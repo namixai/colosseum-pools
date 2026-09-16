@@ -95,6 +95,12 @@ contract SpikeAccount {
         CoreWriterLib.approveBuilderFee(maxFeeRate, builder);
     }
 
+    /// @notice Action 16. 1 = disabled (separate spot and perp balances), 2 = unified
+    ///         account, 3 = portfolio margin.
+    function setAbstraction(uint8 abstraction) external onlyOwner {
+        CoreWriterLib.setAbstraction(address(this), abstraction);
+    }
+
     // ── payment on HyperEVM (spike question 5) ───────────────────────────────────────
 
     /// @notice Pulls `amount` of the chain's linked USDC from the caller.

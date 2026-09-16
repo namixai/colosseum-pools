@@ -89,6 +89,22 @@ contract SpikeAccountTest is Test {
         pool.approveBuilderFee(10, owner);
     }
 
+    /// Action 16 targets the account itself; the value 1 means separate spot and perp
+    /// balances. The tail is written out by hand.
+    function test_setAbstraction_sendsAction16() public {
+        vm.expectEmit(true, false, false, true, CORE_WRITER);
+        emit RawAction(
+            address(pool),
+            bytes.concat(
+                hex"01000010",
+                bytes32(uint256(uint160(address(pool)))),
+                hex"0000000000000000000000000000000000000000000000000000000000000001"
+            )
+        );
+        vm.prank(owner);
+        pool.setAbstraction(1);
+    }
+
     function test_limitOrder_sendsAction1_withReduceOnlyAndIoc() public {
         _expectRaw(
             address(pool),

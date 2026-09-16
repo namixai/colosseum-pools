@@ -1,4 +1,4 @@
-# Spike: six questions before the pool contracts
+# Spike: the questions to answer before the pool contracts
 
 The pool design leans on a handful of HyperCore behaviours that the docs either don't state
 or state only for the API, not for contracts calling CoreWriter. We check them here before
@@ -24,6 +24,7 @@ Two tools answer different halves:
 | 4 | Which call gives account equity? | `accountMarginSummary(perpDexIndex, user)`, precompile `0x…080F`: account value, margin used, notional, raw USD | library; simulator | `run.py q4` |
 | 5 | What does the trader pay with? | Testnet USDC as an ERC-20 on HyperEVM (`0x2B3370eE501B4a559b57D449569354196457D8Ab`, 6 decimals), pulled with `transferFrom`, so the payment is tied to `msg.sender`. A transfer made on HyperCore can't be attributed by a contract at all | RPC; simulator | `run.py q5` |
 | 6 | Can a contract cancel orders? | Yes: action 10 by order id, action 11 by client order id. No precompile lists open orders, so a contract can't find the ids by itself | docs; library | `run.py q1` |
+| 7 | Which margin mode does a new contract account get, and who can change it? (added 16 Sep) | Accounts that never chose report `"default"`; the founder's testnet account reports `"unifiedAccount"`, where spot USDC backs perp positions. The docs say both the account and its agents can switch modes. The enclave build signs only `order` and `cancel`, so its keys can't | info API; docs; enclave source | `run.py q7` |
 
 Nothing in the "live check" column has run yet. The testnet addresses have no funds;
 see "Running it" below.
@@ -49,6 +50,9 @@ These follow from facts we have checked, not from the pending runs.
   deregistered agent can be replayed after its nonce set is pruned. So a key is never
   approved again after it has been replaced, and when a trader passes the challenge, the pool
   approves a new key instead of moving the old one.
+- **Spare pool capital is only safe on spot if the account keeps separate balances.** In
+  unified mode spot USDC is perp margin. The contracts will set mode 1 on every account they
+  create (action 16), and `run.py q7` checks that this sticks.
 - **Prices sent through action 1 may need rounding on our side.** `run.py q1` sends a
   closing order with an unrounded price first and a rounded one second, and records which of
   them closes the position.
@@ -69,8 +73,9 @@ cd spike
 .venv/bin/python run.py gas             # needs testnet USDC on the deployer's HyperCore account
 .venv/bin/python run.py deploy
 .venv/bin/python run.py fund --usdc 40
-.venv/bin/python run.py q1
+.venv/bin/python run.py q7
 .venv/bin/python run.py q3
+.venv/bin/python run.py q1
 .venv/bin/python run.py q4
 .venv/bin/python run.py q2
 .venv/bin/python run.py q5
