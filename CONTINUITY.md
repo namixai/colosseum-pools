@@ -42,7 +42,7 @@ yourself, and the demo agents.
 
 | piece | status |
 |---|---|
-| Spike, six questions: does replacing an API wallet through CoreWriter really cut off the old key; can one agent address serve two accounts; can USDC move between contract accounts and back; how a contract reads account equity; what the trader pays with; can a contract cancel orders | started 16 Sep |
+| Spike, six questions: does replacing an API wallet through CoreWriter really cut off the old key; can one agent address serve two accounts; can USDC move between contract accounts and back; how a contract reads account equity; what the trader pays with; can a contract cancel orders | 16 Sep: harness contract, simulator tests and the live testnet scripts written (`spike/`); the live runs wait for testnet USDC |
 | Contracts `PoolFactory`, `Pool`, `ChallengeAccount`, `KeyRegistry` (Foundry, HyperEVM testnet) | not started |
 | Pool gateway, which checks on chain that a key belongs to the trader's account before an order goes to the signer | not started |
 | App: investor page, list of pools, challenge page, and the check-it-yourself page | not started |
