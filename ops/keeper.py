@@ -4,7 +4,14 @@
     spike/.venv/bin/python -m ops.keeper --deployment demo --once             # one pass
     spike/.venv/bin/python -m ops.keeper --deployment demo                    # a service loop
 
-For every pool and every challenge it can see, one pass does what is due:
+Anyone can create a pool for free, so the keeper doesn't walk the factory's pool list. It
+follows the factory's ChallengeCreated events instead: a pool needs the keeper from its first
+challenge on, and stops needing it once it is idle with no challenge left. A challenge costs
+its buyer the price and the pool real capital, which is what keeps that list short. Events are
+read in windows of --log-window blocks, starting where the last run stopped (the --state
+file) or at the factory's deployment block.
+
+For every pool it follows, one pass does what is due:
   challenge Created  → activate once the capital is there; abort after the start window if not
   challenge Active   → checkpoint in the first minutes of a UTC day; breach if a rule is broken;
                        expire after the deadline
@@ -16,8 +23,8 @@ Nothing here is privileged: the keeper uses its own testnet wallet (--wallet, de
 and only calls functions that are open to everyone. It never graduates a challenge: passing
 early cuts the trader's profit short, so that call is the trader's. Testnet only.
 
-Each pass makes about a dozen RPC reads per pool, and the public testnet RPC is rate limited,
-so keep the interval at tens of seconds unless the keeper has its own RPC.
+Each pass makes about a dozen RPC reads per followed pool, and the public testnet RPC is rate
+limited, so keep the interval at tens of seconds unless the keeper has its own RPC.
 """
 
 from __future__ import annotations
@@ -25,10 +32,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 import time
 
-from eth_utils import to_checksum_address
+from eth_utils import keccak, to_checksum_address
 
 from ops import deployments
 from spike.hlspike import common as c
@@ -37,6 +45,13 @@ ZERO = "0x0000000000000000000000000000000000000000"
 CANCEL = "(uint32,uint64)[]"
 CHECKPOINT_WINDOW = 15 * 60
 START_WINDOW = 3600
+CHALLENGE_CREATED = "0x" + keccak(text="ChallengeCreated(address,address,address)").hex()
+STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
+
+# ChallengeAccount.Status and Pool.Stage. The tests hold these against the Solidity source.
+CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(1, 9)
+STOPPED = (BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED)
+IDLE, CHALLENGE, FUNDED, CLOSING = range(4)
 
 
 def log(event: str, **fields) -> None:
@@ -80,84 +95,143 @@ def rules_assets(addr: str) -> set[int]:
     return set(rules[3])
 
 
+def stop(wallet, addr: str, fn: str, cancels, extra, dry: bool) -> None:
+    send(wallet, addr, f"{fn}({CANCEL},uint32[],bytes32)", [CANCEL, "uint32[]", "bytes32"],
+         [cancels, extra, os.urandom(32)], dry=dry)
+
+
 def challenge_pass(wallet, ch: str, names, now: int, dry: bool) -> None:
     status = view(ch, "status()", "uint8")
-    if status == 1:  # Created
+    if status == CREATED:
         if view(ch, "capitalArrived()", "bool"):
             send(wallet, ch, "activate()", dry=dry)
         elif now > view(ch, "createdAt()", "uint64") + START_WINDOW:
             send(wallet, ch, "abort()", dry=dry)
         return
-    allowed = rules_assets(ch)
-    cancels, extra = stop_inputs(ch, allowed, names)
-    if status == 2:  # Active
+    if status != ACTIVE and status not in STOPPED:
+        return
+    cancels, extra = stop_inputs(ch, rules_assets(ch), names)
+    if status == ACTIVE:
         if in_checkpoint_window(now) and view(ch, "day()", "uint32") < now // 86400:
             send(wallet, ch, "checkpoint()", dry=dry)
         reason = view(ch, "violation(uint32[])", "uint8", ["uint32[]"], [extra])
         if reason:
             log("breach_found", account=ch, reason=reason)
-            send(wallet, ch, f"breach({CANCEL},uint32[],bytes32)", [CANCEL, "uint32[]", "bytes32"],
-                 [cancels, extra, os.urandom(32)], dry=dry)
+            stop(wallet, ch, "breach", cancels, extra, dry)
         elif now > view(ch, "deadline()", "uint64"):
-            send(wallet, ch, f"expire({CANCEL},uint32[],bytes32)", [CANCEL, "uint32[]", "bytes32"],
-                 [cancels, extra, os.urandom(32)], dry=dry)
-    elif status in (3, 4, 5, 6, 7):  # stopped, not yet settled
+            stop(wallet, ch, "expire", cancels, extra, dry)
+    else:
         send(wallet, ch, f"settle({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
 
 
-def pool_pass(wallet, pool: str, names, now: int, dry: bool) -> None:
+def pool_pass(wallet, pool: str, names, now: int, dry: bool) -> bool:
+    """One pass over a pool and its challenge. False once the pool has nothing left to do."""
     stage = view(pool, "stage()", "uint8")
     challenge = to_checksum_address(view(pool, "challenge()", "address"))
     if challenge != ZERO:
         challenge_pass(wallet, challenge, names, now, dry)
-    if stage not in (2, 3):
-        return
-    allowed = rules_assets(pool)
-    cancels, extra = stop_inputs(pool, allowed, names)
-    if stage == 2:  # Funded
-        if in_checkpoint_window(now) and view(pool, "day()", "uint32") < now // 86400:
-            send(wallet, pool, "checkpoint()", dry=dry)
-        reason = view(pool, "violation(uint32[])", "uint8", ["uint32[]"], [extra])
-        if reason:
-            log("breach_found", account=pool, reason=reason)
-            send(wallet, pool, f"breach({CANCEL},uint32[],bytes32)", [CANCEL, "uint32[]", "bytes32"],
-                 [cancels, extra, os.urandom(32)], dry=dry)
-    else:  # Closing
-        send(wallet, pool, f"settleFunded({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
+    if stage in (FUNDED, CLOSING):
+        cancels, extra = stop_inputs(pool, rules_assets(pool), names)
+        if stage == FUNDED:
+            if in_checkpoint_window(now) and view(pool, "day()", "uint32") < now // 86400:
+                send(wallet, pool, "checkpoint()", dry=dry)
+            reason = view(pool, "violation(uint32[])", "uint8", ["uint32[]"], [extra])
+            if reason:
+                log("breach_found", account=pool, reason=reason)
+                stop(wallet, pool, "breach", cancels, extra, dry)
+        else:
+            send(wallet, pool, f"settleFunded({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
+    return not (stage == IDLE and challenge == ZERO)
 
 
-def one_pass(wallet, factory: str, dry: bool) -> None:
-    names = perp_index_by_name()
-    pools = view(factory, "pools()", "address[]")
-    now = int(time.time())
-    for pool in pools:
-        try:
-            pool_pass(wallet, to_checksum_address(pool), names, now, dry)
-        except Exception as exc:
-            log("pool_failed", pool=pool, error=str(exc)[:200])
-    log("pass_done", pools=len(pools))
+def pools_with_challenges(factory: str, start: int, end: int, window: int) -> set[str]:
+    """Pools named by the factory's ChallengeCreated events in blocks [start, end]."""
+    found: set[str] = set()
+    lo = start
+    while lo <= end:
+        hi = min(lo + window - 1, end)
+        logs = c.rpc("eth_getLogs", [{
+            "address": factory, "topics": [CHALLENGE_CREATED], "fromBlock": hex(lo), "toBlock": hex(hi),
+        }])
+        for entry in logs:
+            # Only the factory's own events count; an RPC that ignored the filter changes nothing.
+            if entry["address"].lower() != factory.lower() or entry["topics"][0] != CHALLENGE_CREATED:
+                continue
+            found.add(to_checksum_address("0x" + entry["topics"][2][-40:]))
+        lo = hi + 1
+    return found
+
+
+class Keeper:
+    def __init__(self, factory: str, wallet, dry: bool, state_path: pathlib.Path, start_block: int,
+                 window: int = 1000, max_windows: int = 50):
+        self.factory = to_checksum_address(factory)
+        self.wallet = wallet
+        self.dry = dry
+        self.state_path = state_path
+        self.window = window
+        self.max_windows = max_windows
+        self.next_block = start_block
+        self.live: set[str] = set()
+        if state_path.exists():
+            state = json.loads(state_path.read_text())
+            if to_checksum_address(state["factory"]) != self.factory:
+                raise SystemExit(f"{state_path} belongs to another factory")
+            self.next_block = int(state["next_block"])
+            self.live = {to_checksum_address(p) for p in state["live"]}
+
+    def save(self) -> None:
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"factory": self.factory, "next_block": self.next_block,
+                                   "live": sorted(self.live)}, indent=2) + "\n")
+        tmp.replace(self.state_path)
+
+    def one_pass(self) -> None:
+        latest = int(c.rpc("eth_blockNumber"), 16)
+        end = min(latest, self.next_block + self.window * self.max_windows - 1)
+        if end >= self.next_block:
+            self.live |= pools_with_challenges(self.factory, self.next_block, end, self.window)
+            self.next_block = end + 1
+        names = perp_index_by_name()
+        now = int(time.time())
+        for pool in sorted(self.live):
+            try:
+                if not pool_pass(self.wallet, pool, names, now, self.dry):
+                    self.live.discard(pool)
+            except Exception as exc:
+                log("pool_failed", pool=pool, error=str(exc)[:200])
+        self.save()
+        log("pass_done", following=len(self.live), next_block=self.next_block, latest=latest)
+
+
+def deployment_block(record: dict) -> int:
+    if "block" in record:
+        return int(record["block"])
+    rcpt = c.rpc("eth_getTransactionReceipt", [record["tx"]["PoolFactory"]])
+    return int(rcpt["blockNumber"], 16)
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--deployment", help="label of a record in deployments/")
-    p.add_argument("--factory", help="PoolFactory address, instead of --deployment")
+    p.add_argument("--deployment", required=True, help="label of a record in deployments/")
     p.add_argument("--wallet", default="keeper")
     p.add_argument("--once", action="store_true")
     p.add_argument("--every", type=int, default=30, help="seconds between passes")
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")
+    p.add_argument("--state", help="state file (default ops/state/keeper-<deployment>.json)")
+    p.add_argument("--log-window", type=int, default=1000, help="blocks per eth_getLogs call")
+    p.add_argument("--max-windows", type=int, default=50, help="eth_getLogs calls per pass, at most")
     args = p.parse_args()
 
     c.assert_testnet()
+    record = deployments.load(args.deployment)
+    state = pathlib.Path(args.state) if args.state else STATE_DIR / f"keeper-{args.deployment}.json"
     wallet = None if args.dry_run else c.account(args.wallet)
-    if args.factory:
-        factory = to_checksum_address(args.factory)
-    elif args.deployment:
-        factory = to_checksum_address(deployments.load(args.deployment)["PoolFactory"])
-    else:
-        raise SystemExit("pass --deployment <label> or --factory <address>")
+    keeper = Keeper(record["PoolFactory"], wallet, args.dry_run, state, deployment_block(record),
+                    window=args.log_window, max_windows=args.max_windows)
     while True:
-        one_pass(wallet, factory, args.dry_run)
+        keeper.one_pass()
         if args.once:
             return 0
         time.sleep(args.every)

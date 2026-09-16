@@ -126,4 +126,9 @@ the perp balance goes back to spot, and the pool returns to idle.
   who calls it at the window's lowest point gets that point as the base.
 - No proof that a published key address was minted in the enclave. The Signer build doesn't
   offer one.
+- Anyone can create a pool, at no cost beyond gas, and the factory's pool list has no cap. The
+  keeper doesn't walk that list: it follows the pools named in the factory's
+  `ChallengeCreated` events, which cost the buyer the challenge price and need the pool's
+  capital in place. A long pool list still makes `PoolFactory.pools()` expensive to read for
+  anyone else who calls it.
 - One trader per pool, no pool shares, no leaderboard, no mainnet.

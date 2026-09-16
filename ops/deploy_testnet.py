@@ -98,7 +98,7 @@ def main() -> int:
         big_blocks(deployer, False)
 
     record.update({"KeyRegistry": registry, "PoolImpl": pool_impl, "ChallengeAccountImpl": challenge_impl,
-                   "PoolFactory": factory})
+                   "PoolFactory": factory, "block": int(r4["blockNumber"], 16)})
     record["tx"].update({"KeyRegistry": r1["transactionHash"], "PoolImpl": r2["transactionHash"],
                          "ChallengeAccountImpl": r3["transactionHash"], "PoolFactory": r4["transactionHash"]})
 

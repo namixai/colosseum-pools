@@ -22,6 +22,9 @@ __pycache__/
 *.pem
 keystore/
 
+# Keeper progress (last block read, pools followed); local to the machine that runs it
+ops/state/
+
 # macOS
 .DS_Store
 ._*
