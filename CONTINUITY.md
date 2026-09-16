@@ -38,13 +38,13 @@ yourself, and the demo agents.
 | 16 Sep | settled the scope: two roles, investor and trader, a stop that anyone can trigger, testnet only |
 | 16 Sep | created this repository, private for now |
 
-## What we build in the window, as of 16 September
+## What we build in the window, as of 17 September
 
 | piece | status |
 |---|---|
 | Spike, six questions: does replacing an API wallet through CoreWriter really cut off the old key; can one agent address serve two accounts; can USDC move between contract accounts and back; how a contract reads account equity; what the trader pays with; can a contract cancel orders | 16 Sep: harness contract, simulator tests and the live testnet scripts written (`spike/`); the live runs wait for testnet USDC |
-| Contracts `PoolFactory`, `Pool`, `ChallengeAccount`, `KeyRegistry` (Foundry, HyperEVM testnet) | not started |
-| Pool gateway, which checks on chain that a key belongs to the trader's account before an order goes to the signer | not started |
+| Contracts `PoolFactory`, `Pool`, `ChallengeAccount`, `KeyRegistry` (Foundry, HyperEVM testnet) | 16–17 Sep: written, 60 simulator tests, a mutation check of the tests, one internal audit pass and its fixes; not deployed |
+| Pool gateway, which checks on chain that a key belongs to the trader's account before an order goes to the signer | 17 Sep: written with offline tests, two of them against the Hyperliquid SDK's published signing vectors; not running anywhere yet |
 | App: investor page, list of pools, challenge page, and the check-it-yourself page | not started |
 | Demo agents: a scripted bot and an AI agent, each trading a challenge | not started |
 | No access for US residents: a geoblock plus a line in the terms, as Hyperliquid itself does | not started |
