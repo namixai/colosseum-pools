@@ -15,6 +15,13 @@ import {PoolFactory} from "../src/PoolFactory.sol";
 import {Pool} from "../src/Pool.sol";
 import {ChallengeAccount} from "../src/ChallengeAccount.sol";
 import {RuledAccount} from "../src/RuledAccount.sol";
+import {CoreOps} from "../src/lib/CoreOps.sol";
+
+contract CloseHarness {
+    function close(uint32[] memory perps) external returns (uint256) {
+        return CoreOps.closePositions(address(this), perps, 500);
+    }
+}
 
 contract MockUsdc is ERC20 {
     constructor() ERC20("USDC", "USDC") {}
@@ -38,6 +45,7 @@ contract PoolFlowTest is Test {
     uint32 constant ETH = 4;
     uint64 constant BTC_MARK = 764000; // 76400.0, one decimal (szDecimals 5)
     uint64 constant ETH_MARK = 241370; // 2413.70, two decimals (szDecimals 4)
+    bytes32 constant SALT = keccak256("test-salt");
 
     HyperCore hyperCore;
     MockUsdc usdc;
@@ -218,7 +226,7 @@ contract PoolFlowTest is Test {
     function _settleChallenge(ChallengeAccount ch) internal {
         uint32[] memory none = new uint32[](0);
         for (uint256 i = 0; i < 8 && ch.status() != ChallengeAccount.Status.Settled; ++i) {
-            ch.settle(none);
+            ch.settle(new Cancel[](0), none);
             CoreSimulatorLib.nextBlock();
         }
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Settled), "challenge did not settle");
@@ -355,14 +363,20 @@ contract PoolFlowTest is Test {
         _mockMargin(address(ch), 95e6, 380e6); // -5% total, 4x: inside every rule
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.expectRevert(RuledAccount.NoBreach.selector);
-        ch.breach(c, a);
+        ch.breach(c, a, SALT);
+    }
+
+    /// A minute past the next UTC midnight, inside the snapshot window.
+    function _nextMidnight() internal {
+        vm.warp((block.timestamp / 1 days + 1) * 1 days + 60);
     }
 
     function test_drawdown_boundary() public {
         ChallengeAccount ch = _started(_readyPool());
         // Floor is 90 USDC: exactly 90 is allowed, a micro-dollar less is not. The day
-        // limit (95) would trip first, so move to a new day with a low base.
-        vm.warp(block.timestamp + 1 days);
+        // limit (95 from the first day's base) would trip first, so take a new day's
+        // snapshot at 90.
+        _nextMidnight();
         _mockMargin(address(ch), 90e6, 0);
         ch.checkpoint();
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.None));
@@ -384,32 +398,50 @@ contract PoolFlowTest is Test {
         _mockMargin(address(ch), 96e6, 0);
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.None));
 
-        // Next day: the first checkpoint takes the new base, and later ones don't move it.
-        vm.warp(block.timestamp + 1 days);
+        // Next day: the snapshot takes the new base, once.
+        _nextMidnight();
         ch.checkpoint();
         assertEq(ch.dayStartEquity(), int64(96e6));
         _mockMargin(address(ch), 92e6, 0);
+        vm.expectRevert(RuledAccount.AlreadyCheckpointed.selector);
         ch.checkpoint();
-        assertEq(ch.dayStartEquity(), int64(96e6), "one snapshot per day");
         // 96 * 0.95 = 91.2: 92 is fine, 91.1 is not, and both are above the 90 floor.
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.None));
         _mockMargin(address(ch), 91.1e6, 0);
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.DailyLoss));
     }
 
-    function test_dailyLoss_withoutTodaysSnapshot_isNotChecked() public {
+    /// Nobody can take the snapshot later in the day, the trader included: a base picked
+    /// after a loss would let the day lose twice.
+    function test_checkpoint_onlyJustAfterMidnight() public {
         ChallengeAccount ch = _started(_readyPool());
-        vm.warp(block.timestamp + 1 days);
-        _mockMargin(address(ch), 91e6, 0); // -9% since yesterday's base, above the floor
-        assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.None));
-        // The stop takes today's snapshot first, so it can't use the day rule either; the
-        // refused call leaves no snapshot behind, and the next checkpoint sets it.
-        (Cancel[] memory c, uint32[] memory a) = _none();
-        vm.expectRevert(RuledAccount.NoBreach.selector);
-        ch.breach(c, a);
-        assertEq(ch.dayStartEquity(), int64(100e6));
+        vm.warp((block.timestamp / 1 days + 1) * 1 days + 15 minutes);
+        _mockMargin(address(ch), 97e6, 0);
+        vm.expectRevert(RuledAccount.OutsideCheckpointWindow.selector);
         ch.checkpoint();
-        assertEq(ch.dayStartEquity(), int64(91e6));
+        assertEq(ch.dayStartEquity(), int64(100e6));
+    }
+
+    /// Without a snapshot for the new day, the last one stays in force: the rule is still
+    /// checked, by the stop and by graduation alike.
+    function test_dailyLoss_carriesTheLastSnapshot() public {
+        ChallengeAccount ch = _started(_readyPool());
+        vm.warp(block.timestamp + 1 days + 1 hours);
+        _mockMargin(address(ch), 94e6, 0);
+        assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.DailyLoss));
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        ch.breach(c, a, SALT);
+        assertEq(uint8(ch.breachReason()), uint8(Breach.DailyLoss));
+    }
+
+    function test_graduate_refusedWhileTheDayIsDown() public {
+        ChallengeAccount ch = _started(_readyPool());
+        _nextMidnight();
+        _mockMargin(address(ch), 120e6, 0);
+        ch.checkpoint();
+        _mockMargin(address(ch), 113e6, 0); // above the 108 target, 5.8% under today's 120
+        vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.RuleBroken.selector, Breach.DailyLoss));
+        ch.graduate(SALT);
     }
 
     function test_leverage_boundary() public {
@@ -451,7 +483,7 @@ contract PoolFlowTest is Test {
         _mockMargin(address(ch), 88.5e6, 370e6); // what Hyperliquid would report after -3%
         vm.recordLogs();
         vm.prank(stranger);
-        ch.breach(cancels, new uint32[](0));
+        ch.breach(cancels, new uint32[](0), SALT);
         (address[] memory from, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
         vm.clearMockedCalls();
 
@@ -491,13 +523,17 @@ contract PoolFlowTest is Test {
 
     /// Someone who predicts the stop's first keyless address and funds it on HyperCore
     /// doesn't block the stop: the next candidate is used.
-    function _keylessCandidate(address account, uint256 nonce, uint256 i) internal view returns (address) {
+    function _keylessCandidate(address account, uint256 nonce, bytes32 salt, uint256 i)
+        internal
+        view
+        returns (address)
+    {
         return address(
             uint160(
                 uint256(
                     keccak256(
                         abi.encode(
-                            "colosseum-pools/keyless", account, nonce, i, block.number, blockhash(block.number - 1)
+                            "colosseum-pools/keyless", account, nonce, salt, i, block.number, blockhash(block.number - 1)
                         )
                     )
                 )
@@ -508,20 +544,123 @@ contract PoolFlowTest is Test {
     function test_breach_skipsAKeylessAddressSomeoneActivated() public {
         ChallengeAccount ch = _started(_readyPool());
         address key = ch.agentKey();
-        address first = _keylessCandidate(address(ch), 0, 0);
-        address second = _keylessCandidate(address(ch), 0, 1);
+        address first = _keylessCandidate(address(ch), 0, SALT, 0);
+        address second = _keylessCandidate(address(ch), 0, SALT, 1);
         CoreSimulatorLib.forceAccountActivation(first);
         _mockMargin(address(ch), 80e6, 0);
 
         vm.recordLogs();
         (Cancel[] memory c, uint32[] memory a) = _none();
-        ch.breach(c, a);
+        ch.breach(c, a, SALT);
         (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
         assertEq(kind[0], 9);
         (address keyless,) = abi.decode(args[0], (address, string));
         assertEq(keyless, second, "the pre-activated first candidate is skipped");
         assertTrue(keyless != key);
         assertFalse(PrecompileLib.coreUserExists(keyless));
+    }
+
+    /// Even if every candidate was funded in advance, the stop goes through: it uses the last
+    /// candidate rather than revert, and anyone can replace the agent again with `recut`.
+    function test_breach_goesThroughEvenIfEveryCandidateWasFunded() public {
+        ChallengeAccount ch = _started(_readyPool());
+        address last;
+        for (uint256 i = 0; i < 8; ++i) {
+            last = _keylessCandidate(address(ch), 0, SALT, i);
+            CoreSimulatorLib.forceAccountActivation(last);
+        }
+        _mockMargin(address(ch), 80e6, 0);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+
+        vm.expectRevert(RuledAccount.NotStopped.selector);
+        ch.recut(SALT);
+
+        vm.recordLogs();
+        vm.prank(stranger);
+        ch.breach(c, a, SALT);
+        (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Breached));
+        assertEq(kind[0], 9);
+        (address used,) = abi.decode(args[0], (address, string));
+        assertEq(used, last);
+
+        bytes32 other = keccak256("another salt");
+        address fresh = _keylessCandidate(address(ch), 1, other, 0);
+        vm.recordLogs();
+        vm.prank(stranger);
+        ch.recut(other);
+        (, kind, args) = _actions(vm.getRecordedLogs());
+        assertEq(kind.length, 1);
+        assertEq(kind[0], 9);
+        (used,) = abi.decode(args[0], (address, string));
+        assertEq(used, fresh);
+    }
+
+    /// A resting order holds margin, and nobody can list open orders on chain, so every
+    /// settlement step accepts the orders to cancel, not just the stop.
+    function test_settle_cancelsNamedOrdersEveryCall() public {
+        ChallengeAccount ch = _started(_readyPool());
+        _mockMargin(address(ch), 80e6, 0);
+        (Cancel[] memory none, uint32[] memory a) = _none();
+        ch.breach(none, a, SALT);
+        vm.clearMockedCalls();
+
+        Cancel[] memory late = new Cancel[](2);
+        late[0] = Cancel({asset: BTC, oid: 11});
+        late[1] = Cancel({asset: BTC, oid: 12});
+        for (uint256 round = 0; round < 2; ++round) {
+            vm.recordLogs();
+            ch.settle(late, a);
+            (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
+            assertEq(kind[0], 10);
+            assertEq(args[0], abi.encode(BTC, uint64(11)));
+            assertEq(kind[1], 10);
+            assertEq(args[1], abi.encode(BTC, uint64(12)));
+            CoreSimulatorLib.nextBlock();
+        }
+    }
+
+    function test_abort_refusedOnceTheCapitalArrived() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _buy(p);
+        CoreSimulatorLib.nextBlock();
+        vm.warp(block.timestamp + 1 hours + 1);
+        vm.prank(stranger);
+        vm.expectRevert(ChallengeAccount.CapitalArrived.selector);
+        ch.abort();
+        ch.activate();
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Active));
+    }
+
+    /// Settlement may be called every block while HyperCore is still executing the last
+    /// send. The trader's share still goes out once.
+    function test_payoutIsSentOnce() public {
+        Pool p = _readyPool();
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        (Cancel[] memory c, uint32[] memory a) = _none();
+
+        ch.settle(c, a); // perp -> spot
+        CoreSimulatorLib.nextBlock();
+
+        vm.recordLogs();
+        ch.settle(c, a); // payout
+        ch.settle(c, a); // same block: the spot balance still looks untouched
+        (address[] memory from, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
+        uint256 toTrader;
+        uint256 toPool;
+        for (uint256 i = 0; i < kind.length; ++i) {
+            if (from[i] != address(ch) || kind[i] != 6) continue;
+            (address to,,) = abi.decode(args[i], (address, uint64, uint64));
+            if (to == trader) ++toTrader;
+            if (to == address(p)) ++toPool;
+        }
+        assertEq(toTrader, 1, "one payout send");
+        assertEq(toPool, 0, "nothing to the pool before the payout lands");
+        assertEq(ch.payoutSent(), ch.payoutOwed());
+
+        _settleChallenge(ch);
+        assertEq(_spot(trader), ch.payoutOwed());
     }
 
     /// After a funded stage closes, the passed challenge may still be settling. The pool
@@ -533,10 +672,10 @@ contract PoolFlowTest is Test {
 
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.prank(investor);
-        p.stopFunded(c, a);
+        p.stopFunded(c, a, SALT);
         for (uint256 i = 0; i < 6 && p.stage() != Pool.Stage.Idle; ++i) {
             CoreSimulatorLib.nextBlock();
-            p.settleFunded(a);
+            p.settleFunded(c, a);
         }
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
         assertEq(p.challenge(), address(ch), "the passed challenge has not settled yet");
@@ -559,20 +698,20 @@ contract PoolFlowTest is Test {
         (Cancel[] memory c, uint32[] memory a) = _none();
 
         vm.expectRevert(ChallengeAccount.TooEarly.selector);
-        ch.expire(c, a);
+        ch.expire(c, a, SALT);
         vm.prank(stranger);
         vm.expectRevert(ChallengeAccount.NotTrader.selector);
-        ch.forfeit(c, a);
+        ch.forfeit(c, a, SALT);
 
         vm.warp(block.timestamp + 7 days + 1);
-        ch.expire(c, a);
+        ch.expire(c, a, SALT);
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Expired));
         _settleChallenge(ch);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
 
         ChallengeAccount ch2 = _started(p);
         vm.prank(trader);
-        ch2.forfeit(c, a);
+        ch2.forfeit(c, a, SALT);
         assertEq(uint8(ch2.status()), uint8(ChallengeAccount.Status.Forfeited));
     }
 
@@ -604,19 +743,19 @@ contract PoolFlowTest is Test {
         _trade(address(ch), BTC, true, 0.005e8);
         CoreSimulatorLib.setMarkPx(BTC, 786920); // +3%: about +11.46 USDC
         _trade(address(ch), BTC, false, 0.005e8); // flat again, profit realized
-        ch.graduate();
+        ch.graduate(SALT);
     }
 
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
         vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.TargetNotMet.selector, int64(100e6), int256(108e6)));
-        ch.graduate();
+        ch.graduate(SALT);
 
         _trade(address(ch), BTC, true, 0.005e8);
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         vm.expectRevert(ChallengeAccount.NotFlat.selector);
-        ch.graduate();
+        ch.graduate(SALT);
     }
 
     function test_graduate_fundsTraderWithANewKey_andPaysTheShare() public {
@@ -653,7 +792,7 @@ contract PoolFlowTest is Test {
         uint64 poolSpotBefore = _spot(address(p));
         _settleChallenge(ch);
         assertEq(_spot(trader), 916800000, "trader paid on HyperCore");
-        assertEq(ch.payoutPaid(), ch.payoutOwed());
+        assertEq(ch.payoutSent(), ch.payoutOwed());
         assertGt(_spot(address(p)), poolSpotBefore, "the rest went back to the pool");
         assertEq(p.challenge(), address(0));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded), "the funded stage goes on");
@@ -673,7 +812,7 @@ contract PoolFlowTest is Test {
 
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.prank(stranger);
-        p.breach(c, a);
+        p.breach(c, a, SALT);
         vm.clearMockedCalls();
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing));
         assertEq(uint8(p.fundedEndReason()), uint8(Breach.Drawdown));
@@ -682,7 +821,7 @@ contract PoolFlowTest is Test {
 
         for (uint256 i = 0; i < 6 && p.stage() != Pool.Stage.Idle; ++i) {
             CoreSimulatorLib.nextBlock();
-            p.settleFunded(a);
+            p.settleFunded(c, a);
         }
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
         assertEq(PrecompileLib.position(address(p), BTC).szi, 0);
@@ -705,20 +844,37 @@ contract PoolFlowTest is Test {
 
         vm.prank(stranger);
         vm.expectRevert(Pool.NotAllowed.selector);
-        p.stopFunded(c, a);
+        p.stopFunded(c, a, SALT);
 
         uint64 traderSpotBefore = _spot(trader);
         vm.prank(investor);
-        p.stopFunded(c, a);
+        p.stopFunded(c, a, SALT);
         uint64 owed = p.fundedPayoutOwed();
         assertGt(owed, 0);
 
         for (uint256 i = 0; i < 8 && p.stage() != Pool.Stage.Idle; ++i) {
             CoreSimulatorLib.nextBlock();
-            p.settleFunded(a);
+            p.settleFunded(c, a);
         }
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
         assertEq(_spot(trader) - traderSpotBefore, owed);
+    }
+
+    /// An asset whose size decimals leave no room for a price refuses by name instead of
+    /// underflowing.
+    function test_close_refusesAnAssetWithTooManySizeDecimals() public {
+        uint32 odd = 9;
+        hyperCore.registerPerpAssetInfo(
+            odd,
+            PrecompileLib.PerpAssetInfo({coin: "ODD", marginTableId: 1, szDecimals: 7, maxLeverage: 3, onlyIsolated: false})
+        );
+        CoreSimulatorLib.setMarkPx(odd, 1);
+        CloseHarness h = new CloseHarness();
+        _mockPosition(address(h), odd, 5);
+        uint32[] memory perps = new uint32[](1);
+        perps[0] = odd;
+        vm.expectRevert(abi.encodeWithSelector(CoreOps.UnsupportedSizeDecimals.selector, odd, uint8(7)));
+        h.close(perps);
     }
 
     // ── access ───────────────────────────────────────────────────────────────────────

@@ -45,9 +45,10 @@ contract Pool is RuledAccount {
     address public fundedTrader;
     int64 public fundedStart;
     Breach public fundedEndReason;
-    /// Funded trader's share of the profit at the stop (1e8 = 1 USDC).
+    /// Funded trader's share of the profit at the stop (1e8 = 1 USDC), and what was sent:
+    /// once, never re-sent.
     uint64 public fundedPayoutOwed;
-    uint64 public fundedPayoutPaid;
+    uint64 public fundedPayoutSent;
 
     event AccountReady();
     event Deposited(address indexed from, uint256 amount);
@@ -184,16 +185,18 @@ contract Pool is RuledAccount {
         stage = Stage.Funded;
         fundedTrader = trader;
         fundedEndReason = Breach.None;
-        fundedPayoutOwed = 0;
-        fundedPayoutPaid = 0;
 
         address key = factory.registry().assign(trader);
         _setAgent(key);
-        int64 start = CoreOps.equity(address(this)) + int64(_terms.fundedCapital);
+        // Sending the challenge capital may have cost an activation fee, so fund what is
+        // there, up to the terms.
+        uint64 spot1e6 = CoreOps.spotUsdc(address(this)) / Units.SPOT_PER_PERP;
+        uint64 funded = spot1e6 < _terms.fundedCapital ? spot1e6 : _terms.fundedCapital;
+        int64 start = CoreOps.equity(address(this)) + int64(funded);
         fundedStart = start;
-        CoreOps.toPerp(_terms.fundedCapital);
+        CoreOps.toPerp(funded);
         _startDay(start);
-        emit TraderFunded(trader, key, _terms.fundedCapital);
+        emit TraderFunded(trader, key, funded);
     }
 
     function onChallengeSettled() external onlyChallenge {
@@ -204,25 +207,37 @@ contract Pool is RuledAccount {
 
     // ── funded trader ────────────────────────────────────────────────────────────────
 
+    function isStopped() public view override returns (bool) {
+        return stage == Stage.Closing;
+    }
+
+    /// @notice Takes the day's snapshot, in the first minutes of the UTC day.
     function checkpoint() external inStage(Stage.Funded) {
-        _rollDay();
+        _checkpoint();
     }
 
     /// @notice Stops the funded trader if a rule is broken right now. Anyone may call it.
-    function breach(Cancel[] calldata cancels, uint32[] calldata extraAssets) external inStage(Stage.Funded) {
-        _rollDay();
+    function breach(Cancel[] calldata cancels, uint32[] calldata extraAssets, bytes32 salt)
+        external
+        inStage(Stage.Funded)
+    {
         Breach reason = violation(extraAssets);
         if (reason == Breach.None) revert NoBreach();
-        _endFunded(reason, cancels, extraAssets);
+        _endFunded(reason, cancels, extraAssets, salt);
     }
 
     /// @notice The investor or the trader ends the funded stage without a breach.
-    function stopFunded(Cancel[] calldata cancels, uint32[] calldata extraAssets) external inStage(Stage.Funded) {
+    function stopFunded(Cancel[] calldata cancels, uint32[] calldata extraAssets, bytes32 salt)
+        external
+        inStage(Stage.Funded)
+    {
         if (msg.sender != owner && msg.sender != fundedTrader) revert NotAllowed();
-        _endFunded(Breach.None, cancels, extraAssets);
+        _endFunded(Breach.None, cancels, extraAssets, salt);
     }
 
-    function _endFunded(Breach reason, Cancel[] calldata cancels, uint32[] calldata extraAssets) internal {
+    function _endFunded(Breach reason, Cancel[] calldata cancels, uint32[] calldata extraAssets, bytes32 salt)
+        internal
+    {
         stage = Stage.Closing;
         fundedEndReason = reason;
         int64 eq = CoreOps.equity(address(this));
@@ -230,31 +245,36 @@ contract Pool is RuledAccount {
             uint256 profit = uint256(int256(eq) - int256(fundedStart));
             fundedPayoutOwed = SafeCast.toUint64((profit * _terms.traderShareBps * Units.SPOT_PER_PERP) / Units.BPS);
         }
-        _cutAgent();
+        _cutAgent(salt);
         _cancelAll(cancels);
         _closeAll(extraAssets);
         emit FundedStopped(fundedTrader, reason, eq, fundedPayoutOwed);
     }
 
     /// @notice One step of closing the funded stage; call until the pool is idle. Capital
-    ///         stays in the pool; only the trader's share leaves. Anyone may call it.
-    function settleFunded(uint32[] calldata extraAssets) external inStage(Stage.Closing) {
-        (uint256 open, uint64 free, uint64 spot) = _drainStep(extraAssets);
-        if (open != 0) return;
+    ///         stays in the pool; only the trader's share leaves, once. Anyone may call it.
+    function settleFunded(Cancel[] calldata cancels, uint32[] calldata extraAssets)
+        external
+        inStage(Stage.Closing)
+    {
+        (uint256 open, uint64 free, uint64 spot) = _drainStep(cancels, extraAssets);
+        if (open != 0 || free != 0) return;
 
-        uint64 owed = fundedPayoutOwed - fundedPayoutPaid;
-        if (owed != 0) {
+        if (fundedPayoutOwed != 0 && fundedPayoutSent == 0) {
             if (spot == 0) return;
-            uint64 pay = spot < owed ? spot : owed;
-            fundedPayoutPaid += pay;
+            uint64 pay = spot < fundedPayoutOwed ? spot : fundedPayoutOwed;
+            fundedPayoutSent = pay;
             CoreOps.sendUsdc(fundedTrader, pay);
             emit FundedPayoutSent(fundedTrader, pay);
             return;
         }
-        if (free == 0 && CoreOps.equity(address(this)) <= 0) {
+
+        if (CoreOps.equity(address(this)) <= 0) {
             emit FundedClosed(fundedTrader);
             fundedTrader = address(0);
             fundedStart = 0;
+            fundedPayoutOwed = 0;
+            fundedPayoutSent = 0;
             stage = Stage.Idle;
         }
     }

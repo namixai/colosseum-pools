@@ -62,17 +62,22 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
 2. **Start** (`activate`, anyone, a later block). Requires the account to exist on HyperCore
    and hold the capital. Sets separate balances (16), moves the capital to perp (7), approves
    the reserved key as the account's unnamed agent (9), approves the builder fee if one is set
-   (12), and takes the first daily snapshot. If nothing arrives within an hour, `abort`
-   refunds the price and retires the key.
+   (12), and takes the first daily snapshot. If the capital hasn't arrived an hour after the
+   purchase, `abort` refunds the price and retires the key; once the capital is there,
+   `abort` is refused.
 3. **Trade.** The trader signs an order with their wallet and sends it to the pool gateway.
    The gateway checks on chain that the key is bound to this account and this trader and that
    the challenge is active, then asks the enclave to sign with that key. The enclave applies
    the platform policy (asset list, size caps) and signs or refuses with a signed receipt.
-4. **Stop** (`breach(cancels, assets)`, anyone). Allowed only when a rule is broken at the
-   start of the block: drawdown floor, daily loss, leverage, or a position in an asset outside
-   the list. In this order:
+4. **Stop** (`breach(cancels, assets, salt)`, anyone). Allowed only when a rule is broken at
+   the start of the block: drawdown floor, daily loss, leverage, or a position in an asset
+   outside the list. In this order:
    1. the account's agent is replaced with a fresh keyless address (9), and the old key is
-      retired in the registry;
+      retired in the registry. The address is a hash of the account, a counter, the caller's
+      salt and the block; candidates HyperCore already knows are skipped, and if all of them
+      are taken the stop uses one anyway instead of reverting, so funding the candidates in
+      advance can't block it. `recut(salt)` lets anyone replace the agent again while the
+      account is stopped;
    2. the orders named by the caller are cancelled (10). No precompile lists open orders, so
       the caller reads them from the info API;
    3. every open position among the pool's assets and the caller's extra assets is closed with
@@ -87,11 +92,13 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    the trader, the pool approves it as its agent (9) and moves the funded capital to perp (7).
 6. **Other ends.** `expire` (anyone, after the deadline) and `forfeit` (the trader) end the
    challenge the same way a stop does.
-7. **Settle** (`settle(assets)`, anyone, repeated). Closes whatever is still open, moves the
-   free perp balance to spot (7), pays the trader's share if there is one, and sends the rest
-   to the pool (6). Each call acts on start-of-block state and HyperCore executes a few
-   seconds later, so settling takes several calls; the challenge is `Settled` when perp
-   equity and spot USDC are both zero.
+7. **Settle** (`settle(cancels, assets)`, anyone, repeated). Cancels the orders the caller
+   names (a resting order holds margin, so this can't be a one-time step), closes whatever is
+   still open, and moves the free perp balance to spot (7). Once the perp side is empty it
+   pays the trader's share, once and never again, and sends the rest to the pool (6) only
+   after the payout shows in the balance or five minutes have passed. Each call acts on
+   start-of-block state and HyperCore executes a few seconds later, so settling takes
+   several calls; the challenge is `Settled` when perp equity and spot USDC are both zero.
 
 ## Funded stage
 
@@ -108,8 +115,11 @@ the perp balance goes back to spot, and the pool returns to idle.
 - It does not put the investor's limits inside the enclave. Contracts enforce the pool rules
   after the fact, by stopping the account. Losses can overshoot a limit between the breach and
   the stop landing.
-- The daily snapshot is the first one taken in a UTC day. The keeper takes it at midnight; if
-  nobody does, the first `checkpoint` or stop of the day takes it.
+- The daily snapshot can only be taken in the first 15 minutes of a UTC day, once, so nobody
+  can pick a convenient moment later. The keeper takes it at midnight and anyone else may.
+  If nobody does, the previous snapshot stays in force, which can make the day's limit
+  tighter or looser than the true start of the day.
+- A payout is sent once. If HyperCore dropped it, nothing on chain resends it.
 - No proof that a published key address was minted in the enclave. The Signer build doesn't
   offer one.
 - One trader per pool, no pool shares, no leaderboard, no mainnet.

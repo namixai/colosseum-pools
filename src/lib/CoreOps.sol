@@ -12,7 +12,7 @@ import {Units} from "../Types.sol";
 ///      through CoreWriter and execute on HyperCore a few seconds later; a failure there does
 ///      not revert here.
 library CoreOps {
-    error NoKeylessAddress();
+    error UnsupportedSizeDecimals(uint32 perp, uint8 szDecimals);
 
     // ── reads ────────────────────────────────────────────────────────────────────────
 
@@ -81,6 +81,7 @@ library CoreOps {
     ///         CoreWriter expects.
     function crossingPx1e8(uint32 perp, bool isBuy, uint16 slippageBps) internal view returns (uint64) {
         uint8 szDecimals = PrecompileLib.perpAssetInfo(perp).szDecimals;
+        if (szDecimals > 6) revert UnsupportedSizeDecimals(perp, szDecimals);
         uint8 decimals = 6 - szDecimals;
         uint256 mark = PrecompileLib.markPx(perp);
         uint256 bps = uint256(Units.BPS);
@@ -104,16 +105,10 @@ library CoreOps {
             ++open;
             bool isBuy = szi < 0;
             uint64 size = uint64(isBuy ? -szi : szi);
+            uint64 px = crossingPx1e8(perp, isBuy, slippageBps); // reverts on an unsupported asset
             uint8 szDecimals = PrecompileLib.perpAssetInfo(perp).szDecimals;
-            CoreWriterLib.placeLimitOrder(
-                perp,
-                isBuy,
-                crossingPx1e8(perp, isBuy, slippageBps),
-                SafeCast.toUint64(uint256(size) * 10 ** (8 - szDecimals)),
-                true,
-                Units.TIF_IOC,
-                0
-            );
+            uint64 size1e8 = SafeCast.toUint64(uint256(size) * 10 ** (8 - szDecimals));
+            CoreWriterLib.placeLimitOrder(perp, isBuy, px, size1e8, true, Units.TIF_IOC, 0);
         }
     }
 
@@ -146,23 +141,37 @@ library CoreOps {
         if (builder != address(0)) CoreWriterLib.approveBuilderFee(maxFeeDecibps, builder);
     }
 
-    /// @notice An address nobody holds a key for (it is a hash output) and that HyperCore has
-    ///         not seen. Used to replace an agent when a trader is cut off.
-    function keylessAddress(address account, uint256 nonce) internal view returns (address) {
-        for (uint256 i = 0; i < 4; ++i) {
-            address candidate = address(
-                uint160(
-                    uint256(
-                        keccak256(
-                            abi.encode(
-                                "colosseum-pools/keyless", account, nonce, i, block.number, blockhash(block.number - 1)
-                            )
+    uint256 internal constant KEYLESS_TRIES = 8;
+
+    function keylessCandidate(address account, uint256 nonce, bytes32 salt, uint256 i)
+        internal
+        view
+        returns (address)
+    {
+        return address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encode(
+                            "colosseum-pools/keyless", account, nonce, salt, i, block.number, blockhash(block.number - 1)
                         )
                     )
                 )
-            );
+            )
+        );
+    }
+
+    /// @notice An address nobody holds a key for (it is a hash output), preferably one
+    ///         HyperCore has not seen. Used to replace an agent when a trader is cut off.
+    /// @dev If every candidate already exists on HyperCore (someone predicted and funded
+    ///      them), the last one is returned anyway rather than reverting: a revert here would
+    ///      let anyone block the stop. Whether Hyperliquid accepts an existing user as an
+    ///      agent is checked live by the spike; if the replacement fails, `recut` retries
+    ///      with a different salt, and settlement drains the account either way.
+    function keylessAddress(address account, uint256 nonce, bytes32 salt) internal view returns (address candidate) {
+        for (uint256 i = 0; i < KEYLESS_TRIES; ++i) {
+            candidate = keylessCandidate(account, nonce, salt, i);
             if (!exists(candidate)) return candidate;
         }
-        revert NoKeylessAddress();
     }
 }

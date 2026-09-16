@@ -45,19 +45,29 @@ contract ChallengeAccount is RuledAccount {
 
     /// Trader's share of the profit, owed once the challenge has passed (1e8 = 1 USDC).
     uint64 public payoutOwed;
-    uint64 public payoutPaid;
+    /// What was actually sent to the trader. Sent once, never re-sent, so a slow HyperCore
+    /// can't make it go out twice.
+    uint64 public payoutSent;
+    bool public payoutDone;
+    /// Spot balance when the payout was sent, and when. The rest goes to the pool only after
+    /// the payout shows up in the balance (or after PAYOUT_WAIT), so the pool's transfer can
+    /// never be executed ahead of the trader's.
+    uint64 public payoutSpotBefore;
+    uint64 public payoutAt;
+
+    uint64 public constant PAYOUT_WAIT = 5 minutes;
 
     event Started(address indexed trader, address indexed key, uint64 capital, uint64 deadline);
     event Stopped(Status indexed status, Breach indexed reason, int64 equity);
     event Passed(address indexed trader, int64 equity, uint64 payout);
     event PayoutSent(address indexed trader, uint64 amount);
-    event PayoutShort(address indexed trader, uint64 missing);
     event ReturnedToPool(uint64 amount);
     event Settled();
 
     error BadStatus(Status status);
     error NotTrader();
     error NotStartedOnCore();
+    error CapitalArrived();
     error TooEarly();
     error TooLate();
     error NotFlat();
@@ -79,8 +89,7 @@ contract ChallengeAccount is RuledAccount {
         status = Status.Created;
         createdAt = uint64(block.timestamp);
         // The key is reserved now, so a trader who paid can always start.
-        address key = factory_.registry().assign(trader_);
-        agentKey = key;
+        agentKey = factory_.registry().assign(trader_);
     }
 
     function terms() external view returns (Terms memory) {
@@ -91,6 +100,12 @@ contract ChallengeAccount is RuledAccount {
         return int64(_terms.capital);
     }
 
+    function isStopped() public view override returns (bool) {
+        Status s = status;
+        return s == Status.Breached || s == Status.Expired || s == Status.Forfeited || s == Status.Passed
+            || s == Status.Aborted;
+    }
+
     modifier inStatus(Status s) {
         if (status != s) revert BadStatus(status);
         _;
@@ -98,11 +113,16 @@ contract ChallengeAccount is RuledAccount {
 
     // ── start ────────────────────────────────────────────────────────────────────────
 
+    /// @notice Whether the capital has reached this account on HyperCore.
+    function capitalArrived() public view returns (bool) {
+        return CoreOps.exists(address(this))
+            && CoreOps.spotUsdc(address(this)) >= _terms.capital * Units.SPOT_PER_PERP;
+    }
+
     /// @notice Starts the challenge once the capital has reached this account on HyperCore.
     ///         Anyone may call it.
     function activate() external inStatus(Status.Created) {
-        if (!CoreOps.exists(address(this))) revert NotStartedOnCore();
-        if (CoreOps.spotUsdc(address(this)) < _terms.capital * Units.SPOT_PER_PERP) revert NotStartedOnCore();
+        if (!capitalArrived()) revert NotStartedOnCore();
 
         CoreOps.separateBalances(address(this));
         CoreOps.toPerp(_terms.capital);
@@ -118,11 +138,12 @@ contract ChallengeAccount is RuledAccount {
         emit Started(trader, agentKey, _terms.capital, deadline);
     }
 
-    /// @notice If the challenge never started, anyone may call this after the start window:
-    ///         the trader's payment is refunded and the reserved key retired. Whatever capital
-    ///         did arrive goes back to the pool through `settle`.
+    /// @notice If the capital never arrived, anyone may call this after the start window:
+    ///         the trader's payment is refunded and the reserved key retired. Anything that
+    ///         arrives later goes back to the pool through `settle`.
     function abort() external inStatus(Status.Created) {
         if (block.timestamp <= createdAt + START_WINDOW) revert TooEarly();
+        if (capitalArrived()) revert CapitalArrived();
         status = Status.Aborted;
         address key = agentKey;
         agentKey = address(0);
@@ -133,38 +154,47 @@ contract ChallengeAccount is RuledAccount {
 
     // ── while it runs ────────────────────────────────────────────────────────────────
 
-    /// @notice Takes the daily snapshot. The operator's keeper calls it at midnight UTC;
-    ///         anyone may.
+    /// @notice Takes the day's snapshot, in the first minutes of the UTC day. The operator's
+    ///         keeper calls it at midnight; anyone may.
     function checkpoint() external inStatus(Status.Active) {
-        _rollDay();
+        _checkpoint();
     }
 
     /// @notice Stops the challenge if a rule is broken right now. Anyone may call it.
     /// @param cancels open orders to cancel (read them from the info API)
     /// @param extraAssets assets outside the pool's list that the account may hold
-    function breach(Cancel[] calldata cancels, uint32[] calldata extraAssets) external inStatus(Status.Active) {
-        _rollDay();
+    /// @param salt any value; it only picks which keyless address replaces the agent
+    function breach(Cancel[] calldata cancels, uint32[] calldata extraAssets, bytes32 salt)
+        external
+        inStatus(Status.Active)
+    {
         Breach reason = violation(extraAssets);
         if (reason == Breach.None) revert NoBreach();
         breachReason = reason;
-        _end(Status.Breached, reason, cancels, extraAssets);
+        _end(Status.Breached, reason, cancels, extraAssets, salt);
     }
 
     /// @notice Ends a challenge whose time ran out. Anyone may call it.
-    function expire(Cancel[] calldata cancels, uint32[] calldata extraAssets) external inStatus(Status.Active) {
+    function expire(Cancel[] calldata cancels, uint32[] calldata extraAssets, bytes32 salt)
+        external
+        inStatus(Status.Active)
+    {
         if (block.timestamp <= deadline) revert TooEarly();
-        _end(Status.Expired, Breach.None, cancels, extraAssets);
+        _end(Status.Expired, Breach.None, cancels, extraAssets, salt);
     }
 
     /// @notice The trader walks away.
-    function forfeit(Cancel[] calldata cancels, uint32[] calldata extraAssets) external inStatus(Status.Active) {
+    function forfeit(Cancel[] calldata cancels, uint32[] calldata extraAssets, bytes32 salt)
+        external
+        inStatus(Status.Active)
+    {
         if (msg.sender != trader) revert NotTrader();
-        _end(Status.Forfeited, Breach.None, cancels, extraAssets);
+        _end(Status.Forfeited, Breach.None, cancels, extraAssets, salt);
     }
 
     /// @notice Passes the challenge: no rule broken, account flat, target met, in time.
     ///         Anyone may call it. The pool then funds the trader with a new key.
-    function graduate() external inStatus(Status.Active) {
+    function graduate(bytes32 salt) external inStatus(Status.Active) {
         if (block.timestamp > deadline) revert TooLate();
         Breach reason = violation(new uint32[](0));
         if (reason != Breach.None) revert RuleBroken(reason);
@@ -179,14 +209,16 @@ contract ChallengeAccount is RuledAccount {
         payoutOwed = SafeCast.toUint64((profit * _terms.traderShareBps * Units.SPOT_PER_PERP) / Units.BPS);
 
         status = Status.Passed;
-        _cutAgent();
+        _cutAgent(salt);
         emit Passed(trader, eq, payoutOwed);
         pool.onChallengePassed(trader);
     }
 
-    function _end(Status s, Breach reason, Cancel[] calldata cancels, uint32[] calldata extraAssets) internal {
+    function _end(Status s, Breach reason, Cancel[] calldata cancels, uint32[] calldata extraAssets, bytes32 salt)
+        internal
+    {
         status = s;
-        _cutAgent();
+        _cutAgent(salt);
         _cancelAll(cancels);
         _closeAll(extraAssets);
         emit Stopped(s, reason, CoreOps.equity(address(this)));
@@ -195,39 +227,41 @@ contract ChallengeAccount is RuledAccount {
     // ── after it ends ────────────────────────────────────────────────────────────────
 
     /// @notice One settlement step; call until `status` is Settled. Anyone may call it.
-    function settle(uint32[] calldata extraAssets) external {
-        Status s = status;
-        if (s != Status.Breached && s != Status.Expired && s != Status.Forfeited && s != Status.Passed && s != Status.Aborted) {
-            revert BadStatus(s);
-        }
-        (uint256 open, uint64 free, uint64 spot) = _drainStep(extraAssets);
-        if (open != 0) return;
+    /// @param cancels orders still resting on the account (a resting order holds margin)
+    /// @param extraAssets assets outside the pool's list that may still hold a position
+    function settle(Cancel[] calldata cancels, uint32[] calldata extraAssets) external {
+        if (!isStopped()) revert BadStatus(status);
+        (uint256 open, uint64 free, uint64 spot) = _drainStep(cancels, extraAssets);
+        // Wait until the perp side is fully on spot: from then on the spot balance only
+        // changes through our own sends (and anyone's donations, which go to the pool).
+        if (open != 0 || free != 0) return;
 
-        // Nothing on perp, nothing free, nothing on spot at the start of this block, and no
-        // transfer of ours can be in flight without showing up in one of them: done.
-        if (free == 0 && spot == 0 && CoreOps.equity(address(this)) <= 0) {
-            if (payoutPaid < payoutOwed) emit PayoutShort(trader, payoutOwed - payoutPaid);
-            status = Status.Settled;
-            emit Settled();
-            pool.onChallengeSettled();
-            return;
-        }
-
-        // The trader is paid in a call of its own, and the pool gets what is left in a later
-        // one. A send to an address HyperCore hasn't seen may cost the sender an activation
-        // fee, so the balance after the payout is only known a block later.
-        uint64 owed = payoutOwed - payoutPaid;
-        if (owed != 0) {
+        if (payoutOwed != 0 && !payoutDone) {
             if (spot == 0) return;
-            uint64 pay = spot < owed ? spot : owed;
-            payoutPaid += pay;
+            uint64 pay = spot < payoutOwed ? spot : payoutOwed;
+            payoutDone = true;
+            payoutSent = pay;
+            payoutSpotBefore = spot;
+            payoutAt = uint64(block.timestamp);
             CoreOps.sendUsdc(trader, pay);
             emit PayoutSent(trader, pay);
             return;
         }
+
+        if (payoutDone && spot + payoutSent > payoutSpotBefore && block.timestamp <= payoutAt + PAYOUT_WAIT) {
+            return; // the payout hasn't landed yet
+        }
+
         if (spot != 0) {
             CoreOps.sendUsdc(address(pool), spot);
             emit ReturnedToPool(spot);
+            return;
+        }
+
+        if (CoreOps.equity(address(this)) <= 0) {
+            status = Status.Settled;
+            emit Settled();
+            pool.onChallengeSettled();
         }
     }
 }

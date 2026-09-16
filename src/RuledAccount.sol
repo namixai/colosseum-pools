@@ -18,16 +18,25 @@ interface IFactoryView {
 ///      CoreWriter writes land a few seconds later. So a stop is a sequence of calls: one
 ///      that cuts the agent and sends the closing orders, then settle calls until the
 ///      account is flat and its perp balance is back on spot.
+///
+///      Daily loss is measured from the latest snapshot. A snapshot can only be taken in the
+///      first minutes of a UTC day, so nobody, the trader included, can pick a convenient
+///      moment later in the day. If nobody takes one, the previous snapshot stays in force;
+///      depending on how equity moved since, that makes the day's limit tighter or looser
+///      than the true start of the day would. The operator's keeper takes it at midnight,
+///      and anyone else may.
 abstract contract RuledAccount is Initializable {
     /// Slippage allowed on the orders a stop sends to close positions.
     uint16 public constant CLOSE_SLIPPAGE_BPS = 500;
+    /// How long after UTC midnight the day's snapshot may be taken.
+    uint256 public constant CHECKPOINT_WINDOW = 15 minutes;
 
     IFactoryView public factory;
 
     Rules internal _rules;
     mapping(uint32 asset => bool) internal _allowedAsset;
 
-    /// UTC day of the daily snapshot, and equity at that snapshot (1e6 = 1 USDC).
+    /// UTC day of the latest daily snapshot, and equity at that snapshot (1e6 = 1 USDC).
     uint32 public day;
     int64 public dayStartEquity;
 
@@ -45,7 +54,9 @@ abstract contract RuledAccount is Initializable {
     error TooManyAssets();
     error TooManyCancels();
     error NoBreach();
-    error NotOnCore();
+    error NotStopped();
+    error OutsideCheckpointWindow();
+    error AlreadyCheckpointed();
 
     function __RuledAccount_init(IFactoryView factory_, Rules memory rules_) internal onlyInitializing {
         factory = factory_;
@@ -72,6 +83,9 @@ abstract contract RuledAccount is Initializable {
     /// @notice Equity the static drawdown is measured from (1e6 = 1 USDC).
     function drawdownBase() public view virtual returns (int64);
 
+    /// @notice Whether the account has been stopped and not yet fully settled.
+    function isStopped() public view virtual returns (bool);
+
     /// @notice Which rule the account breaks right now, if any. `extraAssets` are assets
     ///         outside the pool's list that the caller believes the account holds.
     function violation(uint32[] memory extraAssets) public view returns (Breach) {
@@ -82,7 +96,7 @@ abstract contract RuledAccount is Initializable {
         int256 base = drawdownBase();
         if (eq * bps < base * (bps - int256(uint256(_rules.maxDrawdownBps)))) return Breach.Drawdown;
 
-        if (day == _today() && dayStartEquity > 0) {
+        if (dayStartEquity > 0) {
             if (eq * bps < int256(dayStartEquity) * (bps - int256(uint256(_rules.dailyLossBps)))) {
                 return Breach.DailyLoss;
             }
@@ -101,20 +115,32 @@ abstract contract RuledAccount is Initializable {
         return Breach.None;
     }
 
+    // ── anyone ───────────────────────────────────────────────────────────────────────
+
+    /// @notice Replaces the agent of a stopped account again, with another fresh keyless
+    ///         address. Useful if the replacement sent by the stop did not take effect on
+    ///         HyperCore (for example because someone funded the chosen address first).
+    ///         `salt` is any value the caller picks; it only changes which keyless address
+    ///         is used.
+    function recut(bytes32 salt) external {
+        if (!isStopped()) revert NotStopped();
+        _cutAgent(salt);
+    }
+
     // ── internals for the stop and the settlement ────────────────────────────────────
 
     function _today() internal view returns (uint32) {
         return uint32(block.timestamp / 1 days);
     }
 
-    /// @dev Takes the day's snapshot if this is the first touch of a new UTC day.
-    function _rollDay() internal {
+    /// @dev The day's snapshot, allowed once per day and only just after UTC midnight.
+    function _checkpoint() internal {
+        if (block.timestamp % 1 days >= CHECKPOINT_WINDOW) revert OutsideCheckpointWindow();
         uint32 today = _today();
-        if (today > day) {
-            day = today;
-            dayStartEquity = CoreOps.equity(address(this));
-            emit DaySnapshot(today, dayStartEquity);
-        }
+        if (today <= day) revert AlreadyCheckpointed();
+        day = today;
+        dayStartEquity = CoreOps.equity(address(this));
+        emit DaySnapshot(today, dayStartEquity);
     }
 
     function _startDay(int64 equity_) internal {
@@ -130,9 +156,11 @@ abstract contract RuledAccount is Initializable {
     }
 
     /// @dev Replaces the agent with a fresh keyless address and retires the old key for good.
-    function _cutAgent() internal {
+    ///      Never reverts on the choice of address, so nobody can block a stop by funding
+    ///      the candidates in advance.
+    function _cutAgent(bytes32 salt) internal {
         address old = agentKey;
-        address keyless = CoreOps.keylessAddress(address(this), _keylessNonce++);
+        address keyless = CoreOps.keylessAddress(address(this), _keylessNonce++, salt);
         CoreOps.setAgent(keyless);
         agentKey = address(0);
         if (old != address(0)) factory.registry().retire(old);
@@ -176,9 +204,14 @@ abstract contract RuledAccount is Initializable {
         if (open != 0) emit ClosingOrders(open);
     }
 
-    /// @dev One settlement step: close what is open; if nothing is, move the free perp balance
-    ///      to spot. Returns what the start-of-block state showed.
-    function _drainStep(uint32[] memory extra) internal returns (uint256 open, uint64 free, uint64 spot) {
+    /// @dev One settlement step: cancel the named orders (a resting order holds margin, so
+    ///      this has to be repeatable), close what is open, and if nothing is, move the free
+    ///      perp balance to spot. Returns what the start-of-block state showed.
+    function _drainStep(Cancel[] memory cancels, uint32[] memory extra)
+        internal
+        returns (uint256 open, uint64 free, uint64 spot)
+    {
+        _cancelAll(cancels);
         open = _closeAll(extra);
         if (open != 0) return (open, 0, 0);
         free = CoreOps.withdrawable(address(this));
