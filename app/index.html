@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pools on Hyperliquid · testnet</title>
+  <meta name="description" content="Investors open pools with rules; traders and AI agents take challenges without ever holding a key. Hyperliquid testnet.">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.17.0/ethers.umd.min.js"
+    integrity="sha512-AtjhVooOwBRjcpe7YjaQI6VDIBYNqpPGbuhQi0RtmoWQDD9mf9tu4p2jGXLiSw0nhE1JBvOjAbQL43yrva6C2g=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="#/">Pools <span>on Hyperliquid</span></a>
+    <nav>
+      <a href="#/">Pools</a>
+      <a href="#/new">New pool</a>
+      <a href="#/verify">Check it yourself</a>
+    </nav>
+    <button id="wallet" class="secondary">Connect wallet</button>
+  </header>
+  <div class="notice">Hyperliquid <strong>testnet</strong> and mock USDC. Not available to US persons.</div>
+  <main id="view"><p class="muted">Loading…</p></main>
+  <footer>
+    <span>Keys live in the Usenami Signer enclave; nobody hands a trader a key.</span>
+    <a href="#/terms">Terms</a>
+  </footer>
+  <dialog id="gate">
+    <h2>Before you continue</h2>
+    <p>This is a hackathon demo on Hyperliquid <strong>testnet</strong>, with mock funds that have no value.
+    It is not available to residents of the United States or to anyone acting for them.</p>
+    <label class="check"><input type="checkbox" id="gate-us"> I am not a US person, and I understand this is a testnet demo.</label>
+    <p><button id="gate-ok" disabled>Continue</button></p>
+  </dialog>
+</body>
+</html>

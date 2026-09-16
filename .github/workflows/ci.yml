@@ -55,6 +55,13 @@ jobs:
       - name: test
         run: python -m unittest discover -s gateway/tests -t . -v
 
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: pure helpers (CBOR, number formats)
+        run: node --test app/tests/
+
   contracts:
     runs-on: ubuntu-latest
     steps:
