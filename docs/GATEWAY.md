@@ -51,18 +51,36 @@ another.
 4. `key = RuledAccount.agentKey(account)` and `KeyRegistry.isBound(key, account, trader)`.
 5. The asset is in the account's rules. The enclave checks the platform list and the size
    caps again on its side.
-6. `(trader, nonce)` hasn't been seen.
+6. `(trader, nonce)` hasn't been seen. The gateway remembers a pair until its request
+   expires; after that the request fails check 1 anyway. The book holds at most a minute of
+   traffic and answers `503 busy` past 100,000 entries instead of growing.
 
 ## Signing and submission
 
 7. The gateway builds the action and sends it to the Signer demo gateway (`POST /sign`,
    exchange `hyperliquid_testnet`, the same `kind`, the action, the trader's `nonce`) with the
    bearer token of the tenant that holds `key`.
-8. It recovers the signer of the returned signature the way Hyperliquid will (phantom agent,
-   source `b`) and refuses to submit unless it is `key`.
+8. It checks that the returned signature has Hyperliquid's shape (`r` and `s` as hex, `v` an
+   integer 27 or 28), recovers its signer the way Hyperliquid will (phantom agent, source
+   `b`) and refuses to submit unless it is `key`.
 9. It submits to `https://api.hyperliquid-testnet.xyz/exchange` and returns Hyperliquid's
    answer together with the enclave's signed decision receipt. A refusal comes back with its
-   receipt and nothing is submitted.
+   receipt and the Signer's short reason (`error`, `reason`, `code`, `message`), and nothing
+   is submitted.
+
+## Answers
+
+| HTTP | `status` | meaning |
+|---|---|---|
+| 200 | `submitted` | Hyperliquid's answer is in `venue`; it can still reject the order there |
+| 4xx | `refused_by_gateway` | a check failed; `code` says which |
+| 403 | `refused_by_signer` | the enclave refused; its signed receipt is in `receipt` |
+| 502 | `signature_mismatch`, `bad_signer_response` | the Signer's answer can't be submitted; nothing was |
+| 502 | `gateway_error` (`upstream_failed`) | a chain read or the Signer call failed; nothing was submitted |
+| 502 | `venue_unreachable` | the call to Hyperliquid failed; the order may or may not have arrived, so check the account |
+| 503 | (empty body) | more than 32 connections at once |
+
+A connection that sends nothing for 10 seconds is closed.
 
 ## What the gateway does not prove
 

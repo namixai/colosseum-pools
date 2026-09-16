@@ -3,6 +3,7 @@ is reached through a ChainReader, so the checks can be tested against a fake."""
 
 from __future__ import annotations
 
+import heapq
 import re
 import threading
 from dataclasses import dataclass
@@ -13,6 +14,9 @@ from eth_utils import is_hex_address, to_checksum_address
 from . import auth
 
 MAX_EXPIRY_MS = 60_000
+# Requests live for at most a minute, so the nonce book holds at most a minute of traffic;
+# past this many entries the gateway answers "busy" instead of growing.
+MAX_NONCES = 100_000
 TIFS = ("Alo", "Gtc", "Ioc")
 # Hyperliquid normalizes numbers before it checks a signature, so a non-canonical string
 # ("0.0010", "60000.0") signs one thing and verifies another. Only canonical ones pass.
@@ -142,18 +146,29 @@ class Request:
 
 class NonceBook:
     """(trader, nonce) pairs already used. Hyperliquid refuses a repeated nonce too; this stops
-    a replayed request before it costs an enclave call."""
+    a replayed request before it costs an enclave call.
 
-    def __init__(self) -> None:
-        self._seen: set[tuple[str, int]] = set()
+    An entry is kept until its request expires. After that the request is refused as expired
+    before its nonce is looked up, so the entry has nothing left to stop."""
+
+    def __init__(self, limit: int = MAX_NONCES) -> None:
+        self._seen: dict[tuple[str, int], int] = {}
+        self._by_expiry: list[tuple[int, tuple[str, int]]] = []
+        self._limit = limit
         self._lock = threading.Lock()
 
-    def claim(self, trader: str, nonce: int) -> bool:
+    def claim(self, trader: str, nonce: int, expires_at: int, now_ms: int) -> bool:
         with self._lock:
+            while self._by_expiry and self._by_expiry[0][0] <= now_ms:
+                _, old = heapq.heappop(self._by_expiry)
+                self._seen.pop(old, None)
             k = (trader.lower(), nonce)
             if k in self._seen:
                 return False
-            self._seen.add(k)
+            if len(self._seen) >= self._limit:
+                raise GatewayError(503, "busy", "too many requests in the last minute")
+            self._seen[k] = expires_at
+            heapq.heappush(self._by_expiry, (expires_at, k))
             return True
 
 
@@ -182,6 +197,6 @@ def check(req: Request, reader: ChainReader, now_ms: int, nonces: NonceBook) -> 
     if req.asset not in reader.allowed_assets(req.account):
         raise GatewayError(403, "asset_not_allowed", str(req.asset))
 
-    if not nonces.claim(trader, req.nonce):
+    if not nonces.claim(trader, req.nonce, req.expires_at, now_ms):
         raise GatewayError(409, "replayed", "this nonce was already used")
     return Cleared(trader=trader, key=key)

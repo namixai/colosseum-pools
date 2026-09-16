@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import time
 import unittest
 
 from eth_account import Account
@@ -191,6 +192,13 @@ class Checks(Base):
         check(req, self.reader, NOW, self.nonces)
         self.assertRefused("replayed", req)
 
+    def test_replay_after_expiry_is_refused_as_expired(self):
+        req = self.request()
+        check(req, self.reader, NOW, self.nonces)
+        with self.assertRaises(GatewayError) as ctx:
+            check(req, self.reader, NOW + 30_000, self.nonces)
+        self.assertEqual(ctx.exception.code, "expired")
+
     def test_refused_request_does_not_burn_the_nonce(self):
         self.reader.trading = False
         self.assertRefused("not_trading", self.request())
@@ -235,6 +243,41 @@ class Checks(Base):
         self.assertEqual(self.request(kind="cancel").action(), {"type": "cancel", "cancels": [{"a": 3, "o": 42}]})
 
 
+class NonceBookLimits(unittest.TestCase):
+    TRADER = "0x00000000000000000000000000000000000000C3"
+
+    def test_forgets_only_expired_entries(self):
+        book = NonceBook()
+        self.assertTrue(book.claim(self.TRADER, 1, NOW + 10, NOW))
+        self.assertFalse(book.claim(self.TRADER, 1, NOW + 10, NOW + 9))
+        # Once its request has expired, check() refuses the request before the book is asked.
+        self.assertTrue(book.claim(self.TRADER, 1, NOW + 30, NOW + 10))
+
+    def test_is_bounded(self):
+        book = NonceBook(limit=2)
+        self.assertTrue(book.claim(self.TRADER, 1, NOW + 10, NOW))
+        self.assertTrue(book.claim(self.TRADER, 2, NOW + 10, NOW))
+        with self.assertRaises(GatewayError) as ctx:
+            book.claim(self.TRADER, 3, NOW + 10, NOW)
+        self.assertEqual((ctx.exception.status, ctx.exception.code), (503, "busy"))
+        self.assertTrue(book.claim(self.TRADER, 3, NOW + 20, NOW + 10))
+
+
+class ScriptedSigner:
+    """A Signer that answers whatever the test tells it to."""
+
+    def __init__(self, key_address: str, answer):
+        self.key_address, self.answer = key_address, answer
+
+    def has_key(self, key):
+        return key.lower() == self.key_address.lower()
+
+    def sign(self, key, kind, action, nonce):
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
 class Flow(Base):
     def gateway(self, signer):
         self.submitted = []
@@ -276,14 +319,52 @@ class Flow(Base):
         self.assertEqual((status, out["code"]), (409, "not_trading"))
         self.assertEqual(signer.calls, [])
 
+    def test_malformed_enclave_signature_is_never_submitted(self):
+        for sig in ({"r": "oops", "s": "0x1", "v": 27}, {"r": "0x1", "s": "0x1", "v": 27.0},
+                    {"r": "0x1", "s": "0x1", "v": True}, "0x" + "11" * 65):
+            signer = ScriptedSigner(self.enclave_key.address, SignResult(200, sig, {"decision": "allow"}, {}))
+            status, out = self.gateway(signer).handle_order(self.body(nonce=NOW + len(str(sig))))
+            self.assertEqual((status, out["status"]), (502, "bad_signer_response"), sig)
+            self.assertEqual(self.submitted, [])
+
+    def test_upstream_failure_is_an_answer_not_a_crash(self):
+        import requests
+
+        signer = ScriptedSigner(self.enclave_key.address, requests.ConnectionError("signer down"))
+        status, out = self.gateway(signer).handle_order(self.body())
+        self.assertEqual((status, out), (502, {"status": "gateway_error", "code": "upstream_failed"}))
+
+        def rpc_down(account):
+            raise requests.Timeout("rpc down")
+
+        self.reader.is_account = rpc_down
+        status, out = self.gateway(FakeSigner(self.enclave_key, self.enclave_key.address)).handle_order(
+            self.body(nonce=NOW + 1))
+        self.assertEqual((status, out["code"]), (502, "upstream_failed"))
+        self.assertEqual(self.submitted, [])
+
+    def test_unreachable_venue_is_reported_with_the_receipt(self):
+        gw = self.gateway(FakeSigner(self.enclave_key, self.enclave_key.address))
+
+        def venue_down(action, nonce, signature):
+            raise TimeoutError("venue down")
+
+        gw.submit = venue_down
+        status, out = gw.handle_order(self.body())
+        self.assertEqual((status, out["status"]), (502, "venue_unreachable"))
+        self.assertEqual(out["receipt"], {"decision": "allow"})
+
+    def test_enclave_refusal_passes_on_only_the_reason(self):
+        body = {"error": "policy_denied", "receipt": {"decision": "deny"}, "internal": "not for callers"}
+        signer = ScriptedSigner(self.enclave_key.address, SignResult(403, None, {"decision": "deny"}, body))
+        status, out = self.gateway(signer).handle_order(self.body())
+        self.assertEqual((status, out["signer"]), (403, {"error": "policy_denied"}))
+
     def test_key_without_a_token(self):
         other = Account.create(os.urandom(32))
         status, out = self.gateway(FakeSigner(other, other.address)).handle_order(self.body())
         self.assertEqual((status, out["code"]), (503, "key_not_configured"))
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class Http(unittest.TestCase):
@@ -337,6 +418,88 @@ class Http(unittest.TestCase):
         self.assertEqual(self.call("GET", "/v1/health")[0], 200)
 
 
+class HttpLimits(unittest.TestCase):
+    """Timeouts, the connection cap and bad headers, on a real socket."""
+
+    def serve(self, max_active=32, request_timeout=0.5):
+        import threading
+
+        from gateway.server import BoundedServer, make_handler
+
+        calls = []
+
+        class Stub:
+            def handle_order(self, body):
+                calls.append(body)
+                return 200, {"status": "echo"}
+
+        server = BoundedServer(("127.0.0.1", 0), make_handler(Stub(), "", request_timeout), max_active=max_active)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server.server_address[1], calls
+
+    @staticmethod
+    def raw(port, data: bytes):
+        import socket
+
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        if data:
+            sock.sendall(data)
+        return sock
+
+    @staticmethod
+    def read_all(sock) -> bytes:
+        chunks = []
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+
+    def test_bad_content_length(self):
+        port, calls = self.serve()
+        sock = self.raw(port, b"POST /v1/order HTTP/1.1\r\nHost: t\r\nContent-Length: abc\r\nConnection: close\r\n\r\n")
+        self.assertTrue(self.read_all(sock).startswith(b"HTTP/1.0 413"))
+        sock.close()
+        self.assertEqual(calls, [])
+
+    def test_a_silent_client_is_dropped(self):
+        port, _ = self.serve(request_timeout=0.5)
+        started = time.monotonic()
+        sock = self.raw(port, b"POST /v1/order HTTP/1.1\r\nHost: t\r\nContent-Length: 100\r\n\r\n")
+        self.assertEqual(self.read_all(sock), b"")
+        self.assertLess(time.monotonic() - started, 4)
+        sock.close()
+
+    def test_busy_server_answers_503_and_frees_the_slot(self):
+        port, calls = self.serve(max_active=1, request_timeout=3)
+        holder = self.raw(port, b"POST /v1/order HTTP/1.1")  # an unfinished line holds the only slot
+        busy = self.raw(port, b"")
+        self.assertTrue(self.read_all(busy).startswith(b"HTTP/1.1 503"))
+        busy.close()
+        holder.close()
+        body = b'{"kind": "order"}'
+        request = b"POST /v1/order HTTP/1.1\r\nHost: t\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s" % (
+            len(body), body)
+        deadline = time.monotonic() + 3
+        answer = b""
+        while time.monotonic() < deadline:
+            try:
+                sock = self.raw(port, request)
+                try:
+                    answer = self.read_all(sock)
+                finally:
+                    sock.close()
+            except OSError:  # the slot was still taken: answered 503 and closed mid-send
+                answer = b""
+            if b" 200 " in answer.split(b"\r\n", 1)[0]:
+                break
+            time.sleep(0.05)
+        self.assertIn(b" 200 ", answer.split(b"\r\n", 1)[0])
+        self.assertEqual(len(calls), 1)
+
+
 class AppAgreesWithGateway(unittest.TestCase):
     """The browser app signs with its own copy of the EIP-712 types. A field renamed or
     reordered on one side only would make every signature from the app fail to verify."""
@@ -352,3 +515,7 @@ class AppAgreesWithGateway(unittest.TestCase):
             self.assertEqual(js_fields, [(f["name"], f["type"]) for f in py_fields], name)
         domain = re.search(r"const DOMAIN = \{ name: \"([^\"]+)\", version: \"(\d+)\"", js)
         self.assertEqual((domain.group(1), domain.group(2)), (auth.DOMAIN["name"], auth.DOMAIN["version"]))
+
+
+if __name__ == "__main__":
+    unittest.main()
