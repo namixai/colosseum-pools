@@ -427,8 +427,12 @@ def cmd_q2(args, state: dict) -> None:
     resp = ex._post_action(action, sig, nonce)
     c.record("q2_eoa_approve_same_agent", response=resp, role_after=role(agent_d))
 
-    # Which account does an agent-d order land on now?
+    # Which account does an agent-d order land on now? Both need margin to rest it.
     if float(c.core_snapshot(b)["perpAccountValue"]) < 5:
+        if float(c.core_snapshot(b)["spotUSDC"]) < args.margin:
+            c.transact(deployer, a, "spotSend(address,uint64,uint64)", ["address", "uint64", "uint64"],
+                       [b, c.USDC_TOKEN, int(round(args.margin * 1e8))])
+            wait_until("B spot funded", lambda: c.core_snapshot(b), lambda s: float(s["spotUSDC"]) >= args.margin)
         c.transact(deployer, b, "usdClassTransfer(uint64,bool)", ["uint64", "bool"], [int(args.margin * 1e6), True])
         wait_until("B perp margin", lambda: c.core_snapshot(b), lambda s: float(s["perpAccountValue"]) >= 5)
     m = mid(PERP)
