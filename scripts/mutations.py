@@ -5,7 +5,7 @@ Each mutation breaks one guarantee in `src/`. The run applies it, runs `forge te
 requires that every named test goes red (other red tests are listed too). It then
 restores the file byte for byte.
 
-    python3 scripts/mutations.py            # all (M: contracts, G: gateway, A: agent client)
+    python3 scripts/mutations.py            # all (M: contracts, G: gateway, A: agent client, J: app)
     python3 scripts/mutations.py M5 G2      # some
 
 Exit 0 only if every mutation applied exactly once and turned every named test red. A
@@ -199,6 +199,35 @@ MUTATIONS = [
      '"signature": auth.sign(self.wallet, kind, fields)}',
      '"signature": auth.sign(self.wallet, "order", fields)}',
      ["test_cancel_clears_every_gateway_check"]),
+    # ── app (node --test) ──
+    ("J1", "app/lib/cbor.js",
+     '    if (++depth > MAX_DEPTH) throw new Error("CBOR nesting too deep");',
+     "    ++depth;",
+     ["cbor: hostile input fails fast"]),
+    ("J2", "app/lib/cbor.js",
+     "  function itemAt() {\n    need(1);",
+     "  function itemAt() {",
+     ["cbor: hostile input fails fast"]),
+    ("J3", "app/lib/cbor.js",
+     "  const atBreak = () => {\n    need(1);\n",
+     "  const atBreak = () => {\n",
+     ["cbor: hostile input fails fast"]),
+    ("J4", "app/lib/cbor.js",
+     'throw new Error(i > bytes.length ? "CBOR input ends early" : "trailing bytes after the CBOR item");',
+     'throw new Error("trailing bytes after the CBOR item");',
+     ["cbor: hostile input fails fast"]),
+    ("J5", "app/lib/cbor.js",
+     "if (info === 24) { need(1); return bytes[i++]; }",
+     "if (info === 24) { return bytes[i++]; }",
+     ["cbor: hostile input fails fast"]),
+    ("J6", "app/lib/cbor.js",
+     "if (info === 25) { need(2); const v",
+     "if (info === 25) { const v",
+     ["cbor: hostile input fails fast"]),
+    ("J7", "app/lib/gateway.js",
+     'if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {',
+     "if (false) {",
+     ["the gateway is reached over https unless it runs on this machine"]),
 ]
 
 RUNNERS = {
@@ -207,7 +236,11 @@ RUNNERS = {
           r"^(?:FAIL|ERROR): (\w+) \("),
     "A": (["spike/.venv/bin/python", "-m", "unittest", "discover", "-s", "agents/tests", "-t", "."],
           r"^(?:FAIL|ERROR): (\w+) \("),
+    "J": (["node", "--test", "--test-reporter=tap", "app/tests/"], r"^\s*not ok \d+ - (.+?)\s*$"),
 }
+
+# A mutation can turn a bounded loop into an endless one; that has to end the run, not hang it.
+RUN_TIMEOUT_S = 900
 
 
 def failing_tests(output: str, pattern: str) -> set[str]:
@@ -232,7 +265,12 @@ def run(selected: list[str]) -> int:
             continue
         path.write_text(text.replace(old, new), encoding="utf-8")
         try:
-            proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+            try:
+                proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=RUN_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                print(f"{mid}: TIMED OUT after {RUN_TIMEOUT_S}s")
+                problems += 1
+                continue
             out = proc.stdout + proc.stderr
             if "Compiler run failed" in out or "Error (" in out or "SyntaxError" in out:
                 print(f"{mid}: DID NOT COMPILE")

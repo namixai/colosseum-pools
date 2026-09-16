@@ -1,21 +1,36 @@
 // A minimal CBOR reader, enough to open a Nitro attestation document (COSE_Sign1) and read
 // fields out of its signed payload. It does not check the signature; that is a separate step.
+//
+// The document comes over the network, so the reader treats it as hostile. Every item and
+// every length is checked against the end of the input: past the end a byte reads as
+// `undefined`, which would decode as 0 and spin a loop forever. Nesting is capped, and a
+// declared length that runs past the end fails at the final check.
+
+const MAX_DEPTH = 16;
 
 export function decode(bytes) {
   let i = 0;
+  let depth = 0;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  function need(n) {
+    if (i + n > bytes.length) throw new Error("CBOR input ends early");
+  }
 
   function length(info) {
     if (info < 24) return info;
-    if (info === 24) return bytes[i++];
-    if (info === 25) { const v = view.getUint16(i); i += 2; return v; }
-    if (info === 26) { const v = view.getUint32(i); i += 4; return v; }
-    if (info === 27) { const v = view.getBigUint64(i); i += 8; return Number(v); }
+    if (info === 24) { need(1); return bytes[i++]; }
+    if (info === 25) { need(2); const v = view.getUint16(i); i += 2; return v; }
+    if (info === 26) { need(4); const v = view.getUint32(i); i += 4; return v; }
+    if (info === 27) { need(8); const v = view.getBigUint64(i); i += 8; return Number(v); }
     throw new Error(`unsupported CBOR length ${info}`);
   }
 
   const BREAK = 0xff;
-  const atBreak = () => bytes[i] === BREAK && (i++, true);
+  const atBreak = () => {
+    need(1);
+    return bytes[i] === BREAK && (i++, true);
+  };
 
   function chunks(major) {
     // Indefinite-length string: definite-length chunks of the same major type, then a break.
@@ -34,6 +49,16 @@ export function decode(bytes) {
   }
 
   function item() {
+    if (++depth > MAX_DEPTH) throw new Error("CBOR nesting too deep");
+    try {
+      return itemAt();
+    } finally {
+      depth--;
+    }
+  }
+
+  function itemAt() {
+    need(1);
     const head = bytes[i++];
     const major = head >> 5;
     const info = head & 0x1f;
@@ -75,7 +100,9 @@ export function decode(bytes) {
   }
 
   const value = item();
-  if (i !== bytes.length) throw new Error("trailing bytes after the CBOR item");
+  if (i !== bytes.length) {
+    throw new Error(i > bytes.length ? "CBOR input ends early" : "trailing bytes after the CBOR item");
+  }
   return value;
 }
 

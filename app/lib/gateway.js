@@ -30,8 +30,19 @@ function window45s() {
   return { nonce, expiresAt: nonce + 45_000 };
 }
 
+// Orders and the gateway's answers carry account data, so anything but a gateway on this
+// machine has to be reached over https.
+export function orderUrl(base) {
+  const url = new URL(base);
+  const local = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new Error(`the gateway must be reached over https, not ${url.protocol}//${url.host}`);
+  }
+  return `${base.replace(/\/+$/, "")}/v1/order`;
+}
+
 async function post(body) {
-  const res = await fetch(`${CONFIG.gateway}/v1/order`, {
+  const res = await fetch(orderUrl(CONFIG.gateway), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
