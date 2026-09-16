@@ -153,7 +153,8 @@ def erc20_balance(token: str, addr: str) -> int:
     return call_view(token, "balanceOf(address)", ["address"], [addr], ["uint256"])[0]
 
 
-def wait_receipt(tx_hash: str, timeout_s: int = 90) -> dict:
+def wait_receipt(tx_hash: str, timeout_s: int = 180) -> dict:
+    # Big blocks come about once a minute, so allow a few of them.
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         rcpt = rpc("eth_getTransactionReceipt", [tx_hash])
