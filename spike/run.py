@@ -177,10 +177,26 @@ def cmd_status(_args, state: dict) -> None:
     c.record("status_burned_agents", burned=state["burned_agents"])
 
 
+def ensure_spot_usdc(acct, amount: float) -> None:
+    """A transfer from someone's testnet account may land on the perp side (usdSend) or on
+    the spot side (spotSend). The spike spends from spot, so move it over if needed."""
+    snap = c.core_snapshot(acct.address)
+    spot, perp = float(snap["spotUSDC"]), float(snap["withdrawable"] or 0)
+    if spot >= amount:
+        return
+    move = min(perp, amount - spot)
+    if move <= 0:
+        raise SystemExit(f"{acct.address} has {spot} USDC on spot and {perp} on perp; need {amount}")
+    resp = c.exchange(acct).usd_class_transfer(round(move, 6), False)
+    c.record("perp_to_spot", amount=move, response=resp)
+    wait_until("spot USDC", lambda: float(c.core_snapshot(acct.address)["spotUSDC"]), lambda v: v >= amount)
+
+
 def cmd_gas(args, _state: dict) -> None:
     """Buy a little testnet HYPE on HyperCore spot and move part of it to the deployer's
     HyperEVM address, which needs it for gas. Mock funds only."""
     deployer = c.account("deployer")
+    ensure_spot_usdc(deployer, 100.0)
     ex = c.exchange(deployer)
     spot = c.info_post({"type": "spotMeta"})
     tokens = {t["index"]: t for t in spot["tokens"]}
