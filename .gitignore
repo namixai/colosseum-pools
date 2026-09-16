@@ -1,0 +1,27 @@
+# Foundry
+out/
+cache/
+broadcast/
+
+# Node
+node_modules/
+dist/
+.next/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Secrets never live in this tree. Keys for the testnet demo wallets are kept outside the
+# repository; these lines are a second fence, not the first.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+keystore/
+
+# macOS
+.DS_Store
+._*
