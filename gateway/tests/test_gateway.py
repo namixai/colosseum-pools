@@ -335,3 +335,20 @@ class Http(unittest.TestCase):
         self.assertEqual(self.call("POST", "/v1/order", b"x" * (64 * 1024 + 1))[0], 413)
         self.assertEqual(self.call("POST", "/elsewhere", b"{}")[0], 404)
         self.assertEqual(self.call("GET", "/v1/health")[0], 200)
+
+
+class AppAgreesWithGateway(unittest.TestCase):
+    """The browser app signs with its own copy of the EIP-712 types. A field renamed or
+    reordered on one side only would make every signature from the app fail to verify."""
+
+    def test_types_and_domain_match(self):
+        import pathlib
+        import re
+
+        js = (pathlib.Path(__file__).resolve().parents[2] / "app" / "lib" / "gateway.js").read_text()
+        for name, py_fields in (("Order", auth.ORDER_TYPE), ("Cancel", auth.CANCEL_TYPE)):
+            block = re.search(rf"{name}: \[(.*?)\]", js, re.S).group(1)
+            js_fields = re.findall(r'\{ name: "(\w+)", type: "(\w+)" \}', block)
+            self.assertEqual(js_fields, [(f["name"], f["type"]) for f in py_fields], name)
+        domain = re.search(r"const DOMAIN = \{ name: \"([^\"]+)\", version: \"(\d+)\"", js)
+        self.assertEqual((domain.group(1), domain.group(2)), (auth.DOMAIN["name"], auth.DOMAIN["version"]))
