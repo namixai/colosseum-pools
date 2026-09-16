@@ -21,6 +21,19 @@ merges it; a separate coordinating session reads it, argues with it and decides.
 earlier projects that gate has sent work back more than once. It is still a model, though,
 and we won't call it a human reviewer.
 
+## Claude inside the demo
+
+One of the demo's traders is Claude itself. `agents/ai_trader.py` gives it a few tools: read
+the account, read one market, place or cancel an order, close a position, ask the contract to
+pass the challenge, and, in a separate session, list the pools and buy one challenge. It
+trades through the same gateway as a person, with its own testnet wallet, and never sees an
+account's key.
+
+The limits aren't left to the prompt. The code refuses an order for a perp that isn't on the
+account's list, an order over the session's notional cap, and one that would take the account
+past a margin under its leverage rule. Once the session's orders, price cap, model turns or
+spending budget run out, it stops. The default model is Claude Opus 5.
+
 ## What stays out of this repository
 
 - Keys. The demo wallets use testnet-only keys generated for this project. They are never
