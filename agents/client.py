@@ -6,6 +6,7 @@ from __future__ import annotations
 import math
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 from eth_account.signers.local import LocalAccount
@@ -14,12 +15,23 @@ from eth_utils import to_checksum_address
 from gateway import auth
 
 USER_AGENT = "colosseum-pools-agent"
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def order_url(base: str) -> str:
+    """Orders and answers carry account data, so a gateway on another machine has to be
+    reached over https."""
+    parts = urlsplit(base)
+    local = parts.scheme == "http" and parts.hostname in LOCAL_HOSTS
+    if parts.scheme != "https" and not local:
+        raise ValueError(f"the gateway must be reached over https, not {parts.scheme}://{parts.netloc}")
+    return base.rstrip("/") + "/v1/order"
 
 
 class GatewayClient:
     def __init__(self, wallet: LocalAccount, gateway_url: str, timeout: float = 20.0):
         self.wallet = wallet
-        self.url = gateway_url.rstrip("/") + "/v1/order"
+        self.url = order_url(gateway_url)
         self.timeout = timeout
         self._last_nonce = 0
 

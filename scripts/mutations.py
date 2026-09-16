@@ -11,6 +11,8 @@ restores the file byte for byte.
 Exit 0 only if every mutation applied exactly once and turned every named test red. A
 mutation whose text is not found is a failure of this harness, not a pass: otherwise a
 refactor would quietly turn it into "survived" or "killed" without anything being tested.
+Each suite first runs unmutated, and a named test that is already red there fails the run:
+a test that was red before the mutation proves nothing about it.
 """
 
 from __future__ import annotations
@@ -239,6 +241,10 @@ MUTATIONS = [
      '"signature": auth.sign(self.wallet, kind, fields)}',
      '"signature": auth.sign(self.wallet, "order", fields)}',
      ["test_cancel_clears_every_gateway_check"]),
+    ("A6", "agents/client.py",
+     "    if parts.scheme != \"https\" and not local:",
+     "    if False:",
+     ["test_https_unless_the_gateway_runs_here"]),
     # ── app (node --test) ──
     ("J1", "app/lib/cbor.js",
      '    if (++depth > MAX_DEPTH) throw new Error("CBOR nesting too deep");',
@@ -289,12 +295,45 @@ def failing_tests(output: str, pattern: str) -> set[str]:
     return set(re.findall(pattern, output, re.M))
 
 
-def run(selected: list[str]) -> int:
+def red_tests(cmd: list[str], pattern: str) -> set[str] | None:
+    """Names of the red tests, or None if the suite did not run to the end."""
+    try:
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=RUN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None
+    out = proc.stdout + proc.stderr
+    if "Compiler run failed" in out or "Error (" in out or "SyntaxError" in out:
+        return None
+    return failing_tests(out, pattern)
+
+
+def baseline(chosen) -> int:
     problems = 0
-    for mid, rel, old, new, expected in sorted(MUTATIONS, key=lambda m: (m[0][0] != "M", int(m[0][1:]))):
+    for prefix in sorted({m[0][0] for m in chosen}):
+        cmd, pattern = RUNNERS[prefix]
+        red = red_tests(cmd, pattern)
+        named = {t for m in chosen if m[0][0] == prefix for t in m[4]}
+        if red is None:
+            print(f"baseline {prefix}: the suite did not run")
+            problems += 1
+        elif red & named:
+            print(f"baseline {prefix}: already red before any mutation: {sorted(red & named)}")
+            problems += 1
+    return problems
+
+
+def run(selected: list[str]) -> int:
+    unknown = sorted(set(selected) - {m[0] for m in MUTATIONS})
+    if unknown:
+        print(f"mutations: no such mutation: {', '.join(unknown)}")
+        return 1
+    chosen = [m for m in MUTATIONS if not selected or m[0] in selected]
+    problems = baseline(chosen)
+    if problems:
+        print(f"mutations: {problems} problem(s) before mutating; nothing was mutated")
+        return 1
+    for mid, rel, old, new, expected in sorted(chosen, key=lambda m: (m[0][0] != "M", int(m[0][1:]))):
         cmd, pattern = RUNNERS[mid[0]]
-        if selected and mid not in selected:
-            continue
         path = ROOT / rel
         original = path.read_bytes()
         text = original.decode()

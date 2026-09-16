@@ -18,7 +18,7 @@ from unittest import mock
 from eth_account import Account
 
 from agents import client
-from agents.client import GatewayClient, round_price, round_size
+from agents.client import GatewayClient, order_url, round_price, round_size
 from gateway.checks import DECIMAL, NonceBook, Request, check
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -72,7 +72,7 @@ class BodiesClearTheGateway(unittest.TestCase):
         patcher = mock.patch.object(client.requests, "post", side_effect=post)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.client = GatewayClient(self.trader, "http://gateway.test/")
+        self.client = GatewayClient(self.trader, "https://gateway.test/")
 
     def cleared(self, body: dict):
         req = Request.from_json(body)
@@ -81,7 +81,7 @@ class BodiesClearTheGateway(unittest.TestCase):
     def test_order_clears_every_gateway_check(self):
         self.client.order(ACCOUNT.lower(), 3, True, "60000", "0.0002", tif="Alo")
         url, body, _ = self.sent[-1]
-        self.assertEqual(url, "http://gateway.test/v1/order")
+        self.assertEqual(url, "https://gateway.test/v1/order")
         req, cleared = self.cleared(body)
         self.assertEqual(cleared.trader, self.trader.address)
         self.assertEqual(req.action(), {
@@ -120,6 +120,17 @@ class BodiesClearTheGateway(unittest.TestCase):
         self.reply = Response(502)
         out = self.client.cancel(ACCOUNT, 3, 42)
         self.assertEqual((out["http"], out["status"]), (502, "bad_response"))
+
+
+class GatewayUrl(unittest.TestCase):
+    def test_https_unless_the_gateway_runs_here(self):
+        self.assertEqual(order_url("http://127.0.0.1:8787"), "http://127.0.0.1:8787/v1/order")
+        self.assertEqual(order_url("http://localhost:8787/"), "http://localhost:8787/v1/order")
+        self.assertEqual(order_url("http://[::1]:8787"), "http://[::1]:8787/v1/order")
+        self.assertEqual(order_url("https://gateway.example.org/pools"), "https://gateway.example.org/pools/v1/order")
+        for bad in ("http://gateway.example.org", "http://127.0.0.1.example.org", "ftp://127.0.0.1"):
+            with self.assertRaises(ValueError, msg=bad):
+                order_url(bad)
 
 
 class NumbersMatchTheApp(unittest.TestCase):
