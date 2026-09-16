@@ -37,17 +37,19 @@ yourself, and the demo agents.
 | 15–16 Sep | read the track and the rules; read Hyperliquid's docs on CoreWriter, the read precompiles, API wallets and testnet USDC; queried the live testnet RPC |
 | 16 Sep | settled the scope: two roles, investor and trader, a stop that anyone can trigger, testnet only |
 | 16 Sep | created this repository, private for now |
+| 17 Sep | read from the testnet RPC: a small HyperEVM block allows 3M gas. Storing the code of `Pool` (19 KB) or `ChallengeAccount` (16 KB) costs more than that, so the deployer switches to big blocks for the deployment |
 
 ## What we build in the window, as of 17 September
 
 | piece | status |
 |---|---|
 | Spike, six questions: does replacing an API wallet through CoreWriter really cut off the old key; can one agent address serve two accounts; can USDC move between contract accounts and back; how a contract reads account equity; what the trader pays with; can a contract cancel orders | 16 Sep: harness contract, simulator tests and the live testnet scripts written (`spike/`); the live runs wait for testnet USDC |
-| Contracts `PoolFactory`, `Pool`, `ChallengeAccount`, `KeyRegistry` (Foundry, HyperEVM testnet) | 16–17 Sep: written, 60 simulator tests, a mutation check of the tests, one internal audit pass and its fixes; not deployed |
-| Pool gateway, which checks on chain that a key belongs to the trader's account before an order goes to the signer | 17 Sep: written with offline tests, two of them against the Hyperliquid SDK's published signing vectors; not running anywhere yet |
-| App: investor page, list of pools, challenge page, and the check-it-yourself page | not started |
-| Demo agents: a scripted bot and an AI agent, each trading a challenge | not started |
-| No access for US residents: a geoblock plus a line in the terms, as Hyperliquid itself does | not started |
+| Contracts `PoolFactory`, `Pool`, `ChallengeAccount`, `KeyRegistry` (Foundry, HyperEVM testnet) | 16–17 Sep: written, 62 simulator tests, a mutation check of the tests, two internal review passes and their fixes; not deployed |
+| Pool gateway, which checks on chain that a key belongs to the trader's account before an order goes to the signer | 17 Sep: written. The trader's wallet signs the order's own fields (EIP-712). Offline tests, two of them against the Hyperliquid SDK's published signing vectors. Not running anywhere yet |
+| App: investor page, list of pools, challenge page, and the check-it-yourself page | 17 Sep: written as static files and tried in a browser against testnet reads and the live Signer attestation. No contracts are deployed yet, so there is no pool to show |
+| Demo agents: a scripted bot and an AI agent, each trading a challenge | 17 Sep: the trader's gateway client, the scripted bot and the AI trader (Claude through the Anthropic API, its limits in code) written, with offline tests. No session has run against the API yet |
+| Keeper, which makes the calls anyone may make when they fall due: activate, abort, the daily checkpoint, breach, expire, settle | 17 Sep: written, not run yet |
+| No access for US residents: a geoblock plus a line in the terms, as Hyperliquid itself does | 17 Sep, in the app: a confirmation on entry and a line in the terms. The geoblock at the host comes with hosting, which isn't set up |
 
 ## Rules we hold ourselves to
 
