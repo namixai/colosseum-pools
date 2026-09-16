@@ -49,6 +49,13 @@ contract Pool is RuledAccount {
     /// once, never re-sent.
     uint64 public fundedPayoutOwed;
     uint64 public fundedPayoutSent;
+    /// Spot balance when the payout was sent, and when: the pool goes back to idle only once
+    /// the payout shows in the balance (or after PAYOUT_WAIT), so a new challenge can't be
+    /// sold against money that is already on its way out.
+    uint64 public fundedPayoutSpotBefore;
+    uint64 public fundedPayoutAt;
+
+    uint64 public constant PAYOUT_WAIT = 5 minutes;
 
     event AccountReady();
     event Deposited(address indexed from, uint256 amount);
@@ -264,9 +271,18 @@ contract Pool is RuledAccount {
             if (spot == 0) return;
             uint64 pay = spot < fundedPayoutOwed ? spot : fundedPayoutOwed;
             fundedPayoutSent = pay;
+            fundedPayoutSpotBefore = spot;
+            fundedPayoutAt = uint64(block.timestamp);
             CoreOps.sendUsdc(fundedTrader, pay);
             emit FundedPayoutSent(fundedTrader, pay);
             return;
+        }
+
+        if (
+            fundedPayoutSent != 0 && spot + fundedPayoutSent > fundedPayoutSpotBefore
+                && block.timestamp <= fundedPayoutAt + PAYOUT_WAIT
+        ) {
+            return; // the payout hasn't landed yet
         }
 
         if (CoreOps.equity(address(this)) <= 0) {
@@ -275,6 +291,8 @@ contract Pool is RuledAccount {
             fundedStart = 0;
             fundedPayoutOwed = 0;
             fundedPayoutSent = 0;
+            fundedPayoutSpotBefore = 0;
+            fundedPayoutAt = 0;
             stage = Stage.Idle;
         }
     }

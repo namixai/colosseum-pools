@@ -119,7 +119,11 @@ the perp balance goes back to spot, and the pool returns to idle.
   can pick a convenient moment later. The keeper takes it at midnight and anyone else may.
   If nobody does, the previous snapshot stays in force, which can make the day's limit
   tighter or looser than the true start of the day.
-- A payout is sent once. If HyperCore dropped it, nothing on chain resends it.
+- A payout is sent once. If HyperCore dropped it, nothing on chain resends it. After a payout,
+  the rest waits until the payout shows in the balance or five minutes pass; a donation to
+  the account at that moment can stretch the wait to the full five minutes, once.
+- Whoever calls `checkpoint` first in the 15-minute window sets the day's base, so a trader
+  who calls it at the window's lowest point gets that point as the base.
 - No proof that a published key address was minted in the enclave. The Signer build doesn't
   offer one.
 - One trader per pool, no pool shares, no leaderboard, no mainnet.

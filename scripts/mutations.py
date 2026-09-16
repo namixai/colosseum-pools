@@ -132,6 +132,10 @@ MUTATIONS = [
      "if (szDecimals > 6) revert UnsupportedSizeDecimals(perp, szDecimals);",
      "",
      ["test_close_refusesAnAssetWithTooManySizeDecimals"]),
+    ("M28", "src/Pool.sol",
+     "            return; // the payout hasn't landed yet",
+     "",
+     ["test_poolStaysClosingUntilTheFundedPayoutLands"]),
     # ── gateway (Python unittest) ──
     ("G1", "gateway/server.py",
      "if recovered.lower() != cleared.key.lower():",

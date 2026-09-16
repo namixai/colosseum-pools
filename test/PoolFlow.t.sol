@@ -877,6 +877,34 @@ contract PoolFlowTest is Test {
         h.close(perps);
     }
 
+    /// The pool goes back to idle only after the funded trader's payout has left its balance,
+    /// or a new challenge could be sold against money already on its way out.
+    function test_poolStaysClosingUntilTheFundedPayoutLands() public {
+        Pool p = _readyPool();
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        _settleChallenge(ch);
+
+        _trade(address(p), BTC, true, 0.01e8);
+        CoreSimulatorLib.setMarkPx(BTC, 810520);
+        _trade(address(p), BTC, false, 0.01e8); // profit realized, flat
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(investor);
+        p.stopFunded(c, a, SALT);
+        assertGt(p.fundedPayoutOwed(), 0);
+
+        p.settleFunded(c, a); // perp -> spot
+        CoreSimulatorLib.nextBlock();
+        p.settleFunded(c, a); // payout sent
+        assertGt(p.fundedPayoutSent(), 0);
+        p.settleFunded(c, a); // same block: not landed yet
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing));
+
+        CoreSimulatorLib.nextBlock();
+        p.settleFunded(c, a);
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+    }
+
     // ── access ───────────────────────────────────────────────────────────────────────
 
     function test_access() public {
