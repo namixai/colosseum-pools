@@ -17,10 +17,12 @@ a test that was red before the mutation proves nothing about it.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -352,6 +354,15 @@ RUNNERS = {
 RUN_TIMEOUT_S = 900
 
 
+def run_suite(cmd: list[str]) -> subprocess.CompletedProcess:
+    """One test run with its own empty bytecode cache. Python trusts a cached .pyc when the
+    source's size and modification second match, and a mutation of the same length restored
+    within the same second would otherwise keep running as the mutant afterwards."""
+    with tempfile.TemporaryDirectory(prefix="mutations-pyc-") as cache:
+        env = {**os.environ, "PYTHONPYCACHEPREFIX": cache}
+        return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=RUN_TIMEOUT_S, env=env)
+
+
 def failing_tests(output: str, pattern: str) -> set[str]:
     # Forge: a failure message can contain brackets of its own ("[1.08e8]"), so the pattern
     # takes the last "]" on the line; the test name follows it.
@@ -361,7 +372,7 @@ def failing_tests(output: str, pattern: str) -> set[str]:
 def red_tests(cmd: list[str], pattern: str) -> set[str] | None:
     """Names of the red tests, or None if the suite did not run to the end."""
     try:
-        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=RUN_TIMEOUT_S)
+        proc = run_suite(cmd)
     except subprocess.TimeoutExpired:
         return None
     out = proc.stdout + proc.stderr
@@ -408,7 +419,7 @@ def run(selected: list[str]) -> int:
         path.write_text(text.replace(old, new), encoding="utf-8")
         try:
             try:
-                proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=RUN_TIMEOUT_S)
+                proc = run_suite(cmd)
             except subprocess.TimeoutExpired:
                 print(f"{mid}: TIMED OUT after {RUN_TIMEOUT_S}s")
                 problems += 1
