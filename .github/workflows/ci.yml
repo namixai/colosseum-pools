@@ -1,0 +1,26 @@
+name: ci
+
+# `scrub` is the hygiene gate: generic patterns for credentials, infrastructure identity and
+# internal paths. It runs on every branch, because this repository is meant to go public and
+# anything that reaches its history stays there after a revert. The gate is run next to its
+# own falsification test, so a pattern that silently stops matching turns this job red.
+#
+# Actions are pinned by commit SHA, not by tag. A tag is a moving pointer.
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scrub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: gate can still go red
+        run: ./scripts/test-scrub-check.sh
+      - name: hygiene gate
+        run: ./scripts/scrub-check.sh
