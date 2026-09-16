@@ -19,3 +19,6 @@
 {"evm_hype_wei": 0, "evm_usdc": 0, "openOrders": [], "perpAccountValue": "0.0", "role": {"role": "missing"}, "spotHYPE": "0", "spotUSDC": "0", "step": "status", "user": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4", "utc": "2026-09-16T19:34:14+00:00", "who": "deployer", "withdrawable": "0.0"}
 {"evm_hype_wei": 0, "evm_usdc": 0, "openOrders": [], "perpAccountValue": "0.0", "role": {"role": "missing"}, "spotHYPE": "0", "spotUSDC": "0", "step": "status", "user": "0x9BAecee023885815547e22a5839AFc57E6417c67", "utc": "2026-09-16T19:34:16+00:00", "who": "trader", "withdrawable": "0.0"}
 {"burned": [], "step": "status_burned_agents", "utc": "2026-09-16T19:34:16+00:00"}
+{"evm_hype_wei": 0, "evm_usdc": 0, "openOrders": [], "perpAccountValue": "0.0", "role": {"role": "missing"}, "spotHYPE": "0", "spotUSDC": "0", "step": "status", "user": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4", "utc": "2026-09-16T20:02:58+00:00", "who": "deployer", "withdrawable": "0.0"}
+{"evm_hype_wei": 0, "evm_usdc": 0, "openOrders": [], "perpAccountValue": "0.0", "role": {"role": "missing"}, "spotHYPE": "0", "spotUSDC": "0", "step": "status", "user": "0x9BAecee023885815547e22a5839AFc57E6417c67", "utc": "2026-09-16T20:03:00+00:00", "who": "trader", "withdrawable": "0.0"}
+{"burned": [], "step": "status_burned_agents", "utc": "2026-09-16T20:03:00+00:00"}

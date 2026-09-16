@@ -4,9 +4,10 @@
     spike/.venv/bin/python spike/run.py gas --buy-hype 0.5 --to-evm 0.3
     spike/.venv/bin/python spike/run.py deploy
     spike/.venv/bin/python spike/run.py fund --usdc 40          # Q3a: EOA -> new contract account
+    spike/.venv/bin/python spike/run.py q7                      # margin mode: default, contract, agent
     spike/.venv/bin/python spike/run.py q3                      # Q3b: contract -> contract -> perp -> back
-    spike/.venv/bin/python spike/run.py q4                      # equity: precompile vs info API
     spike/.venv/bin/python spike/run.py q1                      # agent replacement + resting orders (+Q6)
+    spike/.venv/bin/python spike/run.py q4                      # equity: precompile vs info API
     spike/.venv/bin/python spike/run.py q2                      # one agent address, two accounts
     spike/.venv/bin/python spike/run.py q5 --usdc 5             # trader pays on HyperEVM
 
@@ -466,6 +467,52 @@ def cmd_q2(args, state: dict) -> None:
     burn(state, agent_d, "used in the two-account test")
 
 
+def abstraction(user: str) -> Any:
+    return c.info_post({"type": "userAbstraction", "user": user})
+
+
+def cmd_q7(_args, state: dict) -> None:
+    """Q7, added 16 Sep. Which margin mode does a new contract account get, and who can
+    change it? In unified mode spot USDC backs perp positions, so a pool that keeps its
+    spare capital on spot would be lending it to the trader's margin. The docs say agents
+    can switch the mode too; the enclave only signs `order` and `cancel`, so its keys can't,
+    but a plain key can, and that is worth seeing once."""
+    deployer = c.account("deployer")
+    a, b = contract(state, "A"), contract(state, "B")
+    if not c.core_user_exists(b):
+        c.transact(deployer, a, "spotSend(address,uint64,uint64)", ["address", "uint64", "uint64"],
+                   [b, c.USDC_TOKEN, 6 * 10**8])
+        wait_until("B exists on HyperCore", lambda: c.core_user_exists(b), lambda v: v, timeout_s=30)
+    for who, addr in (("A", a), ("B", b)):
+        snap = c.core_snapshot(addr)
+        c.record("q7_default_mode", who=who, abstraction=abstraction(addr), spot_usdc=snap["spotUSDC"],
+                 perp_account_value=snap["perpAccountValue"], withdrawable=snap["withdrawable"],
+                 precompile_margin=c.core_margin_summary(addr))
+
+    # The contract sets separate balances on itself (action 16, value 1).
+    c.transact(deployer, a, "setAbstraction(uint8)", ["uint8"], [1])
+    mode = wait_until("A mode set to disabled", lambda: abstraction(a), lambda v: v == "disabled", timeout_s=30)
+    c.record("q7_contract_sets_disabled", abstraction=mode)
+
+    # A plain agent key on B tries to switch B to unified.
+    agent_e = c.address_of("agent-e")
+    contract_add_agent(state, "B", agent_e, "q7")
+    r = wait_until("agent-e becomes B's agent", lambda: role(agent_e), lambda v: is_agent_of(v, b))
+    ex = c.exchange(c.account("agent-e"), account_address=b)
+    resp = ex.agent_set_abstraction("u")
+    time.sleep(6)
+    c.record("q7_agent_sets_unified", agent_role=r, response=resp, abstraction_after=abstraction(b))
+
+    # Put B back to separate balances from the contract side, then retire agent-e.
+    c.transact(deployer, b, "setAbstraction(uint8)", ["uint8"], [1])
+    mode_b = wait_until("B mode back to disabled", lambda: abstraction(b), lambda v: v == "disabled", timeout_s=30)
+    dead = fresh_address()
+    contract_add_agent(state, "B", dead, "q7")
+    burn(state, agent_e, "used in the margin-mode test; replaced on B")
+    burn(state, dead, "keyless replacement for agent-e")
+    c.record("q7_end", abstraction_b=mode_b, agent_e_role=role(agent_e))
+
+
 def cmd_q5(args, state: dict) -> None:
     """Q5. The trader pays on HyperEVM with testnet USDC (ERC-20), so the contract can see
     who paid. The deployer stands in for the trader: it moves USDC from HyperCore to its
@@ -514,6 +561,7 @@ def main() -> int:
     q1.add_argument("--margin", type=float, default=15.0)
     q2 = sub.add_parser("q2")
     q2.add_argument("--margin", type=float, default=5.0)
+    sub.add_parser("q7")
     q5 = sub.add_parser("q5")
     q5.add_argument("--usdc", type=float, default=5.0)
     args = p.parse_args()
@@ -521,7 +569,7 @@ def main() -> int:
     c.assert_testnet()
     state = load_state()
     handlers = {"status": cmd_status, "gas": cmd_gas, "deploy": cmd_deploy, "fund": cmd_fund,
-                "q3": cmd_q3, "q4": cmd_q4, "q1": cmd_q1, "q2": cmd_q2, "q5": cmd_q5}
+                "q3": cmd_q3, "q4": cmd_q4, "q1": cmd_q1, "q2": cmd_q2, "q5": cmd_q5, "q7": cmd_q7}
     handlers[args.cmd](args, state)
     return 0
 
