@@ -63,8 +63,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: pure helpers (CBOR, number formats)
-        run: node --test app/tests/
+      # Test files are named one by one: Node 22 reads a bare directory as a module path.
+      - name: pure helpers (CBOR, navigation, number formats)
+        run: node --version && node --test app/tests/*.test.mjs
 
   contracts:
     runs-on: ubuntu-latest

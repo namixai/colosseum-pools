@@ -97,7 +97,7 @@ uv venv spike/.venv --python 3.14
 uv pip install --python spike/.venv/bin/python -r spike/requirements.txt -r agents/requirements.txt
 spike/.venv/bin/python -m unittest discover -s gateway/tests -t .
 spike/.venv/bin/python -m unittest discover -s agents/tests -t .
-node --test app/tests/
+node --test app/tests/*.test.mjs
 python3 scripts/mutations.py   # breaks one guarantee at a time; every break must turn a test red
 ```
 

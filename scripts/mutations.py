@@ -448,7 +448,8 @@ RUNNERS = {
           r"^(?:FAIL|ERROR): (\w+) \("),
     "K": (["spike/.venv/bin/python", "-m", "unittest", "discover", "-s", "ops/tests", "-t", "."],
           r"^(?:FAIL|ERROR): (\w+) \("),
-    "J": (["node", "--test", "--test-reporter=tap", "app/tests/"], r"^\s*not ok \d+ - (.+?)\s*$"),
+    "J": (["node", "--test", "--test-reporter=tap", *sorted(str(p.relative_to(ROOT)) for p in (ROOT / "app" / "tests").glob("*.test.mjs"))],
+          r"^\s*not ok \d+ - (.+?)\s*$"),
 }
 
 # A mutation can turn a bounded loop into an endless one; that has to end the run, not hang it.
