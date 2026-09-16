@@ -67,6 +67,9 @@ yourself, and the demo agents.
 - The check-it-yourself page checks trades. It compares the account's fills on Hyperliquid
   with the pool's rules. We never write that the enclave has never signed an order against
   the rules, because a signature that never reached the exchange can't be seen from outside.
+- The demo Signer box we use doesn't hold a receipt key as of 17 September, so an enclave
+  refusal in our demo comes back without a signed receipt. We don't present it as a signed
+  refusal.
 - After a stop, the enclave may still sign, and Hyperliquid is the one that refuses. The stop
   replaces the account's agent, so the exchange rejects a later order signed with the old
   key. We say it in exactly those terms.

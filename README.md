@@ -29,8 +29,9 @@ built in the window. [AI-USE.md](AI-USE.md) describes how we used AI tools.
    has to be on the account's list. The gateway also refuses an expired request and a nonce it
    has already seen.
 3. The gateway asks the enclave to sign the Hyperliquid action. The enclave applies the
-   platform policy (an asset list, size and notional caps) and returns a signed receipt,
-   refusals included.
+   platform policy, an asset list and per-order caps, and signs or refuses. A Signer box that
+   holds a receipt key also returns a signed receipt for every decision. The demo box doesn't
+   hold one as of 17 September, so its refusals come back without a receipt.
 4. The gateway checks that the signature recovers to the account's key, then submits it to
    the Hyperliquid testnet.
 

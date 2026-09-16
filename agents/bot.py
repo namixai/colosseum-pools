@@ -3,13 +3,14 @@ the trader's own testnet wallet.
 
     spike/.venv/bin/python -m agents.bot rest      --deployment demo --account 0x…
     spike/.venv/bin/python -m agents.bot roundtrip --deployment demo --account 0x… --notional 20
-    spike/.venv/bin/python -m agents.bot over-cap  --deployment demo --account 0x… --notional 600
+    spike/.venv/bin/python -m agents.bot over-cap  --deployment demo --account 0x… --asset 3 --notional 900
     spike/.venv/bin/python -m agents.bot leverage  --deployment demo --account 0x… --notional 300 --orders 2
     spike/.venv/bin/python -m agents.bot outside   --deployment demo --account 0x…
 
-over-cap asks for more than the enclave's per-order cap, so the enclave refuses it. outside
-picks a perp that is not on the account's list (or the one given with --asset), so the
-gateway refuses it. leverage stacks orders until the account breaks its leverage rule.
+over-cap asks for more than the enclave's per-order cap, so the enclave refuses it: pick a
+--notional above the cap, for example 900 USDC of BTC against a 0.01 BTC cap. outside picks a
+perp that is not on the account's list (or the one given with --asset), so the gateway
+refuses it. leverage stacks orders until the account breaks its leverage rule.
 
 The wallet is the testnet key named by --wallet (default "trader"), read from outside the
 repository and never printed. Every response is printed as JSON.
