@@ -53,6 +53,7 @@ test("canonical numbers, the form Hyperliquid verifies against", () => {
 test("prices: five significant figures, integers always allowed, 6 - szDecimals decimals", () => {
   assert.equal(roundPrice(76412.37, 5), "76412"); // BTC
   assert.equal(roundPrice(123456.7, 5), "123457"); // integer part over five digits
+  assert.equal(roundPrice(76412.5, 5), "76413"); // a half rounds up
   assert.equal(roundPrice(2413.71, 4), "2413.7"); // ETH
   assert.equal(roundPrice(98.307, 2), "98.307"); // SOL
   assert.equal(roundPrice(26.0, 2), "26");

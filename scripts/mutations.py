@@ -5,7 +5,7 @@ Each mutation breaks one guarantee in `src/`. The run applies it, runs `forge te
 requires that every named test goes red (other red tests are listed too). It then
 restores the file byte for byte.
 
-    python3 scripts/mutations.py            # all mutations (M: contracts, G: gateway)
+    python3 scripts/mutations.py            # all (M: contracts, G: gateway, A: agent client)
     python3 scripts/mutations.py M5 G2      # some
 
 Exit 0 only if every mutation applied exactly once and turned every named test red. A
@@ -178,11 +178,34 @@ MUTATIONS = [
      '"a": m["asset"], "b": m["isBuy"], "p": m["limitPx"], "s": m["size"],\n                    "r": m["reduceOnly"],',
      '"a": m["asset"], "b": m["isBuy"], "s": m["size"], "p": m["limitPx"],\n                    "r": m["reduceOnly"],',
      ["test_built_action_is_the_sdk_vector"]),
+    # ── agent client (Python unittest) ──
+    ("A1", "agents/client.py",
+     "nonce = max(int(time.time() * 1000), self._last_nonce + 1)",
+     "nonce = int(time.time() * 1000)",
+     ["test_nonces_never_repeat_within_a_millisecond"]),
+    ("A2", "agents/client.py",
+     "size = int(sz * factor + 1e-9) / factor",
+     "size = round(sz * factor) / factor",
+     ["test_sizes"]),
+    ("A3", "agents/client.py",
+     "return str(math.floor(px + 0.5))",
+     "return str(round(px))",
+     ["test_prices"]),
+    ("A4", "agents/client.py",
+     '"reduceOnly": reduce_only, "tif": tif,',
+     '"reduceOnly": False, "tif": tif,',
+     ["test_reduce_only_reaches_the_action"]),
+    ("A5", "agents/client.py",
+     '"signature": auth.sign(self.wallet, kind, fields)}',
+     '"signature": auth.sign(self.wallet, "order", fields)}',
+     ["test_cancel_clears_every_gateway_check"]),
 ]
 
 RUNNERS = {
     "M": (["forge", "test"], r"^\[FAIL.*\]\s+(\w+)\("),
     "G": (["spike/.venv/bin/python", "-m", "unittest", "discover", "-s", "gateway/tests", "-t", "."],
+          r"^(?:FAIL|ERROR): (\w+) \("),
+    "A": (["spike/.venv/bin/python", "-m", "unittest", "discover", "-s", "agents/tests", "-t", "."],
           r"^(?:FAIL|ERROR): (\w+) \("),
 }
 
