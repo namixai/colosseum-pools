@@ -5,8 +5,8 @@ Each mutation breaks one guarantee in `src/`. The run applies it, runs `forge te
 requires that every named test goes red (other red tests are listed too). It then
 restores the file byte for byte.
 
-    python3 scripts/mutations.py            # all mutations
-    python3 scripts/mutations.py M5 M9      # some
+    python3 scripts/mutations.py            # all mutations (M: contracts, G: gateway)
+    python3 scripts/mutations.py M5 G2      # some
 
 Exit 0 only if every mutation applied exactly once and turned every named test red. A
 mutation whose text is not found is a failure of this harness, not a pass: otherwise a
@@ -96,18 +96,54 @@ MUTATIONS = [
      "        earned += heldPrice;\n        heldPrice = 0;",
      "        heldPrice = 0;",
      ["test_activate_waitsForCapital_thenStarts"]),
+    # ── gateway (Python unittest) ──
+    ("G1", "gateway/server.py",
+     "if recovered.lower() != cleared.key.lower():",
+     "if False:",
+     ["test_wrong_signing_key_is_never_submitted"]),
+    ("G2", "gateway/checks.py",
+     "if not reader.is_bound(key, req.account, trader):",
+     "if False:",
+     ["test_someone_elses_signature", "test_changed_action_is_not_the_traders"]),
+    ("G3", "gateway/checks.py",
+     "if not nonces.claim(trader, req.nonce):",
+     "if False:",
+     ["test_replay"]),
+    ("G4", "gateway/checks.py",
+     "if not now_ms < req.expires_at <= now_ms + MAX_EXPIRY_MS:",
+     "if False:",
+     ["test_expiry_window"]),
+    ("G5", "gateway/checks.py",
+     "if e[\"a\"] not in allowed:",
+     "if False:",
+     ["test_asset_outside_the_rules"]),
+    ("G6", "gateway/checks.py",
+     "if other in req.action:",
+     "if False:",
+     ["test_shape"]),
+    ("G7", "gateway/hl.py",
+     "return action_hash(action, None, nonce, None)",
+     "return action_hash(action, None, nonce + 1, None)",
+     ["test_action_hash_matches_the_sdk_production_vector"]),
 ]
 
+RUNNERS = {
+    "M": (["forge", "test"], r"^\[FAIL.*\]\s+(\w+)\("),
+    "G": (["spike/.venv/bin/python", "-m", "unittest", "discover", "-s", "gateway/tests", "-t", "."],
+          r"^(?:FAIL|ERROR): (\w+) \("),
+}
 
-def failing_tests(output: str) -> set[str]:
-    # A failure message can contain brackets of its own ("[1.08e8]"), so take the last
-    # "]" on the line: the test name follows it.
-    return set(re.findall(r"^\[FAIL.*\]\s+(\w+)\(", output, re.M))
+
+def failing_tests(output: str, pattern: str) -> set[str]:
+    # Forge: a failure message can contain brackets of its own ("[1.08e8]"), so the pattern
+    # takes the last "]" on the line; the test name follows it.
+    return set(re.findall(pattern, output, re.M))
 
 
 def run(selected: list[str]) -> int:
     problems = 0
-    for mid, rel, old, new, expected in sorted(MUTATIONS, key=lambda m: int(m[0][1:])):
+    for mid, rel, old, new, expected in sorted(MUTATIONS, key=lambda m: (m[0][0] != "M", int(m[0][1:]))):
+        cmd, pattern = RUNNERS[mid[0]]
         if selected and mid not in selected:
             continue
         path = ROOT / rel
@@ -120,13 +156,13 @@ def run(selected: list[str]) -> int:
             continue
         path.write_text(text.replace(old, new), encoding="utf-8")
         try:
-            proc = subprocess.run(["forge", "test"], cwd=ROOT, capture_output=True, text=True)
+            proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
             out = proc.stdout + proc.stderr
-            if "Compiler run failed" in out or "Error (" in out:
+            if "Compiler run failed" in out or "Error (" in out or "SyntaxError" in out:
                 print(f"{mid}: DID NOT COMPILE")
                 problems += 1
                 continue
-            red = failing_tests(out)
+            red = failing_tests(out, pattern)
             missing = [t for t in expected if t not in red]
             if missing:
                 print(f"{mid}: SURVIVED in {missing} (red: {sorted(red)})")
