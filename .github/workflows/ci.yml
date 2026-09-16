@@ -5,6 +5,9 @@ name: ci
 # anything that reaches its history stays there after a revert. The gate is run next to its
 # own falsification test, so a pattern that silently stops matching turns this job red.
 #
+# `contracts` builds and runs the Foundry tests. They use the hyper-evm-lib simulator in
+# offline mode, so no RPC is involved and a run is deterministic.
+#
 # Actions are pinned by commit SHA, not by tag. A tag is a moving pointer.
 
 on:
@@ -24,3 +27,17 @@ jobs:
         run: ./scripts/test-scrub-check.sh
       - name: hygiene gate
         run: ./scripts/scrub-check.sh
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+        with:
+          version: v1.7.1
+      - name: build
+        run: forge build
+      - name: test
+        run: forge test -vv
