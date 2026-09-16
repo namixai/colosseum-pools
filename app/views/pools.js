@@ -3,8 +3,8 @@ import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, wire, pct, duration, badge, row } from "../lib/ui.js";
 
-function notDeployed() {
-  render(`<section class="card"><h2>Not deployed yet</h2>
+function notDeployed(page) {
+  render(page, `<section class="card"><h2>Not deployed yet</h2>
     <p>The contracts are not on testnet yet, so there is nothing to list. The addresses go into
     <code>app/config.js</code> after deployment.</p></section>`);
 }
@@ -40,12 +40,12 @@ export function rulesHtml(rules, assets) {
   ].join("");
 }
 
-export async function listView() {
-  if (!chain.deployed()) return notDeployed();
-  render(`<section><h2>Pools</h2><p class="muted">Loading…</p><div id="pools" class="grid"></div></section>`);
+export async function listView(page) {
+  if (!chain.deployed()) return notDeployed(page);
+  render(page, `<section><h2>Pools</h2><p class="muted">Loading…</p><div id="pools" class="grid"></div></section>`);
   const addresses = await chain.factory().pools();
-  const box = $("#pools");
-  $(".muted").textContent = addresses.length
+  const box = $("#pools", page);
+  $(".muted", page).textContent = addresses.length
     ? `${addresses.length} pool(s). Each one sells a single challenge at a time.`
     : "No pools yet.";
   for (const address of [...addresses].reverse()) {
@@ -67,8 +67,8 @@ export async function listView() {
   }
 }
 
-export async function newPoolView() {
-  if (!chain.deployed()) return notDeployed();
+export async function newPoolView(page) {
+  if (!chain.deployed()) return notDeployed(page);
   const list = await hl.perps();
   const listed = await Promise.all(list.slice(0, 64).map((p) => chain.factory().isPlatformAsset(p.index)));
   const options = list
@@ -76,7 +76,7 @@ export async function newPoolView() {
     .filter((_, i) => listed[i])
     .map((p) => `<label class="check"><input type="checkbox" name="asset" value="${p.index}" checked> ${esc(p.name)}</label>`)
     .join("");
-  render(`
+  render(page, `
     <section class="card narrow">
       <h2>New pool</h2>
       <p class="muted">You set the rules and what a challenge costs. Your wallet becomes the pool's owner.
@@ -100,8 +100,8 @@ export async function newPoolView() {
       </form>
     </section>`);
 
-  wire($("#create"), async () => {
-    const f = new FormData($("#pool-form"));
+  wire($("#create", page), async () => {
+    const f = new FormData($("#pool-form", page));
     const bps = (name) => Math.round(Number(f.get(name)) * 100);
     const assets = f.getAll("asset").map(Number);
     if (!assets.length) throw new Error("Pick at least one asset.");

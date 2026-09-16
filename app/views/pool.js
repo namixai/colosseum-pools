@@ -2,14 +2,14 @@
 // stage with its stop.
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
-import { esc, render, $, wire, badge, row } from "../lib/ui.js";
+import { esc, render, $, wire, badge, row, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
 
-export async function poolView(address) {
+export async function poolView(address, page) {
   const pool = chain.contract("pool", address);
   if (!(await chain.factory().isPool(address))) {
-    render(`<section class="card"><h2>Not a pool</h2><p>${esc(address)} was not created by this factory.</p></section>`);
+    render(page, `<section class="card"><h2>Not a pool</h2><p>${esc(address)} was not created by this factory.</p></section>`);
     return;
   }
   const me = chain.currentAddress();
@@ -22,7 +22,7 @@ export async function poolView(address) {
   const isFunded = chain.same(me, fundedTrader);
   const needed = Number(terms.capital + terms.fundedCapital) / 1e6;
 
-  render(`
+  render(page, `
     <section class="card">
       <h2>Pool ${esc(chain.short(address))} ${badge(stageName, Number(stage) === 0 ? "ok" : "")}</h2>
       <p class="muted mono">${esc(address)}</p>
@@ -42,7 +42,7 @@ export async function poolView(address) {
     <section class="card" id="investor"></section>`);
 
   // Trader: buy
-  const buy = $("#buy");
+  const buy = $("#buy", page);
   if (Number(stage) === 0 && ready && challenge === "0x0000000000000000000000000000000000000000") {
     buy.innerHTML = `<h3>Take the challenge</h3>
       <p>You pay ${chain.usd6(terms.price)} USDC on HyperEVM from your wallet. The pool moves
@@ -51,8 +51,8 @@ export async function poolView(address) {
       signed by your wallet.</p>
       <label class="check"><input type="checkbox" id="us"> I am not a US person and I am not acting for one.</label>
       <button id="buy-btn">Pay and start</button>`;
-    wire($("#buy-btn"), async () => {
-      if (!$("#us").checked) throw new Error("Please confirm you are not a US person.");
+    wire($("#buy-btn", page), async () => {
+      if (!$("#us", page).checked) throw new Error("Please confirm you are not a US person.");
       await chain.approveIfNeeded(address, terms.price);
       const receipt = await chain.write("pool", address, "buyChallenge");
       const log = receipt.logs
@@ -68,39 +68,39 @@ export async function poolView(address) {
   }
 
   // Funded stage
-  const funded = $("#funded");
+  const funded = $("#funded", page);
   if (Number(stage) === 2 || Number(stage) === 3) {
     funded.innerHTML = `<h3>Funded stage</h3><div id="equity"></div><div id="trade"></div><div class="actions" id="funded-actions"></div>`;
-    equityPanel($("#equity"), pool, address);
-    if (Number(stage) === 2 && isFunded) tradePanel($("#trade"), address, rules);
-    const actions = $("#funded-actions");
+    settle(equityPanel($("#equity", page), pool, address), $("#equity", page));
+    if (Number(stage) === 2 && isFunded) settle(tradePanel($("#trade", page), address, rules), $("#trade", page));
+    const actions = $("#funded-actions", page);
     if (Number(stage) === 2) {
       actions.innerHTML = `<button id="breach">Stop: a rule is broken</button>
         ${isOwner || isFunded ? '<button id="stop" class="secondary">End the funded stage</button>' : ""}
         <button id="checkpoint" class="secondary">Take today's snapshot</button>`;
-      wire($("#breach"), async () => {
+      wire($("#breach", page), async () => {
         const { cancels, extra } = await stopInputs(address, rules);
         await chain.write("pool", address, "breach", [cancels, extra, chain.randomSalt()]);
         return "Stopped. Now settle until the pool is idle.";
       });
-      wire($("#stop"), async () => {
+      wire($("#stop", page), async () => {
         const { cancels, extra } = await stopInputs(address, rules);
         await chain.write("pool", address, "stopFunded", [cancels, extra, chain.randomSalt()]);
         return "Ended. Now settle until the pool is idle.";
       }, { confirm: "End the funded stage? The trading key is retired for good." });
-      wire($("#checkpoint"), async () => {
+      wire($("#checkpoint", page), async () => {
         await chain.write("pool", address, "checkpoint");
         return "Snapshot taken.";
       });
     } else {
       actions.innerHTML = `<button id="settle">Settle one step</button>
         <button id="recut" class="secondary">Replace the agent again</button>`;
-      wire($("#settle"), async () => {
+      wire($("#settle", page), async () => {
         const { cancels, extra } = await stopInputs(address, rules);
         await chain.write("pool", address, "settleFunded", [cancels, extra]);
         return "Step sent. HyperCore needs a few seconds; repeat until the pool is idle.";
       });
-      wire($("#recut"), async () => {
+      wire($("#recut", page), async () => {
         await chain.write("pool", address, "recut", [chain.randomSalt()]);
         return "Agent replaced again.";
       });
@@ -110,7 +110,7 @@ export async function poolView(address) {
   }
 
   // Investor
-  const inv = $("#investor");
+  const inv = $("#investor", page);
   if (!isOwner) {
     inv.remove();
     return;
@@ -122,22 +122,22 @@ export async function poolView(address) {
       <span class="muted">Once the pool has USDC on HyperCore: separate spot and perp balances, approve the builder fee.</span></p>
     <p>Challenge income held in the contract: ${chain.usd6(earned)} USDC <button id="earned" class="secondary">Withdraw it</button></p>
     <div class="inline"><input id="wd" type="number" step="0.01" min="0" placeholder="USDC"><button id="wd-btn" class="secondary">Withdraw on HyperCore</button></div>`;
-  wire($("#dep-btn"), async () => {
-    const amount = chain.toUnits($("#dep").value, 6);
+  wire($("#dep-btn", page), async () => {
+    const amount = chain.toUnits($("#dep", page).value, 6);
     await chain.approveIfNeeded(address, amount);
     await chain.write("pool", address, "deposit", [amount]);
     return "Deposited. It shows on HyperCore after the next block.";
   });
-  wire($("#prepare"), async () => {
+  wire($("#prepare", page), async () => {
     await chain.write("pool", address, "prepareAccount");
     return "Prepared.";
   });
-  wire($("#earned"), async () => {
+  wire($("#earned", page), async () => {
     await chain.write("pool", address, "withdrawEarned");
     return "Withdrawn.";
   });
-  wire($("#wd-btn"), async () => {
-    const amount = chain.toUnits($("#wd").value, 8);
+  wire($("#wd-btn", page), async () => {
+    const amount = chain.toUnits($("#wd", page).value, 8);
     await chain.write("pool", address, "withdrawOnCore", [amount]);
     return "Sent to your HyperCore account.";
   });

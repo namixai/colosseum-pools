@@ -264,18 +264,24 @@ class NonceBookLimits(unittest.TestCase):
 
 
 class ScriptedSigner:
-    """A Signer that answers whatever the test tells it to."""
+    """A Signer that answers whatever the test tells it to: one answer for every call, or a
+    list consumed in order. An answer may be an exception to raise or a callable to run."""
 
     def __init__(self, key_address: str, answer):
         self.key_address, self.answer = key_address, answer
+        self.calls = 0
 
     def has_key(self, key):
         return key.lower() == self.key_address.lower()
 
     def sign(self, key, kind, action, nonce):
-        if isinstance(self.answer, Exception):
-            raise self.answer
-        return self.answer
+        self.calls += 1
+        answer = self.answer.pop(0) if isinstance(self.answer, list) else self.answer
+        if callable(answer) and not isinstance(answer, type):
+            answer = answer(key, kind, action, nonce)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
 class Flow(Base):
@@ -359,6 +365,49 @@ class Flow(Base):
         signer = ScriptedSigner(self.enclave_key.address, SignResult(403, None, {"decision": "deny"}, body))
         status, out = self.gateway(signer).handle_order(self.body())
         self.assertEqual((status, out["signer"]), (403, {"error": "policy_denied"}))
+
+    def signed_by_the_enclave(self, key, kind, action, nonce):
+        sig = sign_l1_action(self.enclave_key, action, None, nonce, None, False)
+        return SignResult(200, sig, {"decision": "allow"}, {"signature": sig})
+
+    def test_a_request_that_never_reached_the_venue_can_be_retried(self):
+        import requests
+
+        refused = SignResult(403, None, None, {"error": "policy_denied"})
+        signer = ScriptedSigner(self.enclave_key.address,
+                                [requests.ConnectionError("signer down"), refused, self.signed_by_the_enclave])
+        gw = self.gateway(signer)
+        body = self.body()
+        self.assertEqual(gw.handle_order(body)[1]["code"], "upstream_failed")
+        self.assertEqual(gw.handle_order(body)[1]["status"], "refused_by_signer")
+        self.assertEqual(gw.handle_order(body)[1]["status"], "submitted")
+        self.assertEqual((signer.calls, len(self.submitted)), (3, 1))
+
+    def test_a_request_that_may_have_reached_the_venue_keeps_its_nonce(self):
+        gw = self.gateway(ScriptedSigner(self.enclave_key.address, self.signed_by_the_enclave))
+        body = self.body()
+
+        def venue_down(action, nonce, signature):
+            raise TimeoutError("venue down")
+
+        gw.submit = venue_down
+        self.assertEqual(gw.handle_order(body)[1]["status"], "venue_unreachable")
+        self.assertEqual(gw.handle_order(body), (409, {"status": "refused_by_gateway", "code": "replayed",
+                                                        "detail": "this nonce was already used"}))
+
+    def test_a_copy_arriving_while_the_first_is_being_signed_is_refused(self):
+        body = self.body()
+        seen = []
+
+        def sign_and_meanwhile_receive_a_copy(key, kind, action, nonce):
+            seen.append(gw.handle_order(body))
+            return self.signed_by_the_enclave(key, kind, action, nonce)
+
+        signer = ScriptedSigner(self.enclave_key.address, sign_and_meanwhile_receive_a_copy)
+        gw = self.gateway(signer)
+        self.assertEqual(gw.handle_order(body)[1]["status"], "submitted")
+        self.assertEqual([(s, p["code"]) for s, p in seen], [(409, "replayed")])
+        self.assertEqual((signer.calls, len(self.submitted)), (1, 1))
 
     def test_key_without_a_token(self):
         other = Account.create(os.urandom(32))
@@ -513,8 +562,16 @@ class AppAgreesWithGateway(unittest.TestCase):
             block = re.search(rf"{name}: \[(.*?)\]", js, re.S).group(1)
             js_fields = re.findall(r'\{ name: "(\w+)", type: "(\w+)" \}', block)
             self.assertEqual(js_fields, [(f["name"], f["type"]) for f in py_fields], name)
-        domain = re.search(r"const DOMAIN = \{ name: \"([^\"]+)\", version: \"(\d+)\"", js)
-        self.assertEqual((domain.group(1), domain.group(2)), (auth.DOMAIN["name"], auth.DOMAIN["version"]))
+        domain = re.search(r"const DOMAIN = \{(.*?)\};", js, re.S).group(1)
+        fields = dict(re.findall(r"(\w+): ([^,]+)", domain))
+        self.assertEqual(set(fields), set(auth.DOMAIN), "the app's domain has other fields")
+        self.assertEqual(fields["name"].strip('"'), auth.DOMAIN["name"])
+        self.assertEqual(fields["version"].strip('"'), auth.DOMAIN["version"])
+        self.assertEqual(fields["chainId"].strip(), "CONFIG.chainId")
+        config = (pathlib.Path(__file__).resolve().parents[2] / "app" / "config.js").read_text()
+        chain_id = int(re.search(r"^\s*chainId: (\d+),", config, re.M).group(1))
+        self.assertEqual(chain_id, auth.DOMAIN["chainId"])
+        self.assertEqual([f["name"] for f in auth.DOMAIN_TYPE], list(auth.DOMAIN))
 
 
 if __name__ == "__main__":

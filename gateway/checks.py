@@ -171,6 +171,12 @@ class NonceBook:
             heapq.heappush(self._by_expiry, (expires_at, k))
             return True
 
+    def release(self, trader: str, nonce: int) -> None:
+        """Gives a pair back when its request never reached Hyperliquid, so the same signed
+        request can be retried. Its expiry entry stays and is dropped when it comes due."""
+        with self._lock:
+            self._seen.pop((trader.lower(), nonce), None)
+
 
 @dataclass(frozen=True)
 class Cleared:

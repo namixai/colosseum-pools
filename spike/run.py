@@ -503,14 +503,20 @@ def cmd_q7(_args, state: dict) -> None:
     time.sleep(6)
     c.record("q7_agent_sets_unified", agent_role=r, response=resp, abstraction_after=abstraction(b))
 
-    # Put B back to separate balances from the contract side, then retire agent-e.
+    # Put B back to separate balances from the contract side, then retire agent-e. Both keys
+    # are marked spent before anything is checked: agent-e has held B's agent slot, so it is
+    # never used again whether or not the cleanup below lands.
     c.transact(deployer, b, "setAbstraction(uint8)", ["uint8"], [1])
-    mode_b = wait_until("B mode back to disabled", lambda: abstraction(b), lambda v: v == "disabled", timeout_s=30)
     dead = fresh_address()
     contract_add_agent(state, "B", dead, "q7")
     burn(state, agent_e, "used in the margin-mode test; replaced on B")
     burn(state, dead, "keyless replacement for agent-e")
-    c.record("q7_end", abstraction_b=mode_b, agent_e_role=role(agent_e))
+    mode_b = wait_until("B mode back to disabled", lambda: abstraction(b), lambda v: v == "disabled", timeout_s=30)
+    agent_e_role = wait_until("agent-e replaced on B", lambda: role(agent_e), lambda v: not is_agent_of(v, b))
+    c.record("q7_end", abstraction_b=mode_b, agent_e_role=agent_e_role)
+    if mode_b != "disabled" or is_agent_of(agent_e_role, b):
+        raise SystemExit("q7 cleanup did not land: B is not back to separate balances, or agent-e still "
+                         "trades B. Check the results log before running anything else on B.")
 
 
 def cmd_q5(args, state: dict) -> None:

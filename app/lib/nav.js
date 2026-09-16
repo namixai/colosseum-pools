@@ -1,0 +1,23 @@
+// Page switching. Each navigation renders into a page element of its own, so a view that
+// finishes loading after the user has moved on writes into a page that is no longer shown,
+// and its buttons can't be pressed.
+
+/** `mount()` puts a fresh page on screen and returns it. */
+export function createNavigator(mount) {
+  let current = 0;
+  return async function navigate(handler, onError = () => {}) {
+    const id = ++current;
+    const page = mount();
+    try {
+      await handler(page);
+    } catch (err) {
+      if (id === current) onError(page, err);
+    }
+    return id === current;
+  };
+}
+
+/** Every page but the terms asks the entry question until it has been answered. */
+export function needsGate(hash, passed) {
+  return !passed && hash !== "#/terms";
+}

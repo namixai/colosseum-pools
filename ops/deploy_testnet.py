@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -35,11 +36,26 @@ from hlspike import common as c  # noqa: E402
 PLATFORM_ASSETS = {"BTC": 3, "ETH": 4, "SOL": 0}
 
 
+# Everything the bytecode is built from.
+BUILD_INPUTS = ("src", "lib", "foundry.toml", "foundry.lock", "remappings.txt")
+
+
+def git(*args: str) -> str:
+    proc = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)} failed: {proc.stderr.strip()[:200]}")
+    return proc.stdout
+
+
 def git_head() -> str:
-    dirty = subprocess.run(["git", "status", "--porcelain", "src"], cwd=ROOT, capture_output=True, text=True).stdout
-    if dirty.strip():
-        raise SystemExit("src/ has uncommitted changes; deploy only committed bytecode")
-    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    """The commit the bytecode is built from. Refuses to deploy if git can't say, or if any
+    build input differs from that commit."""
+    if git("status", "--porcelain", "--", *BUILD_INPUTS).strip():
+        raise SystemExit(f"uncommitted changes in {', '.join(BUILD_INPUTS)}; deploy only committed bytecode")
+    commit = git("rev-parse", "--verify", "HEAD").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise SystemExit(f"git rev-parse gave {commit!r}, not a commit")
+    return commit
 
 
 def check_assets() -> list[int]:

@@ -14,8 +14,15 @@ export function view() {
   return document.getElementById("view");
 }
 
-export function render(html) {
-  view().innerHTML = html;
+export function render(page, html) {
+  page.innerHTML = html;
+}
+
+/** A panel that loads in the background shows its failure instead of "Loading…" forever. */
+export function settle(promise, box) {
+  return Promise.resolve(promise).catch((err) => {
+    if (box) box.textContent = `Could not load: ${friendly(err)}`;
+  });
 }
 
 export function $(selector, root = document) {

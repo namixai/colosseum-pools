@@ -134,5 +134,7 @@ contract PoolFactory is IAccountSource, IFactoryView {
     function _checkTerms(Terms calldata t) internal pure {
         if (t.capital == 0 || t.fundedCapital == 0 || t.duration == 0 || t.targetBps == 0) revert BadTerms();
         if (t.traderShareBps > Units.BPS) revert BadTerms();
+        // buyChallenge holds capital + fundedCapital on spot, in units 100 times finer, as a uint64.
+        if (uint256(t.capital) + t.fundedCapital > type(uint64).max / Units.SPOT_PER_PERP) revert BadTerms();
     }
 }

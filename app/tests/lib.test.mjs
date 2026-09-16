@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { decode, hex } from "../lib/cbor.js";
 import { orderUrl } from "../lib/gateway.js";
+import { createNavigator, needsGate } from "../lib/nav.js";
+import { settle } from "../lib/ui.js";
 import { canonical, roundPrice, roundSize } from "../lib/hl.js";
 
 const h = (s) => Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16)));
@@ -73,6 +75,58 @@ test("the gateway is reached over https unless it runs on this machine", () => {
   assert.throws(() => orderUrl("http://gateway.example.org"), /https/);
   assert.throws(() => orderUrl("http://127.0.0.1.example.org"), /https/);
   assert.throws(() => orderUrl("ftp://127.0.0.1"), /https/);
+});
+
+test("a page that finishes loading after the user moved on stays off screen", async () => {
+  const mounted = [];
+  const navigate = createNavigator(() => {
+    const page = { html: "" };
+    mounted.push(page);
+    return page;
+  });
+  let release;
+  const slow = navigate(async (page) => {
+    await new Promise((resolve) => (release = resolve));
+    page.html = "the pool the user left";
+  });
+  const fast = navigate(async (page) => {
+    page.html = "the pool the user opened";
+  });
+  assert.equal(await fast, true);
+  release();
+  assert.equal(await slow, false);
+  assert.equal(mounted.length, 2);
+  assert.equal(mounted.at(-1).html, "the pool the user opened");
+});
+
+test("only the page on screen reports its failure", async () => {
+  const errors = [];
+  const report = (page, err) => errors.push(err.message);
+  const navigate = createNavigator(() => ({}));
+  let fail;
+  const stale = navigate(() => new Promise((_, reject) => (fail = reject)), report);
+  await navigate(async () => {
+    throw new Error("current");
+  }, report);
+  fail(new Error("stale"));
+  await stale;
+  assert.deepEqual(errors, ["current"]);
+});
+
+test("every page but the terms asks the entry question until it is answered", () => {
+  assert.equal(needsGate("#/terms", false), false);
+  assert.equal(needsGate("#/", false), true);
+  assert.equal(needsGate("#/pool/0x0000000000000000000000000000000000000001", false), true);
+  assert.equal(needsGate("#/verify", true), false);
+});
+
+test("a panel that fails to load says so", async () => {
+  const box = { textContent: "Loading…" };
+  await settle(Promise.reject(new Error("rpc down")), box);
+  assert.match(box.textContent, /rpc down/);
+  const fine = { textContent: "Loading…" };
+  await settle(Promise.resolve(), fine);
+  assert.equal(fine.textContent, "Loading…");
 });
 
 test("canonical numbers, the form Hyperliquid verifies against", () => {

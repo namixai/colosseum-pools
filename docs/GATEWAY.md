@@ -51,9 +51,14 @@ another.
 4. `key = RuledAccount.agentKey(account)` and `KeyRegistry.isBound(key, account, trader)`.
 5. The asset is in the account's rules. The enclave checks the platform list and the size
    caps again on its side.
-6. `(trader, nonce)` hasn't been seen. The gateway remembers a pair until its request
-   expires; after that the request fails check 1 anyway. The book holds at most a minute of
-   traffic and answers `503 busy` past 100,000 entries instead of growing.
+6. `(trader, nonce)` hasn't been seen. The pair is claimed here, before the enclave is asked,
+   so a copy arriving meanwhile is refused without an enclave call. If the request then never
+   reaches Hyperliquid (the Signer fails or refuses, or its signature is malformed or from the
+   wrong key), the pair is given back and the same signed request can be retried. Once a
+   signature for the right key exists, the pair stays spent, even if the call to Hyperliquid
+   fails. The gateway remembers a pair until its request expires; after that the request
+   fails check 1 anyway. The book holds at most a minute of traffic and answers `503 busy`
+   past 100,000 entries instead of growing.
 
 ## Signing and submission
 
@@ -64,9 +69,9 @@ another.
    integer 27 or 28), recovers its signer the way Hyperliquid will (phantom agent, source
    `b`) and refuses to submit unless it is `key`.
 9. It submits to `https://api.hyperliquid-testnet.xyz/exchange` and returns Hyperliquid's
-   answer together with the enclave's signed decision receipt. A refusal comes back with its
-   receipt and the Signer's short reason (`error`, `reason`, `code`, `message`), and nothing
-   is submitted.
+   answer. A refusal comes back with the Signer's short reason (`error`, `reason`, `code`,
+   `message`), and nothing is submitted. Either way `receipt` carries the Signer's signed
+   decision receipt when the box issues one; the demo box doesn't, as of 17 September.
 
 ## Answers
 
@@ -74,7 +79,7 @@ another.
 |---|---|---|
 | 200 | `submitted` | Hyperliquid's answer is in `venue`; it can still reject the order there |
 | 4xx | `refused_by_gateway` | a check failed; `code` says which |
-| 403 | `refused_by_signer` | the enclave refused; its signed receipt is in `receipt` |
+| 403 | `refused_by_signer` | the enclave refused; `receipt` holds its signed receipt if the box issues one |
 | 502 | `signature_mismatch`, `bad_signer_response` | the Signer's answer can't be submitted; nothing was |
 | 502 | `gateway_error` (`upstream_failed`) | a chain read or the Signer call failed; nothing was submitted |
 | 502 | `venue_unreachable` | the call to Hyperliquid failed; the order may or may not have arrived, so check the account |

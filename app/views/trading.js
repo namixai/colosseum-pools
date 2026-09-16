@@ -2,7 +2,7 @@
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import * as gateway from "../lib/gateway.js";
-import { esc, $, wire, row, badge } from "../lib/ui.js";
+import { esc, $, wire, row, badge, settle } from "../lib/ui.js";
 
 /** Open orders to cancel and positions outside the pool's assets, for stop and settle calls. */
 export async function stopInputs(account, rules) {
@@ -71,10 +71,14 @@ export async function tradePanel(box, account, rules) {
       tif: f.get("tif"),
     });
     $("#ticket-out", box).textContent = JSON.stringify(res, null, 2);
-    setTimeout(() => refreshOrders(box, account), 2500);
+    setTimeout(() => showOrders(box, account), 2500);
     return res.status === "submitted" ? `Sent: ${size} @ ${limitPx}` : `Refused: ${res.code || res.status}`;
   });
-  refreshOrders(box, account);
+  showOrders(box, account);
+}
+
+function showOrders(box, account) {
+  return settle(refreshOrders(box, account), $("#orders", box));
 }
 
 async function refreshOrders(box, account) {
@@ -94,7 +98,7 @@ async function refreshOrders(box, account) {
       const perp = list.find((p) => p.name === b.dataset.coin);
       const signer = chain.currentSigner() || (await chain.connect(), chain.currentSigner());
       const res = await gateway.cancelOrder(signer, { account, asset: perp.index, oid: b.dataset.oid });
-      setTimeout(() => refreshOrders(box, account), 2500);
+      setTimeout(() => showOrders(box, account), 2500);
       return res.status === "submitted" ? "Cancel sent." : `Refused: ${res.code || res.status}`;
     }),
   );

@@ -4,25 +4,25 @@ import { CONFIG } from "../config.js";
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { attestationPayload } from "../lib/cbor.js";
-import { esc, render, $, badge, row, isAddress, wire, view } from "../lib/ui.js";
+import { esc, render, $, badge, row, isAddress, wire } from "../lib/ui.js";
 
 const { ethers } = window;
 
-export async function verifyView(address) {
+export async function verifyView(address, page) {
   if (!isAddress(address)) {
-    render(`<section class="card narrow"><h2>Check it yourself</h2>
+    render(page, `<section class="card narrow"><h2>Check it yourself</h2>
       <p>Open this page from a pool or a challenge, or paste an account address:</p>
       <div class="inline"><input id="addr" placeholder="0x…"><button id="go">Check</button></div></section>`);
-    $("#go").addEventListener("click", () => { location.hash = `#/verify/${$("#addr").value.trim()}`; });
-    view().insertAdjacentHTML("beforeend", `<section class="card"><h3>The enclave behind the keys</h3><div id="enclave"></div></section>`);
-    enclavePanel();
+    $("#go", page).addEventListener("click", () => { location.hash = `#/verify/${$("#addr", page).value.trim()}`; });
+    page.insertAdjacentHTML("beforeend", `<section class="card"><h3>The enclave behind the keys</h3><div id="enclave"></div></section>`);
+    enclavePanel(page);
     return;
   }
   const [isPool, isChallenge] = chain.deployed()
     ? await Promise.all([chain.factory().isPool(address), chain.factory().isChallenge(address)])
     : [false, false];
   const kind = isPool ? "pool" : isChallenge ? "challenge" : null;
-  render(`
+  render(page, `
     <section class="card">
       <h2>Check it yourself</h2>
       <p class="mono">${esc(address)} ${badge(kind || "not ours", kind ? "ok" : "bad")}</p>
@@ -33,20 +33,20 @@ export async function verifyView(address) {
     <section class="card"><h3>2. Trades against the rules</h3><div id="fills" class="muted">Reading…</div></section>
     <section class="card"><h3>3. The enclave behind the keys</h3><div id="enclave"></div></section>`);
   if (!kind) {
-    $("#keys").textContent = chain.deployed()
+    $("#keys", page).textContent = chain.deployed()
       ? "This address was not created by the factory; there is nothing to check."
       : "The contracts are not deployed yet. The enclave check below works already.";
-    $("#fills").textContent = "";
-    enclavePanel();
+    $("#fills", page).textContent = "";
+    enclavePanel(page);
     return;
   }
   const account = chain.contract(kind, address);
-  keysPanel(account, address).catch((e) => ($("#keys").textContent = String(e)));
-  fillsPanel(account, address).catch((e) => ($("#fills").textContent = String(e)));
-  enclavePanel();
+  keysPanel(account, address, page).catch((e) => ($("#keys", page).textContent = String(e)));
+  fillsPanel(account, address, page).catch((e) => ($("#fills", page).textContent = String(e)));
+  enclavePanel(page);
 }
 
-async function keysPanel(account, address) {
+async function keysPanel(account, address, page) {
   const reg = chain.registry();
   const boundLog = await chain.history(reg, reg.filters.KeyBound(null, address));
   const cutLog = await chain.history(account, account.filters.AgentCut());
@@ -67,8 +67,8 @@ async function keysPanel(account, address) {
   }
   const cutRows = cuts.map((ev) => `<div class="kv"><span>block ${ev.blockNumber}</span>
     <span>replaced ${esc(chain.short(ev.args.oldKey))} with keyless <span class="mono">${esc(chain.short(ev.args.keyless))}</span></span></div>`);
-  $("#keys").className = "";
-  $("#keys").innerHTML = `
+  $("#keys", page).className = "";
+  $("#keys", page).innerHTML = `
     ${row("Agent key the contract has approved now", current === ethers.ZeroAddress ? "none" : `<span class="mono">${esc(current)}</span>`)}
     <h4>Keys ever bound to this account (KeyRegistry)</h4>${rows.join("") || "<p>none</p>"}
     <h4>Stops (the agent replaced by an address nobody holds)</h4>${cutRows.join("") || "<p>none</p>"}
@@ -78,7 +78,7 @@ async function keysPanel(account, address) {
     minted inside the enclave. The Signer build in use has no outside proof of that.</p>`;
 }
 
-async function fillsPanel(account, address) {
+async function fillsPanel(account, address, page) {
   const [rules, fills, list] = await Promise.all([account.rules(), hl.fills(address), hl.perps()]);
   const allowed = new Set(rules.assets.map(Number));
   const rows = fills.slice(0, 200).map((f) => {
@@ -91,8 +91,8 @@ async function fillsPanel(account, address) {
   });
   const bad = fills.filter((f) => { const p = list.find((x) => x.name === f.coin); return !(p && allowed.has(p.index)); }).length;
   const verdict = await account.violation([]);
-  $("#fills").className = "";
-  $("#fills").innerHTML = `
+  $("#fills", page).className = "";
+  $("#fills", page).innerHTML = `
     ${row("Fills on this account (Hyperliquid API)", String(fills.length))}
     ${row("Fills in an asset outside the rules", bad ? badge(String(bad), "bad") : badge("0", "ok"))}
     ${row("The contract's verdict right now", Number(verdict) ? badge(chain.BREACH[Number(verdict)], "bad") : badge("inside the rules", "ok"))}
@@ -103,13 +103,13 @@ async function fillsPanel(account, address) {
     signed something against the rules. It says what traded.</p>`;
 }
 
-function enclavePanel() {
-  $("#enclave").innerHTML = `
+function enclavePanel(page) {
+  $("#enclave", page).innerHTML = `
     <p>The keys that trade these accounts sit in the Usenami Signer enclave (build <code>pcr0-fbaad62f</code>,
     public repository <code>namixai/signer</code>). Ask the demo box for a fresh attestation document:</p>
     <button id="attest">Ask the Signer demo box</button>
     <div id="attest-out"></div>`;
-  wire($("#attest"), async () => {
+  wire($("#attest", page), async () => {
     const nonce = ethers.hexlify(crypto.getRandomValues(new Uint8Array(16))).slice(2);
     const res = await fetch(`${CONFIG.signerAttestation}?nonce=${nonce}`);
     const body = await res.json();
@@ -117,7 +117,7 @@ function enclavePanel() {
     const registry = new ethers.Contract(CONFIG.pcr0Registry, chain.ABI.pcr0Registry,
       new ethers.JsonRpcProvider(CONFIG.baseRpc, 8453, { staticNetwork: true }));
     const [active, owner] = await registry.isPCR0Active("0x" + signed.pcr0);
-    $("#attest-out").innerHTML = `
+    $("#attest-out", page).innerHTML = `
       ${row("PCR0 inside the document", `<span class="mono">${esc(signed.pcr0)}</span>`)}
       ${row("Same as the copy the box sends next to it", signed.pcr0 === body.pcr0_sha384 ? badge("yes", "ok") : badge("no", "bad"))}
       ${row("Your nonce came back inside the document", signed.nonce === nonce ? badge("yes", "ok") : badge("no", "bad"))}

@@ -9,7 +9,7 @@ import {CoreSimulatorLib} from "@hyper-evm-lib/test/simulation/CoreSimulatorLib.
 import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {HLConstants} from "@hyper-evm-lib/src/common/HLConstants.sol";
 
-import {Rules, Terms, Cancel, Breach} from "../src/Types.sol";
+import {Rules, Terms, Cancel, Breach, Units} from "../src/Types.sol";
 import {KeyRegistry} from "../src/KeyRegistry.sol";
 import {PoolFactory} from "../src/PoolFactory.sol";
 import {Pool} from "../src/Pool.sol";
@@ -259,6 +259,18 @@ contract PoolFlowTest is Test {
         t = _terms();
         t.traderShareBps = 10_001;
         vm.expectRevert(PoolFactory.BadTerms.selector);
+        factory.createPool(_rules(), t);
+    }
+
+    function test_createPool_refusesCapitalThatCannotBeHeldOnSpot() public {
+        uint64 limit = type(uint64).max / Units.SPOT_PER_PERP;
+        Terms memory t = _terms();
+        t.capital = 1;
+        t.fundedCapital = limit; // one unit over what a uint64 spot balance can hold
+        vm.expectRevert(PoolFactory.BadTerms.selector);
+        factory.createPool(_rules(), t);
+
+        t.fundedCapital = limit - 1; // exactly at the limit
         factory.createPool(_rules(), t);
     }
 

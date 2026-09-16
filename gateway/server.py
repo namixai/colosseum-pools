@@ -79,6 +79,31 @@ class Gateway:
     def _handle(self, body: Any) -> tuple[int, dict]:
         req = Request.from_json(body)
         cleared = check(req, self.reader, int(self.clock() * 1000), self.nonces)
+        # check() claimed the nonce, so a copy of this request arriving meanwhile is refused
+        # without an enclave call. Until a signature for the right key exists, nothing can
+        # reach Hyperliquid, and any failure gives the nonce back for a retry.
+        try:
+            signature, status, payload = self._sign(req, cleared)
+        except BaseException:
+            self.nonces.release(cleared.trader, req.nonce)
+            raise
+        if signature is None:
+            self.nonces.release(cleared.trader, req.nonce)
+            return status, payload
+
+        # From here the nonce stays spent: the venue may have the order even if the call fails.
+        base = payload
+        try:
+            venue = self.submit(req.action(), req.nonce, signature)
+        except Exception as e:
+            log_line(event="venue_unreachable", error=type(e).__name__)
+            return 502, {**base, "status": "venue_unreachable",
+                         "detail": "the order may or may not have reached Hyperliquid; check the account"}
+        return 200, {**base, "status": "submitted", "venue": venue}
+
+    def _sign(self, req: Request, cleared) -> tuple[dict | None, int, dict]:
+        """Asks the enclave and checks its answer. Returns the signature only if it is
+        Hyperliquid-shaped and recovers to the account's key; otherwise the answer to send."""
         if not self.signer.has_key(cleared.key):
             raise GatewayError(503, "key_not_configured", cleared.key)
 
@@ -86,24 +111,17 @@ class Gateway:
         signed = self.signer.sign(cleared.key, req.kind, action, req.nonce)
         base = {"account": req.account, "trader": cleared.trader, "key": cleared.key, "receipt": signed.receipt}
         if signed.http_status != 200 or not signed.signature:
-            return 403 if signed.http_status == 403 else 502, {
+            return None, 403 if signed.http_status == 403 else 502, {
                 **base, "status": "refused_by_signer", "signer": signer_reason(signed.body),
             }
 
         signature = signature_parts(signed.signature)
         if signature is None:
-            return 502, {**base, "status": "bad_signer_response"}
+            return None, 502, {**base, "status": "bad_signer_response"}
         recovered = hl.recover_signer(action, signature, req.nonce)
         if recovered.lower() != cleared.key.lower():
-            return 502, {**base, "status": "signature_mismatch", "recovered": recovered}
-
-        try:
-            venue = self.submit(action, req.nonce, signature)
-        except Exception as e:
-            log_line(event="venue_unreachable", error=type(e).__name__)
-            return 502, {**base, "status": "venue_unreachable",
-                         "detail": "the order may or may not have reached Hyperliquid; check the account"}
-        return 200, {**base, "status": "submitted", "venue": venue}
+            return None, 502, {**base, "status": "signature_mismatch", "recovered": recovered}
+        return signature, 200, base
 
 
 class BoundedServer(ThreadingHTTPServer):

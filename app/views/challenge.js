@@ -1,13 +1,13 @@
 // One challenge: where it stands against the rules, the trader's ticket, and the buttons
 // anyone can press (start, stop, pass, settle).
 import * as chain from "../lib/chain.js";
-import { esc, render, $, wire, badge, row, when, pct } from "../lib/ui.js";
+import { esc, render, $, wire, badge, row, when, pct, settle } from "../lib/ui.js";
 import { rulesHtml, assetNames } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
 
-export async function challengeView(address) {
+export async function challengeView(address, page) {
   if (!(await chain.factory().isChallenge(address))) {
-    render(`<section class="card"><h2>Not a challenge</h2><p>${esc(address)} was not created by this factory.</p></section>`);
+    render(page, `<section class="card"><h2>Not a challenge</h2><p>${esc(address)} was not created by this factory.</p></section>`);
     return;
   }
   const ch = chain.contract("challenge", address);
@@ -24,7 +24,7 @@ export async function challengeView(address) {
   const stopped = [3, 4, 5, 6, 7].includes(s);
   const tone = s === 2 ? "ok" : s === 6 || s === 8 ? "ok" : stopped ? "bad" : "";
 
-  render(`
+  render(page, `
     <section class="card">
       <h2>Challenge ${esc(chain.short(address))} ${badge(name, tone)}</h2>
       <p class="muted mono">${esc(address)}</p>
@@ -43,15 +43,15 @@ export async function challengeView(address) {
     <section class="card" id="trade"></section>
     <section class="card"><h3>Actions</h3><div class="actions" id="actions"></div></section>`);
 
-  $("#rules").innerHTML = rulesHtml(rules, await assetNames(rules.assets));
+  $("#rules", page).innerHTML = rulesHtml(rules, await assetNames(rules.assets));
 
-  if (s >= 2) equityPanel($("#equity"), ch, address);
-  else $("#equity").textContent = arrived ? "The capital has arrived. Start the challenge." : "Waiting for the capital to reach HyperCore.";
+  if (s >= 2) settle(equityPanel($("#equity", page), ch, address), $("#equity", page));
+  else $("#equity", page).textContent = arrived ? "The capital has arrived. Start the challenge." : "Waiting for the capital to reach HyperCore.";
 
-  if (s === 2 && isTrader) tradePanel($("#trade"), address, rules);
-  else $("#trade").remove();
+  if (s === 2 && isTrader) settle(tradePanel($("#trade", page), address, rules), $("#trade", page));
+  else $("#trade", page).remove();
 
-  const actions = $("#actions");
+  const actions = $("#actions", page);
   const buttons = [];
   if (s === 1) {
     buttons.push(`<button id="activate">Start</button>`);
@@ -70,43 +70,43 @@ export async function challengeView(address) {
   }
   actions.innerHTML = buttons.join("") || `<p class="muted">Nothing left to do.</p>`;
 
-  wire($("#activate"), async () => {
+  wire($("#activate", page), async () => {
     await chain.write("challenge", address, "activate");
     return "Started. Reload in a few seconds.";
   });
-  wire($("#abort"), async () => {
+  wire($("#abort", page), async () => {
     await chain.write("challenge", address, "abort");
     return "Aborted and refunded.";
   });
-  wire($("#graduate"), async () => {
+  wire($("#graduate", page), async () => {
     await chain.write("challenge", address, "graduate", [chain.randomSalt()]);
     return "Passed. The pool funds the trader with a new key; settle this challenge next.";
   });
-  wire($("#breach"), async () => {
+  wire($("#breach", page), async () => {
     const { cancels, extra } = await stopInputs(address, rules);
     await chain.write("challenge", address, "breach", [cancels, extra, chain.randomSalt()]);
     return "Stopped. The next order signed with the old key will be refused by Hyperliquid.";
   });
-  wire($("#checkpoint"), async () => {
+  wire($("#checkpoint", page), async () => {
     await chain.write("challenge", address, "checkpoint");
     return "Snapshot taken.";
   });
-  wire($("#expire"), async () => {
+  wire($("#expire", page), async () => {
     const { cancels, extra } = await stopInputs(address, rules);
     await chain.write("challenge", address, "expire", [cancels, extra, chain.randomSalt()]);
     return "Ended.";
   });
-  wire($("#forfeit"), async () => {
+  wire($("#forfeit", page), async () => {
     const { cancels, extra } = await stopInputs(address, rules);
     await chain.write("challenge", address, "forfeit", [cancels, extra, chain.randomSalt()]);
     return "Ended.";
   }, { confirm: "Give up this challenge? Your key is retired and the capital goes back to the pool." });
-  wire($("#settle"), async () => {
+  wire($("#settle", page), async () => {
     const { cancels, extra } = await stopInputs(address, rules);
     await chain.write("challenge", address, "settle", [cancels, extra]);
     return "Step sent. HyperCore needs a few seconds; repeat until the status is Settled.";
   });
-  wire($("#recut"), async () => {
+  wire($("#recut", page), async () => {
     await chain.write("challenge", address, "recut", [chain.randomSalt()]);
     return "Agent replaced again.";
   });
