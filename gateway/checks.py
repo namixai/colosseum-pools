@@ -3,6 +3,7 @@ is reached through a ChainReader, so the checks can be tested against a fake."""
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -11,8 +12,13 @@ from eth_utils import is_hex_address, to_checksum_address
 
 from . import auth
 
-MAX_ENTRIES = 64
 MAX_EXPIRY_MS = 60_000
+TIFS = ("Alo", "Gtc", "Ioc")
+# Hyperliquid normalizes numbers before it checks a signature, so a non-canonical string
+# ("0.0010", "60000.0") signs one thing and verifies another. Only canonical ones pass.
+DECIMAL = re.compile(r"^(0|[1-9][0-9]{0,15})(\.[0-9]{0,9}[1-9])?$")
+U32 = 2**32
+U64 = 2**64
 
 
 class GatewayError(Exception):
@@ -34,56 +40,104 @@ class ChainReader(Protocol):
     def allowed_assets(self, account: str) -> set[int]: ...
 
 
+def _bad(detail: str) -> GatewayError:
+    return GatewayError(400, "bad_request", detail)
+
+
+def _uint(fields: dict, name: str, limit: int, minimum: int = 0) -> int:
+    v = fields.get(name)
+    if not isinstance(v, int) or isinstance(v, bool) or not minimum <= v < limit:
+        raise _bad(f"{name} must be an integer in [{minimum}, {limit})")
+    return v
+
+
+def _flag(fields: dict, name: str) -> bool:
+    v = fields.get(name)
+    if not isinstance(v, bool):
+        raise _bad(f"{name} must be true or false")
+    return v
+
+
+def _decimal(fields: dict, name: str) -> str:
+    v = fields.get(name)
+    if not isinstance(v, str) or not DECIMAL.match(v) or float(v) <= 0:
+        raise _bad(f"{name} must be a positive number written canonically, like 0.0002 or 60000")
+    return v
+
+
 @dataclass(frozen=True)
-class OrderRequest:
-    account: str
+class Request:
     kind: str
-    action: dict
-    nonce: int
-    expires_at: int
+    message: dict
     signature: str
 
+    @property
+    def account(self) -> str:
+        return self.message["account"]
+
+    @property
+    def asset(self) -> int:
+        return self.message["asset"]
+
+    @property
+    def nonce(self) -> int:
+        return self.message["nonce"]
+
+    @property
+    def expires_at(self) -> int:
+        return self.message["expiresAt"]
+
     @staticmethod
-    def from_json(body: Any) -> "OrderRequest":
+    def from_json(body: Any) -> "Request":
         if not isinstance(body, dict):
-            raise GatewayError(400, "bad_request", "body must be a JSON object")
-        try:
-            account = body["account"]
-            kind = body["kind"]
-            action = body["action"]
-            nonce = body["nonce"]
-            expires_at = body["expiresAt"]
-            signature = body["signature"]
-        except KeyError as missing:
-            raise GatewayError(400, "bad_request", f"missing field {missing}") from None
-        if not (isinstance(account, str) and is_hex_address(account)):
-            raise GatewayError(400, "bad_request", "account is not an address")
+            raise _bad("body must be a JSON object")
+        kind = body.get("kind")
         if kind not in ("order", "cancel"):
-            raise GatewayError(400, "bad_request", "kind must be order or cancel")
-        if not isinstance(action, dict):
-            raise GatewayError(400, "bad_request", "action must be an object")
-        for name, value in (("nonce", nonce), ("expiresAt", expires_at)):
-            if not isinstance(value, int) or isinstance(value, bool) or not 0 < value < 2**64:
-                raise GatewayError(400, "bad_request", f"{name} must be a positive integer")
+            raise _bad("kind must be order or cancel")
+        fields = body.get(kind)
+        if not isinstance(fields, dict):
+            raise _bad(f"missing object {kind}")
+        signature = body.get("signature")
         if not (isinstance(signature, str) and signature.startswith("0x") and len(signature) == 132):
-            raise GatewayError(400, "bad_request", "signature must be 65 bytes of hex")
-        return OrderRequest(to_checksum_address(account), kind, action, nonce, expires_at, signature)
+            raise _bad("signature must be 65 bytes of hex")
 
+        account = fields.get("account")
+        if not (isinstance(account, str) and is_hex_address(account)):
+            raise _bad("account is not an address")
+        message: dict = {"account": to_checksum_address(account), "asset": _uint(fields, "asset", U32)}
+        if kind == "order":
+            tif = fields.get("tif")
+            if tif not in TIFS:
+                raise _bad(f"tif must be one of {', '.join(TIFS)}")
+            message.update({
+                "isBuy": _flag(fields, "isBuy"),
+                "limitPx": _decimal(fields, "limitPx"),
+                "size": _decimal(fields, "size"),
+                "reduceOnly": _flag(fields, "reduceOnly"),
+                "tif": tif,
+            })
+        else:
+            message["oid"] = _uint(fields, "oid", U64, 1)
+        message["nonce"] = _uint(fields, "nonce", U64, 1)
+        message["expiresAt"] = _uint(fields, "expiresAt", U64, 1)
+        expected = set(message)
+        if set(fields) != expected:
+            raise _bad(f"{kind} must carry exactly: {', '.join(sorted(expected))}")
+        return Request(kind, message, signature)
 
-def _entries(req: OrderRequest) -> list[dict]:
-    field = "orders" if req.kind == "order" else "cancels"
-    if req.action.get("type") != req.kind:
-        raise GatewayError(400, "bad_request", "action.type does not match kind")
-    other = "cancels" if field == "orders" else "orders"
-    if other in req.action:
-        raise GatewayError(400, "bad_request", f"an {req.kind} action carries no {other}")
-    entries = req.action.get(field)
-    if not isinstance(entries, list) or not entries or len(entries) > MAX_ENTRIES:
-        raise GatewayError(400, "bad_request", f"{field} must hold 1 to {MAX_ENTRIES} entries")
-    for e in entries:
-        if not isinstance(e, dict) or not isinstance(e.get("a"), int) or isinstance(e.get("a"), bool):
-            raise GatewayError(400, "bad_request", "every entry needs an integer asset index a")
-    return entries
+    def action(self) -> dict:
+        """The Hyperliquid action, with keys in the order Hyperliquid hashes them."""
+        m = self.message
+        if self.kind == "order":
+            return {
+                "type": "order",
+                "orders": [{
+                    "a": m["asset"], "b": m["isBuy"], "p": m["limitPx"], "s": m["size"],
+                    "r": m["reduceOnly"], "t": {"limit": {"tif": m["tif"]}},
+                }],
+                "grouping": "na",
+            }
+        return {"type": "cancel", "cancels": [{"a": m["asset"], "o": m["oid"]}]}
 
 
 class NonceBook:
@@ -109,14 +163,12 @@ class Cleared:
     key: str
 
 
-def check(req: OrderRequest, reader: ChainReader, now_ms: int, nonces: NonceBook) -> Cleared:
-    entries = _entries(req)
-
+def check(req: Request, reader: ChainReader, now_ms: int, nonces: NonceBook) -> Cleared:
     if not now_ms < req.expires_at <= now_ms + MAX_EXPIRY_MS:
         raise GatewayError(400, "expired", "expiresAt must be in the next minute")
 
     try:
-        trader = auth.recover_trader(req.account, req.action, req.nonce, req.expires_at, req.signature)
+        trader = auth.recover_trader(req.kind, req.message, req.signature)
     except Exception:  # malformed signature bytes
         raise GatewayError(401, "bad_signature") from None
 
@@ -127,11 +179,8 @@ def check(req: OrderRequest, reader: ChainReader, now_ms: int, nonces: NonceBook
         raise GatewayError(409, "not_trading", "the account is not in a trading state")
     if not reader.is_bound(key, req.account, trader):
         raise GatewayError(403, "not_your_account", "the key on this account is not bound to the signer")
-
-    allowed = reader.allowed_assets(req.account)
-    for e in entries:
-        if e["a"] not in allowed:
-            raise GatewayError(403, "asset_not_allowed", str(e["a"]))
+    if req.asset not in reader.allowed_assets(req.account):
+        raise GatewayError(403, "asset_not_allowed", str(req.asset))
 
     if not nonces.claim(trader, req.nonce):
         raise GatewayError(409, "replayed", "this nonce was already used")
