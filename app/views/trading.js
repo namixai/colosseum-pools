@@ -72,7 +72,7 @@ export async function tradePanel(box, account, rules) {
     });
     $("#ticket-out", box).textContent = JSON.stringify(res, null, 2);
     setTimeout(() => showOrders(box, account), 2500);
-    return res.status === "submitted" ? `Sent: ${size} @ ${limitPx}` : `Refused: ${res.code || res.status}`;
+    return res.status === "submitted" ? `Sent: ${size} @ ${limitPx}` : `Not placed: ${res.reason || res.code || res.status}`;
   });
   showOrders(box, account);
 }
@@ -99,7 +99,7 @@ async function refreshOrders(box, account) {
       const signer = chain.currentSigner() || (await chain.connect(), chain.currentSigner());
       const res = await gateway.cancelOrder(signer, { account, asset: perp.index, oid: b.dataset.oid });
       setTimeout(() => showOrders(box, account), 2500);
-      return res.status === "submitted" ? "Cancel sent." : `Refused: ${res.code || res.status}`;
+      return res.status === "submitted" ? "Cancel sent." : `Not cancelled: ${res.reason || res.code || res.status}`;
     }),
   );
 }

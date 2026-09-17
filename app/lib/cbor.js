@@ -22,7 +22,14 @@ export function decode(bytes) {
     if (info === 24) { need(1); return bytes[i++]; }
     if (info === 25) { need(2); const v = view.getUint16(i); i += 2; return v; }
     if (info === 26) { need(4); const v = view.getUint32(i); i += 4; return v; }
-    if (info === 27) { need(8); const v = view.getBigUint64(i); i += 8; return Number(v); }
+    if (info === 27) {
+      need(8);
+      const v = view.getBigUint64(i);
+      i += 8;
+      // A number past 2^53 would come back rounded; refuse it instead.
+      if (v > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("CBOR integer too large");
+      return Number(v);
+    }
     throw new Error(`unsupported CBOR length ${info}`);
   }
 

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { decode, hex } from "../lib/cbor.js";
 import { orderUrl } from "../lib/gateway.js";
-import { createNavigator, needsGate } from "../lib/nav.js";
+import { createNavigator, logWindows, needsGate } from "../lib/nav.js";
 import { settle } from "../lib/ui.js";
 import { canonical, roundPrice, roundSize } from "../lib/hl.js";
 
@@ -59,7 +59,10 @@ test("cbor: hostile input fails fast", () => {
   assert.equal(decodeInChild("9f01"), early); // indefinite array with no break
   assert.equal(decodeInChild("bf6161"), early); // indefinite map cut after a key
   assert.equal(decodeInChild("7f6161"), early); // indefinite text with no break
-  assert.equal(decodeInChild("9bffffffffffffffff"), early); // an array of 2^64 items
+  assert.equal(decodeInChild("9a0000ffff"), early); // an array of 65535 items with none present
+  assert.equal(decodeInChild("9bffffffffffffffff"), "error: CBOR integer too large"); // 2^64 items
+  assert.equal(decodeInChild("1b0020000000000000"), "error: CBOR integer too large"); // 2^53, would round
+  assert.equal(decodeInChild("1b001fffffffffffff"), "decoded"); // 2^53 - 1 is exact
   assert.equal(decodeInChild("5a0000ffff00"), early); // bytes declared longer than the input
   assert.equal(decodeInChild("58"), early); // a one-byte length that isn't there
   assert.equal(decodeInChild("19"), early); // a two-byte number that isn't there
@@ -72,6 +75,7 @@ test("the gateway is reached over https unless it runs on this machine", () => {
   assert.equal(orderUrl("http://127.0.0.1:8787"), "http://127.0.0.1:8787/v1/order");
   assert.equal(orderUrl("http://localhost:8787/"), "http://localhost:8787/v1/order");
   assert.equal(orderUrl("https://gateway.example.org/pools"), "https://gateway.example.org/pools/v1/order");
+  assert.equal(orderUrl("https://gateway.example.org/pools/?tenant=a#top"), "https://gateway.example.org/pools/v1/order");
   assert.throws(() => orderUrl("http://gateway.example.org"), /https/);
   assert.throws(() => orderUrl("http://127.0.0.1.example.org"), /https/);
   assert.throws(() => orderUrl("ftp://127.0.0.1"), /https/);
@@ -111,6 +115,19 @@ test("only the page on screen reports its failure", async () => {
   fail(new Error("stale"));
   await stale;
   assert.deepEqual(errors, ["current"]);
+});
+
+test("event history is read newest first, 50 blocks a call at most", () => {
+  assert.deepEqual(logWindows(130, 0, 50, 10), {
+    windows: [{ start: 81, end: 130 }, { start: 31, end: 80 }, { start: 0, end: 30 }],
+    complete: true,
+  });
+  assert.deepEqual(logWindows(130, 0, 50, 2), {
+    windows: [{ start: 81, end: 130 }, { start: 31, end: 80 }],
+    complete: false,
+  });
+  assert.deepEqual(logWindows(130, 100, 50, 10), { windows: [{ start: 100, end: 130 }], complete: true });
+  for (const { start, end } of logWindows(10_000, 0, 50, 500).windows) assert.ok(end - start + 1 <= 50);
 });
 
 test("every page but the terms asks the entry question until it is answered", () => {

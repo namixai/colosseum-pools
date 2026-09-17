@@ -101,7 +101,10 @@ export async function newPoolView(page) {
     </section>`);
 
   wire($("#create", page), async () => {
-    const f = new FormData($("#pool-form", page));
+    const form = $("#pool-form", page);
+    // The button isn't a submit button, so the browser won't check min, max and step itself.
+    if (!form.reportValidity()) throw new Error("Some fields are out of range; see the highlighted ones.");
+    const f = new FormData(form);
     const bps = (name) => Math.round(Number(f.get(name)) * 100);
     const assets = f.getAll("asset").map(Number);
     if (!assets.length) throw new Error("Pick at least one asset.");

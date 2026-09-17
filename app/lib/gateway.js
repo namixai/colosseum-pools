@@ -38,7 +38,10 @@ export function orderUrl(base) {
   if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
     throw new Error(`the gateway must be reached over https, not ${url.protocol}//${url.host}`);
   }
-  return `${base.replace(/\/+$/, "")}/v1/order`;
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/order`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 async function post(body) {

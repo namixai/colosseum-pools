@@ -1,5 +1,6 @@
 // HyperEVM access: a read-only provider, the connected wallet, and the contracts.
 import { CONFIG } from "../config.js";
+import { logWindows } from "./nav.js";
 
 const { ethers } = window;
 
@@ -29,6 +30,7 @@ export const ABI = {
     "function isPool(address) view returns (bool)",
     "function isChallenge(address) view returns (bool)",
     "function isPlatformAsset(uint32) view returns (bool)",
+    "function challengeFee() view returns (uint256)",
     `function createPool(${RULES} rules, ${TERMS} terms) returns (address)`,
     "event PoolCreated(address indexed pool, address indexed owner)",
     "event ChallengeCreated(address indexed challenge, address indexed pool, address indexed trader)",
@@ -45,6 +47,8 @@ export const ABI = {
     "function fundedTrader() view returns (address)",
     "function fundedStart() view returns (int64)",
     "function fundedPayoutOwed() view returns (uint64)",
+    "function fundedResultTaken() view returns (bool)",
+    "function fundedResult() view returns (int64)",
     "function deposit(uint256 amount)",
     "function prepareAccount()",
     "function buyChallenge() returns (address)",
@@ -77,6 +81,7 @@ export const ABI = {
   ],
   registry: [
     "function bindingOf(address key) view returns ((uint8 state, address account, address trader))",
+    "function keyOf(address account) view returns (address)",
     "function isBound(address key, address account, address trader) view returns (bool)",
     "function freeCount() view returns (uint256)",
     "event KeyBound(address indexed key, address indexed account, address indexed trader)",
@@ -196,20 +201,19 @@ export async function approveIfNeeded(spender, amount) {
 }
 
 /**
- * Event history in windows of CONFIG.logWindow blocks from the deployment block. Stops at
- * `maxWindows` and says so, instead of hammering a rate-limited public RPC.
+ * Event history, newest blocks first, in windows of CONFIG.logWindow blocks back towards the
+ * deployment block. Stops after `maxWindows` and says so, instead of hammering a rate-limited
+ * public RPC; what it leaves out is the oldest part.
  */
-export async function history(contractInstance, filter, maxWindows = 200) {
+export async function history(contractInstance, filter, maxWindows = 40) {
   const latest = await readProvider.getBlockNumber();
-  const from = CONFIG.deployBlock || Math.max(0, latest - CONFIG.logWindow * maxWindows);
+  const { windows, complete } = logWindows(latest, CONFIG.deployBlock || 0, CONFIG.logWindow, maxWindows);
   const out = [];
-  let windows = 0;
-  for (let start = from; start <= latest; start += CONFIG.logWindow) {
-    if (++windows > maxWindows) return { events: out, complete: false };
-    const end = Math.min(latest, start + CONFIG.logWindow - 1);
+  for (const { start, end } of windows) {
     out.push(...(await contractInstance.queryFilter(filter, start, end)));
   }
-  return { events: out, complete: true };
+  out.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
+  return { events: out, complete };
 }
 
 export function randomSalt() {

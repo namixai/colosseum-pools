@@ -13,9 +13,9 @@ export async function poolView(address, page) {
     return;
   }
   const me = chain.currentAddress();
-  const [{ rules, terms, assets }, stage, owner, ready, challenge, fundedTrader, earned, spotUsdc] = await Promise.all([
+  const [{ rules, terms, assets }, stage, owner, ready, challenge, fundedTrader, earned, spotUsdc, fee] = await Promise.all([
     rulesAndTerms(pool), pool.stage(), pool.owner(), pool.accountReady(), pool.challenge(),
-    pool.fundedTrader(), pool.earned(), hl.spotUsdc(address),
+    pool.fundedTrader(), pool.earned(), hl.spotUsdc(address), chain.factory().challengeFee(),
   ]);
   const stageName = chain.STAGE[Number(stage)];
   const isOwner = chain.same(me, owner);
@@ -45,7 +45,8 @@ export async function poolView(address, page) {
   const buy = $("#buy", page);
   if (Number(stage) === 0 && ready && challenge === "0x0000000000000000000000000000000000000000") {
     buy.innerHTML = `<h3>Take the challenge</h3>
-      <p>You pay ${chain.usd6(terms.price)} USDC on HyperEVM from your wallet. The pool moves
+      <p>You pay ${chain.usd6(terms.price)} USDC on HyperEVM from your wallet${
+        fee > 0n ? `, plus the platform's fee of ${chain.usd6(fee)} USDC, which isn't refunded` : ""}. The pool moves
       ${chain.usd6(terms.capital)} USDC to a new challenge account on HyperCore; a trading key from the
       enclave is reserved for you. You never hold that key: your orders go through the pool gateway,
       signed by your wallet.</p>
@@ -53,7 +54,8 @@ export async function poolView(address, page) {
       <button id="buy-btn">Pay and start</button>`;
     wire($("#buy-btn", page), async () => {
       if (!$("#us", page).checked) throw new Error("Please confirm you are not a US person.");
-      await chain.approveIfNeeded(address, terms.price);
+      // The pool pulls the price and the fee, so it is approved for exactly both.
+      await chain.approveIfNeeded(address, terms.price + fee);
       const receipt = await chain.write("pool", address, "buyChallenge");
       const log = receipt.logs
         .map((l) => { try { return pool.interface.parseLog(l); } catch { return null; } })

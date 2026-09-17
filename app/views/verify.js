@@ -48,15 +48,19 @@ export async function verifyView(address, page) {
 
 async function keysPanel(account, address, page) {
   const reg = chain.registry();
+  // The key bound now comes straight from the registry; older keys only from event history,
+  // which a rate-limited RPC may cut short.
+  const [current, boundNow] = await Promise.all([account.agentKey(), reg.keyOf(address)]);
   const boundLog = await chain.history(reg, reg.filters.KeyBound(null, address));
   const cutLog = await chain.history(account, account.filters.AgentCut());
-  const bound = boundLog.events;
   const cuts = cutLog.events;
   const partial = !(boundLog.complete && cutLog.complete);
-  const current = await account.agentKey();
+  const keys = [...new Set([
+    ...boundLog.events.map((ev) => ev.args.key),
+    ...(boundNow === ethers.ZeroAddress ? [] : [boundNow]),
+  ])];
   const rows = [];
-  for (const ev of bound) {
-    const key = ev.args.key;
+  for (const key of keys) {
     const [binding, role] = await Promise.all([reg.bindingOf(key), hl.info({ type: "userRole", user: key })]);
     const hlSays = role.role === "agent"
       ? (chain.same(role.data.user, address) ? badge("agent of this account", "ok") : badge(`agent of ${chain.short(role.data.user)}`, "bad"))

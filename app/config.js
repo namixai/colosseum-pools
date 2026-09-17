@@ -11,10 +11,10 @@ export const CONFIG = {
   gateway: "http://127.0.0.1:8787",
   factory: "",
   registry: "",
-  // First block of the deployment: event history is read from here, in small windows,
-  // because the public RPC limits log queries.
+  // First block of the deployment. Event history is read back towards it, newest first, in
+  // windows of 50 blocks: HyperEVM answers no more per eth_getLogs call.
   deployBlock: 0,
-  logWindow: 1000,
+  logWindow: 50,
   usdc: "0x2B3370eE501B4a559b57D449569354196457D8Ab",
   signerAttestation: "https://signer-demo.usenami.io:8443/attestation",
   baseRpc: "https://mainnet.base.org",
