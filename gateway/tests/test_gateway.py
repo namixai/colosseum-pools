@@ -246,6 +246,15 @@ class Checks(Base):
 class NonceBookLimits(unittest.TestCase):
     TRADER = "0x00000000000000000000000000000000000000C3"
 
+    def test_a_pair_given_back_and_claimed_again_stays_guarded_until_its_own_expiry(self):
+        book = NonceBook()
+        self.assertTrue(book.claim(self.TRADER, 1, NOW + 10, NOW))
+        book.release(self.TRADER, 1)
+        self.assertTrue(book.claim(self.TRADER, 1, NOW + 30, NOW + 1))
+        # The first claim's expiry comes due; the second claim must still hold.
+        self.assertFalse(book.claim(self.TRADER, 1, NOW + 40, NOW + 11))
+        self.assertTrue(book.claim(self.TRADER, 1, NOW + 60, NOW + 31))
+
     def test_forgets_only_expired_entries(self):
         book = NonceBook()
         self.assertTrue(book.claim(self.TRADER, 1, NOW + 10, NOW))
@@ -284,13 +293,16 @@ class ScriptedSigner:
         return answer
 
 
+RESTING = {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 7}}]}}}
+
+
 class Flow(Base):
-    def gateway(self, signer):
+    def gateway(self, signer, answer=RESTING):
         self.submitted = []
 
         def submit(action, nonce, signature):
             self.submitted.append((action, nonce, signature))
-            return {"status": "ok"}
+            return answer
 
         return Gateway(self.reader, signer, submit=submit, clock=lambda: NOW / 1000)
 
@@ -408,6 +420,28 @@ class Flow(Base):
         self.assertEqual(gw.handle_order(body)[1]["status"], "submitted")
         self.assertEqual([(s, p["code"]) for s, p in seen], [(409, "replayed")])
         self.assertEqual((signer.calls, len(self.submitted)), (1, 1))
+
+    def test_what_hyperliquid_answered_decides_the_status(self):
+        cases = [
+            ({"status": "err", "response": "User or API Wallet 0x1 does not exist."}, 422, "refused_by_venue"),
+            ({"status": "ok", "response": {"type": "order", "data": {"statuses": [
+                {"error": "Order must have minimum value of $10."}]}}}, 422, "refused_by_venue"),
+            (RESTING, 200, "submitted"),
+            ({"status": "ok", "response": {"type": "order", "data": {"statuses": [
+                {"filled": {"totalSz": "0.0002", "avgPx": "60000", "oid": 8}}]}}}, 200, "submitted"),
+            ({"status": "ok", "response": {"type": "cancel", "data": {"statuses": ["success"]}}}, 200, "submitted"),
+            ({"status": "ok"}, 502, "venue_unconfirmed"),
+            ({"status": "unreadable", "http": 502, "body": "<html>"}, 502, "venue_unconfirmed"),
+            ("not a dict", 502, "venue_unconfirmed"),
+        ]
+        for i, (answer, http, status) in enumerate(cases):
+            gw = self.gateway(ScriptedSigner(self.enclave_key.address, self.signed_by_the_enclave), answer)
+            got_http, out = gw.handle_order(self.body(nonce=NOW + i))
+            self.assertEqual((got_http, out["status"]), (http, status), answer)
+            if status == "refused_by_venue":
+                self.assertTrue(out["reason"])
+            # Whatever Hyperliquid said, the signed action reached it: the nonce is spent.
+            self.assertEqual(gw.handle_order(self.body(nonce=NOW + i))[1].get("code"), "replayed")
 
     def test_key_without_a_token(self):
         other = Account.create(os.urandom(32))

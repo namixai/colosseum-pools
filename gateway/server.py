@@ -99,6 +99,12 @@ class Gateway:
             log_line(event="venue_unreachable", error=type(e).__name__)
             return 502, {**base, "status": "venue_unreachable",
                          "detail": "the order may or may not have reached Hyperliquid; check the account"}
+        refusal, confirmed = hl.venue_outcome(venue)
+        if refusal is not None:
+            return 422, {**base, "status": "refused_by_venue", "reason": refusal, "venue": venue}
+        if not confirmed:
+            return 502, {**base, "status": "venue_unconfirmed", "venue": venue,
+                         "detail": "Hyperliquid's answer confirms nothing; check the account"}
         return 200, {**base, "status": "submitted", "venue": venue}
 
     def _sign(self, req: Request, cleared) -> tuple[dict | None, int, dict]:

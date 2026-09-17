@@ -68,8 +68,9 @@ another.
 8. It checks that the returned signature has Hyperliquid's shape (`r` and `s` as hex, `v` an
    integer 27 or 28), recovers its signer the way Hyperliquid will (phantom agent, source
    `b`) and refuses to submit unless it is `key`.
-9. It submits to `https://api.hyperliquid-testnet.xyz/exchange` and returns Hyperliquid's
-   answer. A refusal comes back with the Signer's short reason (`error`, `reason`, `code`,
+9. It submits to `https://api.hyperliquid-testnet.xyz/exchange` and reads the answer: only
+   an order that rests or fills, or a cancel that succeeds, counts as submitted. The nonce
+   stays spent whatever Hyperliquid says. A refusal comes back with the Signer's short reason (`error`, `reason`, `code`,
    `message`), and nothing is submitted. Either way `receipt` carries the Signer's signed
    decision receipt when the box issues one; the demo box doesn't, as of 17 September.
 
@@ -77,9 +78,11 @@ another.
 
 | HTTP | `status` | meaning |
 |---|---|---|
-| 200 | `submitted` | Hyperliquid's answer is in `venue`; it can still reject the order there |
+| 200 | `submitted` | Hyperliquid confirmed the action: the order rests or filled, or the cancel succeeded |
 | 4xx | `refused_by_gateway` | a check failed; `code` says which |
 | 403 | `refused_by_signer` | the enclave refused; `receipt` holds its signed receipt if the box issues one |
+| 422 | `refused_by_venue` | Hyperliquid refused the action or the order; its words are in `reason` |
+| 502 | `venue_unconfirmed` | Hyperliquid's answer confirms nothing (no statuses, or not JSON); check the account |
 | 502 | `signature_mismatch`, `bad_signer_response` | the Signer's answer can't be submitted; nothing was |
 | 502 | `gateway_error` (`upstream_failed`) | a chain read or the Signer call failed; nothing was submitted |
 | 502 | `venue_unreachable` | the call to Hyperliquid failed; the order may or may not have arrived, so check the account |

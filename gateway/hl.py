@@ -29,4 +29,28 @@ def submit(action: dict, nonce: int, signature: dict, timeout: float = 15.0) -> 
     try:
         return resp.json()
     except ValueError:
-        return {"status": "err", "http": resp.status_code, "body": resp.text[:500]}
+        return {"status": "unreadable", "http": resp.status_code, "body": resp.text[:500]}
+
+
+def venue_outcome(answer: Any) -> tuple[str | None, bool]:
+    """(Hyperliquid's reason for refusing, whether it confirmed the action).
+
+    Hyperliquid answers `{"status": "err", "response": reason}` when it refuses the whole
+    action, and `{"status": "ok", "response": {"data": {"statuses": [...]}}}` otherwise, where
+    each order or cancel gets `{"resting": ...}`, `{"filled": ...}`, `"success"` or
+    `{"error": reason}`. Anything else confirms nothing."""
+    if not isinstance(answer, dict):
+        return None, False
+    if answer.get("status") == "err":
+        return str(answer.get("response") or "refused")[:300], False
+    if answer.get("status") != "ok":
+        return None, False
+    response = answer.get("response")
+    data = response.get("data") if isinstance(response, dict) else None
+    statuses = data.get("statuses") if isinstance(data, dict) else None
+    if not isinstance(statuses, list) or not statuses:
+        return None, False
+    for status in statuses:
+        if isinstance(status, dict) and "error" in status:
+            return str(status["error"])[:300], False
+    return None, True

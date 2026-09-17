@@ -160,8 +160,10 @@ class NonceBook:
     def claim(self, trader: str, nonce: int, expires_at: int, now_ms: int) -> bool:
         with self._lock:
             while self._by_expiry and self._by_expiry[0][0] <= now_ms:
-                _, old = heapq.heappop(self._by_expiry)
-                self._seen.pop(old, None)
+                expired, old = heapq.heappop(self._by_expiry)
+                # A pair given back and claimed again has a newer entry; this one is stale.
+                if self._seen.get(old) == expired:
+                    del self._seen[old]
             k = (trader.lower(), nonce)
             if k in self._seen:
                 return False
