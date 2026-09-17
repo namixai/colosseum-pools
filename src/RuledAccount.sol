@@ -50,6 +50,9 @@ abstract contract RuledAccount is Initializable {
     event CancelSent(uint32 indexed asset, uint64 oid);
     event ClosingOrders(uint256 positions);
     event MovedToSpot(uint64 usd1e6);
+    /// A position outside the named assets is still open (notional in 1e6 USDC); settlement
+    /// waits until someone names its asset.
+    event UnnamedPositionOpen(uint64 notional);
 
     error TooManyAssets();
     error TooManyCancels();
@@ -206,7 +209,9 @@ abstract contract RuledAccount is Initializable {
 
     /// @dev One settlement step: cancel the named orders (a resting order holds margin, so
     ///      this has to be repeatable), close what is open, and if nothing is, move the free
-    ///      perp balance to spot. Returns what the start-of-block state showed.
+    ///      perp balance to spot. Returns what the start-of-block state showed. A position in
+    ///      an asset nobody named still counts in the account's notional; until it is gone,
+    ///      nothing moves to spot and `open` stays above zero.
     function _drainStep(Cancel[] memory cancels, uint32[] memory extra)
         internal
         returns (uint256 open, uint64 free, uint64 spot)
@@ -214,6 +219,11 @@ abstract contract RuledAccount is Initializable {
         _cancelAll(cancels);
         open = _closeAll(extra);
         if (open != 0) return (open, 0, 0);
+        uint64 notional = CoreOps.margin(address(this)).ntlPos;
+        if (notional != 0) {
+            emit UnnamedPositionOpen(notional);
+            return (1, 0, 0);
+        }
         free = CoreOps.withdrawable(address(this));
         if (free != 0) {
             CoreOps.toSpot(free);

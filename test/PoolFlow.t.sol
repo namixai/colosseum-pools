@@ -747,6 +747,42 @@ contract PoolFlowTest is Test {
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
     }
 
+    function test_buyChallenge_paysThePlatformFee_whichAnAbortKeeps() public {
+        address feeTo = makeAddr("fee-recipient");
+        vm.prank(operator);
+        factory.setChallengeFee(3e6, feeTo);
+        Pool p = _readyPool();
+
+        deal(address(usdc), trader, 28e6);
+        vm.startPrank(trader);
+        usdc.approve(address(p), 25e6);
+        vm.expectRevert(); // the price alone is approved, not the fee
+        p.buyChallenge();
+        usdc.approve(address(p), 28e6);
+        ChallengeAccount ch = ChallengeAccount(p.buyChallenge());
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(feeTo), 3e6);
+        assertEq(usdc.balanceOf(address(p)), 25e6);
+
+        vm.warp(block.timestamp + 1 hours + 1);
+        ch.abort();
+        assertEq(usdc.balanceOf(trader), 25e6, "the price comes back");
+        assertEq(usdc.balanceOf(feeTo), 3e6, "the fee doesn't");
+    }
+
+    function test_setChallengeFee_operatorOnly_andNeedsARecipient() public {
+        vm.prank(stranger);
+        vm.expectRevert(PoolFactory.NotOperator.selector);
+        factory.setChallengeFee(1, stranger);
+
+        vm.startPrank(operator);
+        vm.expectRevert(PoolFactory.BadFee.selector);
+        factory.setChallengeFee(1, address(0));
+        factory.setChallengeFee(0, address(0)); // switching it off needs no recipient
+        vm.stopPrank();
+        assertEq(factory.challengeFee(), 0);
+    }
+
     // ── passing, and the funded stage ────────────────────────────────────────────────
 
     function _passed(Pool p) internal returns (ChallengeAccount ch, address oldKey) {
@@ -861,15 +897,73 @@ contract PoolFlowTest is Test {
         uint64 traderSpotBefore = _spot(trader);
         vm.prank(investor);
         p.stopFunded(c, a, SALT);
-        uint64 owed = p.fundedPayoutOwed();
-        assertGt(owed, 0);
+        assertEq(p.fundedPayoutOwed(), 0, "not known while the position is open");
+        assertFalse(p.fundedResultTaken());
 
+        uint64 owed;
         for (uint256 i = 0; i < 8 && p.stage() != Pool.Stage.Idle; ++i) {
             CoreSimulatorLib.nextBlock();
             p.settleFunded(c, a);
+            if (p.fundedResultTaken() && owed == 0) owed = p.fundedPayoutOwed();
         }
+        assertGt(owed, 0);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
         assertEq(_spot(trader) - traderSpotBefore, owed);
+    }
+
+    /// The share is computed from what closing realized. At the stop the position is marked
+    /// at +40; the close fills at +5; the trader gets 80% of 5, and the investor doesn't pay
+    /// for the gap.
+    function test_fundedShare_comesFromWhatClosingRealized() public {
+        Pool p = _readyPool();
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        _settleChallenge(ch);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+
+        _trade(address(p), BTC, true, 0.01e8);
+        _mockMargin(address(p), 240e6, 787e6);
+        vm.prank(investor);
+        p.stopFunded(c, a, SALT);
+        assertEq(p.fundedStopEquity(), 240e6);
+        assertEq(p.fundedPayoutOwed(), 0);
+
+        CoreSimulatorLib.nextBlock(); // the reduce-only close executes
+        assertEq(PrecompileLib.position(address(p), BTC).szi, 0);
+        _mockMargin(address(p), 205e6, 0);
+        p.settleFunded(c, a);
+        vm.clearMockedCalls();
+
+        assertTrue(p.fundedResultTaken());
+        assertEq(p.fundedResult(), 205e6);
+        assertEq(p.fundedPayoutOwed(), 4e8, "80% of the realized 5 USDC, in 1e8 units");
+    }
+
+    /// A position in an asset nobody named still shows in the account's notional. Settlement
+    /// waits for it: nothing moves to spot and the result isn't taken.
+    function test_settle_waitsWhileAnUnnamedPositionIsOpen() public {
+        Pool p = _readyPool();
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        _settleChallenge(ch);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(investor);
+        p.stopFunded(c, a, SALT);
+
+        CoreSimulatorLib.nextBlock();
+        _mockMargin(address(p), 200e6, 90e6); // an ETH position nobody named
+        vm.recordLogs();
+        p.settleFunded(c, a);
+        (address[] memory from, uint24[] memory kind,) = _actions(vm.getRecordedLogs());
+        for (uint256 i = 0; i < kind.length; ++i) {
+            assertFalse(from[i] == address(p) && kind[i] == 7, "nothing may move to spot");
+        }
+        assertFalse(p.fundedResultTaken());
+
+        _mockMargin(address(p), 200e6, 0);
+        p.settleFunded(c, a);
+        vm.clearMockedCalls();
+        assertTrue(p.fundedResultTaken());
     }
 
     /// An asset whose size decimals leave no room for a price refuses by name instead of
@@ -903,9 +997,9 @@ contract PoolFlowTest is Test {
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.prank(investor);
         p.stopFunded(c, a, SALT);
-        assertGt(p.fundedPayoutOwed(), 0);
 
-        p.settleFunded(c, a); // perp -> spot
+        p.settleFunded(c, a); // result taken, perp -> spot
+        assertGt(p.fundedPayoutOwed(), 0);
         CoreSimulatorLib.nextBlock();
         p.settleFunded(c, a); // payout sent
         assertGt(p.fundedPayoutSent(), 0);

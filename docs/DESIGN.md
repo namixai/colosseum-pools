@@ -48,6 +48,11 @@ Rules (per pool, copied into each challenge):
 Terms (per pool): challenge price (HyperEVM USDC), challenge capital, profit target, duration,
 trader's share of the challenge profit, capital for a funded trader.
 
+Platform fee (per factory, set by the operator, zero by default): paid by every challenge
+buyer on top of the price, to the operator's fee recipient, and not refunded. A challenge uses
+one enclave key for good, and a pool's owner can sell challenges to itself at price zero, so
+without a fee anyone could use up the published keys for the cost of gas.
+
 Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0), in units of
 1e-6 USDC. Precompiles return the state at the start of the block.
 
@@ -55,7 +60,8 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
 
 1. **Buy** (`Pool.buyChallenge`, the trader). The pool must be idle and hold at least the
    challenge capital on spot. The trader pays the price with HyperEVM USDC (`transferFrom`,
-   so the payment is tied to the trader's address). The factory clones a
+   so the payment is tied to the trader's address), and the platform fee if one is set. The
+   factory clones a
    `ChallengeAccount`, the registry reserves a free key for it and the trader, and the pool
    sends the capital to the challenge's HyperCore address (action 6). The price stays in the
    pool until the challenge starts, so it can be refunded.
@@ -68,7 +74,8 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
 3. **Trade.** The trader signs an order with their wallet and sends it to the pool gateway.
    The gateway checks on chain that the key is bound to this account and this trader and that
    the challenge is active, then asks the enclave to sign with that key. The enclave applies
-   the platform policy (asset list, size caps) and signs or refuses with a signed receipt.
+   the platform policy (asset list, size caps) and signs or refuses. A Signer box with a
+   receipt key also signs a receipt for each decision; the demo box has none as of 17 Sep.
 4. **Stop** (`breach(cancels, assets, salt)`, anyone). Allowed only when a rule is broken at
    the start of the block: drawdown floor, daily loss, leverage, or a position in an asset
    outside the list. In this order:
@@ -94,7 +101,9 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    challenge the same way a stop does.
 7. **Settle** (`settle(cancels, assets)`, anyone, repeated). Cancels the orders the caller
    names (a resting order holds margin, so this can't be a one-time step), closes whatever is
-   still open, and moves the free perp balance to spot (7). Once the perp side is empty it
+   still open, and moves the free perp balance to spot (7), but only once nothing is open at
+   all: a position in an asset the caller didn't name still shows in the account's notional,
+   and settlement waits for it. Once the perp side is empty it
    pays the trader's share, once and never again, and sends the rest to the pool (6) only
    after the payout shows in the balance or five minutes have passed. Each call acts on
    start-of-block state and HyperCore executes a few seconds later, so settling takes
@@ -106,6 +115,12 @@ The pool account trades with the funded trader's key under the same rules, measu
 funded start. `Pool.breach` works like the challenge stop. `Pool.stopFunded` lets the investor
 or the trader end it without a breach. Either way the key is retired, positions are closed,
 the perp balance goes back to spot, and the pool returns to idle.
+
+The trader's share of a funded profit (only when the stage ends without a breach) is computed
+from what closing realized: the account value at the first `settleFunded` step with nothing
+open, before any of it moves to spot. The equity at the stop is kept for the record only. A
+reduce-only close can fill worse than the mark it was priced from, and a share computed from
+the mark would make the investor pay the difference.
 
 ## What the design does not do
 
@@ -131,4 +146,8 @@ the perp balance goes back to spot, and the pool returns to idle.
   `ChallengeCreated` events, which cost the buyer the challenge price and need the pool's
   capital in place. A long pool list still makes `PoolFactory.pools()` expensive to read for
   anyone else who calls it.
+- The platform fee is the only brake on using up enclave keys. At zero, anyone can buy
+  challenges from their own zero-price pool and burn one key each. The operator sets the fee
+  and can change it at any time, including between a buyer's approval and purchase; a buyer
+  who approves exactly price plus fee can't be charged more.
 - One trader per pool, no pool shares, no leaderboard, no mainnet.

@@ -13,6 +13,8 @@ import {KeyRegistry} from "./KeyRegistry.sol";
 interface IPoolFactory is IFactoryView {
     function usdc() external view returns (IERC20);
     function builder() external view returns (address, uint64);
+    function challengeFee() external view returns (uint256);
+    function feeRecipient() external view returns (address);
     function createChallenge(address trader) external returns (address);
 }
 
@@ -45,8 +47,15 @@ contract Pool is RuledAccount {
     address public fundedTrader;
     int64 public fundedStart;
     Breach public fundedEndReason;
-    /// Funded trader's share of the profit at the stop (1e8 = 1 USDC), and what was sent:
-    /// once, never re-sent.
+    /// Account value when the funded stage was stopped, positions marked at the start of that
+    /// block (1e6). For the record only: the share is not computed from it.
+    int64 public fundedStopEquity;
+    /// Account value at the first settlement step with nothing open (1e6): what closing
+    /// actually realized, before any of it moved to spot. The share is computed from this.
+    int64 public fundedResult;
+    bool public fundedResultTaken;
+    /// Funded trader's share of the realized profit (1e8 = 1 USDC), and what was sent: once,
+    /// never re-sent.
     uint64 public fundedPayoutOwed;
     uint64 public fundedPayoutSent;
     /// Spot balance when the payout was sent, and when: the pool goes back to idle only once
@@ -62,7 +71,9 @@ contract Pool is RuledAccount {
     event ChallengeSold(address indexed challenge, address indexed trader, uint256 price);
     event ChallengeRefunded(address indexed challenge, address indexed trader, uint256 price);
     event TraderFunded(address indexed trader, address indexed key, uint64 capital);
-    event FundedStopped(address indexed trader, Breach indexed reason, int64 equity, uint64 payout);
+    event ChallengeFeePaid(address indexed trader, address indexed recipient, uint256 fee);
+    event FundedStopped(address indexed trader, Breach indexed reason, int64 equity);
+    event FundedResult(address indexed trader, int64 realized, uint64 payout);
     event FundedPayoutSent(address indexed trader, uint64 amount);
     event FundedClosed(address indexed trader);
     event WithdrawnOnCore(address indexed to, uint64 amount);
@@ -167,7 +178,17 @@ contract Pool is RuledAccount {
         heldPrice = price;
         stage = Stage.Challenge;
         challengeTrader = msg.sender;
-        IPoolFactory(address(factory)).usdc().safeTransferFrom(msg.sender, address(this), price);
+        IPoolFactory f = IPoolFactory(address(factory));
+        IERC20 usdc = f.usdc();
+        usdc.safeTransferFrom(msg.sender, address(this), price);
+        // The platform's fee: a challenge takes an enclave key for good, and a pool's owner
+        // could otherwise sell challenges to itself for nothing. Not refunded on abort.
+        uint256 fee = f.challengeFee();
+        if (fee != 0) {
+            address recipient = f.feeRecipient();
+            usdc.safeTransferFrom(msg.sender, recipient, fee);
+            emit ChallengeFeePaid(msg.sender, recipient, fee);
+        }
 
         ch = IPoolFactory(address(factory)).createChallenge(msg.sender);
         challenge = ch;
@@ -248,14 +269,11 @@ contract Pool is RuledAccount {
         stage = Stage.Closing;
         fundedEndReason = reason;
         int64 eq = CoreOps.equity(address(this));
-        if (reason == Breach.None && eq > fundedStart) {
-            uint256 profit = uint256(int256(eq) - int256(fundedStart));
-            fundedPayoutOwed = SafeCast.toUint64((profit * _terms.traderShareBps * Units.SPOT_PER_PERP) / Units.BPS);
-        }
+        fundedStopEquity = eq;
         _cutAgent(salt);
         _cancelAll(cancels);
         _closeAll(extraAssets);
-        emit FundedStopped(fundedTrader, reason, eq, fundedPayoutOwed);
+        emit FundedStopped(fundedTrader, reason, eq);
     }
 
     /// @notice One step of closing the funded stage; call until the pool is idle. Capital
@@ -265,7 +283,25 @@ contract Pool is RuledAccount {
         inStage(Stage.Closing)
     {
         (uint256 open, uint64 free, uint64 spot) = _drainStep(cancels, extraAssets);
-        if (open != 0 || free != 0) return;
+        if (open != 0) return;
+
+        if (!fundedResultTaken) {
+            // The first step with nothing open. Precompiles show the start of this block, so
+            // the account value is what closing realized and none of it has moved to spot yet
+            // (this step's transfer lands after the block). Marked equity at the stop is not
+            // used: a close can fill worse than the mark, and the investor would pay the gap.
+            fundedResultTaken = true;
+            int64 result = CoreOps.equity(address(this));
+            fundedResult = result;
+            fundedPayoutOwed = fundedEndReason == Breach.None && result > fundedStart
+                ? SafeCast.toUint64(
+                    (uint256(int256(result) - int256(fundedStart)) * _terms.traderShareBps * Units.SPOT_PER_PERP)
+                        / Units.BPS
+                )
+                : 0;
+            emit FundedResult(fundedTrader, result, fundedPayoutOwed);
+        }
+        if (free != 0) return;
 
         if (fundedPayoutOwed != 0 && fundedPayoutSent == 0) {
             if (spot == 0) return;
@@ -289,6 +325,9 @@ contract Pool is RuledAccount {
             emit FundedClosed(fundedTrader);
             fundedTrader = address(0);
             fundedStart = 0;
+            fundedStopEquity = 0;
+            fundedResult = 0;
+            fundedResultTaken = false;
             fundedPayoutOwed = 0;
             fundedPayoutSent = 0;
             fundedPayoutSpotBefore = 0;

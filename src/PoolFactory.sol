@@ -23,6 +23,11 @@ contract PoolFactory is IAccountSource, IFactoryView {
     address public operator;
     address public builderAddress;
     uint64 public builderMaxFee;
+    /// Paid by every challenge buyer to `feeRecipient`, on top of the pool's price, and never
+    /// refunded (HyperEVM USDC units). Each challenge uses one enclave key for good; without
+    /// a cost that the buyer can't get back, anyone could use up the published keys.
+    uint256 public challengeFee;
+    address public feeRecipient;
 
     mapping(uint32 asset => bool) public isPlatformAsset;
     mapping(address => bool) public isPool;
@@ -34,12 +39,14 @@ contract PoolFactory is IAccountSource, IFactoryView {
     event PlatformAssetSet(uint32 indexed asset, bool allowed);
     event BuilderSet(address indexed builder, uint64 maxFee);
     event OperatorSet(address indexed operator);
+    event ChallengeFeeSet(uint256 fee, address indexed recipient);
 
     error NotOperator();
     error NotPool();
     error BadRules();
     error BadTerms();
     error AssetNotListed(uint32 asset);
+    error BadFee();
 
     constructor(KeyRegistry registry_, address poolImpl_, address challengeImpl_, address operator_) {
         registry = registry_;
@@ -69,6 +76,13 @@ contract PoolFactory is IAccountSource, IFactoryView {
             isPlatformAsset[assets[i]] = allowed;
             emit PlatformAssetSet(assets[i], allowed);
         }
+    }
+
+    function setChallengeFee(uint256 fee, address recipient) external onlyOperator {
+        if (fee != 0 && recipient == address(0)) revert BadFee();
+        challengeFee = fee;
+        feeRecipient = recipient;
+        emit ChallengeFeeSet(fee, recipient);
     }
 
     function setBuilder(address builder_, uint64 maxFee) external onlyOperator {
