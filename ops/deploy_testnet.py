@@ -39,6 +39,10 @@ from hlspike import common as c  # noqa: E402
 # Perp indices from the testnet meta, the three with real volume on 16 Sep 2026:
 # BTC 3, ETH 4, SOL 0. Checked again at deploy time against the live meta.
 PLATFORM_ASSETS = {"BTC": 3, "ETH": 4, "SOL": 0}
+# The platform fee on every challenge, in HyperEVM USDC units, paid to the operator (the
+# deployer). 10 test USDC, the CTO's decision of 17 Sep 2026: the demo has to show that a
+# challenge starts only after payment, and the fee keeps anyone from using up enclave keys.
+CHALLENGE_FEE = 10_000_000
 
 
 # Everything the bytecode is built from.
@@ -162,7 +166,8 @@ def main() -> int:
         raise SystemExit("the deployer has no HyperCore account yet; fund it first")
 
     record: dict = {"chain_id": c.CHAIN_ID, "label": args.label, "commit": commit, "status": "deploying",
-                    "deployer": deployer.address, "platform_assets": PLATFORM_ASSETS, "tx": {}}
+                    "deployer": deployer.address, "platform_assets": PLATFORM_ASSETS,
+                    "challenge_fee": CHALLENGE_FEE, "tx": {}}
     big_blocks(deployer, True)
     try:
         try:
@@ -186,6 +191,8 @@ def main() -> int:
     steps = [
         ("setAccountSource", registry, "setAccountSource(address)", ["address"], [factory]),
         ("setPlatformAssets", factory, "setPlatformAssets(uint32[],bool)", ["uint32[]", "bool"], [assets, True]),
+        ("setChallengeFee", factory, "setChallengeFee(uint256,address)", ["uint256", "address"],
+         [CHALLENGE_FEE, deployer.address]),
     ]
     if keys:
         steps.append(("publish", registry, "publish(address[])", ["address[]"], [keys]))

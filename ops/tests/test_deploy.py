@@ -138,6 +138,12 @@ class Deployment(unittest.TestCase):
         return deploy_one
 
     def run_main(self, deploy_one, transact=None, big_blocks=None):
+        self.transactions = []
+
+        def record_tx(acct, to, sig, types, values):
+            self.transactions.append((to, sig, values))
+            return (transact or (lambda *a: {"transactionHash": "0x" + a[2].split("(")[0]}))(acct, to, sig, types, values)
+
         def switch(acct, enable):
             self.big_blocks.append(enable)
             if big_blocks is not None:
@@ -152,8 +158,7 @@ class Deployment(unittest.TestCase):
                 mock.patch.object(deploy.c, "account", return_value=Deployer()), \
                 mock.patch.object(deploy.c, "core_user_exists", side_effect=lambda a: a == Deployer.address), \
                 mock.patch.object(deploy.c, "deploy", side_effect=deploy_one), \
-                mock.patch.object(deploy.c, "transact",
-                                  side_effect=transact or (lambda *a: {"transactionHash": "0x" + a[2].split("(")[0]})), \
+                mock.patch.object(deploy.c, "transact", side_effect=record_tx), \
                 mock.patch.object(deploy.sys, "argv", ["deploy", "--label", "t", "--keys-file", str(self.keys_file)]):
             return deploy.main()
 
@@ -176,6 +181,11 @@ class Deployment(unittest.TestCase):
         record = self.record()
         self.assertEqual((record["status"], record["block"], record["published_keys"]),
                          ("complete", 0x10, [deploy.to_checksum_address(KEY_A)]))
+        # The demo's platform fee: 10 test USDC to the operator, on the new factory.
+        factory = "0x" + f"{0xE4:040x}"
+        fee = [(to, values) for to, sig, values in self.transactions if sig == "setChallengeFee(uint256,address)"]
+        self.assertEqual(fee, [(factory, [10_000_000, Deployer.address])])
+        self.assertEqual((record["challenge_fee"], "setChallengeFee" in record["tx"]), (10_000_000, True))
         with mock.patch.object(deployments, "ROOT", self.root):
             self.assertEqual(deployments.load("t")["PoolFactory"], "0x" + f"{0xE4:040x}")
 
@@ -219,7 +229,7 @@ class Deployment(unittest.TestCase):
         self.assertIn("execution reverted", record["error"])
         self.assertEqual(record["PoolFactory"], "0x" + f"{0xE4:040x}")
         self.assertEqual(set(record["tx"]), {"KeyRegistry", "PoolImpl", "ChallengeAccountImpl", "PoolFactory",
-                                             "setAccountSource", "setPlatformAssets"})
+                                             "setAccountSource", "setPlatformAssets", "setChallengeFee"})
         self.assert_not_loadable()
 
 

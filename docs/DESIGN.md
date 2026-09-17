@@ -52,8 +52,9 @@ Rules (per pool, copied into each challenge):
 Terms (per pool): challenge price (HyperEVM USDC), challenge capital, profit target, duration,
 trader's share of the challenge profit, capital for a funded trader.
 
-Platform fee (per factory, set by the operator, zero by default): paid by every challenge
-buyer on top of the price, to the operator's fee recipient, and not refunded. A challenge uses
+Platform fee (per factory, set by the operator, zero by default; the testnet deployment sets
+10 test USDC): paid by every challenge buyer on top of the price, to the operator's fee
+recipient, and not refunded. A challenge uses
 one enclave key for good, and a pool's owner can sell challenges to itself at price zero, so
 without a fee anyone could use up the published keys for the cost of gas.
 
