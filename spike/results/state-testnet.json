@@ -1,0 +1,65 @@
+{
+  "approvals": [
+    {
+      "agent": "0x78f3412Be518Aab3BA045d0eFcE0Ff0Ee71f0148",
+      "by": "0x133be14Ef9a80e7F9705cbeef65d748a2F4AF2ff",
+      "name": "q7",
+      "tx": "0x236101207981af9f457ea7f5abcaa4be683cb3927196e8cb0191dbb4587ed70a"
+    },
+    {
+      "agent": "0x549299B099921E37e1bCeB2f788246EC4932D42D",
+      "by": "0x133be14Ef9a80e7F9705cbeef65d748a2F4AF2ff",
+      "name": "q7",
+      "tx": "0x36ac13031d51406b4867357d0727097b34c7f80c9d2a4a7b076b86e3a8acb829"
+    },
+    {
+      "agent": "0x63684BA8D0960159f69DBc8b7E4CC189022C76fE",
+      "by": "0x076f4F0D2448407134F6FcCB5c1128B3a6cfec91",
+      "name": "",
+      "tx": "0xe52a237f18a41cb8464a499bf538b03c60f396d28fdd00571f2920fe4d6d6a97"
+    },
+    {
+      "agent": "0xD949b34594C50e1B6B3DfE714D1f57f231755D91",
+      "by": "0x076f4F0D2448407134F6FcCB5c1128B3a6cfec91",
+      "name": "",
+      "tx": "0x52a3f29ec33f376bc4dbb73eaea69d68d7d0e4b574cfba9b15e7cafa5d70f74f"
+    },
+    {
+      "agent": "0x8EB09E349486147d394A87cBa0793ac09A416097",
+      "by": "0x076f4F0D2448407134F6FcCB5c1128B3a6cfec91",
+      "name": "",
+      "tx": "0x631b53dc077cd4bd7e74397e6d7a1d8732b2597c8b87f62827a357b30875f05f"
+    },
+    {
+      "agent": "0xd5fF56e3Dc4775D8f4134B3DDE3dec00642FaD42",
+      "by": "0x076f4F0D2448407134F6FcCB5c1128B3a6cfec91",
+      "name": "q2",
+      "tx": "0x5a9d2eea1784d6354dbcc7efeaed173b40620dd0d9a34e1dba4d3dacbf18d7d8"
+    },
+    {
+      "agent": "0xd5fF56e3Dc4775D8f4134B3DDE3dec00642FaD42",
+      "by": "0x133be14Ef9a80e7F9705cbeef65d748a2F4AF2ff",
+      "name": "",
+      "tx": "0x3cbd3480a2ab5923848864403e8af9c1159afd7ada5220ebc36af7c023688100"
+    },
+    {
+      "agent": "0x000000000000000000000000000000000000dEaD",
+      "by": "0x133be14Ef9a80e7F9705cbeef65d748a2F4AF2ff",
+      "name": "q8",
+      "tx": "0xe726583b7f9a6765242d0dcd0c4e25de964e74f51ce6eba2065d35094197c66c"
+    }
+  ],
+  "burned_agents": [
+    "0x78f3412Be518Aab3BA045d0eFcE0Ff0Ee71f0148",
+    "0x549299B099921E37e1bCeB2f788246EC4932D42D",
+    "0x63684BA8D0960159f69DBc8b7E4CC189022C76fE",
+    "0xD949b34594C50e1B6B3DfE714D1f57f231755D91",
+    "0x8EB09E349486147d394A87cBa0793ac09A416097",
+    "0xd5fF56e3Dc4775D8f4134B3DDE3dec00642FaD42",
+    "0x000000000000000000000000000000000000dEaD"
+  ],
+  "contracts": {
+    "A": "0x076f4F0D2448407134F6FcCB5c1128B3a6cfec91",
+    "B": "0x133be14Ef9a80e7F9705cbeef65d748a2F4AF2ff"
+  }
+}
