@@ -12,10 +12,10 @@ export async function challengeView(address, page) {
   }
   const ch = chain.contract("challenge", address);
   const me = chain.currentAddress();
-  const [status, reason, trader, pool, rules, terms, createdAt, deadline, key, payoutOwed, payoutSent, arrived] =
+  const [status, reason, trader, pool, rules, terms, createdAt, deadline, key, payoutOwed, payoutSent, arrived, spoiled] =
     await Promise.all([
       ch.status(), ch.breachReason(), ch.trader(), ch.pool(), ch.rules(), ch.terms(), ch.createdAt(),
-      ch.deadline(), ch.agentKey(), ch.payoutOwed(), ch.payoutSent(), ch.capitalArrived(),
+      ch.deadline(), ch.agentKey(), ch.payoutOwed(), ch.payoutSent(), ch.capitalArrived(), ch.keySpoiled(),
     ]);
   const s = Number(status);
   const name = chain.STATUS[s];
@@ -46,7 +46,13 @@ export async function challengeView(address, page) {
   $("#rules", page).innerHTML = rulesHtml(rules, await assetNames(rules.assets));
 
   if (s >= 2) settle(equityPanel($("#equity", page), ch, address), $("#equity", page));
-  else $("#equity", page).textContent = arrived ? "The capital has arrived. Start the challenge." : "Waiting for the capital to reach HyperCore.";
+  else if (spoiled) {
+    $("#equity", page).textContent = "The reserved trading key got a HyperCore account before the start, and "
+      + "Hyperliquid won't take it as an agent. The challenge can't start; anyone can abort it now, "
+      + "which refunds the price (not the platform fee).";
+  } else {
+    $("#equity", page).textContent = arrived ? "The capital has arrived. Start the challenge." : "Waiting for the capital to reach HyperCore.";
+  }
 
   if (s === 2 && isTrader) settle(tradePanel($("#trade", page), address, rules), $("#trade", page));
   else $("#trade", page).remove();
@@ -54,8 +60,10 @@ export async function challengeView(address, page) {
   const actions = $("#actions", page);
   const buttons = [];
   if (s === 1) {
-    buttons.push(`<button id="activate">Start</button>`);
-    buttons.push(`<button id="abort" class="secondary">Abort (capital never arrived)</button>`);
+    if (!spoiled) buttons.push(`<button id="activate">Start</button>`);
+    buttons.push(spoiled
+      ? `<button id="abort">Abort and refund (the key is unusable)</button>`
+      : `<button id="abort" class="secondary">Abort (capital never arrived)</button>`);
   }
   if (s === 2) {
     buttons.push(`<button id="graduate">Pass</button>`);

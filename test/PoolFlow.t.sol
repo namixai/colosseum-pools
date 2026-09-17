@@ -660,6 +660,33 @@ contract PoolFlowTest is Test {
         assertEq(ch.cutBlock(), first + 7, "the latest replacement's block");
     }
 
+    /// A reserved key that gained a HyperCore account before the start can't become the
+    /// challenge's agent. The challenge refuses to start, and anyone can abort it at once:
+    /// the trader gets the price back and the capital goes back to the pool.
+    function test_aSpoiledKey_blocksTheStart_andAbortRefunds() public {
+        Pool p = _readyPool();
+        uint64 poolSpot = _spot(address(p));
+        ChallengeAccount ch = _buy(p);
+        CoreSimulatorLib.nextBlock();
+        assertFalse(ch.keySpoiled());
+        CoreSimulatorLib.forceAccountActivation(ch.agentKey());
+        assertTrue(ch.keySpoiled());
+        assertTrue(ch.capitalArrived());
+
+        vm.expectRevert(ChallengeAccount.KeySpoiled.selector);
+        ch.activate();
+
+        address key = ch.agentKey();
+        vm.prank(stranger);
+        ch.abort(); // inside the start window, with the capital there
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Aborted));
+        assertEq(usdc.balanceOf(trader), 25e6, "price refunded");
+        assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
+        _settleChallenge(ch);
+        assertEq(_spot(address(p)), poolSpot - Units.NEW_ACCOUNT_FEE, "capital back; the account fee is spent");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+    }
+
     /// A resting order holds margin, and nobody can list open orders on chain, so every
     /// settlement step accepts the orders to cancel, not just the stop.
     function test_settle_cancelsNamedOrdersEveryCall() public {

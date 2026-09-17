@@ -73,6 +73,7 @@ export const ABI = {
     "function payoutOwed() view returns (uint64)",
     "function payoutSent() view returns (uint64)",
     "function capitalArrived() view returns (bool)",
+    "function keySpoiled() view returns (bool)",
     "function activate()",
     "function abort()",
     `function breach(${CANCEL} cancels, uint32[] extraAssets, bytes32 salt)`,

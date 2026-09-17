@@ -14,6 +14,10 @@ interface IAccountSource {
 ///      signed by a removed agent can be replayed once its nonces are pruned, so a key that
 ///      has served one account is never handed out again.
 ///
+///      Anyone can send USDC to a published address, which gives it a HyperCore account, and
+///      HyperCore doesn't take an address with an account as an agent (spike question 8,
+///      17 Sep 2026). Such a key is retired when it comes up instead of being handed out.
+///
 ///      What this contract can't show: that a published address was minted inside the
 ///      enclave. The operator publishes the addresses and the Signer build in use offers no
 ///      outside proof of where a key was born.
@@ -31,6 +35,9 @@ contract KeyRegistry {
         address trader;
     }
 
+    /// How many spoiled keys one `assign` skips before giving up; `purgeSpoiled` clears more.
+    uint256 public constant MAX_SPOILED_SKIPS = 16;
+
     address public operator;
     address public pendingOperator;
     IAccountSource public accounts;
@@ -45,6 +52,7 @@ contract KeyRegistry {
     event KeyPublished(address indexed key);
     event KeyBound(address indexed key, address indexed account, address indexed trader);
     event KeyRetired(address indexed key, address indexed account);
+    event KeySpoiled(address indexed key);
 
     error NotOperator();
     error NotPendingOperator();
@@ -56,6 +64,7 @@ contract KeyRegistry {
     error NoFreeKey();
     error AccountHasKey(address account, address key);
     error NotBoundHere(address key, address caller);
+    error TooManySpoiledKeys();
 
     constructor(address operator_) {
         if (operator_ == address(0)) revert ZeroAddress();
@@ -107,17 +116,42 @@ contract KeyRegistry {
     // ── accounts ─────────────────────────────────────────────────────────────────────
 
     /// @notice Hands the next free key to the calling account for `trader`. An account can
-    ///         only take a key for itself, and only one at a time.
+    ///         only take a key for itself, and only one at a time. Keys that gained a
+    ///         HyperCore account on the way are retired and skipped.
     function assign(address trader) external returns (address key) {
         if (!accounts.isAccount(msg.sender)) revert NotAnAccount(msg.sender);
         address current = keyOf[msg.sender];
         if (current != address(0)) revert AccountHasKey(msg.sender, current);
-        if (_free.length == 0) revert NoFreeKey();
-        key = _free[_free.length - 1];
+        for (uint256 skipped = 0;; ++skipped) {
+            if (_free.length == 0) revert NoFreeKey();
+            key = _free[_free.length - 1];
+            if (!CoreOps.exists(key)) break;
+            if (skipped == MAX_SPOILED_SKIPS) revert TooManySpoiledKeys();
+            _free.pop();
+            _spoil(key);
+        }
         _free.pop();
         _bindings[key] = Binding({state: State.Bound, account: msg.sender, trader: trader});
         keyOf[msg.sender] = key;
         emit KeyBound(key, msg.sender, trader);
+    }
+
+    /// @notice Retires up to `max` keys from the top of the free list that have gained a
+    ///         HyperCore account since they were published. Anyone may call it, and
+    ///         `assign` needs it once more than MAX_SPOILED_SKIPS such keys are stacked up.
+    function purgeSpoiled(uint256 max) external returns (uint256 purged) {
+        while (purged < max && _free.length != 0) {
+            address key = _free[_free.length - 1];
+            if (!CoreOps.exists(key)) break;
+            _free.pop();
+            _spoil(key);
+            ++purged;
+        }
+    }
+
+    function _spoil(address key) internal {
+        _bindings[key].state = State.Retired;
+        emit KeySpoiled(key);
     }
 
     /// @notice The account a key is bound to gives it up for good.

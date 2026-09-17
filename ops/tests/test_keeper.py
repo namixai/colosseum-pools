@@ -62,7 +62,8 @@ class FakeChain:
                                     "assets": (3,), "cutKey": ZERO, "cutBlock": 0, **over}
 
     def add_challenge(self, addr, status, **over):
-        self.challenges[addr.lower()] = {"status": status, "capitalArrived": False, "createdAt": NOON - 60,
+        self.challenges[addr.lower()] = {"status": status, "capitalArrived": False, "keySpoiled": False,
+                                         "createdAt": NOON - 60,
                                          "day": 19_999, "violation": 0, "deadline": NOON + DAY, "assets": (3,),
                                          "cutKey": ZERO, "cutBlock": 0, **over}
 
@@ -252,6 +253,11 @@ class ChallengeCalls(KeeperTest):
         self.follow_a(status=keeper.CREATED, capitalArrived=True)
         self.make().one_pass()
         self.assertEqual(self.chain.calls_to(CHALLENGE_A), [("activate", [])])
+
+    def test_a_spoiled_key_is_aborted_at_once(self):
+        self.follow_a(status=keeper.CREATED, capitalArrived=True, keySpoiled=True)
+        self.make().one_pass()
+        self.assertEqual(self.chain.calls_to(CHALLENGE_A), [("abort", [])])
 
     def test_aborts_only_after_the_start_window(self):
         self.follow_a(status=keeper.CREATED, createdAt=NOON - keeper.START_WINDOW)

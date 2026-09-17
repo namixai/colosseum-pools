@@ -73,6 +73,7 @@ contract ChallengeAccount is RuledAccount {
     error NotFlat();
     error TargetNotMet(int64 equity, int256 target);
     error RuleBroken(Breach reason);
+    error KeySpoiled();
 
     constructor() {
         _disableInitializers();
@@ -119,10 +120,18 @@ contract ChallengeAccount is RuledAccount {
             && CoreOps.spotUsdc(address(this)) >= _terms.capital * Units.SPOT_PER_PERP;
     }
 
+    /// @notice Whether the reserved key gained a HyperCore account before the start. HyperCore
+    ///         doesn't take such an address as an agent, so the challenge can't start, and
+    ///         anyone may abort it at once.
+    function keySpoiled() public view returns (bool) {
+        return status == Status.Created && CoreOps.exists(agentKey);
+    }
+
     /// @notice Starts the challenge once the capital has reached this account on HyperCore.
     ///         Anyone may call it.
     function activate() external inStatus(Status.Created) {
         if (!capitalArrived()) revert NotStartedOnCore();
+        if (CoreOps.exists(agentKey)) revert KeySpoiled();
 
         CoreOps.separateBalances(address(this));
         CoreOps.toPerp(_terms.capital);
@@ -138,12 +147,15 @@ contract ChallengeAccount is RuledAccount {
         emit Started(trader, agentKey, _terms.capital, deadline);
     }
 
-    /// @notice If the capital never arrived, anyone may call this after the start window:
-    ///         the trader's payment is refunded and the reserved key retired. Anything that
-    ///         arrives later goes back to the pool through `settle`.
+    /// @notice If the capital never arrived, anyone may call this after the start window; if
+    ///         the reserved key is spoiled, at any time. The trader's payment is refunded (the
+    ///         platform fee is not) and the reserved key retired. The capital, whenever it
+    ///         arrives, goes back to the pool through `settle`.
     function abort() external inStatus(Status.Created) {
-        if (block.timestamp <= createdAt + START_WINDOW) revert TooEarly();
-        if (capitalArrived()) revert CapitalArrived();
+        if (!keySpoiled()) {
+            if (block.timestamp <= createdAt + START_WINDOW) revert TooEarly();
+            if (capitalArrived()) revert CapitalArrived();
+        }
         status = Status.Aborted;
         address key = agentKey;
         agentKey = address(0);

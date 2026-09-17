@@ -14,7 +14,8 @@ deployment block. A pass that fails, say on a rate-limited RPC, is logged and th
 starts from the same block.
 
 For every pool it follows, one pass does what is due:
-  challenge Created  → activate once the capital is there; abort after the start window if not
+  challenge Created  → abort at once if the reserved key is spoiled; activate once the capital
+                       is there; abort after the start window if not
   challenge Active   → checkpoint in the first minutes of a UTC day; breach if a rule is broken;
                        expire after the deadline
   challenge stopped  → recut if the cut key still trades; settle one step
@@ -123,7 +124,10 @@ def stop(wallet, addr: str, fn: str, cancels, extra, dry: bool) -> None:
 def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> None:
     status = view(ch, "status()", "uint8")
     if status == CREATED:
-        if view(ch, "capitalArrived()", "bool"):
+        if view(ch, "keySpoiled()", "bool"):
+            log("key_spoiled", account=ch)
+            send(wallet, ch, "abort()", dry=dry)
+        elif view(ch, "capitalArrived()", "bool"):
             send(wallet, ch, "activate()", dry=dry)
         elif now > view(ch, "createdAt()", "uint64") + START_WINDOW:
             send(wallet, ch, "abort()", dry=dry)

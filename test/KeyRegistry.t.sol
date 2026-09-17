@@ -144,6 +144,43 @@ contract KeyRegistryTest is Test {
         assertTrue(next != key);
     }
 
+    /// Anyone can send USDC to a published key address, which gives it a HyperCore account,
+    /// and HyperCore won't take such an address as an agent. Such a key is retired instead of
+    /// handed out.
+    function test_assign_skipsAKeyThatGotAnAccount() public {
+        _publish(k1, k2);
+        CoreSimulatorLib.forceAccountActivation(k2);
+        vm.expectEmit(true, false, false, false, address(registry));
+        emit KeyRegistry.KeySpoiled(k2);
+        assertEq(accountA.assign(registry, trader), k1);
+        assertEq(uint8(registry.bindingOf(k2).state), uint8(KeyRegistry.State.Retired));
+        assertEq(registry.freeCount(), 0);
+    }
+
+    /// One call skips at most MAX_SPOILED_SKIPS; anyone can clear the rest with purgeSpoiled.
+    function test_manySpoiledKeys_arePurgedByAnyone() public {
+        uint256 n = registry.MAX_SPOILED_SKIPS() + 2;
+        address[] memory keys = new address[](n + 1);
+        keys[0] = k1; // the only clean key, at the bottom
+        for (uint256 i = 1; i <= n; ++i) {
+            keys[i] = makeAddr(string.concat("spoiled-", vm.toString(i)));
+        }
+        vm.prank(operator);
+        registry.publish(keys);
+        for (uint256 i = 1; i <= n; ++i) {
+            CoreSimulatorLib.forceAccountActivation(keys[i]);
+        }
+        vm.expectRevert(KeyRegistry.TooManySpoiledKeys.selector);
+        accountA.assign(registry, trader);
+
+        vm.prank(makeAddr("anyone"));
+        assertEq(registry.purgeSpoiled(n - 1), n - 1);
+        assertEq(registry.freeCount(), 2);
+        assertEq(registry.purgeSpoiled(10), 1, "stops at the first clean key");
+        assertEq(registry.purgeSpoiled(10), 0);
+        assertEq(accountA.assign(registry, trader), k1);
+    }
+
     function test_operatorTransfer_isTwoStep() public {
         address next = makeAddr("next");
         vm.prank(operator);

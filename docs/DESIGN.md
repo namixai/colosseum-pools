@@ -77,7 +77,8 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    the reserved key as the account's unnamed agent (9), approves the builder fee if one is set
    (12), and takes the first daily snapshot. If the capital hasn't arrived an hour after the
    purchase, `abort` refunds the price and retires the key; once the capital is there,
-   `abort` is refused.
+   `abort` is refused, unless the reserved key has gained a HyperCore account
+   (`keySpoiled()`): then the challenge can't start and anyone may abort it at once.
 3. **Trade.** The trader signs an order with their wallet and sends it to the pool gateway.
    The gateway checks on chain that the key is bound to this account and this trader and that
    the challenge is active, then asks the enclave to sign with that key. The enclave applies
@@ -170,4 +171,10 @@ the mark would make the investor pay the difference.
   lands on an address with no account. The candidates depend on the block and on the caller's
   salt, creating each candidate's account costs 1 USDC, and the keeper tries again with a new
   salt on every pass. Settlement drains the account either way.
+- Anyone can send USDC to a published key address, which gives it a HyperCore account, and
+  HyperCore won't take it as an agent then. The registry retires such a key instead of
+  handing it out, and a challenge whose reserved key was spoiled before the start can be
+  aborted at once for a refund of the price. The platform fee isn't refunded, so this costs
+  a buyer the fee and costs the attacker 1 USDC per key. What happens when someone sends
+  USDC to a key that is already an agent is untested.
 - One trader per pool, no pool shares, no leaderboard, no mainnet.
