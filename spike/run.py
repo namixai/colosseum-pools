@@ -203,11 +203,16 @@ def cmd_gas(args, _state: dict) -> None:
     tokens = {t["index"]: t for t in spot["tokens"]}
     pair = next(p for p in spot["universe"] if [tokens[x]["name"] for x in p["tokens"]] == ["HYPE", "USDC"])
     coin = pair["name"]
-    px = float(c.info_post({"type": "allMids"})[coin])
-    if args.buy_hype * px > 30:
-        raise SystemExit(f"refusing: {args.buy_hype} HYPE at {px} is more than 30 USDC")
-    resp = ex.market_open(coin, True, args.buy_hype, None, 0.05)
-    c.record("gas_buy_hype", pair=coin, mid=px, size=args.buy_hype, response=resp)
+    # The testnet HYPE book is thin: on 17 Sep the best ask sat 10% above the mid, so a market
+    # order with 5% slippage matched nothing. Buy at the best ask instead, capped in USDC.
+    asks = c.info_post({"type": "l2Book", "coin": coin})["levels"][1]
+    if not asks:
+        raise SystemExit(f"nobody sells HYPE on the testnet book {coin}")
+    ask = float(asks[0]["px"])
+    if args.buy_hype * ask > 30:
+        raise SystemExit(f"refusing: {args.buy_hype} HYPE at {ask} is more than 30 USDC")
+    resp = ex.order(coin, True, args.buy_hype, ask, {"limit": {"tif": "Ioc"}})
+    c.record("gas_buy_hype", pair=coin, ask=ask, size=args.buy_hype, response=resp)
     time.sleep(3)
     hype_wire = c.spot_token_wire("HYPE")
     resp = ex.spot_transfer(args.to_evm, c.HYPE_SYSTEM, hype_wire)
@@ -240,8 +245,9 @@ def cmd_fund(args, state: dict) -> None:
     a = contract(state, args.to)
     before_sender = c.core_snapshot(deployer.address)
     before_dest = c.core_snapshot(a)
+    existed = c.core_user_exists(a)
     resp = c.exchange(deployer).spot_transfer(args.usdc, a, c.spot_token_wire("USDC"))
-    c.record("fund_sent", to=a, usdc=args.usdc, response=resp, exists_before=c.core_user_exists(a))
+    c.record("fund_sent", to=a, usdc=args.usdc, response=resp, exists_before=existed)
     after_dest = wait_until("usdc arrives at contract", lambda: c.core_snapshot(a),
                             lambda s: float(s["spotUSDC"]) > float(before_dest["spotUSDC"]))
     after_sender = c.core_snapshot(deployer.address)
@@ -445,6 +451,9 @@ def cmd_q2(args, state: dict) -> None:
     c.record("q2_eoa_approve_same_agent", response=resp, role_after=role(agent_d))
 
     # Which account does an agent-d order land on now? Both need margin to rest it.
+    if float(c.core_snapshot(a)["perpAccountValue"]) < 5:
+        c.transact(deployer, a, "usdClassTransfer(uint64,bool)", ["uint64", "bool"], [int(args.margin * 1e6), True])
+        wait_until("A perp margin", lambda: c.core_snapshot(a), lambda s: float(s["perpAccountValue"]) >= 5)
     if float(c.core_snapshot(b)["perpAccountValue"]) < 5:
         if float(c.core_snapshot(b)["spotUSDC"]) < args.margin:
             c.transact(deployer, a, "spotSend(address,uint64,uint64)", ["address", "uint64", "uint64"],
@@ -519,6 +528,22 @@ def cmd_q7(_args, state: dict) -> None:
                          "trades B. Check the results log before running anything else on B.")
 
 
+def cmd_q8(_args, state: dict) -> None:
+    """Q8, added 17 Sep. Does HyperCore take an address that already has an account as an
+    agent? A stop replaces the agent with a fresh keyless address and skips candidates that
+    exist; if every candidate had been funded in advance, it would use one anyway. Contract B
+    tries 0x…dEaD, which exists on testnet and whose key nobody holds."""
+    b = contract(state, "B")
+    target = "0x000000000000000000000000000000000000dEaD"
+    exists = c.core_user_exists(target)
+    before = role(target)
+    contract_add_agent(state, "B", target, "q8")
+    time.sleep(12)
+    c.record("q8_existing_user_as_agent", target=target, exists_on_core=exists, role_before=before,
+             role_after=role(target), extra_agents_B=c.info_post({"type": "extraAgents", "user": b}))
+    burn(state, target, "tried as an agent in q8")
+
+
 def cmd_q5(args, state: dict) -> None:
     """Q5. The trader pays on HyperEVM with testnet USDC (ERC-20), so the contract can see
     who paid. The deployer stands in for the trader: it moves USDC from HyperCore to its
@@ -568,6 +593,7 @@ def main() -> int:
     q2 = sub.add_parser("q2")
     q2.add_argument("--margin", type=float, default=5.0)
     sub.add_parser("q7")
+    sub.add_parser("q8")
     q5 = sub.add_parser("q5")
     q5.add_argument("--usdc", type=float, default=5.0)
     args = p.parse_args()
@@ -575,7 +601,7 @@ def main() -> int:
     c.assert_testnet()
     state = load_state()
     handlers = {"status": cmd_status, "gas": cmd_gas, "deploy": cmd_deploy, "fund": cmd_fund,
-                "q3": cmd_q3, "q4": cmd_q4, "q1": cmd_q1, "q2": cmd_q2, "q5": cmd_q5, "q7": cmd_q7}
+                "q3": cmd_q3, "q4": cmd_q4, "q1": cmd_q1, "q2": cmd_q2, "q5": cmd_q5, "q7": cmd_q7, "q8": cmd_q8}
     handlers[args.cmd](args, state)
     return 0
 
