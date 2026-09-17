@@ -17,9 +17,14 @@ For every pool it follows, one pass does what is due:
   challenge Created  → activate once the capital is there; abort after the start window if not
   challenge Active   → checkpoint in the first minutes of a UTC day; breach if a rule is broken;
                        expire after the deadline
-  challenge stopped  → settle one step
+  challenge stopped  → recut if the cut key still trades; settle one step
   pool Funded        → checkpoint; breach if a rule is broken
-  pool Closing       → settleFunded one step
+  pool Closing       → recut if the cut key still trades; settleFunded one step
+
+HyperCore ignores a replacement agent that already has an account (spike question 8, 17 Sep
+2026), and then the key a stop cut keeps trading. So on a stopped account the keeper asks the
+info API whether `cutKey()` is still that account's agent, once `cutBlock()` is at least
+RECUT_AFTER_BLOCKS behind, and calls `recut` with a fresh salt if it is.
 
 Nothing here is privileged: the keeper uses its own testnet wallet (--wallet, default "keeper")
 and only calls functions that are open to everyone. It never graduates a challenge: passing
@@ -50,6 +55,7 @@ START_WINDOW = 3600
 CHALLENGE_CREATED = "0x" + keccak(text="ChallengeCreated(address,address,address)").hex()
 STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 MAX_LOG_WINDOW = 50  # blocks per eth_getLogs call that HyperEVM accepts
+RECUT_AFTER_BLOCKS = 10  # CoreWriter actions land a few seconds after their block
 
 # ChallengeAccount.Status and Pool.Stage. The tests hold these against the Solidity source.
 CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(1, 9)
@@ -98,12 +104,23 @@ def rules_assets(addr: str) -> set[int]:
     return set(rules[3])
 
 
+def recut_if_uncut(wallet, account: str, latest: int, dry: bool) -> None:
+    key = to_checksum_address(view(account, "cutKey()", "address"))
+    if key == ZERO or latest < view(account, "cutBlock()", "uint64") + RECUT_AFTER_BLOCKS:
+        return
+    role = c.info_post({"type": "userRole", "user": key})
+    agent_of = str((role.get("data") or {}).get("user", "")).lower()
+    if role.get("role") == "agent" and agent_of == account.lower():
+        log("cut_did_not_land", account=account, key=key)
+        send(wallet, account, "recut(bytes32)", ["bytes32"], [os.urandom(32)], dry=dry)
+
+
 def stop(wallet, addr: str, fn: str, cancels, extra, dry: bool) -> None:
     send(wallet, addr, f"{fn}({CANCEL},uint32[],bytes32)", [CANCEL, "uint32[]", "bytes32"],
          [cancels, extra, os.urandom(32)], dry=dry)
 
 
-def challenge_pass(wallet, ch: str, names, now: int, dry: bool) -> None:
+def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> None:
     status = view(ch, "status()", "uint8")
     if status == CREATED:
         if view(ch, "capitalArrived()", "bool"):
@@ -124,15 +141,16 @@ def challenge_pass(wallet, ch: str, names, now: int, dry: bool) -> None:
         elif now > view(ch, "deadline()", "uint64"):
             stop(wallet, ch, "expire", cancels, extra, dry)
     else:
+        recut_if_uncut(wallet, ch, latest, dry)
         send(wallet, ch, f"settle({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
 
 
-def pool_pass(wallet, pool: str, names, now: int, dry: bool) -> bool:
+def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> bool:
     """One pass over a pool and its challenge. False once the pool has nothing left to do."""
     stage = view(pool, "stage()", "uint8")
     challenge = to_checksum_address(view(pool, "challenge()", "address"))
     if challenge != ZERO:
-        challenge_pass(wallet, challenge, names, now, dry)
+        challenge_pass(wallet, challenge, names, now, latest, dry)
     if stage in (FUNDED, CLOSING):
         cancels, extra = stop_inputs(pool, rules_assets(pool), names)
         if stage == FUNDED:
@@ -143,6 +161,7 @@ def pool_pass(wallet, pool: str, names, now: int, dry: bool) -> bool:
                 log("breach_found", account=pool, reason=reason)
                 stop(wallet, pool, "breach", cancels, extra, dry)
         else:
+            recut_if_uncut(wallet, pool, latest, dry)
             send(wallet, pool, f"settleFunded({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
     return not (stage == IDLE and challenge == ZERO)
 
@@ -204,7 +223,7 @@ class Keeper:
         now = int(time.time())
         for pool in sorted(self.live):
             try:
-                if not pool_pass(self.wallet, pool, names, now, self.dry):
+                if not pool_pass(self.wallet, pool, names, now, latest, self.dry):
                     self.live.discard(pool)
             except Exception as exc:
                 log("pool_failed", pool=pool, error=str(exc)[:200])

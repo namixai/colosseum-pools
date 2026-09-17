@@ -55,15 +55,16 @@ class FakeChain:
         self.positions: dict[str, list] = {}
         self.sent: list[tuple[str, str, list]] = []
         self.fail_sends_to: set[str] = set()
+        self.roles: dict[str, dict] = {}
 
     def add_pool(self, addr, stage=keeper.IDLE, challenge=ZERO, **over):
         self.pools[addr.lower()] = {"stage": stage, "challenge": challenge, "day": 19_999, "violation": 0,
-                                    "assets": (3,), **over}
+                                    "assets": (3,), "cutKey": ZERO, "cutBlock": 0, **over}
 
     def add_challenge(self, addr, status, **over):
         self.challenges[addr.lower()] = {"status": status, "capitalArrived": False, "createdAt": NOON - 60,
                                          "day": 19_999, "violation": 0, "deadline": NOON + DAY, "assets": (3,),
-                                         **over}
+                                         "cutKey": ZERO, "cutBlock": 0, **over}
 
     # spike.hlspike.common, as the keeper uses it
     def rpc(self, method, params=()):
@@ -102,6 +103,8 @@ class FakeChain:
             return {"universe": [{"name": n} for n in ("SOL", "APT", "ATOM", "BTC", "ETH")]}
         if kind == "openOrders":
             return self.orders.get(body["user"].lower(), [])
+        if kind == "userRole":
+            return self.roles.get(body["user"].lower(), {"role": "missing"})
         if kind == "clearinghouseState":
             return {"assetPositions": [{"position": {"coin": coin}} for coin in self.positions.get(body["user"].lower(), [])]}
         raise AssertionError(f"unexpected info call {kind}")
@@ -300,6 +303,30 @@ class ChallengeCalls(KeeperTest):
             self.assertEqual(fns, [] if status == keeper.SETTLED else ["settle"], status)
             self.state.unlink()
 
+    def test_a_cut_key_that_still_trades_is_cut_again(self):
+        key = "0x00000000000000000000000000000000000000C7"
+        self.follow_a(status=keeper.BREACHED, cutKey=key, cutBlock=95)
+        self.chain.roles[key.lower()] = {"role": "agent", "data": {"user": CHALLENGE_A.lower()}}
+        k = self.make()
+        k.one_pass()  # block 100: the replacement may still be landing
+        self.assertEqual([fn for fn, _ in self.chain.calls_to(CHALLENGE_A)], ["settle"])
+        self.chain.latest = 105
+        k.one_pass()
+        fns = self.chain.calls_to(CHALLENGE_A)
+        self.assertEqual([fn for fn, _ in fns], ["settle", "recut", "settle"])
+        self.assertEqual(len(fns[1][1][0]), 32, "a fresh salt")
+
+    def test_a_cut_that_landed_is_left_alone(self):
+        key = "0x00000000000000000000000000000000000000C7"
+        other = "0x00000000000000000000000000000000000000C8"
+        self.follow_a(status=keeper.BREACHED, cutKey=key, cutBlock=10)
+        for role in ({"role": "missing"}, {"role": "agent", "data": {"user": other.lower()}}):
+            self.chain.sent.clear()
+            self.chain.roles[key.lower()] = role
+            self.make().one_pass()
+            self.assertEqual([fn for fn, _ in self.chain.calls_to(CHALLENGE_A)], ["settle"], role)
+            self.state.unlink()
+
     def test_aborted_is_one_of_the_stopped_states(self):
         self.assertIn(keeper.ABORTED, keeper.STOPPED)
         self.assertNotIn(keeper.ACTIVE, keeper.STOPPED)
@@ -315,6 +342,14 @@ class PoolCalls(KeeperTest):
         self.chain.add_pool(POOL_A, stage=keeper.CLOSING)
         k.one_pass()
         self.assertEqual([fn for fn, _ in self.chain.calls_to(POOL_A)], ["breach", "settleFunded"])
+
+    def test_a_closing_pool_whose_cut_key_still_trades_is_cut_again(self):
+        key = "0x00000000000000000000000000000000000000C9"
+        self.chain.add_pool(POOL_A, stage=keeper.CLOSING, cutKey=key, cutBlock=50)
+        self.chain.logs.append(challenge_log(10, POOL_A))
+        self.chain.roles[key.lower()] = {"role": "agent", "data": {"user": POOL_A.lower()}}
+        self.make().one_pass()
+        self.assertEqual([fn for fn, _ in self.chain.calls_to(POOL_A)], ["recut", "settleFunded"])
 
     def test_dry_run_sends_nothing(self):
         self.follow_a(status=keeper.ACTIVE, violation=1)

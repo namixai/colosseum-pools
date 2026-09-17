@@ -1,12 +1,13 @@
 # Design: pools, challenges and a stop anyone can pull
 
-Status: working design, 16 September 2026. The spike (`spike/README.md`) checks the
-HyperCore behaviour this design leans on; where a live result is still pending, the section
-says so.
+Status: working design, 16 September 2026, updated on 17 September after the live spike.
+`spike/README.md` has the HyperCore behaviour this design leans on and how each piece was
+checked.
 
 ## Roles
 
-- **Investor.** Creates a pool, sets its rules and challenge terms, puts in capital.
+- **Investor.** Creates a pool, sets its rules and challenge terms, and puts in capital with a
+  HyperCore spot transfer to the pool's address.
 - **Trader**, a person or an AI agent. Picks a pool, pays for a challenge, trades the
   challenge capital, and if the target is met, trades the pool's capital.
 - **Operator** (us). Publishes the addresses of agent keys minted in the Signer enclave, runs
@@ -25,15 +26,18 @@ says so.
   list (perp indices from the testnet `meta`), and is the only source of truth for "this
   address is one of ours".
 - `Pool`: holds the investor's capital on its own HyperCore account. One trader at a time:
-  `Idle → Challenge → Funded → Idle`.
+  `Idle → Challenge → Funded → Idle`. Capital arrives as a spot transfer on HyperCore. There
+  is no HyperEVM deposit: on testnet the USDC bridge credited nothing to a contract bridging
+  to itself (spike question 5).
 - `ChallengeAccount`: one per purchased challenge, with its own HyperCore account and its own
   agent key. Its rules are copied from the pool when it is created, so the investor can't
   change them mid-challenge.
 
 Every account the contracts create sets separate spot and perp balances (CoreWriter action
 16, value 1) before any capital lands on perp. In unified mode, spot USDC would back the
-trader's positions. The enclave build signs only `order` and `cancel` for Hyperliquid, so a
-trader's key can't change the mode back (spike question 7 checks the contract side live).
+trader's positions. The setting held on testnet (spike question 7). A plain agent key can
+switch it back, but the enclave build signs only `order` and `cancel` for Hyperliquid, so a
+trader's key can't.
 
 ## Rules and terms
 
@@ -58,8 +62,10 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
 
 ## Lifecycle of a challenge
 
-1. **Buy** (`Pool.buyChallenge`, the trader). The pool must be idle and hold at least the
-   challenge capital on spot. The trader pays the price with HyperEVM USDC (`transferFrom`,
+1. **Buy** (`Pool.buyChallenge`, the trader). The pool must be idle and hold on spot the
+   challenge capital, the funded capital and 1 USDC more (`capitalNeeded()`): HyperCore
+   charges the sender that much on top when a transfer creates an account, and the
+   challenge's account is always new. The trader pays the price with HyperEVM USDC (`transferFrom`,
    so the payment is tied to the trader's address), and the platform fee if one is set. The
    factory clones a
    `ChallengeAccount`, the registry reserves a free key for it and the trader, and the pool
@@ -83,8 +89,12 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
       retired in the registry. The address is a hash of the account, a counter, the caller's
       salt and the block; candidates HyperCore already knows are skipped, and if all of them
       are taken the stop uses one anyway instead of reverting, so funding the candidates in
-      advance can't block it. `recut(salt)` lets anyone replace the agent again while the
-      account is stopped;
+      advance can't block it. HyperCore ignores an agent address that already has an account
+      (spike question 8), so a stop that had to use a taken candidate leaves the old key in
+      place. The account keeps the cut key (`cutKey`) and the block of the latest replacement
+      (`cutBlock`); `recut(salt)` lets anyone replace the agent again while the account is
+      stopped, and the keeper does so when `cutKey` still acts as the account's agent a few
+      blocks later;
    2. the orders named by the caller are cancelled (10). No precompile lists open orders, so
       the caller reads them from the info API;
    3. every open position among the pool's assets and the caller's extra assets is closed with
@@ -104,7 +114,9 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    still open, and moves the free perp balance to spot (7), but only once nothing is open at
    all: a position in an asset the caller didn't name still shows in the account's notional,
    and settlement waits for it. Once the perp side is empty it
-   pays the trader's share, once and never again, and sends the rest to the pool (6) only
+   pays the trader's share, once and never again (a trader with no HyperCore account yet gets
+   the share less the 1 USDC that creating the account costs, and a share smaller than that
+   isn't sent), and sends the rest to the pool (6) only
    after the payout shows in the balance or five minutes have passed. Each call acts on
    start-of-block state and HyperCore executes a few seconds later, so settling takes
    several calls; the challenge is `Settled` when perp equity and spot USDC are both zero.
@@ -150,4 +162,11 @@ the mark would make the investor pay the difference.
   challenges from their own zero-price pool and burn one key each. The operator sets the fee
   and can change it at any time, including between a buyer's approval and purchase; a buyer
   who approves exactly price plus fee can't be charged more.
+- USDC sent to a pool on HyperEVM is lost on testnet: the bridge doesn't credit contracts.
+  The contracts have no entry point for it, and the app says so, but nothing stops a plain
+  ERC-20 transfer to the pool's address.
+- Someone who funds every stop candidate in advance keeps the old key trading until a `recut`
+  lands on an address with no account. The candidates depend on the block and on the caller's
+  salt, creating each candidate's account costs 1 USDC, and the keeper tries again with a new
+  salt on every pass. Settlement drains the account either way.
 - One trader per pool, no pool shares, no leaderboard, no mainnet.
