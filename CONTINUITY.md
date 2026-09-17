@@ -38,12 +38,13 @@ yourself, and the demo agents.
 | 16 Sep | settled the scope: two roles, investor and trader, a stop that anyone can trigger, testnet only |
 | 16 Sep | created this repository, private for now |
 | 17 Sep | read from the testnet RPC: a small HyperEVM block allows 3M gas. Storing the code of `Pool` (19 KB) or `ChallengeAccount` (16 KB) costs more than that, so the deployer switches to big blocks for the deployment |
+| 17 Sep | the spike's live run on testnet: replacing the agent from a contract cuts the old key; one agent address serves one account; USDC moves between contract accounts on HyperCore; an address that already has an account can't become an agent. The USDC bridge from HyperEVM credited only an address depositing to itself, so pool capital has to arrive on HyperCore. Details in `spike/README.md` |
 
 ## What we build in the window, as of 17 September
 
 | piece | status |
 |---|---|
-| Spike, six questions: does replacing an API wallet through CoreWriter really cut off the old key; can one agent address serve two accounts; can USDC move between contract accounts and back; how a contract reads account equity; what the trader pays with; can a contract cancel orders | 16 Sep: harness contract, simulator tests and the live testnet scripts written (`spike/`); the live runs wait for testnet USDC |
+| Spike, six questions: does replacing an API wallet through CoreWriter really cut off the old key; can one agent address serve two accounts; can USDC move between contract accounts and back; how a contract reads account equity; what the trader pays with; can a contract cancel orders | 16 Sep: harness contract, simulator tests and the live testnet scripts written (`spike/`); the live runs waited for testnet USDC. 17 Sep: live run on testnet, questions 1–8 answered (two added along the way), and five follow-up runs on the USDC bridge that cost 24 test USDC. Report in `spike/README.md` |
 | Contracts `PoolFactory`, `Pool`, `ChallengeAccount`, `KeyRegistry` (Foundry, HyperEVM testnet) | 16–17 Sep: written, a mutation check of the tests, two internal review passes and their fixes. 17 Sep, after a bot review: the funded trader's share is computed from what closing realized, settlement waits for positions nobody named, and the factory takes an operator-set fee per challenge. These last changes have had only the author's review so far. 67 simulator tests; not deployed |
 | Pool gateway, which checks on chain that a key belongs to the trader's account before an order goes to the signer | 17 Sep: written. The trader's wallet signs the order's own fields (EIP-712). Offline tests, two of them against the Hyperliquid SDK's published signing vectors. Not running anywhere yet |
 | App: investor page, list of pools, challenge page, and the check-it-yourself page | 17 Sep: written as static files and tried in a browser against testnet reads and the live Signer attestation. No contracts are deployed yet, so there is no pool to show |
