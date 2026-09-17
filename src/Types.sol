@@ -49,6 +49,10 @@ enum Breach {
 library Units {
     /// @dev HyperCore spot USDC has 8 decimals, perp USD has 6.
     uint64 internal constant SPOT_PER_PERP = 100;
+    /// @dev What HyperCore charges the sender, on top of the amount, when a spot transfer
+    ///      creates the recipient's account: 1 USDC in spot units. Seen on testnet on
+    ///      17 Sep 2026, from an EOA and from a contract alike.
+    uint64 internal constant NEW_ACCOUNT_FEE = 100_000_000;
     uint16 internal constant BPS = 10_000;
     uint32 internal constant USDC_TOKEN = 0;
     uint32 internal constant PERP_DEX = 0;

@@ -137,6 +137,14 @@ library CoreOps {
         if (amount1e8 != 0) CoreWriterLib.spotSend(to, Units.USDC_TOKEN, amount1e8);
     }
 
+    /// @notice What can be sent to `to` out of `budget1e8` so that the whole transfer, the fee
+    ///         for creating `to`'s account included, costs the sender at most the budget.
+    ///         Zero if the fee alone takes the budget.
+    function sendableTo(address to, uint64 budget1e8) internal view returns (uint64) {
+        if (exists(to)) return budget1e8;
+        return budget1e8 > Units.NEW_ACCOUNT_FEE ? budget1e8 - Units.NEW_ACCOUNT_FEE : 0;
+    }
+
     function approveBuilder(address builder, uint64 maxFeeDecibps) internal {
         if (builder != address(0)) CoreWriterLib.approveBuilderFee(maxFeeDecibps, builder);
     }
@@ -165,9 +173,10 @@ library CoreOps {
     ///         HyperCore has not seen. Used to replace an agent when a trader is cut off.
     /// @dev If every candidate already exists on HyperCore (someone predicted and funded
     ///      them), the last one is returned anyway rather than reverting: a revert here would
-    ///      let anyone block the stop. Whether Hyperliquid accepts an existing user as an
-    ///      agent is checked live by the spike; if the replacement fails, `recut` retries
-    ///      with a different salt, and settlement drains the account either way.
+    ///      let anyone block the stop. HyperCore doesn't take an existing user as an agent
+    ///      (spike question 8, 17 Sep 2026): the replacement then does nothing and the old key
+    ///      keeps trading until `recut` succeeds with another salt. The keeper watches for
+    ///      that. Settlement drains the account either way.
     function keylessAddress(address account, uint256 nonce, bytes32 salt) internal view returns (address candidate) {
         for (uint256 i = 0; i < KEYLESS_TRIES; ++i) {
             candidate = keylessCandidate(account, nonce, salt, i);

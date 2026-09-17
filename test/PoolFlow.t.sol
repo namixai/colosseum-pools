@@ -263,7 +263,8 @@ contract PoolFlowTest is Test {
     }
 
     function test_createPool_refusesCapitalThatCannotBeHeldOnSpot() public {
-        uint64 limit = type(uint64).max / Units.SPOT_PER_PERP;
+        // capital + fundedCapital, in spot units, plus the fee for the challenge's new account
+        uint64 limit = (type(uint64).max - Units.NEW_ACCOUNT_FEE) / Units.SPOT_PER_PERP;
         Terms memory t = _terms();
         t.capital = 1;
         t.fundedCapital = limit; // one unit over what a uint64 spot balance can hold
@@ -272,6 +273,26 @@ contract PoolFlowTest is Test {
 
         t.fundedCapital = limit - 1; // exactly at the limit
         factory.createPool(_rules(), t);
+    }
+
+    /// Capital reaches a pool as a HyperCore spot transfer. There is no HyperEVM deposit to
+    /// call: on testnet the USDC bridge credits nothing to a contract bridging to itself.
+    function test_capitalOnlyArrivesOnCore() public {
+        vm.prank(investor);
+        Pool p = Pool(factory.createPool(_rules(), _terms()));
+        deal(address(usdc), investor, 50e6);
+        vm.startPrank(investor);
+        usdc.approve(address(p), 50e6);
+        (bool ok,) = address(p).call(abi.encodeWithSignature("deposit(uint256)", 50e6));
+        vm.stopPrank();
+        assertFalse(ok, "no HyperEVM deposit entry point");
+        assertEq(usdc.balanceOf(investor), 50e6, "nothing was pulled");
+
+        // The investor's spot transfer on HyperCore is what makes the pool sellable.
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, p.capitalNeeded());
+        p.prepareAccount();
+        _buy(p);
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Challenge));
     }
 
     function test_implementationsCannotBeInitialized() public {
@@ -295,17 +316,28 @@ contract PoolFlowTest is Test {
 
     // ── buying and starting ──────────────────────────────────────────────────────────
 
+    /// The pool needs the challenge capital, the funded capital, and 1 USDC for creating the
+    /// challenge's account, which HyperCore charges the sender on top of the transfer.
     function test_buyChallenge_needsCapitalForChallengeAndFunding() public {
         vm.prank(investor);
         Pool p = Pool(factory.createPool(_rules(), _terms()));
-        CoreSimulatorLib.forceSpotBalance(address(p), 0, 299e8);
+        assertEq(p.capitalNeeded(), 301e8);
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, 301e8 - 1);
         p.prepareAccount();
         deal(address(usdc), trader, 25e6);
         vm.startPrank(trader);
         usdc.approve(address(p), 25e6);
-        vm.expectRevert(abi.encodeWithSelector(Pool.NotEnoughCapital.selector, uint64(299e8), uint64(300e8)));
+        vm.expectRevert(abi.encodeWithSelector(Pool.NotEnoughCapital.selector, uint64(301e8 - 1), uint64(301e8)));
         p.buyChallenge();
         vm.stopPrank();
+
+        // Exactly enough: the capital arrives in full and the funded capital is still there.
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, 301e8);
+        vm.prank(trader);
+        ChallengeAccount ch = ChallengeAccount(p.buyChallenge());
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(address(ch)), 100e8, "challenge capital in full");
+        assertEq(_spot(address(p)), 200e8, "funded capital left after the account fee");
     }
 
     function test_buyChallenge_reservesKey_andSendsCapital() public {
@@ -512,6 +544,8 @@ contract PoolFlowTest is Test {
         assertFalse(PrecompileLib.coreUserExists(keyless));
         assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
         assertEq(ch.agentKey(), address(0));
+        assertEq(ch.cutKey(), key, "the cut key stays on record for whoever checks it");
+        assertEq(ch.cutBlock(), block.number);
 
         // 2. the named order is cancelled
         assertEq(kind[1], 10);
@@ -608,6 +642,24 @@ contract PoolFlowTest is Test {
         assertEq(used, fresh);
     }
 
+    /// `recut` replaces the agent again but keeps pointing at the key that was cut, so a
+    /// keeper can still check whether that key lost its agent role.
+    function test_recut_keepsTheCutKeyOnRecord() public {
+        ChallengeAccount ch = _started(_readyPool());
+        address key = ch.agentKey();
+        _mockMargin(address(ch), 80e6, 0);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        ch.breach(c, a, SALT);
+        vm.clearMockedCalls();
+        uint64 first = ch.cutBlock();
+
+        vm.roll(block.number + 7);
+        vm.prank(stranger);
+        ch.recut(keccak256("again"));
+        assertEq(ch.cutKey(), key);
+        assertEq(ch.cutBlock(), first + 7, "the latest replacement's block");
+    }
+
     /// A resting order holds margin, and nobody can list open orders on chain, so every
     /// settlement step accepts the orders to cancel, not just the stop.
     function test_settle_cancelsNamedOrdersEveryCall() public {
@@ -647,6 +699,7 @@ contract PoolFlowTest is Test {
     /// Settlement may be called every block while HyperCore is still executing the last
     /// send. The trader's share still goes out once.
     function test_payoutIsSentOnce() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
         Pool p = _readyPool();
         (ChallengeAccount ch,) = _passed(p);
         CoreSimulatorLib.nextBlock();
@@ -807,6 +860,7 @@ contract PoolFlowTest is Test {
     }
 
     function test_graduate_fundsTraderWithANewKey_andPaysTheShare() public {
+        CoreSimulatorLib.forceAccountActivation(trader); // a trader who already uses HyperCore
         Pool p = _readyPool();
         vm.recordLogs();
         (ChallengeAccount ch, address oldKey) = _passed(p);
@@ -844,6 +898,45 @@ contract PoolFlowTest is Test {
         assertGt(_spot(address(p)), poolSpotBefore, "the rest went back to the pool");
         assertEq(p.challenge(), address(0));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded), "the funded stage goes on");
+    }
+
+    /// A trader with no HyperCore account yet receives the share less the 1 USDC that creating
+    /// the account costs; the challenge spends exactly the share.
+    function test_payout_toATraderWithoutAnAccount_coversTheFeeFromTheShare() public {
+        Pool p = _readyPool();
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        assertFalse(PrecompileLib.coreUserExists(trader));
+        uint64 owed = ch.payoutOwed();
+        int64 left = _equity(address(ch));
+        uint64 poolSpotBefore = _spot(address(p));
+
+        _settleChallenge(ch);
+        assertEq(ch.payoutSent(), owed - Units.NEW_ACCOUNT_FEE);
+        assertEq(_spot(trader), owed - Units.NEW_ACCOUNT_FEE, "share less the account fee");
+        assertEq(_spot(address(p)), poolSpotBefore + uint64(left) * 100 - owed, "the pool gets the rest");
+    }
+
+    /// A share that the account fee would eat whole isn't sent; the challenge settles and
+    /// everything goes back to the pool.
+    function test_payout_smallerThanTheAccountFee_isNotSent() public {
+        Terms memory t = _terms();
+        t.traderShareBps = 500; // 5% of 11.46 USDC: 0.573
+        vm.prank(investor);
+        Pool p = Pool(factory.createPool(_rules(), t));
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8);
+        p.prepareAccount();
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        assertEq(ch.payoutOwed(), 57300000);
+        int64 left = _equity(address(ch));
+        uint64 poolSpotBefore = _spot(address(p));
+
+        _settleChallenge(ch);
+        assertTrue(ch.payoutDone());
+        assertEq(ch.payoutSent(), 0);
+        assertFalse(PrecompileLib.coreUserExists(trader), "nothing was sent to the trader");
+        assertEq(_spot(address(p)), poolSpotBefore + uint64(left) * 100, "all of it back in the pool");
     }
 
     function test_fundedBreach_closesAndReturnsToIdle() public {
@@ -990,6 +1083,7 @@ contract PoolFlowTest is Test {
         (ChallengeAccount ch,) = _passed(p);
         CoreSimulatorLib.nextBlock();
         _settleChallenge(ch);
+        uint64 traderSpotBefore = _spot(trader);
 
         _trade(address(p), BTC, true, 0.01e8);
         CoreSimulatorLib.setMarkPx(BTC, 810520);
@@ -1001,14 +1095,58 @@ contract PoolFlowTest is Test {
         p.settleFunded(c, a); // result taken, perp -> spot
         assertGt(p.fundedPayoutOwed(), 0);
         CoreSimulatorLib.nextBlock();
+        vm.recordLogs();
         p.settleFunded(c, a); // payout sent
-        assertGt(p.fundedPayoutSent(), 0);
+        uint64 sent = p.fundedPayoutSent();
+        assertGt(sent, 0);
         p.settleFunded(c, a); // same block: not landed yet
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing));
+        (address[] memory from, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
+        uint256 toTrader;
+        for (uint256 i = 0; i < kind.length; ++i) {
+            if (from[i] != address(p) || kind[i] != 6) continue;
+            (address to,,) = abi.decode(args[i], (address, uint64, uint64));
+            if (to == trader) ++toTrader;
+        }
+        assertEq(toTrader, 1, "one payout send");
 
         CoreSimulatorLib.nextBlock();
         p.settleFunded(c, a);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+        assertEq(_spot(trader) - traderSpotBefore, sent, "the share arrived once");
+    }
+
+    /// The funded share goes to a trader who still has no HyperCore account (the challenge
+    /// share was too small to send): it arrives less the 1 USDC for creating the account.
+    function test_fundedPayout_toATraderWithoutAnAccount_coversTheFee() public {
+        Terms memory t = _terms();
+        t.traderShareBps = 500;
+        vm.prank(investor);
+        Pool p = Pool(factory.createPool(_rules(), t));
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8);
+        p.prepareAccount();
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        _settleChallenge(ch);
+        assertFalse(PrecompileLib.coreUserExists(trader));
+
+        _trade(address(p), BTC, true, 0.01e8);
+        CoreSimulatorLib.setMarkPx(BTC, 810520);
+        _trade(address(p), BTC, false, 0.01e8);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(trader);
+        p.stopFunded(c, a, SALT);
+        for (uint256 i = 0; i < 8 && p.stage() != Pool.Stage.Idle; ++i) {
+            p.settleFunded(c, a);
+            if (p.fundedPayoutDone() && p.fundedPayoutSent() != 0) {
+                assertEq(p.fundedPayoutSent(), p.fundedPayoutOwed() - Units.NEW_ACCOUNT_FEE);
+            }
+            CoreSimulatorLib.nextBlock();
+        }
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+        // The mark was 78692.0 after the challenge: 0.01 * (81052 - 78692) = 23.60 USDC realized,
+        // 5% of it is 1.18, and the account fee takes 1 of that.
+        assertEq(_spot(trader), 18000000);
     }
 
     // ── access ───────────────────────────────────────────────────────────────────────

@@ -43,6 +43,11 @@ abstract contract RuledAccount is Initializable {
     /// Agent key currently approved on this account, if any.
     address public agentKey;
     uint256 private _keylessNonce;
+    /// The key the last stop cut off, and the block of the latest replacement. A replacement
+    /// can fail on HyperCore without a trace; anyone who sees `cutKey` still acting as this
+    /// account's agent a few blocks after `cutBlock` should call `recut`.
+    address public cutKey;
+    uint64 public cutBlock;
 
     event DaySnapshot(uint32 indexed day, int64 equity);
     event AgentSet(address indexed key);
@@ -166,7 +171,11 @@ abstract contract RuledAccount is Initializable {
         address keyless = CoreOps.keylessAddress(address(this), _keylessNonce++, salt);
         CoreOps.setAgent(keyless);
         agentKey = address(0);
-        if (old != address(0)) factory.registry().retire(old);
+        cutBlock = uint64(block.number);
+        if (old != address(0)) {
+            cutKey = old;
+            factory.registry().retire(old);
+        }
         emit AgentCut(old, keyless);
     }
 

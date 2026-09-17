@@ -238,14 +238,15 @@ contract ChallengeAccount is RuledAccount {
 
         if (payoutOwed != 0 && !payoutDone) {
             if (spot == 0) return;
-            uint64 pay = spot < payoutOwed ? spot : payoutOwed;
+            // A trader with no HyperCore account yet pays for creating it out of the share.
+            uint64 pay = CoreOps.sendableTo(trader, spot < payoutOwed ? spot : payoutOwed);
             payoutDone = true;
             payoutSent = pay;
             payoutSpotBefore = spot;
             payoutAt = uint64(block.timestamp);
             CoreOps.sendUsdc(trader, pay);
             emit PayoutSent(trader, pay);
-            return;
+            if (pay != 0) return;
         }
 
         if (payoutDone && spot + payoutSent > payoutSpotBefore && block.timestamp <= payoutAt + PAYOUT_WAIT) {
