@@ -208,6 +208,17 @@ class Following(KeeperTest):
             with self.assertRaises(SystemExit, msg=bad):
                 self.make(window=bad)
 
+    def test_a_pass_always_reads_logs(self):
+        # With no windows a pass would read nothing and still report itself done.
+        for bad in (0, -1):
+            with self.assertRaises(SystemExit, msg=bad):
+                self.make(max_windows=bad)
+        self.chain.latest = 5
+        k = self.make(max_windows=1, start=0)
+        k.one_pass()
+        self.assertEqual(len(self.chain.log_queries), 1)
+        self.assertEqual(k.next_block, 6)
+
     def test_a_failed_pass_keeps_its_place(self):
         self.follow_a(status=keeper.ACTIVE)
         k = self.make()

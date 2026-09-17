@@ -505,6 +505,10 @@ MUTATIONS = [
      "        tmp.unlink(missing_ok=True)",
      "        pass",
      ["test_a_write_that_dies_half_way_leaves_the_previous_record"]),
+    ("K30", "ops/keeper.py",
+     "        if max_windows < 1:",
+     "        if False:",
+     ["test_a_pass_always_reads_logs"]),
     # ── app (node --test) ──
     ("J1", "app/lib/cbor.js",
      '    if (++depth > MAX_DEPTH) throw new Error("CBOR nesting too deep");',

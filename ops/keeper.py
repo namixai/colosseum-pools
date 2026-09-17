@@ -170,6 +170,8 @@ class Keeper:
                  window: int = MAX_LOG_WINDOW, max_windows: int = 50):
         if not 1 <= window <= MAX_LOG_WINDOW:
             raise SystemExit(f"--log-window must be 1..{MAX_LOG_WINDOW}: HyperEVM refuses wider eth_getLogs ranges")
+        if max_windows < 1:
+            raise SystemExit("--max-windows must be at least 1: a pass that reads no logs never finds a challenge")
         self.factory = to_checksum_address(factory)
         self.wallet = wallet
         self.dry = dry
