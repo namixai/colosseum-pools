@@ -3,6 +3,9 @@
 Everything here refuses to talk to mainnet. Keys are read from a directory outside the
 repository (COLOSSEUM_KEY_DIR, default ~/secure/colosseum-testnet), one hex key per
 `<name>.key` file next to a `<name>.addr` file, and they are never printed.
+
+COLOSSEUM_RPC_URL replaces the public HyperEVM testnet RPC, which rate-limits after a handful
+of calls. Whatever it points at, assert_testnet() still checks the chain id.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
 
-RPC_URL = "https://rpc.hyperliquid-testnet.xyz/evm"
+RPC_URL = os.environ.get("COLOSSEUM_RPC_URL", "https://rpc.hyperliquid-testnet.xyz/evm")
 API_URL = constants.TESTNET_API_URL
 CHAIN_ID = 998
 USER_AGENT = "colosseum-pools-spike"

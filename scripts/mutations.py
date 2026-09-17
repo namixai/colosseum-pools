@@ -465,6 +465,10 @@ MUTATIONS = [
      "    if record.get(\"status\") != \"complete\":",
      "    if False:",
      ["test_a_late_failure_leaves_the_addresses_on_disk"]),
+    ("K24", "spike/hlspike/common.py",
+     'RPC_URL = os.environ.get("COLOSSEUM_RPC_URL", "https://rpc.hyperliquid-testnet.xyz/evm")',
+     'RPC_URL = "https://rpc.hyperliquid-testnet.xyz/evm"',
+     ["test_a_dedicated_rpc_replaces_the_public_one"]),
     # ── app (node --test) ──
     ("J1", "app/lib/cbor.js",
      '    if (++depth > MAX_DEPTH) throw new Error("CBOR nesting too deep");',

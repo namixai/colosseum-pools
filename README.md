@@ -103,7 +103,9 @@ python3 scripts/mutations.py   # breaks one guarantee at a time; every break mus
 
 Everything below touches the testnet. The scripts refuse any RPC whose chain id isn't 998.
 Wallet keys are read from outside the repository: `COLOSSEUM_KEY_DIR` holds one `<name>.key`
-(mode 600) and one `<name>.addr` per wallet.
+(mode 600) and one `<name>.addr` per wallet. The public testnet RPC rate-limits after a
+handful of calls; `COLOSSEUM_RPC_URL` (scripts, keeper, agents) and `GATEWAY_RPC_URL` (gateway)
+point them at another one.
 
 ```bash
 # deploy the contracts; writes deployments/testnet-<label>.json
