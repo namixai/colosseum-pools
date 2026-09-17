@@ -60,6 +60,8 @@
   ],
   "contracts": {
     "A": "0x076f4F0D2448407134F6FcCB5c1128B3a6cfec91",
-    "B": "0x133be14Ef9a80e7F9705cbeef65d748a2F4AF2ff"
+    "B": "0x133be14Ef9a80e7F9705cbeef65d748a2F4AF2ff",
+    "C": "0x3d18931014690bc7Eb836Feca1CdAd580CE5198F",
+    "D": "0x5fb436b6b806541AdE43cAc6088810b3a4e9e25E"
   }
 }

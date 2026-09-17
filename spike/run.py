@@ -10,6 +10,11 @@
     spike/.venv/bin/python spike/run.py q4                      # equity: precompile vs info API
     spike/.venv/bin/python spike/run.py q2                      # one agent address, two accounts
     spike/.venv/bin/python spike/run.py q5 --usdc 5             # trader pays on HyperEVM
+    spike/.venv/bin/python spike/run.py q5b --usdc 1            # which bridge path credits a contract
+    spike/.venv/bin/python spike/run.py q5c                     # the same bridge, a fresh contract, each mode
+    spike/.venv/bin/python spike/run.py q5d                     # the same bridge to an EOA that sends nothing
+    spike/.venv/bin/python spike/run.py q5e                     # the forwarding path (dex 0): EOA and contracts
+    spike/.venv/bin/python spike/run.py q5f --usdc 3            # the same forward with a larger amount
 
 Testnet only (chain 998, api.hyperliquid-testnet.xyz); common.py refuses anything else.
 Every observation goes to spike/results/<date>.jsonl. Nothing here prints a key.
@@ -29,7 +34,7 @@ import sys
 import time
 from typing import Any, Callable
 
-from eth_utils import to_checksum_address
+from eth_utils import keccak, to_checksum_address
 from hyperliquid.utils.signing import get_timestamp_ms, sign_agent
 from hyperliquid.utils.types import Cloid
 
@@ -574,6 +579,229 @@ def cmd_q5(args, state: dict) -> None:
              contract_evm_usdc=c.erc20_balance(c.TESTNET_USDC_ERC20, a))
 
 
+SPOT_DEX = 2**32 - 1  # Circle's CoreDepositWallet: type(uint32).max is HyperCore spot
+TRANSFER = "0x" + keccak(text="Transfer(address,address,uint256)").hex()
+
+
+def balances(user: str) -> dict:
+    snap = c.core_snapshot(user)
+    return {"spotUSDC": snap["spotUSDC"], "perpAccountValue": snap["perpAccountValue"]}
+
+
+def transfer_events(rcpt: dict) -> list[dict]:
+    """The Transfer logs of a receipt: who emitted them, from, to, amount."""
+    out = []
+    for log in rcpt["logs"]:
+        if log["topics"] and log["topics"][0] == TRANSFER:
+            out.append({"emitter": to_checksum_address(log["address"]),
+                        "from": to_checksum_address("0x" + log["topics"][1][-40:]),
+                        "to": to_checksum_address("0x" + log["topics"][2][-40:]),
+                        "amount": int(log["data"], 16)})
+        else:
+            out.append({"emitter": to_checksum_address(log["address"]), "topic0": log["topics"][0] if log["topics"] else None})
+    return out
+
+
+def cmd_q5b(args, state: dict) -> None:
+    """Q5b, added 17 Sep. q5 took 5 USDC off contract A's EVM balance and nothing reached A on
+    HyperCore. Circle's CoreDepositWallet has two paths. For spot (destinationDex = max uint32)
+    it emits Transfer(recipient -> 0x2000...) and HyperCore is expected to credit the recipient.
+    For an enabled perp dex (dex 0 on testnet) it emits Transfer(wallet -> 0x2000...), which
+    credits the wallet's own spot, and forwards to the recipient with a CoreWriter sendAsset.
+    A is a contract in `disabled` mode (q7); the deployer is an EOA in `default` mode. The
+    deployer sends --usdc down three paths: to itself on spot, to A on spot, to A on dex 0."""
+    deployer = c.account("deployer")
+    a = contract(state, "A")
+    wallet = c.TESTNET_CORE_DEPOSIT_WALLET
+    unit = int(round(args.usdc * 1e6))
+    if not 0 < args.usdc <= 5:
+        raise SystemExit("--usdc must be above 0 and at most 5 for this probe")
+    probes = [
+        ("eoa_default_spot", deployer.address, "deposit(uint256,uint32)", ["uint256", "uint32"],
+         [unit, SPOT_DEX], "spotUSDC"),
+        ("contract_disabled_spot", a, "depositFor(address,uint256,uint32)", ["address", "uint256", "uint32"],
+         [a, unit, SPOT_DEX], "spotUSDC"),
+        ("contract_disabled_dex0", a, "depositFor(address,uint256,uint32)", ["address", "uint256", "uint32"],
+         [a, unit, 0], "perpAccountValue"),
+    ]
+    need = unit * len(probes)
+    have = c.erc20_balance(c.TESTNET_USDC_ERC20, deployer.address)
+    if have < need:
+        resp = c.exchange(deployer).send_asset(c.USDC_SYSTEM, "spot", "spot", c.spot_token_wire("USDC"),
+                                               (need - have) / 1e6)
+        c.record("q5b_core_to_evm_sent", response=resp, usdc=(need - have) / 1e6)
+        have = wait_until("deployer EVM USDC", lambda: c.erc20_balance(c.TESTNET_USDC_ERC20, deployer.address),
+                          lambda v: v >= need)
+        if have < need:
+            raise SystemExit("the deployer's EVM USDC did not arrive; nothing was deposited")
+    c.transact(deployer, c.TESTNET_USDC_ERC20, "approve(address,uint256)", ["address", "uint256"], [wallet, need])
+
+    for name, who, sig, types, values, field in probes:
+        before = balances(who)
+        start_ms = get_timestamp_ms()
+        rcpt = c.transact(deployer, wallet, sig, types, values)
+        after = wait_until(f"{name}: {field} grows", lambda: balances(who),
+                           lambda b: float(b[field]) > float(before[field]), timeout_s=60)
+        c.record("q5b_probe", probe=name, recipient=who, mode=abstraction(who), tx=rcpt["transactionHash"],
+                 block=int(rcpt["blockNumber"], 16), events=transfer_events(rcpt), before=before, after=after,
+                 credited=float(after[field]) > float(before[field]),
+                 ledger=c.info_post({"type": "userNonFundingLedgerUpdates", "user": who, "startTime": start_ms - 5000}))
+
+
+def core_credits(user: str, start_ms: int) -> list:
+    """Ledger rows that credit `user` from HyperEVM: from the USDC system address, or a
+    forward from Circle's wallet."""
+    rows = c.info_post({"type": "userNonFundingLedgerUpdates", "user": user, "startTime": start_ms})
+    me = user.lower()
+    return [r for r in rows if r["delta"].get("destination", "").lower() == me and (
+        (r["delta"].get("type") == "spotTransfer" and r["delta"].get("user", "").lower() == c.USDC_SYSTEM.lower())
+        or (r["delta"].get("type") == "send"
+            and r["delta"].get("user", "").lower() == c.TESTNET_CORE_DEPOSIT_WALLET.lower()))]
+
+
+def evm_usdc_for_deposits(deployer, units: int, step: str = "q5c") -> None:
+    have = c.erc20_balance(c.TESTNET_USDC_ERC20, deployer.address)
+    if have < units:
+        usdc = (units - have) / 1e6
+        resp = c.exchange(deployer).send_asset(c.USDC_SYSTEM, "spot", "spot", c.spot_token_wire("USDC"), usdc)
+        c.record(f"{step}_core_to_evm_sent", response=resp, usdc=usdc)
+        have = wait_until("deployer EVM USDC", lambda: c.erc20_balance(c.TESTNET_USDC_ERC20, deployer.address),
+                          lambda v: v >= units)
+        if have < units:
+            raise SystemExit("the deployer's EVM USDC did not arrive; nothing was deposited")
+    c.transact(deployer, c.TESTNET_USDC_ERC20, "approve(address,uint256)", ["address", "uint256"],
+               [c.TESTNET_CORE_DEPOSIT_WALLET, units])
+
+
+def spot_bridge_probe(deployer, name: str, who: str, units: int, step: str = "q5c") -> bool:
+    """depositFor(who, units, spot) from the deployer; True if HyperCore credited `who`."""
+    existed = c.core_user_exists(who)
+    mode = abstraction(who) if existed else None
+    before = balances(who) if existed else None
+    start_ms = get_timestamp_ms() - 5000
+    rcpt = c.transact(deployer, c.TESTNET_CORE_DEPOSIT_WALLET, "depositFor(address,uint256,uint32)",
+                      ["address", "uint256", "uint32"], [who, units, SPOT_DEX])
+    credits = wait_until(f"{name}: credited", lambda: core_credits(who, start_ms), bool, timeout_s=60)
+    c.record(f"{step}_probe", probe=name, recipient=who, existed_before=existed, mode=mode, usdc=units / 1e6,
+             tx=rcpt["transactionHash"], block=int(rcpt["blockNumber"], 16), events=transfer_events(rcpt),
+             credited=bool(credits), credits=credits, before=before,
+             after=balances(who) if c.core_user_exists(who) else None)
+    return bool(credits)
+
+
+def cmd_q5c(_args, state: dict) -> None:
+    """Q5c, added 17 Sep. q5b: the bridge credited the deployer (an EOA in default mode) and
+    left contract A (disabled mode) with nothing, on both paths. A fresh contract C separates
+    the two causes. The deployer sends USDC down the spot path to C four times: before C has a
+    HyperCore account, in default mode, after C sets itself to disabled (action 16, value 1),
+    and after it sets itself to unified (value 2)."""
+    deployer = c.account("deployer")
+    if "C" not in state["contracts"]:
+        addr, rcpt = c.deploy(deployer, "SpikeAccount", ["address"], [deployer.address])
+        state["contracts"]["C"] = addr
+        save_state(state)
+        c.record("deployed", label="C", address=addr, tx=rcpt["transactionHash"],
+                 gas_used=int(rcpt["gasUsed"], 16), core_user_exists=c.core_user_exists(addr))
+    cc = contract(state, "C")
+    evm_usdc_for_deposits(deployer, 5_000_000)
+    results = {}
+    if not c.core_user_exists(cc):
+        results["new_account"] = spot_bridge_probe(deployer, "contract_new_spot", cc, 2_000_000)
+    if not c.core_user_exists(cc):
+        resp = c.exchange(deployer).spot_transfer(2.0, cc, c.spot_token_wire("USDC"))
+        c.record("q5c_created_by_spot_send", response=resp)
+        wait_until("C exists on HyperCore", lambda: c.core_user_exists(cc), bool, timeout_s=30)
+    steps = [("default", "contract_default_spot", 1, "disabled"),
+             ("disabled", "contract_disabled_spot", 2, "unifiedAccount"),
+             ("unifiedAccount", "contract_unified_spot", None, None)]
+    for mode, name, next_value, next_mode in steps:
+        if abstraction(cc) != mode:
+            continue
+        results[mode] = spot_bridge_probe(deployer, name, cc, 1_000_000)
+        if next_value is not None:
+            c.transact(deployer, cc, "setAbstraction(uint8)", ["uint8"], [next_value])
+            wait_until(f"C mode {next_mode}", lambda: abstraction(cc), lambda v: v == next_mode, timeout_s=30)
+    c.record("q5c_end", contract=cc, results=results, mode=abstraction(cc))
+
+
+def cmd_q5d(_args, state: dict) -> None:
+    """Q5d, added 17 Sep. q5c: a contract got nothing in any mode, while q5b credited the
+    deployer, which had also sent the transaction. Is the rule about code at the recipient, or
+    about the recipient being the sender? The deployer bridges to the trader wallet, an EOA that
+    sends nothing here: first while it has no HyperCore account, then, if that fails, after a
+    spot transfer has created one."""
+    deployer = c.account("deployer")
+    trader = c.address_of("trader")
+    evm_usdc_for_deposits(deployer, 3_000_000, step="q5d")
+    results = {"new_eoa": spot_bridge_probe(deployer, "eoa_new_not_sender_spot", trader, 2_000_000, step="q5d")}
+    if not results["new_eoa"]:
+        if not c.core_user_exists(trader):
+            resp = c.exchange(deployer).spot_transfer(1.0, trader, c.spot_token_wire("USDC"))
+            c.record("q5d_created_by_spot_send", response=resp)
+            wait_until("trader exists on HyperCore", lambda: c.core_user_exists(trader), bool, timeout_s=30)
+        results["existing_eoa"] = spot_bridge_probe(deployer, "eoa_existing_not_sender_spot", trader, 1_000_000,
+                                                    step="q5d")
+    c.record("q5d_end", recipient=trader, results=results)
+
+
+def dex0_bridge_probe(deployer, name: str, who: str, units: int, step: str = "q5e") -> bool:
+    """depositFor(who, units, 0) from the deployer: Circle's wallet credits itself and forwards
+    to `who`'s perp balance with a sendAsset. True if the forward reached `who`."""
+    mode = abstraction(who)
+    before = balances(who)
+    start_ms = get_timestamp_ms() - 5000
+    rcpt = c.transact(deployer, c.TESTNET_CORE_DEPOSIT_WALLET, "depositFor(address,uint256,uint32)",
+                      ["address", "uint256", "uint32"], [who, units, 0])
+    credits = wait_until(f"{name}: forwarded", lambda: core_credits(who, start_ms), bool, timeout_s=60)
+    c.record(f"{step}_probe", probe=name, recipient=who, mode=mode, code_bytes=(len(c.rpc("eth_getCode", [who, "latest"])) - 2) // 2,
+             usdc=units / 1e6, tx=rcpt["transactionHash"], block=int(rcpt["blockNumber"], 16),
+             events=transfer_events(rcpt), credited=bool(credits), credits=credits, before=before, after=balances(who),
+             wallet_ledger=c.info_post({"type": "userNonFundingLedgerUpdates", "user": c.TESTNET_CORE_DEPOSIT_WALLET,
+                                        "startTime": start_ms}))
+    return bool(credits)
+
+
+def cmd_q5e(_args, state: dict) -> None:
+    """Q5e, added 17 Sep. Circle's forwarding path (dex 0) reached an EOA that did not send the
+    transaction (a CCTP deposit at 08:03 UTC) but not contract A in q5b. The deployer forwards
+    one USDC each to the trader wallet (an EOA, the control), to contract C (unified since q5c)
+    and to a fresh contract D, created by a spot transfer and left in default mode."""
+    deployer = c.account("deployer")
+    if "D" not in state["contracts"]:
+        addr, rcpt = c.deploy(deployer, "SpikeAccount", ["address"], [deployer.address])
+        state["contracts"]["D"] = addr
+        save_state(state)
+        c.record("deployed", label="D", address=addr, tx=rcpt["transactionHash"],
+                 gas_used=int(rcpt["gasUsed"], 16), core_user_exists=c.core_user_exists(addr))
+    d = contract(state, "D")
+    if not c.core_user_exists(d):
+        resp = c.exchange(deployer).spot_transfer(1.0, d, c.spot_token_wire("USDC"))
+        c.record("q5e_created_by_spot_send", response=resp)
+        wait_until("D exists on HyperCore", lambda: c.core_user_exists(d), bool, timeout_s=30)
+    evm_usdc_for_deposits(deployer, 3_000_000, step="q5e")
+    results = {}
+    for name, who in (("eoa_not_sender_dex0", c.address_of("trader")),
+                      ("contract_unified_dex0", contract(state, "C")),
+                      ("contract_default_dex0", d)):
+        results[name] = dex0_bridge_probe(deployer, name, who, 1_000_000)
+    c.record("q5e_end", results=results)
+
+
+def cmd_q5f(args, state: dict) -> None:
+    """Q5f, added 17 Sep. Every forward in q5e carried 1 USDC and none arrived; the two that
+    arrived for others at 07:52 and 08:03 UTC carried 2 and 998.59. The same forward with
+    --usdc to the trader wallet and to contract D rules the amount in or out."""
+    if not 1 < args.usdc <= 5:
+        raise SystemExit("--usdc must be above 1 and at most 5 for this probe")
+    deployer = c.account("deployer")
+    units = int(round(args.usdc * 1e6))
+    evm_usdc_for_deposits(deployer, 2 * units, step="q5f")
+    results = {name: dex0_bridge_probe(deployer, name, who, units, step="q5f")
+               for name, who in (("eoa_not_sender_dex0", c.address_of("trader")),
+                                 ("contract_default_dex0", contract(state, "D")))}
+    c.record("q5f_end", usdc=args.usdc, results=results)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -596,12 +824,20 @@ def main() -> int:
     sub.add_parser("q8")
     q5 = sub.add_parser("q5")
     q5.add_argument("--usdc", type=float, default=5.0)
+    q5b = sub.add_parser("q5b")
+    q5b.add_argument("--usdc", type=float, default=1.0)
+    sub.add_parser("q5c")
+    sub.add_parser("q5d")
+    sub.add_parser("q5e")
+    q5f = sub.add_parser("q5f")
+    q5f.add_argument("--usdc", type=float, default=3.0)
     args = p.parse_args()
 
     c.assert_testnet()
     state = load_state()
     handlers = {"status": cmd_status, "gas": cmd_gas, "deploy": cmd_deploy, "fund": cmd_fund,
-                "q3": cmd_q3, "q4": cmd_q4, "q1": cmd_q1, "q2": cmd_q2, "q5": cmd_q5, "q7": cmd_q7, "q8": cmd_q8}
+                "q3": cmd_q3, "q4": cmd_q4, "q1": cmd_q1, "q2": cmd_q2, "q5": cmd_q5, "q5b": cmd_q5b, "q5c": cmd_q5c, "q5d": cmd_q5d, "q5e": cmd_q5e, "q5f": cmd_q5f, "q7": cmd_q7,
+                "q8": cmd_q8}
     handlers[args.cmd](args, state)
     return 0
 
