@@ -60,6 +60,7 @@ test("cbor: hostile input fails fast", () => {
   assert.equal(decodeInChild("bf6161"), early); // indefinite map cut after a key
   assert.equal(decodeInChild("7f6161"), early); // indefinite text with no break
   assert.equal(decodeInChild("9a0000ffff"), early); // an array of 65535 items with none present
+  assert.equal(decodeInChild("9b001fffffffffffff"), early); // 2^53 - 1 items: must stop at the first missing one
   assert.equal(decodeInChild("9bffffffffffffffff"), "error: CBOR integer too large"); // 2^64 items
   assert.equal(decodeInChild("1b0020000000000000"), "error: CBOR integer too large"); // 2^53, would round
   assert.equal(decodeInChild("1b001fffffffffffff"), "decoded"); // 2^53 - 1 is exact
