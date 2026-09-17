@@ -79,7 +79,7 @@ Where the checks stop, and what we don't claim:
 | `test/` | Foundry tests on the HyperCore simulator from `hyper-evm-lib`, offline |
 | `gateway/` | the pool gateway (Python) |
 | `app/` | the web app: static files, no build step |
-| `agents/` | the trader's gateway client, a scripted demo trader, and an AI trader run by Claude |
+| `agents/` | the trader's gateway client and its command line, the limits every agent trades under (`desk.py`), a scripted demo trader, the prompt for the trading window, and an AI trader for the Claude API |
 | `ops/` | the testnet deployment script and the keeper |
 | `spike/` | scripts that check HyperCore behaviour, in the simulator and on live testnet |
 | `scripts/` | the hygiene gate, the commit identity check and the mutation check of the tests |
@@ -127,14 +127,18 @@ spike/.venv/bin/python -m ops.keeper --deployment rehearsal --once
 # a scripted trade through the gateway, signed by the trader's wallet
 spike/.venv/bin/python -m agents.bot rest --deployment rehearsal --account 0x...
 
-# the AI trader: --dry-run prints the request Claude would get and calls nothing
-spike/.venv/bin/python -m agents.ai_trader shop --deployment rehearsal --max-price 25 --dry-run
-spike/.venv/bin/python -m agents.ai_trader trade --deployment rehearsal --account 0x... --dry-run
+# the command line the AI trader uses; --dry-run sends nothing and needs no key
+spike/.venv/bin/python -m agents.client --deployment rehearsal pools
+spike/.venv/bin/python -m agents.client --deployment rehearsal account 0x...
+spike/.venv/bin/python -m agents.client --deployment rehearsal --dry-run order 0x... BTC buy 0.0005 76000
 ```
 
-Without `--dry-run`, the AI trader calls the Claude API, which costs money, with credentials
-from the environment. `--no-orders` runs the model but acts on nothing, and `--budget-usd`
-caps the estimated spend of one session.
+In the demo the AI trader is a Claude Code window that works only through that command line,
+with the prompt in [agents/WINDOW-TRADER.md](agents/WINDOW-TRADER.md). The limits are in the
+client (orders per day and their size, counted in `agents/state/`), the gateway, the enclave
+and the contracts, not in the prompt. `agents/ai_trader.py` gives the same desk to Claude over
+the API (`--dry-run` prints the request and calls nothing). The video doesn't use it, and as of
+17 September no session has run it against the API.
 
 ## Status and limits
 

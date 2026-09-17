@@ -28,6 +28,9 @@ ops/state/
 # A deployment record mid-write; it replaces the record once complete
 deployments/*.tmp
 
+# The trading window's daily counters; local to the machine that runs it
+agents/state/
+
 # macOS
 .DS_Store
 ._*

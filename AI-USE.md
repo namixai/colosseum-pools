@@ -23,16 +23,22 @@ and we won't call it a human reviewer.
 
 ## Claude inside the demo
 
-One of the demo's traders is Claude itself. `agents/ai_trader.py` gives it a few tools: read
-the account, read one market, place or cancel an order, close a position, ask the contract to
-pass the challenge, and, in a separate session, list the pools and buy one challenge. It
-trades through the same gateway as a person, with its own testnet wallet, and never sees an
-account's key.
+One of the demo's traders is Claude itself: a Claude Code window that Alex opens for the
+recording, with the prompt in `agents/WINDOW-TRADER.md`. It works only through
+`python -m agents.client`, which can list the pools and buy one challenge, read the account
+and a market, place or cancel an order, close a position, and ask the contract to pass the
+challenge. It trades through the same gateway as a person, with its own testnet wallet, and
+never sees an account's key.
 
-The limits aren't left to the prompt. The code refuses an order for a perp that isn't on the
-account's list, an order over the session's notional cap, and one that would take the account
-past a margin under its leverage rule. Once the session's orders, price cap, model turns or
-spending budget run out, it stops. The default model is Claude Opus 5.
+The limits aren't left to the prompt. `agents/desk.py` refuses an order for a perp that isn't
+on the account's list, one under Hyperliquid's minimum or over 100 USDC, and one that would
+take the account past a margin under its leverage rule. The client counts four orders a day
+per account and one purchase a day per wallet, and no command-line option raises those
+numbers. Behind the client, the gateway, the enclave and the contracts check again.
+
+`agents/ai_trader.py` gives the same desk to Claude over the Anthropic API, with a model-turn
+cap and a spending budget on top. We kept it, but the video doesn't use it, and as of
+17 September no session has run it against the API.
 
 ## What stays out of this repository
 
