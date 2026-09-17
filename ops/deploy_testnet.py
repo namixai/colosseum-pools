@@ -1,7 +1,7 @@
 """Deploy the pool contracts to HyperEVM testnet (chain 998). Nothing else.
 
     spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal
-    spike/.venv/bin/python ops/deploy_testnet.py --label demo --keys-file <file with enclave key addresses>
+    spike/.venv/bin/python ops/deploy_testnet.py --label demo --keys-file <addresses.txt from ops/make_demo_keys.py>
 
 The implementations are larger than a small HyperEVM block allows (3M gas), so the deployer
 switches itself to big blocks (about one a minute, 30M gas) for the deployment and back
@@ -14,8 +14,9 @@ write replaces the whole file, so a failure half way still leaves the addresses 
 failure after the first transaction marks the record `incomplete`, which nothing downstream
 loads.
 
-Key addresses published with --keys-file must be enclave-minted keys from the Signer team.
-Local test keys belong in a rehearsal deployment only; a registry never forgets a key.
+Key addresses published with --keys-file are the demo's agent keys, made with
+ops/make_demo_keys.py and kept on the gateway host; a registry never forgets a key, so publish
+only keys that host will hold.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ from hlspike import common as c  # noqa: E402
 PLATFORM_ASSETS = {"BTC": 3, "ETH": 4, "SOL": 0}
 # The platform fee on every challenge, in HyperEVM USDC units, paid to the operator (the
 # deployer). 10 test USDC, the CTO's decision of 17 Sep 2026: the demo has to show that a
-# challenge starts only after payment, and the fee keeps anyone from using up enclave keys.
+# challenge starts only after payment, and the fee keeps anyone from using up the agent keys.
 CHALLENGE_FEE = 10_000_000
 
 
@@ -148,7 +149,7 @@ def big_blocks(acct, enable: bool) -> None:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--label", required=True)
-    p.add_argument("--keys-file", help="one enclave key address per line")
+    p.add_argument("--keys-file", help="one agent key address per line")
     args = p.parse_args()
 
     c.assert_testnet()

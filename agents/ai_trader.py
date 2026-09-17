@@ -110,7 +110,7 @@ def trade_tools(desk: Desk) -> list:
         are rounded to the exchange's steps. Refused before sending if the perp isn't on the
         list, the order is under 10 USDC, over the per-order cap, or would take open notional
         past the agent's headroom under the leverage rule; reduce-only orders skip the last two
-        checks. The answer shows what the gateway, the enclave and Hyperliquid said.
+        checks. The answer shows what the gateway and Hyperliquid said.
 
         Args:
             coin: Perp name from the account's list.
@@ -162,9 +162,8 @@ capital is mock USDC, but trade it as if it were real: the demo is about trading
 
 How the account works:
 - The account is a smart contract. You reach the market only through an order gateway, which checks \
-your wallet's signature and the account's list of perps. The key that signs for the account is held \
-in an enclave, and you never see it. The enclave refuses orders above its size and notional caps and \
-says so in a signed receipt.
+your wallet's signature, the account's list of perps and the platform's size and notional caps. The key \
+that signs for the account is held by that gateway, and you never see it.
 - The contract holds the pool's rules: a maximum daily loss measured from the day's first snapshot, \
 a maximum drawdown from the starting equity, a maximum leverage (open notional divided by equity), \
 and the list of perps. If any rule is broken, anyone can stop the account: its key is cut off, its \
@@ -178,8 +177,8 @@ How to work:
 - Keep a margin from every limit. Size positions so that an ordinary move against you breaks \
 neither the daily loss nor the drawdown floor, and keep leverage well below the rule.
 - Price limit orders near the market. The smallest order is 10 USDC.
-- If the gateway, the enclave or the exchange refuses an order, read the reason and don't send the \
-same order again unchanged.
+- If the gateway or the exchange refuses an order, read the reason and don't send the same order \
+again unchanged.
 - To pass a challenge, close every position once equity is at the target, check get_account, then \
 call request_graduation.
 - Finish with two or three plain sentences: what you did and why, or why you did nothing."""

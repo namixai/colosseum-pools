@@ -50,8 +50,8 @@ export async function poolView(address, page) {
     buy.innerHTML = `<h3>Take the challenge</h3>
       <p>You pay ${chain.usd6(terms.price)} USDC on HyperEVM from your wallet${
         fee > 0n ? `, plus the platform's fee of ${chain.usd6(fee)} USDC, which isn't refunded` : ""}. The pool moves
-      ${chain.usd6(terms.capital)} USDC to a new challenge account on HyperCore; a trading key from the
-      enclave is reserved for you. You never hold that key: your orders go through the pool gateway,
+      ${chain.usd6(terms.capital)} USDC to a new challenge account on HyperCore; a trading key is
+      reserved for you. You never hold it: the pool gateway does, and your orders go through it,
       signed by your wallet. A profit share is paid to your address on HyperCore; if you have no
       account there yet, 1 USDC of it pays for creating one.</p>
       <label class="check"><input type="checkbox" id="us"> I am not a US person and I am not acting for one.</label>

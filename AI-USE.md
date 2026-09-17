@@ -34,7 +34,7 @@ The limits aren't left to the prompt. `agents/desk.py` refuses an order for a pe
 on the account's list, one under Hyperliquid's minimum or over 100 USDC, and one that would
 take the account past a margin under its leverage rule. The client counts four orders a day
 per account and one purchase a day per wallet, and no command-line option raises those
-numbers. Behind the client, the gateway, the enclave and the contracts check again.
+numbers. Behind the client, the gateway and the contracts check again.
 
 `agents/ai_trader.py` gives the same desk to Claude over the Anthropic API, with a model-turn
 cap and a spending budget on top. We kept it, but the video doesn't use it, and as of
@@ -42,8 +42,9 @@ cap and a spending budget on top. We kept it, but the video doesn't use it, and 
 
 ## What stays out of this repository
 
-- Keys. The demo wallets use testnet-only keys generated for this project. They are never
-  committed, never printed in reports, and never used for anything else.
+- Keys. The demo wallets, and the agent keys the pool gateway holds, are testnet-only keys
+  generated for this project. They are never committed, never printed in reports, and never
+  used for anything else.
 - Infrastructure details: server addresses, instance names, internal paths.
 - Task orders. The sessions work from written orders in Russian, posted in an internal
   channel that also carries other teams' business. Publishing them is the founder's call,

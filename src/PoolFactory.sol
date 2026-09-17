@@ -24,7 +24,7 @@ contract PoolFactory is IAccountSource, IFactoryView {
     address public builderAddress;
     uint64 public builderMaxFee;
     /// Paid by every challenge buyer to `feeRecipient`, on top of the pool's price, and never
-    /// refunded (HyperEVM USDC units). Each challenge uses one enclave key for good; without
+    /// refunded (HyperEVM USDC units). Each challenge uses one agent key for good; without
     /// a cost that the buyer can't get back, anyone could use up the published keys.
     uint256 public challengeFee;
     address public feeRecipient;

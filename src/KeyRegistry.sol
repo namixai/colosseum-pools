@@ -8,7 +8,7 @@ interface IAccountSource {
 }
 
 /// @title KeyRegistry
-/// @notice Addresses of Hyperliquid agent keys minted in the Signer enclave, and which account
+/// @notice Addresses of the Hyperliquid agent keys the operator publishes, and which account
 ///         and trader each one serves.
 /// @dev A key moves Free -> Bound -> Retired and never back. Hyperliquid warns that actions
 ///      signed by a removed agent can be replayed once its nonces are pruned, so a key that
@@ -18,9 +18,8 @@ interface IAccountSource {
 ///      HyperCore doesn't take an address with an account as an agent (spike question 8,
 ///      17 Sep 2026). Such a key is retired when it comes up instead of being handed out.
 ///
-///      What this contract can't show: that a published address was minted inside the
-///      enclave. The operator publishes the addresses and the Signer build in use offers no
-///      outside proof of where a key was born.
+///      What this contract can't show: who holds a published key. In the demo the operator's
+///      pool gateway holds them; the registry only records which account and trader each serves.
 contract KeyRegistry {
     enum State {
         Unknown,

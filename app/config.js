@@ -17,7 +17,4 @@ export const CONFIG = {
   deployBlock: 0,
   logWindow: 50,
   usdc: "0x2B3370eE501B4a559b57D449569354196457D8Ab",
-  signerAttestation: "https://signer-demo.usenami.io:8443/attestation",
-  baseRpc: "https://mainnet.base.org",
-  pcr0Registry: "0x38b42eED740b0fDeb211bBDf773F2238cAEec240",
 };

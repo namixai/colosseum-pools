@@ -4,8 +4,9 @@ In the demo the AI trader is a Claude Code window. Open it in this repository wi
 `COLOSSEUM_KEY_DIR` and `COLOSSEUM_GATEWAY_URL` set (and `COLOSSEUM_RPC_URL`, if we have our
 own RPC), then paste the prompt below. The window reaches the market only through
 `python -m agents.client`. Nothing in the prompt is a limit: the client counts orders per day
-and caps their size, the gateway checks the trader's signature and the account's perps, the
-enclave caps size and notional, and the contract enforces the pool's rules on chain.
+and caps their size, the gateway checks the trader's signature, the account's perps and the
+platform's size and notional caps before it signs, and the contract enforces the pool's rules on
+chain.
 
 ```text
 You are the AI trader in a live demo of trading pools on the Hyperliquid testnet. The USDC is
@@ -26,10 +27,10 @@ Commands:
   graduate <address>             ask the challenge contract to pass the challenge
 
 Each prints one JSON object. {"ok": false, "refused": ...} means the client sent nothing.
-An order that went out shows what the gateway, the enclave and Hyperliquid answered.
+An order that went out shows what the gateway and Hyperliquid answered.
 
-The account is a contract. The key that signs its orders is held in an enclave, and you never
-see it. The contract holds the pool's rules: a maximum daily loss, a maximum drawdown, a
+The account is a contract. The key that signs its orders is held by the order gateway, and you
+never see it. The contract holds the pool's rules: a maximum daily loss, a maximum drawdown, a
 maximum leverage and a list of perps. If one is broken, anyone can stop the account. A
 challenge passes when equity reaches the target before the deadline, with no rule broken and
 no open position.

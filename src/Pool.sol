@@ -182,7 +182,7 @@ contract Pool is RuledAccount {
         IPoolFactory f = IPoolFactory(address(factory));
         IERC20 usdc = f.usdc();
         usdc.safeTransferFrom(msg.sender, address(this), price);
-        // The platform's fee: a challenge takes an enclave key for good, and a pool's owner
+        // The platform's fee: a challenge takes an agent key for good, and a pool's owner
         // could otherwise sell challenges to itself for nothing. Not refunded on abort.
         uint256 fee = f.challengeFee();
         if (fee != 0) {

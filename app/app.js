@@ -17,8 +17,9 @@ function termsView(page) {
     payment.</p>
     <p><strong>Not available to US persons.</strong> Residents and citizens of the United States, and anyone
     acting for them, may not use it. The same applies wherever Hyperliquid itself is not available.</p>
-    <p>Contracts, gateway and app are unaudited hackathon code. Keys are held by the Usenami Signer demo
-    enclave; the operator runs the gateway that forwards orders.</p>
+    <p>Contracts, gateway and app are unaudited hackathon code. In this demo the agent keys are testnet
+    keys held by the operator's pool gateway, which checks the platform's caps in its own code before it
+    signs. Usenami Signer, our enclave signing service, is not used here.</p>
   </section>`);
 }
 

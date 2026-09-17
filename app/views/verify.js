@@ -1,10 +1,8 @@
 // "Check it yourself": what anyone can read without trusting us, and exactly where our word
 // still carries weight.
-import { CONFIG } from "../config.js";
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
-import { attestationPayload } from "../lib/cbor.js";
-import { esc, render, $, badge, row, isAddress, wire } from "../lib/ui.js";
+import { esc, render, $, badge, row, isAddress } from "../lib/ui.js";
 
 const { ethers } = window;
 
@@ -14,8 +12,7 @@ export async function verifyView(address, page) {
       <p>Open this page from a pool or a challenge, or paste an account address:</p>
       <div class="inline"><input id="addr" placeholder="0x…"><button id="go">Check</button></div></section>`);
     $("#go", page).addEventListener("click", () => { location.hash = `#/verify/${$("#addr", page).value.trim()}`; });
-    page.insertAdjacentHTML("beforeend", `<section class="card"><h3>The enclave behind the keys</h3><div id="enclave"></div></section>`);
-    enclavePanel(page);
+    page.insertAdjacentHTML("beforeend", `<section class="card"><h3>Who holds the keys</h3>${KEYS_HELD}</section>`);
     return;
   }
   const [isPool, isChallenge] = chain.deployed()
@@ -26,25 +23,30 @@ export async function verifyView(address, page) {
     <section class="card">
       <h2>Check it yourself</h2>
       <p class="mono">${esc(address)} ${badge(kind || "not ours", kind ? "ok" : "bad")}</p>
-      <p class="muted">Everything below is read in your browser from HyperEVM testnet, Hyperliquid's public API,
-      the Signer demo box and Base. Where a step still rests on our word, it says so.</p>
+      <p class="muted">Everything below is read in your browser from HyperEVM testnet and Hyperliquid's public
+      API. Where a step still rests on our word, it says so.</p>
     </section>
     <section class="card"><h3>1. Who can trade this account</h3><div id="keys" class="muted">Reading…</div></section>
     <section class="card"><h3>2. Trades against the rules</h3><div id="fills" class="muted">Reading…</div></section>
-    <section class="card"><h3>3. The enclave behind the keys</h3><div id="enclave"></div></section>`);
+    <section class="card"><h3>3. Who holds the keys</h3>${KEYS_HELD}</section>`);
   if (!kind) {
     $("#keys", page).textContent = chain.deployed()
       ? "This address was not created by the factory; there is nothing to check."
-      : "The contracts are not deployed yet. The enclave check below works already.";
+      : "The contracts are not deployed yet.";
     $("#fills", page).textContent = "";
-    enclavePanel(page);
     return;
   }
   const account = chain.contract(kind, address);
   keysPanel(account, address, page).catch((e) => ($("#keys", page).textContent = String(e)));
   fillsPanel(account, address, page).catch((e) => ($("#fills", page).textContent = String(e)));
-  enclavePanel(page);
 }
+
+const KEYS_HELD = `
+  <p>In this demo the keys that trade these accounts are testnet keys held by our pool gateway. Before it
+  signs, the gateway's own code checks the platform's caps: the asset list, a size cap per asset and
+  400 USDC per order. Nothing on this page can show you that; it rests on our word.</p>
+  <p class="small muted">Usenami Signer, our enclave signing service, is a separate product and takes no part
+  in this demo. Its code is public in <code>namixai/signer</code>.</p>`;
 
 async function keysPanel(account, address, page) {
   const reg = chain.registry();
@@ -78,8 +80,8 @@ async function keysPanel(account, address, page) {
     <h4>Stops (the agent replaced by an address nobody holds)</h4>${cutRows.join("") || "<p>none</p>"}
     ${partial ? '<p class="small">History is partial: the public RPC limits how far back this page may read.</p>' : ""}
     <p class="small muted">"Hyperliquid:" is Hyperliquid's own answer to <code>userRole</code> for each key, so you
-    can see the replacement took effect without asking us. What you can't see from here: that a key address was
-    minted inside the enclave. The Signer build in use has no outside proof of that.</p>`;
+    can see the replacement took effect without asking us. What you can't see from here: who holds each key.
+    In this demo our gateway does.</p>`;
 }
 
 async function fillsPanel(account, address, page) {
@@ -102,33 +104,7 @@ async function fillsPanel(account, address, page) {
     ${row("The contract's verdict right now", Number(verdict) ? badge(chain.BREACH[Number(verdict)], "bad") : badge("inside the rules", "ok"))}
     <div class="scroll"><table><thead><tr><th>time (UTC)</th><th>asset</th><th>side</th><th>size</th><th>price</th>
     <th>notional</th><th>closed PnL</th><th>asset rule</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
-    <p class="small muted">This checks trades that reached Hyperliquid. An order the enclave refused never reaches
-    the exchange, and neither does one that was signed and not sent, so this page can't say the enclave never
+    <p class="small muted">This checks trades that reached Hyperliquid. An order our gateway refused never reaches
+    the exchange, and neither does one that was signed and not sent, so this page can't say the gateway never
     signed something against the rules. It says what traded.</p>`;
-}
-
-function enclavePanel(page) {
-  $("#enclave", page).innerHTML = `
-    <p>The keys that trade these accounts sit in the Usenami Signer enclave (build <code>pcr0-fbaad62f</code>,
-    public repository <code>namixai/signer</code>). Ask the demo box for a fresh attestation document:</p>
-    <button id="attest">Ask the Signer demo box</button>
-    <div id="attest-out"></div>`;
-  wire($("#attest", page), async () => {
-    const nonce = ethers.hexlify(crypto.getRandomValues(new Uint8Array(16))).slice(2);
-    const res = await fetch(`${CONFIG.signerAttestation}?nonce=${nonce}`);
-    const body = await res.json();
-    const signed = attestationPayload(body.attestation_doc_b64);
-    const registry = new ethers.Contract(CONFIG.pcr0Registry, chain.ABI.pcr0Registry,
-      new ethers.JsonRpcProvider(CONFIG.baseRpc, 8453, { staticNetwork: true }));
-    const [active, owner] = await registry.isPCR0Active("0x" + signed.pcr0);
-    $("#attest-out", page).innerHTML = `
-      ${row("PCR0 inside the document", `<span class="mono">${esc(signed.pcr0)}</span>`)}
-      ${row("Same as the copy the box sends next to it", signed.pcr0 === body.pcr0_sha384 ? badge("yes", "ok") : badge("no", "bad"))}
-      ${row("Your nonce came back inside the document", signed.nonce === nonce ? badge("yes", "ok") : badge("no", "bad"))}
-      ${row("Base registry, isPCR0Active", active ? `${badge("active", "ok")} owner <span class="mono">${esc(owner)}</span>` : badge("not active", "bad"))}
-      <p class="small muted">Compare that owner with the canonical owner published in the <code>namixai/signer</code> README.
-      This page reads the PCR0 from the document, but it does not check AWS's signature on it. To check that, and to
-      rebuild the measurement from source, follow <code>docs/VERIFY-SIGNER-YOURSELF.md</code> in that repository.</p>`;
-    return "Read.";
-  });
 }

@@ -28,7 +28,7 @@ addresses and every burned agent key are in `spike/results/state-testnet.json`.
 | 4 | Which call gives account equity? | `accountMarginSummary(perpDexIndex, user)`, precompile `0x…080F`: account value, margin used, notional, raw USD | library; simulator | **Confirmed.** The precompile read directly and through a contract equals `clearinghouseState`, in millionths of a dollar. `run.py q4` |
 | 5 | What does the trader pay with? | Testnet USDC as an ERC-20 on HyperEVM (`0x2B3370eE501B4a559b57D449569354196457D8Ab`, 6 decimals), pulled with `transferFrom`, so the payment is tied to `msg.sender`. A transfer made on HyperCore can't be attributed by a contract at all | RPC; simulator | **Paying works; the bridge to HyperCore mostly doesn't.** `pay()` recorded the payer, and HyperCore → HyperEVM (`sendAsset`) worked. Of 15 bridge deposits back to HyperCore, one arrived. See "The bridge" below. `run.py q5`, `q5b`–`q5f` |
 | 6 | Can a contract cancel orders? | Yes: action 10 by order id, action 11 by client order id. No precompile lists open orders, so a contract can't find the ids by itself | docs; library | **Yes.** Contract A cancelled one order by oid and one by cloid. `run.py q1` |
-| 7 | Which margin mode does a new contract account get, and who can change it? (added 16 Sep) | Accounts that never chose report `"default"`; the founder's testnet account reports `"unifiedAccount"`, where spot USDC backs perp positions. The docs say both the account and its agents can switch modes. The enclave build signs only `order` and `cancel`, so its keys can't | info API; docs; enclave source | **`default`.** Action 16 set `disabled` and it held. A plain agent key switched B to `unifiedAccount`, and the contract switched it back. `run.py q7` |
+| 7 | Which margin mode does a new contract account get, and who can change it? (added 16 Sep) | Accounts that never chose report `"default"`; the founder's testnet account reports `"unifiedAccount"`, where spot USDC backs perp positions. The docs say both the account and its agents can switch modes. The Signer enclave build signs only `order` and `cancel`, so its keys couldn't (since 17 Sep the demo signs in the pool gateway instead) | info API; docs; enclave source | **`default`.** Action 16 set `disabled` and it held. A plain agent key switched B to `unifiedAccount`, and the contract switched it back. `run.py q7` |
 | 8 | Does HyperCore take an address that already has an account as an agent? (added 17 Sep) | not asked before | — | **No.** Action 9 naming `0x…dEaD`, which has an account on testnet, changed nothing and raised no error. `run.py q8` |
 
 ## The bridge from HyperEVM to HyperCore
@@ -107,8 +107,9 @@ bridge.
   approves a new key instead of moving the old one.
 - **Spare pool capital is only safe on spot if the account keeps separate balances.** In
   unified mode spot USDC is perp margin. The contracts set mode 1 on every account they
-  create (action 16), and it held on 17 September. A plain agent key can switch it back; the
-  enclave's keys can't.
+  create (action 16), and it held on 17 September. A plain agent key can switch it back. The
+  demo gateway signs only orders and cancels, but whoever holds its key files could sign the
+  switch.
 - **Prices sent through action 1 need rounding on our side.** An IOC close at an unrounded
   price did nothing and raised nothing; the same close at a rounded price filled. The
   contracts round.

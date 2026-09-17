@@ -95,7 +95,6 @@ export const ABI = {
     "function allowance(address owner, address spender) view returns (uint256)",
     "function approve(address spender, uint256 amount) returns (bool)",
   ],
-  pcr0Registry: ["function isPCR0Active(bytes pcr0) view returns (bool active, address owner)"],
 };
 
 export const STATUS = ["None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled"];

@@ -7,9 +7,9 @@ the trader's own testnet wallet.
     spike/.venv/bin/python -m agents.bot leverage  --deployment demo --account 0x… --notional 300 --orders 2
     spike/.venv/bin/python -m agents.bot outside   --deployment demo --account 0x…
 
-over-cap asks for more than the enclave's per-order cap, so the enclave refuses it: pick a
---notional above the cap. The demo policy allows 0.005 BTC and 400 USDC per order, so 800 USDC
-of BTC (about 0.01 BTC) is refused on both counts. outside picks a
+over-cap asks for more than the platform's per-order cap, so the gateway refuses it before
+signing: pick a --notional above the cap. The demo allows 0.005 BTC and 400 USDC per order, so
+800 USDC of BTC (about 0.01 BTC) is refused on both counts. outside picks a
 perp that is not on the account's list (or the one given with --asset), so the gateway
 refuses it. leverage stacks orders until the account breaks its leverage rule.
 

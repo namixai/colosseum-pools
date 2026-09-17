@@ -67,7 +67,7 @@ class Keys(unittest.TestCase):
             return deploy.check_keys(lines)
 
     def test_the_registry_rules_are_checked_before_anything_is_deployed(self):
-        self.assertEqual(self.check(["# enclave keys", "", KEY_A, f"  {KEY_B}  "]),
+        self.assertEqual(self.check(["# demo agent keys", "", KEY_A, f"  {KEY_B}  "]),
                          [deploy.to_checksum_address(KEY_A), deploy.to_checksum_address(KEY_B)])
         for bad in (["0x" + "00" * 20], [KEY_A, KEY_A.upper().replace("0X", "0x")], ["not-an-address"]):
             with self.assertRaises(SystemExit, msg=bad):

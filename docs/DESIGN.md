@@ -10,8 +10,10 @@ checked.
   HyperCore spot transfer to the pool's address.
 - **Trader**, a person or an AI agent. Picks a pool, pays for a challenge, trades the
   challenge capital, and if the target is met, trades the pool's capital.
-- **Operator** (us). Publishes the addresses of agent keys minted in the Signer enclave, runs
-  the pool gateway that forwards a trader's orders to the enclave, and runs a keeper. The
+- **Operator** (us). Makes the demo's agent keys (ordinary testnet keys) and publishes their
+  addresses, runs the pool gateway that holds those keys and signs a trader's orders after
+  checking the platform's caps, and runs a keeper. Usenami Signer, our enclave service, takes
+  no part in the demo. The
   operator can't move pool capital and can't stop a stop.
 - **Anyone.** Can trigger a stop when a rule is broken, and can push a finished challenge
   through settlement.
@@ -36,8 +38,8 @@ checked.
 Every account the contracts create sets separate spot and perp balances (CoreWriter action
 16, value 1) before any capital lands on perp. In unified mode, spot USDC would back the
 trader's positions. The setting held on testnet (spike question 7). A plain agent key can
-switch it back, but the enclave build signs only `order` and `cancel` for Hyperliquid, so a
-trader's key can't.
+switch it back. The pool gateway signs only orders and cancels, so a trader can't; whoever
+holds the gateway's key files could.
 
 ## Rules and terms
 
@@ -55,7 +57,7 @@ trader's share of the challenge profit, capital for a funded trader.
 Platform fee (per factory, set by the operator, zero by default; the testnet deployment sets
 10 test USDC): paid by every challenge buyer on top of the price, to the operator's fee
 recipient, and not refunded. A challenge uses
-one enclave key for good, and a pool's owner can sell challenges to itself at price zero, so
+one agent key for good, and a pool's owner can sell challenges to itself at price zero, so
 without a fee anyone could use up the published keys for the cost of gas.
 
 Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0), in units of
@@ -81,9 +83,9 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    (`keySpoiled()`): then the challenge can't start and anyone may abort it at once.
 3. **Trade.** The trader signs an order with their wallet and sends it to the pool gateway.
    The gateway checks on chain that the key is bound to this account and this trader and that
-   the challenge is active, then asks the enclave to sign with that key. The enclave applies
-   the platform policy (asset list, size caps) and signs or refuses. A Signer box with a
-   receipt key also signs a receipt for each decision; the demo box has none as of 17 Sep.
+   the challenge is active, checks the platform's caps (asset list, a size cap per asset,
+   400 USDC per order), and signs with that key, which it holds. An order over a cap is
+   refused before anything is signed.
 4. **Stop** (`breach(cancels, assets, salt)`, anyone). Allowed only when a rule is broken at
    the start of the block: drawdown floor, daily loss, leverage, or a position in an asset
    outside the list. In this order:
@@ -102,8 +104,8 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    3. every open position among the pool's assets and the caller's extra assets is closed with
       a reduce-only IOC order (1), priced off the mark with slippage and rounded to
       Hyperliquid's price rules.
-   After the agent is replaced, the enclave will still sign an order for the old key if asked,
-   and Hyperliquid refuses it. That is the claim we make, and the only one.
+   After the agent is replaced, the gateway could still sign an order for the old key, and
+   Hyperliquid refuses it. That is the claim we make, and the only one.
 5. **Pass** (`graduate`, anyone). Allowed when the challenge is active, no rule is broken, the
    account is flat, equity is at or above the target, and the deadline hasn't passed. The
    challenge key is replaced and retired as in a stop, the trader's share of the profit is
@@ -138,11 +140,13 @@ the mark would make the investor pay the difference.
 
 ## What the design does not do
 
-- It does not check a trader's intent: the operator could submit an order that fits the rules
-  without the trader asking for it. The Signer build used here has no such check for
-  Hyperliquid.
-- It does not put the investor's limits inside the enclave. Contracts enforce the pool rules
-  after the fact, by stopping the account. Losses can overshoot a limit between the breach and
+- It does not check a trader's intent: the operator runs the gateway and could submit an
+  order that fits the rules without the trader asking for it.
+- In the demo the gateway holds the agent keys. A key file can sign anything Hyperliquid lets
+  an agent sign, so whoever controls the gateway host can trade those accounts, within the
+  caps or not, until someone stops them.
+- It does not check the investor's limits before signing; the gateway applies one platform
+  policy. Contracts enforce the pool rules after the fact, by stopping the account. Losses can overshoot a limit between the breach and
   the stop landing.
 - The daily snapshot can only be taken in the first 15 minutes of a UTC day, once, so nobody
   can pick a convenient moment later. The keeper takes it at midnight and anyone else may.
@@ -153,14 +157,13 @@ the mark would make the investor pay the difference.
   the account at that moment can stretch the wait to the full five minutes, once.
 - Whoever calls `checkpoint` first in the 15-minute window sets the day's base, so a trader
   who calls it at the window's lowest point gets that point as the base.
-- No proof that a published key address was minted in the enclave. The Signer build doesn't
-  offer one.
+- Nothing on chain says who holds a published key. In the demo the operator does.
 - Anyone can create a pool, at no cost beyond gas, and the factory's pool list has no cap. The
   keeper doesn't walk that list: it follows the pools named in the factory's
   `ChallengeCreated` events, which cost the buyer the challenge price and need the pool's
   capital in place. A long pool list still makes `PoolFactory.pools()` expensive to read for
   anyone else who calls it.
-- The platform fee is the only brake on using up enclave keys. At zero, anyone can buy
+- The platform fee is the only brake on using up the agent keys. At zero, anyone can buy
   challenges from their own zero-price pool and burn one key each. The operator sets the fee
   and can change it at any time, including between a buyer's approval and purchase; a buyer
   who approves exactly price plus fee can't be charged more.

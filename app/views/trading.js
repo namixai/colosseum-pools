@@ -42,7 +42,8 @@ export async function tradePanel(box, account, rules) {
   box.innerHTML = `
     <h4>Trade</h4>
     <p class="muted small">Your wallet signs the order's fields. The pool gateway checks on chain that this
-    account's key is bound to you, then the enclave signs with that key under its own caps.</p>
+    account's key is bound to you and that the order is within the platform's caps, then signs with that
+    key. In this demo the gateway holds the key.</p>
     <form id="ticket" class="ticket">
       <select name="asset">${assets.map((a) => `<option value="${a.index}">${esc(a.name)}</option>`).join("")}</select>
       <select name="side"><option value="buy">Buy</option><option value="sell">Sell</option></select>
