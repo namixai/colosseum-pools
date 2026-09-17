@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -79,21 +81,37 @@ class Deployer:
 
 
 class Record(unittest.TestCase):
-    def test_a_write_that_dies_half_way_leaves_the_previous_record(self):
+    def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        path = pathlib.Path(tmp.name) / "deployments" / "testnet-t.json"
-        deploy.save(path, {"status": "configuring", "PoolFactory": "0xe4"})
-        real_write = pathlib.Path.write_text
+        self.path = pathlib.Path(tmp.name) / "deployments" / "testnet-t.json"
+        deploy.save(self.path, {"status": "configuring", "PoolFactory": "0xe4"})
 
-        def dies_half_way(target, data, *args, **kwargs):
-            real_write(target, data[: len(data) // 2], *args, **kwargs)  # the file is cut, then the disk fills
-            raise OSError(28, "No space left on device")
+    def test_a_write_that_fails_leaves_the_previous_record(self):
+        def disk_error(fd):
+            raise OSError(5, "Input/output error")
 
-        with mock.patch.object(pathlib.Path, "write_text", dies_half_way), self.assertRaises(OSError):
-            deploy.save(path, {"status": "complete", "PoolFactory": "0xe4"})
-        self.assertEqual(json.loads(path.read_text()), {"status": "configuring", "PoolFactory": "0xe4"})
-        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["testnet-t.json"])
+        with mock.patch.object(deploy.os, "fsync", disk_error), self.assertRaises(OSError):
+            deploy.save(self.path, {"status": "complete", "PoolFactory": "0xe4"})
+        self.assertEqual(json.loads(self.path.read_text()), {"status": "configuring", "PoolFactory": "0xe4"})
+        self.assertEqual(sorted(p.name for p in self.path.parent.iterdir()), ["testnet-t.json"])
+
+    def test_the_new_record_is_on_disk_before_it_replaces_the_old_one(self):
+        events = []
+        real_fsync, real_replace = os.fsync, pathlib.Path.replace
+
+        def fsync(fd):
+            events.append(("fsync", "directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"))
+            real_fsync(fd)
+
+        def replace(src, dst):
+            events.append(("replace", pathlib.Path(dst).name))
+            return real_replace(src, dst)
+
+        with mock.patch.object(deploy.os, "fsync", fsync), mock.patch.object(pathlib.Path, "replace", replace):
+            deploy.save(self.path, {"status": "complete", "PoolFactory": "0xe4"})
+        self.assertEqual(events, [("fsync", "file"), ("replace", "testnet-t.json"), ("fsync", "directory")])
+        self.assertEqual(json.loads(self.path.read_text())["status"], "complete")
 
 
 class Deployment(unittest.TestCase):

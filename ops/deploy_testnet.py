@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -95,15 +96,25 @@ def check_keys(lines: list[str]) -> list[str]:
 
 
 def save(path: pathlib.Path, record: dict) -> None:
-    """Replace the record whole: a write that dies half way leaves the previous version."""
+    """Replace the record whole, and only once the new version is on disk: a write that fails
+    leaves the previous version, and a power cut after the rename doesn't bring it back."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     try:
-        tmp.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        with tmp.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, indent=2, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+    if os.name == "posix":  # the rename itself is durable once the directory is synced
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
 
 def mark_incomplete(path: pathlib.Path, record: dict, exc: BaseException) -> None:
