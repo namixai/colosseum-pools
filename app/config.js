@@ -7,6 +7,7 @@ export const CONFIG = {
   nativeCurrency: { name: "HYPE", symbol: "HYPE", decimals: 18 },
   rpc: "https://rpc.hyperliquid-testnet.xyz/evm",
   hlInfo: "https://api.hyperliquid-testnet.xyz/info",
+  hlExchange: "https://api.hyperliquid-testnet.xyz/exchange",
   hlApp: "https://app.hyperliquid-testnet.xyz",
   gateway: "http://127.0.0.1:8787",
   factory: "",

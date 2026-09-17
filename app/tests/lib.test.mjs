@@ -7,6 +7,7 @@ import { orderUrl } from "../lib/gateway.js";
 import { createNavigator, logWindows, needsGate } from "../lib/nav.js";
 import { settle } from "../lib/ui.js";
 import { canonical, roundPrice, roundSize } from "../lib/hl.js";
+import { refusal, splitSignature, spotSend } from "../lib/hlsend.js";
 
 const h = (s) => Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16)));
 
@@ -177,4 +178,63 @@ test("sizes: rounded down to size decimals", () => {
   assert.equal(roundSize(3, 0), "3");
   assert.equal(roundSize(0.3, 1), "0.3"); // float noise must not drop a unit
   assert.throws(() => roundSize(0.000001, 5), /zero/);
+});
+
+// The same input through the Hyperliquid Python SDK's user_signed_payload gives this domain,
+// type list and message; eth_account and ethers 5 both hash it to 0x5b3135…ef60.
+const SPOT_VECTOR = {
+  destination: "0x5fb436b6b806541ade43cac6088810b3a4e9e25e",
+  token: "USDC:0xeb62eee3685fc4c43992febcd9e75443",
+  amount: "1",
+  time: 1789640000000,
+  chainHex: "0x3e6",
+};
+
+test("spot transfer: the data the wallet signs is Hyperliquid's", () => {
+  const out = spotSend(SPOT_VECTOR);
+  assert.deepEqual(out.domain, {
+    name: "HyperliquidSignTransaction", version: "1", chainId: 998,
+    verifyingContract: "0x0000000000000000000000000000000000000000",
+  });
+  assert.deepEqual(out.types, {
+    "HyperliquidTransaction:SpotSend": [
+      { name: "hyperliquidChain", type: "string" },
+      { name: "destination", type: "string" },
+      { name: "token", type: "string" },
+      { name: "amount", type: "string" },
+      { name: "time", type: "uint64" },
+    ],
+  });
+  assert.deepEqual(out.message, {
+    hyperliquidChain: "Testnet", destination: SPOT_VECTOR.destination, token: SPOT_VECTOR.token,
+    amount: "1", time: 1789640000000,
+  });
+  assert.deepEqual(out.action, { type: "spotSend", signatureChainId: "0x3e6", ...out.message });
+});
+
+test("spot transfer: amounts are canonical, and a bad field is refused before signing", () => {
+  assert.equal(spotSend({ ...SPOT_VECTOR, amount: "0250.50" }).message.amount, "250.5");
+  assert.throws(() => spotSend({ ...SPOT_VECTOR, destination: "0x" + "00".repeat(20) }), /destination/);
+  assert.throws(() => spotSend({ ...SPOT_VECTOR, destination: "0x5fb4" }), /destination/);
+  assert.throws(() => spotSend({ ...SPOT_VECTOR, token: "USDC" }), /token/);
+  assert.throws(() => spotSend({ ...SPOT_VECTOR, time: 0 }), /time/);
+  assert.throws(() => spotSend({ ...SPOT_VECTOR, chainHex: "998" }), /chain/);
+  assert.throws(() => spotSend({ ...SPOT_VECTOR, amount: "0" }), /above zero/);
+});
+
+test("spot transfer: a 65-byte signature becomes r, s and v", () => {
+  const r = "11".repeat(32);
+  const s = "22".repeat(32);
+  assert.deepEqual(splitSignature(`0x${r}${s}1b`), { r: `0x${r}`, s: `0x${s}`, v: 27 });
+  assert.deepEqual(splitSignature(`0x${r}${s}01`), { r: `0x${r}`, s: `0x${s}`, v: 28 });
+  assert.throws(() => splitSignature(`0x${r}${s}1d`), /v/);
+  assert.throws(() => splitSignature(`0x${r}`), /65-byte/);
+});
+
+test("spot transfer: only an ok answer counts as sent", () => {
+  assert.equal(refusal({ status: "ok", response: { type: "default" } }), null);
+  assert.equal(refusal({ status: "err", response: "Insufficient balance for token transfer" }),
+    "Insufficient balance for token transfer");
+  assert.match(refusal({ status: "unknown" }), /confirms nothing/);
+  assert.match(refusal(null), /confirms nothing/);
 });

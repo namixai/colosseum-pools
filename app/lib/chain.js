@@ -20,6 +20,8 @@ const RULED = [
   "function isStopped() view returns (bool)",
   "function checkpoint()",
   "function recut(bytes32 salt)",
+  "function cutKey() view returns (address)",
+  "function cutBlock() view returns (uint64)",
   "event AgentSet(address indexed key)",
   "event AgentCut(address indexed oldKey, address indexed keyless)",
 ];
@@ -49,7 +51,7 @@ export const ABI = {
     "function fundedPayoutOwed() view returns (uint64)",
     "function fundedResultTaken() view returns (bool)",
     "function fundedResult() view returns (int64)",
-    "function deposit(uint256 amount)",
+    "function capitalNeeded() view returns (uint64)",
     "function prepareAccount()",
     "function buyChallenge() returns (address)",
     "function withdrawOnCore(uint64 amount1e8)",

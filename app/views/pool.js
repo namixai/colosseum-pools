@@ -1,7 +1,9 @@
 // One pool: its terms and rules, the investor's controls, buying a challenge, and the funded
 // stage with its stop.
+import { CONFIG } from "../config.js";
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
+import { sendUsdc } from "../lib/hlsend.js";
 import { esc, render, $, wire, badge, row, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
@@ -13,14 +15,15 @@ export async function poolView(address, page) {
     return;
   }
   const me = chain.currentAddress();
-  const [{ rules, terms, assets }, stage, owner, ready, challenge, fundedTrader, earned, spotUsdc, fee] = await Promise.all([
+  const [{ rules, terms, assets }, stage, owner, ready, challenge, fundedTrader, earned, spotUsdc, fee, neededSpot] = await Promise.all([
     rulesAndTerms(pool), pool.stage(), pool.owner(), pool.accountReady(), pool.challenge(),
-    pool.fundedTrader(), pool.earned(), hl.spotUsdc(address), chain.factory().challengeFee(),
+    pool.fundedTrader(), pool.earned(), hl.spotUsdc(address), chain.factory().challengeFee(), pool.capitalNeeded(),
   ]);
   const stageName = chain.STAGE[Number(stage)];
   const isOwner = chain.same(me, owner);
   const isFunded = chain.same(me, fundedTrader);
-  const needed = Number(terms.capital + terms.fundedCapital) / 1e6;
+  // Challenge capital, funded capital, and 1 USDC for creating the challenge's account.
+  const needed = Number(neededSpot) / 1e8;
 
   render(page, `
     <section class="card">
@@ -49,7 +52,8 @@ export async function poolView(address, page) {
         fee > 0n ? `, plus the platform's fee of ${chain.usd6(fee)} USDC, which isn't refunded` : ""}. The pool moves
       ${chain.usd6(terms.capital)} USDC to a new challenge account on HyperCore; a trading key from the
       enclave is reserved for you. You never hold that key: your orders go through the pool gateway,
-      signed by your wallet.</p>
+      signed by your wallet. A profit share is paid to your address on HyperCore; if you have no
+      account there yet, 1 USDC of it pays for creating one.</p>
       <label class="check"><input type="checkbox" id="us"> I am not a US person and I am not acting for one.</label>
       <button id="buy-btn">Pay and start</button>`;
     wire($("#buy-btn", page), async () => {
@@ -118,17 +122,19 @@ export async function poolView(address, page) {
     return;
   }
   inv.innerHTML = `<h3>Investor</h3>
-    <p>Add capital from HyperEVM USDC, or send USDC to <span class="mono">${esc(address)}</span> on HyperCore.</p>
-    <div class="inline"><input id="dep" type="number" step="0.01" min="0" placeholder="USDC"><button id="dep-btn">Deposit</button></div>
+    <p>Capital goes to the pool on HyperCore: a spot transfer of USDC from your HyperCore account to
+      <span class="mono">${esc(address)}</span>. The button below asks your wallet to sign that transfer;
+      you can also make it yourself in the <a href="${esc(CONFIG.hlApp)}" target="_blank" rel="noopener">Hyperliquid testnet app</a>.
+      Don't send USDC to this address on HyperEVM: the bridge doesn't credit contracts, and it would be lost.</p>
+    <div class="inline"><input id="dep" type="number" step="0.01" min="0" placeholder="USDC"><button id="dep-btn">Send on HyperCore</button></div>
     <p><button id="prepare" class="secondary">Prepare the account</button>
       <span class="muted">Once the pool has USDC on HyperCore: separate spot and perp balances, approve the builder fee.</span></p>
     <p>Challenge income held in the contract: ${chain.usd6(earned)} USDC <button id="earned" class="secondary">Withdraw it</button></p>
     <div class="inline"><input id="wd" type="number" step="0.01" min="0" placeholder="USDC"><button id="wd-btn" class="secondary">Withdraw on HyperCore</button></div>`;
   wire($("#dep-btn", page), async () => {
-    const amount = chain.toUnits($("#dep", page).value, 6);
-    await chain.approveIfNeeded(address, amount);
-    await chain.write("pool", address, "deposit", [amount]);
-    return "Deposited. It shows on HyperCore after the next block.";
+    const signer = chain.currentSigner() || (await chain.connect(), chain.currentSigner());
+    await sendUsdc(signer, window.ethers.getAddress(address), hl.canonical($("#dep", page).value));
+    return "Sent. The pool's HyperCore balance shows it in a few seconds; reload to see it.";
   });
   wire($("#prepare", page), async () => {
     await chain.write("pool", address, "prepareAccount");
