@@ -96,13 +96,29 @@ def record(step: str, **fields: Any) -> dict:
 
 # ── HyperEVM JSON-RPC ────────────────────────────────────────────────────────────────
 
+RATE_LIMITED = -32005  # what the public HyperEVM RPC answers when it throttles
+RPC_ATTEMPTS = 6
+
+
 def rpc(method: str, params: Sequence[Any] = ()) -> Any:
-    resp = _session.post(RPC_URL, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)}, timeout=30)
-    resp.raise_for_status()
-    body = resp.json()
-    if "error" in body:
-        raise RuntimeError(f"{method}: {body['error']}")
-    return body["result"]
+    """One JSON-RPC call. A throttled call (HTTP 429 or error -32005) is retried after 1, 2,
+    4, 8 and 16 seconds; any other error is raised at once."""
+    delay = 1.0
+    for attempt in range(RPC_ATTEMPTS):
+        resp = _session.post(RPC_URL, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
+                             timeout=30)
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            body = resp.json()
+            error = body.get("error")
+            if error is None:
+                return body["result"]
+            if not (isinstance(error, dict) and error.get("code") == RATE_LIMITED):
+                raise RuntimeError(f"{method}: {error}")
+        if attempt + 1 < RPC_ATTEMPTS:
+            time.sleep(delay)
+            delay *= 2
+    raise RuntimeError(f"{method}: rate limited {RPC_ATTEMPTS} times in a row")
 
 
 def assert_testnet() -> None:
@@ -188,7 +204,13 @@ def send_tx(acct: LocalAccount, to: str | None, data: bytes = b"", value: int = 
         probe["to"] = tx["to"]
     tx["gas"] = gas if gas is not None else int(int(rpc("eth_estimateGas", [probe]), 16) * 1.25)
     signed = acct.sign_transaction(tx)
-    tx_hash = rpc("eth_sendRawTransaction", ["0x" + signed.raw_transaction.hex().removeprefix("0x")])
+    tx_hash = "0x" + signed.hash.hex().removeprefix("0x")
+    try:
+        rpc("eth_sendRawTransaction", ["0x" + signed.raw_transaction.hex().removeprefix("0x")])
+    except RuntimeError as exc:
+        # A send that was throttled after it reached the node comes back as a duplicate.
+        if "already known" not in str(exc):
+            raise
     rcpt = wait_receipt(tx_hash)
     if int(rcpt["status"], 16) != 1:
         raise RuntimeError(f"transaction {tx_hash} reverted")
