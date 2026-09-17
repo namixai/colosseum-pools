@@ -16,6 +16,9 @@ def load(label: str) -> dict:
     record = json.loads(path.read_text())
     if record.get("chain_id") != TESTNET_CHAIN_ID:
         raise SystemExit(f"{path.relative_to(ROOT)} is not a testnet deployment")
+    if record.get("status") != "complete":
+        raise SystemExit(f"deployment {label!r} is {record.get('status', 'of unknown state')}, not complete: "
+                         f"{record.get('error', 'see the record')}")
     return record
 
 

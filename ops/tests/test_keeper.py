@@ -132,7 +132,7 @@ class KeeperTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.state = pathlib.Path(self.tmp.name) / "keeper.json"
 
-    def make(self, dry=False, window=1000, max_windows=50, start=1):
+    def make(self, dry=False, window=50, max_windows=50, start=1):
         return keeper.Keeper(FACTORY, object(), dry, self.state, start, window=window, max_windows=max_windows)
 
     def at(self, t):
@@ -198,6 +198,34 @@ class Following(KeeperTest):
         spans = [(int(q["fromBlock"], 16), int(q["toBlock"], 16)) for q in self.chain.log_queries[2:]]
         self.assertEqual(spans, [(20, 29), (30, 35)])
         self.assertEqual(again.next_block, 36)
+
+    def test_log_windows_stay_within_what_hyperevm_accepts(self):
+        self.chain.latest = 130
+        self.make(start=0).one_pass()
+        spans = [int(q["toBlock"], 16) - int(q["fromBlock"], 16) + 1 for q in self.chain.log_queries]
+        self.assertEqual(spans, [50, 50, 31])
+        for bad in (0, 51, 1000):
+            with self.assertRaises(SystemExit, msg=bad):
+                self.make(window=bad)
+
+    def test_a_failed_pass_keeps_its_place(self):
+        self.follow_a(status=keeper.ACTIVE)
+        k = self.make()
+        self.chain.rpc = mock.Mock(side_effect=RuntimeError("eth_blockNumber: rate limited"))
+        with self.assertRaises(RuntimeError):
+            k.one_pass()
+        self.assertEqual(k.next_block, 1)  # nothing skipped
+
+    def test_the_service_logs_a_failed_pass_instead_of_dying(self):
+        record = {"chain_id": 998, "PoolFactory": FACTORY, "block": 1}
+        with mock.patch.object(keeper.deployments, "load", return_value=record), \
+                mock.patch.object(self.chain, "assert_testnet", create=True), \
+                mock.patch.object(keeper.Keeper, "one_pass", side_effect=RuntimeError("rate limited")), \
+                mock.patch.object(keeper.sys, "argv", ["keeper", "--deployment", "demo", "--once", "--dry-run",
+                                                       "--state", str(self.state)]):
+            self.assertEqual(keeper.main(), 1)
+        events = [call.args[0] for call in keeper.log.call_args_list]
+        self.assertIn("pass_failed", events)
 
     def test_state_of_another_factory_is_refused(self):
         self.make().save()

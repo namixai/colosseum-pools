@@ -8,7 +8,9 @@ switches itself to big blocks (about one a minute, 30M gas) for the deployment a
 afterwards. That switch is a HyperCore action, so the deployer must already exist there.
 
 Writes deployments/testnet-<label>.json: addresses, transaction hashes, the git commit the
-bytecode was built from, and the platform asset list. Refuses to overwrite a label.
+bytecode was built from, and the platform asset list. Refuses to overwrite a label. The record
+is written as soon as the contracts exist and after every later transaction, with a `status`
+field, so a failure half way still leaves the addresses on disk.
 
 Key addresses published with --keys-file must be enclave-minted keys from the Signer team.
 Local test keys belong in a rehearsal deployment only; a registry never forgets a key.
@@ -68,6 +70,33 @@ def check_assets() -> list[int]:
     return out
 
 
+def check_keys(lines: list[str]) -> list[str]:
+    """Key addresses from a keys file, checked the way KeyRegistry.publish would check them,
+    before anything is deployed."""
+    keys: list[str] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            key = to_checksum_address(line)
+        except ValueError:
+            raise SystemExit(f"not an address: {line!r}") from None
+        if int(key, 16) == 0:
+            raise SystemExit("the zero address can't be a key")
+        if key in keys:
+            raise SystemExit(f"{key} is listed twice")
+        if c.core_user_exists(key):
+            raise SystemExit(f"{key} already exists on HyperCore; the registry would refuse it")
+        keys.append(key)
+    return keys
+
+
+def save(path: pathlib.Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+
+
 def big_blocks(acct, enable: bool) -> None:
     resp = c.exchange(acct).use_big_blocks(enable)
     c.record("big_blocks", enable=enable, response=resp)
@@ -90,18 +119,13 @@ def main() -> int:
     subprocess.run(["forge", "build"], cwd=ROOT, check=True, capture_output=True)
     assets = check_assets()
 
-    keys: list[str] = []
-    if args.keys_file:
-        for line in pathlib.Path(args.keys_file).read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                keys.append(to_checksum_address(line))
+    keys = check_keys(pathlib.Path(args.keys_file).read_text().splitlines()) if args.keys_file else []
 
     deployer = c.account("deployer")
     if not c.core_user_exists(deployer.address):
         raise SystemExit("the deployer has no HyperCore account yet; fund it first")
 
-    record: dict = {"chain_id": c.CHAIN_ID, "label": args.label, "commit": commit,
+    record: dict = {"chain_id": c.CHAIN_ID, "label": args.label, "commit": commit, "status": "deploying",
                     "deployer": deployer.address, "platform_assets": PLATFORM_ASSETS, "tx": {}}
     big_blocks(deployer, True)
     try:
@@ -114,21 +138,31 @@ def main() -> int:
         big_blocks(deployer, False)
 
     record.update({"KeyRegistry": registry, "PoolImpl": pool_impl, "ChallengeAccountImpl": challenge_impl,
-                   "PoolFactory": factory, "block": int(r4["blockNumber"], 16)})
+                   "PoolFactory": factory, "block": int(r4["blockNumber"], 16), "status": "configuring"})
     record["tx"].update({"KeyRegistry": r1["transactionHash"], "PoolImpl": r2["transactionHash"],
                          "ChallengeAccountImpl": r3["transactionHash"], "PoolFactory": r4["transactionHash"]})
+    save(out_path, record)
 
-    rcpt = c.transact(deployer, registry, "setAccountSource(address)", ["address"], [factory])
-    record["tx"]["setAccountSource"] = rcpt["transactionHash"]
-    rcpt = c.transact(deployer, factory, "setPlatformAssets(uint32[],bool)", ["uint32[]", "bool"], [assets, True])
-    record["tx"]["setPlatformAssets"] = rcpt["transactionHash"]
+    steps = [
+        ("setAccountSource", registry, "setAccountSource(address)", ["address"], [factory]),
+        ("setPlatformAssets", factory, "setPlatformAssets(uint32[],bool)", ["uint32[]", "bool"], [assets, True]),
+    ]
     if keys:
-        rcpt = c.transact(deployer, registry, "publish(address[])", ["address[]"], [keys])
-        record["tx"]["publish"] = rcpt["transactionHash"]
-        record["published_keys"] = keys
+        steps.append(("publish", registry, "publish(address[])", ["address[]"], [keys]))
+    try:
+        for name, to, sig, types, values in steps:
+            record["tx"][name] = c.transact(deployer, to, sig, types, values)["transactionHash"]
+            if name == "publish":
+                record["published_keys"] = keys
+            save(out_path, record)
+    except BaseException as exc:
+        record["status"] = "incomplete"
+        record["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+        save(out_path, record)
+        raise
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    record["status"] = "complete"
+    save(out_path, record)
     c.record("deployed_product", **{k: v for k, v in record.items() if k != "tx"})
     print(f"wrote {out_path.relative_to(ROOT)}")
     return 0

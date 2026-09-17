@@ -7,9 +7,11 @@
 Anyone can create a pool for free, so the keeper doesn't walk the factory's pool list. It
 follows the factory's ChallengeCreated events instead: a pool needs the keeper from its first
 challenge on, and stops needing it once it is idle with no challenge left. A challenge costs
-its buyer the price and the pool real capital, which is what keeps that list short. Events are
-read in windows of --log-window blocks, starting where the last run stopped (the --state
-file) or at the factory's deployment block.
+its buyer the price and the platform fee, and the pool real capital, which is what keeps that
+list short. Events are read in windows of --log-window blocks (HyperEVM answers at most 50 per
+eth_getLogs call), starting where the last run stopped (the --state file) or at the factory's
+deployment block. A pass that fails, say on a rate-limited RPC, is logged and the next one
+starts from the same block.
 
 For every pool it follows, one pass does what is due:
   challenge Created  → activate once the capital is there; abort after the start window if not
@@ -47,6 +49,7 @@ CHECKPOINT_WINDOW = 15 * 60
 START_WINDOW = 3600
 CHALLENGE_CREATED = "0x" + keccak(text="ChallengeCreated(address,address,address)").hex()
 STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
+MAX_LOG_WINDOW = 50  # blocks per eth_getLogs call that HyperEVM accepts
 
 # ChallengeAccount.Status and Pool.Stage. The tests hold these against the Solidity source.
 CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(1, 9)
@@ -164,7 +167,9 @@ def pools_with_challenges(factory: str, start: int, end: int, window: int) -> se
 
 class Keeper:
     def __init__(self, factory: str, wallet, dry: bool, state_path: pathlib.Path, start_block: int,
-                 window: int = 1000, max_windows: int = 50):
+                 window: int = MAX_LOG_WINDOW, max_windows: int = 50):
+        if not 1 <= window <= MAX_LOG_WINDOW:
+            raise SystemExit(f"--log-window must be 1..{MAX_LOG_WINDOW}: HyperEVM refuses wider eth_getLogs ranges")
         self.factory = to_checksum_address(factory)
         self.wallet = wallet
         self.dry = dry
@@ -220,7 +225,8 @@ def main() -> int:
     p.add_argument("--every", type=int, default=30, help="seconds between passes")
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")
     p.add_argument("--state", help="state file (default ops/state/keeper-<deployment>.json)")
-    p.add_argument("--log-window", type=int, default=1000, help="blocks per eth_getLogs call")
+    p.add_argument("--log-window", type=int, default=MAX_LOG_WINDOW,
+                   help=f"blocks per eth_getLogs call, 1..{MAX_LOG_WINDOW}")
     p.add_argument("--max-windows", type=int, default=50, help="eth_getLogs calls per pass, at most")
     args = p.parse_args()
 
@@ -231,7 +237,12 @@ def main() -> int:
     keeper = Keeper(record["PoolFactory"], wallet, args.dry_run, state, deployment_block(record),
                     window=args.log_window, max_windows=args.max_windows)
     while True:
-        keeper.one_pass()
+        try:
+            keeper.one_pass()
+        except Exception as exc:  # the RPC or the info API failed; the next pass retries
+            log("pass_failed", error=str(exc)[:200], next_block=keeper.next_block)
+            if args.once:
+                return 1
         if args.once:
             return 0
         time.sleep(args.every)
