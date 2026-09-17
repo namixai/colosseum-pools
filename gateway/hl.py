@@ -32,13 +32,19 @@ def submit(action: dict, nonce: int, signature: dict, timeout: float = 15.0) -> 
         return {"status": "unreadable", "http": resp.status_code, "body": resp.text[:500]}
 
 
+def _confirmed(status: Any) -> bool:
+    return status == "success" or (isinstance(status, dict) and any(
+        isinstance(status.get(outcome), dict) for outcome in ("resting", "filled")))
+
+
 def venue_outcome(answer: Any) -> tuple[str | None, bool]:
     """(Hyperliquid's reason for refusing, whether it confirmed the action).
 
     Hyperliquid answers `{"status": "err", "response": reason}` when it refuses the whole
-    action, and `{"status": "ok", "response": {"data": {"statuses": [...]}}}` otherwise, where
-    each order or cancel gets `{"resting": ...}`, `{"filled": ...}`, `"success"` or
-    `{"error": reason}`. Anything else confirms nothing."""
+    action, and `{"status": "ok", "response": {"data": {"statuses": [...]}}}` otherwise. The
+    gateway sends only limit orders without grouping and cancels by oid: an order gets
+    `{"resting": {...}}`, `{"filled": {...}}` or `{"error": reason}`, a cancel `"success"` or
+    `{"error": reason}`. Anything else, `{}` included, confirms nothing."""
     if not isinstance(answer, dict):
         return None, False
     if answer.get("status") == "err":
@@ -53,4 +59,4 @@ def venue_outcome(answer: Any) -> tuple[str | None, bool]:
     for status in statuses:
         if isinstance(status, dict) and "error" in status:
             return str(status["error"])[:300], False
-    return None, True
+    return None, all(_confirmed(status) for status in statuses)

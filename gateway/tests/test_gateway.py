@@ -434,6 +434,10 @@ class Flow(Base):
             ({"status": "unreadable", "http": 502, "body": "<html>"}, 502, "venue_unconfirmed"),
             ("not a dict", 502, "venue_unconfirmed"),
         ]
+        # An "ok" whose item says neither placed, filled, cancelled nor refused confirms nothing.
+        for item in ({}, {"resting": None}, {"oid": 7}, "waiting", 7, None):
+            cases.append(({"status": "ok", "response": {"type": "order", "data": {"statuses": [item]}}},
+                          502, "venue_unconfirmed"))
         for i, (answer, http, status) in enumerate(cases):
             gw = self.gateway(ScriptedSigner(self.enclave_key.address, self.signed_by_the_enclave), answer)
             got_http, out = gw.handle_order(self.body(nonce=NOW + i))

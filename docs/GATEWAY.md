@@ -82,7 +82,7 @@ another.
 | 4xx | `refused_by_gateway` | a check failed; `code` says which |
 | 403 | `refused_by_signer` | the enclave refused; `receipt` holds its signed receipt if the box issues one |
 | 422 | `refused_by_venue` | Hyperliquid refused the action or the order; its words are in `reason` |
-| 502 | `venue_unconfirmed` | Hyperliquid's answer confirms nothing (no statuses, or not JSON); check the account |
+| 502 | `venue_unconfirmed` | Hyperliquid's answer confirms nothing (not JSON, no statuses, or a status that is neither a resting or filled order, a successful cancel, nor an error); check the account |
 | 502 | `signature_mismatch`, `bad_signer_response` | the Signer's answer can't be submitted; nothing was |
 | 502 | `gateway_error` (`upstream_failed`) | a chain read or the Signer call failed; nothing was submitted |
 | 502 | `venue_unreachable` | the call to Hyperliquid failed; the order may or may not have arrived, so check the account |
