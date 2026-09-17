@@ -78,47 +78,131 @@ class Deployer:
     address = "0x00000000000000000000000000000000000000d0"
 
 
-class HalfWay(unittest.TestCase):
-    """The publish transaction fails after four deployments and two settings went through."""
-
-    def test_a_late_failure_leaves_the_addresses_on_disk(self):
+class Record(unittest.TestCase):
+    def test_a_write_that_dies_half_way_leaves_the_previous_record(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        root = pathlib.Path(tmp.name)
-        keys_file = root / "keys.txt"
-        keys_file.write_text(KEY_A + "\n")
+        path = pathlib.Path(tmp.name) / "deployments" / "testnet-t.json"
+        deploy.save(path, {"status": "configuring", "PoolFactory": "0xe4"})
+        real_write = pathlib.Path.write_text
+
+        def dies_half_way(target, data, *args, **kwargs):
+            real_write(target, data[: len(data) // 2], *args, **kwargs)  # the file is cut, then the disk fills
+            raise OSError(28, "No space left on device")
+
+        with mock.patch.object(pathlib.Path, "write_text", dies_half_way), self.assertRaises(OSError):
+            deploy.save(path, {"status": "complete", "PoolFactory": "0xe4"})
+        self.assertEqual(json.loads(path.read_text()), {"status": "configuring", "PoolFactory": "0xe4"})
+        self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["testnet-t.json"])
+
+
+class Deployment(unittest.TestCase):
+    """main() against fake chains: four deployments, then the settings."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = pathlib.Path(tmp.name)
+        self.keys_file = self.root / "keys.txt"
+        self.keys_file.write_text(KEY_A + "\n")
+        self.record_path = self.root / "deployments" / "testnet-t.json"
+        self.on_disk = []  # the record as it was on disk when each deployment was sent
+        self.big_blocks = []
+
+    def deployed(self, fail_on=None):
         addresses = iter(f"0x{i:040x}" for i in range(0xE1, 0xE5))
 
-        def deployed(acct, name, types, values):
+        def deploy_one(acct, name, types, values):
+            self.on_disk.append(json.loads(self.record_path.read_text()) if self.record_path.exists() else None)
+            if name == fail_on:
+                raise RuntimeError("replacement transaction underpriced")
             return next(addresses), {"transactionHash": f"0x{name}", "blockNumber": "0x10"}
+        return deploy_one
 
+    def run_main(self, deploy_one, transact=None, big_blocks=None):
+        def switch(acct, enable):
+            self.big_blocks.append(enable)
+            if big_blocks is not None:
+                big_blocks(enable)
+
+        with mock.patch.object(deploy, "ROOT", self.root), \
+                mock.patch.object(deploy.subprocess, "run", side_effect=fake_git()), \
+                mock.patch.object(deploy, "check_assets", return_value=[3, 4, 0]), \
+                mock.patch.object(deploy, "big_blocks", side_effect=switch), \
+                mock.patch.object(deploy.c, "assert_testnet"), \
+                mock.patch.object(deploy.c, "record"), \
+                mock.patch.object(deploy.c, "account", return_value=Deployer()), \
+                mock.patch.object(deploy.c, "core_user_exists", side_effect=lambda a: a == Deployer.address), \
+                mock.patch.object(deploy.c, "deploy", side_effect=deploy_one), \
+                mock.patch.object(deploy.c, "transact",
+                                  side_effect=transact or (lambda *a: {"transactionHash": "0x" + a[2].split("(")[0]})), \
+                mock.patch.object(deploy.sys, "argv", ["deploy", "--label", "t", "--keys-file", str(self.keys_file)]):
+            return deploy.main()
+
+    def record(self):
+        return json.loads(self.record_path.read_text())
+
+    def assert_not_loadable(self):
+        with mock.patch.object(deployments, "ROOT", self.root), self.assertRaises(SystemExit):
+            deployments.load("t")
+
+    def test_every_contract_is_on_disk_before_the_next_is_sent(self):
+        with mock.patch.object(deploy, "print"):
+            self.assertEqual(self.run_main(self.deployed()), 0)
+        self.assertEqual(self.big_blocks, [True, False])
+        self.assertIsNone(self.on_disk[0])
+        self.assertEqual([sorted(r["tx"]) for r in self.on_disk[1:]],
+                         [["KeyRegistry"], ["KeyRegistry", "PoolImpl"],
+                          ["ChallengeAccountImpl", "KeyRegistry", "PoolImpl"]])
+        self.assertEqual([r["PoolImpl"] for r in self.on_disk[2:]], ["0x" + f"{0xE2:040x}"] * 2)
+        record = self.record()
+        self.assertEqual((record["status"], record["block"], record["published_keys"]),
+                         ("complete", 0x10, [deploy.to_checksum_address(KEY_A)]))
+        with mock.patch.object(deployments, "ROOT", self.root):
+            self.assertEqual(deployments.load("t")["PoolFactory"], "0x" + f"{0xE4:040x}")
+
+    def test_a_failed_deployment_keeps_the_earlier_ones_and_goes_back_to_small_blocks(self):
+        with self.assertRaises(RuntimeError):
+            self.run_main(self.deployed(fail_on="ChallengeAccount"))
+        record = self.record()
+        self.assertEqual(record["status"], "incomplete")
+        self.assertIn("underpriced", record["error"])
+        self.assertEqual(sorted(record["tx"]), ["KeyRegistry", "PoolImpl"])
+        self.assertEqual(record["PoolImpl"], "0x" + f"{0xE2:040x}")
+        self.assertNotIn("ChallengeAccountImpl", record)
+        self.assertEqual(self.big_blocks, [True, False])
+        self.assert_not_loadable()
+
+    def test_failing_to_leave_big_blocks_marks_the_record(self):
+        def stuck(enable):
+            if not enable:
+                raise SystemExit("could not switch big blocks to False: {'status': 'err'}")
+
+        with self.assertRaises(SystemExit):
+            self.run_main(self.deployed(), big_blocks=stuck)
+        record = self.record()
+        self.assertEqual(record["status"], "incomplete")
+        self.assertIn("could not switch big blocks", record["error"])
+        self.assertEqual(record["PoolFactory"], "0x" + f"{0xE4:040x}")
+        self.assertEqual(len(record["tx"]), 4)
+        self.assert_not_loadable()
+
+    def test_a_late_failure_leaves_the_addresses_on_disk(self):
+        """The publish transaction fails after four deployments and two settings went through."""
         def transact(acct, to, sig, types, values):
             if sig.startswith("publish"):
                 raise RuntimeError("execution reverted")
             return {"transactionHash": f"0x{sig.split('(')[0]}"}
 
-        with mock.patch.object(deploy, "ROOT", root), \
-                mock.patch.object(deploy.subprocess, "run", side_effect=fake_git()), \
-                mock.patch.object(deploy, "check_assets", return_value=[3, 4, 0]), \
-                mock.patch.object(deploy, "big_blocks"), \
-                mock.patch.object(deploy.c, "assert_testnet"), \
-                mock.patch.object(deploy.c, "account", return_value=Deployer()), \
-                mock.patch.object(deploy.c, "core_user_exists", side_effect=lambda a: a == Deployer.address), \
-                mock.patch.object(deploy.c, "deploy", side_effect=deployed), \
-                mock.patch.object(deploy.c, "transact", side_effect=transact), \
-                mock.patch.object(deploy.sys, "argv", ["deploy", "--label", "t", "--keys-file", str(keys_file)]):
-            with self.assertRaises(RuntimeError):
-                deploy.main()
-
-        record = json.loads((root / "deployments" / "testnet-t.json").read_text())
+        with self.assertRaises(RuntimeError):
+            self.run_main(self.deployed(), transact=transact)
+        record = self.record()
         self.assertEqual(record["status"], "incomplete")
         self.assertIn("execution reverted", record["error"])
         self.assertEqual(record["PoolFactory"], "0x" + f"{0xE4:040x}")
         self.assertEqual(set(record["tx"]), {"KeyRegistry", "PoolImpl", "ChallengeAccountImpl", "PoolFactory",
                                              "setAccountSource", "setPlatformAssets"})
-        # Nothing downstream will use it.
-        with mock.patch.object(deployments, "ROOT", root), self.assertRaises(SystemExit):
-            deployments.load("t")
+        self.assert_not_loadable()
 
 
 if __name__ == "__main__":

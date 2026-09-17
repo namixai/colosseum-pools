@@ -9,8 +9,10 @@ afterwards. That switch is a HyperCore action, so the deployer must already exis
 
 Writes deployments/testnet-<label>.json: addresses, transaction hashes, the git commit the
 bytecode was built from, and the platform asset list. Refuses to overwrite a label. The record
-is written as soon as the contracts exist and after every later transaction, with a `status`
-field, so a failure half way still leaves the addresses on disk.
+is written after every contract and every later transaction, with a `status` field, and each
+write replaces the whole file, so a failure half way still leaves the addresses on disk. A
+failure after the first transaction marks the record `incomplete`, which nothing downstream
+loads.
 
 Key addresses published with --keys-file must be enclave-minted keys from the Signer team.
 Local test keys belong in a rehearsal deployment only; a registry never forgets a key.
@@ -93,8 +95,31 @@ def check_keys(lines: list[str]) -> list[str]:
 
 
 def save(path: pathlib.Path, record: dict) -> None:
+    """Replace the record whole: a write that dies half way leaves the previous version."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def mark_incomplete(path: pathlib.Path, record: dict, exc: BaseException) -> None:
+    record["status"] = "incomplete"
+    record["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    save(path, record)
+
+
+def deploy_contract(deployer, path: pathlib.Path, record: dict, key: str, contract: str,
+                    types: list, values: list) -> tuple[str, dict]:
+    """Deploy one contract and put its address on disk before the next transaction is sent."""
+    addr, rcpt = c.deploy(deployer, contract, types, values)
+    record[key] = addr
+    record["tx"][key] = rcpt["transactionHash"]
+    save(path, record)
+    return addr, rcpt
 
 
 def big_blocks(acct, enable: bool) -> None:
@@ -129,18 +154,22 @@ def main() -> int:
                     "deployer": deployer.address, "platform_assets": PLATFORM_ASSETS, "tx": {}}
     big_blocks(deployer, True)
     try:
-        registry, r1 = c.deploy(deployer, "KeyRegistry", ["address"], [deployer.address])
-        pool_impl, r2 = c.deploy(deployer, "Pool", [], [])
-        challenge_impl, r3 = c.deploy(deployer, "ChallengeAccount", [], [])
-        factory, r4 = c.deploy(deployer, "PoolFactory", ["address", "address", "address", "address"],
-                               [registry, pool_impl, challenge_impl, deployer.address])
-    finally:
-        big_blocks(deployer, False)
+        try:
+            registry, _ = deploy_contract(deployer, out_path, record, "KeyRegistry", "KeyRegistry",
+                                          ["address"], [deployer.address])
+            pool_impl, _ = deploy_contract(deployer, out_path, record, "PoolImpl", "Pool", [], [])
+            challenge_impl, _ = deploy_contract(deployer, out_path, record, "ChallengeAccountImpl",
+                                                "ChallengeAccount", [], [])
+            factory, rcpt = deploy_contract(deployer, out_path, record, "PoolFactory", "PoolFactory",
+                                            ["address", "address", "address", "address"],
+                                            [registry, pool_impl, challenge_impl, deployer.address])
+        finally:
+            big_blocks(deployer, False)
+    except BaseException as exc:  # a deployment or the switch back to small blocks failed
+        mark_incomplete(out_path, record, exc)
+        raise
 
-    record.update({"KeyRegistry": registry, "PoolImpl": pool_impl, "ChallengeAccountImpl": challenge_impl,
-                   "PoolFactory": factory, "block": int(r4["blockNumber"], 16), "status": "configuring"})
-    record["tx"].update({"KeyRegistry": r1["transactionHash"], "PoolImpl": r2["transactionHash"],
-                         "ChallengeAccountImpl": r3["transactionHash"], "PoolFactory": r4["transactionHash"]})
+    record.update({"block": int(rcpt["blockNumber"], 16), "status": "configuring"})
     save(out_path, record)
 
     steps = [
@@ -156,9 +185,7 @@ def main() -> int:
                 record["published_keys"] = keys
             save(out_path, record)
     except BaseException as exc:
-        record["status"] = "incomplete"
-        record["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
-        save(out_path, record)
+        mark_incomplete(out_path, record, exc)
         raise
 
     record["status"] = "complete"

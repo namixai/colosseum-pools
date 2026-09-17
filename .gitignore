@@ -25,6 +25,9 @@ keystore/
 # Keeper progress (last block read, pools followed); local to the machine that runs it
 ops/state/
 
+# A deployment record mid-write; it replaces the record once complete
+deployments/*.tmp
+
 # macOS
 .DS_Store
 ._*
