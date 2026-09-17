@@ -3,7 +3,8 @@ latest block; nothing is cached, so a stop lands in the gateway's view as soon a
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+import time
+from typing import Any, Callable, Sequence
 
 import eth_abi
 import requests
@@ -11,6 +12,10 @@ from eth_utils import keccak, to_checksum_address
 
 CHAIN_ID = 998
 USER_AGENT = "colosseum-pools-gateway"
+RATE_LIMITED = -32005  # what the public HyperEVM RPC answers when it throttles
+# An order is waiting on these reads, so a throttled one is retried twice, after 0.25 s and
+# 0.5 s, and then the request fails as an upstream error.
+RPC_ATTEMPTS = 3
 
 # ChallengeAccount.Status.Active and Pool.Stage.Funded
 CHALLENGE_ACTIVE = 2
@@ -18,8 +23,10 @@ POOL_FUNDED = 2
 
 
 class JsonRpcReader:
-    def __init__(self, rpc_url: str, factory: str, registry: str, timeout: float = 10.0):
+    def __init__(self, rpc_url: str, factory: str, registry: str, timeout: float = 10.0,
+                 sleep: Callable[[float], None] = time.sleep):
         self.rpc_url = rpc_url
+        self._sleep = sleep
         self.factory = to_checksum_address(factory)
         self.registry = to_checksum_address(registry)
         self.timeout = timeout
@@ -29,15 +36,24 @@ class JsonRpcReader:
     # ── plumbing ─────────────────────────────────────────────────────────────────────
 
     def _rpc(self, method: str, params: Sequence[Any]) -> Any:
-        resp = self._session.post(
-            self.rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        if "error" in body:
-            raise RuntimeError(f"{method}: {body['error']}")
-        return body["result"]
+        delay = 0.25
+        for attempt in range(RPC_ATTEMPTS):
+            resp = self._session.post(
+                self.rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
+                timeout=self.timeout,
+            )
+            if resp.status_code != 429:
+                resp.raise_for_status()
+                body = resp.json()
+                error = body.get("error")
+                if error is None:
+                    return body["result"]
+                if not (isinstance(error, dict) and error.get("code") == RATE_LIMITED):
+                    raise RuntimeError(f"{method}: {error}")
+            if attempt + 1 < RPC_ATTEMPTS:
+                self._sleep(delay)
+                delay *= 2
+        raise RuntimeError(f"{method}: rate limited {RPC_ATTEMPTS} times in a row")
 
     def check_chain(self) -> None:
         chain = int(self._rpc("eth_chainId", []), 16)
