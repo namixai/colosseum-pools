@@ -54,6 +54,7 @@ class FakeChain:
         self.sent: list[tuple[str, str, list]] = []
         self.revert: str | None = None
         self.allowance = 0
+        self.fee = 0
         self.pools = {
             POOL.lower(): {"stage": 0, "ready": True, "challenge": "0x" + "00" * 20, "spot": 600_000_000_000},
             POOL_BUSY.lower(): {"stage": 1, "ready": True, "challenge": NEW_CHALLENGE, "spot": 600_000_000_000},
@@ -65,7 +66,7 @@ class FakeChain:
         to = to.lower()
         if to == FACTORY.lower():
             return {"isChallenge": (self.challenge,), "isPool": (not self.challenge,), "usdc": (USDC,),
-                    "pools": ([POOL, POOL_BUSY, POOL_POOR],)}[name]
+                    "pools": ([POOL, POOL_BUSY, POOL_POOR],), "challengeFee": (self.fee,)}[name]
         if to == USDC.lower():
             return {"decimals": (6,), "allowance": (self.allowance,), "balanceOf": (100_000_000,)}[name]
         if to in self.pools:
@@ -248,6 +249,18 @@ class ShopLimits(WithChain):
                                            (POOL.lower(), "buyChallenge", [])])
         with self.assertRaises(ToolError):
             shop.buy(POOL, 20.0)
+
+    def test_the_platform_fee_counts_toward_the_cap_and_the_approval(self):
+        self.chain.fee = 3_000_000
+        shop = self.shop(max_price=22.0)
+        offers = shop.listing()
+        self.assertEqual((offers[0]["platform_fee_usdc"], offers[0]["total_to_pay_usdc"]), (3.0, 23.0))
+        with self.assertRaises(ToolError):
+            shop.buy(POOL, 20.0)  # 20 fits the cap, 23 doesn't
+        shop = self.shop(max_price=23.0)
+        shop.listing()
+        shop.buy(POOL, 20.0)
+        self.assertEqual(self.chain.sent[0], (USDC.lower(), "approve", [ai.to_checksum_address(POOL), 23_000_000]))
 
     def test_dry_shop_buys_nothing(self):
         shop = self.shop(send=False)

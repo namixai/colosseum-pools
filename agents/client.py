@@ -25,7 +25,7 @@ def order_url(base: str) -> str:
     local = parts.scheme == "http" and parts.hostname in LOCAL_HOSTS
     if parts.scheme != "https" and not local:
         raise ValueError(f"the gateway must be reached over https, not {parts.scheme}://{parts.netloc}")
-    return base.rstrip("/") + "/v1/order"
+    return parts._replace(path=parts.path.rstrip("/") + "/v1/order", query="", fragment="").geturl()
 
 
 class GatewayClient:

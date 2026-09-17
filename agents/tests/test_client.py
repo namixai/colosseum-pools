@@ -128,6 +128,8 @@ class GatewayUrl(unittest.TestCase):
         self.assertEqual(order_url("http://localhost:8787/"), "http://localhost:8787/v1/order")
         self.assertEqual(order_url("http://[::1]:8787"), "http://[::1]:8787/v1/order")
         self.assertEqual(order_url("https://gateway.example.org/pools"), "https://gateway.example.org/pools/v1/order")
+        self.assertEqual(order_url("https://gateway.example.org/pools/?tenant=a#top"),
+                         "https://gateway.example.org/pools/v1/order")
         for bad in ("http://gateway.example.org", "http://127.0.0.1.example.org", "ftp://127.0.0.1"):
             with self.assertRaises(ValueError, msg=bad):
                 order_url(bad)

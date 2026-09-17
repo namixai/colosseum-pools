@@ -421,6 +421,7 @@ class Shop:
         self.purchases_left = 1
         self.usdc = to_checksum_address(view(self.factory, "usdc()", "address"))
         self.decimals = view(self.usdc, "decimals()", "uint8")
+        self.fee_units = view(self.factory, "challengeFee()", "uint256")
         universe = c.info_post({"type": "meta"})["universe"]
         self.names = {i: a["name"] for i, a in enumerate(universe)}
         self.offers: dict[str, dict] = {}
@@ -442,6 +443,8 @@ class Shop:
             offers[pool] = {
                 "pool": pool,
                 "price_usdc": usd(price, self.decimals),
+                "platform_fee_usdc": usd(self.fee_units, self.decimals),
+                "total_to_pay_usdc": usd(price + self.fee_units, self.decimals),
                 "challenge_capital_usdc": usd(capital),
                 "target_profit_pct": target_bps / 100,
                 "days": round(duration / 86400, 2),
@@ -464,16 +467,16 @@ class Shop:
             raise ToolError("one challenge per session")
         if abs(offer["price_usdc"] - price_usdc) > 1e-9:
             raise ToolError(f"the pool's price is {offer['price_usdc']} USDC, not {price_usdc}")
-        if offer["price_usdc"] > self.max_price:
-            raise ToolError(f"{offer['price_usdc']} USDC is over this session's price cap of {self.max_price}")
+        if offer["total_to_pay_usdc"] > self.max_price:
+            raise ToolError(f"{offer['total_to_pay_usdc']} USDC with the platform fee is over this session's "
+                            f"cap of {self.max_price}")
         self.purchases_left -= 1
         if not self.send:
-            return {"status": "not_sent", "pool": pool, "price_usdc": offer["price_usdc"]}
-        price = offer["_price_units"]
-        allowance = c.call_view(self.usdc, "allowance(address,address)", ["address", "address"],
-                                [self.wallet.address, pool], ["uint256"])[0]
-        if allowance < price:
-            c.transact(self.wallet, self.usdc, "approve(address,uint256)", ["address", "uint256"], [pool, price])
+            return {"status": "not_sent", "pool": pool, "total_usdc": offer["total_to_pay_usdc"]}
+        # The pool pulls the price and the fee; approve exactly both, so a fee raised after
+        # the listing makes the purchase fail instead of costing more.
+        total = offer["_price_units"] + self.fee_units
+        c.transact(self.wallet, self.usdc, "approve(address,uint256)", ["address", "uint256"], [pool, total])
         receipt = c.transact(self.wallet, pool, "buyChallenge()")
         challenge = to_checksum_address(view(pool, "challenge()", "address"))
         return {"status": "bought", "pool": pool, "challenge": challenge, "tx": receipt["transactionHash"]}
@@ -482,16 +485,17 @@ class Shop:
 def shop_tools(shop: Shop) -> list:
     @beta_tool(strict=True)
     def list_pools() -> str:
-        """The pools that can sell a challenge right now, with each one's price, challenge
-        capital, profit target, duration, profit share, the capital a passing trader gets, and
-        its rules. Call it before choosing."""
+        """The pools that can sell a challenge right now, with each one's price, the platform's
+        fee on top of it, challenge capital, profit target, duration, profit share, the capital
+        a passing trader gets, and its rules. Call it before choosing."""
         return trimmed(shop.listing(), 8000)
 
     @beta_tool(strict=True)
     def buy_challenge(pool: str, price_usdc: float) -> str:
         """Buy a challenge from one pool with this agent's wallet. Refused if the pool isn't in the
-        latest listing, the price differs from the listing, the price is over the session's cap,
-        or a challenge was already bought in this session. Returns the new challenge account.
+        latest listing, the price differs from the listing, the price plus the platform fee is
+        over the session's cap, or a challenge was already bought in this session. Returns the
+        new challenge account.
 
         Args:
             pool: Pool address from list_pools.
