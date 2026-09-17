@@ -1,7 +1,12 @@
 """Pool gateway HTTP server.
 
-    GATEWAY_FACTORY=0x… GATEWAY_REGISTRY=0x… SIGNER_URL=https://… SIGNER_TOKENS_FILE=~/… \\
+    GATEWAY_FACTORY=0x… GATEWAY_REGISTRY=0x… GATEWAY_SIGNER=demo GATEWAY_KEYS_DIR=~/… \\
         spike/.venv/bin/python -m gateway.server
+
+GATEWAY_SIGNER picks who signs. `demo`, what the demo runs: the gateway signs with testnet
+keys from GATEWAY_KEYS_DIR and checks the platform's caps before it signs (gateway/demo_signer.py).
+`signer`: it asks a Usenami Signer gateway (SIGNER_URL, SIGNER_TOKENS_FILE); the demo doesn't
+use this mode.
 
 POST /v1/order   one order or one cancel, see docs/GATEWAY.md
 GET  /v1/health  liveness and configuration summary (no secrets)
@@ -24,6 +29,7 @@ from typing import Any
 from . import hl
 from .chain import JsonRpcReader
 from .checks import ChainReader, GatewayError, NonceBook, Request, check
+from .demo_signer import DemoSigner
 from .signer import SignerClient
 
 MAX_BODY = 64 * 1024
@@ -59,8 +65,17 @@ def signer_reason(body: Any) -> dict:
     return {k: str(body[k])[:200] for k in SIGNER_REASON_FIELDS if k in body}
 
 
+def signer_from_env(env) -> tuple[str, DemoSigner | SignerClient]:
+    mode = env.get("GATEWAY_SIGNER")
+    if mode == "demo":
+        return mode, DemoSigner(DemoSigner.load_keys(env["GATEWAY_KEYS_DIR"]))
+    if mode == "signer":
+        return mode, SignerClient(env["SIGNER_URL"], SignerClient.load_tokens(env["SIGNER_TOKENS_FILE"]))
+    raise SystemExit("GATEWAY_SIGNER must be demo or signer")
+
+
 class Gateway:
-    def __init__(self, reader: ChainReader, signer: SignerClient, submit=hl.submit, clock=time.time):
+    def __init__(self, reader: ChainReader, signer: DemoSigner | SignerClient, submit=hl.submit, clock=time.time):
         self.reader = reader
         self.signer = signer
         self.submit = submit
@@ -80,7 +95,7 @@ class Gateway:
         req = Request.from_json(body)
         cleared = check(req, self.reader, int(self.clock() * 1000), self.nonces)
         # check() claimed the nonce, so a copy of this request arriving meanwhile is refused
-        # without an enclave call. Until a signature for the right key exists, nothing can
+        # without a signer call. Until a signature for the right key exists, nothing can
         # reach Hyperliquid, and any failure gives the nonce back for a retry.
         try:
             signature, status, payload = self._sign(req, cleared)
@@ -108,8 +123,9 @@ class Gateway:
         return 200, {**base, "status": "submitted", "venue": venue}
 
     def _sign(self, req: Request, cleared) -> tuple[dict | None, int, dict]:
-        """Asks the enclave and checks its answer. Returns the signature only if it is
-        Hyperliquid-shaped and recovers to the account's key; otherwise the answer to send."""
+        """Asks the signer and checks its answer. Returns the signature only if it is
+        Hyperliquid-shaped and recovers to the account's key; otherwise the answer to send.
+        The demo signer refuses an order over the caps with a GatewayError."""
         if not self.signer.has_key(cleared.key):
             raise GatewayError(503, "key_not_configured", cleared.key)
 
@@ -161,7 +177,8 @@ class BoundedServer(ThreadingHTTPServer):
             self._slots.release()
 
 
-def make_handler(gw: Gateway, allow_origin: str = "", request_timeout: float = REQUEST_TIMEOUT_S):
+def make_handler(gw: Gateway, allow_origin: str = "", request_timeout: float = REQUEST_TIMEOUT_S,
+                 health: dict | None = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "colosseum-pools-gateway"
         timeout = request_timeout  # applies to every read and write on the connection
@@ -193,7 +210,7 @@ def make_handler(gw: Gateway, allow_origin: str = "", request_timeout: float = R
 
         def do_GET(self):  # noqa: N802
             if self.path == "/v1/health":
-                self._send(200, {"ok": True, "chain_id": 998})
+                self._send(200, {"ok": True, "chain_id": 998, **(health or {})})
             else:
                 self._send(404, {"status": "not_found"})
 
@@ -227,11 +244,12 @@ def main() -> int:
     rpc = os.environ.get("GATEWAY_RPC_URL", DEFAULT_RPC)
     reader = JsonRpcReader(rpc, os.environ["GATEWAY_FACTORY"], os.environ["GATEWAY_REGISTRY"])
     reader.check_chain()
-    signer = SignerClient(os.environ["SIGNER_URL"], SignerClient.load_tokens(os.environ["SIGNER_TOKENS_FILE"]))
+    mode, signer = signer_from_env(os.environ)
     host, _, port = os.environ.get("GATEWAY_BIND", "127.0.0.1:8787").partition(":")
     allow_origin = os.environ.get("GATEWAY_ALLOW_ORIGIN", "")  # the app's origin, if it calls from a browser
-    server = BoundedServer((host, int(port)), make_handler(Gateway(reader, signer), allow_origin))
-    print(f"gateway listening on {host}:{port}", flush=True)
+    health = {"signer": mode, "keys": len(signer)} if mode == "demo" else {"signer": mode}
+    server = BoundedServer((host, int(port)), make_handler(Gateway(reader, signer), allow_origin, health=health))
+    print(f"gateway listening on {host}:{port}, signer: {mode}", flush=True)
     server.serve_forever()
     return 0
 
