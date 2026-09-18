@@ -39,7 +39,8 @@ against the rehearsal deployment. The public name waits for the Cloudflare steps
 
 Each service can't read the other's `/var/lib` directory, by owner and again by its unit
 (`InaccessiblePaths`). The units are in `ops/host/` and run with `ProtectSystem=strict`,
-without capabilities; only the keeper may write, and only to its own directory.
+without capabilities. The gateway writes nothing outside its private `/tmp`; the keeper
+writes only to its own directory.
 
 Whoever holds root on this host holds the agent keys and can trade every account whose key is
 on it, until someone stops that account. The keys are testnet keys for mock USDC, made for the
@@ -47,9 +48,9 @@ demo and used nowhere else.
 
 ## One-time setup
 
-1. On the host, as root: `ops/host/bootstrap.sh`. It makes the users, directories and env
-   files, the TLS key and its CSR, and prints the CSR. Running it again adds only what is
-   missing.
+1. On the host, as root: `ops/host/bootstrap.sh`. It installs Python 3.12 and nginx, makes
+   the users, directories and env files, the TLS key and its CSR, and prints the CSR.
+   Running it again adds only what is missing.
 2. From the Mac: `ops/host/deploy.sh <commit> <user@host>`, which also builds the venv.
 3. The agent keys, on the host, as the gateway's user. Only the addresses leave the host,
    for `ops/deploy_testnet.py --keys-file`:
