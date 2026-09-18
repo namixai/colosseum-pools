@@ -103,6 +103,18 @@ class Caps(unittest.TestCase):
         for side in (1, "true", None):
             self.refused("over_cap", "order", order(BTC, "0.005", "60000", b=side), Market(BTC="80000.2"))
 
+    def test_reduce_only_passes_the_notional_cap_and_nothing_else(self):
+        # 18 Sep 2026: a 4 SOL long closed at a mid of 105.805 is 423 USDC, over the cap.
+        check_caps("order", sell(SOL, "4", "90", r=True), unreadable)  # no market read either
+        self.refused("over_cap", "order", sell(SOL, "4", "90"), Market(SOL="105.805"))  # not reduce-only
+        check_caps("order", order(BTC, "0.005", "80000.2", r=True), unreadable)  # closing a short: 400.001
+        self.refused("over_cap", "order", order(BTC, "0.005", "80000.2"))
+        self.refused("over_cap", "order", sell(SOL, "4.01", "90", r=True))  # the size cap still binds
+        self.refused("policy", "order", sell(5, "0.001", "10", r=True))  # so does the platform list
+        self.refused("policy", "order", sell(BTC, "0.001", "60000", r=True, t={"trigger": {"isMarket": True}}))
+        for flag in (1, "true", None):  # only a literal true is reduce-only
+            self.refused("over_cap", "order", order(BTC, "0.005", "80000.2", r=flag))
+
     def test_the_mid_is_hyperliquids(self):
         with mock.patch.object(hl, "mids", return_value={"SOL": "105.805", "@1035": "12.1"}):
             self.assertEqual(market_mid(SOL), Decimal("105.805"))
@@ -242,6 +254,18 @@ class DemoFlow(Base):
         status, out = gw.handle_order(body)
         self.assertEqual((status, out["status"]), (200, "submitted"))
         self.assertEqual(market.asked, [BTC, BTC])
+
+    def test_reduce_only_over_the_notional_is_signed_the_same_order_without_it_is_not(self):
+        market = Market(BTC="90000")
+        gw = self.gateway(market)
+        closing = self.body(isBuy=False, size="0.005", limitPx="60000", tif="Ioc", reduceOnly=True)  # 450 at the mid
+        status, out = gw.handle_order(closing)
+        self.assertEqual((status, out["status"]), (200, "submitted"))
+        self.assertIs(self.submitted[0][0]["orders"][0]["r"], True)
+        opening = self.body(isBuy=False, size="0.005", limitPx="60000", tif="Ioc", nonce=NOW + 1)
+        status, out = gw.handle_order(opening)
+        self.assertEqual((status, out["status"], out["code"]), (403, "refused_by_gateway", "over_cap"))
+        self.assertEqual((len(self.submitted), market.asked), (1, [BTC]))
 
     def test_a_sell_is_not_signed_without_a_mid(self):
         def no_mid(asset):

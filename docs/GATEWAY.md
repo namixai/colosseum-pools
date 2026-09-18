@@ -71,7 +71,8 @@ another.
    - `demo` mode, what the demo runs: before signing, the gateway's own code checks that the
      action is one limit order (`Alo`, `Gtc` or `Ioc`, no grouping) or one cancel, on an asset
      of the platform's list (BTC 3, ETH 4, SOL 0), with a size within that asset's cap
-     (0.005 BTC, 0.15 ETH, 4 SOL) and a notional of at most 400 USDC.
+     (0.005 BTC, 0.15 ETH, 4 SOL) and, when it opens or grows a position, a notional of at
+     most 400 USDC.
      Anything else is refused as 403 `refused_by_gateway`, code `over_cap` or `policy`, and the
      nonce is given back. Then it signs with the key file for `key` (phantom agent, source `b`).
      - The notional is size times the highest price the order can fill at. A buy never fills
@@ -81,6 +82,10 @@ another.
        testnet (`allMids`) when the sell is checked. Without a mid, nothing is signed: 502,
        code `no_market_price`.
      - A price that moves up in the second between that read and the fill isn't covered.
+     - The 400 USDC notional cap is on opening and growing a position (CTO, 18 Sep 2026). A
+       reduce-only order passes it: Hyperliquid won't let it grow a position, and a position
+       that grew with the price couldn't otherwise be closed in one order. The size cap and
+       every other check above still bind it, and it reads no mid.
    - `signer` mode, not used in the demo: it sends the action to a Usenami Signer gateway
      (`POST /sign`, exchange `hyperliquid_testnet`, the same `kind`, the action, the trader's
      `nonce`) with the bearer token of the tenant that holds `key`.

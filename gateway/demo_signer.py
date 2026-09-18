@@ -56,7 +56,8 @@ def market_mid(asset: int) -> Decimal:
 
 def check_caps(kind: str, action: Any, mid: Callable[[int], Decimal]) -> None:
     """Refuses, before signing, anything but one limit order within the caps, or one cancel,
-    on an asset of the platform's list. `mid` gives an asset's market mid; only a sell asks."""
+    on an asset of the platform's list. `mid` gives an asset's market mid; only a sell that
+    isn't reduce-only asks."""
     if not isinstance(action, dict):
         raise GatewayError(403, "policy", "not an action")
     if kind == "cancel":
@@ -82,6 +83,11 @@ def check_caps(kind: str, action: Any, mid: Callable[[int], Decimal]) -> None:
     size, price = _number(order.get("s")), _number(order.get("p"))
     if size > MAX_SIZE[asset]:
         raise GatewayError(403, "over_cap", f"size {size} is over the cap of {MAX_SIZE[asset]} for asset {asset}")
+    # The notional cap is on opening and growing a position (CTO, 18 Sep 2026). A reduce-only
+    # order can't grow one, Hyperliquid refuses that, and a position that grew with the price
+    # couldn't be closed in one order under the cap. The size cap still binds it.
+    if order.get("r") is True:
+        return
     # A buy never fills above its limit. A sell never fills below it, and one priced under the
     # market fills at the bids, all under the mid; so a sell counts at its limit or at the mid,
     # whichever is higher. At its limit alone, 4 SOL offered at 90 counted as 360 USDC and
