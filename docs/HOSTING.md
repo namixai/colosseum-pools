@@ -1,7 +1,7 @@
 # Hosting the gateway and the keeper
 
-Status: the host is set up on 18 September 2026. Neither service runs yet: they start after
-the contracts are deployed on testnet.
+Status, 18 September 2026: the host is set up, and the gateway and the keeper run there
+against the rehearsal deployment. The public name waits for the Cloudflare steps below.
 
 ## Where things run
 

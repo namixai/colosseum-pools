@@ -1,6 +1,6 @@
 # Pool gateway
 
-Status: built and tested offline (`gateway/`), 17 September 2026; the demo signer added the same day. Not running anywhere yet.
+Status: built and tested offline (`gateway/`), 17 September 2026; the demo signer added the same day. Running on the pools host since 18 September 2026, against the rehearsal deployment (docs/HOSTING.md).
 
 The gateway sits between a trader and Hyperliquid. It asks one question before it forwards an
 order: is this key bound, on chain, to this account and this trader, and is the account allowed
