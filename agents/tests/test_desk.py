@@ -66,6 +66,20 @@ class DeskLimits(WithChain):
         desk.place_order("BTC", "sell", 0.0016, 62000, "limit", False)  # 99.2 at its limit
         self.assertEqual([o[2:5] for o in self.gateway.orders], [(False, "50000", "0.0016"), (False, "62000", "0.0016")])
 
+    def test_a_sell_without_a_usable_mid_is_refused(self):
+        desk = self.desk(max_notional=100)
+        self.chain.positions = [{"coin": "BTC", "szi": "0.0031", "entryPx": "59000", "unrealizedPnl": "3.1"}]
+        for mids in ({}, {"BTC": "NaN"}, {"BTC": "inf"}, {"BTC": "0"}, {"BTC": "-1"}, {"BTC": "abc"},
+                     {"BTC": None}, ["BTC"]):
+            self.chain.mids = mids
+            with self.assertRaises(Refused, msg=mids):
+                desk.place_order("BTC", "sell", 0.0017, 50000, "ioc", False)  # 85 at its limit
+            with self.assertRaises(Refused, msg=mids):
+                desk.close_position("BTC")
+        self.chain.mids = {"BTC": "60000"}
+        desk.place_order("BTC", "buy", 0.0015, 60000, "limit", False)  # a buy asks no mid
+        self.assertEqual(len(self.gateway.orders), 1)
+
     def test_headroom_counts_a_sell_at_the_mid(self):
         self.chain.equity, self.chain.notional = 100.0, 200.0  # rule 3x: 300; headroom 0.8: 240
         desk = self.desk(max_notional=100)

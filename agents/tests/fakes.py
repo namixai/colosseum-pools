@@ -35,6 +35,7 @@ class FakeChain:
         self.terms = (20_000_000, 1_000_000_000, 1000, 7 * 86400, 5000, 5_000_000_000)
         self.verdict = 0
         self.equity, self.notional = 1000.0, 0.0
+        self.mids = {"BTC": "60000", "ETH": "3000"}
         self.positions: list[dict] = []
         self.orders: list[dict] = []
         self.sent: list[tuple[str, str, list]] = []
@@ -78,7 +79,7 @@ class FakeChain:
         if kind == "openOrders":
             return self.orders
         if kind == "allMids":
-            return {"BTC": "60000", "ETH": "3000"}
+            return self.mids
         if kind == "metaAndAssetCtxs":
             ctx = {"midPx": "60000", "markPx": "60010", "oraclePx": "60005", "funding": "0.0000125",
                    "openInterest": "12.5", "dayNtlVlm": "1000000", "prevDayPx": "59000"}

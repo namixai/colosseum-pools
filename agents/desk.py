@@ -9,6 +9,7 @@ and graduation requests, a price cap and one purchase. Testnet only.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import time
@@ -60,6 +61,19 @@ def revert_reason(exc: Exception, names: dict[str, str]) -> str:
 
 class Refused(Exception):
     """A request the desk won't pass on; the message says why."""
+
+
+def market_mid(coin: str) -> float:
+    """The coin's mid on Hyperliquid's testnet now. Missing, unreadable, not positive or not
+    finite, it refuses: max(limit, NaN) would quietly be the limit again."""
+    mids = c.info_post({"type": "allMids"})
+    try:
+        mid = float(mids[coin])
+    except (KeyError, IndexError, TypeError, ValueError):
+        mid = math.nan
+    if not math.isfinite(mid) or mid <= 0:
+        raise Refused(f"Hyperliquid gave no usable mid for {coin}; nothing was sent")
+    return mid
 
 
 # ── trading one account ──────────────────────────────────────────────────────────────────
@@ -205,8 +219,7 @@ class Desk:
             if side != "buy":
                 # A sell priced under the market fills at the market: it counts at the mid when
                 # that is higher than its limit, as the gateway counts it.
-                mid = float(c.info_post({"type": "allMids"})[coin])
-                notional = max(float(px), mid) * float(sz)
+                notional = max(float(px), market_mid(coin)) * float(sz)
             if notional > self.limits.max_notional:
                 raise Refused(f"{notional:.2f} USDC is over this session's cap of {self.limits.max_notional} per order")
             summary = self._state()["marginSummary"]
@@ -239,7 +252,7 @@ class Desk:
         size = float(position["szi"]) if position else 0.0
         if size == 0:
             raise Refused(f"no open {coin} position")
-        mid = float(c.info_post({"type": "allMids"})[coin])
+        mid = market_mid(coin)
         closing_buy = size < 0
         price = mid * (1.02 if closing_buy else 0.98)  # crosses the book; reduce-only caps the size
         return self.place_order(coin, "buy" if closing_buy else "sell", abs(size), price, "ioc", reduce_only=True)
