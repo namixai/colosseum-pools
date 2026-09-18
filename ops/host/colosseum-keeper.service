@@ -1,0 +1,44 @@
+# The keeper on the pools host, testnet only. Installed by ops/host/install.sh; the layout,
+# the users and the env files are in docs/HOSTING.md.
+[Unit]
+Description=colosseum-pools keeper (HyperEVM testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=colosseum-keeper
+Group=colosseum-keeper
+WorkingDirectory=/opt/colosseum-pools/current
+EnvironmentFile=/etc/colosseum/deployment.env
+EnvironmentFile=/etc/colosseum/keeper.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.keeper --deployment ${COLOSSEUM_DEPLOYMENT} \
+    --state /var/lib/colosseum-keeper/keeper-${COLOSSEUM_DEPLOYMENT}.json --every 30
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/colosseum-keeper
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+InaccessiblePaths=/var/lib/colosseum-gw
+
+[Install]
+WantedBy=multi-user.target

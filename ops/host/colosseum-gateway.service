@@ -1,0 +1,43 @@
+# The pool gateway on the pools host, testnet only. Installed by ops/host/install.sh; the
+# layout, the users and the env files are in docs/HOSTING.md.
+[Unit]
+Description=colosseum-pools gateway (HyperEVM testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=colosseum-gw
+Group=colosseum-gw
+WorkingDirectory=/opt/colosseum-pools/current
+# Addresses and paths only; the keys stay in GATEWAY_KEYS_DIR.
+EnvironmentFile=/etc/colosseum/deployment.env
+EnvironmentFile=/etc/colosseum/gateway.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/colosseum-pools/venv/bin/python -m gateway.server
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+InaccessiblePaths=/var/lib/colosseum-keeper
+
+[Install]
+WantedBy=multi-user.target
