@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# One-time setup of the pools host, run as root on the host (docs/HOSTING.md). Running it
+# again creates only what is missing and changes nothing that is there.
+#
+#   - users colosseum-gw (the gateway) and colosseum-keeper, each able to read only its own
+#     /var/lib directory;
+#   - /opt/colosseum-pools for releases, /etc/colosseum for settings;
+#   - gateway.env and keeper.env: paths, URLs and the app's origin, no secret;
+#   - the TLS key for pools-api.usenami.io and a certificate request (CSR) for Cloudflare's
+#     Origin CA. The key never leaves the host; the CSR is printed, it is public.
+#
+# The agent keys and the keeper key are made afterwards, as their own users (docs/HOSTING.md).
+set -euo pipefail
+
+say() { printf 'bootstrap: %s\n' "$*"; }
+
+for user in colosseum-gw colosseum-keeper; do
+  if id "$user" >/dev/null 2>&1; then
+    say "user $user exists"
+  else
+    useradd --system --no-create-home --home-dir /nonexistent --shell /sbin/nologin "$user"
+    say "user $user created"
+  fi
+done
+
+install -d -m 0700 -o colosseum-gw -g colosseum-gw /var/lib/colosseum-gw
+install -d -m 0700 -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-keeper
+install -d -m 0700 -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-keeper/secrets
+install -d -m 0755 -o root -g root /opt/colosseum-pools /opt/colosseum-pools/releases /etc/colosseum
+install -d -m 0700 -o root -g root /etc/colosseum/tls
+
+if [ ! -f /etc/colosseum/gateway.env ]; then
+  install -m 0644 -o root -g root /dev/stdin /etc/colosseum/gateway.env <<'EOF'
+GATEWAY_SIGNER=demo
+GATEWAY_KEYS_DIR=/var/lib/colosseum-gw/keys
+GATEWAY_RPC_URL=https://rpcs.chain.link/hyperevm/testnet
+GATEWAY_BIND=127.0.0.1:8787
+GATEWAY_ALLOW_ORIGIN=https://pools.usenami.io
+EOF
+  say "wrote /etc/colosseum/gateway.env"
+fi
+
+if [ ! -f /etc/colosseum/keeper.env ]; then
+  install -m 0644 -o root -g root /dev/stdin /etc/colosseum/keeper.env <<'EOF'
+COLOSSEUM_KEY_DIR=/var/lib/colosseum-keeper/secrets
+COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm
+EOF
+  say "wrote /etc/colosseum/keeper.env"
+fi
+
+if [ ! -f /etc/colosseum/tls/origin.key ]; then
+  (umask 077 && openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -keyout /etc/colosseum/tls/origin.key -out /etc/colosseum/tls/origin.csr \
+    -subj "/CN=pools-api.usenami.io" -addext "subjectAltName=DNS:pools-api.usenami.io" 2>/dev/null)
+  chmod 0600 /etc/colosseum/tls/origin.key
+  chmod 0644 /etc/colosseum/tls/origin.csr
+  say "made the TLS key and its CSR"
+fi
+
+if [ -f /etc/colosseum/tls/origin.crt ]; then
+  say "the Origin CA certificate is in place"
+else
+  say "waiting for the Origin CA certificate at /etc/colosseum/tls/origin.crt; the CSR:"
+  cat /etc/colosseum/tls/origin.csr
+fi
