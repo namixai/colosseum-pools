@@ -43,6 +43,8 @@ def make_keys(out: pathlib.Path, count: int) -> list[str]:
 def make_wallet(directory: pathlib.Path, name: str) -> str:
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", name):
         raise SystemExit(f"{name!r}: a wallet name is lower-case letters, digits and dashes")
+    if not directory.is_dir():
+        raise SystemExit(f"{directory} is not an existing directory")
     if directory.stat().st_mode & 0o077:
         raise SystemExit(f"{directory} is open to others; chmod 700 it")
     address = _new_key(directory / f"{name}.key")

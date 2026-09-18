@@ -100,6 +100,16 @@ class WalletKey(unittest.TestCase):
                 self.run_main("--wallet", name, "--dir", str(self.dir))
         self.assertEqual(list(self.dir.iterdir()), [])
 
+    def test_the_directory_must_exist_and_be_one(self):
+        with self.assertRaises(SystemExit):
+            self.run_main("--wallet", "keeper", "--dir", str(self.dir / "missing"))
+        plain = self.dir / "plain"
+        plain.write_text("")
+        os.chmod(plain, 0o600)  # owner-only, so the mode check alone would let it through
+        with self.assertRaises(SystemExit):
+            self.run_main("--wallet", "keeper", "--dir", str(plain))
+        self.assertEqual(([q.name for q in self.dir.iterdir()], plain.read_text()), (["plain"], ""))
+
     def test_the_two_modes_do_not_mix(self):
         for argv in (["--wallet", "keeper"], ["--wallet", "keeper", "--dir", str(self.dir), "--out", "x"],
                      ["--dir", str(self.dir)], []):

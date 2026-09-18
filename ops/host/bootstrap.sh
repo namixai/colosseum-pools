@@ -59,13 +59,20 @@ EOF
   say "wrote /etc/colosseum/keeper.env"
 fi
 
-if [ ! -f /etc/colosseum/tls/origin.key ]; then
-  (umask 077 && openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-    -keyout /etc/colosseum/tls/origin.key -out /etc/colosseum/tls/origin.csr \
-    -subj "/CN=pools-api.usenami.io" -addext "subjectAltName=DNS:pools-api.usenami.io" 2>/dev/null)
-  chmod 0600 /etc/colosseum/tls/origin.key
-  chmod 0644 /etc/colosseum/tls/origin.csr
-  say "made the TLS key and its CSR"
+tls=/etc/colosseum/tls
+if [ ! -f "$tls/origin.key" ]; then
+  # Written aside and moved in whole: a run cut short leaves no half-written key behind.
+  (umask 077 && openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tls/origin.key.next")
+  mv "$tls/origin.key.next" "$tls/origin.key"
+  rm -f "$tls/origin.csr"  # a request for an earlier key is of no use
+  say "made the TLS key"
+fi
+# Made from the key that is there, so a run cut short between the two steps is finished here.
+if [ ! -f "$tls/origin.csr" ]; then
+  openssl req -new -key "$tls/origin.key" -out "$tls/origin.csr" \
+    -subj "/CN=pools-api.usenami.io" -addext "subjectAltName=DNS:pools-api.usenami.io"
+  chmod 0644 "$tls/origin.csr"
+  say "made the CSR for the TLS key"
 fi
 
 if [ -f /etc/colosseum/tls/origin.crt ]; then
