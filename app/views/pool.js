@@ -54,10 +54,8 @@ export async function poolView(address, page) {
       reserved for you. You never hold it: the pool gateway does, and your orders go through it,
       signed by your wallet. A profit share is paid to your address on HyperCore; if you have no
       account there yet, 1 USDC of it pays for creating one.</p>
-      <label class="check"><input type="checkbox" id="us"> I am not a US person and I am not acting for one.</label>
       <button id="buy-btn">Pay and start</button>`;
     wire($("#buy-btn", page), async () => {
-      if (!$("#us", page).checked) throw new Error("Please confirm you are not a US person.");
       // The pool pulls the price and the fee, so it is approved for exactly both.
       await chain.approveIfNeeded(address, terms.price + fee);
       const receipt = await chain.write("pool", address, "buyChallenge");

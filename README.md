@@ -148,8 +148,7 @@ limits that remain are listed in [docs/DESIGN.md](docs/DESIGN.md#what-the-design
 The hackathon version leaves out several traders per pool, pool shares, a leaderboard,
 collusion detection, a token and mainnet.
 
-Not available to US persons. The app asks each visitor to confirm this and says it again in
-its terms.
+The app asks each visitor once to confirm they understand it is a testnet demo with mock funds.
 
 ## License
 

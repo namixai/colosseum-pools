@@ -12,10 +12,10 @@ against the rehearsal deployment. The public name waits for the Cloudflare steps
     operator's address.
   - It runs the gateway and the keeper, each as its own user.
 - **The gateway** (`colosseum-gw`) listens on `127.0.0.1:8787`. nginx serves it on 443 as
-  `pools-api.usenami.io`, behind Cloudflare, which blocks visitors from the US.
+  `pools-api.usenami.io`, behind Cloudflare.
 - **The keeper** (`colosseum-keeper`) has no port. It polls the chain every 30 seconds.
-- **The app** is the static `app/` folder on Cloudflare Pages, `pools.usenami.io`, with the
-  same US block. It calls the gateway from the browser; `GATEWAY_ALLOW_ORIGIN` names it.
+- **The app** is the static `app/` folder on Cloudflare Pages, `pools.usenami.io`. It calls
+  the gateway from the browser; `GATEWAY_ALLOW_ORIGIN` names it.
 - **RPC** (CTO, 17 Sep):
   - the gateway reads the chain through `rpcs.chain.link/hyperevm/testnet`, which allows 1000
     calls per IP in five minutes;
@@ -105,13 +105,12 @@ release.
 - `journalctl -u colosseum-gateway`: one JSON line per request.
 - `journalctl -u colosseum-keeper`: `pass_done` and `pass_failed` lines.
 - The keeper's progress file changes on every pass. Older than five minutes means it stopped.
-- Through Cloudflare: `https://pools-api.usenami.io/v1/health`, from outside the US.
+- Through Cloudflare: `https://pools-api.usenami.io/v1/health`.
 
 ## By hand, and by whom
 
 - Cloudflare (Alex, in the dashboard):
   - the `pools-api` DNS record, proxied, to the host's address;
-  - the US block on both names;
   - the Pages project;
   - the Origin CA certificate from the CSR above.
 - The SSH rule: the operator's current address, dated in the rule's description. A rule

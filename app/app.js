@@ -15,8 +15,6 @@ function termsView(page) {
     <p>This is a demo built for the Colosseum Crypto World's Fair. It runs on Hyperliquid testnet and HyperEVM
     testnet with mock USDC that has no value. Nothing here is an offer of investment, trading capital or
     payment.</p>
-    <p><strong>Not available to US persons.</strong> Residents and citizens of the United States, and anyone
-    acting for them, may not use it. The same applies wherever Hyperliquid itself is not available.</p>
     <p>Contracts, gateway and app are unaudited hackathon code. In this demo the agent keys are testnet
     keys held by the operator's pool gateway, which checks the platform's caps in its own code before it
     signs. Usenami Signer, our enclave signing service, is not used here.</p>
@@ -93,7 +91,7 @@ function openGate() {
 
 function setUpGate() {
   const dialog = $("#gate");
-  const box = $("#gate-us");
+  const box = $("#gate-agree");
   const ok = $("#gate-ok");
   box.addEventListener("change", () => (ok.disabled = !box.checked));
   ok.addEventListener("click", () => {
