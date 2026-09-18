@@ -12,34 +12,51 @@ from __future__ import annotations
 
 import pathlib
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Callable
 
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from hyperliquid.utils.signing import sign_l1_action
 
+from . import hl
 from .checks import GatewayError
 from .signer import SignResult
 
 # The platform's caps per order, by testnet perp index: BTC 3, ETH 4, SOL 0 (CTO, 17 Sep 2026).
 MAX_SIZE = {3: Decimal("0.005"), 4: Decimal("0.15"), 0: Decimal("4")}
+# The same perps by name, which is how Hyperliquid's testnet lists their mids.
+COINS = {3: "BTC", 4: "ETH", 0: "SOL"}
 MAX_NOTIONAL = Decimal("400")  # USDC per order
 LIMIT_TIFS = ("Alo", "Gtc", "Ioc")
 
 
-def _number(text: Any) -> Decimal:
+def _positive(text: Any) -> Decimal | None:
     try:
-        value = Decimal(text) if isinstance(text, str) else Decimal("NaN")
+        value = Decimal(text) if isinstance(text, str) else None
     except InvalidOperation:
-        value = Decimal("NaN")
-    if not value.is_finite() or value <= 0:
+        value = None
+    return value if value is not None and value.is_finite() and value > 0 else None
+
+
+def _number(text: Any) -> Decimal:
+    value = _positive(text)
+    if value is None:
         raise GatewayError(403, "policy", f"not a positive decimal string: {text!r}")
     return value
 
 
-def check_caps(kind: str, action: Any) -> None:
+def market_mid(asset: int) -> Decimal:
+    """The asset's mid on Hyperliquid's testnet now. Without one, a sell isn't signed."""
+    mids = hl.mids()
+    mid = _positive(mids.get(COINS[asset])) if isinstance(mids, dict) else None
+    if mid is None:
+        raise GatewayError(502, "no_market_price", f"Hyperliquid gave no mid for {COINS[asset]}")
+    return mid
+
+
+def check_caps(kind: str, action: Any, mid: Callable[[int], Decimal]) -> None:
     """Refuses, before signing, anything but one limit order within the caps, or one cancel,
-    on an asset of the platform's list."""
+    on an asset of the platform's list. `mid` gives an asset's market mid; only a sell asks."""
     if not isinstance(action, dict):
         raise GatewayError(403, "policy", "not an action")
     if kind == "cancel":
@@ -65,13 +82,19 @@ def check_caps(kind: str, action: Any) -> None:
     size, price = _number(order.get("s")), _number(order.get("p"))
     if size > MAX_SIZE[asset]:
         raise GatewayError(403, "over_cap", f"size {size} is over the cap of {MAX_SIZE[asset]} for asset {asset}")
-    if size * price > MAX_NOTIONAL:
-        raise GatewayError(403, "over_cap", f"notional {size * price} is over the cap of {MAX_NOTIONAL} USDC")
+    # A buy never fills above its limit. A sell never fills below it, and one priced under the
+    # market fills at the bids, all under the mid; so a sell counts at its limit or at the mid,
+    # whichever is higher. At its limit alone, 4 SOL offered at 90 counted as 360 USDC and
+    # filled at the market: 423 at a mid of 105.8 (18 Sep 2026).
+    highest = price if order.get("b") is True else max(price, mid(asset))
+    if size * highest > MAX_NOTIONAL:
+        raise GatewayError(403, "over_cap", f"notional {size * highest} is over the cap of {MAX_NOTIONAL} USDC")
 
 
 class DemoSigner:
-    def __init__(self, keys: list[LocalAccount]):
+    def __init__(self, keys: list[LocalAccount], mid: Callable[[int], Decimal] = market_mid):
         self._keys = {k.address.lower(): k for k in keys}
+        self._mid = mid
 
     @staticmethod
     def load_keys(directory: str) -> list[LocalAccount]:
@@ -95,6 +118,6 @@ class DemoSigner:
         return key.lower() in self._keys
 
     def sign(self, key: str, kind: str, action: dict, nonce: int) -> SignResult:
-        check_caps(kind, action)
+        check_caps(kind, action, self._mid)
         signature = sign_l1_action(self._keys[key.lower()], action, None, nonce, None, False)
         return SignResult(200, signature, None, {"signature": signature})

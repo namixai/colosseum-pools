@@ -202,6 +202,11 @@ class Desk:
         if notional < MIN_ORDER_USDC:
             raise Refused(f"{notional:.2f} USDC is under Hyperliquid's minimum order of {MIN_ORDER_USDC:.0f} USDC")
         if not reduce_only:
+            if side != "buy":
+                # A sell priced under the market fills at the market: it counts at the mid when
+                # that is higher than its limit, as the gateway counts it.
+                mid = float(c.info_post({"type": "allMids"})[coin])
+                notional = max(float(px), mid) * float(sz)
             if notional > self.limits.max_notional:
                 raise Refused(f"{notional:.2f} USDC is over this session's cap of {self.limits.max_notional} per order")
             summary = self._state()["marginSummary"]

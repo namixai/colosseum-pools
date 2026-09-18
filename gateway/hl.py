@@ -1,5 +1,5 @@
 """Hyperliquid pieces the gateway needs: the action hash, recovering who signed an L1 action,
-and submitting a signed action. Testnet only."""
+submitting a signed action, and the mids the demo's caps count a sell at. Testnet only."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import requests
 from hyperliquid.utils.signing import action_hash, recover_agent_or_user_from_l1_action
 
 TESTNET_EXCHANGE_URL = "https://api.hyperliquid-testnet.xyz/exchange"
+TESTNET_INFO_URL = "https://api.hyperliquid-testnet.xyz/info"
 USER_AGENT = "colosseum-pools-gateway"
 
 
@@ -21,6 +22,14 @@ def hash_action(action: dict, nonce: int) -> bytes:
 def recover_signer(action: dict, signature: dict, nonce: int) -> str:
     """The address Hyperliquid will attribute a testnet L1 action to (phantom agent, source b)."""
     return recover_agent_or_user_from_l1_action(action, signature, None, nonce, None, False)
+
+
+def mids(timeout: float = 5.0) -> Any:
+    """Every mid on Hyperliquid's testnet, keyed by coin name, as strings."""
+    resp = requests.post(TESTNET_INFO_URL, json={"type": "allMids"}, timeout=timeout,
+                         headers={"User-Agent": USER_AGENT})
+    resp.raise_for_status()
+    return resp.json()
 
 
 def submit(action: dict, nonce: int, signature: dict, timeout: float = 15.0) -> Any:

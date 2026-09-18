@@ -71,9 +71,16 @@ another.
    - `demo` mode, what the demo runs: before signing, the gateway's own code checks that the
      action is one limit order (`Alo`, `Gtc` or `Ioc`, no grouping) or one cancel, on an asset
      of the platform's list (BTC 3, ETH 4, SOL 0), with a size within that asset's cap
-     (0.005 BTC, 0.15 ETH, 4 SOL) and a notional, price times size, of at most 400 USDC.
+     (0.005 BTC, 0.15 ETH, 4 SOL) and a notional of at most 400 USDC.
      Anything else is refused as 403 `refused_by_gateway`, code `over_cap` or `policy`, and the
      nonce is given back. Then it signs with the key file for `key` (phantom agent, source `b`).
+     - The notional is size times the highest price the order can fill at. A buy never fills
+       above its limit, so it counts at its limit. A sell never fills below its limit, and one
+       priced under the market fills at the bids, which are under the mid. So a sell counts at
+       its limit or at the asset's mid, whichever is higher. The mid is read from Hyperliquid's
+       testnet (`allMids`) when the sell is checked. Without a mid, nothing is signed: 502,
+       code `no_market_price`.
+     - A price that moves up in the second between that read and the fill isn't covered.
    - `signer` mode, not used in the demo: it sends the action to a Usenami Signer gateway
      (`POST /sign`, exchange `hyperliquid_testnet`, the same `kind`, the action, the trader's
      `nonce`) with the bearer token of the tenant that holds `key`.
@@ -97,7 +104,8 @@ another.
 | 422 | `refused_by_venue` | Hyperliquid refused the action or the order; its words are in `reason` |
 | 502 | `venue_unconfirmed` | Hyperliquid's answer confirms nothing (not JSON, no statuses, or a status that is neither a resting or filled order, a successful cancel, nor an error); check the account |
 | 502 | `signature_mismatch`, `bad_signer_response` | the Signer's answer can't be submitted; nothing was |
-| 502 | `gateway_error` (`upstream_failed`) | a chain read or the Signer call failed; nothing was submitted. A chain read the RPC throttled is tried three times, 0.25 s and 0.5 s apart, before this answer |
+| 502 | `gateway_error` (`upstream_failed`) | a chain read, the market read or the Signer call failed; nothing was submitted. A chain read the RPC throttled is tried three times, 0.25 s and 0.5 s apart, before this answer |
+| 502 | `refused_by_gateway` (`no_market_price`) | `demo` mode: Hyperliquid gave no mid for the asset of a sell, so it wasn't counted or signed |
 | 502 | `venue_unreachable` | the call to Hyperliquid failed; the order may or may not have arrived, so check the account |
 | 503 | (empty body) | more than 32 connections at once |
 

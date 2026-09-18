@@ -56,6 +56,24 @@ class DeskLimits(WithChain):
         desk.place_order("ETH", "sell", 0.1, 3000, "ioc", True)  # reduce-only: 300 USDC, no cap
         self.assertEqual([o[5:] for o in self.gateway.orders], [("Ioc", False), ("Ioc", True)])
 
+    def test_a_sell_under_the_market_counts_at_the_mid(self):
+        desk = self.desk(max_notional=100)  # the fake's mids: BTC 60000, ETH 3000
+        with self.assertRaises(Refused):
+            desk.place_order("BTC", "sell", 0.0017, 50000, "ioc", False)  # 85 at its limit, 102 at the mid
+        with self.assertRaises(Refused):
+            desk.place_order("BTC", "sell", 0.0016, 64000, "limit", False)  # 102.4 at its limit, over the mid
+        desk.place_order("BTC", "sell", 0.0016, 50000, "ioc", False)  # 96 at the mid
+        desk.place_order("BTC", "sell", 0.0016, 62000, "limit", False)  # 99.2 at its limit
+        self.assertEqual([o[2:5] for o in self.gateway.orders], [(False, "50000", "0.0016"), (False, "62000", "0.0016")])
+
+    def test_headroom_counts_a_sell_at_the_mid(self):
+        self.chain.equity, self.chain.notional = 100.0, 200.0  # rule 3x: 300; headroom 0.8: 240
+        desk = self.desk(max_notional=100)
+        with self.assertRaises(Refused):
+            desk.place_order("ETH", "sell", 0.014, 2500, "ioc", False)  # 35 at its limit, 42 at the mid -> 242
+        desk.place_order("ETH", "sell", 0.013, 2500, "ioc", False)  # 39 at the mid -> 239
+        self.assertEqual(len(self.gateway.orders), 1)
+
     def test_orders_per_session(self):
         desk = self.desk(max_orders=2)
         desk.place_order("ETH", "buy", 0.005, 3000, "post_only", False)
