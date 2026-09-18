@@ -2,6 +2,7 @@
 # One-time setup of the pools host, run as root on the host (docs/HOSTING.md). Running it
 # again creates only what is missing and changes nothing that is there.
 #
+#   - Python 3.12 and nginx from the distribution, if missing;
 #   - users colosseum-gw (the gateway) and colosseum-keeper, each able to read only its own
 #     /var/lib directory;
 #   - /opt/colosseum-pools for releases, /etc/colosseum for settings;
@@ -13,6 +14,16 @@
 set -euo pipefail
 
 say() { printf 'bootstrap: %s\n' "$*"; }
+
+# Amazon Linux 2023: its python3 is 3.9, and CI tests on 3.12.
+for pkg in python3.12 nginx; do
+  if command -v "$pkg" >/dev/null 2>&1; then
+    say "$pkg is installed"
+  else
+    dnf -y -q install "$pkg"
+    say "$pkg installed"
+  fi
+done
 
 for user in colosseum-gw colosseum-keeper; do
   if id "$user" >/dev/null 2>&1; then
