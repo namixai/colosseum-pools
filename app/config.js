@@ -1,5 +1,7 @@
 // Deployment settings for the app. Testnet only.
 // `factory` and `registry` are filled in from deployments/testnet-<label>.json after a deploy.
+// `gateway` is the pools host behind Cloudflare (docs/HOSTING.md); against a gateway on this
+// machine, use http://127.0.0.1:8787 instead.
 export const CONFIG = {
   chainId: 998,
   chainHex: "0x3e6",
@@ -9,7 +11,7 @@ export const CONFIG = {
   hlInfo: "https://api.hyperliquid-testnet.xyz/info",
   hlExchange: "https://api.hyperliquid-testnet.xyz/exchange",
   hlApp: "https://app.hyperliquid-testnet.xyz",
-  gateway: "http://127.0.0.1:8787",
+  gateway: "https://pools-api.usenami.io",
   factory: "",
   registry: "",
   // First block of the deployment. Event history is read back towards it, newest first, in

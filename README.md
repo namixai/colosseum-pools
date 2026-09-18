@@ -109,7 +109,8 @@ spike/.venv/bin/python ops/make_demo_keys.py --out <new directory outside the re
 # deploy the contracts and publish those addresses; writes deployments/testnet-<label>.json
 spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal --keys-file <that directory>/addresses.txt
 
-# the app: copy the factory, registry and first block from that record into app/config.js
+# the app: copy the factory, registry and first block from that record into app/config.js,
+# and point its gateway at http://127.0.0.1:8787 for a gateway on this machine
 python3 -m http.server 8790 --bind 127.0.0.1 --directory app
 
 # the gateway, signing with those keys and checking the caps first
