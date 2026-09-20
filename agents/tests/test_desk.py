@@ -134,6 +134,13 @@ class DeskLimits(WithChain):
         self.chain.verdict = 3
         self.assertEqual(self.desk().account_view()["contract_verdict_now"], "Leverage")
 
+    def test_account_view_keeps_the_two_shares_apart(self):
+        # The fake's terms pay 0% for passing the challenge and 80% on the funded account.
+        # Reading one field where the other is meant swaps these two numbers.
+        challenge = self.desk().account_view()["challenge"]
+        self.assertEqual(challenge["trader_share_of_challenge_profit_pct"], 0.0)
+        self.assertEqual(challenge["trader_share_of_funded_profit_pct"], 80.0)
+
     def test_a_stranger_account_is_refused(self):
         self.chain.challenge = False
         self.chain.call_view = lambda to, sig, *a: (False,) if to.lower() == FACTORY.lower() else (None,)
@@ -151,6 +158,10 @@ class ShopLimits(WithChain):
         self.assertEqual(offers[0]["price_usdc"], 20.0)
         self.assertEqual(offers[0]["rules"]["perps"], ["BTC", "ETH"])
         self.assertNotIn("_price_units", offers[0])
+        # What a buyer is told they get, per stage, and the two are not the same number.
+        self.assertEqual(offers[0]["trader_share_of_challenge_profit_pct"], 0.0)
+        self.assertEqual(offers[0]["trader_share_of_funded_profit_pct"], 80.0)
+        self.assertEqual(offers[0]["funded_capital_after_passing_usdc"], 5000.0)
 
     def test_buy_needs_the_listing_price_and_the_cap(self):
         shop = self.shop(max_price=15.0)

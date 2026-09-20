@@ -296,7 +296,7 @@ contract Pool is RuledAccount {
             fundedResult = result;
             fundedPayoutOwed = fundedEndReason == Breach.None && result > fundedStart
                 ? SafeCast.toUint64(
-                    (uint256(int256(result) - int256(fundedStart)) * _terms.traderShareBps * Units.SPOT_PER_PERP)
+                    (uint256(int256(result) - int256(fundedStart)) * _terms.traderShareFundedBps * Units.SPOT_PER_PERP)
                         / Units.BPS
                 )
                 : 0;

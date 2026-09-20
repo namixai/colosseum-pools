@@ -6,7 +6,8 @@ const { ethers } = window;
 
 const RULES = "(uint16 dailyLossBps, uint16 maxDrawdownBps, uint32 maxLeverageX100, uint32[] assets)";
 const TERMS =
-  "(uint64 price, uint64 capital, uint16 targetBps, uint32 duration, uint16 traderShareBps, uint64 fundedCapital)";
+  "(uint64 price, uint64 capital, uint16 targetBps, uint32 duration, uint16 traderShareChallengeBps, "
+  + "uint16 traderShareFundedBps, uint64 fundedCapital)";
 const CANCEL = "(uint32 asset, uint64 oid)[]";
 
 const RULED = [

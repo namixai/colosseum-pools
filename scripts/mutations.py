@@ -230,6 +230,24 @@ MUTATIONS = [
      "        if (!keySpoiled()) {",
      "        if (true) {",
      ["test_aSpoiledKey_blocksTheStart_andAbortRefunds"]),
+    ("M51", "src/ChallengeAccount.sol",
+     "payoutOwed = SafeCast.toUint64((profit * _terms.traderShareChallengeBps * Units.SPOT_PER_PERP) / Units.BPS);",
+     "payoutOwed = SafeCast.toUint64((profit * _terms.traderShareFundedBps * Units.SPOT_PER_PERP) / Units.BPS);",
+     ["test_shares_areIndependent_zeroOnTheChallenge_eightyOnTheFunded",
+      "test_graduate_fundsTraderWithANewKey_andPaysTheShare"]),
+    ("M52", "src/Pool.sol",
+     "* _terms.traderShareFundedBps * Units.SPOT_PER_PERP)",
+     "* _terms.traderShareChallengeBps * Units.SPOT_PER_PERP)",
+     ["test_shares_areIndependent_eightyOnTheChallenge_zeroOnTheFunded",
+      "test_fundedShare_comesFromWhatClosingRealized"]),
+    ("M53", "src/PoolFactory.sol",
+     "        if (t.price == 0) revert BadTerms();",
+     "",
+     ["test_createPool_checksRulesAndTerms"]),
+    ("M54", "src/PoolFactory.sol",
+     "if (t.traderShareChallengeBps > Units.BPS || t.traderShareFundedBps > Units.BPS) revert BadTerms();",
+     "if (t.traderShareChallengeBps > Units.BPS) revert BadTerms();",
+     ["test_createPool_checksRulesAndTerms"]),
     # ── gateway (Python unittest) ──
     ("G1", "gateway/server.py",
      "if recovered.lower() != cleared.key.lower():",
@@ -600,6 +618,22 @@ MUTATIONS = [
      "    if not math.isfinite(mid) or mid <= 0:",
      "    if False:",
      ["test_a_sell_without_a_usable_mid_is_refused"]),
+    ("A33", "agents/desk.py",
+     '                "trader_share_of_challenge_profit_pct": ch_share_bps / 100,\n'
+     '                "trader_share_of_funded_profit_pct": funded_share_bps / 100,\n'
+     '                "funded_capital_after_passing_usdc": usd(funded),',
+     '                "trader_share_of_challenge_profit_pct": funded_share_bps / 100,\n'
+     '                "trader_share_of_funded_profit_pct": ch_share_bps / 100,\n'
+     '                "funded_capital_after_passing_usdc": usd(funded),',
+     ["test_listing_shows_only_pools_that_can_sell_now"]),
+    ("A34", "agents/desk.py",
+     '                "trader_share_of_challenge_profit_pct": ch_share_bps / 100,\n'
+     '                "trader_share_of_funded_profit_pct": funded_share_bps / 100,\n'
+     '                "passes_when":',
+     '                "trader_share_of_challenge_profit_pct": funded_share_bps / 100,\n'
+     '                "trader_share_of_funded_profit_pct": ch_share_bps / 100,\n'
+     '                "passes_when":',
+     ["test_account_view_keeps_the_two_shares_apart"]),
     # ── keeper (Python unittest) ──
     ("K1", "ops/keeper.py",
      'if entry["address"].lower() != factory.lower() or entry["topics"][0] != CHALLENGE_CREATED:',

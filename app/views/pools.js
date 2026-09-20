@@ -26,7 +26,8 @@ export function termsHtml(terms) {
     row("Challenge capital", `${chain.usd6(terms.capital)} USDC`),
     row("Profit target", pct(terms.targetBps)),
     row("Time limit", esc(duration(terms.duration))),
-    row("Trader's share of profit", pct(terms.traderShareBps)),
+    row("Trader's share of the challenge profit", pct(terms.traderShareChallengeBps)),
+    row("Trader's share of the funded profit", pct(terms.traderShareFundedBps)),
     row("Funded capital after passing", `${chain.usd6(terms.fundedCapital)} USDC`),
   ].join("");
 }
@@ -83,18 +84,21 @@ export async function newPoolView(page) {
       Testnet, mock USDC.</p>
       <form id="pool-form">
         <fieldset><legend>Rules</legend>
-          <label>Daily loss limit, % <input name="daily" type="number" step="0.1" min="0.1" max="99" value="5"></label>
-          <label>Max drawdown from start, % <input name="dd" type="number" step="0.1" min="0.1" max="99" value="10"></label>
+          <label>Daily loss limit, % <input name="daily" type="number" step="0.1" min="0.1" max="99" value="3"></label>
+          <label>Max drawdown from start, % <input name="dd" type="number" step="0.1" min="0.1" max="99" value="6"></label>
           <label>Max leverage, × <input name="lev" type="number" step="0.1" min="1" value="5"></label>
           <div class="checks">${options || "<em>No assets listed by the platform yet.</em>"}</div>
         </fieldset>
         <fieldset><legend>Challenge</legend>
-          <label>Price, USDC <input name="price" type="number" step="0.01" min="0" value="25"></label>
-          <label>Capital, USDC <input name="capital" type="number" step="1" min="11" value="100"></label>
+          <label>Price, USDC <input name="price" type="number" step="0.01" min="0.01" value="100"></label>
+          <label>Capital, USDC <input name="capital" type="number" step="1" min="11" value="1000"></label>
           <label>Profit target, % <input name="target" type="number" step="0.1" min="0.1" value="8"></label>
           <label>Time limit, days <input name="days" type="number" step="1" min="1" value="7"></label>
-          <label>Trader's share of profit, % <input name="share" type="number" step="1" min="0" max="100" value="80"></label>
-          <label>Funded capital after passing, USDC <input name="funded" type="number" step="1" min="11" value="200"></label>
+          <label>Trader's share of the challenge profit, %
+            <input name="challengeShare" type="number" step="1" min="0" max="100" value="0"></label>
+          <label>Trader's share of the funded profit, %
+            <input name="fundedShare" type="number" step="1" min="0" max="100" value="80"></label>
+          <label>Funded capital after passing, USDC <input name="funded" type="number" step="1" min="11" value="10000"></label>
         </fieldset>
         <button type="button" id="create">Create the pool</button>
       </form>
@@ -119,7 +123,8 @@ export async function newPoolView(page) {
       capital: chain.toUnits(f.get("capital"), 6),
       targetBps: bps("target"),
       duration: Number(f.get("days")) * 86400,
-      traderShareBps: bps("share"),
+      traderShareChallengeBps: bps("challengeShare"),
+      traderShareFundedBps: bps("fundedShare"),
       fundedCapital: chain.toUnits(f.get("funded"), 6),
     };
     const receipt = await chain.write("factory", chain.factory().target, "createPool", [rules, terms]);

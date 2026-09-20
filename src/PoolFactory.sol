@@ -146,8 +146,14 @@ contract PoolFactory is IAccountSource, IFactoryView {
     }
 
     function _checkTerms(Terms calldata t) internal pure {
+        // A price of zero is refused. A challenge is what the pool sells; give it away and
+        // the pool funds strangers out of the investor's capital, and every published agent
+        // key can be used up for nothing. This is a floor of one unit, not a judgement about
+        // what a challenge is worth: what one costs the pool depends on the rules and on who
+        // buys it, which no contract can see. The app works that out before you create a pool.
+        if (t.price == 0) revert BadTerms();
         if (t.capital == 0 || t.fundedCapital == 0 || t.duration == 0 || t.targetBps == 0) revert BadTerms();
-        if (t.traderShareBps > Units.BPS) revert BadTerms();
+        if (t.traderShareChallengeBps > Units.BPS || t.traderShareFundedBps > Units.BPS) revert BadTerms();
         // buyChallenge holds capital + fundedCapital on spot, in units 100 times finer, plus the
         // fee for creating the challenge account, as a uint64.
         if ((uint256(t.capital) + t.fundedCapital) * Units.SPOT_PER_PERP + Units.NEW_ACCOUNT_FEE > type(uint64).max) {

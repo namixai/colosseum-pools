@@ -23,7 +23,7 @@ from .client import GatewayClient, round_price, round_size
 
 MIN_ORDER_USDC = 10.0
 RULES = "(uint16,uint16,uint32,uint32[])"
-TERMS = "(uint64,uint64,uint16,uint32,uint16,uint64)"
+TERMS = "(uint64,uint64,uint16,uint32,uint16,uint16,uint64)"
 
 # Enum names in declaration order; the tests hold them against the Solidity source.
 STATUS = ("None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled")
@@ -165,14 +165,16 @@ class Desk:
                         "max_order_notional_usdc": self.limits.max_notional},
         }
         if self.is_challenge:
-            _, capital, target_bps, _, share_bps, _ = c.call_view(self.account, "terms()", [], [], [TERMS])[0]
+            _, capital, target_bps, _, ch_share_bps, funded_share_bps, _ = c.call_view(
+                self.account, "terms()", [], [], [TERMS])[0]
             deadline = view(self.account, "deadline()", "uint64")
             out["challenge"] = {
                 "capital_usdc": usd(capital),
                 "target_equity_usdc": round(usd(capital) * (1 + target_bps / 1e4), 2),
                 "deadline_utc": time.strftime("%Y-%m-%d %H:%M", time.gmtime(deadline)) if deadline else None,
                 "hours_left": round((deadline - time.time()) / 3600, 1) if deadline else None,
-                "trader_share_of_profit_pct": share_bps / 100,
+                "trader_share_of_challenge_profit_pct": ch_share_bps / 100,
+                "trader_share_of_funded_profit_pct": funded_share_bps / 100,
                 "passes_when": "equity reaches the target before the deadline, no rule broken, no open position",
             }
         return out
@@ -303,7 +305,8 @@ class Shop:
                 continue
             if int(view(pool, "challenge()", "address"), 16) != 0:
                 continue
-            price, capital, target_bps, duration, share_bps, funded = c.call_view(pool, "terms()", [], [], [TERMS])[0]
+            (price, capital, target_bps, duration, ch_share_bps, funded_share_bps,
+             funded) = c.call_view(pool, "terms()", [], [], [TERMS])[0]
             if c.core_spot_balance(pool, 0)["total"] < view(pool, "capitalNeeded()", "uint64"):
                 continue
             daily, drawdown, leverage, assets = c.call_view(pool, "rules()", [], [], [RULES])[0]
@@ -315,7 +318,8 @@ class Shop:
                 "challenge_capital_usdc": usd(capital),
                 "target_profit_pct": target_bps / 100,
                 "days": round(duration / 86400, 2),
-                "trader_share_of_profit_pct": share_bps / 100,
+                "trader_share_of_challenge_profit_pct": ch_share_bps / 100,
+                "trader_share_of_funded_profit_pct": funded_share_bps / 100,
                 "funded_capital_after_passing_usdc": usd(funded),
                 "rules": {"max_daily_loss_pct": daily / 100, "max_drawdown_pct": drawdown / 100,
                           "max_leverage": leverage / 100,

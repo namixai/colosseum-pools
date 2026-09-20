@@ -110,7 +110,15 @@ contract PoolFlowTest is Test {
 
     function _terms() internal pure returns (Terms memory) {
         return Terms({
-            price: 25e6, capital: 100e6, targetBps: 800, duration: 7 days, traderShareBps: 8000, fundedCapital: 200e6
+            price: 25e6,
+            capital: 100e6,
+            targetBps: 800,
+            duration: 7 days,
+            // The two shares are deliberately different here: a test that reads one where it
+            // means the other changes a number instead of passing by coincidence.
+            traderShareChallengeBps: 5000,
+            traderShareFundedBps: 8000,
+            fundedCapital: 200e6
         });
     }
 
@@ -257,8 +265,22 @@ contract PoolFlowTest is Test {
         factory.createPool(_rules(), t);
 
         t = _terms();
-        t.traderShareBps = 10_001;
+        t.traderShareChallengeBps = 10_001;
         vm.expectRevert(PoolFactory.BadTerms.selector);
+        factory.createPool(_rules(), t);
+
+        t = _terms();
+        t.traderShareFundedBps = 10_001;
+        vm.expectRevert(PoolFactory.BadTerms.selector);
+        factory.createPool(_rules(), t);
+
+        // A challenge given away spends the investor's capital and a published key on nothing.
+        t = _terms();
+        t.price = 0;
+        vm.expectRevert(PoolFactory.BadTerms.selector);
+        factory.createPool(_rules(), t);
+
+        t.price = 1; // one unit is enough; the contract sets no floor above zero
         factory.createPool(_rules(), t);
     }
 
@@ -913,14 +935,14 @@ contract PoolFlowTest is Test {
         }
         assertTrue(sawAgent && sawPerp);
 
-        // Profit 0.005 * (78692.0 - 76400.0) = 11.46 USDC; 80% to the trader, 1e8 scale.
-        assertEq(ch.payoutOwed(), 916800000);
+        // Profit 0.005 * (78692.0 - 76400.0) = 11.46 USDC; 50% to the trader, 1e8 scale.
+        assertEq(ch.payoutOwed(), 573000000);
         CoreSimulatorLib.nextBlock();
         assertEq(_equity(address(p)), int64(200e6));
 
         uint64 poolSpotBefore = _spot(address(p));
         _settleChallenge(ch);
-        assertEq(_spot(trader), 916800000, "trader paid on HyperCore");
+        assertEq(_spot(trader), 573000000, "trader paid on HyperCore");
         assertEq(ch.payoutSent(), ch.payoutOwed());
         assertGt(_spot(address(p)), poolSpotBefore, "the rest went back to the pool");
         assertEq(p.challenge(), address(0));
@@ -948,7 +970,7 @@ contract PoolFlowTest is Test {
     /// everything goes back to the pool.
     function test_payout_smallerThanTheAccountFee_isNotSent() public {
         Terms memory t = _terms();
-        t.traderShareBps = 500; // 5% of 11.46 USDC: 0.573
+        t.traderShareChallengeBps = 500; // 5% of 11.46 USDC: 0.573
         vm.prank(investor);
         Pool p = Pool(factory.createPool(_rules(), t));
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8);
@@ -1059,6 +1081,68 @@ contract PoolFlowTest is Test {
         assertEq(p.fundedPayoutOwed(), 4e8, "80% of the realized 5 USDC, in 1e8 units");
     }
 
+    /// The two shares are independent, and this is the pair the demo deploys: nothing for
+    /// passing the audition, 80% of what the trader makes on the pool's own capital. The
+    /// challenge pays zero and no HyperCore account is created for the trader by it; the
+    /// funded stage then pays the full 80%.
+    function test_shares_areIndependent_zeroOnTheChallenge_eightyOnTheFunded() public {
+        Terms memory t = _terms();
+        t.traderShareChallengeBps = 0;
+        t.traderShareFundedBps = 8000;
+        vm.prank(investor);
+        Pool p = Pool(factory.createPool(_rules(), t));
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8);
+        p.prepareAccount();
+
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        assertEq(ch.payoutOwed(), 0, "the challenge pays nothing at a zero challenge share");
+        _settleChallenge(ch);
+        assertEq(_spot(trader), 0, "and nothing reached the trader on HyperCore");
+        assertFalse(PrecompileLib.coreUserExists(trader));
+
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        _trade(address(p), BTC, true, 0.01e8);
+        _mockMargin(address(p), 240e6, 787e6);
+        vm.prank(investor);
+        p.stopFunded(c, a, SALT);
+        CoreSimulatorLib.nextBlock();
+        _mockMargin(address(p), 205e6, 0);
+        p.settleFunded(c, a);
+        vm.clearMockedCalls();
+        assertEq(p.fundedPayoutOwed(), 4e8, "80% of the realized 5 USDC, in 1e8 units");
+    }
+
+    /// The mirror: the challenge share paid, the funded share zero. Reading one field where
+    /// the other is meant would give this pool the same numbers as the one above.
+    function test_shares_areIndependent_eightyOnTheChallenge_zeroOnTheFunded() public {
+        Terms memory t = _terms();
+        t.traderShareChallengeBps = 8000;
+        t.traderShareFundedBps = 0;
+        vm.prank(investor);
+        Pool p = Pool(factory.createPool(_rules(), t));
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8);
+        p.prepareAccount();
+
+        (ChallengeAccount ch,) = _passed(p);
+        CoreSimulatorLib.nextBlock();
+        // Profit 0.005 * (78692.0 - 76400.0) = 11.46 USDC; 80% of it, 1e8 scale.
+        assertEq(ch.payoutOwed(), 916800000, "the challenge pays its own rate");
+        _settleChallenge(ch);
+
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        _trade(address(p), BTC, true, 0.01e8);
+        _mockMargin(address(p), 240e6, 787e6);
+        vm.prank(investor);
+        p.stopFunded(c, a, SALT);
+        CoreSimulatorLib.nextBlock();
+        _mockMargin(address(p), 205e6, 0);
+        p.settleFunded(c, a);
+        vm.clearMockedCalls();
+        assertEq(p.fundedResult(), 205e6, "the funded stage did realize a profit");
+        assertEq(p.fundedPayoutOwed(), 0, "and none of it is owed at a zero funded share");
+    }
+
     /// A position in an asset nobody named still shows in the account's notional. Settlement
     /// waits for it: nothing moves to spot and the result isn't taken.
     function test_settle_waitsWhileAnUnnamedPositionIsOpen() public {
@@ -1147,7 +1231,8 @@ contract PoolFlowTest is Test {
     /// share was too small to send): it arrives less the 1 USDC for creating the account.
     function test_fundedPayout_toATraderWithoutAnAccount_coversTheFee() public {
         Terms memory t = _terms();
-        t.traderShareBps = 500;
+        t.traderShareChallengeBps = 500;
+        t.traderShareFundedBps = 500;
         vm.prank(investor);
         Pool p = Pool(factory.createPool(_rules(), t));
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8);

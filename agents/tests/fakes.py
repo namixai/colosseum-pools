@@ -32,7 +32,9 @@ class FakeChain:
     def __init__(self):
         self.challenge = True
         self.rules = (500, 1000, 300, (3, 4))
-        self.terms = (20_000_000, 1_000_000_000, 1000, 7 * 86400, 5000, 5_000_000_000)
+        # price, capital, target, duration, challenge share, funded share, funded capital.
+        # The two shares differ: a reader that takes one for the other changes a number.
+        self.terms = (20_000_000, 1_000_000_000, 1000, 7 * 86400, 0, 8000, 5_000_000_000)
         self.verdict = 0
         self.equity, self.notional = 1000.0, 0.0
         self.mids = {"BTC": "60000", "ETH": "3000"}

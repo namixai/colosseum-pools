@@ -191,8 +191,9 @@ def shop_tools(shop: Shop) -> list:
     @beta_tool(strict=True)
     def list_pools() -> str:
         """The pools that can sell a challenge right now, with each one's price, the platform's
-        fee on top of it, challenge capital, profit target, duration, profit share, the capital
-        a passing trader gets, and its rules. Call it before choosing."""
+        fee on top of it, challenge capital, profit target, duration, the trader's share of the
+        challenge profit and of the funded profit (two separate numbers), the capital a passing
+        trader gets, and its rules. Call it before choosing."""
         return answered(shop.listing, 8000)
 
     @beta_tool(strict=True)

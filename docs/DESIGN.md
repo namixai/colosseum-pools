@@ -52,7 +52,11 @@ Rules (per pool, copied into each challenge):
 - `assets`: perp indices the trader may hold, a subset of the platform list.
 
 Terms (per pool): challenge price (HyperEVM USDC), challenge capital, profit target, duration,
-trader's share of the challenge profit, capital for a funded trader.
+trader's share of the challenge profit, trader's share of the funded profit, capital for a
+funded trader. The two shares are separate numbers: a pool pays for performance on its own
+capital without having to pay the same rate for passing the audition, and either may be zero.
+A price of zero is refused at creation — a pool that gives challenges away spends the
+investor's capital and the published agent keys on nothing.
 
 Platform fee (per factory, set by the operator, zero by default; the testnet deployment sets
 10 test USDC): paid by every challenge buyer on top of the price, to the operator's fee

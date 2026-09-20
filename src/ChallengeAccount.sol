@@ -218,7 +218,7 @@ contract ChallengeAccount is RuledAccount {
         if (int256(eq) < target) revert TargetNotMet(eq, target);
 
         uint256 profit = uint256(int256(eq) - capital);
-        payoutOwed = SafeCast.toUint64((profit * _terms.traderShareBps * Units.SPOT_PER_PERP) / Units.BPS);
+        payoutOwed = SafeCast.toUint64((profit * _terms.traderShareChallengeBps * Units.SPOT_PER_PERP) / Units.BPS);
 
         status = Status.Passed;
         _cutAgent(salt);

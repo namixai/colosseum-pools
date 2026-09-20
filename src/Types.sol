@@ -24,8 +24,12 @@ struct Terms {
     uint16 targetBps;
     /// How long a challenge may run, in seconds.
     uint32 duration;
-    /// Trader's share of the challenge profit when it passes (bps).
-    uint16 traderShareBps;
+    /// Trader's share of the profit made on the challenge, paid when it passes (bps).
+    uint16 traderShareChallengeBps;
+    /// Trader's share of the profit made on the funded account, paid when the funded stage
+    /// ends without a breach (bps). Separate from the challenge share, so a pool can pay for
+    /// performance on its capital without also paying for the audition.
+    uint16 traderShareFundedBps;
     /// Capital a funded trader trades on the pool account, perp USD units (1e6 = 1 USDC).
     uint64 fundedCapital;
 }
