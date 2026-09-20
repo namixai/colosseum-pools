@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { orderUrl } from "../lib/gateway.js";
-import { createNavigator, logWindows, needsGate } from "../lib/nav.js";
+import { createNavigator, needsGate } from "../lib/nav.js";
 import { settle } from "../lib/ui.js";
 import { canonical, roundPrice, roundSize } from "../lib/hl.js";
 import { refusal, splitSignature, spotSend } from "../lib/hlsend.js";
@@ -51,19 +51,6 @@ test("only the page on screen reports its failure", async () => {
   fail(new Error("stale"));
   await stale;
   assert.deepEqual(errors, ["current"]);
-});
-
-test("event history is read newest first, 50 blocks a call at most", () => {
-  assert.deepEqual(logWindows(130, 0, 50, 10), {
-    windows: [{ start: 81, end: 130 }, { start: 31, end: 80 }, { start: 0, end: 30 }],
-    complete: true,
-  });
-  assert.deepEqual(logWindows(130, 0, 50, 2), {
-    windows: [{ start: 81, end: 130 }, { start: 31, end: 80 }],
-    complete: false,
-  });
-  assert.deepEqual(logWindows(130, 100, 50, 10), { windows: [{ start: 100, end: 130 }], complete: true });
-  for (const { start, end } of logWindows(10_000, 0, 50, 500).windows) assert.ok(end - start + 1 <= 50);
 });
 
 test("every page but the terms asks the entry question until it is answered", () => {

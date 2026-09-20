@@ -1,6 +1,5 @@
 // HyperEVM access: a read-only provider, the connected wallet, and the contracts.
 import { CONFIG } from "../config.js";
-import { logWindows } from "./nav.js";
 
 const { ethers } = window;
 
@@ -202,20 +201,9 @@ export async function approveIfNeeded(spender, amount) {
   return tx.wait();
 }
 
-/**
- * Event history, newest blocks first, in windows of CONFIG.logWindow blocks back towards the
- * deployment block. Stops after `maxWindows` and says so, instead of hammering a rate-limited
- * public RPC; what it leaves out is the oldest part.
- */
-export async function history(contractInstance, filter, maxWindows = 40) {
-  const latest = await readProvider.getBlockNumber();
-  const { windows, complete } = logWindows(latest, CONFIG.deployBlock || 0, CONFIG.logWindow, maxWindows);
-  const out = [];
-  for (const { start, end } of windows) {
-    out.push(...(await contractInstance.queryFilter(filter, start, end)));
-  }
-  out.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
-  return { events: out, complete };
+/** The block the contracts were deployed in, from the app's config. */
+export function deployBlock() {
+  return CONFIG.deployBlock || 0;
 }
 
 export function randomSalt() {

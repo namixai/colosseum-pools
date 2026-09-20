@@ -60,8 +60,25 @@ export function wire(button, action, { done = "Done.", confirm } = {}) {
 export function friendly(err) {
   if (!err) return "Something went wrong.";
   if (err.code === "ACTION_REJECTED" || err.code === 4001) return "Cancelled in the wallet.";
+  if (rateLimited(err)) {
+    return "The public HyperEVM RPC is refusing further reads from this browser right now "
+      + "(rate limited). Wait a few seconds and try again.";
+  }
   const reason = err.revert?.name || err.reason || err.shortMessage || err.message || String(err);
   return String(reason).slice(0, 300);
+}
+
+/**
+ * The public RPC answers -32005 "rate limited". ethers wraps that answer, sometimes twice, and
+ * the raw wrapper carries a whole JSON-RPC payload: pasting it into the page put what looks
+ * like a stack trace in the most honest section of the site. Recognise it and say it in words.
+ */
+export function rateLimited(err) {
+  for (let e = err, depth = 0; e && depth < 5; e = e.error || e.info?.error || e.cause, depth++) {
+    if (Number(e.code) === -32005) return true;
+    if (/rate limit/i.test(String(e.message || ""))) return true;
+  }
+  return false;
 }
 
 export function pct(bps) {
