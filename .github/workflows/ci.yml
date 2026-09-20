@@ -87,5 +87,9 @@ jobs:
           version: v1.7.1
       - name: build
         run: forge build
+      - name: check can still go red
+        run: ./scripts/test-abi-check.sh
+      - name: structs match their copies in the app and the agents
+        run: ./scripts/abi-check.py
       - name: test
         run: forge test -vv
