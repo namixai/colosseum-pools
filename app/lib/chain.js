@@ -1,5 +1,6 @@
 // HyperEVM access: a read-only provider, the connected wallet, and the contracts.
 import { CONFIG } from "../config.js";
+export { MAX_BATCH, readAll } from "./batch.js";
 import { logWindows } from "./nav.js";
 
 const { ethers } = window;
@@ -217,6 +218,10 @@ export async function history(contractInstance, filter, maxWindows = 40) {
   }
   out.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index);
   return { events: out, complete };
+}
+
+export function platformAssets() {
+  return CONFIG.platformAssets || [];
 }
 
 export function randomSalt() {

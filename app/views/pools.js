@@ -2,6 +2,7 @@
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, wire, pct, duration, badge, row } from "../lib/ui.js";
+import { minPrice, ratioOff, gridText } from "../lib/floor.js";
 
 function notDeployed(page) {
   render(page, `<section class="card"><h2>Not deployed yet</h2>
@@ -70,12 +71,19 @@ export async function listView(page) {
 
 export async function newPoolView(page) {
   if (!chain.deployed()) return notDeployed(page);
-  const list = await hl.perps();
-  const listed = await Promise.all(list.slice(0, 64).map((p) => chain.factory().isPlatformAsset(p.index)));
-  const options = list
-    .slice(0, 64)
+  // The candidates come from the deployment record (app/config.js), the answer from the chain.
+  // This used to ask isPlatformAsset for the first 64 perps in one Promise.all, which ethers
+  // sends as one JSON-RPC batch -- and the public RPC refuses a batch over 20 calls outright,
+  // so this page did not load at all. Measured 20 Sep 2026: -32010, "Exceeded max limit of 20".
+  const [list, candidates] = [await hl.perps(), chain.platformAssets()];
+  const listed = await chain.readAll(candidates, (index) => chain.factory().isPlatformAsset(index));
+  const options = candidates
     .filter((_, i) => listed[i])
-    .map((p) => `<label class="check"><input type="checkbox" name="asset" value="${p.index}" checked> ${esc(p.name)}</label>`)
+    .map((index) => {
+      const perp = list.find((p) => Number(p.index) === Number(index));
+      return `<label class="check"><input type="checkbox" name="asset" value="${esc(index)}" checked>
+        ${esc(perp ? perp.name : `#${index}`)}</label>`;
+    })
     .join("");
   render(page, `
     <section class="card narrow">
@@ -102,7 +110,13 @@ export async function newPoolView(page) {
         </fieldset>
         <button type="button" id="create">Create the pool</button>
       </form>
+      <p class="small" id="floor"></p>
     </section>`);
+
+  // One line from the model, and only this one: what a challenge of THIS pool costs the pool.
+  // The rest of the calculator is on the Economics page, because it describes a pool of several
+  // seats with a shared reserve, which is not what this button makes.
+  priceFloor(page).catch(() => { $("#floor", page).textContent = ""; });
 
   wire($("#create", page), async () => {
     const form = $("#pool-form", page);
@@ -134,4 +148,47 @@ export async function newPoolView(page) {
     if (log) location.hash = `#/pool/${log.args.pool}`;
     return "Pool created.";
   });
+}
+
+/**
+ * The floor under the challenge price, for the pool this form would create. The contract refuses a
+ * price of zero and nothing more: what a challenge actually costs depends on the rules and on who
+ * buys, which no contract can see. This says it before the pool exists, and says nothing when the
+ * model has no cell for the rules chosen -- a floor shown to an investor has to be the floor of
+ * their own rules, not of the nearest ones the model happens to hold.
+ */
+async function priceFloor(page) {
+  const box = $("#floor", page);
+  const form = $("#pool-form", page);
+  if (!box || !form) return;
+  const tables = await (await fetch("./data/calc_tables.json")).json();
+  const show = () => {
+    const f = new FormData(form);
+    const terms = {
+      fundedCapital: Number(f.get("funded")),
+      capital: Number(f.get("capital")),
+      dd: Number(f.get("dd")) / 100,
+      daily: Number(f.get("daily")) / 100,
+      target: Number(f.get("target")) / 100,
+      share: Number(f.get("share") ?? f.get("fundedShare") ?? 80) / 100,
+    };
+    const floor = minPrice(tables, terms);
+    if (floor.offGrid) {
+      box.innerHTML = `<span class="muted">The model has no figure for these rules, so there is no cost line
+        here. It holds ${esc(gridText(tables))}.</span>`;
+      return;
+    }
+    const price = Number(f.get("price"));
+    const under = price > 0 && price < floor.price;
+    const ratio = ratioOff(terms);
+    box.innerHTML = `${under ? badge("the price is below what a challenge costs this pool", "bad") : ""}
+      By the model, one challenge of this pool costs it about
+      <strong>${floor.price.toFixed(2)} USDC</strong>; sell below that and the investor pays for each sale.
+      ${ratio === null ? "" : `The model prices a challenge account at a tenth of the funded capital; yours is
+      ${(ratio * 100).toFixed(0)}% of it, so treat the figure as the wrong pool's.`}
+      <span class="muted">Model, not a measurement — the whole of it is on the
+      <a href="#/economics">Economics</a> page.</span>`;
+  };
+  form.addEventListener("input", show);
+  show();
 }

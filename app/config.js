@@ -19,4 +19,9 @@ export const CONFIG = {
   deployBlock: 64583921,
   logWindow: 50,
   usdc: "0x2B3370eE501B4a559b57D449569354196457D8Ab",
+  // Perp indices the factory lists, copied from deployments/testnet-<label>.json after a deploy.
+  // The chain stays the authority -- the new-pool form asks isPlatformAsset for each of these and
+  // drops any the factory does not confirm. The list is here only to keep the form from probing
+  // every perp on the venue, which the public RPC refuses as one batch.
+  platformAssets: [3, 4, 0],
 };
