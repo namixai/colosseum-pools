@@ -1,0 +1,6013 @@
+{
+ "evaluate": [
+  {
+   "name": "default 100000 bad real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "bad",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 100000.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 278.22720928618475,
+      "cost_pct_F": 0.0055645441857236945,
+      "margin": 221.77279071381525,
+      "min_price": 278.22720928618475,
+      "min_price_pct_F": 0.0055645441857236945,
+      "trader_ceiling_at_take_profit": 3200.0,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 0.75,
+      "offered_load": 0.06147231142465753,
+      "blocking": 0.05791230799242641,
+      "sold_per_year": 8.478789228068162,
+      "busy_share": 0.057912307992426415,
+      "fails_challenge": 49,
+      "fails_funded": 1
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 139.59539930975905,
+      "cost_pct_F": 0.005583815972390362,
+      "margin": 110.40460069024095,
+      "min_price": 139.59539930975905,
+      "min_price_pct_F": 0.005583815972390362,
+      "trader_ceiling_at_take_profit": 1600.0,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 1.5,
+      "offered_load": 0.12294462284931507,
+      "blocking": 0.10948413692685954,
+      "sold_per_year": 16.02928553531653,
+      "busy_share": 0.10948413692685956,
+      "fails_challenge": 98,
+      "fails_funded": 2
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 28.689951328618477,
+      "cost_pct_F": 0.005737990265723696,
+      "margin": 21.310048671381523,
+      "min_price": 28.689951328618477,
+      "min_price_pct_F": 0.005737990265723696,
+      "trader_ceiling_at_take_profit": 320.0,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 2.75,
+      "offered_load": 0.2253984752237443,
+      "blocking": 0.0015235313163232149,
+      "sold_per_year": 32.94972346656133,
+      "busy_share": 0.07501835786269646,
+      "fails_challenge": 473,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.043522318286403724,
+    "annual_income": 4352.231828640372,
+    "platform_fee_year": 1978.840434238256,
+    "sold_per_year": 57.45779822994602,
+    "seat_busy_share": 0.07849030370147507,
+    "capital_committed_share": 0.07434186061325089,
+    "idle_share": 0.9256581393867491,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 21478.0,
+        "high": 35384.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 11478.0,
+        "high": 25384.0
+       },
+       "years_of_base_return": {
+        "low": 4.934939324385595,
+        "high": 8.130081620917212
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 28499.000000000004,
+        "high": 57229.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 18499.000000000004,
+        "high": 47229.0
+       },
+       "years_of_base_return": {
+        "low": 6.548134640360605,
+        "high": 13.149345497498052
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 40716.0,
+        "high": 79614.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 30716.0,
+        "high": 69614.0
+       },
+       "years_of_base_return": {
+        "low": 9.355200183056331,
+        "high": 18.292683647063726
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 100000 bad demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "bad",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 100000.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 212.46120235242535,
+      "cost_pct_F": 0.004249224047048507,
+      "margin": 287.53879764757465,
+      "min_price": 212.46120235242535,
+      "min_price_pct_F": 0.004249224047048507,
+      "trader_ceiling_at_take_profit": 3200.0,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 0.75,
+      "offered_load": 0.06147231142465753,
+      "blocking": 0.05791230799242641,
+      "sold_per_year": 8.478789228068162,
+      "busy_share": 0.057912307992426415,
+      "fails_challenge": null,
+      "fails_funded": 1
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 106.29387617621266,
+      "cost_pct_F": 0.004251755047048507,
+      "margin": 143.70612382378732,
+      "min_price": 106.29387617621266,
+      "min_price_pct_F": 0.004251755047048507,
+      "trader_ceiling_at_take_profit": 1600.0,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 1.5,
+      "offered_load": 0.12294462284931507,
+      "blocking": 0.10948413692685954,
+      "sold_per_year": 16.02928553531653,
+      "busy_share": 0.10948413692685956,
+      "fails_challenge": null,
+      "fails_funded": 2
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 21.360015235242535,
+      "cost_pct_F": 0.004272003047048507,
+      "margin": 28.639984764757465,
+      "min_price": 21.360015235242535,
+      "min_price_pct_F": 0.004272003047048507,
+      "trader_ceiling_at_take_profit": 320.0,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 2.75,
+      "offered_load": 0.2253984752237443,
+      "blocking": 0.0015235313163232149,
+      "sold_per_year": 32.94972346656133,
+      "busy_share": 0.07501835786269646,
+      "fails_challenge": null,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.05685166930176256,
+    "annual_income": 5685.166930176256,
+    "platform_fee_year": 1978.840434238256,
+    "sold_per_year": 57.45779822994602,
+    "seat_busy_share": 0.07849030370147507,
+    "capital_committed_share": 0.06758386642251764,
+    "idle_share": 0.9324161335774823,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 21478.0,
+        "high": 35384.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 11478.0,
+        "high": 25384.0
+       },
+       "years_of_base_return": {
+        "low": 3.777901381575461,
+        "high": 6.223915750333648
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 28499.000000000004,
+        "high": 57229.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 18499.000000000004,
+        "high": 47229.0
+       },
+       "years_of_base_return": {
+        "low": 5.012869516413031,
+        "high": 10.06637108511882
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 40716.0,
+        "high": 79614.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 30716.0,
+        "high": 69614.0
+       },
+       "years_of_base_return": {
+        "low": 7.161794983342326,
+        "high": 14.00381043825071
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 100000 base real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "base",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 100000.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 170.33664976494128,
+      "cost_pct_F": 0.0034067329952988256,
+      "margin": 329.6633502350587,
+      "min_price": 170.33664976494128,
+      "min_price_pct_F": 0.0034067329952988256,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 2.25,
+      "offered_load": 0.21585023880821916,
+      "blocking": 0.17753028450263444,
+      "sold_per_year": 22.20668231842887,
+      "busy_share": 0.17753028450263442,
+      "fails_challenge": 49,
+      "fails_funded": 1
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 85.63865338247065,
+      "cost_pct_F": 0.003425546135298826,
+      "margin": 164.36134661752936,
+      "min_price": 85.63865338247065,
+      "min_price_pct_F": 0.003425546135298826,
+      "trader_ceiling_at_take_profit": 1000.0000000000002,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 4.5,
+      "offered_load": 0.4317004776164383,
+      "blocking": 0.3015298830766288,
+      "sold_per_year": 37.71738631386204,
+      "busy_share": 0.3015298830766288,
+      "fails_challenge": 98,
+      "fails_funded": 2
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 17.880256276494134,
+      "cost_pct_F": 0.0035760512552988266,
+      "margin": 32.11974372350586,
+      "min_price": 17.880256276494134,
+      "min_price_pct_F": 0.0035760512552988266,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 8.25,
+      "offered_load": 0.7914508756301369,
+      "blocking": 0.03777611390106258,
+      "sold_per_year": 95.2601647237948,
+      "busy_share": 0.2538509790684124,
+      "fails_challenge": 473,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.16579741774126083,
+    "annual_income": 16579.741774126083,
+    "platform_fee_year": 5059.139194773937,
+    "sold_per_year": 155.1842333560857,
+    "seat_busy_share": 0.24812262095690008,
+    "capital_committed_share": 0.22246019199985775,
+    "idle_share": 0.7775398080001422,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 21478.0,
+        "high": 35384.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 11478.0,
+        "high": 25384.0
+       },
+       "years_of_base_return": {
+        "low": 1.295436339878225,
+        "high": 2.1341707538062717
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 28499.000000000004,
+        "high": 57229.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 18499.000000000004,
+        "high": 47229.0
+       },
+       "years_of_base_return": {
+        "low": 1.7189049376194028,
+        "high": 3.451742540967079
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 40716.0,
+        "high": 79614.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 30716.0,
+        "high": 69614.0
+       },
+       "years_of_base_return": {
+        "low": 2.455768042391368,
+        "high": 4.801884196064112
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 100000 base demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "base",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 100000.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 147.3559359068618,
+      "cost_pct_F": 0.0029471187181372357,
+      "margin": 352.64406409313824,
+      "min_price": 147.3559359068618,
+      "min_price_pct_F": 0.0029471187181372357,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 2.25,
+      "offered_load": 0.21585023880821916,
+      "blocking": 0.17753028450263444,
+      "sold_per_year": 22.20668231842887,
+      "busy_share": 0.17753028450263442,
+      "fails_challenge": null,
+      "fails_funded": 1
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 73.72975528676425,
+      "cost_pct_F": 0.0029491902114705698,
+      "margin": 176.27024471323574,
+      "min_price": 73.72975528676425,
+      "min_price_pct_F": 0.0029491902114705698,
+      "trader_ceiling_at_take_profit": 1000.0000000000002,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 4.5,
+      "offered_load": 0.4317004776164383,
+      "blocking": 0.3015298830766288,
+      "sold_per_year": 37.71738631386204,
+      "busy_share": 0.3015298830766288,
+      "fails_challenge": null,
+      "fails_funded": 2
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 14.828810790686182,
+      "cost_pct_F": 0.0029657621581372366,
+      "margin": 35.171189209313816,
+      "min_price": 14.828810790686182,
+      "min_price_pct_F": 0.0029657621581372366,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 8.25,
+      "offered_load": 0.7914508756301369,
+      "blocking": 0.03777611390106258,
+      "sold_per_year": 95.2601647237948,
+      "busy_share": 0.2538509790684124,
+      "fails_challenge": null,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.1782992089589509,
+    "annual_income": 17829.92089589509,
+    "platform_fee_year": 5059.139194773937,
+    "sold_per_year": 155.1842333560857,
+    "seat_busy_share": 0.24812262095690008,
+    "capital_committed_share": 0.20223766601178408,
+    "idle_share": 0.7977623339882159,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 21478.0,
+        "high": 35384.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 11478.0,
+        "high": 25384.0
+       },
+       "years_of_base_return": {
+        "low": 1.204604334781137,
+        "high": 1.9845292756260244
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 28499.000000000004,
+        "high": 57229.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 18499.000000000004,
+        "high": 47229.0
+       },
+       "years_of_base_return": {
+        "low": 1.5983806190952428,
+        "high": 3.209716988322455
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 40716.0,
+        "high": 79614.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 30716.0,
+        "high": 69614.0
+       },
+       "years_of_base_return": {
+        "low": 2.283577153131054,
+        "high": 4.465190870158555
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 100000 good real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "good",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 100000.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 123.60352847216738,
+      "cost_pct_F": 0.0024720705694433478,
+      "margin": 376.3964715278326,
+      "min_price": 123.60352847216738,
+      "min_price_pct_F": 0.0024720705694433478,
+      "trader_ceiling_at_take_profit": 1200.0,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 6.0,
+      "offered_load": 0.6543642586849314,
+      "blocking": 0.39553819858577655,
+      "sold_per_year": 43.52124970182409,
+      "busy_share": 0.39553819858577655,
+      "fails_challenge": 49,
+      "fails_funded": 1
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 62.25914656941703,
+      "cost_pct_F": 0.002490365862776681,
+      "margin": 187.74085343058297,
+      "min_price": 62.25914656941703,
+      "min_price_pct_F": 0.002490365862776681,
+      "trader_ceiling_at_take_profit": 600.0,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 12.0,
+      "offered_load": 1.3087285173698628,
+      "blocking": 0.5668611564865953,
+      "sold_per_year": 62.371993465930274,
+      "busy_share": 0.5668611564865952,
+      "fails_challenge": 98,
+      "fails_funded": 2
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 13.183641047216739,
+      "cost_pct_F": 0.0026367282094433477,
+      "margin": 36.81635895278326,
+      "min_price": 13.183641047216739,
+      "min_price_pct_F": 0.0026367282094433477,
+      "trader_ceiling_at_take_profit": 120.0,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 22.0,
+      "offered_load": 2.399335615178082,
+      "blocking": 0.2683138858216563,
+      "sold_per_year": 193.16513414308275,
+      "busy_share": 0.5851868509597856,
+      "fails_challenge": 473,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.3520265302348309,
+    "annual_income": 35202.653023483086,
+    "platform_fee_year": 9402.375984909751,
+    "sold_per_year": 299.0583773108371,
+    "seat_busy_share": 0.5435919815903457,
+    "capital_committed_share": 0.4700158372634349,
+    "idle_share": 0.5299841627365651,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 21478.0,
+        "high": 35384.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 11478.0,
+        "high": 25384.0
+       },
+       "years_of_base_return": {
+        "low": 0.61012446947315,
+        "high": 1.0051515144723875
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 28499.000000000004,
+        "high": 57229.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 18499.000000000004,
+        "high": 47229.0
+       },
+       "years_of_base_return": {
+        "low": 0.8095696645644522,
+        "high": 1.625701334550652
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 40716.0,
+        "high": 79614.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 30716.0,
+        "high": 69614.0
+       },
+       "years_of_base_return": {
+        "low": 1.1566173712202616,
+        "high": 2.261590907562872
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 100000 good demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "good",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 100000.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 113.91613786095544,
+      "cost_pct_F": 0.0022783227572191088,
+      "margin": 386.0838621390445,
+      "min_price": 113.91613786095544,
+      "min_price_pct_F": 0.0022783227572191088,
+      "trader_ceiling_at_take_profit": 1200.0,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 6.0,
+      "offered_load": 0.6543642586849314,
+      "blocking": 0.39553819858577655,
+      "sold_per_year": 43.52124970182409,
+      "busy_share": 0.39553819858577655,
+      "fails_challenge": null,
+      "fails_funded": 1
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 56.997560263811046,
+      "cost_pct_F": 0.0022799024105524418,
+      "margin": 193.00243973618896,
+      "min_price": 56.997560263811046,
+      "min_price_pct_F": 0.0022799024105524418,
+      "trader_ceiling_at_take_profit": 600.0,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 12.0,
+      "offered_load": 1.3087285173698628,
+      "blocking": 0.5668611564865953,
+      "sold_per_year": 62.371993465930274,
+      "busy_share": 0.5668611564865952,
+      "fails_challenge": null,
+      "fails_funded": 2
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 11.462698186095544,
+      "cost_pct_F": 0.0022925396372191088,
+      "margin": 38.537301813904456,
+      "min_price": 11.462698186095544,
+      "min_price_pct_F": 0.0022925396372191088,
+      "trader_ceiling_at_take_profit": 120.0,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 22.0,
+      "offered_load": 2.399335615178082,
+      "blocking": 0.2683138858216563,
+      "sold_per_year": 193.16513414308275,
+      "busy_share": 0.5851868509597856,
+      "fails_challenge": null,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.36284862154527486,
+    "annual_income": 36284.86215452749,
+    "platform_fee_year": 9402.375984909751,
+    "sold_per_year": 299.0583773108371,
+    "seat_busy_share": 0.5435919815903457,
+    "capital_committed_share": 0.42728959565758445,
+    "idle_share": 0.5727104043424156,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 21478.0,
+        "high": 35384.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 11478.0,
+        "high": 25384.0
+       },
+       "years_of_base_return": {
+        "low": 0.5919272866059395,
+        "high": 0.9751725071824454
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 28499.000000000004,
+        "high": 57229.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 18499.000000000004,
+        "high": 47229.0
+       },
+       "years_of_base_return": {
+        "low": 0.7854239566525129,
+        "high": 1.577214204542849
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 40716.0,
+        "high": 79614.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 30716.0,
+        "high": 69614.0
+       },
+       "years_of_base_return": {
+        "low": 1.1221208399966214,
+        "high": 2.194138141160502
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 500000 bad real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 5
+     },
+     {
+      "F": 25000.0,
+      "count": 5
+     },
+     {
+      "F": 5000.0,
+      "count": 15
+     }
+    ],
+    "reserve": 50000.0,
+    "scenario": "bad",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 500000.0,
+    "seat_capital": 450000.0,
+    "n_seats": 25,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 278.22720928618475,
+      "cost_pct_F": 0.0055645441857236945,
+      "margin": 221.77279071381525,
+      "min_price": 278.22720928618475,
+      "min_price_pct_F": 0.0055645441857236945,
+      "trader_ceiling_at_take_profit": 3200.0,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 3.75,
+      "offered_load": 0.3073615571232877,
+      "blocking": 1.681053190779317e-05,
+      "sold_per_year": 44.99924352606415,
+      "busy_share": 0.06147127804240489,
+      "fails_challenge": 247,
+      "fails_funded": 7
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 139.59539930975905,
+      "cost_pct_F": 0.005583815972390362,
+      "margin": 110.40460069024095,
+      "min_price": 139.59539930975905,
+      "min_price_pct_F": 0.005583815972390362,
+      "trader_ceiling_at_take_profit": 1600.0,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 7.5,
+      "offered_load": 0.6147231142465754,
+      "blocking": 0.0003956078401062137,
+      "sold_per_year": 89.96439529439044,
+      "busy_share": 0.122895984992617,
+      "fails_challenge": 492,
+      "fails_funded": 14
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 28.689951328618477,
+      "cost_pct_F": 0.005737990265723696,
+      "margin": 21.310048671381523,
+      "min_price": 28.689951328618477,
+      "min_price_pct_F": 0.005737990265723696,
+      "trader_ceiling_at_take_profit": 320.0,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 15,
+      "arrivals_per_month": 13.750000000000002,
+      "offered_load": 1.1269923761187217,
+      "blocking": 1.48891015113772e-12,
+      "sold_per_year": 164.99999999975435,
+      "busy_share": 0.07513282507446958,
+      "fails_challenge": 2369,
+      "fails_funded": 71
+     }
+    ],
+    "annual_return": 0.04685649797274943,
+    "annual_income": 23428.248986374714,
+    "platform_fee_year": 10648.144117323482,
+    "sold_per_year": 299.963638820209,
+    "seat_busy_share": 0.08195314765168613,
+    "capital_committed_share": 0.08000661259096244,
+    "idle_share": 0.9199933874090376,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 107390.0,
+        "high": 176920.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 57390.0,
+        "high": 126920.0
+       },
+       "years_of_base_return": {
+        "low": 4.583782597771406,
+        "high": 7.55156734516917
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 142495.0,
+        "high": 286145.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 92495.0,
+        "high": 236145.0
+       },
+       "years_of_base_return": {
+        "low": 6.082187366323089,
+        "high": 12.213674191631428
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 203580.0,
+        "high": 398070.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 153580.0,
+        "high": 348070.0
+       },
+       "years_of_base_return": {
+        "low": 8.689509835685845,
+        "high": 16.991026526630634
+       }
+      }
+     },
+     "rules_cap_usd": 27000.0,
+     "reserve": 50000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 500000 bad demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 5
+     },
+     {
+      "F": 25000.0,
+      "count": 5
+     },
+     {
+      "F": 5000.0,
+      "count": 15
+     }
+    ],
+    "reserve": 50000.0,
+    "scenario": "bad",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 500000.0,
+    "seat_capital": 450000.0,
+    "n_seats": 25,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 212.46120235242535,
+      "cost_pct_F": 0.004249224047048507,
+      "margin": 287.53879764757465,
+      "min_price": 212.46120235242535,
+      "min_price_pct_F": 0.004249224047048507,
+      "trader_ceiling_at_take_profit": 3200.0,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 3.75,
+      "offered_load": 0.3073615571232877,
+      "blocking": 1.681053190779317e-05,
+      "sold_per_year": 44.99924352606415,
+      "busy_share": 0.06147127804240489,
+      "fails_challenge": null,
+      "fails_funded": 7
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 106.29387617621266,
+      "cost_pct_F": 0.004251755047048507,
+      "margin": 143.70612382378732,
+      "min_price": 106.29387617621266,
+      "min_price_pct_F": 0.004251755047048507,
+      "trader_ceiling_at_take_profit": 1600.0,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 7.5,
+      "offered_load": 0.6147231142465754,
+      "blocking": 0.0003956078401062137,
+      "sold_per_year": 89.96439529439044,
+      "busy_share": 0.122895984992617,
+      "fails_challenge": null,
+      "fails_funded": 14
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 21.360015235242535,
+      "cost_pct_F": 0.004272003047048507,
+      "margin": 28.639984764757465,
+      "min_price": 21.360015235242535,
+      "min_price_pct_F": 0.004272003047048507,
+      "trader_ceiling_at_take_profit": 320.0,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 15,
+      "arrivals_per_month": 13.750000000000002,
+      "offered_load": 1.1269923761187217,
+      "blocking": 1.48891015113772e-12,
+      "sold_per_year": 164.99999999975435,
+      "busy_share": 0.07513282507446958,
+      "fails_challenge": null,
+      "fails_funded": 71
+     }
+    ],
+    "annual_return": 0.06118612078924132,
+    "annual_income": 30593.06039462066,
+    "platform_fee_year": 10648.144117323482,
+    "sold_per_year": 299.963638820209,
+    "seat_busy_share": 0.08195314765168613,
+    "capital_committed_share": 0.07273365668790971,
+    "idle_share": 0.9272663433120902,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 107390.0,
+        "high": 176920.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 57390.0,
+        "high": 126920.0
+       },
+       "years_of_base_return": {
+        "low": 3.510273199698679,
+        "high": 5.783010843567281
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 142495.0,
+        "high": 286145.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 92495.0,
+        "high": 236145.0
+       },
+       "years_of_base_return": {
+        "low": 4.65775565314334,
+        "high": 9.353264966270402
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 203580.0,
+        "high": 398070.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 153580.0,
+        "high": 348070.0
+       },
+       "years_of_base_return": {
+        "low": 6.654450302585502,
+        "high": 13.01177439802638
+       }
+      }
+     },
+     "rules_cap_usd": 27000.0,
+     "reserve": 50000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 500000 base real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 5
+     },
+     {
+      "F": 25000.0,
+      "count": 5
+     },
+     {
+      "F": 5000.0,
+      "count": 15
+     }
+    ],
+    "reserve": 50000.0,
+    "scenario": "base",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 500000.0,
+    "seat_capital": 450000.0,
+    "n_seats": 25,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 170.33664976494128,
+      "cost_pct_F": 0.0034067329952988256,
+      "margin": 329.6633502350587,
+      "min_price": 170.33664976494128,
+      "min_price_pct_F": 0.0034067329952988256,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 11.25,
+      "offered_load": 1.0792511940410958,
+      "blocking": 0.0041504989479043,
+      "sold_per_year": 134.43968264203292,
+      "busy_share": 0.21495435261914078,
+      "fails_challenge": 247,
+      "fails_funded": 7
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 85.63865338247065,
+      "cost_pct_F": 0.003425546135298826,
+      "margin": 164.36134661752936,
+      "min_price": 85.63865338247065,
+      "min_price_pct_F": 0.003425546135298826,
+      "trader_ceiling_at_take_profit": 1000.0000000000002,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 22.5,
+      "offered_load": 2.1585023880821916,
+      "blocking": 0.04615888692448997,
+      "sold_per_year": 257.5371005303877,
+      "busy_share": 0.41177366408489285,
+      "fails_challenge": 492,
+      "fails_funded": 14
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 17.880256276494134,
+      "cost_pct_F": 0.0035760512552988266,
+      "margin": 32.11974372350586,
+      "min_price": 17.880256276494134,
+      "min_price_pct_F": 0.0035760512552988266,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 15,
+      "arrivals_per_month": 41.25,
+      "offered_load": 3.9572543781506844,
+      "blocking": 1.3359740862839956e-05,
+      "sold_per_year": 494.9933869282729,
+      "busy_share": 0.2638134340171776,
+      "fails_challenge": 2369,
+      "fails_funded": 71
+     }
+    ],
+    "annual_return": 0.205096083128851,
+    "annual_income": 102548.0415644255,
+    "platform_fee_year": 31270.757160005407,
+    "sold_per_year": 886.9701701006935,
+    "seat_busy_share": 0.2836336637511133,
+    "capital_committed_share": 0.27500604985989485,
+    "idle_share": 0.7249939501401051,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 107390.0,
+        "high": 176920.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 57390.0,
+        "high": 126920.0
+       },
+       "years_of_base_return": {
+        "low": 1.047216488600931,
+        "high": 1.7252401635466683
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 142495.0,
+        "high": 286145.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 92495.0,
+        "high": 236145.0
+       },
+       "years_of_base_return": {
+        "low": 1.3895438452666886,
+        "high": 2.7903507042621603
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 203580.0,
+        "high": 398070.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 153580.0,
+        "high": 348070.0
+       },
+       "years_of_base_return": {
+        "low": 1.9852158743772936,
+        "high": 3.881790367980004
+       }
+      }
+     },
+     "rules_cap_usd": 27000.0,
+     "reserve": 50000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 500000 base demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 5
+     },
+     {
+      "F": 25000.0,
+      "count": 5
+     },
+     {
+      "F": 5000.0,
+      "count": 15
+     }
+    ],
+    "reserve": 50000.0,
+    "scenario": "base",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 500000.0,
+    "seat_capital": 450000.0,
+    "n_seats": 25,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 147.3559359068618,
+      "cost_pct_F": 0.0029471187181372357,
+      "margin": 352.64406409313824,
+      "min_price": 147.3559359068618,
+      "min_price_pct_F": 0.0029471187181372357,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 11.25,
+      "offered_load": 1.0792511940410958,
+      "blocking": 0.0041504989479043,
+      "sold_per_year": 134.43968264203292,
+      "busy_share": 0.21495435261914078,
+      "fails_challenge": null,
+      "fails_funded": 7
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 73.72975528676425,
+      "cost_pct_F": 0.0029491902114705698,
+      "margin": 176.27024471323574,
+      "min_price": 73.72975528676425,
+      "min_price_pct_F": 0.0029491902114705698,
+      "trader_ceiling_at_take_profit": 1000.0000000000002,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 22.5,
+      "offered_load": 2.1585023880821916,
+      "blocking": 0.04615888692448997,
+      "sold_per_year": 257.5371005303877,
+      "busy_share": 0.41177366408489285,
+      "fails_challenge": null,
+      "fails_funded": 14
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 14.828810790686182,
+      "cost_pct_F": 0.0029657621581372366,
+      "margin": 35.171189209313816,
+      "min_price": 14.828810790686182,
+      "min_price_pct_F": 0.0029657621581372366,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 15,
+      "arrivals_per_month": 41.25,
+      "offered_load": 3.9572543781506844,
+      "blocking": 1.3359740862839956e-05,
+      "sold_per_year": 494.9933869282729,
+      "busy_share": 0.2638134340171776,
+      "fails_challenge": null,
+      "fails_funded": 71
+     }
+    ],
+    "annual_return": 0.22042997972904044,
+    "annual_income": 110214.98986452022,
+    "platform_fee_year": 31270.757160005407,
+    "sold_per_year": 886.9701701006935,
+    "seat_busy_share": 0.2836336637511133,
+    "capital_committed_share": 0.2500067891165578,
+    "idle_share": 0.7499932108834422,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 107390.0,
+        "high": 176920.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 57390.0,
+        "high": 126920.0
+       },
+       "years_of_base_return": {
+        "low": 0.9743683697835223,
+        "high": 1.605226296508993
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 142495.0,
+        "high": 286145.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 92495.0,
+        "high": 236145.0
+       },
+       "years_of_base_return": {
+        "low": 1.2928822129835462,
+        "high": 2.59624394423788
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 203580.0,
+        "high": 398070.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 153580.0,
+        "high": 348070.0
+       },
+       "years_of_base_return": {
+        "low": 1.8471171684563692,
+        "high": 3.6117591671452343
+       }
+      }
+     },
+     "rules_cap_usd": 27000.0,
+     "reserve": 50000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 500000 good real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 5
+     },
+     {
+      "F": 25000.0,
+      "count": 5
+     },
+     {
+      "F": 5000.0,
+      "count": 15
+     }
+    ],
+    "reserve": 50000.0,
+    "scenario": "good",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 500000.0,
+    "seat_capital": 450000.0,
+    "n_seats": 25,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 123.60352847216738,
+      "cost_pct_F": 0.0024720705694433478,
+      "margin": 376.3964715278326,
+      "min_price": 123.60352847216738,
+      "min_price_pct_F": 0.0024720705694433478,
+      "trader_ceiling_at_take_profit": 1200.0,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 30.0,
+      "offered_load": 3.2718212934246576,
+      "blocking": 0.13374591943633887,
+      "sold_per_year": 311.851469002918,
+      "busy_share": 0.5668457092608371,
+      "fails_challenge": 247,
+      "fails_funded": 7
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 62.25914656941703,
+      "cost_pct_F": 0.002490365862776681,
+      "margin": 187.74085343058297,
+      "min_price": 62.25914656941703,
+      "min_price_pct_F": 0.002490365862776681,
+      "trader_ceiling_at_take_profit": 600.0,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 60.0,
+      "offered_load": 6.543642586849315,
+      "blocking": 0.39670445156959305,
+      "sold_per_year": 434.372794869893,
+      "busy_share": 0.7895500886331649,
+      "fails_challenge": 492,
+      "fails_funded": 14
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 13.183641047216739,
+      "cost_pct_F": 0.0026367282094433477,
+      "margin": 36.81635895278326,
+      "min_price": 13.183641047216739,
+      "min_price_pct_F": 0.0026367282094433477,
+      "trader_ceiling_at_take_profit": 120.0,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 15,
+      "arrivals_per_month": 110.00000000000001,
+      "offered_load": 11.996678075890411,
+      "blocking": 0.085633656151474,
+      "sold_per_year": 1206.9635738800546,
+      "busy_share": 0.7312905780386457,
+      "fails_challenge": 2369,
+      "fails_funded": 71
+     }
+    ],
+    "annual_return": 0.4867306319365462,
+    "annual_income": 243365.3159682731,
+    "platform_fee_year": 64973.422382587,
+    "sold_per_year": 1953.1878377528656,
+    "seat_busy_share": 0.7100535064019878,
+    "capital_committed_share": 0.6495898625192774,
+    "idle_share": 0.3504101374807226,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 107390.0,
+        "high": 176920.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 57390.0,
+        "high": 126920.0
+       },
+       "years_of_base_return": {
+        "low": 0.44127076848535046,
+        "high": 0.7269729431085594
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 142495.0,
+        "high": 286145.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 92495.0,
+        "high": 236145.0
+       },
+       "years_of_base_return": {
+        "low": 0.5855189324454793,
+        "high": 1.1757838164469745
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 203580.0,
+        "high": 398070.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 153580.0,
+        "high": 348070.0
+       },
+       "years_of_base_return": {
+        "low": 0.8365201885487257,
+        "high": 1.6356891219942586
+       }
+      }
+     },
+     "rules_cap_usd": 27000.0,
+     "reserve": 50000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 500000 good demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 5
+     },
+     {
+      "F": 25000.0,
+      "count": 5
+     },
+     {
+      "F": 5000.0,
+      "count": 15
+     }
+    ],
+    "reserve": 50000.0,
+    "scenario": "good",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 500000.0,
+    "seat_capital": 450000.0,
+    "n_seats": 25,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 113.91613786095544,
+      "cost_pct_F": 0.0022783227572191088,
+      "margin": 386.0838621390445,
+      "min_price": 113.91613786095544,
+      "min_price_pct_F": 0.0022783227572191088,
+      "trader_ceiling_at_take_profit": 1200.0,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 30.0,
+      "offered_load": 3.2718212934246576,
+      "blocking": 0.13374591943633887,
+      "sold_per_year": 311.851469002918,
+      "busy_share": 0.5668457092608371,
+      "fails_challenge": null,
+      "fails_funded": 7
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 56.997560263811046,
+      "cost_pct_F": 0.0022799024105524418,
+      "margin": 193.00243973618896,
+      "min_price": 56.997560263811046,
+      "min_price_pct_F": 0.0022799024105524418,
+      "trader_ceiling_at_take_profit": 600.0,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 60.0,
+      "offered_load": 6.543642586849315,
+      "blocking": 0.39670445156959305,
+      "sold_per_year": 434.372794869893,
+      "busy_share": 0.7895500886331649,
+      "fails_challenge": null,
+      "fails_funded": 14
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 11.462698186095544,
+      "cost_pct_F": 0.0022925396372191088,
+      "margin": 38.537301813904456,
+      "min_price": 11.462698186095544,
+      "min_price_pct_F": 0.0022925396372191088,
+      "trader_ceiling_at_take_profit": 120.0,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 15,
+      "arrivals_per_month": 110.00000000000001,
+      "offered_load": 11.996678075890411,
+      "blocking": 0.085633656151474,
+      "sold_per_year": 1206.9635738800546,
+      "busy_share": 0.7312905780386457,
+      "fails_challenge": null,
+      "fails_funded": 71
+     }
+    ],
+    "annual_return": 0.5014978965126041,
+    "annual_income": 250748.94825630207,
+    "platform_fee_year": 64973.422382587,
+    "sold_per_year": 1953.1878377528656,
+    "seat_busy_share": 0.7100535064019878,
+    "capital_committed_share": 0.5905394661698267,
+    "idle_share": 0.40946053383017333,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 107390.0,
+        "high": 176920.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 57390.0,
+        "high": 126920.0
+       },
+       "years_of_base_return": {
+        "low": 0.4282769708379065,
+        "high": 0.7055662694910365
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 142495.0,
+        "high": 286145.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 92495.0,
+        "high": 236145.0
+       },
+       "years_of_base_return": {
+        "low": 0.5682775580551959,
+        "high": 1.1411613168862347
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 203580.0,
+        "high": 398070.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 153580.0,
+        "high": 348070.0
+       },
+       "years_of_base_return": {
+        "low": 0.8118877523343049,
+        "high": 1.5875241063548322
+       }
+      }
+     },
+     "rules_cap_usd": 27000.0,
+     "reserve": 50000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 1000000 bad real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "bad",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 1000000.0,
+    "seat_capital": 900000.0,
+    "n_seats": 50,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 278.22720928618475,
+      "cost_pct_F": 0.0055645441857236945,
+      "margin": 221.77279071381525,
+      "min_price": 278.22720928618475,
+      "min_price_pct_F": 0.0055645441857236945,
+      "trader_ceiling_at_take_profit": 3200.0,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 7.5,
+      "offered_load": 0.6147231142465754,
+      "blocking": 1.148316339236899e-09,
+      "sold_per_year": 89.99999989665153,
+      "busy_share": 0.06147231135406789,
+      "fails_challenge": 495,
+      "fails_funded": 14
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 139.59539930975905,
+      "cost_pct_F": 0.005583815972390362,
+      "margin": 110.40460069024095,
+      "min_price": 139.59539930975905,
+      "min_price_pct_F": 0.005583815972390362,
+      "trader_ceiling_at_take_profit": 1600.0,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 15.0,
+      "offered_load": 1.2294462284931509,
+      "blocking": 6.359027145908749e-07,
+      "sold_per_year": 179.99988553751137,
+      "busy_share": 0.12294454466849566,
+      "fails_challenge": 985,
+      "fails_funded": 28
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 28.689951328618477,
+      "cost_pct_F": 0.005737990265723696,
+      "margin": 21.310048671381523,
+      "min_price": 28.689951328618477,
+      "min_price_pct_F": 0.005737990265723696,
+      "trader_ceiling_at_take_profit": 320.0,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 30,
+      "arrivals_per_month": 27.500000000000004,
+      "offered_load": 2.2539847522374434,
+      "blocking": 1.534532175495762e-23,
+      "sold_per_year": 330.00000000000006,
+      "busy_share": 0.07513282507458145,
+      "fails_challenge": 4739,
+      "fails_funded": 142
+     }
+    ],
+    "annual_return": 0.04686468268993741,
+    "annual_income": 46864.682689937414,
+    "platform_fee_year": 21299.99426654072,
+    "sold_per_year": 599.9998854341629,
+    "seat_busy_share": 0.08196306624926158,
+    "capital_committed_share": 0.08002053531919207,
+    "idle_share": 0.9199794646808079,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 214780.0,
+        "high": 353840.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 114780.0,
+        "high": 253840.0
+       },
+       "years_of_base_return": {
+        "low": 4.582982059667645,
+        "high": 7.550248496102056
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 284990.0,
+        "high": 572290.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 184990.0,
+        "high": 472290.0
+       },
+       "years_of_base_return": {
+        "low": 6.081125138209714,
+        "high": 12.21154112546418
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 407160.0,
+        "high": 796140.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 307160.0,
+        "high": 696140.0
+       },
+       "years_of_base_return": {
+        "low": 8.687992249810405,
+        "high": 16.988059116229625
+       }
+      }
+     },
+     "rules_cap_usd": 54000.0,
+     "reserve": 100000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 1000000 bad demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "bad",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 1000000.0,
+    "seat_capital": 900000.0,
+    "n_seats": 50,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 212.46120235242535,
+      "cost_pct_F": 0.004249224047048507,
+      "margin": 287.53879764757465,
+      "min_price": 212.46120235242535,
+      "min_price_pct_F": 0.004249224047048507,
+      "trader_ceiling_at_take_profit": 3200.0,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 7.5,
+      "offered_load": 0.6147231142465754,
+      "blocking": 1.148316339236899e-09,
+      "sold_per_year": 89.99999989665153,
+      "busy_share": 0.06147231135406789,
+      "fails_challenge": null,
+      "fails_funded": 14
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 106.29387617621266,
+      "cost_pct_F": 0.004251755047048507,
+      "margin": 143.70612382378732,
+      "min_price": 106.29387617621266,
+      "min_price_pct_F": 0.004251755047048507,
+      "trader_ceiling_at_take_profit": 1600.0,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 15.0,
+      "offered_load": 1.2294462284931509,
+      "blocking": 6.359027145908749e-07,
+      "sold_per_year": 179.99988553751137,
+      "busy_share": 0.12294454466849566,
+      "fails_challenge": null,
+      "fails_funded": 28
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 21.360015235242535,
+      "cost_pct_F": 0.004272003047048507,
+      "margin": 28.639984764757465,
+      "min_price": 21.360015235242535,
+      "min_price_pct_F": 0.004272003047048507,
+      "trader_ceiling_at_take_profit": 320.0,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 30,
+      "arrivals_per_month": 27.500000000000004,
+      "offered_load": 2.2539847522374434,
+      "blocking": 1.534532175495762e-23,
+      "sold_per_year": 330.00000000000006,
+      "busy_share": 0.07513282507458145,
+      "fails_challenge": null,
+      "fails_funded": 142
+     }
+    ],
+    "annual_return": 0.061196772570256144,
+    "annual_income": 61196.772570256144,
+    "platform_fee_year": 21299.99426654072,
+    "sold_per_year": 599.9998854341629,
+    "seat_busy_share": 0.08196306624926158,
+    "capital_committed_share": 0.07274631375865755,
+    "idle_share": 0.9272536862413424,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 214780.0,
+        "high": 353840.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 114780.0,
+        "high": 253840.0
+       },
+       "years_of_base_return": {
+        "low": 3.509662208957583,
+        "high": 5.782004264910844
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 284990.0,
+        "high": 572290.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 184990.0,
+        "high": 472290.0
+       },
+       "years_of_base_return": {
+        "low": 4.65694493402934,
+        "high": 9.351636956720062
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 407160.0,
+        "high": 796140.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 307160.0,
+        "high": 696140.0
+       },
+       "years_of_base_return": {
+        "low": 6.653292043016899,
+        "high": 13.0095095960494
+       }
+      }
+     },
+     "rules_cap_usd": 54000.0,
+     "reserve": 100000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 1000000 base real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "base",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 1000000.0,
+    "seat_capital": 900000.0,
+    "n_seats": 50,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 170.33664976494128,
+      "cost_pct_F": 0.0034067329952988256,
+      "margin": 329.6633502350587,
+      "min_price": 170.33664976494128,
+      "min_price_pct_F": 0.0034067329952988256,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 22.5,
+      "offered_load": 2.1585023880821916,
+      "blocking": 6.987854629193158e-05,
+      "sold_per_year": 269.98113279250117,
+      "busy_share": 0.2158351555073145,
+      "fails_challenge": 495,
+      "fails_funded": 14
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 85.63865338247065,
+      "cost_pct_F": 0.003425546135298826,
+      "margin": 164.36134661752936,
+      "min_price": 85.63865338247065,
+      "min_price_pct_F": 0.003425546135298826,
+      "trader_ceiling_at_take_profit": 1000.0000000000002,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 45.0,
+      "offered_load": 4.317004776164383,
+      "blocking": 0.00830562036975355,
+      "sold_per_year": 535.5149650003331,
+      "busy_share": 0.4281149373359149,
+      "fails_challenge": 985,
+      "fails_funded": 28
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 17.880256276494134,
+      "cost_pct_F": 0.0035760512552988266,
+      "margin": 32.11974372350586,
+      "min_price": 17.880256276494134,
+      "min_price_pct_F": 0.0035760512552988266,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 30,
+      "arrivals_per_month": 82.5,
+      "offered_load": 7.914508756301369,
+      "blocking": 1.2354676067696736e-09,
+      "sold_per_year": 989.9999987768871,
+      "busy_share": 0.2638169582174416,
+      "fails_challenge": 4739,
+      "fails_funded": 142
+     }
+    ],
+    "annual_return": 0.2088193917649108,
+    "annual_income": 208819.3917649108,
+    "platform_fee_year": 63673.861517035635,
+    "sold_per_year": 1795.4960965697214,
+    "seat_busy_share": 0.28708019349911085,
+    "capital_committed_share": 0.27998509541195243,
+    "idle_share": 0.7200149045880475,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 214780.0,
+        "high": 353840.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 114780.0,
+        "high": 253840.0
+       },
+       "years_of_base_return": {
+        "low": 1.0285443233251041,
+        "high": 1.694478644963939
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 284990.0,
+        "high": 572290.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 184990.0,
+        "high": 472290.0
+       },
+       "years_of_base_return": {
+        "low": 1.364767886695323,
+        "high": 2.740597964408808
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 407160.0,
+        "high": 796140.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 307160.0,
+        "high": 696140.0
+       },
+       "years_of_base_return": {
+        "low": 1.949818915564994,
+        "high": 3.8125769511688627
+       }
+      }
+     },
+     "rules_cap_usd": 54000.0,
+     "reserve": 100000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 1000000 base demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "base",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 1000000.0,
+    "seat_capital": 900000.0,
+    "n_seats": 50,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 147.3559359068618,
+      "cost_pct_F": 0.0029471187181372357,
+      "margin": 352.64406409313824,
+      "min_price": 147.3559359068618,
+      "min_price_pct_F": 0.0029471187181372357,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 22.5,
+      "offered_load": 2.1585023880821916,
+      "blocking": 6.987854629193158e-05,
+      "sold_per_year": 269.98113279250117,
+      "busy_share": 0.2158351555073145,
+      "fails_challenge": null,
+      "fails_funded": 14
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 73.72975528676425,
+      "cost_pct_F": 0.0029491902114705698,
+      "margin": 176.27024471323574,
+      "min_price": 73.72975528676425,
+      "min_price_pct_F": 0.0029491902114705698,
+      "trader_ceiling_at_take_profit": 1000.0000000000002,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 45.0,
+      "offered_load": 4.317004776164383,
+      "blocking": 0.00830562036975355,
+      "sold_per_year": 535.5149650003331,
+      "busy_share": 0.4281149373359149,
+      "fails_challenge": null,
+      "fails_funded": 28
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 14.828810790686182,
+      "cost_pct_F": 0.0029657621581372366,
+      "margin": 35.171189209313816,
+      "min_price": 14.828810790686182,
+      "min_price_pct_F": 0.0029657621581372366,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 30,
+      "arrivals_per_month": 82.5,
+      "offered_load": 7.914508756301369,
+      "blocking": 1.2354676067696736e-09,
+      "sold_per_year": 989.9999987768871,
+      "busy_share": 0.2638169582174416,
+      "fails_challenge": null,
+      "fails_funded": 142
+     }
+    ],
+    "annual_return": 0.22442207509882778,
+    "annual_income": 224422.07509882777,
+    "platform_fee_year": 63673.861517035635,
+    "sold_per_year": 1795.4960965697214,
+    "seat_busy_share": 0.28708019349911085,
+    "capital_committed_share": 0.25453320982992717,
+    "idle_share": 0.7454667901700729,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 214780.0,
+        "high": 353840.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 114780.0,
+        "high": 253840.0
+       },
+       "years_of_base_return": {
+        "low": 0.9570359774341194,
+        "high": 1.5766719911318037
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 284990.0,
+        "high": 572290.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 184990.0,
+        "high": 472290.0
+       },
+       "years_of_base_return": {
+        "low": 1.2698839892399185,
+        "high": 2.5500610835542052
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 407160.0,
+        "high": 796140.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 307160.0,
+        "high": 696140.0
+       },
+       "years_of_base_return": {
+        "low": 1.814260026874365,
+        "high": 3.547511980046558
+       }
+      }
+     },
+     "rules_cap_usd": 54000.0,
+     "reserve": 100000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 1000000 good real",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "good",
+    "mode": "real",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 1000000.0,
+    "seat_capital": 900000.0,
+    "n_seats": 50,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 123.60352847216738,
+      "cost_pct_F": 0.0024720705694433478,
+      "margin": 376.3964715278326,
+      "min_price": 123.60352847216738,
+      "min_price_pct_F": 0.0024720705694433478,
+      "trader_ceiling_at_take_profit": 1200.0,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 60.0,
+      "offered_load": 6.543642586849315,
+      "blocking": 0.061341709879187994,
+      "sold_per_year": 675.8339688869846,
+      "busy_share": 0.6142244361733705,
+      "fails_challenge": 495,
+      "fails_funded": 14
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 62.25914656941703,
+      "cost_pct_F": 0.002490365862776681,
+      "margin": 187.74085343058297,
+      "min_price": 62.25914656941703,
+      "min_price_pct_F": 0.002490365862776681,
+      "trader_ceiling_at_take_profit": 600.0,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 120.0,
+      "offered_load": 13.08728517369863,
+      "blocking": 0.3444612093227197,
+      "sold_per_year": 943.9758585752836,
+      "busy_share": 0.8579223096015101,
+      "fails_challenge": 985,
+      "fails_funded": 28
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 13.183641047216739,
+      "cost_pct_F": 0.0026367282094433477,
+      "margin": 36.81635895278326,
+      "min_price": 13.183641047216739,
+      "min_price_pct_F": 0.0026367282094433477,
+      "trader_ceiling_at_take_profit": 120.0,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 30,
+      "arrivals_per_month": 220.00000000000003,
+      "offered_load": 23.993356151780823,
+      "blocking": 0.04004339196966593,
+      "sold_per_year": 2534.2854452000824,
+      "busy_share": 0.767752692890909,
+      "fails_challenge": 4739,
+      "fails_funded": 142
+     }
+    ],
+    "annual_return": 0.5249075171738035,
+    "annual_income": 524907.5171738034,
+    "platform_fee_year": 140125.04426946345,
+    "sold_per_year": 4154.095272662351,
+    "seat_busy_share": 0.7550809648895215,
+    "capital_committed_share": 0.7004690234110135,
+    "idle_share": 0.29953097658898653,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 214780.0,
+        "high": 353840.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 114780.0,
+        "high": 253840.0
+       },
+       "years_of_base_return": {
+        "low": 0.40917684158233086,
+        "high": 0.6740997002769902
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 284990.0,
+        "high": 572290.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 184990.0,
+        "high": 472290.0
+       },
+       "years_of_base_return": {
+        "low": 0.542933737231346,
+        "high": 1.090268249693417
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 407160.0,
+        "high": 796140.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 307160.0,
+        "high": 696140.0
+       },
+       "years_of_base_return": {
+        "low": 0.7756794991091436,
+        "high": 1.516724325623228
+       }
+      }
+     },
+     "rules_cap_usd": 54000.0,
+     "reserve": 100000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "default 1000000 good demo",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "good",
+    "mode": "demo",
+    "fee_pct_price": 0.2
+   },
+   "expected": {
+    "capital": 1000000.0,
+    "seat_capital": 900000.0,
+    "n_seats": 50,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 100.0,
+      "trader_pays": 600.0,
+      "cost": 113.91613786095544,
+      "cost_pct_F": 0.0022783227572191088,
+      "margin": 386.0838621390445,
+      "min_price": 113.91613786095544,
+      "min_price_pct_F": 0.0022783227572191088,
+      "trader_ceiling_at_take_profit": 1200.0,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 60.0,
+      "offered_load": 6.543642586849315,
+      "blocking": 0.061341709879187994,
+      "sold_per_year": 675.8339688869846,
+      "busy_share": 0.6142244361733705,
+      "fails_challenge": null,
+      "fails_funded": 14
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 50.0,
+      "trader_pays": 300.0,
+      "cost": 56.997560263811046,
+      "cost_pct_F": 0.0022799024105524418,
+      "margin": 193.00243973618896,
+      "min_price": 56.997560263811046,
+      "min_price_pct_F": 0.0022799024105524418,
+      "trader_ceiling_at_take_profit": 600.0,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 10,
+      "arrivals_per_month": 120.0,
+      "offered_load": 13.08728517369863,
+      "blocking": 0.3444612093227197,
+      "sold_per_year": 943.9758585752836,
+      "busy_share": 0.8579223096015101,
+      "fails_challenge": null,
+      "fails_funded": 28
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 10.0,
+      "trader_pays": 60.0,
+      "cost": 11.462698186095544,
+      "cost_pct_F": 0.0022925396372191088,
+      "margin": 38.537301813904456,
+      "min_price": 11.462698186095544,
+      "min_price_pct_F": 0.0022925396372191088,
+      "trader_ceiling_at_take_profit": 120.0,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 30,
+      "arrivals_per_month": 220.00000000000003,
+      "offered_load": 23.993356151780823,
+      "blocking": 0.04004339196966593,
+      "sold_per_year": 2534.2854452000824,
+      "busy_share": 0.767752692890909,
+      "fails_challenge": null,
+      "fails_funded": 142
+     }
+    ],
+    "annual_return": 0.5407827557140001,
+    "annual_income": 540782.7557140001,
+    "platform_fee_year": 140125.04426946345,
+    "sold_per_year": 4154.095272662351,
+    "seat_busy_share": 0.7550809648895215,
+    "capital_committed_share": 0.6367934534689436,
+    "idle_share": 0.36320654653105644,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 214780.0,
+        "high": 353840.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 114780.0,
+        "high": 253840.0
+       },
+       "years_of_base_return": {
+        "low": 0.397165031115728,
+        "high": 0.6543108045906937
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 284990.0,
+        "high": 572290.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 184990.0,
+        "high": 472290.0
+       },
+       "years_of_base_return": {
+        "low": 0.5269953543983208,
+        "high": 1.058262294707235
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 407160.0,
+        "high": 796140.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 307160.0,
+        "high": 696140.0
+       },
+       "years_of_base_return": {
+        "low": 0.7529086230984254,
+        "high": 1.4721993103290607
+       }
+      }
+     },
+     "rules_cap_usd": 54000.0,
+     "reserve": 100000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "rules 8/4, target 12, share 70, price 1.2 %, paper",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 2
+     },
+     {
+      "F": 25000.0,
+      "count": 2
+     },
+     {
+      "F": 5000.0,
+      "count": 6
+     }
+    ],
+    "reserve": 20000.0,
+    "scenario": "base",
+    "mode": "demo",
+    "max_drawdown": 0.08,
+    "daily_loss": 0.04,
+    "target": 0.12,
+    "trader_share": 0.7,
+    "price_pct": 0.012,
+    "fee_pct_price": 0.15
+   },
+   "expected": {
+    "capital": 200000.0,
+    "seat_capital": 180000.0,
+    "n_seats": 10,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 600.0,
+      "fee": 90.0,
+      "trader_pays": 690.0,
+      "cost": 182.4429616955057,
+      "cost_pct_F": 0.003648859233910114,
+      "margin": 417.5570383044943,
+      "min_price": 182.4429616955057,
+      "min_price_pct_F": 0.003648859233910114,
+      "trader_ceiling_at_take_profit": 1749.9999999999998,
+      "commit": 50001.0,
+      "loss_failed_challenge": -600.0,
+      "loss_failed_funded": 8010.0,
+      "price_below_cost": false,
+      "count": 2,
+      "arrivals_per_month": 4.5,
+      "offered_load": 0.7651934289863014,
+      "blocking": 0.1422580403347405,
+      "sold_per_year": 46.318065821924016,
+      "busy_share": 0.32816925565084487,
+      "fails_challenge": null,
+      "fails_funded": 2
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 300.0,
+      "fee": 45.0,
+      "trader_pays": 345.0,
+      "cost": 91.2720915144195,
+      "cost_pct_F": 0.00365088366057678,
+      "margin": 208.72790848558049,
+      "min_price": 91.2720915144195,
+      "min_price_pct_F": 0.00365088366057678,
+      "trader_ceiling_at_take_profit": 874.9999999999999,
+      "commit": 25001.0,
+      "loss_failed_challenge": -300.0,
+      "loss_failed_funded": 4005.0,
+      "price_below_cost": false,
+      "count": 2,
+      "arrivals_per_month": 9.0,
+      "offered_load": 1.5303868579726028,
+      "blocking": 0.31637565457424865,
+      "sold_per_year": 73.83142930598115,
+      "busy_share": 0.5231048570148464,
+      "fails_challenge": null,
+      "fails_funded": 4
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 60.0,
+      "fee": 9.0,
+      "trader_pays": 69.0,
+      "cost": 18.335395369550564,
+      "cost_pct_F": 0.003667079073910113,
+      "margin": 41.66460463044943,
+      "min_price": 18.335395369550564,
+      "min_price_pct_F": 0.003667079073910113,
+      "trader_ceiling_at_take_profit": 174.99999999999997,
+      "commit": 5001.0,
+      "loss_failed_challenge": -60.0,
+      "loss_failed_funded": 801.0,
+      "price_below_cost": false,
+      "count": 6,
+      "arrivals_per_month": 16.5,
+      "offered_load": 2.8057092396164385,
+      "blocking": 0.042000664602482765,
+      "sold_per_year": 189.6838684087084,
+      "busy_share": 0.4479779311452036,
+      "fails_challenge": null,
+      "fails_funded": 24
+     }
+    ],
+    "annual_return": 0.2132710879307834,
+    "annual_income": 42654.21758615668,
+    "platform_fee_year": 9198.19505842069,
+    "sold_per_year": 309.83336353661355,
+    "seat_busy_share": 0.4390415812202605,
+    "capital_committed_share": 0.36207948382997557,
+    "idle_share": 0.6379205161700244,
+    "shock_overshoot_covered": 0.031111111111111103,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 42956.0,
+        "high": 70768.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 2.9830555555555556,
+        "high": 4.914444444444444
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 22956.0,
+        "high": 50768.0
+       },
+       "years_of_base_return": {
+        "low": 1.0070750896610343,
+        "high": 1.659109087092189
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 56998.00000000001,
+        "high": 114458.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9581944444444446,
+        "high": 7.948472222222222
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 36998.00000000001,
+        "high": 94458.0
+       },
+       "years_of_base_return": {
+        "low": 1.3362805186818985,
+        "high": 2.68339232266558
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 81432.0,
+        "high": 159228.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.655,
+        "high": 11.0575
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 61432.0,
+        "high": 139228.0
+       },
+       "years_of_base_return": {
+        "low": 1.909119533971444,
+        "high": 3.732995445957425
+       }
+      }
+     },
+     "rules_cap_usd": 14400.0,
+     "reserve": 20000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": false,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve",
+     "cascade_measured_on_other_rules"
+    ]
+   }
+  },
+  {
+   "name": "price under the cost",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "base",
+    "mode": "real",
+    "price_pct": 0.001
+   },
+   "expected": {
+    "capital": 100000.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 50.0,
+      "fee": 0.0,
+      "trader_pays": 50.0,
+      "cost": 170.33664976494128,
+      "cost_pct_F": 0.0034067329952988256,
+      "margin": -120.33664976494128,
+      "min_price": 170.33664976494128,
+      "min_price_pct_F": 0.0034067329952988256,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 55001.0,
+      "loss_failed_challenge": 652.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": true,
+      "count": 1,
+      "arrivals_per_month": 2.25,
+      "offered_load": 0.21585023880821916,
+      "blocking": 0.17753028450263444,
+      "sold_per_year": 22.20668231842887,
+      "busy_share": 0.17753028450263442,
+      "fails_challenge": 15,
+      "fails_funded": 1
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 25.0,
+      "fee": 0.0,
+      "trader_pays": 25.0,
+      "cost": 85.63865338247065,
+      "cost_pct_F": 0.003425546135298826,
+      "margin": -60.63865338247065,
+      "min_price": 85.63865338247065,
+      "min_price_pct_F": 0.003425546135298826,
+      "trader_ceiling_at_take_profit": 1000.0000000000002,
+      "commit": 27501.0,
+      "loss_failed_challenge": 326.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": true,
+      "count": 1,
+      "arrivals_per_month": 4.5,
+      "offered_load": 0.4317004776164383,
+      "blocking": 0.3015298830766288,
+      "sold_per_year": 37.71738631386204,
+      "busy_share": 0.3015298830766288,
+      "fails_challenge": 30,
+      "fails_funded": 2
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 5.0,
+      "fee": 0.0,
+      "trader_pays": 5.0,
+      "cost": 17.880256276494134,
+      "cost_pct_F": 0.0035760512552988266,
+      "margin": -12.880256276494134,
+      "min_price": 17.880256276494134,
+      "min_price_pct_F": 0.0035760512552988266,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5501.0,
+      "loss_failed_challenge": 66.1,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": true,
+      "count": 3,
+      "arrivals_per_month": 8.25,
+      "offered_load": 0.7914508756301369,
+      "blocking": 0.03777611390106258,
+      "sold_per_year": 95.2601647237948,
+      "busy_share": 0.2538509790684124,
+      "fails_challenge": 151,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": -0.06186384602356636,
+    "annual_income": -6186.384602356636,
+    "platform_fee_year": 0.0,
+    "sold_per_year": 155.1842333560857,
+    "seat_busy_share": 0.24812262095690008,
+    "capital_committed_share": 0.22246019199985775,
+    "idle_share": 0.7775398080001422,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 21478.0,
+        "high": 35384.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.21478,
+        "high": 0.35384
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 11478.0,
+        "high": 25384.0
+       },
+       "years_of_base_return": {
+        "low": null,
+        "high": null
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 28499.000000000004,
+        "high": 57229.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.28499,
+        "high": 0.57229
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 18499.000000000004,
+        "high": 47229.0
+       },
+       "years_of_base_return": {
+        "low": null,
+        "high": null
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 40716.0,
+        "high": 79614.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.40716,
+        "high": 0.79614
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 30716.0,
+        "high": 69614.0
+       },
+       "years_of_base_return": {
+        "low": null,
+        "high": null
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "price_below_cost",
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "thin reserve, bad scenario",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 500.0,
+    "scenario": "bad",
+    "mode": "real"
+   },
+   "expected": {
+    "capital": 90500.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 0.0,
+      "trader_pays": 500.0,
+      "cost": 278.22720928618475,
+      "cost_pct_F": 0.0055645441857236945,
+      "margin": 221.77279071381525,
+      "min_price": 278.22720928618475,
+      "min_price_pct_F": 0.0055645441857236945,
+      "trader_ceiling_at_take_profit": 3200.0,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 0.75,
+      "offered_load": 0.06147231142465753,
+      "blocking": 0.05791230799242641,
+      "sold_per_year": 8.478789228068162,
+      "busy_share": 0.057912307992426415,
+      "fails_challenge": 2,
+      "fails_funded": 0
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 0.0,
+      "trader_pays": 250.0,
+      "cost": 139.59539930975905,
+      "cost_pct_F": 0.005583815972390362,
+      "margin": 110.40460069024095,
+      "min_price": 139.59539930975905,
+      "min_price_pct_F": 0.005583815972390362,
+      "trader_ceiling_at_take_profit": 1600.0,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 1.5,
+      "offered_load": 0.12294462284931507,
+      "blocking": 0.10948413692685954,
+      "sold_per_year": 16.02928553531653,
+      "busy_share": 0.10948413692685956,
+      "fails_challenge": 4,
+      "fails_funded": 0
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 0.0,
+      "trader_pays": 50.0,
+      "cost": 28.689951328618477,
+      "cost_pct_F": 0.005737990265723696,
+      "margin": 21.310048671381523,
+      "min_price": 28.689951328618477,
+      "min_price_pct_F": 0.005737990265723696,
+      "trader_ceiling_at_take_profit": 320.0,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 2.75,
+      "offered_load": 0.2253984752237443,
+      "blocking": 0.0015235313163232149,
+      "sold_per_year": 32.94972346656133,
+      "busy_share": 0.07501835786269646,
+      "fails_challenge": 23,
+      "fails_funded": 0
+     }
+    ],
+    "annual_return": 0.0480909594324903,
+    "annual_income": 4352.231828640372,
+    "platform_fee_year": 0.0,
+    "sold_per_year": 57.45779822994602,
+    "seat_busy_share": 0.07849030370147507,
+    "capital_committed_share": 0.08214570233508386,
+    "idle_share": 0.9178542976649161,
+    "shock_overshoot_covered": -0.05444444444444444,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 21478.0,
+        "high": 35384.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.23732596685082874,
+        "high": 0.39098342541436465
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 20978.0,
+        "high": 34884.0
+       },
+       "years_of_base_return": {
+        "low": 4.934939324385595,
+        "high": 8.130081620917212
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 28499.000000000004,
+        "high": 57229.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.31490607734806636,
+        "high": 0.6323646408839779
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 27999.000000000004,
+        "high": 56729.0
+       },
+       "years_of_base_return": {
+        "low": 6.5481346403606056,
+        "high": 13.149345497498054
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 40716.0,
+        "high": 79614.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.4499005524861878,
+        "high": 0.8797127071823204
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 40216.0,
+        "high": 79114.0
+       },
+       "years_of_base_return": {
+        "low": 9.35520018305633,
+        "high": 18.292683647063726
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 500.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_takes_few_failures",
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "own seats",
+   "spec": {
+    "seats": [
+     {
+      "F": 20000.0,
+      "count": 2
+     },
+     {
+      "F": 8000.0,
+      "count": 4
+     }
+    ],
+    "reserve": 15000.0,
+    "scenario": "good",
+    "mode": "real",
+    "max_drawdown": 0.05,
+    "daily_loss": 0.02,
+    "fee_flat": 15.0
+   },
+   "expected": {
+    "capital": 87000.0,
+    "seat_capital": 72000.0,
+    "n_seats": 6,
+    "groups": [
+     {
+      "F": 20000.0,
+      "C": 2000.0,
+      "price": 200.0,
+      "fee": 15.0,
+      "trader_pays": 215.0,
+      "cost": 23.945798721593565,
+      "cost_pct_F": 0.0011972899360796782,
+      "margin": 176.05420127840642,
+      "min_price": 23.945798721593565,
+      "min_price_pct_F": 0.0011972899360796782,
+      "trader_ceiling_at_take_profit": 480.0,
+      "commit": 22001.0,
+      "loss_failed_challenge": 61.39999999999998,
+      "loss_failed_funded": 2603.9999999999995,
+      "price_below_cost": false,
+      "count": 2,
+      "arrivals_per_month": 11.294117647058822,
+      "offered_load": 0.6237049414343271,
+      "blocking": 0.10697556829865956,
+      "sold_per_year": 121.03107591999341,
+      "busy_share": 0.2784918754368539,
+      "fails_challenge": 244,
+      "fails_funded": 5
+     },
+     {
+      "F": 8000.0,
+      "C": 800.0,
+      "price": 80.0,
+      "fee": 15.0,
+      "trader_pays": 95.0,
+      "cost": 10.158016688637426,
+      "cost_pct_F": 0.0012697520860796782,
+      "margin": 69.84198331136257,
+      "min_price": 10.158016688637426,
+      "min_price_pct_F": 0.0012697520860796782,
+      "trader_ceiling_at_take_profit": 192.0,
+      "commit": 8801.0,
+      "loss_failed_challenge": 25.159999999999982,
+      "loss_failed_funded": 1041.6,
+      "price_below_cost": false,
+      "count": 4,
+      "arrivals_per_month": 20.705882352941178,
+      "offered_load": 1.1434590592962663,
+      "blocking": 0.022848005849047108,
+      "sold_per_year": 242.79353078197798,
+      "busy_share": 0.2793333250053298,
+      "fails_challenge": 596,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.43983001294186563,
+    "annual_income": 38265.21112594231,
+    "platform_fee_year": 5457.369100529571,
+    "sold_per_year": 363.8246067019714,
+    "seat_busy_share": 0.27905284181583784,
+    "capital_committed_share": 0.2538833319133342,
+    "idle_share": 0.7461166680866658,
+    "shock_overshoot_covered": 0.15833333333333333,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 17182.399999999998,
+        "high": 28307.199999999997
+       },
+       "loss_share_of_pool": {
+        "low": 0.19749885057471261,
+        "high": 0.3253701149425287
+       },
+       "multiple_of_rules_cap": {
+        "low": 4.772888888888889,
+        "high": 7.8631111111111105
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 2182.399999999998,
+        "high": 13307.199999999997
+       },
+       "years_of_base_return": {
+        "low": 0.4490345014286621,
+        "high": 0.7397633298515588
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 22799.2,
+        "high": 45783.2
+       },
+       "loss_share_of_pool": {
+        "low": 0.2620597701149425,
+        "high": 0.5262436781609195
+       },
+       "multiple_of_rules_cap": {
+        "low": 6.333111111111111,
+        "high": 12.717555555555554
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 7799.200000000001,
+        "high": 30783.199999999997
+       },
+       "years_of_base_return": {
+        "low": 0.5958205725028142,
+        "high": 1.1964705969951068
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 32572.800000000003,
+        "high": 63691.2
+       },
+       "loss_share_of_pool": {
+        "low": 0.3744,
+        "high": 0.7320827586206896
+       },
+       "multiple_of_rules_cap": {
+        "low": 9.048,
+        "high": 17.691999999999997
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 17572.800000000003,
+        "high": 48691.2
+       },
+       "years_of_base_return": {
+        "low": 0.8512379532623805,
+        "high": 1.6644674921660072
+       }
+      }
+     },
+     "rules_cap_usd": 3600.0,
+     "reserve": 15000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": false,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve",
+     "cascade_measured_on_other_rules"
+    ]
+   }
+  },
+  {
+   "name": "two groups in one bracket",
+   "spec": {
+    "seats": [
+     {
+      "F": 20000.0,
+      "count": 1
+     },
+     {
+      "F": 30000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 30000.0,
+    "scenario": "base",
+    "mode": "real",
+    "demand_per_100k": 22.0
+   },
+   "expected": {
+    "capital": 140000.0,
+    "seat_capital": 110000.0,
+    "n_seats": 4,
+    "groups": [
+     {
+      "F": 20000.0,
+      "C": 2000.0,
+      "price": 200.0,
+      "fee": 0.0,
+      "trader_pays": 200.0,
+      "cost": 68.69905410597653,
+      "cost_pct_F": 0.0034349527052988265,
+      "margin": 131.30094589402347,
+      "min_price": 68.69905410597653,
+      "min_price_pct_F": 0.0034349527052988265,
+      "trader_ceiling_at_take_profit": 800.0000000000001,
+      "commit": 22001.0,
+      "loss_failed_challenge": 81.39999999999998,
+      "loss_failed_funded": 2804.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 6.722222222222222,
+      "offered_load": 0.6448858986615931,
+      "blocking": 0.3920550958497014,
+      "sold_per_year": 49.040888934790765,
+      "busy_share": 0.39205509584970144,
+      "fails_challenge": 368,
+      "fails_funded": 10
+     },
+     {
+      "F": 30000.0,
+      "C": 3000.0,
+      "price": 300.0,
+      "fee": 0.0,
+      "trader_pays": 300.0,
+      "cost": 102.57825265896479,
+      "cost_pct_F": 0.0034192750886321596,
+      "margin": 197.4217473410352,
+      "min_price": 102.57825265896479,
+      "min_price_pct_F": 0.0034192750886321596,
+      "trader_ceiling_at_take_profit": 1200.0000000000002,
+      "commit": 33001.0,
+      "loss_failed_challenge": 121.59999999999997,
+      "loss_failed_funded": 4206.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 20.166666666666668,
+      "offered_load": 1.934657695984779,
+      "blocking": 0.20071111101475386,
+      "sold_per_year": 193.42791113442956,
+      "busy_share": 0.5154501334634767,
+      "fails_challenge": 246,
+      "fails_funded": 7
+     }
+    ],
+    "annual_return": 0.3187570807521953,
+    "annual_income": 44625.99130530734,
+    "platform_fee_year": 0.0,
+    "sold_per_year": 242.46880006922032,
+    "seat_busy_share": 0.4846013740600329,
+    "capital_committed_share": 0.4261193837648133,
+    "idle_share": 0.5738806162351867,
+    "shock_overshoot_covered": 0.2127272727272727,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 26250.888888888887,
+        "high": 43247.11111111111
+       },
+       "loss_share_of_pool": {
+        "low": 0.1875063492063492,
+        "high": 0.3089079365079365
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 0.0,
+        "high": 13247.11111111111
+       },
+       "years_of_base_return": {
+        "low": 0.5882421459121041,
+        "high": 0.9691014103246993
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 34832.11111111112,
+        "high": 69946.55555555555
+       },
+       "loss_share_of_pool": {
+        "low": 0.2488007936507937,
+        "high": 0.49961825396825393
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 4832.111111111117,
+        "high": 39946.55555555555
+       },
+       "years_of_base_return": {
+        "low": 0.780534170609417,
+        "high": 1.5673949980633115
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 49764.0,
+        "high": 97306.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.35545714285714286,
+        "high": 0.6950428571428572
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 19764.0,
+        "high": 67306.0
+       },
+       "years_of_base_return": {
+        "low": 1.1151348921201802,
+        "high": 2.180478173230574
+       }
+      }
+     },
+     "rules_cap_usd": 6600.0,
+     "reserve": 30000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "no medium seats",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "base",
+    "mode": "demo"
+   },
+   "expected": {
+    "capital": 75000.0,
+    "seat_capital": 65000.0,
+    "n_seats": 4,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 0.0,
+      "trader_pays": 500.0,
+      "cost": 147.3559359068618,
+      "cost_pct_F": 0.0029471187181372357,
+      "margin": 352.64406409313824,
+      "min_price": 147.3559359068618,
+      "min_price_pct_F": 0.0029471187181372357,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 2.321428571428571,
+      "offered_load": 0.22270262734181337,
+      "blocking": 0.182139648972518,
+      "sold_per_year": 22.783252635765567,
+      "busy_share": 0.182139648972518,
+      "fails_challenge": null,
+      "fails_funded": 1
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 0.0,
+      "trader_pays": 50.0,
+      "cost": 14.828810790686182,
+      "cost_pct_F": 0.0029657621581372366,
+      "margin": 35.171189209313816,
+      "min_price": 14.828810790686182,
+      "min_price_pct_F": 0.0029657621581372366,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 8.511904761904763,
+      "offered_load": 0.8165763002533158,
+      "blocking": 0.04049961201889297,
+      "sold_per_year": 98.00611105807023,
+      "busy_share": 0.2611684256364112,
+      "fails_challenge": null,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.15308493704572648,
+    "annual_income": 11481.370278429486,
+    "platform_fee_year": 0.0,
+    "sold_per_year": 120.7893636938358,
+    "seat_busy_share": 0.2414112314704379,
+    "capital_committed_share": 0.17367299304130598,
+    "idle_share": 0.826327006958694,
+    "shock_overshoot_covered": 0.09384615384615386,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "default",
+     "coins": [
+      "BTC",
+      "ETH",
+      "SOL"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "spread_calm": {
+       "label": "seats spread over the list, the big ones on the calm coins",
+       "loss_share_of_seats": {
+        "low": 0.23864444444444444,
+        "high": 0.39315555555555554
+       },
+       "loss_usd": {
+        "low": 15511.888888888889,
+        "high": 25555.11111111111
+       },
+       "loss_share_of_pool": {
+        "low": 0.2068251851851852,
+        "high": 0.34073481481481477
+       },
+       "multiple_of_rules_cap": {
+        "low": 3.9774074074074073,
+        "high": 6.5525925925925925
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 5511.888888888889,
+        "high": 15555.11111111111
+       },
+       "years_of_base_return": {
+        "low": 1.3510485693534073,
+        "high": 2.225789299655506
+       }
+      },
+      "spread_risky": {
+       "label": "seats spread over the list, the big one on the riskiest coin",
+       "loss_share_of_seats": {
+        "low": 0.3166555555555556,
+        "high": 0.6358777777777778
+       },
+       "loss_usd": {
+        "low": 20582.611111111113,
+        "high": 41332.055555555555
+       },
+       "loss_share_of_pool": {
+        "low": 0.27443481481481485,
+        "high": 0.5510940740740741
+       },
+       "multiple_of_rules_cap": {
+        "low": 5.277592592592593,
+        "high": 10.597962962962963
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 10582.611111111113,
+        "high": 31332.055555555555
+       },
+       "years_of_base_return": {
+        "low": 1.7926963952883304,
+        "high": 3.599923576474818
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.4524,
+        "high": 0.8845999999999999
+       },
+       "loss_usd": {
+        "low": 29406.0,
+        "high": 57498.99999999999
+       },
+       "loss_share_of_pool": {
+        "low": 0.39208,
+        "high": 0.7666533333333332
+       },
+       "multiple_of_rules_cap": {
+        "low": 7.540000000000001,
+        "high": 14.743333333333332
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 19406.0,
+        "high": 47498.99999999999
+       },
+       "years_of_base_return": {
+        "low": 2.561192548179222,
+        "high": 5.008025924224889
+       }
+      }
+     },
+     "rules_cap_usd": 3900.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "wide list of coins",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "base",
+    "mode": "real",
+    "asset_list": "wide"
+   },
+   "expected": {
+    "capital": 100000.0,
+    "seat_capital": 90000.0,
+    "n_seats": 5,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 5000.0,
+      "price": 500.0,
+      "fee": 0.0,
+      "trader_pays": 500.0,
+      "cost": 170.33664976494128,
+      "cost_pct_F": 0.0034067329952988256,
+      "margin": 329.6633502350587,
+      "min_price": 170.33664976494128,
+      "min_price_pct_F": 0.0034067329952988256,
+      "trader_ceiling_at_take_profit": 2000.0000000000005,
+      "commit": 55001.0,
+      "loss_failed_challenge": 202.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 2.25,
+      "offered_load": 0.21585023880821916,
+      "blocking": 0.17753028450263444,
+      "sold_per_year": 22.20668231842887,
+      "busy_share": 0.17753028450263442,
+      "fails_challenge": 49,
+      "fails_funded": 1
+     },
+     {
+      "F": 25000.0,
+      "C": 2500.0,
+      "price": 250.0,
+      "fee": 0.0,
+      "trader_pays": 250.0,
+      "cost": 85.63865338247065,
+      "cost_pct_F": 0.003425546135298826,
+      "margin": 164.36134661752936,
+      "min_price": 85.63865338247065,
+      "min_price_pct_F": 0.003425546135298826,
+      "trader_ceiling_at_take_profit": 1000.0000000000002,
+      "commit": 27501.0,
+      "loss_failed_challenge": 101.5,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 1,
+      "arrivals_per_month": 4.5,
+      "offered_load": 0.4317004776164383,
+      "blocking": 0.3015298830766288,
+      "sold_per_year": 37.71738631386204,
+      "busy_share": 0.3015298830766288,
+      "fails_challenge": 98,
+      "fails_funded": 2
+     },
+     {
+      "F": 5000.0,
+      "C": 500.0,
+      "price": 50.0,
+      "fee": 0.0,
+      "trader_pays": 50.0,
+      "cost": 17.880256276494134,
+      "cost_pct_F": 0.0035760512552988266,
+      "margin": 32.11974372350586,
+      "min_price": 17.880256276494134,
+      "min_price_pct_F": 0.0035760512552988266,
+      "trader_ceiling_at_take_profit": 200.00000000000003,
+      "commit": 5501.0,
+      "loss_failed_challenge": 21.099999999999994,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 3,
+      "arrivals_per_month": 8.25,
+      "offered_load": 0.7914508756301369,
+      "blocking": 0.03777611390106258,
+      "sold_per_year": 95.2601647237948,
+      "busy_share": 0.2538509790684124,
+      "fails_challenge": 473,
+      "fails_funded": 14
+     }
+    ],
+    "annual_return": 0.16579741774126083,
+    "annual_income": 16579.741774126083,
+    "platform_fee_year": 0.0,
+    "sold_per_year": 155.1842333560857,
+    "seat_busy_share": 0.24812262095690008,
+    "capital_committed_share": 0.22246019199985775,
+    "idle_share": 0.7775398080001422,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "wide",
+     "coins": [
+      "ADA",
+      "AVAX",
+      "BNB",
+      "BTC",
+      "DOGE",
+      "ETH",
+      "LINK",
+      "SOL",
+      "SUI",
+      "XRP"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "reference_mix": {
+       "label": "the stress test's pool: two big seats on alts",
+       "loss_share_of_seats": {
+        "low": 0.8366555555555556,
+        "high": 0.8706888888888888
+       },
+       "loss_usd": {
+        "low": 75299.0,
+        "high": 78362.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.75299,
+        "high": 0.78362
+       },
+       "multiple_of_rules_cap": {
+        "low": 13.94425925925926,
+        "high": 14.511481481481482
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 65299.0,
+        "high": 68362.0
+       },
+       "years_of_base_return": {
+        "low": 4.541626825425573,
+        "high": 4.726370354108272
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.9206,
+        "high": 0.9206
+       },
+       "loss_usd": {
+        "low": 82854.0,
+        "high": 82854.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.82854,
+        "high": 0.82854
+       },
+       "multiple_of_rules_cap": {
+        "low": 15.343333333333334,
+        "high": 15.343333333333334
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 72854.0,
+        "high": 72854.0
+       },
+       "years_of_base_return": {
+        "low": 4.997303403681462,
+        "high": 4.997303403681462
+       }
+      }
+     },
+     "rules_cap_usd": 5400.0,
+     "reserve": 10000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  },
+  {
+   "name": "wide list, paper, bad, 500k",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 5
+     },
+     {
+      "F": 25000.0,
+      "count": 5
+     },
+     {
+      "F": 5000.0,
+      "count": 15
+     }
+    ],
+    "reserve": 50000.0,
+    "scenario": "bad",
+    "mode": "demo",
+    "asset_list": "wide"
+   },
+   "expected": {
+    "capital": 500000.0,
+    "seat_capital": 450000.0,
+    "n_seats": 25,
+    "groups": [
+     {
+      "F": 50000.0,
+      "C": 0.0,
+      "price": 500.0,
+      "fee": 0.0,
+      "trader_pays": 500.0,
+      "cost": 212.46120235242535,
+      "cost_pct_F": 0.004249224047048507,
+      "margin": 287.53879764757465,
+      "min_price": 212.46120235242535,
+      "min_price_pct_F": 0.004249224047048507,
+      "trader_ceiling_at_take_profit": 3200.0,
+      "commit": 50001.0,
+      "loss_failed_challenge": -500.0,
+      "loss_failed_funded": 7010.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 3.75,
+      "offered_load": 0.3073615571232877,
+      "blocking": 1.681053190779317e-05,
+      "sold_per_year": 44.99924352606415,
+      "busy_share": 0.06147127804240489,
+      "fails_challenge": null,
+      "fails_funded": 7
+     },
+     {
+      "F": 25000.0,
+      "C": 0.0,
+      "price": 250.0,
+      "fee": 0.0,
+      "trader_pays": 250.0,
+      "cost": 106.29387617621266,
+      "cost_pct_F": 0.004251755047048507,
+      "margin": 143.70612382378732,
+      "min_price": 106.29387617621266,
+      "min_price_pct_F": 0.004251755047048507,
+      "trader_ceiling_at_take_profit": 1600.0,
+      "commit": 25001.0,
+      "loss_failed_challenge": -250.0,
+      "loss_failed_funded": 3505.0,
+      "price_below_cost": false,
+      "count": 5,
+      "arrivals_per_month": 7.5,
+      "offered_load": 0.6147231142465754,
+      "blocking": 0.0003956078401062137,
+      "sold_per_year": 89.96439529439044,
+      "busy_share": 0.122895984992617,
+      "fails_challenge": null,
+      "fails_funded": 14
+     },
+     {
+      "F": 5000.0,
+      "C": 0.0,
+      "price": 50.0,
+      "fee": 0.0,
+      "trader_pays": 50.0,
+      "cost": 21.360015235242535,
+      "cost_pct_F": 0.004272003047048507,
+      "margin": 28.639984764757465,
+      "min_price": 21.360015235242535,
+      "min_price_pct_F": 0.004272003047048507,
+      "trader_ceiling_at_take_profit": 320.0,
+      "commit": 5001.0,
+      "loss_failed_challenge": -50.0,
+      "loss_failed_funded": 701.0,
+      "price_below_cost": false,
+      "count": 15,
+      "arrivals_per_month": 13.750000000000002,
+      "offered_load": 1.1269923761187217,
+      "blocking": 1.48891015113772e-12,
+      "sold_per_year": 164.99999999975435,
+      "busy_share": 0.07513282507446958,
+      "fails_challenge": null,
+      "fails_funded": 71
+     }
+    ],
+    "annual_return": 0.06118612078924132,
+    "annual_income": 30593.06039462066,
+    "platform_fee_year": 0.0,
+    "sold_per_year": 299.963638820209,
+    "seat_busy_share": 0.08195314765168613,
+    "capital_committed_share": 0.07273365668790971,
+    "idle_share": 0.9272663433120902,
+    "shock_overshoot_covered": 0.05111111111111111,
+    "worst_overshoot": 0.0802,
+    "worst_overshoot_range": {
+     "low": 0.0296,
+     "high": 0.0802
+    },
+    "cascade": {
+     "asset_list": "wide",
+     "coins": [
+      "ADA",
+      "AVAX",
+      "BNB",
+      "BTC",
+      "DOGE",
+      "ETH",
+      "LINK",
+      "SOL",
+      "SUI",
+      "XRP"
+     ],
+     "day": "2025-10-10",
+     "cases": {
+      "reference_mix": {
+       "label": "the stress test's pool: two big seats on alts",
+       "loss_share_of_seats": {
+        "low": 0.8366555555555556,
+        "high": 0.8706888888888888
+       },
+       "loss_usd": {
+        "low": 376495.0,
+        "high": 391810.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.75299,
+        "high": 0.78362
+       },
+       "multiple_of_rules_cap": {
+        "low": 13.94425925925926,
+        "high": 14.511481481481482
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 326495.0,
+        "high": 341810.0
+       },
+       "years_of_base_return": {
+        "low": 12.306549104391044,
+        "high": 12.807152829629755
+       }
+      },
+      "single_coin": {
+       "label": "every seat on the riskiest coin of the list",
+       "loss_share_of_seats": {
+        "low": 0.9206,
+        "high": 0.9206
+       },
+       "loss_usd": {
+        "low": 414270.0,
+        "high": 414270.0
+       },
+       "loss_share_of_pool": {
+        "low": 0.82854,
+        "high": 0.82854
+       },
+       "multiple_of_rules_cap": {
+        "low": 15.343333333333334,
+        "high": 15.343333333333334
+       },
+       "loss_beyond_reserve_usd": {
+        "low": 364270.0,
+        "high": 364270.0
+       },
+       "years_of_base_return": {
+        "low": 13.541306252343531,
+        "high": 13.541306252343531
+       }
+      }
+     },
+     "rules_cap_usd": 27000.0,
+     "reserve": 50000.0,
+     "measured_rules": {
+      "max_drawdown": 0.06,
+      "daily_loss": 0.03,
+      "leverage": 5.0
+     },
+     "rules_match": true,
+     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+    },
+    "warnings": [
+     "reserve_short_of_a_shock",
+     "cascade_beyond_rules",
+     "cascade_beyond_reserve"
+    ]
+   }
+  }
+ ],
+ "demand_for_return": [
+  {
+   "name": "demand for 0.0414 at 100000",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "base",
+    "mode": "real"
+   },
+   "target": 0.0414,
+   "expected": 3.130512329736746
+  },
+  {
+   "name": "demand for 0.183 at 100000",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "base",
+    "mode": "real"
+   },
+   "target": 0.183,
+   "expected": 17.01936286144442
+  },
+  {
+   "name": "demand for 50.0 at 100000",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0,
+    "scenario": "base",
+    "mode": "real"
+   },
+   "target": 50.0,
+   "expected": null
+  },
+  {
+   "name": "demand for 0.0414 at 1000000",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "base",
+    "mode": "real"
+   },
+   "target": 0.0414,
+   "expected": 2.9633125317161353
+  },
+  {
+   "name": "demand for 0.183 at 1000000",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "base",
+    "mode": "real"
+   },
+   "target": 0.183,
+   "expected": 13.119541034701228
+  },
+  {
+   "name": "demand for 50.0 at 1000000",
+   "spec": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0,
+    "scenario": "base",
+    "mode": "real"
+   },
+   "target": 50.0,
+   "expected": null
+  }
+ ],
+ "default_layout": [
+  {
+   "pool": 100000.0,
+   "expected": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 1
+     },
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 5000.0,
+      "count": 3
+     }
+    ],
+    "reserve": 10000.0
+   }
+  },
+  {
+   "pool": 250000.0,
+   "expected": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 2
+     },
+     {
+      "F": 25000.0,
+      "count": 2
+     },
+     {
+      "F": 5000.0,
+      "count": 6
+     }
+    ],
+    "reserve": 70000.0
+   }
+  },
+  {
+   "pool": 500000.0,
+   "expected": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 5
+     },
+     {
+      "F": 25000.0,
+      "count": 5
+     },
+     {
+      "F": 5000.0,
+      "count": 15
+     }
+    ],
+    "reserve": 50000.0
+   }
+  },
+  {
+   "pool": 1000000.0,
+   "expected": {
+    "seats": [
+     {
+      "F": 50000.0,
+      "count": 10
+     },
+     {
+      "F": 25000.0,
+      "count": 10
+     },
+     {
+      "F": 5000.0,
+      "count": 30
+     }
+    ],
+    "reserve": 100000.0
+   }
+  },
+  {
+   "pool": 50000.0,
+   "expected": {
+    "seats": [
+     {
+      "F": 25000.0,
+      "count": 1
+     },
+     {
+      "F": 12500.0,
+      "count": 1
+     },
+     {
+      "F": 2500.0,
+      "count": 3
+     }
+    ],
+    "reserve": 5000.0
+   }
+  }
+ ],
+ "after_cascades": [
+  {
+   "annual_return": 0.168,
+   "per_year": 0.2,
+   "loss_share_of_pool": 0.7529,
+   "expected": 0.01741999999999999
+  },
+  {
+   "annual_return": 0.168,
+   "per_year": 0.0,
+   "loss_share_of_pool": 0.7529,
+   "expected": 0.168
+  },
+  {
+   "annual_return": 0.209,
+   "per_year": 1.0,
+   "loss_share_of_pool": 0.2148,
+   "expected": -0.0058
+  },
+  {
+   "annual_return": -0.05,
+   "per_year": 0.5,
+   "loss_share_of_pool": 0.4,
+   "expected": -0.25
+  }
+ ],
+ "erlang_b": [
+  {
+   "servers": 0,
+   "offered": 2.0,
+   "expected": 1.0
+  },
+  {
+   "servers": 1,
+   "offered": 2.0,
+   "expected": 0.6666666666666666
+  },
+  {
+   "servers": 2,
+   "offered": 1.0,
+   "expected": 0.2
+  },
+  {
+   "servers": 10,
+   "offered": 5.0,
+   "expected": 0.01838457033664814
+  },
+  {
+   "servers": 25,
+   "offered": 20.0,
+   "expected": 0.0502217778907946
+  },
+  {
+   "servers": 50,
+   "offered": 40.0,
+   "expected": 0.018690671109632243
+  }
+ ]
+}

@@ -1,5 +1,6 @@
 // HyperEVM access: a read-only provider, the connected wallet, and the contracts.
 import { CONFIG } from "../config.js";
+export { MAX_BATCH, readAll } from "./batch.js";
 
 const { ethers } = window;
 
@@ -205,6 +206,10 @@ export async function approveIfNeeded(spender, amount) {
 /** The block the contracts were deployed in, from the app's config. */
 export function deployBlock() {
   return CONFIG.deployBlock || 0;
+}
+
+export function platformAssets() {
+  return CONFIG.platformAssets || [];
 }
 
 export function randomSalt() {
