@@ -2,9 +2,8 @@
 // still carries weight.
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
-import { esc, render, $, badge, row, isAddress } from "../lib/ui.js";
-
-const { ethers } = window;
+import { esc, render, $, badge, row, isAddress, settle, wire } from "../lib/ui.js";
+import { keyFacts } from "../lib/keys.js";
 
 export async function verifyView(address, page) {
   if (!isAddress(address)) {
@@ -37,8 +36,10 @@ export async function verifyView(address, page) {
     return;
   }
   const account = chain.contract(kind, address);
-  keysPanel(account, address, page).catch((e) => ($("#keys", page).textContent = String(e)));
-  fillsPanel(account, address, page).catch((e) => ($("#fills", page).textContent = String(e)));
+  // Raw errors used to be pasted in here, ethers payload and all. settle() says what failed
+  // in words; the section that failed is named by the box it writes into.
+  settle(keysPanel(account, address, page), $("#keys", page));
+  settle(fillsPanel(account, address, page), $("#fills", page));
 }
 
 const KEYS_HELD = `
@@ -50,38 +51,74 @@ const KEYS_HELD = `
 
 async function keysPanel(account, address, page) {
   const reg = chain.registry();
-  // The key bound now comes straight from the registry; older keys only from event history,
-  // which a rate-limited RPC may cut short.
-  const [current, boundNow] = await Promise.all([account.agentKey(), reg.keyOf(address)]);
-  const boundLog = await chain.history(reg, reg.filters.KeyBound(null, address));
-  const cutLog = await chain.history(account, account.filters.AgentCut());
-  const cuts = cutLog.events;
-  const partial = !(boundLog.complete && cutLog.complete);
-  const keys = [...new Set([
-    ...boundLog.events.map((ev) => ev.args.key),
-    ...(boundNow === ethers.ZeroAddress ? [] : [boundNow]),
-  ])];
-  const rows = [];
-  for (const key of keys) {
-    const [binding, role] = await Promise.all([reg.bindingOf(key), hl.info({ type: "userRole", user: key })]);
-    const hlSays = role.role === "agent"
-      ? (chain.same(role.data.user, address) ? badge("agent of this account", "ok") : badge(`agent of ${chain.short(role.data.user)}`, "bad"))
-      : badge(`Hyperliquid: ${role.role}`);
-    rows.push(`<div class="kv"><span class="mono">${esc(key)}</span><span>
-      ${badge(chain.KEY_STATE[Number(binding.state)], Number(binding.state) === 2 ? "ok" : "")}
-      trader <span class="mono">${esc(chain.short(binding.trader))}</span> · ${hlSays}</span></div>`);
-  }
-  const cutRows = cuts.map((ev) => `<div class="kv"><span>block ${ev.blockNumber}</span>
-    <span>replaced ${esc(chain.short(ev.args.oldKey))} with keyless <span class="mono">${esc(chain.short(ev.args.keyless))}</span></span></div>`);
+  // Every read this panel makes on load, in one place: four from the chain, plus Hyperliquid's
+  // own answer for each key it found. No event log — see app/lib/keys.js for why.
+  const facts = await keyFacts({
+    agentKey: () => account.agentKey(),
+    keyOf: () => reg.keyOf(address),
+    cutKey: () => account.cutKey(),
+    cutBlock: () => account.cutBlock(),
+    bindingOf: (key) => reg.bindingOf(key),
+    role: (key) => hl.info({ type: "userRole", user: key }),
+  });
+
+  const rows = facts.keys.map((k) => {
+    const hlSays = k.role.role === "agent"
+      ? (chain.same(k.role.data.user, address)
+        ? badge("agent of this account", "ok")
+        : badge(`agent of ${chain.short(k.role.data.user)}`, "bad"))
+      : badge(`Hyperliquid: ${k.role.role}`);
+    const tags = [
+      k.isCurrent ? badge("approved now", "ok") : "",
+      k.wasCut ? badge("cut by a stop", "bad") : "",
+    ].join("");
+    return `<div class="kv"><span class="mono">${esc(k.address)}</span><span>
+      ${tags}
+      ${badge(chain.KEY_STATE[Number(k.binding.state)], Number(k.binding.state) === 2 ? "ok" : "")}
+      trader <span class="mono">${esc(chain.short(k.binding.trader))}</span> · ${hlSays}</span></div>`;
+  });
+
+  const stop = facts.cutBlock
+    ? row("Last stop, as the account recorded it",
+      `block ${facts.cutBlock}, agent replaced by an address nobody holds`
+      + (facts.cutKey ? `; the key it cut was <span class="mono">${esc(facts.cutKey)}</span>` : ""))
+    : row("Stops recorded by this account", "none");
+
   $("#keys", page).className = "";
   $("#keys", page).innerHTML = `
-    ${row("Agent key the contract has approved now", current === ethers.ZeroAddress ? "none" : `<span class="mono">${esc(current)}</span>`)}
-    <h4>Keys ever bound to this account (KeyRegistry)</h4>${rows.join("") || "<p>none</p>"}
-    <h4>Stops (the agent replaced by an address nobody holds)</h4>${cutRows.join("") || "<p>none</p>"}
-    ${partial ? '<p class="small">History is partial: the public RPC limits how far back this page may read.</p>' : ""}
+    ${row("Agent key the contract has approved now",
+      facts.current ? `<span class="mono">${esc(facts.current)}</span>` : "none")}
+    ${stop}
+    <h4>Keys this account can name without the event log</h4>${rows.join("") || "<p>none</p>"}
     <p class="small muted">"Hyperliquid:" is Hyperliquid's own answer to <code>userRole</code> for each key, so you
-    can see the replacement took effect without asking us. What you can't see from here: who holds each key.
-    In this demo our gateway does.</p>`;
+    can see a replacement took effect without asking us. What you can't see from here: who holds each key.
+    In this demo our gateway does.</p>
+    <p class="small muted">Everything above is contract state, read now, in four reads. The account writes down
+    the block of its last stop and the key it cut, so that much is exact and does not decay. The full list of
+    keys ever bound lives in the event log, and this public RPC serves logs 50 blocks at a call — over the
+    hundreds of thousands of blocks since the deployment that is thousands of calls, which no browser gets to
+    make. We don't pretend to read it here.</p>
+    ${facts.cutBlock ? '<p><button type="button" id="log">Read the stop from the chain</button></p>' : ""}
+    <div id="logout"></div>`;
+
+  if (facts.cutBlock) wire($("#log", page), () => keyLog(account, facts.cutBlock, page), { done: "" });
+}
+
+/**
+ * The stop, on an explicit click. One `eth_getLogs` over the single block the account wrote
+ * down, so it is always found and always affordable. There is no windowed scan anywhere on
+ * this page: one that fits a browser covers a fraction of a percent of the history and shrinks
+ * every day, and the answer it fails to find is one the account states outright.
+ */
+async function keyLog(account, cutBlock, page) {
+  const cuts = await account.queryFilter(account.filters.AgentCut(), cutBlock, cutBlock);
+  const rows = cuts.map((ev) => `<div class="kv"><span>block ${ev.blockNumber}</span>
+    <span>replaced ${esc(chain.short(ev.args.oldKey))} with keyless
+    <span class="mono">${esc(chain.short(ev.args.keyless))}</span></span></div>`);
+  $("#logout", page).innerHTML = `
+    <h4>AgentCut in block ${cutBlock}</h4>${rows.join("")
+      || "<p>The account records this block, but the node served no event for it.</p>"}`;
+  return "";
 }
 
 async function fillsPanel(account, address, page) {
