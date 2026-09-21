@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseSeats, specFrom, gridValues, onGrid } from "../views/economics.js";
+import { parseSeats, specFrom, gridValues, onGrid, reserveFrom, MAX_SEATS } from "../views/economics.js";
 import { minPrice, ratioOff, gridText, CHALLENGE_RATIO } from "../lib/floor.js";
 import { readAll, MAX_BATCH } from "../lib/batch.js";
 import { evaluate } from "../lib/calc.js";
@@ -160,4 +160,47 @@ test("the Economics page shows the coins and the caption, not just a percentage"
   // No hand-typed cascade percentage: the page prints what the measurement says for the list chosen.
   assert.doesNotMatch(source, /8[37]\.[17]\s*%|four fifths/,
     "a cascade figure is hard-coded in the page and will not follow the asset list");
+});
+
+test("no floor for a pool the model does not describe, rather than the floor of another pool", () => {
+  // The model prices a challenge account of a tenth of the seat and was only checked there. A floor
+  // shown for 50% would be the cost of a different pool, labelled as this one's.
+  const off = minPrice(tables, { fundedCapital: 200, capital: 100, ...RULES });
+  assert.equal(off.price, undefined, "a figure for a pool the model does not describe");
+  assert.equal(off.offRatio, 0.5);
+  const on = minPrice(tables, { fundedCapital: 10000, capital: 1000, ...RULES, target: 0.08 });
+  assert.ok(on.price > 0, "the model's own ratio still gets its floor");
+  // And the form does not raise "below cost" on the strength of another pool's figure.
+  const source = readFileSync(new URL("../views/pools.js", import.meta.url), "utf8");
+  const offBranch = source.slice(source.indexOf("floor.offRatio"), source.indexOf("const price = Number"));
+  assert.doesNotMatch(offBranch, /below what a challenge costs/, "the badge fires for a pool the model does not price");
+});
+
+test("a seat count cannot freeze the page", () => {
+  // erlangB walks every seat of a group, three times, in the page's own thread.
+  assert.throws(() => parseSeats("5000x99999999999999999999"), /too large/);
+  assert.throws(() => parseSeats(`5000x${MAX_SEATS + 1}`), /more than this calculator takes/);
+  assert.throws(() => parseSeats("5000x600, 5000x600"), /more than this calculator takes/, "the cap is on the total");
+  assert.deepEqual(parseSeats(`5000x${MAX_SEATS}`), [{ F: 5000, count: MAX_SEATS }]);
+  assert.ok(MAX_SEATS >= 50, "a $1M pool of the default layout has 50 seats and must fit");
+});
+
+test("the reserve is zero or more dollars, never a division by zero", () => {
+  assert.equal(reserveFrom(""), 0, "an empty field is no reserve, which is allowed");
+  assert.equal(reserveFrom("2500"), 2500);
+  assert.throws(() => reserveFrom("-1"), /zero or more/);
+  assert.throws(() => reserveFrom("abc"), /zero or more/);
+  assert.throws(() => reserveFrom("Infinity"), /zero or more/);
+  assert.throws(() => specFrom({ mode: "custom", seats: "1000x1", reserve: "-1000", share: "80", pricePct: "1",
+    dd: "6", daily: "3", target: "10", chmode: "real", feePct: "20" }), /zero or more/);
+});
+
+test("the page names what the model covers and what it does not", () => {
+  const source = readFileSync(new URL("../views/economics.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /Every number on this page is a model/,
+    "the page calls its measured cascade a model again");
+  assert.match(source, /Every number the calculator returns is a model/);
+  // An invalid edit clears the previous pool's cascade on both error paths.
+  const run = source.slice(source.indexOf("function run("), source.indexOf("function cascade("));
+  assert.equal((run.match(/clearCascade\(/g) || []).length, 2, "an error path leaves the old cascade on the page");
 });

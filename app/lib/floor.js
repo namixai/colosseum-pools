@@ -28,6 +28,11 @@ export function gridText(tables) {
 export function minPrice(tables, terms, scenario = "base", mode = "real") {
   const { fundedCapital, dd, daily, target, share } = terms;
   if (!(fundedCapital > 0)) return { offGrid: true };
+  // The model prices a challenge account of a tenth of the seat and was only checked at that ratio.
+  // A pool with another one is not the pool it describes, and a floor labelled "the cost of this
+  // pool" would be the cost of a different one -- so there is no floor rather than a wrong one.
+  const ratio = ratioOff(terms);
+  if (ratio !== null) return { offRatio: ratio };
   if (!Object.prototype.hasOwnProperty.call(tables.cells, cellKey(scenario, mode, dd, daily, target))) {
     return { offGrid: true };
   }

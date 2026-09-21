@@ -2,7 +2,7 @@
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, wire, pct, duration, badge, row } from "../lib/ui.js";
-import { minPrice, ratioOff, gridText } from "../lib/floor.js";
+import { minPrice, gridText } from "../lib/floor.js";
 
 function notDeployed(page) {
   render(page, `<section class="card"><h2>Not deployed yet</h2>
@@ -178,14 +178,19 @@ async function priceFloor(page) {
         here. It holds ${esc(gridText(tables))}.</span>`;
       return;
     }
+    if (floor.offRatio !== undefined) {
+      // No figure and no "below cost" badge: the model describes a pool with a different challenge
+      // account, and its cost is not this pool's.
+      box.innerHTML = `<span class="muted">The model prices a challenge account at a tenth of the funded
+        capital; this one is ${esc((floor.offRatio * 100).toFixed(0))}% of it. That is not the pool the model
+        describes, so there is no cost line for it here rather than one for a different pool.</span>`;
+      return;
+    }
     const price = Number(f.get("price"));
     const under = price > 0 && price < floor.price;
-    const ratio = ratioOff(terms);
     box.innerHTML = `${under ? badge("the price is below what a challenge costs this pool", "bad") : ""}
       By the model, one challenge of this pool costs it about
       <strong>${floor.price.toFixed(2)} USDC</strong>; sell below that and the investor pays for each sale.
-      ${ratio === null ? "" : `The model prices a challenge account at a tenth of the funded capital; yours is
-      ${(ratio * 100).toFixed(0)}% of it, so treat the figure as the wrong pool's.`}
       <span class="muted">Model, not a measurement — the whole of it is on the
       <a href="#/economics">Economics</a> page.</span>`;
   };
