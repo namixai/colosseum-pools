@@ -113,7 +113,21 @@ expect 2 "the app's copy moved" "no TERMS in app/lib/chain.js"
 drift "$PY" 'RULES = "(' 'RULES = "'
 expect 2 "the agents' copy is not a tuple" "agents/desk.py RULES is not a tuple"
 
-# 8. Restored, the check is green again.
+# 8. forge itself answers with something that is not an ABI. A fake forge first on PATH, for
+#    this one run only; it lives in the backup directory, so the exit trap takes it away too.
+printf '#!/bin/sh\necho "Error: this is not an ABI"\nexit 0\n' >"$SAVE/forge" && chmod +x "$SAVE/forge"
+out=$(PATH="$SAVE:$PATH" python3 "$CHECK" 2>&1); code=$?
+rm_fake() { find "$SAVE" -maxdepth 1 -name forge -type f -delete; }
+if [ "$code" -eq 2 ] && printf '%s' "$out" | grep -q "did not print an ABI" && ! printf '%s' "$out" | grep -q Traceback; then
+  echo "ok: forge printing something that is not an ABI"
+else
+  echo "FAIL: forge printing something that is not an ABI: exit ${code}"
+  printf '%s\n' "$out"
+  fail=1
+fi
+rm_fake
+
+# 9. Restored, the check is green again.
 if out=$(python3 "$CHECK" 2>&1); then
   echo "ok: green again once the copies match"
 else
