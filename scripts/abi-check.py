@@ -41,9 +41,16 @@ def compiled(contract: str, function: str) -> dict[str, list[tuple[str, str]]]:
                              cwd=ROOT, capture_output=True, text=True, timeout=600)
     except FileNotFoundError:
         cannot_run("forge is not on PATH; this check needs the contracts built")
+    except subprocess.TimeoutExpired:
+        cannot_run("forge inspect did not finish in 600 seconds")
+    except OSError as error:  # after FileNotFoundError, which is one of these
+        cannot_run(f"could not run forge inspect: {error}")
     if out.returncode != 0:
         cannot_run(f"forge inspect failed\n{out.stderr.strip()[:800]}")
-    abi = json.loads(out.stdout)
+    try:
+        abi = json.loads(out.stdout)
+    except json.JSONDecodeError:
+        cannot_run(f"forge inspect did not print an ABI: {out.stdout.strip()[:120]!r}")
     fns = [f for f in abi if f.get("name") == function]
     if len(fns) != 1:
         cannot_run(f"expected one {function} in {contract}'s ABI, found {len(fns)}")
