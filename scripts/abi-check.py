@@ -15,6 +15,8 @@ invisible otherwise.
 """
 from __future__ import annotations
 
+from typing import NoReturn
+
 import json
 import pathlib
 import re
@@ -24,22 +26,27 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def cannot_run(message: str) -> "NoReturn":
+    """Exit 2: the check could not do its job. Distinct from 1, a real mismatch -- a copy that has
+    moved or no longer parses must not read as "the copies disagree", nor the other way round.
+    (`raise SystemExit("...")` would exit 1 whatever the message says.)"""
+    print(f"abi-check: {message}")
+    raise SystemExit(2)
+
+
 def compiled(contract: str, function: str) -> dict[str, list[tuple[str, str]]]:
     """{argument name: [(type, name), ...]} for every struct argument of `function`."""
     try:
         out = subprocess.run(["forge", "inspect", contract, "abi", "--json"],
                              cwd=ROOT, capture_output=True, text=True, timeout=600)
     except FileNotFoundError:
-        print("abi-check: forge is not on PATH; this check needs the contracts built")
-        raise SystemExit(2)
+        cannot_run("forge is not on PATH; this check needs the contracts built")
     if out.returncode != 0:
-        print(f"abi-check: forge inspect failed\n{out.stderr.strip()[:800]}")
-        raise SystemExit(2)
+        cannot_run(f"forge inspect failed\n{out.stderr.strip()[:800]}")
     abi = json.loads(out.stdout)
     fns = [f for f in abi if f.get("name") == function]
     if len(fns) != 1:
-        print(f"abi-check: expected one {function} in {contract}'s ABI, found {len(fns)}")
-        raise SystemExit(2)
+        cannot_run(f"expected one {function} in {contract}'s ABI, found {len(fns)}")
     return {i["name"]: [(c["type"], c["name"]) for c in i.get("components", [])]
             for i in fns[0]["inputs"] if i.get("components")}
 
@@ -48,23 +55,36 @@ def js_struct(source: str, name: str) -> list[tuple[str, str]]:
     """`const NAME = "(type name, ...)";`, including the form split over lines with `+`."""
     m = re.search(rf'const {name} =\s*((?:"[^"]*"\s*\+?\s*)+);', source)
     if not m:
-        raise SystemExit(f"abi-check: no {name} in app/lib/chain.js — did it move? (exit 2)")
+        cannot_run(f"no {name} in app/lib/chain.js -- did it move?")
     text = "".join(re.findall(r'"([^"]*)"', m.group(1))).strip()
-    return [tuple(part.split()) for part in inner(text, name).split(",")]  # type: ignore[misc]
+    fields = []
+    for i, part in enumerate(inner(text, name, "app/lib/chain.js").split(",")):
+        words = part.split()
+        # Exactly a type and a name. `uint64` alone would compare as a one-item tuple and fall
+        # over on the name with a traceback instead of saying which copy is malformed.
+        if len(words) != 2:
+            cannot_run(f"app/lib/chain.js {name} field {i} is {part.strip()!r}, not 'type name'")
+        fields.append((words[0], words[1]))
+    return fields
 
 
 def py_struct(source: str, name: str) -> list[tuple[str, str]]:
     """`NAME = "(type,type,...)"` — types only, so the names are not compared for this copy."""
     m = re.search(rf'^{name} = "([^"]*)"', source, re.M)
     if not m:
-        raise SystemExit(f"abi-check: no {name} in agents/desk.py — did it move? (exit 2)")
-    return [(part.strip(), "") for part in inner(m.group(1), name).split(",")]
+        cannot_run(f"no {name} in agents/desk.py -- did it move?")
+    fields = []
+    for i, part in enumerate(inner(m.group(1), name, "agents/desk.py").split(",")):
+        if len(part.split()) != 1:
+            cannot_run(f"agents/desk.py {name} field {i} is {part.strip()!r}, not a bare type")
+        fields.append((part.strip(), ""))
+    return fields
 
 
-def inner(text: str, name: str) -> str:
+def inner(text: str, name: str, where: str) -> str:
     text = text.strip()
     if not (text.startswith("(") and text.endswith(")")):
-        raise SystemExit(f"abi-check: {name} is not a tuple: {text[:60]!r} (exit 2)")
+        cannot_run(f"{where} {name} is not a tuple: {text[:60]!r}")
     return text[1:-1]
 
 
@@ -88,8 +108,7 @@ def main() -> int:
     problems: list[str] = []
     for arg, name in (("rules", "RULES"), ("terms", "TERMS")):
         if arg not in structs:
-            print(f"abi-check: createPool has no struct argument '{arg}'")
-            return 2
+            cannot_run(f"createPool has no struct argument '{arg}'")
         problems += compare(f"app/lib/chain.js {name}", structs[arg], js_struct(js, name))
         problems += compare(f"agents/desk.py {name}", structs[arg], py_struct(py, name))
     if problems:
