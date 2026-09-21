@@ -63,7 +63,9 @@ async function keysPanel(account, address, page) {
   });
 
   const rows = facts.keys.map((k) => {
-    const hlSays = k.role.role === "agent"
+    const hlSays = !k.role
+      ? badge("Hyperliquid: no answer right now", "bad")
+      : k.role.role === "agent"
       ? (chain.same(k.role.data.user, address)
         ? badge("agent of this account", "ok")
         : badge(`agent of ${chain.short(k.role.data.user)}`, "bad"))
@@ -93,7 +95,8 @@ async function keysPanel(account, address, page) {
     <p class="small muted">"Hyperliquid:" is Hyperliquid's own answer to <code>userRole</code> for each key, so you
     can see a replacement took effect without asking us. What you can't see from here: who holds each key.
     In this demo our gateway does.</p>
-    <p class="small muted">Everything above is contract state, read now, in four reads. The account writes down
+    <p class="small muted">Everything above is contract state, read now, in ${facts.chainReads} reads from the
+    chain: four for the account and the registry, and one binding for each key named. The account writes down
     the block of its last stop and the key it cut, so that much is exact and does not decay. The full list of
     keys ever bound lives in the event log, and this public RPC serves logs 50 blocks at a call — over the
     hundreds of thousands of blocks since the deployment that is thousands of calls, which no browser gets to

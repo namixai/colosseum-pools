@@ -42,7 +42,10 @@ export async function keyFacts(reads) {
   const keys = await Promise.all(named.map(async (address) => ({
     address,
     binding: await reads.bindingOf(address),
-    role: await reads.role(address),
+    // Hyperliquid's answer is a second opinion on facts the contract has already given. If it
+    // fails, the key is shown without it -- a failure there must not take the contract's own
+    // state down with it, which is the fragility this module exists to remove.
+    role: await Promise.resolve().then(() => reads.role(address)).catch(() => null),
     isCurrent: sameAddress(address, current),
     wasCut: sameAddress(address, cutKey),
   })));
@@ -52,6 +55,9 @@ export async function keyFacts(reads) {
     cutKey: isZero(cutKey) ? null : cutKey,
     cutBlock: Number(cutBlock || 0),
     keys,
+    // What the panel says about itself has to be true: four state reads, then one binding per
+    // key it could name. The page prints this number rather than a constant.
+    chainReads: 4 + named.length,
   };
 }
 
