@@ -185,6 +185,19 @@ test("a seat count cannot freeze the page", () => {
   assert.ok(MAX_SEATS >= 50, "a $1M pool of the default layout has 50 seats and must fit");
 });
 
+test("a pool size cannot freeze the page either", () => {
+  // The default layout gives five seats for every $100k, so a pool typed with extra zeros is the
+  // same freeze as a seat count typed with them -- through the other door.
+  const pool = (v) => specFrom({ mode: "default", pool: v, chmode: "real", feePct: "20" });
+  assert.throws(() => pool("1000000000000"), /more than this calculator takes/);
+  assert.throws(() => pool("Infinity"), /number of dollars/);
+  assert.throws(() => pool("1e308"), /more than this calculator takes/);
+  const top = (MAX_SEATS / 5) * 100000;                        // the largest pool that still fits
+  assert.equal(pool(String(top)).seats.reduce((a, s) => a + s.count, 0), MAX_SEATS);
+  assert.throws(() => pool(String(top + 100000)), /more than this calculator takes/);
+  assert.equal(pool("1000000").seats.reduce((a, s) => a + s.count, 0), 50, "the default sizes are untouched");
+});
+
 test("the reserve is zero or more dollars, never a division by zero", () => {
   assert.equal(reserveFrom(""), 0, "an empty field is no reserve, which is allowed");
   assert.equal(reserveFrom("2500"), 2500);

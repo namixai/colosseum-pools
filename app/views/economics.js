@@ -149,10 +149,21 @@ export function parseSeats(text) {
     return { F, count };
   });
   if (!seats.length) throw new Error("Name at least one seat, for example 50000x1");
-  // The Erlang formula walks every seat of a group, for each of three scenarios, in the page's own
-  // thread. A count typed with a few extra zeros would freeze the tab rather than fail.
+  return withinSeatCap(seats);
+}
+
+/**
+ * The Erlang formula walks every seat of a group, for each of three scenarios, in the page's own
+ * thread, on every keystroke. Too many seats would freeze the tab rather than fail -- whether they
+ * were typed as a count with extra zeros or came from a pool size with extra zeros. Both paths to
+ * seats come through here, so neither can forget the cap.
+ */
+export function withinSeatCap(seats) {
   const total = seats.reduce((a, s) => a + s.count, 0);
-  if (total > MAX_SEATS) throw new Error(`${total} seats is more than this calculator takes (${MAX_SEATS})`);
+  if (!Number.isSafeInteger(total) || total > MAX_SEATS) {
+    throw new Error(`${Number.isFinite(total) ? total.toLocaleString("en-US") : "that many"} seats is more `
+      + `than this calculator takes (${MAX_SEATS})`);
+  }
   return seats;
 }
 
@@ -188,7 +199,10 @@ export function specFrom(values) {
     err.tooSmall = true;
     throw err;
   }
-  return { ...base, ...defaultLayout(pool), price_pct: 0.01,
+  if (!Number.isFinite(pool)) throw new Error("The pool's capital has to be a number of dollars");
+  const layout = defaultLayout(pool);
+  withinSeatCap(layout.seats);
+  return { ...base, ...layout, price_pct: 0.01,
     trader_share: 0.80, max_drawdown: 0.06, daily_loss: 0.03, target: 0.10 };
 }
 
