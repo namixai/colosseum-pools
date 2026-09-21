@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Falsifies scripts/abi-check.py: drifts each copy of the structs in turn and requires the check
-# to go red and to name the copy it is unhappy with. Then puts the tree back and requires green.
+# to go red and to name the copy it is unhappy with. Then breaks a copy so it no longer parses,
+# and requires exit 2 -- "could not run", never mistaken for "the copies disagree". Then puts the
+# tree back and requires green.
 #
 #   ./scripts/test-abi-check.sh
 #
@@ -16,10 +18,17 @@ JS="$ROOT/app/lib/chain.js"
 PY="$ROOT/agents/desk.py"
 
 SAVE="$(mktemp -d -t abitest.XXXXXX)" || { echo "mktemp failed"; exit 2; }
-cp "$JS" "$SAVE/chain.js" && cp "$PY" "$SAVE/desk.py" || { echo "could not save the originals"; exit 2; }
+drop_save() { find "$SAVE" -type f -delete 2>/dev/null; rmdir "$SAVE" 2>/dev/null; }
+# Registered before anything can fail, so a failed backup does not leave the directory behind.
+trap drop_save EXIT
+
+if ! cp "$JS" "$SAVE/chain.js" || ! cp "$PY" "$SAVE/desk.py"; then
+  echo "could not save the originals"
+  exit 2
+fi
 put_back() { cp "$SAVE/chain.js" "$JS"; cp "$SAVE/desk.py" "$PY"; }
-cleanup() { put_back; find "$SAVE" -type f -delete; rmdir "$SAVE" 2>/dev/null; }
-trap cleanup EXIT
+# From here on the originals exist, so every exit puts them back first.
+trap 'put_back; drop_save' EXIT
 
 fail=0
 
@@ -30,15 +39,19 @@ if ! out=$(python3 "$CHECK" 2>&1); then
   exit 1
 fi
 
-expect_red() { # label  text-the-message-must-contain
-  label="$1"; named="$2"
+expect() { # exit-code  label  text-the-message-must-contain
+  want="$1"; label="$2"; named="$3"
   out=$(python3 "$CHECK" 2>&1); code=$?
-  if [ "$code" -ne 1 ]; then
-    echo "FAIL: ${label}: exit ${code}, expected 1"
+  if [ "$code" -ne "$want" ]; then
+    echo "FAIL: ${label}: exit ${code}, expected ${want}"
     printf '%s\n' "$out"
     fail=1
   elif ! printf '%s' "$out" | grep -q "$named"; then
-    echo "FAIL: ${label}: red, but did not name ${named}"
+    echo "FAIL: ${label}: exit ${code}, but did not name ${named}"
+    printf '%s\n' "$out"
+    fail=1
+  elif printf '%s' "$out" | grep -q "Traceback"; then
+    echo "FAIL: ${label}: a traceback instead of a message"
     printf '%s\n' "$out"
     fail=1
   else
@@ -47,42 +60,60 @@ expect_red() { # label  text-the-message-must-contain
   put_back
 }
 
-# 1. A type in the app's copy drifts.
-python3 - "$JS" <<'EOF'
+drift() { # file  old  new -- a literal replacement that must hit exactly once
+  # A drift that silently fails to apply would leave a green check and a passing case that
+  # tested nothing. So a text that is not there exactly once stops the whole run.
+  if ! python3 - "$1" "$2" "$3" <<'EOF'
 import pathlib, sys
-p = pathlib.Path(sys.argv[1]); t = p.read_text()
-p.write_text(t.replace("uint64 price", "uint128 price", 1))
+p, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+t = p.read_text()
+if t.count(old) != 1:
+    print(f"drift: {old!r} is in {p.name} {t.count(old)} times, not once")
+    raise SystemExit(1)
+p.write_text(t.replace(old, new, 1))
 EOF
-expect_red "a type in the app's copy" "app/lib/chain.js TERMS"
+  then
+    echo "FAIL: the drift above did not apply, so its case would test nothing"
+    exit 2
+  fi
+}
+
+# ── exit 1: the copies disagree ───────────────────────────────────────────────────────────
+
+# 1. A type in the app's copy drifts.
+drift "$JS" "uint64 price" "uint128 price"
+expect 1 "a type in the app's copy" "app/lib/chain.js TERMS"
 
 # 2. Two fields of the same width swap names. Nothing about the encoding changes; the app just
 #    reads one share where it means the other. This is the case no other test would catch.
-python3 - "$JS" <<'EOF'
-import pathlib, sys
-p = pathlib.Path(sys.argv[1]); t = p.read_text()
-t = t.replace("uint16 traderShareChallengeBps", "uint16 __SWAP__", 1)
-t = t.replace("uint16 traderShareFundedBps", "uint16 traderShareChallengeBps", 1)
-p.write_text(t.replace("uint16 __SWAP__", "uint16 traderShareFundedBps", 1))
-EOF
-expect_red "two same-width fields swapped by name" "app/lib/chain.js TERMS"
+drift "$JS" "uint16 traderShareChallengeBps" "uint16 __SWAP__"
+drift "$JS" "uint16 traderShareFundedBps" "uint16 traderShareChallengeBps"
+drift "$JS" "uint16 __SWAP__" "uint16 traderShareFundedBps"
+expect 1 "two same-width fields swapped by name" "app/lib/chain.js TERMS"
 
 # 3. A field goes missing from the agents' copy.
-python3 - "$PY" <<'EOF'
-import pathlib, re, sys
-p = pathlib.Path(sys.argv[1]); t = p.read_text()
-p.write_text(re.sub(r'^TERMS = "\(uint64,', 'TERMS = "(', t, count=1, flags=re.M))
-EOF
-expect_red "a field missing from the agents' copy" "agents/desk.py TERMS"
+drift "$PY" 'TERMS = "(uint64,' 'TERMS = "('
+expect 1 "a field missing from the agents' copy" "agents/desk.py TERMS"
 
 # 4. A type in the agents' copy drifts.
-python3 - "$PY" <<'EOF'
-import pathlib, re, sys
-p = pathlib.Path(sys.argv[1]); t = p.read_text()
-p.write_text(re.sub(r'^RULES = "\(uint16,', 'RULES = "(uint32,', t, count=1, flags=re.M))
-EOF
-expect_red "a type in the agents' copy" "agents/desk.py RULES"
+drift "$PY" 'RULES = "(uint16,' 'RULES = "(uint32,'
+expect 1 "a type in the agents' copy" "agents/desk.py RULES"
 
-# 5. Restored, the check is green again.
+# ── exit 2: the check could not run, and says which copy it could not read ────────────────
+
+# 5. A field of the app's copy loses its name: a type alone is not "type name".
+drift "$JS" "uint64 price," "uint64,"
+expect 2 "a field of the app's copy without a name" "app/lib/chain.js TERMS field 0"
+
+# 6. The app's copy moves or is renamed.
+drift "$JS" "const TERMS =" "const TERMS_V2 ="
+expect 2 "the app's copy moved" "no TERMS in app/lib/chain.js"
+
+# 7. The agents' copy stops being a tuple.
+drift "$PY" 'RULES = "(' 'RULES = "'
+expect 2 "the agents' copy is not a tuple" "agents/desk.py RULES is not a tuple"
+
+# 8. Restored, the check is green again.
 if out=$(python3 "$CHECK" 2>&1); then
   echo "ok: green again once the copies match"
 else
@@ -91,5 +122,5 @@ else
   fail=1
 fi
 
-[ "$fail" -eq 0 ] && echo "test-abi-check: every case behaved."
+if [ "$fail" -eq 0 ]; then echo "test-abi-check: every case behaved."; fi
 exit "$fail"
