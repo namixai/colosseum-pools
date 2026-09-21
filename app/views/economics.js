@@ -11,6 +11,8 @@ import { esc, render, $, badge, row } from "../lib/ui.js";
 
 const SIZES = [100_000, 500_000, 1_000_000];
 const MIN_POOL = 100_000;
+/** More seats than any pool here would hold; erlangB walks every one of them, three times. */
+export const MAX_SEATS = 1000;
 const SCENARIO_NAME = { bad: "bad", base: "base", good: "good" };
 
 let tables = null;
@@ -52,9 +54,10 @@ export async function economicsView(page) {
     <section class="card">
       <h2>Economics</h2>
       <p>What a pool of this design earns, what a trader can earn on it, and what it costs to run one.</p>
-      <p class="notice"><strong>Every number on this page is a model, not a measurement.</strong> The mechanics
-      come from the contracts in this repository; who buys a challenge, how often, and how far a stop overshoots
-      are assumptions. Nobody has run this with real traders.</p>
+      <p class="notice"><strong>Every number the calculator returns is a model, not a measurement.</strong> The
+      mechanics come from the contracts in this repository; who buys a challenge, how often, and how far a stop
+      overshoots are assumptions. Nobody has run this with real traders. The one exception on this page is the
+      cascade further down: that is a measurement of real crash days, and it is labelled as one.</p>
       <p class="muted">This describes the product at scale. The demo on this site is a single-seat pool on
       testnet holding mock USDC, and these numbers are not about it.</p>
     </section>
@@ -140,10 +143,26 @@ export function parseSeats(text) {
     const F = Number(m[1]);
     const count = Number(m[2]);
     if (!(F > 0) || !(count > 0)) throw new Error(`"${part.trim()}" is not a seat: both numbers must be above zero`);
+    if (!Number.isFinite(F) || !Number.isSafeInteger(count)) {
+      throw new Error(`"${part.trim()}" is not a seat: the numbers are too large to be a pool`);
+    }
     return { F, count };
   });
   if (!seats.length) throw new Error("Name at least one seat, for example 50000x1");
+  // The Erlang formula walks every seat of a group, for each of three scenarios, in the page's own
+  // thread. A count typed with a few extra zeros would freeze the tab rather than fail.
+  const total = seats.reduce((a, s) => a + s.count, 0);
+  if (total > MAX_SEATS) throw new Error(`${total} seats is more than this calculator takes (${MAX_SEATS})`);
   return seats;
+}
+
+/** An empty field is zero; anything negative or not a number is refused before the division. */
+export function reserveFrom(text) {
+  const reserve = Number(text ?? 0);
+  if (!Number.isFinite(reserve) || reserve < 0) {
+    throw new Error("The reserve kept back has to be zero or more dollars");
+  }
+  return reserve;
 }
 
 export function specFrom(values) {
@@ -156,7 +175,7 @@ export function specFrom(values) {
   if (values.mode === "custom") {
     return {
       ...base,
-      ...{ seats: parseSeats(values.seats), reserve: Number(values.reserve) },
+      ...{ seats: parseSeats(values.seats), reserve: reserveFrom(values.reserve) },
       trader_share: Number(values.share) / 100,
       max_drawdown: Number(values.dd) / 100,
       daily_loss: Number(values.daily) / 100,
@@ -176,12 +195,20 @@ export function specFrom(values) {
 function run(form, page) {
   const values = Object.fromEntries(new FormData(form));
   const box = $("#out", page);
+  const cascadeBox = $("#cascade", page);
+  // Whatever this input turns out to be, the cascade of the previous one is not about it.
+  const clearCascade = (why) => {
+    cascadeBox.className = "muted";
+    cascadeBox.textContent = why;
+  };
   let spec;
   try {
     spec = specFrom(values);
   } catch (e) {
     box.className = "";
     box.innerHTML = e.tooSmall ? SHARED_POOL : `<p class="notice">${esc(e.message)}</p>`;
+    clearCascade(e.tooSmall ? "No pool of its own below the minimum, so no cascade to show."
+      : "Fix the pool above to see what a cascade does to it.");
     return;
   }
   if (values.mode === "default") {
@@ -197,11 +224,11 @@ function run(form, page) {
   } catch (e) {
     box.className = "";
     box.innerHTML = `<p class="notice">${esc(String(e.message || e))}</p>`;
+    clearCascade("Fix the pool above to see what a cascade does to it.");
     return;
   }
   box.className = "";
   box.innerHTML = results(Object.fromEntries(runs));
-  const cascadeBox = $("#cascade", page);
   cascadeBox.className = "";
   cascadeBox.innerHTML = cascade(Object.fromEntries(runs).base);
 }
