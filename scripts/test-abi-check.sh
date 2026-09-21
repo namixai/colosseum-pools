@@ -6,7 +6,9 @@
 #
 #   ./scripts/test-abi-check.sh
 #
-# The originals are saved before anything is touched and restored on any exit, including a kill.
+# The originals are saved before anything is touched and restored after every case and on any
+# exit, including a kill. If a restore itself fails, the run says so and exits 2: a test that
+# reports success while leaving a source file drifted would be worse than no test.
 # A check that cannot go red proves nothing, which is the only reason this file exists.
 
 set -uo pipefail
@@ -26,9 +28,27 @@ if ! cp "$JS" "$SAVE/chain.js" || ! cp "$PY" "$SAVE/desk.py"; then
   echo "could not save the originals"
   exit 2
 fi
-put_back() { cp "$SAVE/chain.js" "$JS"; cp "$SAVE/desk.py" "$PY"; }
-# From here on the originals exist, so every exit puts them back first.
-trap 'put_back; drop_save' EXIT
+
+# Both copies are attempted even if the first fails, each failure is named, and any failure is 2.
+put_back() {
+  local status=0
+  cp "$SAVE/chain.js" "$JS" || { echo "FAIL: could not restore app/lib/chain.js"; status=2; }
+  cp "$SAVE/desk.py" "$PY" || { echo "FAIL: could not restore agents/desk.py"; status=2; }
+  return "$status"
+}
+
+# From here on the originals exist. On any exit: put them back, keep the run's own status, and
+# turn it into 2 if the restore failed -- then drop the backups, but only once they are not needed.
+on_exit() {
+  local status=$?
+  if ! put_back; then
+    echo "the working tree may still hold a drifted copy; the backups are kept in $SAVE"
+    exit 2
+  fi
+  drop_save
+  exit "$status"
+}
+trap on_exit EXIT
 
 fail=0
 
@@ -39,9 +59,14 @@ if ! out=$(python3 "$CHECK" 2>&1); then
   exit 1
 fi
 
-expect() { # exit-code  label  text-the-message-must-contain
+run_check() { # [PATH-prefix] -- runs the check, sets $out and $code
+  if [ -n "${1:-}" ]; then out=$(PATH="$1:$PATH" python3 "$CHECK" 2>&1); else out=$(python3 "$CHECK" 2>&1); fi
+  code=$?
+}
+
+expect() { # exit-code  label  text-the-message-must-contain  [PATH-prefix]
   want="$1"; label="$2"; named="$3"
-  out=$(python3 "$CHECK" 2>&1); code=$?
+  run_check "${4:-}"
   if [ "$code" -ne "$want" ]; then
     echo "FAIL: ${label}: exit ${code}, expected ${want}"
     printf '%s\n' "$out"
@@ -57,7 +82,8 @@ expect() { # exit-code  label  text-the-message-must-contain
   else
     echo "ok: ${label}"
   fi
-  put_back
+  # A restore that fails stops the run: every later case would be testing a drifted file.
+  put_back || exit 2
 }
 
 drift() { # file  old  new -- a literal replacement that must hit exactly once
@@ -76,6 +102,15 @@ EOF
     echo "FAIL: the drift above did not apply, so its case would test nothing"
     exit 2
   fi
+}
+
+fake_forge() { # what-it-prints -- a forge first on PATH for one case; the exit trap takes it away too
+  python3 - "$SAVE/forge" "$1" <<'EOF'
+import pathlib, stat, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text("#!/usr/bin/env python3\nimport sys\nsys.stdout.write(" + repr(sys.argv[2] + "\n") + ")\n")
+p.chmod(p.stat().st_mode | stat.S_IXUSR)
+EOF
 }
 
 # ── exit 1: the copies disagree ───────────────────────────────────────────────────────────
@@ -99,7 +134,7 @@ expect 1 "a field missing from the agents' copy" "agents/desk.py TERMS"
 drift "$PY" 'RULES = "(uint16,' 'RULES = "(uint32,'
 expect 1 "a type in the agents' copy" "agents/desk.py RULES"
 
-# ── exit 2: the check could not run, and says which copy it could not read ────────────────
+# ── exit 2: the check could not run, and says what it could not read ──────────────────────
 
 # 5. A field of the app's copy loses its name: a type alone is not "type name".
 drift "$JS" "uint64 price," "uint64,"
@@ -113,22 +148,22 @@ expect 2 "the app's copy moved" "no TERMS in app/lib/chain.js"
 drift "$PY" 'RULES = "(' 'RULES = "'
 expect 2 "the agents' copy is not a tuple" "agents/desk.py RULES is not a tuple"
 
-# 8. forge itself answers with something that is not an ABI. A fake forge first on PATH, for
-#    this one run only; it lives in the backup directory, so the exit trap takes it away too.
-printf '#!/bin/sh\necho "Error: this is not an ABI"\nexit 0\n' >"$SAVE/forge" && chmod +x "$SAVE/forge"
-out=$(PATH="$SAVE:$PATH" python3 "$CHECK" 2>&1); code=$?
-rm_fake() { find "$SAVE" -maxdepth 1 -name forge -type f -delete; }
-if [ "$code" -eq 2 ] && printf '%s' "$out" | grep -q "did not print an ABI" && ! printf '%s' "$out" | grep -q Traceback; then
-  echo "ok: forge printing something that is not an ABI"
-else
-  echo "FAIL: forge printing something that is not an ABI: exit ${code}"
-  printf '%s\n' "$out"
-  fail=1
-fi
-rm_fake
+# 8. forge answers with something that is not JSON.
+fake_forge 'Error: this is not an ABI'
+expect 2 "forge printing something that is not JSON" "did not print an ABI" "$SAVE"
 
-# 9. Restored, the check is green again.
-if out=$(python3 "$CHECK" 2>&1); then
+# 9. forge answers with JSON that is not an ABI at all.
+fake_forge 'null'
+expect 2 "forge printing JSON that is not an ABI" "not an ABI" "$SAVE"
+
+# 10. forge answers with an ABI whose entry has an odd shape: no stray exception gets out as 1.
+fake_forge '[{"name": "createPool", "inputs": null}]'
+expect 2 "an ABI entry of an odd shape" "stopped on" "$SAVE"
+find "$SAVE" -maxdepth 1 -name forge -type f -delete
+
+# 11. Restored, the check is green again.
+run_check
+if [ "$code" -eq 0 ]; then
   echo "ok: green again once the copies match"
 else
   echo "FAIL: still red after putting the originals back"

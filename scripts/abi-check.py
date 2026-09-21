@@ -51,6 +51,8 @@ def compiled(contract: str, function: str) -> dict[str, list[tuple[str, str]]]:
         abi = json.loads(out.stdout)
     except json.JSONDecodeError:
         cannot_run(f"forge inspect did not print an ABI: {out.stdout.strip()[:120]!r}")
+    if not isinstance(abi, list) or not all(isinstance(f, dict) for f in abi):
+        cannot_run(f"forge inspect printed JSON that is not an ABI: {out.stdout.strip()[:120]!r}")
     fns = [f for f in abi if f.get("name") == function]
     if len(fns) != 1:
         cannot_run(f"expected one {function} in {contract}'s ABI, found {len(fns)}")
@@ -108,10 +110,17 @@ def compare(label: str, solidity: list[tuple[str, str]], copy: list[tuple[str, s
     return problems
 
 
+def read(rel: str) -> str:
+    try:
+        return (ROOT / rel).read_text()
+    except (OSError, UnicodeError) as error:
+        cannot_run(f"could not read {rel}: {error}")
+
+
 def main() -> int:
     structs = compiled("PoolFactory", "createPool")
-    js = (ROOT / "app/lib/chain.js").read_text()
-    py = (ROOT / "agents/desk.py").read_text()
+    js = read("app/lib/chain.js")
+    py = read("agents/desk.py")
     problems: list[str] = []
     for arg, name in (("rules", "RULES"), ("terms", "TERMS")):
         if arg not in structs:
@@ -130,4 +139,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Exit 1 happens only through the explicit mismatch path in main(). Anything unforeseen -- an
+    # ABI entry of an odd shape, a missing key -- means the comparison never completed, which is
+    # "could not run", with the error printed rather than a traceback that CI reads as a mismatch.
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as error:  # noqa: BLE001
+        cannot_run(f"stopped on {type(error).__name__}: {error}")
