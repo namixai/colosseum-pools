@@ -7,7 +7,9 @@ export async function info(body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Hyperliquid info ${body.type}: HTTP ${res.status}`);
+  // The status goes on the error, not only into its message: the failure page tells a refusal
+  // (429) from a failure by the status (app/lib/ui.js) rather than by parsing the words.
+  if (!res.ok) throw Object.assign(new Error(`Hyperliquid info ${body.type}: HTTP ${res.status}`), { status: res.status });
   return res.json();
 }
 

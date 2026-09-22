@@ -118,10 +118,14 @@ test("a page that fails to load names a cause only when the error shows one", as
     new TypeError("Load failed"), Object.assign(new Error("server response 503"), { code: "SERVER_ERROR", info: { responseStatus: 503 } })]) {
     assert.match(failureHint(down), /could not be reached/, down.message);
   }
+  // Hyperliquid's own answers, as app/lib/hl.js raises them: a failure, and a refusal.
   const saved = globalThis.fetch;
-  globalThis.fetch = async () => ({ ok: false, status: 502 });
   try {
+    globalThis.fetch = async () => ({ ok: false, status: 502 });
     await assert.rejects(hl.info({ type: "meta" }), (err) => /could not be reached/.test(failureHint(err)));
+    globalThis.fetch = async () => ({ ok: false, status: 429 });
+    await assert.rejects(hl.info({ type: "meta" }),
+      (err) => rateLimited(err) && /rate limited/.test(friendly(err)) && failureHint(err) === "");
   } finally {
     globalThis.fetch = saved;
   }

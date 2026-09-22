@@ -83,8 +83,10 @@ function layers(err) {
 export function rateLimited(err) {
   for (const e of layers(err)) {
     if (Number(e.code) === -32005) return true;
-    // The same refusal, said by the web server in front of a node rather than by the node.
+    // The same refusal, said by the web server in front of a node rather than by the node...
     if (Number(e.info?.responseStatus) === 429) return true;
+    // ...or by Hyperliquid's API, whose status app/lib/hl.js puts on its error.
+    if (Number(e.status) === 429) return true;
     if (/rate limit/i.test(String(e.message || ""))) return true;
   }
   return false;
@@ -119,8 +121,8 @@ function unreachable(e) {
   // in Firefox, "Load failed" in Safari.
   const message = String(e.message || "");
   if (e.name === "TypeError" && /failed to fetch|networkerror|load failed/i.test(message)) return true;
-  // Hyperliquid answered with an HTTP error (app/lib/hl.js).
-  return /^Hyperliquid info \S+: HTTP \d+$/.test(message);
+  // Hyperliquid answered with an HTTP error (app/lib/hl.js puts the status on it).
+  return Number(e.status) >= 400;
 }
 
 export function pct(bps) {
