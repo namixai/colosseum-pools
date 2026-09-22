@@ -1,7 +1,8 @@
-# Hosting the gateway and the keeper
+# Hosting the app, the gateway and the keeper
 
-Status, 18 September 2026: the host is set up, and the gateway and the keeper run there
-against the rehearsal deployment. The public name waits for the Cloudflare steps below.
+Status, 22 September 2026: the gateway and the keeper run on the host against the rehearsal
+deployment, public as `pools-api.usenami.io` behind Cloudflare. The app at `pools.usenami.io`
+is the `app/` folder of commit `7855198`.
 
 ## Where things run
 
@@ -14,8 +15,10 @@ against the rehearsal deployment. The public name waits for the Cloudflare steps
 - **The gateway** (`colosseum-gw`) listens on `127.0.0.1:8787`. nginx serves it on 443 as
   `pools-api.usenami.io`, behind Cloudflare.
 - **The keeper** (`colosseum-keeper`) has no port. It polls the chain every 30 seconds.
-- **The app** is the static `app/` folder on Cloudflare Pages, `pools.usenami.io`. It calls
-  the gateway from the browser; `GATEWAY_ALLOW_ORIGIN` names it.
+- **The app** is the static `app/` folder, served by a Cloudflare Worker with static assets
+  (`raspy-violet-594d`) on `pools.usenami.io`. There is no build step and no server code: every
+  page is a `#/…` route of the one `index.html`. It calls the gateway from the browser;
+  `GATEWAY_ALLOW_ORIGIN` names it.
 - **RPC** (CTO, 17 Sep):
   - the gateway reads the chain through `rpcs.chain.link/hyperevm/testnet`, which allows 1000
     calls per IP in five minutes;
@@ -99,6 +102,19 @@ release.
 
 `install.sh` refuses a label without a complete testnet record in the release.
 
+## Publishing the app
+
+`deploy.sh` does not touch the app. A new version is a new deployment of the Worker, uploaded
+in the Cloudflare dashboard:
+
+1. Take `app/` from a commit on `origin/main`: `git archive <commit> app | tar -x -C <dir>`.
+2. If the contracts were deployed again, first put the new record's addresses in
+   `app/config.js` (`factory`, `registry`, `deployBlock`, `platformAssets`) and merge that. An
+   app that reads contracts of another version fails on every page that reads them, with
+   "could not decode result data".
+3. Upload the contents of `<dir>/app` as a new deployment.
+4. Open `/`, `#/new`, `#/economics` and `#/verify/<a challenge>` on `pools.usenami.io`.
+
 ## Checking
 
 - `curl -s 127.0.0.1:8787/v1/health` on the host: the chain, the signer mode and the number of keys.
@@ -111,7 +127,8 @@ release.
 
 - Cloudflare (Alex, in the dashboard):
   - the `pools-api` DNS record, proxied, to the host's address;
-  - the Pages project;
+  - the Worker that serves the app, and each new deployment of it;
+  - that Worker's `workers.dev` address, turned off, so the app has one public name;
   - the Origin CA certificate from the CSR above.
 - The SSH rule: the operator's current address, dated in the rule's description. A rule
   whose address the provider has since changed is removed.
