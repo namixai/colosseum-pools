@@ -68,17 +68,59 @@ export function friendly(err) {
   return String(reason).slice(0, 300);
 }
 
+/** An error and what it wraps, outermost first: ethers wraps what the node said, sometimes twice. */
+function layers(err) {
+  const out = [];
+  for (let e = err, depth = 0; e && depth < 5; e = e.error || e.info?.error || e.cause, depth++) out.push(e);
+  return out;
+}
+
 /**
  * The public RPC answers -32005 "rate limited". ethers wraps that answer, sometimes twice, and
  * the raw wrapper carries a whole JSON-RPC payload: pasting it into the page put what looks
  * like a stack trace in the most honest section of the site. Recognise it and say it in words.
  */
 export function rateLimited(err) {
-  for (let e = err, depth = 0; e && depth < 5; e = e.error || e.info?.error || e.cause, depth++) {
+  for (const e of layers(err)) {
     if (Number(e.code) === -32005) return true;
+    // The same refusal, said by the web server in front of a node rather than by the node.
+    if (Number(e.info?.responseStatus) === 429) return true;
     if (/rate limit/i.test(String(e.message || ""))) return true;
   }
   return false;
+}
+
+/**
+ * The line under a page that failed to load: what the failure means for the visitor, said only
+ * when the error shows it. It used to say "the public testnet RPC is rate limited" under every
+ * failure, the decode error too -- and that one no wait and no reload fixes.
+ */
+export function failureHint(err) {
+  // friendly() has already said it, and when to try again.
+  if (rateLimited(err)) return "";
+  const all = layers(err);
+  // ethers says BAD_DATA when a view's answer does not decode against the app's ABI: a contract
+  // of another version, or no contract at the address at all, whose answer is "0x".
+  if (all.some((e) => e.code === "BAD_DATA")) {
+    return "The contracts at the addresses this app is set up with did not answer in the form this "
+      + "version of the app reads: the app and the deployment it points at do not match. Reloading "
+      + "will not help.";
+  }
+  if (all.some(unreachable)) {
+    return "A service this page reads could not be reached or answered with an error: the HyperEVM "
+      + "testnet RPC, Hyperliquid's testnet API or the pool gateway. Reload in a moment.";
+  }
+  return "";
+}
+
+function unreachable(e) {
+  if (["NETWORK_ERROR", "SERVER_ERROR", "TIMEOUT"].includes(e.code)) return true;
+  // fetch itself: "Failed to fetch" in Chrome, "NetworkError when attempting to fetch resource."
+  // in Firefox, "Load failed" in Safari.
+  const message = String(e.message || "");
+  if (e.name === "TypeError" && /failed to fetch|networkerror|load failed/i.test(message)) return true;
+  // Hyperliquid answered with an HTTP error (app/lib/hl.js).
+  return /^Hyperliquid info \S+: HTTP \d+$/.test(message);
 }
 
 export function pct(bps) {

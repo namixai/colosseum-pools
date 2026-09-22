@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { keyFacts, isZero, sameAddress, MAX_CHAIN_READS_ON_LOAD, ZERO } from "../lib/keys.js";
-import { friendly, rateLimited } from "../lib/ui.js";
+import { friendly, rateLimited, failureHint } from "../lib/ui.js";
+import * as hl from "../lib/hl.js";
 
 // Hex letters on purpose: an all-digit address would make every case test pass by accident.
 const KEY = "0xaBcDeF1111111111111111111111111111111111";
@@ -102,6 +103,43 @@ test("a rate-limited RPC is said in words, not pasted as a payload", () => {
   assert.equal(rateLimited(new Error("execution reverted")), false);
   assert.match(friendly(new Error("execution reverted")), /execution reverted/);
   assert.equal(rateLimited({ info: { error: { code: -32005 } } }), true);
+});
+
+test("a page that fails to load names a cause only when the error shows one", async () => {
+  // What the demo hit: an app that reads a Terms of seven fields, against contracts that return
+  // six. ethers 6.17 raises this. No wait fixes it, so the page must not blame a busy RPC.
+  const decode = Object.assign(new Error('could not decode result data (value="0x00", code=BAD_DATA, version=6.17.0)'),
+    { code: "BAD_DATA", shortMessage: "could not decode result data", info: { method: "terms", signature: "terms()" } });
+  assert.match(failureHint(decode), /do not match/);
+  assert.doesNotMatch(failureHint(decode), /rate limit|reload in a moment/i);
+
+  // Nothing answered, or a server answered with an error: as the browser and ethers say it.
+  for (const down of [new TypeError("Failed to fetch"), new TypeError("NetworkError when attempting to fetch resource."),
+    new TypeError("Load failed"), Object.assign(new Error("server response 503"), { code: "SERVER_ERROR", info: { responseStatus: 503 } })]) {
+    assert.match(failureHint(down), /could not be reached/, down.message);
+  }
+  const saved = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 502 });
+  try {
+    await assert.rejects(hl.info({ type: "meta" }), (err) => /could not be reached/.test(failureHint(err)));
+  } finally {
+    globalThis.fetch = saved;
+  }
+
+  // Rate limited: friendly() says so and when to try again, and the hint doesn't say it twice --
+  // nor call a server's 429 "could not be reached".
+  const throttled = Object.assign(new Error("server response 429"), { code: "SERVER_ERROR", info: { responseStatus: 429 } });
+  assert.equal(rateLimited(throttled), true);
+  assert.match(friendly(throttled), /rate limited/);
+  assert.equal(failureHint(throttled), "");
+  assert.equal(failureHint({ info: { error: { code: -32005 } } }), "");
+  // Anything else: the message, and no cause the error didn't show.
+  assert.equal(failureHint(new Error("execution reverted")), "");
+  assert.equal(failureHint(new TypeError("x is not a function")), "");
+
+  // And the page that shows it adds no cause of its own.
+  const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /rate limited/i, "the failure page names a cause whatever the error");
 });
 
 test("Hyperliquid failing does not take the contract's own answer down with it", async () => {
