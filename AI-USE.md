@@ -7,19 +7,20 @@ work done by the team rather than by a third party. So here is how the work is a
 
 ## Who does what
 
-Claude Code (Anthropic) writes this repository. It runs as several sessions, one per area of
-the company, and the session assigned to this event writes the contracts, the gateway, the
-app, the tests and these documents.
+Alex, the founder, sets the architecture and the scope, writes and debugs code himself, and
+reviews and merges every change. He also decides what gets built and what gets cut, what may
+be said in public, when this repository goes public, and anything that costs money, and
+presents the pitch and the demo, on camera and in his own voice.
 
-Alex, the founder, makes the decisions: what gets built and what gets cut, what may be said
-in public, when this repository goes public, and anything that costs money. Alex also
-presents the pitch and the demo, on camera and in Alex's own voice.
+Claude Code (Anthropic) is a co-author: it runs as several sessions, one per area of the
+company, and the session assigned to this event writes parts of the contracts, the gateway,
+the app, the tests and these documents, and does research and a first pass of review before
+Alex looks at a change. Gemini Code Assist and CodeRabbit review pull requests too, as bots,
+alongside that first pass.
 
-Review is done by another session, not by a second person. One GitHub account carries every
-commit and every merge, and it is the founder's. The session that writes a change never
-merges it; a separate coordinating session reads it, argues with it and decides. In our
-earlier projects that gate has sent work back more than once. It is still a model, though,
-and we won't call it a human reviewer.
+One GitHub account carries every commit and every merge, and it is Alex's. He is the one who
+decides a change is ready and the one who merges it; the sessions above inform that decision,
+they don't stand in for it.
 
 ## Claude inside the demo
 
@@ -53,6 +54,8 @@ cap and a spending budget on top. We kept it, but the video doesn't use it, and 
 
 ## The count
 
-As of 16 September, every file in this repository except `LICENSE` was written by a Claude
-Code session. `LICENSE` is the Apache License 2.0, word for word. We will count again before
-submitting and put the new number here, with its date.
+Claude Code sessions wrote most of the code and documents in this repository; Alex set the
+architecture and scope for each, wrote and debugged parts of it himself, and reviewed and
+merged every change. `LICENSE` is the Apache License 2.0, word for word, untouched by either.
+We aren't putting a file count here: a number that only measures which hand typed a line
+would say less about the work than this page already does.
