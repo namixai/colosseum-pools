@@ -59,7 +59,7 @@ A price of zero is refused at creation — a pool that gives challenges away spe
 investor's capital and the published agent keys on nothing.
 
 Platform fee (per factory, set by the operator, zero by default; the testnet deployment sets
-10 test USDC): paid by every challenge buyer on top of the price, to the operator's fee
+2 test USDC): paid by every challenge buyer on top of the price, to the operator's fee
 recipient, and not refunded. A challenge uses
 one agent key for good, and a pool's owner can sell challenges to itself at price zero, so
 without a fee anyone could use up the published keys for the cost of gas.

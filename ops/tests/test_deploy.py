@@ -181,11 +181,11 @@ class Deployment(unittest.TestCase):
         record = self.record()
         self.assertEqual((record["status"], record["block"], record["published_keys"]),
                          ("complete", 0x10, [deploy.to_checksum_address(KEY_A)]))
-        # The demo's platform fee: 10 test USDC to the operator, on the new factory.
+        # The demo's platform fee: 2 test USDC to the operator, on the new factory.
         factory = "0x" + f"{0xE4:040x}"
         fee = [(to, values) for to, sig, values in self.transactions if sig == "setChallengeFee(uint256,address)"]
-        self.assertEqual(fee, [(factory, [10_000_000, Deployer.address])])
-        self.assertEqual((record["challenge_fee"], "setChallengeFee" in record["tx"]), (10_000_000, True))
+        self.assertEqual(fee, [(factory, [2_000_000, Deployer.address])])
+        self.assertEqual((record["challenge_fee"], "setChallengeFee" in record["tx"]), (2_000_000, True))
         with mock.patch.object(deployments, "ROOT", self.root):
             self.assertEqual(deployments.load("t")["PoolFactory"], "0x" + f"{0xE4:040x}")
 

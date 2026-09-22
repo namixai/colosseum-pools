@@ -3,6 +3,7 @@ import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, wire, pct, duration, badge, row } from "../lib/ui.js";
 import { minPrice, gridText } from "../lib/floor.js";
+import { DEMO_POOL as D } from "../lib/demo.js";
 
 function notDeployed(page) {
   render(page, `<section class="card"><h2>Not deployed yet</h2>
@@ -92,21 +93,21 @@ export async function newPoolView(page) {
       Testnet, mock USDC.</p>
       <form id="pool-form">
         <fieldset><legend>Rules</legend>
-          <label>Daily loss limit, % <input name="daily" type="number" step="0.1" min="0.1" max="99" value="3"></label>
-          <label>Max drawdown from start, % <input name="dd" type="number" step="0.1" min="0.1" max="99" value="6"></label>
-          <label>Max leverage, × <input name="lev" type="number" step="0.1" min="1" value="5"></label>
+          <label>Daily loss limit, % <input name="daily" type="number" step="0.1" min="0.1" max="99" value="${D.daily}"></label>
+          <label>Max drawdown from start, % <input name="dd" type="number" step="0.1" min="0.1" max="99" value="${D.dd}"></label>
+          <label>Max leverage, × <input name="lev" type="number" step="0.1" min="1" value="${D.lev}"></label>
           <div class="checks">${options || "<em>No assets listed by the platform yet.</em>"}</div>
         </fieldset>
         <fieldset><legend>Challenge</legend>
-          <label>Price, USDC <input name="price" type="number" step="0.01" min="0.01" value="100"></label>
-          <label>Capital, USDC <input name="capital" type="number" step="1" min="11" value="1000"></label>
-          <label>Profit target, % <input name="target" type="number" step="0.1" min="0.1" value="8"></label>
-          <label>Time limit, days <input name="days" type="number" step="1" min="1" value="7"></label>
+          <label>Price, USDC <input name="price" type="number" step="0.01" min="0.01" value="${D.price}"></label>
+          <label>Capital, USDC <input name="capital" type="number" step="1" min="11" value="${D.capital}"></label>
+          <label>Profit target, % <input name="target" type="number" step="0.1" min="0.1" value="${D.target}"></label>
+          <label>Time limit, days <input name="days" type="number" step="1" min="1" value="${D.days}"></label>
           <label>Trader's share of the challenge profit, %
-            <input name="challengeShare" type="number" step="1" min="0" max="100" value="0"></label>
+            <input name="challengeShare" type="number" step="1" min="0" max="100" value="${D.challengeShare}"></label>
           <label>Trader's share of the funded profit, %
-            <input name="fundedShare" type="number" step="1" min="0" max="100" value="80"></label>
-          <label>Funded capital after passing, USDC <input name="funded" type="number" step="1" min="11" value="10000"></label>
+            <input name="fundedShare" type="number" step="1" min="0" max="100" value="${D.fundedShare}"></label>
+          <label>Funded capital after passing, USDC <input name="funded" type="number" step="1" min="11" value="${D.funded}"></label>
         </fieldset>
         <button type="button" id="create">Create the pool</button>
       </form>

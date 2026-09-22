@@ -41,9 +41,11 @@ from hlspike import common as c  # noqa: E402
 # BTC 3, ETH 4, SOL 0. Checked again at deploy time against the live meta.
 PLATFORM_ASSETS = {"BTC": 3, "ETH": 4, "SOL": 0}
 # The platform fee on every challenge, in HyperEVM USDC units, paid to the operator (the
-# deployer). 10 test USDC, the CTO's decision of 17 Sep 2026: the demo has to show that a
-# challenge starts only after payment, and the fee keeps anyone from using up the agent keys.
-CHALLENGE_FEE = 10_000_000
+# deployer). The demo has to show that a challenge starts only after payment, and the fee keeps
+# anyone from using up the agent keys (CTO, 17 Sep 2026). 2 test USDC, a tenth of the demo
+# pool's price: the demo pool is 2,000 funded, 200 per challenge, a price of 20 and this fee
+# of 2 (CTO, 21 Sep 2026), sized to what the testnet faucet can pay for.
+CHALLENGE_FEE = 2_000_000
 
 
 # Everything the bytecode is built from.

@@ -6,6 +6,7 @@ import { parseSeats, specFrom, gridValues, onGrid, reserveFrom, MAX_SEATS } from
 import { minPrice, ratioOff, gridText, CHALLENGE_RATIO } from "../lib/floor.js";
 import { readAll, MAX_BATCH } from "../lib/batch.js";
 import { evaluate } from "../lib/calc.js";
+import { DEMO_POOL } from "../lib/demo.js";
 
 const tables = JSON.parse(readFileSync(new URL("../data/calc_tables.json", import.meta.url), "utf8"));
 const RULES = { dd: 0.06, daily: 0.03, target: 0.10, share: 0.80 };
@@ -174,6 +175,22 @@ test("no floor for a pool the model does not describe, rather than the floor of 
   const source = readFileSync(new URL("../views/pools.js", import.meta.url), "utf8");
   const offBranch = source.slice(source.indexOf("floor.offRatio"), source.indexOf("const price = Number"));
   assert.doesNotMatch(offBranch, /below what a challenge costs/, "the badge fires for a pool the model does not price");
+});
+
+test("the new-pool form starts with the demo pool, one the model prices, above what a challenge costs it", () => {
+  const d = DEMO_POOL;
+  const terms = { fundedCapital: d.funded, capital: d.capital, dd: d.dd / 100, daily: d.daily / 100,
+    target: d.target / 100, share: d.fundedShare / 100 };
+  assert.equal(ratioOff(terms), null, "the form would show no floor for the pool it starts with");
+  const floor = minPrice(tables, terms);
+  assert.ok(floor.price > 0, "the model has no figure for the demo pool's rules");
+  assert.ok(d.price > floor.price, `a challenge sells at ${d.price} and costs the pool ${floor.price}`);
+  // Every number field of the form starts from that record, and nothing else: the record is what
+  // the form shows, so what is checked above is what an investor opening the page sees.
+  const source = readFileSync(new URL("../views/pools.js", import.meta.url), "utf8");
+  const fields = [...source.matchAll(/<input name="(\w+)" type="number"[^>]*value="([^"]*)"/g)];
+  assert.deepEqual(fields.map((m) => m[1]).sort(), Object.keys(d).sort(), "the form and the record list different fields");
+  for (const [, name, value] of fields) assert.equal(value, `\${D.${name}}`, `${name} does not start from DEMO_POOL`);
 });
 
 test("a seat count cannot freeze the page", () => {
