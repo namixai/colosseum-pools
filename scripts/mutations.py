@@ -991,12 +991,17 @@ MUTATIONS = [
     ("K51", "ops/keeper.py",
      '                log("scan_stopped", at_block=self.next_block, error=str(exc)[:200])\n                break\n',
      "                raise\n",
-     ["test_a_refused_read_keeps_the_blocks_the_pass_already_read"]),
+     ["test_a_refused_read_keeps_the_blocks_and_the_rest_of_the_pass"]),
     ("K52", "ops/keeper.py",
-     "        # On disk before the rest of the pass: what follows reads the venue too, and a refusal\n"
-     "        # there must not cost the blocks this pass has already read.\n        self.save()\n",
+     "            # On disk window by window. A refused read is handled above, but a process killed\n"
+     "            # mid-scan -- a redeploy restarts this service -- would otherwise start the next run\n"
+     "            # at the block this pass began at, which is the rescan the loop exists to avoid. It\n"
+     "            # also keeps what was read from the venue reads below, which can be refused too.\n"
+     "            self.save()\n",
      "",
-     ["test_a_refused_read_keeps_the_blocks_the_pass_already_read"]),
+     # A pass that finishes saves at its end anyway; what this line alone keeps is the scan of a
+     # pass that is killed part way, which is what a redeploy does to this service.
+     ["test_an_interrupted_scan_keeps_the_windows_that_finished"]),
     # ── the identity gate and its list of known commits (bash) ──
     ("S1", "scripts/identity-check.sh",
      '  if [ -n "$entry" ]; then',

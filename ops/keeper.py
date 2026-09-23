@@ -230,9 +230,11 @@ class Keeper:
                 log("scan_stopped", at_block=self.next_block, error=str(exc)[:200])
                 break
             self.next_block = hi + 1
-        # On disk before the rest of the pass: what follows reads the venue too, and a refusal
-        # there must not cost the blocks this pass has already read.
-        self.save()
+            # On disk window by window. A refused read is handled above, but a process killed
+            # mid-scan -- a redeploy restarts this service -- would otherwise start the next run
+            # at the block this pass began at, which is the rescan the loop exists to avoid. It
+            # also keeps what was read from the venue reads below, which can be refused too.
+            self.save()
         names = perp_index_by_name()
         now = int(time.time())
         for pool in sorted(self.live):

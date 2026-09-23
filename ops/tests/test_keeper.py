@@ -224,11 +224,12 @@ class Following(KeeperTest):
         self.assertEqual(len(self.chain.log_queries), 1)
         self.assertEqual(k.next_block, 6)
 
-    def test_a_refused_read_keeps_the_blocks_the_pass_already_read(self):
+    def test_a_refused_read_keeps_the_blocks_and_the_rest_of_the_pass(self):
         """The demo's own failure, 23 Sep 2026: every pass was refused part way through its
         windows, and a pass that kept nothing started again at the deployment block each time.
-        A keeper that cannot catch up after a gap never activates the challenge it exists for."""
-        self.follow_a(status=keeper.ACTIVE)
+        A keeper that cannot catch up after a gap never activates the challenge it exists for,
+        so a refused window must cost the scan and nothing else."""
+        self.follow_a(status=keeper.CREATED, capitalArrived=True)  # due to be activated
         self.chain.latest = 100
         real_rpc = self.chain.rpc
         calls = {"logs": 0}
@@ -241,14 +242,13 @@ class Following(KeeperTest):
             return real_rpc(method, params)
 
         self.chain.rpc = refusing
-        # The venue is out too: what the scan read must survive that as well.
-        with mock.patch.object(keeper, "perp_index_by_name", side_effect=RuntimeError("meta: rate limited")):
-            with self.assertRaises(RuntimeError):
-                self.make(window=10, max_windows=5, start=0).one_pass()
+        self.make(window=10, max_windows=5, start=0).one_pass()  # the pass finishes
 
         on_disk = json.loads(self.state.read_text())
         self.assertEqual(on_disk["next_block"], 20, "the two windows that came back were thrown away")
         self.assertEqual(on_disk["live"], [keeper.to_checksum_address(POOL_A)])
+        # The pool found before the refusal is still acted on: that work is why the keeper runs.
+        self.assertEqual(self.chain.calls_to(CHALLENGE_A), [("activate", [])])
 
         # The next pass starts where that one stopped, and the refusal is not repeated forever.
         self.chain.rpc = real_rpc
@@ -256,6 +256,29 @@ class Following(KeeperTest):
         self.assertEqual(again.next_block, 20)
         again.one_pass()
         self.assertEqual(again.next_block, 70)
+
+    def test_an_interrupted_scan_keeps_the_windows_that_finished(self):
+        """A redeploy restarts this service, and it can land mid-scan. What the pass had read by
+        then is on disk, so the next run does not start again at the block this one began at."""
+        self.follow_a(status=keeper.ACTIVE)
+        self.chain.latest = 100
+        real_rpc = self.chain.rpc
+        calls = {"logs": 0}
+
+        def interrupted(method, params=()):
+            if method == "eth_getLogs":
+                calls["logs"] += 1
+                if calls["logs"] == 3:
+                    raise KeyboardInterrupt  # not an Exception: nothing in the pass catches it
+            return real_rpc(method, params)
+
+        self.chain.rpc = interrupted
+        with self.assertRaises(KeyboardInterrupt):
+            self.make(window=10, max_windows=5, start=0).one_pass()
+
+        on_disk = json.loads(self.state.read_text())
+        self.assertEqual(on_disk["next_block"], 20)
+        self.assertEqual(on_disk["live"], [keeper.to_checksum_address(POOL_A)])
 
     def test_a_failed_pass_keeps_its_place(self):
         self.follow_a(status=keeper.ACTIVE)
