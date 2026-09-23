@@ -170,21 +170,17 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
     return not (stage == IDLE and challenge == ZERO)
 
 
-def pools_with_challenges(factory: str, start: int, end: int, window: int) -> set[str]:
-    """Pools named by the factory's ChallengeCreated events in blocks [start, end]."""
+def pools_with_challenges(factory: str, lo: int, hi: int) -> set[str]:
+    """Pools named by the factory's ChallengeCreated events in blocks [lo, hi], one call."""
     found: set[str] = set()
-    lo = start
-    while lo <= end:
-        hi = min(lo + window - 1, end)
-        logs = c.rpc("eth_getLogs", [{
-            "address": factory, "topics": [CHALLENGE_CREATED], "fromBlock": hex(lo), "toBlock": hex(hi),
-        }])
-        for entry in logs:
-            # Only the factory's own events count; an RPC that ignored the filter changes nothing.
-            if entry["address"].lower() != factory.lower() or entry["topics"][0] != CHALLENGE_CREATED:
-                continue
-            found.add(to_checksum_address("0x" + entry["topics"][2][-40:]))
-        lo = hi + 1
+    logs = c.rpc("eth_getLogs", [{
+        "address": factory, "topics": [CHALLENGE_CREATED], "fromBlock": hex(lo), "toBlock": hex(hi),
+    }])
+    for entry in logs:
+        # Only the factory's own events count; an RPC that ignored the filter changes nothing.
+        if entry["address"].lower() != factory.lower() or entry["topics"][0] != CHALLENGE_CREATED:
+            continue
+        found.add(to_checksum_address("0x" + entry["topics"][2][-40:]))
     return found
 
 
@@ -220,9 +216,23 @@ class Keeper:
     def one_pass(self) -> None:
         latest = int(c.rpc("eth_blockNumber"), 16)
         end = min(latest, self.next_block + self.window * self.max_windows - 1)
-        if end >= self.next_block:
-            self.live |= pools_with_challenges(self.factory, self.next_block, end, self.window)
-            self.next_block = end + 1
+        # Window by window, and the place moves after each window that came back. A refused read
+        # ends the scan for this pass and keeps what it read: a pass that threw its whole scan away
+        # on the last window started again from the same block every time, so after a gap -- a
+        # deployment older than the keeper, or any restart behind the head -- it never caught up.
+        # Measured on the demo, 23 Sep 2026: 50 windows a pass against a node that allows 100 calls
+        # a minute, every pass refused part way, `next_block` at the deployment block all along.
+        while self.next_block <= end:
+            hi = min(self.next_block + self.window - 1, end)
+            try:
+                self.live |= pools_with_challenges(self.factory, self.next_block, hi)
+            except Exception as exc:
+                log("scan_stopped", at_block=self.next_block, error=str(exc)[:200])
+                break
+            self.next_block = hi + 1
+        # On disk before the rest of the pass: what follows reads the venue too, and a refusal
+        # there must not cost the blocks this pass has already read.
+        self.save()
         names = perp_index_by_name()
         now = int(time.time())
         for pool in sorted(self.live):

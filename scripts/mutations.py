@@ -988,6 +988,15 @@ MUTATIONS = [
      ", { status: res.status });",
      ");",
      ["a page that fails to load names a cause only when the error shows one"]),
+    ("K51", "ops/keeper.py",
+     '                log("scan_stopped", at_block=self.next_block, error=str(exc)[:200])\n                break\n',
+     "                raise\n",
+     ["test_a_refused_read_keeps_the_blocks_the_pass_already_read"]),
+    ("K52", "ops/keeper.py",
+     "        # On disk before the rest of the pass: what follows reads the venue too, and a refusal\n"
+     "        # there must not cost the blocks this pass has already read.\n        self.save()\n",
+     "",
+     ["test_a_refused_read_keeps_the_blocks_the_pass_already_read"]),
     # ── the identity gate and its list of known commits (bash) ──
     ("S1", "scripts/identity-check.sh",
      '  if [ -n "$entry" ]; then',
