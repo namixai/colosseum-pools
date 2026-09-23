@@ -118,23 +118,35 @@ test("a page that fails to load names a cause only when the error shows one", as
     new TypeError("Load failed"), Object.assign(new Error("server response 503"), { code: "SERVER_ERROR", info: { responseStatus: 503 } })]) {
     assert.match(failureHint(down), /could not be reached/, down.message);
   }
-  // Hyperliquid's own answers, as app/lib/hl.js raises them: a failure, and a refusal.
+  // Hyperliquid's own answers, as app/lib/hl.js raises them: a failure that may pass, a refusal,
+  // and one that says the request itself was wrong.
   const saved = globalThis.fetch;
   try {
     globalThis.fetch = async () => ({ ok: false, status: 502 });
     await assert.rejects(hl.info({ type: "meta" }), (err) => /could not be reached/.test(failureHint(err)));
     globalThis.fetch = async () => ({ ok: false, status: 429 });
-    await assert.rejects(hl.info({ type: "meta" }),
-      (err) => rateLimited(err) && /rate limited/.test(friendly(err)) && failureHint(err) === "");
+    await assert.rejects(hl.info({ type: "meta" }), (err) => rateLimited(err)
+      // Said in the name of whoever refused: this one is Hyperliquid, not the RPC.
+      && /Hyperliquid's testnet API is refusing/.test(friendly(err))
+      && !/HyperEVM RPC/.test(friendly(err))
+      && failureHint(err) === "");
+    // 404 and 400 answer the same way however often the page is reloaded, so it is not told to.
+    for (const status of [404, 400]) {
+      globalThis.fetch = async () => ({ ok: false, status });
+      await assert.rejects(hl.info({ type: "meta" }), (err) => failureHint(err) === "");
+    }
   } finally {
     globalThis.fetch = saved;
   }
+  // The same, from ethers: a status it carries in info decides, whatever its code says.
+  assert.equal(failureHint(Object.assign(new Error("server response 404"),
+    { code: "SERVER_ERROR", info: { responseStatus: 404 } })), "");
 
   // Rate limited: friendly() says so and when to try again, and the hint doesn't say it twice --
   // nor call a server's 429 "could not be reached".
   const throttled = Object.assign(new Error("server response 429"), { code: "SERVER_ERROR", info: { responseStatus: 429 } });
   assert.equal(rateLimited(throttled), true);
-  assert.match(friendly(throttled), /rate limited/);
+  assert.match(friendly(throttled), /The public HyperEVM RPC is refusing/);
   assert.equal(failureHint(throttled), "");
   assert.equal(failureHint({ info: { error: { code: -32005 } } }), "");
   // Anything else: the message, and no cause the error didn't show.

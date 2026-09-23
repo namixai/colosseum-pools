@@ -60,9 +60,10 @@ export function wire(button, action, { done = "Done.", confirm } = {}) {
 export function friendly(err) {
   if (!err) return "Something went wrong.";
   if (err.code === "ACTION_REJECTED" || err.code === 4001) return "Cancelled in the wallet.";
-  if (rateLimited(err)) {
-    return "The public HyperEVM RPC is refusing further reads from this browser right now "
-      + "(rate limited). Wait a few seconds and try again.";
+  const limiter = rateLimitedBy(err);
+  if (limiter) {
+    return `${limiter} is refusing further requests from this browser right now (rate limited). `
+      + "Wait a few seconds and try again.";
   }
   const reason = err.revert?.name || err.reason || err.shortMessage || err.message || String(err);
   return String(reason).slice(0, 300);
@@ -75,21 +76,32 @@ function layers(err) {
   return out;
 }
 
+const RPC = "The public HyperEVM RPC";
+const HYPERLIQUID = "Hyperliquid's testnet API";
+
 /**
+ * Which service answered "too many requests", or "" when none did. Who refused belongs in the
+ * sentence: a limit from Hyperliquid said in the RPC's name sends the reader to look at the
+ * wrong thing, and both are asked for on the same page.
+ *
  * The public RPC answers -32005 "rate limited". ethers wraps that answer, sometimes twice, and
  * the raw wrapper carries a whole JSON-RPC payload: pasting it into the page put what looks
  * like a stack trace in the most honest section of the site. Recognise it and say it in words.
  */
-export function rateLimited(err) {
+export function rateLimitedBy(err) {
   for (const e of layers(err)) {
-    if (Number(e.code) === -32005) return true;
-    // The same refusal, said by the web server in front of a node rather than by the node...
-    if (Number(e.info?.responseStatus) === 429) return true;
-    // ...or by Hyperliquid's API, whose status app/lib/hl.js puts on its error.
-    if (Number(e.status) === 429) return true;
-    if (/rate limit/i.test(String(e.message || ""))) return true;
+    // app/lib/hl.js puts the HTTP status on its own error; nothing else in this app does.
+    if (Number(e.status) === 429) return HYPERLIQUID;
+    if (Number(e.code) === -32005) return RPC;
+    // The same refusal, said by a web server in front of the node rather than by the node.
+    if (Number(e.info?.responseStatus) === 429) return RPC;
+    if (/rate limit/i.test(String(e.message || ""))) return RPC;
   }
-  return false;
+  return "";
+}
+
+export function rateLimited(err) {
+  return rateLimitedBy(err) !== "";
 }
 
 /**
@@ -98,8 +110,8 @@ export function rateLimited(err) {
  * failure, the decode error too -- and that one no wait and no reload fixes.
  */
 export function failureHint(err) {
-  // friendly() has already said it, and when to try again.
-  if (rateLimited(err)) return "";
+  // A rate limit gets no line of its own: friendly() has already named who refused and said when
+  // to try again, and 429 is not a status this reads as a service that could not be reached.
   const all = layers(err);
   // ethers says BAD_DATA when a view's answer does not decode against the app's ABI: a contract
   // of another version, or no contract at the address at all, whose answer is "0x".
@@ -116,13 +128,17 @@ export function failureHint(err) {
 }
 
 function unreachable(e) {
-  if (["NETWORK_ERROR", "SERVER_ERROR", "TIMEOUT"].includes(e.code)) return true;
+  // A status decides on its own, because it says whether waiting can help: a 5xx, a request
+  // timeout (408) and "too early" (425) can pass, while a 400 or a 404 will answer the same way
+  // however many times the page is reloaded, and telling the visitor to reload wastes their time.
+  const status = Number(e.status ?? e.info?.responseStatus);
+  if (Number.isFinite(status)) return status >= 500 || status === 408 || status === 425;
   // fetch itself: "Failed to fetch" in Chrome, "NetworkError when attempting to fetch resource."
   // in Firefox, "Load failed" in Safari.
   const message = String(e.message || "");
   if (e.name === "TypeError" && /failed to fetch|networkerror|load failed/i.test(message)) return true;
-  // Hyperliquid answered with an HTTP error (app/lib/hl.js puts the status on it).
-  return Number(e.status) >= 400;
+  // ethers, when nothing answered at all or the answer never came.
+  return ["NETWORK_ERROR", "TIMEOUT", "SERVER_ERROR"].includes(e.code);
 }
 
 export function pct(bps) {
