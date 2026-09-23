@@ -1,9 +1,9 @@
 # Hosting the app, the gateway and the keeper
 
-Status, 22 September 2026: the gateway runs on the host against the rehearsal deployment and
-is public as `pools-api.usenami.io` behind Cloudflare; its `/v1/health` answers. The keeper was
-last checked on the host on 18 September. The app at `pools.usenami.io` is the `app/` folder of
-commit `7855198`.
+Status, 23 September 2026: the gateway and the keeper both run on the host against the
+rehearsal deployment, each `active` under systemd, and the gateway is public as
+`pools-api.usenami.io` behind Cloudflare with `/v1/health` answering. The app at
+`pools.usenami.io` is the `app/` folder of commit `7855198`.
 
 ## Where things run
 
