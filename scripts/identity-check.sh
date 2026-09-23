@@ -10,8 +10,21 @@
 # merging account's e-mail privacy setting, and this check is how we find out.
 #
 # Exit 0 = clean, 1 = at least one commit with another identity, 2 = could not run.
+#
+# KNOWN_IDENTITIES below names the commits this check accepts anyway, one line each: the full
+# 40-character commit id, a space, and the reason it is there. An id names one commit and
+# everything in it, author and committer included -- change any of that and the id changes with
+# it, so an entry cannot come to cover a different identity later. Nothing is skipped by
+# address or by pattern, a shortened id never matches the full id the log prints, and every
+# commit not named here is checked as before. Each run says which commits it skipped and why,
+# because a list nobody reads is a hole. Adding a line is a decision to publish that identity:
+# it is reviewed like any other change, and the reason is what the reviewer weighs.
 
 set -uo pipefail
+
+KNOWN_IDENTITIES='
+ceee373edce212f1bf074039a5a2cb224cdb5307 merged on 22 Sep 2026 with the GitHub merge button, which rewrote the committer; same tree and same parent as f834847, the head that passed this check
+'
 
 REV="${1:-HEAD}"
 git rev-parse --verify --quiet "$REV" >/dev/null || { echo "identity-check: unknown revision $REV"; exit 2; }
@@ -24,8 +37,15 @@ fi
 allowed='(@users\.noreply\.github\.com|^noreply@github\.com)$'
 bad=0
 total=0
+known=0
 while IFS=' ' read -r sha author committer; do
   total=$((total + 1))
+  entry="$(printf '%s\n' "$KNOWN_IDENTITIES" | grep "^${sha} " | head -1)"
+  if [ -n "$entry" ]; then
+    echo "identity-check: ${sha} known, not checked: ${entry#* }"
+    known=$((known + 1))
+    continue
+  fi
   a_ok=0; c_ok=0
   printf '%s\n' "$author" | grep -Eq "$allowed" && a_ok=1
   printf '%s\n' "$committer" | grep -Eq "$allowed" && c_ok=1
@@ -40,4 +60,4 @@ if [ "$bad" -ne 0 ]; then
   echo "identity-check: ${bad} of ${total} commits carry a non-noreply identity"
   exit 1
 fi
-echo "identity-check: clean (${total} commits)"
+echo "identity-check: clean (${total} commits, ${known} known and not checked)"

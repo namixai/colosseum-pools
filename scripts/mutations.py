@@ -988,6 +988,15 @@ MUTATIONS = [
      ", { status: res.status });",
      ");",
      ["a page that fails to load names a cause only when the error shows one"]),
+    # ── the identity gate and its list of known commits (bash) ──
+    ("S1", "scripts/identity-check.sh",
+     '  if [ -n "$entry" ]; then',
+     "  if true; then",
+     ["personal author", "personal committer"]),
+    ("S2", "scripts/identity-check.sh",
+     'grep "^${sha} "',
+     'grep "${sha:0:8}"',
+     ["a short id does not match"]),
     ("J15", "app/lib/hlsend.js",
      "  if (v < 27) v += 27;",
      "",
@@ -1020,6 +1029,9 @@ MUTATIONS = [
 
 RUNNERS = {
     "M": (["forge", "test"], r"^\[FAIL.*\]\s+(\w+)\("),
+    # The gate that keeps personal addresses out of this public history, and the list of commits
+    # it accepts anyway: its own cases name themselves in the FAIL line.
+    "S": (["bash", "scripts/test-identity-check.sh"], r"^FAIL (.+?)(?::|$)"),
     "G": (["spike/.venv/bin/python", "-m", "unittest", "discover", "-s", "gateway/tests", "-t", "."],
           r"^(?:FAIL|ERROR): (\w+) \("),
     "A": (["spike/.venv/bin/python", "-m", "unittest", "discover", "-s", "agents/tests", "-t", "."],
