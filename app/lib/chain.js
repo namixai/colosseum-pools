@@ -53,6 +53,8 @@ export const ABI = {
     "function fundedPayoutOwed() view returns (uint64)",
     "function fundedResultTaken() view returns (bool)",
     "function fundedResult() view returns (int64)",
+    // What the contract wrote down when it ended the funded stage: the pool's own breachReason.
+    "function fundedEndReason() view returns (uint8)",
     "function capitalNeeded() view returns (uint64)",
     "function prepareAccount()",
     "function buyChallenge() returns (address)",

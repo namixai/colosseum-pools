@@ -15,9 +15,12 @@ export async function poolView(address, page) {
     return;
   }
   const me = chain.currentAddress();
-  const [{ rules, terms, assets }, stage, owner, ready, challenge, fundedTrader, earned, spotUsdc, fee, neededSpot] = await Promise.all([
+  const [{ rules, terms, assets }, stage, owner, ready, challenge, fundedTrader, earned, spotUsdc, fee,
+         neededSpot, fundedEndReason] = await Promise.all([
     rulesAndTerms(pool), pool.stage(), pool.owner(), pool.accountReady(), pool.challenge(),
     pool.fundedTrader(), pool.earned(), hl.spotUsdc(address), chain.factory().challengeFee(), pool.capitalNeeded(),
+    // What the contract wrote down if it stopped the funded trader; None when it ended clean.
+    pool.fundedEndReason(),
   ]);
   const stageName = chain.STAGE[Number(stage)];
   const isOwner = chain.same(me, owner);
@@ -77,7 +80,8 @@ export async function poolView(address, page) {
     funded.innerHTML = `<h3>Funded stage</h3><div id="equity"></div><div id="trade"></div><div class="actions" id="funded-actions"></div>`;
     // Closing is what a pool looks like after its funded stage was stopped: the panel should say
     // so rather than judge what is left of the account.
-    settle(equityPanel($("#equity", page), pool, address, { stopped: Number(stage) === 3 }),
+    settle(equityPanel($("#equity", page), pool, address,
+                       { recorded: fundedEndReason, stopped: Number(stage) === 3 }),
            $("#equity", page));
     if (Number(stage) === 2 && isFunded) settle(tradePanel($("#trade", page), address, rules), $("#trade", page));
     const actions = $("#funded-actions", page);

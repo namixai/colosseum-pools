@@ -51,8 +51,8 @@ export async function equityPanel(box, contract, account, { recorded = 0, finish
     <p class="muted small">${live
       ? `The verdict reads HyperCore through precompiles at the start of the block; the numbers above come
          from Hyperliquid's API and can be a second newer.`
-      : `The figures above are this account as it stands now: once it has finished, its capital is back with
-         the pool, so they no longer describe what it did while it traded.`}</p>`;
+      : `The figures above are this account as it stands now. It has stopped trading, and its settlement may
+         still be running, so they do not say what happened while it traded.`}</p>`;
 }
 
 /** The order ticket and the open orders, for the trader of this account. */

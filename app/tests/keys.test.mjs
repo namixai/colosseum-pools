@@ -104,12 +104,17 @@ test("a stop shows the reason the contract recorded, not one computed on an empt
   assert.match(livePanel, /finished/, "the live panel cannot tell a finished account from a trading one");
   const poolView = readFileSync(new URL("../views/pool.js", import.meta.url), "utf8");
   assert.match(poolView, /stopped: Number\(stage\) === 3/, "a pool in Closing tells the panel nothing");
+  // A pool keeps its own reason when it stops a funded trader; throwing it away would leave the
+  // page saying "stopped" where the contract can say what for.
+  assert.match(poolView, /pool\.fundedEndReason\(\)/, "the pool page drops its own recorded reason");
+  assert.doesNotMatch(livePanel, /capital is back with/, "the panel claims settlement has finished");
 
   // The pages ask for the recorded reason, and the challenge page no longer hides it once the
   // challenge is settled -- which is where a judge reads it.
   const verify = readFileSync(new URL("../views/verify.js", import.meta.url), "utf8");
   assert.match(verify, /breachReason\(\)/, "the verify page does not read the recorded reason");
   assert.match(verify, /finished = kind === "challenge"/, "the verify page cannot tell a finished account");
+  assert.match(verify, /account\.fundedEndReason\(\)/, "the verify page drops a pool's recorded reason");
   assert.match(verify, /ruleVerdict\(/);
   const challenge = readFileSync(new URL("../views/challenge.js", import.meta.url), "utf8");
   assert.match(challenge, /ruleVerdict\(/);

@@ -142,13 +142,15 @@ async function fillsPanel(account, address, page, kind) {
   // the live reading is for accounts that are still trading.
   const [live, recorded, stopped, state] = await Promise.all([
     account.violation([]),
-    kind === "challenge" ? account.breachReason() : 0,
+    kind === "challenge" ? account.breachReason() : account.fundedEndReason(),
     account.isStopped(),
     kind === "challenge" ? account.status() : account.stage(),
   ]);
-  // Past Active a challenge does not trade again, whatever ended it; a pool in Closing is
-  // settling a stop. Either way the live reading is about what is left, not about what happened.
-  const finished = kind === "challenge" ? Number(state) > 2 : Number(state) === 3;
+  // A pool records its own reason when it stops a funded trader (fundedEndReason), so a stopped
+  // pool has one to show; a funded stage ended without a rule broken leaves it None and the pool
+  // is simply stopped. "Finished" is for challenges: past Active one never trades again, while a
+  // pool goes back to Idle and sells the next challenge.
+  const finished = kind === "challenge" && Number(state) > 2;
   const verdict = ruleVerdict({ recorded, live, stopped, finished });
   $("#fills", page).className = "";
   $("#fills", page).innerHTML = `
@@ -164,9 +166,9 @@ async function fillsPanel(account, address, page, kind) {
           : row("The contract's verdict right now",
                 verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))}
     ${liveReadingIsMoot(verdict) ? `<p class="small muted">A verdict this page could compute from the
-      account's state would be about the account as it stands now, and this one has finished: its capital has
-      gone back to the pool, so a reading of what is left says drawdown whatever happened. What the contract
-      itself holds is above.</p>` : ""}
+      account's state would be about the account as it stands now. This one has stopped trading, and its
+      settlement may still be running, so a reading of what is left on it does not say what happened while it
+      traded. What the contract itself holds is above.</p>` : ""}
     <div class="scroll"><table><thead><tr><th>time (UTC)</th><th>asset</th><th>side</th><th>size</th><th>price</th>
     <th>notional</th><th>closed PnL</th><th>asset rule</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
     <p class="small muted">This checks trades that reached Hyperliquid. An order our gateway refused never reaches
