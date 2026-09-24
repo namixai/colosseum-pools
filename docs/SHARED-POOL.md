@@ -131,6 +131,19 @@ run, anyone may call `endFundedTerm`, which stops the stage through `Pool.stopFu
 breach: the trader is paid their share of the profit when the stage settles. The term counts from
 the first time the stage is seen, so it runs late by however long nobody looked.
 
+## In the app
+
+`#/shared` is the pool's page. It shows the value, the price of a share, what waits to be paid,
+whether a settlement point can run now and what holds it up, and the seats with their rules and
+terms. A connected wallet also sees its own shares, what they cost it, and what the pool has paid it
+so far, each part where it was paid. From the page it can deposit (the wallet opens a ticket, then
+signs the transfer to it on HyperCore), ask to withdraw, and run a settlement point. The page's ABI
+is in `app/lib/shared.js`; its test reads this contract's source back, so a renamed function or two
+swapped fields fail there first.
+
+A seat comes from the shared pool's own factory. The app's challenge and trading pages only know
+the demo's factory, so a seat's challenge can't be bought or traded through the app yet.
+
 ## Gas
 
 Reading one seat the way a settlement point does, measured with `eth_call` against the live testnet
@@ -183,7 +196,7 @@ price other than 1, a passed challenge and a funded stage, the funded term.
 
 ## Not done yet
 
-- The app view and the keeper calls for the shared pool.
+- The keeper calls for the shared pool, and buying and trading a seat's challenge through the app.
 - A testnet run with two depositors: a short payment split between them, a deposit at a price other
   than 1.
 - Deposits through HyperEVM on mainnet, where the sender is visible.

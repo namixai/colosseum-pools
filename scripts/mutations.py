@@ -1389,6 +1389,16 @@ MUTATIONS = [
      "return amount(value, decimals, 2);",
      ["USDC is shown to the millionth a payment carries, down to cents",
       "a payment's two parts are said apart, and the total with them"]),
+    # The page's ABI test reads the contract's source: two fields of the same width swapped there, or
+    # two reasons, would decode into the wrong words without any error.
+    ("PJ12", "src/shared/SharedPool.sol",
+     "        uint96 evm;\n        uint96 core;\n",
+     "        uint96 core;\n        uint96 evm;\n",
+     ["payments() decodes in the contract's order: when, HyperEVM, HyperCore"]),
+    ("PJ13", "src/shared/SharedPool.sol",
+     "        PositionsOpen,\n        PayoutInFlight,\n",
+     "        PayoutInFlight,\n        PositionsOpen,\n",
+     ["the blocker's words follow the contract's reasons, one for one"]),
 ]
 
 RUNNERS = {
