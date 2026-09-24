@@ -119,7 +119,9 @@ contract SharedPool {
     error NoValue();
 
     constructor(PoolFactory factory_, address operator_, address platform_, uint64 minDeposit_) {
-        if (minDeposit_ == 0) revert BadDeposit();
+        // A deposit under SWEEP_MIN would be closed and forgotten as dust in the same point that minted
+        // its shares: shares for money the pool never takes in.
+        if (minDeposit_ < SWEEP_MIN) revert BadDeposit();
         factory = factory_;
         usdc = factory_.usdc();
         operator = operator_;

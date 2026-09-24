@@ -245,6 +245,14 @@ contract SharedPoolTest is Test {
         sp.start();
     }
 
+    /// A minimum under the dust line would let a deposit be counted and then forgotten in one point.
+    function test_minimumDeposit_isAtLeastWhatASweepTakes() public {
+        uint64 dustLine = sp.SWEEP_MIN();
+        vm.expectRevert(SharedPool.BadDeposit.selector);
+        new SharedPool(factory, operator, platform, dustLine - 1);
+        new SharedPool(factory, operator, platform, dustLine);
+    }
+
     function test_nothingRunsBeforeTheStart() public {
         vm.expectRevert(SharedPool.NotStarted.selector);
         sp.openTicket();

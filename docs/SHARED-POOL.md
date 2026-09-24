@@ -56,7 +56,9 @@ to a contract bridging to itself (spike, question 5). So each deposit gets its o
    to a closed ticket later is a gift to all holders, taken in when someone names the ticket. Less
    than 1 USDC left on a closed ticket is dust: it is not swept or counted, and the ticket drops off
    the list every settlement point reads. Keeping a ticket on that list would otherwise cost next
-   to nothing; now it costs 1 USDC a point, which the pool keeps.
+   to nothing; now it costs 1 USDC a point, which the pool keeps. For the same reason `minDeposit`
+   can't be set below 1 USDC: a smaller deposit would be counted, closed and forgotten as dust in
+   one point, and its shares would stand for money the pool never took in.
 
 Shares are minted only for money a precompile has already shown on the ticket. A deposit address
 used more than once would not work: the pool couldn't tell its own sweep, still in flight, from a
