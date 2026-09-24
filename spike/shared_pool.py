@@ -147,6 +147,8 @@ def cmd_atomic(args) -> None:
     c.assert_testnet()
     if args.usdc > MAX_USDC_PER_SEND:
         raise SystemExit(f"refusing: more than {MAX_USDC_PER_SEND} USDC per send")
+    if args.times < 1:
+        raise SystemExit("--times must be at least 1: a run with nothing sent proves nothing")
     acct = c.account(args.key)
     if args.via == "api":
         sender = acct.address
@@ -254,8 +256,11 @@ def analyse(samples: list[dict], sends: list[dict], step_1e8: int) -> dict:
     gaps = [b for a, b in zip(blocks, blocks[1:]) if b - a > 1]
     accepted = sum(1 for x in sends if x.get("ok"))
     perp_moved = len({(s["perp_a"], s["perp_b"]) for s in good}) > 1
-    complete = (accepted == len(sends) and len(landings) == len(sends)
-                and all(x["same_read"] for x in landings) and not perp_moved)
+    # Each landing must be exactly one requested transfer: a smaller move that happened to be equal and
+    # opposite would otherwise count for a send it isn't.
+    complete = (len(sends) > 0 and accepted == len(sends) and len(landings) == len(sends)
+                and all(x["same_read"] and x["d_sender_1e8"] == -step_1e8 for x in landings)
+                and not perp_moved)
     return {"reads": len(samples), "good_reads": len(good), "failed_reads": len(samples) - len(good),
             "blocks_seen": len(blocks), "first_block": blocks[0], "last_block": blocks[-1],
             "blocks_skipped_between_reads": len(gaps), "total_1e8": base, "reads_off_total": len(off),
