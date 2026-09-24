@@ -64,6 +64,10 @@ jobs:
         run: python -m unittest discover -s agents/tests -t . -v
       - name: keeper
         run: python -m unittest discover -s ops/tests -t . -v
+      - name: the mutation check can still go red
+        run: ./scripts/test-mutations-check.sh
+      - name: every mutation still points at the code it guards
+        run: python scripts/mutations.py --check
 
   app:
     runs-on: ubuntu-latest
