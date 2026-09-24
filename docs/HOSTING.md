@@ -20,10 +20,18 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   (`raspy-violet-594d`) on `pools.usenami.io`. There is no build step and no server code: every
   page is a `#/…` route of the one `index.html`. It calls the gateway from the browser;
   `GATEWAY_ALLOW_ORIGIN` names it.
-- **RPC** (CTO, 17 Sep):
+- **RPC** (CTO, 17 Sep; measured again on the host 24 Sep):
   - the gateway reads the chain through `rpcs.chain.link/hyperevm/testnet`, which allows 1000
-    calls per IP in five minutes;
-  - the keeper uses Hyperliquid's public node, which allows 100 per minute.
+    calls per IP in five minutes. It throttles in bursts: on 24 Sep it refused three `eth_call`s
+    inside one second and served the same reads five times over seconds later, so the gateway
+    retries five times and answers 429 when it still cannot read (`gateway/chain.py`);
+  - the keeper reads event logs, and **Hyperliquid's own node refuses `eth_getLogs` from this
+    host**: `-32602 invalid block range` for any range, 60 blocks back or 100 000, while
+    `eth_blockNumber` answers and the same call from a laptop goes through. `rpcs.chain.link`
+    serves those logs from the host, so that is what the keeper uses.
+  - 🔴 A 403 from `rpcs.chain.link` can be the client rather than the endpoint: plain
+    `urllib` is refused there, `curl` and `requests` with a User-Agent are not. Measure with the
+    client the service actually uses, or the answer is about your tool.
 
 ## Layout on the host
 

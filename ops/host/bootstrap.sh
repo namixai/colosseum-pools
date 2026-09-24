@@ -52,9 +52,14 @@ EOF
 fi
 
 if [ ! -f /etc/colosseum/keeper.env ]; then
+  # The keeper follows challenges through eth_getLogs, and Hyperliquid's own node refuses that
+  # from this host -- "invalid block range" for any range, however near the head, while the same
+  # call from elsewhere goes through (measured 24 Sep 2026, docs/HOSTING.md). The other node
+  # serves it. This file is only written when it is missing, so a host set up before that
+  # measurement keeps the old URL and has to be edited by hand.
   install -m 0644 -o root -g root /dev/stdin /etc/colosseum/keeper.env <<'EOF'
 COLOSSEUM_KEY_DIR=/var/lib/colosseum-keeper/secrets
-COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm
+COLOSSEUM_RPC_URL=https://rpcs.chain.link/hyperevm/testnet
 EOF
   say "wrote /etc/colosseum/keeper.env"
 fi
