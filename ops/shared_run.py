@@ -123,16 +123,18 @@ def cmd_wallets(record: dict, args) -> None:
     op = c.account("shared-operator")
     ex = c.exchange(op)
     wire = c.spot_token_wire("USDC")
-    for name in DEPOSITORS:
+    for name in args.only:
         to = c.address_of(name)
         resp = ex.spot_transfer(args.deposit + 1.0, to, wire)
         c.record("shared_wallet_usdc", to=to, usdc=args.deposit + 1.0, response=resp)
         if not api_ok(resp):
             raise SystemExit(f"transfer to {name} refused: {resp}")
-    for name in (*DEPOSITORS, TRADER):
+    for name in (*args.only, *([TRADER] if args.trader else [])):
         to = c.address_of(name)
         rcpt = c.send_tx(op, to, value=int(args.hype * 1e18))
         c.record("shared_wallet_hype", to=to, hype=args.hype, tx=rcpt["transactionHash"])
+    if not args.trader:
+        return
     trader_evm = int(round(args.trader_evm * USDC_1E6))
     rcpt = c.transact(op, c.TESTNET_USDC_ERC20, "transfer(address,uint256)", ["address", "uint256"],
                       [c.address_of(TRADER), trader_evm])
@@ -285,6 +287,9 @@ def main() -> int:
     w.add_argument("--deposit", type=float, default=20.0)
     w.add_argument("--hype", type=float, default=0.004)
     w.add_argument("--trader-evm", type=float, default=1.2)
+    w.add_argument("--only", nargs="+", choices=DEPOSITORS, default=list(DEPOSITORS),
+                   help="the depositors to fund this time")
+    w.add_argument("--no-trader", dest="trader", action="store_false", help="leave the trader out")
     s = sub.add_parser("start")
     s.add_argument("--seed", type=float, default=1.0)
     sub.add_parser("seat")
