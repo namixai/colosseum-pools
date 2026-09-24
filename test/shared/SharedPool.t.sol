@@ -37,6 +37,9 @@ contract SharedPoolTest is Test {
     uint64 constant SEED = 10e8;
     uint64 constant MIN = 20e8;
     uint64 constant NEED = 101e8; // capitalNeeded of the seat below: (20 + 80) USDC plus 1 for the challenge account
+    uint32 constant LOCK = 1 days;
+    uint16 constant FEE_BPS = 1000; // 10% of a holder's profit
+    uint32 constant TERM = 30 days;
 
     HyperCore hyperCore;
     SharedMockUsdc usdc;
@@ -83,7 +86,7 @@ contract SharedPoolTest is Test {
         factory.setPlatformAssets(listed, true);
         vm.stopPrank();
 
-        sp = new SharedPool(factory, operator, platform, MIN);
+        sp = new SharedPool(factory, operator, platform, MIN, LOCK, FEE_BPS);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────
@@ -150,7 +153,7 @@ contract SharedPoolTest is Test {
     /// A seat that is on HyperCore, prepared and holding what it needs to sell a challenge.
     function _armedSeat() internal returns (Pool seat) {
         vm.prank(operator);
-        seat = Pool(sp.addSeat(_rules(), _terms()));
+        seat = Pool(sp.addSeat(_rules(), _terms(), TERM));
         sp.armSeat(address(seat));
         CoreSimulatorLib.nextBlock();
         seat.prepareAccount();
@@ -249,8 +252,8 @@ contract SharedPoolTest is Test {
     function test_minimumDeposit_isAtLeastWhatASweepTakes() public {
         uint64 dustLine = sp.SWEEP_MIN();
         vm.expectRevert(SharedPool.BadDeposit.selector);
-        new SharedPool(factory, operator, platform, dustLine - 1);
-        new SharedPool(factory, operator, platform, dustLine);
+        new SharedPool(factory, operator, platform, dustLine - 1, LOCK, FEE_BPS);
+        new SharedPool(factory, operator, platform, dustLine, LOCK, FEE_BPS);
     }
 
     function test_nothingRunsBeforeTheStart() public {
@@ -260,7 +263,7 @@ contract SharedPoolTest is Test {
         sp.settle(new address[](0));
         vm.prank(operator);
         vm.expectRevert(SharedPool.NotStarted.selector);
-        sp.addSeat(_rules(), _terms());
+        sp.addSeat(_rules(), _terms(), TERM);
     }
 
     // ── the seat plan ────────────────────────────────────────────────────────────────
@@ -269,10 +272,10 @@ contract SharedPoolTest is Test {
         _start(SEED);
         vm.prank(stranger);
         vm.expectRevert(SharedPool.NotOperator.selector);
-        sp.addSeat(_rules(), _terms());
+        sp.addSeat(_rules(), _terms(), TERM);
 
         vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms());
+        address seat = sp.addSeat(_rules(), _terms(), TERM);
         assertEq(Pool(seat).owner(), address(sp), "the shared pool owns its seats");
         assertTrue(sp.isSeat(seat));
         assertTrue(factory.isPool(seat));
@@ -288,23 +291,23 @@ contract SharedPoolTest is Test {
     function test_addSeat_keepsTheSeedAtFivePercentOfThePlan() public {
         _start(5.05e8);
         vm.prank(operator);
-        sp.addSeat(_rules(), _terms());
+        sp.addSeat(_rules(), _terms(), TERM);
 
-        SharedPool short = new SharedPool(factory, operator, platform, MIN);
+        SharedPool short = new SharedPool(factory, operator, platform, MIN, LOCK, FEE_BPS);
         CoreSimulatorLib.forceSpotBalance(address(short), 0, 5.05e8 - 1);
         vm.startPrank(operator);
         short.start();
         vm.expectRevert(abi.encodeWithSelector(SharedPool.SeedTooSmall.selector, uint256(5.05e8 - 1), uint256(NEED)));
-        short.addSeat(_rules(), _terms());
+        short.addSeat(_rules(), _terms(), TERM);
         vm.stopPrank();
     }
 
     function test_addSeat_refusesASecondSeatTheSeedCannotCover() public {
         _start(SEED); // covers 200 USDC of plan, one seat is 101
         vm.startPrank(operator);
-        sp.addSeat(_rules(), _terms());
+        sp.addSeat(_rules(), _terms(), TERM);
         vm.expectRevert(abi.encodeWithSelector(SharedPool.SeedTooSmall.selector, uint256(SEED), uint256(2 * NEED)));
-        sp.addSeat(_rules(), _terms());
+        sp.addSeat(_rules(), _terms(), TERM);
         vm.stopPrank();
     }
 
@@ -462,7 +465,7 @@ contract SharedPoolTest is Test {
     function test_armSeat_topsUpAFreshSeat_payingItsAccountFeeOnce() public {
         _funded(150e8); // 160 in the pool
         vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms());
+        address seat = sp.addSeat(_rules(), _terms(), TERM);
         vm.prank(stranger);
         sp.armSeat(seat);
         CoreSimulatorLib.nextBlock();
@@ -474,7 +477,7 @@ contract SharedPoolTest is Test {
     function test_armSeat_refusesWithoutRoomForTheAccountFee() public {
         _funded(91e8); // 101 in the pool: the seat's capital, not the fee for its new account
         vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms());
+        address seat = sp.addSeat(_rules(), _terms(), TERM);
         vm.expectRevert(abi.encodeWithSelector(SharedPool.NotEnoughFree.selector, uint64(NEED), NEED + Units.NEW_ACCOUNT_FEE));
         sp.armSeat(seat);
     }
@@ -482,7 +485,7 @@ contract SharedPoolTest is Test {
     function test_armSeat_waitsForThePreviousTopUp() public {
         _funded(250e8);
         vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms());
+        address seat = sp.addSeat(_rules(), _terms(), TERM);
         sp.armSeat(seat);
         // Not landed yet: the seat still shows nothing, and a second top-up would send twice.
         vm.warp(block.timestamp + sp.ARM_WAIT());
@@ -653,5 +656,336 @@ contract SharedPoolTest is Test {
         sp.settle(_list(t));
         // Value 159 on 160 shares: bob's 159 buy 160 shares.
         assertEq(sp.sharesOf(bob), 160e8);
+    }
+    // ── withdrawals ──────────────────────────────────────────────────────────────────
+
+    function _request(address who, uint256 shares) internal {
+        vm.prank(who);
+        sp.requestRedeem(shares);
+    }
+
+    function _settleFunded(Pool seat) internal {
+        uint32[] memory none = new uint32[](0);
+        for (uint256 i = 0; i < 10 && seat.stage() != Pool.Stage.Idle; ++i) {
+            seat.settleFunded(new Cancel[](0), none);
+            CoreSimulatorLib.nextBlock();
+        }
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.Idle), "funded stage did not settle");
+    }
+
+    function test_requestRedeem_onlyFreeShares_afterTheLock_neverTheSeed() public {
+        vm.warp(10 days); // a clock well past the lock, so a deposit time of zero would not pass for one
+        _start(SEED);
+        address t = _ticket(alice, MIN);
+        uint64 at = uint64(block.timestamp);
+        sp.settle(_list(t));
+        CoreSimulatorLib.nextBlock();
+        assertEq(sp.lastDeposit(alice), at, "the lock runs from the point that took the deposit");
+        uint64 until = at + LOCK;
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.Locked.selector, until));
+        sp.requestRedeem(MIN);
+
+        vm.warp(until);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.NotFree.selector, uint256(MIN)));
+        sp.requestRedeem(MIN + 1);
+        _request(alice, MIN);
+        assertEq(sp.queuedOf(alice), MIN);
+        assertEq(sp.queuedShares(), MIN);
+        assertEq(sp.queue().length, 1);
+        assertEq(sp.sharesOf(alice), MIN, "still hers until paid");
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.NotFree.selector, uint256(0)));
+        sp.requestRedeem(1);
+        vm.prank(platform);
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.NotFree.selector, uint256(0)));
+        sp.requestRedeem(1);
+        vm.prank(alice);
+        vm.expectRevert(SharedPool.NothingRequested.selector);
+        sp.requestRedeem(0);
+    }
+
+    /// The pool made 3 USDC on HyperEVM: 33 on 30 shares, 1.1 a share. Alice's 20 shares are worth
+    /// 22 against the 20 they cost; the platform takes 10% of the 2 as shares, and she is paid 21.8,
+    /// the 3 on HyperEVM first and 18.8 on HyperCore.
+    function test_settle_paysTheQueueInFull_evmFirst_atThePointsPrice() public {
+        CoreSimulatorLib.forceAccountActivation(alice);
+        _funded(MIN);
+        deal(address(usdc), address(sp), 3e6);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, MIN);
+
+        sp.settle(new address[](0));
+        uint256 feeShares = 18_181_818; // 20e8 x 0.2e8 / 22e8, rounded down
+        assertEq(usdc.balanceOf(alice), 3e6, "HyperEVM first");
+        assertEq(sp.sharesOf(alice), 0);
+        assertEq(sp.queuedOf(alice), 0);
+        assertEq(sp.queue().length, 0, "paid in full, off the queue");
+        assertEq(sp.sharesOf(platform), SEED + feeShares, "the fee stays in the pool as the platform's shares");
+        assertEq(sp.totalShares(), SEED + feeShares);
+
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), 18.8e8, "the rest on HyperCore");
+        // What stays is worth at least 1.1 a share: rounding favours the pool.
+        assertGe(sp.value() * 30e8, 33e8 * sp.totalShares());
+
+        // The platform's fee shares are free to withdraw; its seed is not.
+        vm.prank(platform);
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.NotFree.selector, feeShares));
+        sp.requestRedeem(feeShares + 1);
+        _request(platform, feeShares);
+    }
+
+    /// Alice's request and Bob's deposit meet in one point: both at 1.1.
+    function test_depositAndPaymentInOnePoint_shareOnePrice() public {
+        CoreSimulatorLib.forceAccountActivation(alice);
+        _funded(MIN);
+        deal(address(usdc), address(sp), 3e6);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, MIN);
+        address t = _ticket(bob, 22e8);
+
+        sp.settle(_list(t));
+        assertEq(sp.sharesOf(bob), 20e8, "22 at 1.1");
+        assertEq(usdc.balanceOf(alice), 3e6);
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), 18.8e8, "21.8 at 1.1, net of the fee");
+    }
+
+    /// The pool lost 6 of its 30 after Alice asked: her shares carry it until they are paid, and there
+    /// is no fee on a loss.
+    function test_queuedShares_bearTheResultUntilPaid_noFeeOnALoss() public {
+        CoreSimulatorLib.forceAccountActivation(alice);
+        _funded(MIN);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, MIN);
+        CoreSimulatorLib.forceSpotBalance(address(sp), 0, 24e8);
+
+        sp.settle(new address[](0));
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), 16e8, "20 shares at 0.8");
+        assertEq(sp.sharesOf(platform), SEED, "no fee on a loss");
+    }
+
+    /// Alice came in at 1, Bob at 1.5; both leave at 1.8. The fee is 10% of each one's own profit: 16
+    /// for Alice, 6 for Bob.
+    function test_fee_isOnEachHoldersOwnProfit() public {
+        CoreSimulatorLib.forceAccountActivation(alice);
+        CoreSimulatorLib.forceAccountActivation(bob);
+        _funded(MIN); // value 30, 30 shares
+        CoreSimulatorLib.forceSpotBalance(address(sp), 0, 45e8); // 1.5
+        address t = _ticket(bob, 30e8);
+        sp.settle(_list(t));
+        assertEq(sp.sharesOf(bob), 20e8);
+        CoreSimulatorLib.nextBlock();
+        CoreSimulatorLib.forceSpotBalance(address(sp), 0, 90e8); // 1.8 on 50 shares
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 20e8);
+        _request(bob, 20e8);
+
+        sp.settle(new address[](0));
+        uint256 aliceFee = 88_888_888; // 20e8 x 1.6e8 / 36e8
+        uint256 bobFee = 33_333_333; //   20e8 x 0.6e8 / 36e8
+        assertEq(sp.sharesOf(platform), SEED + aliceFee + bobFee);
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), 34.4e8, "36 less 1.6");
+        assertEq(_spot(bob), 35.4e8, "36 less 0.6");
+    }
+
+    /// Alice and Bob ask for everything while most of the capital is in a seat: both get the same share
+    /// of what is free, the earned price on HyperEVM first, and both wait for the rest.
+    function test_settle_paysEveryRequestTheSameFraction_whenMoneyIsShort() public {
+        CoreSimulatorLib.forceAccountActivation(alice);
+        CoreSimulatorLib.forceAccountActivation(bob);
+        _start(SEED);
+        address ta = _ticket(alice, 60e8);
+        address tb = _ticket(bob, 60e8);
+        sp.settle(_list(ta, tb));
+        CoreSimulatorLib.nextBlock();
+        Pool seat = _armedSeat();
+        _started(seat);
+        assertEq(seat.earned(), 1e6);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 60e8);
+        _request(bob, 60e8);
+
+        sp.settle(new address[](0));
+        assertEq(seat.earned(), 0, "the earned price was collected to pay");
+        assertGt(usdc.balanceOf(alice), 0, "part on HyperEVM");
+        assertEq(usdc.balanceOf(alice), usdc.balanceOf(bob));
+        assertGt(sp.queuedOf(alice), 0, "the rest waits");
+        assertEq(sp.queuedOf(alice), sp.queuedOf(bob), "the same fraction for both");
+        assertEq(sp.queue().length, 2);
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), _spot(bob));
+        assertLt(_spot(address(sp)), 1e4, "all that was free went out, but for rounding");
+    }
+
+    /// Alice's Core account doesn't exist yet: creating it comes out of her part, not the pool's.
+    function test_aHolderWithoutACoreAccount_paysItsCreation() public {
+        _funded(MIN);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, MIN);
+        uint64 poolBefore = _spot(address(sp));
+        sp.settle(new address[](0));
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), 19e8, "20 less the 1 her new account cost");
+        assertEq(_spot(address(sp)), poolBefore - 20e8, "the pool paid 20, not 21");
+    }
+
+    // ── seats while someone waits ────────────────────────────────────────────────────
+
+    function test_armSeat_waitsWhileSomeoneWaitsToBePaid() public {
+        _funded(150e8);
+        vm.prank(operator);
+        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 1e8);
+        vm.expectRevert(SharedPool.QueueWaiting.selector);
+        sp.armSeat(seat);
+    }
+
+    function test_releaseSeat_bringsAnIdleSeatsCapitalBack_whileTheQueueWaits() public {
+        _funded(150e8);
+        Pool seat = _armedSeat();
+        vm.expectRevert(SharedPool.NoQueue.selector);
+        sp.releaseSeat(address(seat));
+
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 1e8);
+        uint256 value_ = sp.value();
+        vm.prank(stranger);
+        sp.releaseSeat(address(seat));
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(address(seat)), 0);
+        assertEq(_spot(address(sp)), 58e8 + NEED);
+        assertEq(sp.value(), value_, "moving it changes nothing");
+    }
+
+    function test_releaseSeat_onlyAnIdleSeat() public {
+        _funded(150e8);
+        Pool seat = _armedSeat();
+        _started(seat);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 1e8);
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.SeatBusy.selector, address(seat)));
+        sp.releaseSeat(address(seat));
+    }
+
+    function test_ownPayments_holdUpTheNextPointAndTopUps() public {
+        CoreSimulatorLib.forceAccountActivation(alice);
+        _funded(150e8);
+        vm.prank(operator);
+        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 10e8);
+        sp.settle(new address[](0));
+        uint64 until = sp.lastCorePayAt() + sp.PAYOUT_WAIT();
+
+        _assertBlocked(SharedPool.Blocker.PaymentInFlight, address(sp));
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.PaymentsLanding.selector, until));
+        sp.armSeat(seat);
+
+        vm.warp(until + 1);
+        _assertQuiet();
+        sp.armSeat(seat);
+    }
+
+    function test_collect_movesEarnedPrices_valueUnchanged() public {
+        _funded(150e8);
+        Pool seat = _armedSeat();
+        _started(seat);
+        uint256 value_ = sp.value();
+        sp.collect(address(seat));
+        assertEq(seat.earned(), 0);
+        assertEq(usdc.balanceOf(address(sp)), 1e6);
+        assertEq(sp.value(), value_);
+    }
+
+    // ── the funded term ──────────────────────────────────────────────────────────────
+
+    function test_addSeat_needsAFundedTerm() public {
+        _start(SEED);
+        vm.prank(operator);
+        vm.expectRevert(SharedPool.BadTerm.selector);
+        sp.addSeat(_rules(), _terms(), 0);
+    }
+
+    function test_constructor_refusesAFeeAboveTheWholeProfit() public {
+        vm.expectRevert(SharedPool.BadFee.selector);
+        new SharedPool(factory, operator, platform, MIN, LOCK, 10_001);
+        new SharedPool(factory, operator, platform, MIN, LOCK, 10_000);
+    }
+
+    function test_endFundedTerm_onlyAfterItsTerm() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        _funded(150e8);
+        Pool seat = _armedSeat();
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.NotFunded.selector, address(seat)));
+        sp.endFundedTerm(address(seat), new Cancel[](0), new uint32[](0), SALT);
+
+        _passed(seat);
+        sp.noteFunded(address(seat));
+        uint64 until = sp.fundedSince(address(seat)) + TERM;
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.TermNotOver.selector, until));
+        sp.endFundedTerm(address(seat), new Cancel[](0), new uint32[](0), SALT);
+
+        vm.warp(until);
+        vm.prank(stranger);
+        sp.endFundedTerm(address(seat), new Cancel[](0), new uint32[](0), SALT);
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.Closing), "stopped without a breach");
+        assertEq(uint8(seat.fundedEndReason()), 0);
+        assertEq(sp.fundedSince(address(seat)), 0);
+
+        CoreSimulatorLib.nextBlock();
+        _settleFunded(seat);
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.NotFunded.selector, address(seat)));
+        sp.endFundedTerm(address(seat), new Cancel[](0), new uint32[](0), SALT);
+    }
+
+    /// Stage one was seen at T1 and nobody looked while the seat was idle. Stage two begins later with a
+    /// new key: its term runs from when it is seen, not from T1.
+    function test_noteFunded_tellsANewStageFromTheOldOne() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        _funded(150e8);
+        Pool seat = _armedSeat();
+        ChallengeAccount first = _passed(seat);
+        sp.noteFunded(address(seat));
+        uint64 t1 = sp.fundedSince(address(seat));
+
+        // Stage one ends by the trader's own hand; nobody calls noteFunded until stage two.
+        vm.prank(trader);
+        seat.stopFunded(new Cancel[](0), new uint32[](0), SALT);
+        CoreSimulatorLib.nextBlock();
+        _settleFunded(seat);
+        uint32[] memory none = new uint32[](0);
+        for (uint256 i = 0; i < 8 && first.status() != ChallengeAccount.Status.Settled; ++i) {
+            first.settle(new Cancel[](0), none);
+            CoreSimulatorLib.nextBlock();
+        }
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.NotFunded.selector, address(seat)));
+        sp.endFundedTerm(address(seat), new Cancel[](0), new uint32[](0), SALT);
+
+        vm.warp(block.timestamp + 1 days);
+        if (_spot(address(seat)) < NEED) {
+            sp.armSeat(address(seat));
+            CoreSimulatorLib.nextBlock();
+        }
+        ChallengeAccount second = _started(seat);
+        _trade(address(second), true, 0.001e8);
+        CoreSimulatorLib.setMarkPx(BTC, 810528); // +3% again
+        _trade(address(second), false, 0.001e8);
+        second.graduate(SALT);
+        CoreSimulatorLib.nextBlock();
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
+
+        sp.noteFunded(address(seat));
+        uint64 t2 = sp.fundedSince(address(seat));
+        assertGt(t2, t1, "a new stage, a new start");
+        vm.warp(t1 + TERM);
+        vm.expectRevert(abi.encodeWithSelector(SharedPool.TermNotOver.selector, t2 + TERM));
+        sp.endFundedTerm(address(seat), new Cancel[](0), new uint32[](0), SALT);
     }
 }

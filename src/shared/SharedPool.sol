@@ -2,8 +2,9 @@
 pragma solidity ^0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
-import {Rules, Terms, Breach, Units} from "../Types.sol";
+import {Rules, Terms, Cancel, Breach, Units} from "../Types.sol";
 import {CoreOps} from "../lib/CoreOps.sol";
 import {Pool} from "../Pool.sol";
 import {PoolFactory} from "../PoolFactory.sol";
@@ -16,20 +17,25 @@ import {DepositTicket} from "./DepositTicket.sol";
 ///         and terms before anyone deposits. A share is a claim on a part of the pool's value.
 ///
 ///         A deposit arrives on HyperCore at an address made for that deposit (`DepositTicket`) and
-///         becomes shares at the next settlement point, priced at the pool's value without it. The
-///         pool's value is what it would have if every account were closed at the mark now and everyone
-///         it owes were paid; `value()` spells it out.
+///         becomes shares at the next settlement point, priced at the pool's value without it. A request
+///         to withdraw locks shares that keep bearing the pool's result until settlement points pay them,
+///         at the price of the point that pays, all requests alike. The pool's value is what it would
+///         have if every account were closed at the mark now and everyone it owes were paid; `value()`
+///         spells it out.
 /// @dev Value and shares are in HyperCore spot units, 1e8 = 1 USDC; the first shares are one per unit.
 ///      Settlement points are open to anyone. `blocker()` is the one place that decides whether a point
 ///      may run: while a loss is still moving or a payment is in flight, no price is struck.
 ///      Testnet only; not part of the reviewed core.
 contract SharedPool {
+    using SafeERC20 for IERC20;
+
     enum Blocker {
         None,
         RuleBroken,
         SeatClosing,
         PositionsOpen,
-        PayoutInFlight
+        PayoutInFlight,
+        PaymentInFlight
     }
 
     enum TicketState {
@@ -61,6 +67,11 @@ contract SharedPool {
     /// ticket on the list, which every settlement point reads, then costs whoever tries 1 USDC a point,
     /// and the pool keeps it.
     uint64 public constant SWEEP_MIN = 1e8;
+    /// Holders waiting to be paid at once; a request past this waits for the queue to move.
+    uint256 public constant MAX_QUEUE = 16;
+    /// The pool's own HyperCore payments are given this long to land before the next point or top-up,
+    /// the same wait the core contracts give a payout.
+    uint64 public constant PAYOUT_WAIT = 5 minutes;
 
     PoolFactory public immutable factory;
     IERC20 public immutable usdc;
@@ -70,11 +81,26 @@ contract SharedPool {
     address public immutable platform;
     /// Smallest deposit a settlement point takes (1e8 = 1 USDC).
     uint64 public immutable minDeposit;
+    /// How long after a holder's latest deposit they may ask to withdraw (seconds).
+    uint32 public immutable lock;
+    /// The platform's share of a holder's profit, taken when they withdraw (bps).
+    uint16 public immutable feeBps;
 
     uint256 public totalShares;
     mapping(address holder => uint256) public sharesOf;
     uint256 public seedValue;
     uint256 public seedShares;
+    /// What a holder's shares cost them (1e8); their profit is counted from it.
+    mapping(address holder => uint256) public basis;
+    mapping(address holder => uint64) public lastDeposit;
+
+    /// Shares a holder asked to withdraw and hasn't been paid for yet; still theirs, still counted.
+    mapping(address holder => uint256) public queuedOf;
+    uint256 public queuedShares;
+    address[] internal _queue;
+    mapping(address holder => uint256) internal _queueSlot; // index + 1
+    /// When the pool last paid anyone on HyperCore.
+    uint64 public lastCorePayAt;
 
     /// Sum of the seats' `capitalNeeded()` (1e8).
     uint256 public planCapital;
@@ -82,6 +108,12 @@ contract SharedPool {
     mapping(address seat => bool) public isSeat;
     mapping(address seat => SeatTerms) public seatTerms;
     mapping(address seat => uint64) public armedAt;
+    /// How long a funded stage may run on a seat, published with the seat (seconds).
+    mapping(address seat => uint32) public fundedTerm;
+    /// When the pool first saw the seat's current funded stage, and that stage's agent key: every funded
+    /// stage gets a new key, so a new stage is never taken for the old one.
+    mapping(address seat => uint64) public fundedSince;
+    mapping(address seat => address) public fundedKey;
 
     mapping(address ticket => Ticket) public tickets;
     mapping(address depositor => uint256) public ticketCount;
@@ -95,8 +127,13 @@ contract SharedPool {
     uint64 public lastPoint;
 
     event Started(address indexed platform, uint256 seed);
-    event SeatAdded(address indexed seat, uint256 capitalNeeded);
+    event SeatAdded(address indexed seat, uint256 capitalNeeded, uint32 fundedTerm);
     event SeatArmed(address indexed seat, uint64 amount);
+    event SeatReleased(address indexed seat, uint64 amount);
+    event FundedNoted(address indexed seat, address indexed key, uint64 since);
+    event FundedTermEnded(address indexed seat);
+    event RedeemRequested(address indexed holder, uint256 shares);
+    event Paid(address indexed holder, uint256 shares, uint256 feeShares, uint256 evmAmount, uint64 coreAmount);
     event TicketOpened(address indexed depositor, address indexed ticket, uint256 index);
     event DepositRecognized(address indexed depositor, address indexed ticket, uint256 amount, uint256 shares);
     event TicketSwept(address indexed ticket, uint64 amount);
@@ -117,16 +154,36 @@ contract SharedPool {
     error NotEnoughFree(uint64 free, uint64 needed);
     error NotQuiet(Blocker reason, address account);
     error NoValue();
+    error BadFee();
+    error BadTerm();
+    error NothingRequested();
+    error NotFree(uint256 free);
+    error Locked(uint64 until);
+    error QueueWaiting();
+    error NoQueue();
+    error PaymentsLanding(uint64 until);
+    error NotFunded(address seat);
+    error TermNotOver(uint64 until);
 
-    constructor(PoolFactory factory_, address operator_, address platform_, uint64 minDeposit_) {
+    constructor(
+        PoolFactory factory_,
+        address operator_,
+        address platform_,
+        uint64 minDeposit_,
+        uint32 lock_,
+        uint16 feeBps_
+    ) {
         // A deposit under SWEEP_MIN would be closed and forgotten as dust in the same point that minted
         // its shares: shares for money the pool never takes in.
         if (minDeposit_ < SWEEP_MIN) revert BadDeposit();
+        if (feeBps_ > Units.BPS) revert BadFee();
         factory = factory_;
         usdc = factory_.usdc();
         operator = operator_;
         platform = platform_;
         minDeposit = minDeposit_;
+        lock = lock_;
+        feeBps = feeBps_;
         ticketImpl = address(new DepositTicket());
     }
 
@@ -158,10 +215,17 @@ contract SharedPool {
         emit Started(platform, seed);
     }
 
-    /// @notice Publishes a seat: a new pool owned by this contract, with the platform's rules and terms.
-    ///         The starting shares must stay worth at least `SEED_BPS` of the whole seat plan.
-    function addSeat(Rules calldata rules_, Terms calldata terms_) external onlyOperator started returns (address seat) {
+    /// @notice Publishes a seat: a new pool owned by this contract, with the platform's rules and terms,
+    ///         and how long a funded stage may run on it. The starting shares must stay worth at least
+    ///         `SEED_BPS` of the whole seat plan.
+    function addSeat(Rules calldata rules_, Terms calldata terms_, uint32 fundedTerm_)
+        external
+        onlyOperator
+        started
+        returns (address seat)
+    {
         if (_seats.length >= MAX_SEATS) revert TooMany();
+        if (fundedTerm_ == 0) revert BadTerm();
         seat = factory.createPool(rules_, terms_);
         uint256 need = Pool(seat).capitalNeeded();
         uint256 plan = planCapital + need;
@@ -169,13 +233,14 @@ contract SharedPool {
         planCapital = plan;
         _seats.push(seat);
         isSeat[seat] = true;
+        fundedTerm[seat] = fundedTerm_;
         seatTerms[seat] = SeatTerms({
             capital: terms_.capital,
             targetBps: terms_.targetBps,
             shareChallengeBps: terms_.traderShareChallengeBps,
             shareFundedBps: terms_.traderShareFundedBps
         });
-        emit SeatAdded(seat, need);
+        emit SeatAdded(seat, need, fundedTerm_);
     }
 
     // ── seats ────────────────────────────────────────────────────────────────────────
@@ -185,6 +250,10 @@ contract SharedPool {
     ///         after that anyone calls `prepareAccount` on it. Anyone may call this.
     function armSeat(address seat) external started {
         if (!isSeat[seat]) revert NotSeat(seat);
+        // While someone waits to be paid, capital that comes free goes to them, not to a new challenge.
+        if (queuedShares != 0) revert QueueWaiting();
+        // The pool's last payments may not show in its balance yet; the money is already theirs.
+        _paymentsLanded();
         Pool p = Pool(seat);
         if (p.stage() != Pool.Stage.Idle || p.challenge() != address(0)) revert SeatBusy(seat);
         // The previous top-up may not show in the balance yet; sending again would send twice.
@@ -199,6 +268,74 @@ contract SharedPool {
         armedAt[seat] = uint64(block.timestamp);
         CoreOps.sendUsdc(seat, amount);
         emit SeatArmed(seat, amount);
+    }
+
+    /// @notice While someone waits to be paid, moves an idle seat's capital back into the pool. Anyone may
+    ///         call it.
+    function releaseSeat(address seat) external started {
+        if (!isSeat[seat]) revert NotSeat(seat);
+        if (queuedShares == 0) revert NoQueue();
+        Pool p = Pool(seat);
+        if (p.stage() != Pool.Stage.Idle || p.challenge() != address(0)) revert SeatBusy(seat);
+        uint64 held = CoreOps.spotUsdc(seat);
+        p.withdrawOnCore(held);
+        emit SeatReleased(seat, held);
+    }
+
+    /// @notice Moves the challenge prices a seat has earned to this contract on HyperEVM. The value
+    ///         doesn't change; anyone may call it.
+    function collect(address seat) external {
+        if (!isSeat[seat]) revert NotSeat(seat);
+        Pool(seat).withdrawEarned();
+    }
+
+    /// @notice Records when the seat's current funded stage began, as far as the pool can tell: the first
+    ///         time anyone calls this, or a settlement point runs, while the stage is on. The keeper calls
+    ///         it on every pass.
+    function noteFunded(address seat) external {
+        if (!isSeat[seat]) revert NotSeat(seat);
+        _note(Pool(seat));
+    }
+
+    /// @notice Ends a funded stage that has run its published term, through `Pool.stopFunded`: no breach,
+    ///         so the trader is paid their share of the profit when the stage settles. Anyone may call it.
+    function endFundedTerm(address seat, Cancel[] calldata cancels, uint32[] calldata extraAssets, bytes32 salt)
+        external
+    {
+        if (!isSeat[seat]) revert NotSeat(seat);
+        Pool p = Pool(seat);
+        _note(p);
+        uint64 since = fundedSince[seat];
+        if (since == 0) revert NotFunded(seat);
+        uint64 until = since + fundedTerm[seat];
+        if (block.timestamp < until) revert TermNotOver(until);
+        fundedSince[seat] = 0;
+        fundedKey[seat] = address(0);
+        p.stopFunded(cancels, extraAssets, salt);
+        emit FundedTermEnded(seat);
+    }
+
+    // ── withdrawals ──────────────────────────────────────────────────────────────────
+
+    /// @notice Asks to withdraw `shares`. They stay the caller's and keep bearing the pool's result until
+    ///         settlement points pay them, at the price of the point that pays; a request can't be taken
+    ///         back. Allowed once `lock` has passed since the caller's latest deposit. The platform's
+    ///         starting shares never leave.
+    function requestRedeem(uint256 shares) external started {
+        if (shares == 0) revert NothingRequested();
+        uint256 held = queuedOf[msg.sender] + (msg.sender == platform ? seedShares : 0);
+        uint256 free = sharesOf[msg.sender] > held ? sharesOf[msg.sender] - held : 0;
+        if (shares > free) revert NotFree(free);
+        uint64 until = lastDeposit[msg.sender] + lock;
+        if (block.timestamp < until) revert Locked(until);
+        if (_queueSlot[msg.sender] == 0) {
+            if (_queue.length >= MAX_QUEUE) revert TooMany();
+            _queue.push(msg.sender);
+            _queueSlot[msg.sender] = _queue.length;
+        }
+        queuedOf[msg.sender] += shares;
+        queuedShares += shares;
+        emit RedeemRequested(msg.sender, shares);
     }
 
     // ── deposits ─────────────────────────────────────────────────────────────────────
@@ -253,9 +390,15 @@ contract SharedPool {
             _dropOpen(t);
             _addClosed(t);
             _mint(tk.depositor, minted);
+            basis[tk.depositor] += amount;
+            lastDeposit[tk.depositor] = uint64(block.timestamp);
             emit DepositRecognized(tk.depositor, t, amount, minted);
         }
         _sweepClosed();
+        for (uint256 i = 0; i < _seats.length; ++i) {
+            _note(Pool(_seats[i]));
+        }
+        if (queuedShares != 0) _pay(poolValue, sharesBefore);
 
         lastPoint = uint64(block.timestamp);
         emit PointSettled(++points, poolValue, sharesBefore, totalShares);
@@ -268,6 +411,9 @@ contract SharedPool {
     ///      debits and credits it in one step and a read sees both sides from the same state, so the
     ///      value doesn't change while it is in flight (measured on the testnet on 24 Sep 2026).
     function blocker() public view returns (Blocker, address) {
+        if (lastCorePayAt != 0 && block.timestamp <= lastCorePayAt + PAYOUT_WAIT) {
+            return (Blocker.PaymentInFlight, address(this));
+        }
         uint32[] memory none = new uint32[](0);
         for (uint256 i = 0; i < _seats.length; ++i) {
             Pool p = Pool(_seats[i]);
@@ -365,7 +511,132 @@ contract SharedPool {
             && block.timestamp <= c.payoutAt() + c.PAYOUT_WAIT();
     }
 
+    // ── payment ──────────────────────────────────────────────────────────────────────
+
+    /// Pays the queue at this point's price (`poolValue / sharesBefore`), every request alike: in full if
+    /// the pool's free money covers it, otherwise the same fraction of each. Seats' earned prices are
+    /// collected first, so USDC on HyperEVM pays first and HyperCore the rest, in the same proportion for
+    /// every holder. The platform's fee is its share of the holder's profit over what their shares cost
+    /// them; it stays in the pool as the platform's shares instead of being paid out.
+    function _pay(uint256 poolValue, uint256 sharesBefore) internal {
+        for (uint256 i = 0; i < _seats.length; ++i) {
+            if (Pool(_seats[i]).earned() != 0) Pool(_seats[i]).withdrawEarned();
+        }
+        // A copy: paying a holder in full takes them off the queue, which reorders it.
+        address[] memory holders = _queue;
+        uint256 n = holders.length;
+        uint256[] memory burn = new uint256[](n);
+        uint256[] memory feeShares = new uint256[](n);
+        uint256[] memory net6 = new uint256[](n);
+
+        // In full first, to see whether the money covers it.
+        uint256 wanted6 = _quote(holders, poolValue, sharesBefore, 1, 1, burn, feeShares, net6);
+        uint256 evm6 = usdc.balanceOf(address(this));
+        uint256 core6 = CoreOps.spotUsdc(address(this)) / Units.SPOT_PER_PERP;
+        // A unit per holder is left for the rounding of each holder's split between the two.
+        uint256 have6 = evm6 + core6 > n ? evm6 + core6 - n : 0;
+        if (wanted6 > have6) {
+            if (have6 == 0) return;
+            wanted6 = _quote(holders, poolValue, sharesBefore, have6, wanted6, burn, feeShares, net6);
+        }
+        if (wanted6 == 0) return;
+        uint256 fromEvm6 = evm6 < wanted6 ? evm6 : wanted6;
+
+        bool core;
+        for (uint256 k = 0; k < n; ++k) {
+            address h = holders[k];
+            uint256 e6 = (net6[k] * fromEvm6) / wanted6;
+            uint64 c = uint64((net6[k] - e6) * Units.SPOT_PER_PERP);
+            _settleHolder(h, burn[k], feeShares[k]);
+            if (queuedOf[h] == 0) _dropQueue(h);
+            if (e6 != 0) usdc.safeTransfer(h, e6);
+            if (c != 0) {
+                // A holder with no HyperCore account yet pays for creating it out of this part.
+                CoreOps.sendUsdc(h, CoreOps.sendableTo(h, c));
+                core = true;
+            }
+            emit Paid(h, burn[k] + feeShares[k], feeShares[k], e6, c);
+        }
+        if (core) lastCorePayAt = uint64(block.timestamp);
+    }
+
+    /// What each holder gets for the fraction `num / den` of their queued shares: the shares burned, the
+    /// shares that go to the platform as its fee, and the payment in 1e6 units, rounded down. Returns
+    /// the sum of the payments.
+    function _quote(
+        address[] memory holders,
+        uint256 poolValue,
+        uint256 sharesBefore,
+        uint256 num,
+        uint256 den,
+        uint256[] memory burn,
+        uint256[] memory feeShares,
+        uint256[] memory net6
+    ) internal view returns (uint256 total6) {
+        for (uint256 k = 0; k < holders.length; ++k) {
+            address h = holders[k];
+            uint256 s = (queuedOf[h] * num) / den;
+            uint256 gross = (s * poolValue) / sharesBefore;
+            uint256 cost = (basis[h] * s) / sharesOf[h];
+            uint256 f = 0;
+            if (h != platform && gross > cost) {
+                uint256 fee = ((gross - cost) * feeBps) / Units.BPS;
+                f = (s * fee) / gross;
+            }
+            burn[k] = s - f;
+            feeShares[k] = f;
+            net6[k] = ((s - f) * poolValue) / sharesBefore / Units.SPOT_PER_PERP;
+            total6 += net6[k];
+        }
+    }
+
+    function _settleHolder(address h, uint256 burned, uint256 fee) internal {
+        uint256 s = burned + fee;
+        basis[h] -= (basis[h] * s) / sharesOf[h];
+        sharesOf[h] -= s;
+        queuedOf[h] -= s;
+        queuedShares -= s;
+        totalShares -= burned;
+        sharesOf[platform] += fee;
+    }
+
+    function _dropQueue(address h) internal {
+        uint256 slot = _queueSlot[h];
+        address last = _queue[_queue.length - 1];
+        _queue[slot - 1] = last;
+        _queueSlot[last] = slot;
+        _queue.pop();
+        delete _queueSlot[h];
+    }
+
+    function _paymentsLanded() internal view {
+        if (lastCorePayAt != 0 && block.timestamp <= lastCorePayAt + PAYOUT_WAIT) {
+            revert PaymentsLanding(lastCorePayAt + PAYOUT_WAIT);
+        }
+    }
+
+    function _note(Pool p) internal {
+        address seat = address(p);
+        if (p.stage() != Pool.Stage.Funded) {
+            if (fundedSince[seat] != 0) {
+                fundedSince[seat] = 0;
+                fundedKey[seat] = address(0);
+            }
+            return;
+        }
+        address key = p.agentKey();
+        if (fundedSince[seat] == 0 || fundedKey[seat] != key) {
+            fundedSince[seat] = uint64(block.timestamp);
+            fundedKey[seat] = key;
+            emit FundedNoted(seat, key, uint64(block.timestamp));
+        }
+    }
+
     // ── views ────────────────────────────────────────────────────────────────────────
+
+    function queue() external view returns (address[] memory) {
+        return _queue;
+    }
 
     function seats() external view returns (address[] memory) {
         return _seats;

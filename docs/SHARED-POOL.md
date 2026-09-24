@@ -1,9 +1,8 @@
 # Design: the shared pool
 
-Status: first part, 25 September 2026: shares, deposits, the pool's value and settlement points.
-Withdrawals, the withdrawal queue, the funded term and the platform's fee come next. Testnet only,
-and not part of the reviewed core: `Pool`, `PoolFactory`, `ChallengeAccount` and `KeyRegistry` are
-used as they are, unchanged.
+Status: 25 September 2026: shares, deposits, the pool's value, settlement points, withdrawals and
+their queue, the funded term and the platform's fee. Testnet only, and not part of the reviewed
+core: `Pool`, `PoolFactory`, `ChallengeAccount` and `KeyRegistry` are used as they are, unchanged.
 
 ## Why a shared pool
 
@@ -72,7 +71,8 @@ it names something, no price is struck:
 - a funded seat or an active challenge breaks a rule right now (someone has to call `breach` first);
 - a seat is closing its funded stage;
 - a stopped challenge still holds positions (the loss is still moving);
-- a payout to a trader has been sent and hasn't landed.
+- a payout to a trader has been sent and hasn't landed;
+- the pool's own payments on HyperCore were sent less than `PAYOUT_WAIT` (5 minutes) ago.
 
 Not in it: a transfer between two of the pool's own accounts (the pool, a seat, a challenge, a
 closed ticket). HyperCore debits and credits a transfer in one step, and a read sees both sides from
@@ -82,12 +82,42 @@ sides in the same read about a second after it was sent (`spike/shared_pool.py a
 check for a transfer a contract sends through CoreWriter is still to run; if it fails, only
 `blocker()` changes.
 
+## Withdrawals
+
+`requestRedeem(shares)` locks shares for payment, once `lock` has passed since the holder's latest
+deposit (a day; published). The shares stay the holder's and keep bearing the pool's result until
+they are paid, so asking early fixes nothing: there is no price to race for. A request can't be
+taken back, and the platform's starting shares never leave.
+
+Each settlement point pays the queue at its own price, the same for every request and for the
+deposits it takes in. If the pool's free money covers the queue, everyone is paid in full;
+otherwise everyone gets the same fraction and the rest waits. Free money is the pool's USDC on
+HyperEVM (the seats' earned prices are collected first) and its spot on HyperCore; HyperEVM pays
+first, in the same proportion for every holder, and the app shows the two parts apart. A holder
+with no HyperCore account yet pays the 1 USDC for creating it out of their HyperCore part.
+
+The platform's fee is its share of each holder's own profit, taken when they are paid: the payment
+over what the paid shares cost that holder, never on a loss. It stays in the pool as the platform's
+shares rather than being paid out.
+
+While someone waits, a seat that comes free is not armed again: `releaseSeat` (anyone) brings an
+idle seat's capital back into the pool, and `armSeat` refuses. Capital in a running challenge or a
+funded stage can't be taken back early; a funded stage ends by its term (below). Whoever stays pays
+for the wait in revenue the pool doesn't earn meanwhile; there is no exit fee.
+
 ## Seats
 
 `addSeat` (the operator) publishes a seat. `armSeat` (anyone) tops an idle seat up to its
 `capitalNeeded()` from the pool's spot, paying 1 USDC once for a seat that has no HyperCore account
 yet; after that anyone calls `prepareAccount` on it. A top-up is given a minute to land before the
-same seat can be topped up again.
+same seat can be topped up again, and waits for the pool's own payments to land.
+
+Each seat is published with a funded term. `noteFunded` (the keeper, or any settlement point)
+records when the seat's current funded stage was first seen, together with that stage's agent key:
+every funded stage gets a new key, so a new stage is never taken for an old one. Once the term has
+run, anyone may call `endFundedTerm`, which stops the stage through `Pool.stopFunded`, without a
+breach: the trader is paid their share of the profit when the stage settles. The term counts from
+the first time the stage is seen, so it runs late by however long nobody looked.
 
 ## Gas
 
@@ -101,13 +131,9 @@ nothing else.
 
 ## Not done yet
 
-- Withdrawals: a request locks shares, which keep bearing the pool's result until paid; payment at
-  settlement points at the price of the point that pays, pro rata, from USDC on HyperEVM first and
-  then HyperCore; seats not re-armed while the queue waits.
-- A funded term the traders know before they buy, ended through `stopFunded`; a day's lock after a
-  deposit; the platform's fee on each depositor's profit, taken when they withdraw.
-- The app view and the keeper calls for the shared pool.
+- The app view and the keeper calls for the shared pool; a live run on testnet.
 - Deposits through HyperEVM on mainnet, where the sender is visible.
+- At most 16 holders wait at once; a request past that waits for the queue to move.
 
 The limits of the core apply here too: the operator's gateway holds the demo's agent keys, a stop
 comes after the breach, and a payout the contracts sent is taken as landed after `PAYOUT_WAIT`.
