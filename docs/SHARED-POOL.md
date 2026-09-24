@@ -1,8 +1,9 @@
 # Design: the shared pool
 
 Status: 25 September 2026: shares, deposits, the pool's value, settlement points, withdrawals and
-their queue, the funded term and the platform's fee. Testnet only, and not part of the reviewed
-core: `Pool`, `PoolFactory`, `ChallengeAccount` and `KeyRegistry` are used as they are, unchanged.
+their queue, the funded term and the platform's fee; run once on testnet, with one depositor.
+Testnet only, and not part of the reviewed core: `Pool`, `PoolFactory`, `ChallengeAccount` and
+`KeyRegistry` are used as they are, unchanged.
 
 ## Why a shared pool
 
@@ -79,8 +80,9 @@ closed ticket). HyperCore debits and credits a transfer in one step, and a read 
 the same state, so the value doesn't change while one is in flight. Measured on 24 September 2026:
 four transfers sent through the API, read 264 times, never seen half done, each visible on both
 sides in the same read about a second after it was sent (`spike/shared_pool.py atomic`). The same
-check for a transfer a contract sends through CoreWriter is still to run; if it fails, only
-`blocker()` changes.
+night, four transfers a contract sent through CoreWriter, the way the pool and its seats send: read
+281 times, never seen half done, each visible on both sides in the same read, one block after the
+block of the transaction that sent it (`atomic --via corewriter`).
 
 ## Withdrawals
 
@@ -136,9 +138,50 @@ keeps a point well inside a small block. Anyone can open tickets for the price o
 point never walks the open ones, only the list a caller names, so that costs the keeper reads and
 nothing else.
 
+## The testnet run (24 September)
+
+One depositor, 22:30 to 23:16 UTC, on contracts of the run's own: `ops/deploy_shared.py` deployed a
+`KeyRegistry`, a `PoolFactory` and a `SharedPool`, reusing the demo's `Pool` and `ChallengeAccount`
+implementations (the script checks that their sources haven't changed since the demo was deployed),
+and `ops/shared_run.py` ran the pool one step at a time. The addresses are in
+`deployments/testnet-shared-run.json`. Every step, with the full transaction hash and what the chain
+showed before and after it, is in `spike/results/2026-09-24.jsonl`. The run's parameters: a 20 USDC
+minimum deposit, a 10-minute lock, a 10% fee; one seat with a 2 USDC challenge (price 0.5 USDC, a 1%
+target, half an hour), 8 USDC of funded capital and a quarter-hour funded term.
+
+| step | HyperEVM transaction | what the chain showed after it |
+|---|---|---|
+| The platform's 1 USDC, then `start()` | `0xf746465e` | 1e8 shares, value 1 USDC |
+| `addSeat` | `0xcfc2f0d5` | |
+| `openTicket()`, then 20 USDC to the ticket on HyperCore | `0x047f6c9d` | the ticket holds 20 USDC |
+| Point 1 | `0xf3636c2f` | 20e8 shares for 20 USDC; the ticket swept into the pool |
+| `armSeat`, `prepareAccount` | `0xa795ab84`, `0x930222ff` | the seat holds 11 USDC; creating its HyperCore account cost the pool 1 USDC more; value 20 |
+| A trader buys the challenge, then `activate()` | `0xa46dbe1c`, `0x688be7ae` | 2 USDC in the challenge, 1 USDC paid for creating its account, the 0.5 USDC price earned; value 19.5 |
+| `requestRedeem` for all 20e8 shares | `0x39ae2298` | 20e8 shares queued |
+| Point 2 | `0xe2ea3bd2` | price 0.928571; 9.5 USDC free against 18.57 owed, so 0.5 USDC paid on HyperEVM and 8.999999 on HyperCore; 976 923 154 shares still queued |
+| `expire`, then three `settle` steps of the challenge | `0x6863b125` and three more | the challenge's 2 USDC back on the seat; the seat idle with 10 USDC; value 10.000001, unchanged |
+| `releaseSeat` | `0xc08ea386` | the seat's 10 USDC back in the pool; value unchanged |
+| Point 3 | `0x10e5a304` | 9.071429 USDC paid on HyperCore; the queue empty |
+
+The depositor put in 20 USDC and got 18.571428 back, 0.5 on HyperEVM and 18.071428 on HyperCore,
+at the same price at both points. The difference is what the run cost the pool: 1 USDC for creating
+the seat's HyperCore account and 1 USDC for creating the challenge's, less the 0.5 USDC the trader
+paid for the challenge (the 0.7 USDC fee went to the platform). That is 1.5 USDC out of 21, and
+20/21 of it fell on the depositor. A challenge priced above the 1 USDC its account costs brings
+money in rather than out. The fee took nothing, since the depositor made no profit. The platform's
+starting shares are worth 0.928572 USDC and stay in the pool.
+
+Each point went through at the first call. The value stayed the same while the challenge's capital
+and then the seat's came back into the pool.
+
+Not covered by this run, only by the tests: two depositors sharing a short payment, a deposit at a
+price other than 1, a passed challenge and a funded stage, the funded term.
+
 ## Not done yet
 
-- The app view and the keeper calls for the shared pool; a live run on testnet.
+- The app view and the keeper calls for the shared pool.
+- A testnet run with two depositors: a short payment split between them, a deposit at a price other
+  than 1.
 - Deposits through HyperEVM on mainnet, where the sender is visible.
 - At most 16 holders wait at once; a request past that waits for the queue to move.
 

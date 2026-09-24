@@ -1,0 +1,40 @@
+{
+  "ChallengeAccountImpl": "0xd1Cea5a527D812203eC5317F082c959A65407803",
+  "KeyRegistry": "0xe9903F9523889e9C3C2499210ad9Ed6c67f52Dbf",
+  "PoolFactory": "0x436d9074AB42001538D5a999a0eEe721deC516Db",
+  "PoolImpl": "0xE841A6b72Af55DB3A1c51DF98D18125751371e57",
+  "SharedPool": "0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A",
+  "block": 65163508,
+  "chain_id": 998,
+  "challenge_fee": 700000,
+  "commit": "91d3311136989f85c214b8ba20a554e6fc4749b3",
+  "deployer": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",
+  "fee_bps": 1000,
+  "implementations_from": "00c52622c5e2a7685323cbb041e91480d5778d05",
+  "label": "shared-run",
+  "lock": 600,
+  "min_deposit": 2000000000,
+  "operator": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",
+  "platform": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",
+  "platform_assets": {
+    "BTC": 3,
+    "ETH": 4,
+    "SOL": 0
+  },
+  "published_keys": [
+    "0xAadfC55ddb98987d33b88eDfC93Bb21DC09A36aE",
+    "0x02FD5f7Ce005aB82e1cdB54DF5622106F33a9e94",
+    "0x974b85D72016F0b776f903EF1Af939E4ceB9bCC3",
+    "0x6511A3609291d1b0Bf1fF669003f7c627a0A0883"
+  ],
+  "status": "complete",
+  "tx": {
+    "KeyRegistry": "0x921c57b863d7f0be794fd2d2a553df510f5e800d2f1bf35ad8936c93e608e10c",
+    "PoolFactory": "0x2f12c17942572c31bd63c82c0cf9c9cfdae80c887b474e379e988b158504897e",
+    "SharedPool": "0x8c9b7bba351bdcb6830c6e5a45a534f9eabd0de8f6cdd21189e396649b5b71a9",
+    "publish": "0x5da850fa510cd8de179d861db214ebde4c06071c3dfd18b43dd8dace81f397b1",
+    "setAccountSource": "0xfd7604029ac8fde5ae1160399bf73641d5043e4158f580bbdefc3ec18600b94b",
+    "setChallengeFee": "0x273ca8af7f79d81315f644558c7664eceb90f7b18168a6597b485c96cad4a13e",
+    "setPlatformAssets": "0xf5f86e6fdc989bcf45a114f530820087c4be9cd10455834790eaa9647cb54c34"
+  }
+}

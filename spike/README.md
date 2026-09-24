@@ -125,7 +125,7 @@ the transfer check are next to it, in `spike/results/atomic-*.jsonl`.
 
 | # | question | how | answer, 24 Sep |
 |---|---|---|---|
-| 9 | Can a precompile read show a HyperCore transfer half done: the sender debited and the recipient not yet credited, or both at once? | One call reads both accounts (`SharedPoolProbe.pair`), about 2.5 times a second, while USDC moves between them; every read must add up to the same total | **Not in 264 reads.** Four transfers of 0.2 USDC, sent through the API from an EOA to an existing contract account: every read adds up, and each transfer shows on both sides in the same read, 0.93–1.31 s after it was sent. The same check for a transfer a contract sends through CoreWriter (`atomic --via corewriter`) is still to run. |
+| 9 | Can a precompile read show a HyperCore transfer half done: the sender debited and the recipient not yet credited, or both at once? | One call reads both accounts (`SharedPoolProbe.pair`), about 2.5 times a second, while USDC moves between them; every read must add up to the same total | **Not in 264 reads.** Four transfers of 0.2 USDC, sent through the API from an EOA to an existing contract account: every read adds up, and each transfer shows on both sides in the same read, 0.93–1.31 s after it was sent. **Not in 281 reads for a contract's transfers either** (`atomic --via corewriter`): four transfers of 0.25 USDC that a SpikeAccount sent through CoreWriter to its owner. Every read adds up, and each transfer shows on both sides in the same read, one block after the block of the transaction that sent it, 2.76–3.51 s after it was sent. |
 | 10 | What does reading one seat cost at a settlement point? | `SharedPoolProbe.seat` through `eth_call` with a state override, against the live demo and rehearsal pools, so nothing is deployed or spent | **28 265 gas for an idle seat, 74 336–74 759 with a running challenge.** One `spotBalance` read costs 7 431, `accountMarginSummary` 8 590, `coreUserExists` 3 897, a `violation()` call 22 357–23 380. |
 
 Two things learned about the tools on the way:
@@ -166,6 +166,8 @@ cd spike
 .venv/bin/python run.py q5f --usdc 3    # the same forward, a larger amount
 .venv/bin/python shared_pool.py gas     # sends nothing
 .venv/bin/python shared_pool.py atomic --key YOUR_KEY_NAME --to EXISTING_ACCOUNT_ADDRESS --usdc 0.2 --times 4
+.venv/bin/python shared_pool.py deploy --key YOUR_KEY_NAME --fund 1.2
+.venv/bin/python shared_pool.py atomic --key YOUR_KEY_NAME --via corewriter --usdc 0.25 --times 4
 ```
 
 The testnet faucet only pays addresses that have deposited on mainnet, and the wallets here
