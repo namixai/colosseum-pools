@@ -99,8 +99,9 @@ contract SharedPool {
     uint256 public queuedShares;
     address[] internal _queue;
     mapping(address holder => uint256) internal _queueSlot; // index + 1
-    /// When the pool last paid anyone on HyperCore.
+    /// When the pool last paid anyone on HyperCore, and when it last topped a seat up there.
     uint64 public lastCorePayAt;
+    uint64 public lastArmAt;
 
     /// Sum of the seats' `capitalNeeded()` (1e8).
     uint256 public planCapital;
@@ -161,6 +162,7 @@ contract SharedPool {
     error Locked(uint64 until);
     error QueueWaiting();
     error NoQueue();
+    error QueueCovered();
     error PaymentsLanding(uint64 until);
     error NotFunded(address seat);
     error TermNotOver(uint64 until);
@@ -250,8 +252,6 @@ contract SharedPool {
     ///         after that anyone calls `prepareAccount` on it. Anyone may call this.
     function armSeat(address seat) external started {
         if (!isSeat[seat]) revert NotSeat(seat);
-        // While someone waits to be paid, capital that comes free goes to them, not to a new challenge.
-        if (queuedShares != 0) revert QueueWaiting();
         // The pool's last payments may not show in its balance yet; the money is already theirs.
         _paymentsLanded();
         Pool p = Pool(seat);
@@ -265,16 +265,25 @@ contract SharedPool {
         uint64 cost = CoreOps.exists(seat) ? amount : amount + Units.NEW_ACCOUNT_FEE;
         uint64 free = CoreOps.spotUsdc(address(this));
         if (free < cost) revert NotEnoughFree(free, cost);
+        // While someone waits to be paid, a seat is armed only from money the queue doesn't need: what
+        // is left on HyperCore after the top-up, with the USDC on HyperEVM, must still cover the queue.
+        if (queuedShares != 0) {
+            uint256 left = uint256(free - cost) + usdc.balanceOf(address(this)) * Units.SPOT_PER_PERP;
+            if (left < _queuedValue()) revert QueueWaiting();
+        }
         armedAt[seat] = uint64(block.timestamp);
+        lastArmAt = uint64(block.timestamp);
         CoreOps.sendUsdc(seat, amount);
         emit SeatArmed(seat, amount);
     }
 
-    /// @notice While someone waits to be paid, moves an idle seat's capital back into the pool. Anyone may
-    ///         call it.
+    /// @notice While the queue needs more than the pool has free, moves an idle seat's capital back into
+    ///         the pool. Anyone may call it.
     function releaseSeat(address seat) external started {
         if (!isSeat[seat]) revert NotSeat(seat);
         if (queuedShares == 0) revert NoQueue();
+        uint256 free = uint256(CoreOps.spotUsdc(address(this))) + usdc.balanceOf(address(this)) * Units.SPOT_PER_PERP;
+        if (free >= _queuedValue()) revert QueueCovered();
         Pool p = Pool(seat);
         if (p.stage() != Pool.Stage.Idle || p.challenge() != address(0)) revert SeatBusy(seat);
         uint64 held = CoreOps.spotUsdc(seat);
@@ -519,6 +528,9 @@ contract SharedPool {
     /// every holder. The platform's fee is its share of the holder's profit over what their shares cost
     /// them; it stays in the pool as the platform's shares instead of being paid out.
     function _pay(uint256 poolValue, uint256 sharesBefore) internal {
+        // A top-up sent to a seat moments ago may not show in the balance read below yet; paying out of
+        // that balance would send money that is already gone. The queue waits for the next point.
+        if (lastArmAt != 0 && block.timestamp <= lastArmAt + ARM_WAIT) return;
         for (uint256 i = 0; i < _seats.length; ++i) {
             if (Pool(_seats[i]).earned() != 0) Pool(_seats[i]).withdrawEarned();
         }
@@ -531,6 +543,17 @@ contract SharedPool {
 
         // In full first, to see whether the money covers it.
         uint256 wanted6 = _quote(holders, poolValue, sharesBefore, 1, 1, burn, feeShares, net6);
+        // A request worth less than the smallest amount a payment carries is cleared now: its shares are
+        // burned for nothing (under a millionth of a dollar), so dust can never keep the queue waiting.
+        for (uint256 k = 0; k < n; ++k) {
+            if (net6[k] != 0) continue;
+            address h = holders[k];
+            uint256 dust = queuedOf[h];
+            _settleHolder(h, dust, 0);
+            _dropQueue(h);
+            emit Paid(h, dust, 0, 0, 0);
+            holders[k] = address(0);
+        }
         uint256 evm6 = usdc.balanceOf(address(this));
         uint256 core6 = CoreOps.spotUsdc(address(this)) / Units.SPOT_PER_PERP;
         // A unit per holder is left for the rounding of each holder's split between the two.
@@ -545,6 +568,9 @@ contract SharedPool {
         bool core;
         for (uint256 k = 0; k < n; ++k) {
             address h = holders[k];
+            // Cleared above, or a share of a short payment too small to carry: nothing burned, nothing
+            // sent, the request waits.
+            if (h == address(0) || net6[k] == 0) continue;
             uint256 e6 = (net6[k] * fromEvm6) / wanted6;
             uint64 c = uint64((net6[k] - e6) * Units.SPOT_PER_PERP);
             _settleHolder(h, burn[k], feeShares[k]);
@@ -575,6 +601,10 @@ contract SharedPool {
     ) internal view returns (uint256 total6) {
         for (uint256 k = 0; k < holders.length; ++k) {
             address h = holders[k];
+            if (h == address(0)) {
+                (burn[k], feeShares[k], net6[k]) = (0, 0, 0);
+                continue;
+            }
             uint256 s = (queuedOf[h] * num) / den;
             uint256 gross = (s * poolValue) / sharesBefore;
             uint256 cost = (basis[h] * s) / sharesOf[h];
@@ -607,6 +637,11 @@ contract SharedPool {
         _queueSlot[last] = slot;
         _queue.pop();
         delete _queueSlot[h];
+    }
+
+    /// What the queued shares are worth now (1e8), indicative the way `value()` is.
+    function _queuedValue() internal view returns (uint256) {
+        return (queuedShares * _value()) / totalShares;
     }
 
     function _paymentsLanded() internal view {

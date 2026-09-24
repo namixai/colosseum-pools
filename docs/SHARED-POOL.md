@@ -94,16 +94,23 @@ deposits it takes in. If the pool's free money covers the queue, everyone is pai
 otherwise everyone gets the same fraction and the rest waits. Free money is the pool's USDC on
 HyperEVM (the seats' earned prices are collected first) and its spot on HyperCore; HyperEVM pays
 first, in the same proportion for every holder, and the app shows the two parts apart. A holder
-with no HyperCore account yet pays the 1 USDC for creating it out of their HyperCore part.
+with no HyperCore account yet pays the 1 USDC for creating it out of their HyperCore part. A
+request worth less than the smallest amount a payment carries (a millionth of a dollar) is cleared
+at the next point, its shares burned for nothing, so dust never keeps the queue waiting. And a point
+doesn't pay the queue within `ARM_WAIT` of a top-up: the top-up may not show yet in the balance the
+payment would come from.
 
 The platform's fee is its share of each holder's own profit, taken when they are paid: the payment
 over what the paid shares cost that holder, never on a loss. It stays in the pool as the platform's
 shares rather than being paid out.
 
-While someone waits, a seat that comes free is not armed again: `releaseSeat` (anyone) brings an
-idle seat's capital back into the pool, and `armSeat` refuses. Capital in a running challenge or a
-funded stage can't be taken back early; a funded stage ends by its term (below). Whoever stays pays
-for the wait in revenue the pool doesn't earn meanwhile; there is no exit fee.
+While someone waits, the queue comes first. A seat is armed only from money the queue doesn't need:
+what is left on HyperCore after the top-up, with the USDC on HyperEVM, must still cover the queue at
+the current value. And while the queue needs more than the pool has free, `releaseSeat` (anyone)
+brings an idle seat's capital back into the pool. A small request doesn't stop the seats; a large
+one gets the capital as it comes free. Capital in a running challenge or a funded stage can't be
+taken back early; a funded stage ends by its term (below). Whoever stays pays for a long wait in
+revenue the pool doesn't earn meanwhile; there is no exit fee.
 
 ## Seats
 

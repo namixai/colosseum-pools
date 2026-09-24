@@ -837,14 +837,62 @@ contract SharedPoolTest is Test {
 
     // ── seats while someone waits ────────────────────────────────────────────────────
 
-    function test_armSeat_waitsWhileSomeoneWaitsToBePaid() public {
+    /// 160 in the pool; arming a new seat takes 102. With 100 queued, what would be left (58) doesn't
+    /// cover the queue, so the seat waits; with 50 queued it does, and the seat is armed.
+    function test_armSeat_onlyFromMoneyTheQueueDoesntNeed() public {
         _funded(150e8);
         vm.prank(operator);
         address seat = sp.addSeat(_rules(), _terms(), TERM);
         vm.warp(block.timestamp + LOCK);
-        _request(alice, 1e8);
+        _request(alice, 100e8);
         vm.expectRevert(SharedPool.QueueWaiting.selector);
         sp.armSeat(seat);
+
+        SharedPool other = new SharedPool(factory, operator, platform, MIN, LOCK, FEE_BPS);
+        sp = other;
+        _funded(150e8);
+        vm.prank(operator);
+        seat = sp.addSeat(_rules(), _terms(), TERM);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 50e8);
+        sp.armSeat(seat);
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(seat), NEED);
+    }
+
+    /// A request for one share is worth less than a millionth of a dollar: the next point clears it, so it
+    /// can't keep the queue, and every rule that waits on the queue, waiting.
+    function test_dustRequest_isClearedAtThePoint() public {
+        _funded(MIN);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 1);
+        sp.settle(new address[](0));
+        assertEq(sp.queue().length, 0);
+        assertEq(sp.queuedOf(alice), 0);
+        assertEq(sp.queuedShares(), 0);
+        assertEq(sp.sharesOf(alice), MIN - 1, "burned for nothing");
+        assertEq(usdc.balanceOf(alice), 0);
+    }
+
+    /// A top-up sent in the same block (or a minute before) may not show in the pool's balance yet:
+    /// the point takes deposits but pays the queue only once the top-up has had its minute.
+    function test_noPayment_whileATopUpIsInFlight() public {
+        CoreSimulatorLib.forceAccountActivation(alice);
+        _funded(150e8);
+        vm.prank(operator);
+        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        vm.warp(block.timestamp + LOCK);
+        sp.armSeat(seat);
+        _request(alice, 10e8);
+        sp.settle(new address[](0));
+        assertEq(sp.queuedOf(alice), 10e8, "not paid out of money already on its way to the seat");
+        CoreSimulatorLib.nextBlock();
+
+        vm.warp(block.timestamp + sp.ARM_WAIT() + 1);
+        sp.settle(new address[](0));
+        assertEq(sp.queuedOf(alice), 0);
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), 9.9375e8, "10 shares at 159/160: the seat's new account cost the pool 1");
     }
 
     function test_releaseSeat_bringsAnIdleSeatsCapitalBack_whileTheQueueWaits() public {
@@ -854,7 +902,11 @@ contract SharedPoolTest is Test {
         sp.releaseSeat(address(seat));
 
         vm.warp(block.timestamp + LOCK);
-        _request(alice, 1e8);
+        _request(alice, 10e8);
+        vm.expectRevert(SharedPool.QueueCovered.selector);
+        sp.releaseSeat(address(seat)); // 58 free covers 10
+
+        _request(alice, 90e8); // 100 queued: more than the 58 free
         uint256 value_ = sp.value();
         vm.prank(stranger);
         sp.releaseSeat(address(seat));
@@ -869,7 +921,7 @@ contract SharedPoolTest is Test {
         Pool seat = _armedSeat();
         _started(seat);
         vm.warp(block.timestamp + LOCK);
-        _request(alice, 1e8);
+        _request(alice, 100e8); // more than the 58 free: the queue needs the seat
         vm.expectRevert(abi.encodeWithSelector(SharedPool.SeatBusy.selector, address(seat)));
         sp.releaseSeat(address(seat));
     }
