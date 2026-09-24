@@ -17,10 +17,10 @@ run go to spike/results/atomic-*.jsonl.
 
     .venv/bin/python shared_pool.py gas
     COLOSSEUM_RPC_URL=https://rpcs.chain.link/hyperevm/testnet \\
-        .venv/bin/python shared_pool.py atomic --key trader --to <existing account> --usdc 0.2 --times 4
-    .venv/bin/python shared_pool.py deploy --key <name> --fund 1.2
+        .venv/bin/python shared_pool.py atomic --key trader --to EXISTING_ACCOUNT_ADDRESS --usdc 0.2 --times 4
+    .venv/bin/python shared_pool.py deploy --key YOUR_KEY_NAME --fund 1.2
     COLOSSEUM_RPC_URL=https://rpcs.chain.link/hyperevm/testnet \\
-        .venv/bin/python shared_pool.py atomic --key <name> --via corewriter --usdc 0.25 --times 4
+        .venv/bin/python shared_pool.py atomic --key YOUR_KEY_NAME --via corewriter --usdc 0.25 --times 4
 """
 
 from __future__ import annotations
