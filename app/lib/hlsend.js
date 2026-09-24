@@ -53,6 +53,23 @@ export function refusal(answer) {
   return "Hyperliquid's answer confirms nothing; check your balances";
 }
 
+/**
+ * What the person can do about a refusal, or "" when the reason already says it.
+ *
+ * Hyperliquid switches this action off for an account in unified mode and answers "Action
+ * disabled when unified account is active" -- which is true and useless to read. It stopped the
+ * demo's own investor on 24 Sep 2026, and the same transfer made in Hyperliquid's app went
+ * through, so that is what the page says now. The recognised case names the way out; anything
+ * else keeps the venue's own words rather than a guess at what they mean.
+ */
+export function whatToDo(why, { destination, amount, app = CONFIG.hlApp } = {}) {
+  if (/unified account/i.test(String(why || ""))) {
+    return `Your Hyperliquid account has unified mode on, and that switches this transfer off. `
+      + `Open ${app} with this wallet and send ${amount} USDC to ${destination} there instead.`;
+  }
+  return "";
+}
+
 let usdcToken = null;
 
 async function usdcTokenId() {
@@ -80,5 +97,8 @@ export async function sendUsdc(signer, destination, amount) {
   });
   const answer = await res.json().catch(() => null);
   const why = refusal(answer);
-  if (why) throw new Error(`Hyperliquid refused the transfer: ${why}`);
+  if (why) {
+    const advice = whatToDo(why, { destination, amount: canonical(amount) });
+    throw new Error(`Hyperliquid refused the transfer: ${why}${advice ? `. ${advice}` : ""}`);
+  }
 }

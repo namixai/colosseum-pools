@@ -1002,6 +1002,18 @@ MUTATIONS = [
      # A pass that finishes saves at its end anyway; what this line alone keeps is the scan of a
      # pass that is killed part way, which is what a redeploy does to this service.
      ["test_an_interrupted_scan_keeps_the_windows_that_finished"]),
+    ("J58", "app/lib/wallet.js",
+     "    if (cancelled(err)) throw err;",
+     "    throw err;",
+     ["the wallet is put on this chain by what it is on, not by how it refuses"]),
+    ("J59", "app/lib/wallet.js",
+     '  if ((await chainOf(eth)) === want) return "added";',
+     '  return "added";',
+     ["the wallet is put on this chain by what it is on, not by how it refuses"]),
+    ("J60", "app/lib/hlsend.js",
+     '  if (/unified account/i.test(String(why || ""))) {',
+     "  if (false) {",
+     ["spot transfer: a refusal that has a way out says what it is"]),
     # ── the identity gate and its list of known commits (bash) ──
     ("S1", "scripts/identity-check.sh",
      '  if [ -n "$entry" ]; then',

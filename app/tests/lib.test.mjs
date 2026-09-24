@@ -5,7 +5,9 @@ import { orderUrl } from "../lib/gateway.js";
 import { createNavigator, needsGate } from "../lib/nav.js";
 import { settle } from "../lib/ui.js";
 import { canonical, roundPrice, roundSize } from "../lib/hl.js";
-import { refusal, splitSignature, spotSend } from "../lib/hlsend.js";
+import { refusal, splitSignature, spotSend, whatToDo } from "../lib/hlsend.js";
+import { ensureChain, cancelled } from "../lib/wallet.js";
+import { CONFIG } from "../config.js";
 
 test("the gateway is reached over https unless it runs on this machine", () => {
   assert.equal(orderUrl("http://127.0.0.1:8787"), "http://127.0.0.1:8787/v1/order");
@@ -158,4 +160,77 @@ test("spot transfer: only an ok answer counts as sent", () => {
     "Insufficient balance for token transfer");
   assert.match(refusal({ status: "unknown" }), /confirms nothing/);
   assert.match(refusal(null), /confirms nothing/);
+});
+
+/** A wallet that answers as the real ones do: it knows the chains it was given, and nothing else. */
+function fakeWallet({ on, knows = [], refuseSwitchWith, refuseAddWith, addLeavesItElsewhere = false } = {}) {
+  const calls = [];
+  const known = new Set(knows.map((c) => c.toLowerCase()));
+  return {
+    calls,
+    chain: () => on,
+    async request({ method, params }) {
+      calls.push(method);
+      if (method === "eth_chainId") return on;
+      if (method === "wallet_switchEthereumChain") {
+        const want = params[0].chainId.toLowerCase();
+        if (!known.has(want)) throw refuseSwitchWith ?? Object.assign(new Error("Unrecognized chain ID"), { code: 4902 });
+        on = params[0].chainId;
+        return null;
+      }
+      if (method === "wallet_addEthereumChain") {
+        if (refuseAddWith) throw refuseAddWith;
+        known.add(params[0].chainId.toLowerCase());
+        if (!addLeavesItElsewhere) on = params[0].chainId;
+        return null;
+      }
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+}
+
+test("the wallet is put on this chain by what it is on, not by how it refuses", async () => {
+  // Already there: nothing is asked of the wallet beyond which chain it is on.
+  const there = fakeWallet({ on: CONFIG.chainHex, knows: [CONFIG.chainHex] });
+  assert.equal(await ensureChain(there, CONFIG), "already");
+  assert.deepEqual(there.calls, ["eth_chainId"]);
+
+  // Knows the chain, switches.
+  const knows = fakeWallet({ on: "0x1", knows: [CONFIG.chainHex] });
+  assert.equal(await ensureChain(knows, CONFIG), "switched");
+  assert.equal(knows.chain(), CONFIG.chainHex);
+  assert.ok(!knows.calls.includes("wallet_addEthereumChain"), "added a chain it already knew");
+
+  // 24 Sep 2026 on the live demo: the refusal was not 4902, and the visitor was stopped there.
+  // What matters is that the wallet is still elsewhere, so the chain is offered for adding.
+  for (const refuseSwitchWith of [
+    Object.assign(new Error('Unrecognized chain ID "0x3e6". Try adding the chain using wallet_switchEthereumChain first.'), { code: -32603 }),
+    Object.assign(new Error("Unrecognized chain ID"), { code: 4902 }),
+    new Error("unrecognized chain"),
+  ]) {
+    const w = fakeWallet({ on: "0x1", refuseSwitchWith });
+    assert.equal(await ensureChain(w, CONFIG), "added", String(refuseSwitchWith.code));
+    assert.equal(w.chain(), CONFIG.chainHex);
+  }
+
+  // Adding went through and the wallet is still elsewhere: say what to type in by hand.
+  const stubborn = fakeWallet({ on: "0x1", addLeavesItElsewhere: true });
+  await assert.rejects(ensureChain(stubborn, CONFIG), (err) =>
+    new RegExp(CONFIG.rpc.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).test(err.message)
+    && err.message.includes(String(CONFIG.chainId)));
+
+  // The person saying no is an answer, not a limitation: nothing is added behind their back.
+  const said_no = fakeWallet({ on: "0x1", refuseSwitchWith: Object.assign(new Error("User rejected"), { code: 4001 }) });
+  await assert.rejects(ensureChain(said_no, CONFIG), (err) => cancelled(err));
+  assert.ok(!said_no.calls.includes("wallet_addEthereumChain"), "added a chain after a refusal");
+});
+
+test("spot transfer: a refusal that has a way out says what it is", () => {
+  const advice = whatToDo("Action disabled when unified account is active",
+    { destination: "0x2839D3C872CE82151a16aFE0315756915D8A9b79", amount: "771", app: "https://app.hyperliquid-testnet.xyz" });
+  assert.match(advice, /unified/i);
+  assert.match(advice, /771 USDC to 0x2839D3C872CE82151a16aFE0315756915D8A9b79/);
+  assert.match(advice, /app\.hyperliquid-testnet\.xyz/);
+  // A refusal whose words already say the reason is left in the venue's own words.
+  assert.equal(whatToDo("Insufficient balance for token transfer", { destination: "0x0", amount: "1" }), "");
 });

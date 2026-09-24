@@ -1,5 +1,6 @@
 // HyperEVM access: a read-only provider, the connected wallet, and the contracts.
 import { CONFIG } from "../config.js";
+import { ensureChain } from "./wallet.js";
 export { MAX_BATCH, readAll } from "./batch.js";
 
 const { ethers } = window;
@@ -124,33 +125,10 @@ export function deployed() {
   return Boolean(CONFIG.factory && CONFIG.registry);
 }
 
-async function ensureChain() {
-  const eth = window.ethereum;
-  const current = await eth.request({ method: "eth_chainId" });
-  if (current === CONFIG.chainHex) return;
-  try {
-    await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CONFIG.chainHex }] });
-  } catch (err) {
-    if (err && err.code === 4902) {
-      await eth.request({
-        method: "wallet_addEthereumChain",
-        params: [{
-          chainId: CONFIG.chainHex,
-          chainName: CONFIG.chainName,
-          nativeCurrency: CONFIG.nativeCurrency,
-          rpcUrls: [CONFIG.rpc],
-        }],
-      });
-    } else {
-      throw err;
-    }
-  }
-}
-
 export async function connect() {
   if (!window.ethereum) throw new Error("No browser wallet found. Install Rabby or MetaMask.");
   await window.ethereum.request({ method: "eth_requestAccounts" });
-  await ensureChain();
+  await ensureChain(window.ethereum, CONFIG);
   const provider = new ethers.BrowserProvider(window.ethereum, "any");
   signer = await provider.getSigner();
   listeners.forEach((fn) => fn(signer.address));
