@@ -33,20 +33,28 @@ export async function ensureChain(eth, config) {
   }
   if ((await chainOf(eth)) === want) return "switched";
 
-  await eth.request({
-    method: "wallet_addEthereumChain",
-    params: [{
-      chainId: config.chainHex,
-      chainName: config.chainName,
-      nativeCurrency: config.nativeCurrency,
-      rpcUrls: [config.rpc],
-    }],
-  });
+  try {
+    await eth.request({
+      method: "wallet_addEthereumChain",
+      params: [{
+        chainId: config.chainHex,
+        chainName: config.chainName,
+        nativeCurrency: config.nativeCurrency,
+        rpcUrls: [config.rpc],
+      }],
+    });
+  } catch (err) {
+    if (cancelled(err)) throw err;
+    // The wallet refused to take the chain at all. Its own words are no use to the visitor, so
+    // they get the four fields instead: this is the one path where the network is still missing.
+    throw new Error(`This wallet would not add ${config.chainName}. Add it by hand: network name `
+      + `${config.chainName}, RPC URL ${config.rpc}, chain id ${config.chainId}, currency symbol `
+      + `${config.nativeCurrency.symbol}.`);
+  }
   if ((await chainOf(eth)) === want) return "added";
 
-  // Adding it went through and the wallet still is not on it: say what to type in by hand
-  // rather than leave the visitor with a refusal they cannot act on.
-  throw new Error(`This wallet is not on ${config.chainName}. Add it by hand: network name `
-    + `${config.chainName}, RPC URL ${config.rpc}, chain id ${config.chainId}, currency symbol `
-    + `${config.nativeCurrency.symbol}.`);
+  // The chain is in the wallet now and the wallet is still on another one. Telling them to add
+  // what they already have sends them in a circle; what is left to do is pick it.
+  throw new Error(`${config.chainName} is added to this wallet, but the wallet is still on `
+    + `another network. Switch it to ${config.chainName} (chain id ${config.chainId}) and try again.`);
 }

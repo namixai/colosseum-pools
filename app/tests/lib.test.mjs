@@ -5,7 +5,7 @@ import { orderUrl } from "../lib/gateway.js";
 import { createNavigator, needsGate } from "../lib/nav.js";
 import { settle } from "../lib/ui.js";
 import { canonical, roundPrice, roundSize } from "../lib/hl.js";
-import { refusal, splitSignature, spotSend, whatToDo } from "../lib/hlsend.js";
+import { refusal, splitSignature, spotSend, whatToDo, sendUsdc } from "../lib/hlsend.js";
 import { ensureChain, cancelled } from "../lib/wallet.js";
 import { CONFIG } from "../config.js";
 
@@ -213,16 +213,49 @@ test("the wallet is put on this chain by what it is on, not by how it refuses", 
     assert.equal(w.chain(), CONFIG.chainHex);
   }
 
-  // Adding went through and the wallet is still elsewhere: say what to type in by hand.
+  // The wallet would not take the chain at all: the four fields to type in, because it is missing.
+  const wontAdd = fakeWallet({ on: "0x1", refuseAddWith: Object.assign(new Error("nope"), { code: -32603 }) });
+  await assert.rejects(ensureChain(wontAdd, CONFIG), (err) =>
+    /would not add/.test(err.message)
+    && err.message.includes(CONFIG.rpc)
+    && err.message.includes(String(CONFIG.chainId))
+    && err.message.includes(CONFIG.nativeCurrency.symbol));
+
+  // Added, and the wallet stayed where it was: what is left to do is pick it, not add it again.
   const stubborn = fakeWallet({ on: "0x1", addLeavesItElsewhere: true });
   await assert.rejects(ensureChain(stubborn, CONFIG), (err) =>
-    new RegExp(CONFIG.rpc.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).test(err.message)
-    && err.message.includes(String(CONFIG.chainId)));
+    /is added to this wallet/.test(err.message)
+    && /Switch it to/.test(err.message)
+    && !/Add it by hand/.test(err.message));
 
   // The person saying no is an answer, not a limitation: nothing is added behind their back.
   const said_no = fakeWallet({ on: "0x1", refuseSwitchWith: Object.assign(new Error("User rejected"), { code: 4001 }) });
   await assert.rejects(ensureChain(said_no, CONFIG), (err) => cancelled(err));
   assert.ok(!said_no.calls.includes("wallet_addEthereumChain"), "added a chain after a refusal");
+});
+
+test("spot transfer: the refusal the button throws carries the way out", async () => {
+  // whatToDo() being right is not the same as sendUsdc() saying it: this drives the path the
+  // deposit button takes, with Hyperliquid answering as it did to the demo's own investor.
+  const saved = globalThis.fetch;
+  globalThis.fetch = async (url) => ({
+    ok: true,
+    json: async () => (String(url).includes("/info")
+      ? { tokens: [{ name: "USDC", tokenId: `0x${"a".repeat(32)}` }] }
+      : { status: "err", response: "Action disabled when unified account is active" }),
+  });
+  const signer = {
+    provider: { getNetwork: async () => ({ chainId: 998n }) },
+    signTypedData: async () => `0x${"1".repeat(64)}${"2".repeat(64)}1b`,
+  };
+  try {
+    await assert.rejects(
+      sendUsdc(signer, "0x2839D3C872CE82151a16aFE0315756915D8A9b79", "771"),
+      (err) => /Action disabled when unified account is active/.test(err.message)
+        && /771 USDC to 0x2839D3C872CE82151a16aFE0315756915D8A9b79/.test(err.message));
+  } finally {
+    globalThis.fetch = saved;
+  }
 });
 
 test("spot transfer: a refusal that has a way out says what it is", () => {

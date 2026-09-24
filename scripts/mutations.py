@@ -1003,8 +1003,8 @@ MUTATIONS = [
      # pass that is killed part way, which is what a redeploy does to this service.
      ["test_an_interrupted_scan_keeps_the_windows_that_finished"]),
     ("J58", "app/lib/wallet.js",
-     "    if (cancelled(err)) throw err;",
-     "    throw err;",
+     "    if (cancelled(err)) throw err;\n  }\n  if ((await chainOf(eth)) === want) return \"switched\";",
+     "    throw err;\n  }\n  if ((await chainOf(eth)) === want) return \"switched\";",
      ["the wallet is put on this chain by what it is on, not by how it refuses"]),
     ("J59", "app/lib/wallet.js",
      '  if ((await chainOf(eth)) === want) return "added";',
@@ -1013,7 +1013,22 @@ MUTATIONS = [
     ("J60", "app/lib/hlsend.js",
      '  if (/unified account/i.test(String(why || ""))) {',
      "  if (false) {",
-     ["spot transfer: a refusal that has a way out says what it is"]),
+     ["spot transfer: a refusal that has a way out says what it is",
+      "spot transfer: the refusal the button throws carries the way out"]),
+    ("J63", "app/lib/hlsend.js",
+     '    const advice = whatToDo(why, { destination, amount: canonical(amount) });\n'
+     '    throw new Error(`Hyperliquid refused the transfer: ${why}${advice ? `. ${advice}` : ""}`);',
+     "    throw new Error(`Hyperliquid refused the transfer: ${why}`);",
+     ["spot transfer: the refusal the button throws carries the way out"]),
+    ("J64", "app/lib/wallet.js",
+     "    if (cancelled(err)) throw err;\n"
+     "    // The wallet refused to take the chain at all. Its own words are no use to the visitor, so\n"
+     "    // they get the four fields instead: this is the one path where the network is still missing.\n"
+     "    throw new Error(`This wallet would not add ${config.chainName}. Add it by hand: network name `\n"
+     "      + `${config.chainName}, RPC URL ${config.rpc}, chain id ${config.chainId}, currency symbol `\n"
+     "      + `${config.nativeCurrency.symbol}.`);",
+     "    throw err;",
+     ["the wallet is put on this chain by what it is on, not by how it refuses"]),
     # ── the identity gate and its list of known commits (bash) ──
     ("S1", "scripts/identity-check.sh",
      '  if [ -n "$entry" ]; then',
