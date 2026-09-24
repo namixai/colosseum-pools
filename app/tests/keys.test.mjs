@@ -90,10 +90,26 @@ test("a stop shows the reason the contract recorded, not one computed on an empt
   // A pool records no reason of its own: say it is stopped rather than invent one.
   assert.deepEqual(ruleVerdict({ recorded: 0, live: 1, stopped: true }), { kind: "stopped-without-a-recorded-reason" });
 
+  // A challenge that PASSED is as empty as one that was stopped: it hands the capital back and
+  // ends at Settled with no reason recorded. Without this the first graduate would be shown as
+  // a drawdown -- the same defect, on the other branch, and review caught it before it ran.
+  const passed = ruleVerdict({ recorded: 0, live: 1, stopped: false, finished: true });
+  assert.deepEqual(passed, { kind: "finished-with-no-rule-broken" });
+  assert.equal(liveReadingIsMoot(passed), true);
+  // A stopped account still carries its recorded reason ahead of anything else.
+  assert.deepEqual(ruleVerdict({ recorded: 3, live: 1, stopped: true, finished: true }), { kind: "recorded", reason: 3 });
+
+  // The pages that render it know when an account has finished.
+  const livePanel = readFileSync(new URL("../views/trading.js", import.meta.url), "utf8");
+  assert.match(livePanel, /finished/, "the live panel cannot tell a finished account from a trading one");
+  const poolView = readFileSync(new URL("../views/pool.js", import.meta.url), "utf8");
+  assert.match(poolView, /stopped: Number\(stage\) === 3/, "a pool in Closing tells the panel nothing");
+
   // The pages ask for the recorded reason, and the challenge page no longer hides it once the
   // challenge is settled -- which is where a judge reads it.
   const verify = readFileSync(new URL("../views/verify.js", import.meta.url), "utf8");
   assert.match(verify, /breachReason\(\)/, "the verify page does not read the recorded reason");
+  assert.match(verify, /finished = kind === "challenge"/, "the verify page cannot tell a finished account");
   assert.match(verify, /ruleVerdict\(/);
   const challenge = readFileSync(new URL("../views/challenge.js", import.meta.url), "utf8");
   assert.match(challenge, /ruleVerdict\(/);

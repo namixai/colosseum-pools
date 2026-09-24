@@ -13,10 +13,16 @@
 
 /**
  * `recorded` is breachReason() where the account keeps one (a challenge) and 0 otherwise;
- * `live` is violation() computed now; `stopped` is isStopped().
+ * `live` is violation() computed now; `stopped` is isStopped(); `finished` says the account has
+ * stopped trading for good -- a challenge past Active, a pool in Closing.
+ *
+ * A challenge that passed is as empty as one that was stopped: it hands its capital back and
+ * ends at Settled with no reason recorded, so without `finished` the live reading would call a
+ * pass a drawdown. Review caught that before the first graduate could show it to anyone.
  */
-export function ruleVerdict({ recorded = 0, live = 0, stopped = false } = {}) {
+export function ruleVerdict({ recorded = 0, live = 0, stopped = false, finished = false } = {}) {
   if (Number(recorded)) return { kind: "recorded", reason: Number(recorded) };
+  if (finished) return { kind: "finished-with-no-rule-broken" };
   if (stopped) return { kind: "stopped-without-a-recorded-reason" };
   return { kind: "live", reason: Number(live) };
 }

@@ -103,6 +103,17 @@ configuration. That script:
 The deployment record the services use has to be committed: `install.sh` reads it from the
 release.
 
+🔴 **By hand on a host set up before 24 September 2026:** `/etc/colosseum/keeper.env` still says
+`COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm`, and that node refuses the keeper's
+log reads from this host (above). `bootstrap.sh` writes that file only when it is missing, so
+deploying does not change it. The fix is one line and a restart, and it is a change to the
+host's configuration — it happens on the operator's word, not as part of a deploy:
+
+    sudo sed -i 's|^COLOSSEUM_RPC_URL=.*|COLOSSEUM_RPC_URL=https://rpcs.chain.link/hyperevm/testnet|' \
+        /etc/colosseum/keeper.env
+    sudo systemctl restart colosseum-keeper
+    journalctl -u colosseum-keeper -n 5     # pass_done, and next_block climbing towards the head
+
 ## Choosing the deployment and starting
 
     echo rehearsal | sudo tee /etc/colosseum/deployment      # on the host

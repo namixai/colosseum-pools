@@ -75,7 +75,10 @@ export async function poolView(address, page) {
   const funded = $("#funded", page);
   if (Number(stage) === 2 || Number(stage) === 3) {
     funded.innerHTML = `<h3>Funded stage</h3><div id="equity"></div><div id="trade"></div><div class="actions" id="funded-actions"></div>`;
-    settle(equityPanel($("#equity", page), pool, address), $("#equity", page));
+    // Closing is what a pool looks like after its funded stage was stopped: the panel should say
+    // so rather than judge what is left of the account.
+    settle(equityPanel($("#equity", page), pool, address, { stopped: Number(stage) === 3 }),
+           $("#equity", page));
     if (Number(stage) === 2 && isFunded) settle(tradePanel($("#trade", page), address, rules), $("#trade", page));
     const actions = $("#funded-actions", page);
     if (Number(stage) === 2) {

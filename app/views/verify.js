@@ -140,12 +140,16 @@ async function fillsPanel(account, address, page, kind) {
   // A settled account holds nothing, and a verdict computed on nothing says "drawdown" whatever
   // the stop was for. What the contract wrote down when it stopped the account is the answer;
   // the live reading is for accounts that are still trading.
-  const [live, recorded, stopped] = await Promise.all([
+  const [live, recorded, stopped, state] = await Promise.all([
     account.violation([]),
     kind === "challenge" ? account.breachReason() : 0,
     account.isStopped(),
+    kind === "challenge" ? account.status() : account.stage(),
   ]);
-  const verdict = ruleVerdict({ recorded, live, stopped });
+  // Past Active a challenge does not trade again, whatever ended it; a pool in Closing is
+  // settling a stop. Either way the live reading is about what is left, not about what happened.
+  const finished = kind === "challenge" ? Number(state) > 2 : Number(state) === 3;
+  const verdict = ruleVerdict({ recorded, live, stopped, finished });
   $("#fills", page).className = "";
   $("#fills", page).innerHTML = `
     ${row("Fills on this account (Hyperliquid API)", String(fills.length))}
@@ -153,14 +157,16 @@ async function fillsPanel(account, address, page, kind) {
     ${verdict.kind === "recorded"
       ? row("The rule the contract recorded when it stopped this account",
             badge(chain.BREACH[verdict.reason], "bad"))
-      : verdict.kind === "live"
-        ? row("The contract's verdict right now",
-              verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))
-        : row("This account is stopped", badge("stopped", "bad"))}
-    ${liveReadingIsMoot(verdict) ? `<p class="small muted">The verdict this page can compute from the
-      account's state is about the account as it stands now. Once a stopped account is settled its capital
-      has gone back to the pool, and a reading of an empty account says drawdown whatever the stop was for,
-      so it is not shown beside the recorded reason.</p>` : ""}
+      : verdict.kind === "finished-with-no-rule-broken"
+        ? row("Rules while this account traded", badge("none broken; the contract recorded no stop", "ok"))
+        : verdict.kind === "stopped-without-a-recorded-reason"
+          ? row("This account is stopped", badge("stopped; it keeps no reason of its own", "bad"))
+          : row("The contract's verdict right now",
+                verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))}
+    ${liveReadingIsMoot(verdict) ? `<p class="small muted">A verdict this page could compute from the
+      account's state would be about the account as it stands now, and this one has finished: its capital has
+      gone back to the pool, so a reading of what is left says drawdown whatever happened. What the contract
+      itself holds is above.</p>` : ""}
     <div class="scroll"><table><thead><tr><th>time (UTC)</th><th>asset</th><th>side</th><th>size</th><th>price</th>
     <th>notional</th><th>closed PnL</th><th>asset rule</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
     <p class="small muted">This checks trades that reached Hyperliquid. An order our gateway refused never reaches

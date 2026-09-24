@@ -14,7 +14,7 @@ export async function stopInputs(account, rules) {
 }
 
 /** Equity against the rules, as HyperCore reports it, and the contract's own verdict. */
-export async function equityPanel(box, contract, account, recorded = 0) {
+export async function equityPanel(box, contract, account, { recorded = 0, finished = false, stopped = false } = {}) {
   const [state, base, dayBase, rules, verdict, positions] = await Promise.all([
     hl.account(account), contract.drawdownBase(), contract.dayStartEquity(), contract.rules(),
     contract.violation([]), hl.positions(account),
@@ -28,7 +28,7 @@ export async function equityPanel(box, contract, account, recorded = 0) {
   // A stop the contract recorded outlives the account it was recorded on: once the capital has
   // gone back to the pool, a verdict computed on what is left says drawdown whatever the stop
   // was for. Show what was written down, and say why the live reading is not beside it.
-  const v = ruleVerdict({ recorded, live: verdict, stopped: false });
+  const v = ruleVerdict({ recorded, live: verdict, stopped, finished });
   // On an account whose stop is already recorded, a badge saying it is below its floor says
   // only that the account is empty; the numbers stay, the alarm goes.
   const live = !liveReadingIsMoot(v);
@@ -41,12 +41,18 @@ export async function equityPanel(box, contract, account, recorded = 0) {
     ${v.kind === "recorded"
       ? row("Stopped for", `${badge(chain.BREACH[v.reason], "bad")} <span class="muted">as the contract
           recorded it at the stop</span>`)
-      : row("Contract's verdict", v.reason ? badge(`breaks: ${chain.BREACH[v.reason]}`, "bad") : badge("inside the rules", "ok"))}
-    <p class="muted small">${v.kind === "recorded"
-      ? `The figures above are this account as it stands now: after a stop is settled its capital is back
-         with the pool, so they no longer describe what the stop was about.`
-      : `The verdict reads HyperCore through precompiles at the start of the block; the numbers above come
-         from Hyperliquid's API and can be a second newer.`}</p>`;
+      : v.kind === "finished-with-no-rule-broken"
+        ? row("Rules", `${badge("none broken", "ok")} <span class="muted">this account has finished and the
+            contract recorded no stop</span>`)
+        : v.kind === "stopped-without-a-recorded-reason"
+          ? row("Stopped", `${badge("stopped", "bad")} <span class="muted">this account keeps no reason of
+              its own</span>`)
+          : row("Contract's verdict", v.reason ? badge(`breaks: ${chain.BREACH[v.reason]}`, "bad") : badge("inside the rules", "ok"))}
+    <p class="muted small">${live
+      ? `The verdict reads HyperCore through precompiles at the start of the block; the numbers above come
+         from Hyperliquid's API and can be a second newer.`
+      : `The figures above are this account as it stands now: once it has finished, its capital is back with
+         the pool, so they no longer describe what it did while it traded.`}</p>`;
 }
 
 /** The order ticket and the open orders, for the trader of this account. */

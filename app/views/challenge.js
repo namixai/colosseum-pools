@@ -52,7 +52,8 @@ export async function challengeView(address, page) {
 
   $("#rules", page).innerHTML = rulesHtml(rules, await assetNames(rules.assets));
 
-  if (s >= 2) settle(equityPanel($("#equity", page), ch, address, reason), $("#equity", page));
+  if (s >= 2) settle(equityPanel($("#equity", page), ch, address, { recorded: reason, finished: s > 2 }),
+                     $("#equity", page));
   else if (spoiled) {
     $("#equity", page).textContent = "The reserved trading key got a HyperCore account before the start, and "
       + "Hyperliquid won't take it as an agent. The challenge can't start; anyone can abort it now, "
