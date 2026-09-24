@@ -660,7 +660,7 @@ MUTATIONS = [
      "STOPPED = (BREACHED, EXPIRED, FORFEITED, PASSED)",
      ["test_stopped_states_match_is_stopped", "test_aborted_is_one_of_the_stopped_states"]),
     ("K7", "ops/keeper.py",
-     "hi = min(lo + window - 1, end)",
+     "hi = min(self.next_block + self.window - 1, end)",
      "hi = end",
      ["test_logs_are_read_in_windows_and_the_state_resumes"]),
     ("K8", "ops/keeper.py",
@@ -672,8 +672,8 @@ MUTATIONS = [
      "CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(0, 8)",
      ["test_status_and_stage_numbers"]),
     ("K10", "ops/keeper.py",
-     "            self.next_block = end + 1",
-     "            self.next_block = end",
+     "            self.next_block = hi + 1",
+     "            self.next_block = hi",
      ["test_logs_are_read_in_windows_and_the_state_resumes"]),
     ("K11", "ops/keeper.py",
      'elif now > view(ch, "createdAt()", "uint64") + START_WINDOW:',
@@ -1102,6 +1102,34 @@ def baseline(chosen) -> int:
     return problems
 
 
+def check() -> int:
+    """Every mutation still points at the code it guards, and no id is used twice.
+
+    A refactor moves a line and the mutation that guarded it stops matching anything. The full
+    run says so, but the full run takes minutes and is called by hand, so a mutation can sit
+    orphaned for days -- K7 and K10 did, from 23 to 24 Sep 2026, after their own author moved
+    the lines they named. This check reads files and nothing else, so CI can afford it on every
+    push: a mutation that matches no code, or matches twice, guards nothing either way.
+    """
+    problems = 0
+    seen: dict[str, int] = {}
+    for mid, rel, old, _new, _expected in MUTATIONS:
+        seen[mid] = seen.get(mid, 0) + 1
+        count = (ROOT / rel).read_text().count(old)
+        if count != 1:
+            print(f"{mid}: {count} matches in {rel}")
+            problems += 1
+    for mid, times in sorted(seen.items()):
+        if times > 1:
+            print(f"{mid}: used {times} times")
+            problems += 1
+    if problems:
+        print(f"mutations --check: {problems} mutation(s) guard nothing; fix the text or drop them")
+        return 1
+    print(f"mutations --check: {len(MUTATIONS)} mutations, each matching once")
+    return 0
+
+
 def run(selected: list[str]) -> int:
     unknown = sorted(set(selected) - {m[0] for m in MUTATIONS})
     if unknown:
@@ -1152,4 +1180,6 @@ def run(selected: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--check"]:
+        sys.exit(check())
     sys.exit(run(sys.argv[1:]))
