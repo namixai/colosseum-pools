@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Rules, Terms, Cancel, Breach, Units} from "../Types.sol";
 import {CoreOps} from "../lib/CoreOps.sol";
 import {Pool} from "../Pool.sol";
@@ -47,6 +48,16 @@ contract SharedPool {
     struct Ticket {
         address depositor;
         TicketState state;
+    }
+
+    /// What the pool has paid a holder so far, each part where it was paid, and when it last paid them.
+    /// `evm` is USDC on HyperEVM (1e6 = 1 USDC). `core` is the spot USDC the pool sent to the holder's
+    /// HyperCore account (1e8 = 1 USDC), after the 1 USDC a holder who had no account there paid out of
+    /// their first HyperCore part for creating it.
+    struct Payments {
+        uint64 at;
+        uint96 evm;
+        uint96 core;
     }
 
     /// The seat's terms that its value depends on, copied at creation: a pool's terms never change.
@@ -99,6 +110,9 @@ contract SharedPool {
     uint256 public queuedShares;
     address[] internal _queue;
     mapping(address holder => uint256) internal _queueSlot; // index + 1
+    /// Kept so the app can show a payment's two parts apart from the contract's state alone: the public
+    /// RPC answers `eth_getLogs` for 50 blocks at a time, which can't find a payment made a day ago.
+    mapping(address holder => Payments) public payments;
     /// When the pool last paid anyone on HyperCore, and when it last topped a seat up there.
     uint64 public lastCorePayAt;
     uint64 public lastArmAt;
@@ -575,12 +589,7 @@ contract SharedPool {
             uint64 c = uint64((net6[k] - e6) * Units.SPOT_PER_PERP);
             _settleHolder(h, burn[k], feeShares[k]);
             if (queuedOf[h] == 0) _dropQueue(h);
-            if (e6 != 0) usdc.safeTransfer(h, e6);
-            if (c != 0) {
-                // A holder with no HyperCore account yet pays for creating it out of this part.
-                CoreOps.sendUsdc(h, CoreOps.sendableTo(h, c));
-                core = true;
-            }
+            if (_send(h, e6, c)) core = true;
             emit Paid(h, burn[k] + feeShares[k], feeShares[k], e6, c);
         }
         if (core) lastCorePayAt = uint64(block.timestamp);
@@ -628,6 +637,23 @@ contract SharedPool {
         queuedShares -= s;
         totalShares -= burned;
         sharesOf[platform] += fee;
+    }
+
+    /// Sends a holder the two parts of a payment and adds them to what the pool has paid them; whether
+    /// anything went out on HyperCore.
+    function _send(address h, uint256 evm6, uint64 core1e8) internal returns (bool onCore) {
+        if (evm6 != 0) usdc.safeTransfer(h, evm6);
+        uint64 sent;
+        if (core1e8 != 0) {
+            // A holder with no HyperCore account yet pays for creating it out of this part.
+            sent = CoreOps.sendableTo(h, core1e8);
+            CoreOps.sendUsdc(h, sent);
+            onCore = true;
+        }
+        Payments storage p = payments[h];
+        p.at = uint64(block.timestamp);
+        p.evm += SafeCast.toUint96(evm6);
+        p.core += sent;
     }
 
     function _dropQueue(address h) internal {

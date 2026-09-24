@@ -95,8 +95,11 @@ Each settlement point pays the queue at its own price, the same for every reques
 deposits it takes in. If the pool's free money covers the queue, everyone is paid in full;
 otherwise everyone gets the same fraction and the rest waits. Free money is the pool's USDC on
 HyperEVM (the seats' earned prices are collected first) and its spot on HyperCore; HyperEVM pays
-first, in the same proportion for every holder, and the app shows the two parts apart. A holder
-with no HyperCore account yet pays the 1 USDC for creating it out of their HyperCore part. A
+first, in the same proportion for every holder, and the app shows the two parts apart. For that the
+contract keeps what it has paid each holder so far, each part where it was paid, and when it last
+paid them (`payments`): the public RPC serves the event log 50 blocks at a time, which can't find a
+payment made yesterday. A holder with no HyperCore account yet pays the 1 USDC for creating it out
+of their HyperCore part; `payments` counts what was sent to them after it. A
 request worth less than the smallest amount a payment carries (a millionth of a dollar) is cleared
 at the next point, its shares burned for nothing, so dust never keeps the queue waiting. And a point
 doesn't pay the queue within `ARM_WAIT` of a top-up: the top-up may not show yet in the balance the
@@ -147,7 +150,8 @@ and `ops/shared_run.py` ran the pool one step at a time. The addresses are in
 `deployments/testnet-shared-run.json`. Every step, with the full transaction hash and what the chain
 showed before and after it, is in `spike/results/2026-09-24.jsonl`. The run's parameters: a 20 USDC
 minimum deposit, a 10-minute lock, a 10% fee; one seat with a 2 USDC challenge (price 0.5 USDC, a 1%
-target, half an hour), 8 USDC of funded capital and a quarter-hour funded term.
+target, half an hour), 8 USDC of funded capital and a quarter-hour funded term. The pool deployed for
+the run is older than `payments`.
 
 | step | HyperEVM transaction | what the chain showed after it |
 |---|---|---|

@@ -218,6 +218,13 @@ contract SharedPoolTest is Test {
         sp.settle(new address[](0));
     }
 
+    function _assertPayments(address h, uint256 at, uint256 evm, uint256 core) internal view {
+        (uint64 at_, uint96 evm_, uint96 core_) = sp.payments(h);
+        assertEq(at_, at, "when the pool last paid them");
+        assertEq(evm_, evm, "paid on HyperEVM so far");
+        assertEq(core_, core, "paid on HyperCore so far");
+    }
+
     function _assertQuiet() internal view {
         (SharedPool.Blocker reason,) = sp.blocker();
         assertEq(uint8(reason), uint8(SharedPool.Blocker.None), "nothing should hold the point up");
@@ -720,6 +727,7 @@ contract SharedPoolTest is Test {
         sp.settle(new address[](0));
         uint256 feeShares = 18_181_818; // 20e8 x 0.2e8 / 22e8, rounded down
         assertEq(usdc.balanceOf(alice), 3e6, "HyperEVM first");
+        _assertPayments(alice, block.timestamp, 3e6, 18.8e8);
         assertEq(sp.sharesOf(alice), 0);
         assertEq(sp.queuedOf(alice), 0);
         assertEq(sp.queue().length, 0, "paid in full, off the queue");
@@ -829,10 +837,45 @@ contract SharedPoolTest is Test {
         vm.warp(block.timestamp + LOCK);
         _request(alice, MIN);
         uint64 poolBefore = _spot(address(sp));
+        uint256 paidAt = block.timestamp;
         sp.settle(new address[](0));
         CoreSimulatorLib.nextBlock();
         assertEq(_spot(alice), 19e8, "20 less the 1 her new account cost");
         assertEq(_spot(address(sp)), poolBefore - 20e8, "the pool paid 20, not 21");
+        _assertPayments(alice, paidAt, 0, 19e8); // what was sent to her, not the 20 it cost the pool
+    }
+
+    /// Alice asks for everything while most of the capital is in a seat. The first point pays what is
+    /// free, 2 on HyperEVM and the rest on HyperCore; the seat's capital comes back and a second point
+    /// pays the rest, 1 more on HyperEVM. What the pool has paid her adds up across both, each part
+    /// where it was paid, matching what arrived.
+    function test_payments_addUpAcrossPoints_eachPartApart() public {
+        CoreSimulatorLib.forceAccountActivation(alice);
+        _funded(150e8);
+        Pool seat = _armedSeat(); // 58 of the 160 left free
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 150e8);
+
+        deal(address(usdc), address(sp), 2e6);
+        uint256 first = block.timestamp;
+        sp.settle(new address[](0));
+        assertGt(sp.queuedOf(alice), 0, "a short payment");
+        CoreSimulatorLib.nextBlock();
+        uint64 firstCore = _spot(alice);
+        assertGt(firstCore, 50e8);
+        _assertPayments(alice, first, 2e6, firstCore);
+
+        vm.warp(block.timestamp + sp.PAYOUT_WAIT() + 1);
+        sp.releaseSeat(address(seat));
+        CoreSimulatorLib.nextBlock();
+        deal(address(usdc), address(sp), 1e6);
+        uint256 second = block.timestamp;
+        sp.settle(new address[](0));
+        assertEq(sp.queuedOf(alice), 0, "paid in full");
+        CoreSimulatorLib.nextBlock();
+        assertGt(_spot(alice), firstCore);
+        assertEq(usdc.balanceOf(alice), 3e6);
+        _assertPayments(alice, second, 3e6, _spot(alice));
     }
 
     // ── seats while someone waits ────────────────────────────────────────────────────
@@ -872,6 +915,7 @@ contract SharedPoolTest is Test {
         assertEq(sp.queuedShares(), 0);
         assertEq(sp.sharesOf(alice), MIN - 1, "burned for nothing");
         assertEq(usdc.balanceOf(alice), 0);
+        _assertPayments(alice, 0, 0, 0);
     }
 
     /// A top-up sent in the same block (or a minute before) may not show in the pool's balance yet:
