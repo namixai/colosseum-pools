@@ -2,6 +2,7 @@
 // anyone can press (start, stop, pass, settle).
 import * as chain from "../lib/chain.js";
 import { esc, render, $, wire, badge, row, when, pct, settle } from "../lib/ui.js";
+import { ruleVerdict } from "../lib/verdict.js";
 import { rulesHtml, assetNames } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
 
@@ -24,6 +25,9 @@ export async function challengeView(address, page) {
   const stopped = [3, 4, 5, 6, 7].includes(s);
   const tone = s === 2 ? "ok" : s === 6 || s === 8 ? "ok" : stopped ? "bad" : "";
 
+  // A recorded stop outlives the status it was recorded in: after settling, status is Settled
+  // and the reason is still the fact a reader came for.
+  const verdict = ruleVerdict({ recorded: reason, stopped: s === 3 });
   render(page, `
     <section class="card">
       <h2>Challenge ${esc(chain.short(address))} ${badge(name, tone)}</h2>
@@ -34,7 +38,10 @@ export async function challengeView(address, page) {
       ${row("Created", esc(when(createdAt)))}
       ${s >= 2 ? row("Deadline", esc(when(deadline))) : ""}
       ${row("Agent key", key === "0x0000000000000000000000000000000000000000" ? "none (cut)" : `<span class="mono">${esc(key)}</span>`)}
-      ${s === 3 ? row("Stopped for", esc(chain.BREACH[Number(reason)])) : ""}
+      ${verdict.kind === "recorded"
+        ? row("Stopped for", `${esc(chain.BREACH[verdict.reason])} <span class="muted">— what the contract
+            recorded when it stopped this account</span>`)
+        : ""}
       ${s === 6 || s === 8 ? row("Trader's share", `${chain.usd8(payoutOwed)} USDC owed, ${chain.usd8(payoutSent)} sent`) : ""}
       <p><a href="#/verify/${esc(address)}">Check this account yourself →</a></p>
     </section>
@@ -45,7 +52,7 @@ export async function challengeView(address, page) {
 
   $("#rules", page).innerHTML = rulesHtml(rules, await assetNames(rules.assets));
 
-  if (s >= 2) settle(equityPanel($("#equity", page), ch, address), $("#equity", page));
+  if (s >= 2) settle(equityPanel($("#equity", page), ch, address, reason), $("#equity", page));
   else if (spoiled) {
     $("#equity", page).textContent = "The reserved trading key got a HyperCore account before the start, and "
       + "Hyperliquid won't take it as an agent. The challenge can't start; anyone can abort it now, "

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { keyFacts, isZero, sameAddress, MAX_CHAIN_READS_ON_LOAD, ZERO } from "../lib/keys.js";
 import { friendly, rateLimited, failureHint } from "../lib/ui.js";
+import { ruleVerdict, liveReadingIsMoot } from "../lib/verdict.js";
 import * as hl from "../lib/hl.js";
 
 // Hex letters on purpose: an all-digit address would make every case test pass by accident.
@@ -70,6 +71,33 @@ test("the same address bound and approved is named once", async () => {
   const { reads } = reader({ agentKey: KEY, keyOf: KEY.toUpperCase().replace("0X", "0x") });
   const facts = await keyFacts(reads);
   assert.equal(facts.keys.length, 1);
+});
+
+test("a stop shows the reason the contract recorded, not one computed on an empty account", () => {
+  // 24 Sep 2026 on the live demo: a challenge the contract stopped for leverage (3) read
+  // "Drawdown" (1) on its own page, because after settling the account holds nothing and a
+  // reading of nothing is a hundred per cent below where it started.
+  const settled = ruleVerdict({ recorded: 3, live: 1, stopped: true });
+  assert.deepEqual(settled, { kind: "recorded", reason: 3 });
+  assert.equal(liveReadingIsMoot(settled), true, "the live reading would be shown as an equal");
+
+  // Still trading: the live reading is the only thing that can be asked, and it is shown.
+  const trading = ruleVerdict({ recorded: 0, live: 0, stopped: false });
+  assert.deepEqual(trading, { kind: "live", reason: 0 });
+  assert.equal(liveReadingIsMoot(trading), false);
+  assert.deepEqual(ruleVerdict({ recorded: 0, live: 2, stopped: false }), { kind: "live", reason: 2 });
+
+  // A pool records no reason of its own: say it is stopped rather than invent one.
+  assert.deepEqual(ruleVerdict({ recorded: 0, live: 1, stopped: true }), { kind: "stopped-without-a-recorded-reason" });
+
+  // The pages ask for the recorded reason, and the challenge page no longer hides it once the
+  // challenge is settled -- which is where a judge reads it.
+  const verify = readFileSync(new URL("../views/verify.js", import.meta.url), "utf8");
+  assert.match(verify, /breachReason\(\)/, "the verify page does not read the recorded reason");
+  assert.match(verify, /ruleVerdict\(/);
+  const challenge = readFileSync(new URL("../views/challenge.js", import.meta.url), "utf8");
+  assert.match(challenge, /ruleVerdict\(/);
+  assert.doesNotMatch(challenge, /s === 3 \? row\("Stopped for"/, "the reason is tied to one status again");
 });
 
 test("the panel may not read the event log while it loads", () => {

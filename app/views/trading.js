@@ -3,6 +3,7 @@ import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import * as gateway from "../lib/gateway.js";
 import { esc, $, wire, row, badge, settle } from "../lib/ui.js";
+import { ruleVerdict, liveReadingIsMoot } from "../lib/verdict.js";
 
 /** Open orders to cancel and positions outside the pool's assets, for stop and settle calls. */
 export async function stopInputs(account, rules) {
@@ -13,7 +14,7 @@ export async function stopInputs(account, rules) {
 }
 
 /** Equity against the rules, as HyperCore reports it, and the contract's own verdict. */
-export async function equityPanel(box, contract, account) {
+export async function equityPanel(box, contract, account, recorded = 0) {
   const [state, base, dayBase, rules, verdict, positions] = await Promise.all([
     hl.account(account), contract.drawdownBase(), contract.dayStartEquity(), contract.rules(),
     contract.violation([]), hl.positions(account),
@@ -24,16 +25,28 @@ export async function equityPanel(box, contract, account) {
   const dayFloor = (Number(dayBase) / 1e6) * (1 - Number(rules.dailyLossBps) / 1e4);
   const lev = equity > 0 ? notional / equity : 0;
   const maxLev = Number(rules.maxLeverageX100) / 100;
-  const v = Number(verdict);
+  // A stop the contract recorded outlives the account it was recorded on: once the capital has
+  // gone back to the pool, a verdict computed on what is left says drawdown whatever the stop
+  // was for. Show what was written down, and say why the live reading is not beside it.
+  const v = ruleVerdict({ recorded, live: verdict, stopped: false });
+  // On an account whose stop is already recorded, a badge saying it is below its floor says
+  // only that the account is empty; the numbers stay, the alarm goes.
+  const live = !liveReadingIsMoot(v);
   box.innerHTML = `
     ${row("Equity (HyperCore)", `${equity.toFixed(2)} USDC`)}
-    ${row("Drawdown floor", `${floor.toFixed(2)} USDC ${equity < floor ? badge("below", "bad") : ""}`)}
-    ${row("Today's floor", `${dayFloor.toFixed(2)} USDC ${equity < dayFloor ? badge("below", "bad") : ""}`)}
-    ${row("Leverage", `${lev.toFixed(2)}× of ${maxLev.toFixed(2)}× ${lev > maxLev ? badge("above", "bad") : ""}`)}
+    ${row("Drawdown floor", `${floor.toFixed(2)} USDC ${live && equity < floor ? badge("below", "bad") : ""}`)}
+    ${row("Today's floor", `${dayFloor.toFixed(2)} USDC ${live && equity < dayFloor ? badge("below", "bad") : ""}`)}
+    ${row("Leverage", `${lev.toFixed(2)}× of ${maxLev.toFixed(2)}× ${live && lev > maxLev ? badge("above", "bad") : ""}`)}
     ${row("Positions", positions.length ? esc(positions.map((p) => `${p.name} ${p.szi}`).join(", ")) : "none")}
-    ${row("Contract's verdict", v ? badge(`breaks: ${chain.BREACH[v]}`, "bad") : badge("inside the rules", "ok"))}
-    <p class="muted small">The verdict reads HyperCore through precompiles at the start of the block; the numbers
-    above come from Hyperliquid's API and can be a second newer.</p>`;
+    ${v.kind === "recorded"
+      ? row("Stopped for", `${badge(chain.BREACH[v.reason], "bad")} <span class="muted">as the contract
+          recorded it at the stop</span>`)
+      : row("Contract's verdict", v.reason ? badge(`breaks: ${chain.BREACH[v.reason]}`, "bad") : badge("inside the rules", "ok"))}
+    <p class="muted small">${v.kind === "recorded"
+      ? `The figures above are this account as it stands now: after a stop is settled its capital is back
+         with the pool, so they no longer describe what the stop was about.`
+      : `The verdict reads HyperCore through precompiles at the start of the block; the numbers above come
+         from Hyperliquid's API and can be a second newer.`}</p>`;
 }
 
 /** The order ticket and the open orders, for the trader of this account. */

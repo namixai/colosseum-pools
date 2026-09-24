@@ -3,6 +3,7 @@
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, badge, row, isAddress, settle, wire } from "../lib/ui.js";
+import { ruleVerdict, liveReadingIsMoot } from "../lib/verdict.js";
 import { keyFacts } from "../lib/keys.js";
 
 export async function verifyView(address, page) {
@@ -39,7 +40,7 @@ export async function verifyView(address, page) {
   // Raw errors used to be pasted in here, ethers payload and all. settle() says what failed
   // in words; the section that failed is named by the box it writes into.
   settle(keysPanel(account, address, page), $("#keys", page));
-  settle(fillsPanel(account, address, page), $("#fills", page));
+  settle(fillsPanel(account, address, page, kind), $("#fills", page));
 }
 
 const KEYS_HELD = `
@@ -124,7 +125,7 @@ async function keyLog(account, cutBlock, page) {
   return "";
 }
 
-async function fillsPanel(account, address, page) {
+async function fillsPanel(account, address, page, kind) {
   const [rules, fills, list] = await Promise.all([account.rules(), hl.fills(address), hl.perps()]);
   const allowed = new Set(rules.assets.map(Number));
   const rows = fills.slice(0, 200).map((f) => {
@@ -136,12 +137,30 @@ async function fillsPanel(account, address, page) {
       <td>${esc(notional.toFixed(2))}</td><td>${esc(f.closedPnl)}</td><td>${ok ? badge("allowed", "ok") : badge("not allowed", "bad")}</td></tr>`;
   });
   const bad = fills.filter((f) => { const p = list.find((x) => x.name === f.coin); return !(p && allowed.has(p.index)); }).length;
-  const verdict = await account.violation([]);
+  // A settled account holds nothing, and a verdict computed on nothing says "drawdown" whatever
+  // the stop was for. What the contract wrote down when it stopped the account is the answer;
+  // the live reading is for accounts that are still trading.
+  const [live, recorded, stopped] = await Promise.all([
+    account.violation([]),
+    kind === "challenge" ? account.breachReason() : 0,
+    account.isStopped(),
+  ]);
+  const verdict = ruleVerdict({ recorded, live, stopped });
   $("#fills", page).className = "";
   $("#fills", page).innerHTML = `
     ${row("Fills on this account (Hyperliquid API)", String(fills.length))}
     ${row("Fills in an asset outside the rules", bad ? badge(String(bad), "bad") : badge("0", "ok"))}
-    ${row("The contract's verdict right now", Number(verdict) ? badge(chain.BREACH[Number(verdict)], "bad") : badge("inside the rules", "ok"))}
+    ${verdict.kind === "recorded"
+      ? row("The rule the contract recorded when it stopped this account",
+            badge(chain.BREACH[verdict.reason], "bad"))
+      : verdict.kind === "live"
+        ? row("The contract's verdict right now",
+              verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))
+        : row("This account is stopped", badge("stopped", "bad"))}
+    ${liveReadingIsMoot(verdict) ? `<p class="small muted">The verdict this page can compute from the
+      account's state is about the account as it stands now. Once a stopped account is settled its capital
+      has gone back to the pool, and a reading of an empty account says drawdown whatever the stop was for,
+      so it is not shown beside the recorded reason.</p>` : ""}
     <div class="scroll"><table><thead><tr><th>time (UTC)</th><th>asset</th><th>side</th><th>size</th><th>price</th>
     <th>notional</th><th>closed PnL</th><th>asset rule</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
     <p class="small muted">This checks trades that reached Hyperliquid. An order our gateway refused never reaches
