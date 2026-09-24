@@ -27,7 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from . import hl
-from .chain import JsonRpcReader
+from .chain import JsonRpcReader, Throttled
 from .checks import ChainReader, GatewayError, NonceBook, Request, check
 from .demo_signer import DemoSigner
 from .signer import SignerClient
@@ -87,6 +87,15 @@ class Gateway:
             return self._handle(body)
         except GatewayError as e:
             return e.status, {"status": "refused_by_gateway", "code": e.code, "detail": e.detail}
+        except Throttled:
+            # The node is rate limiting us, which is not the same as being broken: waiting
+            # helps, and the trader can be told so. 429 and not a 5xx on purpose -- the CDN in
+            # front of this replaces the body of a 5xx with its own page (measured 24 Sep 2026,
+            # a trader's order came back as Cloudflare's HTML), and then nothing this gateway
+            # said reaches anyone.
+            log_line(event="upstream_busy")
+            return 429, {"status": "busy", "code": "upstream_busy",
+                         "detail": "the chain node is refusing reads right now; try again in a moment"}
         except Exception as e:  # a chain read or the Signer failed; nothing was submitted
             log_line(event="upstream_failed", error=type(e).__name__)
             return 502, {"status": "gateway_error", "code": "upstream_failed"}

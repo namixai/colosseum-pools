@@ -52,11 +52,15 @@ class Throttling(unittest.TestCase):
         self.assertEqual(r._rpc("eth_chainId", []), "0x3e6")
         self.assertEqual((r._session.posts, self.slept), (3, [0.25, 0.5]))
 
-    def test_it_gives_up_after_three_tries(self):
-        r = self.reader([THROTTLED, Reply(429), THROTTLED])
-        with self.assertRaisesRegex(RuntimeError, "rate limited 3 times"):
+    def test_it_gives_up_in_the_end_and_says_it_was_throttled(self):
+        """Five tries over about four seconds. Three inside one second was what the node
+        refused on 24 Sep 2026 while the same reads went through moments later, and the trader
+        was told the gateway was broken. The type is its own: waiting helps, so the caller can
+        be told to wait rather than that something failed."""
+        r = self.reader([THROTTLED, Reply(429), THROTTLED, Reply(429), THROTTLED])
+        with self.assertRaisesRegex(chain.Throttled, "rate limited 5 times"):
             r._rpc("eth_call", [])
-        self.assertEqual((r._session.posts, self.slept), (3, [0.25, 0.5]))
+        self.assertEqual((r._session.posts, self.slept), (5, [0.25, 0.5, 1.0, 2.0]))
 
     def test_any_other_error_is_raised_at_once(self):
         r = self.reader([Reply(200, {"error": {"code": -32000, "message": "execution reverted"}})])

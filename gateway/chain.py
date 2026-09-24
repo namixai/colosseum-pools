@@ -13,9 +13,16 @@ from eth_utils import keccak, to_checksum_address
 CHAIN_ID = 998
 USER_AGENT = "colosseum-pools-gateway"
 RATE_LIMITED = -32005  # what the public HyperEVM RPC answers when it throttles
-# An order is waiting on these reads, so a throttled one is retried twice, after 0.25 s and
-# 0.5 s, and then the request fails as an upstream error.
-RPC_ATTEMPTS = 3
+# An order is waiting on these reads, so a throttled one is retried after 0.25 s, 0.5 s, 1 s
+# and 2 s. Three tries inside a second was not enough: on 24 Sep 2026 the node refused all
+# three, the trader's order came back as a gateway error, and the very same reads went through
+# seconds later. Four seconds of patience is cheap next to telling a visitor the demo is broken.
+RPC_ATTEMPTS = 5
+
+
+class Throttled(RuntimeError):
+    """The node refused every attempt because it is rate limiting this caller, not because the
+    read was wrong. Worth telling apart: waiting helps, and the visitor can be told so."""
 
 # ChallengeAccount.Status.Active and Pool.Stage.Funded
 CHALLENGE_ACTIVE = 2
@@ -53,7 +60,7 @@ class JsonRpcReader:
             if attempt + 1 < RPC_ATTEMPTS:
                 self._sleep(delay)
                 delay *= 2
-        raise RuntimeError(f"{method}: rate limited {RPC_ATTEMPTS} times in a row")
+        raise Throttled(f"{method}: rate limited {RPC_ATTEMPTS} times in a row")
 
     def check_chain(self) -> None:
         chain = int(self._rpc("eth_chainId", []), 16)

@@ -345,6 +345,23 @@ class Flow(Base):
             self.assertEqual((status, out["status"]), (502, "bad_signer_response"), sig)
             self.assertEqual(self.submitted, [])
 
+    def test_a_throttled_node_is_busy_not_broken(self):
+        """What a visitor met on 24 Sep 2026: the node refused the gateway's reads for a moment
+        and the order came back as a gateway error -- through the CDN, as its HTML page, so even
+        the code this gateway chose never reached them. Throttling now answers 429 with words,
+        which a CDN passes through, and nothing is submitted."""
+        from gateway.chain import Throttled
+
+        def throttled(account):
+            raise Throttled("eth_call: rate limited 5 times in a row")
+
+        self.reader.is_account = throttled
+        status, out = self.gateway(FakeSigner(self.enclave_key, self.enclave_key.address)).handle_order(self.body())
+        self.assertEqual(status, 429)
+        self.assertEqual((out["status"], out["code"]), ("busy", "upstream_busy"))
+        self.assertIn("try again", out["detail"])
+        self.assertEqual(self.submitted, [])
+
     def test_upstream_failure_is_an_answer_not_a_crash(self):
         import requests
 
