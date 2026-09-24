@@ -238,13 +238,26 @@ test("who takes the loss reads the day's figures from the table, and the page sa
   const movedHtml = whoTakesTheLoss(other).replace(/\s+/g, " ");
   assert.match(movedHtml, /11% to 95%/);
   assert.match(movedHtml, /liquidated 4 of its five seats/);
-  assert.match(movedHtml, /rules allowed 8%/);
+  assert.match(movedHtml, /line they set at 8%/);
+
+  // Whose capital the figures are about, in the sentence that carries them: a size with no owner
+  // is the question this card exists to answer, left unanswered.
+  assert.match(words, /of the seats' capital — the investor's own money/);
 
   // Whose loss it is, said before how big it is: the card sits above the cascade block.
   const source = readFileSync(new URL("../views/economics.js", import.meta.url), "utf8");
   assert.ok(source.indexOf("Who takes the loss") < source.indexOf("What the rules do not protect against"),
     "the size of the loss is told before whose it is");
   assert.match(source, /The capital in a pool is the investor's/);
+
+  // The two layers, kept apart, because a visitor who reads the pre-signature check as the whole
+  // guard reads this product as safer than it is (docs/DESIGN.md, "What the design does not do").
+  const card = source.slice(source.indexOf("Who takes the loss"), source.indexOf("What the rules do not protect against"));
+  const cardWords = card.replace(/\s+/g, " ");
+  assert.match(cardWords, /Before it signs an order, the gateway checks the platform's own list of assets and its size caps/);
+  assert.match(cardWords, /The investor's limits are not checked there/);
+  assert.match(cardWords, /after the fact/);
+  assert.match(cardWords, /a loss can go past the line/);
 });
 
 test("a seat count cannot freeze the page", () => {

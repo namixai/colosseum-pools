@@ -68,9 +68,13 @@ export async function economicsView(page) {
       <p>The capital in a pool is the investor's, so the investor takes the loss. A trader risks what a
       challenge costs and nothing more: the challenge account holds the pool's money, and a pass moves
       the pool's money too.</p>
-      <p>A stop comes after a rule is broken, not before it. That holds an ordinary bad day. A cascade
-      moves the price first, and what decides the damage is which coins the seats may trade and how the
-      seats sit on that list — two pools under the same rules are not in the same danger.</p>
+      <p>Two different things guard a seat, and only one of them runs before the money moves. Before it
+      signs an order, the gateway checks the platform's own list of assets and its size caps. The
+      investor's limits are not checked there: the contract enforces those <em>after the fact</em>, by
+      stopping the account once the drawdown, the daily loss or the leverage line is crossed. Between
+      the crossing and the stop landing, a loss can go past the line — and on a cascade it goes far
+      past it, because the price moves first. What decides how far is which coins the seats may trade
+      and how the seats sit on that list: two pools under the same rules are not in the same danger.</p>
       <div id="who" class="muted">…</div>
       <p class="small">Check the pieces rather than this page: the rules are in the contract, every stop
       and every pass is a transaction anyone can read, and the table these figures come from ships with
@@ -291,7 +295,8 @@ export function whoTakesTheLoss(tables) {
   return `<p>Replayed on one-minute bars of ${esc(f.day)}, entering at the worst minute of that day with
     every seat in a full position on the same side: a pool whose seats may trade
     ${esc(f.coins.join(", "))} would have lost <strong>${percent(f.low, 0)} to ${percent(f.high, 0)}</strong>
-    of the seats' capital, where its rules allowed ${percent(f.cap, 0)}. On a list with alts the same day
+    of the seats' capital — the investor's own money, put in by them under a line they set at
+    ${percent(f.cap, 0)}. On a list with alts the same day
     took <strong>${percent(f.wideLow, 0)} to ${percent(f.wideHigh, 0)}</strong> of the stress test's own
     pool and liquidated ${f.wideLiquidated} of its five seats. How often such a day comes is not
     measured, and Hyperliquid itself was not the venue measured — the block below says both again, at
