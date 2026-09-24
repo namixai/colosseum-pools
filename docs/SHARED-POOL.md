@@ -188,6 +188,10 @@ price other than 1, a passed challenge and a funded stage, the funded term.
   than 1.
 - Deposits through HyperEVM on mainnet, where the sender is visible.
 - At most 16 holders wait at once; a request past that waits for the queue to move.
+- A holder with no HyperCore account loses a HyperCore part of 1 USDC or less: it can't pay for
+  creating the account, so nothing is sent, and the shares it stood for are burned. A deposit made
+  from the depositor's own HyperCore account, the way the app makes it, means the account exists; a
+  holder whose deposit came from another account can meet this.
 
 The limits of the core apply here too: the operator's gateway holds the demo's agent keys, a stop
 comes after the breach, and a payout the contracts sent is taken as landed after `PAYOUT_WAIT`.

@@ -650,6 +650,9 @@ contract SharedPool {
             CoreOps.sendUsdc(h, sent);
             onCore = true;
         }
+        // A HyperCore part no larger than what creating the holder's account would cost sends nothing:
+        // no payment to note.
+        if (evm6 == 0 && sent == 0) return onCore;
         Payments storage p = payments[h];
         p.at = uint64(block.timestamp);
         p.evm += SafeCast.toUint96(evm6);

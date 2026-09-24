@@ -845,6 +845,19 @@ contract SharedPoolTest is Test {
         _assertPayments(alice, paidAt, 0, 19e8); // what was sent to her, not the 20 it cost the pool
     }
 
+    /// Alice has no HyperCore account and asks for half a dollar's worth: creating her account would cost
+    /// more than the part, so nothing is sent, and nothing is noted as paid.
+    function test_payments_noteNothing_whenNothingIsSent() public {
+        _funded(MIN);
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 0.5e8);
+        sp.settle(new address[](0));
+        assertEq(sp.queuedOf(alice), 0);
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), 0, "nothing reached her");
+        _assertPayments(alice, 0, 0, 0);
+    }
+
     /// Alice asks for everything while most of the capital is in a seat. The first point pays what is
     /// free, 2 on HyperEVM and the rest on HyperCore; the seat's capital comes back and a second point
     /// pays the rest, 1 more on HyperEVM. What the pool has paid her adds up across both, each part
