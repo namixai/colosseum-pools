@@ -126,13 +126,21 @@ def cmd_deploy(args) -> None:
         STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
         c.record("p_deployed", owner=acct.address, address=addr, tx=rcpt["transactionHash"],
                  gas_used=int(rcpt["gasUsed"], 16))
+    before = c.core_spot_balance(addr, c.USDC_TOKEN)["total"]
     resp = c.exchange(acct).spot_transfer(args.fund, addr, c.spot_token_wire("USDC"))
     c.record("p_fund_sent", to=addr, usdc=args.fund, response=resp)
+    # The SDK hands back the exchange's answer without checking it.
+    if not (isinstance(resp, dict) and resp.get("status") == "ok"):
+        raise SystemExit(f"the funding transfer was refused: {resp}")
     deadline = time.time() + 120
-    while time.time() < deadline and c.core_spot_balance(addr, c.USDC_TOKEN)["total"] == 0:
+    after = before
+    while time.time() < deadline and after <= before:
         time.sleep(1)
-    c.record("p_fund_result", contract=addr, spot_1e8=c.core_spot_balance(addr, c.USDC_TOKEN)["total"],
-             exists=c.core_user_exists(addr))
+        after = c.core_spot_balance(addr, c.USDC_TOKEN)["total"]
+    c.record("p_fund_result", contract=addr, spot_before_1e8=before, spot_after_1e8=after,
+             arrived=after > before, exists=c.core_user_exists(addr))
+    if after <= before:
+        raise SystemExit("the funding did not arrive within two minutes")
 
 
 def cmd_atomic(args) -> None:
@@ -146,7 +154,11 @@ def cmd_atomic(args) -> None:
         sender = load_state().get(args.key)
         if sender is None:
             raise SystemExit(f"no SpikeAccount for {args.key}; run `deploy` first")
+    if args.via == "api" and not args.to:
+        raise SystemExit("--via api needs --to: the key sends, so without it the key would send to itself")
     to = to_checksum_address(args.to) if args.to else acct.address
+    if to == sender:
+        raise SystemExit("sender and recipient are the same account; a debit and a credit can't be told apart")
     if not c.core_user_exists(to):
         # A send that creates the recipient's account costs the sender 1 USDC more, and the reads would
         # no longer add up for a reason that has nothing to do with the question.
@@ -188,12 +200,15 @@ def cmd_atomic(args) -> None:
         t_send = time.time()
         if ex is not None:
             resp, tx_block = ex.spot_transfer(args.usdc, to, wire), None
+            # The SDK hands back the exchange's answer without checking it; a refused send moves nothing.
+            ok = isinstance(resp, dict) and resp.get("status") == "ok"
         else:
             rcpt = c.transact(acct, sender, "spotSend(address,uint64,uint64)", ["address", "uint64", "uint64"],
                               [to, c.USDC_TOKEN, wei])
             resp, tx_block = rcpt["transactionHash"], int(rcpt["blockNumber"], 16)
+            ok = True  # mined; whether HyperCore carried it out shows only as a landing
         t_ack = time.time()
-        sends.append({"i": i, "t_send": round(t_send, 3), "t_ack": round(t_ack, 3), "tx_block": tx_block})
+        sends.append({"i": i, "t_send": round(t_send, 3), "t_ack": round(t_ack, 3), "tx_block": tx_block, "ok": ok})
         c.record("p_atomic_send", via=args.via, i=i, sender=sender, to=to, usdc=args.usdc, response=resp,
                  tx_block=tx_block)
         time.sleep(args.window)
@@ -205,15 +220,18 @@ def cmd_atomic(args) -> None:
 
 
 def analyse(samples: list[dict], sends: list[dict], step_1e8: int) -> dict:
-    """Every good read must add up to the first read's total. Each change of the sender's balance is a
-    transfer seen landing: say whether the recipient changed in the same read, how long after the send, and,
-    for a CoreWriter send, how many blocks after the block that carried it."""
+    """Every good read's two spot balances must add up to the first read's total. Each change of the sender's
+    balance is a transfer seen landing: say whether the recipient changed in the same read, how long after the
+    send, and, for a CoreWriter send, how many blocks after the block that carried it. The check counts only
+    if every send was accepted and every one was seen landing: a run where nothing moved proves nothing."""
     good = [s for s in samples if "error" not in s]
     if not good:
         return {"reads": len(samples), "good_reads": 0}
 
+    # Spot only: a perp account value moves with an open position whether or not USDC moves between
+    # the two, so it is watched on its own below instead of being part of the total.
     def total(s: dict) -> int:
-        return s["spot_a"] + s["spot_b"] + (s["perp_a"] + s["perp_b"]) * 100
+        return s["spot_a"] + s["spot_b"]
 
     base = total(good[0])
     off = [s for s in good if total(s) != base]
@@ -234,10 +252,16 @@ def analyse(samples: list[dict], sends: list[dict], step_1e8: int) -> dict:
             landings.append(row)
     blocks = sorted({s["block"] for s in good})
     gaps = [b for a, b in zip(blocks, blocks[1:]) if b - a > 1]
+    accepted = sum(1 for x in sends if x.get("ok"))
+    perp_moved = len({(s["perp_a"], s["perp_b"]) for s in good}) > 1
+    complete = (accepted == len(sends) and len(landings) == len(sends)
+                and all(x["same_read"] for x in landings) and not perp_moved)
     return {"reads": len(samples), "good_reads": len(good), "failed_reads": len(samples) - len(good),
             "blocks_seen": len(blocks), "first_block": blocks[0], "last_block": blocks[-1],
             "blocks_skipped_between_reads": len(gaps), "total_1e8": base, "reads_off_total": len(off),
-            "off_examples": off[:5], "landings": landings}
+            "off_examples": off[:5], "sends": len(sends), "sends_accepted": accepted,
+            "landings_seen": len(landings), "perp_moved": perp_moved, "complete": complete,
+            "landings": landings}
 
 
 def main() -> None:
