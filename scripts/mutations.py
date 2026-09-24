@@ -671,9 +671,12 @@ MUTATIONS = [
      "CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(1, 9)",
      "CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(0, 8)",
      ["test_status_and_stage_numbers"]),
+    # Not "= hi": that leaves the cursor inside the window it just read, the loop asks for the
+    # same window forever and the run times out instead of the test failing. A mutation has to
+    # end, and this one is the defect that matters anyway -- a block skipped every window.
     ("K10", "ops/keeper.py",
      "            self.next_block = hi + 1",
-     "            self.next_block = hi",
+     "            self.next_block = hi + 2",
      ["test_logs_are_read_in_windows_and_the_state_resumes"]),
     ("K11", "ops/keeper.py",
      'elif now > view(ch, "createdAt()", "uint64") + START_WINDOW:',

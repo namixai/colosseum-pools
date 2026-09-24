@@ -43,7 +43,7 @@ old = 'MUTATIONS = [\n'
 dst.write_text(text.replace(old, old + '    ("Z2", "README.md", "the", "x", ["nothing"]),\n', 1))
 PY
 rc=0; out="$(python3 "$COPY" --check)" || rc=$?
-if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qE "Z2: [0-9]+ matches in README.md"; then
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qE "Z2: ([2-9]|[0-9]{2,}) matches in README.md"; then
   echo "ok   a mutation matching twice is caught"
 else
   echo "FAIL a mutation matching twice: rc=$rc"; echo "$out"; fail=1
