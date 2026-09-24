@@ -64,6 +64,19 @@ export async function economicsView(page) {
     <section class="card"><h3>The pool</h3><div id="form" class="muted">Loading the model…</div></section>
     <section class="card"><h3>What it comes to</h3><div id="out" class="muted">…</div></section>
     <section class="card">
+      <h3>Who takes the loss</h3>
+      <p>The capital in a pool is the investor's, so the investor takes the loss. A trader risks what a
+      challenge costs and nothing more: the challenge account holds the pool's money, and a pass moves
+      the pool's money too.</p>
+      <p>A stop comes after a rule is broken, not before it. That holds an ordinary bad day. A cascade
+      moves the price first, and what decides the damage is which coins the seats may trade and how the
+      seats sit on that list — two pools under the same rules are not in the same danger.</p>
+      <div id="who" class="muted">…</div>
+      <p class="small">Check the pieces rather than this page: the rules are in the contract, every stop
+      and every pass is a transaction anyone can read, and the table these figures come from ships with
+      the page — <a href="./data/calc_tables.json">calc_tables.json</a>.</p>
+    </section>
+    <section class="card">
       <h3>What the rules do not protect against</h3>
       <p>The daily loss line and the drawdown line hold on an ordinary bad day. A cascade is a
       different thing, and the block below is <strong>not part of the model above</strong>: it is a
@@ -72,6 +85,8 @@ export async function economicsView(page) {
       <div id="cascade" class="muted">…</div>
     </section>`);
   await loadTables();
+  $("#who", page).className = "";
+  $("#who", page).innerHTML = whoTakesTheLoss(tables);
   formPanel(page);
 }
 
@@ -245,6 +260,42 @@ function run(form, page) {
   box.innerHTML = results(Object.fromEntries(runs));
   cascadeBox.className = "";
   cascadeBox.innerHTML = cascade(Object.fromEntries(runs).base);
+}
+
+/**
+ * What a cascade took on the day the tail was measured, read from the table rather than written
+ * into the page: the same file feeds the block below, and a page that restates its figures in
+ * prose drifts from them the first time the measurement is redone.
+ *
+ * The spread between the low and the high is not uncertainty. It is the investor's own choice:
+ * which coins the rules allow, and how the seats sit on that list.
+ */
+export function lossOnTheMeasuredDay(tables) {
+  const c = tables.tail.cascade;
+  const shares = (list) => Object.values(c.lists[list].cases).flatMap((k) => [k.open, k.worst]);
+  const mix = c.lists.wide.cases.reference_mix;
+  return {
+    day: c.day,
+    cap: tables.tail.rules_measured.max_drawdown,
+    coins: c.lists.default.coins,
+    low: Math.min(...shares("default")),
+    high: Math.max(...shares("default")),
+    wideLow: Math.min(mix.open, mix.worst),
+    wideHigh: Math.max(mix.open, mix.worst),
+    wideLiquidated: Math.max(mix.seats_liquidated.open, mix.seats_liquidated.worst),
+  };
+}
+
+export function whoTakesTheLoss(tables) {
+  const f = lossOnTheMeasuredDay(tables);
+  return `<p>Replayed on one-minute bars of ${esc(f.day)}, entering at the worst minute of that day with
+    every seat in a full position on the same side: a pool whose seats may trade
+    ${esc(f.coins.join(", "))} would have lost <strong>${percent(f.low, 0)} to ${percent(f.high, 0)}</strong>
+    of the seats' capital, where its rules allowed ${percent(f.cap, 0)}. On a list with alts the same day
+    took <strong>${percent(f.wideLow, 0)} to ${percent(f.wideHigh, 0)}</strong> of the stress test's own
+    pool and liquidated ${f.wideLiquidated} of its five seats. How often such a day comes is not
+    measured, and Hyperliquid itself was not the venue measured — the block below says both again, at
+    length, for the pool you set above.</p>`;
 }
 
 /**

@@ -1002,6 +1002,14 @@ MUTATIONS = [
      # A pass that finishes saves at its end anyway; what this line alone keeps is the scan of a
      # pass that is killed part way, which is what a redeploy does to this service.
      ["test_an_interrupted_scan_keeps_the_windows_that_finished"]),
+    ("J61", "app/views/economics.js",
+     "    low: Math.min(...shares(\"default\")),",
+     "    low: 0.24,",
+     ["who takes the loss reads the day's figures from the table, and the page says them once"]),
+    ("J62", "app/views/economics.js",
+     "    wideLiquidated: Math.max(mix.seats_liquidated.open, mix.seats_liquidated.worst),",
+     "    wideLiquidated: 3,",
+     ["who takes the loss reads the day's figures from the table, and the page says them once"]),
     # ── the identity gate and its list of known commits (bash) ──
     ("S1", "scripts/identity-check.sh",
      '  if [ -n "$entry" ]; then',

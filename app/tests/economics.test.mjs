@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseSeats, specFrom, gridValues, onGrid, reserveFrom, MAX_SEATS } from "../views/economics.js";
+import { parseSeats, specFrom, gridValues, onGrid, reserveFrom, MAX_SEATS, lossOnTheMeasuredDay, whoTakesTheLoss } from "../views/economics.js";
 import { minPrice, ratioOff, gridText, CHALLENGE_RATIO } from "../lib/floor.js";
 import { readAll, MAX_BATCH } from "../lib/batch.js";
 import { evaluate } from "../lib/calc.js";
@@ -191,6 +191,60 @@ test("the new-pool form starts with the demo pool, one the model prices, above w
   const fields = [...source.matchAll(/<input name="(\w+)" type="number"[^>]*value="([^"]*)"/g)];
   assert.deepEqual(fields.map((m) => m[1]).sort(), Object.keys(d).sort(), "the form and the record list different fields");
   for (const [, name, value] of fields) assert.equal(value, `\${D.${name}}`, `${name} does not start from DEMO_POOL`);
+});
+
+test("who takes the loss reads the day's figures from the table, and the page says them once", () => {
+  const f = lossOnTheMeasuredDay(tables);
+  const cascade = tables.tail.cascade;
+  const every = (list) => Object.values(cascade.lists[list].cases).flatMap((k) => [k.open, k.worst]);
+  // The card's spread is the whole of what the measurement holds for that list, not a picked pair.
+  assert.equal(f.low, Math.min(...every("default")));
+  assert.equal(f.high, Math.max(...every("default")));
+  assert.equal(f.cap, tables.tail.rules_measured.max_drawdown);
+  assert.equal(f.day, cascade.day);
+  assert.deepEqual(f.coins, cascade.lists.default.coins);
+  const mix = cascade.lists.wide.cases.reference_mix;
+  assert.equal(f.wideHigh, Math.max(mix.open, mix.worst));
+  assert.equal(f.wideLiquidated, mix.seats_liquidated.worst);
+
+  // What the visitor reads is those same figures: no number in the card is written into the page.
+  const html = whoTakesTheLoss(tables);
+  for (const v of [f.low, f.high, f.wideLow, f.wideHigh, f.cap]) {
+    assert.ok(html.includes(`${(v * 100).toFixed(0)}%`), `${v} is not in the card`);
+  }
+  assert.ok(html.includes(String(f.wideLiquidated)), "the liquidated seats are not in the card");
+  assert.ok(html.includes(cascade.day), "the day is not in the card");
+  // The honesty the note carries has to survive the shorter telling. Line breaks in the template
+  // are not part of what a visitor reads, so they are not part of what is checked.
+  const words = html.replace(/\s+/g, " ");
+  assert.match(words, /How often such a day comes is not measured/);
+  assert.match(words, /Hyperliquid itself was not the venue measured/);
+
+  // A figure that happens to equal today's data is not a figure read from it: the same function
+  // over a changed table has to move with it, or a constant would pass this test unnoticed.
+  const other = JSON.parse(JSON.stringify(tables));
+  const oc = other.tail.cascade;
+  oc.day = "2026-01-02";
+  oc.lists.default.cases.single_coin.worst = 0.95;
+  oc.lists.default.cases.spread_calm.open = 0.11;
+  oc.lists.wide.cases.reference_mix.seats_liquidated = { open: 1, worst: 4 };
+  other.tail.rules_measured.max_drawdown = 0.08;
+  const moved = lossOnTheMeasuredDay(other);
+  assert.equal(moved.high, 0.95);
+  assert.equal(moved.low, 0.11);
+  assert.equal(moved.wideLiquidated, 4);
+  assert.equal(moved.cap, 0.08);
+  assert.equal(moved.day, "2026-01-02");
+  const movedHtml = whoTakesTheLoss(other).replace(/\s+/g, " ");
+  assert.match(movedHtml, /11% to 95%/);
+  assert.match(movedHtml, /liquidated 4 of its five seats/);
+  assert.match(movedHtml, /rules allowed 8%/);
+
+  // Whose loss it is, said before how big it is: the card sits above the cascade block.
+  const source = readFileSync(new URL("../views/economics.js", import.meta.url), "utf8");
+  assert.ok(source.indexOf("Who takes the loss") < source.indexOf("What the rules do not protect against"),
+    "the size of the loss is told before whose it is");
+  assert.match(source, /The capital in a pool is the investor's/);
 });
 
 test("a seat count cannot freeze the page", () => {
