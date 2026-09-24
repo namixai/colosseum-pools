@@ -7,6 +7,7 @@ import { poolView } from "./views/pool.js";
 import { challengeView } from "./views/challenge.js";
 import { verifyView } from "./views/verify.js";
 import { economicsView } from "./views/economics.js";
+import { sharedView } from "./views/shared.js";
 
 const GATE_KEY = "pools-gate-v1";
 
@@ -29,6 +30,7 @@ const routes = [
   [/^#\/challenge\/(0x[0-9a-fA-F]{40})$/, (m, page) => challengeView(m[1], page)],
   [/^#\/verify(?:\/(.*))?$/, (m, page) => verifyView(m[1] || "", page)],
   [/^#\/economics$/, (m, page) => economicsView(page)],
+  [/^#\/shared(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => sharedView(m[1], page)],
   [/^#\/terms$/, (m, page) => termsView(page)],
 ];
 

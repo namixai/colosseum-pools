@@ -1343,6 +1343,52 @@ MUTATIONS = [
      'if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {',
      "if (false) {",
      ["the gateway is reached over https unless it runs on this machine"]),
+    # The shared pool's page (app/lib/shared.js). "PJ": the second window's prefix, run by node.
+    ("PJ1", "app/lib/shared.js",
+     "  if (deposit < min) throw new Error(",
+     "  if (false) throw new Error(",
+     ["a deposit below the pool's minimum is refused before the wallet is asked"]),
+    ("PJ2", "app/lib/shared.js",
+     "return { deposit, cost: deposit + NEW_ACCOUNT_FEE };",
+     "return { deposit, cost: deposit };",
+     ["a deposit below the pool's minimum is refused before the wallet is asked"]),
+    ("PJ3", "app/lib/shared.js",
+     "    .filter((t) => BigInt(t.spot) >= min)",
+     "    .filter((t) => BigInt(t.spot) > 0n)",
+     ["a point names only tickets holding a deposit it can take, in the order given, eight at most"]),
+    ("PJ4", "app/lib/shared.js",
+     "    .slice(0, MAX_PER_POINT)\n",
+     "",
+     ["a point names only tickets holding a deposit it can take, in the order given, eight at most"]),
+    ("PJ5", "app/lib/shared.js",
+     "const total = e * 100n + c;",
+     "const total = e + c;",
+     ["a payment's two parts are said apart, and the total with them"]),
+    ("PJ6", "app/lib/shared.js",
+     "if (!/^\\d+(\\.\\d{1,8})?$/.test(t))",
+     "if (!/^\\d+(\\.\\d+)?$/.test(t))",
+     ["Hyperliquid's balance strings become spot units exactly, or not at all"]),
+    ("PJ7", "app/lib/shared.js",
+     "return amount((BigInt(value) * 1_000_000n) / t, 6, 6);",
+     "return amount(BigInt(value) / t, 6, 6);",
+     ["a share's price and what shares are worth, at the run's numbers"]),
+    ("PJ8", "app/lib/shared.js",
+     "return BLOCKER[n] || `Unknown reason ${n}.`;",
+     "return BLOCKER[n] || BLOCKER[0];",
+     ["every reason blocker() can give has its own words"]),
+    ("PJ9", "app/lib/shared.js",
+     "new Date(Number(args[0]) * 1000)",
+     "new Date(Number(args[0]))",
+     ["the pool's reverts are said in words; anything else is left to the page"]),
+    ("PJ10", "app/lib/shared.js",
+     '.padStart(decimals, "0").replace(/0+$/, "");',
+     '.padStart(decimals, "0");',
+     ["an input gets the number back without separators or padding"]),
+    ("PJ11", "app/lib/shared.js",
+     'return amount(value, decimals, 6).replace(/(\\.\\d\\d\\d*?)0+$/, "$1");',
+     "return amount(value, decimals, 2);",
+     ["USDC is shown to the millionth a payment carries, down to cents",
+      "a payment's two parts are said apart, and the total with them"]),
 ]
 
 RUNNERS = {
@@ -1360,7 +1406,14 @@ RUNNERS = {
           r"^(?:FAIL|ERROR): (\w+) \("),
     "J": (["node", "--test", "--test-reporter=tap", *sorted(str(p.relative_to(ROOT)) for p in (ROOT / "app" / "tests").glob("*.test.mjs"))],
           r"^\s*not ok \d+ - (.+?)\s*$"),
+    # The shared pool's page: its own test file, the way "P" runs only the shared pool's contract tests.
+    "PJ": (["node", "--test", "--test-reporter=tap", "app/tests/shared.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
 }
+
+
+def runner_of(mid: str) -> str:
+    """The runner a mutation id names: its two-letter prefix if there is a runner for it, else its first letter."""
+    return mid[:2] if mid[:2] in RUNNERS else mid[0]
 
 # A mutation can turn a bounded loop into an endless one; that has to end the run, not hang it.
 RUN_TIMEOUT_S = 900
@@ -1395,10 +1448,10 @@ def red_tests(cmd: list[str], pattern: str) -> set[str] | None:
 
 def baseline(chosen) -> int:
     problems = 0
-    for prefix in sorted({m[0][0] for m in chosen}):
+    for prefix in sorted({runner_of(m[0]) for m in chosen}):
         cmd, pattern = RUNNERS[prefix]
         red = red_tests(cmd, pattern)
-        named = {t for m in chosen if m[0][0] == prefix for t in m[4]}
+        named = {t for m in chosen if runner_of(m[0]) == prefix for t in m[4]}
         if red is None:
             print(f"baseline {prefix}: the suite did not run")
             problems += 1
@@ -1446,8 +1499,8 @@ def run(selected: list[str]) -> int:
     if problems:
         print(f"mutations: {problems} problem(s) before mutating; nothing was mutated")
         return 1
-    for mid, rel, old, new, expected in sorted(chosen, key=lambda m: (m[0][0] != "M", int(m[0][1:]))):
-        cmd, pattern = RUNNERS[mid[0]]
+    for mid, rel, old, new, expected in sorted(chosen, key=lambda m: (m[0][0] != "M", runner_of(m[0]), int(m[0][len(runner_of(m[0])):]))):
+        cmd, pattern = RUNNERS[runner_of(mid)]
         path = ROOT / rel
         original = path.read_bytes()
         text = original.decode()
