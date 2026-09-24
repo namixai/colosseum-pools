@@ -117,6 +117,25 @@ bridge.
   or pays a trader who has no account yet, it needs that dollar on top. The pool's capital
   check doesn't leave room for it yet; that fix is queued too.
 
+## The shared pool (24 September)
+
+Two things the shared pool's design leans on, checked before its code, with
+`spike/shared_pool.py`. Every observation is in `spike/results/2026-09-24.jsonl`; the raw reads of
+the transfer check are next to it, in `spike/results/atomic-*.jsonl`.
+
+| # | question | how | answer, 24 Sep |
+|---|---|---|---|
+| 9 | Can a precompile read show a HyperCore transfer half done: the sender debited and the recipient not yet credited, or both at once? | One call reads both accounts (`SharedPoolProbe.pair`), about 2.5 times a second, while USDC moves between them; every read must add up to the same total | **Not in 264 reads.** Four transfers of 0.2 USDC, sent through the API from an EOA to an existing contract account: every read adds up, and each transfer shows on both sides in the same read, 0.93–1.31 s after it was sent. The same check for a transfer a contract sends through CoreWriter (`atomic --via corewriter`) is still to run. |
+| 10 | What does reading one seat cost at a settlement point? | `SharedPoolProbe.seat` through `eth_call` with a state override, against the live demo and rehearsal pools, so nothing is deployed or spent | **28 265 gas for an idle seat, 74 336–74 759 with a running challenge.** One `spotBalance` read costs 7 431, `accountMarginSummary` 8 590, `coreUserExists` 3 897, a `violation()` call 22 357–23 380. |
+
+Two things learned about the tools on the way:
+
+- `eth_call` takes a state override on the public RPC and on Chainlink's, so a read-only contract
+  can run against live accounts without being deployed.
+- A precompile read through `eth_call` answers with HyperCore's state as it is now, whatever block
+  is asked for. The demo pool's balance read at the block the demo was deployed in, before the pool
+  existed, came back as the current one. HyperCore's history can't be read this way.
+
 ## Running it
 
 Testnet only. `hlspike/common.py` refuses any RPC whose chain id isn't 998 and any API URL
@@ -145,6 +164,8 @@ cd spike
 .venv/bin/python run.py q5d             # the bridge: an EOA that sends nothing
 .venv/bin/python run.py q5e             # the forward to dex 0
 .venv/bin/python run.py q5f --usdc 3    # the same forward, a larger amount
+.venv/bin/python shared_pool.py gas     # sends nothing
+.venv/bin/python shared_pool.py atomic --key <name> --to <existing account> --usdc 0.2 --times 4
 ```
 
 The testnet faucet only pays addresses that have deposited on mainnet, and the wallets here
