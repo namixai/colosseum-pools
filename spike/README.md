@@ -165,7 +165,7 @@ cd spike
 .venv/bin/python run.py q5e             # the forward to dex 0
 .venv/bin/python run.py q5f --usdc 3    # the same forward, a larger amount
 .venv/bin/python shared_pool.py gas     # sends nothing
-.venv/bin/python shared_pool.py atomic --key <name> --to <existing account> --usdc 0.2 --times 4
+.venv/bin/python shared_pool.py atomic --key YOUR_KEY_NAME --to EXISTING_ACCOUNT_ADDRESS --usdc 0.2 --times 4
 ```
 
 The testnet faucet only pays addresses that have deposited on mainnet, and the wallets here
