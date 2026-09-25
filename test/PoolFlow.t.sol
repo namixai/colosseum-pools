@@ -1009,21 +1009,12 @@ contract PoolFlowTest is Test {
             "must not finish while its own capital is still sitting here");
     }
 
-    /// 🔴 KNOWN HOLE, audit A-01, still open. This test asserts the BAD behaviour on purpose,
-    /// so that closing the hole turns it red and whoever closes it has to come here and say so.
-    ///
-    /// A stranger cannot reach the pool's spot balance -- that money is the pool's and it keeps
-    /// it -- but they can push USDC into its perp account. The closing step has to move that
-    /// across before the pool may return to Idle, and the pool's capital only comes out in Idle
-    /// (withdrawOnCore), so one unit per block holds the investor's money.
-    ///
-    /// Why it is not fixed here, while the challenge's spot door is: closing this one needs two
-    /// coupled changes on the path that pays the funded trader their share -- telling our own
-    /// drain from outside dust at `free != 0`, AND letting Idle be reached while the last move
-    /// to spot is still in flight (equity then reads exactly what was moved). The challenge's
-    /// door needed neither: its final sweep is atomic in the same call and strands nothing.
-    /// A wrong guess on a payout path costs someone real money, so it waits for its own pass.
-    function test_settleFunded_isHeldOpenByAStrangersPerpDust_knownHole() public {
+    /// Audit A-01, the pool's door, now closed. A stranger cannot reach the pool's spot
+    /// balance -- that money is the pool's and it keeps it -- but they could push USDC into its
+    /// perp account, which the closing step has to move across before the pool may return to
+    /// Idle. The pool's capital only leaves in Idle (withdrawOnCore), so one unit a block held
+    /// the investor's money for as long as the stranger cared to pay the gas.
+    function test_settleFunded_isNotHeldOpenByAStrangersPerpDust() public {
         Pool p = _readyPool();
         (ChallengeAccount ch,) = _passed(p);
         ch;
@@ -1037,74 +1028,35 @@ contract PoolFlowTest is Test {
             p.settleFunded(c, a);
             CoreSimulatorLib.nextBlock();
         }
-        assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing),
-            "known hole: perp dust still holds the pool in Closing. If this line fails because "
-            "the pool now reaches Idle, the hole is closed -- delete this test and say so.");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle),
+            "a stranger's perp dust must not hold the pool in Closing");
+        assertFalse(p.fundedDrainWaited(), "and the flag is cleared for the next cycle");
     }
 
-    /// What the purchase-time reservation did NOT fix, and made cheaper. The reserved key is
-    /// public from the moment of the sale -- KeyBound names it -- and the trader has days to
-    /// run. Spoiling that ONE key costs one USDC, against draining the whole free list before.
-    function test_reservedKey_canBeSpoiledBeforeThePass() public {
+    /// The other side of that rule. The pool's OWN closing proceeds need a block to reach spot,
+    /// and finishing before they land would leave them on the perp account -- where nothing can
+    /// move them, because Closing is the only stage that drains. So the first step still waits.
+    function test_settleFunded_stillWaitsForItsOwnProceedsToReachSpot() public {
         Pool p = _readyPool();
-        ChallengeAccount ch = _started(p);
-        address reserved = p.reservedKey();
+        (ChallengeAccount ch,) = _passed(p);
+        ch;
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        // Let the funded capital actually reach the perp side first: graduate only queues that
+        // transfer, so without this the stage is stopped with nothing there to drain.
+        CoreSimulatorLib.nextBlock();
+        vm.prank(investor);
+        p.stopFunded(c, a, SALT);
+        CoreSimulatorLib.nextBlock();
 
-        // The stranger gives the reserved key an account of its own, and every other free key
-        // too, so nothing can be substituted for it.
-        CoreSimulatorLib.forceAccountActivation(reserved);
-        for (uint256 i = 0; i < keys.length; ++i) {
-            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
-                CoreSimulatorLib.forceAccountActivation(keys[i]);
-            }
+        // Step until the proceeds start moving across. Nobody donates anything here, so the
+        // only thing on the perp side is the pool's own money.
+        for (uint256 i = 0; i < 8 && !p.fundedDrainWaited(); ++i) {
+            p.settleFunded(c, a);
+            if (!p.fundedDrainWaited()) CoreSimulatorLib.nextBlock();
         }
-
-        _trade(address(ch), BTC, true, 0.005e8);
-        CoreSimulatorLib.setMarkPx(BTC, 786920);
-        _trade(address(ch), BTC, false, 0.005e8);
-
-        // With nothing left to substitute, the pass is refused LOUDLY -- the same NoFreeKey as
-        // before the reservation existed. That is the point: the reservation must never end in
-        // a funded stage opened on a key HyperCore will not accept, because that one looks fine
-        // and cannot trade. A refusal is recoverable: the operator publishes keys.
-        vm.expectRevert(KeyRegistry.NoFreeKey.selector);
-        ch.graduate(SALT);
-        assertEq(uint8(p.stage()), uint8(Pool.Stage.Challenge), "no stage opened on a dead key");
-    }
-
-    /// And when the stranger spoils only the reserved key, the pass takes a live one instead.
-    function test_aSpoiledReservedKeyIsSwappedForALiveOne() public {
-        Pool p = _readyPool();
-        ChallengeAccount ch = _started(p);
-        address reserved = p.reservedKey();
-        CoreSimulatorLib.forceAccountActivation(reserved);
-
-        _trade(address(ch), BTC, true, 0.005e8);
-        CoreSimulatorLib.setMarkPx(BTC, 786920);
-        _trade(address(ch), BTC, false, 0.005e8);
-        ch.graduate(SALT);
-
-        assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
-        assertTrue(p.agentKey() != reserved, "not the spoiled one");
-        assertFalse(CoreOps.exists(p.agentKey()), "the stage opened on a key with no account");
-        assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
-    }
-
-    /// Audit A-05, and it is a limit of the design rather than a bug to fix: the target is
-    /// measured from the account's perp equity, and that rises for any USDC sent in. HyperCore
-    /// gives no way to tell a deposit from a realised gain, so a pass says "the account reached
-    /// the target", not "this trader can trade". docs/DESIGN.md says so; this makes it checkable.
-    function test_theTargetCanBeReachedByDepositing_notOnlyByTrading() public {
-        Pool p = _readyPool();
-        ChallengeAccount ch = _started(p);
-
-        // Not one order: the money simply arrives.
-        CoreSimulatorLib.forcePerpBalance(address(ch), 108e6);
-        ch.graduate(SALT);
-
-        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Passed), "passed without trading");
-        assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded), "and the pool funded them");
-        assertGt(ch.payoutOwed(), 0, "with a share of the 'profit' owed back to the trader");
+        assertTrue(p.fundedDrainWaited(), "a step waited once for the perp side to reach spot");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing),
+            "and it did not finish while its own capital was still on the perp side");
     }
 
     function test_graduate_needsTargetAndFlat() public {

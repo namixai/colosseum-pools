@@ -70,6 +70,9 @@ contract Pool is RuledAccount {
     /// sold against money that is already on its way out.
     uint64 public fundedPayoutSpotBefore;
     uint64 public fundedPayoutAt;
+    /// Set when a closing step has waited once for the perp side to reach spot. After that,
+    /// anything arriving on the perp side came from outside and does not hold the pool.
+    bool public fundedDrainWaited;
 
     uint64 public constant PAYOUT_WAIT = 5 minutes;
 
@@ -334,7 +337,15 @@ contract Pool is RuledAccount {
                 : 0;
             emit FundedResult(fundedTrader, result, fundedPayoutOwed);
         }
-        if (free != 0) return;
+        if (free != 0 && !fundedDrainWaited) {
+            // The closing proceeds need a block to reach spot, so the first step waits. After
+            // that, a perp balance is somebody else's transfer: this step has already sent it
+            // across, and it does not get to hold the pool in Closing. Otherwise anyone could
+            // keep the investor's capital locked -- it only leaves in Idle -- for one unit a
+            // block. Audit A-01.
+            fundedDrainWaited = true;
+            return;
+        }
 
         if (fundedPayoutOwed != 0 && !fundedPayoutDone) {
             if (spot == 0) return;
@@ -356,7 +367,14 @@ contract Pool is RuledAccount {
             return; // the payout hasn't landed yet
         }
 
-        if (CoreOps.equity(address(this)) <= 0) {
+        // Finish only when nothing is HELD on the perp side: what is left there is all
+        // withdrawable and already on its way to spot. A resting order's margin is not
+        // withdrawable, so this still waits for one -- Closing is the only stage that can
+        // drain, and finishing with margin held would strand it. The position check repeats
+        // what _drainStep established at the top of this call; it is a cheap read and it
+        // makes this condition true on its own rather than by code order.
+        int64 eq = CoreOps.equity(address(this));
+        if (eq <= int64(CoreOps.withdrawable(address(this))) && CoreOps.margin(address(this)).ntlPos == 0) {
             emit FundedClosed(fundedTrader);
             fundedTrader = address(0);
             fundedStart = 0;
@@ -368,6 +386,7 @@ contract Pool is RuledAccount {
             fundedPayoutSent = 0;
             fundedPayoutSpotBefore = 0;
             fundedPayoutAt = 0;
+            fundedDrainWaited = false;
             stage = Stage.Idle;
         }
     }

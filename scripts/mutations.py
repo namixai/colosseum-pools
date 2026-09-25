@@ -270,6 +270,18 @@ MUTATIONS = [
      "        if (false) {",
      ["test_aSpoiledReservedKeyIsSwappedForALiveOne",
       "test_reservedKey_canBeSpoiledBeforeThePass"]),
+    ("M60", "src/Pool.sol",
+     "        if (free != 0 && !fundedDrainWaited) {",
+     "        if (free != 0) {",
+     ["test_settleFunded_isNotHeldOpenByAStrangersPerpDust"]),
+    ("M61", "src/Pool.sol",
+     "        if (free != 0 && !fundedDrainWaited) {",
+     "        if (false) {",
+     ["test_settleFunded_stillWaitsForItsOwnProceedsToReachSpot"]),
+    ("M62", "src/Pool.sol",
+     "        if (eq <= int64(CoreOps.withdrawable(address(this))) && CoreOps.margin(address(this)).ntlPos == 0) {",
+     "        if (eq <= 0) {",
+     ["test_settleFunded_isNotHeldOpenByAStrangersPerpDust"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",
