@@ -119,6 +119,15 @@ test("every leverage stop is marked as staged, and the daily-loss stop as the on
   assert.ok(daily[0].notes.some((n) => /run from a laptop/.test(n)), "and that the keeper ran from a laptop");
 });
 
+test("the leverage stop that ran on the demo pool says so, with the pool's terms", () => {
+  const staged = section("docs/EVIDENCE.md", "What is staged, and what is not");
+  const m = staged.match(/challenge (0x[0-9a-fA-F]+)…, stopped for leverage — ran on the demo pool (0x[0-9a-fA-F]{40})/);
+  assert.ok(m, "the document names the challenge and the demo pool");
+  const row = DATA.rows.find((r) => r.account?.toLowerCase().startsWith(m[1].toLowerCase()));
+  assert.ok(row, "that challenge is a row of the page");
+  assert.ok(row.notes.some((n) => n.includes(m[2]) && n.includes("the terms an investor would actually set")), row.what);
+});
+
 test("the page links an account only where the app reads it", () => {
   const rehearsal = section("docs/EVIDENCE.md", "The fourth ending, on the rehearsal deployment");
   assert.match(rehearsal, /not on the demo's factory/);
@@ -148,7 +157,7 @@ test("the three shared pools are the document's table, cell for cell", () => {
 test("what was staged, and what none of this shows, are quoted from their sections", () => {
   const staged = section(DATA.staged.doc, DATA.staged.section);
   for (const q of DATA.staged.quotes) assert.ok(staged.includes(q), q);
-  for (const must of [/placed by a person/, /benches, and both have soft targets/, /Every wallet here is ours/, /testnet money/, /deliberate/]) {
+  for (const must of [/placed by a person/, /benches with soft targets/, /not a bench/, /Every wallet here is ours/, /keeper's two addresses/, /testnet money/, /deliberate/]) {
     assert.ok(DATA.staged.quotes.some((q) => must.test(q)), `staged: ${must}`);
   }
   for (const l of DATA.limits) assert.ok(section(l.doc, l.section)?.includes(l.quote), l.quote);

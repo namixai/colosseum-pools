@@ -11,7 +11,10 @@
       "tx": null,
       "record": "Settled, breachReason Leverage, key 0xBB9EBcD7 cut at block 65149660",
       "check": ["status() and breachReason() on the account"],
-      "notes": ["The two leverage stops were staged: orders were placed to break the rule on purpose, to make the contract do its job and see what it writes."],
+      "notes": [
+        "The two leverage stops were staged: orders were placed to break the rule on purpose, to make the contract do its job and see what it writes.",
+        "The first row — challenge 0xf01f16d0…, stopped for leverage — ran on the demo pool 0x2839d3c872ce82151a16afe0315756915d8a9b79: 8% target, 3% daily, 6% drawdown, the terms an investor would actually set. That pool was opened from a different wallet (0x21538eBF…) through the site's own form, capital sent by hand on HyperCore, not deployed by a script."
+      ],
       "sources": ["| 0xf01f16d0f933b46089947739d5147331764d612c | challenge | Settled, breachReason Leverage, key 0xBB9EBcD7 cut at block 65149660 |"]
     },
     {
@@ -466,10 +469,12 @@
       "The state transitions and the records above are real.",
       "Two of the stops were deliberate, one was not.",
       "The orders were placed by a person, through the gateway, not by an autonomous trading agent.",
-      "Both pools above are benches, and both have soft targets.",
-      "An investor's pool sets its own terms: the demo pool is 8% target, 3% daily, 6% drawdown, and none of the records above are from it.",
+      "Two of the three pools above are benches with soft targets.",
+      "The third is not a bench, and neither are its terms.",
       "Every wallet here is ours.",
+      "Three of them: the deploy key that owns the two benches (0x00d014df…), the trader (0xdc87191c…), and the one that opened the demo pool (0x21538eBF…).",
       "The mechanism is what the chain proves; an arm's-length trader is not.",
+      "The keeper's two addresses are ours as well, and the only actor here that decided anything without being told.",
       "The money is testnet money and the USDC is mock."
     ]
   },
