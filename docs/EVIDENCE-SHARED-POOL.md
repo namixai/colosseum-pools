@@ -16,7 +16,15 @@ anyone can read, or a transaction that was read back from its receipt. The demo'
 
 ## Checking it yourself
 
-Everything here answers to a plain `eth_call` on `https://rpc.hyperliquid-testnet.xyz/evm`:
+Each kind of record has its own source:
+
+- **Contract state.** A plain `eth_call` on `https://rpc.hyperliquid-testnet.xyz/evm`, as below.
+- **Transactions.** `eth_getTransactionReceipt` for each hash.
+- **Trades.** Hyperliquid's testnet info API: `POST https://api.hyperliquid-testnet.xyz/info` with
+  `{"type": "userFills", "user": "0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7"}`.
+- **The gateway's answers.** Recorded as they came back, in `spike/results/2026-09-25.jsonl`.
+
+The contract state:
 
 - `SharedPool.value()`, `totalShares()`, `sharesOf(holder)` and `queuedShares()` give the pool's
   state now. `payments(holder)` gives when the pool last paid a holder and what it has paid them so

@@ -259,8 +259,9 @@ rules the Economics page prices. Two deposits of 20 armed it. A trader bought it
 traded $11 of BTC through the pool gateway, in and out; the account is flat at 2.98997 USDC. The
 seat opens on the app's pool page like any demo pool, and the shared pool by
 `#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6`; the page's default is still the second
-round's pool. Every transaction, and how the trader acted (the gateway client, not a click), is in
-[EVIDENCE-SHARED-POOL.md](EVIDENCE-SHARED-POOL.md).
+round's pool. The main transactions, and how the trader acted (the gateway client, not a click),
+are in [EVIDENCE-SHARED-POOL.md](EVIDENCE-SHARED-POOL.md); every step's hash is in
+`spike/results/2026-09-25.jsonl`.
 
 ## Not done yet
 
