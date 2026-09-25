@@ -41,12 +41,26 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   protects the gateway's own node. It is not what keeps the keeper seeing — the separation is.
 
   🔴 **A keeper that has fallen behind is not watching, and it takes real time to come back.**
-  HyperEVM serves `eth_getLogs` 50 blocks at a call and the unit runs the defaults, 50 calls a
-  pass: 2,500 blocks each time. The 30-second wait comes *after* a pass, not instead of it, so a
+  The keeper reads `eth_getLogs` 50 blocks at a call and the unit runs the defaults, 50 calls a
+  pass: 2,500 blocks each time. **The 50 is ours, not the node's.** Measured 25 September 2026 on
+  a range old enough that the chain's tip could not interfere: both nodes answer a 1,000-block
+  query, and Hyperliquid's refuses 2,000 with `-32602 query exceeds max block range 1000`. Our
+  own `MAX_LOG_WINDOW = 50` in `ops/keeper.py` caps the `--log-window` flag, so an operator
+  cannot widen it without a code change — and the comment on that constant, which calls 50 what
+  HyperEVM accepts, is wrong. At the node's own limit a catch-up would be twenty times shorter. The 30-second wait comes *after* a pass, not instead of it, so a
   cycle is 30 seconds plus however long the pass took and the ceiling of 5,000 blocks a minute
   never arrives. Measured on 25 September 2026, walking 177,422 blocks took 44 minutes —
   **about 4,000 blocks a minute**, with single cycles between 34 and 35 seconds. The chain makes
-  roughly 57 a minute, so catching up is quick per minute of downtime and slow per day of it.
+  **61 a minute** — about one block a second, measured 65206003 at 10:16:59Z against 65209897 at
+  11:20:49Z, which is 3,894 blocks in 3,830 seconds — so catching up is quick per minute of downtime and slow per day of it.
+  Keep the two apart: **4,000 a minute is how fast the keeper walks, one a second is how fast the
+  chain is made.**
+
+  🔴 **A past block number does not buy you the past.** `eth_call` with an old block silently
+  answers from the current state on both nodes: `status()` on challenge `0xf4d98de2…` at block
+  65200000 answers `8` (Settled) although it was only settled in block 65204639, with no error
+  and no warning. So nothing can be reconstructed by asking an old block, and a binary search
+  over past state returns the same answer at every point. Whoever needs history reads events.
 
   While it walks it has not yet seen the events that name the pools, so `following` climbs
   towards its true number rather than starting there, and it enforces nothing on the pools it has
@@ -60,6 +74,70 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   `scan_stopped` above the line, means it is **stuck** rather than slow. `--max-windows`
   (default 50) is the lever if a catch-up ever has to go faster, at the cost of more calls per
   pass against a node that rate-limits.
+- **A second keeper is a copy of the first, not a special build.** Every call the keeper makes is
+  open to anyone: on a challenge `activate`, `abort`, `checkpoint`, `breach`, `expire`, `settle`
+  and `recut`; on a pool `breach`, `settleFunded`, `checkpoint` and `recut`. The only two calls
+  with a caller check are `forfeit` (the trader alone) and `stopFunded` (the investor or the
+  funded trader), and the keeper makes neither. `graduate` is open to anyone as well, and the
+  keeper still leaves it alone on purpose — passing the moment the target is touched cuts the
+  trader's run short, so the timing is theirs. The keeper's own header says so. So a second keeper has exactly
+  the powers of the first, and needs no permission from it or from us.
+
+  What it needs is its own wallet and its own state file:
+
+      COLOSSEUM_KEY_DIR=<its own key directory> \
+      COLOSSEUM_RPC_URL=https://rpcs.chain.link/hyperevm/testnet \
+      python -m ops.keeper --deployment demo --state <its own file>.json --every 30
+
+  The wallet is a separate `<name>.key`/`<name>.addr` pair with its own gas (a stop cost 194,818
+  gas at 0.1 gwei on 25 Sep 2026, about 0.0000195 HYPE). The state file must not be shared: it
+  holds `next_block` and the pools being followed, and two processes writing one file would
+  corrupt each other's place.
+
+  🔴 **Do not let a second keeper catch up beside a working one on the same host.** Measured
+  25 September 2026, starting one with an empty state file: within a minute the FIRST keeper —
+  the one actually enforcing — logged `pass_failed: eth_blockNumber: rate limited 6 times in a
+  row`. Two keepers on one host share one address at the RPC, and a catch-up spends fifty
+  `eth_getLogs` a pass against a node that counts them. The newcomer does not join the watch; it
+  blinds the incumbent for as long as it walks.
+
+  Seed it instead. Copy the working keeper's state file **whole** into the new one before
+  starting it, so it begins at the head with the pools already known. Copy it whole and not in
+  part: `Keeper.__init__` reads all three keys, and a hand-written file carrying only
+  `next_block` and `live` dies on startup with a bare `KeyError: 'factory'`. (A `factory` that
+  is present but belongs to another deployment is caught properly — `<path> belongs to another
+  factory`, and the keeper refuses to start rather than enforcing the wrong pools.)
+
+      sudo systemctl stop colosseum-keeper2
+      sudo cat /var/lib/colosseum-keeper/keeper-demo.json   # all three keys: factory, next_block, live
+      printf '%s\n' '<that json, entire>' | sudo tee /var/lib/colosseum-keeper/keeper2-demo.json >/dev/null
+      sudo chown colosseum-keeper:colosseum-keeper /var/lib/colosseum-keeper/keeper2-demo.json
+      sudo chmod 600 /var/lib/colosseum-keeper/keeper2-demo.json
+      sudo systemctl start colosseum-keeper2
+
+  (`sudo -u colosseum-keeper install -m 0600 /dev/stdin …` looks tidier and does not work:
+  dropping to that user makes the heredoc unreadable, and the write fails with `Permission
+  denied`.) Seeded that way both keepers sat at the head, each following the same two pools,
+  with **no rate-limit failure on either in the three minutes after** — the steady-state load of
+  two fits where a catch-up does not. Two keepers have run on this host since 25 September 2026:
+  `0xD6F07317fC5f12302776b03A7206B1614FD49021` and
+  `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`.
+
+  **What happens when both reach the same account in the same block.** `breach` re-reads the
+  violation from the chain and refuses if there is none (`NoBreach`), so neither keeper can stop
+  an account that is inside its rules — the worst a second one can do is duplicate work. If both
+  send a stop for the same account, one lands and the other reverts on the stage or status
+  guard (`BadStage`, `BadStatus`); the loser pays for a reverted transaction, which is gas
+  without an effect, and the account is stopped exactly once. `settle` and `settleFunded` do not
+  revert while there is settling left to do: the second call reads the state the first left and
+  either takes the next step or returns early. Again, wasted gas and nothing else.
+
+  🔴 **What the code does not give you:** there is no coordination, no leader election and no
+  de-duplication between keepers. "Redundant" here means two independent callers racing, and the
+  loser pays every time they collide. That is the whole cost, and it is small — but if it matters,
+  stagger the two rather than expecting the chain to sort it out: the second keeper's `--every`
+  and its start time are the only levers, and neither is a guarantee.
+
 - **The app** is the static `app/` folder, served by a Cloudflare Worker with static assets
   (`raspy-violet-594d`) on `pools.usenami.io`. There is no build step and no server code: every
   page is a `#/…` route of the one `index.html`. It calls the gateway from the browser;
@@ -224,6 +302,45 @@ in the Cloudflare dashboard:
 - `journalctl -u colosseum-keeper`: `pass_done` and `pass_failed` lines.
 - The keeper's progress file changes on every pass. Older than five minutes means it stopped.
 - Through Cloudflare: `https://pools-api.usenami.io/v1/health`.
+
+## If the host is lost
+
+No service level is promised here; what follows is what the code makes true, so that whoever has
+to recover knows which parts are a rebuild and which are gone.
+
+**Nothing on chain is lost.** The pools, their capital, their rules and every record of what
+happened live in the contracts. The host runs two processes that talk to them; it holds no
+ledger of its own.
+
+**The keeper's state is a cache.** `/var/lib/colosseum-keeper/keeper-<label>.json` holds
+`next_block` and the pools it follows, and a keeper with no state file starts at the deployment
+block and walks to the head — the catch-up above, and the reason to start a replacement before
+you need it rather than after. Nothing is lost by deleting it; time is.
+
+**The gateway keeps one thing in memory: the nonce book.** It refuses a nonce it has already
+seen, and a request must expire within the next minute (`MAX_EXPIRY_MS`, 60 s). A restart
+forgets those nonces, so a request captured in the last minute could be replayed once inside its
+own expiry window. That is the whole exposure of a gateway restart; everything else it needs is
+on disk or on chain.
+
+**The keys are the part that does not come back.** `/var/lib/colosseum-gw/keys` holds the demo's
+agent keys and `/var/lib/colosseum-keeper/secrets` the keeper's wallet. A lost keeper wallet is
+replaced by making another and funding it — the keeper has no privileges, every call it makes is
+open to anyone. Lost agent keys are worse only in that nobody can trade those accounts any more;
+they cannot be stolen from a disk that is gone.
+
+**Getting capital out of an account whose key is lost** goes through `recut(salt)`, which
+replaces the agent with an address nobody holds, and then the ordinary settlement. `recut`
+requires the account to be **stopped**, so the order matters and there is an honest edge:
+
+- a **funded stage** can always be ended by the pool's investor (`stopFunded`), so there is no
+  wait;
+- a **challenge** that is inside its rules and before its deadline can be ended only by its
+  trader (`forfeit`). If both the gateway's keys and the trader are gone, the capital waits for
+  the challenge's own deadline, when `expire` opens to anyone. On the demo's terms that is seven
+  days from the start.
+
+That wait is a property of the contracts, not of the host, and no amount of hosting fixes it.
 
 ## By hand, and by whom
 
