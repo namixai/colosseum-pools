@@ -265,7 +265,8 @@ are in [EVIDENCE-SHARED-POOL.md](EVIDENCE-SHARED-POOL.md); every step's hash is 
 
 On the same pool, once its value was no longer its number of shares, a new holder deposited 20 at
 0.98785643 a share, got 20.24585701e8 shares for it, and later took 19.999999 out at the same price.
-Nobody else's holding moved. The table is in the evidence page.
+Nobody else's holding moved but for the millionth the payment left behind, which is theirs now. The
+table is in the evidence page.
 
 ## Not done yet
 
