@@ -19,7 +19,8 @@ POOL = "0x00000000000000000000000000000000000000C1"
 
 
 def seat_args(**over) -> argparse.Namespace:
-    base = {"price": None, "capital": None, "funded": None, "term": run.FUNDED_TERM}
+    base = {"price": None, "capital": None, "funded": None, "term": run.FUNDED_TERM, "duration": None,
+            "target_bps": None, "daily_bps": None, "drawdown_bps": None}
     base.update(over)
     return argparse.Namespace(**base)
 
@@ -38,8 +39,26 @@ class SeatTerms(unittest.TestCase):
                 run.cmd_seat(record, seat_args())  # 2 and 8: the first run's seat
             c.transact.assert_not_called()
             c.call_view.return_value = ([],)
-            run.cmd_seat(record, seat_args(capital=1, funded=10))
+            run.cmd_seat(record, seat_args(capital=1, funded=10, target_bps=800))
             self.assertEqual(c.transact.call_count, 1)
+
+    def test_the_rules_and_duration_from_the_command_line(self):
+        self.assertEqual(run.seat_rules(seat_args()), run.RULES)
+        self.assertEqual(run.seat_rules(seat_args(daily_bps=500, drawdown_bps=1000)), (500, 1000, run.RULES[2]))
+        self.assertEqual(run.seat_terms(seat_args(duration=86400))["duration"], 86400)
+        self.assertEqual(run.seat_terms(seat_args(target_bps=800))["targetBps"], 800)
+
+    def test_a_seat_on_the_demos_factory_keeps_to_the_models_grid(self):
+        record = {"SharedPool": POOL, "factory_from": "demo", "platform_assets": {"BTC": 3}}
+        with mock.patch.object(run, "c") as c:
+            c.call_view.return_value = ([],)
+            for off in ({"drawdown_bps": 700, "target_bps": 800}, {"target_bps": 100}):  # 7%, and a 1% target
+                with self.assertRaisesRegex(SystemExit, "Economics page's model has a figure"):
+                    run.cmd_seat(record, seat_args(capital=3, funded=30, **off))
+            c.transact.assert_not_called()
+            run.cmd_seat(record, seat_args(capital=3, funded=30, daily_bps=500, drawdown_bps=1000, target_bps=800))
+            sent_rules = c.transact.call_args.args[4][0]
+            self.assertEqual(sent_rules[:3], (500, 1000, run.RULES[2]))
 
     def test_a_seat_on_a_factory_of_its_own_may_differ(self):
         record = {"SharedPool": POOL, "platform_assets": {"BTC": 3}}
