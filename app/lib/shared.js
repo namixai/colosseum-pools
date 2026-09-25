@@ -5,8 +5,10 @@
 // Pool, PoolFactory, ChallengeAccount and KeyRegistry, which it uses unchanged. docs/SHARED-POOL.md
 // has the design and the testnet run.
 
-/** The pool of the testnet run (deployments/testnet-shared-run.json). */
-export const SHARED_POOL = "0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A";
+/** The pool of the second testnet round, whose seats the demo's factory makes
+ *  (deployments/testnet-shared-demo.json). The first run's pool, on a factory of its own, is still
+ *  there: #/shared/0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A. */
+export const SHARED_POOL = "0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0";
 
 export const SHARED_ABI = [
   "function value() view returns (uint256)",
@@ -164,6 +166,21 @@ export function paymentsLine({ evm, core }) {
   const total = e * 100n + c; // HyperEVM USDC has 6 decimals, HyperCore spot 8
   return `${usd(total, 8)} USDC: ${usd(e, 6)} on HyperEVM, in your wallet, and ${usd(c, 8)} `
     + "on HyperCore, in your spot balance";
+}
+
+/**
+ * "Paid to you so far" from what `payments(holder)` answered, or null for a pool older than that
+ * record. The answer is read by position: ethers hands it back as an array, and on an array `at`
+ * is Array.prototype.at, so `paid.at` would be a function, not the time of the last payment.
+ */
+export function paidSummary(paid, when) {
+  if (paid === null) {
+    return "This pool was deployed before the contract kept a record of payments. Your wallet and your "
+      + "HyperCore spot balance show what arrived.";
+  }
+  const [at, evm, core] = paid;
+  if (Number(at) === 0) return "Nothing yet.";
+  return `${paymentsLine({ evm, core })}. The latest payment: ${when(at)}.`;
 }
 
 /** A revert of the pool's, said so the person knows what to do; "" when it isn't one of these. */

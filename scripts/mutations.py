@@ -1432,6 +1432,10 @@ MUTATIONS = [
      '&& String(l.args.depositor).toLowerCase() === who',
      "",
      ["a deposit goes to the ticket its own transaction opened"]),
+    ("PJ15", "app/lib/shared.js",
+     "  const [at, evm, core] = paid;",
+     "  const { at, evm, core } = paid;",
+     ["what the pool has paid is read by position, so the time of the last payment is the field, not a method"]),
     # The shared pool's keeper (ops/shared_keeper.py). "PK": the second window's prefix, run by unittest.
     ('PK1', 'ops/shared_keeper.py',
      'queue_due = queued > 0 and now >= self.last_queue_point + self.queue_every',

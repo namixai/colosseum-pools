@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   SHARED_ABI, BLOCKER, TICKET_STATE, MAX_PER_POINT, blockerText, amount, usd, plain, spot1e8, shares, worth, price,
-  depositPlan, ticketsToName, lockedUntil, paymentsLine, explain, openedTicket,
+  depositPlan, ticketsToName, lockedUntil, paymentsLine, explain, openedTicket, paidSummary,
 } from "../lib/shared.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -98,6 +98,18 @@ test("a payment's two parts are said apart, and the total with them", () => {
     "18.571428 USDC: 0.50 on HyperEVM, in your wallet, and 18.071428 on HyperCore, in your spot balance");
   assert.equal(paymentsLine({ evm: 0n, core: 1_900_000_000n }),
     "19.00 USDC: 0.00 on HyperEVM, in your wallet, and 19.00 on HyperCore, in your spot balance");
+});
+
+test("what the pool has paid is read by position, so the time of the last payment is the field, not a method", () => {
+  // ethers answers with an array, and an array's `at` is Array.prototype.at: the second round's page
+  // showed "—" for the time until this read the answer by position.
+  const when = (s) => `T${s}`;
+  const answer = [1_790_310_795n, 0n, 1_951_219_500n];
+  assert.equal(paidSummary(answer, when),
+    "19.512195 USDC: 0.00 on HyperEVM, in your wallet, and 19.512195 on HyperCore, in your spot balance. "
+    + "The latest payment: T1790310795.");
+  assert.equal(paidSummary([0n, 0n, 0n], when), "Nothing yet.");
+  assert.match(paidSummary(null, when), /deployed before the contract kept a record of payments/);
 });
 
 test("every reason blocker() can give has its own words", () => {
