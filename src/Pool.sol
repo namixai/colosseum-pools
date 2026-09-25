@@ -70,9 +70,10 @@ contract Pool is RuledAccount {
     /// sold against money that is already on its way out.
     uint64 public fundedPayoutSpotBefore;
     uint64 public fundedPayoutAt;
-    /// Set when a closing step has waited once for the perp side to reach spot. After that,
-    /// anything arriving on the perp side came from outside and does not hold the pool.
-    bool public fundedDrainWaited;
+    /// The block in which a closing step sent the perp side across to spot. A BLOCK and not a
+    /// flag: precompiles answer with the start of the block, so two steps in one block read the
+    /// same stale numbers, and a flag would wave the second one through. Zero until it happens.
+    uint64 public fundedDrainBlock;
 
     uint64 public constant PAYOUT_WAIT = 5 minutes;
 
@@ -337,15 +338,20 @@ contract Pool is RuledAccount {
                 : 0;
             emit FundedResult(fundedTrader, result, fundedPayoutOwed);
         }
-        if (free != 0 && !fundedDrainWaited) {
-            // The closing proceeds need a block to reach spot, so the first step waits. After
-            // that, a perp balance is somebody else's transfer: this step has already sent it
-            // across, and it does not get to hold the pool in Closing. Otherwise anyone could
-            // keep the investor's capital locked -- it only leaves in Idle -- for one unit a
-            // block. Audit A-01.
-            fundedDrainWaited = true;
+        if (free != 0 && fundedDrainBlock == 0) {
+            // The closing proceeds need a block to reach spot, so the first step to see them
+            // sends them and waits. After that, a perp balance is somebody else's transfer:
+            // this step has already sent it across, and it does not get to hold the pool in
+            // Closing. Otherwise anyone could keep the investor's capital locked -- it only
+            // leaves in Idle -- for one unit a block. Audit A-01.
+            fundedDrainBlock = uint64(block.number);
             return;
         }
+        // Still inside the block that sent it: every read below is the start of this block, so
+        // the money is not in `spot` yet and the trader's share would be paid from a balance
+        // that predates it -- once, because the payout marks itself done. Audit A-11, which is
+        // what a bare flag cost: a flag says "it happened", a block number says "when".
+        if (block.number <= fundedDrainBlock) return;
 
         if (fundedPayoutOwed != 0 && !fundedPayoutDone) {
             if (spot == 0) return;
@@ -386,7 +392,7 @@ contract Pool is RuledAccount {
             fundedPayoutSent = 0;
             fundedPayoutSpotBefore = 0;
             fundedPayoutAt = 0;
-            fundedDrainWaited = false;
+            fundedDrainBlock = 0;
             stage = Stage.Idle;
         }
     }

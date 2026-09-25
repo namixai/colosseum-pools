@@ -36,7 +36,20 @@ contract MockUsdc is ERC20 {
 /// The simulator executes perp orders (at the mark), spot sends and spot/perp transfers. It
 /// ignores API wallet changes, cancels, builder fees and margin-mode changes, so for those
 /// the tests check the bytes our contracts send to CoreWriter, not an effect.
+/// Calls settleFunded twice inside one transaction, so both calls read the same start-of-block
+/// state. Written by the audit as test/audit/AuditRegression.t.sol; kept as they wrote it.
+contract TwoStepsInOneBlock {
+    function run(Pool p) external {
+        Cancel[] memory c = new Cancel[](0);
+        uint32[] memory a = new uint32[](0);
+        p.settleFunded(c, a);
+        p.settleFunded(c, a);
+    }
+}
+
 contract PoolFlowTest is Test {
+    address griefer = makeAddr("griefer");
+
     event RawAction(address indexed user, bytes data);
 
     address constant CORE_WRITER = 0x3333333333333333333333333333333333333333;
@@ -1030,7 +1043,7 @@ contract PoolFlowTest is Test {
         }
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle),
             "a stranger's perp dust must not hold the pool in Closing");
-        assertFalse(p.fundedDrainWaited(), "and the flag is cleared for the next cycle");
+        assertEq(p.fundedDrainBlock(), 0, "and the drain block is cleared for the next cycle");
     }
 
     /// The other side of that rule. The pool's OWN closing proceeds need a block to reach spot,
@@ -1050,13 +1063,66 @@ contract PoolFlowTest is Test {
 
         // Step until the proceeds start moving across. Nobody donates anything here, so the
         // only thing on the perp side is the pool's own money.
-        for (uint256 i = 0; i < 8 && !p.fundedDrainWaited(); ++i) {
+        for (uint256 i = 0; i < 8 && p.fundedDrainBlock() == 0; ++i) {
             p.settleFunded(c, a);
-            if (!p.fundedDrainWaited()) CoreSimulatorLib.nextBlock();
+            if (p.fundedDrainBlock() == 0) CoreSimulatorLib.nextBlock();
         }
-        assertTrue(p.fundedDrainWaited(), "a step waited once for the perp side to reach spot");
+        assertTrue(p.fundedDrainBlock() != 0, "a step sent the perp side across and noted the block");
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing),
             "and it did not finish while its own capital was still on the perp side");
+    }
+
+    /// Audit finding A-11: a regression I put into the pool's closing step and did not see.
+    /// Closing the perp door, I replaced "wait for the perp side to reach spot" with a one-time
+    /// FLAG. A flag records that something happened; it does not record WHEN. Precompiles answer
+    /// with the start of the block, so a second settleFunded in the same block reads the same
+    /// stale numbers -- and with the flag set it walked past the wait and paid the funded trader
+    /// their share out of a balance that predated the drain. Once, because the payout marks
+    /// itself done. In the audit's run: 9.232 USDC owed, 1e-8 sent.
+    ///
+    /// The scenario is theirs, unchanged; only the assertions differ, because theirs pinned the
+    /// bug and these pin the fix. It lives here rather than in its own file: inheriting the
+    /// harness would re-run every test in it a second time under another contract name, and a
+    /// suite whose count means two different things is how numbers start drifting.
+    function test_regression_twoStepsInOneBlock_payTheFundedShareFromAStaleSpot() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        CoreSimulatorLib.forceSpotBalance(griefer, 0, 1e8);
+
+        // A pool holding exactly what one sale needs: after the pass, all of it is on perp.
+        vm.prank(investor);
+        Pool p = Pool(factory.createPool(_rules(), _terms()));
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, p.capitalNeeded());
+        p.prepareAccount();
+        _passed(p); // the challenge's own return is left unsettled on purpose
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(address(p)), 0, "everything is on perp or in the challenge");
+
+        // The funded trader makes a profit and stops the stage, no breach.
+        _trade(address(p), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 810000);
+        _trade(address(p), BTC, false, 0.005e8);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(trader);
+        p.stopFunded(c, a, SALT);
+
+        // One unit lands on the pool's spot (anyone can send it; the investor has the motive).
+        hyperCore.executeSpotSend(griefer, CoreState.SpotSendAction({destination: address(p), token: 0, _wei: 1}));
+        CoreSimulatorLib.nextBlock();
+
+        new TwoStepsInOneBlock().run(p);
+        CoreSimulatorLib.nextBlock();
+
+        assertGt(p.fundedPayoutOwed(), 1e8, "a real share is owed");
+        assertFalse(p.fundedPayoutDone(), "two steps in one block must not spend the one payout");
+        assertEq(p.fundedPayoutSent(), 0, "and nothing was paid out of the stale spot");
+
+        // The next block has the drained capital on spot, so the share is paid in full.
+        for (uint256 i = 0; i < 8 && !p.fundedPayoutDone(); ++i) {
+            p.settleFunded(c, a);
+            CoreSimulatorLib.nextBlock();
+        }
+        assertTrue(p.fundedPayoutDone(), "the payout happens on a later block");
+        assertEq(p.fundedPayoutSent(), p.fundedPayoutOwed(), "and it is the whole share");
     }
 
     function test_graduate_needsTargetAndFlat() public {
