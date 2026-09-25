@@ -1042,6 +1042,54 @@ contract PoolFlowTest is Test {
             "the pool now reaches Idle, the hole is closed -- delete this test and say so.");
     }
 
+    /// What the purchase-time reservation did NOT fix, and made cheaper. The reserved key is
+    /// public from the moment of the sale -- KeyBound names it -- and the trader has days to
+    /// run. Spoiling that ONE key costs one USDC, against draining the whole free list before.
+    function test_reservedKey_canBeSpoiledBeforeThePass() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        address reserved = p.reservedKey();
+
+        // The stranger gives the reserved key an account of its own, and every other free key
+        // too, so nothing can be substituted for it.
+        CoreSimulatorLib.forceAccountActivation(reserved);
+        for (uint256 i = 0; i < keys.length; ++i) {
+            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
+                CoreSimulatorLib.forceAccountActivation(keys[i]);
+            }
+        }
+
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+
+        // With nothing left to substitute, the pass is refused LOUDLY -- the same NoFreeKey as
+        // before the reservation existed. That is the point: the reservation must never end in
+        // a funded stage opened on a key HyperCore will not accept, because that one looks fine
+        // and cannot trade. A refusal is recoverable: the operator publishes keys.
+        vm.expectRevert(KeyRegistry.NoFreeKey.selector);
+        ch.graduate(SALT);
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Challenge), "no stage opened on a dead key");
+    }
+
+    /// And when the stranger spoils only the reserved key, the pass takes a live one instead.
+    function test_aSpoiledReservedKeyIsSwappedForALiveOne() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        address reserved = p.reservedKey();
+        CoreSimulatorLib.forceAccountActivation(reserved);
+
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
+        assertTrue(p.agentKey() != reserved, "not the spoiled one");
+        assertFalse(CoreOps.exists(p.agentKey()), "the stage opened on a key with no account");
+        assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);

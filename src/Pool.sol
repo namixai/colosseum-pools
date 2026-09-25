@@ -227,6 +227,18 @@ contract Pool is RuledAccount {
 
         address key = reservedKey;
         reservedKey = address(0);
+        // The reserved key has been public since the sale -- KeyBound names it -- so a stranger
+        // had the whole challenge term to give it an account, and HyperCore then takes it as an
+        // agent silently and does nothing (spike question 8). A funded stage on a dead key looks
+        // open and cannot trade, which is worse than any refusal. So check, and if it is spoiled
+        // give it back and take a live one. That can still run out, and then this reverts
+        // NoFreeKey exactly as it did before the reservation existed -- loud, and recoverable by
+        // publishing keys. The reservation buys immunity to the free list being drained; it does
+        // not buy immunity to this key being singled out.
+        if (CoreOps.exists(key)) {
+            factory.registry().retire(key);
+            key = factory.registry().assign(trader);
+        }
         _setAgent(key);
         // Sending the challenge capital may have cost an activation fee, so fund what is
         // there, up to the terms.

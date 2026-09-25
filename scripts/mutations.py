@@ -265,6 +265,11 @@ MUTATIONS = [
      "            if (!landed) {",
      "            if (true) {",
      ["test_settle_isNotHeldOpenByAStrangersDust"]),
+    ("M59", "src/Pool.sol",
+     "        if (CoreOps.exists(key)) {",
+     "        if (false) {",
+     ["test_aSpoiledReservedKeyIsSwappedForALiveOne",
+      "test_reservedKey_canBeSpoiledBeforeThePass"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",
