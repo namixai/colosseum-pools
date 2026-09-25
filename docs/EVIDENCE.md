@@ -47,7 +47,21 @@ Transactions read back from their receipts:
   block 65176406, sent by us as the pool's owner.
 - daily-loss stop, `0xf2365bf087abb81f069d51fd48ce9573ca92fb563a826c9e9cb3ba89369d3c07`,
   block 65178469, **sent by `0x75deec8b513Ee3f5D15d6b40B706A3314cf26590`, the keeper's own
-  address** — it found the violation and sent the stop with no one asking it to.
+  address** — it found the violation and sent the stop with no one asking it to. From chain data
+  that stop looks slow: the equity crossed the day's floor around 02:38 UTC and the transaction
+  landed at 02:43:16, five minutes later, against the fourteen seconds the host keeper took in
+  the morning. **That gap is not detection.** No keeper was running: this one was started by
+  hand, after the fact, and it reported `breach_found` on its very first pass at 02:41:44 — 224
+  seconds of which it did not exist. What the chain shows for the remaining 92: the deployer sent
+  that keeper gas in block 65178452 at 02:43:00
+  (`0xc563490bec314ae5a156336c8410fc1ec79a834e1323745361d63e82711d08db`), sixteen seconds before
+  the stop, and the keeper's address has sent **exactly one transaction in its life** — that stop.
+  The reason it needed gas mid-incident, a first send refused on an empty wallet, is in the
+  operator's local journal and **not in this repository**, so take it as an account rather than a
+  record. Nor can it be recovered from the chain: a balance or nonce asked for at an old block
+  comes back as today's, as the hosting notes set out. Both keepers saw the violation immediately
+  once running; the difference between five minutes and fourteen seconds is a keeper that was
+  already watching against one that was fetched to look.
 - second pass, `0x75f6d5f34563e31e8ffbfe6d42f856d2b795d5c78bffb3c11ddb6f5cc7c38b09`,
   block 65180551, sent by the trader.
 
@@ -97,6 +111,27 @@ The state transitions and the records above are real. How they were reached, pla
   (Leverage)** with the agent key cut in that same block; the keeper went on to `settleFunded`
   by itself. The staged half is the rule-breaking. **Nobody chose the stop, timed it or sent
   it** — the person who set the trap was still loading the page when it sprang.
+
+  Those two seconds are the last leg only — from the keeper noticing to the keeper sending — and
+  a reader could take them for the system's answer time, which they are not. The pair anyone can
+  check is on the pool's own fills: the order that broke the rule filled at **10:16:45.354 UTC**
+  (oid 61008081414, SOL buy 0.47 at 118.23) and the position was closed at **10:16:59.363** (oid
+  61008094170, sell 0.47 at 118.14), the stop's block 65206003 carrying 10:16:59. **14.009
+  seconds from the breach to the close**, both fills public under `userFills` for
+  `0x2b108c46…`.
+
+  What that number is made of: the keeper polls, it does not listen. The unit sleeps 30 seconds
+  after each pass, so a cycle is 34–35 seconds, and noticing takes anywhere from nothing to a
+  cycle depending on where in it the rule broke — here about 12 seconds — plus a block. The 14
+  seconds is one draw from that range, not an average of anything: one stop is one stop.
+
+  **A cycle bounds noticing only while every pass succeeds and reads the pools that exist now.**
+  It is a bound on the good case, not a guarantee. A pass that throws is logged as `pass_failed`
+  and the keeper waits for the next one, so that cycle finds nothing; this file records both
+  failures that do it — a node rate-limiting the reads (`eth_blockNumber: rate limited 6 times in
+  a row`, on this host the same day) and a node refusing the log queries entirely, which left the
+  keeper following **zero** pools for the life of a deployment while every pass still reported
+  success. A keeper that has not discovered a pool has no bound on it at all.
 - **Two of the three pools above are benches with soft targets.** `0x2b108c46…` asks +0.2% to
   pass (10% daily, 20% drawdown) and `0x914E4bf9…` — where the first pass, the funded-stage
   leverage stop and the daily-loss stop all happened — asks +1% on 11 USDC. Both were built to
