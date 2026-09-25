@@ -80,8 +80,11 @@ demo and used nowhere else.
    that looks like nothing: a keeper with an empty wallet finds every breach correctly and sends
    none of them, and the node's refusal reads like a rate limit. A stop cost 0.0000195 HYPE on
    25 Sep 2026 (194818 gas at 0.1 gwei), so a little goes a long way — but zero goes nowhere.
-   The journal now says which it is: a `send_failed` line carries `gas_wei` and `unfunded`, and
-   `unfunded: true` means no amount of waiting will help.
+   The journal now tells them apart: a `send_failed` line carries `gas_wei` and `unfunded`.
+   `unfunded: true` means the wallet has dropped below the 0.001 HYPE reserve and wants topping
+   up — it is a warning about the reserve, not proof that this send could not have gone through,
+   because a balance just under the floor still pays for many stops. `gas_wei: 0` is the reading
+   that leaves no doubt: that wallet can pay for nothing, and waiting will not change it.
 
        sudo journalctl -u colosseum-keeper -n 200 --no-pager | grep -F '"send_failed"'
 

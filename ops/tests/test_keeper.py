@@ -481,6 +481,15 @@ class GasMoney(unittest.TestCase):
         one_stop_wei = 194818 * 10**8
         self.assertGreaterEqual(keeper.GAS_FLOOR_WEI // one_stop_wei, 20)
 
+    def test_a_wallet_under_the_reserve_can_still_afford_stops(self):
+        # The floor is a reserve line, not the price of one transaction. A wallet just under it
+        # pays for plenty, so `unfunded` may never be read as "this send was impossible" -- only
+        # gas_wei can say that, and only when it is zero.
+        one_stop_wei = 194818 * 10**8
+        just_under = keeper.GAS_FLOOR_WEI - 1
+        self.assertTrue(keeper.unfunded(just_under))
+        self.assertGreater(just_under // one_stop_wei, 1)
+
     def test_a_balance_that_cannot_be_read_is_not_a_verdict(self):
         chain = mock.Mock()
         chain.evm_balance.side_effect = RuntimeError("the node refused")

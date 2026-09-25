@@ -65,16 +65,19 @@ IDLE, CHALLENGE, FUNDED, CLOSING = range(4)
 
 
 # A stop cost 194818 gas at 0.1 gwei on 25 Sep 2026 -- 0.0000195 HYPE -- and a settle step
-# 0.0000115. This floor is about fifty stops, and it is not meant to be precise: it exists so the
-# journal can tell an empty wallet, which fails on every pass for good, from a node that refused
-# once. Measured after a keeper found a real breach and could not send it: the node answered 500,
-# which reads exactly like a rate limit, and the actual cause was a wallet that had never been
-# funded and had sent nothing in its life.
+# 0.0000115. This floor is about fifty stops: a RESERVE line, not the price of one transaction.
+# A wallet just under it can still pay for a good many stops, so `unfunded` says the reserve is
+# running out and wants topping up; it never claims that this particular send could not have
+# gone through. The raw balance goes in the same line for that, and `gas_wei: 0` is the one
+# reading that leaves no doubt. Measured after a keeper found a real breach and could not send
+# it: the node answered 500, which reads exactly like a rate limit, and the cause was a wallet
+# that had never been funded and had sent nothing in its life.
 GAS_FLOOR_WEI = 10**15
 
 
 def unfunded(balance_wei: int, floor_wei: int = GAS_FLOOR_WEI) -> bool:
-    """Whether the keeper has too little gas left to keep stopping accounts."""
+    """Whether the keeper's gas reserve has run below the floor and wants topping up. Not a claim
+    that a given send was impossible: a balance just under the floor still pays for many."""
     return int(balance_wei) < int(floor_wei)
 
 
@@ -116,9 +119,10 @@ def send(wallet, addr: str, sig: str, types=(), args=(), dry=False) -> None:
         rcpt = c.transact(wallet, addr, sig, list(types), list(args))
         log("sent", to=addr, call=sig, tx=rcpt["transactionHash"])
     except Exception as exc:  # one failed call must not stop the pass
-        # Say whether this can succeed later. A keeper that finds a breach and cannot send it is
-        # the one failure that matters, and "send_failed" alone read the same whether the node
-        # was busy for a second or the wallet had been empty for days.
+        # A keeper that finds a breach and cannot send it is the one failure that matters, and
+        # "send_failed" alone read the same whether the node was busy for a second or the wallet
+        # had been empty for days. The balance goes in the line so the two can be told apart --
+        # as a fact, not as a verdict on this send.
         gas = gas_balance(wallet)
         log("send_failed", to=addr, call=sig, error=str(exc)[:200], gas_wei=gas,
             unfunded=None if gas is None else unfunded(gas))
