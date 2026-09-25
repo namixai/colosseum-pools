@@ -142,6 +142,38 @@ open, before any of it moves to spot. The equity at the stop is kept for the rec
 reduce-only close can fill worse than the mark it was priced from, and a share computed from
 the mark would make the investor pay the difference.
 
+## What a cycle costs the pool, and why the two sides don't meet
+
+A pool that has run a full cycle usually can't sell the next challenge out of what came home,
+and the reason is structural rather than a loss.
+
+The two figures live on different sides of the bridge. `capitalNeeded()` is spent on
+**HyperCore**: the challenge capital, the funded capital, and 1 USDC for creating the
+challenge's account — and HyperCore keeps that dollar. The price the trader paid arrives on
+**HyperEVM**, where `buyChallenge` books it into `earned` for the investor to withdraw. So each
+challenge a pool sells moves at least 1 USDC from its HyperCore balance to its HyperEVM one, and
+nothing on chain moves it back: `withdrawEarned` pays the investor on HyperEVM, and the pool is
+refilled only by a spot transfer the investor makes on HyperCore. The step is manual by design
+— sending USDC to a pool on HyperEVM would lose it, since the testnet bridge doesn't credit
+contracts — but it was not written down anywhere, and the pool page offered the sale regardless.
+
+Measured on the stand pool `0x914E4bf9` (testnet, 25 Sep 2026), over one whole cycle — a
+challenge sold at a price of 1.00, passed at 11.1135, the trader funded with 30, the funded
+stage stopped on a leverage breach and settled home — it needs 42.000000 USDC on HyperCore to
+sell the next one and had 40.781793 when everything had settled, so it is 1.218207 short.
+HyperCore kept 1.000000 of that for the account; closing the funded stage cost 0.331676
+(30.000000 out, 29.668324 back); and the challenge returned 11.113469 against the 11.000000 it
+took, its 0.113469 gain going the other way.
+
+The 1.00 is the floor: even a cycle that loses nothing leaves the pool a dollar short on
+HyperCore while holding a dollar more on HyperEVM. The demo pool shows the same thing at its own
+size — 769.56 on HyperCore against the 771.00 it needs.
+
+The economics model already prices the fee (`new_account_fee = 1` in `app/data/calc_tables.json`;
+zeroing it moves the demo's price floor from 4.0493 to 3.1306). What it doesn't say is that the
+dollar leaves one balance and lands in another, so the pool needs the investor to close the loop
+before it can sell again.
+
 ## What the design does not do
 
 - It does not check a trader's intent: the operator runs the gateway and could submit an

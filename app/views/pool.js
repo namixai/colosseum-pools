@@ -28,13 +28,21 @@ export async function poolView(address, page) {
   const isFunded = chain.same(me, fundedTrader);
   // Challenge capital, funded capital, and 1 USDC for creating the challenge's account.
   const needed = Number(neededSpot) / 1e8;
+  // The pool pays the challenge capital out of HyperCore, so an idle pool that is short there
+  // would take the approval and then revert. Decided once, for the balance row, the buy button
+  // and the card that replaces it.
+  const blocker = saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed });
+  const shortOnCore = blocker && blocker.kind === "underfunded" ? blocker.short : 0;
 
   render(page, `
     <section class="card">
       <h2>Pool ${esc(chain.short(address))} ${badge(stageName, Number(stage) === 0 ? "ok" : "")}</h2>
       <p class="muted mono">${esc(address)}</p>
       ${row("Investor", `<span class="mono">${esc(owner)}</span>`)}
-      ${row("HyperCore spot", `${esc(spotUsdc.toFixed(2))} USDC (needs ${esc(needed.toFixed(2))} to sell a challenge)`)}
+      ${row("HyperCore spot", `${esc(spotUsdc.toFixed(2))} USDC (needs ${esc(needed.toFixed(2))} to sell a challenge)${
+        shortOnCore > 0 ? ` — <strong>${esc(shortOnCore.toFixed(2))} short</strong>. Creating each challenge's
+        account costs 1 USDC here and never comes back, while the price the trader paid is held on HyperEVM.
+        The investor moves it across; nothing on chain does.` : ""}`)}
       ${row("Account prepared", ready ? "yes" : "no")}
       ${Number(stage) === 1 ? row("Current challenge", `<a href="#/challenge/${esc(challenge)}">${esc(chain.short(challenge))}</a>`) : ""}
       ${Number(stage) >= 2 ? row("Funded trader", `<span class="mono">${esc(fundedTrader)}</span>`) : ""}
@@ -50,9 +58,6 @@ export async function poolView(address, page) {
 
   // Trader: buy
   const buy = $("#buy", page);
-  // The pool pays the challenge capital out of HyperCore, so an idle pool that is short there
-  // would take the approval and then revert. Decided in one place, for the button and the card.
-  const blocker = saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed });
   if (!blocker) {
     buy.innerHTML = `<h3>Take the challenge</h3>
       <p>You pay ${chain.usd6(terms.price)} USDC on HyperEVM from your wallet${
@@ -134,10 +139,7 @@ export async function poolView(address, page) {
     inv.remove();
     return;
   }
-  const advice = topUpAdvice({
-    short: blocker && blocker.kind === "underfunded" ? blocker.short : 0,
-    earned: Number(earned) / 1e6,
-  });
+  const advice = topUpAdvice({ short: shortOnCore, earned: Number(earned) / 1e6 });
   inv.innerHTML = `<h3>Investor</h3>
     <p>Capital goes to the pool on HyperCore: a spot transfer of USDC from your HyperCore account to
       <span class="mono">${esc(address)}</span>. The button below asks your wallet to sign that transfer;
