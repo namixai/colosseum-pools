@@ -16,6 +16,21 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
 - **The gateway** (`colosseum-gw`) listens on `127.0.0.1:8787`. nginx serves it on 443 as
   `pools-api.usenami.io`, behind Cloudflare.
 - **The keeper** (`colosseum-keeper`) has no port. It polls the chain every 30 seconds.
+
+  🔴 **A keeper that has fallen behind is not watching, and it takes real time to come back.**
+  HyperEVM serves `eth_getLogs` 50 blocks at a call, and the unit runs the defaults — 50 calls a
+  pass, a pass every 30 seconds — so it walks about **5,000 blocks a minute**. The chain makes
+  roughly 57 a minute, so catching up is quick per minute of downtime and slow per day of it:
+  measured on 25 September 2026, 175,000 blocks took about **forty minutes** to walk. Until it
+  reaches the head it has not seen the events that name the pools, so `following` stays low and
+  it enforces nothing on the pools it has not rediscovered yet — silently, because every pass
+  still logs `pass_done`.
+
+  What to read: `pass_done` carries `next_block` and `latest`. If the gap between them is not
+  shrinking, the keeper is stuck, not busy — check for `scan_stopped` above it. If it is
+  shrinking, divide the gap by 5,000 for the minutes left. `--max-windows` (default 50) is the
+  lever if a catch-up ever has to go faster, at the cost of more calls per pass against a node
+  that rate-limits.
 - **The app** is the static `app/` folder, served by a Cloudflare Worker with static assets
   (`raspy-violet-594d`) on `pools.usenami.io`. There is no build step and no server code: every
   page is a `#/…` route of the one `index.html`. It calls the gateway from the browser;
