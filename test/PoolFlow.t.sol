@@ -896,6 +896,70 @@ contract PoolFlowTest is Test {
         ch.graduate(SALT);
     }
 
+    /// A stranger can spoil every published key by giving it a HyperCore account, one USDC
+    /// each. Before the sale reserved the funded key, that was enough to take the funded stage
+    /// away from a trader who had already met the target: graduate reached into an empty
+    /// registry and reverted, and after the deadline the trader could only expire -- no funded
+    /// stage, no share, and the challenge's profit left in the pool. Now the key is already in
+    /// hand when the trader passes, so nobody outside can reach it.
+    function test_graduate_survivesAnEmptyRegistry_becauseTheSaleReservedTheKey() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+
+        uint256 spoiled;
+        for (uint256 i = 0; i < keys.length; ++i) {
+            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
+                CoreSimulatorLib.forceAccountActivation(keys[i]);
+                ++spoiled;
+            }
+        }
+        assertGt(spoiled, 0, "there was something left to spoil");
+
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+
+        // The whole assertion is behaviour: the trader who met the target IS funded, although
+        // every key still on the free list was spoiled while the challenge ran.
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
+        assertTrue(registry.isBound(p.agentKey(), address(p), trader), "funded on a key of its own");
+
+        // What the fix does NOT claim: the attack still stops NEW sales. Say so here, so that
+        // nobody reads this test as proof the registry cannot be drained.
+        Pool other = _readyPool();
+        deal(address(usdc), trader, 25e6);
+        vm.startPrank(trader);
+        usdc.approve(address(other), 25e6);
+        vm.expectRevert(KeyRegistry.NoFreeKey.selector);
+        other.buyChallenge();
+        vm.stopPrank();
+    }
+
+    /// The sale takes two keys, and one of them is only needed if the trader passes. When
+    /// nobody does, the pool gives it back -- otherwise the pool would still be holding it at
+    /// the next sale, and a pool may hold only one.
+    function test_aChallengeNobodyPassesGivesTheReservedKeyBack() public {
+        Pool p = _readyPool();
+        uint256 free0 = registry.freeCount();
+        ChallengeAccount ch = _started(p);
+        assertEq(registry.freeCount(), free0 - 2, "the challenge's own key, and one held for the pass");
+        address reserved = p.reservedKey();
+
+        uint32[] memory none = new uint32[](0);
+        vm.prank(trader);
+        ch.forfeit(new Cancel[](0), none, SALT);
+        _settleChallenge(ch);
+
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+        assertEq(p.reservedKey(), address(0), "the pool is not still holding it");
+        assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
+
+        // The proof that it was really given back: the pool can sell again.
+        _buy(p);
+        assertTrue(p.reservedKey() != address(0) && p.reservedKey() != reserved);
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);

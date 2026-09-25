@@ -42,6 +42,9 @@ contract Pool is RuledAccount {
     Stage public stage;
     address public challenge;
     address public challengeTrader;
+    /// The agent key this pool has already taken for the funded stage, held from the moment the
+    /// challenge is sold. Zero once it is in use or given back.
+    address public reservedKey;
     /// Price paid for the current challenge, held until it starts (HyperEVM USDC units).
     uint256 public heldPrice;
     /// Prices of started challenges, withdrawable by the owner (HyperEVM USDC units).
@@ -193,6 +196,13 @@ contract Pool is RuledAccount {
 
         ch = IPoolFactory(address(factory)).createChallenge(msg.sender);
         challenge = ch;
+        // The key for the funded stage is taken NOW, not when the trader passes. Free keys are
+        // public and anyone can spoil one for the price of an account on HyperCore, so a trader
+        // who did everything asked could otherwise reach the pass and find the registry empty --
+        // losing the funded stage, and their share of it, to a stranger. The challenge's own key
+        // is reserved at ChallengeAccount.initialize for exactly this reason; this is the other
+        // half of the same promise.
+        reservedKey = factory.registry().assign(msg.sender);
         CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);
         emit ChallengeSold(ch, msg.sender, price);
     }
@@ -215,7 +225,8 @@ contract Pool is RuledAccount {
         fundedTrader = trader;
         fundedEndReason = Breach.None;
 
-        address key = factory.registry().assign(trader);
+        address key = reservedKey;
+        reservedKey = address(0);
         _setAgent(key);
         // Sending the challenge capital may have cost an activation fee, so fund what is
         // there, up to the terms.
@@ -231,7 +242,16 @@ contract Pool is RuledAccount {
     function onChallengeSettled() external onlyChallenge {
         challenge = address(0);
         challengeTrader = address(0);
-        if (stage == Stage.Challenge) stage = Stage.Idle;
+        if (stage == Stage.Challenge) {
+            stage = Stage.Idle;
+            // Nobody passed, so the reserved key was never used. Give it up: a pool may hold
+            // only one key, and the next challenge needs its own, bound to whoever buys that.
+            address spare = reservedKey;
+            if (spare != address(0)) {
+                reservedKey = address(0);
+                factory.registry().retire(spare);
+            }
+        }
     }
 
     // ── funded trader ────────────────────────────────────────────────────────────────
