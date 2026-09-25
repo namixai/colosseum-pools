@@ -99,6 +99,7 @@ Where the checks stop, and what we don't claim:
 | `ops/` | the testnet deployment script and the keeper |
 | `spike/` | scripts that check HyperCore behaviour, in the simulator and on live testnet |
 | `scripts/` | the hygiene gate, the commit identity check and the mutation check of the tests |
+| `stress/` | what the pool rules do on real crash days: a stress test over the eight worst days since 10 Oct 2025, on one-minute Bybit bars (Bybit, not Hyperliquid), with the data snapshot and its hashes, the results and their checks; `./run-tests.sh` runs them all |
 | `docs/` | six documents, listed below |
 
 ### The documents
