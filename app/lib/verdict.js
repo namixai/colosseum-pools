@@ -31,3 +31,19 @@ export function ruleVerdict({ recorded = 0, live = 0, stopped = false, finished 
 export function liveReadingIsMoot(verdict) {
   return verdict.kind !== "live";
 }
+
+/**
+ * Whether what this account has to say is about a funded stage that is OVER.
+ *
+ * A pool keeps `cutBlock` — the block where it cut the funded trader's key — and keeps it after
+ * the stage has ended and the capital has come home. That is the only thing on the pool that
+ * tells the two quiet cases apart: a funded stage that ended CLEANLY records `fundedEndReason`
+ * None, which is byte for byte what a pool that has never funded anyone records. Before this, a
+ * judge arriving after a completed cycle saw the second and could not know it was the first.
+ *
+ * Stage 0 is the condition, not just a non-zero block: a stage still running (2) or still
+ * settling (3) is present tense, and the page already has words for those.
+ */
+export function pastFundedStage({ kind, stage = 0, cutBlock = 0 } = {}) {
+  return kind === "pool" && Number(cutBlock) > 0 && Number(stage) === 0;
+}

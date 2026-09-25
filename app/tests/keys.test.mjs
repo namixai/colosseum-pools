@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { keyFacts, isZero, sameAddress, MAX_CHAIN_READS_ON_LOAD, ZERO } from "../lib/keys.js";
 import { friendly, rateLimited, failureHint } from "../lib/ui.js";
-import { ruleVerdict, liveReadingIsMoot } from "../lib/verdict.js";
+import { ruleVerdict, liveReadingIsMoot, pastFundedStage } from "../lib/verdict.js";
 import * as hl from "../lib/hl.js";
 
 // Hex letters on purpose: an all-digit address would make every case test pass by accident.
@@ -229,4 +229,45 @@ test("the page prints the read count it made, not a number typed into it", () =>
   assert.match(source, /facts\.chainReads/, "the page no longer prints the count it measured");
   assert.doesNotMatch(source, /\bin (four|five|six|\d+) reads\b/i, "a read count is typed into the page again");
   assert.match(source, /!k\.role/, "a key with no answer from Hyperliquid would break the render");
+});
+
+// The three pools on the demo factory on 25 Sep 2026, read from the chain. Two of them look
+// identical on every field a page used to show; cutBlock is the one that separates them.
+const CLEAN_CLOSE = { kind: "pool", stage: 0, cutBlock: 65199047 };   // funded stage ended, no rule broken
+const LEVERAGE_STOP = { kind: "pool", stage: 0, cutBlock: 65176406 }; // funded stage stopped for leverage
+const NEVER_FUNDED = { kind: "pool", stage: 0, cutBlock: 0 };         // an investor's pool that has not funded anyone
+
+test("a pool that has funded someone says so after the stage is over", () => {
+  assert.equal(pastFundedStage(CLEAN_CLOSE), true);
+  assert.equal(pastFundedStage(LEVERAGE_STOP), true);
+  assert.equal(pastFundedStage(NEVER_FUNDED), false, "a pool nobody has funded must not claim a past stage");
+});
+
+test("a stage that is not over yet is present tense", () => {
+  assert.equal(pastFundedStage({ ...CLEAN_CLOSE, stage: 2 }), false, "funded and trading now");
+  assert.equal(pastFundedStage({ ...CLEAN_CLOSE, stage: 3 }), false, "stopped and still settling");
+  assert.equal(pastFundedStage({ ...CLEAN_CLOSE, stage: 1 }), false, "a challenge is running");
+});
+
+test("challenges are judged by their own status, not by this", () => {
+  assert.equal(pastFundedStage({ kind: "challenge", stage: 0, cutBlock: 65180551 }), false);
+});
+
+test("the clean close stops reading like a pool nobody ever funded", () => {
+  // Both record fundedEndReason None and neither is stopped. Before cutBlock was read, both
+  // produced the same live verdict and the page said "inside the rules" over a finished cycle.
+  const asVerdict = (p) => ruleVerdict({ recorded: 0, live: 0, stopped: false, finished: pastFundedStage(p) }).kind;
+  assert.equal(asVerdict(CLEAN_CLOSE), "finished-with-no-rule-broken");
+  assert.equal(asVerdict(NEVER_FUNDED), "live");
+  assert.notEqual(asVerdict(CLEAN_CLOSE), asVerdict(NEVER_FUNDED));
+});
+
+test("the verify page actually asks it", () => {
+  // Testing pastFundedStage alone would stay green if the view went back to deciding "finished"
+  // from the stage alone, which is the state this fixes.
+  const src = readFileSync(new URL("../views/verify.js", import.meta.url), "utf8");
+  assert.match(src, /pastFundedStage\(\{ kind, stage: state, cutBlock \}\)/, "the view must ask the function");
+  assert.match(src, /account\.cutBlock\(\)/, "and must read cutBlock to ask it with");
+  assert.doesNotMatch(src, /const finished = kind === "challenge" && Number\(state\) > 2;/,
+    "the old pool-blind rule is back");
 });

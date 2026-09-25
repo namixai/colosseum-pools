@@ -3,7 +3,7 @@
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, badge, row, isAddress, settle, wire } from "../lib/ui.js";
-import { ruleVerdict, liveReadingIsMoot } from "../lib/verdict.js";
+import { ruleVerdict, liveReadingIsMoot, pastFundedStage } from "../lib/verdict.js";
 import { keyFacts } from "../lib/keys.js";
 
 export async function verifyView(address, page) {
@@ -140,35 +140,50 @@ async function fillsPanel(account, address, page, kind) {
   // A settled account holds nothing, and a verdict computed on nothing says "drawdown" whatever
   // the stop was for. What the contract wrote down when it stopped the account is the answer;
   // the live reading is for accounts that are still trading.
-  const [live, recorded, stopped, state] = await Promise.all([
+  const [live, recorded, stopped, state, cutBlock] = await Promise.all([
     account.violation([]),
     kind === "challenge" ? account.breachReason() : account.fundedEndReason(),
     account.isStopped(),
     kind === "challenge" ? account.status() : account.stage(),
+    account.cutBlock(),
   ]);
   // A pool records its own reason when it stops a funded trader (fundedEndReason), so a stopped
   // pool has one to show; a funded stage ended without a rule broken leaves it None and the pool
   // is simply stopped. "Finished" is for challenges: past Active one never trades again, while a
   // pool goes back to Idle and sells the next challenge.
-  const finished = kind === "challenge" && Number(state) > 2;
+  // A pool that has funded someone keeps the block where it cut their key, and keeps it after the
+  // stage is over. Without that, a pool whose funded stage ended CLEANLY records reason None and
+  // reads exactly like a pool that has never funded anyone -- which is what a judge arriving after
+  // a completed cycle saw here. Non-zero cutBlock on an idle pool means: a funded stage ran, and
+  // it is over.
+  const idleAfterFunding = pastFundedStage({ kind, stage: state, cutBlock });
+  const finished = kind === "challenge" ? Number(state) > 2 : idleAfterFunding;
+  // Every line below is about the LAST funded stage once the pool is idle again, never about the
+  // pool as it stands: idle means it is ready to sell the next challenge.
+  const past = idleAfterFunding ? "the last funded stage" : "this account";
   const verdict = ruleVerdict({ recorded, live, stopped, finished });
   $("#fills", page).className = "";
   $("#fills", page).innerHTML = `
     ${row("Fills on this account (Hyperliquid API)", String(fills.length))}
     ${row("Fills in an asset outside the rules", bad ? badge(String(bad), "bad") : badge("0", "ok"))}
     ${verdict.kind === "recorded"
-      ? row("The rule the contract recorded when it stopped this account",
+      ? row(`The rule the contract recorded when it stopped ${esc(past)}`,
             badge(chain.BREACH[verdict.reason], "bad"))
       : verdict.kind === "finished-with-no-rule-broken"
-        ? row("Rules while this account traded", badge("none broken; the contract recorded no stop", "ok"))
+        ? row(`Rules while ${esc(past)} traded`, badge("none broken; the contract recorded no stop", "ok"))
         : verdict.kind === "stopped-without-a-recorded-reason"
           ? row("This account is stopped", badge("stopped; it keeps no reason of its own", "bad"))
           : row("The contract's verdict right now",
                 verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))}
+    ${idleAfterFunding ? row("Funded stage on this pool",
+        `ended at block ${esc(String(cutBlock))}; the pool is idle again and can sell the next challenge`) : ""}
     ${liveReadingIsMoot(verdict) ? `<p class="small muted">A verdict this page could compute from the
-      account's state would be about the account as it stands now. This one has stopped trading, and its
+      account's state would be about the account as it stands now${idleAfterFunding
+        ? `, and this pool is idle: its capital is home and the stage above is over. A reading of what
+        it holds today says nothing about how that stage went`
+        : `. This one has stopped trading, and its
       settlement may still be running, so a reading of what is left on it does not say what happened while it
-      traded. What the contract itself holds is above.</p>` : ""}
+      traded`}. What the contract itself holds is above.</p>` : ""}
     <div class="scroll"><table><thead><tr><th>time (UTC)</th><th>asset</th><th>side</th><th>size</th><th>price</th>
     <th>notional</th><th>closed PnL</th><th>asset rule</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
     <p class="small muted">This checks trades that reached Hyperliquid. An order our gateway refused never reaches
