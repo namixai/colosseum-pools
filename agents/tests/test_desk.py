@@ -30,6 +30,60 @@ class WithChain(unittest.TestCase):
         return dk.Desk(FACTORY, ACCOUNT, dk.Limits(**limits), self.gateway if send else None, Wallet(), send)
 
 
+class BusyDoesNotCost(WithChain):
+    """A session gets four orders. Two of them went on `busy` in a live session on 25 Sep 2026 --
+    the gateway's own chain reads were rate limited, nothing reached Hyperliquid, and the agent
+    paid for our node's bad minute out of its own budget."""
+
+    def ok_order(self, desk):
+        return desk.place_order("BTC", "buy", 0.0002, 60000, "limit", False)   # 12 USDC
+
+    def test_a_busy_refusal_gives_the_attempt_back(self):
+        self.gateway = FakeGateway(busy_for=2)
+        desk = self.desk()
+        self.assertEqual(self.ok_order(desk)["answer"]["status"], "busy")
+        self.assertEqual(desk.orders_left, 4, "a refusal of ours must not cost the agent an order")
+        self.assertEqual(self.ok_order(desk)["answer"]["status"], "busy")
+        self.assertEqual(desk.orders_left, 4)
+        # And the budget really is still whole: four orders still go through afterwards.
+        for _ in range(4):
+            self.assertEqual(self.ok_order(desk)["answer"]["status"], "submitted")
+        self.assertEqual(desk.orders_left, 0)
+        with self.assertRaises(Refused):
+            self.ok_order(desk)
+
+    def test_an_order_that_was_sent_still_costs_one(self):
+        desk = self.desk()
+        self.assertEqual(self.ok_order(desk)["answer"]["status"], "submitted")
+        self.assertEqual(desk.orders_left, 3)
+
+    def test_the_venues_own_refusal_costs_one(self):
+        # It reached Hyperliquid and Hyperliquid said no. That was an attempt.
+        self.gateway.order = lambda *a, **k: {"http": 422, "status": "refused_by_venue",
+                                              "reason": "Order price cannot be more than 80% away"}
+        desk = self.desk()
+        self.ok_order(desk)
+        self.assertEqual(desk.orders_left, 3)
+
+    def test_an_answer_that_settles_nothing_costs_one(self):
+        # "may or may not have reached Hyperliquid": giving this one back is how an order gets
+        # sent twice.
+        self.gateway.order = lambda *a, **k: {"http": 502, "status": "uncertain", "code": "send_failed",
+                                              "detail": "the order may or may not have reached Hyperliquid"}
+        desk = self.desk()
+        self.ok_order(desk)
+        self.assertEqual(desk.orders_left, 3)
+
+    def test_cancels_are_counted_the_same_way(self):
+        self.gateway = FakeGateway(busy_for=1)
+        desk = self.desk()
+        before = desk.cancels_left
+        self.assertEqual(desk.cancel_order("BTC", 1)["answer"]["status"], "busy")
+        self.assertEqual(desk.cancels_left, before)
+        self.assertEqual(desk.cancel_order("BTC", 1)["answer"]["status"], "submitted")
+        self.assertEqual(desk.cancels_left, before - 1)
+
+
 class DeskLimits(WithChain):
     def test_only_perps_on_the_accounts_list(self):
         with self.assertRaises(Refused):

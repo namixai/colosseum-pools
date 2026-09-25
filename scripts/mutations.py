@@ -872,6 +872,23 @@ MUTATIONS = [
      "    if not math.isfinite(mid) or mid <= 0:",
      "    if False:",
      ["test_a_sell_without_a_usable_mid_is_refused"]),
+    # ── a refusal that is ours must not cost the agent an attempt (python) ──
+    ("A35", "agents/desk.py",
+     '        if isinstance(answer, dict) and answer.get("status") == "busy":',
+     "        if False:",
+     ["test_a_busy_refusal_gives_the_attempt_back", "test_cancels_are_counted_the_same_way"]),
+    ("A36", "agents/desk.py",
+     '        if isinstance(answer, dict) and answer.get("status") == "busy":',
+     '        if isinstance(answer, dict) and answer.get("status") != "submitted":',
+     ["test_the_venues_own_refusal_costs_one", "test_an_answer_that_settles_nothing_costs_one"]),
+    ("A37", "agents/desk.py",
+     '        answer = self.client.cancel(self.account, index, oid)\n        self._refund_if_ours(answer, "cancels_left")',
+     "        answer = self.client.cancel(self.account, index, oid)",
+     ["test_cancels_are_counted_the_same_way"]),
+    ("A38", "agents/desk.py",
+     '            setattr(self, counter, getattr(self, counter) + 1)',
+     "            pass",
+     ["test_a_busy_refusal_gives_the_attempt_back"]),
     ("A33", "agents/desk.py",
      '                "trader_share_of_challenge_profit_pct": ch_share_bps / 100,\n'
      '                "trader_share_of_funded_profit_pct": funded_share_bps / 100,\n'

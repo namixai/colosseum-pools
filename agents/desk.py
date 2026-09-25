@@ -236,7 +236,21 @@ class Desk:
         if not self.send:
             return {"status": "not_sent", "order": order}
         answer = self.client.order(self.account, index, side == "buy", px, sz, tif=tif, reduce_only=reduce_only)
+        self._refund_if_ours(answer, "orders_left")
         return {"order": order, "answer": answer}
+
+    def _refund_if_ours(self, answer: dict, counter: str) -> None:
+        """Gives the attempt back when the gateway refused for a reason of OURS.
+
+        The counter is spent before the call on purpose: a send that throws, or one the gateway
+        cannot resolve, may still have reached Hyperliquid, and an agent that got the attempt back
+        would send it twice. `busy` is the one answer with no such doubt -- the gateway's own chain
+        reads were rate limited, so it refused before signing anything and nothing left the house.
+        Charging a session order for our node's bad minute spends the agent's budget on our
+        problem: seen live on 25 Sep 2026, when two of a session's four orders went on `busy`.
+        """
+        if isinstance(answer, dict) and answer.get("status") == "busy":
+            setattr(self, counter, getattr(self, counter) + 1)
 
     def cancel_order(self, coin: str, oid: int) -> dict:
         index, _ = self._perp(coin)
@@ -245,7 +259,9 @@ class Desk:
         self.cancels_left -= 1
         if not self.send:
             return {"status": "not_sent", "cancel": {"coin": coin, "oid": oid}}
-        return {"answer": self.client.cancel(self.account, index, oid)}
+        answer = self.client.cancel(self.account, index, oid)
+        self._refund_if_ours(answer, "cancels_left")
+        return {"answer": answer}
 
     def close_position(self, coin: str) -> dict:
         self._perp(coin)

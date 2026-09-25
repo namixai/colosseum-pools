@@ -103,14 +103,27 @@ class FakeChain:
                         {"type": "error", "name": "TargetNotMet", "inputs": [{"type": "int64"}, {"type": "int256"}]}]}
 
 
+# What the live gateway answers when its own chain reads are rate limited: it refuses BEFORE it
+# signs anything, so nothing reaches Hyperliquid.
+BUSY = {"http": 429, "status": "busy", "code": "upstream_busy",
+        "detail": "the chain node is refusing reads right now; try again in a moment"}
+
+
 class FakeGateway:
-    def __init__(self):
+    def __init__(self, busy_for=0):
         self.orders, self.cancels = [], []
+        self.busy_for = busy_for   # answer this many calls with busy before accepting any
+
+    def _answer(self):
+        if self.busy_for > 0:
+            self.busy_for -= 1
+            return dict(BUSY)
+        return {"http": 200, "status": "submitted"}
 
     def order(self, account, asset, is_buy, px, size, tif="Gtc", reduce_only=False):
         self.orders.append((account, asset, is_buy, px, size, tif, reduce_only))
-        return {"http": 200, "status": "submitted"}
+        return self._answer()
 
     def cancel(self, account, asset, oid):
         self.cancels.append((account, asset, oid))
-        return {"http": 200, "status": "submitted"}
+        return self._answer()
