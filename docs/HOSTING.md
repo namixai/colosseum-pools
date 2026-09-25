@@ -76,6 +76,15 @@ demo and used nowhere else.
        cd / && sudo -u colosseum-keeper /opt/colosseum-pools/venv/bin/python \
            /opt/colosseum-pools/current/ops/make_demo_keys.py --wallet keeper --dir /var/lib/colosseum-keeper/secrets
 
+   🔴 **Check that it has gas, and check it again after any redeploy.** This is the one failure
+   that looks like nothing: a keeper with an empty wallet finds every breach correctly and sends
+   none of them, and the node's refusal reads like a rate limit. A stop cost 0.0000195 HYPE on
+   25 Sep 2026 (194818 gas at 0.1 gwei), so a little goes a long way — but zero goes nowhere.
+   The journal now says which it is: a `send_failed` line carries `gas_wei` and `unfunded`, and
+   `unfunded: true` means no amount of waiting will help.
+
+       sudo journalctl -u colosseum-keeper -n 200 --no-pager | grep -F '"send_failed"'
+
 5. TLS. Cloudflare checks the origin's certificate (the zone is set to Full, strict), so the
    host needs one from Cloudflare's Origin CA:
    - In the dashboard: SSL/TLS → Origin Server → Create Certificate. Choose "Use my private

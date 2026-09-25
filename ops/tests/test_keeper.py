@@ -463,5 +463,59 @@ class MatchesTheContracts(unittest.TestCase):
         self.assertRegex(challenge, rf"START_WINDOW = {keeper.START_WINDOW // 3600} hours?")
 
 
+class GasMoney(unittest.TestCase):
+    """A keeper that finds a breach and cannot send it is the one failure that matters, and the
+    journal has to say whether waiting will help. Written after a live keeper answered 500 on a
+    real breach: that reads like a rate limit, and the cause was a wallet that had never been
+    funded."""
+
+    def test_the_verdict_comes_from_the_balance_against_the_floor(self):
+        self.assertTrue(keeper.unfunded(0))
+        self.assertTrue(keeper.unfunded(keeper.GAS_FLOOR_WEI - 1))
+        self.assertFalse(keeper.unfunded(keeper.GAS_FLOOR_WEI))
+        self.assertFalse(keeper.unfunded(10 * keeper.GAS_FLOOR_WEI))
+
+    def test_the_floor_is_worth_a_run_of_stops_at_the_measured_price(self):
+        # A breach cost 194818 gas at 0.1 gwei on HyperEVM testnet, 25 Sep 2026. A floor worth
+        # one stop would call a keeper funded that is about to stop being able to work.
+        one_stop_wei = 194818 * 10**8
+        self.assertGreaterEqual(keeper.GAS_FLOOR_WEI // one_stop_wei, 20)
+
+    def test_a_balance_that_cannot_be_read_is_not_a_verdict(self):
+        chain = mock.Mock()
+        chain.evm_balance.side_effect = RuntimeError("the node refused")
+        with mock.patch.object(keeper, "c", chain):
+            self.assertIsNone(keeper.gas_balance(mock.Mock()))
+
+
+class FailedSend(KeeperTest):
+    def failed_send(self, balance=None, readable=True):
+        self.chain.transact = mock.Mock(side_effect=RuntimeError("500 Server Error"))
+        self.chain.evm_balance = mock.Mock(
+            return_value=balance) if readable else mock.Mock(side_effect=RuntimeError("no"))
+        with mock.patch.object(keeper, "log") as logged:
+            keeper.send(mock.Mock(), CHALLENGE_A, "breach((uint32,uint64)[],uint32[],bytes32)")
+        (event, *_), fields = logged.call_args
+        self.assertEqual(event, "send_failed")
+        return fields
+
+    def test_an_empty_wallet_is_named_as_one(self):
+        fields = self.failed_send(balance=0)
+        self.assertIs(fields["unfunded"], True)
+        self.assertEqual(fields["gas_wei"], 0)
+        # The failure it was reporting is still there; the balance is added to it, not instead.
+        self.assertIn("500", fields["error"])
+
+    def test_a_funded_wallet_that_failed_says_waiting_may_help(self):
+        fields = self.failed_send(balance=10 * keeper.GAS_FLOOR_WEI)
+        self.assertIs(fields["unfunded"], False)
+
+    def test_an_unreadable_balance_claims_nothing(self):
+        fields = self.failed_send(readable=False)
+        self.assertIsNone(fields["unfunded"])
+        self.assertIsNone(fields["gas_wei"])
+        self.assertIn("500", fields["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
