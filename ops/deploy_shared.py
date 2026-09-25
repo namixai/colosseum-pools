@@ -1,7 +1,15 @@
-"""Deploy a shared pool for its testnet run, on a factory and a key registry of its own (chain 998).
+"""Deploy a shared pool on testnet (chain 998), on a factory and key registry of its own or on the demo's.
 
     spike/.venv/bin/python ops/deploy_shared.py --label shared-run --keys-file <addresses.txt> \\
         --min-deposit 20 --lock 600 --fee-bps 1000
+    spike/.venv/bin/python ops/deploy_shared.py --label shared-demo --on-demo-factory \\
+        --min-deposit 20 --lock 600 --fee-bps 1000
+
+With --on-demo-factory only the SharedPool is deployed, and its seats are made by the demo's
+factory: they are pools of the demo like any other, served by its gateway, its pages and its keeper
+on the operator's host, and a challenge on them takes a key from the demo's registry. Don't run
+ops/keeper.py with such a deployment yourself: it follows every challenge of the demo's factory, the
+demo's own pools included.
 
 The run's seats don't trade, so its agent keys never go near the gateway host: a registry of its
 own keeps them apart from the demo's, and a factory of its own keeps the run's seats out of the
@@ -47,10 +55,48 @@ CORE_SOURCES = ("src/Pool.sol", "src/ChallengeAccount.sol", "src/RuledAccount.so
 USDC_1E8 = 100_000_000
 
 
+def on_demo_factory(args, out_path: pathlib.Path, commit: str, demo: dict, assets: list[int]) -> int:
+    """The SharedPool alone, owning seats the demo's factory makes. Nothing of the demo's is changed."""
+    factory, registry = demo["PoolFactory"], demo["KeyRegistry"]
+    for idx in assets:
+        if not c.call_view(factory, "isPlatformAsset(uint32)", ["uint32"], [idx], ["bool"])[0]:
+            raise SystemExit(f"the demo's factory doesn't list asset {idx}")
+    op = c.account("shared-operator")
+    if not c.core_user_exists(op.address):
+        raise SystemExit("shared-operator has no HyperCore account yet; fund it first")
+    min_deposit = int(round(args.min_deposit * USDC_1E8))
+    fee = c.call_view(factory, "challengeFee()", [], [], ["uint256"])[0]
+    record: dict = {"chain_id": c.CHAIN_ID, "label": args.label, "commit": commit, "status": "deploying",
+                    "deployer": op.address, "operator": op.address, "platform": op.address,
+                    "factory_from": "demo", "PoolFactory": factory, "KeyRegistry": registry,
+                    "platform_assets": PLATFORM_ASSETS, "challenge_fee": fee,
+                    "PoolImpl": demo["PoolImpl"], "ChallengeAccountImpl": demo["ChallengeAccountImpl"],
+                    "implementations_from": demo["commit"], "min_deposit": min_deposit, "lock": args.lock,
+                    "fee_bps": args.fee_bps, "tx": {}}
+    big_blocks(op, True)
+    try:
+        try:
+            _, rcpt = deploy_contract(op, out_path, record, "SharedPool", "SharedPool",
+                                      ["address", "address", "address", "uint64", "uint32", "uint16"],
+                                      [factory, op.address, op.address, min_deposit, args.lock, args.fee_bps])
+        finally:
+            big_blocks(op, False)
+    except BaseException as exc:
+        mark_incomplete(out_path, record, exc)
+        raise
+    record.update({"block": int(rcpt["blockNumber"], 16), "status": "complete"})
+    save(out_path, record)
+    c.record("deployed_shared", **{k: v for k, v in record.items() if k != "tx"})
+    print(f"wrote {out_path.relative_to(ROOT)}")
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--label", required=True)
-    p.add_argument("--keys-file", required=True, help="agent key addresses for this registry, one per line")
+    p.add_argument("--keys-file", help="agent key addresses for this deployment's own registry, one per line")
+    p.add_argument("--on-demo-factory", action="store_true",
+                   help="make the seats on the demo's factory; deploys the SharedPool alone")
     p.add_argument("--min-deposit", type=float, default=20.0, help="USDC")
     p.add_argument("--lock", type=int, default=600, help="seconds after a deposit before a request")
     p.add_argument("--fee-bps", type=int, default=1000)
@@ -67,8 +113,12 @@ def main() -> int:
     changed = git("diff", "--name-only", demo["commit"], "HEAD", "--", *CORE_SOURCES).strip()
     if changed:
         raise SystemExit(f"the demo's implementations were built from other source; changed: {changed}")
+    if args.on_demo_factory == bool(args.keys_file):
+        raise SystemExit("either --keys-file for a registry of its own, or --on-demo-factory, whose registry has its keys")
     subprocess.run(["forge", "build"], cwd=ROOT, check=True, capture_output=True)
     assets = check_assets()
+    if args.on_demo_factory:
+        return on_demo_factory(args, out_path, commit, demo, assets)
     keys = check_keys(pathlib.Path(args.keys_file).read_text().splitlines())
     if not keys:
         raise SystemExit("no agent keys: every challenge reserves one")

@@ -12,6 +12,24 @@
     spike/.venv/bin/python ops/shared_run.py --deployment shared-run expire
     spike/.venv/bin/python ops/shared_run.py --deployment shared-run release
 
+A second round with two depositors, on a pool whose seats the demo's factory makes (the seat keeps
+the demo's proportion, a challenge a tenth of the funded capital, and is too small to trade: the
+round needs capital at work, not a trader):
+
+    spike/.venv/bin/python ops/deploy_shared.py --label shared-demo --on-demo-factory
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo wallets --no-trader
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo start --seed 1
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo seat --capital 1 --funded 10 --price 1.5
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo deposit --who shared-dep-a
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo deposit --who shared-dep-b
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo settle
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo arm
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo request --who shared-dep-a
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo request --who shared-dep-b
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo settle
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo release
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo settle
+
 Testnet only (hlspike.common refuses anything else). Wallets are read by name from
 COLOSSEUM_KEY_DIR and never printed: `shared-operator` runs the pool, `shared-dep-a` and
 `shared-dep-b` deposit, `shared-trader` buys a challenge on the seat. Nobody trades in this run;
@@ -117,16 +135,23 @@ def cmd_status(record: dict, _args) -> None:
 
 
 def cmd_wallets(record: dict, args) -> None:
-    """From shared-operator: USDC on HyperCore to each depositor (their deposit, the 1 USDC a new
-    ticket's account costs them, and what creating their own account costs the sender), HYPE on
-    HyperEVM for their transactions; to the trader, the price and the fee on HyperEVM and HYPE."""
+    """From shared-operator: USDC on HyperCore to each depositor, up to their deposit and the 1 USDC a
+    new ticket's account costs them (the sender also pays for creating the depositor's own account
+    if they have none), HYPE on HyperEVM for their transactions; to the trader, the price and the
+    fee on HyperEVM and HYPE."""
     op = c.account("shared-operator")
     ex = c.exchange(op)
     wire = c.spot_token_wire("USDC")
     for name in args.only:
         to = c.address_of(name)
-        resp = ex.spot_transfer(args.deposit + 1.0, to, wire)
-        c.record("shared_wallet_usdc", to=to, usdc=args.deposit + 1.0, response=resp)
+        # Up to the deposit and the 1 USDC its ticket's new account costs, counting what is there.
+        want = int(round((args.deposit + 1.0) * USDC_1E8))
+        short = want - c.core_spot_balance(to, c.USDC_TOKEN)["total"]
+        if short <= 0:
+            c.record("shared_wallet_usdc", to=to, usdc=0, note="already holds enough")
+            continue
+        resp = ex.spot_transfer(short / USDC_1E8, to, wire)
+        c.record("shared_wallet_usdc", to=to, usdc=short / USDC_1E8, response=resp)
         if not api_ok(resp):
             raise SystemExit(f"transfer to {name} refused: {resp}")
     for name in (*args.only, *([TRADER] if args.trader else [])):
@@ -155,16 +180,32 @@ def cmd_start(record: dict, args) -> None:
     c.record("shared_started", tx=rcpt["transactionHash"], **snapshot(record))
 
 
-def cmd_seat(record: dict, _args) -> None:
+def seat_terms(args) -> dict:
+    """The run's terms, with whatever the command line changes."""
+    t = dict(TERMS)
+    if args.price is not None:
+        t["price"] = int(round(args.price * USDC_1E6))
+    if args.capital is not None:
+        t["capital"] = int(round(args.capital * USDC_1E6))
+    if args.funded is not None:
+        t["fundedCapital"] = int(round(args.funded * USDC_1E6))
+    return t
+
+
+def cmd_seat(record: dict, args) -> None:
     op = c.account("shared-operator")
     assets = sorted(record["platform_assets"].values())
-    t = TERMS
+    t = seat_terms(args)
+    # The demo's pools sell a challenge a tenth the size of the funded capital; that is the pool its
+    # Economics page prices. A seat on the demo's factory keeps to it.
+    if record.get("factory_from") == "demo" and t["fundedCapital"] != 10 * t["capital"]:
+        raise SystemExit("a seat on the demo's factory keeps the challenge at a tenth of the funded capital")
     rcpt = c.transact(op, pool_of(record), f"addSeat({RULES_TYPE},{TERMS_TYPE},uint32)",
                       [RULES_TYPE, TERMS_TYPE, "uint32"],
                       [(RULES[0], RULES[1], RULES[2], assets),
                        (t["price"], t["capital"], t["targetBps"], t["duration"], t["traderShareChallengeBps"],
-                        t["traderShareFundedBps"], t["fundedCapital"]), FUNDED_TERM])
-    c.record("shared_seat_added", tx=rcpt["transactionHash"], seats=seats(record))
+                        t["traderShareFundedBps"], t["fundedCapital"]), args.term])
+    c.record("shared_seat_added", tx=rcpt["transactionHash"], terms=t, funded_term=args.term, seats=seats(record))
 
 
 def cmd_arm(record: dict, _args) -> None:
@@ -221,14 +262,14 @@ def cmd_buy(record: dict, _args) -> None:
     tr = c.account(TRADER)
     op = c.account("shared-operator")
     seat = seats(record)[0]
-    price = TERMS["price"]
+    price, capital = view(seat, "terms()", [], [], [TERMS_TYPE])[0][:2]
     fee = view(record["PoolFactory"], "challengeFee()", [], [], ["uint256"])[0]
     c.transact(tr, c.TESTNET_USDC_ERC20, "approve(address,uint256)", ["address", "uint256"], [seat, price + fee])
     rcpt = c.transact(tr, seat, "buyChallenge()")
     ch = view(seat, "challenge()", [], [], ["address"])[0]
     c.record("shared_challenge_bought", seat=seat, challenge=ch, tx=rcpt["transactionHash"])
     wait_until("the challenge's capital to land", lambda: c.core_spot_balance(ch, c.USDC_TOKEN)["total"],
-               lambda v: v >= TERMS["capital"] * 100)
+               lambda v: v >= capital * 100)
     rcpt = c.transact(op, ch, "activate()")
     c.record("shared_challenge_started", challenge=ch, tx=rcpt["transactionHash"], **snapshot(record))
 
@@ -292,7 +333,11 @@ def main() -> int:
     w.add_argument("--no-trader", dest="trader", action="store_false", help="leave the trader out")
     s = sub.add_parser("start")
     s.add_argument("--seed", type=float, default=1.0)
-    sub.add_parser("seat")
+    st = sub.add_parser("seat")
+    st.add_argument("--price", type=float, help="challenge price, USDC (default 0.5)")
+    st.add_argument("--capital", type=float, help="challenge capital, USDC (default 2)")
+    st.add_argument("--funded", type=float, help="funded capital, USDC (default 8)")
+    st.add_argument("--term", type=int, default=FUNDED_TERM, help="funded term, seconds")
     sub.add_parser("arm")
     d = sub.add_parser("deposit")
     d.add_argument("--who", choices=DEPOSITORS, required=True)
