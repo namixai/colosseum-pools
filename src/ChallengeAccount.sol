@@ -53,6 +53,10 @@ contract ChallengeAccount is RuledAccount {
     /// the payout shows up in the balance (or after PAYOUT_WAIT), so the pool's transfer can
     /// never be executed ahead of the trader's.
     uint64 public payoutSpotBefore;
+    /// What the last return to the pool sent, so the next step can tell our own send landing
+    /// from money that arrived afterwards.
+    uint64 public returnSpotBefore;
+    bool public returnStarted;
     uint64 public payoutAt;
 
     uint64 public constant PAYOUT_WAIT = 5 minutes;
@@ -266,9 +270,23 @@ contract ChallengeAccount is RuledAccount {
         }
 
         if (spot != 0) {
+            // Our own return has landed when the balance came DOWN from what we sent last
+            // time; whatever is here now arrived after it, from outside. The same shape as
+            // the payout check above, and for the same reason: a send is queued, not instant.
+            bool landed = returnStarted && spot < returnSpotBefore;
             CoreOps.sendUsdc(address(pool), spot);
             emit ReturnedToPool(spot);
-            return;
+            if (!landed) {
+                // Either this is the account's own capital going home, or the last send did
+                // not land. Wait for it: settling now could strand real money here.
+                returnStarted = true;
+                returnSpotBefore = spot;
+                return;
+            }
+            // A donation, then. It has just been sent on to the pool, and it does not get to
+            // hold the settlement open: anyone with a HyperCore account could otherwise keep
+            // this challenge -- and the pool behind it, whose capital only comes out in Idle
+            // -- from ever finishing, for the price of one unit per block.
         }
 
         if (CoreOps.equity(address(this)) <= 0) {

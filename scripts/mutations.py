@@ -257,6 +257,14 @@ MUTATIONS = [
      "                factory.registry().retire(spare);",
      "                spare;",
      ["test_aChallengeNobodyPassesGivesTheReservedKeyBack"]),
+    ("M57", "src/ChallengeAccount.sol",
+     "bool landed = returnStarted && spot < returnSpotBefore;",
+     "bool landed = returnStarted;",
+     ["test_settle_stillWaitsWhileItsOwnReturnHasNotLanded"]),
+    ("M58", "src/ChallengeAccount.sol",
+     "            if (!landed) {",
+     "            if (true) {",
+     ["test_settle_isNotHeldOpenByAStrangersDust"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",

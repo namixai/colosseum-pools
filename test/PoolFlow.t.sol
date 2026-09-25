@@ -960,6 +960,88 @@ contract PoolFlowTest is Test {
         assertTrue(p.reservedKey() != address(0) && p.reservedKey() != reserved);
     }
 
+    /// Audit A-01. Every settlement step that sees ANY spot balance sends it to the pool and
+    /// returns, and Settled is reached only when the balance is zero at the start of a block.
+    /// So a stranger who tops the account up by one unit before each step holds the settlement
+    /// open for as long as they care to pay the gas -- and with it the pool, because
+    /// withdrawOnCore is Idle-only: the investor's capital cannot come out while this lasts.
+    /// One unit is 1e-8 USDC, and after the first transfer the account exists, so there is not
+    /// even an activation fee to pay.
+    function test_settle_isNotHeldOpenByAStrangersDust() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        uint32[] memory none = new uint32[](0);
+        vm.prank(trader);
+        ch.forfeit(new Cancel[](0), none, SALT);
+
+        for (uint256 i = 0; i < 12 && ch.status() != ChallengeAccount.Status.Settled; ++i) {
+            uint64 held = CoreOps.spotUsdc(address(ch));
+            CoreSimulatorLib.forceSpotBalance(address(ch), 0, held + 1); // the stranger's dust
+            ch.settle(new Cancel[](0), none);
+            CoreSimulatorLib.nextBlock();
+        }
+
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Settled),
+            "a stranger's dust must not hold the settlement open");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle), "and the pool must come back to Idle");
+    }
+
+    /// The other half of that rule, and the one that keeps it honest: while the account's OWN
+    /// return has not landed yet, finishing would leave real capital sitting in a settled
+    /// account. Only money that turns up AFTER our send landed is swept and ignored.
+    function test_settle_stillWaitsWhileItsOwnReturnHasNotLanded() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        uint32[] memory none = new uint32[](0);
+        vm.prank(trader);
+        ch.forfeit(new Cancel[](0), none, SALT);
+
+        for (uint256 i = 0; i < 8 && !ch.returnStarted(); ++i) {
+            ch.settle(new Cancel[](0), none);
+            if (!ch.returnStarted()) CoreSimulatorLib.nextBlock();
+        }
+        assertTrue(ch.returnStarted(), "the capital was sent back to the pool");
+        assertGt(ch.returnSpotBefore(), 0);
+
+        // Same block, so that send is still queued and the balance reads untouched.
+        ch.settle(new Cancel[](0), none);
+        assertTrue(ch.status() != ChallengeAccount.Status.Settled,
+            "must not finish while its own capital is still sitting here");
+    }
+
+    /// 🔴 KNOWN HOLE, audit A-01, still open. This test asserts the BAD behaviour on purpose,
+    /// so that closing the hole turns it red and whoever closes it has to come here and say so.
+    ///
+    /// A stranger cannot reach the pool's spot balance -- that money is the pool's and it keeps
+    /// it -- but they can push USDC into its perp account. The closing step has to move that
+    /// across before the pool may return to Idle, and the pool's capital only comes out in Idle
+    /// (withdrawOnCore), so one unit per block holds the investor's money.
+    ///
+    /// Why it is not fixed here, while the challenge's spot door is: closing this one needs two
+    /// coupled changes on the path that pays the funded trader their share -- telling our own
+    /// drain from outside dust at `free != 0`, AND letting Idle be reached while the last move
+    /// to spot is still in flight (equity then reads exactly what was moved). The challenge's
+    /// door needed neither: its final sweep is atomic in the same call and strands nothing.
+    /// A wrong guess on a payout path costs someone real money, so it waits for its own pass.
+    function test_settleFunded_isHeldOpenByAStrangersPerpDust_knownHole() public {
+        Pool p = _readyPool();
+        (ChallengeAccount ch,) = _passed(p);
+        ch;
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(investor);
+        p.stopFunded(c, a, SALT);
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing));
+
+        for (uint256 i = 0; i < 12 && p.stage() != Pool.Stage.Idle; ++i) {
+            CoreSimulatorLib.forcePerpBalance(address(p), 1); // the stranger's dust
+            p.settleFunded(c, a);
+            CoreSimulatorLib.nextBlock();
+        }
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing),
+            "known hole: perp dust still holds the pool in Closing. If this line fails because "
+            "the pool now reaches Idle, the hole is closed -- delete this test and say so.");
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
