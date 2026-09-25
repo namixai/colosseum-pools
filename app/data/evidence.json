@@ -1,0 +1,491 @@
+{
+  "about": "The rows of #/evidence. Each row's sources are quoted from its section of the document named in doc, as written there without markdown; its record, account, transaction, block and sender are inside those sources. app/tests/evidence.test.mjs holds every row to the documents.",
+  "rows": [
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "The end states recorded so far",
+      "what": "A challenge stopped for leverage",
+      "kind": "challenge",
+      "factory": "demo",
+      "account": "0xf01f16d0f933b46089947739d5147331764d612c",
+      "tx": null,
+      "record": "Settled, breachReason Leverage, key 0xBB9EBcD7 cut at block 65149660",
+      "check": ["status() and breachReason() on the account"],
+      "notes": [
+        "The two leverage stops were staged: orders were placed to break the rule on purpose, to make the contract do its job and see what it writes.",
+        "The first row — challenge 0xf01f16d0…, stopped for leverage — ran on the demo pool 0x2839d3c872ce82151a16afe0315756915d8a9b79: 8% target, 3% daily, 6% drawdown, the terms an investor would actually set. That pool was opened from a different wallet (0x21538eBF…) through the site's own form, capital sent by hand on HyperCore, not deployed by a script."
+      ],
+      "sources": ["| 0xf01f16d0f933b46089947739d5147331764d612c | challenge | Settled, breachReason Leverage, key 0xBB9EBcD7 cut at block 65149660 |"]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "The end states recorded so far",
+      "what": "A challenge passed",
+      "kind": "challenge",
+      "factory": "demo",
+      "account": "0x5cdd86ea90d9d8f94d7718a6e182e757ea34b9bd",
+      "tx": null,
+      "record": "Settled, breachReason None — it passed; key 0x9F5B271A cut at block 65176274",
+      "check": ["status() and breachReason() on the account"],
+      "notes": ["0x914E4bf9… — where the first pass, the funded-stage leverage stop and the daily-loss stop all happened — asks +1% on 11 USDC."],
+      "sources": ["| 0x5cdd86ea90d9d8f94d7718a6e182e757ea34b9bd | challenge | Settled, breachReason None — it passed; key 0x9F5B271A cut at block 65176274 |"]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "The end states recorded so far",
+      "what": "A funded stage stopped for leverage",
+      "kind": "pool",
+      "factory": "demo",
+      "account": "0x914E4bf94751274b70855d321ec68EEf5aD79Df0",
+      "tx": "0x03b387efded880407b35d35e4ed44d7344c91662da7568c6b016458c7b1ba50f",
+      "block": 65176406,
+      "sentBy": "sent by us as the pool's owner",
+      "record": "fundedEndReason Leverage, key 0xc2Bbf231 retired, pool back to Idle",
+      "check": ["fundedEndReason() on the pool"],
+      "notes": ["The two leverage stops were staged: orders were placed to break the rule on purpose, to make the contract do its job and see what it writes."],
+      "sources": [
+        "| 0x914E4bf94751274b70855d321ec68EEf5aD79Df0 | pool, funded stage | fundedEndReason Leverage, key 0xc2Bbf231 retired, pool back to Idle |",
+        "funded-stage stop, 0x03b387efded880407b35d35e4ed44d7344c91662da7568c6b016458c7b1ba50f, block 65176406, sent by us as the pool's owner."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "The end states recorded so far",
+      "what": "A challenge stopped for a daily loss",
+      "kind": "challenge",
+      "factory": "demo",
+      "account": "0x110Fb6B8985f89b4e651cbeb536925C5Fd1950b0",
+      "tx": "0xf2365bf087abb81f069d51fd48ce9573ca92fb563a826c9e9cb3ba89369d3c07",
+      "block": 65178469,
+      "from": "0x75deec8b513Ee3f5D15d6b40B706A3314cf26590",
+      "sentBy": "sent by 0x75deec8b513Ee3f5D15d6b40B706A3314cf26590, the keeper's own address",
+      "record": "Settled, breachReason DailyLoss, key 0x9066e1b4 cut at block 65178469",
+      "check": ["status() and breachReason() on the account"],
+      "notes": [
+        "That was a real attempt at the target that lost, on a guard of ours set too close to the floor to catch it in time, and the keeper stopped the account for it. It is the only record here nobody arranged.",
+        "it was run from a laptop"
+      ],
+      "sources": [
+        "| 0x110Fb6B8985f89b4e651cbeb536925C5Fd1950b0 | challenge | Settled, breachReason DailyLoss, key 0x9066e1b4 cut at block 65178469 |",
+        "daily-loss stop, 0xf2365bf087abb81f069d51fd48ce9573ca92fb563a826c9e9cb3ba89369d3c07, block 65178469, sent by 0x75deec8b513Ee3f5D15d6b40B706A3314cf26590, the keeper's own address — it found the violation and sent the stop with no one asking it to."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "The end states recorded so far",
+      "what": "A second challenge passed",
+      "kind": "challenge",
+      "factory": "demo",
+      "account": "0xf4d98de2e668a8376319f54fc9592e948bd08655",
+      "tx": "0x75f6d5f34563e31e8ffbfe6d42f856d2b795d5c78bffb3c11ddb6f5cc7c38b09",
+      "block": 65180551,
+      "sentBy": "sent by the trader",
+      "record": "Passed, breachReason None, key 0x936433aB cut at block 65180551",
+      "check": ["status() and breachReason() on the account"],
+      "notes": [],
+      "sources": [
+        "| 0xf4d98de2e668a8376319f54fc9592e948bd08655 | challenge | Passed, breachReason None, key 0x936433aB cut at block 65180551 |",
+        "second pass, 0x75f6d5f34563e31e8ffbfe6d42f856d2b795d5c78bffb3c11ddb6f5cc7c38b09, block 65180551, sent by the trader."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "What is staged, and what is not",
+      "what": "The keeper on the pools host returned capital left in a passed challenge",
+      "kind": null,
+      "factory": "demo",
+      "account": null,
+      "tx": "0xf140a7500d5a2c7525a27fc1cc94b85d586c866c8a078ce48b5061087d2511bf",
+      "from": "0xD6F07317fC5f12302776b03A7206B1614FD49021",
+      "sentBy": "a settle sent from the host keeper's address 0xD6F07317fC5f12302776b03A7206B1614FD49021",
+      "record": "which returned 5.03 USDC left stranded in a passed challenge and freed the pool to sell the next one. Nobody asked it to.",
+      "check": [],
+      "notes": ["Until that morning it had been reading the chain through a node that refuses its log queries, so it followed zero pools and sat 175,000 blocks behind the head — enforcing nothing, while saying nothing was wrong."],
+      "sources": ["it caught up and went to work on its own: 0xf140a7500d5a2c7525a27fc1cc94b85d586c866c8a078ce48b5061087d2511bf, a settle sent from the host keeper's address 0xD6F07317fC5f12302776b03A7206B1614FD49021, which returned 5.03 USDC left stranded in a passed challenge and freed the pool to sell the next one. Nobody asked it to."]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "What is staged, and what is not",
+      "what": "The keeper on the pools host stopped a funded stage for leverage",
+      "kind": "pool",
+      "factory": "demo",
+      "account": "0x2b108c465786b040355dcefe1b721e3e6276e80c",
+      "tx": "0x7fa53a03f3aba4ac42a0e38f46103849cb95c1b425a93996e571f78ac72b15b2",
+      "block": 65206003,
+      "from": "0xD6F07317fC5f12302776b03A7206B1614FD49021",
+      "sentBy": "from 0xD6F07317fC5f12302776b03A7206B1614FD49021",
+      "record": "the pool now records fundedEndReason 3 (Leverage) with the agent key cut in that same block; the keeper went on to settleFunded by itself.",
+      "check": ["fundedEndReason() on the pool"],
+      "notes": [
+        "Later the same morning a funded account on pool 0x2b108c46… was taken to 5.58× against a 5× rule — deliberately, by us, to see what the host would do with it.",
+        "What it did, from its own journal: breach_found at 10:16:57 UTC, reason 3; breach sent at 10:16:59. Two seconds.",
+        "The staged half is the rule-breaking. Nobody chose the stop, timed it or sent it — the person who set the trap was still loading the page when it sprang."
+      ],
+      "sources": [
+        "Later the same morning a funded account on pool 0x2b108c46… was taken to 5.58× against a 5× rule — deliberately, by us, to see what the host would do with it.",
+        "The transaction is 0x7fa53a03f3aba4ac42a0e38f46103849cb95c1b425a93996e571f78ac72b15b2 in block 65206003, from 0xD6F07317fC5f12302776b03A7206B1614FD49021, and the pool now records fundedEndReason 3 (Leverage) with the agent key cut in that same block; the keeper went on to settleFunded by itself."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "A funded stage ended cleanly, and the trader was paid",
+      "what": "A funded stage ended with no breach",
+      "kind": "pool",
+      "factory": "demo",
+      "account": "0x2b108c465786b040355dcefe1b721e3e6276e80c",
+      "tx": "0xaee60fe87fe216ffffd00986088b3814818dee1f6ef06eb642ee7722c87ea271",
+      "sentBy": "ended from the funded trader's own wallet",
+      "record": "which records Breach.None: the contract was not made to stop it, it was let go.",
+      "check": [],
+      "notes": [
+        "This is the one the whole design is for, and it closed on 25 September on the soft bench 0x2b108c465786b040355dcefe1b721e3e6276e80c.",
+        "The call came from a watcher of ours using that wallet, and the wallet is ours too; what this shows is the path, not a trader we do not control."
+      ],
+      "sources": [
+        "it closed on 25 September on the soft bench 0x2b108c465786b040355dcefe1b721e3e6276e80c.",
+        "The stage was ended from the funded trader's own wallet with stopFunded — 0xaee60fe87fe216ffffd00986088b3814818dee1f6ef06eb642ee7722c87ea271 — which records Breach.None: the contract was not made to stop it, it was let go."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "A funded stage ended cleanly, and the trader was paid",
+      "what": "The stage's result, taken once nothing was open",
+      "kind": "pool",
+      "factory": "demo",
+      "account": "0x2b108c465786b040355dcefe1b721e3e6276e80c",
+      "tx": "0xab49fd6e3b4447a0321651e8d186e759569e3c90c6a92e84982675bf47601e5e",
+      "record": "the stage came home at 10.012723 against a fundedStart of 10.000000, a gain of 0.012723, and the trader's 80% of it is 0.0101784.",
+      "event": { "name": "FundedResult", "text": "FundedResult(trader, 10012723, 1017840)", "values": { "realized": "10012723", "payout": "1017840" } },
+      "check": ["the event FundedResult(trader, 10012723, 1017840) in its receipt"],
+      "notes": [
+        "Read this one from the events, not from the pool.",
+        "It is also why the amount is small: the bench trades 10 USDC and the gain was a twelfth of a percent."
+      ],
+      "sources": [
+        "it closed on 25 September on the soft bench 0x2b108c465786b040355dcefe1b721e3e6276e80c.",
+        "FundedResult(trader, 10012723, 1017840) in 0xab49fd6e3b4447a0321651e8d186e759569e3c90c6a92e84982675bf47601e5e — the stage came home at 10.012723 against a fundedStart of 10.000000, a gain of 0.012723, and the trader's 80% of it is 0.0101784."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "A funded stage ended cleanly, and the trader was paid",
+      "what": "The trader's share was sent",
+      "kind": "pool",
+      "factory": "demo",
+      "account": "0x2b108c465786b040355dcefe1b721e3e6276e80c",
+      "tx": "0xb1733533e70b08ef75efc310de11a02a62ef1aa490455a01d1d7409b7b8f9f5a",
+      "record": "The trader's HyperCore spot balance went from 0.5 to 0.5101784.",
+      "event": { "name": "FundedPayoutSent", "text": "FundedPayoutSent(trader, 1017840)", "values": { "amount": "1017840" } },
+      "check": ["the event FundedPayoutSent(trader, 1017840) in its receipt"],
+      "notes": ["That is the number that matters: a balance that moved, not a field a contract set."],
+      "sources": [
+        "it closed on 25 September on the soft bench 0x2b108c465786b040355dcefe1b721e3e6276e80c.",
+        "FundedPayoutSent(trader, 1017840) in 0xb1733533e70b08ef75efc310de11a02a62ef1aa490455a01d1d7409b7b8f9f5a — it was sent.",
+        "The trader's HyperCore spot balance went from 0.5 to 0.5101784."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "The fourth ending, on the rehearsal deployment",
+      "what": "A challenge ran out of time with nothing broken",
+      "kind": "challenge",
+      "factory": "rehearsal",
+      "account": "0x71bd0281f0099b87634464dd00c512aca4972018",
+      "tx": "0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc",
+      "record": "It holds status 4 (Expired) with breachReason 0 (None) — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong.",
+      "check": ["status() and breachReason() on the account"],
+      "notes": ["that one is not on the demo's factory — it is on the rehearsal deployment (deployments/testnet-rehearsal.json, factory 0x52A141515570eA66053D29bBCb61042e5693970D), which runs the same contracts under a registry of its own."],
+      "sources": ["Challenge 0x71bd0281f0099b87634464dd00c512aca4972018, bought 25 September and given seven days, was expired the moment its deadline passed, by expire (0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc). It holds status 4 (Expired) with breachReason 0 (None) — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong."]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "The fourth ending, on the rehearsal deployment",
+      "what": "Its pool's owner withdrew the capital",
+      "kind": null,
+      "factory": "rehearsal",
+      "account": null,
+      "tx": "0x1183d9590d1a2db7655cc431f64dd57f9f58a53c41c832d2bfc6199fa38ed924",
+      "record": "Three settle calls returned the capital and the pool went back to Idle, whereupon its owner withdrew it",
+      "check": [],
+      "notes": [],
+      "sources": ["Three settle calls returned the capital and the pool went back to Idle, whereupon its owner withdrew it (0x1183d9590d1a2db7655cc431f64dd57f9f58a53c41c832d2bfc6199fa38ed924)."]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "A trader walked away",
+      "what": "A trader walked away without a single order",
+      "kind": "challenge",
+      "factory": "demo",
+      "account": "0xd736550af8ad2284fb67823aa3ca01145656e7d7",
+      "tx": "0x119b8243e0d5c2626cd77e031c93d04ff5c2e904247791d5b2ad499695a41608",
+      "sentBy": "sent by the trader",
+      "record": "Stopped(status 5 Forfeited, reason 0 None, equity 3000000) in that transaction: it ended as Forfeited, with nothing held against the trader, and the equity was 3.000000 — exactly the capital it was given, untouched.",
+      "event": { "name": "Stopped", "text": "Stopped(status 5 Forfeited, reason 0 None, equity 3000000)", "values": { "status": "5", "reason": "0", "equity": "3000000" } },
+      "check": ["the event Stopped(status 5 Forfeited, reason 0 None, equity 3000000) in its receipt", "status() on the account, which answers 8 today"],
+      "notes": ["Read this one from the event, not from status()."],
+      "sources": [
+        "On pool 0x9bc941cd7980a2564b06fd6baeb56b09a765237b, challenge 0xd736550af8ad2284fb67823aa3ca01145656e7d7 was bought, activated and forfeited without a single order: 0x119b8243e0d5c2626cd77e031c93d04ff5c2e904247791d5b2ad499695a41608, sent by the trader.",
+        "The walk-away is Stopped(status 5 Forfeited, reason 0 None, equity 3000000) in that transaction: it ended as Forfeited, with nothing held against the trader, and the equity was 3.000000 — exactly the capital it was given, untouched.",
+        "so status() answers 8 today."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "Two depositors, a short payment split",
+      "what": "A short payment, split between two depositors",
+      "kind": "shared pool",
+      "factory": "demo",
+      "account": "0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0",
+      "tx": "0x39994dbf111750d6624e28a22b524ba3bd177643844485b7382faf93508a3209",
+      "record": "had 28 USDC free against 39.02 owed and paid each 13.999999 USDC, the same 71.75% of their request, both through CoreWriter in one transaction.",
+      "check": [],
+      "notes": [],
+      "sources": [
+        "On 0x2f05940C…B0C0, payments answers the same for both depositors:",
+        "The short payment came first: point 0x39994dbf111750d6624e28a22b524ba3bd177643844485b7382faf93508a3209 had 28 USDC free against 39.02 owed and paid each 13.999999 USDC, the same 71.75% of their request, both through CoreWriter in one transaction."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "Two depositors, a short payment split",
+      "what": "The rest, once the seat's capital was back",
+      "kind": "shared pool",
+      "factory": "demo",
+      "account": "0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0",
+      "tx": "0x09190d77acbc59e87c9924a89db461231df768a3f0dc239b2a5c0d7088ec6a33",
+      "record": "paid the rest, 5.512196 each, once the seat's capital was back.",
+      "check": [],
+      "notes": [],
+      "sources": [
+        "On 0x2f05940C…B0C0, payments answers the same for both depositors:",
+        "Point 0x09190d77acbc59e87c9924a89db461231df768a3f0dc239b2a5c0d7088ec6a33 paid the rest, 5.512196 each, once the seat's capital was back."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "Two depositors, a short payment split",
+      "what": "What each depositor was paid in all",
+      "kind": "shared pool",
+      "factory": "demo",
+      "account": "0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0",
+      "tx": null,
+      "record": "at 1790310783 (04:33:03 UTC), HyperEVM 0, HyperCore 1951219500 (19.512195 USDC)",
+      "check": [
+        "payments(0xbD97438655835138daBeE38f3B7d96275eDc315a) and payments(0x278AbBC5B78F34F77829dDd7887566E182beBD83) on the pool",
+        "sharesOf(holder) for both, now 0"
+      ],
+      "notes": ["Creating the seat's HyperCore account cost the pool 1 USDC, so every share lost 1/41 of a dollar alike, the platform's too: 20 × 40/41 = 19.512195."],
+      "sources": [
+        "On 0x2f05940C…B0C0, payments answers the same for both depositors:",
+        "| 0xbD97438655835138daBeE38f3B7d96275eDc315a | at 1790310783 (04:33:03 UTC), HyperEVM 0, HyperCore 1951219500 (19.512195 USDC) | 0 |",
+        "| 0x278AbBC5B78F34F77829dDd7887566E182beBD83 | the same | 0 |"
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A seat a trader bought and traded",
+      "what": "Two deposits of 20 became shares",
+      "kind": "shared pool",
+      "factory": "demo",
+      "account": "0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
+      "tx": "0x820c72ddc394b9351eabe38825c9b75f5b9fff4b589b121f34229048900c7203",
+      "record": "gave each depositor 20e8 shares",
+      "check": [],
+      "notes": [],
+      "sources": [
+        "On 0x547067e2…26a6, the seat 0xa24868c68088dcd0c1d8e3121af1d7bec40f8c7c:",
+        "The seat's 34 USDC came from two deposits of 20: point 0x820c72ddc394b9351eabe38825c9b75f5b9fff4b589b121f34229048900c7203 gave each depositor 20e8 shares, and armSeat 0xc39506009ac9dc673b8fdbc38bf5d6883529f735b8c0975a1fd751292b4ce3cd moved the capital."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A seat a trader bought and traded",
+      "what": "The capital moved to the seat",
+      "kind": "shared pool",
+      "factory": "demo",
+      "account": "0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
+      "tx": "0xc39506009ac9dc673b8fdbc38bf5d6883529f735b8c0975a1fd751292b4ce3cd",
+      "record": "The seat's 34 USDC came from two deposits of 20",
+      "check": [],
+      "notes": [],
+      "sources": [
+        "On 0x547067e2…26a6, the seat 0xa24868c68088dcd0c1d8e3121af1d7bec40f8c7c:",
+        "The seat's 34 USDC came from two deposits of 20: point 0x820c72ddc394b9351eabe38825c9b75f5b9fff4b589b121f34229048900c7203 gave each depositor 20e8 shares, and armSeat 0xc39506009ac9dc673b8fdbc38bf5d6883529f735b8c0975a1fd751292b4ce3cd moved the capital."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A seat a trader bought and traded",
+      "what": "The trader bought the seat's challenge",
+      "kind": "seat",
+      "factory": "demo",
+      "account": "0xa24868c68088dcd0c1d8e3121af1d7bec40f8c7c",
+      "tx": "0x31f09c61aa7cd0194946bfa2663fda46e701120edf02cf6e91c9d192127260e1",
+      "from": "0xc6E83B1B88110C54e34977AD215E94cfdbC0374E",
+      "record": "0xc6E83B1B88110C54e34977AD215E94cfdbC0374E bought its challenge 0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7, paying the 1.5 price and the 0.7 platform fee",
+      "check": ["rules() and terms() on the seat"],
+      "notes": ["rules() is (500, 1000, 500, [0, 3, 4]): a 5% daily loss, a 10% drawdown, 5× leverage, SOL, BTC and ETH."],
+      "sources": [
+        "On 0x547067e2…26a6, the seat 0xa24868c68088dcd0c1d8e3121af1d7bec40f8c7c:",
+        "The trader. 0xc6E83B1B88110C54e34977AD215E94cfdbC0374E bought its challenge 0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7, paying the 1.5 price and the 0.7 platform fee (buyChallenge in 0x31f09c61aa7cd0194946bfa2663fda46e701120edf02cf6e91c9d192127260e1)."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A seat a trader bought and traded",
+      "what": "The challenge was activated",
+      "kind": "challenge",
+      "factory": "demo",
+      "account": "0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7",
+      "tx": "0xc1a02149831173b539597b2dcfff83fbdd2a208b8c4d4d656a4f73c5cdd12b74",
+      "record": "The challenge was activated",
+      "check": [],
+      "notes": [],
+      "sources": [
+        "bought its challenge 0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7",
+        "The challenge was activated in 0xc1a02149831173b539597b2dcfff83fbdd2a208b8c4d4d656a4f73c5cdd12b74."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A seat a trader bought and traded",
+      "what": "The challenge's key is bound to it and to the trader",
+      "kind": "challenge",
+      "factory": "demo",
+      "account": "0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7",
+      "tx": null,
+      "record": "KeyRegistry.bindingOf(0x01b4811f38A5613E2882976c546c0921d56A2A07) is (2, challenge, trader): Bound, to that challenge, for that trader.",
+      "check": ["KeyRegistry.bindingOf(0x01b4811f38A5613E2882976c546c0921d56A2A07) on the demo's registry 0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA"],
+      "notes": [],
+      "sources": [
+        "bought its challenge 0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7",
+        "The key. KeyRegistry.bindingOf(0x01b4811f38A5613E2882976c546c0921d56A2A07) is (2, challenge, trader): Bound, to that challenge, for that trader."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A seat a trader bought and traded",
+      "what": "The trader bought and sold 0.00013 BTC through the gateway",
+      "kind": "challenge",
+      "factory": "demo",
+      "account": "0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7",
+      "tx": null,
+      "fills": [
+        "0x816918ba80d4b58782e2042a27dafa010b0030a01bd7d4592531c40d3fd88f72",
+        "0x28ba561e1b2ff35a2a34042a27ddf6010c006e03b623122ccc830170da23cd44"
+      ],
+      "record": "The trader bought 0.00013 BTC at 84 619, about $11, and sold it at 84 618.",
+      "check": [],
+      "notes": [
+        "The account is flat again at 2.98997 USDC.",
+        "Not by clicking the app's pages: we would have had to put the trader's private key into a browser wallet, and we don't do that. The buy and both orders went through agents.client, the gateway client in this repository.",
+        "Each order is signed by the trader's wallet and sent to the live pool gateway (https://pools-api.usenami.io/v1/order), which checked the binding and signed it with the challenge's agent key."
+      ],
+      "sources": [
+        "bought its challenge 0x416C4D9B9A3973C39607f0Ac68Dbbc6bA1b476A7",
+        "The trades. The trader bought 0.00013 BTC at 84 619, about $11, and sold it at 84 618. Hyperliquid's fills for the challenge account (userFills) carry the hashes 0x816918ba80d4b58782e2042a27dafa010b0030a01bd7d4592531c40d3fd88f72 (oid 61001916689) and 0x28ba561e1b2ff35a2a34042a27ddf6010c006e03b623122ccc830170da23cd44 (oid 61001960703). The account is flat again at 2.98997 USDC."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A deposit at a price other than 1, and the way out at that price",
+      "what": "A deposit at a price other than 1",
+      "kind": "shared pool",
+      "factory": "demo",
+      "account": "0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
+      "tx": "0x2dce964a4cb671d034e3e1cefd9795b2fb28a1e8b1b5e43c7482e03c2836c353",
+      "record": "20 × 42e8 / 41.48997 = 20.24585701e8 shares: the deposit bought at the price it found, not at 1.",
+      "check": [],
+      "notes": [
+        "A new holder, 0x329166c41C9249Aa857cd7B7D8F3aF5F4E4CE09f, deposited 20 USDC through a ticket of its own.",
+        "The earlier holders' 20e8 shares were worth 19.757 USDC before it and after it."
+      ],
+      "sources": [
+        "On 0x547067e2…26a6, after the trade above, the pool held 41.48997 USDC on 42e8 shares, a price of 0.98785643 a share.",
+        "| after point 0x2dce964a4cb671d034e3e1cefd9795b2fb28a1e8b1b5e43c7482e03c2836c353 | 61.48997 | 62.24585701e8 | 20.24585701e8 | 20e8 | 0.98785643 |",
+        "In. 20 × 42e8 / 41.48997 = 20.24585701e8 shares: the deposit bought at the price it found, not at 1."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A deposit at a price other than 1, and the way out at that price",
+      "what": "The new holder asked for everything",
+      "kind": "shared pool",
+      "factory": "demo",
+      "account": "0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
+      "tx": "0x864349c7744deba7498b9a207401534f01fbd9335b99781056d5f418e28e7926",
+      "from": "0x329166c41C9249Aa857cd7B7D8F3aF5F4E4CE09f",
+      "record": "Once the lock had run, it asked for everything.",
+      "check": [],
+      "notes": [],
+      "sources": [
+        "On 0x547067e2…26a6, after the trade above, the pool held 41.48997 USDC on 42e8 shares, a price of 0.98785643 a share. A new holder, 0x329166c41C9249Aa857cd7B7D8F3aF5F4E4CE09f, deposited 20 USDC through a ticket of its own. Once the lock had run, it asked for everything.",
+        "Out. The request was 0x864349c7744deba7498b9a207401534f01fbd9335b99781056d5f418e28e7926."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A deposit at a price other than 1, and the way out at that price",
+      "what": "The way out, at the same price",
+      "kind": "shared pool",
+      "factory": "demo",
+      "account": "0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
+      "tx": "0x248495a343ea8b898d25679b0ffe902ac76a6d0c834a2e1ae188d688e7dfd462",
+      "record": "The point paid 19.999999 USDC at the same price: 1.5 on HyperEVM, the challenge price it collected from the seat, and 18.499999 on HyperCore.",
+      "check": ["payments(0x329166c41C9249Aa857cd7B7D8F3aF5F4E4CE09f) on the pool, which reads (1790327053, 1500000, 1849999900)"],
+      "notes": ["The millionth left behind stays in the pool: the value after the point is 41.489971, not 41.48997, and the price of a share went up in the eighth decimal, to 0.98785645, for everyone still in."],
+      "sources": [
+        "On 0x547067e2…26a6, after the trade above",
+        "| after point 0x248495a343ea8b898d25679b0ffe902ac76a6d0c834a2e1ae188d688e7dfd462 | 41.489971 | 42e8 | 0 | 20e8 | 0.98785645 |",
+        "The point paid 19.999999 USDC at the same price: 1.5 on HyperEVM, the challenge price it collected from the seat, and 18.499999 on HyperCore. payments(0x329166c4…E09f) reads (1790327053, 1500000, 1849999900)."
+      ]
+    }
+  ],
+  "pools": {
+    "doc": "docs/EVIDENCE-SHARED-POOL.md",
+    "section": "The three pools",
+    "rows": [
+      {
+        "pool": "0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A",
+        "factory": "its own, 0x436d9074AB42001538D5a999a0eEe721deC516Db",
+        "open": "#/shared/0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A",
+        "showed": "one depositor: deposit, shares, a request, payment at two points while the capital was in a challenge"
+      },
+      {
+        "pool": "0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0",
+        "factory": "the demo's",
+        "open": "#/shared (the page's default)",
+        "showed": "two depositors: a short payment split between them, the same fraction at one price"
+      },
+      {
+        "pool": "0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
+        "factory": "the demo's",
+        "open": "#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
+        "showed": "a seat a trader bought and traded"
+      }
+    ]
+  },
+  "staged": {
+    "doc": "docs/EVIDENCE.md",
+    "section": "What is staged, and what is not",
+    "quotes": [
+      "The state transitions and the records above are real.",
+      "Two of the stops were deliberate, one was not.",
+      "The orders were placed by a person, through the gateway, not by an autonomous trading agent.",
+      "Two of the three pools above are benches with soft targets.",
+      "The third is not a bench, and neither are its terms.",
+      "Every wallet here is ours.",
+      "Three of them: the deploy key that owns the two benches (0x00d014df…), the trader (0xdc87191c…), and the one that opened the demo pool (0x21538eBF…).",
+      "The mechanism is what the chain proves; an arm's-length trader is not.",
+      "The keeper's two addresses are ours as well, and the only actor here that decided anything without being told.",
+      "The money is testnet money and the USDC is mock."
+    ]
+  },
+  "limits": [
+    { "doc": "docs/EVIDENCE.md", "section": "Not demonstrated yet", "quote": "Drawdown, the last of the three rules the pools enforce." },
+    { "doc": "docs/EVIDENCE.md", "section": "ForbiddenAsset, and why it is not in the list above", "quote": "Breach.ForbiddenAsset cannot be reached through this demo, and that is by construction rather than for want of trying." },
+    { "doc": "docs/EVIDENCE-SHARED-POOL.md", "section": "What this does not show", "quote": "A passed challenge or a funded stage on a seat, and the funded term running out." },
+    { "doc": "docs/EVIDENCE-SHARED-POOL.md", "section": "What this does not show", "quote": "A stop on a seat." },
+    { "doc": "docs/EVIDENCE-SHARED-POOL.md", "section": "", "quote": "The shared pool (src/shared/SharedPool.sol, the design) is a layer over the pools of this demo. Nobody has reviewed it." }
+  ]
+}
