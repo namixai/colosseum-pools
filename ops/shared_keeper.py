@@ -48,11 +48,16 @@ SWEEP_MIN = 100_000_000
 # A small HyperEVM block holds 2M gas, and send_tx asks for a quarter more than the estimate.
 SMALL_BLOCK_GAS = 2_000_000
 GAS_HEADROOM = 1.25
-OPEN_READ = 64  # open tickets read per pass; anyone can open them for the price of gas
-# An empty ticket is read again only every this many passes. Anyone can open tickets for gas alone,
-# and reading each of them on every pass would spend the public RPC's allowance on nothing. A new
-# ticket is read at once: a deposit usually follows its ticket within seconds.
+# Anyone can open tickets for gas alone, so the list of open ones can be long and mostly empty. The
+# keeper reads the whole list every pass, a page of addresses per call, but spends balance reads
+# with care: a ticket it hasn't seen yet first (a deposit usually follows its ticket within seconds),
+# at most NEW_PER_PASS of them; then empty ones again, the longest-unread first, each no sooner than
+# RECHECK_EVERY passes after the last read and at most RECHECK_PER_PASS a pass. No page of the list
+# is special, so no pile of empty tickets can keep a deposit behind it out of reach for good.
+PAGE = 256
+NEW_PER_PASS = 64
 RECHECK_EVERY = 10
+RECHECK_PER_PASS = 32
 
 ERRORS = [
     "NotStarted()", "NotSeat(address)", "SeatBusy(address)", "TooSoon(address)", "AlreadyArmed(address)",
@@ -138,24 +143,32 @@ class SharedKeeper:
             })
         return out
 
-    def funded_tickets(self, minimum: int) -> list[str]:
+    def open_tickets(self) -> list[str]:
+        """Every open ticket, a page of addresses per call. The pool keeps them in no order worth
+        relying on, and a point that closes one moves the last into its place, so a pass can miss a
+        ticket that moved while it read; the next pass reads the list again."""
         count = view(self.pool, "openTicketCount()", "uint256")
-        if not count:
-            return []
-        opened = [to_checksum_address(t) for t in view(self.pool, "openTickets(uint256,uint256)", "address[]",
-                                                        ["uint256", "uint256"], [0, min(count, OPEN_READ)])]
+        out: list[str] = []
+        for start in range(0, count, PAGE):
+            page = view(self.pool, "openTickets(uint256,uint256)", "address[]", ["uint256", "uint256"], [start, PAGE])
+            out += [to_checksum_address(t) for t in page]
+        return list(dict.fromkeys(out))
+
+    def funded_tickets(self, minimum: int) -> list[str]:
+        opened = self.open_tickets()
+        is_open = set(opened)
+        # Tickets no longer open were counted, or were never opened here; forget them.
+        self.empty_at = {t: n for t, n in self.empty_at.items() if t in is_open}
+        new = [t for t in opened if t not in self.empty_at][:NEW_PER_PASS]
+        due = sorted((t for t in opened if t in self.empty_at and self.passes - self.empty_at[t] >= RECHECK_EVERY),
+                     key=lambda t: self.empty_at[t])[:RECHECK_PER_PASS]
         funded = []
-        for t in opened:
-            last = self.empty_at.get(t)
-            if last is not None and self.passes - last < RECHECK_EVERY:
-                continue
+        for t in new + due:
             if self.spot(t) >= minimum:
                 funded.append(t)
                 self.empty_at.pop(t, None)
             else:
                 self.empty_at[t] = self.passes
-        # Tickets no longer open were counted or never will be; forget them.
-        self.empty_at = {t: n for t, n in self.empty_at.items() if t in opened}
         return funded
 
     def stray_on_closed(self) -> bool:

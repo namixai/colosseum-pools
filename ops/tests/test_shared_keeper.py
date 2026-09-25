@@ -180,6 +180,48 @@ class Points(SharedKeeperTest):
         self.assertEqual(reads.count(TICKET_1.lower()), 2)
         self.assertEqual(self.chain.calls("settle"), [(POOL.lower(), "settle", [[sk.to_checksum_address(TICKET_1)]])])
 
+    def test_a_deposit_behind_a_pile_of_empty_tickets_is_found(self):
+        pile = [f"0x{i:040x}" for i in range(1, 301)]  # more than a page of addresses
+        funded = "0x" + "c7" * 20
+        self.chain.pool["open"] = pile + [funded]
+        self.chain.spots[funded.lower()] = MIN
+        k = self.make()
+        for n in range(len(pile) // sk.NEW_PER_PASS + 1):
+            k.one_pass()
+            self.at(NOW + 30 * (n + 1))
+        self.assertEqual(self.chain.calls("settle"), [(POOL.lower(), "settle", [[sk.to_checksum_address(funded)]])])
+
+    def test_balance_reads_a_pass_are_bounded_however_many_tickets_are_open(self):
+        pile = [f"0x{i:040x}" for i in range(1, 501)]
+        self.chain.pool["open"] = pile
+        reads = []
+        real = self.chain.core_spot_balance
+
+        def counted(user, token):
+            reads.append(user.lower())
+            return real(user, token)
+
+        k = self.make()
+        with mock.patch.object(self.chain, "core_spot_balance", side_effect=counted):
+            for n in range(20):
+                before = len(reads)
+                k.one_pass()
+                self.assertLessEqual(len(reads) - before, sk.NEW_PER_PASS + sk.RECHECK_PER_PASS)
+        self.assertEqual(len(set(reads)), len(pile), "and every ticket gets read in the end")
+
+    def test_an_empty_ticket_long_unread_is_read_again_first(self):
+        pile = [f"0x{i:040x}" for i in range(1, sk.RECHECK_PER_PASS + 11)]
+        self.chain.pool["open"] = pile
+        k = self.make()
+        k.one_pass()  # all new: every one read once
+        k.passes += sk.RECHECK_EVERY
+        reads = []
+        real = self.chain.core_spot_balance
+        with mock.patch.object(self.chain, "core_spot_balance",
+                               side_effect=lambda user, token: reads.append(user.lower()) or real(user, token)):
+            k.one_pass()
+        self.assertEqual(len(reads), sk.RECHECK_PER_PASS)
+
     def test_a_new_ticket_is_read_at_once(self):
         self.chain.pool["open"] = [TICKET_1]
         k = self.make()

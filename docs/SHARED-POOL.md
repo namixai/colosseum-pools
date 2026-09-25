@@ -172,8 +172,10 @@ every point first and names half the tickets, then half again, when it wouldn't 
 still doesn't fit needs the keeper's wallet on big blocks.
 
 Anyone can open tickets for the price of gas. A settlement point never walks the open ones, only
-the list a caller names, so they cost the keeper reads and nothing else; it reads an empty ticket
-again only every tenth pass.
+the list a caller names, so they cost the keeper reads and nothing else. It reads the whole list of
+addresses every pass but rations balance reads: tickets it hasn't seen yet first, at most 64 a pass,
+then empty ones again, the longest-unread first, at most 32 a pass and none sooner than ten passes
+after its last read. A pile of empty tickets slows a deposit behind it down and can't hide it.
 
 ## The testnet run (24 September)
 
