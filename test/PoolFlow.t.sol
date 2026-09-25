@@ -1090,6 +1090,23 @@ contract PoolFlowTest is Test {
         assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
     }
 
+    /// Audit A-05, and it is a limit of the design rather than a bug to fix: the target is
+    /// measured from the account's perp equity, and that rises for any USDC sent in. HyperCore
+    /// gives no way to tell a deposit from a realised gain, so a pass says "the account reached
+    /// the target", not "this trader can trade". docs/DESIGN.md says so; this makes it checkable.
+    function test_theTargetCanBeReachedByDepositing_notOnlyByTrading() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+
+        // Not one order: the money simply arrives.
+        CoreSimulatorLib.forcePerpBalance(address(ch), 108e6);
+        ch.graduate(SALT);
+
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Passed), "passed without trading");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded), "and the pool funded them");
+        assertGt(ch.payoutOwed(), 0, "with a share of the 'profit' owed back to the trader");
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);

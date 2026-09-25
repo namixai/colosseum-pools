@@ -176,6 +176,16 @@ before it can sell again.
 
 ## What the design does not do
 
+- **It cannot tell profit from a deposit, so a pass can be bought.** The target and the
+  trader's share are both measured from the challenge account's perp equity
+  (`ChallengeAccount.graduate`), and that number rises for any USDC sent to the account —
+  a trade is not required and the contract cannot see the difference. A trader who sends
+  their challenge the target amount passes without trading, takes their share of that
+  "profit" back, and the pool funds them. The price of a bought pass is the target less the
+  trader's share of it, plus the challenge price and the fee. On chain there is no fix:
+  HyperCore offers no precompile that separates an incoming transfer from a realised gain.
+  So read a pass as "the account reached the target", not as "this trader can trade", and
+  price the pool on the first reading. Found by the audit, 25 September 2026.
 - It does not check a trader's intent: the operator runs the gateway and could submit an
   order that fits the rules without the trader asking for it.
 - In the demo the gateway holds the agent keys. A key file can sign anything Hyperliquid lets
