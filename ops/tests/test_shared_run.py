@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import unittest
 from unittest import mock
 
+from ops import deploy_shared
 from ops import shared_run as run
 
 DEP_A = "0x00000000000000000000000000000000000000A1"
@@ -47,6 +49,30 @@ class SeatTerms(unittest.TestCase):
             self.assertEqual(c.transact.call_count, 1)
 
 
+class Request(unittest.TestCase):
+    def call(self, now, last_deposit=1_000_000, lock=600):
+        record = {"SharedPool": POOL}
+        args = argparse.Namespace(who="shared-dep-a", shares="all")
+        answers = {"lastDeposit": last_deposit, "lock": lock, "sharesOf": 5 * 10**8, "queuedOf": 0}
+        with mock.patch.object(run, "c") as c, mock.patch.object(run.time, "time", return_value=now):
+            c.account.return_value.address = DEP_A
+            c.call_view.side_effect = lambda to, sig, types, args_, out: (answers[sig.split("(")[0]],)
+            c.transact.return_value = {"transactionHash": "0x" + "ab" * 32}
+            try:
+                run.cmd_request(record, args)
+            finally:
+                self.sent = c.transact.call_count
+
+    def test_a_request_inside_the_lock_says_how_long_and_sends_nothing(self):
+        with self.assertRaisesRegex(SystemExit, "locked until 1000600; 100 s to go"):
+            self.call(now=1_000_500)
+        self.assertEqual(self.sent, 0)
+
+    def test_a_request_after_the_lock_goes_out(self):
+        self.call(now=1_000_600)
+        self.assertEqual(self.sent, 1)
+
+
 class Wallets(unittest.TestCase):
     def test_depositors_are_topped_up_to_the_deposit_and_the_tickets_fee(self):
         balances = {DEP_A.lower(): 1_807_142_800, DEP_B.lower(): 0}
@@ -71,6 +97,21 @@ class Wallets(unittest.TestCase):
             c.send_tx.return_value = {"transactionHash": "0x" + "ab" * 32}
             run.cmd_wallets({}, args)
             c.exchange.return_value.spot_transfer.assert_not_called()
+
+
+class DeployArguments(unittest.TestCase):
+    def refused(self, *argv):
+        with mock.patch.object(sys, "argv", ["deploy_shared.py", "--label", "x", *argv]), \
+                mock.patch.object(deploy_shared, "c") as c:
+            with self.assertRaisesRegex(SystemExit, "either --keys-file"):
+                deploy_shared.main()
+            self.assertEqual(c.mock_calls, [], "nothing reached the chain")
+
+    def test_an_empty_keys_file_is_still_a_keys_file(self):
+        self.refused("--on-demo-factory", "--keys-file", "")
+
+    def test_one_of_the_two_is_needed(self):
+        self.refused()
 
 
 if __name__ == "__main__":

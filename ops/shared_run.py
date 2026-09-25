@@ -24,6 +24,7 @@ round needs capital at work, not a trader):
     spike/.venv/bin/python ops/shared_run.py --deployment shared-demo deposit --who shared-dep-b
     spike/.venv/bin/python ops/shared_run.py --deployment shared-demo settle
     spike/.venv/bin/python ops/shared_run.py --deployment shared-demo arm
+    # the lock (600 s by default) runs from the point that took the deposits in; `request` says how long
     spike/.venv/bin/python ops/shared_run.py --deployment shared-demo request --who shared-dep-a
     spike/.venv/bin/python ops/shared_run.py --deployment shared-demo request --who shared-dep-b
     spike/.venv/bin/python ops/shared_run.py --deployment shared-demo settle
@@ -277,6 +278,11 @@ def cmd_buy(record: dict, _args) -> None:
 def cmd_request(record: dict, args) -> None:
     who = c.account(args.who)
     sp = pool_of(record)
+    # A request waits out the lock after the holder's latest deposit, which the point that took it
+    # in wrote down; the pool would refuse it sooner.
+    until = view(sp, "lastDeposit(address)", ["address"], [who.address], ["uint64"])[0] + view(sp, "lock()", [], [], ["uint32"])[0]
+    if time.time() < until:
+        raise SystemExit(f"{args.who} is locked until {until}; {int(until - time.time())} s to go")
     shares = view(sp, "sharesOf(address)", ["address"], [who.address], ["uint256"])[0]
     queued = view(sp, "queuedOf(address)", ["address"], [who.address], ["uint256"])[0]
     amount = shares - queued if args.shares == "all" else int(args.shares)

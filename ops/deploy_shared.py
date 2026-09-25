@@ -101,6 +101,9 @@ def main() -> int:
     p.add_argument("--lock", type=int, default=600, help="seconds after a deposit before a request")
     p.add_argument("--fee-bps", type=int, default=1000)
     args = p.parse_args()
+    # Before anything reaches the chain. An empty --keys-file is still one.
+    if args.on_demo_factory == (args.keys_file is not None):
+        raise SystemExit("either --keys-file for a registry of its own, or --on-demo-factory, whose registry has its keys")
 
     c.assert_testnet()
     out_path = ROOT / "deployments" / f"testnet-{args.label}.json"
@@ -113,8 +116,6 @@ def main() -> int:
     changed = git("diff", "--name-only", demo["commit"], "HEAD", "--", *CORE_SOURCES).strip()
     if changed:
         raise SystemExit(f"the demo's implementations were built from other source; changed: {changed}")
-    if args.on_demo_factory == bool(args.keys_file):
-        raise SystemExit("either --keys-file for a registry of its own, or --on-demo-factory, whose registry has its keys")
     subprocess.run(["forge", "build"], cwd=ROOT, check=True, capture_output=True)
     assets = check_assets()
     if args.on_demo_factory:

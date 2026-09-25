@@ -1501,6 +1501,14 @@ MUTATIONS = [
      '        t["fundedCapital"] = int(round(args.funded * USDC_1E6))\n',
      '        pass\n',
      ['test_the_runs_terms_unless_the_command_line_changes_them']),
+    ('PR5', 'ops/shared_run.py',
+     '    if time.time() < until:\n',
+     '    if False:\n',
+     ['test_a_request_inside_the_lock_says_how_long_and_sends_nothing']),
+    ('PR6', 'ops/deploy_shared.py',
+     '    if args.on_demo_factory == (args.keys_file is not None):\n',
+     '    if args.on_demo_factory == bool(args.keys_file):\n',
+     ['test_an_empty_keys_file_is_still_a_keys_file']),
 ]
 
 RUNNERS = {
