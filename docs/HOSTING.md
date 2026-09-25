@@ -144,7 +144,12 @@ in the Cloudflare dashboard:
    `app/config.js` (`factory`, `registry`, `deployBlock`, `platformAssets`) and merge that. An
    app that reads contracts of another version fails on every page that reads them, with
    "could not decode result data".
-3. Upload the contents of `<dir>/app` as a new deployment.
+3. Upload it as a new deployment — **drag the `app` folder itself into the upload box, not the
+   files inside it**. Selecting the files loses the directories they live in, so `lib/`,
+   `views/` and `data/` never arrive and every page fails on its first import; dragging the
+   folder makes the browser walk it and keeps the paths. Done right the whole tree goes up; the
+   top level is only a handful of the files. (Measured on 24 September 2026, when a deploy made
+   this way arrived with four.)
 4. Open `/`, `#/new`, `#/economics` and `#/verify/<a challenge>` on `pools.usenami.io`.
 
 ## Checking
