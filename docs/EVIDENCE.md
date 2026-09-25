@@ -87,8 +87,16 @@ The state transitions and the records above are real. How they were reached, pla
   `0xf140a7500d5a2c7525a27fc1cc94b85d586c866c8a078ce48b5061087d2511bf`, a `settle` sent from the
   host keeper's address `0xD6F07317fC5f12302776b03A7206B1614FD49021`, which returned 5.03 USDC
   left stranded in a passed challenge and freed the pool to sell the next one. Nobody asked it
-  to. Precisely: what it has sent from the host so far is **housekeeping, not a stop** — it has
-  not yet had a rule broken in front of it there.
+  to.
+- **And then it stopped a trader.** Later the same morning a funded account on pool
+  `0x2b108c46…` was taken to 5.58× against a 5× rule — **deliberately, by us**, to see what the
+  host would do with it. What it did, from its own journal: `breach_found` at 10:16:57 UTC,
+  reason 3; `breach` **sent at 10:16:59**. Two seconds. The transaction is
+  `0x7fa53a03f3aba4ac42a0e38f46103849cb95c1b425a93996e571f78ac72b15b2` in block 65206003, from
+  `0xD6F07317fC5f12302776b03A7206B1614FD49021`, and the pool now records `fundedEndReason` **3
+  (Leverage)** with the agent key cut in that same block; the keeper went on to `settleFunded`
+  by itself. The staged half is the rule-breaking. **Nobody chose the stop, timed it or sent
+  it** — the person who set the trap was still loading the page when it sprang.
 - **Both pools above are benches, and both have soft targets.** `0x2b108c46…` asks +0.2% to
   pass (10% daily, 20% drawdown) and `0x914E4bf9…` — where the first pass, the funded-stage
   leverage stop and the daily-loss stop all happened — asks +1% on 11 USDC. Both were built to
