@@ -7,6 +7,7 @@ import { sendUsdc } from "../lib/hlsend.js";
 import { esc, render, $, wire, badge, row, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
+import { saleBlocker, topUpAdvice } from "../lib/funding.js";
 
 export async function poolView(address, page) {
   const pool = chain.contract("pool", address);
@@ -49,7 +50,10 @@ export async function poolView(address, page) {
 
   // Trader: buy
   const buy = $("#buy", page);
-  if (Number(stage) === 0 && ready && challenge === "0x0000000000000000000000000000000000000000") {
+  // The pool pays the challenge capital out of HyperCore, so an idle pool that is short there
+  // would take the approval and then revert. Decided in one place, for the button and the card.
+  const blocker = saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed });
+  if (!blocker) {
     buy.innerHTML = `<h3>Take the challenge</h3>
       <p>You pay ${chain.usd6(terms.price)} USDC on HyperEVM from your wallet${
         fee > 0n ? `, plus the platform's fee of ${chain.usd6(fee)} USDC, which isn't refunded` : ""}. The pool moves
@@ -70,7 +74,11 @@ export async function poolView(address, page) {
     });
   } else {
     buy.innerHTML = `<h3>Take the challenge</h3><p class="muted">${
-      Number(stage) !== 0 ? `The pool is taken (${esc(stageName)}).` : !ready ? "The investor hasn't prepared the account yet." : "A previous challenge is still settling."
+      blocker.kind === "taken" ? `The pool is taken (${esc(stageName)}).`
+        : blocker.kind === "not-prepared" ? "The investor hasn't prepared the account yet."
+        : blocker.kind === "settling" ? "A previous challenge is still settling."
+        : `The pool is ${esc(blocker.short.toFixed(2))} USDC short on HyperCore: it holds ${
+            esc(spotUsdc.toFixed(2))} and needs ${esc(needed.toFixed(2))} to sell a challenge. Only its investor can top it up.`
     }</p>`;
   }
 
@@ -126,6 +134,10 @@ export async function poolView(address, page) {
     inv.remove();
     return;
   }
+  const advice = topUpAdvice({
+    short: blocker && blocker.kind === "underfunded" ? blocker.short : 0,
+    earned: Number(earned) / 1e6,
+  });
   inv.innerHTML = `<h3>Investor</h3>
     <p>Capital goes to the pool on HyperCore: a spot transfer of USDC from your HyperCore account to
       <span class="mono">${esc(address)}</span>. The button below asks your wallet to sign that transfer;
@@ -135,6 +147,13 @@ export async function poolView(address, page) {
     <p><button id="prepare" class="secondary">Prepare the account</button>
       <span class="muted">Once the pool has USDC on HyperCore: separate spot and perp balances, approve the builder fee.</span></p>
     <p>Challenge income held in the contract: ${chain.usd6(earned)} USDC <button id="earned" class="secondary">Withdraw it</button></p>
+    ${advice ? `<p class="muted">The pool is ${esc(advice.short.toFixed(2))} USDC short on HyperCore for the next
+      challenge. This is normal after a cycle and is not a loss: creating the challenge's account costs 1 USDC on
+      HyperCore, which never comes back, while the price the trader paid is held here on HyperEVM. The two sides
+      don't meet on their own. ${advice.fromEarned > 0
+        ? `Withdraw the ${esc(advice.fromEarned.toFixed(2))} USDC above, then send it to the pool with the field at the top of this card.`
+        : "There is no income held here to cover it."}${advice.stillNeeded > 0
+        ? ` That still leaves ${esc(advice.stillNeeded.toFixed(2))} USDC to come from you.` : ""}</p>` : ""}
     <div class="inline"><input id="wd" type="number" step="0.01" min="0" placeholder="USDC"><button id="wd-btn" class="secondary">Withdraw on HyperCore</button></div>`;
   wire($("#dep-btn", page), async () => {
     const signer = chain.currentSigner() || (await chain.connect(), chain.currentSigner());
