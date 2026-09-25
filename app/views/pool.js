@@ -8,6 +8,7 @@ import { esc, render, $, wire, badge, row, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
 import { saleBlocker, topUpAdvice } from "../lib/funding.js";
+import { stageName as nameOf, stageWords, isFundedStage } from "../lib/stages.js";
 
 export async function poolView(address, page) {
   const pool = chain.contract("pool", address);
@@ -23,7 +24,7 @@ export async function poolView(address, page) {
     // What the contract wrote down if it stopped the funded trader; None when it ended clean.
     pool.fundedEndReason(),
   ]);
-  const stageName = chain.STAGE[Number(stage)];
+  const stageName = nameOf(stage);
   const isOwner = chain.same(me, owner);
   const isFunded = chain.same(me, fundedTrader);
   // Challenge capital, funded capital, and 1 USDC for creating the challenge's account.
@@ -45,7 +46,8 @@ export async function poolView(address, page) {
         The investor moves it across; nothing on chain does.` : ""}`)}
       ${row("Account prepared", ready ? "yes" : "no")}
       ${Number(stage) === 1 ? row("Current challenge", `<a href="#/challenge/${esc(challenge)}">${esc(chain.short(challenge))}</a>`) : ""}
-      ${Number(stage) >= 2 ? row("Funded trader", `<span class="mono">${esc(fundedTrader)}</span>`) : ""}
+      ${isFundedStage(stage) ? row("Funded trader", `<span class="mono">${esc(fundedTrader)}</span>`) : ""}
+      ${row("What the pool is doing", esc(stageWords(stage)))}
       <p><a href="#/verify/${esc(address)}">Check this account yourself →</a></p>
     </section>
     <div class="grid">

@@ -4,6 +4,7 @@ import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, badge, row, isAddress, settle, wire } from "../lib/ui.js";
 import { ruleVerdict, liveReadingIsMoot, pastFundedStage } from "../lib/verdict.js";
+import { stageWords } from "../lib/stages.js";
 import { keyFacts } from "../lib/keys.js";
 
 export async function verifyView(address, page) {
@@ -164,6 +165,7 @@ async function fillsPanel(account, address, page, kind) {
   const verdict = ruleVerdict({ recorded, live, stopped, finished });
   $("#fills", page).className = "";
   $("#fills", page).innerHTML = `
+    ${kind === "pool" ? row("What the pool is doing", esc(stageWords(state))) : ""}
     ${row("Fills on this account (Hyperliquid API)", String(fills.length))}
     ${row("Fills in an asset outside the rules", bad ? badge(String(bad), "bad") : badge("0", "ok"))}
     ${verdict.kind === "recorded"
