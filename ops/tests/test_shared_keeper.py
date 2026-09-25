@@ -227,6 +227,12 @@ class Points(SharedKeeperTest):
         self.make().one_pass()
         self.assertEqual(self.chain.calls("settle"), [])
 
+    def test_a_point_is_tried_once_before_it_is_sent(self):
+        self.chain.pool["open"] = [TICKET_1]
+        self.chain.spots[TICKET_1.lower()] = MIN
+        self.make().one_pass()
+        self.assertEqual([name for _, name, _ in self.chain.estimates].count("settle"), 1)
+
     def test_a_point_the_pool_refuses_is_not_sent_and_says_why(self):
         self.chain.pool["open"] = [TICKET_1]
         self.chain.spots[TICKET_1.lower()] = MIN

@@ -144,15 +144,36 @@ swapped fields fail there first.
 A seat comes from the shared pool's own factory. The app's challenge and trading pages only know
 the demo's factory, so a seat's challenge can't be bought or traded through the app yet.
 
+## The keeper
+
+`ops/shared_keeper.py` makes the calls anyone may make on the pool, when the pool would take them:
+`noteFunded` for a funded stage new to the pool and `endFundedTerm` once the stage has run its
+term; `releaseSeat` while the queue needs more than the pool has free; `settle` when a ticket holds
+a deposit, when the queue waits (at most once every five minutes by default) or when a closed ticket
+still holds money; `armSeat` and then `prepareAccount` when there is money to spare. It tries every
+call with `eth_estimateGas` from its own address first and sends only what the contract would take,
+so the rules stay in the contract. It reads the contract's state and the precompiles and never the
+event log. The seats' challenges and funded stages are ordinary pools; the core keeper
+(`ops/keeper.py`), run with the same deployment, takes them through their lives.
+
 ## Gas
 
 Reading one seat the way a settlement point does, measured with `eth_call` against the live testnet
 pools (`spike/shared_pool.py gas`): 28 265 gas for an idle seat, 74 336–74 759 for a seat with a
 running challenge. One `spotBalance` read costs 7 431, `accountMarginSummary` 8 590, a `violation()`
-call about 22 400–23 400. The contract caps the seats at 12 and the tickets per point at 8, which
-keeps a point well inside a small block. Anyone can open tickets for the price of gas; a settlement
-point never walks the open ones, only the list a caller names, so that costs the keeper reads and
-nothing else.
+call about 22 400–23 400.
+
+Whole points on the testnet run: 340 720 gas taking in one deposit with the seat idle, 297 935
+paying one holder on both sides with a challenge running, 169 440 paying one holder with the seat
+idle. A deposit taken in costs about as much as the rest of a light point. The contract caps a point
+at 12 seats, 8 tickets and 16 holders waiting, and those caps don't keep the heaviest point inside a
+small block's 2M gas: nobody has measured one, and by these numbers it may not fit. The keeper tries
+every point first and names half the tickets, then half again, when it wouldn't fit; a point that
+still doesn't fit needs the keeper's wallet on big blocks.
+
+Anyone can open tickets for the price of gas. A settlement point never walks the open ones, only
+the list a caller names, so they cost the keeper reads and nothing else; it reads an empty ticket
+again only every tenth pass.
 
 ## The testnet run (24 September)
 
@@ -196,7 +217,8 @@ price other than 1, a passed challenge and a funded stage, the funded term.
 
 ## Not done yet
 
-- The keeper calls for the shared pool, and buying and trading a seat's challenge through the app.
+- Buying and trading a seat's challenge through the app.
+- The keeper running on the operator's host.
 - A testnet run with two depositors: a short payment split between them, a deposit at a price other
   than 1.
 - Deposits through HyperEVM on mainnet, where the sender is visible.

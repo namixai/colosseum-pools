@@ -104,6 +104,10 @@ class SharedKeeper:
         """Sends the call if the contract would take it now. True if it went out (or would have)."""
         if self.gas(to, sig, types, args) is None:
             return False
+        return self.deliver(to, sig, types, args)
+
+    def deliver(self, to: str, sig: str, types=(), args=()) -> bool:
+        """Sends a call already tried; in a dry run only says so."""
         if self.dry:
             log("would_send", to=to, call=sig.split("(")[0])
             return True
@@ -208,7 +212,7 @@ class SharedKeeper:
             log("point_needs_big_block", gas=gas,
                 hint="enable big blocks for the keeper's wallet (evmUserModify usingBigBlocks)")
             return
-        if self.send(self.pool, "settle(address[])", ["address[]"], [named]) and queued:
+        if self.deliver(self.pool, "settle(address[])", ["address[]"], [named]) and queued:
             self.last_queue_point = now
 
     def arm_pass(self, seats: list[dict]) -> None:
