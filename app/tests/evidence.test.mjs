@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { TEXT, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict } from "../lib/evidence.js";
+import { TEXT, EVENTS, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict, eventText } from "../lib/evidence.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DATA = JSON.parse(readFileSync(join(ROOT, "app", "data", "evidence.json"), "utf8"));
@@ -207,6 +207,8 @@ test("the node's receipt is held against the row: success, block, sender and acc
   const good = { status: 1, blockNumber: 65178469, from: row.from.toLowerCase(), to: row.account.toLowerCase() };
   assert.equal(receiptVerdict(row, good).ok, true);
   assert.match(receiptVerdict(row, good).text, /block 65178469/);
+  // Only what was compared is called agreed: the record (a call's answer here) is not in the receipt.
+  assert.match(receiptVerdict(row, good).text, /Block, sender and account are as the row says\. This button does not read the record itself\.$/);
   for (const [bad, said] of [
     [{ ...good, status: 0 }, /reverted/],
     [{ ...good, blockNumber: 65178470 }, /names block 65178469/],
@@ -234,4 +236,56 @@ test("Hyperliquid's fills are held against the hashes the row names", () => {
   assert.equal(v.text, "Hyperliquid lists both fills: bought 0.00013 BTC at 84619; sold 0.00013 BTC at 84618.");
   assert.equal(fillsVerdict(row, both.slice(1)).ok, false);
   assert.equal(fillsVerdict(row, []).ok, false);
+});
+
+// The contracts' own declarations, an enum written as the uint8 it is in the ABI.
+const SOURCES = ["src/Pool.sol", "src/ChallengeAccount.sol"].map((p) => readFileSync(join(ROOT, p), "utf8")).join("\n");
+const declared = (name) => {
+  const m = SOURCES.match(new RegExp(`event ${name}\\(([^)]*)\\);`));
+  return m && `event ${name}(${m[1].replace(/\b(Status|Breach)\b/g, "uint8").replace(/\s+/g, " ").trim()})`;
+};
+const params = (line) => line.slice(line.indexOf("(") + 1, -1).split(",").map((p) => p.trim().split(" ").pop());
+
+test("the events the page reads are the contracts' own, field for field", () => {
+  for (const line of EVENTS) {
+    const name = line.match(/^event (\w+)\(/)[1];
+    assert.equal(line, declared(name), name);
+  }
+});
+
+test("a row that names an event carries it as the document writes it", () => {
+  const named = DATA.rows.filter((r) => r.check.some((c) => /\b(FundedResult|FundedPayoutSent|Stopped)\(/.test(c)));
+  assert.equal(named.length, 3);
+  for (const r of named) {
+    assert.ok(r.event, `${r.what}: carries the event it names`);
+    assert.ok(r.sources.some((s) => s.includes(r.event.text)), `${r.what}: ${r.event.text} is in its sources`);
+    assert.ok(r.event.text.startsWith(`${r.event.name}(`), r.what);
+    const line = EVENTS.find((l) => l.startsWith(`event ${r.event.name}(`));
+    assert.ok(line, `${r.what}: the page can decode ${r.event.name}`);
+    for (const [k, v] of Object.entries(r.event.values)) {
+      assert.ok(params(line).includes(k), `${r.what}: ${k} is a field of ${r.event.name}`);
+      assert.ok(hasNumber(r.event.text, v), `${r.what}: ${k} ${v} is what the document writes`);
+    }
+  }
+});
+
+test("the node's receipt bears out a named event only with its values, from the row's account", () => {
+  const row = DATA.rows.find((r) => r.event?.name === "FundedResult");
+  const receipt = { status: 1, blockNumber: 65199083, from: "0xdc87191c63ab838434806d6dc4752904efab59b0", to: row.account };
+  const event = { address: row.account.toUpperCase().replace("0X", "0x"), name: "FundedResult",
+    args: { trader: "0xdc87191c63ab838434806d6dc4752904efab59b0", realized: 10012723n, payout: 1017840n } };
+  const ok = receiptVerdict(row, receipt, [event]);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.text, `The node says: block 65199083, from ${receipt.from}, to ${receipt.to}, succeeded. `
+    + `Account and the event ${eventText(row.event)} are as the row says.`);
+  for (const [bad, said] of [
+    [[], /carry no FundedResult\(realized 10012723, payout 1017840\)/],
+    [[{ ...event, args: { ...event.args, payout: 1017841n } }], /carry no FundedResult/],
+    [[{ ...event, address: "0xf4d98de2e668a8376319f54fc9592e948bd08655" }], /carry no FundedResult/],
+    [[{ ...event, name: "FundedPayoutSent" }], /carry no FundedResult/],
+  ]) {
+    const v = receiptVerdict(row, receipt, bad);
+    assert.equal(v.ok, false, said.source);
+    assert.match(v.text, said);
+  }
 });

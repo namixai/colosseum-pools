@@ -155,6 +155,7 @@
       "account": "0x2b108c465786b040355dcefe1b721e3e6276e80c",
       "tx": "0xab49fd6e3b4447a0321651e8d186e759569e3c90c6a92e84982675bf47601e5e",
       "record": "the stage came home at 10.012723 against a fundedStart of 10.000000, a gain of 0.012723, and the trader's 80% of it is 0.0101784.",
+      "event": { "name": "FundedResult", "text": "FundedResult(trader, 10012723, 1017840)", "values": { "realized": "10012723", "payout": "1017840" } },
       "check": ["the event FundedResult(trader, 10012723, 1017840) in its receipt"],
       "notes": [
         "Read this one from the events, not from the pool.",
@@ -174,6 +175,7 @@
       "account": "0x2b108c465786b040355dcefe1b721e3e6276e80c",
       "tx": "0xb1733533e70b08ef75efc310de11a02a62ef1aa490455a01d1d7409b7b8f9f5a",
       "record": "The trader's HyperCore spot balance went from 0.5 to 0.5101784.",
+      "event": { "name": "FundedPayoutSent", "text": "FundedPayoutSent(trader, 1017840)", "values": { "amount": "1017840" } },
       "check": ["the event FundedPayoutSent(trader, 1017840) in its receipt"],
       "notes": ["That is the number that matters: a balance that moved, not a field a contract set."],
       "sources": [
@@ -218,6 +220,7 @@
       "tx": "0x119b8243e0d5c2626cd77e031c93d04ff5c2e904247791d5b2ad499695a41608",
       "sentBy": "sent by the trader",
       "record": "Stopped(status 5 Forfeited, reason 0 None, equity 3000000) in that transaction: it ended as Forfeited, with nothing held against the trader, and the equity was 3.000000 — exactly the capital it was given, untouched.",
+      "event": { "name": "Stopped", "text": "Stopped(status 5 Forfeited, reason 0 None, equity 3000000)", "values": { "status": "5", "reason": "0", "equity": "3000000" } },
       "check": ["the event Stopped(status 5 Forfeited, reason 0 None, equity 3000000) in its receipt", "status() on the account, which answers 8 today"],
       "notes": ["Read this one from the event, not from status()."],
       "sources": [

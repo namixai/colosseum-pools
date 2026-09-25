@@ -6,6 +6,14 @@
 
 export const DOCS = "https://github.com/namixai/colosseum-pools/blob/main/";
 
+// The events a row may claim, as the contracts declare them (src/Pool.sol, src/ChallengeAccount.sol; an enum is a
+// uint8 in the ABI). app/tests/evidence.test.mjs holds these lines to the sources.
+export const EVENTS = [
+  "event FundedResult(address indexed trader, int64 realized, uint64 payout)",
+  "event FundedPayoutSent(address indexed trader, uint64 amount)",
+  "event Stopped(uint8 indexed status, uint8 indexed reason, int64 equity)",
+];
+
 // Every sentence the page says in its own words. The rows' records and notes are the documents' words.
 export const TEXT = {
   title: "What happened on chain",
@@ -69,10 +77,19 @@ export function howToCheck(row) {
 }
 
 const same = (a, b) => Boolean(a && b && String(a).toLowerCase() === String(b).toLowerCase());
+const listed = (words) => (words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`);
 
-/** What the node's receipt says, and whether that is what the row says. `receipt` is what ethers returns:
- *  null for a transaction the node does not know. */
-export function receiptVerdict(row, receipt) {
+/** An event as a row claims it: "FundedResult(realized 10012723, payout 1017840)". */
+export function eventText(event) {
+  return `${event.name}(${Object.entries(event.values).map(([k, v]) => `${k} ${v}`).join(", ")})`;
+}
+
+/** What the node's receipt says, and how much of the row that bears out. `receipt` is what ethers returns (null
+ *  for a transaction the node does not know); `events` are its logs decoded with EVENTS, as { address, name, args }.
+ *  A row that names an event has it looked for, from the row's account and with the row's values. For any other
+ *  row the answer says that the record itself was not read, so a green line never stands for more than was
+ *  compared. */
+export function receiptVerdict(row, receipt, events = []) {
   if (!receipt) return { ok: false, text: "The node does not know this transaction." };
   const said = `block ${receipt.blockNumber}, from ${receipt.from}, to ${receipt.to}, `
     + (Number(receipt.status) === 1 ? "succeeded" : "reverted");
@@ -81,9 +98,17 @@ export function receiptVerdict(row, receipt) {
   if (row.block && Number(receipt.blockNumber) !== Number(row.block)) off.push(`the document names block ${row.block}`);
   if (row.from && !same(receipt.from, row.from)) off.push(`the document names the sender ${row.from}`);
   if (row.account && !same(receipt.to, row.account)) off.push(`it went to another account than ${row.account}`);
-  return off.length
-    ? { ok: false, text: `The node says: ${said}. That is not what the row says: ${off.join("; ")}.` }
-    : { ok: true, text: `The node says: ${said}. That is what the row says.` };
+  const claimed = row.event ? eventText(row.event) : "";
+  const carried = row.event && events.some((e) => e.name === row.event.name && same(e.address, row.account)
+    && Object.entries(row.event.values).every(([k, v]) => String(e.args?.[k]) === String(v)));
+  if (row.event && !carried) off.push(`its logs carry no ${claimed} from ${row.account}`);
+  if (off.length) return { ok: false, text: `The node says: ${said}. That is not what the row says: ${off.join("; ")}.` };
+  const agreed = [row.block && "block", row.from && "sender", row.account && "account", row.event && `the event ${claimed}`]
+    .filter(Boolean);
+  const verdict = agreed.length
+    ? ` ${listed(agreed).replace(/^./, (c) => c.toUpperCase())} ${agreed.length === 1 ? "is" : "are"} as the row says.`
+    : "";
+  return { ok: true, text: `The node says: ${said}.${verdict}${row.event ? "" : " This button does not read the record itself."}` };
 }
 
 /** Hyperliquid's fills for the account (userFills), next to the fills the row names. */

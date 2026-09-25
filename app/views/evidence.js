@@ -4,7 +4,9 @@
 import { readProvider } from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, friendly } from "../lib/ui.js";
-import { DOCS, TEXT, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict } from "../lib/evidence.js";
+import { DOCS, TEXT, EVENTS, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict } from "../lib/evidence.js";
+
+const EVENT_ABI = new ethers.Interface(EVENTS);
 
 // This page's layout only; style.css is shared by every page. A record is a sentence, so cells wrap, and on a
 // narrow screen each row becomes a block with its column names written in.
@@ -113,12 +115,30 @@ export async function evidenceView(page) {
 
   for (const button of page.querySelectorAll("button[data-receipt]")) {
     const row = data.rows[Number(button.dataset.receipt)];
-    ask(button, async () => receiptVerdict(row, await readProvider.getTransactionReceipt(row.tx)));
+    ask(button, async () => {
+      const receipt = await readProvider.getTransactionReceipt(row.tx);
+      return receiptVerdict(row, receipt, decode(receipt));
+    });
   }
   for (const button of page.querySelectorAll("button[data-fills]")) {
     const row = data.rows[Number(button.dataset.fills)];
     ask(button, async () => fillsVerdict(row, await hl.fills(row.account)));
   }
+}
+
+/** The receipt's logs this page can name, each argument under its name. Arguments are taken by position from the
+ *  fragment rather than by name from ethers' Result, whose names can collide with an array's own methods. */
+function decode(receipt) {
+  const out = [];
+  for (const log of receipt?.logs || []) {
+    let parsed = null;
+    try { parsed = EVENT_ABI.parseLog(log); } catch { parsed = null; }
+    if (parsed) {
+      out.push({ address: log.address, name: parsed.name,
+        args: Object.fromEntries(parsed.fragment.inputs.map((input, i) => [input.name, parsed.args[i]])) });
+    }
+  }
+  return out;
 }
 
 // A button that asks the node and shows its answer next to itself. A disagreement is an answer, not a failure:
