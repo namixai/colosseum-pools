@@ -8,7 +8,7 @@ import { esc, render, $, wire, badge, row, when, duration, pct, settle } from ".
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import {
   SHARED_POOL, SHARED_ABI, TICKET_STATE, blockerText, amount, spot1e8, shares, worth, price, depositPlan,
-  ticketsToName, lockedUntil, paymentsLine, explain, plain, usd, openedTicket,
+  ticketsToName, lockedUntil, explain, plain, usd, openedTicket, paidSummary,
 } from "../lib/shared.js";
 
 const { ethers } = window;
@@ -156,14 +156,7 @@ export async function holderPanel(box, sp, at, pool, me) {
   const until = lockedUntil(last, pool.lock);
   const now = Math.floor(Date.now() / 1000);
 
-  let paidText;
-  if (paid === null) {
-    paidText = "This pool was deployed before the contract kept a record of payments. Your wallet and your HyperCore spot balance show what arrived.";
-  } else if (Number(paid.at) === 0) {
-    paidText = "Nothing yet.";
-  } else {
-    paidText = `${esc(paymentsLine(paid))}. The latest payment: ${esc(when(paid.at))}.`;
-  }
+  const paidText = esc(paidSummary(paid, when));
 
   const ticketRows = tickets.map((t, i) => {
     const state = TICKET_STATE[Number(states[i].state)] || "?";
@@ -229,14 +222,18 @@ async function seats(box, sp, seatList) {
   }
   const cards = await chain.readAll([...seatList], async (seat) => {
     const pool = chain.contract("pool", seat);
-    const [{ rules, terms, assets }, stage, challenge, term, spot] = await Promise.all([
-      rulesAndTerms(pool), pool.stage(), pool.challenge(), sp.fundedTerm(seat), spotOf(seat),
+    // A seat the app's own factory made opens on the pool page like any other pool; one from a
+    // factory of the shared pool's own doesn't.
+    const [{ rules, terms, assets }, stage, challenge, term, spot, known] = await Promise.all([
+      rulesAndTerms(pool), pool.stage(), pool.challenge(), sp.fundedTerm(seat), spotOf(seat), chain.factory().isPool(seat),
     ]);
     let status = "";
     if (challenge !== ZERO) {
       const ch = chain.contract("challenge", challenge);
       const [s, deadline] = await Promise.all([ch.status(), ch.deadline()]);
-      status = row("Challenge", `<span class="mono">${esc(chain.short(challenge))}</span>, ${esc(chain.STATUS[Number(s)])}${
+      const name = known ? `<a href="#/challenge/${esc(challenge)}">${esc(chain.short(challenge))}</a>`
+        : `<span class="mono">${esc(chain.short(challenge))}</span>`;
+      status = row("Challenge", `${name}, ${esc(chain.STATUS[Number(s)])}${
         Number(deadline) ? `, until ${esc(when(deadline))}` : ""}`);
     }
     return `<article class="card">
@@ -246,10 +243,11 @@ async function seats(box, sp, seatList) {
       ${row("Longest funded stage", esc(duration(term)))}
       ${termsHtml(terms)}
       ${rulesHtml(rules, assets)}
-      <p class="small muted">This seat was made by the shared pool's own factory. The challenge and
-      trading pages of this site only know the demo's factory, so they won't open it.</p>
+      ${known ? `<p><a href="#/pool/${esc(seat)}">The seat's pool page →</a></p>`
+        : `<p class="small muted">This seat was made by a factory of the shared pool's own. The pool,
+      challenge and trading pages of this site only know the demo's factory, so they won't open it.</p>`}
     </article>`;
-  }, 3); // five reads a seat at once, three seats a round: fifteen in one batch
+  }, 3); // six reads a seat at once, three seats a round: eighteen in one batch
   box.innerHTML = cards.join("");
 }
 
