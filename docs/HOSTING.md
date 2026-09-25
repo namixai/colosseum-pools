@@ -28,8 +28,8 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   cycle is 30 seconds plus however long the pass took and the ceiling of 5,000 blocks a minute
   never arrives. Measured on 25 September 2026, walking 177,422 blocks took 44 minutes —
   **about 4,000 blocks a minute**, with single cycles between 34 and 35 seconds. The chain makes
-  roughly 57 a minute — about one block a second, measured 65206003 at 10:16:59Z against
-  65209897 at 11:20:49Z — so catching up is quick per minute of downtime and slow per day of it.
+  **61 a minute** — about one block a second, measured 65206003 at 10:16:59Z against 65209897 at
+  11:20:49Z, which is 3,894 blocks in 3,830 seconds — so catching up is quick per minute of downtime and slow per day of it.
   Keep the two apart: **4,000 a minute is how fast the keeper walks, one a second is how fast the
   chain is made.**
 
@@ -76,12 +76,16 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   `eth_getLogs` a pass against a node that counts them. The newcomer does not join the watch; it
   blinds the incumbent for as long as it walks.
 
-  Seed it instead. Copy the working keeper's `next_block` and `live` into the new state file
-  before starting it, so it begins at the head with the pools already known:
+  Seed it instead. Copy the working keeper's state file **whole** into the new one before
+  starting it, so it begins at the head with the pools already known. Copy it whole and not in
+  part: `Keeper.__init__` reads all three keys, and a hand-written file carrying only
+  `next_block` and `live` dies on startup with a bare `KeyError: 'factory'`. (A `factory` that
+  is present but belongs to another deployment is caught properly — `<path> belongs to another
+  factory`, and the keeper refuses to start rather than enforcing the wrong pools.)
 
       sudo systemctl stop colosseum-keeper2
-      sudo cat /var/lib/colosseum-keeper/keeper-demo.json      # copy next_block and live
-      printf '%s\n' '<that json>' | sudo tee /var/lib/colosseum-keeper/keeper2-demo.json >/dev/null
+      sudo cat /var/lib/colosseum-keeper/keeper-demo.json   # all three keys: factory, next_block, live
+      printf '%s\n' '<that json, entire>' | sudo tee /var/lib/colosseum-keeper/keeper2-demo.json >/dev/null
       sudo chown colosseum-keeper:colosseum-keeper /var/lib/colosseum-keeper/keeper2-demo.json
       sudo chmod 600 /var/lib/colosseum-keeper/keeper2-demo.json
       sudo systemctl start colosseum-keeper2
