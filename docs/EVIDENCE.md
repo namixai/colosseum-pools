@@ -97,6 +97,20 @@ The state transitions and the records above are real. How they were reached, pla
   (Leverage)** with the agent key cut in that same block; the keeper went on to `settleFunded`
   by itself. The staged half is the rule-breaking. **Nobody chose the stop, timed it or sent
   it** — the person who set the trap was still loading the page when it sprang.
+
+  Those two seconds are the last leg only — from the keeper noticing to the keeper sending — and
+  a reader could take them for the system's answer time, which they are not. The pair anyone can
+  check is on the pool's own fills: the order that broke the rule filled at **10:16:45.354 UTC**
+  (oid 61008081414, SOL buy 0.47 at 118.23) and the position was closed at **10:16:59.363** (oid
+  61008094170, sell 0.47 at 118.14), the stop's block 65206003 carrying 10:16:59. **14.009
+  seconds from the breach to the close**, both fills public under `userFills` for
+  `0x2b108c46…`.
+
+  What that number is made of: the keeper polls, it does not listen. The unit sleeps 30 seconds
+  after each pass, so a cycle is 34–35 seconds, and noticing takes anywhere from nothing to a
+  cycle depending on where in it the rule broke — here about 12 seconds — plus a block. So the
+  **poll interval is the upper bound on noticing**, and the 14 seconds is one draw from that
+  range, not an average of anything. One stop is one stop.
 - **Two of the three pools above are benches with soft targets.** `0x2b108c46…` asks +0.2% to
   pass (10% daily, 20% drawdown) and `0x914E4bf9…` — where the first pass, the funded-stage
   leverage stop and the daily-loss stop all happened — asks +1% on 11 USDC. Both were built to

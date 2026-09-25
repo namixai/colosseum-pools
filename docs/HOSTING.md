@@ -37,6 +37,40 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   `scan_stopped` above the line, means it is **stuck** rather than slow. `--max-windows`
   (default 50) is the lever if a catch-up ever has to go faster, at the cost of more calls per
   pass against a node that rate-limits.
+- **A second keeper is a copy of the first, not a special build.** Every call the keeper makes is
+  open to anyone: on a challenge `activate`, `abort`, `checkpoint`, `breach`, `expire`,
+  `graduate`, `settle` and `recut`; on a pool `breach`, `settleFunded`, `checkpoint` and `recut`.
+  The only two calls with a caller check are `forfeit` (the trader alone) and `stopFunded` (the
+  investor or the funded trader), and the keeper makes neither. So a second keeper has exactly
+  the powers of the first, and needs no permission from it or from us.
+
+  What it needs is its own wallet and its own state file:
+
+      COLOSSEUM_KEY_DIR=<its own key directory> \
+      COLOSSEUM_RPC_URL=https://rpcs.chain.link/hyperevm/testnet \
+      python -m ops.keeper --deployment demo --state <its own file>.json --every 30
+
+  The wallet is a separate `<name>.key`/`<name>.addr` pair with its own gas (a stop cost 194,818
+  gas at 0.1 gwei on 25 Sep 2026, about 0.0000195 HYPE). The state file must not be shared: it
+  holds `next_block` and the pools being followed, and two processes writing one file would
+  corrupt each other's place. A new keeper starts at the deployment block and pays the catch-up
+  above before it enforces anything, so start it before you need it.
+
+  **What happens when both reach the same account in the same block.** `breach` re-reads the
+  violation from the chain and refuses if there is none (`NoBreach`), so neither keeper can stop
+  an account that is inside its rules — the worst a second one can do is duplicate work. If both
+  send a stop for the same account, one lands and the other reverts on the stage or status
+  guard (`BadStage`, `BadStatus`); the loser pays for a reverted transaction, which is gas
+  without an effect, and the account is stopped exactly once. `settle` and `settleFunded` do not
+  revert while there is settling left to do: the second call reads the state the first left and
+  either takes the next step or returns early. Again, wasted gas and nothing else.
+
+  🔴 **What the code does not give you:** there is no coordination, no leader election and no
+  de-duplication between keepers. "Redundant" here means two independent callers racing, and the
+  loser pays every time they collide. That is the whole cost, and it is small — but if it matters,
+  stagger the two rather than expecting the chain to sort it out: the second keeper's `--every`
+  and its start time are the only levers, and neither is a guarantee.
+
 - **The app** is the static `app/` folder, served by a Cloudflare Worker with static assets
   (`raspy-violet-594d`) on `pools.usenami.io`. There is no build step and no server code: every
   page is a `#/…` route of the one `index.html`. It calls the gateway from the browser;
