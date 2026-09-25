@@ -31,6 +31,20 @@ round needs capital at work, not a trader):
     spike/.venv/bin/python ops/shared_run.py --deployment shared-demo release
     spike/.venv/bin/python ops/shared_run.py --deployment shared-demo settle
 
+A seat a trader can trade: 3 USDC of challenge capital at five times is a $15 position, above
+Hyperliquid's $10 minimum order, under rules the Economics page's model has a figure for. The trader
+buys its challenge and trades it through the pool gateway with agents.client, the way the app does:
+
+    spike/.venv/bin/python ops/deploy_shared.py --label shared-trade --on-demo-factory
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-trade wallets --trader-evm 2.2
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-trade start --seed 2
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-trade seat --capital 3 --funded 30 --price 1.5 \\
+        --target-bps 800 --daily-bps 500 --drawdown-bps 1000 --duration 86400 --term 86400
+    (deposit A, deposit B, settle, arm, as above)
+    spike/.venv/bin/python -m agents.client --deployment demo --wallet shared-trader --gateway GATEWAY_URL buy SEAT 1.5
+    spike/.venv/bin/python -m agents.client --deployment demo --wallet shared-trader --gateway GATEWAY_URL \\
+        order CHALLENGE BTC buy SIZE PRICE --type ioc
+
 Testnet only (hlspike.common refuses anything else). Wallets are read by name from
 COLOSSEUM_KEY_DIR and never printed: `shared-operator` runs the pool, `shared-dep-a` and
 `shared-dep-b` deposit, `shared-trader` buys a challenge on the seat. Nobody trades in this run;
@@ -42,6 +56,7 @@ spike/results/<date>.jsonl.
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import sys
 import time
@@ -181,9 +196,28 @@ def cmd_start(record: dict, args) -> None:
     c.record("shared_started", tx=rcpt["transactionHash"], **snapshot(record))
 
 
+def seat_rules(args) -> tuple[int, int, int]:
+    """The run's rules (daily loss and drawdown in bps, leverage x100), with whatever the command line
+    changes."""
+    daily = args.daily_bps if args.daily_bps is not None else RULES[0]
+    drawdown = args.drawdown_bps if args.drawdown_bps is not None else RULES[1]
+    return daily, drawdown, RULES[2]
+
+
+def on_model_grid(daily_bps: int, drawdown_bps: int, target_bps: int) -> bool:
+    """Whether the Economics page's model has a figure for these rules: the cells it was computed
+    for, in app/data/calc_tables.json."""
+    cells = json.loads((ROOT / "app" / "data" / "calc_tables.json").read_text())["cells"]
+    return f"base|real|{drawdown_bps}|{daily_bps}|{target_bps}" in cells
+
+
 def seat_terms(args) -> dict:
     """The run's terms, with whatever the command line changes."""
     t = dict(TERMS)
+    if args.duration is not None:
+        t["duration"] = args.duration
+    if args.target_bps is not None:
+        t["targetBps"] = args.target_bps
     if args.price is not None:
         t["price"] = int(round(args.price * USDC_1E6))
     if args.capital is not None:
@@ -197,16 +231,22 @@ def cmd_seat(record: dict, args) -> None:
     op = c.account("shared-operator")
     assets = sorted(record["platform_assets"].values())
     t = seat_terms(args)
-    # The demo's pools sell a challenge a tenth the size of the funded capital; that is the pool its
-    # Economics page prices. A seat on the demo's factory keeps to it.
-    if record.get("factory_from") == "demo" and t["fundedCapital"] != 10 * t["capital"]:
-        raise SystemExit("a seat on the demo's factory keeps the challenge at a tenth of the funded capital")
+    daily, drawdown, leverage = seat_rules(args)
+    # The demo's pools sell a challenge a tenth the size of the funded capital, under rules the
+    # Economics page has a figure for; that is the pool it prices. A seat on the demo's factory keeps
+    # to both.
+    if record.get("factory_from") == "demo":
+        if t["fundedCapital"] != 10 * t["capital"]:
+            raise SystemExit("a seat on the demo's factory keeps the challenge at a tenth of the funded capital")
+        if not on_model_grid(daily, drawdown, t["targetBps"]):
+            raise SystemExit("a seat on the demo's factory keeps to rules the Economics page's model has a figure for")
     rcpt = c.transact(op, pool_of(record), f"addSeat({RULES_TYPE},{TERMS_TYPE},uint32)",
                       [RULES_TYPE, TERMS_TYPE, "uint32"],
-                      [(RULES[0], RULES[1], RULES[2], assets),
+                      [(daily, drawdown, leverage, assets),
                        (t["price"], t["capital"], t["targetBps"], t["duration"], t["traderShareChallengeBps"],
                         t["traderShareFundedBps"], t["fundedCapital"]), args.term])
-    c.record("shared_seat_added", tx=rcpt["transactionHash"], terms=t, funded_term=args.term, seats=seats(record))
+    c.record("shared_seat_added", tx=rcpt["transactionHash"], terms=t, rules=[daily, drawdown, leverage],
+             funded_term=args.term, seats=seats(record))
 
 
 def cmd_arm(record: dict, _args) -> None:
@@ -344,6 +384,10 @@ def main() -> int:
     st.add_argument("--capital", type=float, help="challenge capital, USDC (default 2)")
     st.add_argument("--funded", type=float, help="funded capital, USDC (default 8)")
     st.add_argument("--term", type=int, default=FUNDED_TERM, help="funded term, seconds")
+    st.add_argument("--duration", type=int, help="challenge duration, seconds (default 1800)")
+    st.add_argument("--target-bps", type=int, help="profit target, bps (default 100)")
+    st.add_argument("--daily-bps", type=int, help="daily loss limit, bps (default 300)")
+    st.add_argument("--drawdown-bps", type=int, help="drawdown limit, bps (default 600)")
     sub.add_parser("arm")
     d = sub.add_parser("deposit")
     d.add_argument("--who", choices=DEPOSITORS, required=True)

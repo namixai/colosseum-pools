@@ -1561,8 +1561,8 @@ MUTATIONS = [
      ['test_an_empty_ticket_long_unread_is_read_again_first']),
     # The shared pool's run script (ops/shared_run.py). "PR": the second window's prefix, run by unittest.
     ('PR1', 'ops/shared_run.py',
-     'if record.get("factory_from") == "demo" and t["fundedCapital"] != 10 * t["capital"]:',
-     'if False:',
+     '        if t["fundedCapital"] != 10 * t["capital"]:\n',
+     '        if False:\n',
      ['test_a_seat_on_the_demos_factory_keeps_a_tenth']),
     ('PR2', 'ops/shared_run.py',
      'short = want - c.core_spot_balance(to, c.USDC_TOKEN)["total"]',
@@ -1584,6 +1584,18 @@ MUTATIONS = [
      '    if args.on_demo_factory == (args.keys_file is not None):\n',
      '    if args.on_demo_factory == bool(args.keys_file):\n',
      ['test_an_empty_keys_file_is_still_a_keys_file']),
+    ('PR7', 'ops/shared_run.py',
+     '        if not on_model_grid(daily, drawdown, t["targetBps"]):\n',
+     '        if False:\n',
+     ['test_a_seat_on_the_demos_factory_keeps_to_the_models_grid']),
+    ('PR8', 'ops/shared_run.py',
+     '    drawdown = args.drawdown_bps if args.drawdown_bps is not None else RULES[1]\n',
+     '    drawdown = RULES[1]\n',
+     ['test_the_rules_and_duration_from_the_command_line']),
+    ('PR9', 'ops/shared_run.py',
+     '        t["targetBps"] = args.target_bps\n',
+     '        pass\n',
+     ['test_the_rules_and_duration_from_the_command_line']),
 ]
 
 RUNNERS = {
