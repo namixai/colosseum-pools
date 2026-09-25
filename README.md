@@ -20,6 +20,22 @@ Usenami Signer, our enclave signing service, is older than this event and takes 
 this demo. [CONTINUITY.md](CONTINUITY.md) separates what existed before 14 September from what was
 built in the window. [AI-USE.md](AI-USE.md) describes how we used AI tools.
 
+## Where it runs
+
+Testnet only, chain 998. The demo deployment is in `deployments/testnet-demo.json`; the numbers
+below come from it and from that record's own `block`.
+
+| | |
+|---|---|
+| app | <https://pools.usenami.io> |
+| gateway | <https://pools-api.usenami.io> (`/v1/health` answers without a wallet) |
+| `PoolFactory` | `0xf2707FCf99eD546BBA4612783761e7906FA1958e` |
+| `KeyRegistry` | `0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA` |
+| deployed at block | 65021402, with 16 agent keys published |
+
+What has actually happened on those contracts, and how to rebuild the list from the registry
+rather than believe it: [docs/EVIDENCE.md](docs/EVIDENCE.md).
+
 ## How an order travels
 
 1. The trader's wallet signs the order's own fields with EIP-712: account, perp, side, price,
@@ -83,7 +99,18 @@ Where the checks stop, and what we don't claim:
 | `ops/` | the testnet deployment script and the keeper |
 | `spike/` | scripts that check HyperCore behaviour, in the simulator and on live testnet |
 | `scripts/` | the hygiene gate, the commit identity check and the mutation check of the tests |
-| `docs/` | design notes |
+| `docs/` | six documents, listed below |
+
+### The documents
+
+| file | what it answers |
+|---|---|
+| [docs/DESIGN.md](docs/DESIGN.md) | what the contracts do, and what the design does not do |
+| [docs/GATEWAY.md](docs/GATEWAY.md) | what the gateway checks before it signs, and what it refuses |
+| [docs/HOSTING.md](docs/HOSTING.md) | the host: services, files, deploying, publishing the app, what to read in the keeper's journal |
+| [docs/EVIDENCE.md](docs/EVIDENCE.md) | what has happened on chain, how to check it, and which parts were staged |
+| [docs/SHARED-POOL.md](docs/SHARED-POOL.md) | the shared pool: many investors in one pool, its seats |
+| [docs/EVIDENCE-SHARED-POOL.md](docs/EVIDENCE-SHARED-POOL.md) | the same, for the shared pool's own runs |
 
 ## Running it
 
@@ -97,9 +124,37 @@ uv venv spike/.venv --python 3.14
 uv pip install --python spike/.venv/bin/python -r spike/requirements.txt -r agents/requirements.txt
 spike/.venv/bin/python -m unittest discover -s gateway/tests -t .
 spike/.venv/bin/python -m unittest discover -s agents/tests -t .
+spike/.venv/bin/python -m unittest discover -s ops/tests -t .
 node --test app/tests/*.test.mjs
-python3 scripts/mutations.py   # breaks one guarantee at a time; every break must turn a test red
+
+# the gates, each with a self-test that makes it fail on purpose
+bash scripts/scrub-check.sh && bash scripts/test-scrub-check.sh
+bash scripts/identity-check.sh && bash scripts/test-identity-check.sh
+spike/.venv/bin/python scripts/abi-check.py && bash scripts/test-abi-check.sh
+spike/.venv/bin/python scripts/mutations.py --check && bash scripts/test-mutations-check.sh
 ```
+
+That is every test in the repository: 126 for the contracts, 65 for the gateway, 52 for the
+agents, 100 for ops, 89 for the app. The five suites themselves run in about six seconds on a
+laptop; what takes time is once-only — `forge build` and the two installs. The gates and their
+self-tests add under a minute.
+
+The mutation stand is the slow one and is worth its own run:
+
+```bash
+spike/.venv/bin/python scripts/mutations.py --check   # instant: every mutation still matches its anchor exactly once
+spike/.venv/bin/python scripts/mutations.py           # the real thing: breaks one guarantee at a time
+```
+
+Measured from a fresh clone of this commit on a laptop: **385 mutations in about fifteen
+minutes**, every one of them caught by a test. `--check` takes a twentieth of a second and only
+asks whether each mutation still matches its anchor — run it after touching any guarded line, and
+the full stand before a release.
+
+🔴 **The full run rewrites the working tree** — it applies each mutation to the file on disk,
+runs the suite, and puts it back. Nothing else may run in that checkout while it does, including
+the gates above: a self-test that reads a half-mutated source reports a defect that is not there.
+Use a second checkout if you want to work while it runs.
 
 Everything below touches the testnet. The scripts refuse any RPC whose chain id isn't 998.
 Wallet keys are read from outside the repository: `COLOSSEUM_KEY_DIR` holds one `<name>.key`
