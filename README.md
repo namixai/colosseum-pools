@@ -40,9 +40,14 @@ contracts enforce daily loss, drawdown and leverage, reading HyperCore through i
 precompiles, and anyone may trigger the stop.
 
 More detail: [docs/DESIGN.md](docs/DESIGN.md) for the contracts and
-[docs/GATEWAY.md](docs/GATEWAY.md) for the gateway.
+[docs/GATEWAY.md](docs/GATEWAY.md) for the gateway. What the demo has already done on chain,
+and how to rebuild the list from the registry rather than believe it:
+[docs/EVIDENCE.md](docs/EVIDENCE.md).
 
 ## Checking it yourself
+
+[docs/EVIDENCE.md](docs/EVIDENCE.md) lists what the contracts have actually recorded so far —
+every stop, with the rule it names and the key it cut — and says plainly which parts were staged.
 
 Every account in the app has a page that shows the evidence and says where each piece comes
 from:
