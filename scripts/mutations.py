@@ -1480,6 +1480,10 @@ MUTATIONS = [
      'key=lambda t: self.empty_at[t])[:RECHECK_PER_PASS]',
      'key=lambda t: self.empty_at[t])',
      ['test_an_empty_ticket_long_unread_is_read_again_first']),
+    ('PK20', 'ops/shared_keeper.py',
+     'key=lambda t: self.empty_at[t])',
+     'key=lambda t: 0)',
+     ['test_an_empty_ticket_long_unread_is_read_again_first']),
 ]
 
 RUNNERS = {

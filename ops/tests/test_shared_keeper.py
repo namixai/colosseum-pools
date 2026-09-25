@@ -214,6 +214,9 @@ class Points(SharedKeeperTest):
         self.chain.pool["open"] = pile
         k = self.make()
         k.one_pass()  # all new: every one read once
+        oldest = pile[-5:]  # last in the pool's list, longest unread
+        for ticket in oldest:
+            k.empty_at[sk.to_checksum_address(ticket)] -= 100
         k.passes += sk.RECHECK_EVERY
         reads = []
         real = self.chain.core_spot_balance
@@ -221,6 +224,7 @@ class Points(SharedKeeperTest):
                                side_effect=lambda user, token: reads.append(user.lower()) or real(user, token)):
             k.one_pass()
         self.assertEqual(len(reads), sk.RECHECK_PER_PASS)
+        self.assertTrue({x.lower() for x in oldest} <= set(reads), "the longest unread are read first")
 
     def test_a_new_ticket_is_read_at_once(self):
         self.chain.pool["open"] = [TICKET_1]
