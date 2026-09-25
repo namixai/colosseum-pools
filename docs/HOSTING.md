@@ -3,7 +3,9 @@
 Status, 23 September 2026: the gateway and the keeper both run on the host against the
 rehearsal deployment, each `active` under systemd, and the gateway is public as
 `pools-api.usenami.io` behind Cloudflare with `/v1/health` answering. The app at
-`pools.usenami.io` is the `app/` folder of commit `7855198`.
+`pools.usenami.io` is, on 25 September, the `app/` folder of commit `589157c7`: every file
+compared with the site, byte for byte, apart from the one script Cloudflare adds to
+`index.html` before `</body>`.
 
 ## Where things run
 

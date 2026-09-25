@@ -135,7 +135,7 @@ spike/.venv/bin/python scripts/mutations.py --check && bash scripts/test-mutatio
 ```
 
 That is every test in the repository: 126 for the contracts, 65 for the gateway, 52 for the
-agents, 100 for ops, 89 for the app. The five suites themselves run in about six seconds on a
+agents, 100 for ops, 107 for the app. The five suites themselves run in about six seconds on a
 laptop; what takes time is once-only — `forge build` and the two installs. The gates and their
 self-tests add under a minute.
 
@@ -146,7 +146,7 @@ spike/.venv/bin/python scripts/mutations.py --check   # instant: every mutation 
 spike/.venv/bin/python scripts/mutations.py           # the real thing: breaks one guarantee at a time
 ```
 
-Measured from a fresh clone of this commit on a laptop: **385 mutations in about fifteen
+Measured from a fresh clone of this commit on a laptop: **417 mutations in about fifteen
 minutes**, every one of them caught by a test. `--check` takes a twentieth of a second and only
 asks whether each mutation still matches its anchor — run it after touching any guarded line, and
 the full stand before a release.
@@ -201,12 +201,19 @@ the API (`--dry-run` prints the request and calls nothing). The video doesn't us
 
 ## Status and limits
 
-Nothing is deployed yet. [CONTINUITY.md](CONTINUITY.md) tracks each piece by date.
+The demo is deployed, on testnet: the contracts in the table at the top, the pool gateway and
+the keeper on our pools host ([docs/HOSTING.md](docs/HOSTING.md)), and the app at
+<https://pools.usenami.io>. On 25 September the site serves the `app/` folder of commit
+`589157c7`, checked against it file by file. The shared pool's three test pools are listed in
+[docs/EVIDENCE-SHARED-POOL.md](docs/EVIDENCE-SHARED-POOL.md). [CONTINUITY.md](CONTINUITY.md)
+tracks each piece by date.
 
 The code is unaudited. We reviewed the contracts internally and fixed what we found; the
 limits that remain are listed in [docs/DESIGN.md](docs/DESIGN.md#what-the-design-does-not-do).
-The hackathon version leaves out several traders per pool, pool shares, a leaderboard,
-collusion detection, a token and mainnet.
+The hackathon version leaves out several traders per pool, a leaderboard, collusion detection,
+a token and mainnet. Pool shares exist only in the shared pool, a layer over these pools with
+one trader per seat ([docs/SHARED-POOL.md](docs/SHARED-POOL.md)); it runs on testnet and is not
+part of the reviewed core.
 
 The app asks each visitor once to confirm they understand it is a testnet demo with mock funds.
 
