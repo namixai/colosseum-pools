@@ -23,7 +23,9 @@ The app's `#/verify/<address>` page does the same reads in a browser.
 
 ## The end states recorded so far
 
-Five keys are Retired, one is Bound to a funded stage still running, ten are Free.
+Five keys were Retired when this was written, one Bound to a funded stage still running and ten
+Free. Those counts move as the demo runs — `freeCount()` and the bindings are the live answer,
+and the rows below are the part that does not change: a retired key stays retired.
 
 | Account | What it is | The contract's own record |
 |---|---|---|
@@ -80,10 +82,28 @@ The state transitions and the records above are real. How they were reached, pla
   sets its own terms; the demo pool is 8% target, 3% daily, 6% drawdown.
 - **The money is testnet money** and the USDC is mock.
 
+## The fourth ending, on the rehearsal deployment
+
+A challenge can also simply run out of time with nothing broken, and that one is not on the demo's
+factory — it is on the rehearsal deployment (`deployments/testnet-rehearsal.json`, factory
+`0x52A141515570eA66053D29bBCb61042e5693970D`), which runs the same contracts under a registry of
+its own. Said plainly so the counts above still add up: the key it cut is not one of the demo's
+sixteen.
+
+Challenge `0x71bd0281f0099b87634464dd00c512aca4972018`, bought 25 September and given seven days,
+was expired the moment its deadline passed, by `expire`
+(`0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc`). It holds `status` 4
+(Expired) with `breachReason` **0 (None)** — the distinction the whole design turns on: the
+account stopped, and nothing says the trader did anything wrong. Three `settle` calls returned
+the capital and the pool went back to Idle, whereupon its owner withdrew it
+(`0x1183d9590d1a2db7655cc431f64dd57f9f58a53c41c832d2bfc6199fa38ed924`).
+
+That leaves one ending unseen on either deployment: `Forfeited`, where the trader walks away.
+
 ## Not demonstrated yet
 
 - A funded stage ended **cleanly** (`stopFunded`, no rule broken) and the trader's share paid out
   of the result. This is the one that matters most — the whole promise is a share of what the
   trader earns — and it is in progress on the bench.
-- `Expired` (the clock ran out with nothing broken) and `Forfeited` (the trader walked away).
+- `Forfeited`, where the trader walks away.
 - `Drawdown` and `ForbiddenAsset`, the two remaining `Breach` values.
