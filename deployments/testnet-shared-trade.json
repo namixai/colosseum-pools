@@ -1,0 +1,29 @@
+{
+  "ChallengeAccountImpl": "0xd1Cea5a527D812203eC5317F082c959A65407803",
+  "KeyRegistry": "0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA",
+  "PoolFactory": "0xf2707FCf99eD546BBA4612783761e7906FA1958e",
+  "PoolImpl": "0xE841A6b72Af55DB3A1c51DF98D18125751371e57",
+  "SharedPool": "0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
+  "block": 65198940,
+  "chain_id": 998,
+  "challenge_fee": 700000,
+  "commit": "a3745c55f71ad724e59804e7bbfa9141dd972f1a",
+  "deployer": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",
+  "factory_from": "demo",
+  "fee_bps": 1000,
+  "implementations_from": "00c52622c5e2a7685323cbb041e91480d5778d05",
+  "label": "shared-trade",
+  "lock": 600,
+  "min_deposit": 2000000000,
+  "operator": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",
+  "platform": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",
+  "platform_assets": {
+    "BTC": 3,
+    "ETH": 4,
+    "SOL": 0
+  },
+  "status": "complete",
+  "tx": {
+    "SharedPool": "0x5b7cff0e690c0a11042e2c5aa0f531fe9d209423b4384f230a37e45363ed9472"
+  }
+}
