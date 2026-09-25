@@ -44,7 +44,7 @@ pages read the recorded reason rather than measuring the wreckage afterwards.
 Transactions read back from their receipts:
 
 - funded-stage stop, `0x03b387efded880407b35d35e4ed44d7344c91662da7568c6b016458c7b1ba50f`,
-  block 65176406, sent by the pool's investor.
+  block 65176406, sent by us as the pool's owner.
 - daily-loss stop, `0xf2365bf087abb81f069d51fd48ce9573ca92fb563a826c9e9cb3ba89369d3c07`,
   block 65178469, **sent by `0x75deec8b513Ee3f5D15d6b40B706A3314cf26590`, the keeper's own
   address** — it found the violation and sent the stop with no one asking it to.
@@ -67,8 +67,11 @@ Both were real refusals against the live gateway, not tests:
 
 The state transitions and the records above are real. How they were reached, plainly:
 
-- **The breaches were deliberate.** Orders were placed to break a rule on purpose. Nobody lost
-  money by accident; the point was to make the contract do its job and to see what it writes.
+- **Two of the stops were deliberate, one was not.** The two leverage stops were staged: orders
+  were placed to break the rule on purpose, to make the contract do its job and see what it
+  writes. The **daily-loss** stop was not. That was a real attempt at the target that lost, on a
+  guard of ours set too close to the floor to catch it in time, and the keeper stopped the
+  account for it. It is the only record here nobody arranged.
 - **The orders were placed by a person**, through the gateway, not by an autonomous trading
   agent. Where a demo says "AI agent", read "a program holding a wallet that signs gateway
   requests" — that part is built, but these trades were driven by hand.
@@ -77,17 +80,25 @@ The state transitions and the records above are real. How they were reached, pla
   than the pools host, and its discovery state was seeded with the pool it follows instead of
   replaying ~180k blocks of logs. Finding the violation, choosing the call and sending it were
   all the keeper's.
-- **Pool `0x2b108c46…` is a bench with soft terms** — +0.2% to pass, 10% daily, 20% drawdown —
-  built to exercise pass → funded → clean stop → payout, not to show trading. An investor's pool
-  sets its own terms; the demo pool is 8% target, 3% daily, 6% drawdown.
+- **Both pools above are benches, and both have soft targets.** `0x2b108c46…` asks +0.2% to
+  pass (10% daily, 20% drawdown) and `0x914E4bf9…` — where the first pass, the funded-stage
+  leverage stop and the daily-loss stop all happened — asks +1% on 11 USDC. Both were built to
+  exercise the transitions, not to show trading, and we own both. An investor's pool sets its
+  own terms: the demo pool is 8% target, 3% daily, 6% drawdown, and none of the records above
+  are from it.
+- **Every wallet here is ours.** The pools' owner and the trader are two keys we hold, so where
+  a line says a pool's investor or its trader did something, read "we did, wearing that hat".
+  The mechanism is what the chain proves; an arm's-length trader is not.
 - **The money is testnet money** and the USDC is mock.
 
 ## A funded stage ended cleanly, and the trader was paid
 
 This is the one the whole design is for, and it closed on 25 September on the soft bench
-`0x2b108c465786b040355dcefe1b721e3e6276e80c`. The funded trader ended their own stage with
-`stopFunded` — `0xaee60fe87fe216ffffd00986088b3814818dee1f6ef06eb642ee7722c87ea271` — which
-records `Breach.None`: nobody stopped them, they stopped.
+`0x2b108c465786b040355dcefe1b721e3e6276e80c`. The stage was ended from the funded trader's own
+wallet with `stopFunded` — `0xaee60fe87fe216ffffd00986088b3814818dee1f6ef06eb642ee7722c87ea271`
+— which records `Breach.None`: the contract was not made to stop it, it was let go. The call came
+from a watcher of ours using that wallet, and the wallet is ours too; what this shows is the
+path, not a trader we do not control.
 
 The share is not computed at the stop. `settleFunded` takes the result at the first step with
 nothing open, which is what closing actually realized rather than the mark it was priced from,
@@ -135,9 +146,13 @@ traded at all.
 On pool `0x9bc941cd7980a2564b06fd6baeb56b09a765237b`, challenge
 `0xd736550af8ad2284fb67823aa3ca01145656e7d7` was bought, activated and forfeited without a single
 order: `0x119b8243e0d5c2626cd77e031c93d04ff5c2e904247791d5b2ad499695a41608`, sent by the trader.
-It holds `status` 5 (Forfeited), `breachReason` **0 (None)**, and its equity at the end was
-**3.000000** — exactly the capital it was given. The key was retired like any other; the capital
-went back to the pool over three `settle` calls.
+**Read this one from the event, not from `status()`.** The walk-away is
+`Stopped(status 5 Forfeited, reason 0 None, equity 3000000)` in that transaction: it ended as
+Forfeited, with nothing held against the trader, and the equity was **3.000000** — exactly the
+capital it was given, untouched. Three `settle` calls then returned that capital to the pool and
+carried the account on to `Settled`, so `status()` answers **8** today. The account is telling
+the truth and so is this file; they are answering different questions, and the end state a
+challenge passes through is only in its events.
 
 ## ForbiddenAsset, and why it is not in the list above
 
