@@ -67,8 +67,32 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   The wallet is a separate `<name>.key`/`<name>.addr` pair with its own gas (a stop cost 194,818
   gas at 0.1 gwei on 25 Sep 2026, about 0.0000195 HYPE). The state file must not be shared: it
   holds `next_block` and the pools being followed, and two processes writing one file would
-  corrupt each other's place. A new keeper starts at the deployment block and pays the catch-up
-  above before it enforces anything, so start it before you need it.
+  corrupt each other's place.
+
+  🔴 **Do not let a second keeper catch up beside a working one on the same host.** Measured
+  25 September 2026, starting one with an empty state file: within a minute the FIRST keeper —
+  the one actually enforcing — logged `pass_failed: eth_blockNumber: rate limited 6 times in a
+  row`. Two keepers on one host share one address at the RPC, and a catch-up spends fifty
+  `eth_getLogs` a pass against a node that counts them. The newcomer does not join the watch; it
+  blinds the incumbent for as long as it walks.
+
+  Seed it instead. Copy the working keeper's `next_block` and `live` into the new state file
+  before starting it, so it begins at the head with the pools already known:
+
+      sudo systemctl stop colosseum-keeper2
+      sudo cat /var/lib/colosseum-keeper/keeper-demo.json      # copy next_block and live
+      printf '%s\n' '<that json>' | sudo tee /var/lib/colosseum-keeper/keeper2-demo.json >/dev/null
+      sudo chown colosseum-keeper:colosseum-keeper /var/lib/colosseum-keeper/keeper2-demo.json
+      sudo chmod 600 /var/lib/colosseum-keeper/keeper2-demo.json
+      sudo systemctl start colosseum-keeper2
+
+  (`sudo -u colosseum-keeper install -m 0600 /dev/stdin …` looks tidier and does not work:
+  dropping to that user makes the heredoc unreadable, and the write fails with `Permission
+  denied`.) Seeded that way both keepers sat at the head, each following the same two pools,
+  with **no rate-limit failure on either in the three minutes after** — the steady-state load of
+  two fits where a catch-up does not. Two keepers have run on this host since 25 September 2026:
+  `0xD6F07317fC5f12302776b03A7206B1614FD49021` and
+  `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`.
 
   **What happens when both reach the same account in the same block.** `breach` re-reads the
   violation from the chain and refuses if there is none (`NoBreach`), so neither keeper can stop
