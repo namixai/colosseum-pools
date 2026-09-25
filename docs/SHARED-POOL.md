@@ -263,10 +263,14 @@ round's pool. The main transactions, and how the trader acted (the gateway clien
 are in [EVIDENCE-SHARED-POOL.md](EVIDENCE-SHARED-POOL.md); every step's hash is in
 `spike/results/2026-09-25.jsonl`.
 
+On the same pool, once its value was no longer its number of shares, a new holder deposited 20 at
+0.98785643 a share, got 20.24585701e8 shares for it, and later took 19.999999 out at the same price.
+Nobody else's holding moved but for the millionth the payment left behind, which is theirs now. The
+table is in the evidence page.
+
 ## Not done yet
 
 - The keeper running on the operator's host.
-- A deposit at a price other than 1 on testnet: both runs took their deposits into a fresh pool.
 - Deposits through HyperEVM on mainnet, where the sender is visible.
 - At most 16 holders wait at once; a request past that waits for the queue to move.
 - A holder with no HyperCore account loses a HyperCore part of 1 USDC or less: it can't pay for

@@ -45,6 +45,17 @@ buys its challenge and trades it through the pool gateway with agents.client, th
     spike/.venv/bin/python -m agents.client --deployment demo --wallet shared-trader --gateway GATEWAY_URL \\
         order CHALLENGE BTC buy SIZE PRICE --type ioc
 
+A deposit at a price other than 1, and the way out at the same price: a third depositor on that pool,
+once its value is no longer its number of shares. The point mints the deposit times the shares over
+the value, and the price of a share, and everyone else's holding, stay where they were:
+
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-trade wallets --only shared-dep-c --no-trader
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-trade deposit --who shared-dep-c
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-trade settle
+    # the lock (600 s) runs from that point; `request` says how long is left
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-trade request --who shared-dep-c
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-trade settle
+
 Testnet only (hlspike.common refuses anything else). Wallets are read by name from
 COLOSSEUM_KEY_DIR and never printed: `shared-operator` runs the pool, `shared-dep-a` and
 `shared-dep-b` deposit, `shared-trader` buys a challenge on the seat. Nobody trades in this run;
@@ -68,7 +79,7 @@ sys.path.insert(0, str(ROOT))
 from hlspike import common as c  # noqa: E402
 from ops import deployments  # noqa: E402
 
-DEPOSITORS = ("shared-dep-a", "shared-dep-b")
+DEPOSITORS = ("shared-dep-a", "shared-dep-b", "shared-dep-c")
 TRADER = "shared-trader"
 USDC_1E8 = 100_000_000
 USDC_1E6 = 1_000_000

@@ -87,9 +87,37 @@ checked the binding and signed it with the challenge's agent key. Twice before t
 through, the gateway answered 429 `upstream_busy`: its own chain node was refusing reads. That answer
 means wait, not a refusal of the order.
 
+## A deposit at a price other than 1, and the way out at that price
+
+On `0x547067e2…26a6`, after the trade above, the pool held 41.48997 USDC on 42e8 shares, a price
+of 0.98785643 a share. A new holder, `0x329166c41C9249Aa857cd7B7D8F3aF5F4E4CE09f`, deposited 20
+USDC through a ticket of its own. Once the lock had run, it asked for everything.
+
+| | `value()` | `totalShares()` | new holder's `sharesOf` | each earlier depositor's `sharesOf` | price of a share |
+|---|---|---|---|---|---|
+| before the deposit's point | 41.48997 | 42e8 | 0 | 20e8 | 0.98785643 |
+| after point `0x2dce964a4cb671d034e3e1cefd9795b2fb28a1e8b1b5e43c7482e03c2836c353` | 61.48997 | 62.24585701e8 | 20.24585701e8 | 20e8 | 0.98785643 |
+| after point `0x248495a343ea8b898d25679b0ffe902ac76a6d0c834a2e1ae188d688e7dfd462` | 41.489971 | 42e8 | 0 | 20e8 | 0.98785645 |
+
+- **In.** 20 × 42e8 / 41.48997 = 20.24585701e8 shares: the deposit bought at the price it found, not
+  at 1. The earlier holders' 20e8 shares were worth 19.757 USDC before it and after it.
+- **Out.** The request was `0x864349c7744deba7498b9a207401534f01fbd9335b99781056d5f418e28e7926`. The
+  point paid 19.999999 USDC at the same price: 1.5 on HyperEVM, the challenge price it collected from
+  the seat, and 18.499999 on HyperCore. `payments(0x329166c4…E09f)` reads `(1790327053, 1500000,
+  1849999900)`. That is 20.24585701e8 shares at the point's price, 0.98785643, rounded down to the
+  millionth a payment carries. The millionth left behind stays in the pool: the value after the point
+  is 41.489971, not 41.48997, and the price of a share went up in the eighth decimal, to 0.98785645,
+  for everyone still in. The earlier depositors' 20e8 were worth 19.75712857 before and 19.75712905
+  after.
+- **The money went back.** The step was funded by `0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4`, which
+  sent the pool's operator 22 USDC on HyperCore (`0xd53c3f5396b7bdbdd6b5042a2822ca010900573931badc8f7904eaa655bb97a8`
+  in the ledger); the operator passed 21 to the new holder. The holder's payout went back to that
+  address: 18.499999 on HyperCore (`0x05302871574daf0506a9042a2861550103004056f240cdd7a8f8d3c4164188ef`)
+  and 1.5 on HyperEVM (`0x04ced3f1dbe84f83f48a7848f3fa5c9a834caa9e5f7de6352b6cca39b68e0819`).
+  Its two new HyperCore accounts, the holder's and the ticket's, cost 2 USDC; that money is gone.
+
 ## What this does not show
 
-- A deposit at a price other than 1: all three pools took their deposits fresh.
 - A passed challenge or a funded stage on a seat, and the funded term running out.
 - A stop on a seat. The rules above would stop the challenge at 2.70 USDC of equity, or at 2.85 on
   the day; the trader stayed well inside.
