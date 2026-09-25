@@ -56,10 +56,15 @@ contract ChallengeAccount is RuledAccount {
     /// What the last return to the pool sent, so the next step can tell our own send landing
     /// from money that arrived afterwards.
     uint64 public returnSpotBefore;
-    bool public returnStarted;
+    /// When this account first had anything to hand back. Set ONCE and never moved again: a
+    /// window that a stranger can restart is not a window, which is what the old check was.
+    uint64 public returnAt;
     uint64 public payoutAt;
 
     uint64 public constant PAYOUT_WAIT = 5 minutes;
+    /// How long the account's own money may be in flight before nothing here holds the
+    /// settlement open any more. Anything that turns up after it is not lost: `sweep()`.
+    uint64 public constant RETURN_WAIT = 5 minutes;
 
     event Started(address indexed trader, address indexed key, uint64 capital, uint64 deadline);
     event Stopped(Status indexed status, Breach indexed reason, int64 equity);
@@ -248,9 +253,20 @@ contract ChallengeAccount is RuledAccount {
     function settle(Cancel[] calldata cancels, uint32[] calldata extraAssets) external {
         if (!isStopped()) revert BadStatus(status);
         (uint256 open, uint64 free, uint64 spot) = _drainStep(cancels, extraAssets);
-        // Wait until the perp side is fully on spot: from then on the spot balance only
-        // changes through our own sends (and anyone's donations, which go to the pool).
-        if (open != 0 || free != 0) return;
+        if (open != 0) return; // a real position has to close first
+
+        // One clock for the whole hand-back, started the first time there is anything to give
+        // and never moved afterwards. That is the fix: the old check asked whether this step's
+        // balance was smaller than the last one we sent, so a stranger sending the SAME unit
+        // every step was never "smaller", and could hold the account open for as long as the
+        // gas was worth it to them. A window they cannot restart bounds that.
+        if (returnAt == 0 && (free != 0 || spot != 0)) returnAt = uint64(block.timestamp);
+        bool waited = returnAt != 0 && block.timestamp > returnAt + RETURN_WAIT;
+
+        // The perp side needs a moment to reach spot, and the share below is paid out of spot.
+        // Inside the window that wait is the account's own money; past it, a perp balance is
+        // somebody else's transfer, already sent across by _drainStep, and it gets no veto.
+        if (free != 0 && !waited) return;
 
         if (payoutOwed != 0 && !payoutDone) {
             if (spot == 0) return;
@@ -270,29 +286,57 @@ contract ChallengeAccount is RuledAccount {
         }
 
         if (spot != 0) {
-            // Our own return has landed when the balance came DOWN from what we sent last
-            // time; whatever is here now arrived after it, from outside. The same shape as
-            // the payout check above, and for the same reason: a send is queued, not instant.
-            bool landed = returnStarted && spot < returnSpotBefore;
+            // Our own first return has landed when the balance came DOWN from what it was --
+            // and `returnSpotBefore` is frozen at that first send, so a later donation is
+            // measured against the capital, not against itself. When even that cannot tell
+            // (the account had nothing of its own to send, so the first "return" was the
+            // stranger's unit), the window decides instead.
+            bool landed = returnSpotBefore != 0 && (spot < returnSpotBefore || waited);
             CoreOps.sendUsdc(address(pool), spot);
             emit ReturnedToPool(spot);
             if (!landed) {
-                // Either this is the account's own capital going home, or the last send did
-                // not land. Wait for it: settling now could strand real money here.
-                returnStarted = true;
-                returnSpotBefore = spot;
+                // Frozen at the FIRST send, so a later donation is measured against the
+                // capital rather than against itself, and a dust attack is shrugged off in a
+                // step instead of waiting out the window. No test pins this: the only case
+                // where freezing and re-setting differ is a settlement already held up by a
+                // resting order's margin, and this harness cannot make an order rest.
+                if (returnSpotBefore == 0) returnSpotBefore = spot;
                 return;
             }
-            // A donation, then. It has just been sent on to the pool, and it does not get to
-            // hold the settlement open: anyone with a HyperCore account could otherwise keep
-            // this challenge -- and the pool behind it, whose capital only comes out in Idle
-            // -- from ever finishing, for the price of one unit per block.
         }
 
-        if (CoreOps.equity(address(this)) <= 0) {
+        // Finish when nothing is HELD here: no position, and everything left is withdrawable.
+        // A resting order's margin is not withdrawable, so this still waits for one -- ending
+        // with margin held would leave it on a settled account. What is merely in flight, or
+        // arrives afterwards, is not stranded either: anyone may `sweep()` it to the pool.
+        if (CoreOps.margin(address(this)).ntlPos == 0
+            && CoreOps.equity(address(this)) <= int64(CoreOps.withdrawable(address(this)))) {
             status = Status.Settled;
             emit Settled();
             pool.onChallengeSettled();
+        }
+    }
+
+    /// @notice Pushes whatever is left on a settled account back to the pool. Anyone may call
+    ///         it, as often as they like.
+    /// @dev    This is what lets `settle` finish on time. Without it the step would have to
+    ///         wait until every last unit had landed before ending, and a stranger who keeps
+    ///         sending units decides when that is. With it, ending early strands nothing: a
+    ///         late fill, a send of ours that did not land, a donation that arrived afterwards
+    ///         -- all of it comes here and goes home. It changes no state and reads no rule,
+    ///         so it cannot reopen a settlement or alter what anybody was paid.
+    function sweep() external {
+        if (status != Status.Settled) revert BadStatus(status);
+        uint64 free = CoreOps.withdrawable(address(this));
+        if (free != 0) {
+            CoreOps.toSpot(free);
+            emit MovedToSpot(free);
+            return; // it lands next block; call again then
+        }
+        uint64 spot = CoreOps.spotUsdc(address(this));
+        if (spot != 0) {
+            CoreOps.sendUsdc(address(pool), spot);
+            emit ReturnedToPool(spot);
         }
     }
 }

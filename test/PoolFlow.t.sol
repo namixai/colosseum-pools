@@ -1009,11 +1009,11 @@ contract PoolFlowTest is Test {
         vm.prank(trader);
         ch.forfeit(new Cancel[](0), none, SALT);
 
-        for (uint256 i = 0; i < 8 && !ch.returnStarted(); ++i) {
+        for (uint256 i = 0; i < 8 && ch.returnSpotBefore() == 0; ++i) {
             ch.settle(new Cancel[](0), none);
-            if (!ch.returnStarted()) CoreSimulatorLib.nextBlock();
+            if (ch.returnSpotBefore() == 0) CoreSimulatorLib.nextBlock();
         }
-        assertTrue(ch.returnStarted(), "the capital was sent back to the pool");
+        assertTrue(ch.returnSpotBefore() != 0, "the capital was sent back to the pool");
         assertGt(ch.returnSpotBefore(), 0);
 
         // Same block, so that send is still queued and the balance reads untouched.
@@ -1123,6 +1123,76 @@ contract PoolFlowTest is Test {
         }
         assertTrue(p.fundedPayoutDone(), "the payout happens on a later block");
         assertEq(p.fundedPayoutSent(), p.fundedPayoutOwed(), "and it is the whole share");
+    }
+
+    /// Audit's recheck of the first A-01 fix: the amount comparison alone could still be held
+    /// open. When the account has nothing of its own to hand back, the first "return" IS the
+    /// stranger's unit, and a unit of the same size after it is never "smaller than last time".
+    /// The window is what ends it, and the stranger cannot restart the window.
+    function test_settle_spotDust_whenTheOwnReturnIsTiny_noLongerHolds() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _buy(p);
+        vm.warp(block.timestamp + 1 hours + 1);
+        ch.abort();
+        uint32[] memory none = new uint32[](0);
+
+        // The same unit before every step: under the old rule this ran for ever.
+        for (uint256 i = 0; i < 20 && ch.status() != ChallengeAccount.Status.Settled; ++i) {
+            uint64 held = CoreOps.spotUsdc(address(ch));
+            CoreSimulatorLib.forceSpotBalance(address(ch), 0, held + 1);
+            ch.settle(new Cancel[](0), none);
+            CoreSimulatorLib.nextBlock();
+            vm.warp(block.timestamp + 60);
+        }
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Settled),
+            "the window ends it even when no amount comparison can");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+    }
+
+    /// The challenge's other door: a stranger pushing USDC onto its PERP account, which the
+    /// step has to move across before it can finish. Same window, same reason.
+    function test_settle_challengePerpDust_noLongerHolds() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        uint32[] memory none = new uint32[](0);
+        vm.prank(trader);
+        ch.forfeit(new Cancel[](0), none, SALT);
+
+        for (uint256 i = 0; i < 20 && ch.status() != ChallengeAccount.Status.Settled; ++i) {
+            CoreSimulatorLib.forcePerpBalance(address(ch), 1);
+            ch.settle(new Cancel[](0), none);
+            CoreSimulatorLib.nextBlock();
+            vm.warp(block.timestamp + 60);
+        }
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Settled),
+            "perp dust must not hold the challenge open either");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+    }
+
+    /// Finishing on time is only safe because nothing is stranded by it. Whatever turns up on
+    /// a settled account -- our own send that did not land, a late fill, someone's donation --
+    /// goes home when anyone calls sweep().
+    function test_sweep_sendsWhatArrivesAfterTheEndBackToThePool() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        uint32[] memory none = new uint32[](0);
+        vm.prank(trader);
+        ch.forfeit(new Cancel[](0), none, SALT);
+        _settleChallenge(ch);
+
+        // A live challenge refuses: sweep is only for accounts that are finished with.
+        ChallengeAccount fresh = _buy(p);
+        vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.BadStatus.selector, ChallengeAccount.Status.Created));
+        fresh.sweep();
+        // Its capital leaves the pool on the next block; measure after that, not before.
+        CoreSimulatorLib.nextBlock();
+
+        uint64 poolBefore = _spot(address(p));
+        CoreSimulatorLib.forceSpotBalance(address(ch), 0, 5e8); // 5 USDC turns up afterwards
+        ch.sweep();
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(address(ch)), 0, "the settled account is empty again");
+        assertEq(_spot(address(p)), poolBefore + 5e8, "and the pool has it");
     }
 
     function test_graduate_needsTargetAndFlat() public {
