@@ -97,15 +97,23 @@ The state transitions and the records above are real. How they were reached, pla
   (Leverage)** with the agent key cut in that same block; the keeper went on to `settleFunded`
   by itself. The staged half is the rule-breaking. **Nobody chose the stop, timed it or sent
   it** — the person who set the trap was still loading the page when it sprang.
-- **Both pools above are benches, and both have soft targets.** `0x2b108c46…` asks +0.2% to
+- **Two of the three pools above are benches with soft targets.** `0x2b108c46…` asks +0.2% to
   pass (10% daily, 20% drawdown) and `0x914E4bf9…` — where the first pass, the funded-stage
   leverage stop and the daily-loss stop all happened — asks +1% on 11 USDC. Both were built to
-  exercise the transitions, not to show trading, and we own both. An investor's pool sets its
-  own terms: the demo pool is 8% target, 3% daily, 6% drawdown, and none of the records above
-  are from it.
-- **Every wallet here is ours.** The pools' owner and the trader are two keys we hold, so where
-  a line says a pool's investor or its trader did something, read "we did, wearing that hat".
-  The mechanism is what the chain proves; an arm's-length trader is not.
+  exercise the transitions rather than to show trading, and we own both.
+- **The third is not a bench, and neither are its terms.** The first row — challenge
+  `0xf01f16d0…`, stopped for leverage — ran on the demo pool
+  `0x2839d3c872ce82151a16afe0315756915d8a9b79`: **8% target, 3% daily, 6% drawdown**, the terms
+  an investor would actually set. That pool was opened from a different wallet
+  (`0x21538eBF…`) through the site's own form, capital sent by hand on HyperCore, not deployed by
+  a script. So the softest thing about that record is nothing: the rule it broke is the rule a
+  real pool would carry.
+- **Every wallet here is ours.** Three of them: the deploy key that owns the two benches
+  (`0x00d014df…`), the trader (`0xdc87191c…`), and the one that opened the demo pool
+  (`0x21538eBF…`). So where a line says a pool's investor or its trader did something, read "we
+  did, wearing that hat". The mechanism is what the chain proves; an arm's-length trader is not.
+  The keeper's two addresses are ours as well, and the only actor here that decided anything
+  without being told.
 - **The money is testnet money** and the USDC is mock.
 
 ## A funded stage ended cleanly, and the trader was paid
