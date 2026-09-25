@@ -55,7 +55,14 @@ CHECKPOINT_WINDOW = 15 * 60
 START_WINDOW = 3600
 CHALLENGE_CREATED = "0x" + keccak(text="ChallengeCreated(address,address,address)").hex()
 STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
-MAX_LOG_WINDOW = 50  # blocks per eth_getLogs call that HyperEVM accepts
+# Measured 25 Sep 2026 on a range old enough that the chain's tip could not interfere: both
+# Hyperliquid's node and rpcs.chain.link answer a 1,000-block eth_getLogs, and Hyperliquid's
+# refuses 2,000 with "-32602 query exceeds max block range 1000". So 1,000 is the node's, and
+# the 50 below is ours: a conservative step that has never been refused, kept as the default
+# because a catch-up is the only time the width matters and nobody has measured the wider one
+# against a live node yet. Raise it with --log-window when someone has.
+MAX_LOG_WINDOW = 1000
+DEFAULT_LOG_WINDOW = 50
 RECUT_AFTER_BLOCKS = 10  # CoreWriter actions land a few seconds after their block
 
 # ChallengeAccount.Status and Pool.Stage. The tests hold these against the Solidity source.
@@ -218,7 +225,7 @@ def pools_with_challenges(factory: str, lo: int, hi: int) -> set[str]:
 
 class Keeper:
     def __init__(self, factory: str, wallet, dry: bool, state_path: pathlib.Path, start_block: int,
-                 window: int = MAX_LOG_WINDOW, max_windows: int = 50):
+                 window: int = DEFAULT_LOG_WINDOW, max_windows: int = 50):
         if not 1 <= window <= MAX_LOG_WINDOW:
             raise SystemExit(f"--log-window must be 1..{MAX_LOG_WINDOW}: HyperEVM refuses wider eth_getLogs ranges")
         if max_windows < 1:
@@ -294,7 +301,7 @@ def main() -> int:
     p.add_argument("--every", type=int, default=30, help="seconds between passes")
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")
     p.add_argument("--state", help="state file (default ops/state/keeper-<deployment>.json)")
-    p.add_argument("--log-window", type=int, default=MAX_LOG_WINDOW,
+    p.add_argument("--log-window", type=int, default=DEFAULT_LOG_WINDOW,
                    help=f"blocks per eth_getLogs call, 1..{MAX_LOG_WINDOW}")
     p.add_argument("--max-windows", type=int, default=50, help="eth_getLogs calls per pass, at most")
     args = p.parse_args()

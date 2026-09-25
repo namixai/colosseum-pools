@@ -204,12 +204,18 @@ class Following(KeeperTest):
         self.assertEqual(spans, [(20, 29), (30, 35)])
         self.assertEqual(again.next_block, 36)
 
-    def test_log_windows_stay_within_what_hyperevm_accepts(self):
+    def test_log_windows_step_by_the_default_not_the_ceiling(self):
+        # The default is ours and conservative; the ceiling is the node's. This test used to be
+        # called "stay within what HyperEVM accepts" and refused 1000 as too wide -- which is the
+        # width the node actually serves. A test can pin a belief as firmly as a fact.
         self.chain.latest = 130
         self.make(start=0).one_pass()
         spans = [int(q["toBlock"], 16) - int(q["fromBlock"], 16) + 1 for q in self.chain.log_queries]
-        self.assertEqual(spans, [50, 50, 31])
-        for bad in (0, 51, 1000):
+        self.assertEqual(spans, [50, 50, 31], "the default step is 50, whatever the ceiling is")
+        self.assertEqual(keeper.DEFAULT_LOG_WINDOW, 50)
+        self.assertEqual(keeper.MAX_LOG_WINDOW, 1000, "measured: the node refuses 2000, serves 1000")
+        self.make(window=1000)          # at the node's limit: allowed
+        for bad in (0, 1001):
             with self.assertRaises(SystemExit, msg=bad):
                 self.make(window=bad)
 
