@@ -133,3 +133,14 @@ In `demo` mode the gateway reads one owner-only `*.key` file per agent key from
 the address comes from the key. In `signer` mode it reads one bearer token per key from
 `SIGNER_TOKENS_FILE`. Either lives on the gateway host only, never in this repository.
 `GET /v1/health` names the mode and, in `demo` mode, how many keys it holds.
+
+**The gateway reads its own node, and that costs you requests.** Since 25 September 2026 it
+reads `rpc.hyperliquid-testnet.xyz` while the keeper reads `rpcs.chain.link`, because the two
+were sharing one per-IP budget on one host: an outsider's order costs the gateway five chain
+reads *before* it is refused, so a stream of refusable orders could spend the budget the keeper
+needed to notice a broken rule (audit A-03). Separating them fixed that and cost something
+visible from outside. The gateway's node allows about 100 calls a minute against the old one's
+200, so nginx is cut to match: **15 requests a minute across everyone, burst 10**, where it used
+to be 30 and 20. Past that you get `429` from nginx, not a refusal from the gateway. It is a
+smaller ceiling than before and it is deliberate: a keeper that cannot see a breach costs the
+investor money, a trader who waits a few seconds does not.

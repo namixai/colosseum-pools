@@ -40,6 +40,23 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   These per-IP limits are also why `ops/host/nginx-pools-api.conf.in` throttles: that budget
   protects the gateway's own node. It is not what keeps the keeper seeing — the separation is.
 
+  ✅ **Done on the running host on 25 September 2026**, by hand, and checked rather than
+  assumed. What was seen there: the new node answered `eth_call` **from the host** (`freeCount()`
+  came back `0x…0005`); after the swap `GET /v1/health` returned
+  `{"ok": true, "chain_id": 998, "signer": "demo", "keys": 32}`; and — the check that matters,
+  because a gateway can start and still fail its first chain read — a throwaway key asking about
+  an address that is not a pool account was refused `not_an_account`, which is only reachable by
+  reading the chain. nginx went to 15 requests a minute with a burst of 10 in the same pass; the
+  `pools_ip` line was left alone. Both files were copied first and the copies are still there as
+  `*.bak-0925`.
+
+  🔴 **Keep the key directory reconciled with the registry.** On that same visit the directory
+  held twenty `*.key` files while the registry had only ever published sixteen addresses: four
+  usable keys had been sitting there unpublished since the start. Nobody knew, because nothing
+  compares the two. `GET /v1/health` gives the count the host holds and `freeCount()` gives what
+  the registry has free — if they drift apart, the gap is either keys nobody can use or keys
+  nobody knows about, and the second kind is what makes a trader pass and then find no key.
+
   🔴 **A keeper that has fallen behind is not watching, and it takes real time to come back.**
   The keeper reads `eth_getLogs` 50 blocks at a call and the unit runs the defaults, 50 calls a
   pass: 2,500 blocks each time. **The 50 is ours, not the node's.** Measured 25 September 2026 on
