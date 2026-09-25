@@ -124,9 +124,37 @@ account stopped, and nothing says the trader did anything wrong. Three `settle` 
 the capital and the pool went back to Idle, whereupon its owner withdrew it
 (`0x1183d9590d1a2db7655cc431f64dd57f9f58a53c41c832d2bfc6199fa38ed924`).
 
-That leaves one ending unseen on either deployment: `Forfeited`, where the trader walks away.
+
+## A trader walked away
+
+`Forfeited` is the ending nobody talks about and every prop firm has: the trader takes the
+challenge, looks at it, and leaves. Only the trader can do it — `forfeit` reverts for anyone else
+— and it is the one ending that says nothing about how they traded, because they need not have
+traded at all.
+
+On pool `0x9bc941cd7980a2564b06fd6baeb56b09a765237b`, challenge
+`0xd736550af8ad2284fb67823aa3ca01145656e7d7` was bought, activated and forfeited without a single
+order: `0x119b8243e0d5c2626cd77e031c93d04ff5c2e904247791d5b2ad499695a41608`, sent by the trader.
+It holds `status` 5 (Forfeited), `breachReason` **0 (None)**, and its equity at the end was
+**3.000000** — exactly the capital it was given. The key was retired like any other; the capital
+went back to the pool over three `settle` calls.
+
+## ForbiddenAsset, and why it is not in the list above
+
+`Breach.ForbiddenAsset` cannot be reached through this demo, and that is by construction rather
+than for want of trying. The gateway refuses an order whose asset is not in the pool's rules
+before it signs anything (`asset_not_allowed`, 403), so no position in a forbidden asset can be
+opened by a trader going through it — and in this demo the gateway holds every key.
+
+The contract's check is the second layer, and it is there for the case the first cannot cover: a
+key our gateway does **not** hold. If an account's agent key ever signed elsewhere, or the
+operator submitted an order around its own checks, the position would still be visible to
+`violation()` and anyone could pull the stop. Demonstrating it would mean signing with a key
+outside the gateway on purpose, which is the one thing the design says nobody does.
+
+So: not a gap in the evidence, a consequence of the layering. Worth saying plainly rather than
+leaving a reader to wonder which it was.
 
 ## Not demonstrated yet
 
-- `Forfeited`, where the trader walks away.
-- `Drawdown` and `ForbiddenAsset`, the two remaining `Breach` values.
+- `Drawdown`, the last of the three rules the pools enforce.
