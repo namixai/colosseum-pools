@@ -52,10 +52,12 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   (default 50) is the lever if a catch-up ever has to go faster, at the cost of more calls per
   pass against a node that rate-limits.
 - **A second keeper is a copy of the first, not a special build.** Every call the keeper makes is
-  open to anyone: on a challenge `activate`, `abort`, `checkpoint`, `breach`, `expire`,
-  `graduate`, `settle` and `recut`; on a pool `breach`, `settleFunded`, `checkpoint` and `recut`.
-  The only two calls with a caller check are `forfeit` (the trader alone) and `stopFunded` (the
-  investor or the funded trader), and the keeper makes neither. So a second keeper has exactly
+  open to anyone: on a challenge `activate`, `abort`, `checkpoint`, `breach`, `expire`, `settle`
+  and `recut`; on a pool `breach`, `settleFunded`, `checkpoint` and `recut`. The only two calls
+  with a caller check are `forfeit` (the trader alone) and `stopFunded` (the investor or the
+  funded trader), and the keeper makes neither. `graduate` is open to anyone as well, and the
+  keeper still leaves it alone on purpose — passing the moment the target is touched cuts the
+  trader's run short, so the timing is theirs. The keeper's own header says so. So a second keeper has exactly
   the powers of the first, and needs no permission from it or from us.
 
   What it needs is its own wallet and its own state file:
