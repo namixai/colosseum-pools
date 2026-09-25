@@ -5,6 +5,13 @@
 
 # Every order costs the gateway six RPC calls, and its RPC allows 1000 calls in five minutes
 # per IP. Half an order a second, from everyone together, is 900 of them.
+#
+# That budget is the gateway's alone ONLY because the keeper was moved to the other node
+# (ops/host/bootstrap.sh). While the two shared one node this arithmetic was wrong in the way
+# that matters: the 900 came out of the same 1000 the keeper needed to see a breach, so an
+# outsider sending refusable orders -- five reads each, spent BEFORE the refusal -- could
+# blind the stop. These limits protect the gateway's own node; they are not what keeps the
+# keeper seeing.
 limit_req_zone $binary_remote_addr zone=pools_ip:1m rate=12r/m;
 limit_req_zone $server_name zone=pools_all:1m rate=30r/m;
 limit_req_status 429;

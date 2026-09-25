@@ -17,6 +17,29 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
   `pools-api.usenami.io`, behind Cloudflare.
 - **The keeper** (`colosseum-keeper`) has no port. It polls the chain every 30 seconds.
 
+  🔴 **The two use different nodes on purpose, and swapping them breaks one of them.** Both
+  nodes rate-limit per IP and this host is one IP, so while the gateway and the keeper shared
+  a node they shared a budget — and the gateway is public. An outsider's order costs the
+  gateway five chain reads *before* it is refused, so a stream of refusable orders spends the
+  keeper's budget from the outside, and a keeper that is being throttled does not stop a trader
+  who has broken the rules. The investor pays for that delay. So: the keeper reads
+  `rpcs.chain.link`, the gateway reads `rpc.hyperliquid-testnet.xyz`.
+
+  The assignment is forced, not a preference. The keeper cannot move, because Hyperliquid's
+  node refuses its `eth_getLogs` *from this host* — `invalid block range` for any range,
+  however near the head, while the same call from elsewhere goes through (measured 24 Sep
+  2026). The gateway can, because it makes no `eth_getLogs` call at all: it reads state with
+  `eth_call` and nothing else. Check before trusting this on a new host, from the host itself
+  and not from a laptop — the refusal above is what a laptop does **not** reproduce:
+
+      curl -s -X POST https://rpc.hyperliquid-testnet.xyz/evm -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"<registry>","data":"0xa6f48c90"},"latest"]}'
+
+  `0xa6f48c90` is `freeCount()`; a number back means the gateway's reads work from there.
+
+  These per-IP limits are also why `ops/host/nginx-pools-api.conf.in` throttles: that budget
+  protects the gateway's own node. It is not what keeps the keeper seeing — the separation is.
+
   🔴 **A keeper that has fallen behind is not watching, and it takes real time to come back.**
   HyperEVM serves `eth_getLogs` 50 blocks at a call and the unit runs the defaults, 50 calls a
   pass: 2,500 blocks each time. The 30-second wait comes *after* a pass, not instead of it, so a

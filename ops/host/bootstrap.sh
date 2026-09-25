@@ -40,11 +40,19 @@ install -d -m 0700 -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-ke
 install -d -m 0755 -o root -g root /opt/colosseum-pools /opt/colosseum-pools/releases /etc/colosseum
 install -d -m 0700 -o root -g root /etc/colosseum/tls
 
+# The gateway and the keeper deliberately use DIFFERENT nodes. Both rate-limit per IP, and
+# this host is one IP: while they shared a node, anyone outside could spend the keeper's budget
+# by calling the public gateway, which costs five chain reads per request before it refuses.
+# A blinded keeper does not stop a trader who has broken the rules, and the investor pays for
+# the delay. The keeper is the one that cannot move: Hyperliquid's node refuses its eth_getLogs
+# from this host (see the note below), so the keeper keeps the node that serves logs and the
+# gateway takes the other one. The gateway makes no eth_getLogs call at all -- it only reads
+# state with eth_call -- so that refusal does not reach it.
 if [ ! -f /etc/colosseum/gateway.env ]; then
   install -m 0644 -o root -g root /dev/stdin /etc/colosseum/gateway.env <<'EOF'
 GATEWAY_SIGNER=demo
 GATEWAY_KEYS_DIR=/var/lib/colosseum-gw/keys
-GATEWAY_RPC_URL=https://rpcs.chain.link/hyperevm/testnet
+GATEWAY_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm
 GATEWAY_BIND=127.0.0.1:8787
 GATEWAY_ALLOW_ORIGIN=https://pools.usenami.io
 EOF
