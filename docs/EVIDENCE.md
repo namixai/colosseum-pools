@@ -47,7 +47,15 @@ Transactions read back from their receipts:
   block 65176406, sent by us as the pool's owner.
 - daily-loss stop, `0xf2365bf087abb81f069d51fd48ce9573ca92fb563a826c9e9cb3ba89369d3c07`,
   block 65178469, **sent by `0x75deec8b513Ee3f5D15d6b40B706A3314cf26590`, the keeper's own
-  address** — it found the violation and sent the stop with no one asking it to.
+  address** — it found the violation and sent the stop with no one asking it to. From chain data
+  that stop looks slow: the equity crossed the day's floor around 02:38 UTC and the transaction
+  landed at 02:43:16, five minutes later, against the fourteen seconds the host keeper took in
+  the morning. **That gap is not detection.** No keeper was running: this one was started by
+  hand, after the fact, and it reported `breach_found` on its very first pass at 02:41:44 — 224
+  seconds of which it did not exist. The remaining 92 seconds were its first send failing on an
+  empty wallet, being funded, and going again. Both keepers saw the violation immediately once
+  running; the difference between five minutes and fourteen seconds is a keeper that was already
+  watching against one that was fetched to look.
 - second pass, `0x75f6d5f34563e31e8ffbfe6d42f856d2b795d5c78bffb3c11ddb6f5cc7c38b09`,
   block 65180551, sent by the trader.
 
