@@ -82,6 +82,32 @@ The state transitions and the records above are real. How they were reached, pla
   sets its own terms; the demo pool is 8% target, 3% daily, 6% drawdown.
 - **The money is testnet money** and the USDC is mock.
 
+## A funded stage ended cleanly, and the trader was paid
+
+This is the one the whole design is for, and it closed on 25 September on the soft bench
+`0x2b108c465786b040355dcefe1b721e3e6276e80c`. The funded trader ended their own stage with
+`stopFunded` — `0xaee60fe87fe216ffffd00986088b3814818dee1f6ef06eb642ee7722c87ea271` — which
+records `Breach.None`: nobody stopped them, they stopped.
+
+The share is not computed at the stop. `settleFunded` takes the result at the first step with
+nothing open, which is what closing actually realized rather than the mark it was priced from,
+and the events carry it:
+
+- `FundedResult(trader, 10012723, 1017840)` in
+  `0xab49fd6e3b4447a0321651e8d186e759569e3c90c6a92e84982675bf47601e5e` — the stage came home at
+  **10.012723** against a `fundedStart` of 10.000000, a gain of **0.012723**, and the trader's
+  80% of it is **0.0101784**.
+- `FundedPayoutSent(trader, 1017840)` in
+  `0xb1733533e70b08ef75efc310de11a02a62ef1aa490455a01d1d7409b7b8f9f5a` — it was sent.
+- The trader's HyperCore spot balance went from **0.5** to **0.5101784**. That is the number that
+  matters: a balance that moved, not a field a contract set.
+
+**Read this one from the events, not from the pool.** When the pool returns to Idle it clears
+`fundedResult` and `fundedPayoutOwed` for the next challenge, so reading them now gives zeroes.
+The transactions above are the durable record. It is also why the amount is small: the bench
+trades 10 USDC and the gain was a twelfth of a percent. The share is 80% of whatever the stage
+earns, and the arithmetic is the same at any size.
+
 ## The fourth ending, on the rehearsal deployment
 
 A challenge can also simply run out of time with nothing broken, and that one is not on the demo's
@@ -102,8 +128,5 @@ That leaves one ending unseen on either deployment: `Forfeited`, where the trade
 
 ## Not demonstrated yet
 
-- A funded stage ended **cleanly** (`stopFunded`, no rule broken) and the trader's share paid out
-  of the result. This is the one that matters most — the whole promise is a share of what the
-  trader earns — and it is in progress on the bench.
 - `Forfeited`, where the trader walks away.
 - `Drawdown` and `ForbiddenAsset`, the two remaining `Breach` values.
