@@ -75,11 +75,20 @@ The state transitions and the records above are real. How they were reached, pla
 - **The orders were placed by a person**, through the gateway, not by an autonomous trading
   agent. Where a demo says "AI agent", read "a program holding a wallet that signs gateway
   requests" — that part is built, but these trades were driven by hand.
-- **The keeper's stop was its own.** `ops/keeper.py` found the daily-loss violation and sent the
-  transaction from the keeper's address. Two honest qualifiers: it was run from a laptop rather
-  than the pools host, and its discovery state was seeded with the pool it follows instead of
-  replaying ~180k blocks of logs. Finding the violation, choosing the call and sending it were
-  all the keeper's.
+- **The keeper's stop was its own**, and it was run from a laptop. `ops/keeper.py` found the
+  daily-loss violation and sent the transaction from the keeper's address
+  (`0x75deec8b…`). Two honest qualifiers: that run was not the pools host, and its discovery
+  state was seeded with the pool it follows rather than replaying ~180k blocks of logs. Finding
+  the violation, choosing the call and sending it were all the keeper's.
+- **The keeper on the pools host runs and acts, since 25 September.** Until that morning it had
+  been reading the chain through a node that refuses its log queries, so it followed **zero**
+  pools and sat 175,000 blocks behind the head — enforcing nothing, while saying nothing was
+  wrong. Pointed at a node that serves logs, it caught up and went to work on its own:
+  `0xf140a7500d5a2c7525a27fc1cc94b85d586c866c8a078ce48b5061087d2511bf`, a `settle` sent from the
+  host keeper's address `0xD6F07317fC5f12302776b03A7206B1614FD49021`, which returned 5.03 USDC
+  left stranded in a passed challenge and freed the pool to sell the next one. Nobody asked it
+  to. Precisely: what it has sent from the host so far is **housekeeping, not a stop** — it has
+  not yet had a rule broken in front of it there.
 - **Both pools above are benches, and both have soft targets.** `0x2b108c46…` asks +0.2% to
   pass (10% daily, 20% drawdown) and `0x914E4bf9…` — where the first pass, the funded-stage
   leverage stop and the daily-loss stop all happened — asks +1% on 11 USDC. Both were built to
