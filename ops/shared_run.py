@@ -52,6 +52,7 @@ the value, and the price of a share, and everyone else's holding, stay where the
     spike/.venv/bin/python ops/shared_run.py --deployment shared-trade wallets --only shared-dep-c --no-trader
     spike/.venv/bin/python ops/shared_run.py --deployment shared-trade deposit --who shared-dep-c
     spike/.venv/bin/python ops/shared_run.py --deployment shared-trade settle
+    # the lock (600 s) runs from that point; `request` says how long is left
     spike/.venv/bin/python ops/shared_run.py --deployment shared-trade request --who shared-dep-c
     spike/.venv/bin/python ops/shared_run.py --deployment shared-trade settle
 
