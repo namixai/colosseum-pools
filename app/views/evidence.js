@@ -83,7 +83,10 @@ function poolsHtml(pools) {
 }
 
 export async function evidenceView(page) {
-  const data = await (await fetch("./data/evidence.json")).json();
+  // A missing file is said as one, not as the JSON error an HTML 404 page would give.
+  const res = await fetch("./data/evidence.json");
+  if (!res.ok) throw new Error(`The page's records (data/evidence.json) did not load: HTTP ${res.status}.`);
+  const data = await res.json();
   const index = new Map(data.rows.map((r, i) => [r, i]));
   const all = groups(data.rows);
   // What was staged is a section of the document that holds records too: its words go in that section's card,
