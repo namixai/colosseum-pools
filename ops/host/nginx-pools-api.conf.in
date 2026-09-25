@@ -3,17 +3,23 @@
 # 443. Rendered by ops/host/install.sh, which puts Cloudflare's published ranges in place of
 # the marker below, and only once the certificate is on the host (docs/HOSTING.md).
 
-# Every order costs the gateway six RPC calls, and its RPC allows 1000 calls in five minutes
-# per IP. Half an order a second, from everyone together, is 900 of them.
+# Every order costs the gateway six RPC calls. These limits keep that inside the budget of the
+# node the GATEWAY reads -- rpc.hyperliquid-testnet.xyz, which we measured at about 100 calls a
+# minute (the note in ops/keeper.py, from when the keeper still used it). Sixteen orders a
+# minute is the whole budget, so the shared zone is set below that and the burst with it:
+# 15r/m is 90 reads a minute, and a burst of 10 is 60 reads at once. Both fit.
 #
-# That budget is the gateway's alone ONLY because the keeper was moved to the other node
-# (ops/host/bootstrap.sh). While the two shared one node this arithmetic was wrong in the way
-# that matters: the 900 came out of the same 1000 the keeper needed to see a breach, so an
-# outsider sending refusable orders -- five reads each, spent BEFORE the refusal -- could
-# blind the stop. These limits protect the gateway's own node; they are not what keeps the
-# keeper seeing.
+# They are NOT what keeps the keeper seeing. The keeper reads a different node on purpose
+# (ops/host/bootstrap.sh): while the two shared one, an outsider's refusable orders -- five
+# reads each, spent BEFORE the refusal -- came out of the same budget the keeper needed to
+# notice a breach. Separation fixed that; these numbers only stop the gateway starving itself.
+#
+# The earlier version of this comment budgeted against 1000 calls in five minutes. That is the
+# OTHER node's limit, and it stayed here by mistake when the gateway moved: it would have let
+# 30 orders a minute, 180 reads, against a node that allows about 100, and legitimate traders
+# would have met upstream_busy from a limit we set ourselves.
 limit_req_zone $binary_remote_addr zone=pools_ip:1m rate=12r/m;
-limit_req_zone $server_name zone=pools_all:1m rate=30r/m;
+limit_req_zone $server_name zone=pools_all:1m rate=15r/m;
 limit_req_status 429;
 
 # Any other name, or none, gets no TLS handshake at all.
@@ -44,7 +50,7 @@ server {
 
     location = /v1/order {
         limit_req zone=pools_ip burst=10 nodelay;
-        limit_req zone=pools_all burst=20 nodelay;
+        limit_req zone=pools_all burst=10 nodelay;
         proxy_pass http://127.0.0.1:8787;
         proxy_http_version 1.1;
         proxy_set_header Connection "";

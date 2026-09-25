@@ -170,6 +170,27 @@ host's configuration — it happens on the operator's word, not as part of a dep
     sudo systemctl restart colosseum-keeper
     journalctl -u colosseum-keeper -n 5     # pass_done, and next_block climbing towards the head
 
+🔴 **By hand on any host set up before 25 September 2026:** `/etc/colosseum/gateway.env` still
+says `GATEWAY_RPC_URL=https://rpcs.chain.link/hyperevm/testnet`, which is the node the keeper
+reads. While the two share it, anyone outside can spend the keeper's budget through the public
+gateway (above), so until this is done that hole is open on the running host no matter what the
+repository says. `bootstrap.sh` writes this file only when it is missing, so deploying does not
+change it either. Check from the host FIRST — a laptop does not reproduce what this host sees:
+
+    curl -s -X POST https://rpc.hyperliquid-testnet.xyz/evm -H 'Content-Type: application/json' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"<registry>","data":"0xa6f48c90"},"latest"]}'
+
+A number back (`freeCount()`) means the gateway's reads work from there. Only then:
+
+    sudo sed -i 's|^GATEWAY_RPC_URL=.*|GATEWAY_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm|' \
+        /etc/colosseum/gateway.env
+    sudo systemctl restart colosseum-gateway
+    journalctl -u colosseum-gateway -n 5
+
+Deploy the nginx file in the same pass: the gateway's new node allows about 100 calls a minute
+against the old one's 200, and the limits were recut for that. Running the old limits against the new
+node makes the gateway refuse honest traders with `upstream_busy` out of its own budget.
+
 ## Choosing the deployment and starting
 
     echo rehearsal | sudo tee /etc/colosseum/deployment      # on the host

@@ -48,6 +48,11 @@ install -d -m 0700 -o root -g root /etc/colosseum/tls
 # from this host (see the note below), so the keeper keeps the node that serves logs and the
 # gateway takes the other one. The gateway makes no eth_getLogs call at all -- it only reads
 # state with eth_call -- so that refusal does not reach it.
+#
+# The node the gateway moves TO is the tighter of the two: about 100 calls a minute against
+# the other's 200. ops/host/nginx-pools-api.conf.in is cut to fit that, and the two must be
+# deployed together -- the old limits against this node would have the gateway refusing
+# honest traders out of a budget we set ourselves.
 if [ ! -f /etc/colosseum/gateway.env ]; then
   install -m 0644 -o root -g root /dev/stdin /etc/colosseum/gateway.env <<'EOF'
 GATEWAY_SIGNER=demo
