@@ -251,10 +251,19 @@ The public RPC dropped two replies on the way: `start()` and point 1 went throug
 to the sender timed out, so their hashes were read afterwards from the pool's own events. The rest
 of the round went through Chainlink's testnet RPC (`COLOSSEUM_RPC_URL`).
 
+## A seat a trader traded (25 September)
+
+A third pool, `0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6`, on the demo's factory, with one seat of 3
+USDC of challenge capital and 30 funded: a 10% drawdown, a 5% daily loss, an 8% target and a day,
+rules the Economics page prices. Two deposits of 20 armed it. A trader bought its challenge and
+traded $11 of BTC through the pool gateway, in and out; the account is flat at 2.98997 USDC. The
+seat opens on the app's pool page like any demo pool, and the shared pool by
+`#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6`; the page's default is still the second
+round's pool. Every transaction, and how the trader acted (the gateway client, not a click), is in
+[EVIDENCE-SHARED-POOL.md](EVIDENCE-SHARED-POOL.md).
+
 ## Not done yet
 
-- A seat big enough to trade. The second round's is 1 and 10, and five times 1 USDC is under
-  Hyperliquid's $10 minimum order.
 - The keeper running on the operator's host.
 - A deposit at a price other than 1 on testnet: both runs took their deposits into a fresh pool.
 - Deposits through HyperEVM on mainnet, where the sender is visible.
