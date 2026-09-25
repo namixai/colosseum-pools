@@ -1,7 +1,7 @@
 # Design: the shared pool
 
 Status: 25 September 2026: shares, deposits, the pool's value, settlement points, withdrawals and
-their queue, the funded term and the platform's fee; run once on testnet, with one depositor.
+their queue, the funded term and the platform's fee; run on testnet with one depositor, then two.
 Testnet only, and not part of the reviewed core: `Pool`, `PoolFactory`, `ChallengeAccount` and
 `KeyRegistry` are used as they are, unchanged.
 
@@ -141,8 +141,9 @@ signs the transfer to it on HyperCore), ask to withdraw, and run a settlement po
 is in `app/lib/shared.js`; its test reads this contract's source back, so a renamed function or two
 swapped fields fail there first.
 
-A seat comes from the shared pool's own factory. The app's challenge and trading pages only know
-the demo's factory, so a seat's challenge can't be bought or traded through the app yet.
+A seat the demo's factory made, like the second round's, opens on the pool page like any other
+pool, and its challenge is bought and traded there. The first run's seat comes from a factory of its
+own, which the pool, challenge and trading pages don't know; the shared pool's page says so.
 
 ## The keeper
 
@@ -163,13 +164,14 @@ pools (`spike/shared_pool.py gas`): 28 265 gas for an idle seat, 74 336–74 759
 running challenge. One `spotBalance` read costs 7 431, `accountMarginSummary` 8 590, a `violation()`
 call about 22 400–23 400.
 
-Whole points on the testnet run: 340 720 gas taking in one deposit with the seat idle, 297 935
-paying one holder on both sides with a challenge running, 169 440 paying one holder with the seat
-idle. A deposit taken in costs about as much as the rest of a light point. The contract caps a point
-at 12 seats, 8 tickets and 16 holders waiting, and those caps don't keep the heaviest point inside a
-small block's 2M gas: nobody has measured one, and by these numbers it may not fit. The keeper tries
-every point first and names half the tickets, then half again, when it wouldn't fit; a point that
-still doesn't fit needs the keeper's wallet on big blocks.
+Whole points on the testnet runs: 340 720 gas taking in one deposit with the seat idle, 513 366
+taking in two; 169 440 paying one holder on HyperCore with the seat idle, 225 879 paying two;
+297 935 paying one holder on both sides with a challenge running. So a deposit taken in adds about
+170 000 and a holder paid about 56 000. The contract caps a point at 12 seats, 8 tickets and 16
+holders waiting, and at those caps, with every seat running a challenge, a point comes to some 3.3M
+gas by these numbers, past a small block's 2M. Nobody has run one that big. The keeper tries every
+point first and names half the tickets, then half again, when it wouldn't fit; a point that still
+doesn't fit needs the keeper's wallet on big blocks.
 
 Anyone can open tickets for the price of gas. A settlement point never walks the open ones, only
 the list a caller names, so they cost the keeper reads and nothing else. It reads the whole list of
@@ -217,12 +219,44 @@ and then the seat's came back into the pool.
 Not covered by this run, only by the tests: two depositors sharing a short payment, a deposit at a
 price other than 1, a passed challenge and a funded stage, the funded term.
 
+## The second round (25 September)
+
+Two depositors, 03:18 to 04:33 UTC, on a pool whose seats the demo's factory makes:
+`ops/deploy_shared.py --on-demo-factory` deployed the SharedPool alone
+(`deployments/testnet-shared-demo.json`), and its seat is a demo pool like any other. The seat keeps
+the demo's proportion, a challenge of 1 USDC to 10 funded, the pool the Economics page prices. It is
+too small to trade, and the round didn't need a trader: an armed seat made the payment short, and
+`releaseSeat` brought its capital back. Every step is in `spike/results/2026-09-25.jsonl`.
+
+| step | HyperEVM transaction | what the chain showed after it |
+|---|---|---|
+| Deploy the SharedPool | `0xaa169f94` | |
+| The platform's 1 USDC, then `start()` | `0xe816bc8d` | 1e8 shares |
+| `addSeat`: 1 and 10, price 1.5 | `0xb13916f8` | |
+| Two deposits of 20, each through a ticket of its own | `0xb9e79541`, `0x3f43cfc8` | |
+| Point 1 | `0xb8b756ca` | 20e8 shares each at 1.00; value 41 |
+| `armSeat`, `prepareAccount` | `0x24bcf044`, `0x00ef511b` | 12 USDC on the seat; creating its account cost the pool 1; value 40 |
+| Two requests for everything | `0x09d86ed7`, `0xc8a7f39f` | 40e8 shares queued, worth 39.02 |
+| Point 2 | `0x39994dbf` | 28 USDC free: each holder paid 13.999999 on HyperCore, the same 71.75% of their request; 565 000 094 shares each still queued |
+| `releaseSeat` | `0x4fd3b101` | the seat's 12 back in the pool; value unchanged |
+| Point 3 | `0x09190d77` | 5.512196 more to each; the queue empty |
+
+Each depositor put in 20 and got 19.512195 back, all of it on HyperCore: 20 × 40/41. The 1 USDC the
+seat's new account cost fell on every share alike, the platform's starting share included, which is
+now worth 0.97561. Point 2 paid two holders through CoreWriter in one transaction, and both
+transfers landed. `payments` on this pool shows each depositor 19.512195 on HyperCore and nothing on
+HyperEVM, the last at 04:33 UTC.
+
+The public RPC dropped two replies on the way: `start()` and point 1 went through while the answer
+to the sender timed out, so their hashes were read afterwards from the pool's own events. The rest
+of the round went through Chainlink's testnet RPC (`COLOSSEUM_RPC_URL`).
+
 ## Not done yet
 
-- Buying and trading a seat's challenge through the app.
+- A seat big enough to trade. The second round's is 1 and 10, and five times 1 USDC is under
+  Hyperliquid's $10 minimum order.
 - The keeper running on the operator's host.
-- A testnet run with two depositors: a short payment split between them, a deposit at a price other
-  than 1.
+- A deposit at a price other than 1 on testnet: both runs took their deposits into a fresh pool.
 - Deposits through HyperEVM on mainnet, where the sender is visible.
 - At most 16 holders wait at once; a request past that waits for the queue to move.
 - A holder with no HyperCore account loses a HyperCore part of 1 USDC or less: it can't pay for
