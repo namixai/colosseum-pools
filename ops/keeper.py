@@ -64,6 +64,29 @@ STOPPED = (BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED)
 IDLE, CHALLENGE, FUNDED, CLOSING = range(4)
 
 
+# A stop cost 194818 gas at 0.1 gwei on 25 Sep 2026 -- 0.0000195 HYPE -- and a settle step
+# 0.0000115. This floor is about fifty stops, and it is not meant to be precise: it exists so the
+# journal can tell an empty wallet, which fails on every pass for good, from a node that refused
+# once. Measured after a keeper found a real breach and could not send it: the node answered 500,
+# which reads exactly like a rate limit, and the actual cause was a wallet that had never been
+# funded and had sent nothing in its life.
+GAS_FLOOR_WEI = 10**15
+
+
+def unfunded(balance_wei: int, floor_wei: int = GAS_FLOOR_WEI) -> bool:
+    """Whether the keeper has too little gas left to keep stopping accounts."""
+    return int(balance_wei) < int(floor_wei)
+
+
+def gas_balance(wallet) -> int | None:
+    """The keeper's own gas balance, or None if it can't be read. Swallows its own failure: this
+    is called while reporting someone else's, and must not replace it with a second one."""
+    try:
+        return c.evm_balance(wallet.address)
+    except Exception:
+        return None
+
+
 def log(event: str, **fields) -> None:
     print(json.dumps({"t": int(time.time()), "event": event, **fields}, default=str), flush=True)
 
@@ -93,7 +116,12 @@ def send(wallet, addr: str, sig: str, types=(), args=(), dry=False) -> None:
         rcpt = c.transact(wallet, addr, sig, list(types), list(args))
         log("sent", to=addr, call=sig, tx=rcpt["transactionHash"])
     except Exception as exc:  # one failed call must not stop the pass
-        log("send_failed", to=addr, call=sig, error=str(exc)[:200])
+        # Say whether this can succeed later. A keeper that finds a breach and cannot send it is
+        # the one failure that matters, and "send_failed" alone read the same whether the node
+        # was busy for a second or the wallet had been empty for days.
+        gas = gas_balance(wallet)
+        log("send_failed", to=addr, call=sig, error=str(exc)[:200], gas_wei=gas,
+            unfunded=None if gas is None else unfunded(gas))
 
 
 def in_checkpoint_window(now: int) -> bool:
