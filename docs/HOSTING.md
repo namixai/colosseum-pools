@@ -16,6 +16,27 @@ rehearsal deployment, each `active` under systemd, and the gateway is public as
 - **The gateway** (`colosseum-gw`) listens on `127.0.0.1:8787`. nginx serves it on 443 as
   `pools-api.usenami.io`, behind Cloudflare.
 - **The keeper** (`colosseum-keeper`) has no port. It polls the chain every 30 seconds.
+
+  🔴 **A keeper that has fallen behind is not watching, and it takes real time to come back.**
+  HyperEVM serves `eth_getLogs` 50 blocks at a call and the unit runs the defaults, 50 calls a
+  pass: 2,500 blocks each time. The 30-second wait comes *after* a pass, not instead of it, so a
+  cycle is 30 seconds plus however long the pass took and the ceiling of 5,000 blocks a minute
+  never arrives. Measured on 25 September 2026, walking 177,422 blocks took 44 minutes —
+  **about 4,000 blocks a minute**, with single cycles between 34 and 35 seconds. The chain makes
+  roughly 57 a minute, so catching up is quick per minute of downtime and slow per day of it.
+
+  While it walks it has not yet seen the events that name the pools, so `following` climbs
+  towards its true number rather than starting there, and it enforces nothing on the pools it has
+  not reached yet — silently, because every pass still logs `pass_done` and looks like a healthy
+  one.
+
+  What to read: `pass_done` carries `next_block` and `latest`. A gap that is **shrinking** means
+  it is catching up — divide the gap by 4,000 for the minutes left. A gap that stays level means
+  it is keeping pace with the chain but **not catching up**, which at 57 blocks a minute against
+  2,500 a pass should not happen and means something is eating the passes. A gap that grows, or
+  `scan_stopped` above the line, means it is **stuck** rather than slow. `--max-windows`
+  (default 50) is the lever if a catch-up ever has to go faster, at the cost of more calls per
+  pass against a node that rate-limits.
 - **The app** is the static `app/` folder, served by a Cloudflare Worker with static assets
   (`raspy-violet-594d`) on `pools.usenami.io`. There is no build step and no server code: every
   page is a `#/…` route of the one `index.html`. It calls the gateway from the browser;
