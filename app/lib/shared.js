@@ -33,6 +33,7 @@ export const SHARED_ABI = [
   "function tickets(address ticket) view returns (address depositor, uint8 state)",
   "function payments(address holder) view returns (uint64 at, uint96 evm, uint96 core)",
   "function openTicket() returns (address)",
+  "event TicketOpened(address indexed depositor, address indexed ticket, uint256 index)",
   "function requestRedeem(uint256 shares)",
   "function settle(address[] recognize)",
   "error NotStarted()",
@@ -137,6 +138,18 @@ export function ticketsToName(open, minDeposit) {
     .filter((t) => BigInt(t.spot) >= min)
     .slice(0, MAX_PER_POINT)
     .map((t) => t.address);
+}
+
+/**
+ * The ticket an `openTicket` transaction opened, from its receipt's logs as the pool's interface
+ * parsed them. Not the ticket count read before sending: two pages open on the same wallet can read
+ * the same count, and the second would then send its deposit to the first one's ticket.
+ */
+export function openedTicket(parsedLogs, depositor) {
+  const who = String(depositor).toLowerCase();
+  const log = parsedLogs.find((l) => l && l.name === "TicketOpened" && String(l.args.depositor).toLowerCase() === who);
+  if (!log) throw new Error("The pool's answer names no ticket opened for this wallet; nothing was sent.");
+  return log.args.ticket;
 }
 
 /** When a holder may ask to withdraw: their latest deposit plus the pool's lock (seconds). */

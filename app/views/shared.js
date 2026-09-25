@@ -8,7 +8,7 @@ import { esc, render, $, wire, badge, row, when, duration, pct, settle } from ".
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import {
   SHARED_POOL, SHARED_ABI, TICKET_STATE, blockerText, amount, spot1e8, shares, worth, price, depositPlan,
-  ticketsToName, lockedUntil, paymentsLine, explain, plain, usd,
+  ticketsToName, lockedUntil, paymentsLine, explain, plain, usd, openedTicket,
 } from "../lib/shared.js";
 
 const { ethers } = window;
@@ -140,8 +140,12 @@ export async function holderPanel(box, sp, at, pool, me) {
   }
   const [held, waiting, cost, last, count, paid] = await Promise.all([
     sp.sharesOf(me), sp.queuedOf(me), sp.basis(me), sp.lastDeposit(me), sp.ticketCount(me),
-    // The pool deployed for the testnet run is older than this record: its answer is a revert.
-    sp.payments(me).catch(() => null),
+    // The pool deployed for the testnet run is older than this record: it reverts, and only that
+    // means "no record". Anything else, a rate limit say, fails the panel with its own words.
+    sp.payments(me).catch((err) => {
+      if (err?.code === "CALL_EXCEPTION") return null;
+      throw err;
+    }),
   ]);
   const n = Number(count);
   const indices = Array.from({ length: Math.min(n, TICKETS_SHOWN) }, (_, i) => n - 1 - i);
@@ -196,9 +200,9 @@ export async function holderPanel(box, sp, at, pool, me) {
     const text = hl.canonical($("#dep", box).value);
     depositPlan(text, pool.minDeposit);
     const signer = chain.currentSigner() || (await chain.connect(), chain.currentSigner());
-    const next = await sp.ticketCount(signer.address);
-    await write(at, "openTicket");
-    const ticket = ethers.getAddress(await sp.ticketAddress(signer.address, next));
+    const receipt = await write(at, "openTicket");
+    const parsed = receipt.logs.map((l) => { try { return sp.interface.parseLog(l); } catch { return null; } });
+    const ticket = ethers.getAddress(openedTicket(parsed, signer.address));
     await sendUsdc(signer, ticket, text);
     return `Sent to your ticket ${chain.short(ticket)}. It becomes shares at the next settlement point.`;
   });

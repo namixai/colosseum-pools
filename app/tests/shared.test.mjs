@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   SHARED_ABI, BLOCKER, TICKET_STATE, MAX_PER_POINT, blockerText, amount, usd, plain, spot1e8, shares, worth, price,
-  depositPlan, ticketsToName, lockedUntil, paymentsLine, explain,
+  depositPlan, ticketsToName, lockedUntil, paymentsLine, explain, openedTicket,
 } from "../lib/shared.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -79,6 +79,16 @@ test("a point names only tickets holding a deposit it can take, in the order giv
   assert.deepEqual(ticketsToName(many, min), many.slice(0, 8).map((x) => x.address), "the first ones, the viewer's own");
 });
 
+test("a deposit goes to the ticket its own transaction opened", () => {
+  const me = "0xbD97438655835138daBeE38f3B7d96275eDc315a";
+  const other = "0x278AbBC5B78F34F77829dDd7887566E182beBD83";
+  const opened = (depositor, ticket) => ({ name: "TicketOpened", args: { depositor, ticket, index: 0n } });
+  const mine = "0x617bCc231586d33ab3984BFE07aa8cAdf9AEe27d";
+  assert.equal(openedTicket([null, opened(other, "0x" + "11".repeat(20)), opened(me.toLowerCase(), mine)], me), mine);
+  assert.throws(() => openedTicket([opened(other, mine)], me), /names no ticket opened for this wallet/);
+  assert.throws(() => openedTicket([], me), /nothing was sent/);
+});
+
 test("the lock runs from the latest deposit", () => {
   assert.equal(lockedUntil(1_790_289_725n, 600n), 1_790_290_325);
 });
@@ -148,6 +158,13 @@ test("every function the app calls is in the contract", () => {
   for (const line of SHARED_ABI.filter((l) => l.startsWith("error "))) {
     const name = line.match(/^error (\w+)\(/)[1];
     assert.match(SOURCE, new RegExp(`error ${name}\\(`), `SharedPool.sol has no error ${name}`);
+  }
+  for (const line of SHARED_ABI.filter((l) => l.startsWith("event "))) {
+    const [, name, params] = line.match(/^event (\w+)\((.*)\)$/);
+    const declared = SOURCE.match(new RegExp(`event ${name}\\(([^)]*)\\);`));
+    assert.ok(declared, `SharedPool.sol has no event ${name}`);
+    const squash = (s) => s.replace(/\s+/g, " ").trim();
+    assert.equal(squash(declared[1]), squash(params), `${name} is declared otherwise in SharedPool.sol`);
   }
 });
 

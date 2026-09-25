@@ -1399,6 +1399,10 @@ MUTATIONS = [
      "        PositionsOpen,\n        PayoutInFlight,\n",
      "        PayoutInFlight,\n        PositionsOpen,\n",
      ["the blocker's words follow the contract's reasons, one for one"]),
+    ("PJ14", "app/lib/shared.js",
+     '&& String(l.args.depositor).toLowerCase() === who',
+     "",
+     ["a deposit goes to the ticket its own transaction opened"]),
 ]
 
 RUNNERS = {
