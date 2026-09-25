@@ -1484,6 +1484,23 @@ MUTATIONS = [
      'key=lambda t: self.empty_at[t])',
      'key=lambda t: 0)',
      ['test_an_empty_ticket_long_unread_is_read_again_first']),
+    # The shared pool's run script (ops/shared_run.py). "PR": the second window's prefix, run by unittest.
+    ('PR1', 'ops/shared_run.py',
+     'if record.get("factory_from") == "demo" and t["fundedCapital"] != 10 * t["capital"]:',
+     'if False:',
+     ['test_a_seat_on_the_demos_factory_keeps_a_tenth']),
+    ('PR2', 'ops/shared_run.py',
+     'short = want - c.core_spot_balance(to, c.USDC_TOKEN)["total"]',
+     'short = want',
+     ['test_depositors_are_topped_up_to_the_deposit_and_the_tickets_fee']),
+    ('PR3', 'ops/shared_run.py',
+     '        if short <= 0:\n',
+     '        if False:\n',
+     ['test_a_depositor_holding_enough_gets_nothing']),
+    ('PR4', 'ops/shared_run.py',
+     '        t["fundedCapital"] = int(round(args.funded * USDC_1E6))\n',
+     '        pass\n',
+     ['test_the_runs_terms_unless_the_command_line_changes_them']),
 ]
 
 RUNNERS = {
@@ -1505,6 +1522,8 @@ RUNNERS = {
     "PJ": (["node", "--test", "--test-reporter=tap", "app/tests/shared.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     # The shared pool's keeper: its own test module.
     "PK": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_shared_keeper"], r"^(?:FAIL|ERROR): (\w+) \("),
+    # The shared pool's run script: its own test module.
+    "PR": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_shared_run"], r"^(?:FAIL|ERROR): (\w+) \("),
 }
 
 
