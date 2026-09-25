@@ -65,3 +65,25 @@ export async function cancelOrder(signer, { account, asset, oid }) {
   const signature = await signer.signTypedData(DOMAIN, { Cancel: TYPES.Cancel }, cancel);
   return post({ kind: "cancel", cancel, signature });
 }
+
+/**
+ * What to show a trader when an order was not placed.
+ *
+ * The gateway answers in two registers at once: a machine `code` and a `detail` written for a
+ * person. The page showed the code and dropped the sentence, so a refusal read `upstream_busy`
+ * when what the gateway actually said was "the chain node is refusing reads right now; try again
+ * in a moment" — the difference between knowing to wait and not knowing what happened.
+ *
+ * It matters most on the two answers that are not refusals at all: when the gateway cannot tell
+ * whether the order reached Hyperliquid, the detail says "the order may or may not have reached
+ * Hyperliquid; check the account". No code can say that, and a trader who isn't told it may send
+ * the order twice.
+ *
+ * A venue refusal carries Hyperliquid's own words in `reason`, and those come first: they are
+ * what the exchange actually answered, not our description of it.
+ */
+export function refusalText(res = {}) {
+  if (res.reason) return res.reason;
+  if (res.detail) return res.detail;
+  return res.code || res.status || "the gateway said nothing";
+}
