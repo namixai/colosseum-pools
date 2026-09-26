@@ -12,8 +12,12 @@ The short answer, measured, not modelled:
 > The 3 % / 6 % rule holds on an ordinary crash day — the pool's median loss per entry is
 > **2.97–3.33 %** across the eight worst days since 10 Oct 2025. It does **not** hold in a cascade
 > like 10 Oct 2025, and how badly depends on which coins the seats sit on: on the default list
-> (BTC, ETH, SOL) the pool loses **24 % to 88 %** of seat capital, on a wider list with alts
-> **84–87 %**, and there the exchange liquidates three of five seats before the keeper can act.
+> (BTC, ETH, SOL) the pool loses **24 % to 100 %** of seat capital, on a wider list with alts
+> **84–94 %**, and there the exchange liquidates three of five seats before the keeper can act.
+> The upper ends are the worst price inside the keeper's delay window with a liquidated seat
+> losing everything; the lower ends are the open of the next minute with the maintenance margin
+> kept. On the default list it is the **short** side that gets liquidated — the SOL seats, by the
+> bounce of 21:21 — not the long.
 
 A number without the name of the coin list is meaningless here. Every table below names its list.
 
@@ -31,18 +35,23 @@ first thing to say, not a footnote.
 | Exit line | whichever comes first: daily `snapshot × (1 − 3 %)` or static `capital × (1 − 6 %)` |
 | Keeper delay | `--lag 0` (line price, perfect keeper) · `--lag 1` (open of the next minute) · `--lag 2` (one poll missed) |
 | Execution | `--exec open` — the price the keeper sees · `--exec worst` — the worst price inside the delay window |
-| Liquidation | the exchange closes first if equity falls below `--mm` (2 %) of notional; the seat loses everything |
+| Liquidation | the exchange closes first if equity falls below `--mm` (2 %) of notional. What the seat keeps is a bracket, not a number: at the lower bound (`--exec open`) it keeps the maintenance margin, at the upper bound (`--exec worst`) it loses everything. Hyperliquid's own words: a liquidation through the book leaves "any remaining collateral" with the trader; a backstop liquidation (equity below 2/3 of the maintenance margin) does not return it |
 | Fees | taker 4.5 bps on the whole notional at the close |
 
-**`--lag 1` is not an upper bound.** The open of the next minute sometimes lands on a bounce and the
-seat exits *better* than the line — that is what BTC did on 10 Oct. The honest bracket is
-`--lag 0` (best case) to `--exec worst` (worst case), and the real keeper sits between them. Every
-range in this file is exactly that bracket.
+**`--lag 1` at the open is not an upper bound.** The open of the next minute sometimes lands on a
+bounce and the seat exits *better* than the line — that is what BTC did on 10 Oct. That is why every
+range in this file is the same bracket: **the open of the next minute (`--lag 1 --exec open`, a
+liquidated seat keeps its maintenance margin) to the worst price inside that minute's delay window
+(`--lag 1 --exec worst`, a liquidated seat loses everything)**. The real keeper sits between them.
+`--lag 0` — closing exactly at the line, the perfect keeper — is kinder than both ends; it is
+published in `results/` for completeness and is never quoted as a bound. If a line is crossed in
+the last minute of a day, the exit is that minute's close, the last price the keeper would see.
 
 **Overshoot is measured here, not assumed.** The economics model assumes a keeper overshoots the
 line by 0.5 % of equity. Measured over 115 200 entries per side: mean **0.46 pp** at the open,
-**1.41 pp** at the worst price of the window; p99 **2.96 pp** and **8.02 pp**; maximum 89 pp. The
-assumption is right in the middle of an ordinary day and far too kind in a cascade.
+**1.41 pp** at the worst price of the window; p99 **2.96 pp** and **8.02 pp**; maximum 89 pp at
+the open and 97 pp at the worst price (a liquidated seat losing everything). The assumption is
+right in the middle of an ordinary day and far too kind in a cascade.
 
 ## Ordinary crash days hold; the cascade does not
 
@@ -54,7 +63,7 @@ open → worst.
 
 | day | median loss | p99 (open) | p99 (worst) | worst entry | seats hit | liquidated |
 |---|---|---|---|---|---|---|
-| 2025-10-10 | 3.26 % | 10.06 % | 24.84 % | **83.7–87.1 %** at 21:18 | 5/5 | **3** |
+| 2025-10-10 | 3.26 % | 10.06 % | 24.84 % | **83.7–94.1 %** at 21:18 | 5/5 | **3** |
 | 2026-02-05 | 3.33 % | 6.03 % | 7.98 % | 8.5–10.1 % at 17:30 | 5/5 | 0 |
 | 2026-01-31 | 3.14 % | 5.56 % | 8.88 % | 20.3–21.7 % at 18:42 | 5/5 | 0 |
 | 2025-11-03 | 3.13 % | 4.48 % | 7.42 % | 21.7–25.2 % at 15:30 | 5/5 | 0 |
@@ -68,9 +77,10 @@ Read the median column as "the rule works": half the entries of a crash day cost
 **the worst entry beats the 6 % cap on seven of the eight days, and 20 % on three of them.** The
 cascade is the extreme of a tail, not a freak event standing alone.
 
-On 10 Oct the pool loses **$75 299 of $90 000** in seat capital at the 21:18 entry. The rules
-allowed 6 %, i.e. $5 400. That is fourteen times the permitted loss, and three seats are gone
-before any rule can be applied to them.
+On 10 Oct the pool loses **$75 299 to $84 712 of $90 000** in seat capital at the 21:18 entry
+(open of the next minute → worst price in the window). The rules allowed 6 %, i.e. $5 400. That is
+fourteen to sixteen times the permitted loss, and three seats are gone before any rule can be
+applied to them — at the lower bound they keep their maintenance margin, at the upper bound nothing.
 
 ## The same cascade on the default list (BTC, ETH, SOL)
 
@@ -79,16 +89,17 @@ only the coins under the five seats change.
 
 *Bybit bars, not Hyperliquid.*
 
-| seat layout | pool loses | liquidated |
-|---|---|---|
-| big seats on the calm coins (BTC 50k, ETH 25k, SOL 3×5k) | 23.9–39.3 % | none |
-| the big seat on the risky coin (SOL 50k, ETH 25k, BTC 3×5k) | 31.7–63.6 % | none |
-| all five seats on SOL | 45.2–88.5 % | none |
+| seat layout | pool loses | liquidated at the open | liquidated at the worst price |
+|---|---|---|---|
+| big seats on the calm coins (BTC 50k, ETH 25k, SOL 3×5k) | 23.9–40.0 % | none | the three SOL seats (short) |
+| the big seat on the risky coin (SOL 50k, ETH 25k, BTC 3×5k) | 31.7–70.0 % | none | the SOL seat (short) |
+| all five seats on SOL | 45.2–100 % | none | all five (short) |
 
-Lower bound: execution at the open of the next minute. Upper bound: worst price inside the delay
-window; for "all on SOL" the upper end is the **short** side caught by the 21:21 bounce, not the
-long. **No seat is liquidated in any variant of the default list** — the alts are what bring the
-exchange in.
+Same bracket as everywhere in this file: open of the next minute → worst price inside the delay
+window. For all three layouts the upper end is the **short** side caught by the 21:21 bounce, not
+the long, and at that bounce the exchange liquidates the SOL seats. **On the long side no seat of
+the default list is liquidated; on the short side, at the worst price, every SOL seat is.** The
+alts are what bring the exchange in on the long side, and SOL brings it in on the short side.
 
 Per coin on 10 Oct, worst entry of the day, open → worst. *Bybit bars, not Hyperliquid.*
 
@@ -96,7 +107,7 @@ Per coin on 10 Oct, worst entry of the day, open → worst. *Bybit bars, not Hyp
 |---|---|---|
 | BTC | 25.18 → 34.79 % | 13.75 → 22.96 % |
 | ETH | 23.72 → 30.94 % | 34.11 → 38.22 % |
-| SOL | 45.24 → 72.85 % | 34.07 → 88.46 % |
+| SOL | 45.24 → 72.85 % | 34.07 → 100.0 % |
 
 ## Limits — read these before quoting a number
 
@@ -121,16 +132,18 @@ Per coin on 10 Oct, worst entry of the day, open → worst. *Bybit bars, not Hyp
 ## Reproduce it
 
 ```bash
+PKG="$(pwd)"                                         # run from the package directory
 python3 fetch_bybit_minutes.py --out /tmp/fresh     # public Bybit API, no key
-cd /tmp/fresh && shasum -a 256 -c /path/to/data/SHA256SUMS
-python3 test_anchor.py                               # re-runs everything and compares
+(cd /tmp/fresh && shasum -a 256 -c "$PKG/data/SHA256SUMS")   # the fresh bars must match the snapshot
+python3 test_anchor.py                               # re-runs everything over data/ and compares
 ```
 
-`test_anchor.py` is the one that matters: it re-runs the four published configurations over the
-snapshot in `data/`, compares **every field** with the files in `results/`, and then checks the
-headline numbers by name (83.7, 87.1, 45.24, 88.46, the three layouts, the medians, seven of eight
-days over the cap). If the exchange restates a candle or a refactor shifts a number, this test goes
-red instead of letting a stale claim survive in this README.
+`test_anchor.py` is the one that matters: it re-runs the four published configurations and the
+layout run over the snapshot in `data/`, compares **every field of every section** — the rule
+block included — with the files in `results/`, and then checks the headline numbers by name (83.7,
+94.1, 45.24, 100.0, the three layouts, the medians, seven of eight days over the cap). If the
+exchange restates a candle or a refactor shifts a number, this test goes red instead of letting a
+stale claim survive in this README. `make_results.py` is the command that produced `results/`.
 
 A single run, for a single day:
 
@@ -146,16 +159,18 @@ Requirements: Python 3.10+ and numpy (the stress test uses it; the downloader is
 
 | file | what it is |
 |---|---|
-| `pool_stress.py` | the stress test — the backtester's tool, unchanged except `--data-dir`, CSV input and `--seat-coins` |
-| `test_pool_stress.py` | 21 checks of the rules on synthetic data, by the same author |
-| `mut_pool_stress.py` | 26 deliberate breakages; each one must turn a check red |
+| `pool_stress.py` | the stress test — the backtester's tool, plus `--data-dir`, CSV input, `--seat-coins`, and the three fixes of the 25 Sep 2026 review (see `CHANGES.md`) |
+| `test_pool_stress.py` | 29 checks of the rules on synthetic data, by the same author |
+| `mut_pool_stress.py` | 32 deliberate breakages; each one must turn a check red |
 | `test_anchor.py` | the anchor: the snapshot must still produce the published numbers |
+| `make_results.py` | the one command that writes every file in `results/` |
+| `CHANGES.md` | what the review of 25 Sep 2026 changed, number by number |
 | `fetch_bybit_minutes.py` | downloads the exact bars from Bybit's public API |
 | `data/` | the snapshot: 10 symbols × 8 days × 1440 minutes, with `SHA256SUMS` |
-| `results/` | the four runs the 20 Sep 2026 decision was made on, plus the layout run |
+| `results/` | the four runs (lag 0 / 1 / 2 at the open, lag 1 at the worst price) and the layout run, produced on 25 Sep 2026 by `make_results.py`; the 20 Sep 2026 figures they replace are in `CHANGES.md` |
 
 The tool's comments and its JSON keys are in the author's language (Russian). They are kept as they
-are: this package publishes a measurement, and rewriting 375 lines of audited code to translate it
+are: this package publishes a measurement, and rewriting 400 lines of audited code to translate it
 would risk the numbers it exists to carry. The keys used above:
 
 `сутки` day · `монета` coin · `сторона` side (`лонг` long, `шорт` short) · `убыток_пула_медиана_%`
@@ -172,4 +187,7 @@ reviewed and accepted on 20 Sep 2026 — including the correction, made the same
 that closing at the next minute's open is not an upper bound. The decision to publish this tail,
 and the wording of what may be claimed about it, was taken on 20 Sep 2026 as well. This package — the data-path
 parameter, the public downloader, the snapshot, the anchor test and this README — was assembled by
-the **operations department** on 25 Sep 2026 for publication.
+the **operations department** on 25 Sep 2026 for publication. A bot review of the same day found
+four defects (the last minute of a day, the liquidation residual, seats aligned by bar index, and
+a bracket sentence that did not match the tables); the backtester fixed them the same day, and the
+numbers moved as `CHANGES.md` lists — the short-side liquidations had never been flagged.

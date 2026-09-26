@@ -28,8 +28,14 @@ UTC, статическая просадка 6 % от капитала мест�
 Закрытие платит комиссию тейкера на весь номинал (`--taker-bps`, Hyperliquid 4.5 bps).
 
 Биржа впереди сторожа. Если эквити падает ниже поддерживающей маржи, позицию закрывает не сторож, а
-ликвидация биржи, и место теряет капитал целиком: правила пула в этот момент уже не действуют.
-Порог — `--mm` доля номинала (по умолчанию 2 %).
+ликвидация биржи: правила пула в этот момент уже не действуют. Порог — `--mm` доля номинала (по
+умолчанию 2 %). Что остаётся месту — вилка по документации Hyperliquid: ликвидация через книгу
+возвращает остаток обеспечения (поддерживающую маржу), резервная ликвидация его не возвращает.
+Нижняя граница (`--exec open`) оставляет месту маржу, верхняя (`--exec worst`) — место теряет всё.
+
+Край суток. Если линия пробита так поздно, что минуты `j + lag` в сутках уже нет, выход считается по
+закрытию последней минуты (последняя цена, которую сторож увидит), а не по её открытию, которое стоит
+до пробития.
 
     python3 pool_stress.py --days 2025-10-10 --entries hour          # один день, вход каждый час
     python3 pool_stress.py --top 8 --entries hour --json итог.json   # восемь худших суток с 10.10.2025
@@ -159,28 +165,44 @@ def episode(bar: dict, i: int, side: int, *, lev: float, daily_loss: float, max_
                 "итог_доля": eq_out / start_eq - 1.0, "линия_доля": -loss_to_line, "перелёт_доля": 0.0,
                 "выход": int(ts[n - 1]), "минут_до_выхода": n - 1 - i}
     j = i + int(hit[0])
-    k = min(j + lag, n - 1)
-    p_out = p_line if lag == 0 else float(o[k])
-    if lag == 0 and ((side > 0 and float(o[j]) < p_line) or (side < 0 and float(o[j]) > p_line)):
-        p_out = float(o[j])                                 # минута открылась за линией: раньше не исполнить
+    if lag == 0:
+        k, p_out, path_end = j, p_line, j
+        if (side > 0 and float(o[j]) < p_line) or (side < 0 and float(o[j]) > p_line):
+            p_out = float(o[j])                             # минута открылась за линией: раньше не исполнить
+    elif j + lag <= n - 1:
+        k, p_out, path_end = j + lag, float(o[j + lag]), j + lag
+    else:
+        # 🔴 Окно задержки выходит за край суток: минуты j + lag в данных нет. Открытие минуты j стоит
+        # ДО пробития и выходом быть не может (так место выходило лучше линии — замечание ревью 25.09).
+        # Берём закрытие последней минуты — последнюю цену, которую сторож увидит в этих сутках; путь
+        # позиции при этом проходит минуту j целиком, включая её низ.
+        k, p_out, path_end = n - 1, float(bar["c"][n - 1]), n
     if exec_mode == "worst" and lag:
         # Сторожу не повезло с моментом опроса: худшая цена внутри окна [j, k]. Это верхняя граница
         # перелёта; закрытие по открытию минуты k — не граница вовсе, оно бывает и лучше линии.
         bad = float(l[j:k + 1].min()) if side > 0 else float(h[j:k + 1].max())
         p_out = min(p_out, bad) if side > 0 else max(p_out, bad)
     # Биржа впереди сторожа: если цена прошла уровень ликвидации ДО момента закрытия, позицию снесло
-    # раньше. Путь кончается на самом закрытии: минуты [i, k) целиком плюс открытие минуты k — всё, что
-    # внутри минуты k после открытия, случилось уже после выхода. Иначе при мгновенном стороже
+    # раньше. Путь кончается на самом закрытии: минуты [i, path_end) целиком плюс цена выхода — всё, что
+    # внутри минуты выхода после этой цены, случилось уже после выхода. Иначе при мгновенном стороже
     # (задержка 0) минимум минуты пробития засчитывался бы позиции, которой в ней уже нет.
     tail = p_out                                            # путь кончается на цене самого выхода
-    if k == i:                                              # вышли в минуту входа: путь — только выход
+    if path_end <= i:                                       # вышли в минуту входа: путь — только выход
         deep = tail
     else:
-        deep = min(float(l[i:k].min()), tail) if side > 0 else max(float(h[i:k].max()), tail)
-    if (side > 0 and deep <= p_liq) or (side < 0 and deep >= p_liq):
+        deep = min(float(l[i:path_end].min()), tail) if side > 0 else max(float(h[i:path_end].max()), tail)
+    liquidated = bool((side > 0 and deep <= p_liq) or (side < 0 and deep >= p_liq))
+    if liquidated:
+        # Что остаётся месту после ликвидации — вилка, а не число. Документация Hyperliquid: при
+        # ликвидации через книгу «any remaining collateral remains with the trader» (это поддерживающая
+        # маржа, mm × номинал), при резервной ликвидации (эквити ниже 2/3 маржи) «the maintenance margin
+        # is not returned to the user». Нижняя граница (`open`) оставляет маржу, верхняя (`worst`) — нет:
+        # место теряет капитал целиком, комиссии платить не с чего.
         p_out = p_liq
-    eq_out = max(equity(p_out, px_in, side, lev, eq_in) - fee, 0.0)
-    return {"вход": int(ts[i]), "пробито": True, "ликвидация": bool(eq_out <= mm * lev * eq_in),
+        eq_out = 0.0 if exec_mode == "worst" else max(equity(p_liq, px_in, side, lev, eq_in) - fee, 0.0)
+    else:
+        eq_out = max(equity(p_out, px_in, side, lev, eq_in) - fee, 0.0)
+    return {"вход": int(ts[i]), "пробито": True, "ликвидация": liquidated,
             "итог_доля": eq_out / start_eq - 1.0, "линия_доля": -loss_to_line,
             "перелёт_доля": max(line_eq - eq_out, 0.0) / start_eq,
             "выход": int(ts[k]), "минут_до_выхода": k - i}
@@ -267,6 +289,20 @@ def run(days: list[str], syms: list[str], *, side: int, lev: float, daily_loss: 
     return out, every
 
 
+def entry_minutes(bars: dict[str, dict], t0: int, mode: str) -> list[tuple[int, dict[str, int]]]:
+    """Минуты входа пула: отметка времени и индекс бара у КАЖДОЙ монеты на эту отметку.
+
+    🔴 Места входят в одну и ту же минуту, поэтому сводить их надо по отметке времени, а не по номеру
+    бара: при пропуске минуты у одной из монет номера расходятся, и пять «одновременных» входов
+    оказались бы в разные моменты (замечание ревью 25.09). Берутся минуты, которые есть у всех монет;
+    `hour` — только ровные часы от полуночи.
+    """
+    pos = {s: {int(t): idx for idx, t in enumerate(b["ts"].tolist())} for s, b in bars.items()}
+    common = set.intersection(*[set(p) for p in pos.values()]) if pos else set()
+    step = 60 if mode == "minute" else 3600
+    return [(t, {s: pos[s][t] for s in pos}) for t in sorted(common) if (t - t0) % step == 0]
+
+
 def seats_report(days: list[str], syms: list[str], *, side: int, lev: float, daily_loss: float,
                  max_dd: float, lag: int, taker_bps: float, mm: float, mode: str, exec_mode: str = "open",
                  seat_coins: list[str] | None = None) -> list[dict]:
@@ -288,12 +324,11 @@ def seats_report(days: list[str], syms: list[str], *, side: int, lev: float, dai
         bars = {s: load_day(s, t0) for s in set(use)}
         if any(b is None for b in bars.values()):
             continue
-        n = min(len(b["o"]) for b in bars.values())
         worst = None
         cnt: dict[int, int] = {}
         money_all: list[float] = []
-        for i in entries(n, mode):
-            eps = [episode(bars[s], i, side, lev=lev, daily_loss=daily_loss, max_dd=max_dd, snapshot=F,
+        for t, at in entry_minutes(bars, t0, mode):
+            eps = [episode(bars[s], at[s], side, lev=lev, daily_loss=daily_loss, max_dd=max_dd, snapshot=F,
                            start_eq=F, lag=lag, taker_bps=taker_bps, mm=mm, exec_mode=exec_mode)
                    for s, F in zip(use, POOL_SEATS)]
             eps = [e for e in eps if e.get("вход") is not None]
@@ -304,7 +339,7 @@ def seats_report(days: list[str], syms: list[str], *, side: int, lev: float, dai
             money = sum(-e["итог_доля"] * F for e, F in zip(eps, POOL_SEATS))
             money_all.append(money)
             if worst is None or money > worst[0]:
-                worst = (money, int(bars[use[0]]["ts"][i]), k, sum(e["ликвидация"] for e in eps))
+                worst = (money, t, k, sum(e["ликвидация"] for e in eps))
         if worst is None:
             continue
         total = sum(POOL_SEATS)
