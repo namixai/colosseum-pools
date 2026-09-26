@@ -125,8 +125,9 @@ test("the new-pool form asks about the deployment's assets, not about every perp
 });
 
 test("the asset list reaches the calculator, and the page cannot show a tail without naming it", () => {
-  // The measured tail is two to three times larger on a wide list than on BTC/ETH/SOL. A page that
-  // shows one number without the list it belongs to is wrong for one of the two pools.
+  // The measured tail of a spread pool is two to three times larger on a wide list than on BTC/ETH/SOL,
+  // while every seat on one coin reaches the whole of its capital at the worst price on either list. A
+  // page that shows one number without the list it belongs to is wrong for one of the two pools.
   const spec = specFrom({ mode: "default", pool: "100000", chmode: "real", feePct: "20", assetList: "wide" });
   assert.equal(spec.asset_list, "wide");
   assert.equal(specFrom({ mode: "default", pool: "100000", chmode: "real", feePct: "20" }).asset_list, "default",
@@ -137,8 +138,9 @@ test("the asset list reaches the calculator, and the page cannot show a tail wit
   assert.deepEqual(dflt.cascade.coins, ["BTC", "ETH", "SOL"]);
   assert.ok(wide.cascade.coins.length > dflt.cascade.coins.length);
 
-  const worst = (r) => Math.max(...Object.values(r.cascade.cases).map((c) => c.loss_share_of_seats.high));
-  assert.ok(worst(wide) > worst(dflt), "the wide list has the bigger tail, as measured");
+  const spread = ["spread_calm", "spread_risky"].map((k) => dflt.cascade.cases[k].loss_share_of_seats.high);
+  assert.ok(wide.cascade.cases.reference_mix.loss_share_of_seats.low > Math.max(...spread),
+    "the wide list's own pool loses more at its lower bound than any spread of the default list at its upper one");
   // The figure the decision quotes -- more than four fifths -- belongs to the wide list. On the
   // default list the smallest case is nowhere near it, which is why the page prints the list.
   const calm = dflt.cascade.cases.spread_calm.loss_share_of_seats;
