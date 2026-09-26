@@ -56,6 +56,10 @@ export const ABI = {
     // What the contract wrote down when it ended the funded stage: the pool's own breachReason.
     "function fundedEndReason() view returns (uint8)",
     "function capitalNeeded() view returns (uint64)",
+    // Stage 4 only, which a pool of the older factory never reports: when the pass was recorded, and
+    // how long the pool waits for a key before anyone may release it (abandonFundedStage).
+    "function passedAt() view returns (uint64)",
+    "function AWAIT_KEY_WINDOW() view returns (uint64)",
     "function prepareAccount()",
     "function buyChallenge() returns (address)",
     "function withdrawOnCore(uint64 amount1e8)",
@@ -102,7 +106,8 @@ export const ABI = {
 };
 
 export const STATUS = ["None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled"];
-export const STAGE = ["Idle", "Challenge", "Funded", "Closing"];
+// A pool's stages, with the one added at the end (4, "Passed, waiting for a key"), live in stages.js.
+export { STAGE } from "./stages.js";
 export const BREACH = ["None", "Drawdown", "Daily loss", "Leverage", "Forbidden asset"];
 export const KEY_STATE = ["Unknown", "Free", "Bound", "Retired"];
 
