@@ -1795,6 +1795,19 @@ MUTATIONS = [
      '  "Passed, waiting for a key: the trader passed the challenge, and the funded stage opens as soon as a "',
      '  "Passed: the trader passed the challenge, and the funded stage opens as soon as a "',
      ["stage 4 is the trader who passed and waits for a key, and no stage is shown as undefined"]),
+    ("PS8", "app/lib/stages.js",
+     "  return Number(now) > release\n",
+     "  return Number(now) >= release\n",
+     ["a pool waiting for a key says how long before it may step back, and the second it may"]),
+    ("PS9", "app/lib/stages.js",
+     '  if (d > 0) return h > 0 ? `${plural(d, "day")} and ${plural(h, "hour")}` : plural(d, "day");',
+     '  if (d > 0) return plural(d, "day");',
+     ["the time left is said in days and hours, and never as a negative",
+      "a pool waiting for a key says how long before it may step back, and the second it may"]),
+    ("PS10", "app/lib/stages.js",
+     "  const release = Number(passedAt) + Number(window);",
+     "  const release = Number(passedAt);",
+     ["a pool waiting for a key says how long before it may step back, and the second it may"]),
 ]
 
 RUNNERS = {

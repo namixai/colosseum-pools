@@ -8,13 +8,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { STAGE, STAGE_IDS, stageName, stageWords, isFundedStage } from "../lib/stages.js";
+import { STAGE, STAGE_IDS, stageName, stageWords, isFundedStage, spanWords, awaitingKeyWords } from "../lib/stages.js";
 import { saleBlocker } from "../lib/funding.js";
 import { pastFundedStage } from "../lib/verdict.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SOURCE = readFileSync(join(ROOT, "src", "Pool.sol"), "utf8");
-const CONTRACT = SOURCE.match(/enum Stage\s*\{([^}]*)\}/)[1].split(",").map((s) => s.replace(/\/\/.*$/gm, "").trim()).filter(Boolean);
+// Comments first, then commas: a comment inside the enum may have commas of its own.
+const CONTRACT = SOURCE.match(/enum Stage\s*\{([^}]*)\}/)[1].replace(/\/\/[^\n]*/g, "").split(",").map((s) => s.trim()).filter(Boolean);
 
 test("the app's stages are the contract's, in its order, and anything more comes after them", () => {
   assert.ok(CONTRACT.length >= 4, `src/Pool.sol has ${CONTRACT.length} stages`);
@@ -48,4 +49,34 @@ test("a pool waiting for a key is taken: it sells no challenge", () => {
 test("a pool waiting for a key is not read as a funded stage that is over", () => {
   assert.equal(pastFundedStage({ kind: "pool", stage: 4, cutBlock: 65206003 }), false);
   assert.equal(pastFundedStage({ kind: "pool", stage: 0, cutBlock: 65206003 }), true);
+});
+
+test("the time left is said in days and hours, and never as a negative", () => {
+  assert.equal(spanWords(0), "less than an hour");
+  assert.equal(spanWords(3599), "less than an hour");
+  assert.equal(spanWords(3600), "1 hour");
+  assert.equal(spanWords(7 * 3600), "7 hours");
+  assert.equal(spanWords(86400), "1 day");
+  assert.equal(spanWords(86400 + 3600), "1 day and 1 hour");
+  assert.equal(spanWords(6 * 86400 + 12 * 3600 + 59), "6 days and 12 hours");
+  assert.equal(spanWords(-5), "less than an hour");
+});
+
+test("a pool waiting for a key says how long before it may step back, and the second it may", () => {
+  const passedAt = 1790400000, window = 7 * 86400;
+  const early = awaitingKeyWords({ passedAt, window, now: passedAt + 12 * 3600 });
+  assert.equal(early, "Passed, waiting for a key: the trader passed the challenge, and the funded stage opens as soon as "
+    + "a trading key is free. 6 days and 12 hours left before the pool may step back: after 2026-10-03 05:20 UTC anyone "
+    + "may release it to Idle, and the trader keeps the pass and the challenge share.");
+  // abandonFundedStage reverts TooEarly up to and including passedAt + window.
+  assert.match(awaitingKeyWords({ passedAt, window, now: passedAt + window }), /less than an hour left before the pool may step back/);
+  assert.match(awaitingKeyWords({ passedAt, window, now: passedAt + window + 1 }), /The wait is over: anyone may now release the pool to Idle/);
+});
+
+test("where the contract has stage 4, it has the clock the pool page reads", () => {
+  if (!CONTRACT.includes("PassedAwaitingKey")) return;   // a checkout whose Pool.sol predates the stage
+  assert.match(SOURCE, /uint64 public passedAt;/);
+  assert.match(SOURCE, /uint64 public constant AWAIT_KEY_WINDOW = 7 days;/);
+  assert.match(SOURCE, /function abandonFundedStage\(\) external inStage\(Stage\.PassedAwaitingKey\)/);
+  assert.match(SOURCE, /if \(block\.timestamp <= passedAt \+ AWAIT_KEY_WINDOW\) revert TooEarly\(\);/);
 });

@@ -8,7 +8,7 @@ import { esc, render, $, wire, badge, row, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
 import { saleBlocker, topUpAdvice } from "../lib/funding.js";
-import { stageName as nameOf, stageWords, isFundedStage } from "../lib/stages.js";
+import { stageName as nameOf, stageWords, isFundedStage, awaitingKeyWords } from "../lib/stages.js";
 
 export async function poolView(address, page) {
   const pool = chain.contract("pool", address);
@@ -25,6 +25,11 @@ export async function poolView(address, page) {
     pool.fundedEndReason(),
   ]);
   const stageName = nameOf(stage);
+  // Only a pool of the newer factory can be in stage 4, and only such a pool has the clock to read.
+  const waiting = Number(stage) === 4
+    ? await Promise.all([pool.passedAt(), pool.AWAIT_KEY_WINDOW()]).then(([passedAt, window]) => ({ passedAt, window }))
+    : null;
+  const doing = waiting ? awaitingKeyWords({ ...waiting, now: Math.floor(Date.now() / 1000) }) : stageWords(stage);
   const isOwner = chain.same(me, owner);
   const isFunded = chain.same(me, fundedTrader);
   // Challenge capital, funded capital, and 1 USDC for creating the challenge's account.
@@ -47,7 +52,8 @@ export async function poolView(address, page) {
       ${row("Account prepared", ready ? "yes" : "no")}
       ${Number(stage) === 1 ? row("Current challenge", `<a href="#/challenge/${esc(challenge)}">${esc(chain.short(challenge))}</a>`) : ""}
       ${isFundedStage(stage) ? row("Funded trader", `<span class="mono">${esc(fundedTrader)}</span>`) : ""}
-      ${row("What the pool is doing", esc(stageWords(stage)))}
+      ${waiting ? row("Trader who passed", `<span class="mono">${esc(fundedTrader)}</span>`) : ""}
+      ${row("What the pool is doing", esc(doing))}
       <p><a href="#/verify/${esc(address)}">Check this account yourself →</a></p>
     </section>
     <div class="grid">
