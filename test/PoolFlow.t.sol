@@ -907,6 +907,9 @@ contract PoolFlowTest is Test {
         CoreSimulatorLib.setMarkPx(BTC, 786920); // +3%: about +11.46 USDC
         _trade(address(ch), BTC, false, 0.005e8); // flat again, profit realized
         ch.graduate(SALT);
+        // Since audit A-02 the pass and the funding are two calls: graduate records that the
+        // trader passed whatever the key registry looks like, and this opens the stage.
+        p.openFundedStage();
     }
 
     /// A stranger can spoil every published key by giving it a HyperCore account, one USDC
@@ -915,7 +918,7 @@ contract PoolFlowTest is Test {
     /// registry and reverted, and after the deadline the trader could only expire -- no funded
     /// stage, no share, and the challenge's profit left in the pool. Now the key is already in
     /// hand when the trader passes, so nobody outside can reach it.
-    function test_graduate_survivesAnEmptyRegistry_becauseTheSaleReservedTheKey() public {
+    function test_graduate_recordsThePassWithTheRegistryDrained_andTheStageOpensLater() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
 
@@ -927,19 +930,44 @@ contract PoolFlowTest is Test {
             }
         }
         assertGt(spoiled, 0, "there was something left to spoil");
+        // And the key this sale put aside for the funded stage, which a stranger could reach
+        // too: KeyBound named it publicly the moment the challenge was sold.
+        CoreSimulatorLib.forceAccountActivation(p.reservedKey());
 
         _trade(address(ch), BTC, true, 0.005e8);
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
+        // The pass goes through with the registry empty: it does not ask for a key any more.
         ch.graduate(SALT);
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Passed), "the pass is recorded");
+        assertGt(ch.payoutOwed(), 0, "and the trader's share of the challenge is owed to them");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey), "the pool waits for a key");
+        assertEq(p.fundedTrader(), trader, "for this trader and nobody else");
 
-        // The whole assertion is behaviour: the trader who met the target IS funded, although
-        // every key still on the free list was spoiled while the challenge ran.
+        // The pool holds its capital while it waits, so the investor cannot take it back out
+        // from under someone who passed.
+        vm.prank(investor);
+        vm.expectRevert(abi.encodeWithSelector(Pool.BadStage.selector, Pool.Stage.PassedAwaitingKey));
+        p.withdrawOnCore(1e8);
+
+        // Opening the stage is what needs a key, and it can simply be tried again.
+        vm.expectRevert(KeyRegistry.NoFreeKey.selector);
+        p.openFundedStage();
+
+        // One key published by the operator and the trader gets what they earned. Nobody had to
+        // be quick about it, and no stranger could decide the outcome.
+        address[] memory more = new address[](1);
+        more[0] = makeAddr("enclave-key-late");
+        vm.prank(operator);
+        registry.publish(more);
+        p.openFundedStage();
+
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
-        assertTrue(registry.isBound(p.agentKey(), address(p), trader), "funded on a key of its own");
+        assertEq(p.agentKey(), more[0], "funded on the key that was published");
+        assertTrue(registry.isBound(more[0], address(p), trader));
 
-        // What the fix does NOT claim: the attack still stops NEW sales. Say so here, so that
-        // nobody reads this test as proof the registry cannot be drained.
+        // What this does NOT claim: draining the registry still stops NEW sales. Say so here so
+        // nobody reads the test as proof the free list cannot be emptied.
         Pool other = _readyPool();
         deal(address(usdc), trader, 25e6);
         vm.startPrank(trader);
@@ -1193,6 +1221,65 @@ contract PoolFlowTest is Test {
         CoreSimulatorLib.nextBlock();
         assertEq(_spot(address(ch)), 0, "the settled account is empty again");
         assertEq(_spot(address(p)), poolBefore + 5e8, "and the pool has it");
+    }
+
+    /// Holding a pool's capital for a trader who passed is right, and holding it for ever is
+    /// not: if no key is ever published the investor would never get their money back, which is
+    /// a worse hole than the one the wait closes. After the window anyone may release the pool.
+    /// The trader keeps the pass and the challenge share; the event records that THIS POOL never
+    /// funded them, which is a mark on the pool.
+    function test_abandonFundedStage_onlyAfterTheWindow_andThenAnyoneMay() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        for (uint256 i = 0; i < keys.length; ++i) {
+            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
+                CoreSimulatorLib.forceAccountActivation(keys[i]);
+            }
+        }
+        address reserved = p.reservedKey();
+        CoreSimulatorLib.forceAccountActivation(reserved);
+
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey));
+
+        vm.prank(stranger);
+        vm.expectRevert(Pool.TooEarly.selector);
+        p.abandonFundedStage();
+
+        vm.warp(block.timestamp + p.AWAIT_KEY_WINDOW() + 1);
+        vm.prank(stranger); // anyone, not just the owner whose capital it is
+        p.abandonFundedStage();
+
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle), "the pool is released");
+        assertEq(p.fundedTrader(), address(0));
+        assertEq(p.reservedKey(), address(0), "and the key it was holding is given back");
+        assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
+        assertGt(ch.payoutOwed(), 0, "the trader still earned the challenge share");
+    }
+
+    /// When the stranger spoils only the reserved key, opening the stage takes a live one
+    /// instead. HyperCore accepts an address that already has an account as an agent by doing
+    /// NOTHING and saying nothing (spike question 8), so a stage opened on a spoiled key would
+    /// look funded and be unable to trade -- which is worse than any refusal.
+    function test_aSpoiledReservedKeyIsSwappedForALiveOne() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        address reserved = p.reservedKey();
+        CoreSimulatorLib.forceAccountActivation(reserved);
+
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+        p.openFundedStage();
+
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
+        assertTrue(p.agentKey() != reserved, "not the spoiled one");
+        assertFalse(CoreOps.exists(p.agentKey()), "the stage opened on a key with no account");
+        assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
     }
 
     function test_graduate_needsTargetAndFlat() public {

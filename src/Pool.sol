@@ -32,7 +32,12 @@ contract Pool is RuledAccount {
         Idle,
         Challenge,
         Funded,
-        Closing
+        Closing,
+        /// The trader met the target and the pass is recorded, but the funded stage has no key
+        /// yet. Appended rather than placed where it belongs in the life of a pool: the app
+        /// reads this deployment and the one before it, and a number that means two different
+        /// things on two factories has to be branched on everywhere it appears.
+        PassedAwaitingKey
     }
 
     address public owner;
@@ -51,6 +56,8 @@ contract Pool is RuledAccount {
     uint256 public earned;
 
     address public fundedTrader;
+    /// When the pass was recorded, so the wait for a key cannot run for ever.
+    uint64 public passedAt;
     int64 public fundedStart;
     Breach public fundedEndReason;
     /// Account value when the funded stage was stopped, positions marked at the start of that
@@ -76,6 +83,10 @@ contract Pool is RuledAccount {
     uint64 public fundedDrainBlock;
 
     uint64 public constant PAYOUT_WAIT = 5 minutes;
+    /// How long a pool holds its capital for a trader who passed but has no key yet. After it,
+    /// anyone may release the pool -- the pass and the challenge share stay with the trader, and
+    /// the event says the platform never funded them.
+    uint64 public constant AWAIT_KEY_WINDOW = 7 days;
 
     event AccountReady();
     event ChallengeSold(address indexed challenge, address indexed trader, uint256 price);
@@ -85,6 +96,8 @@ contract Pool is RuledAccount {
     event FundedStopped(address indexed trader, Breach indexed reason, int64 equity);
     event FundedResult(address indexed trader, int64 realized, uint64 payout);
     event FundedPayoutSent(address indexed trader, uint64 amount);
+    event TraderPassed(address indexed trader);
+    event FundedStageAbandoned(address indexed trader);
     event FundedClosed(address indexed trader);
     event WithdrawnOnCore(address indexed to, uint64 amount);
     event EarnedWithdrawn(address indexed to, uint256 amount);
@@ -95,6 +108,7 @@ contract Pool is RuledAccount {
     error NotReady();
     error NotEnoughCapital(uint64 spot, uint64 needed);
     error NotAllowed();
+    error TooEarly();
 
     constructor() {
         _disableInitializers();
@@ -223,26 +237,40 @@ contract Pool is RuledAccount {
         emit ChallengeRefunded(challenge, challengeTrader, price);
     }
 
-    /// @notice The trader passed: bind a new key to this account for them and fund it.
+    /// @notice The trader passed. Recorded here and now, whatever state the key registry is
+    ///         in: opening the funded stage is a separate call that anyone may make.
+    /// @dev    This split is the whole of audit A-02. While this function took a key, a stranger
+    ///         who had drained the free list decided whether a trader who had already met the
+    ///         target got their stage at all -- graduate reverted, the deadline passed, and the
+    ///         trader was left with `expire`: no funded stage, no share of one, and the
+    ///         challenge's profit staying in the pool. Nothing a third party can do reaches this
+    ///         function now. The pool holds its capital in the meantime, so the investor cannot
+    ///         withdraw from under someone who passed.
     function onChallengePassed(address trader) external onlyChallenge inStage(Stage.Challenge) {
-        stage = Stage.Funded;
+        stage = Stage.PassedAwaitingKey;
         fundedTrader = trader;
         fundedEndReason = Breach.None;
+        passedAt = uint64(block.timestamp);
+        emit TraderPassed(trader);
+    }
 
+    /// @notice Opens the funded stage for the trader who passed, as soon as a live key exists.
+    ///         Anyone may call it; the keeper does.
+    /// @dev    If there is no live key this reverts and the pool stays where it is, so the call
+    ///         can simply be made again later -- which is the point: a refusal here costs a
+    ///         retry, where before it cost the trader the stage.
+    function openFundedStage() external inStage(Stage.PassedAwaitingKey) {
         address key = reservedKey;
         reservedKey = address(0);
         // The reserved key has been public since the sale -- KeyBound names it -- so a stranger
-        // had the whole challenge term to give it an account, and HyperCore then takes it as an
-        // agent silently and does nothing (spike question 8). A funded stage on a dead key looks
-        // open and cannot trade, which is worse than any refusal. So check, and if it is spoiled
-        // give it back and take a live one. That can still run out, and then this reverts
-        // NoFreeKey exactly as it did before the reservation existed -- loud, and recoverable by
-        // publishing keys. The reservation buys immunity to the free list being drained; it does
-        // not buy immunity to this key being singled out.
-        if (CoreOps.exists(key)) {
-            factory.registry().retire(key);
-            key = factory.registry().assign(trader);
+        // had the whole challenge term to give it an account, and HyperCore then takes such an
+        // address as an agent silently and does nothing (spike question 8). A funded stage on a
+        // dead key looks open and cannot trade, which is worse than any refusal.
+        if (key == address(0) || CoreOps.exists(key)) {
+            if (key != address(0)) factory.registry().retire(key);
+            key = factory.registry().assign(fundedTrader);
         }
+        stage = Stage.Funded;
         _setAgent(key);
         // Sending the challenge capital may have cost an activation fee, so fund what is
         // there, up to the terms.
@@ -252,7 +280,27 @@ contract Pool is RuledAccount {
         fundedStart = start;
         CoreOps.toPerp(funded);
         _startDay(start);
-        emit TraderFunded(trader, key, funded);
+        emit TraderFunded(fundedTrader, key, funded);
+    }
+
+    /// @notice Releases a pool that has been waiting for a key longer than the window. Anyone
+    ///         may call it.
+    /// @dev    Without this the pool holds its capital for ever if no key is ever published,
+    ///         which is a worse hole than the one the wait closes. The trader keeps the pass and
+    ///         the challenge share they earned; what the event records is that this pool never
+    ///         funded them, which is a mark on the pool and not on the trader.
+    function abandonFundedStage() external inStage(Stage.PassedAwaitingKey) {
+        if (block.timestamp <= passedAt + AWAIT_KEY_WINDOW) revert TooEarly();
+        address spare = reservedKey;
+        if (spare != address(0)) {
+            reservedKey = address(0);
+            factory.registry().retire(spare);
+        }
+        emit FundedStageAbandoned(fundedTrader);
+        fundedTrader = address(0);
+        fundedEndReason = Breach.None;
+        passedAt = 0;
+        stage = Stage.Idle;
     }
 
     function onChallengeSettled() external onlyChallenge {

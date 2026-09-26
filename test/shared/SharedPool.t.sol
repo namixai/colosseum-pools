@@ -197,6 +197,7 @@ contract SharedPoolTest is Test {
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), false, 0.001e8);
         ch.graduate(SALT);
+        seat.openFundedStage(); // since audit A-02 the pass and the funding are two calls
         CoreSimulatorLib.nextBlock();
     }
 
@@ -1087,6 +1088,7 @@ contract SharedPoolTest is Test {
         CoreSimulatorLib.setMarkPx(BTC, 810528); // +3% again
         _trade(address(second), false, 0.001e8);
         second.graduate(SALT);
+        seat.openFundedStage();
         CoreSimulatorLib.nextBlock();
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
 

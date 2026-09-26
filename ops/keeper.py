@@ -61,7 +61,7 @@ RECUT_AFTER_BLOCKS = 10  # CoreWriter actions land a few seconds after their blo
 # ChallengeAccount.Status and Pool.Stage. The tests hold these against the Solidity source.
 CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(1, 9)
 STOPPED = (BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED)
-IDLE, CHALLENGE, FUNDED, CLOSING = range(4)
+IDLE, CHALLENGE, FUNDED, CLOSING, PASSED_AWAITING_KEY = range(5)
 
 
 # A stop cost 194818 gas at 0.1 gwei on 25 Sep 2026 -- 0.0000195 HYPE -- and a settle step
@@ -187,6 +187,11 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
     challenge = to_checksum_address(view(pool, "challenge()", "address"))
     if challenge != ZERO:
         challenge_pass(wallet, challenge, names, now, latest, dry)
+    if stage == PASSED_AWAITING_KEY:
+        # The trader met the target and the pass is already recorded; the stage only needs a
+        # live key. The call is open to anyone and reverts NoFreeKey when there is none, so it
+        # is worth trying every pass: the pool holds the investor's capital until it succeeds.
+        send(wallet, pool, "openFundedStage()", dry=dry)
     if stage in (FUNDED, CLOSING):
         cancels, extra = stop_inputs(pool, rules_assets(pool), names)
         if stage == FUNDED:
@@ -199,6 +204,7 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
         else:
             recut_if_uncut(wallet, pool, latest, dry)
             send(wallet, pool, f"settleFunded({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
+    # A pool waiting for a key is not finished with, even when its challenge has settled.
     return not (stage == IDLE and challenge == ZERO)
 
 
