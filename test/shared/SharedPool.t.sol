@@ -143,17 +143,44 @@ contract SharedPoolTest is Test {
     }
 
     /// Started with the seed, `deposit` from alice recognized and swept into the pool.
+    /// A seat put in place BEFORE any deposit is recognised, which since audit A-06 is the only
+    /// time seats may be added: holders get the pool they could read when they paid in.
+    Pool internal pending;
+    Pool internal pending2;
+
     function _funded(uint64 deposit) internal {
         _start(SEED);
+        vm.prank(operator);
+        pending = Pool(sp.addSeat(_rules(), _terms(), TERM));
         address t = _ticket(alice, deposit);
         sp.settle(_list(t));
         CoreSimulatorLib.nextBlock();
     }
 
     /// A seat that is on HyperCore, prepared and holding what it needs to sell a challenge.
+    /// The seat _funded put in place before the deposit. Since A-06 that is the only seat a
+    /// test with holders in it can have, so tests take this one instead of adding their own.
+    function _pendingSeat() internal returns (address seat) {
+        if (address(pending) != address(0)) {
+            seat = address(pending);
+            pending = Pool(address(0));
+        } else {
+            require(address(pending2) != address(0), "no seat was put in place before the deposit");
+            seat = address(pending2);
+            pending2 = Pool(address(0));
+        }
+    }
+
     function _armedSeat() internal returns (Pool seat) {
-        vm.prank(operator);
-        seat = Pool(sp.addSeat(_rules(), _terms(), TERM));
+        // Arming moves holders' money, so it can only happen after a deposit -- while ADDING can
+        // only happen before one. Hence the two steps: take the seat put in place by _funded, or
+        // add one now if nothing has been deposited yet.
+        if (address(pending) != address(0) || address(pending2) != address(0)) {
+            seat = Pool(_pendingSeat());
+        } else {
+            vm.prank(operator);
+            seat = Pool(sp.addSeat(_rules(), _terms(), TERM));
+        }
         sp.armSeat(address(seat));
         CoreSimulatorLib.nextBlock();
         seat.prepareAccount();
@@ -472,8 +499,7 @@ contract SharedPoolTest is Test {
 
     function test_armSeat_topsUpAFreshSeat_payingItsAccountFeeOnce() public {
         _funded(150e8); // 160 in the pool
-        vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        address seat = _pendingSeat();
         vm.prank(stranger);
         sp.armSeat(seat);
         CoreSimulatorLib.nextBlock();
@@ -484,16 +510,14 @@ contract SharedPoolTest is Test {
 
     function test_armSeat_refusesWithoutRoomForTheAccountFee() public {
         _funded(91e8); // 101 in the pool: the seat's capital, not the fee for its new account
-        vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        address seat = _pendingSeat();
         vm.expectRevert(abi.encodeWithSelector(SharedPool.NotEnoughFree.selector, uint64(NEED), NEED + Units.NEW_ACCOUNT_FEE));
         sp.armSeat(seat);
     }
 
     function test_armSeat_waitsForThePreviousTopUp() public {
         _funded(250e8);
-        vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        address seat = _pendingSeat();
         sp.armSeat(seat);
         // Not landed yet: the seat still shows nothing, and a second top-up would send twice.
         vm.warp(block.timestamp + sp.ARM_WAIT());
@@ -809,6 +833,8 @@ contract SharedPoolTest is Test {
         CoreSimulatorLib.forceAccountActivation(alice);
         CoreSimulatorLib.forceAccountActivation(bob);
         _start(SEED);
+        vm.prank(operator); // the seat goes in before the deposits, as A-06 now requires
+        pending = Pool(sp.addSeat(_rules(), _terms(), TERM));
         address ta = _ticket(alice, 60e8);
         address tb = _ticket(bob, 60e8);
         sp.settle(_list(ta, tb));
@@ -898,8 +924,7 @@ contract SharedPoolTest is Test {
     /// cover the queue, so the seat waits; with 50 queued it does, and the seat is armed.
     function test_armSeat_onlyFromMoneyTheQueueDoesntNeed() public {
         _funded(150e8);
-        vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        address seat = _pendingSeat();
         vm.warp(block.timestamp + LOCK);
         _request(alice, 100e8);
         vm.expectRevert(SharedPool.QueueWaiting.selector);
@@ -908,8 +933,7 @@ contract SharedPoolTest is Test {
         SharedPool other = new SharedPool(factory, operator, platform, MIN, LOCK, FEE_BPS);
         sp = other;
         _funded(150e8);
-        vm.prank(operator);
-        seat = sp.addSeat(_rules(), _terms(), TERM);
+        seat = _pendingSeat();
         vm.warp(block.timestamp + LOCK);
         _request(alice, 50e8);
         sp.armSeat(seat);
@@ -937,8 +961,7 @@ contract SharedPoolTest is Test {
     function test_noPayment_whileATopUpIsInFlight() public {
         CoreSimulatorLib.forceAccountActivation(alice);
         _funded(150e8);
-        vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        address seat = _pendingSeat();
         vm.warp(block.timestamp + LOCK);
         sp.armSeat(seat);
         _request(alice, 10e8);
@@ -987,8 +1010,7 @@ contract SharedPoolTest is Test {
     function test_ownPayments_holdUpTheNextPointAndTopUps() public {
         CoreSimulatorLib.forceAccountActivation(alice);
         _funded(150e8);
-        vm.prank(operator);
-        address seat = sp.addSeat(_rules(), _terms(), TERM);
+        address seat = _pendingSeat();
         vm.warp(block.timestamp + LOCK);
         _request(alice, 10e8);
         sp.settle(new address[](0));
@@ -1015,6 +1037,31 @@ contract SharedPoolTest is Test {
     }
 
     // ── the funded term ──────────────────────────────────────────────────────────────
+
+    /// Audit A-06. The contract's own header and docs/SHARED-POOL.md both say the seats, their
+    /// rules and their terms are published BEFORE anyone deposits, and nothing held the operator
+    /// to it. A seat added afterwards -- near-total drawdown allowed, fifty times leverage, the
+    /// whole profit to the trader -- takes holders' money the next time anyone arms a seat, and
+    /// they cannot leave quickly: only a queue, a lock and settlement points.
+    function test_addSeat_isRefusedOnceAnyoneHasDeposited() public {
+        _funded(150e8);
+        Rules memory hostile = _rules();
+        hostile.maxDrawdownBps = 9999;
+        hostile.maxLeverageX100 = 5000;
+        Terms memory greedy = _terms();
+        greedy.traderShareChallengeBps = Units.BPS;
+        greedy.traderShareFundedBps = Units.BPS;
+
+        vm.prank(operator);
+        vm.expectRevert(SharedPool.SeatsClosed.selector);
+        sp.addSeat(hostile, greedy, TERM);
+
+        // And not because those particular rules are refused: the ordinary ones are too.
+        vm.prank(operator);
+        vm.expectRevert(SharedPool.SeatsClosed.selector);
+        sp.addSeat(_rules(), _terms(), TERM);
+        assertTrue(sp.depositsBegun(), "the door closed when the first deposit became shares");
+    }
 
     function test_addSeat_needsAFundedTerm() public {
         _start(SEED);

@@ -12,6 +12,16 @@ investors hold shares in one book of seats, and the platform publishes the seats
 terms before anyone deposits. So the investor chooses a pool whose limits are published; they don't
 set the limits themselves.
 
+**That is now a rule and not only a sentence.** `addSeat` is refused once the first deposit from
+outside has become shares (`depositsBegun`), so the book of seats an investor could read when they
+paid in is the book they get. Until audit A-06 the promise was in this document and in the
+contract's header while nothing in the code held the operator to it: a seat added afterwards —
+near-total drawdown allowed, fifty times leverage, the whole profit to the trader — would have
+taken holders' money the next time anyone armed a seat, and leaving is not quick here. There is
+one consequence worth saying plainly: a pool with holders in it can never gain a seat again. To
+run a different set of seats, the platform starts another pool, and anyone who wants those terms
+chooses it.
+
 ## Contracts
 
 - `SharedPool` (`src/shared/SharedPool.sol`). Creates its seats through `PoolFactory.createPool`,

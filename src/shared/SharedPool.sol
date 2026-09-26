@@ -98,6 +98,9 @@ contract SharedPool {
     uint16 public immutable feeBps;
 
     uint256 public totalShares;
+    /// Set the first time a deposit from outside becomes shares. From then on the set of seats
+    /// is fixed: holders put money into the pool they could read, and that is the pool they get.
+    bool public depositsBegun;
     mapping(address holder => uint256) public sharesOf;
     uint256 public seedValue;
     uint256 public seedShares;
@@ -162,6 +165,7 @@ contract SharedPool {
     error BadDeposit();
     error SeedTooSmall(uint256 seedValue, uint256 planCapital);
     error TooMany();
+    error SeatsClosed();
     error NotSeat(address seat);
     error SeatBusy(address seat);
     error TooSoon(address seat);
@@ -240,6 +244,13 @@ contract SharedPool {
         started
         returns (address seat)
     {
+        // Audit A-06. This contract's own header and docs/SHARED-POOL.md both promise that the
+        // seats, their rules and their terms are published BEFORE anyone deposits, and nothing
+        // used to hold the operator to it. A seat added afterwards -- 99.99% drawdown, 50x
+        // leverage, the whole profit to the trader -- would take holders' money the next time
+        // anyone armed a seat, and they cannot leave quickly: only a queue, a lock and
+        // settlement points. So the promise is now the rule.
+        if (depositsBegun) revert SeatsClosed();
         if (_seats.length >= MAX_SEATS) revert TooMany();
         if (fundedTerm_ == 0) revert BadTerm();
         seat = factory.createPool(rules_, terms_);
@@ -415,6 +426,7 @@ contract SharedPool {
             _mint(tk.depositor, minted);
             basis[tk.depositor] += amount;
             lastDeposit[tk.depositor] = uint64(block.timestamp);
+            depositsBegun = true;
             emit DepositRecognized(tk.depositor, t, amount, minted);
         }
         _sweepClosed();

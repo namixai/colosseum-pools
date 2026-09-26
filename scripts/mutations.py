@@ -321,6 +321,14 @@ MUTATIONS = [
      "            if (!_nothingHeldOnPerp()) return;",
      "            if (false) return;",
      ["test_settleFunded_doesNotPayTheShareWhileAnOrderHoldsMargin"]),
+    ("P62", "src/shared/SharedPool.sol",
+     "        if (depositsBegun) revert SeatsClosed();",
+     "        if (false) revert SeatsClosed();",
+     ["test_addSeat_isRefusedOnceAnyoneHasDeposited"]),
+    ("P63", "src/shared/SharedPool.sol",
+     "            depositsBegun = true;",
+     "            depositsBegun = depositsBegun;",
+     ["test_addSeat_isRefusedOnceAnyoneHasDeposited"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",
