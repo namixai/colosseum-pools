@@ -402,6 +402,11 @@ contract Pool is RuledAccount {
         if (block.number <= fundedDrainBlock) return;
 
         if (fundedPayoutOwed != 0 && !fundedPayoutDone) {
+            // Audit A-04, the same on this side as on a passed challenge: the share is measured
+            // against `spot`, and a resting order keeps its margin outside `withdrawable`, so
+            // `free == 0` does not mean the perp side has let go. A pool that funded a trader out
+            // of everything it had holds little on spot, which is exactly when this bites.
+            if (!_nothingHeldOnPerp()) return;
             if (spot == 0) return;
             // A trader with no HyperCore account yet pays for creating it out of the share.
             uint64 pay = CoreOps.sendableTo(fundedTrader, spot < fundedPayoutOwed ? spot : fundedPayoutOwed);
@@ -427,8 +432,7 @@ contract Pool is RuledAccount {
         // drain, and finishing with margin held would strand it. The position check repeats
         // what _drainStep established at the top of this call; it is a cheap read and it
         // makes this condition true on its own rather than by code order.
-        int64 eq = CoreOps.equity(address(this));
-        if (eq <= int64(CoreOps.withdrawable(address(this))) && CoreOps.margin(address(this)).ntlPos == 0) {
+        if (_nothingHeldOnPerp()) {
             emit FundedClosed(fundedTrader);
             fundedTrader = address(0);
             fundedStart = 0;

@@ -221,6 +221,18 @@ abstract contract RuledAccount is Initializable {
     ///      perp balance to spot. Returns what the start-of-block state showed. A position in
     ///      an asset nobody named still counts in the account's notional; until it is gone,
     ///      nothing moves to spot and `open` stays above zero.
+    /// @dev True when the perp side is holding nothing back: no position open, and every dollar
+    ///      still there is withdrawable. A RESTING ORDER'S MARGIN IS NOT WITHDRAWABLE -- that is
+    ///      the whole point of asking it this way. `withdrawable == 0` reads the same whether the
+    ///      perp side is empty or a limit order is sitting on the money, and a share paid on that
+    ///      reading comes out of whatever happened to reach spot in time (audit A-04). Somebody
+    ///      else's dust does not trip this: a donation is withdrawable, so it keeps equity and
+    ///      withdrawable equal.
+    function _nothingHeldOnPerp() internal view returns (bool) {
+        return CoreOps.margin(address(this)).ntlPos == 0
+            && CoreOps.equity(address(this)) <= int64(CoreOps.withdrawable(address(this)));
+    }
+
     function _drainStep(Cancel[] memory cancels, uint32[] memory extra)
         internal
         returns (uint256 open, uint64 free, uint64 spot)

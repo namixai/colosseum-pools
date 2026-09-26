@@ -269,6 +269,12 @@ contract ChallengeAccount is RuledAccount {
         if (free != 0 && !waited) return;
 
         if (payoutOwed != 0 && !payoutDone) {
+            // Audit A-04. The share is measured against `spot`, and `spot` is only the whole of
+            // what the trader earned once the perp side has let go of it. `free == 0` does not
+            // say that: a resting order keeps its margin outside `withdrawable`, so this step
+            // used to pay out of whatever had reached spot and mark the payout done for good.
+            // The trader's own orders are named by the keeper; until they are, this waits.
+            if (!_nothingHeldOnPerp()) return;
             if (spot == 0) return;
             // A trader with no HyperCore account yet pays for creating it out of the share.
             uint64 pay = CoreOps.sendableTo(trader, spot < payoutOwed ? spot : payoutOwed);
@@ -309,8 +315,7 @@ contract ChallengeAccount is RuledAccount {
         // A resting order's margin is not withdrawable, so this still waits for one -- ending
         // with margin held would leave it on a settled account. What is merely in flight, or
         // arrives afterwards, is not stranded either: anyone may `sweep()` it to the pool.
-        if (CoreOps.margin(address(this)).ntlPos == 0
-            && CoreOps.equity(address(this)) <= int64(CoreOps.withdrawable(address(this)))) {
+        if (_nothingHeldOnPerp()) {
             status = Status.Settled;
             emit Settled();
             pool.onChallengeSettled();

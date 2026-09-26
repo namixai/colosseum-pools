@@ -176,6 +176,22 @@ before it can sell again.
 
 ## What the design does not do
 
+- **A pool's owner can buy their way out of funding a trader who passed, for about the price of
+  the keys.** When a trader passes, the pool holds its capital in a stage that waits for an agent
+  key, so the owner cannot simply withdraw from under them. That wait has to end, though: if no
+  key is ever published the capital would be locked for good, which is worse than the hole the
+  wait closes. So after seven days -- one challenge term -- anyone may call
+  `abandonFundedStage`, the pool returns to Idle, and the trader keeps the pass and the challenge
+  share they earned while the event records that this pool never funded them.
+  An owner who wants that outcome can arrange it: give every free key in the registry a HyperCore
+  account (`KeyRegistry` then retires each one, about 1 USDC apiece), including the key the sale
+  reserved, and wait the week out. What stands against it is cost and daylight, not a rule. The
+  operator can publish keys at any time and each one has to be spoiled again; the count the
+  gateway holds and the registry's `freeCount()` are both public, so the two drifting apart is
+  visible, and `docs/HOSTING.md` says to keep them reconciled. The release is open to anyone
+  rather than to the owner on purpose -- the owner is the one who gains from it, so it should not
+  be theirs alone to trigger. Found while designing the fix for A-02 and written down rather than
+  left for someone else to find; the seven days and the "anyone" are one line each to change.
 - **It cannot tell profit from a deposit, so a pass can be bought.** The target and the
   trader's share are both measured from the challenge account's perp equity
   (`ChallengeAccount.graduate`), and that number rises for any USDC sent to the account —

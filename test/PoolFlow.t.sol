@@ -1282,6 +1282,94 @@ contract PoolFlowTest is Test {
         assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
     }
 
+    /// Makes the margin precompile report money on the perp side while `withdrawable` -- a
+    /// different precompile, left real -- still reads zero. That is what a resting limit order
+    /// looks like from a contract: the money is there and it cannot be taken out.
+    function _mockHeldMargin(address account, int64 accountValue) internal {
+        vm.mockCall(
+            address(0x080F),
+            abi.encode(uint32(0), account),
+            abi.encode(PrecompileLib.AccountMarginSummary({
+                accountValue: accountValue, marginUsed: uint64(int64(accountValue)), ntlPos: 0, rawUsd: accountValue
+            }))
+        );
+    }
+
+    /// Audit A-04. The trader's share is measured against spot, and the step used to wait only
+    /// for `withdrawable` to read zero -- which it does both when the perp side is empty and when
+    /// an order is sitting on the money. Paying on that reading hands the trader whatever reached
+    /// spot in time and marks the share paid for good; the difference stays with the pool. The
+    /// trader's own orders are named by the keeper, so waiting for them is right.
+    function test_settle_doesNotPayTheShareWhileAnOrderHoldsMargin() public {
+        // A trader who already has a HyperCore account, so the activation fee does not come out
+        // of the share and the only thing this test measures is A-04.
+        CoreSimulatorLib.forceAccountActivation(trader);
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+        p.openFundedStage();
+        assertGt(ch.payoutOwed(), 0, "a share is owed for the challenge");
+
+        uint32[] memory none = new uint32[](0);
+        _mockHeldMargin(address(ch), 5e6); // an order resting on 5 USDC of the account's money
+        for (uint256 i = 0; i < 6; ++i) {
+            ch.settle(new Cancel[](0), none);
+            CoreSimulatorLib.nextBlock();
+        }
+        assertFalse(ch.payoutDone(), "the share is not paid while an order holds the money");
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Passed), "and it has not finished");
+
+        vm.clearMockedCalls(); // the keeper named the order and it is gone
+        _settleChallenge(ch);
+        assertTrue(ch.payoutDone());
+        assertEq(ch.payoutSent(), ch.payoutOwed(), "paid in full, not out of whatever had landed");
+    }
+
+    /// Audit A-04 on the funded stage, the half found later. The same reading, the same loss,
+    /// and worse odds: a pool that funded a trader out of everything it had holds almost nothing
+    /// on spot, so "whatever reached spot" is a much smaller number than the share.
+    function test_settleFunded_doesNotPayTheShareWhileAnOrderHoldsMargin() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        Pool p = _readyPool();
+        (ChallengeAccount ch,) = _passed(p);
+        ch;
+        CoreSimulatorLib.nextBlock();
+        _trade(address(p), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 810000);
+        _trade(address(p), BTC, false, 0.005e8);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(trader);
+        p.stopFunded(c, a, SALT);
+        CoreSimulatorLib.nextBlock();
+
+        // Take the result, then put an order back on the money before the share is paid.
+        p.settleFunded(c, a);
+        CoreSimulatorLib.nextBlock();
+        uint64 owed = p.fundedPayoutOwed();
+        assertGt(owed, 0, "a share is owed for the funded stage");
+        uint64 traderBefore = _spot(trader);
+        _mockHeldMargin(address(p), 5e6);
+        for (uint256 i = 0; i < 6; ++i) {
+            p.settleFunded(c, a);
+            CoreSimulatorLib.nextBlock();
+        }
+        assertFalse(p.fundedPayoutDone(), "not paid while an order holds the money");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing), "and the stage has not closed");
+
+        vm.clearMockedCalls();
+        for (uint256 i = 0; i < 8 && p.stage() != Pool.Stage.Idle; ++i) {
+            p.settleFunded(c, a);
+            CoreSimulatorLib.nextBlock();
+        }
+        // Reaching Idle wipes every funded* field, so what the trader actually received is the
+        // only thing left to measure -- and the only thing that ever mattered.
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle), "the stage closed once the order was gone");
+        assertEq(_spot(trader) - traderBefore, owed, "the trader got the whole share, not part of it");
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
