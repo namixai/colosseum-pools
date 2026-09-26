@@ -25,13 +25,13 @@ here are never deleted and the early design leaned on them.
 
 | component | state before the window | where to check |
 |---|---|---|
-| Usenami Signer: keys held in an AWS Nitro Enclave, signing behind a gateway | in development since May 2026, live service | public repository `namixai/signer` |
+| Usenami Signer: keys held in an AWS Nitro Enclave, signing behind a gateway | in development since May 2026, and a live service until 21 September 2026, when we switched off its hosted lanes: production and the public demo are both stopped | public repository `namixai/signer`; its README says so at the top |
 | The exact build this project planned to use until 17 September | tag `pcr0-fbaad62f`, commit `865f418`, 10 September 2026. We are not rebuilding the enclave for this event, and since 17 September the demo doesn't use it at all | that tag in `namixai/signer` |
 | Hyperliquid agent keys minted inside the enclave (`provision_agent_key`, venues `hyperliquid_main` and `hyperliquid_testnet`) | in that build | `poc/enclave/src/handler.rs` at the tag |
 | Per-asset size and notional caps, checked in the enclave before it signs a Hyperliquid order (`hl_order_caps`, enforced by `enforce_hl_caps`) | in that build | same file |
 | Hyperliquid testnet signing (phantom-agent `source = "b"`), orders and cancels only | in that build | same file |
 | A signed receipt for every decision, refusals included, from a key bound into the attestation document | since the August 2026 rotation | `docs/CLIENT-ONBOARDING.md` in `namixai/signer` |
-| An attestation endpoint, and a PCR0 registry contract on Base | live | `namixai/signer` README |
+| An attestation endpoint, and a PCR0 registry contract on Base | the endpoint answered until 21 September 2026 and went off with the hosted lanes; the registry contract is still on Base, unchanged | `namixai/signer` README |
 | Live orders on Hyperliquid mainnet: a full round trip, entry and exit both filled, on 19 August 2026 | product history, on our own account with our own money, no external audit | not reproduced in this repository |
 | Our ETHOnline 2026 submission (`namixai/signer-ethonline2026`) | a separate event with a different scope: Permit2, Uniswap, The Graph, World ID | nothing from it is imported here unless a row below says so |
 
