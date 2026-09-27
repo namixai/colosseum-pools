@@ -78,7 +78,9 @@ contract SharedPool {
     /// ticket on the list, which every settlement point reads, then costs whoever tries 1 USDC a point,
     /// and the pool keeps it.
     uint64 public constant SWEEP_MIN = 1e8;
-    /// Holders waiting to be paid at once; a request past this waits for the queue to move.
+    /// Holders waiting to be paid at once. A request past this is REFUSED, not queued behind the
+    /// others -- the seventeenth holder has to ask again once the queue has moved. Said plainly
+    /// because it used to say "waits", which is not what the code does (audit A-07).
     uint256 public constant MAX_QUEUE = 16;
     /// The pool's own HyperCore payments are given this long to land before the next point or top-up,
     /// the same wait the core contracts give a payout.

@@ -282,7 +282,11 @@ table is in the evidence page.
 
 - The keeper running on the operator's host.
 - Deposits through HyperEVM on mainnet, where the sender is visible.
-- At most 16 holders wait at once; a request past that waits for the queue to move.
+- At most 16 holders wait at once, and a request past that is **refused** rather than queued: the
+  seventeenth holder has to ask again once the queue has moved. Sixteen addresses holding requests
+  bigger than the pool's free money can keep it full while seats are busy, so this is a real
+  inconvenience and not a formality. It is written here rather than left for someone to meet on the
+  day they wanted their money (audit A-07; the sentence used to say "waits").
 - A holder with no HyperCore account loses a HyperCore part of 1 USDC or less: it can't pay for
   creating the account, so nothing is sent, and the shares it stood for are burned. A deposit made
   from the depositor's own HyperCore account, the way the app makes it, means the account exists; a
