@@ -1,6 +1,8 @@
 """Стенд поломок для pool_stress.py: каждая поломка правила обязана краснить test_pool_stress.py.
 
-После ревью 25.09 добавлены поломки края суток, вилки ликвидации и сведения мест по времени.
+После ревью 25.09 добавлены поломки края суток, вилки ликвидации и сведения мест по времени; после
+ревью 26.09 — задержки и входов по времени, сторожа загрузчика, и поломки самого якоря (test_anchor.py
+--selftest).
 
 Копия без `__pycache__` и запуск с `-B`: иначе поломка той же длины, записанная в ту же секунду,
 читается из старого `.pyc` и «зеленеет» ложно. Сначала контроль без поломки — он обязан быть
@@ -30,10 +32,9 @@ M = [
  ("вход при уже пробитой линии", "    if line_eq >= eq_in:", "    if False:"),
  ("пробитие по закрытию, а не по минимуму минуты", "    adverse = l if side > 0 else h", "    adverse = bar['c']"),
  ("пробитие шорта ищется снизу", "    adverse = l if side > 0 else h", "    adverse = l"),
- ("задержка не применяется", "        k, p_out, path_end = j + lag, float(o[j + lag]), j + lag",
-  "        k, p_out, path_end = j, float(o[j]), j"),
- ("выход по закрытию минуты, а не по открытию", "        k, p_out, path_end = j + lag, float(o[j + lag]), j + lag",
-  "        k, p_out, path_end = j + lag, float(bar['c'][j + lag]), j + lag"),
+ ("задержка не применяется", "        t_exit = int(ts[j]) + lag * 60", "        t_exit = int(ts[j])"),
+ ("выход по закрытию минуты, а не по открытию", "            p_out, path_end = float(o[k]), k",
+  "            p_out, path_end = float(bar['c'][k]), k"),
  ("гэп через линию исполнен по линии",
   "            p_out = float(o[j])                             # минута открылась за линией: раньше не исполнить",
   "            pass"),
@@ -77,6 +78,33 @@ M = [
  ("режим worst применяется всегда", '    if exec_mode == "worst" and lag:', "    if lag:"),
  ("путь до ликвидации кончается не на выходе", "    tail = p_out ", "    tail = float(o[k]) "),
  ("пробитые места не считаются", 'k = sum(e["пробито"] for e in eps)', "k = 0"),
+ ("🔴 задержка выхода по номеру бара, а не по времени (ревью 26.09)",
+  "        k = int(np.searchsorted(ts, t_exit))", "        k = j + lag"),
+ ("🔴 почасовые входы по номеру бара, а не по времени (ревью 26.09)",
+  "        return [int(i) for i in np.flatnonzero((ts.astype(np.int64) - t0) % 3600 == 0)]",
+  "        return list(range(0, len(ts), 60))"),
+ ("минуты до выхода считаются по номерам баров",
+  '            "выход": int(ts[k]), "минут_до_выхода": (int(ts[k]) - int(ts[i])) // 60}',
+  '            "выход": int(ts[k]), "минут_до_выхода": k - i}'),
+ ("🔴 сторож загрузчика снят: повтор минуты принимается (ревью 26.09)",
+  "    if len(step) and not np.all(step > 0):", "    if False:"),
+ ("сторож загрузчика ловит только беспорядок, повтор минуты пропускает",
+  "    if len(step) and not np.all(step > 0):", "    if len(step) and not np.all(step >= 0):"),
+ ("докстринг снова обещает одновременные пробития",
+  "    Считает, сколько мест из пяти пробивает линию в те же сутки после общего входа — каждое в свою\n    минуту, не одновременно, — и сколько денег теряет пул при этом входе.",
+  "    Считает, сколько мест из пяти пробивает линию одновременно и сколько денег теряет пул."),
+]
+
+# Поломки самого якоря: сравнение строк живёт в test_anchor.py, его ломаем отдельно и проверяем
+# быстрой самопроверкой (`test_anchor.py --selftest`), а не полным прогоном по слепку.
+FA, TA = "test_anchor.py", ["--selftest"]
+M_ANCHOR = [
+ ("🔴 якорь: повтор строки схлопывается в одну (ревью 26.09)",
+  "    if len(a) != len(published) or len(b) != len(fresh):", "    if False:"),
+ ("якорь: состав полей не сравнивается", "        if set(a[k]) != set(b[k]):", "        if False:"),
+ ("якорь: изменённое поле не называется",
+  '        diffs += [f"{section} {k} {f}: {v} -> {b[k].get(f)}" for f, v in a[k].items() if b[k].get(f) != v]',
+  "        pass"),
 ]
 
 only = sys.argv[1:]
@@ -125,5 +153,51 @@ for name, old, new in M:
         print(f"🔴 УПАЛ НЕ НА ПРОВЕРКЕ  {name}: {(r.stderr or r.stdout).strip()[-160:]}")
     else:
         print(f"КРАСНЕЕТ  {name}: {why[2:80]}")
-print(f"поломок {len(M)} · не пойманы/не легли: {bad}")
+
+
+def run_anchor(mutate=None):
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        shutil.copy(SRC / FA, d)
+        if mutate and not mutate(d):
+            return None
+        return subprocess.run([PY, "-B", FA] + TA, cwd=d, capture_output=True, text=True, env=ENV)
+
+
+if not (SRC / FA).exists():
+    # Оригинал инструмента в strategy-configs живёт без якоря: там ломать нечего, и это не провал.
+    print(f"({FA} рядом нет — поломки якоря пропущены, это копия инструмента без слепка)")
+    M_ANCHOR = []
+else:
+    ctl = run_anchor()
+    if ctl.returncode != 0:
+        print("🔴 самопроверка якоря без поломки красная — стенд сломан:", (ctl.stdout + ctl.stderr).strip()[-300:])
+        sys.exit(1)
+for name, old, new in M_ANCHOR:
+    if only and not any(o in name for o in only):
+        continue
+
+    def mut_a(d, old=old, new=new):
+        p = d / FA
+        src = p.read_text(encoding="utf-8")
+        if src.count(old) != 1:
+            return False
+        p.write_text(src.replace(old, new), encoding="utf-8")
+        return True
+
+    r = run_anchor(mut_a)
+    if r is None:
+        print(f"🔴 МУТАЦИЯ НЕ ЛЕГЛА: {name}")
+        bad += 1
+        continue
+    why = next((x.strip() for x in r.stdout.splitlines() if x.strip().startswith("•")), None)
+    if r.returncode == 0:
+        bad += 1
+        print(f"🔴 ЗЕЛЁНЫЙ  {name}")
+    elif why is None:
+        bad += 1
+        print(f"🔴 УПАЛ НЕ НА ПРОВЕРКЕ  {name}: {(r.stderr or r.stdout).strip()[-160:]}")
+    else:
+        print(f"КРАСНЕЕТ  {name}: {why[2:80]}")
+print(f"поломок {len(M) + len(M_ANCHOR)} · не пойманы/не легли: {bad}")
 sys.exit(1 if bad else 0)

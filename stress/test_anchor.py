@@ -61,12 +61,17 @@ def key_of(row: dict) -> str:
 
 def diff_rows(published: list, fresh: list, section: str) -> list[str]:
     """Every field of every row, and the set of fields itself: a key that appears or disappears is a
-    difference too — that is how the rule block once drifted unnoticed."""
+    difference too — that is how the rule block once drifted unnoticed. Rows are keyed, so a key
+    that repeats would collapse into one — that is a difference as well (review of 26 Sep 2026):
+    the row counts are compared before anything else."""
     a = {key_of(r): r for r in published}
     b = {key_of(r): r for r in fresh}
     diffs = []
+    if len(a) != len(published) or len(b) != len(fresh):
+        diffs.append(f"{section}: repeated keys — {len(published)} rows published ({len(a)} distinct), "
+                     f"{len(fresh)} now ({len(b)} distinct)")
     if set(a) != set(b):
-        diffs.append(f"{section}: {len(a)} rows published, {len(b)} now")
+        diffs.append(f"{section}: {len(a)} keys published, {len(b)} now")
     for k in sorted(set(a) & set(b)):
         if set(a[k]) != set(b[k]):
             diffs.append(f"{section} {k}: fields {sorted(set(a[k]) ^ set(b[k]))} differ")
@@ -88,7 +93,43 @@ def readme_recipe(readme: str) -> list[str]:
     return m.group(1).splitlines() if m else []
 
 
+def selftest() -> list[str]:
+    """The comparison itself, on made-up rows: a repeated row, a missing row, a changed field and an
+    extra field must each show up as a difference, and identical lists must not. Runs first in the
+    full anchor and alone with `--selftest`, so the breakage stand can break it in seconds."""
+    r1 = {"сутки": "d", "монета": "A", "сторона": "лонг", "x": 1}
+    r2 = {"сутки": "d", "монета": "B", "сторона": "лонг", "x": 2}
+    fails = []
+    if diff_rows([r1, r2], [r1, r2], "t"):
+        fails.append("identical lists reported as different")
+    if not diff_rows([r1, r2], [r1, r2, dict(r2)], "t"):
+        fails.append("a repeated row in the fresh output passed the comparison")
+    if not diff_rows([r1, r2, dict(r1)], [r1, r2], "t"):
+        fails.append("a repeated row in the published file passed the comparison")
+    if not diff_rows([r1, r2, dict(r2)], [r1, r2, dict(r2)], "t"):
+        fails.append("the same repeated row on both sides, equal counts, passed the comparison")
+    if not diff_rows([r1, r2], [r1], "t"):
+        fails.append("a missing row passed the comparison")
+    if not any("x: 1 -> 3" in d for d in diff_rows([r1, r2], [{**r1, "x": 3}, r2], "t")):
+        fails.append("a changed field is not named")
+    if not any("fields" in d for d in diff_rows([r1, r2], [{**r1, "y": 0}, r2], "t")):
+        fails.append("an extra field passed the comparison")
+    return fails
+
+
 def main() -> int:
+    if "--selftest" in sys.argv[1:]:
+        fails = selftest()
+        for f in fails:
+            print(f"• {f}")
+        print("selftest:", "FAILED" if fails else "ok")
+        return 1 if fails else 0
+
+    print("0. the comparison itself catches what it must:")
+    fails = selftest()
+    (ok("repeated, missing and changed rows are all differences") if not fails
+     else bad("diff_rows self-test", "; ".join(fails)))
+
     print("1. the snapshot is the one the numbers were measured on:")
     sums = os.path.join(DATA, "SHA256SUMS")
     if not os.path.exists(sums):

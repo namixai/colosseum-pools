@@ -307,7 +307,65 @@ def main() -> int:
             fails.append(f"отчёт не берёт индексы монет из entry_minutes: вход {r.get('худший_вход')}, "
                          f"пробито {r.get('мест_пробито_в_худшем')} из 5")
 
-    print(f"проверок в файле: 29 · провалов: {len(fails)}")
+        # 20. 🔴 Задержка выхода — по ВРЕМЕНИ, не по номеру бара. Минуты 3 нет: пробитие в минуте 2,
+        #     задержка 2 → выход в минуте 4 (бар № 3), а не в баре № 4 (минута 5).
+        gapped = bar([flat, flat, (99.8, 99.9, 99.0, 99.6), (97.0, 97.0, 97.0, 97.0), (95.0, 95.0, 95.0, 95.0)],
+                     )
+        gapped["ts"] = np.array([T0 + m * 60 for m in (0, 1, 2, 4, 5)], dtype=np.int64)
+        r = ep(gapped, lag=2)
+        if not (close(r["итог_доля"], -(LEV * 0.03 + FEE)) and r["выход"] == T0 + 4 * 60 and r["минут_до_выхода"] == 4):
+            fails.append(f"задержка считается по номеру бара, а не по времени: {r}")
+        # 20а. Задержка 1, а минуты 3 нет: выход — первая минута после задержки, которую сторож увидит (минута 4).
+        r = ep(gapped, lag=1)
+        if not (close(r["итог_доля"], -(LEV * 0.03 + FEE)) and r["выход"] == T0 + 4 * 60):
+            fails.append(f"при пропущенной минуте выхода не взята первая следующая: {r}")
+        # 20б. Путь до ликвидации при задержке по времени проходит только бары ДО выхода: низ бара № 4
+        #      (минута 5, после выхода) позиции не принадлежит.
+        gapped2 = bar([flat, flat, (99.8, 99.9, 99.0, 99.6), (97.0, 97.0, 97.0, 97.0), (95.0, 95.0, 10.0, 95.0)])
+        gapped2["ts"] = gapped["ts"]
+        r = ep(gapped2, lag=2)
+        if r["ликвидация"]:
+            fails.append(f"низ бара после выхода засчитан позиции: {r}")
+
+        # 21. 🔴 Почасовые входы — по отметке времени: у ряда без минуты 30 бар № 60 — это минута 01:01,
+        #     а вход обязан быть в 01:00 (бар № 59).
+        ts_gap = np.array([T0 + m * 60 for m in range(122) if m != 30], dtype=np.int64)
+        idx = PS.entry_indices(ts_gap, T0, "hour")
+        if idx != [0, 59, 119]:
+            fails.append(f"почасовые входы по номеру бара, а не по времени: {idx}")
+        if PS.entry_indices(ts_gap, T0, "minute") != list(range(121)):
+            fails.append("минутные входы — не все бары")
+        # 21а. Сторож проводки: run() берёт входы из entry_indices. Подставная функция даёт один вход
+        #      (бар № 59); в строке обязан быть ровно один вход.
+        real = PS.entry_indices
+        PS.entry_indices = lambda ts, t0, mode: [59]
+        try:
+            rows, eps_ = PS.run(["2025-10-10"], ["AAAUSDT"], side=1, lev=LEV, daily_loss=DL, max_dd=MDD, lag=1,
+                                taker_bps=TAKER, mm=MM, mode="hour")
+        finally:
+            PS.entry_indices = real
+        if not (rows and rows[0]["входов"] == 1 and len(eps_) == 1 and eps_[0]["вход"] == T0 + 59 * 60):
+            fails.append(f"run() не берёт входы из entry_indices: {rows and rows[0]['входов']}")
+
+        # 22. 🔴 Сторож загрузчика: повтор минуты или беспорядок — отказ с именем монеты, а не счёт.
+        write_npz(d, "DUPUSDT", [flat] * 5, ts=[T0, T0 + 60, T0 + 60, T0 + 180, T0 + 240])
+        write_npz(d, "MIXUSDT", [flat] * 5, ts=[T0, T0 + 120, T0 + 60, T0 + 180, T0 + 240])
+        for sym in ("DUPUSDT", "MIXUSDT"):
+            getattr(PS, "_CSV_CACHE", {}).clear()
+            try:
+                PS.load_day(sym, T0)
+                fails.append(f"{sym}: ряд с повтором/беспорядком минут принят молча")
+            except SystemExit as e:
+                if sym not in str(e):
+                    fails.append(f"{sym}: отказ не называет монету: {e}")
+        getattr(PS, "_CSV_CACHE", {}).clear()
+
+    # 23. Докстринг seats_report не обещает «одновременных» пробитий: места пробивают в свои минуты.
+    doc = PS.seats_report.__doc__ or ""
+    if "пробивает линию одновременно" in doc or "не одновременно" not in doc:
+        fails.append("докстринг seats_report обещает одновременные пробития")
+
+    print(f"проверок в файле: 36 · провалов: {len(fails)}")
     for f in fails:
         print("•", f)                                       # «•» читает стенд поломок mut_pool_stress.py
     return 1 if fails else 0

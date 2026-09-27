@@ -138,9 +138,10 @@ python3 fetch_bybit_minutes.py --out /tmp/fresh     # public Bybit API, no key
 python3 test_anchor.py                               # re-runs everything over data/ and compares
 ```
 
-`test_anchor.py` is the one that matters: it re-runs the four published configurations and the
-layout run over the snapshot in `data/`, compares **every field of every section** — the rule
-block included — with the files in `results/`, and then checks the headline numbers by name (83.7,
+`test_anchor.py` is the one that matters: it first checks its own comparison on made-up rows
+(repeated, missing, changed), then re-runs the four published configurations and the layout run
+over the snapshot in `data/`, compares **every field of every section** — the rule block included,
+row counts and repeated keys too — with the files in `results/`, and then checks the headline numbers by name (83.7,
 94.1, 45.24, 100.0, the three layouts, the medians, seven of eight days over the cap). If the
 exchange restates a candle or a refactor shifts a number, this test goes red instead of letting a
 stale claim survive in this README. `make_results.py` is the command that produced `results/`.
@@ -159,10 +160,10 @@ Requirements: Python 3.10+ and numpy (the stress test uses it; the downloader is
 
 | file | what it is |
 |---|---|
-| `pool_stress.py` | the stress test — the backtester's tool, plus `--data-dir`, CSV input, `--seat-coins`, and the three fixes of the 25 Sep 2026 review (see `CHANGES.md`) |
-| `test_pool_stress.py` | 29 checks of the rules on synthetic data, by the same author |
-| `mut_pool_stress.py` | 32 deliberate breakages; each one must turn a check red |
-| `test_anchor.py` | the anchor: the snapshot must still produce the published numbers |
+| `pool_stress.py` | the stress test — the backtester's tool, plus `--data-dir`, CSV input, `--seat-coins`, and the fixes of the reviews of 25 and 26 Sep 2026 (see `CHANGES.md`) |
+| `test_pool_stress.py` | 36 checks of the rules on synthetic data, by the same author |
+| `mut_pool_stress.py` | 41 deliberate breakages of the tool and of the anchor's own comparison; each one must turn a check red |
+| `test_anchor.py` | the anchor: the snapshot must still produce the published numbers (`--selftest` checks the comparison alone) |
 | `make_results.py` | the one command that writes every file in `results/` |
 | `CHANGES.md` | what the review of 25 Sep 2026 changed, number by number |
 | `fetch_bybit_minutes.py` | downloads the exact bars from Bybit's public API |
@@ -190,4 +191,6 @@ parameter, the public downloader, the snapshot, the anchor test and this README 
 the **operations department** on 25 Sep 2026 for publication. A bot review of the same day found
 four defects (the last minute of a day, the liquidation residual, seats aligned by bar index, and
 a bracket sentence that did not match the tables); the backtester fixed them the same day, and the
-numbers moved as `CHANGES.md` lists — the short-side liquidations had never been flagged.
+numbers moved as `CHANGES.md` lists — the short-side liquidations had never been flagged. A second
+review on 26 Sep 2026 found three more (delay and hourly entries by bar index, a docstring, repeated
+rows in the anchor); fixed the same day, no number moved.

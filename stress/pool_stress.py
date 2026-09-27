@@ -96,6 +96,14 @@ def read_symbol(sym: str) -> dict | None:
         z = dict(np.load(npz_path))
     else:
         return None
+    # 🔴 Сторож на чужие данные: минуты обязаны идти строго по возрастанию, без повторов. Дубль минуты
+    # или перепутанный порядок молча сдвинули бы и путь до ликвидации, и выборку входов (ревью 26.09).
+    ts_all = z["ts"].astype(np.int64)
+    step = np.diff(ts_all)
+    if len(step) and not np.all(step > 0):
+        bad_at = int(ts_all[int(np.flatnonzero(step <= 0)[0]) + 1])
+        raise SystemExit(f"{sym}: минуты не строго по возрастанию (повтор или беспорядок) у отметки {bad_at} — "
+                         f"данные надо очистить, а не считать по ним")
     _CSV_CACHE[sym] = z
     return z
 
@@ -163,20 +171,26 @@ def episode(bar: dict, i: int, side: int, *, lev: float, daily_loss: float, max_
         eq_out = equity(float(bar["c"][n - 1]), px_in, side, lev, eq_in) - fee
         return {"вход": int(ts[i]), "пробито": False, "ликвидация": False,
                 "итог_доля": eq_out / start_eq - 1.0, "линия_доля": -loss_to_line, "перелёт_доля": 0.0,
-                "выход": int(ts[n - 1]), "минут_до_выхода": n - 1 - i}
+                "выход": int(ts[n - 1]), "минут_до_выхода": (int(ts[n - 1]) - int(ts[i])) // 60}
     j = i + int(hit[0])
     if lag == 0:
         k, p_out, path_end = j, p_line, j
         if (side > 0 and float(o[j]) < p_line) or (side < 0 and float(o[j]) > p_line):
             p_out = float(o[j])                             # минута открылась за линией: раньше не исполнить
-    elif j + lag <= n - 1:
-        k, p_out, path_end = j + lag, float(o[j + lag]), j + lag
     else:
-        # 🔴 Окно задержки выходит за край суток: минуты j + lag в данных нет. Открытие минуты j стоит
-        # ДО пробития и выходом быть не может (так место выходило лучше линии — замечание ревью 25.09).
-        # Берём закрытие последней минуты — последнюю цену, которую сторож увидит в этих сутках; путь
-        # позиции при этом проходит минуту j целиком, включая её низ.
-        k, p_out, path_end = n - 1, float(bar["c"][n - 1]), n
+        # 🔴 Задержка — по ВРЕМЕНИ, не по номеру бара (ревью 26.09): выход в первой минуте с отметкой
+        # ≥ пробитие + lag минут. При пропуске минут это первая минута, которую сторож увидит после
+        # задержки; на данных без пропусков — ровно бар j + lag, как и раньше.
+        t_exit = int(ts[j]) + lag * 60
+        k = int(np.searchsorted(ts, t_exit))
+        if k <= n - 1:
+            p_out, path_end = float(o[k]), k
+        else:
+            # 🔴 Окно задержки выходит за край суток: минуты с такой отметкой в данных нет. Открытие
+            # минуты j стоит ДО пробития и выходом быть не может (так место выходило лучше линии —
+            # замечание ревью 25.09). Берём закрытие последней минуты — последнюю цену, которую сторож
+            # увидит в этих сутках; путь позиции при этом проходит минуту j целиком, включая её низ.
+            k, p_out, path_end = n - 1, float(bar["c"][n - 1]), n
     if exec_mode == "worst" and lag:
         # Сторожу не повезло с моментом опроса: худшая цена внутри окна [j, k]. Это верхняя граница
         # перелёта; закрытие по открытию минуты k — не граница вовсе, оно бывает и лучше линии.
@@ -205,7 +219,7 @@ def episode(bar: dict, i: int, side: int, *, lev: float, daily_loss: float, max_
     return {"вход": int(ts[i]), "пробито": True, "ликвидация": liquidated,
             "итог_доля": eq_out / start_eq - 1.0, "линия_доля": -loss_to_line,
             "перелёт_доля": max(line_eq - eq_out, 0.0) / start_eq,
-            "выход": int(ts[k]), "минут_до_выхода": k - i}
+            "выход": int(ts[k]), "минут_до_выхода": (int(ts[k]) - int(ts[i])) // 60}
 
 
 def summarise(eps: list[dict], max_dd: float, label: str) -> dict:
@@ -227,11 +241,13 @@ def summarise(eps: list[dict], max_dd: float, label: str) -> dict:
             "ликвидаций_%": round(float(np.mean([e["ликвидация"] for e in eps])) * 100, 2)}
 
 
-def entries(n: int, mode: str) -> list[int]:
+def entry_indices(ts: np.ndarray, t0: int, mode: str) -> list[int]:
+    """Индексы баров-входов одной монеты: каждая минута или ровные часы от полуночи — ПО ОТМЕТКЕ
+    ВРЕМЕНИ, не по номеру бара (ревью 26.09): при пропуске минут бар № 60 — уже не минута 01:00."""
     if mode == "minute":
-        return list(range(n))
+        return list(range(len(ts)))
     if mode == "hour":
-        return list(range(0, n, 60))
+        return [int(i) for i in np.flatnonzero((ts.astype(np.int64) - t0) % 3600 == 0)]
     raise ValueError(mode)
 
 
@@ -267,7 +283,7 @@ def run(days: list[str], syms: list[str], *, side: int, lev: float, daily_loss: 
                 continue
             eps = [episode(bar, i, side, lev=lev, daily_loss=daily_loss, max_dd=max_dd, snapshot=start_eq,
                            start_eq=start_eq, lag=lag, taker_bps=taker_bps, mm=mm, exec_mode=exec_mode)
-                   for i in entries(len(bar["o"]), mode)]
+                   for i in entry_indices(bar["ts"], t0, mode)]
             eps = [e for e in eps if e.get("вход") is not None]
             if not eps:
                 continue
@@ -308,7 +324,8 @@ def seats_report(days: list[str], syms: list[str], *, side: int, lev: float, dai
                  seat_coins: list[str] | None = None) -> list[dict]:
     """Пул $100 тыс.: пять мест, каждое на своей монете, вход в одну и ту же минуту.
 
-    Считает, сколько мест из пяти пробивает линию одновременно и сколько денег теряет пул.
+    Считает, сколько мест из пяти пробивает линию в те же сутки после общего входа — каждое в свою
+    минуту, не одновременно, — и сколько денег теряет пул при этом входе.
     Монеты берутся по алфавиту — первые пять; это не выбор лучших, а фиксированное правило.
     """
     # По умолчанию — первые пять монет по алфавиту (правило автора: не выбор лучших, а

@@ -57,3 +57,24 @@ now set by the price path, not by a threshold.
 
 Unchanged: every lower bound, every median, both p99 columns, "three of five seats liquidated" on
 the long side of the wide list, "seven of eight days over the cap, three over 20 %".
+
+## 26 Sep 2026 — third version, after the bot's review of the second
+
+Three notes on robustness; none touched a published number. `make_results.py` was re-run after the
+changes and every file in `results/` came out byte-identical.
+
+1. **Delay and hourly entries by time** (`pool_stress.py`). The keeper's delay was `j + lag` bars and
+   the hourly entries were every 60th bar; on data with a missing minute a bar number is no longer a
+   minute. The exit is now the first bar at or after `crossing + lag minutes` (`entry_indices` picks the
+   entries by timestamp, `entry_minutes` already did so for the seats). On gap-free data this is the
+   same bar as before, which is why nothing moved. Checks 20–21a and four breakages.
+2. **"Simultaneously"** (`seats_report` docstring). The seats enter the same minute; each crosses its
+   line in its own minute. The docstring said "simultaneously"; it now says what the code counts. The
+   README never said it. Check 23 and one breakage.
+3. **Repeated rows in a fresh run** (`test_anchor.py`). The comparison keyed rows by (day, coin, side)
+   and a repeated key collapsed silently. It now compares row counts and distinct keys first; a
+   self-test of the comparison (`test_anchor.py --selftest`) runs at the start of every anchor run and
+   under the breakage stand, with four breakages of the anchor itself.
+
+Also: the loader refuses a series whose minutes repeat or run out of order, naming the coin and the
+minute (check 22, two breakages) — a duplicate bar would otherwise have moved the numbers silently.
