@@ -183,9 +183,15 @@ before it can sell again.
   wait closes. So after seven days -- one challenge term -- anyone may call
   `abandonFundedStage`, the pool returns to Idle, and the trader keeps the pass and the challenge
   share they earned while the event records that this pool never funded them.
-  An owner who wants that outcome can arrange it: give every free key in the registry a HyperCore
-  account (`KeyRegistry` then retires each one, about 1 USDC apiece), including the key the sale
-  reserved, and wait the week out. What stands against it is cost and daylight, not a rule. The
+  The release is refused while a key is there to be had: the pool checks, at the moment it is
+  asked, that the key it reserved is spoiled and that the registry lists nothing free. So a week of
+  nobody bothering to call `openFundedStage` cannot cost a trader their stage — only a week with no
+  key can.
+  An owner who wants that outcome has to make it true and leave the traces: give every free key a
+  HyperCore account (about 1 USDC apiece), including the one the sale reserved, and then call
+  `KeyRegistry.purgeSpoiled` so the count actually reaches zero. That last call is public and
+  anyone can make it, which is the point — the registry has to be visibly empty, not merely full of
+  keys nobody checked. What stands against the whole thing is cost and daylight, not a rule. The
   operator can publish keys at any time and each one has to be spoiled again; the count the
   gateway holds and the registry's `freeCount()` are both public, so the two drifting apart is
   visible, and `docs/HOSTING.md` says to keep them reconciled. The release is open to anyone

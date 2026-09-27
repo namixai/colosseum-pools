@@ -329,6 +329,14 @@ MUTATIONS = [
      "            depositsBegun = true;",
      "            depositsBegun = depositsBegun;",
      ["test_addSeat_isRefusedOnceAnyoneHasDeposited"]),
+    ("M72", "src/Pool.sol",
+     "        if (reservedKey != address(0) && !CoreOps.exists(reservedKey)) revert KeyAvailable();",
+     "        if (false) revert KeyAvailable();",
+     ["test_abandonFundedStage_isRefusedWhileAKeyIsThereToBeHad"]),
+    ("M73", "src/Pool.sol",
+     "        if (factory.registry().freeCount() != 0) revert KeyAvailable();",
+     "        if (false) revert KeyAvailable();",
+     ["test_abandonFundedStage_onlyAfterTheWindow_andThenAnyoneMay"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",

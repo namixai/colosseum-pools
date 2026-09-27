@@ -1250,6 +1250,20 @@ contract PoolFlowTest is Test {
         p.abandonFundedStage();
 
         vm.warp(block.timestamp + p.AWAIT_KEY_WINDOW() + 1);
+
+        // The window alone is not enough, and this is the half the audit asked for. While the
+        // registry still lists keys, the pool is NOT released: a week of nobody calling
+        // openFundedStage must not cost a trader their stage when a key was there to be had.
+        assertGt(registry.freeCount(), 0, "spoiled keys are still listed until somebody sweeps");
+        vm.prank(stranger);
+        vm.expectRevert(Pool.KeyAvailable.selector);
+        p.abandonFundedStage();
+
+        // Somebody says so on chain: purgeSpoiled stops at the first key that is still good, so
+        // reaching zero is proof and not an assumption.
+        registry.purgeSpoiled(keys.length);
+        assertEq(registry.freeCount(), 0, "nothing left that could have been used");
+
         vm.prank(stranger); // anyone, not just the owner whose capital it is
         p.abandonFundedStage();
 
@@ -1368,6 +1382,44 @@ contract PoolFlowTest is Test {
         // only thing left to measure -- and the only thing that ever mattered.
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle), "the stage closed once the order was gone");
         assertEq(_spot(trader) - traderBefore, owed, "the trader got the whole share, not part of it");
+    }
+
+    /// The audit's condition on abandonFundedStage, and the case it named: a week of silence
+    /// must not cost a trader their stage when the key was sitting right there. Nobody calls
+    /// openFundedStage, the window runs out, and the pool still refuses to let go -- because a
+    /// live key means the answer is to open the stage, not to give up on it.
+    function test_abandonFundedStage_isRefusedWhileAKeyIsThereToBeHad() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey));
+        address reserved = p.reservedKey();
+        assertFalse(CoreOps.exists(reserved), "the reserved key is still good");
+
+        // Empty the free list so that the ONLY thing standing between this pool and release is
+        // the key it is already holding. Without that the count check alone would refuse and
+        // this test would not be about the reserved key at all.
+        for (uint256 i = 0; i < keys.length; ++i) {
+            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
+                CoreSimulatorLib.forceAccountActivation(keys[i]);
+            }
+        }
+        registry.purgeSpoiled(keys.length);
+        assertEq(registry.freeCount(), 0, "nothing free in the registry");
+
+        vm.warp(block.timestamp + p.AWAIT_KEY_WINDOW() + 1);
+        vm.prank(stranger);
+        vm.expectRevert(Pool.KeyAvailable.selector);
+        p.abandonFundedStage();
+
+        // What should happen instead, and anyone can make it happen.
+        vm.prank(stranger);
+        p.openFundedStage();
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
+        assertEq(p.agentKey(), reserved, "on the key that was waiting the whole time");
     }
 
     function test_graduate_needsTargetAndFlat() public {

@@ -109,6 +109,7 @@ contract Pool is RuledAccount {
     error NotEnoughCapital(uint64 spot, uint64 needed);
     error NotAllowed();
     error TooEarly();
+    error KeyAvailable();
 
     constructor() {
         _disableInitializers();
@@ -291,6 +292,18 @@ contract Pool is RuledAccount {
     ///         funded them, which is a mark on the pool and not on the trader.
     function abandonFundedStage() external inStage(Stage.PassedAwaitingKey) {
         if (block.timestamp <= passedAt + AWAIT_KEY_WINDOW) revert TooEarly();
+        // The window is not enough on its own. A pool may only be released when there is no key
+        // to be had RIGHT NOW -- otherwise a week of nobody calling openFundedStage would drop a
+        // trader who passed while a usable key sat in the registry, which is the outcome the wait
+        // exists to prevent. Audit's condition on this function, and it was right.
+        if (reservedKey != address(0) && !CoreOps.exists(reservedKey)) revert KeyAvailable();
+        // freeCount() counts entries, and a spoiled key is still an entry until somebody sweeps
+        // it. Refusing on a non-zero count is deliberate: it does not decide from here whether
+        // those keys are alive, it makes someone say so on chain first. Anyone may call
+        // KeyRegistry.purgeSpoiled, which stops at the first key that is still good -- so a zero
+        // count after a sweep means there really is nothing, and a live key keeps the count up
+        // and this refusal standing.
+        if (factory.registry().freeCount() != 0) revert KeyAvailable();
         address spare = reservedKey;
         if (spare != address(0)) {
             reservedKey = address(0);
