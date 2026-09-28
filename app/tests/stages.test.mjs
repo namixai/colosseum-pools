@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { STAGE, STAGE_IDS, stageName, stageWords, isFundedStage, spanWords, awaitingKeyWords } from "../lib/stages.js";
+import { STAGE_NAMES, STAGE_IDS, stageName, stageWords, isFundedStage, spanWords, awaitingKeyWords } from "../lib/stages.js";
 import { saleBlocker } from "../lib/funding.js";
 import { pastFundedStage } from "../lib/verdict.js";
 
@@ -16,11 +16,15 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SOURCE = readFileSync(join(ROOT, "src", "Pool.sol"), "utf8");
 // Comments first, then commas: a comment inside the enum may have commas of its own.
 const CONTRACT = SOURCE.match(/enum Stage\s*\{([^}]*)\}/)[1].replace(/\/\/[^\n]*/g, "").split(",").map((s) => s.trim()).filter(Boolean);
+// chain.js keeps the contract's names as one literal line, the one scripts/abi-check.py holds to the contract.
+const CHAIN_STAGE = JSON.parse(readFileSync(join(ROOT, "app", "lib", "chain.js"), "utf8")
+  .match(/^export const STAGE = (\[[^\]\n]*\]);$/m)[1]);
 
 test("the app's stages are the contract's, in its order, and anything more comes after them", () => {
   assert.ok(CONTRACT.length >= 4, `src/Pool.sol has ${CONTRACT.length} stages`);
   assert.deepEqual(STAGE_IDS.slice(0, CONTRACT.length), CONTRACT);
-  assert.equal(STAGE.length, STAGE_IDS.length, "one name on the page for each stage");
+  assert.deepEqual(CHAIN_STAGE, STAGE_IDS, "chain.js names the same stages as stages.js");
+  assert.equal(STAGE_NAMES.length, STAGE_IDS.length, "one name on the page for each stage");
 });
 
 test("stage 4 is the trader who passed and waits for a key, and no stage is shown as undefined", () => {
@@ -29,7 +33,7 @@ test("stage 4 is the trader who passed and waits for a key, and no stage is show
   assert.equal(stageName("4"), "Passed, waiting for a key");
   assert.equal(stageName(0), "Idle");
   assert.equal(stageName(7), "Stage 7");
-  for (let s = 0; s < STAGE.length; s++) assert.ok(stageWords(s).length > 10, `stage ${s} has words`);
+  for (let s = 0; s < STAGE_NAMES.length; s++) assert.ok(stageWords(s).length > 10, `stage ${s} has words`);
   assert.match(stageWords(4), /^Passed, waiting for a key: the trader passed the challenge/);
   assert.match(stageWords(4), /nothing trades on this pool's account/);
   assert.equal(stageWords(9), "Stage 9, which this page does not know yet.");

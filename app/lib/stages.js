@@ -6,15 +6,16 @@
 // everywhere a stage is shown. Appended, 0 to 3 mean the same on both, and a pool of the older factory
 // simply never reports 4. The price is that the order of the list is no longer the order of a life.
 
-/** The contract's own names, in its order. app/tests/stages.test.mjs holds them to src/Pool.sol. */
+/** The contract's own names, in its order. app/tests/stages.test.mjs holds them to src/Pool.sol and to the
+ *  same list in app/lib/chain.js (STAGE), which scripts/abi-check.py reads. */
 export const STAGE_IDS = ["Idle", "Challenge", "Funded", "Closing", "PassedAwaitingKey"];
 
-/** The name a page shows beside a pool, one for each of STAGE_IDS. */
-export const STAGE = ["Idle", "Challenge", "Funded", "Closing", "Passed, waiting for a key"];
+/** The name a page shows beside a pool, one for each of STAGE_IDS: a page never shows the contract's identifier. */
+export const STAGE_NAMES = ["Idle", "Challenge", "Funded", "Closing", "Passed, waiting for a key"];
 
 /** A stage this app does not know is shown as its number: a new one must never render as "undefined". */
 export function stageName(stage) {
-  return STAGE[Number(stage)] ?? `Stage ${Number(stage)}`;
+  return STAGE_NAMES[Number(stage)] ?? `Stage ${Number(stage)}`;
 }
 
 const WORDS = [
