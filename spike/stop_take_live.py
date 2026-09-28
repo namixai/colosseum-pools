@@ -93,6 +93,12 @@ def cmd_setup(_args) -> None:
     pool = view(factory, "pools()", "address[]")[-1]
     c.record("stop_take_pool_created", pool=pool, tx=rcpt["transactionHash"])
     needed = view(pool, "capitalNeeded()", "uint64")
+    # What the probe left on the operator's perp goes back to spot first: the pool needs its capital
+    # there, and 1 USDC more for creating the pool's own HyperCore account.
+    perp = float(c.info_post({"type": "clearinghouseState", "user": op.address})["marginSummary"]["accountValue"])
+    if perp >= 0.01:
+        amount = int(perp * 100) / 100
+        c.record("stop_take_operator_perp_to_spot", amount=amount, answer=c.exchange(op).usd_class_transfer(amount, False))
     resp = c.exchange(op).spot_transfer(needed / 1e8, pool, c.spot_token_wire("USDC"))
     c.record("stop_take_pool_funded", pool=pool, usdc=needed / 1e8, response=resp)
     wait_until("the pool's capital", lambda: c.core_spot_balance(pool, c.USDC_TOKEN)["total"], lambda v: v >= needed)

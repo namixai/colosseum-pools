@@ -238,6 +238,13 @@ platform's list; nothing else goes out under that kind, and no cap applies becau
 can only close. `signer` mode would need the Signer to accept the same; the demo doesn't use it,
 and that is not done.
 
+**Not covered: HIP-3 markets.** The gateway reads the marks, positions and open orders of
+Hyperliquid's main perp dex only. A builder-deployed market (HIP-3: another dex, names like
+`xyz:GOLD`, asset `100000 + perp_dex_index × 10000 + index_in_meta`) has no mark there, so an
+order on one would be refused with 502 `no_market_price` before anything is sent, and a position
+on one would not be seen by the sweep or the keeper. The demo's platform list is BTC, ETH and SOL,
+all on the main dex; a pool that trades HIP-3 markets needs these reads for its dex first.
+
 ## Answers
 
 | HTTP | `status` | meaning |
