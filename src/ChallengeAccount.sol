@@ -59,6 +59,9 @@ contract ChallengeAccount is RuledAccount {
     /// When this account first had anything to hand back. Set ONCE and never moved again: a
     /// window that a stranger can restart is not a window, which is what the old check was.
     uint64 public returnAt;
+    /// When this step first had to wait because the share was short and money was crossing. A
+    /// clock, not a flag: the wait it bounds has to end even when the gap never closes.
+    uint64 public payoutShortAt;
     uint64 public payoutAt;
 
     uint64 public constant PAYOUT_WAIT = 5 minutes;
@@ -274,14 +277,30 @@ contract ChallengeAccount is RuledAccount {
             // say that: a resting order keeps its margin outside `withdrawable`, so this step
             // used to pay out of whatever had reached spot and mark the payout done for good.
             // The trader's own orders are named by the keeper; until they are, this waits.
-            if (!_nothingHeldOnPerp()) return;
+            if (!_nothingHeldOnPerp()) {
+                payoutShortAt = 0;
+                return;
+            }
             // And margin let go in THIS block reaches spot only after it, while `spot` here is
             // the start of the block -- the same blindness as A-11, one line further on. So
             // unless spot already covers the share, wait until nothing is on its way across.
             // Somebody else's dust delays this only while the share is short, and every unit of
             // it lands in spot and brings the share closer: paying to delay a payout is paying
             // into it.
-            if (spot < payoutOwed && free != 0) return;
+            // Audit A-12, which my own A-04 fix opened. I reasoned that dust could only delay
+            // this while the share was short, because every unit of it lands in spot and brings
+            // the share closer -- true when the shortfall is a crumb, false when the account
+            // genuinely lost most of itself after the pass. Then the gap never closes, a unit a
+            // step holds the settlement for as long as somebody keeps paying gas, and nothing
+            // else stops it: RETURN_WAIT is upstream of here and PAYOUT_WAIT never starts,
+            // because no payout was made. So this wait gets a clock of its own. It resets while
+            // margin is held, for a release that comes in pieces -- more than 32 resting orders
+            // take several passes -- and a stranger cannot hold margin on somebody else's
+            // account, so the reset is not theirs to use.
+            if (spot < payoutOwed && free != 0) {
+                if (payoutShortAt == 0) payoutShortAt = uint64(block.timestamp);
+                if (block.timestamp <= payoutShortAt + PAYOUT_WAIT) return;
+            }
             if (spot == 0) return;
             // A trader with no HyperCore account yet pays for creating it out of the share.
             uint64 pay = CoreOps.sendableTo(trader, spot < payoutOwed ? spot : payoutOwed);
@@ -310,9 +329,12 @@ contract ChallengeAccount is RuledAccount {
             if (!landed) {
                 // Frozen at the FIRST send, so a later donation is measured against the
                 // capital rather than against itself, and a dust attack is shrugged off in a
-                // step instead of waiting out the window. No test pins this: the only case
-                // where freezing and re-setting differ is a settlement already held up by a
-                // resting order's margin, and this harness cannot make an order rest.
+                // step instead of waiting out the window. No test pins this. The case where
+                // freezing and re-setting differ is a settlement already held up by a resting
+                // order's margin -- which the harness CAN produce, by mocking the margin summary
+                // above the real withdrawable figure. I tried after learning that and still could
+                // not build a case where the two behave differently, so this stays a guard
+                // against something I cannot name rather than something nothing can reach.
                 if (returnSpotBefore == 0) returnSpotBefore = spot;
                 return;
             }

@@ -80,6 +80,8 @@ contract Pool is RuledAccount {
     /// sold against money that is already on its way out.
     uint64 public fundedPayoutSpotBefore;
     uint64 public fundedPayoutAt;
+    /// When this step first had to wait because the share was short and money was crossing.
+    uint64 public fundedPayoutShortAt;
     /// The block in which a closing step sent the perp side across to spot. A BLOCK and not a
     /// flag: precompiles answer with the start of the block, so two steps in one block read the
     /// same stale numbers, and a flag would wave the second one through. Zero until it happens.
@@ -431,14 +433,30 @@ contract Pool is RuledAccount {
             // against `spot`, and a resting order keeps its margin outside `withdrawable`, so
             // `free == 0` does not mean the perp side has let go. A pool that funded a trader out
             // of everything it had holds little on spot, which is exactly when this bites.
-            if (!_nothingHeldOnPerp()) return;
+            if (!_nothingHeldOnPerp()) {
+                fundedPayoutShortAt = 0;
+                return;
+            }
             // And margin let go in THIS block reaches spot only after it, while `spot` here is
             // the start of the block -- the same blindness as A-11, one line further on. So
             // unless spot already covers the share, wait until nothing is on its way across.
             // Somebody else's dust delays this only while the share is short, and every unit of
             // it lands in spot and brings the share closer: paying to delay a payout is paying
             // into it.
-            if (spot < fundedPayoutOwed && free != 0) return;
+            // Audit A-12, which my own A-04 fix opened. I reasoned that dust could only delay
+            // this while the share was short, because every unit of it lands in spot and brings
+            // the share closer -- true when the shortfall is a crumb, false when the account
+            // genuinely lost most of itself after the pass. Then the gap never closes, a unit a
+            // step holds the settlement for as long as somebody keeps paying gas, and nothing
+            // else stops it: RETURN_WAIT is upstream of here and PAYOUT_WAIT never starts,
+            // because no payout was made. So this wait gets a clock of its own. It resets while
+            // margin is held, for a release that comes in pieces -- more than 32 resting orders
+            // take several passes -- and a stranger cannot hold margin on somebody else's
+            // account, so the reset is not theirs to use.
+            if (spot < fundedPayoutOwed && free != 0) {
+                if (fundedPayoutShortAt == 0) fundedPayoutShortAt = uint64(block.timestamp);
+                if (block.timestamp <= fundedPayoutShortAt + PAYOUT_WAIT) return;
+            }
             if (spot == 0) return;
             // A trader with no HyperCore account yet pays for creating it out of the share.
             uint64 pay = CoreOps.sendableTo(fundedTrader, spot < fundedPayoutOwed ? spot : fundedPayoutOwed);

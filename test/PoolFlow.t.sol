@@ -1212,6 +1212,87 @@ contract PoolFlowTest is PoolHarness {
             "and the challenge got its capital");
     }
 
+    /// Audit A-12, a hole my own A-04 fix opened. Waiting while the share is short only ends by
+    /// itself if the dust closes the gap, and after a real loss it never will: the account has
+    /// less than the share and a unit a step keeps something crossing for ever. RETURN_WAIT sits
+    /// upstream of that line and PAYOUT_WAIT never starts, because no payout was made. So the
+    /// wait has its own clock, and the settlement finishes with whatever is actually there.
+    function test_settle_shortShareWithDustEveryStep_stillFinishes() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+        p.openFundedStage();
+        uint64 owed = ch.payoutOwed();
+
+        // The account loses almost everything after the pass -- an order left resting at the pass
+        // opened a position and it went against them -- so there is less here than the share.
+        CoreSimulatorLib.forceSpotBalance(address(ch), 0, 2e8);
+        assertLt(2e8, owed, "less on the account than the trader is owed");
+
+        uint32[] memory none = new uint32[](0);
+        for (uint256 i = 0; i < 40 && ch.status() != ChallengeAccount.Status.Settled; ++i) {
+            CoreSimulatorLib.forcePerpBalance(address(ch), 1); // a unit before every step
+            ch.settle(new Cancel[](0), none);
+            CoreSimulatorLib.nextBlock();
+            vm.warp(block.timestamp + 60);
+        }
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Settled),
+            "a stranger cannot hold a short settlement open for ever");
+        assertGt(ch.payoutSent(), 0, "and the trader got what there was");
+        // The pool is Funded here, because this trader passed and was funded -- what the
+        // settlement releases is the challenge slot, which is what a stuck one holds.
+        assertEq(p.challenge(), address(0), "the pool is not held by a challenge any more");
+    }
+
+    /// The clock that bounds the short-share wait resets while margin is held, and this is why:
+    /// a release can come in pieces. The keeper names at most 32 resting orders a pass, so an
+    /// account with more than that lets its margin go over several passes. Without the reset the
+    /// clock started on the first piece would run out while the rest was still held, and the step
+    /// would pay from a stale balance the moment the last piece came free -- which is the A-04
+    /// bug again, arriving by the back door. A stranger cannot hold margin on somebody else's
+    /// account, so the reset is not theirs to lean on.
+    function test_settle_theShortShareClockRestartsWhenMarginIsHeldAgain() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+        p.openFundedStage();
+        uint32[] memory none = new uint32[](0);
+
+        // Short, with money crossing: the clock starts.
+        CoreSimulatorLib.forceSpotBalance(address(ch), 0, 1e8);
+        CoreSimulatorLib.forcePerpBalance(address(ch), 1e5);
+        // The door guard from A-01 is upstream of the payout and waits on its own window first,
+        // so let that run out; past it the payout's own wait is what decides.
+        ch.settle(new Cancel[](0), none);
+        vm.warp(block.timestamp + ch.RETURN_WAIT() + 1);
+        CoreSimulatorLib.nextBlock();
+        CoreSimulatorLib.forcePerpBalance(address(ch), 1e5);
+        ch.settle(new Cancel[](0), none);
+        assertTrue(ch.payoutShortAt() != 0, "the wait noted when it started");
+
+        // Another piece of the release is still held, and it takes longer than the clock.
+        _mockHeldMargin(address(ch), int64(CoreOps.withdrawable(address(ch))) + 5e6);
+        ch.settle(new Cancel[](0), none);
+        assertEq(ch.payoutShortAt(), 0, "held again, so the clock is back to nothing");
+        vm.warp(block.timestamp + ch.PAYOUT_WAIT() + 1);
+        CoreSimulatorLib.nextBlock();
+
+        // The last piece comes free, and it is crossing to spot as it does. The old clock must
+        // not be what decides whether the trader is paid before it lands.
+        vm.clearMockedCalls();
+        CoreSimulatorLib.forcePerpBalance(address(ch), 1e5);
+        ch.settle(new Cancel[](0), none);
+        assertFalse(ch.payoutDone(), "not paid out of a balance the release has not reached");
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);

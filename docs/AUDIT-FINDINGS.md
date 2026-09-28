@@ -1,11 +1,11 @@
 # Audit findings and the tests that pin them
 
-An internal audit went through these contracts between 25 and 27 September 2026. This file is the
+An internal audit went through these contracts between 25 and 28 September 2026. This file is the
 map from each finding to the test that holds it down, and `scripts/findings-check.py` reads it: a
 test named here that does not exist in the repository fails the check, so the claim cannot rot
 quietly into a sentence nobody verifies.
 
-Three findings have no test, and each says why on its own line. That is the part worth reading:
+Four findings have no test, and each says why on its own line. That is the part worth reading:
 a row with no test is either a limit of the harness or a limit of the design, and neither is
 improved by a test that passes for the wrong reason.
 
@@ -20,10 +20,11 @@ Status is what the repository does, not what anyone intends to do next.
 | A-05 | Medium | The target is measured from the account's equity, which rises for any USDC sent in, so a pass can be bought without trading | Open by design | `test_theTargetCanBeReachedByDepositing_notOnlyByTrading` — the test buys a pass. HyperCore offers no way to tell a deposit from a gain, so this is written into `docs/DESIGN.md` under what the design does not do |
 | A-06 | Medium | The shared pool's operator could add a seat after people had deposited, with any rules, while the document promised seats are published beforehand | Closed | `test_addSeat_isRefusedOnceAnyoneHasDeposited` |
 | A-07 | Low | The seventeenth withdrawal request is refused, and both the contract comment and the document said it "waits for the queue to move" | Closed as a documentation defect | No behaviour test, because no behaviour changed: the cap was always 16 and still is. Both sentences now say refused. Building a queue of sixteen holders to watch the seventeenth bounce would test the constant, not the fix |
-| A-08 | Low | `buyChallenge` checks the pool's balance through a precompile, which answers with the start of the block, so a withdrawal earlier in the same block is invisible to it | Closed | `test_buyChallenge_refusesInTheBlockTheOwnerWithdrew` — the sale is refused inside the withdrawal's own block. Pinning the OLD behaviour was the thing this harness could not do: it processes the queued transfer before the withdrawal, so the capital arrived and the silent failure never appeared. Refusing is a revert, which it shows fine |
+| A-08 | Low | `buyChallenge` checks the pool's balance through a precompile, which answers with the start of the block, so a withdrawal earlier in the same block is invisible to it | Closed | `test_buyChallenge_refusesInTheBlockTheOwnerWithdrew` — the sale is refused inside the withdrawal's own block. Pinning the OLD behaviour needs two things this harness does not do by default: an owner with a HyperCore account (otherwise sending everything to a new account fails on the 1 USDC fee and the sale goes through anyway), and failed actions dropped silently as HyperCore drops them (`setRevertOnFailure(false)`). My first explanation here — that the transfer is processed before the withdrawal — was wrong; actions run in the order they are sent. Corrected by the audit. Refusing is a revert, which this harness shows fine |
 | A-09 | Info | `docs/DESIGN.md` contradicted the code and itself: a price of zero, the fee as "the only brake", who pays for a spoiled challenge's account | Closed | No test, because nothing in the code was wrong — the document was. Four sentences corrected, including one that called a HyperCore behaviour untested after we had measured it |
 | A-10 | Info | The list of "every call the keeper makes" included `graduate`, which the keeper has never called | Closed | No test: the keeper's own header already says why it leaves that call to the trader, and the sentence now matches it |
-| A-11 | High | A regression of ours: a one-time flag let a second `settleFunded` in the same block walk past the wait and pay the funded share out of a stale spot balance | Closed | `test_regression_twoStepsInOneBlock_payTheFundedShareFromAStaleSpot` |
+| A-12 | Low | My own A-04 fix: waiting while the share was short and money was crossing never ended if the shortfall was real, so a unit of dust a step held a settlement open indefinitely | Closed | `test_settle_shortShareWithDustEveryStep_stillFinishes`, `test_settle_theShortShareClockRestartsWhenMarginIsHeldAgain` — the wait has its own clock, which resets while margin is held so a release arriving in pieces cannot run it out |
+| A-11 | High | A regression of ours: a one-time flag let a second `settleFunded` in the same block walk past the wait and pay the funded share out of a stale spot balance | Closed | `test_regression_twoStepsInOneBlock_payTheFundedShareFromAStaleSpot` — with a caveat found by the audit: since the A-04 line went into `settleFunded`, TWO lines catch this case, so removing either alone leaves the test green and it only goes red with both gone. Not a hole, but a weaker guard than one line each would look. The mutation stand cannot remove two lines at once, so this was read, not measured |
 
 ## Why a map and not copies of the audit's files
 

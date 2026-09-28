@@ -259,5 +259,10 @@ before it can sell again.
   the account exactly as before, so a live trader cannot be switched off this way. HyperCore's rule
   is about becoming an agent, not about staying one — which is why the window that matters runs
   from a key being reserved to it being set as the agent, and both ends of it are guarded
-  (`ChallengeAccount.activate`, `Pool.openFundedStage`).
+  (`ChallengeAccount.activate`, `Pool.openFundedStage`). Those two guards read the key's state
+  **at the start of their block**, and the agent is set after it, so a spoiling transfer landing
+  in the same block is not seen by them — HyperCore then ignores the assignment silently and the
+  account has an agent that cannot sign. Whoever does that has to land in one particular block
+  rather than any time in the week the key sits there, which is a much smaller window and not a
+  closed one. Raised by the audit, 28 September 2026.
 - One trader per pool, no pool shares, no leaderboard, no mainnet.
