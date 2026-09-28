@@ -43,16 +43,19 @@ export function spanWords(seconds) {
 }
 
 /** Stage 4 with its clock: the pool may be released to Idle only strictly after passedAt + window
- *  (Pool.abandonFundedStage reverts TooEarly up to and including that second). */
+ *  (Pool.abandonFundedStage reverts TooEarly up to and including that second), and only while there is no
+ *  key to be had: a live reserved key or a free one in the registry makes it revert KeyAvailable, because
+ *  then the right call is to open the funded stage, which anyone may make. */
 export function awaitingKeyWords({ passedAt, window, now }) {
   const release = Number(passedAt) + Number(window);
   const head = "Passed, waiting for a key: the trader passed the challenge, and the funded stage opens as soon "
     + "as a trading key is free.";
   const keeps = "and the trader keeps the pass and the challenge share.";
+  const noKey = "if there is still no key to be had";
   return Number(now) > release
-    ? `${head} The wait is over: anyone may now release the pool to Idle, ${keeps}`
-    : `${head} ${spanWords(release - Number(now))} left before the pool may step back: after ${utc(release)} anyone `
-      + `may release it to Idle, ${keeps}`;
+    ? `${head} The wait is over: ${noKey}, anyone may now release the pool to Idle, ${keeps}`
+    : `${head} ${spanWords(release - Number(now))} left before the pool may step back: after ${utc(release)}, ${noKey}, `
+      + `anyone may release it to Idle, ${keeps}`;
 }
 
 /** A funded trader is on the pool: the stage is running (2) or settling (3). By name, not by order:

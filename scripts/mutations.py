@@ -1808,6 +1808,10 @@ MUTATIONS = [
      "  const release = Number(passedAt) + Number(window);",
      "  const release = Number(passedAt);",
      ["a pool waiting for a key says how long before it may step back, and the second it may"]),
+    ("PS11", "app/lib/stages.js",
+     "The wait is over: ${noKey}, anyone may now release the pool to Idle",
+     "The wait is over: anyone may now release the pool to Idle",
+     ["a pool waiting for a key says how long before it may step back, and the second it may"]),
 ]
 
 RUNNERS = {

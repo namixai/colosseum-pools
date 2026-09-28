@@ -66,11 +66,12 @@ test("a pool waiting for a key says how long before it may step back, and the se
   const passedAt = 1790400000, window = 7 * 86400;
   const early = awaitingKeyWords({ passedAt, window, now: passedAt + 12 * 3600 });
   assert.equal(early, "Passed, waiting for a key: the trader passed the challenge, and the funded stage opens as soon as "
-    + "a trading key is free. 6 days and 12 hours left before the pool may step back: after 2026-10-03 05:20 UTC anyone "
-    + "may release it to Idle, and the trader keeps the pass and the challenge share.");
+    + "a trading key is free. 6 days and 12 hours left before the pool may step back: after 2026-10-03 05:20 UTC, if "
+    + "there is still no key to be had, anyone may release it to Idle, and the trader keeps the pass and the challenge share.");
   // abandonFundedStage reverts TooEarly up to and including passedAt + window.
   assert.match(awaitingKeyWords({ passedAt, window, now: passedAt + window }), /less than an hour left before the pool may step back/);
-  assert.match(awaitingKeyWords({ passedAt, window, now: passedAt + window + 1 }), /The wait is over: anyone may now release the pool to Idle/);
+  assert.match(awaitingKeyWords({ passedAt, window, now: passedAt + window + 1 }),
+    /The wait is over: if there is still no key to be had, anyone may now release the pool to Idle/);
 });
 
 test("where the contract has stage 4, it has the clock the pool page reads", () => {
@@ -79,4 +80,11 @@ test("where the contract has stage 4, it has the clock the pool page reads", () 
   assert.match(SOURCE, /uint64 public constant AWAIT_KEY_WINDOW = 7 days;/);
   assert.match(SOURCE, /function abandonFundedStage\(\) external inStage\(Stage\.PassedAwaitingKey\)/);
   assert.match(SOURCE, /if \(block\.timestamp <= passedAt \+ AWAIT_KEY_WINDOW\) revert TooEarly\(\);/);
+  // Where the release also waits for there to be no key, the page says so on both sides of the window.
+  if (/revert KeyAvailable\(\);/.test(SOURCE)) {
+    const passedAt = 1790400000, window = 7 * 86400;
+    for (const now of [passedAt, passedAt + window + 1]) {
+      assert.match(awaitingKeyWords({ passedAt, window, now }), /if there is still no key to be had, anyone may/);
+    }
+  }
 });
