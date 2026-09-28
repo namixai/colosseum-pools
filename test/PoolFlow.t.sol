@@ -1187,6 +1187,31 @@ contract PoolFlowTest is PoolHarness {
         assertEq(p.fundedPayoutSent(), 0, "a crumb of spot is not the trader's share");
     }
 
+    /// Audit A-08. buyChallenge checks the pool's balance through a precompile, which answers with
+    /// the START of the block, so a withdrawal earlier in the same block is invisible to it: the
+    /// sale went through, the transfer to the fresh challenge quietly did not, and the buyer was
+    /// out the platform's fee and an hour's wait for a refund. It refuses now instead.
+    function test_buyChallenge_refusesInTheBlockTheOwnerWithdrew() public {
+        Pool p = _readyPool();
+        vm.prank(investor);
+        p.withdrawOnCore(1e8);
+        assertEq(p.withdrewAtBlock(), block.number, "the withdrawal noted its block");
+
+        deal(address(usdc), trader, 25e6);
+        vm.startPrank(trader);
+        usdc.approve(address(p), 25e6);
+        vm.expectRevert(Pool.WithdrawnThisBlock.selector);
+        p.buyChallenge();
+        vm.stopPrank();
+
+        // The next block sees the balance it is actually checking, and the sale goes through.
+        CoreSimulatorLib.nextBlock();
+        ChallengeAccount ch = _buy(p);
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(address(ch)), uint64(_terms().capital) * Units.SPOT_PER_PERP,
+            "and the challenge got its capital");
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);

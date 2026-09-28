@@ -61,8 +61,10 @@ investor's capital and the published agent keys on nothing.
 Platform fee (per factory, set by the operator, zero by default; the testnet deployment sets
 0.7 test USDC): paid by every challenge buyer on top of the price, to the operator's fee
 recipient, and not refunded. A challenge uses
-one agent key for good, and a pool's owner can sell challenges to itself at price zero, so
-without a fee anyone could use up the published keys for the cost of gas.
+one agent key for good, so without a fee a pool's owner could sell challenges to themselves at
+whatever price they liked and use up the published keys cheaply. Not for nothing, though: the
+paragraph above says a price of zero is refused at creation, and it is (`PoolFactory`), so the
+owner would be paying themselves the price while the fee is the only part that leaves.
 
 Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0), in units of
 1e-6 USDC. Precompiles return the state at the start of the block.
@@ -231,10 +233,13 @@ before it can sell again.
   `ChallengeCreated` events, which cost the buyer the challenge price and need the pool's
   capital in place. A long pool list still makes `PoolFactory.pools()` expensive to read for
   anyone else who calls it.
-- The platform fee is the only brake on using up the agent keys. At zero, anyone can buy
-  challenges from their own zero-price pool and burn one key each. The operator sets the fee
-  and can change it at any time, including between a buyer's approval and purchase; a buyer
-  who approves exactly price plus fee can't be charged more.
+- The platform fee is the brake on BUYING up the agent keys, and it is not the only way keys go.
+  At a fee of zero the owner of a pool can buy its challenges themselves — paying themselves the
+  price, since zero is refused at creation — and burn one key each. But a key can also be spoiled
+  without buying anything at all, for about 1 USDC and no fee (below), so the fee is a brake on one
+  road and not on the other. It used to say "the only brake", which was wrong in both halves.
+  The operator sets the fee and can change it at any time, including between a buyer's approval and
+  purchase; a buyer who approves exactly price plus fee can't be charged more.
 - USDC sent to a pool on HyperEVM is lost on testnet: the bridge doesn't credit contracts.
   The contracts have no entry point for it, and the app says so, but nothing stops a plain
   ERC-20 transfer to the pool's address.
@@ -246,6 +251,13 @@ before it can sell again.
   HyperCore won't take it as an agent then. The registry retires such a key instead of
   handing it out, and a challenge whose reserved key was spoiled before the start can be
   aborted at once for a refund of the price. The platform fee isn't refunded, so this costs
-  a buyer the fee and costs the attacker 1 USDC per key. What happens when someone sends
-  USDC to a key that is already an agent is untested.
+  a buyer the fee, costs the attacker about 1 USDC per key — and costs the POOL 1 USDC as well,
+  which the earlier version of this line left out: creating the spoiled challenge's HyperCore
+  account is paid for by the sender, and an abort returns the price and the capital, not that.
+  What happens when someone sends USDC to a key that is ALREADY an agent is no longer untested:
+  measured on testnet on 25 September 2026, the agency survives it. The address keeps signing for
+  the account exactly as before, so a live trader cannot be switched off this way. HyperCore's rule
+  is about becoming an agent, not about staying one — which is why the window that matters runs
+  from a key being reserved to it being set as the agent, and both ends of it are guarded
+  (`ChallengeAccount.activate`, `Pool.openFundedStage`).
 - One trader per pool, no pool shares, no leaderboard, no mainnet.

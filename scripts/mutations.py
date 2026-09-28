@@ -345,6 +345,14 @@ MUTATIONS = [
      "            if (spot < fundedPayoutOwed && free != 0) return;",
      "            if (false) return;",
      ["test_settleFunded_doesNotPayTheShareInTheBlockTheMarginIsReleased"]),
+    ("M76", "src/Pool.sol",
+     "        if (block.number <= withdrewAtBlock) revert WithdrawnThisBlock();",
+     "        if (false) revert WithdrawnThisBlock();",
+     ["test_buyChallenge_refusesInTheBlockTheOwnerWithdrew"]),
+    ("M77", "src/Pool.sol",
+     "        withdrewAtBlock = uint64(block.number);",
+     "        withdrewAtBlock = 0;",
+     ["test_buyChallenge_refusesInTheBlockTheOwnerWithdrew"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",

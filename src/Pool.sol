@@ -56,6 +56,9 @@ contract Pool is RuledAccount {
     uint256 public earned;
 
     address public fundedTrader;
+    /// The block a withdrawal left in. A sale in the same block would check the balance through a
+    /// precompile, which answers with the START of the block and cannot see the money going out.
+    uint64 public withdrewAtBlock;
     /// When the pass was recorded, so the wait for a key cannot run for ever.
     uint64 public passedAt;
     int64 public fundedStart;
@@ -110,6 +113,7 @@ contract Pool is RuledAccount {
     error NotAllowed();
     error TooEarly();
     error KeyAvailable();
+    error WithdrawnThisBlock();
 
     constructor() {
         _disableInitializers();
@@ -167,6 +171,7 @@ contract Pool is RuledAccount {
 
     /// @notice Sends spot USDC to the owner on HyperCore. Only while no trader holds the pool.
     function withdrawOnCore(uint64 amount1e8) external onlyOwner inStage(Stage.Idle) {
+        withdrewAtBlock = uint64(block.number);
         CoreOps.sendUsdc(owner, amount1e8);
         emit WithdrawnOnCore(owner, amount1e8);
     }
@@ -191,6 +196,13 @@ contract Pool is RuledAccount {
     ///         challenge capital and for funding the trader afterwards.
     function buyChallenge() external inStage(Stage.Idle) returns (address ch) {
         if (!accountReady) revert NotReady();
+        // Audit A-08. The capital check below reads a precompile, which answers with the start of
+        // the block, so a withdrawal earlier in the SAME block is invisible to it: the sale would
+        // be allowed on money that had already left, the transfer to the fresh challenge would
+        // quietly not happen, and the buyer would be out the platform's fee and an hour's wait for
+        // a refund. Same start-of-block blindness as A-11 and A-04, on the way in this time.
+        // SharedPool.releaseSeat goes through withdrawOnCore, so it is covered by the same line.
+        if (block.number <= withdrewAtBlock) revert WithdrawnThisBlock();
         // A passed challenge can still be settling after its funded stage has closed.
         if (challenge != address(0)) revert BadStage(stage);
         uint64 needed = capitalNeeded();
