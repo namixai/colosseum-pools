@@ -86,18 +86,68 @@ def second(ex, user: str) -> None:
         c.record("tpsl_cleanup2_cancel", oid=o["oid"], answer=ex.cancel(COIN, o["oid"]))
 
 
+def third(ex, user: str) -> None:
+    """Position TP/SL for the other direction while a position is open: what the gateway places before
+    a plain sell against a long, which may flip it."""
+    m = mid()
+    c.record("tpsl_open3", mid=m, answer=ex.order(COIN, True, SIZE, px(m * 1.01), {"limit": {"tif": "Ioc"}}))
+    m = mid()
+    c.record("tpsl_J_other_side_while_long", mid=m, answer=ex.bulk_orders(
+        [trigger(True, 0, px(m * 1.03), "sl"), trigger(True, 0, px(m * 0.97), "tp")], grouping="positionTpsl"))
+    c.record("tpsl_J_orders", position=position(user), orders=orders(user))
+    time.sleep(1)
+    m = mid()
+    c.record("tpsl_close3", mid=m,
+             answer=ex.order(COIN, False, SIZE, px(m * 0.99), {"limit": {"tif": "Ioc"}}, reduce_only=True))
+    time.sleep(2)
+    c.record("tpsl_after_close3_orders", position=position(user), orders=orders(user))
+    for o in orders(user):
+        c.record("tpsl_cleanup3_cancel", oid=o["oid"], answer=ex.cancel(COIN, o["oid"]))
+
+
+def fourth(ex, user: str) -> None:
+    """A long flipped to a short by one sell: does the short's position TP/SL, placed beforehand,
+    survive the flip?"""
+    m = mid()
+    c.record("tpsl_open4", mid=m, answer=ex.order(COIN, True, SIZE, px(m * 1.01), {"limit": {"tif": "Ioc"}}))
+    m = mid()
+    # Both sides in one action is refused as a whole ("Trigger order has unexpected side", 28 Sep): one
+    # action per side.
+    c.record("tpsl_K_both_sides", mid=m, answer=ex.bulk_orders(
+        [trigger(False, 0, px(m * 0.97), "sl"), trigger(True, 0, px(m * 1.03), "sl")], grouping="positionTpsl"))
+    c.record("tpsl_K_long_side", answer=ex.bulk_orders([trigger(False, 0, px(m * 0.97), "sl")], grouping="positionTpsl"))
+    c.record("tpsl_K_short_side", answer=ex.bulk_orders([trigger(True, 0, px(m * 1.03), "sl")], grouping="positionTpsl"))
+    c.record("tpsl_K_orders_before_flip", position=position(user), orders=orders(user))
+    m = mid()
+    c.record("tpsl_flip", mid=m, answer=ex.order(COIN, False, SIZE * 2, px(m * 0.99), {"limit": {"tif": "Ioc"}}))
+    time.sleep(2)
+    c.record("tpsl_K_orders_after_flip", position=position(user), orders=orders(user))
+    m = mid()
+    c.record("tpsl_close4", mid=m,
+             answer=ex.order(COIN, True, SIZE, px(m * 1.01), {"limit": {"tif": "Ioc"}}, reduce_only=True))
+    time.sleep(2)
+    c.record("tpsl_after_close4_orders", position=position(user), orders=orders(user))
+    for o in orders(user):
+        c.record("tpsl_cleanup4_cancel", oid=o["oid"], answer=ex.cancel(COIN, o["oid"]))
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--wallet", default="shared-operator")
     p.add_argument("--second", action="store_true", help="the second round: position TP/SL with no position, "
                    "a second stop, moving a stop")
+    p.add_argument("--third", action="store_true", help="the third round: position TP/SL for the other "
+                   "direction while a position is open")
+    p.add_argument("--fourth", action="store_true", help="the fourth round: a long flipped to a short")
     args = p.parse_args()
     acct = c.account(args.wallet)
     user = acct.address
     ex = c.exchange(acct)
-    if args.second:
-        second(ex, user)
-        c.record("tpsl_probe2_end", orders=orders(user), snapshot=c.core_snapshot(user)["perpAccountValue"])
+    if args.second or args.third or args.fourth:
+        if float(c.core_snapshot(user)["perpAccountValue"]) < 0.45:
+            c.record("tpsl_to_perp", answer=ex.usd_class_transfer(0.57, True), amount=0.57)
+        (second if args.second else third if args.third else fourth)(ex, user)
+        c.record("tpsl_probe_end", orders=orders(user), snapshot=c.core_snapshot(user)["perpAccountValue"])
         return 0
 
     snap = c.core_snapshot(user)

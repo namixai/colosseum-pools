@@ -132,9 +132,12 @@ orders, and sized `0`, which Hyperliquid reads as the whole position however lar
 Measured on testnet on 28 September 2026 with one of our own wallets (`spike/tpsl_probe.py`, two
 positions of about 11 USDC in ETH, a minute each): Hyperliquid accepts them before the position
 exists and they wait for it; it answers `waitingForTrigger` and gives no oid (the gateway reads
-the oids back from `frontendOpenOrders`); several can stand side by side; when the position
-closes Hyperliquid removes every reduce-only order on it, these included; a `batchModify` moves
-one in a single action and gives it a new oid.
+the oids back from `frontendOpenOrders`); several can stand side by side, of either direction, but
+one action may carry only one direction (an action mixing them is refused as a whole); when the
+position closes Hyperliquid removes every reduce-only order on it, these included, and when one
+order flips a long to a short, the short's orders placed beforehand stay; a `batchModify` moves
+one in a single action and gives it a new oid. So an order that may flip a position gets its new
+direction's stop before it goes, and the flip is guarded from its first fill.
 
 **Where the stop is: the rule line.** The price at which the account's equity would reach the
 nearest rule:

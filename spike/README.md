@@ -148,6 +148,8 @@ ETH, a minute each. Every answer is in `spike/results/2026-09-28.jsonl`.
 | 12 | What is a position TP/SL of size `0`, and what does Hyperliquid answer? | **The whole position.** `frontendOpenOrders` lists it with `isPositionTpsl: true` and size `0.0`; the answer to placing it is `waitingForTrigger`, with no oid. The order's price is kept as sent (a market stop sent with its trigger less 10 % shows that as its `limitPx`). |
 | 13 | Can two stops stand on one position, and can one be moved? | **Yes and yes.** Three position stops stood side by side. `batchModify` moved one to a new trigger in one action, answered `resting` with a new oid, and the old oid was gone. |
 | 14 | What is left of them when the position closes? | **Nothing.** After a reduce-only IOC closed the position, every reduce-only order on it was gone, position TP/SL and the fixed-size `na` stop alike. |
+| 15 | Can both directions' position TP/SL stand on one asset, and go in one action? | **Stand, yes; one action, no.** An action carrying a sell stop and a buy stop was refused as a whole: "Trigger order has unexpected side". Sent as two actions, both were placed, next to a long, and so was a buy stop and buy take next to a long. |
+| 16 | Does a flip keep them? | **The new side's, yes.** A long flipped to a short by one sell: the long's sell stop was gone, and the buy stop placed beforehand stayed and stood guard over the short. |
 
 ## Running it
 

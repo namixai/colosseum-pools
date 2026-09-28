@@ -80,6 +80,10 @@ def check_protective(action: Any) -> None:
             raise GatewayError(403, "policy", "a stop and a take are one or two position TP/SL orders")
         for order in orders:
             _protective(order)
+        # One asset and one direction per action: Hyperliquid refuses a position TP/SL action that
+        # mixes the two sides as a whole ("Trigger order has unexpected side", 28 Sep 2026).
+        if len({(order["a"], order["b"]) for order in orders}) != 1:
+            raise GatewayError(403, "policy", "a stop and a take for one asset and one direction per action")
         return
     if action.get("type") == "batchModify" and list(action) == ["type", "modifies"]:
         modifies = action["modifies"]

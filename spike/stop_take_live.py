@@ -2,15 +2,20 @@
 Hyperliquid"), on testnet, with our own deployment `shared-run` and its own published agent keys;
 nothing of the first window's is touched.
 
-    spike/.venv/bin/python -m spike.stop_take_live setup       # a pool, its capital, a challenge, started
-    # then a gateway on this machine, the one under test, holding shared-run's agent keys:
-    #   GATEWAY_FACTORY=<shared-run factory> GATEWAY_REGISTRY=<shared-run registry> GATEWAY_SIGNER=demo \\
-    #   GATEWAY_KEYS_DIR=<owner-only dir> GATEWAY_BIND=127.0.0.1:8799 spike/.venv/bin/python -m gateway.server
-    spike/.venv/bin/python -m spike.stop_take_live open --gateway http://127.0.0.1:8799
-    spike/.venv/bin/python -m spike.stop_take_live keeper      # the keeper's pass, sending nothing
-    spike/.venv/bin/python -m spike.stop_take_live refusals --gateway http://127.0.0.1:8799
-    spike/.venv/bin/python -m spike.stop_take_live close --gateway http://127.0.0.1:8799
-    spike/.venv/bin/python -m spike.stop_take_live cleanup     # forfeit, settle, and the capital back
+    spike/.venv/bin/python -m spike.stop_take_live setup                # a pool, its capital, a challenge, started
+    spike/.venv/bin/python -m spike.stop_take_live trade --keys <dir>   # the whole check, below
+    spike/.venv/bin/python -m spike.stop_take_live cleanup              # forfeit, settle, and the capital back
+
+`trade` runs this branch's gateway in this process, on 127.0.0.1, with the demo signer holding the
+agent keys found in <dir> (an owner-only directory of `*.key` files: shared-run's published keys),
+and talks to it over HTTP the way a trader's client does:
+
+  1. a position through the gateway: the stop and the take go to Hyperliquid before the order;
+  2. the account's open orders on Hyperliquid, and one pass of the keeper, sending nothing;
+  3. what the trader may and may not do: cancel the stop (refused), a looser stop (refused), a
+     tighter stop, a take past the target (refused), a nearer take;
+  4. a sweep with everything in place, which sends nothing;
+  5. the position closed with a reduce-only order, and what is left on the book after it.
 
 The pool: a 3 USDC challenge, 3 % a day, 6 % drawdown, 5x, an 8 % target, on SOL, BTC and ETH. The
 position: 0.0042 ETH, about 11 USDC, Hyperliquid's minimum. Every step goes to
@@ -26,10 +31,14 @@ import json
 import os
 import pathlib
 import tempfile
+import threading
 import time
 from decimal import Decimal
 
 from agents.client import GatewayClient, round_price
+from gateway import protect, server
+from gateway.chain import JsonRpcReader
+from gateway.demo_signer import DemoSigner
 from ops import deployments
 from spike.hlspike import common as c
 
@@ -105,8 +114,35 @@ def cmd_setup(_args) -> None:
     STATE.write_text(json.dumps({"pool": pool, "challenge": ch}, indent=2) + "\n")
 
 
-def client(args) -> GatewayClient:
-    return GatewayClient(c.account(TRADER), args.gateway)
+@contextlib.contextmanager
+def gateway_here(keys_dir: str):
+    """This branch's gateway, on 127.0.0.1 and a free port, with its sweep; every line it logs is
+    kept and recorded when it stops."""
+    factory, registry = deployments.resolve(DEPLOYMENT)
+    reader = JsonRpcReader(c.RPC_URL, factory, registry)
+    reader.check_chain()
+    lines: list[dict] = []
+
+    def keep(**fields):
+        lines.append({"t": int(time.time()), **fields})
+
+    server.log_line, protect.log_line = keep, keep
+    gw = server.Gateway(reader, DemoSigner(DemoSigner.load_keys(keys_dir)))
+    stop = threading.Event()
+    threading.Thread(target=gw.protector.run, args=(server.PROTECT_EVERY_S, stop), daemon=True).start()
+    http = server.BoundedServer(("127.0.0.1", 0), server.make_handler(gw))
+    threading.Thread(target=http.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{http.server_address[1]}", gw
+    finally:
+        stop.set()
+        http.shutdown()
+        http.server_close()
+        c.record("stop_take_gateway_log", lines=lines)
+
+
+def client(url: str) -> GatewayClient:
+    return GatewayClient(c.account(TRADER), url)
 
 
 def book(ch: str, step: str) -> dict:
@@ -115,10 +151,9 @@ def book(ch: str, step: str) -> dict:
     return row
 
 
-def cmd_open(args) -> None:
-    ch = state()["challenge"]
+def open_position(cl: GatewayClient, ch: str) -> None:
     px = round_price(mid() * 1.01, 4)
-    answer = client(args).order(ch, ETH, True, px, SIZE, tif="Ioc")
+    answer = cl.order(ch, ETH, True, px, SIZE, tif="Ioc")
     c.record("stop_take_open", challenge=ch, limit_px=px, size=SIZE, answer=answer)
     time.sleep(2)
     book(ch, "stop_take_book_after_open")
@@ -126,6 +161,19 @@ def cmd_open(args) -> None:
 
 def cmd_book(_args) -> None:
     book(state()["challenge"], "stop_take_book")
+
+
+def cmd_trade(args) -> None:
+    ch = state()["challenge"]
+    with gateway_here(args.keys) as (url, gw):
+        cl = client(url)
+        open_position(cl, ch)
+        cmd_keeper(args)
+        refusals(cl, ch)
+        watching = sorted(gw.protector.watching())
+        gw.protector.sweep()
+        c.record("stop_take_sweep_in_place", watching=watching, book=orders(ch))
+        close_position(cl, ch)
 
 
 def cmd_keeper(_args) -> None:
@@ -145,9 +193,7 @@ def cmd_keeper(_args) -> None:
     c.record("stop_take_keeper_pass", lines=[json.loads(line) for line in out.getvalue().splitlines() if line])
 
 
-def cmd_refusals(args) -> None:
-    ch = state()["challenge"]
-    cl = client(args)
+def refusals(cl: GatewayClient, ch: str) -> None:
     now = orders(ch)
     stop = next(o for o in now if o["orderType"] == "Stop Market")
     take = next(o for o in now if o["orderType"] == "Take Profit Market")
@@ -165,13 +211,12 @@ def cmd_refusals(args) -> None:
     book(ch, "stop_take_book_after_moves")
 
 
-def cmd_close(args) -> None:
-    ch = state()["challenge"]
+def close_position(cl: GatewayClient, ch: str) -> None:
     size = eth_position(ch)
     if Decimal(size) <= 0:
         raise SystemExit(f"no long ETH position to close: {size}")
     px = round_price(mid() * 0.99, 4)
-    answer = client(args).order(ch, ETH, False, px, str(Decimal(size).normalize()), tif="Ioc", reduce_only=True)
+    answer = cl.order(ch, ETH, False, px, str(Decimal(size).normalize()), tif="Ioc", reduce_only=True)
     c.record("stop_take_close", challenge=ch, limit_px=px, size=size, answer=answer)
     time.sleep(3)
     book(ch, "stop_take_book_after_close")
@@ -205,8 +250,8 @@ def cmd_cleanup(_args) -> None:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("step", choices=["setup", "open", "book", "keeper", "refusals", "close", "fills", "cleanup"])
-    p.add_argument("--gateway", default="http://127.0.0.1:8799")
+    p.add_argument("step", choices=["setup", "trade", "book", "keeper", "fills", "cleanup"])
+    p.add_argument("--keys", help="owner-only directory of the agent keys the gateway under test holds")
     args = p.parse_args()
     c.assert_testnet()
     globals()[f"cmd_{args.step}"](args)

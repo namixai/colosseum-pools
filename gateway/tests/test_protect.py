@@ -245,6 +245,16 @@ class Reconcile(unittest.TestCase):
         far = self.plan({BTC: Decimal("0.01")}, [stop_at(1, BTC, LONG, "57000"), take_at(2, BTC, LONG, "69000")])
         self.assertEqual(far.actions, [protect.modify_action(2, order_wire(BTC, LONG, "tp", Decimal("68000"), 5))])
 
+    def test_each_direction_goes_in_an_action_of_its_own(self):
+        # Hyperliquid refuses, as a whole, a position TP/SL action that mixes the sides (28 Sep 2026).
+        want = {(BTC, LONG): protect.Line(Decimal("57000"), Decimal("68000")),
+                (BTC, SHORT): protect.Line(Decimal("63000"), Decimal("52000"))}
+        plan = reconcile(Book(Decimal(1000), {BTC: Decimal("0.01")}, {}, []), want, MARKETS)
+        self.assertEqual(len(plan.actions), 2)
+        for action in plan.actions:
+            self.assertEqual(len({(o["a"], o["b"]) for o in action["orders"]}), 1, action)
+            check_caps("protect", action, lambda a: Decimal(1))
+
     def test_orders_for_the_other_direction_are_not_this_ones(self):
         plan = self.plan({BTC: Decimal("0.01")}, [stop_at(1, BTC, SHORT, "58000"), take_at(2, BTC, SHORT, "59000")])
         self.assertEqual(plan.report[0]["stopWas"], "placed")
@@ -595,6 +605,8 @@ class DemoSignerPolicy(unittest.TestCase):
             protect.modify_action(5, grown),
             {"type": "cancel", "cancels": [{"a": BTC, "o": 5}]},
             {"type": "order", "orders": [self.SL], "grouping": "positionTpsl", "builder": {"b": "0x0", "f": 1}},
+            protect.place_action([self.SL, order_wire(BTC, SHORT, "sl", Decimal("66000"), 5)]),
+            protect.place_action([self.SL, order_wire(ETH, LONG, "tp", Decimal("3300"), 4)]),
         ):
             self.assertEqual(self.refused(action), "policy", action)
 
