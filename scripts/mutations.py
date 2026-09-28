@@ -1812,6 +1812,28 @@ MUTATIONS = [
      "The wait is over: ${noKey}, anyone may now release the pool to Idle",
      "The wait is over: anyone may now release the pool to Idle",
      ["a pool waiting for a key says how long before it may step back, and the second it may"]),
+    # The Economics page's measured tail (app/data/calc_tables.json) against the published package's results
+    # (stress/results). "PT": the second window's prefix, run by node on its own test file.
+    ("PT1", "app/data/calc_tables.json",
+     '       "worst": 0.9572,',
+     '       "worst": 0.9412,',
+     ["the wide list's cascade is the stress test's own pool and its worst coin"]),
+    ("PT2", "app/data/calc_tables.json",
+     '       "worst": 0.6999888888888889,',
+     '       "worst": 0.6358777777777778,',
+     ["the default list's cascade is the package's layouts and its worst coin"]),
+    ("PT3", "app/data/calc_tables.json",
+     '       "worst": 1.0,\n       "open_at": "SOL long",',
+     '       "worst": 0.8846,\n       "open_at": "SOL long",',
+     ["the default list's cascade is the package's layouts and its worst coin"]),
+    ("PT4", "app/data/calc_tables.json",
+     '"note": "measured, not modelled: one-minute bars from Bybit',
+     '"note": "измерено, не модель: one-minute bars from Bybit',
+     ["the rules measured are the package's, and the note the page prints is English and names what was measured"]),
+    ("PT5", "app/data/calc_tables.json",
+     '     "p99": 0.0802,\n     "max": 0.97,',
+     '     "p99": 0.0802,\n     "max": 0.8906,',
+     ["a stop's overshoot is the package's summaries, side by side and execution by execution"]),
 ]
 
 RUNNERS = {
@@ -1835,6 +1857,8 @@ RUNNERS = {
     "PE": (["node", "--test", "--test-reporter=tap", "app/tests/evidence.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     # A pool's stage 4 in the app: its own test file.
     "PS": (["node", "--test", "--test-reporter=tap", "app/tests/stages.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
+    # The Economics page's measured tail against the cascade package: its own test file.
+    "PT": (["node", "--test", "--test-reporter=tap", "app/tests/tail.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     # The shared pool's keeper: its own test module.
     "PK": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_shared_keeper"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The shared pool's run script: its own test module.
