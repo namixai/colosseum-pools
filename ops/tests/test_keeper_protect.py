@@ -32,7 +32,10 @@ class Chain(FakeChain):
                 raise RuntimeError("429 Too Many Requests")
             return self.front.get(user, [])
         if body["type"] == "clearinghouseState":
-            return {"assetPositions": [{"position": {"coin": coin, "szi": szi}} for coin, szi in self.sizes.get(user, [])]}
+            # The parent's positions name a coin and no size; they stay open here, at a nominal one.
+            named = [(coin, "1") for coin in self.positions.get(user, [])]
+            return {"assetPositions": [{"position": {"coin": coin, "szi": szi}}
+                                       for coin, szi in named + self.sizes.get(user, [])]}
         return super().info_post(body)
 
 
@@ -70,7 +73,7 @@ class ProtectionCheck(KeeperTest):
         self.assertEqual(self.missing(), [])
 
     def test_a_take_a_stop_on_the_wrong_side_or_a_smaller_stop_is_not_a_stop(self):
-        for orders in ([stop_order(kind="Take Profit Market")], [stop_order(side="B")],
+        for orders in ([stop_order(kind="Take Profit Market")], [stop_order(kind="Stop Limit")], [stop_order(side="B")],
                        [stop_order(sz="0.004", position_tpsl=False)], [stop_order(coin="ETH")],
                        [dict(stop_order(), reduceOnly=False)], [dict(stop_order(), isTrigger=False)]):
             self.logged.clear()
@@ -95,6 +98,12 @@ class ProtectionCheck(KeeperTest):
         self.make().one_pass()
         self.assertEqual(self.missing(), [])
         self.assertIn("breach", [fn for fn, _ in self.chain.calls_to(CHALLENGE_A)])
+
+    def test_the_parents_positions_count_as_open(self):
+        self.active_challenge([], [])
+        self.chain.positions[CHALLENGE_A.lower()] = ["ETH"]
+        self.make().one_pass()
+        self.assertEqual(self.missing(), [{"account": CHALLENGE_A, "coin": "ETH", "size": "1"}])
 
     def test_a_failed_read_is_logged_and_the_pass_goes_on(self):
         self.active_challenge([("BTC", "0.005")], [])

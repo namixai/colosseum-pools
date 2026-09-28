@@ -11,6 +11,7 @@ import inspect
 import os
 import pathlib
 import re
+import threading
 import unittest
 from decimal import ROUND_CEILING, Decimal
 
@@ -180,6 +181,10 @@ class Wire(unittest.TestCase):
             {"coin": "BTC", "isPositionTpsl": False, "isTrigger": False, "oid": 6, "orderType": "Limit",
              "reduceOnly": True, "side": "A", "sz": "0.001", "triggerPx": "0.0"},
             {"coin": "DOGE", "isTrigger": False, "oid": 8, "reduceOnly": False, "side": "B", "sz": "10"},
+            # A stop limit may rest unfilled past its trigger: it guards nothing, and nobody can place
+            # one through the gateway anyway.
+            {"coin": "ETH", "isPositionTpsl": False, "isTrigger": True, "oid": 9, "orderType": "Stop Limit",
+             "reduceOnly": True, "side": "A", "sz": "0.0042", "triggerPx": "2560"},
         ]
         book = parse_book(state, orders, markets)
         self.assertEqual(book.equity, Decimal("11.0512"))
@@ -274,6 +279,8 @@ class Exchange:
         self.refuse = None  # an answer for the gateway's own actions
         self.next_oid = 1000
         self.market_reads = 0
+        self.rest_trader_orders = False  # a trader's order joins the book when it is submitted
+        self.during_trader_submit = None  # runs while a trader's order is on its way
 
     # Venue
     def markets(self):
@@ -317,13 +324,25 @@ class Exchange:
                 self.orders.append(self._protective(wire, self._oid()))
             return {"status": "ok", "response": {"type": "order",
                                                  "data": {"statuses": ["waitingForTrigger"] * len(action["orders"])}}}
-        return {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": self._oid()}}]}}}
+        if self.during_trader_submit is not None:
+            self.during_trader_submit()
+        oid = self._oid()
+        if self.rest_trader_orders:
+            o = action["orders"][0]
+            self.orders.append(resting(self.markets_now[o["a"]].coin, "B" if o["b"] else "A", o["s"], oid))
+        return {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": oid}}]}}}
 
     def own_actions(self):
         return [a for a in self.sent if a.get("grouping") == "positionTpsl" or a["type"] == "batchModify"]
 
     def trader_actions(self):
         return [a for a in self.sent if a not in self.own_actions()]
+
+
+def resting(coin, side, sz, oid):
+    """A trader's limit order resting on the book, as frontendOpenOrders lists it."""
+    return {"coin": coin, "isPositionTpsl": False, "isTrigger": False, "oid": oid, "orderType": "Limit",
+            "reduceOnly": False, "side": side, "sz": sz, "triggerPx": "0.0"}
 
 
 class Reader(FakeReader):
@@ -502,6 +521,58 @@ class Flow(FlowBase):
         self.assertEqual(len(seen), 2)
         self.assertNotEqual(seen[0], seen[1])
         self.assertEqual(seen[1], NOW)  # the trader's order goes with the trader's nonce
+
+
+class OneAtATime(FlowBase):
+    """From the stop and take placed for an order to Hyperliquid's answer, the book doesn't show the
+    order; nothing else may act on the account in between."""
+
+    def stops(self):
+        return [o["triggerPx"] for o in self.x.orders if o["orderType"] == "Stop Market"]
+
+    def test_a_sweep_waits_until_the_order_has_reached_hyperliquid(self):
+        # 0.002 BTC already rests; the order on its way adds 0.003, so the stop is placed for 0.005.
+        self.x.orders.append(resting("BTC", "B", "0.002", 555))
+        self.x.rest_trader_orders = True
+        self.gw.protector.watch(ACCOUNT, self.key.address)
+        seen = {}
+
+        def meanwhile():
+            sweep = threading.Thread(target=self.gw.protector.sweep)
+            sweep.start()
+            sweep.join(0.3)
+            seen.update(blocked=sweep.is_alive(), sweep=sweep)
+
+        self.x.during_trader_submit = meanwhile
+        status, out = self.send(size="0.003")
+        seen["sweep"].join(5)
+        self.assertEqual(status, 200)
+        self.assertTrue(seen["blocked"])
+        # The line for 0.005; a sweep let in early would have seen only the 0.002 and moved the stop
+        # out to that looser line (45000).
+        self.assertEqual(self.stops(), ["54000"])
+
+    def test_two_orders_for_one_account_are_protected_one_after_the_other(self):
+        self.x.rest_trader_orders = True
+        second = {}
+
+        def meanwhile():
+            if "thread" in second:
+                return
+            before = len(self.x.sent)
+            thread = threading.Thread(target=lambda: second.update(answer=self.send(nonce=NOW + 1)))
+            second["thread"] = thread
+            thread.start()
+            thread.join(0.3)
+            second["blocked"] = thread.is_alive() and len(self.x.sent) == before
+
+        self.x.during_trader_submit = meanwhile
+        status, _ = self.send()
+        second["thread"].join(5)
+        self.assertEqual((status, second["answer"][0]), (200, 200))
+        self.assertTrue(second["blocked"])
+        # Both 0.005 buys: 0.01 BTC is 600 of notional against 30 to lose, a stop 5% under the mark.
+        self.assertEqual(self.stops(), ["57000"])
 
 
 class Sweep(FlowBase):

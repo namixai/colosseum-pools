@@ -114,6 +114,13 @@ class Gateway:
     def _handle(self, body: Any) -> tuple[int, dict]:
         req = Request.from_json(body)
         cleared = check(req, self.reader, int(self.clock() * 1000), self.nonces)
+        # One request at a time per account, from the stop and take placed for it to Hyperliquid's
+        # answer: a sweep, or a second order for the same account, in between would read a book
+        # without this order and protect the account for less than it is about to hold.
+        with self.protector.holding(req.account):
+            return self._handle_held(req, cleared)
+
+    def _handle_held(self, req: Request, cleared) -> tuple[int, dict]:
         # check() claimed the nonce, so a copy of this request arriving meanwhile is refused
         # without a signer call. Until a signature for the right key exists, nothing can
         # reach Hyperliquid, and any failure gives the nonce back for a retry.

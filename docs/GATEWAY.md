@@ -209,6 +209,13 @@ it is submitted:
 A 200 for such an order carries `protection`: for each asset and direction, the stop and the
 take, and whether each was `placed`, `moved` or `kept`.
 
+**One request at a time per account.** From the stop and the take placed for an order until
+Hyperliquid has answered for the order itself, the book doesn't show that order yet, so nothing
+else may act on the account in between: the account's other requests and the sweep wait. Otherwise
+a second order would be protected as if the first weren't coming, and a sweep would move a stop that
+guards nothing yet out to the line of a book without the order. The nonce check comes before the
+wait, so a replayed copy is refused at once.
+
 **The sweep.** Every `GATEWAY_PROTECT_EVERY` seconds (default 10) the gateway goes over the
 accounts it has traded since it started and puts back what is missing: a position that opened
 from an order that rested, a position opened again after its stop fired while another order

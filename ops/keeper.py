@@ -130,8 +130,8 @@ def send(wallet, addr: str, sig: str, types=(), args=(), dry=False) -> None:
 
 
 def unprotected(account: str) -> list[dict]:
-    """Open positions with no stop on Hyperliquid itself: no reduce-only stop order on the side that
-    would close them, for the whole position. The gateway puts one there before every order that may
+    """Open positions with no stop on Hyperliquid itself: no reduce-only stop market order on the side
+    that would close them, for the whole position. The gateway puts one there before every order that may
     open a position, and sweeps for the rest (gateway/protect.py); the keeper holds no key to place
     one, so all it can do is say so."""
     positions = c.info_post({"type": "clearinghouseState", "user": account}).get("assetPositions", [])
@@ -144,7 +144,7 @@ def unprotected(account: str) -> list[dict]:
             continue
         closing = "A" if size > 0 else "B"
         if not any(o.get("coin") == p["coin"] and o.get("isTrigger") and o.get("reduceOnly") and o.get("side") == closing
-                   and str(o.get("orderType", "")).startswith("Stop")
+                   and o.get("orderType") == "Stop Market"  # a stop limit may rest unfilled past its trigger
                    and (o.get("isPositionTpsl") or Decimal(o.get("sz") or "0") >= abs(size))
                    for o in orders):
             gaps.append({"coin": p["coin"], "size": p["szi"]})

@@ -50,6 +50,8 @@ MARKET_SLIPPAGE = Decimal("0.1")
 PERP_DECIMALS = 6
 SIG_FIGS = 5
 LONG, SHORT = "long", "short"
+# How frontendOpenOrders names the two kinds of order the gateway places.
+MARKET_TRIGGERS = {"Stop Market": "sl", "Take Profit Market": "tp"}
 # How long a day's snapshot read from the chain is trusted before the gateway reads it again, when
 # the snapshot is from an earlier UTC day (nobody has taken today's yet).
 SNAPSHOT_RECHECK_S = 60.0
@@ -171,9 +173,11 @@ def parse_book(state: Any, orders: Any, markets: dict[int, Market]) -> Book:
         # "B" buys: it closes a short or grows a long; "A" sells.
         buys = o["side"] == "B"
         if o.get("isTrigger") and o.get("reduceOnly"):
-            kind = "sl" if str(o.get("orderType", "")).startswith("Stop") else "tp"
-            book.protective.append(Protective(int(o["oid"]), asset, SHORT if buys else LONG, kind,
-                                              Decimal(o["triggerPx"])))
+            # Only a market trigger protects: a stop limit may rest unfilled past its trigger.
+            kind = MARKET_TRIGGERS.get(o.get("orderType"))
+            if kind is not None:
+                book.protective.append(Protective(int(o["oid"]), asset, SHORT if buys else LONG, kind,
+                                                  Decimal(o["triggerPx"])))
         elif not o.get("reduceOnly") and not o.get("isTrigger"):
             sides = book.opening.setdefault(asset, {LONG: Decimal(0), SHORT: Decimal(0)})
             sides[LONG if buys else SHORT] += Decimal(o["sz"])
@@ -363,12 +367,18 @@ class Protector:
         self.clock = clock
         self._limits: dict[tuple[str, str], tuple[RuleLimits, float]] = {}
         self._watch: dict[str, str] = {}  # account -> key, for the sweep
-        self._locks: dict[str, threading.Lock] = {}
+        self._locks: dict[str, threading.RLock] = {}
         self._guard = threading.Lock()
 
-    def _lock(self, account: str) -> threading.Lock:
+    def _lock(self, account: str) -> threading.RLock:
         with self._guard:
-            return self._locks.setdefault(account.lower(), threading.Lock())
+            return self._locks.setdefault(account.lower(), threading.RLock())
+
+    def holding(self, account: str) -> threading.RLock:
+        """The account's lock, for a caller that must keep the sweep and the account's other
+        requests out from the stop and take it placed until its own order has reached Hyperliquid:
+        until then the book doesn't show the order the stop was placed for."""
+        return self._lock(account)
 
     def limits(self, account: str, key: str) -> RuleLimits:
         """Rules, terms and the drawdown base don't change while a key trades an account, so
