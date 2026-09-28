@@ -8,8 +8,12 @@ keys from GATEWAY_KEYS_DIR and checks the platform's caps before it signs (gatew
 `signer`: it asks a Usenami Signer gateway (SIGNER_URL, SIGNER_TOKENS_FILE); the demo doesn't
 use this mode.
 
-POST /v1/order   one order or one cancel, see docs/GATEWAY.md
+POST /v1/order   one order, one cancel, or moving the account's stop or take, see docs/GATEWAY.md
 GET  /v1/health  liveness and configuration summary (no secrets)
+
+Before an order that may open or grow a position goes, the gateway puts a stop at the pool's
+rule line and a take at the target on Hyperliquid itself (gateway/protect.py), and a sweep every
+GATEWAY_PROTECT_EVERY seconds (default 10) keeps them there.
 
 Testnet only: refuses to start unless the RPC reports chain 998, and submits only to
 Hyperliquid's testnet API.
@@ -23,6 +27,7 @@ import re
 import sys
 import threading
 import time
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -30,6 +35,7 @@ from . import hl
 from .chain import JsonRpcReader, Throttled
 from .checks import ChainReader, GatewayError, NonceBook, Request, check
 from .demo_signer import DemoSigner
+from .protect import Protector
 from .signer import SignerClient
 
 MAX_BODY = 64 * 1024
@@ -41,6 +47,7 @@ MAX_ACTIVE = 32
 HEX_WORD = re.compile(r"^0x[0-9a-fA-F]{1,64}$")
 # What a refusal may pass on from the Signer's answer, besides the signed receipt.
 SIGNER_REASON_FIELDS = ("error", "reason", "code", "message")
+PROTECT_EVERY_S = 10.0
 
 
 def log_line(**fields) -> None:
@@ -75,12 +82,16 @@ def signer_from_env(env) -> tuple[str, DemoSigner | SignerClient]:
 
 
 class Gateway:
-    def __init__(self, reader: ChainReader, signer: DemoSigner | SignerClient, submit=hl.submit, clock=time.time):
+    def __init__(self, reader: ChainReader, signer: DemoSigner | SignerClient, submit=hl.submit, clock=time.time,
+                 venue=None):
         self.reader = reader
         self.signer = signer
         self.submit = submit
         self.clock = clock
         self.nonces = NonceBook()
+        self._own_nonce = 0
+        self._own_nonce_lock = threading.Lock()
+        self.protector = Protector(reader, venue if venue is not None else hl.Venue(), self._act, clock)
 
     def handle_order(self, body: Any) -> tuple[int, dict]:
         try:
@@ -106,8 +117,23 @@ class Gateway:
         # check() claimed the nonce, so a copy of this request arriving meanwhile is refused
         # without a signer call. Until a signature for the right key exists, nothing can
         # reach Hyperliquid, and any failure gives the nonce back for a retry.
+        protection = None
         try:
-            signature, status, payload = self._sign(req, cleared)
+            if req.kind in ("stop", "take"):
+                action = self.protector.move(req.account, cleared.key, "sl" if req.kind == "stop" else "tp",
+                                             req.asset, Decimal(req.message["triggerPx"]))
+                signature, status, payload = self._sign(req, cleared, action, "protect")
+            else:
+                if req.kind == "cancel":
+                    self.protector.refuse_protective_cancel(req.account, req.message["oid"])
+                action = req.action()
+                signature, status, payload = self._sign(req, cleared, action, req.kind)
+                # The stop and the take go first: an order that may open a position is never
+                # submitted without them on the book.
+                if signature is not None and req.opens():
+                    protection = self.protector.before_opening(
+                        req.account, cleared.key, req.asset, req.message["isBuy"], Decimal(req.message["size"]),
+                        avoid_nonce=req.nonce)
         except BaseException:
             self.nonces.release(cleared.trader, req.nonce)
             raise
@@ -116,9 +142,9 @@ class Gateway:
             return status, payload
 
         # From here the nonce stays spent: the venue may have the order even if the call fails.
-        base = payload
+        base = payload if protection is None else {**payload, "protection": protection}
         try:
-            venue = self.submit(req.action(), req.nonce, signature)
+            venue = self.submit(action, req.nonce, signature)
         except Exception as e:
             log_line(event="venue_unreachable", error=type(e).__name__)
             return 502, {**base, "status": "venue_unreachable",
@@ -131,15 +157,14 @@ class Gateway:
                          "detail": "Hyperliquid's answer confirms nothing; check the account"}
         return 200, {**base, "status": "submitted", "venue": venue}
 
-    def _sign(self, req: Request, cleared) -> tuple[dict | None, int, dict]:
+    def _sign(self, req: Request, cleared, action: dict, kind: str) -> tuple[dict | None, int, dict]:
         """Asks the signer and checks its answer. Returns the signature only if it is
         Hyperliquid-shaped and recovers to the account's key; otherwise the answer to send.
         The demo signer refuses an order over the caps with a GatewayError."""
         if not self.signer.has_key(cleared.key):
             raise GatewayError(503, "key_not_configured", cleared.key)
 
-        action = req.action()
-        signed = self.signer.sign(cleared.key, req.kind, action, req.nonce)
+        signed = self.signer.sign(cleared.key, kind, action, req.nonce)
         base = {"account": req.account, "trader": cleared.trader, "key": cleared.key, "receipt": signed.receipt}
         if signed.http_status != 200 or not signed.signature:
             return None, 403 if signed.http_status == 403 else 502, {
@@ -153,6 +178,38 @@ class Gateway:
         if recovered.lower() != cleared.key.lower():
             return None, 502, {**base, "status": "signature_mismatch", "recovered": recovered}
         return signature, 200, base
+
+    def _next_nonce(self, avoid: int | None) -> int:
+        """A nonce for an action of the gateway's own. Hyperliquid wants every nonce of a key
+        used once, and the trader's nonce of the request in hand is taken already."""
+        with self._own_nonce_lock:
+            nonce = max(int(self.clock() * 1000), self._own_nonce + 1)
+            if nonce == avoid:
+                nonce += 1
+            self._own_nonce = nonce
+            return nonce
+
+    def _act(self, key: str, action: dict, avoid_nonce: int | None = None) -> tuple[str | None, bool, Any]:
+        """Signs the gateway's own stop or take with the account's key, checks the signature the
+        way a trader's is checked, and submits it. Returns (why it failed, whether Hyperliquid
+        confirmed it, Hyperliquid's answer)."""
+        nonce = self._next_nonce(avoid_nonce)
+        try:
+            signed = self.signer.sign(key, "protect", action, nonce)
+        except GatewayError as e:
+            return f"the signer refused it: {e.code} {e.detail}", False, None
+        signature = signature_parts(signed.signature) if signed.http_status == 200 else None
+        if signature is None:
+            return f"the signer refused it: {signer_reason(signed.body)}", False, None
+        if hl.recover_signer(action, signature, nonce).lower() != key.lower():
+            return "it was signed by another key", False, None
+        try:
+            venue = self.submit(action, nonce, signature)
+        except Exception as e:
+            return f"Hyperliquid was unreachable: {type(e).__name__}", False, None
+        refusal, confirmed = hl.venue_outcome(venue)
+        log_line(event="protect_sent", key=key, action=action.get("type"), refusal=refusal, confirmed=confirmed)
+        return refusal, confirmed, venue
 
 
 class BoundedServer(ThreadingHTTPServer):
@@ -256,9 +313,12 @@ def main() -> int:
     mode, signer = signer_from_env(os.environ)
     host, _, port = os.environ.get("GATEWAY_BIND", "127.0.0.1:8787").partition(":")
     allow_origin = os.environ.get("GATEWAY_ALLOW_ORIGIN", "")  # the app's origin, if it calls from a browser
+    every = float(os.environ.get("GATEWAY_PROTECT_EVERY", PROTECT_EVERY_S))
     health = {"signer": mode, "keys": len(signer)} if mode == "demo" else {"signer": mode}
-    server = BoundedServer((host, int(port)), make_handler(Gateway(reader, signer), allow_origin, health=health))
-    print(f"gateway listening on {host}:{port}, signer: {mode}", flush=True)
+    gateway = Gateway(reader, signer)
+    threading.Thread(target=gateway.protector.run, args=(every,), name="protect-sweep", daemon=True).start()
+    server = BoundedServer((host, int(port)), make_handler(gateway, allow_origin, health={**health, "protect_every": every}))
+    print(f"gateway listening on {host}:{port}, signer: {mode}, stop and take swept every {every:g} s", flush=True)
     server.serve_forever()
     return 0
 

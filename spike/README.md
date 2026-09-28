@@ -136,6 +136,19 @@ Two things learned about the tools on the way:
   is asked for. The demo pool's balance read at the block the demo was deployed in, before the pool
   existed, came back as the current one. HyperCore's history can't be read this way.
 
+## The stop and the take on the exchange (28 September)
+
+What the gateway's stop and take (docs/GATEWAY.md) lean on, checked with `spike/tpsl_probe.py`
+from one of our own testnet wallets, no pool and no gateway: two positions of about 11 USDC in
+ETH, a minute each. Every answer is in `spike/results/2026-09-28.jsonl`.
+
+| # | question | answer, 28 Sep |
+|---|---|---|
+| 11 | Does Hyperliquid take a reduce-only trigger order with no position to reduce? | **Yes.** A stop market sell, grouping `na`, rested as `Stop Market` with "Price below 2550.2". So does a position TP/SL (`positionTpsl`, size `0`): it waits, and stays once a position opens. |
+| 12 | What is a position TP/SL of size `0`, and what does Hyperliquid answer? | **The whole position.** `frontendOpenOrders` lists it with `isPositionTpsl: true` and size `0.0`; the answer to placing it is `waitingForTrigger`, with no oid. The order's price is kept as sent (a market stop sent with its trigger less 10 % shows that as its `limitPx`). |
+| 13 | Can two stops stand on one position, and can one be moved? | **Yes and yes.** Three position stops stood side by side. `batchModify` moved one to a new trigger in one action, answered `resting` with a new oid, and the old oid was gone. |
+| 14 | What is left of them when the position closes? | **Nothing.** After a reduce-only IOC closed the position, every reduce-only order on it was gone, position TP/SL and the fixed-size `na` stop alike. |
+
 ## Running it
 
 Testnet only. `hlspike/common.py` refuses any RPC whose chain id isn't 998 and any API URL

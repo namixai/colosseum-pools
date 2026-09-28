@@ -28,6 +28,8 @@ MAX_SIZE = {3: Decimal("0.005"), 4: Decimal("0.15"), 0: Decimal("4")}
 COINS = {3: "BTC", 4: "ETH", 0: "SOL"}
 MAX_NOTIONAL = Decimal("400")  # USDC per order
 LIMIT_TIFS = ("Alo", "Gtc", "Ioc")
+ORDER_FIELDS = ["a", "b", "p", "s", "r", "t"]
+TRIGGER_FIELDS = ["isMarket", "triggerPx", "tpsl"]
 
 
 def _positive(text: Any) -> Decimal | None:
@@ -54,12 +56,50 @@ def market_mid(asset: int) -> Decimal:
     return mid
 
 
+def _protective(order: Any) -> None:
+    """One of the gateway's own stop or take orders (gateway/protect.py): a position TP/SL that
+    is reduce-only, sized 0 (the whole position, whatever it is), and a market trigger. It can
+    only close a position, so no cap applies to it."""
+    t = order.get("t") if isinstance(order, dict) else None
+    trigger = t.get("trigger") if isinstance(t, dict) and list(t) == ["trigger"] else None
+    if not (isinstance(order, dict) and list(order) == ORDER_FIELDS and isinstance(trigger, dict)
+            and list(trigger) == TRIGGER_FIELDS and trigger["isMarket"] is True and trigger["tpsl"] in ("sl", "tp")
+            and order["r"] is True and order["s"] == "0" and isinstance(order["b"], bool)):
+        raise GatewayError(403, "policy", "not a reduce-only stop or take for the whole position")
+    if order["a"] not in MAX_SIZE:
+        raise GatewayError(403, "policy", f"asset {order['a']} is not on the platform list")
+    _number(order["p"])
+    _number(trigger["triggerPx"])
+
+
+def check_protective(action: Any) -> None:
+    """Placing the gateway's stop and take (one or two position TP/SL orders), or moving one."""
+    if action.get("type") == "order" and list(action) == ["type", "orders", "grouping"]:
+        orders = action["orders"]
+        if action["grouping"] != "positionTpsl" or not isinstance(orders, list) or not 1 <= len(orders) <= 2:
+            raise GatewayError(403, "policy", "a stop and a take are one or two position TP/SL orders")
+        for order in orders:
+            _protective(order)
+        return
+    if action.get("type") == "batchModify" and list(action) == ["type", "modifies"]:
+        modifies = action["modifies"]
+        if not (isinstance(modifies, list) and len(modifies) == 1 and isinstance(modifies[0], dict)
+                and list(modifies[0]) == ["oid", "order"] and type(modifies[0]["oid"]) is int and modifies[0]["oid"] > 0):
+            raise GatewayError(403, "policy", "one stop or take moved at a time, by its oid")
+        _protective(modifies[0]["order"])
+        return
+    raise GatewayError(403, "policy", "not a stop or a take")
+
+
 def check_caps(kind: str, action: Any, mid: Callable[[int], Decimal]) -> None:
-    """Refuses, before signing, anything but one limit order within the caps, or one cancel,
-    on an asset of the platform's list. `mid` gives an asset's market mid; only a sell that
-    isn't reduce-only asks."""
+    """Refuses, before signing, anything but one limit order within the caps, one cancel, or the
+    gateway's own stop and take, on an asset of the platform's list. `mid` gives an asset's
+    market mid; only a sell that isn't reduce-only asks."""
     if not isinstance(action, dict):
         raise GatewayError(403, "policy", "not an action")
+    if kind == "protect":
+        check_protective(action)
+        return
     if kind == "cancel":
         cancels = action.get("cancels")
         if (action.get("type") != "cancel" or not isinstance(cancels, list) or len(cancels) != 1

@@ -21,7 +21,7 @@ from gateway.checks import GatewayError
 from gateway.demo_signer import COINS, MAX_NOTIONAL, MAX_SIZE, DemoSigner, check_caps, market_mid
 from gateway.server import Gateway, signer_from_env
 from gateway.signer import SignerClient
-from gateway.tests.test_gateway import NOW, Base
+from gateway.tests.test_gateway import NOW, Base, QuietVenue
 
 BTC, ETH, SOL = 3, 4, 0
 
@@ -241,7 +241,8 @@ class DemoFlow(Base):
             self.submitted.append((action, nonce, signature))
             return {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": 1}}]}}}
 
-        return Gateway(self.reader, DemoSigner([self.enclave_key], mid), submit=submit, clock=lambda: NOW / 1000)
+        return Gateway(self.reader, DemoSigner([self.enclave_key], mid), submit=submit, clock=lambda: NOW / 1000,
+                       venue=QuietVenue())
 
     def test_a_sell_under_the_market_over_the_cap_is_refused_before_signing(self):
         market = Market(BTC="80000.2")
