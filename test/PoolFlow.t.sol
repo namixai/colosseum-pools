@@ -1100,6 +1100,93 @@ contract PoolFlowTest is PoolHarness {
         assertGt(ch.payoutOwed(), 0, "with a share of the 'profit' owed back to the trader");
     }
 
+    /// Audit A-04, the half left open after the first fix. Waiting for the margin to be let go
+    /// is not enough: it is let go DURING a block, and the money it was holding reaches spot only
+    /// after that block, while `spot` read here is the start of it. So the step that first sees
+    /// "nothing held" pays the share out of a balance the released money has not arrived in --
+    /// once, because the payout marks itself done. The same start-of-block blindness as A-11, one
+    /// line further along.
+    function test_settle_doesNotPayTheShareInTheBlockTheMarginIsReleased() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+        p.openFundedStage();
+        uint64 owed = ch.payoutOwed();
+        assertGt(owed, 1e8, "the share is bigger than the crumb below");
+
+        // A little on spot -- enough that the old "spot == 0" guard does not hide the hole -- and
+        // the rest of the money held by a resting order.
+        CoreSimulatorLib.forceSpotBalance(address(ch), 0, 1e8);
+        uint32[] memory none = new uint32[](0);
+        // Held margin means equity ABOVE what can be withdrawn -- money that is there and cannot
+        // be taken out. Mocking it below the real withdrawable, which is what I did first, says
+        // the opposite and the test then passes for no reason at all.
+        _mockHeldMargin(address(ch), int64(CoreOps.withdrawable(address(ch))) + 5e6);
+        ch.settle(new Cancel[](0), none);
+        assertFalse(ch.payoutDone(), "nothing paid while the order holds the money");
+
+        // Let the return window run out. Until it does, the door guard happens to protect the
+        // payout as a side effect -- it waits while anything is crossing. Past the window it stops
+        // doing that, by design, so dust cannot hold a settlement open for ever. That is where the
+        // payout is left uncovered, and a resting order holding margin for five minutes is not an
+        // unusual thing.
+        vm.warp(block.timestamp + ch.RETURN_WAIT() + 1);
+        ch.settle(new Cancel[](0), none);
+        assertFalse(ch.payoutDone(), "still nothing while the order holds it");
+
+        // The order is named and the margin comes free -- and the step runs in the SAME block,
+        // which is the case this test exists for.
+        vm.clearMockedCalls();
+        ch.settle(new Cancel[](0), none);
+        assertFalse(ch.payoutDone(), "and not in the block the margin was released either");
+        assertEq(ch.payoutSent(), 0, "a crumb of spot is not the trader's share");
+
+        _settleChallenge(ch);
+        assertEq(ch.payoutSent(), owed, "the whole share, once the money had somewhere to be");
+    }
+
+    /// The same hole on the funded side, where it is likelier: a pool that funded a trader out of
+    /// what it had holds little on spot, so "whatever reached spot" is far short of the share.
+    function test_settleFunded_doesNotPayTheShareInTheBlockTheMarginIsReleased() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        Pool p = _readyPool();
+        (ChallengeAccount ch,) = _passed(p);
+        ch;
+        CoreSimulatorLib.nextBlock();
+        _trade(address(p), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 810000);
+        _trade(address(p), BTC, false, 0.005e8);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(trader);
+        p.stopFunded(c, a, SALT);
+        CoreSimulatorLib.nextBlock();
+
+        p.settleFunded(c, a); // takes the result and starts the drain
+        CoreSimulatorLib.nextBlock();
+        uint64 owed = p.fundedPayoutOwed();
+        assertGt(owed, 1e8, "a share worth more than the crumb below");
+
+        // Little on spot, the rest held by a resting order. Held margin is equity ABOVE what can
+        // be withdrawn, so the mock has to sit above the real figure.
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, 1e8);
+        // Real money on the perp side: this is what the order is holding and what comes free when
+        // it is named. Mocking alone changes a reading, not a balance, so without this there is
+        // nothing to release and the step is honestly paying out a genuine shortfall.
+        CoreSimulatorLib.forcePerpBalance(address(p), 5e6);
+        _mockHeldMargin(address(p), 10e6); // above the 5 that can be withdrawn: held
+        p.settleFunded(c, a);
+        assertFalse(p.fundedPayoutDone(), "nothing paid while the order holds the money");
+
+        vm.clearMockedCalls(); // the order is named, the margin comes free, same block
+        p.settleFunded(c, a);
+        assertFalse(p.fundedPayoutDone(), "and not in the block it was released");
+        assertEq(p.fundedPayoutSent(), 0, "a crumb of spot is not the trader's share");
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);

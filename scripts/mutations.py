@@ -337,6 +337,14 @@ MUTATIONS = [
      "        if (factory.registry().freeCount() != 0) revert KeyAvailable();",
      "        if (false) revert KeyAvailable();",
      ["test_abandonFundedStage_onlyAfterTheWindow_andThenAnyoneMay"]),
+    ("M74", "src/ChallengeAccount.sol",
+     "            if (spot < payoutOwed && free != 0) return;",
+     "            if (false) return;",
+     ["test_settle_doesNotPayTheShareInTheBlockTheMarginIsReleased"]),
+    ("M75", "src/Pool.sol",
+     "            if (spot < fundedPayoutOwed && free != 0) return;",
+     "            if (false) return;",
+     ["test_settleFunded_doesNotPayTheShareInTheBlockTheMarginIsReleased"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",

@@ -275,6 +275,13 @@ contract ChallengeAccount is RuledAccount {
             // used to pay out of whatever had reached spot and mark the payout done for good.
             // The trader's own orders are named by the keeper; until they are, this waits.
             if (!_nothingHeldOnPerp()) return;
+            // And margin let go in THIS block reaches spot only after it, while `spot` here is
+            // the start of the block -- the same blindness as A-11, one line further on. So
+            // unless spot already covers the share, wait until nothing is on its way across.
+            // Somebody else's dust delays this only while the share is short, and every unit of
+            // it lands in spot and brings the share closer: paying to delay a payout is paying
+            // into it.
+            if (spot < payoutOwed && free != 0) return;
             if (spot == 0) return;
             // A trader with no HyperCore account yet pays for creating it out of the share.
             uint64 pay = CoreOps.sendableTo(trader, spot < payoutOwed ? spot : payoutOwed);

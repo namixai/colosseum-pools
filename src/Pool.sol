@@ -420,6 +420,13 @@ contract Pool is RuledAccount {
             // `free == 0` does not mean the perp side has let go. A pool that funded a trader out
             // of everything it had holds little on spot, which is exactly when this bites.
             if (!_nothingHeldOnPerp()) return;
+            // And margin let go in THIS block reaches spot only after it, while `spot` here is
+            // the start of the block -- the same blindness as A-11, one line further on. So
+            // unless spot already covers the share, wait until nothing is on its way across.
+            // Somebody else's dust delays this only while the share is short, and every unit of
+            // it lands in spot and brings the share closer: paying to delay a payout is paying
+            // into it.
+            if (spot < fundedPayoutOwed && free != 0) return;
             if (spot == 0) return;
             // A trader with no HyperCore account yet pays for creating it out of the share.
             uint64 pay = CoreOps.sendableTo(fundedTrader, spot < fundedPayoutOwed ? spot : fundedPayoutOwed);
