@@ -366,6 +366,10 @@ MUTATIONS = [
      "                payoutShortAt = 0;",
      "                payoutShortAt = payoutShortAt;",
      ["test_settle_theShortShareClockRestartsWhenMarginIsHeldAgain"]),
+    ("K61", "ops/deploy_testnet.py",
+     "    if gas_wei < GAS_FLOOR_WEI:",
+     "    if False:",
+     ["test_a_deployer_without_gas_is_refused_before_anything_is_sent"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",
