@@ -1,6 +1,6 @@
 # Pool gateway
 
-Status: built and tested offline (`gateway/`), 17 September 2026; the demo signer added the same day. Running on the pools host since 18 September 2026, against the rehearsal deployment (docs/HOSTING.md). The stop and the take on Hyperliquid (below) added on 28 September 2026.
+Status: built and tested offline (`gateway/`), 17 September 2026; the demo signer added the same day. Running on the pools host since 18 September 2026, against the rehearsal deployment (docs/HOSTING.md). The stop and the take on Hyperliquid (below) added on 28 September 2026, and checked live on testnet on 29 September through a gateway running this code: both placed before the order, the refusals and the moves, and each of them firing on its own (`spike/README.md`, "The live check through the gateway").
 
 The gateway sits between a trader and Hyperliquid. It asks one question before it forwards an
 order: is this key bound, on chain, to this account and this trader, and is the account allowed

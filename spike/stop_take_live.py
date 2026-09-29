@@ -17,6 +17,9 @@ and talks to it over HTTP the way a trader's client does:
   4. a sweep with everything in place, which sends nothing;
   5. the position closed with a reduce-only order, and what is left on the book after it.
 
+`fire --keys <dir>` then leaves a position to Hyperliquid: its stop moved by the trader to a few
+basis points under the mid, and nothing sent until the exchange has closed it.
+
 The pool: a 3 USDC challenge, 3 % a day, 6 % drawdown, 5x, an 8 % target, on SOL, BTC and ETH. The
 position: 0.0042 ETH, about 11 USDC, Hyperliquid's minimum. Every step goes to
 spike/results/<date>.jsonl; the pool and the challenge to spike/results/state-stop-take.json.
@@ -86,24 +89,39 @@ def wait_until(what: str, read, ok, seconds: int = 90):
     raise SystemExit(f"gave up waiting for {what}")
 
 
-def cmd_setup(_args) -> None:
+def cmd_setup(args) -> None:
+    """Each step checks what is already there, so a run that stopped part way can go on with
+    --pool."""
     factory = deployments.resolve(DEPLOYMENT)[0]
     op, tr, spare = c.account(OPERATOR), c.account(TRADER), c.account(SPARE)
-    rcpt = c.transact(op, factory, f"createPool({RULES_T},{TERMS_T})", [RULES_T, TERMS_T], [RULES, TERMS])
-    pool = view(factory, "pools()", "address[]")[-1]
-    c.record("stop_take_pool_created", pool=pool, tx=rcpt["transactionHash"])
+    pool = args.pool
+    if pool is None:
+        rcpt = c.transact(op, factory, f"createPool({RULES_T},{TERMS_T})", [RULES_T, TERMS_T], [RULES, TERMS])
+        pool = view(factory, "pools()", "address[]")[-1]
+        c.record("stop_take_pool_created", pool=pool, tx=rcpt["transactionHash"])
+    STATE.write_text(json.dumps({"pool": pool}, indent=2) + "\n")
     needed = view(pool, "capitalNeeded()", "uint64")
-    # What the probe left on the operator's perp goes back to spot first: the pool needs its capital
-    # there, and 1 USDC more for creating the pool's own HyperCore account.
-    perp = float(c.info_post({"type": "clearinghouseState", "user": op.address})["marginSummary"]["accountValue"])
-    if perp >= 0.01:
-        amount = int(perp * 100) / 100
-        c.record("stop_take_operator_perp_to_spot", amount=amount, answer=c.exchange(op).usd_class_transfer(amount, False))
-    resp = c.exchange(op).spot_transfer(needed / 1e8, pool, c.spot_token_wire("USDC"))
-    c.record("stop_take_pool_funded", pool=pool, usdc=needed / 1e8, response=resp)
-    wait_until("the pool's capital", lambda: c.core_spot_balance(pool, c.USDC_TOKEN)["total"], lambda v: v >= needed)
+    if c.core_spot_balance(pool, c.USDC_TOKEN)["total"] < needed:
+        # What the probe left on the operator's perp goes back to spot first: the pool needs its
+        # capital there, and 1 USDC more for creating the pool's own HyperCore account.
+        perp = float(c.info_post({"type": "clearinghouseState", "user": op.address})["marginSummary"]["accountValue"])
+        if perp >= 0.01:
+            amount = int(perp * 100) / 100
+            c.record("stop_take_operator_perp_to_spot", amount=amount,
+                     answer=c.exchange(op).usd_class_transfer(amount, False))
+        resp = c.exchange(op).spot_transfer(needed / 1e8, pool, c.spot_token_wire("USDC"))
+        c.record("stop_take_pool_funded", pool=pool, usdc=needed / 1e8, response=resp)
+        wait_until("the pool's capital", lambda: c.core_spot_balance(pool, c.USDC_TOKEN)["total"], lambda v: v >= needed)
+    if not view(pool, "accountReady()", "bool"):
+        # Separate spot and perp and approve the builder fee, once the pool exists on HyperCore; a
+        # pool sells nothing before (Pool.buyChallenge reverts NotReady).
+        rcpt = c.transact(op, pool, "prepareAccount()")
+        c.record("stop_take_pool_prepared", pool=pool, tx=rcpt["transactionHash"])
     price, fee = TERMS[0], view(factory, "challengeFee()", "uint256")
+    usdc = lambda who: view(c.TESTNET_USDC_ERC20, "balanceOf(address)", "uint256", ["address"], [who])  # noqa: E731
     for who, amount in ((op, 300_000), (spare, 500_000)):
+        if usdc(tr.address) >= price + fee:
+            break
         rcpt = c.transact(who, c.TESTNET_USDC_ERC20, "transfer(address,uint256)", ["address", "uint256"],
                           [tr.address, amount])
         c.record("stop_take_trader_usdc", frm=who.address, usdc_1e6=amount, tx=rcpt["transactionHash"])
@@ -112,12 +130,12 @@ def cmd_setup(_args) -> None:
     ch = view(pool, "challenge()", "address")
     c.record("stop_take_challenge_bought", pool=pool, challenge=ch, key=view(ch, "agentKey()", "address"),
              tx=rcpt["transactionHash"])
+    STATE.write_text(json.dumps({"pool": pool, "challenge": ch}, indent=2) + "\n")
     wait_until("the challenge's capital", lambda: c.core_spot_balance(ch, c.USDC_TOKEN)["total"],
                lambda v: v >= TERMS[1] * 100)
     rcpt = c.transact(op, ch, "activate()")
     c.record("stop_take_challenge_started", challenge=ch, tx=rcpt["transactionHash"],
              status=view(ch, "status()", "uint8"))
-    STATE.write_text(json.dumps({"pool": pool, "challenge": ch}, indent=2) + "\n")
 
 
 @contextlib.contextmanager
@@ -228,6 +246,32 @@ def close_position(cl: GatewayClient, ch: str) -> None:
     book(ch, "stop_take_book_after_close")
 
 
+def cmd_fire(args) -> None:
+    """Hyperliquid closing a position by itself. A position through the gateway; its stop moved by
+    the trader (nearer the mark, which the rules allow) to --bps under the mid, and with --take-bps
+    its take as near over it; then nothing is sent until the position is gone or --wait seconds
+    have passed. The fills are the pair: the gateway's opening order and the trigger the exchange
+    ran."""
+    ch = state()["challenge"]
+    with gateway_here(args.keys) as (url, gw):
+        cl = client(url)
+        open_position(cl, ch)
+        trigger = round_price(mid() * (1 - args.bps / 1e4), 4)
+        c.record("stop_take_fire_stop", trigger=trigger, bps=args.bps, answer=cl.stop(ch, ETH, trigger))
+        if args.take_bps:
+            take = round_price(mid() * (1 + args.take_bps / 1e4), 4)
+            c.record("stop_take_fire_take", trigger=take, bps=args.take_bps, answer=cl.take(ch, ETH, take))
+        book(ch, "stop_take_fire_book")
+        deadline = time.time() + args.wait
+        while time.time() < deadline and Decimal(eth_position(ch)) != 0:
+            time.sleep(5)
+        book(ch, "stop_take_fire_after")
+        fired = Decimal(eth_position(ch)) == 0
+        c.record("stop_take_fire_fills", fired=fired, fills=c.info_post({"type": "userFills", "user": ch})[:6])
+        if not fired:
+            close_position(cl, ch)
+
+
 def cmd_fills(_args) -> None:
     """Every fill on the challenge's account, with its time: the pair to set against the trigger."""
     ch = state()["challenge"]
@@ -256,8 +300,12 @@ def cmd_cleanup(_args) -> None:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("step", choices=["setup", "trade", "book", "keeper", "fills", "cleanup"])
+    p.add_argument("step", choices=["setup", "trade", "fire", "book", "keeper", "fills", "cleanup"])
+    p.add_argument("--bps", type=float, default=15, help="fire: how far under the mid the trader puts the stop")
+    p.add_argument("--wait", type=int, default=1500, help="fire: seconds to leave the position to the exchange")
+    p.add_argument("--take-bps", type=float, default=0, help="fire: also bring the take this near over the mid")
     p.add_argument("--keys", help="owner-only directory of the agent keys the gateway under test holds")
+    p.add_argument("--pool", help="setup: go on with a pool an earlier run created")
     args = p.parse_args()
     c.assert_testnet()
     globals()[f"cmd_{args.step}"](args)
