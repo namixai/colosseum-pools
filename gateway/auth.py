@@ -1,7 +1,7 @@
-"""The trader's authorization for one order or one cancel: an EIP-712 signature over the
-order's own fields, so the wallet shows the person what they are signing (asset, side,
-price, size) instead of an opaque hash. The gateway builds the Hyperliquid action from the
-same fields, so what is signed and what is submitted can't drift apart."""
+"""The trader's authorization for one order, one cancel, or moving the account's stop or take:
+an EIP-712 signature over the request's own fields, so the wallet shows the person what they are
+signing (asset, side, price, size) instead of an opaque hash. The gateway builds the Hyperliquid
+action from the same fields, so what is signed and what is submitted can't drift apart."""
 
 from __future__ import annotations
 
@@ -36,10 +36,22 @@ CANCEL_TYPE = [
     {"name": "expiresAt", "type": "uint64"},
 ]
 
+# Moving the account's stop (only nearer the mark) or its take (within the target). One type for
+# each, so a signature for the one can't be replayed as the other.
+MOVE_TYPE = [
+    {"name": "account", "type": "address"},
+    {"name": "asset", "type": "uint32"},
+    {"name": "triggerPx", "type": "string"},
+    {"name": "nonce", "type": "uint64"},
+    {"name": "expiresAt", "type": "uint64"},
+]
+
+TYPES = {"order": ("Order", ORDER_TYPE), "cancel": ("Cancel", CANCEL_TYPE),
+         "stop": ("Stop", MOVE_TYPE), "take": ("Take", MOVE_TYPE)}
+
 
 def typed_data(kind: str, message: dict) -> dict:
-    primary = {"order": "Order", "cancel": "Cancel"}[kind]
-    fields = ORDER_TYPE if kind == "order" else CANCEL_TYPE
+    primary, fields = TYPES[kind]
     return {
         "domain": DOMAIN,
         "types": {"EIP712Domain": DOMAIN_TYPE, primary: fields},

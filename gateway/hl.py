@@ -1,5 +1,6 @@
 """Hyperliquid pieces the gateway needs: the action hash, recovering who signed an L1 action,
-submitting a signed action, and the mids the demo's caps count a sell at. Testnet only."""
+submitting a signed action, the mids the demo's caps count a sell at, and what the stop and the
+take are worked out from (gateway/protect.py). Testnet only."""
 
 from __future__ import annotations
 
@@ -7,6 +8,8 @@ from typing import Any
 
 import requests
 from hyperliquid.utils.signing import action_hash, recover_agent_or_user_from_l1_action
+
+from .protect import Book, Market, parse_book, parse_markets
 
 TESTNET_EXCHANGE_URL = "https://api.hyperliquid-testnet.xyz/exchange"
 TESTNET_INFO_URL = "https://api.hyperliquid-testnet.xyz/info"
@@ -24,12 +27,31 @@ def recover_signer(action: dict, signature: dict, nonce: int) -> str:
     return recover_agent_or_user_from_l1_action(action, signature, None, nonce, None, False)
 
 
-def mids(timeout: float = 5.0) -> Any:
-    """Every mid on Hyperliquid's testnet, keyed by coin name, as strings."""
-    resp = requests.post(TESTNET_INFO_URL, json={"type": "allMids"}, timeout=timeout,
-                         headers={"User-Agent": USER_AGENT})
+def _info(body: dict, timeout: float) -> Any:
+    resp = requests.post(TESTNET_INFO_URL, json=body, timeout=timeout, headers={"User-Agent": USER_AGENT})
     resp.raise_for_status()
     return resp.json()
+
+
+class Venue:
+    """The reads the stop and the take are worked out from: every perp's mark, and one account's
+    equity, positions and open orders."""
+
+    def __init__(self, timeout: float = 5.0):
+        self.timeout = timeout
+
+    def markets(self) -> dict[int, Market]:
+        return parse_markets(_info({"type": "metaAndAssetCtxs"}, self.timeout))
+
+    def book(self, account: str, markets: dict[int, Market]) -> Book:
+        state = _info({"type": "clearinghouseState", "user": account}, self.timeout)
+        orders = _info({"type": "frontendOpenOrders", "user": account}, self.timeout)
+        return parse_book(state, orders, markets)
+
+
+def mids(timeout: float = 5.0) -> Any:
+    """Every mid on Hyperliquid's testnet, keyed by coin name, as strings."""
+    return _info({"type": "allMids"}, timeout)
 
 
 def submit(action: dict, nonce: int, signature: dict, timeout: float = 15.0) -> Any:
@@ -42,7 +64,7 @@ def submit(action: dict, nonce: int, signature: dict, timeout: float = 15.0) -> 
 
 
 def _confirmed(status: Any) -> bool:
-    return status == "success" or (isinstance(status, dict) and any(
+    return status in ("success", "waitingForTrigger") or (isinstance(status, dict) and any(
         isinstance(status.get(outcome), dict) for outcome in ("resting", "filled")))
 
 
@@ -50,10 +72,12 @@ def venue_outcome(answer: Any) -> tuple[str | None, bool]:
     """(Hyperliquid's reason for refusing, whether it confirmed the action).
 
     Hyperliquid answers `{"status": "err", "response": reason}` when it refuses the whole
-    action, and `{"status": "ok", "response": {"data": {"statuses": [...]}}}` otherwise. The
-    gateway sends only limit orders without grouping and cancels by oid: an order gets
-    `{"resting": {...}}`, `{"filled": {...}}` or `{"error": reason}`, a cancel `"success"` or
-    `{"error": reason}`. Anything else, `{}` included, confirms nothing."""
+    action, and `{"status": "ok", "response": {"data": {"statuses": [...]}}}` otherwise. A
+    trader's order is a limit order without grouping and gets `{"resting": {...}}`,
+    `{"filled": {...}}` or `{"error": reason}`; a cancel by oid gets `"success"` or
+    `{"error": reason}`. The gateway's own stop and take are position TP/SL orders, which get
+    `"waitingForTrigger"` (with no oid), and moving one is a modify, which gets `{"resting": {...}}`
+    (measured on testnet, 28 Sep 2026). Anything else, `{}` included, confirms nothing."""
     if not isinstance(answer, dict):
         return None, False
     if answer.get("status") == "err":

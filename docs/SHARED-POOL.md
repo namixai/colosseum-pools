@@ -12,6 +12,20 @@ investors hold shares in one book of seats, and the platform publishes the seats
 terms before anyone deposits. So the investor chooses a pool whose limits are published; they don't
 set the limits themselves.
 
+**That is now a rule and not only a sentence.** `addSeat` is refused as soon as a deposit ticket
+is open — not merely once a deposit has become shares. Money goes into a ticket first and the
+shares are minted later, at a settlement point, so closing the door at the later moment would
+still let a seat appear between a depositor paying and being counted. Nobody can pay into a ticket
+that does not exist, so an open ticket is where "before anyone deposits" actually falls. The
+consequence for whoever runs a pool: every seat goes in immediately after the pool starts and
+before it is announced, because the first person to open a ticket fixes the set. Until audit A-06 the promise was in this document and in the
+contract's header while nothing in the code held the operator to it: a seat added afterwards —
+near-total drawdown allowed, fifty times leverage, the whole profit to the trader — would have
+taken holders' money the next time anyone armed a seat, and leaving is not quick here. There is
+one consequence worth saying plainly: a pool with holders in it can never gain a seat again. To
+run a different set of seats, the platform starts another pool, and anyone who wants those terms
+chooses it.
+
 ## Contracts
 
 - `SharedPool` (`src/shared/SharedPool.sol`). Creates its seats through `PoolFactory.createPool`,
@@ -272,7 +286,11 @@ table is in the evidence page.
 
 - The keeper running on the operator's host.
 - Deposits through HyperEVM on mainnet, where the sender is visible.
-- At most 16 holders wait at once; a request past that waits for the queue to move.
+- At most 16 holders wait at once, and a request past that is **refused** rather than queued: the
+  seventeenth holder has to ask again once the queue has moved. Sixteen addresses holding requests
+  bigger than the pool's free money can keep it full while seats are busy, so this is a real
+  inconvenience and not a formality. It is written here rather than left for someone to meet on the
+  day they wanted their money (audit A-07; the sentence used to say "waits").
 - A holder with no HyperCore account loses a HyperCore part of 1 USDC or less: it can't pay for
   creating the account, so nothing is sent, and the shares it stood for are burned. A deposit made
   from the depositor's own HyperCore account, the way the app makes it, means the account exists; a
