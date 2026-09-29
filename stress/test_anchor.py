@@ -317,6 +317,32 @@ def main() -> int:
      if "make_results.py" in readme and os.path.exists(os.path.join(HERE, "make_results.py"))
      else bad("results provenance", "README does not name make_results.py, or the file is missing"))
 
+    # The lever runs (make_levers.py, 29 Sep 2026): the twelve cells again, and the README's table.
+    levers_file = os.path.join(RESULTS, "levers-2026-09-29.json")
+    with tempfile.TemporaryDirectory() as tmp:
+        r = subprocess.run([sys.executable, os.path.join(HERE, "make_levers.py"), "--out", tmp],
+                           capture_output=True, text=True)
+        fresh_path = os.path.join(tmp, "levers-2026-09-29.json")
+        if r.returncode != 0 or not os.path.exists(fresh_path):
+            bad("levers", f"make_levers.py failed ({r.returncode}): {r.stderr[-300:]}")
+        else:
+            with open(fresh_path, encoding="utf-8") as f:
+                fresh = json.load(f)
+            with open(levers_file, encoding="utf-8") as f:
+                levers = json.load(f)
+            (ok("make_levers.py reproduces results/levers-2026-09-29.json, all twelve cells")
+             if fresh == levers else bad("levers", "a fresh run differs from results/levers-2026-09-29.json"))
+            cell = {(c["stop"], c["leverage"], c["list"], c["exec"]): c for c in levers["cells"]}
+            quoted = [f"| {lev:.0f}x | {cell[('exchange', lev, 'default', 'open')]['worst_pct']} % | "
+                      f"{cell[('exchange', lev, 'wide', 'open')]['worst_pct']} % |" for lev in (3.0, 5.0)]
+            quoted += [f"| {lev:.0f}x | {cell[('keeper', lev, lst, 'open')]['worst_pct']}–"
+                       f"{cell[('keeper', lev, lst, 'worst')]['worst_pct']} %" for lev in (3.0, 5.0) for lst in ("default",)]
+            quoted += [f"{cell[('keeper', lev, 'wide', 'open')]['worst_pct']}–{cell[('keeper', lev, 'wide', 'worst')]['worst_pct']} %"
+                       for lev in (3.0, 5.0)]
+            missing = [q for q in quoted if q not in readme]
+            (ok("the README's lever table is the lever file") if not missing and "make_levers.py" in readme
+             else bad("README levers", f"not in README.md: {missing}"))
+
     print()
     print(f"PASSED {len(PASS)} of {len(PASS) + len(FAIL)}" if not FAIL
           else f"FAILED {len(FAIL)} of {len(PASS) + len(FAIL)}")

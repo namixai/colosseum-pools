@@ -44,8 +44,10 @@ range in this file is the same bracket: **the open of the next minute (`--lag 1 
 liquidated seat keeps its maintenance margin) to the worst price inside that minute's delay window
 (`--lag 1 --exec worst`, a liquidated seat loses everything)**. The real keeper sits between them.
 `--lag 0` — closing exactly at the line, the perfect keeper — is kinder than both ends; it is
-published in `results/` for completeness and is never quoted as a bound. If a line is crossed in
-the last minute of a day, the exit is that minute's close, the last price the keeper would see.
+published in `results/` for completeness and is never quoted as a bound on a keeper. It is what a
+stop resting on the exchange would do at the line itself, before its fill, and `make_levers.py`
+uses it that way (see "The levers an investor sets"). If a line is crossed in the last minute of a
+day, the exit is that minute's close, the last price the keeper would see.
 
 **Overshoot is measured here, not assumed.** The economics model assumes a keeper overshoots the
 line by 0.5 % of equity. Measured over 115 200 entries per side: mean **0.46 pp** at the open,
@@ -109,6 +111,29 @@ Per coin on 10 Oct, worst entry of the day, open → worst. *Bybit bars, not Hyp
 | ETH | 23.72 → 30.94 % | 34.11 → 38.22 % |
 | SOL | 45.24 → 72.85 % | 34.07 → 100.0 % |
 
+## The levers an investor sets (29 Sep 2026)
+
+`make_levers.py` runs the same tool over the same eight days and the same pool once for each of
+three choices around the rules: where the stop sits, the leverage, and the coins. Long side, as in
+the headline above; the worst entry of the worst day, which is 10 Oct 2025 in every cell, as a
+share of the seats' capital. The file is `results/levers-2026-09-29.json`.
+
+*Bybit bars, not Hyperliquid.*
+
+| where the stop sits | leverage | BTC, ETH, SOL (big seats on the calm coins) | wide list with alts |
+|---|---|---|---|
+| on the exchange, at the line (`--lag 0`) | 3x | 3.1 % | 3.1 % |
+| on the exchange, at the line (`--lag 0`) | 5x | 3.2 % | 3.2 % |
+| keeper, a minute late (`--lag 1`, open → worst) | 3x | 14.3–23.6 %, none liquidated | 64.9–92.0 %, up to 3 of 5 liquidated |
+| keeper, a minute late (`--lag 1`, open → worst) | 5x | 23.9–39.3 %, none liquidated | 83.7–94.1 %, 3 of 5 liquidated |
+
+The median day moves little: 3.05–3.91 % in every cell. The levers decide the tail.
+
+`--lag 0` is here for what it is: a stop that rests on the exchange and closes at the line itself.
+That is the line, not a fill in a real book. Walking the order book comes on top, and the book in a
+cascade has not been measured by anyone, so a stop at the line on a day like 10 Oct 2025 could fill
+worse than this table says.
+
 ## Limits — read these before quoting a number
 
 1. **Bybit bars, not Hyperliquid.** The pool trades on Hyperliquid, where liquidation is driven by
@@ -164,11 +189,12 @@ Requirements: Python 3.10+ and numpy (the stress test uses it; the downloader is
 | `test_pool_stress.py` | 36 checks of the rules on synthetic data, by the same author |
 | `mut_pool_stress.py` | 41 deliberate breakages of the tool and of the anchor's own comparison; each one must turn a check red |
 | `test_anchor.py` | the anchor: the snapshot must still produce the published numbers (`--selftest` checks the comparison alone) |
-| `make_results.py` | the one command that writes every file in `results/` |
+| `make_results.py` | the one command that writes every file in `results/` but the levers |
+| `make_levers.py` | the lever runs of 29 Sep 2026: where the stop sits, the leverage, the coins |
 | `CHANGES.md` | what the review of 25 Sep 2026 changed, number by number |
 | `fetch_bybit_minutes.py` | downloads the exact bars from Bybit's public API |
 | `data/` | the snapshot: 10 symbols × 8 days × 1440 minutes, with `SHA256SUMS` |
-| `results/` | the four runs (lag 0 / 1 / 2 at the open, lag 1 at the worst price) and the layout run, produced on 25 Sep 2026 by `make_results.py`; the 20 Sep 2026 figures they replace are in `CHANGES.md` |
+| `results/` | the four runs (lag 0 / 1 / 2 at the open, lag 1 at the worst price) and the layout run, produced on 25 Sep 2026 by `make_results.py`; the 20 Sep 2026 figures they replace are in `CHANGES.md`; and the lever runs, produced on 29 Sep 2026 by `make_levers.py` |
 
 The tool's comments and its JSON keys are in the author's language (Russian). They are kept as they
 are: this package publishes a measurement, and rewriting 400 lines of audited code to translate it
