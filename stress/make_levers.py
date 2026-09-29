@@ -14,6 +14,11 @@ The long side only, as in the headline of README.md. A stop at the line has no w
 only the open is run for it; a keeper's minute has two ends, the open of the next minute and the
 worst price inside it, and both are run. Each cell gives the median over the eight days of the
 day's median loss, and the worst entry of the worst day, as a share of the seats' capital.
+
+A stop on the exchange closes at the line, and walking the order book comes on top of it. The file
+also carries the book: bounds derived here from `results/hl-book-2026-09-27.json`, which
+`book/analyze_l2.py` wrote from our own collection of Hyperliquid's public order book (`book/collect_l2.py`,
+l2Book, mainnet, 25-27 Sep 2026, a calm market). The raw snapshots are not published.
 """
 from __future__ import annotations
 
@@ -38,6 +43,38 @@ LISTS = (("wide", None, None, "one seat on each of the first five coins by name:
           "BTC, ETH and SOL, the big seats on the calm coins: BTC 50k, ETH 25k, SOL 3 x 5k"))
 STOPS = ((0, "exchange", ("open",)), (1, "keeper", ("open", "worst")))
 LEVERAGE = (3.0, 5.0)
+BOOK = os.path.join(RESULTS, "hl-book-2026-09-27.json")
+SEATS_USD = (5000, 25000, 50000)  # the pool's seat sizes: 50k, 25k and three of 5k
+
+
+def book_bounds(path: str = BOOK) -> dict:
+    """What walking the book costs, in basis points of the mid, for each coin and measured size.
+
+    Each cell takes the worse of the two sides, closing a long into the bids or a short into the asks,
+    since a seat's side is not known in advance: the median and the 99th percentile over every snapshot.
+    Half the median spread is the least a market close costs at any size."""
+    with open(path, encoding="utf-8") as f:
+        r = json.load(f)
+    coins = r["coins"]
+    first = min(c["first_utc"] for c in coins.values())[:10]
+    last = max(c["last_utc"] for c in coins.values())[:10]
+    return {
+        "source": "stress/results/hl-book-2026-09-27.json",
+        "measured": (f"our own collection of Hyperliquid's public order book (l2Book, mainnet), "
+                     f"{r['meta']['series']['files']} hourly files of snapshots from {first} to {last}, "
+                     f"a calm market; the repository holds the derived bounds and the scripts that derive "
+                     f"them, not the raw snapshots"),
+        "half_spread_bps": {coin: round(c["spread_bps"]["median"] / 2, 3) for coin, c in coins.items()},
+        "walk_bps": {coin: {str(size): {stat: round(max(c["cost_bps"][side][str(size)][stat]
+                                                        for side in ("sell", "buy")), 3)
+                                       for stat in ("median", "p99")}
+                            for size in r["sizes_usd"]}
+                     for coin, c in coins.items()},
+        "seats_usd": list(SEATS_USD),
+        "note": ("upper bounds: a seat's notional is priced at the nearest measured size at or above it, on the "
+                 "worse side of the book; the taker fee is already inside the cells, so only walking the book "
+                 "is added"),
+    }
 
 
 def run(lag: int, lev: float, symbols: str | None, seats: str | None, mode: str, out: str) -> dict:
@@ -90,6 +127,7 @@ def main() -> int:
         "days": list(DAYS),
         "lists": {name: desc for name, _, _, desc in LISTS},
         "cells": cells,
+        "book": book_bounds(),
     }
     path = os.path.join(a.out, f"levers-{STAMP}.json")
     with open(path, "w", encoding="utf-8") as f:

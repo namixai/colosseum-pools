@@ -330,7 +330,7 @@ def main() -> int:
                 fresh = json.load(f)
             with open(levers_file, encoding="utf-8") as f:
                 levers = json.load(f)
-            (ok("make_levers.py reproduces results/levers-2026-09-29.json, all twelve cells")
+            (ok("make_levers.py reproduces results/levers-2026-09-29.json, all twelve cells and the book bounds")
              if fresh == levers else bad("levers", "a fresh run differs from results/levers-2026-09-29.json"))
             cell = {(c["stop"], c["leverage"], c["list"], c["exec"]): c for c in levers["cells"]}
             quoted = [f"| {lev:.0f}x | {cell[('exchange', lev, 'default', 'open')]['worst_pct']} % | "

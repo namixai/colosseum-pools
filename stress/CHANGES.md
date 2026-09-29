@@ -96,3 +96,8 @@ file's 3.2 %. The other result files were not re-made and did not change.
 as a bound on a keeper; the lever table uses it for what it is, a stop resting on the exchange at
 the line, before its fill in a book nobody has measured in a cascade. The sentence in README.md
 says so now.
+
+The book's cost on top of the line is in the lever file as well, derived by `make_levers.py` from
+`results/hl-book-2026-09-27.json`: the output of `book/analyze_l2.py` over our own l2Book snapshots of
+Hyperliquid mainnet, 25–27 Sep 2026, a calm market. Each cell is the worse of the two sides. The
+collector, the analyzer and their checks are in `book/`; the raw snapshots are not published.

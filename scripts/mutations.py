@@ -2201,6 +2201,30 @@ MUTATIONS = [
      "  $(\"#who\", page).innerHTML = leversCard(tables);",
      "  $(\"#who\", page).innerHTML = \"\";",
      ["the page puts the card where the loss is told, and the cascade block says whose stop it shows"]),
+    # The book: the worse of the two sides, from the analyzer's output that ships with the package, and the
+    # line that names the side the levers were measured on.
+    ("PL16", "app/data/calc_tables.json",
+     "      \"p99\": 7.235",
+     "      \"p99\": 6.959",
+     ["the lever cells are the cascade package's own result, cell for cell",
+      "the levers name their side, and the book names its source"]),
+    ("PL17", "stress/results/levers-2026-09-29.json",
+     "    \"p99\": 7.235",
+     "    \"p99\": 6.959",
+     ["the lever cells are the cascade package's own result, cell for cell"]),
+    ("PL18", "app/views/economics.js",
+     "    <p>The levers below are measured on the long side, as in the headline of the cascade package's README;\n    the cascade further down shows the worse of the two sides on the same days.</p>\n",
+     "",
+     ["the levers name their side, and the book names its source"]),
+    ("PL19", "app/data/calc_tables.json",
+     ", not the raw snapshots\"",
+     "\"",
+     ["the lever cells are the cascade package's own result, cell for cell",
+      "the levers name their side, and the book names its source"]),
+    ("PL20", "app/views/economics.js",
+     "the book taken from\n    ${esc(L.book.measured)}.",
+     "the book measured on\n    ${esc(L.book.measured)}.",
+     ["the levers name their side, and the book names its source"]),
 ]
 
 RUNNERS = {

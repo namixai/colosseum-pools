@@ -329,6 +329,8 @@ export function leversCard(tables) {
       <li><strong>After the fact, the contract.</strong> Anyone may stop an account that broke a rule, and our
       keeper looks every 30 seconds; between the crossing and the stop landing, a loss can go past the line.</li>
     </ol>
+    <p>The levers below are measured on the long side, as in the headline of the cascade package's README;
+    the cascade further down shows the worse of the two sides on the same days.</p>
     <p>Where the stop sits is the investor's biggest lever, and two more sit beside it: the leverage the seats
     may take, and the coins they may trade. Replayed through these rules on one-minute bars of the eight worst
     crash days between ${esc([...L.days].sort()[0])} and ${esc([...L.days].sort().at(-1))}, here is what each
@@ -343,7 +345,7 @@ export function leversCard(tables) {
     <p>On the median day the levers barely matter: it cost ${points(Math.min(...medians), 2)} to
     ${points(Math.max(...medians), 2)} in every combination. They decide the tail.</p>
     <p>A stop on the exchange closes at the line, and walking the order book comes on top: with it, the
-    worst day is at most ${points(b3.high, 1)} at 3x and ${points(b5.high, 1)} at 5x, the book measured on
+    worst day is at most ${points(b3.high, 1)} at 3x and ${points(b5.high, 1)} at 5x, the book taken from
     ${esc(L.book.measured)}. The book in a cascade has never been measured, so on a day like ${esc(day)} the
     fill could be worse.</p>
     <p><strong>Without a stop on the exchange</strong>, on a list with alts at 5x, the worst entry of that
