@@ -3847,7 +3847,7 @@
      "median": 0.0092,
      "p95": 0.0363,
      "p99": 0.0802,
-     "max": 0.8906000000000001,
+     "max": 0.97,
      "episodes": 115200,
      "share_beyond_cap": 0.0699,
      "share_liquidated": 0.0002
@@ -3862,17 +3862,17 @@
      "max": 0.8545999999999999,
      "episodes": 115200,
      "share_beyond_cap": 0.0109,
-     "share_liquidated": 0.0
+     "share_liquidated": 0.0001
     },
     "worst": {
-     "mean": 0.0146,
+     "mean": 0.0147,
      "median": 0.009399999999999999,
      "p95": 0.0394,
      "p99": 0.07429999999999999,
-     "max": 0.8545999999999999,
+     "max": 0.97,
      "episodes": 115200,
      "share_beyond_cap": 0.058499999999999996,
-     "share_liquidated": 0.0
+     "share_liquidated": 0.0002
     }
    }
   },
@@ -3889,31 +3889,31 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "open": 0.23864444444444444,
-       "worst": 0.39315555555555554,
+       "worst": 0.4003777777777778,
        "open_at": "long",
-       "worst_at": "long",
+       "worst_at": "short",
        "layout": "big seats on the calm coins: BTC 50k, ETH 25k, SOL 3 x 5k",
        "seats_liquidated": {
         "open": 0,
-        "worst": 0
+        "worst": 3
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "open": 0.3166555555555556,
-       "worst": 0.6358777777777778,
+       "worst": 0.6999888888888889,
        "open_at": "long",
        "worst_at": "short",
        "layout": "big seats on the risky coin: SOL 50k, ETH 25k, BTC 3 x 5k",
        "seats_liquidated": {
         "open": 0,
-        "worst": 0
+        "worst": 1
        }
       },
       "single_coin": {
        "label": "every seat on the riskiest coin of the list",
        "open": 0.4524,
-       "worst": 0.8845999999999999,
+       "worst": 1.0,
        "open_at": "SOL long",
        "worst_at": "SOL short"
       }
@@ -3936,19 +3936,19 @@
       "reference_mix": {
        "label": "the stress test's pool: two big seats on alts",
        "open": 0.8366555555555556,
-       "worst": 0.8706888888888888,
+       "worst": 0.9572,
        "open_at": "long",
-       "worst_at": "long",
+       "worst_at": "short",
        "layout": "the stress test's own pool: ADA 50k, AVAX 25k, BNB, BTC, DOGE 5k each",
        "seats_liquidated": {
         "open": 3,
-        "worst": 3
+        "worst": 4
        }
       },
       "single_coin": {
        "label": "every seat on the riskiest coin of the list",
        "open": 0.9206,
-       "worst": 0.9206,
+       "worst": 1.0,
        "open_at": "ADA long",
        "worst_at": "ADA long"
       }
@@ -3961,7 +3961,7 @@
     {
      "day": "2025-10-10",
      "worst_open": 0.8366555555555556,
-     "worst_worst": 0.8706888888888888,
+     "worst_worst": 0.9412444444444444,
      "median_open": 0.0326,
      "beyond_cap_open": 0.022000000000000002,
      "liquidated_open": 3
@@ -4031,62 +4031,6 @@
      "median_open": 0.033,
      "beyond_cap_open": 0.01,
      "liquidated_open": 0
-    },
-    {
-     "day": "2026-01-31",
-     "worst_open": 0.1663777777777778,
-     "worst_worst": 0.17346666666666666,
-     "median_open": 0.031200000000000002,
-     "beyond_cap_open": 0.004,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2025-11-21",
-     "worst_open": 0.09484444444444444,
-     "worst_worst": 0.20602222222222222,
-     "median_open": 0.031400000000000004,
-     "beyond_cap_open": 0.001,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2026-02-05",
-     "worst_open": 0.06741111111111112,
-     "worst_worst": 0.08796666666666667,
-     "median_open": 0.0339,
-     "beyond_cap_open": 0.006,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2025-11-03",
-     "worst_open": 0.05566666666666667,
-     "worst_worst": 0.09716666666666667,
-     "median_open": 0.031200000000000002,
-     "beyond_cap_open": 0.0,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2025-11-04",
-     "worst_open": 0.05212222222222222,
-     "worst_worst": 0.09406666666666667,
-     "median_open": 0.0308,
-     "beyond_cap_open": 0.0,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2025-12-01",
-     "worst_open": 0.04862222222222222,
-     "worst_worst": 0.07335555555555555,
-     "median_open": 0.0304,
-     "beyond_cap_open": 0.0,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2026-06-05",
-     "worst_open": 0.04552222222222222,
-     "worst_worst": 0.061566666666666665,
-     "median_open": 0.0319,
-     "beyond_cap_open": 0.0,
-     "liquidated_open": 0
     }
    ],
    "default_risky": [
@@ -4096,62 +4040,6 @@
      "worst_worst": 0.5236888888888889,
      "median_open": 0.0321,
      "beyond_cap_open": 0.012,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2026-01-31",
-     "worst_open": 0.22464444444444445,
-     "worst_worst": 0.23701111111111112,
-     "median_open": 0.0313,
-     "beyond_cap_open": 0.006999999999999999,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2025-11-21",
-     "worst_open": 0.1009,
-     "worst_worst": 0.2333222222222222,
-     "median_open": 0.0311,
-     "beyond_cap_open": 0.001,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2025-11-03",
-     "worst_open": 0.08934444444444445,
-     "worst_worst": 0.1486222222222222,
-     "median_open": 0.0311,
-     "beyond_cap_open": 0.008,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2026-02-05",
-     "worst_open": 0.0816,
-     "worst_worst": 0.11191111111111111,
-     "median_open": 0.0337,
-     "beyond_cap_open": 0.012,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2025-11-04",
-     "worst_open": 0.06241111111111111,
-     "worst_worst": 0.13146666666666668,
-     "median_open": 0.030899999999999997,
-     "beyond_cap_open": 0.001,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2025-12-01",
-     "worst_open": 0.052333333333333336,
-     "worst_worst": 0.08475555555555556,
-     "median_open": 0.029500000000000002,
-     "beyond_cap_open": 0.0,
-     "liquidated_open": 0
-    },
-    {
-     "day": "2026-06-05",
-     "worst_open": 0.04828888888888889,
-     "worst_worst": 0.07102222222222222,
-     "median_open": 0.0317,
-     "beyond_cap_open": 0.0,
      "liquidated_open": 0
     }
    ]

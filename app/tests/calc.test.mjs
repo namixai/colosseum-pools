@@ -77,7 +77,9 @@ test("the cascade of the stress test's own pool, in dollars", () => {
   const r = evaluate(tables, { ...defaultLayout(100000), scenario: "base", mode: "real", asset_list: "wide" });
   const ref = r.cascade.cases.reference_mix;
   assert.ok(Math.abs(ref.loss_usd.low - 75299) < 1);                   // the backtester: $75 299 of $90 000, three seats liquidated
-  assert.ok(Math.abs(ref.loss_usd.high - 78362) < 1);                  // with the stop at the worst price of its window
+  // With the stop at the worst price of its window the worse side is the short one: $86 148, four seats
+  // liquidated (the cascade package's second version, which counts a liquidated seat as lost whole there).
+  assert.ok(Math.abs(ref.loss_usd.high - 86148) < 1);
   assert.ok(Math.abs(ref.multiple_of_rules_cap.low - 0.8367 / 0.06) < 0.01);
   assert.ok(Math.abs(r.cascade.rules_cap_usd - 5400) < 1e-9);
   assert.equal(r.cascade.asset_list, "wide");
