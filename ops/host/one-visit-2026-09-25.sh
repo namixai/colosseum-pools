@@ -62,15 +62,23 @@ if ! systemctl list-unit-files 'colosseum-keeper2.service' 2>/dev/null | grep -q
   note "no colosseum-keeper2 on this host; skipping"
 elif [ ! -f "$KEEPER_STATE" ]; then
   note "the first keeper has no state file yet, so there is nothing to copy from; skipping"
-elif [ -f "$KEEPER2_STATE" ] && systemctl is-active --quiet colosseum-keeper2; then
-  ok "the second keeper is running with a state file of its own; leaving it alone"
+elif [ -f "$KEEPER2_STATE" ]; then
+  # Seed only when there is nothing there. A state file holds that keeper's own next_block and
+  # the pools it has found; overwriting it with the first keeper's throws both away and sends it
+  # back to walk ground it had already covered. "It is stopped" is not permission to do that --
+  # a keeper is stopped for a reason and the reason is not usually "its cursor is worthless".
+  ok "the second keeper already has a state file; leaving it alone"
+  systemctl is-active --quiet colosseum-keeper2 \
+    || note "it is not running, though -- find out why before starting it, its cursor is in there"
 else
   systemctl stop colosseum-keeper2
   # The whole file, not part of it: the keeper reads factory, next_block and live, and dies on
   # a bare KeyError if any is missing.
   install -o colosseum-keeper -g colosseum-keeper -m 600 "$KEEPER_STATE" "$KEEPER2_STATE" \
     || die "could not seed $KEEPER2_STATE"
-  undo+=("rm -f '$KEEPER2_STATE'")
+  # Stop it first: undoing while it runs leaves it going until something restarts it, and then it
+  # comes up with no cursor at all -- worse than either state this run could leave behind.
+  undo+=("systemctl stop colosseum-keeper2 && rm -f '$KEEPER2_STATE'")
   systemctl start colosseum-keeper2 || die "the second keeper would not start"
   sleep 4
   systemctl is-active --quiet colosseum-keeper2 \

@@ -55,9 +55,16 @@ compared with the site, byte for byte, apart from the one script Cloudflare adds
   🔴 **Keep the key directory reconciled with the registry.** On that same visit the directory
   held twenty `*.key` files while the registry had only ever published sixteen addresses: four
   usable keys had been sitting there unpublished since the start. Nobody knew, because nothing
-  compares the two. `GET /v1/health` gives the count the host holds and `freeCount()` gives what
-  the registry has free — if they drift apart, the gap is either keys nobody can use or keys
-  nobody knows about, and the second kind is what makes a trader pass and then find no key.
+  compares the two. Comparing the two counts directly does NOT work, and the
+  first version of this rule said to: `GET /v1/health` counts every key the gateway holds,
+  including ones already bound to an account, while `freeCount()` counts only what is still on the
+  registry's free list. A bound key is held and not free, so the two differ in normal operation
+  and a gap means nothing on its own. What has to be compared is the SET of addresses the gateway
+  holds against every address the registry has ever published, in any state — a gateway address
+  the registry does not know is a key nobody can be given, and a published address the gateway
+  does not hold is a key that makes a trader pass and then find nothing able to sign. The gateway
+  does not list its addresses today, only their number, so this is a reconciliation that needs a
+  way to ask it; until then the count is a hint and not a check.
 
   🔴 **A keeper that has fallen behind is not watching, and it takes real time to come back.**
   The keeper reads `eth_getLogs` 50 blocks at a call and the unit runs the defaults, 50 calls a
@@ -162,7 +169,9 @@ compared with the site, byte for byte, apart from the one script Cloudflare adds
   page is a `#/…` route of the one `index.html`. It calls the gateway from the browser;
   `GATEWAY_ALLOW_ORIGIN` names it.
 - **RPC** (CTO, 17 Sep; measured again on the host 24 Sep):
-  - the gateway reads the chain through `rpcs.chain.link/hyperevm/testnet`, which allows 1000
+  - **until 25 September** the gateway read the chain through
+    `rpcs.chain.link/hyperevm/testnet` — it now reads `rpc.hyperliquid-testnet.xyz`, and the
+    paragraph at the top of this file says why. What follows is about that old node, which allows 1000
     calls per IP in five minutes. It throttles in bursts: on 24 Sep it refused three `eth_call`s
     inside one second and served the same reads five times over seconds later, so the gateway
     retries five times and answers 429 when it still cannot read (`gateway/chain.py`);

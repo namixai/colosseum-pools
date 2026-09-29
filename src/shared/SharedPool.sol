@@ -252,7 +252,13 @@ contract SharedPool {
         // leverage, the whole profit to the trader -- would take holders' money the next time
         // anyone armed a seat, and they cannot leave quickly: only a queue, a lock and
         // settlement points. So the promise is now the rule.
-        if (depositsBegun) revert SeatsClosed();
+        // Closed at the first OPEN TICKET, not at the first recognised deposit. A depositor pays
+        // into a ticket and the shares are minted later, at a settlement point; a seat added in
+        // between would be one they never saw when they paid, which is the thing this promise is
+        // about. Nobody can pay into a ticket that does not exist, so "no tickets open" is the
+        // honest reading of "before anyone deposits". Raised on review of the first version,
+        // which closed one step too late.
+        if (depositsBegun || _open.length != 0) revert SeatsClosed();
         if (_seats.length >= MAX_SEATS) revert TooMany();
         if (fundedTerm_ == 0) revert BadTerm();
         seat = factory.createPool(rules_, terms_);

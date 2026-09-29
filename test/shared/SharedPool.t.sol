@@ -1043,6 +1043,21 @@ contract SharedPoolTest is Test {
     /// to it. A seat added afterwards -- near-total drawdown allowed, fifty times leverage, the
     /// whole profit to the trader -- takes holders' money the next time anyone arms a seat, and
     /// they cannot leave quickly: only a queue, a lock and settlement points.
+    /// Raised on review of the first version of this rule, and it was right: shares are minted at
+    /// a settlement point, but the money goes into a ticket before that. A seat added in between
+    /// would be one the depositor never saw when they paid. Nobody can pay into a ticket that does
+    /// not exist, so an open ticket is where the door has to close.
+    function test_addSeat_isRefusedOnceATicketIsOpen_beforeAnySettlement() public {
+        _start(SEED);
+        vm.prank(alice);
+        sp.openTicket();
+        assertFalse(sp.depositsBegun(), "nothing has been recognised yet");
+
+        vm.prank(operator);
+        vm.expectRevert(SharedPool.SeatsClosed.selector);
+        sp.addSeat(_rules(), _terms(), TERM);
+    }
+
     function test_addSeat_isRefusedOnceAnyoneHasDeposited() public {
         _funded(150e8);
         Rules memory hostile = _rules();

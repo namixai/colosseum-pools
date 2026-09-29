@@ -25,15 +25,26 @@ TEST_DIRS = ["test", "ops/tests", "gateway/tests"]
 # A row that names no test has to explain itself; these are the words that count as an explanation
 # rather than a shrug.
 REASON_WORDS = ("no test", "no behaviour test", "no contract test")
+# The findings the table has carried. It may grow; it may not shrink without somebody saying so.
+MIN_FINDINGS = 12
 
 
 def test_names() -> set[str]:
+    """Every test that would actually run.
+
+    Comment lines are thrown away first. A commented-out test still reads as a declaration to a
+    regular expression, so without this a row could go on naming a test somebody had disabled --
+    which is the one failure this whole file exists to make impossible.
+    """
     names: set[str] = set()
     for d in TEST_DIRS:
         for f in (ROOT / d).rglob("*"):
-            if f.suffix in (".sol", ".py") and f.is_file():
-                names |= set(re.findall(r"function (test_\w+)", f.read_text()))
-                names |= set(re.findall(r"def (test_\w+)", f.read_text()))
+            if f.suffix not in (".sol", ".py") or not f.is_file():
+                continue
+            live = "\n".join(l for l in f.read_text().split("\n")
+                              if not l.lstrip().startswith(("//", "#")))
+            names |= set(re.findall(r"function (test_\w+)", live))
+            names |= set(re.findall(r"def (test_\w+)", live))
     return names
 
 
@@ -42,9 +53,23 @@ def main() -> int:
         print(f"findings-check: {MAP} is missing", file=sys.stderr)
         return 1
     known = test_names()
-    rows = [l for l in MAP.read_text().split("\n") if l.startswith("| A-")]
+    rows = [line for line in MAP.read_text().split("\n") if line.startswith("| A-")]
     if not rows:
         print("findings-check: the table has no findings in it", file=sys.stderr)
+        return 1
+
+    # A gate that only checks the rows it finds cannot tell a finding that was closed from one
+    # that was deleted: both leave a shorter table and a smaller number in the summary. So the
+    # numbering has to run from A-01 with no gaps, and it can only grow.
+    seen = sorted(int(m.group(1)) for m in (re.match(r"\| A-(\d+)", r) for r in rows) if m)
+    missing = [n for n in range(1, max(seen, default=0) + 1) if n not in seen]
+    if missing:
+        print(f"findings-check: A-{missing[0]:02d} is not in the table; a finding cannot be "
+              f"dropped out of it", file=sys.stderr)
+        return 1
+    if len(seen) < MIN_FINDINGS:
+        print(f"findings-check: the table has {len(seen)} findings and has had {MIN_FINDINGS}; "
+              f"raise MIN_FINDINGS deliberately if that is really right", file=sys.stderr)
         return 1
 
     problems, pinned, unpinned = [], 0, 0
@@ -62,8 +87,14 @@ def main() -> int:
                     problems.append(f"{finding}: names {n}, which no test file defines")
         else:
             unpinned += 1
-            if not any(w in pins.lower() for w in REASON_WORDS):
+            low = pins.lower()
+            marker = next((w for w in REASON_WORDS if w in low), None)
+            if marker is None:
                 problems.append(f"{finding}: names no test and gives no reason")
+            elif len(low.replace(marker, "").strip(" .,*_`—-")) < 20:
+                # "No test" on its own is a shrug, not a reason. The point of the cell is the
+                # sentence after it.
+                problems.append(f"{finding}: says it has no test but does not say why")
         if not status:
             problems.append(f"{finding}: has no status")
 

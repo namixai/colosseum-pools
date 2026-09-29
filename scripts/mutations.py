@@ -327,7 +327,7 @@ MUTATIONS = [
      "            if (false) {",
      ["test_settleFunded_doesNotPayTheShareWhileAnOrderHoldsMargin"]),
     ("P62", "src/shared/SharedPool.sol",
-     "        if (depositsBegun) revert SeatsClosed();",
+     "        if (depositsBegun || _open.length != 0) revert SeatsClosed();",
      "        if (false) revert SeatsClosed();",
      ["test_addSeat_isRefusedOnceAnyoneHasDeposited"]),
     ("P63", "src/shared/SharedPool.sol",
@@ -370,6 +370,10 @@ MUTATIONS = [
      "    if gas_wei < GAS_FLOOR_WEI:",
      "    if False:",
      ["test_a_deployer_without_gas_is_refused_before_anything_is_sent"]),
+    ("P64", "src/shared/SharedPool.sol",
+     "        if (depositsBegun || _open.length != 0) revert SeatsClosed();",
+     "        if (depositsBegun) revert SeatsClosed();",
+     ["test_addSeat_isRefusedOnceATicketIsOpen_beforeAnySettlement"]),
     # ── gateway (Python unittest) ──
     # P: the shared pool (src/shared), guarded by test/shared.
     ("P1", "src/shared/SharedPool.sol",

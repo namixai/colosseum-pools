@@ -12,9 +12,13 @@ investors hold shares in one book of seats, and the platform publishes the seats
 terms before anyone deposits. So the investor chooses a pool whose limits are published; they don't
 set the limits themselves.
 
-**That is now a rule and not only a sentence.** `addSeat` is refused once the first deposit from
-outside has become shares (`depositsBegun`), so the book of seats an investor could read when they
-paid in is the book they get. Until audit A-06 the promise was in this document and in the
+**That is now a rule and not only a sentence.** `addSeat` is refused as soon as a deposit ticket
+is open — not merely once a deposit has become shares. Money goes into a ticket first and the
+shares are minted later, at a settlement point, so closing the door at the later moment would
+still let a seat appear between a depositor paying and being counted. Nobody can pay into a ticket
+that does not exist, so an open ticket is where "before anyone deposits" actually falls. The
+consequence for whoever runs a pool: every seat goes in immediately after the pool starts and
+before it is announced, because the first person to open a ticket fixes the set. Until audit A-06 the promise was in this document and in the
 contract's header while nothing in the code held the operator to it: a seat added afterwards —
 near-total drawdown allowed, fifty times leverage, the whole profit to the trader — would have
 taken holders' money the next time anyone armed a seat, and leaving is not quick here. There is
