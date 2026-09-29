@@ -33,11 +33,19 @@ early cuts the trader's profit short, so that call is the trader's. Testnet only
 
 Each pass makes about a dozen RPC reads per followed pool, and the public testnet RPC is rate
 limited, so keep the interval at tens of seconds unless the keeper has its own RPC.
+
+The reads of Hyperliquid's own API are limited too, and that budget is the host's rather than the
+keeper's: the public gateway draws on the same 1200 a minute. So a pass is not guaranteed to
+finish, and the pools it does not reach go unserved until the next one. It takes them in sorted
+order but begins where the last pass got to, not at the top every time -- under a fixed order the
+same accounts are last in every round, and where an address sorts is something its owner chooses
+(audit A-14). The place is `resume_at` in the state file.
 """
 
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import os
 import pathlib
@@ -259,6 +267,22 @@ def pools_with_challenges(factory: str, lo: int, hi: int) -> set[str]:
     return found
 
 
+def ring(order: list[str], resume_at: str | None) -> list[str]:
+    """The pools of one pass, in the order this pass takes them: sorted, but begun where the last
+    pass broke off instead of at the top every time.
+
+    A pass is not guaranteed to finish. Hyperliquid's REST budget belongs to the host, not to the
+    keeper -- the public gateway draws on the same 1200 a minute -- and a pass that runs out of it
+    fails the pools it has not reached. Under a fixed order those are the same pools every pass:
+    the end of the sorted list is never served, and where an address sorts is something its owner
+    chooses. Rotating the start makes the tail a place in the round rather than a set of accounts.
+    """
+    if not order:
+        return []
+    start = bisect.bisect_left(order, resume_at) % len(order) if resume_at else 0
+    return order[start:] + order[:start]
+
+
 class Keeper:
     def __init__(self, factory: str, wallet, dry: bool, state_path: pathlib.Path, start_block: int,
                  window: int = MAX_LOG_WINDOW, max_windows: int = 50):
@@ -274,18 +298,25 @@ class Keeper:
         self.max_windows = max_windows
         self.next_block = start_block
         self.live: set[str] = set()
+        # Where the next pass begins its round. Read with a default, because a keeper started on
+        # a state file written before this existed -- the demo's, and the second keeper's, which
+        # was seeded from it -- must come up rather than die on a missing key.
+        self.resume_at: str | None = None
         if state_path.exists():
             state = json.loads(state_path.read_text())
             if to_checksum_address(state["factory"]) != self.factory:
                 raise SystemExit(f"{state_path} belongs to another factory")
             self.next_block = int(state["next_block"])
             self.live = {to_checksum_address(p) for p in state["live"]}
+            at = state.get("resume_at")
+            self.resume_at = to_checksum_address(at) if at else None
 
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"factory": self.factory, "next_block": self.next_block,
-                                   "live": sorted(self.live)}, indent=2) + "\n")
+                                   "live": sorted(self.live), "resume_at": self.resume_at},
+                                  indent=2) + "\n")
         tmp.replace(self.state_path)
 
     def one_pass(self) -> None:
@@ -312,14 +343,33 @@ class Keeper:
             self.save()
         names = perp_index_by_name()
         now = int(time.time())
-        for pool in sorted(self.live):
+        todo = ring(sorted(self.live), self.resume_at)
+        served = None
+        for i, pool in enumerate(todo):
             try:
                 if not pool_pass(self.wallet, pool, names, now, latest, self.dry):
                     self.live.discard(pool)
+                served = i
             except Exception as exc:
                 log("pool_failed", pool=pool, error=str(exc)[:200])
+        if served is not None:
+            # Next pass begins after the last pool this one actually got through, so a round cut
+            # short by the shared budget carries on instead of starting over.
+            #
+            # After the last SUCCESS, not at the first failure: a pool that throws for its own
+            # reasons -- a reverting view, an address the node dislikes -- would otherwise hold
+            # the place at its own position for good, and everything behind it would go unserved.
+            # That is the same starvation as the fixed order with a new cause. Success is what
+            # moves the round, so nothing that only fails can own a place in it.
+            #
+            # A round that gets through everything wraps back to its own top, and that is right:
+            # the order only has to move when a pass does not finish, which is the case this
+            # exists for. When nothing at all got through there is nothing to carry on from, and
+            # the next pass starts where this one did.
+            self.resume_at = todo[(served + 1) % len(todo)]
         self.save()
-        log("pass_done", following=len(self.live), next_block=self.next_block, latest=latest)
+        log("pass_done", following=len(self.live), next_block=self.next_block, latest=latest,
+            resume_at=self.resume_at)
 
 
 def deployment_block(record: dict) -> int:

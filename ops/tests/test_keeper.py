@@ -545,5 +545,132 @@ class FailedSend(KeeperTest):
         self.assertIn("500", fields["error"])
 
 
+class Budgeted(FakeChain):
+    """A chain whose info API refuses reads once a weight budget is spent, as a rate limit does.
+
+    Weights as Hyperliquid publishes them: clearinghouseState 2, other info requests 20, and 1200
+    a minute for the whole IP -- which is the host, so the keeper shares it with the public
+    gateway. 600 is half a minute: one pass at the keeper's default `--every 30`, and nothing left
+    over for the gateway. An active account costs 44 of it (the audit weighed the pass on
+    29 September 2026), so a 600-weight pass reaches thirteen of them.
+    """
+
+    def __init__(self, budget: int):
+        super().__init__()
+        self.budget, self.spent = budget, 0
+
+    def info_post(self, body):
+        weight = 2 if body["type"] == "clearinghouseState" else 20
+        if self.spent + weight > self.budget:
+            raise RuntimeError("429 Too Many Requests")
+        self.spent += weight
+        return super().info_post(body)
+
+
+class RoundOrder(KeeperTest):
+    """A-14. A pass is not guaranteed to finish, so who goes last must not always be the same.
+
+    The budget the keeper reads against belongs to the host and is shared with the gateway. When a
+    pass runs out of it the pools it has not reached go unserved -- and under a sorted order those
+    are the same pools every pass. Where an address sorts is something its owner chooses, so that
+    is a rule a trader can put themselves past.
+    """
+
+    def active(self, n: int, violating=()):
+        for i in range(n):
+            # Digits only, so the checksummed form sorts the way the number does.
+            pool = "0x" + ("11" + f"{i:06d}").rjust(40, "0")
+            challenge = "0x" + ("22" + f"{i:06d}").rjust(40, "0")
+            self.chain.add_pool(pool, stage=keeper.CHALLENGE, challenge=challenge)
+            self.chain.add_challenge(challenge, status=keeper.ACTIVE, violation=1 if i in violating else 0)
+            self.chain.logs.append(challenge_log(10, pool))
+        return ["0x" + ("22" + f"{i:06d}").rjust(40, "0") for i in range(n)]
+
+    def budgeted(self, budget: int) -> Budgeted:
+        chain = Budgeted(budget)
+        chain.latest, chain.logs = self.chain.latest, self.chain.logs
+        patcher = mock.patch.object(keeper, "c", chain)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.chain = chain
+        return chain
+
+    def breached(self) -> set[str]:
+        return {to for to, fn, _ in self.chain.sent if fn == "breach"}
+
+    def test_a_broken_rule_at_the_end_of_the_list_is_stopped_on_the_next_pass(self):
+        chain = self.budgeted(600)
+        challenges = self.active(16, violating={0, 15})
+        first, last = challenges[0].lower(), challenges[-1].lower()
+        k = self.make()
+
+        k.one_pass()
+        self.assertIn(first, self.breached(), "a broken rule early in the round is stopped at once")
+        self.assertNotIn(last, self.breached(), "the budget runs out before the end of the round")
+
+        chain.spent = 0  # a new minute, the same budget
+        k.one_pass()
+        self.assertIn(last, self.breached(),
+                      "the second pass begins where the first broke off, so the end is served")
+
+    def test_the_place_in_the_round_survives_a_restart(self):
+        chain = self.budgeted(600)
+        self.active(16)
+        self.make().one_pass()
+        saved = json.loads(self.state.read_text())["resume_at"]
+        self.assertTrue(saved, "a keeper that forgets where it stopped starts over every time")
+        chain.spent = 0
+        self.assertEqual(keeper.ring(sorted(self.make().live), saved)[0], saved,
+                         "the keeper that comes back up carries on from the same pool")
+
+    def test_one_pool_that_always_throws_does_not_pin_the_round_to_itself(self):
+        # A broken pool alone starves nobody -- the pass carries on past it. A broken pool AND a
+        # budget that runs out does: if the round resumed at the first failure it would begin at
+        # that pool every time, serve the same thirteen behind it, and the end of the list would
+        # be exactly as unreachable as it was under the sorted order.
+        chain = self.budgeted(600)
+        challenges = self.active(16, violating={15})
+        pools = sorted("0x" + ("11" + f"{i:06d}").rjust(40, "0") for i in range(16))
+        broken, last = pools[0], challenges[-1].lower()
+        real = keeper.pool_pass
+
+        def one_is_broken(wallet, pool, *a, **kw):
+            if pool == broken:
+                raise RuntimeError("this pool throws every time it is asked")
+            return real(wallet, pool, *a, **kw)
+
+        k = self.make()
+        with mock.patch.object(keeper, "pool_pass", side_effect=one_is_broken):
+            for _ in range(3):
+                chain.spent = 0  # a new minute, the same budget
+                k.one_pass()
+        self.assertIn(last, self.breached(),
+                      "the end of the list never came up: a pool that only fails held the place")
+
+    def test_a_round_that_gets_through_everything_stays_where_it_is(self):
+        # The order moves when a pass does not finish, which is the case it exists for. A round
+        # that served everybody has nobody waiting behind it, and shuffling it would only make
+        # the keeper harder to read.
+        self.active(3)
+        k = self.make()
+        k.one_pass()
+        first = k.resume_at
+        k.one_pass()
+        self.assertEqual(k.resume_at, first)
+        self.assertEqual(keeper.ring(sorted(k.live), k.resume_at), sorted(k.live))
+
+
+class Ring(unittest.TestCase):
+    def test_an_empty_round_is_empty_and_an_unknown_place_starts_at_the_next_one(self):
+        self.assertEqual(keeper.ring([], "0xaa"), [])
+        order = ["0xa", "0xb", "0xc"]
+        self.assertEqual(keeper.ring(order, None), order, "no place yet: start at the top")
+        self.assertEqual(keeper.ring(order, "0xb"), ["0xb", "0xc", "0xa"])
+        self.assertEqual(keeper.ring(order, "0xbb"), ["0xc", "0xa", "0xb"],
+                         "the pool we stopped at is gone: take the next one, not the top")
+        self.assertEqual(keeper.ring(order, "0xd"), order,
+                         "past the end wraps to the top rather than serving nobody")
+
+
 if __name__ == "__main__":
     unittest.main()
