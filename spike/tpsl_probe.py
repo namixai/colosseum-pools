@@ -131,6 +131,48 @@ def fourth(ex, user: str) -> None:
         c.record("tpsl_cleanup4_cancel", oid=o["oid"], answer=ex.cancel(COIN, o["oid"]))
 
 
+def both_reads(user: str) -> dict:
+    """The keeper's two reads of an account's orders: openOrders for what a breach cancels, and
+    frontendOpenOrders for whether a stop stands. The same orders, in the same order?"""
+    plain = c.info_post({"type": "openOrders", "user": user})
+    front = c.info_post({"type": "frontendOpenOrders", "user": user})
+    return {"openOrders": plain, "frontendOpenOrders": front,
+            "same_oids_in_order": [o["oid"] for o in plain] == [o["oid"] for o in front],
+            "same_oids": sorted(o["oid"] for o in plain) == sorted(o["oid"] for o in front)}
+
+
+def fifth(ex, user: str) -> None:
+    """Every kind of order the keeper meets on an account at once -- a position TP/SL stop and take, a
+    fixed reduce-only stop, and a resting limit -- read through both of the keeper's reads, then again
+    after the position closes and after the cleanup."""
+    m = mid()
+    c.record("tpsl_open5", mid=m, answer=ex.order(COIN, True, SIZE, px(m * 1.01), {"limit": {"tif": "Ioc"}}))
+    m = mid()
+    c.record("tpsl_L_position_tpsl", mid=m, answer=ex.bulk_orders(
+        [trigger(False, 0, px(m * 0.97), "sl"), trigger(False, 0, px(m * 1.03), "tp")], grouping="positionTpsl"))
+    c.record("tpsl_L_na_stop", answer=ex.bulk_orders([trigger(False, SIZE, px(m * 0.95), "sl")], grouping="na"))
+    c.record("tpsl_L_reads_open", position=position(user), **both_reads(user))
+    time.sleep(1)
+    m = mid()
+    c.record("tpsl_close5", mid=m,
+             answer=ex.order(COIN, False, SIZE, px(m * 0.99), {"limit": {"tif": "Ioc"}}, reduce_only=True))
+    time.sleep(2)
+    c.record("tpsl_L_reads_after_close", position=position(user), **both_reads(user))
+    # A resting limit beside triggers that wait for a position, placed once the position's margin is free
+    # (next to it the wallet's 0.57 USDC was short, 29 Sep); 0.8 of the mid needs a larger size to clear
+    # the 10 USDC minimum.
+    m = mid()
+    c.record("tpsl_L_resting_limit", mid=m, answer=ex.order(COIN, True, round(SIZE * 1.4, 4), px(m * 0.8),
+                                                             {"limit": {"tif": "Gtc"}}))
+    c.record("tpsl_L_position_tpsl_again", answer=ex.bulk_orders(
+        [trigger(False, 0, px(m * 0.97), "sl"), trigger(False, 0, px(m * 1.03), "tp")], grouping="positionTpsl"))
+    c.record("tpsl_L_na_stop_again", answer=ex.bulk_orders([trigger(False, SIZE, px(m * 0.95), "sl")], grouping="na"))
+    c.record("tpsl_L_reads_resting", position=position(user), **both_reads(user))
+    for o in orders(user):
+        c.record("tpsl_cleanup5_cancel", oid=o["oid"], answer=ex.cancel(COIN, o["oid"]))
+    c.record("tpsl_L_reads_after_cleanup", **both_reads(user))
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--wallet", default="shared-operator")
@@ -139,14 +181,16 @@ def main() -> int:
     p.add_argument("--third", action="store_true", help="the third round: position TP/SL for the other "
                    "direction while a position is open")
     p.add_argument("--fourth", action="store_true", help="the fourth round: a long flipped to a short")
+    p.add_argument("--fifth", action="store_true", help="the fifth round: the keeper's two reads of the "
+                   "same orders, openOrders and frontendOpenOrders")
     args = p.parse_args()
     acct = c.account(args.wallet)
     user = acct.address
     ex = c.exchange(acct)
-    if args.second or args.third or args.fourth:
+    if args.second or args.third or args.fourth or args.fifth:
         if float(c.core_snapshot(user)["perpAccountValue"]) < 0.45:
             c.record("tpsl_to_perp", answer=ex.usd_class_transfer(0.57, True), amount=0.57)
-        (second if args.second else third if args.third else fourth)(ex, user)
+        (second if args.second else third if args.third else fourth if args.fourth else fifth)(ex, user)
         c.record("tpsl_probe_end", orders=orders(user), snapshot=c.core_snapshot(user)["perpAccountValue"])
         return 0
 

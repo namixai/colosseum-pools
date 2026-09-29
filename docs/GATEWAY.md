@@ -227,8 +227,10 @@ list of accounts lives in memory: after a restart an account is swept again from
 request, and the stops already on the exchange stay where they are. A sweep costs Hyperliquid's
 info API 20 of weight for the marks (`metaAndAssetCtxs`) and 22 for each account it watches
 (`clearinghouseState` 2, `frontendOpenOrders` 20): at 10 seconds, about 250 a minute for one
-account, of the 1,200 an IP may spend, which the keeper on the same host shares. An account the
-gateway has nothing open for drops out of the list.
+account, of the 1,200 an IP may spend, which the keeper on the same host shares. The keeper spends
+20 a pass on the names of the markets and 22 on each active account, the same two reads, once each
+for everything it decides about the account; at a pass every 30 seconds, 40 a minute and 44 for
+each account. An account the gateway has nothing open for drops out of the list.
 
 **Signing them.** The gateway signs its own stop and take with the account's key under nonces of
 its own (never the trader's nonce of the request in hand). In `demo` mode the gateway's code

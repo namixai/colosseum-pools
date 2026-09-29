@@ -1,5 +1,5 @@
 """The keeper's check that every open position has its stop on Hyperliquid itself. Offline: the
-chain and the info API are the fakes of test_keeper.py, answering frontendOpenOrders as well.
+chain and the info API are the fakes of test_keeper.py, with sizes on the positions.
 
     spike/.venv/bin/python -m unittest ops.tests.test_keeper_protect
 """
@@ -22,15 +22,14 @@ class Chain(FakeChain):
     def __init__(self):
         super().__init__()
         self.sizes: dict[str, list[tuple[str, str]]] = {}
-        self.front: dict[str, list[dict]] = {}
         self.front_fails = False
+        self.reads: list[str] = []
 
     def info_post(self, body):
         user = body.get("user", "").lower()
-        if body["type"] == "frontendOpenOrders":
-            if self.front_fails:
-                raise RuntimeError("429 Too Many Requests")
-            return self.front.get(user, [])
+        self.reads.append(body["type"])
+        if body["type"] == "frontendOpenOrders" and self.front_fails:
+            raise RuntimeError("429 Too Many Requests")
         if body["type"] == "clearinghouseState":
             # The parent's positions name a coin and no size; they stay open here, at a nominal one.
             named = [(coin, "1") for coin in self.positions.get(user, [])]
@@ -56,7 +55,7 @@ class ProtectionCheck(KeeperTest):
         self.chain.add_challenge(CHALLENGE_A, status=keeper.ACTIVE, **challenge)
         self.chain.logs.append(challenge_log(10, POOL_A))
         self.chain.sizes[CHALLENGE_A.lower()] = sizes
-        self.chain.front[CHALLENGE_A.lower()] = orders
+        self.chain.orders[CHALLENGE_A.lower()] = orders
 
     def missing(self):
         return [f for event, f in self.logged if event == "protection_missing"]
@@ -106,13 +105,53 @@ class ProtectionCheck(KeeperTest):
         self.assertEqual(self.missing(), [{"account": CHALLENGE_A, "coin": "ETH", "size": "1"}])
 
     def test_a_failed_read_is_logged_and_the_pass_goes_on(self):
+        # One read of the orders serves the cancels and the check, so a refused read fails the account's
+        # pass as a refused read of the orders always did; the next pool is still gone through.
         self.active_challenge([("BTC", "0.005")], [])
         self.chain.front_fails = True
         self.make().one_pass()
-        failed = [f for event, f in self.logged if event == "protection_check_failed"]
+        failed = [f for event, f in self.logged if event == "pool_failed"]
         self.assertEqual(len(failed), 1)
         self.assertIn("429", failed[0]["error"])
         self.assertIn("pass_done", [event for event, _ in self.logged])
+
+    def test_an_active_account_is_read_once_a_pass_22_of_hyperliquids_weight(self):
+        # Hyperliquid's weights (rate-limits-and-user-limits): clearinghouseState 2, every other info
+        # request 20 but a few. The stop check once read both again: 44 an account, and one keeper ran out
+        # of the host's 1,200 a minute at 14 active accounts instead of 27.
+        weight = {"clearinghouseState": 2, "frontendOpenOrders": 20, "openOrders": 20, "meta": 20}
+        self.active_challenge([("BTC", "0.005")], [stop_order("BTC", "A")])
+        self.make().one_pass()
+        per_account = [r for r in self.chain.reads if r != "meta"]
+        self.assertEqual(sorted(per_account), ["clearinghouseState", "frontendOpenOrders"])
+        self.assertEqual(sum(weight[r] for r in per_account), 22)
+        self.assertEqual(self.missing(), [])
+        # A funded pool the same.
+        self.chain.challenges.clear()
+        self.chain.add_pool(POOL_A, stage=keeper.FUNDED)
+        self.chain.sizes[POOL_A.lower()] = [("SOL", "-2")]
+        self.chain.reads.clear()
+        self.make().one_pass()
+        per_account = [r for r in self.chain.reads if r != "meta"]
+        self.assertEqual(sum(weight[r] for r in per_account), 22)
+        self.assertEqual(self.missing(), [{"account": POOL_A, "coin": "SOL", "size": "-2"}])
+
+    def test_an_answer_the_check_cannot_read_is_logged_and_the_pass_goes_on(self):
+        self.active_challenge([("BTC", "not a size")], [])
+        self.make().one_pass()
+        failed = [f for event, f in self.logged if event == "protection_check_failed"]
+        self.assertEqual(len(failed), 1)
+        self.assertIn("pass_done", [event for event, _ in self.logged])
+        self.assertNotIn("pool_failed", [event for event, _ in self.logged])
+
+    def test_the_cancels_come_from_the_same_read_and_take_the_stop_with_them(self):
+        # Breached: the cancels are the orders the one read returned, the exchange's own stop included.
+        self.active_challenge([("BTC", "0.005")], [stop_order("BTC", "A")], violation=1)
+        self.make().one_pass()
+        breach = [args for fn, args in self.chain.calls_to(CHALLENGE_A) if fn == "breach"]
+        self.assertEqual(len(breach), 1)
+        self.assertIn([3, 1], [list(x) for x in breach[0][0]])
+        self.assertEqual(self.chain.reads.count("frontendOpenOrders"), 1)
 
 
 if __name__ == "__main__":

@@ -103,7 +103,7 @@ class FakeChain:
         kind = body["type"]
         if kind == "meta":
             return {"universe": [{"name": n} for n in ("SOL", "APT", "ATOM", "BTC", "ETH")]}
-        if kind == "openOrders":
+        if kind == "frontendOpenOrders":
             return self.orders.get(body["user"].lower(), [])
         if kind == "userRole":
             return self.roles.get(body["user"].lower(), {"role": "missing"})

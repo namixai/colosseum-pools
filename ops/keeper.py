@@ -103,10 +103,21 @@ def perp_index_by_name() -> dict[str, int]:
     return {a["name"]: i for i, a in enumerate(c.info_post({"type": "meta"})["universe"])}
 
 
-def stop_inputs(account: str, allowed: set[int], names: dict[str, int]) -> tuple[list, list]:
-    orders = c.info_post({"type": "openOrders", "user": account})
+def read_book(account: str) -> tuple[dict, list]:
+    """An account's positions and open orders, one read of each, for everything a pass decides about it.
+
+    Hyperliquid weighs clearinghouseState 2 and frontendOpenOrders 20, of 1,200 a minute per IP that
+    the gateway on the same host shares. The stop check once read both again, which made an active
+    account cost 44 a pass instead of 22. frontendOpenOrders lists the same orders as openOrders, in
+    the same order, trigger orders included (spike/README.md, question 17), and says which is a stop."""
+    return (c.info_post({"type": "clearinghouseState", "user": account}),
+            c.info_post({"type": "frontendOpenOrders", "user": account}))
+
+
+def stop_inputs(account: str, allowed: set[int], names: dict[str, int],
+                book: tuple[dict, list] | None = None) -> tuple[list, list]:
+    state, orders = book or read_book(account)
     cancels = [(names[o["coin"]], int(o["oid"])) for o in orders if o["coin"] in names][:32]
-    state = c.info_post({"type": "clearinghouseState", "user": account})
     extra = sorted({names[p["position"]["coin"]] for p in state.get("assetPositions", [])
                     if p["position"]["coin"] in names and names[p["position"]["coin"]] not in allowed})[:16]
     return cancels, extra
@@ -129,13 +140,13 @@ def send(wallet, addr: str, sig: str, types=(), args=(), dry=False) -> None:
             unfunded=None if gas is None else unfunded(gas))
 
 
-def unprotected(account: str) -> list[dict]:
+def unprotected(account: str, book: tuple[dict, list] | None = None) -> list[dict]:
     """Open positions with no stop on Hyperliquid itself: no reduce-only stop market order on the side
     that would close them, for the whole position. The gateway puts one there before every order that may
     open a position, and sweeps for the rest (gateway/protect.py); the keeper holds no key to place
     one, so all it can do is say so."""
-    positions = c.info_post({"type": "clearinghouseState", "user": account}).get("assetPositions", [])
-    orders = c.info_post({"type": "frontendOpenOrders", "user": account})
+    state, orders = book or read_book(account)
+    positions = state.get("assetPositions", [])
     gaps = []
     for entry in positions:
         p = entry["position"]
@@ -151,11 +162,11 @@ def unprotected(account: str) -> list[dict]:
     return gaps
 
 
-def check_protection(account: str) -> None:
-    """Logs each open position that has no stop on the exchange. A failed read is logged too and
-    never stops the pass: the rules are still the contract's to enforce."""
+def check_protection(account: str, book: tuple[dict, list] | None = None) -> None:
+    """Logs each open position that has no stop on the exchange. A failure is logged too and never
+    stops the pass: the rules are still the contract's to enforce."""
     try:
-        for gap in unprotected(account):
+        for gap in unprotected(account, book):
             log("protection_missing", account=account, **gap)
     except Exception as exc:
         log("protection_check_failed", account=account, error=str(exc)[:200])
@@ -199,7 +210,8 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
         return
     if status != ACTIVE and status not in STOPPED:
         return
-    cancels, extra = stop_inputs(ch, rules_assets(ch), names)
+    book = read_book(ch)
+    cancels, extra = stop_inputs(ch, rules_assets(ch), names, book)
     if status == ACTIVE:
         if in_checkpoint_window(now) and view(ch, "day()", "uint32") < now // 86400:
             send(wallet, ch, "checkpoint()", dry=dry)
@@ -210,7 +222,7 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
         elif now > view(ch, "deadline()", "uint64"):
             stop(wallet, ch, "expire", cancels, extra, dry)
         else:
-            check_protection(ch)
+            check_protection(ch, book)
     else:
         recut_if_uncut(wallet, ch, latest, dry)
         send(wallet, ch, f"settle({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
@@ -228,7 +240,8 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
         # is worth trying every pass: the pool holds the investor's capital until it succeeds.
         send(wallet, pool, "openFundedStage()", dry=dry)
     if stage in (FUNDED, CLOSING):
-        cancels, extra = stop_inputs(pool, rules_assets(pool), names)
+        book = read_book(pool)
+        cancels, extra = stop_inputs(pool, rules_assets(pool), names, book)
         if stage == FUNDED:
             if in_checkpoint_window(now) and view(pool, "day()", "uint32") < now // 86400:
                 send(wallet, pool, "checkpoint()", dry=dry)
@@ -237,7 +250,7 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
                 log("breach_found", account=pool, reason=reason)
                 stop(wallet, pool, "breach", cancels, extra, dry)
             else:
-                check_protection(pool)
+                check_protection(pool, book)
         else:
             recut_if_uncut(wallet, pool, latest, dry)
             send(wallet, pool, f"settleFunded({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
