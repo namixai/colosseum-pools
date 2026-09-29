@@ -64,10 +64,15 @@ MUTATIONS = [
      "if (CoreOps.margin(address(this)).ntlPos != 0) revert NotFlat();",
      "",
      ["test_graduate_needsTargetAndFlat"]),
+    # Re-aimed 29 Sep 2026. The line moved from `graduate` to `openFundedStage` when A-02 split
+    # the pass from the funding, and `trader` is not in scope there -- the mutation stopped
+    # compiling, which the stand reports but no test can catch. Same claim, current code: the
+    # stage opens on the key the sale reserved, not on one taken fresh while that key is left
+    # bound to the pool for good.
     ("M10", "src/Pool.sol",
      "        address key = reservedKey;",
-     "        address key = trader; // not the key the registry bound to this pool",
-     ["test_graduate_fundsTraderWithANewKey_andPaysTheShare"]),
+     "        address key = address(0); // not the key the registry reserved for this pool",
+     ["test_theFundedStageOpensOnTheKeyReservedAtTheSale"]),
     ("M11", "src/KeyRegistry.sol",
      "if (!accounts.isAccount(msg.sender)) revert NotAnAccount(msg.sender);",
      "",
@@ -248,11 +253,14 @@ MUTATIONS = [
      "if (t.traderShareChallengeBps > Units.BPS || t.traderShareFundedBps > Units.BPS) revert BadTerms();",
      "if (t.traderShareChallengeBps > Units.BPS) revert BadTerms();",
      ["test_createPool_checksRulesAndTerms"]),
+    # `..._withTheRegistryDrained_...` was named here and never caught this: with the registry
+    # drained there is no key to assign, so a sale that reserves nothing looks exactly like a sale
+    # that could not. The test that does catch it is the one where a key WAS there.
     ("M55", "src/Pool.sol",
      "reservedKey = factory.registry().assign(msg.sender);",
      "reservedKey = address(0);",
-     ["test_graduate_recordsThePassWithTheRegistryDrained_andTheStageOpensLater",
-      "test_aChallengeNobodyPassesGivesTheReservedKeyBack"]),
+     ["test_aChallengeNobodyPassesGivesTheReservedKeyBack",
+      "test_theFundedStageOpensOnTheKeyReservedAtTheSale"]),
     ("M56", "src/Pool.sol",
      "                factory.registry().retire(spare);",
      "                spare;",
@@ -283,10 +291,14 @@ MUTATIONS = [
     # So removing either alone leaves the A-11 test green, and this entry only goes red together
     # with M75. Not a hole, but the guard is weaker than one line each would look. Found by the
     # audit reading the pair, not by the stand, which cannot remove two lines at once.
+    # A-11's own regression test cannot kill this one: with a share owed, the A-12 wait below
+    # holds the same second step, so the line can go and the test stays green. The case the wait
+    # does not reach is a stage that owes nothing -- then the payout branch is skipped whole and
+    # this line is all that stands between the drain and Stage.Idle.
     ("M63", "src/Pool.sol",
      "        if (block.number <= fundedDrainBlock) return;",
      "        if (false) return;",
-     ["test_regression_twoStepsInOneBlock_payTheFundedShareFromAStaleSpot"]),
+     ["test_regression_twoStepsInOneBlock_endTheStageBeforeTheCapitalLands"]),
     ("M62", "src/RuledAccount.sol",
      "            && CoreOps.equity(address(this)) <= int64(CoreOps.withdrawable(address(this)));",
      "            && CoreOps.equity(address(this)) <= 0;",
