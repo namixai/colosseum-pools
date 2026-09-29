@@ -1696,10 +1696,11 @@ MUTATIONS = [
      '        "What it did',
      ["every leverage stop is marked as staged, and the daily-loss stop as the one nobody arranged"]),
     ("PE26", "app/data/evidence.json",
-     # Anchored short of the next sentence on purpose: it named the wallet that opened
-     # the pool, and a shortened address is still an address. The terms are what this guards.
-     ',\n        "The first row — challenge 0xf01f16d0…, stopped for leverage — ran on the demo pool 0x2839d3c872ce82151a16afe0315756915d8a9b79: 8% target, 3% daily, 6% drawdown, the terms an investor would actually set.',
-     '\n',
+     # The whole array element, comma included, so removing it leaves valid JSON. An
+     # anchor that stopped mid-sentence left the rest dangling outside a string and the
+     # mutation died on the parser instead of testing the omission.
+     ',\n        "The first row — challenge 0xf01f16d0…, stopped for leverage — ran on the demo pool 0x2839d3c872ce82151a16afe0315756915d8a9b79: 8% target, 3% daily, 6% drawdown, the terms an investor would actually set. That pool was opened from another wallet of ours through the site\'s own form, capital sent by hand on HyperCore, not deployed by a script."',
+     '',
      ["the leverage stop that ran on the demo pool says so, with the pool's terms"]),
     ("PE27", "app/lib/evidence.js",
      "e.name === row.event.name && same(e.address, row.account)",
