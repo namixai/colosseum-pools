@@ -13,7 +13,7 @@ GET  /v1/health  liveness and configuration summary (no secrets)
 
 Before an order that may open or grow a position goes, the gateway puts a stop at the pool's
 rule line and a take at the target on Hyperliquid itself (gateway/protect.py), and a sweep every
-GATEWAY_PROTECT_EVERY seconds (default 10) keeps them there.
+GATEWAY_PROTECT_EVERY seconds (default 15) keeps them there.
 
 Testnet only: refuses to start unless the RPC reports chain 998, and submits only to
 Hyperliquid's testnet API.
@@ -47,7 +47,9 @@ MAX_ACTIVE = 32
 HEX_WORD = re.compile(r"^0x[0-9a-fA-F]{1,64}$")
 # What a refusal may pass on from the Signer's answer, besides the signed receipt.
 SIGNER_REASON_FIELDS = ("error", "reason", "code", "message")
-PROTECT_EVERY_S = 10.0
+# 15 and not 10: the keeper, the sweep and the orders share Hyperliquid's 1,200 of weight a minute per IP,
+# and at 10 two accounts trading at nginx's rate already spent 1,202 (docs/GATEWAY.md, "The host's minute").
+PROTECT_EVERY_S = 15.0
 
 
 def log_line(**fields) -> None:

@@ -2166,6 +2166,17 @@ MUTATIONS = [
      "            kind = MARKET_TRIGGERS.get(o.get(\"orderType\"))",
      "            kind = \"sl\" if str(o.get(\"orderType\", \"\")).startswith(\"Stop\") else \"tp\"",
      ["test_the_book_is_read_from_hyperliquids_answers"]),
+    # The sweep's interval, which with the keeper and the orders decides the host's minute of Hyperliquid's
+    # weight: 15 seconds, and the document's table of that minute.
+    ("PG46", "gateway/server.py",
+     "PROTECT_EVERY_S = 15.0\n",
+     "PROTECT_EVERY_S = 10.0\n",
+     ["test_main_starts_the_sweep",
+      "test_at_the_default_two_accounts_trading_at_nginxs_rate_fit_in_the_hosts_minute"]),
+    ("PG47", "docs/GATEWAY.md",
+     "| two accounts | 1,074 | 1,202 |",
+     "| two accounts | 1,202 | 1,202 |",
+     ["test_at_the_default_two_accounts_trading_at_nginxs_rate_fit_in_the_hosts_minute"]),
     ("PW1", "ops/keeper.py",
      "        closing = \"A\" if size > 0 else \"B\"",
      "        closing = \"B\" if size > 0 else \"A\"",
