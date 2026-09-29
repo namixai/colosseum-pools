@@ -1,6 +1,7 @@
 # Design: pools, challenges and a stop anyone can pull
 
-Status: working design, 16 September 2026, updated on 17 September after the live spike.
+Status: working design, 16 September 2026, updated on 17 September after the live spike, and on
+28 September with the stop and the take on the exchange ("Three layers").
 `spike/README.md` has the HyperCore behaviour this design leans on and how each piece was
 checked.
 
@@ -91,7 +92,9 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    The gateway checks on chain that the key is bound to this account and this trader and that
    the challenge is active, checks the platform's caps (asset list, a size cap per asset,
    400 USDC per order), and signs with that key, which it holds. An order over a cap is
-   refused before anything is signed.
+   refused before anything is signed. Before an order that may open a position goes, the
+   gateway puts a stop at the account's rule line and a take at its target on Hyperliquid
+   itself (see "Three layers" below).
 4. **Stop** (`breach(cancels, assets, salt)`, anyone). Allowed only when a rule is broken at
    the start of the block: drawdown floor, daily loss, leverage, or a position in an asset
    outside the list. In this order:
@@ -143,6 +146,38 @@ from what closing realized: the account value at the first `settleFunded` step w
 open, before any of it moves to spot. The equity at the stop is kept for the record only. A
 reduce-only close can fill worse than the mark it was priced from, and a share computed from
 the mark would make the investor pay the difference.
+
+## Three layers
+
+A pool's rules are held in three places, each covering what the one before can't.
+
+1. **Before signing: the policy.** The gateway checks on chain that the key is bound to this
+   account and this trader and that the account may trade, keeps to the platform's assets and
+   caps, and refuses an order that may open a position when equity is already at the rule line
+   or a challenge is at its target. It binds only what goes through the gateway.
+2. **On the exchange: the stop and the take.** Before any order that may open or grow a position,
+   the gateway puts a stop at the rule line (the price at which equity would reach the higher of
+   the drawdown floor and the day's floor, the budget shared across positions in proportion to
+   their notional) and a take at the target (the pass target in a challenge; in a funded stage,
+   at most one target's worth of the equity it has), as reduce-only position TP/SL orders on
+   Hyperliquid for the whole position. Hyperliquid closes at the line on the mark price without
+   waiting for anyone. The trader may move a stop nearer the mark and a take within the target,
+   and may cancel neither. A sweep puts back what a position that opened later is missing.
+   docs/GATEWAY.md has the arithmetic and each assumption it rests on.
+3. **After the fact: the contract.** Anyone may stop an account that breaks a rule at the start
+   of a block; the keeper looks every 30 seconds, cuts the key, cancels and closes (above). It
+   also says in its log when an open position has no stop on the exchange, which it can't place
+   itself: it holds no agent key.
+
+The second layer exists because of the delay in the third. In the cascade package (`stress/`,
+Bybit bars, not Hyperliquid), the worst entry of 10 October 2025 lost 83.7–94.1 % of the stress
+test's pool on the long side when each stop filled a minute late, and 3 of its 5 seats were
+liquidated. A stop on the exchange takes that minute out. It does not take out slippage: a
+stop-market in a cascade fills below its trigger, within Hyperliquid's 10 % tolerance for a
+triggered market order, and how far below on a day like that is not known: Hyperliquid's book has
+been measured only in a calm market, never in a cascade. So the honest claim is the delay taken
+out, not a loss figure. And the line is the rule itself: when a stop fires, the account is at its
+limit, the fee and the fill take it past, and the stage ends through the contract as before.
 
 ## What a cycle costs the pool, and why the two sides don't meet
 
@@ -215,9 +250,12 @@ before it can sell again.
 - In the demo the gateway holds the agent keys. A key file can sign anything Hyperliquid lets
   an agent sign, so whoever controls the gateway host can trade those accounts, within the
   caps or not, until someone stops them.
-- It does not check the investor's limits before signing; the gateway applies one platform
-  policy. Contracts enforce the pool rules after the fact, by stopping the account. Losses can overshoot a limit between the breach and
-  the stop landing.
+- It does not refuse an order for the room it would use under the investor's limits; the gateway
+  applies one platform policy, refuses to open at the rule line, and puts a stop at that line on
+  Hyperliquid before anything may open. The contracts still enforce the rules after the fact, by
+  stopping the account. Losses can overshoot a limit: by the stop's slippage when it fires, and
+  by the keeper's delay when there is no stop on the exchange — a position that opened from a
+  resting order in the seconds before the sweep reached it, or a gateway that is down.
 - The daily snapshot can only be taken in the first 15 minutes of a UTC day, once, so nobody
   can pick a convenient moment later. The keeper takes it at midnight and anyone else may.
   If nobody does, the previous snapshot stays in force, which can make the day's limit

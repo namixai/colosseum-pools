@@ -96,6 +96,15 @@ class BodiesClearTheGateway(unittest.TestCase):
         self.assertEqual(cleared.trader, self.trader.address)
         self.assertEqual(req.action(), {"type": "cancel", "cancels": [{"a": 3, "o": 42}]})
 
+    def test_a_stop_or_take_move_clears_every_gateway_check(self):
+        for kind, move in (("stop", self.client.stop), ("take", self.client.take)):
+            move(ACCOUNT.lower(), 3, "58000")
+            url, body, _ = self.sent[-1]
+            self.assertEqual((url, body["kind"]), ("https://gateway.test/v1/order", kind))
+            req, cleared = self.cleared(body)
+            self.assertEqual((req.kind, cleared.trader), (kind, self.trader.address))
+            self.assertEqual(req.message["triggerPx"], "58000")
+
     def test_reduce_only_reaches_the_action(self):
         self.client.order(ACCOUNT, 3, False, "59000", "0.0002", tif="Ioc", reduce_only=True)
         req, _ = self.cleared(self.sent[-1][1])
