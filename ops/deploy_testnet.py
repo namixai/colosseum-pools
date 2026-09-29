@@ -51,6 +51,9 @@ CHALLENGE_FEE = 700_000
 
 # Everything the bytecode is built from.
 BUILD_INPUTS = ("src", "lib", "foundry.toml", "foundry.lock", "remappings.txt")
+# Four contracts through big blocks. Measured deployments used well under this; the floor is a
+# refusal to start, not an estimate.
+GAS_FLOOR_WEI = 2 * 10**16
 
 
 def git(*args: str) -> str:
@@ -153,6 +156,8 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--label", required=True)
     p.add_argument("--keys-file", help="one agent key address per line")
+    p.add_argument("--dry-run", action="store_true",
+                   help="run every check and send nothing; says what a real run would do")
     args = p.parse_args()
 
     c.assert_testnet()
@@ -168,6 +173,36 @@ def main() -> int:
     deployer = c.account("deployer")
     if not c.core_user_exists(deployer.address):
         raise SystemExit("the deployer has no HyperCore account yet; fund it first")
+
+    # Gas is checked here rather than discovered half way. A deployment that runs out after the
+    # registry leaves a record marked incomplete and a live contract nothing points at, and an
+    # empty wallet reads like a node problem until somebody looks -- it cost an hour once.
+    gas_wei = int(c.rpc("eth_getBalance", [deployer.address, "latest"]), 16)
+    if gas_wei < GAS_FLOOR_WEI:
+        raise SystemExit(f"the deployer holds {gas_wei / 1e18:.4f} HYPE, which is below the "
+                         f"{GAS_FLOOR_WEI / 1e18:.2f} these four contracts need; fund it first")
+
+    if args.dry_run:
+        print("deploy --dry-run: nothing was sent.")
+        print(f"  label            {args.label}  (deployments/testnet-{args.label}.json is free)")
+        print(f"  commit           {commit}")
+        print(f"  deployer         {deployer.address}, {gas_wei / 1e18:.4f} HYPE, on HyperCore")
+        print(f"  would deploy     KeyRegistry, Pool, ChallengeAccount, PoolFactory (big blocks on, then off)")
+        print(f"  would configure  setAccountSource, setPlatformAssets {assets}, "
+              f"setChallengeFee {CHALLENGE_FEE}")
+        print(f"  would publish    {len(keys)} agent keys" if keys else "  would publish    no keys")
+        print("  would NOT touch  any existing deployment record or contract")
+        if not keys:
+            print()
+            print("  🔴 With no keys this registry cannot sell a single challenge. A sale takes")
+            print("     one key for the challenge and holds a second for the funded stage, so a")
+            print("     deployment meant to run anything needs keys published at the same time.")
+            print("     They cannot be the ones an existing registry already knows: a key bound")
+            print("     in two places would sign for two accounts.")
+        print("A real run needs the private halves of those keys already on the gateway host:")
+        print("publishing an address whose key file is not there hands a trader a key nobody can")
+        print("sign with, and the registry never forgets a key.")
+        return 0
 
     record: dict = {"chain_id": c.CHAIN_ID, "label": args.label, "commit": commit, "status": "deploying",
                     "deployer": deployer.address, "platform_assets": PLATFORM_ASSETS,

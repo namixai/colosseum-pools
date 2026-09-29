@@ -60,6 +60,30 @@ def compiled(contract: str, function: str) -> dict[str, list[tuple[str, str]]]:
             for i in fns[0]["inputs"] if i.get("components")}
 
 
+def sol_enum(path: str, name: str) -> list[str]:
+    """The members of `enum NAME { ... }`, with comments thrown away.
+
+    Two test suites grew their own copy of this parser and both of them kept the comments, so a
+    member with a doc comment above it came back glued to its own explanation. One copy was fixed
+    and the other was not, which is how a branch stayed red for five CI runs. It lives here now,
+    once, next to the other thing that compares the contracts with their copies.
+    """
+    src = (ROOT / path).read_text()
+    m = re.search(rf"enum {name} \{{(.*?)\}}", src, re.S)
+    if not m:
+        cannot_run(f"no enum {name} in {path} -- did it move?")
+    body = re.sub(r"//[^\n]*", "", m.group(1))
+    return [x.strip() for x in body.split(",") if x.strip()]
+
+
+def listed_names(source: str, where: str) -> list[str]:
+    """`STAGE = ("a", "b")` in Python or `STAGE = ["a", "b"]` in JavaScript."""
+    m = re.search(r"STAGE\s*=\s*[\[(](.*?)[\])]", source, re.S)
+    if not m:
+        cannot_run(f"no STAGE in {where} -- did it move?")
+    return re.findall(r'"([^"]*)"', m.group(1))
+
+
 def js_struct(source: str, name: str) -> list[tuple[str, str]]:
     """`const NAME = "(type name, ...)";`, including the form split over lines with `+`."""
     m = re.search(rf'const {name} =\s*((?:"[^"]*"\s*\+?\s*)+);', source)
@@ -127,14 +151,25 @@ def main() -> int:
             cannot_run(f"createPool has no struct argument '{arg}'")
         problems += compare(f"app/lib/chain.js {name}", structs[arg], js_struct(js, name))
         problems += compare(f"agents/desk.py {name}", structs[arg], py_struct(py, name))
+    # The stages, in all three places that name them. A stage added to the contract and not to a
+    # copy is not a compile error anywhere: the app renders `undefined` and the agent walks off the
+    # end of its tuple, both at the moment somebody's pool is in that stage.
+    stages = sol_enum("src/Pool.sol", "Stage")
+    for names, where in ((listed_names(js, "app/lib/chain.js"), "app/lib/chain.js STAGE"),
+                         (listed_names(py, "agents/desk.py"), "agents/desk.py STAGE")):
+        if names != stages:
+            problems.append(f"{where} is {names}, the contract says {stages}")
+
     if problems:
         print("abi-check: the contracts and their copies disagree.")
         for p in problems:
             print(f"  - {p}")
-        print("Fix the copy, or the app decodes a pool's terms into the wrong fields.")
+        print("Fix the copy. A wrong struct decodes a pool's terms into the wrong fields; a")
+        print("missing stage makes the app render `undefined` and the agent read past its tuple,")
+        print("both at the moment somebody's pool is actually in that stage.")
         return 1
     fields = sum(len(v) for v in structs.values())
-    print(f"abi-check: clean ({fields} fields x 2 copies).")
+    print(f"abi-check: clean ({fields} fields and {len(stages)} stages x 2 copies).")
     return 0
 
 

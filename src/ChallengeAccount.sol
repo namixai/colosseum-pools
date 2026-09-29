@@ -53,9 +53,21 @@ contract ChallengeAccount is RuledAccount {
     /// the payout shows up in the balance (or after PAYOUT_WAIT), so the pool's transfer can
     /// never be executed ahead of the trader's.
     uint64 public payoutSpotBefore;
+    /// What the last return to the pool sent, so the next step can tell our own send landing
+    /// from money that arrived afterwards.
+    uint64 public returnSpotBefore;
+    /// When this account first had anything to hand back. Set ONCE and never moved again: a
+    /// window that a stranger can restart is not a window, which is what the old check was.
+    uint64 public returnAt;
+    /// When this step first had to wait because the share was short and money was crossing. A
+    /// clock, not a flag: the wait it bounds has to end even when the gap never closes.
+    uint64 public payoutShortAt;
     uint64 public payoutAt;
 
     uint64 public constant PAYOUT_WAIT = 5 minutes;
+    /// How long the account's own money may be in flight before nothing here holds the
+    /// settlement open any more. Anything that turns up after it is not lost: `sweep()`.
+    uint64 public constant RETURN_WAIT = 5 minutes;
 
     event Started(address indexed trader, address indexed key, uint64 capital, uint64 deadline);
     event Stopped(Status indexed status, Breach indexed reason, int64 equity);
@@ -244,11 +256,51 @@ contract ChallengeAccount is RuledAccount {
     function settle(Cancel[] calldata cancels, uint32[] calldata extraAssets) external {
         if (!isStopped()) revert BadStatus(status);
         (uint256 open, uint64 free, uint64 spot) = _drainStep(cancels, extraAssets);
-        // Wait until the perp side is fully on spot: from then on the spot balance only
-        // changes through our own sends (and anyone's donations, which go to the pool).
-        if (open != 0 || free != 0) return;
+        if (open != 0) return; // a real position has to close first
+
+        // One clock for the whole hand-back, started the first time there is anything to give
+        // and never moved afterwards. That is the fix: the old check asked whether this step's
+        // balance was smaller than the last one we sent, so a stranger sending the SAME unit
+        // every step was never "smaller", and could hold the account open for as long as the
+        // gas was worth it to them. A window they cannot restart bounds that.
+        if (returnAt == 0 && (free != 0 || spot != 0)) returnAt = uint64(block.timestamp);
+        bool waited = returnAt != 0 && block.timestamp > returnAt + RETURN_WAIT;
+
+        // The perp side needs a moment to reach spot, and the share below is paid out of spot.
+        // Inside the window that wait is the account's own money; past it, a perp balance is
+        // somebody else's transfer, already sent across by _drainStep, and it gets no veto.
+        if (free != 0 && !waited) return;
 
         if (payoutOwed != 0 && !payoutDone) {
+            // Audit A-04. The share is measured against `spot`, and `spot` is only the whole of
+            // what the trader earned once the perp side has let go of it. `free == 0` does not
+            // say that: a resting order keeps its margin outside `withdrawable`, so this step
+            // used to pay out of whatever had reached spot and mark the payout done for good.
+            // The trader's own orders are named by the keeper; until they are, this waits.
+            if (!_nothingHeldOnPerp()) {
+                payoutShortAt = 0;
+                return;
+            }
+            // And margin let go in THIS block reaches spot only after it, while `spot` here is
+            // the start of the block -- the same blindness as A-11, one line further on. So
+            // unless spot already covers the share, wait until nothing is on its way across.
+            // Somebody else's dust delays this only while the share is short, and every unit of
+            // it lands in spot and brings the share closer: paying to delay a payout is paying
+            // into it.
+            // Audit A-12, which my own A-04 fix opened. I reasoned that dust could only delay
+            // this while the share was short, because every unit of it lands in spot and brings
+            // the share closer -- true when the shortfall is a crumb, false when the account
+            // genuinely lost most of itself after the pass. Then the gap never closes, a unit a
+            // step holds the settlement for as long as somebody keeps paying gas, and nothing
+            // else stops it: RETURN_WAIT is upstream of here and PAYOUT_WAIT never starts,
+            // because no payout was made. So this wait gets a clock of its own. It resets while
+            // margin is held, for a release that comes in pieces -- more than 32 resting orders
+            // take several passes -- and a stranger cannot hold margin on somebody else's
+            // account, so the reset is not theirs to use.
+            if (spot < payoutOwed && free != 0) {
+                if (payoutShortAt == 0) payoutShortAt = uint64(block.timestamp);
+                if (block.timestamp <= payoutShortAt + PAYOUT_WAIT) return;
+            }
             if (spot == 0) return;
             // A trader with no HyperCore account yet pays for creating it out of the share.
             uint64 pay = CoreOps.sendableTo(trader, spot < payoutOwed ? spot : payoutOwed);
@@ -266,15 +318,59 @@ contract ChallengeAccount is RuledAccount {
         }
 
         if (spot != 0) {
+            // Our own first return has landed when the balance came DOWN from what it was --
+            // and `returnSpotBefore` is frozen at that first send, so a later donation is
+            // measured against the capital, not against itself. When even that cannot tell
+            // (the account had nothing of its own to send, so the first "return" was the
+            // stranger's unit), the window decides instead.
+            bool landed = returnSpotBefore != 0 && (spot < returnSpotBefore || waited);
             CoreOps.sendUsdc(address(pool), spot);
             emit ReturnedToPool(spot);
-            return;
+            if (!landed) {
+                // Frozen at the FIRST send, so a later donation is measured against the
+                // capital rather than against itself, and a dust attack is shrugged off in a
+                // step instead of waiting out the window. No test pins this. The case where
+                // freezing and re-setting differ is a settlement already held up by a resting
+                // order's margin -- which the harness CAN produce, by mocking the margin summary
+                // above the real withdrawable figure. I tried after learning that and still could
+                // not build a case where the two behave differently, so this stays a guard
+                // against something I cannot name rather than something nothing can reach.
+                if (returnSpotBefore == 0) returnSpotBefore = spot;
+                return;
+            }
         }
 
-        if (CoreOps.equity(address(this)) <= 0) {
+        // Finish when nothing is HELD here: no position, and everything left is withdrawable.
+        // A resting order's margin is not withdrawable, so this still waits for one -- ending
+        // with margin held would leave it on a settled account. What is merely in flight, or
+        // arrives afterwards, is not stranded either: anyone may `sweep()` it to the pool.
+        if (_nothingHeldOnPerp()) {
             status = Status.Settled;
             emit Settled();
             pool.onChallengeSettled();
+        }
+    }
+
+    /// @notice Pushes whatever is left on a settled account back to the pool. Anyone may call
+    ///         it, as often as they like.
+    /// @dev    This is what lets `settle` finish on time. Without it the step would have to
+    ///         wait until every last unit had landed before ending, and a stranger who keeps
+    ///         sending units decides when that is. With it, ending early strands nothing: a
+    ///         late fill, a send of ours that did not land, a donation that arrived afterwards
+    ///         -- all of it comes here and goes home. It changes no state and reads no rule,
+    ///         so it cannot reopen a settlement or alter what anybody was paid.
+    function sweep() external {
+        if (status != Status.Settled) revert BadStatus(status);
+        uint64 free = CoreOps.withdrawable(address(this));
+        if (free != 0) {
+            CoreOps.toSpot(free);
+            emit MovedToSpot(free);
+            return; // it lands next block; call again then
+        }
+        uint64 spot = CoreOps.spotUsdc(address(this));
+        if (spot != 0) {
+            CoreOps.sendUsdc(address(pool), spot);
+            emit ReturnedToPool(spot);
         }
     }
 }

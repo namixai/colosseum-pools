@@ -19,6 +19,53 @@ compared with the site, byte for byte, apart from the one script Cloudflare adds
   `pools-api.usenami.io`, behind Cloudflare.
 - **The keeper** (`colosseum-keeper`) has no port. It polls the chain every 30 seconds.
 
+  🔴 **The two use different nodes on purpose, and swapping them breaks one of them.** Both
+  nodes rate-limit per IP and this host is one IP, so while the gateway and the keeper shared
+  a node they shared a budget — and the gateway is public. An outsider's order costs the
+  gateway five chain reads *before* it is refused, so a stream of refusable orders spends the
+  keeper's budget from the outside, and a keeper that is being throttled does not stop a trader
+  who has broken the rules. The investor pays for that delay. So: the keeper reads
+  `rpcs.chain.link`, the gateway reads `rpc.hyperliquid-testnet.xyz`.
+
+  The assignment is forced, not a preference. The keeper cannot move, because Hyperliquid's
+  node refuses its `eth_getLogs` *from this host* — `invalid block range` for any range,
+  however near the head, while the same call from elsewhere goes through (measured 24 Sep
+  2026). The gateway can, because it makes no `eth_getLogs` call at all: it reads state with
+  `eth_call` and nothing else. Check before trusting this on a new host, from the host itself
+  and not from a laptop — the refusal above is what a laptop does **not** reproduce:
+
+      curl -s -X POST https://rpc.hyperliquid-testnet.xyz/evm -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"<registry>","data":"0xa6f48c90"},"latest"]}'
+
+  `0xa6f48c90` is `freeCount()`; a number back means the gateway's reads work from there.
+
+  These per-IP limits are also why `ops/host/nginx-pools-api.conf.in` throttles: that budget
+  protects the gateway's own node. It is not what keeps the keeper seeing — the separation is.
+
+  ✅ **Done on the running host on 25 September 2026**, by hand, and checked rather than
+  assumed. What was seen there: the new node answered `eth_call` **from the host** (`freeCount()`
+  came back `0x…0005`); after the swap `GET /v1/health` returned
+  `{"ok": true, "chain_id": 998, "signer": "demo", "keys": 32}`; and — the check that matters,
+  because a gateway can start and still fail its first chain read — a throwaway key asking about
+  an address that is not a pool account was refused `not_an_account`, which is only reachable by
+  reading the chain. nginx went to 15 requests a minute with a burst of 10 in the same pass; the
+  `pools_ip` line was left alone. Both files were copied first and the copies are still there as
+  `*.bak-0925`.
+
+  🔴 **Keep the key directory reconciled with the registry.** On that same visit the directory
+  held twenty `*.key` files while the registry had only ever published sixteen addresses: four
+  usable keys had been sitting there unpublished since the start. Nobody knew, because nothing
+  compares the two. Comparing the two counts directly does NOT work, and the
+  first version of this rule said to: `GET /v1/health` counts every key the gateway holds,
+  including ones already bound to an account, while `freeCount()` counts only what is still on the
+  registry's free list. A bound key is held and not free, so the two differ in normal operation
+  and a gap means nothing on its own. What has to be compared is the SET of addresses the gateway
+  holds against every address the registry has ever published, in any state — a gateway address
+  the registry does not know is a key nobody can be given, and a published address the gateway
+  does not hold is a key that makes a trader pass and then find nothing able to sign. The gateway
+  does not list its addresses today, only their number, so this is a reconciliation that needs a
+  way to ask it; until then the count is a hint and not a check.
+
   🔴 **A keeper that has fallen behind is not watching, and it takes real time to come back.**
   The keeper reads `eth_getLogs` 50 blocks at a call and the unit runs the defaults, 50 calls a
   pass: 2,500 blocks each time. **The 50 is ours, not the node's.** Measured 25 September 2026 on
@@ -122,7 +169,9 @@ compared with the site, byte for byte, apart from the one script Cloudflare adds
   page is a `#/…` route of the one `index.html`. It calls the gateway from the browser;
   `GATEWAY_ALLOW_ORIGIN` names it.
 - **RPC** (CTO, 17 Sep; measured again on the host 24 Sep):
-  - the gateway reads the chain through `rpcs.chain.link/hyperevm/testnet`, which allows 1000
+  - **until 25 September** the gateway read the chain through
+    `rpcs.chain.link/hyperevm/testnet` — it now reads `rpc.hyperliquid-testnet.xyz`, and the
+    paragraph at the top of this file says why. What follows is about that old node, which allows 1000
     calls per IP in five minutes. It throttles in bursts: on 24 Sep it refused three `eth_call`s
     inside one second and served the same reads five times over seconds later, so the gateway
     retries five times and answers 429 when it still cannot read (`gateway/chain.py`);
@@ -226,6 +275,27 @@ host's configuration — it happens on the operator's word, not as part of a dep
         /etc/colosseum/keeper.env
     sudo systemctl restart colosseum-keeper
     journalctl -u colosseum-keeper -n 5     # pass_done, and next_block climbing towards the head
+
+🔴 **By hand on any host set up before 25 September 2026:** `/etc/colosseum/gateway.env` still
+says `GATEWAY_RPC_URL=https://rpcs.chain.link/hyperevm/testnet`, which is the node the keeper
+reads. While the two share it, anyone outside can spend the keeper's budget through the public
+gateway (above), so until this is done that hole is open on the running host no matter what the
+repository says. `bootstrap.sh` writes this file only when it is missing, so deploying does not
+change it either. Check from the host FIRST — a laptop does not reproduce what this host sees:
+
+    curl -s -X POST https://rpc.hyperliquid-testnet.xyz/evm -H 'Content-Type: application/json' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"<registry>","data":"0xa6f48c90"},"latest"]}'
+
+A number back (`freeCount()`) means the gateway's reads work from there. Only then:
+
+    sudo sed -i 's|^GATEWAY_RPC_URL=.*|GATEWAY_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm|' \
+        /etc/colosseum/gateway.env
+    sudo systemctl restart colosseum-gateway
+    journalctl -u colosseum-gateway -n 5
+
+Deploy the nginx file in the same pass: the gateway's new node allows about 100 calls a minute
+against the old one's 200, and the limits were recut for that. Running the old limits against the new
+node makes the gateway refuse honest traders with `upstream_busy` out of its own budget.
 
 ## Choosing the deployment and starting
 

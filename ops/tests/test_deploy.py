@@ -137,7 +137,7 @@ class Deployment(unittest.TestCase):
             return next(addresses), {"transactionHash": f"0x{name}", "blockNumber": "0x10"}
         return deploy_one
 
-    def run_main(self, deploy_one, transact=None, big_blocks=None):
+    def run_main(self, deploy_one, transact=None, big_blocks=None, balance=10**18):
         self.transactions = []
 
         def record_tx(acct, to, sig, types, values):
@@ -157,10 +157,20 @@ class Deployment(unittest.TestCase):
                 mock.patch.object(deploy.c, "record"), \
                 mock.patch.object(deploy.c, "account", return_value=Deployer()), \
                 mock.patch.object(deploy.c, "core_user_exists", side_effect=lambda a: a == Deployer.address), \
+                mock.patch.object(deploy.c, "rpc", return_value=hex(balance)), \
                 mock.patch.object(deploy.c, "deploy", side_effect=deploy_one), \
                 mock.patch.object(deploy.c, "transact", side_effect=record_tx), \
                 mock.patch.object(deploy.sys, "argv", ["deploy", "--label", "t", "--keys-file", str(self.keys_file)]):
             return deploy.main()
+
+    def test_a_deployer_without_gas_is_refused_before_anything_is_sent(self):
+        """Running out half way leaves a record marked incomplete and a live contract nothing
+        points at, and an empty wallet reads like a node problem until somebody looks."""
+        with self.assertRaises(SystemExit) as caught:
+            self.run_main(self.deployed(), balance=deploy.GAS_FLOOR_WEI - 1)
+        self.assertIn("below", str(caught.exception))
+        self.assertEqual(self.big_blocks, [], "big blocks were never switched on")
+        self.assertFalse(self.record_path.exists(), "and nothing was written")
 
     def record(self):
         return json.loads(self.record_path.read_text())

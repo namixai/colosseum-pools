@@ -167,6 +167,10 @@ class MatchesTheContracts(unittest.TestCase):
     @staticmethod
     def enum(path: str, name: str) -> tuple[str, ...]:
         body = re.search(rf"enum {name} \{{(.*?)\}}", (ROOT / path).read_text(), re.S).group(1)
+        # Comments live inside enum bodies, and without this a member explained by one comes back
+        # as its own explanation. The keeper's copy of this parser had the same hole; fixing one
+        # and not looking for the other is what turned this suite red for five runs.
+        body = re.sub(r"//[^\n]*", "", body)
         return tuple(m.strip() for m in body.split(",") if m.strip())
 
     def test_enum_names(self):

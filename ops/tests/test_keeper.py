@@ -406,6 +406,18 @@ class PoolCalls(KeeperTest):
         k.one_pass()
         self.assertEqual([fn for fn, _ in self.chain.calls_to(POOL_A)], ["breach", "settleFunded"])
 
+    def test_a_pool_waiting_for_a_key_gets_its_funded_stage_opened(self):
+        """Audit A-02: the pass is recorded without a key, and opening the stage is a separate
+        call anyone may make. Nobody makes it if the keeper does not, and the pool holds the
+        investor's capital until somebody does."""
+        self.chain.add_pool(POOL_A, stage=keeper.PASSED_AWAITING_KEY)
+        self.chain.logs.append(challenge_log(10, POOL_A))
+        k = self.make()
+        k.one_pass()
+        self.assertEqual([fn for fn, _ in self.chain.calls_to(POOL_A)], ["openFundedStage"])
+        # And it is still a pool worth following: not finished with just because it is quiet.
+        self.assertIn(POOL_A, k.live)
+
     def test_a_closing_pool_whose_cut_key_still_trades_is_cut_again(self):
         key = "0x00000000000000000000000000000000000000C9"
         self.chain.add_pool(POOL_A, stage=keeper.CLOSING, cutKey=key, cutBlock=50)
@@ -437,6 +449,9 @@ class MatchesTheContracts(unittest.TestCase):
     def enum(path: str, name: str) -> list[str]:
         src = (ROOT / path).read_text()
         body = re.search(rf"enum {name} \{{(.*?)\}}", src, re.S).group(1)
+        # Comments live inside enum bodies too, and a member explained by one used to come back
+        # as its own explanation -- so the check passed on a name that was never there.
+        body = re.sub(r"//[^\n]*", "", body)
         return [m.strip() for m in body.split(",") if m.strip()]
 
     def test_status_and_stage_numbers(self):
@@ -446,8 +461,12 @@ class MatchesTheContracts(unittest.TestCase):
                          [keeper.CREATED, keeper.ACTIVE, keeper.BREACHED, keeper.EXPIRED, keeper.FORFEITED,
                           keeper.PASSED, keeper.ABORTED, keeper.SETTLED])
         stage = self.enum("src/Pool.sol", "Stage")
-        self.assertEqual([stage.index(n) for n in ("Idle", "Challenge", "Funded", "Closing")],
-                         [keeper.IDLE, keeper.CHALLENGE, keeper.FUNDED, keeper.CLOSING])
+        self.assertEqual(
+            [stage.index(n) for n in ("Idle", "Challenge", "Funded", "Closing", "PassedAwaitingKey")],
+            [keeper.IDLE, keeper.CHALLENGE, keeper.FUNDED, keeper.CLOSING, keeper.PASSED_AWAITING_KEY])
+        # Every stage the contract has is named here, so adding one to the enum without telling
+        # the keeper fails this line rather than leaving the keeper quietly blind to it.
+        self.assertEqual(len(stage), 5, "a stage was added to Pool.Stage and not to the keeper")
 
     def test_stopped_states_match_is_stopped(self):
         src = (ROOT / "src/ChallengeAccount.sol").read_text()
