@@ -1293,6 +1293,43 @@ contract PoolFlowTest is PoolHarness {
         assertFalse(ch.payoutDone(), "not paid out of a balance the release has not reached");
     }
 
+    /// Audit A-12, the funded side: the same clock in settleFunded. After the result is taken the
+    /// pool holds less than the share (a loss after the stop), and a unit arrives on perp before
+    /// every step. The close still finishes, and the trader gets what there is. Written by the
+    /// audit; the two halves of A-12 were mine to open and only the challenge side had a test.
+    function test_settleFunded_shortShareWithDustEveryStep_stillFinishes() public {
+        (Pool p, uint64 owed) = _fundedClosingShort(1e8, 1);
+        assertLt(uint256(1e8) + 100, owed, "less on the pool than the trader is owed");
+        uint64 before = _spot(trader);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        for (uint256 i = 0; i < 60 && p.stage() != Pool.Stage.Idle; ++i) {
+            CoreSimulatorLib.forcePerpBalance(address(p), hyperCore.readPerpBalance(address(p)) + 1);
+            p.settleFunded(c, a);
+            CoreSimulatorLib.nextBlock();
+            vm.warp(block.timestamp + 60);
+        }
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle), "a stranger cannot hold the funded close open");
+        assertGt(_spot(trader) - before, 0, "and the trader got what there was");
+    }
+
+    /// Audit A-12, the funded side: the clock resets while margin is held, so a release that comes
+    /// in pieces cannot run it out.
+    function test_settleFunded_theShortShareClockRestartsWhenMarginIsHeldAgain() public {
+        (Pool p,) = _fundedClosingShort(1e8, 1e5); // short, with money crossing
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        p.settleFunded(c, a);
+        assertTrue(p.fundedPayoutShortAt() != 0, "the wait noted when it started");
+        _mockHeldMargin(address(p), int64(CoreOps.withdrawable(address(p))) + 5e6);
+        p.settleFunded(c, a);
+        assertEq(p.fundedPayoutShortAt(), 0, "held again, so the clock is back to nothing");
+        vm.warp(block.timestamp + p.PAYOUT_WAIT() + 1);
+        CoreSimulatorLib.nextBlock();
+        vm.clearMockedCalls(); // the last piece comes free and is crossing as it does
+        CoreSimulatorLib.forcePerpBalance(address(p), 1e5);
+        p.settleFunded(c, a);
+        assertFalse(p.fundedPayoutDone(), "not paid out of a balance the release has not reached");
+    }
+
     function test_graduate_needsTargetAndFlat() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);

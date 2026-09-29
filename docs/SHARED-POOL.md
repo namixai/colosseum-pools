@@ -12,13 +12,19 @@ investors hold shares in one book of seats, and the platform publishes the seats
 terms before anyone deposits. So the investor chooses a pool whose limits are published; they don't
 set the limits themselves.
 
-**That is now a rule and not only a sentence.** `addSeat` is refused as soon as a deposit ticket
-is open — not merely once a deposit has become shares. Money goes into a ticket first and the
-shares are minted later, at a settlement point, so closing the door at the later moment would
-still let a seat appear between a depositor paying and being counted. Nobody can pay into a ticket
-that does not exist, so an open ticket is where "before anyone deposits" actually falls. The
-consequence for whoever runs a pool: every seat goes in immediately after the pool starts and
-before it is announced, because the first person to open a ticket fixes the set. Until audit A-06 the promise was in this document and in the
+**That is now a rule and not only a sentence, and the rule is an order rather than a race.** The
+platform starts the pool, adds its seats, and calls `seal()`. Before the seal nobody can open a
+deposit ticket; after it nobody can add a seat, and nothing undoes it. So the book an investor
+reads when they pay in is the book they get, and the platform decides when it is finished.
+
+Two earlier versions of this got it wrong in opposite directions, which is worth knowing if you
+are reading the history. The first closed the seats when a deposit was RECOGNISED — after the
+money had already gone into a ticket, so a seat could still appear between paying and being
+counted. The second closed them at the first open ticket, which anyone could trigger: open an
+empty ticket the moment a pool starts, never pay into it, and the seat set freezes at whatever it
+was, possibly nothing, for ever — an empty ticket never leaves the open list, and the platform's
+own seed is then locked in a pool that can never do anything. A seal costs the operator one
+transaction and takes that decision back from strangers. Until audit A-06 the promise was in this document and in the
 contract's header while nothing in the code held the operator to it: a seat added afterwards —
 near-total drawdown allowed, fifty times leverage, the whole profit to the trader — would have
 taken holders' money the next time anyone armed a seat, and leaving is not quick here. There is
