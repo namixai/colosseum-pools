@@ -6,6 +6,7 @@ import * as hl from "../lib/hl.js";
 import { sendUsdc } from "../lib/hlsend.js";
 import { esc, render, $, wire, badge, row, when, duration, pct, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
+import { stageName } from "../lib/stages.js";
 import {
   SHARED_POOL, SHARED_ABI, TICKET_STATE, blockerText, amount, spot1e8, shares, worth, price, depositPlan,
   ticketsToName, lockedUntil, explain, plain, usd, openedTicket, paidSummary,
@@ -237,7 +238,7 @@ async function seats(box, sp, seatList) {
         Number(deadline) ? `, until ${esc(when(deadline))}` : ""}`);
     }
     return `<article class="card">
-      <h3><span class="mono">${esc(chain.short(seat))}</span> ${badge(chain.STAGE[Number(stage)], Number(stage) === 0 ? "ok" : "")}</h3>
+      <h3><span class="mono">${esc(chain.short(seat))}</span> ${badge(stageName(stage), Number(stage) === 0 ? "ok" : "")}</h3>
       ${row("On HyperCore spot", `${usd(spot, 8)} USDC`)}
       ${status}
       ${row("Longest funded stage", esc(duration(term)))}

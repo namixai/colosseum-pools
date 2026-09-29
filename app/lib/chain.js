@@ -56,6 +56,10 @@ export const ABI = {
     // What the contract wrote down when it ended the funded stage: the pool's own breachReason.
     "function fundedEndReason() view returns (uint8)",
     "function capitalNeeded() view returns (uint64)",
+    // Stage 4 only, which a pool of the older factory never reports: when the pass was recorded, and
+    // how long the pool waits for a key before anyone may release it (abandonFundedStage).
+    "function passedAt() view returns (uint64)",
+    "function AWAIT_KEY_WINDOW() view returns (uint64)",
     "function prepareAccount()",
     "function buyChallenge() returns (address)",
     "function withdrawOnCore(uint64 amount1e8)",

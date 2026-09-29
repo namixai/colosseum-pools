@@ -4,6 +4,7 @@ import * as hl from "../lib/hl.js";
 import { esc, render, $, wire, pct, duration, badge, row } from "../lib/ui.js";
 import { minPrice, gridText } from "../lib/floor.js";
 import { DEMO_POOL as D } from "../lib/demo.js";
+import { stageName } from "../lib/stages.js";
 
 function notDeployed(page) {
   render(page, `<section class="card"><h2>Not deployed yet</h2>
@@ -61,7 +62,7 @@ export async function listView(page) {
     card.className = "card";
     card.innerHTML = `
       <h3><a href="#/pool/${esc(address)}">${esc(chain.short(address))}</a>
-        ${badge(chain.STAGE[Number(stage)], open ? "ok" : "")}</h3>
+        ${badge(stageName(stage), open ? "ok" : "")}</h3>
       <p class="muted">Investor ${esc(chain.short(owner))} · ${esc(spotUsdc.toFixed(2))} USDC on HyperCore spot</p>
       ${termsHtml(terms)}
       ${rulesHtml(rules, assets)}

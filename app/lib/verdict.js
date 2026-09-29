@@ -42,7 +42,9 @@ export function liveReadingIsMoot(verdict) {
  * judge arriving after a completed cycle saw the second and could not know it was the first.
  *
  * Stage 0 is the condition, not just a non-zero block: a stage still running (2) or still
- * settling (3) is present tense, and the page already has words for those.
+ * settling (3) is present tense, and the page already has words for those. So is 4, a trader who
+ * passed and waits for a key: nothing funded has happened yet, whatever an earlier stage left in
+ * `cutBlock`.
  */
 export function pastFundedStage({ kind, stage = 0, cutBlock = 0 } = {}) {
   return kind === "pool" && Number(cutBlock) > 0 && Number(stage) === 0;
