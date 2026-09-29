@@ -545,7 +545,23 @@ class FailedSend(KeeperTest):
         self.assertIn("500", fields["error"])
 
 
-class Budgeted(FakeChain):
+class ForbiddenNeedsNaming(FakeChain):
+    """A chain where the forbidden-asset rule is the only thing broken -- and so is invisible to
+    the contract until the keeper names the assets to it.
+
+    The contract holds the allowed set but not the account's open positions, so `violation([])`
+    answers None. Drawdown, daily loss and leverage come off the margin precompile and need no
+    names at all, which is why this is the one rule a pass has to reach the venue for.
+    """
+
+    def call_view(self, to, signature, types, args, out):
+        if signature.split("(")[0] == "violation":
+            state = self.pools.get(to.lower()) or self.challenges.get(to.lower())
+            return (state["violation"] if args and args[0] else 0,)
+        return super().call_view(to, signature, types, args, out)
+
+
+class BudgetedForbidden(ForbiddenNeedsNaming):
     """A chain whose info API refuses reads once a weight budget is spent, as a rate limit does.
 
     Weights as Hyperliquid publishes them: clearinghouseState 2, other info requests 20, and 1200
@@ -567,6 +583,7 @@ class Budgeted(FakeChain):
         return super().info_post(body)
 
 
+
 class RoundOrder(KeeperTest):
     """A-14. A pass is not guaranteed to finish, so who goes last must not always be the same.
 
@@ -583,11 +600,14 @@ class RoundOrder(KeeperTest):
             challenge = "0x" + ("22" + f"{i:06d}").rjust(40, "0")
             self.chain.add_pool(pool, stage=keeper.CHALLENGE, challenge=challenge)
             self.chain.add_challenge(challenge, status=keeper.ACTIVE, violation=1 if i in violating else 0)
+            # A position in an asset the rules do not allow (ETH is 4, the rules allow 3): this is
+            # what the keeper has to read from the venue before the contract can see the breach.
+            self.chain.positions[challenge.lower()] = ["ETH"]
             self.chain.logs.append(challenge_log(10, pool))
         return ["0x" + ("22" + f"{i:06d}").rjust(40, "0") for i in range(n)]
 
-    def budgeted(self, budget: int) -> Budgeted:
-        chain = Budgeted(budget)
+    def budgeted(self, budget: int) -> BudgetedForbidden:
+        chain = BudgetedForbidden(budget)
         chain.latest, chain.logs = self.chain.latest, self.chain.logs
         patcher = mock.patch.object(keeper, "c", chain)
         patcher.start()
@@ -612,6 +632,25 @@ class RoundOrder(KeeperTest):
         k.one_pass()
         self.assertIn(last, self.breached(),
                       "the second pass begins where the first broke off, so the end is served")
+
+    def test_the_round_comes_back_to_the_pools_the_pass_did_not_get_through(self):
+        # A pass can end on something other than the venue budget -- a node that stops answering
+        # part way is the usual one. Whatever the cause, the round has to begin next time at the
+        # first pool it did not get through, not wrap back to the top as if it had finished.
+        self.active(5)
+        pools = sorted("0x" + ("11" + f"{i:06d}").rjust(40, "0") for i in range(5))
+        real = keeper.pool_pass
+
+        def the_last_two_throw(wallet, pool, *a, **kw):
+            if pool in pools[3:]:
+                raise RuntimeError("the node stopped answering part way through")
+            return real(wallet, pool, *a, **kw)
+
+        k = self.make()
+        with mock.patch.object(keeper, "pool_pass", side_effect=the_last_two_throw):
+            k.one_pass()
+        self.assertEqual(k.resume_at, pools[3],
+                         "the round wrapped back to the top past two pools it never got through")
 
     def test_the_place_in_the_round_survives_a_restart(self):
         chain = self.budgeted(600)
@@ -658,6 +697,133 @@ class RoundOrder(KeeperTest):
         k.one_pass()
         self.assertEqual(k.resume_at, first)
         self.assertEqual(keeper.ring(sorted(k.live), k.resume_at), sorted(k.live))
+
+
+class Silent(FakeChain):
+    """A chain whose venue answers nothing at all -- every info request refused."""
+
+    def __init__(self, except_meta: bool = True):
+        super().__init__()
+        self.except_meta = except_meta
+
+    def info_post(self, body):
+        if body["type"] == "meta" and self.except_meta:
+            return super().info_post(body)
+        raise RuntimeError("429 Too Many Requests")
+
+
+class ContractFirst(KeeperTest):
+    """A-14. The contract is asked first, because its rules cost nothing at the venue.
+
+    Drawdown, daily loss and leverage come off the margin precompile over EVM, which the keeper
+    reads through its own node. Reading Hyperliquid first meant a refusal there left the account
+    unchecked entirely -- at the one moment the check was worth having, when the budget the
+    gateway shares with the keeper had run out.
+    """
+
+    def silent(self, **kw) -> Silent:
+        chain = Silent(**kw)
+        chain.latest, chain.logs = self.chain.latest, self.chain.logs
+        patcher = mock.patch.object(keeper, "c", chain)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.chain = chain
+        return chain
+
+    def loud(self) -> list:
+        entries: list = []
+        patcher = mock.patch.object(keeper, "log", side_effect=lambda e, **f: entries.append((e, f)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return entries
+
+    def test_a_breach_is_still_sent_when_the_venue_will_not_answer(self):
+        chain = self.silent()
+        self.chain.add_pool(POOL_A, stage=keeper.CHALLENGE, challenge=CHALLENGE_A)
+        self.chain.add_challenge(CHALLENGE_A, status=keeper.ACTIVE, violation=1)
+        self.chain.logs.append(challenge_log(10, POOL_A))
+        self.make().one_pass()
+        calls = chain.calls_to(CHALLENGE_A)
+        self.assertEqual([fn for fn, _ in calls], ["breach"],
+                         "the contract said a rule was broken and nothing at the venue changes that")
+        cancels, extra, _salt = calls[0][1]
+        self.assertEqual((cancels, extra), ([], []),
+                         "a stop with no cancels beats no stop: the orders go on the next pass")
+
+    def test_a_refused_venue_read_is_not_a_turn_taken(self):
+        chain = self.silent()
+        entries = self.loud()
+        self.chain.add_pool(POOL_A, stage=keeper.CHALLENGE, challenge=CHALLENGE_A)
+        self.chain.add_challenge(CHALLENGE_A, status=keeper.ACTIVE)
+        self.chain.logs.append(challenge_log(10, POOL_A))
+        k = self.make()
+        k.one_pass()
+        self.assertEqual([], [fn for _, fn, _ in chain.sent], "nothing was broken, so nothing is sent")
+        self.assertIn("venue_read_failed", [e for e, _ in entries])
+        self.assertIn("venue_incomplete", [e for e, _ in entries],
+                      "the forbidden-asset rule and the stop check were not done: not a served turn")
+        self.assertIsNone(k.resume_at, "the round did not move past a pool it did not get through")
+
+    def test_a_funded_pool_whose_venue_is_silent_is_not_a_turn_taken_either(self):
+        # The same rule on the pool's own side of the pass: a funded pool has the investor's
+        # capital in it, and it is the one the round must come back to first.
+        chain = self.silent()
+        entries = self.loud()
+        self.chain.add_pool(POOL_A, stage=keeper.FUNDED)
+        self.chain.logs.append(challenge_log(10, POOL_A))
+        k = self.make()
+        k.one_pass()
+        self.assertIn("venue_incomplete", [e for e, _ in entries])
+        self.assertIsNone(k.resume_at)
+
+    def test_the_forbidden_asset_rule_still_needs_the_venue_and_still_fires(self):
+        # The contract answers None until the assets are named to it, so this test goes red the
+        # moment the keeper stops naming them -- which a test using the plain fake would not.
+        chain = ForbiddenNeedsNaming()
+        chain.latest, chain.logs = self.chain.latest, self.chain.logs
+        patcher = mock.patch.object(keeper, "c", chain)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.chain = chain
+        self.chain.add_pool(POOL_A, stage=keeper.FUNDED, violation=1, assets=(3,))
+        self.chain.positions[POOL_A.lower()] = ["ETH"]  # 4, and the rules allow 3
+        self.chain.logs.append(challenge_log(10, POOL_A))
+        self.make().one_pass()
+        calls = self.chain.calls_to(POOL_A)
+        self.assertEqual([fn for fn, _ in calls], ["breach"])
+        self.assertEqual(calls[0][1][1], [4], "the asset is named to the contract, which checks it on chain")
+
+
+class PerpNames(KeeperTest):
+    """`meta` is read once a pass and outside the per-pool guard, so its refusal used to end the
+    pass before a single account was looked at -- and a pass that ends before it starts never
+    moves the round on."""
+
+    def setUp(self):
+        super().setUp()
+        keeper._perp_names = {}
+        self.addCleanup(setattr, keeper, "_perp_names", {})
+
+    def test_the_last_list_is_used_when_the_venue_will_not_answer(self):
+        self.follow_a(status=keeper.ACTIVE)
+        self.make().one_pass()
+        self.assertIn("BTC", keeper._perp_names)
+        with mock.patch.object(keeper.c, "info_post", side_effect=RuntimeError("429")):
+            self.assertEqual(keeper.perp_index_by_name()["BTC"], 3,
+                             "a list one pass old is still right about every asset it names")
+
+    def test_a_first_pass_with_no_list_at_all_still_runs_the_contracts_rules(self):
+        chain = Silent(except_meta=False)
+        chain.latest, chain.logs = self.chain.latest, self.chain.logs
+        patcher = mock.patch.object(keeper, "c", chain)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        chain.add_pool(POOL_A, stage=keeper.CHALLENGE, challenge=CHALLENGE_A)
+        chain.add_challenge(CHALLENGE_A, status=keeper.ACTIVE, violation=1)
+        chain.logs.append(challenge_log(10, POOL_A))
+        self.make().one_pass()
+        self.assertEqual([fn for fn, _ in chain.calls_to(CHALLENGE_A)], ["breach"],
+                         "no names costs the cancel list, not the rules that need no names")
 
 
 class Ring(unittest.TestCase):

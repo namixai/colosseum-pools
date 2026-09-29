@@ -1032,6 +1032,27 @@ MUTATIONS = [
      '                "passes_when":',
      ["test_account_view_keeps_the_two_shares_apart"]),
     # ── keeper (Python unittest) ──
+    # A-14: the contract is asked first, because its rules cost nothing at the venue.
+    ("K67", "ops/keeper.py",
+     'reason = view(account, "violation(uint32[])", "uint8", ["uint32[]"], [[]])',
+     "reason = 0",
+     ["test_a_breach_is_still_sent_when_the_venue_will_not_answer"]),
+    ("K68", "ops/keeper.py",
+     "    if inputs and inputs[1]:",
+     "    if False:",
+     ["test_the_forbidden_asset_rule_still_needs_the_venue_and_still_fires"]),
+    ("K69", "ops/keeper.py",
+     "        return inputs is not None",
+     "        return True",
+     ["test_a_refused_venue_read_is_not_a_turn_taken"]),
+    ("K70", "ops/keeper.py",
+     "            checked = checked and inputs is not None",
+     "            checked = checked",
+     ["test_a_funded_pool_whose_venue_is_silent_is_not_a_turn_taken_either"]),
+    ("K71", "ops/keeper.py",
+     '        log("meta_read_failed", error=str(exc)[:200], names=len(_perp_names))',
+     "        raise",
+     ["test_the_last_list_is_used_when_the_venue_will_not_answer"]),
     # A-14: the round is not guaranteed to finish, so who goes last must not always be the same.
     ("K62", "ops/keeper.py",
      "    return order[start:] + order[:start]",
@@ -1049,12 +1070,18 @@ MUTATIONS = [
      "        if served is not None:",
      "        if served is None:",
      ["test_a_broken_rule_at_the_end_of_the_list_is_stopped_on_the_next_pass"]),
-    # A failure moving the round is the starvation this rule exists to avoid: the round would
-    # begin at a pool that only ever throws, and everything behind it would go unserved.
+    # A failure moving the round is the starvation this rule exists to avoid: the round would go
+    # on past a pool it never got through, and come back to it only after everything else.
     ("K66", "ops/keeper.py",
      '                log("pool_failed", pool=pool, error=str(exc)[:200])',
      '                served = i; log("pool_failed", pool=pool, error=str(exc)[:200])',
-     ["test_one_pool_that_always_throws_does_not_pin_the_round_to_itself"]),
+     ["test_the_round_comes_back_to_the_pools_the_pass_did_not_get_through"]),
+    # An unfinished turn counted as a finished one puts the tail back where it was: the accounts
+    # whose venue reads the budget refused are the same ones every pass.
+    ("K72", "ops/keeper.py",
+     '                log("venue_incomplete", pool=pool)',
+     '                served = i; log("venue_incomplete", pool=pool)',
+     ["test_a_refused_venue_read_is_not_a_turn_taken"]),
     ("K1", "ops/keeper.py",
      'if entry["address"].lower() != factory.lower() or entry["topics"][0] != CHALLENGE_CREATED:',
      'if entry["topics"][0] != CHALLENGE_CREATED:',
