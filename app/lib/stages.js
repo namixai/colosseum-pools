@@ -32,7 +32,9 @@ export function stageWords(stage) {
   return WORDS[Number(stage)] ?? `Stage ${Number(stage)}, which this page does not know yet.`;
 }
 
-const utc = (seconds) => new Date(Number(seconds) * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+// To the second: the contract releases the pool strictly after passedAt + window, and a page that said
+// only the minute would name a moment at which the release still reverts.
+const utc = (seconds) => new Date(Number(seconds) * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
 
 /** Seconds as the page says them: "6 days and 9 hours", "9 hours", "less than an hour". */
 export function spanWords(seconds) {

@@ -1944,6 +1944,10 @@ MUTATIONS = [
      ["the app's stages are the contract's, in its order, and anything more comes after them"]),
     # The Economics page's measured tail (app/data/calc_tables.json) against the published package's results
     # (stress/results). "PT": the second window's prefix, run by node on its own test file.
+    ("PS13", "app/lib/stages.js",
+     "const utc = (seconds) => new Date(Number(seconds) * 1000).toISOString().replace(\"T\", \" \").slice(0, 19) + \" UTC\";",
+     "const utc = (seconds) => new Date(Number(seconds) * 1000).toISOString().replace(\"T\", \" \").slice(0, 16) + \" UTC\";",
+     ["a pool waiting for a key says how long before it may step back, and the second it may"]),
     ("PT1", "app/data/calc_tables.json",
      '       "worst": 0.9572,',
      '       "worst": 0.9412,',

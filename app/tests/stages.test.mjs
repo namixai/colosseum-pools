@@ -70,8 +70,10 @@ test("a pool waiting for a key says how long before it may step back, and the se
   const passedAt = 1790400000, window = 7 * 86400;
   const early = awaitingKeyWords({ passedAt, window, now: passedAt + 12 * 3600 });
   assert.equal(early, "Passed, waiting for a key: the trader passed the challenge, and the funded stage opens as soon as "
-    + "a trading key is free. 6 days and 12 hours left before the pool may step back: after 2026-10-03 05:20 UTC, if "
+    + "a trading key is free. 6 days and 12 hours left before the pool may step back: after 2026-10-03 05:20:00 UTC, if "
     + "there is still no key to be had, anyone may release it to Idle, and the trader keeps the pass and the challenge share.");
+  // The release time to the second: 45 seconds past the minute, and the page says so, not just the minute.
+  assert.match(awaitingKeyWords({ passedAt: passedAt + 45, window, now: passedAt }), /after 2026-10-03 05:20:45 UTC,/);
   // abandonFundedStage reverts TooEarly up to and including passedAt + window.
   assert.match(awaitingKeyWords({ passedAt, window, now: passedAt + window }), /less than an hour left before the pool may step back/);
   assert.match(awaitingKeyWords({ passedAt, window, now: passedAt + window + 1 }),
