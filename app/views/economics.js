@@ -56,8 +56,9 @@ export async function economicsView(page) {
       <p>What a pool of this design earns, what a trader can earn on it, and what it costs to run one.</p>
       <p class="notice"><strong>Every number the calculator returns is a model, not a measurement.</strong> The
       mechanics come from the contracts in this repository; who buys a challenge, how often, and how far a stop
-      overshoots are assumptions. Nobody has run this with real traders. The one exception on this page is the
-      cascade further down: that is a measurement of real crash days, and it is labelled as one.</p>
+      overshoots are assumptions. Nobody has run this with real traders. The exceptions on this page are the
+      levers an investor sets and the cascade further down: those are measurements of real crash days, and they
+      are labelled as such.</p>
       <p class="muted">This describes the product at scale. The demo on this site is a single-seat pool on
       testnet holding mock USDC, and these numbers are not about it.</p>
     </section>
@@ -68,13 +69,6 @@ export async function economicsView(page) {
       <p>The capital in a pool is the investor's, so the investor takes the loss. A trader risks what a
       challenge costs and nothing more: the challenge account holds the pool's money, and a pass moves
       the pool's money too.</p>
-      <p>Two different things guard a seat, and only one of them runs before the money moves. Before it
-      signs an order, the gateway checks the platform's own list of assets and its size caps. The
-      investor's limits are not checked there: the contract enforces those <em>after the fact</em>, by
-      stopping the account once the drawdown, the daily loss or the leverage line is crossed. Between
-      the crossing and the stop landing, a loss can go past the line — and on a cascade it goes far
-      past it, because the price moves first. What decides how far is which coins the seats may trade
-      and how the seats sit on that list: two pools under the same rules are not in the same danger.</p>
       <div id="who" class="muted">…</div>
       <p class="small">Check the pieces rather than this page: the rules are in the contract, every stop
       and every pass is a transaction anyone can read, and the table these figures come from ships with
@@ -85,12 +79,13 @@ export async function economicsView(page) {
       <p>The daily loss line and the drawdown line hold on an ordinary bad day. A cascade is a
       different thing, and the block below is <strong>not part of the model above</strong>: it is a
       measurement of real crash days replayed through these rules. It carries no frequency, so it is
-      never subtracted from the returns.</p>
+      never subtracted from the returns. It is the stop <strong>with the keeper alone, a minute late</strong>, as
+      pools ran before 29 Sep 2026: with the stop on the exchange, the same day stays at the line (the levers above).</p>
       <div id="cascade" class="muted">…</div>
     </section>`);
   await loadTables();
   $("#who", page).className = "";
-  $("#who", page).innerHTML = whoTakesTheLoss(tables);
+  $("#who", page).innerHTML = leversCard(tables);
   formPanel(page);
 }
 
@@ -266,41 +261,98 @@ function run(form, page) {
   cascadeBox.innerHTML = cascade(Object.fromEntries(runs).base);
 }
 
+/** A share already in percent, as the lever cells carry it. */
+const points = (v, digits = 0) => `${Number(v).toFixed(digits)}%`;
+
 /**
- * What a cascade took on the day the tail was measured, read from the table rather than written
- * into the page: the same file feeds the block below, and a page that restates its figures in
- * prose drifts from them the first time the measurement is redone.
- *
- * The spread between the low and the high is not uncertainty. It is the investor's own choice:
- * which coins the rules allow, and how the seats sit on that list.
+ * One cell of the lever table: where the stop sits ("exchange" at the line, or "keeper" a minute
+ * late), the leverage, the list ("default" or "wide") and, for the keeper, which end of its minute.
  */
-export function lossOnTheMeasuredDay(tables) {
-  const c = tables.tail.cascade;
-  const shares = (list) => Object.values(c.lists[list].cases).flatMap((k) => [k.open, k.worst]);
-  const mix = c.lists.wide.cases.reference_mix;
-  return {
-    day: c.day,
-    cap: tables.tail.rules_measured.max_drawdown,
-    coins: c.lists.default.coins,
-    low: Math.min(...shares("default")),
-    high: Math.max(...shares("default")),
-    wideLow: Math.min(mix.open, mix.worst),
-    wideHigh: Math.max(mix.open, mix.worst),
-    wideLiquidated: Math.max(mix.seats_liquidated.open, mix.seats_liquidated.worst),
-  };
+export function leverCell(tables, stop, leverage, list, exec = "open") {
+  const cell = tables.levers.cells.find((c) => c.stop === stop && c.leverage === leverage && c.list === list
+    && c.exec === exec);
+  if (!cell) throw new Error(`no lever cell for ${stop} ${leverage}x ${list} ${exec}`);
+  return cell;
 }
 
-export function whoTakesTheLoss(tables) {
-  const f = lossOnTheMeasuredDay(tables);
-  return `<p>Replayed on one-minute bars of ${esc(f.day)}, entering at the worst minute of that day with
-    every seat in a full position on the same side: a pool whose seats may trade
-    ${esc(f.coins.join(", "))} would have lost <strong>${percent(f.low, 0)} to ${percent(f.high, 0)}</strong>
-    of the seats' capital — the investor's own money, put in by them under a line they set at
-    ${percent(f.cap, 0)}. On a list with alts the same day
-    took <strong>${percent(f.wideLow, 0)} to ${percent(f.wideHigh, 0)}</strong> of the stress test's own
-    pool and liquidated ${f.wideLiquidated} of its five seats. How often such a day comes is not
-    measured, and Hyperliquid itself was not the venue measured — the block below says both again, at
-    length, for the pool you set above.</p>`;
+/**
+ * A stop on the exchange closes at the line; walking the book adds a little on top, measured only in a
+ * calm market. The worst day's bracket: the line, plus at the low end half the spread of the calmest
+ * coin, and at the high end the worst hour's walk, the highest over every seat and coin, each seat priced
+ * at the nearest measured size at or above its notional. Wider than the truth on purpose: a seat sits on
+ * one coin, not on all of them. Basis points are of the notional, so they count times the leverage
+ * against the seat's own capital.
+ */
+export function exchangeBracket(tables, leverage) {
+  const book = tables.levers.book;
+  const line = Math.max(...["default", "wide"].map((list) => leverCell(tables, "exchange", leverage, list).worst_pct));
+  const bound = (coin, notional) => {
+    const sizes = Object.keys(book.walk_bps[coin]).map(Number).sort((a, b) => a - b);
+    return book.walk_bps[coin][String(sizes.find((z) => z >= notional) ?? sizes[sizes.length - 1])];
+  };
+  const low = Math.min(...Object.values(book.half_spread_bps)) * leverage / 100;
+  const high = Math.max(...book.seats_usd.flatMap((seat) => Object.keys(book.walk_bps)
+    .map((coin) => bound(coin, seat * leverage).p99))) * leverage / 100;
+  return { line, low: line + low, high: line + high };
+}
+
+/**
+ * Who takes the loss, and what the investor decides about it: the three layers that guard a seat, then
+ * the levers with what each cost on the worst measured day, then the worst case, named as the case
+ * without a stop on the exchange. Every figure is read from the table; a card that restates them in prose
+ * drifts from the measurement the first time it is redone.
+ */
+export function leversCard(tables) {
+  const L = tables.levers;
+  const cell = (stop, lev, list, exec) => leverCell(tables, stop, lev, list, exec);
+  const keeper = (lev, list) => {
+    const [open, worst] = [cell("keeper", lev, list, "open"), cell("keeper", lev, list, "worst")];
+    const [least, most] = [open, worst].map((c) => c.seats_liquidated_on_worst).sort((a, b) => a - b);
+    return `${points(open.worst_pct)} to ${points(worst.worst_pct)}`
+      + (most ? `, ${least === most ? "" : "up to "}${most} of 5 seats liquidated` : "");
+  };
+  const medians = L.cells.map((c) => c.median_of_days_pct);
+  const day = cell("keeper", 5, "wide", "worst").worst_day;
+  const [b3, b5] = [exchangeBracket(tables, 3), exchangeBracket(tables, 5)];
+  const tail = [cell("keeper", 5, "wide", "open"), cell("keeper", 5, "wide", "worst")];
+  const rows = [3, 5].map((lev) => `<tr><td>${lev}x</td>
+      <td>${points(cell("exchange", lev, "default").worst_pct, 1)}</td>
+      <td>${points(cell("exchange", lev, "wide").worst_pct, 1)}</td>
+      <td>${keeper(lev, "default")}</td><td>${keeper(lev, "wide")}</td></tr>`).join("");
+  return `<p>Three things guard a seat, one after another.</p>
+    <ol>
+      <li><strong>Before signing, the gateway.</strong> It keeps to the platform's list of assets and its size
+      caps.</li>
+      <li><strong>On the exchange, a stop at the rule line and a take at the target.</strong> The gateway puts
+      them on Hyperliquid before any order that may open a position, so the exchange closes at the line
+      without waiting for anyone. <em>On this site since 29 Sep 2026, after a live check on testnet through a
+      gateway running the same code.</em></li>
+      <li><strong>After the fact, the contract.</strong> Anyone may stop an account that broke a rule, and our
+      keeper looks every 30 seconds; between the crossing and the stop landing, a loss can go past the line.</li>
+    </ol>
+    <p>The levers below are measured on the long side, as in the headline of the cascade package's README;
+    the cascade further down shows the worse of the two sides on the same days.</p>
+    <p>Where the stop sits is the investor's biggest lever, and two more sit beside it: the leverage the seats
+    may take, and the coins they may trade. Replayed through these rules on one-minute bars of the eight worst
+    crash days between ${esc([...L.days].sort()[0])} and ${esc([...L.days].sort().at(-1))}, here is what each
+    choice cost on the worst of them, ${esc(day)}, as a share of the seats' capital — the investor's own
+    money:</p>
+    <div class="scroll"><table>
+      <tr><th rowspan="2">Leverage</th><th colspan="2">Stop on the exchange, at the line<br>(this site, since 29 Sep 2026)</th>
+        <th colspan="2">Stop with the keeper alone, a minute late<br>(before 29 Sep 2026)</th></tr>
+      <tr><th>BTC, ETH, SOL</th><th>With alts</th><th>BTC, ETH, SOL</th><th>With alts</th></tr>
+      ${rows}
+    </table></div>
+    <p>On the median day the levers barely matter: it cost ${points(Math.min(...medians), 2)} to
+    ${points(Math.max(...medians), 2)} in every combination. They decide the tail.</p>
+    <p>A stop on the exchange closes at the line, and walking the order book comes on top: with it, the
+    worst day is at most ${points(b3.high, 1)} at 3x and ${points(b5.high, 1)} at 5x, the book taken from
+    ${esc(L.book.measured)}. The book in a cascade has never been measured, so on a day like ${esc(day)} the
+    fill could be worse.</p>
+    <p><strong>Without a stop on the exchange</strong>, on a list with alts at 5x, the worst entry of that
+    day took ${points(tail[0].worst_pct)} to ${points(tail[1].worst_pct)} of the seats' capital and liquidated
+    ${Math.max(...tail.map((c) => c.seats_liquidated_on_worst))} of the five seats. How often such a day comes is
+    not measured, and the venue replayed is Bybit, not Hyperliquid.</p>`;
 }
 
 /**
