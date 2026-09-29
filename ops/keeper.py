@@ -17,9 +17,9 @@ For every pool it follows, one pass does what is due:
   challenge Created  → abort at once if the reserved key is spoiled; activate once the capital
                        is there; abort after the start window if not
   challenge Active   → checkpoint in the first minutes of a UTC day; breach if a rule is broken;
-                       expire after the deadline
+                       expire after the deadline; otherwise say so if a position has no stop
   challenge stopped  → recut if the cut key still trades; settle one step
-  pool Funded        → checkpoint; breach if a rule is broken
+  pool Funded        → checkpoint; breach if a rule is broken; otherwise the same stop check
   pool Closing       → recut if the cut key still trades; settleFunded one step
 
 HyperCore ignores a replacement agent that already has an account (spike question 8, 17 Sep
@@ -43,6 +43,7 @@ import os
 import pathlib
 import sys
 import time
+from decimal import Decimal
 
 from eth_utils import keccak, to_checksum_address
 
@@ -128,6 +129,38 @@ def send(wallet, addr: str, sig: str, types=(), args=(), dry=False) -> None:
             unfunded=None if gas is None else unfunded(gas))
 
 
+def unprotected(account: str) -> list[dict]:
+    """Open positions with no stop on Hyperliquid itself: no reduce-only stop market order on the side
+    that would close them, for the whole position. The gateway puts one there before every order that may
+    open a position, and sweeps for the rest (gateway/protect.py); the keeper holds no key to place
+    one, so all it can do is say so."""
+    positions = c.info_post({"type": "clearinghouseState", "user": account}).get("assetPositions", [])
+    orders = c.info_post({"type": "frontendOpenOrders", "user": account})
+    gaps = []
+    for entry in positions:
+        p = entry["position"]
+        size = Decimal(p["szi"])
+        if size == 0:
+            continue
+        closing = "A" if size > 0 else "B"
+        if not any(o.get("coin") == p["coin"] and o.get("isTrigger") and o.get("reduceOnly") and o.get("side") == closing
+                   and o.get("orderType") == "Stop Market"  # a stop limit may rest unfilled past its trigger
+                   and (o.get("isPositionTpsl") or Decimal(o.get("sz") or "0") >= abs(size))
+                   for o in orders):
+            gaps.append({"coin": p["coin"], "size": p["szi"]})
+    return gaps
+
+
+def check_protection(account: str) -> None:
+    """Logs each open position that has no stop on the exchange. A failed read is logged too and
+    never stops the pass: the rules are still the contract's to enforce."""
+    try:
+        for gap in unprotected(account):
+            log("protection_missing", account=account, **gap)
+    except Exception as exc:
+        log("protection_check_failed", account=account, error=str(exc)[:200])
+
+
 def in_checkpoint_window(now: int) -> bool:
     return now % 86400 < CHECKPOINT_WINDOW
 
@@ -176,6 +209,8 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
             stop(wallet, ch, "breach", cancels, extra, dry)
         elif now > view(ch, "deadline()", "uint64"):
             stop(wallet, ch, "expire", cancels, extra, dry)
+        else:
+            check_protection(ch)
     else:
         recut_if_uncut(wallet, ch, latest, dry)
         send(wallet, ch, f"settle({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
@@ -196,6 +231,8 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
             if reason:
                 log("breach_found", account=pool, reason=reason)
                 stop(wallet, pool, "breach", cancels, extra, dry)
+            else:
+                check_protection(pool)
         else:
             recut_if_uncut(wallet, pool, latest, dry)
             send(wallet, pool, f"settleFunded({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)

@@ -1,5 +1,5 @@
-"""A trader's client for the pool gateway: signs one order or one cancel with the trader's
-wallet and posts it. Used by the demo bot, by `agents.ai_trader`, and from the command line by
+"""A trader's client for the pool gateway: signs one order, one cancel, or a move of the
+account's stop or take with the trader's wallet and posts it. Used by the demo bot, by `agents.ai_trader`, and from the command line by
 the Claude Code window that trades the demo:
 
     spike/.venv/bin/python -m agents.client --deployment demo pools
@@ -84,6 +84,23 @@ class GatewayClient:
             "account": to_checksum_address(account), "asset": asset, "oid": oid,
             "nonce": nonce, "expiresAt": expires,
         })
+
+    def _move(self, kind: str, account: str, asset: int, trigger_px: str) -> Any:
+        nonce, expires = self._nonce()
+        return self._post(kind, {
+            "account": to_checksum_address(account), "asset": asset, "triggerPx": trigger_px,
+            "nonce": nonce, "expiresAt": expires,
+        })
+
+    def stop(self, account: str, asset: int, trigger_px: str) -> Any:
+        """Moves the account's stop on this asset to trigger_px: the gateway allows it only nearer
+        the mark than where it is."""
+        return self._move("stop", account, asset, trigger_px)
+
+    def take(self, account: str, asset: int, trigger_px: str) -> Any:
+        """Moves the account's take on this asset to trigger_px, anywhere between the mark and the
+        target."""
+        return self._move("take", account, asset, trigger_px)
 
 
 def canonical(value: float, decimals: int) -> str:

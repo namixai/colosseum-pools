@@ -12,8 +12,11 @@ import unittest
 from eth_account import Account
 from hyperliquid.utils.signing import sign_l1_action
 
+from decimal import Decimal
+
 from gateway import auth, hl
 from gateway.checks import GatewayError, NonceBook, Request, check
+from gateway.protect import LONG, Book, Market, Protective, RuleLimits
 from gateway.server import Gateway
 from gateway.signer import SignResult
 
@@ -68,6 +71,33 @@ class FakeReader:
 
     def allowed_assets(self, account):
         return self.assets
+
+    def rule_limits(self, account):
+        # A funded pool with 1000 USDC of equity at the start: floors of 950 (drawdown) and 970 (day).
+        return RuleLimits(False, 300, 500, 1_000_000_000, 20_833, 1_000_000_000, 800)
+
+    def day_snapshot(self, account):
+        return 20_833, 1_000_000_000
+
+
+class QuietVenue:
+    """Hyperliquid as the stop and take see it, for tests about something else: a long BTC and
+    ETH position whose stop and take already sit one tick from the mark, tighter than any rule
+    line, so the gateway has nothing of its own to send before a buy."""
+
+    MARKETS = {0: Market("SOL", Decimal("150"), 2), 3: Market("BTC", Decimal("60000"), 5),
+               4: Market("ETH", Decimal("3000"), 4)}
+
+    def markets(self):
+        return dict(self.MARKETS)
+
+    def book(self, account, markets):
+        protective = []
+        for asset, oid in ((3, 900), (4, 910)):
+            mark = self.MARKETS[asset].mark
+            step = Decimal("1") if asset == 3 else Decimal("0.1")
+            protective += [Protective(oid, asset, LONG, "sl", mark - step), Protective(oid + 1, asset, LONG, "tp", mark + step)]
+        return Book(Decimal("1000"), {3: Decimal("0.001"), 4: Decimal("0.01")}, {}, protective)
 
 
 class FakeSigner:
@@ -304,7 +334,7 @@ class Flow(Base):
             self.submitted.append((action, nonce, signature))
             return answer
 
-        return Gateway(self.reader, signer, submit=submit, clock=lambda: NOW / 1000)
+        return Gateway(self.reader, signer, submit=submit, clock=lambda: NOW / 1000, venue=QuietVenue())
 
     def test_submits_what_the_trader_signed_and_the_enclave_signed(self):
         signer = FakeSigner(self.enclave_key, self.enclave_key.address)
