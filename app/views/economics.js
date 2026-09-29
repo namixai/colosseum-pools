@@ -79,8 +79,8 @@ export async function economicsView(page) {
       <p>The daily loss line and the drawdown line hold on an ordinary bad day. A cascade is a
       different thing, and the block below is <strong>not part of the model above</strong>: it is a
       measurement of real crash days replayed through these rules. It carries no frequency, so it is
-      never subtracted from the returns. It is the stop as a pool runs today, <strong>with the keeper, a
-      minute late</strong>: with the stop on the exchange, the same day stays at the line (the levers above).</p>
+      never subtracted from the returns. It is the stop <strong>with the keeper alone, a minute late</strong>, as
+      pools ran before 29 Sep 2026: with the stop on the exchange, the same day stays at the line (the levers above).</p>
       <div id="cascade" class="muted">…</div>
     </section>`);
   await loadTables();
@@ -325,7 +325,8 @@ export function leversCard(tables) {
       caps.</li>
       <li><strong>On the exchange, a stop at the rule line and a take at the target.</strong> The gateway puts
       them on Hyperliquid before any order that may open a position, so the exchange closes at the line
-      without waiting for anyone. <em>Being built: checked live on testnet, not yet running on this site.</em></li>
+      without waiting for anyone. <em>On this site since 29 Sep 2026, after a live check on testnet through a
+      gateway running the same code.</em></li>
       <li><strong>After the fact, the contract.</strong> Anyone may stop an account that broke a rule, and our
       keeper looks every 30 seconds; between the crossing and the stop landing, a loss can go past the line.</li>
     </ol>
@@ -337,8 +338,8 @@ export function leversCard(tables) {
     choice cost on the worst of them, ${esc(day)}, as a share of the seats' capital — the investor's own
     money:</p>
     <div class="scroll"><table>
-      <tr><th rowspan="2">Leverage</th><th colspan="2">Stop on the exchange, at the line<br>(being built)</th>
-        <th colspan="2">Stop with the keeper, a minute late<br>(today)</th></tr>
+      <tr><th rowspan="2">Leverage</th><th colspan="2">Stop on the exchange, at the line<br>(this site, since 29 Sep 2026)</th>
+        <th colspan="2">Stop with the keeper alone, a minute late<br>(before 29 Sep 2026)</th></tr>
       <tr><th>BTC, ETH, SOL</th><th>With alts</th><th>BTC, ETH, SOL</th><th>With alts</th></tr>
       ${rows}
     </table></div>

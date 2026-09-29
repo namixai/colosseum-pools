@@ -2,8 +2,8 @@
 //
 // The levers an investor sets, on the Economics page: where the stop sits, the leverage, the coins. The figures are the
 // cascade package's own lever runs (stress/results/levers-2026-09-29.json, made by stress/make_levers.py), copied into
-// the table's block `levers`; the card reads every one of them from there. The stop on the exchange is being built, and
-// the card says so; the worst case comes last, and it is named as the case without that stop.
+// the table's block `levers`; the card reads every one of them from there. The stop on the exchange runs on this site
+// since 29 Sep 2026, and the card says so; the worst case comes last, and it is named as the case without that stop.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
@@ -106,12 +106,13 @@ test("the card reads every figure from the table, and moves with it", () => {
   assert.match(moved, /2\.50% to 3\.91%/);
 });
 
-test("the stop on the exchange is labelled as being built, the keeper as what runs today", () => {
+test("the stop on the exchange is labelled with the day it went live here, the keeper alone as before it", () => {
   const card = words(leversCard(TABLES));
-  assert.match(card, /Stop on the exchange, at the line \(being built\)/);
-  assert.match(card, /Stop with the keeper, a minute late \(today\)/);
-  assert.match(card, /Being built: checked live on testnet, not yet running on this site\./);
-  // Nothing the gateway does only in the branch that isn't live is claimed of the gateway that is.
+  assert.match(card, /Stop on the exchange, at the line \(this site, since 29 Sep 2026\)/);
+  assert.match(card, /Stop with the keeper alone, a minute late \(before 29 Sep 2026\)/);
+  assert.match(card, /On this site since 29 Sep 2026, after a live check on testnet through a gateway running the same code\./);
+  assert.doesNotMatch(card, /[Bb]eing built|today/);
+  // The card claims no more of the gateway than its three layers say.
   assert.doesNotMatch(card, /refuses to open/);
 });
 
@@ -135,7 +136,8 @@ test("the page puts the card where the loss is told, and the cascade block says 
   assert.match(source, /\$\("#who", page\)\.innerHTML = leversCard\(tables\);/);
   assert.match(source, /The capital in a pool is the investor's/);
   const block = source.slice(source.indexOf("What the rules do not protect against")).replace(/\s+/g, " ");
-  assert.match(block, /with the keeper, a minute late<\/strong>: with the stop on the exchange, the same day stays at the line/);
+  assert.match(block, /with the keeper alone, a minute late<\/strong>, as pools ran before 29 Sep 2026: with the stop on the exchange, the same day stays at the line/);
+  assert.doesNotMatch(block, /runs today/);
   assert.match(source.replace(/\s+/g, " "), /The exceptions on this page are the levers an investor sets and the cascade further down/);
 });
 
