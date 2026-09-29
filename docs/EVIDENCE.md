@@ -139,14 +139,15 @@ The state transitions and the records above are real. How they were reached, pla
 - **The third is not a bench, and neither are its terms.** The first row — challenge
   `0xf01f16d0…`, stopped for leverage — ran on the demo pool
   `0x2839d3c872ce82151a16afe0315756915d8a9b79`: **8% target, 3% daily, 6% drawdown**, the terms
-  an investor would actually set. That pool was opened from a different wallet
-  (`0x21538eBF…`) through the site's own form, capital sent by hand on HyperCore, not deployed by
+  an investor would actually set. That pool was opened from another wallet of
+  ours through the site's own form, capital sent by hand on HyperCore, not deployed by
   a script. So the softest thing about that record is nothing: the rule it broke is the rule a
   real pool would carry.
 - **Every wallet here is ours.** Three of them: the deploy key that owns the two benches
-  (`0x00d014df…`), the trader (`0xdc87191c…`), and the one that opened the demo pool
-  (`0x21538eBF…`). So where a line says a pool's investor or its trader did something, read "we
-  did, wearing that hat". The mechanism is what the chain proves; an arm's-length trader is not.
+  (`0x00d014df…`), the trader (`0xdc87191c…`), and the one that opened the demo
+  pool, which is named here only as that: the first two belong to the project and the third
+  belongs to a person, and a short address is still an address. So where a line says a pool's
+  investor or its trader did something, read "we did, wearing that hat". The mechanism is what the chain proves; an arm's-length trader is not.
   The keeper's two addresses are ours as well, and the only actor here that decided anything
   without being told.
 - **The money is testnet money** and the USDC is mock.
