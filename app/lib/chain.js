@@ -102,7 +102,7 @@ export const ABI = {
 };
 
 export const STATUS = ["None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled"];
-export const STAGE = ["Idle", "Challenge", "Funded", "Closing"];
+export const STAGE = ["Idle", "Challenge", "Funded", "Closing", "PassedAwaitingKey"];
 export const BREACH = ["None", "Drawdown", "Daily loss", "Leverage", "Forbidden asset"];
 export const KEY_STATE = ["Unknown", "Free", "Bound", "Retired"];
 

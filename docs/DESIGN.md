@@ -1,6 +1,7 @@
 # Design: pools, challenges and a stop anyone can pull
 
-Status: working design, 16 September 2026, updated on 17 September after the live spike.
+Status: working design, 16 September 2026, updated on 17 September after the live spike, and on
+28 September with the stop and the take on the exchange ("Three layers").
 `spike/README.md` has the HyperCore behaviour this design leans on and how each piece was
 checked.
 
@@ -61,8 +62,10 @@ investor's capital and the published agent keys on nothing.
 Platform fee (per factory, set by the operator, zero by default; the testnet deployment sets
 0.7 test USDC): paid by every challenge buyer on top of the price, to the operator's fee
 recipient, and not refunded. A challenge uses
-one agent key for good, and a pool's owner can sell challenges to itself at price zero, so
-without a fee anyone could use up the published keys for the cost of gas.
+one agent key for good, so without a fee a pool's owner could sell challenges to themselves at
+whatever price they liked and use up the published keys cheaply. Not for nothing, though: the
+paragraph above says a price of zero is refused at creation, and it is (`PoolFactory`), so the
+owner would be paying themselves the price while the fee is the only part that leaves.
 
 Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0), in units of
 1e-6 USDC. Precompiles return the state at the start of the block.
@@ -89,7 +92,9 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    The gateway checks on chain that the key is bound to this account and this trader and that
    the challenge is active, checks the platform's caps (asset list, a size cap per asset,
    400 USDC per order), and signs with that key, which it holds. An order over a cap is
-   refused before anything is signed.
+   refused before anything is signed. Before an order that may open a position goes, the
+   gateway puts a stop at the account's rule line and a take at its target on Hyperliquid
+   itself (see "Three layers" below).
 4. **Stop** (`breach(cancels, assets, salt)`, anyone). Allowed only when a rule is broken at
    the start of the block: drawdown floor, daily loss, leverage, or a position in an asset
    outside the list. In this order:
@@ -142,6 +147,38 @@ open, before any of it moves to spot. The equity at the stop is kept for the rec
 reduce-only close can fill worse than the mark it was priced from, and a share computed from
 the mark would make the investor pay the difference.
 
+## Three layers
+
+A pool's rules are held in three places, each covering what the one before can't.
+
+1. **Before signing: the policy.** The gateway checks on chain that the key is bound to this
+   account and this trader and that the account may trade, keeps to the platform's assets and
+   caps, and refuses an order that may open a position when equity is already at the rule line
+   or a challenge is at its target. It binds only what goes through the gateway.
+2. **On the exchange: the stop and the take.** Before any order that may open or grow a position,
+   the gateway puts a stop at the rule line (the price at which equity would reach the higher of
+   the drawdown floor and the day's floor, the budget shared across positions in proportion to
+   their notional) and a take at the target (the pass target in a challenge; in a funded stage,
+   at most one target's worth of the equity it has), as reduce-only position TP/SL orders on
+   Hyperliquid for the whole position. Hyperliquid closes at the line on the mark price without
+   waiting for anyone. The trader may move a stop nearer the mark and a take within the target,
+   and may cancel neither. A sweep puts back what a position that opened later is missing.
+   docs/GATEWAY.md has the arithmetic and each assumption it rests on.
+3. **After the fact: the contract.** Anyone may stop an account that breaks a rule at the start
+   of a block; the keeper looks every 30 seconds, cuts the key, cancels and closes (above). It
+   also says in its log when an open position has no stop on the exchange, which it can't place
+   itself: it holds no agent key.
+
+The second layer exists because of the delay in the third. In the cascade package (`stress/`,
+Bybit bars, not Hyperliquid), the worst entry of 10 October 2025 lost 83.7–94.1 % of the stress
+test's pool on the long side when each stop filled a minute late, and 3 of its 5 seats were
+liquidated. A stop on the exchange takes that minute out. It does not take out slippage: a
+stop-market in a cascade fills below its trigger, within Hyperliquid's 10 % tolerance for a
+triggered market order, and how far below on a day like that is not known: Hyperliquid's book has
+been measured only in a calm market, never in a cascade. So the honest claim is the delay taken
+out, not a loss figure. And the line is the rule itself: when a stop fires, the account is at its
+limit, the fee and the fill take it past, and the stage ends through the contract as before.
+
 ## What a cycle costs the pool, and why the two sides don't meet
 
 A pool that has run a full cycle usually can't sell the next challenge out of what came home,
@@ -176,14 +213,49 @@ before it can sell again.
 
 ## What the design does not do
 
+- **A pool's owner can buy their way out of funding a trader who passed, for about the price of
+  the keys.** When a trader passes, the pool holds its capital in a stage that waits for an agent
+  key, so the owner cannot simply withdraw from under them. That wait has to end, though: if no
+  key is ever published the capital would be locked for good, which is worse than the hole the
+  wait closes. So after seven days -- one challenge term -- anyone may call
+  `abandonFundedStage`, the pool returns to Idle, and the trader keeps the pass and the challenge
+  share they earned while the event records that this pool never funded them.
+  The release is refused while a key is there to be had: the pool checks, at the moment it is
+  asked, that the key it reserved is spoiled and that the registry lists nothing free. So a week of
+  nobody bothering to call `openFundedStage` cannot cost a trader their stage — only a week with no
+  key can.
+  An owner who wants that outcome has to make it true and leave the traces: give every free key a
+  HyperCore account (about 1 USDC apiece), including the one the sale reserved, and then call
+  `KeyRegistry.purgeSpoiled` so the count actually reaches zero. That last call is public and
+  anyone can make it, which is the point — the registry has to be visibly empty, not merely full of
+  keys nobody checked. What stands against the whole thing is cost and daylight, not a rule. The
+  operator can publish keys at any time and each one has to be spoiled again; the count the
+  gateway holds and the registry's `freeCount()` are both public, so the two drifting apart is
+  visible, and `docs/HOSTING.md` says to keep them reconciled. The release is open to anyone
+  rather than to the owner on purpose -- the owner is the one who gains from it, so it should not
+  be theirs alone to trigger. Found while designing the fix for A-02 and written down rather than
+  left for someone else to find; the seven days and the "anyone" are one line each to change.
+- **It cannot tell profit from a deposit, so a pass can be bought.** The target and the
+  trader's share are both measured from the challenge account's perp equity
+  (`ChallengeAccount.graduate`), and that number rises for any USDC sent to the account —
+  a trade is not required and the contract cannot see the difference. A trader who sends
+  their challenge the target amount passes without trading, takes their share of that
+  "profit" back, and the pool funds them. The price of a bought pass is the target less the
+  trader's share of it, plus the challenge price and the fee. On chain there is no fix:
+  HyperCore offers no precompile that separates an incoming transfer from a realised gain.
+  So read a pass as "the account reached the target", not as "this trader can trade", and
+  price the pool on the first reading. Found by the audit, 25 September 2026.
 - It does not check a trader's intent: the operator runs the gateway and could submit an
   order that fits the rules without the trader asking for it.
 - In the demo the gateway holds the agent keys. A key file can sign anything Hyperliquid lets
   an agent sign, so whoever controls the gateway host can trade those accounts, within the
   caps or not, until someone stops them.
-- It does not check the investor's limits before signing; the gateway applies one platform
-  policy. Contracts enforce the pool rules after the fact, by stopping the account. Losses can overshoot a limit between the breach and
-  the stop landing.
+- It does not refuse an order for the room it would use under the investor's limits; the gateway
+  applies one platform policy, refuses to open at the rule line, and puts a stop at that line on
+  Hyperliquid before anything may open. The contracts still enforce the rules after the fact, by
+  stopping the account. Losses can overshoot a limit: by the stop's slippage when it fires, and
+  by the keeper's delay when there is no stop on the exchange — a position that opened from a
+  resting order in the seconds before the sweep reached it, or a gateway that is down.
 - The daily snapshot can only be taken in the first 15 minutes of a UTC day, once, so nobody
   can pick a convenient moment later. The keeper takes it at midnight and anyone else may.
   If nobody does, the previous snapshot stays in force, which can make the day's limit
@@ -199,10 +271,13 @@ before it can sell again.
   `ChallengeCreated` events, which cost the buyer the challenge price and need the pool's
   capital in place. A long pool list still makes `PoolFactory.pools()` expensive to read for
   anyone else who calls it.
-- The platform fee is the only brake on using up the agent keys. At zero, anyone can buy
-  challenges from their own zero-price pool and burn one key each. The operator sets the fee
-  and can change it at any time, including between a buyer's approval and purchase; a buyer
-  who approves exactly price plus fee can't be charged more.
+- The platform fee is the brake on BUYING up the agent keys, and it is not the only way keys go.
+  At a fee of zero the owner of a pool can buy its challenges themselves — paying themselves the
+  price, since zero is refused at creation — and burn one key each. But a key can also be spoiled
+  without buying anything at all, for about 1 USDC and no fee (below), so the fee is a brake on one
+  road and not on the other. It used to say "the only brake", which was wrong in both halves.
+  The operator sets the fee and can change it at any time, including between a buyer's approval and
+  purchase; a buyer who approves exactly price plus fee can't be charged more.
 - USDC sent to a pool on HyperEVM is lost on testnet: the bridge doesn't credit contracts.
   The contracts have no entry point for it, and the app says so, but nothing stops a plain
   ERC-20 transfer to the pool's address.
@@ -214,6 +289,18 @@ before it can sell again.
   HyperCore won't take it as an agent then. The registry retires such a key instead of
   handing it out, and a challenge whose reserved key was spoiled before the start can be
   aborted at once for a refund of the price. The platform fee isn't refunded, so this costs
-  a buyer the fee and costs the attacker 1 USDC per key. What happens when someone sends
-  USDC to a key that is already an agent is untested.
+  a buyer the fee, costs the attacker about 1 USDC per key — and costs the POOL 1 USDC as well,
+  which the earlier version of this line left out: creating the spoiled challenge's HyperCore
+  account is paid for by the sender, and an abort returns the price and the capital, not that.
+  What happens when someone sends USDC to a key that is ALREADY an agent is no longer untested:
+  measured on testnet on 25 September 2026, the agency survives it. The address keeps signing for
+  the account exactly as before, so a live trader cannot be switched off this way. HyperCore's rule
+  is about becoming an agent, not about staying one — which is why the window that matters runs
+  from a key being reserved to it being set as the agent, and both ends of it are guarded
+  (`ChallengeAccount.activate`, `Pool.openFundedStage`). Those two guards read the key's state
+  **at the start of their block**, and the agent is set after it, so a spoiling transfer landing
+  in the same block is not seen by them — HyperCore then ignores the assignment silently and the
+  account has an agent that cannot sign. Whoever does that has to land in one particular block
+  rather than any time in the week the key sits there, which is a much smaller window and not a
+  closed one. Raised by the audit, 28 September 2026.
 - One trader per pool, no pool shares, no leaderboard, no mainnet.

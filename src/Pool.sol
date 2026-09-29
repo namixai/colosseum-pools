@@ -32,7 +32,12 @@ contract Pool is RuledAccount {
         Idle,
         Challenge,
         Funded,
-        Closing
+        Closing,
+        /// The trader met the target and the pass is recorded, but the funded stage has no key
+        /// yet. Appended rather than placed where it belongs in the life of a pool: the app
+        /// reads this deployment and the one before it, and a number that means two different
+        /// things on two factories has to be branched on everywhere it appears.
+        PassedAwaitingKey
     }
 
     address public owner;
@@ -42,12 +47,20 @@ contract Pool is RuledAccount {
     Stage public stage;
     address public challenge;
     address public challengeTrader;
+    /// The agent key this pool has already taken for the funded stage, held from the moment the
+    /// challenge is sold. Zero once it is in use or given back.
+    address public reservedKey;
     /// Price paid for the current challenge, held until it starts (HyperEVM USDC units).
     uint256 public heldPrice;
     /// Prices of started challenges, withdrawable by the owner (HyperEVM USDC units).
     uint256 public earned;
 
     address public fundedTrader;
+    /// The block a withdrawal left in. A sale in the same block would check the balance through a
+    /// precompile, which answers with the START of the block and cannot see the money going out.
+    uint64 public withdrewAtBlock;
+    /// When the pass was recorded, so the wait for a key cannot run for ever.
+    uint64 public passedAt;
     int64 public fundedStart;
     Breach public fundedEndReason;
     /// Account value when the funded stage was stopped, positions marked at the start of that
@@ -67,8 +80,18 @@ contract Pool is RuledAccount {
     /// sold against money that is already on its way out.
     uint64 public fundedPayoutSpotBefore;
     uint64 public fundedPayoutAt;
+    /// When this step first had to wait because the share was short and money was crossing.
+    uint64 public fundedPayoutShortAt;
+    /// The block in which a closing step sent the perp side across to spot. A BLOCK and not a
+    /// flag: precompiles answer with the start of the block, so two steps in one block read the
+    /// same stale numbers, and a flag would wave the second one through. Zero until it happens.
+    uint64 public fundedDrainBlock;
 
     uint64 public constant PAYOUT_WAIT = 5 minutes;
+    /// How long a pool holds its capital for a trader who passed but has no key yet. After it,
+    /// anyone may release the pool -- the pass and the challenge share stay with the trader, and
+    /// the event says the platform never funded them.
+    uint64 public constant AWAIT_KEY_WINDOW = 7 days;
 
     event AccountReady();
     event ChallengeSold(address indexed challenge, address indexed trader, uint256 price);
@@ -78,6 +101,8 @@ contract Pool is RuledAccount {
     event FundedStopped(address indexed trader, Breach indexed reason, int64 equity);
     event FundedResult(address indexed trader, int64 realized, uint64 payout);
     event FundedPayoutSent(address indexed trader, uint64 amount);
+    event TraderPassed(address indexed trader);
+    event FundedStageAbandoned(address indexed trader);
     event FundedClosed(address indexed trader);
     event WithdrawnOnCore(address indexed to, uint64 amount);
     event EarnedWithdrawn(address indexed to, uint256 amount);
@@ -88,6 +113,9 @@ contract Pool is RuledAccount {
     error NotReady();
     error NotEnoughCapital(uint64 spot, uint64 needed);
     error NotAllowed();
+    error TooEarly();
+    error KeyAvailable();
+    error WithdrawnThisBlock();
 
     constructor() {
         _disableInitializers();
@@ -145,6 +173,7 @@ contract Pool is RuledAccount {
 
     /// @notice Sends spot USDC to the owner on HyperCore. Only while no trader holds the pool.
     function withdrawOnCore(uint64 amount1e8) external onlyOwner inStage(Stage.Idle) {
+        withdrewAtBlock = uint64(block.number);
         CoreOps.sendUsdc(owner, amount1e8);
         emit WithdrawnOnCore(owner, amount1e8);
     }
@@ -169,6 +198,13 @@ contract Pool is RuledAccount {
     ///         challenge capital and for funding the trader afterwards.
     function buyChallenge() external inStage(Stage.Idle) returns (address ch) {
         if (!accountReady) revert NotReady();
+        // Audit A-08. The capital check below reads a precompile, which answers with the start of
+        // the block, so a withdrawal earlier in the SAME block is invisible to it: the sale would
+        // be allowed on money that had already left, the transfer to the fresh challenge would
+        // quietly not happen, and the buyer would be out the platform's fee and an hour's wait for
+        // a refund. Same start-of-block blindness as A-11 and A-04, on the way in this time.
+        // SharedPool.releaseSeat goes through withdrawOnCore, so it is covered by the same line.
+        if (block.number <= withdrewAtBlock) revert WithdrawnThisBlock();
         // A passed challenge can still be settling after its funded stage has closed.
         if (challenge != address(0)) revert BadStage(stage);
         uint64 needed = capitalNeeded();
@@ -193,6 +229,13 @@ contract Pool is RuledAccount {
 
         ch = IPoolFactory(address(factory)).createChallenge(msg.sender);
         challenge = ch;
+        // The key for the funded stage is taken NOW, not when the trader passes. Free keys are
+        // public and anyone can spoil one for the price of an account on HyperCore, so a trader
+        // who did everything asked could otherwise reach the pass and find the registry empty --
+        // losing the funded stage, and their share of it, to a stranger. The challenge's own key
+        // is reserved at ChallengeAccount.initialize for exactly this reason; this is the other
+        // half of the same promise.
+        reservedKey = factory.registry().assign(msg.sender);
         CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);
         emit ChallengeSold(ch, msg.sender, price);
     }
@@ -209,13 +252,40 @@ contract Pool is RuledAccount {
         emit ChallengeRefunded(challenge, challengeTrader, price);
     }
 
-    /// @notice The trader passed: bind a new key to this account for them and fund it.
+    /// @notice The trader passed. Recorded here and now, whatever state the key registry is
+    ///         in: opening the funded stage is a separate call that anyone may make.
+    /// @dev    This split is the whole of audit A-02. While this function took a key, a stranger
+    ///         who had drained the free list decided whether a trader who had already met the
+    ///         target got their stage at all -- graduate reverted, the deadline passed, and the
+    ///         trader was left with `expire`: no funded stage, no share of one, and the
+    ///         challenge's profit staying in the pool. Nothing a third party can do reaches this
+    ///         function now. The pool holds its capital in the meantime, so the investor cannot
+    ///         withdraw from under someone who passed.
     function onChallengePassed(address trader) external onlyChallenge inStage(Stage.Challenge) {
-        stage = Stage.Funded;
+        stage = Stage.PassedAwaitingKey;
         fundedTrader = trader;
         fundedEndReason = Breach.None;
+        passedAt = uint64(block.timestamp);
+        emit TraderPassed(trader);
+    }
 
-        address key = factory.registry().assign(trader);
+    /// @notice Opens the funded stage for the trader who passed, as soon as a live key exists.
+    ///         Anyone may call it; the keeper does.
+    /// @dev    If there is no live key this reverts and the pool stays where it is, so the call
+    ///         can simply be made again later -- which is the point: a refusal here costs a
+    ///         retry, where before it cost the trader the stage.
+    function openFundedStage() external inStage(Stage.PassedAwaitingKey) {
+        address key = reservedKey;
+        reservedKey = address(0);
+        // The reserved key has been public since the sale -- KeyBound names it -- so a stranger
+        // had the whole challenge term to give it an account, and HyperCore then takes such an
+        // address as an agent silently and does nothing (spike question 8). A funded stage on a
+        // dead key looks open and cannot trade, which is worse than any refusal.
+        if (key == address(0) || CoreOps.exists(key)) {
+            if (key != address(0)) factory.registry().retire(key);
+            key = factory.registry().assign(fundedTrader);
+        }
+        stage = Stage.Funded;
         _setAgent(key);
         // Sending the challenge capital may have cost an activation fee, so fund what is
         // there, up to the terms.
@@ -225,13 +295,54 @@ contract Pool is RuledAccount {
         fundedStart = start;
         CoreOps.toPerp(funded);
         _startDay(start);
-        emit TraderFunded(trader, key, funded);
+        emit TraderFunded(fundedTrader, key, funded);
+    }
+
+    /// @notice Releases a pool that has been waiting for a key longer than the window. Anyone
+    ///         may call it.
+    /// @dev    Without this the pool holds its capital for ever if no key is ever published,
+    ///         which is a worse hole than the one the wait closes. The trader keeps the pass and
+    ///         the challenge share they earned; what the event records is that this pool never
+    ///         funded them, which is a mark on the pool and not on the trader.
+    function abandonFundedStage() external inStage(Stage.PassedAwaitingKey) {
+        if (block.timestamp <= passedAt + AWAIT_KEY_WINDOW) revert TooEarly();
+        // The window is not enough on its own. A pool may only be released when there is no key
+        // to be had RIGHT NOW -- otherwise a week of nobody calling openFundedStage would drop a
+        // trader who passed while a usable key sat in the registry, which is the outcome the wait
+        // exists to prevent. Audit's condition on this function, and it was right.
+        if (reservedKey != address(0) && !CoreOps.exists(reservedKey)) revert KeyAvailable();
+        // freeCount() counts entries, and a spoiled key is still an entry until somebody sweeps
+        // it. Refusing on a non-zero count is deliberate: it does not decide from here whether
+        // those keys are alive, it makes someone say so on chain first. Anyone may call
+        // KeyRegistry.purgeSpoiled, which stops at the first key that is still good -- so a zero
+        // count after a sweep means there really is nothing, and a live key keeps the count up
+        // and this refusal standing.
+        if (factory.registry().freeCount() != 0) revert KeyAvailable();
+        address spare = reservedKey;
+        if (spare != address(0)) {
+            reservedKey = address(0);
+            factory.registry().retire(spare);
+        }
+        emit FundedStageAbandoned(fundedTrader);
+        fundedTrader = address(0);
+        fundedEndReason = Breach.None;
+        passedAt = 0;
+        stage = Stage.Idle;
     }
 
     function onChallengeSettled() external onlyChallenge {
         challenge = address(0);
         challengeTrader = address(0);
-        if (stage == Stage.Challenge) stage = Stage.Idle;
+        if (stage == Stage.Challenge) {
+            stage = Stage.Idle;
+            // Nobody passed, so the reserved key was never used. Give it up: a pool may hold
+            // only one key, and the next challenge needs its own, bound to whoever buys that.
+            address spare = reservedKey;
+            if (spare != address(0)) {
+                reservedKey = address(0);
+                factory.registry().retire(spare);
+            }
+        }
     }
 
     // ── funded trader ────────────────────────────────────────────────────────────────
@@ -302,9 +413,50 @@ contract Pool is RuledAccount {
                 : 0;
             emit FundedResult(fundedTrader, result, fundedPayoutOwed);
         }
-        if (free != 0) return;
+        if (free != 0 && fundedDrainBlock == 0) {
+            // The closing proceeds need a block to reach spot, so the first step to see them
+            // sends them and waits. After that, a perp balance is somebody else's transfer:
+            // this step has already sent it across, and it does not get to hold the pool in
+            // Closing. Otherwise anyone could keep the investor's capital locked -- it only
+            // leaves in Idle -- for one unit a block. Audit A-01.
+            fundedDrainBlock = uint64(block.number);
+            return;
+        }
+        // Still inside the block that sent it: every read below is the start of this block, so
+        // the money is not in `spot` yet and the trader's share would be paid from a balance
+        // that predates it -- once, because the payout marks itself done. Audit A-11, which is
+        // what a bare flag cost: a flag says "it happened", a block number says "when".
+        if (block.number <= fundedDrainBlock) return;
 
         if (fundedPayoutOwed != 0 && !fundedPayoutDone) {
+            // Audit A-04, the same on this side as on a passed challenge: the share is measured
+            // against `spot`, and a resting order keeps its margin outside `withdrawable`, so
+            // `free == 0` does not mean the perp side has let go. A pool that funded a trader out
+            // of everything it had holds little on spot, which is exactly when this bites.
+            if (!_nothingHeldOnPerp()) {
+                fundedPayoutShortAt = 0;
+                return;
+            }
+            // And margin let go in THIS block reaches spot only after it, while `spot` here is
+            // the start of the block -- the same blindness as A-11, one line further on. So
+            // unless spot already covers the share, wait until nothing is on its way across.
+            // Somebody else's dust delays this only while the share is short, and every unit of
+            // it lands in spot and brings the share closer: paying to delay a payout is paying
+            // into it.
+            // Audit A-12, which my own A-04 fix opened. I reasoned that dust could only delay
+            // this while the share was short, because every unit of it lands in spot and brings
+            // the share closer -- true when the shortfall is a crumb, false when the account
+            // genuinely lost most of itself after the pass. Then the gap never closes, a unit a
+            // step holds the settlement for as long as somebody keeps paying gas, and nothing
+            // else stops it: RETURN_WAIT is upstream of here and PAYOUT_WAIT never starts,
+            // because no payout was made. So this wait gets a clock of its own. It resets while
+            // margin is held, for a release that comes in pieces -- more than 32 resting orders
+            // take several passes -- and a stranger cannot hold margin on somebody else's
+            // account, so the reset is not theirs to use.
+            if (spot < fundedPayoutOwed && free != 0) {
+                if (fundedPayoutShortAt == 0) fundedPayoutShortAt = uint64(block.timestamp);
+                if (block.timestamp <= fundedPayoutShortAt + PAYOUT_WAIT) return;
+            }
             if (spot == 0) return;
             // A trader with no HyperCore account yet pays for creating it out of the share.
             uint64 pay = CoreOps.sendableTo(fundedTrader, spot < fundedPayoutOwed ? spot : fundedPayoutOwed);
@@ -324,7 +476,13 @@ contract Pool is RuledAccount {
             return; // the payout hasn't landed yet
         }
 
-        if (CoreOps.equity(address(this)) <= 0) {
+        // Finish only when nothing is HELD on the perp side: what is left there is all
+        // withdrawable and already on its way to spot. A resting order's margin is not
+        // withdrawable, so this still waits for one -- Closing is the only stage that can
+        // drain, and finishing with margin held would strand it. The position check repeats
+        // what _drainStep established at the top of this call; it is a cheap read and it
+        // makes this condition true on its own rather than by code order.
+        if (_nothingHeldOnPerp()) {
             emit FundedClosed(fundedTrader);
             fundedTrader = address(0);
             fundedStart = 0;
@@ -336,6 +494,7 @@ contract Pool is RuledAccount {
             fundedPayoutSent = 0;
             fundedPayoutSpotBefore = 0;
             fundedPayoutAt = 0;
+            fundedDrainBlock = 0;
             stage = Stage.Idle;
         }
     }

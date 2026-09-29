@@ -136,6 +136,50 @@ Two things learned about the tools on the way:
   is asked for. The demo pool's balance read at the block the demo was deployed in, before the pool
   existed, came back as the current one. HyperCore's history can't be read this way.
 
+## The stop and the take on the exchange (28 September)
+
+What the gateway's stop and take (docs/GATEWAY.md) lean on, checked with `spike/tpsl_probe.py`
+from one of our own testnet wallets, no pool and no gateway: two positions of about 11 USDC in
+ETH, a minute each. Every answer is in `spike/results/2026-09-28.jsonl`.
+
+| # | question | answer, 28 Sep |
+|---|---|---|
+| 11 | Does Hyperliquid take a reduce-only trigger order with no position to reduce? | **Yes.** A stop market sell, grouping `na`, rested as `Stop Market` with "Price below 2550.2". So does a position TP/SL (`positionTpsl`, size `0`): it waits, and stays once a position opens. |
+| 12 | What is a position TP/SL of size `0`, and what does Hyperliquid answer? | **The whole position.** `frontendOpenOrders` lists it with `isPositionTpsl: true` and size `0.0`; the answer to placing it is `waitingForTrigger`, with no oid. The order's price is kept as sent (a market stop sent with its trigger less 10 % shows that as its `limitPx`). |
+| 13 | Can two stops stand on one position, and can one be moved? | **Yes and yes.** Three position stops stood side by side. `batchModify` moved one to a new trigger in one action, answered `resting` with a new oid, and the old oid was gone. |
+| 14 | What is left of them when the position closes? | **Nothing.** After a reduce-only IOC closed the position, every reduce-only order on it was gone, position TP/SL and the fixed-size `na` stop alike. |
+| 15 | Can both directions' position TP/SL stand on one asset, and go in one action? | **Stand, yes; one action, no.** An action carrying a sell stop and a buy stop was refused as a whole: "Trigger order has unexpected side". Sent as two actions, both were placed, next to a long, and so was a buy stop and buy take next to a long. |
+| 16 | Does a flip keep them? | **The new side's, yes.** A long flipped to a short by one sell: the long's sell stop was gone, and the buy stop placed beforehand stayed and stood guard over the short. |
+
+## The live check through the gateway (29 September)
+
+`spike/stop_take_live.py` on our own deployment `shared-run` (its own factory, registry and
+published agent keys; nothing of the first window's), with this branch's gateway running on
+127.0.0.1 and the demo signer holding the three free keys. A new pool sold a 3 USDC challenge
+(3 % a day, 6 % drawdown, 5x, an 8 % target) to our trader wallet, which then traded 0.0042 ETH
+through the gateway's HTTP interface, the way the agents' client does. Every step is in
+`spike/results/2026-09-29.jsonl`; the pool is `0xdbed5655…28a9`, the challenge `0x3420b511…d77d`.
+
+| step | what happened |
+|---|---|
+| the order | the gateway put a stop at 2646.6 and a take at 2725.1 on Hyperliquid first, then sent the buy; it filled at 2668.8 |
+| the book | Hyperliquid listed both, `Stop Market` and `Take Profit Market`, reduce-only position TP/SL |
+| the sweep | its next pass, seconds later, moved the stop up to 2648.5: the entry's fee had taken the budget from 0.09 to about 0.085 USDC |
+| the keeper | one pass over the pool, sending nothing: no `protection_missing` |
+| refused | cancelling the stop (403 `protective_order`); a stop at 2622 (403 `stop_looser`: "nearer the mark than 2648.5"); a take at 2752.4 (403 `take_beyond_target`: "no further than 2727.3") |
+| allowed | the stop to 2655.1 and the take to 2706.2, each one `batchModify` |
+| a sweep with it all in place | nothing sent |
+| the close | a reduce-only IOC sell through the gateway, filled at 2668.2; Hyperliquid removed both orders with the position |
+| the take, by itself | a new position through the gateway (filled 06:30:06.088 UTC at 2687.7); the trader brought the stop to 2686.2 and the take to 2688.2 (a `stop` and a `take` request) and sent nothing after 06:30:19; Hyperliquid closed the position at 06:30:23.276 at 2688.3, fill oid `61354606022`, the take's own |
+| the stop, by itself | another (filled 06:31:14.530 at 2689.7); the trader moved the stop up to 2688.6 (a `stop` request, nearer the mark) and sent nothing after 06:31:23; Hyperliquid closed it at 06:32:32.188 at 2688.3, fill oid `61354674642`, the stop's own, 0.3 under its trigger in a calm market; the take went with the position |
+| the cost | about 2 USDC of our own testnet money: 1 USDC each for creating the pool's and the challenge's HyperCore accounts, the rest fees; the capital came back through `forfeit`, `settle` and `withdrawOnCore` |
+
+The stop and the take were moved near the market on purpose, which the rules allow a trader, so
+that Hyperliquid would fire them within minutes; at the rule line itself (2646.6 on the first
+position, 0.8 % under the mark) nothing would have fired in the half hour this took. A stop that fires
+at the line in a cascade is the case this can't show: see "The slippage, said plainly" in
+docs/GATEWAY.md.
+
 ## Running it
 
 Testnet only. `hlspike/common.py` refuses any RPC whose chain id isn't 998 and any API URL

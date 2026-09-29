@@ -18,6 +18,8 @@ MAX_EXPIRY_MS = 60_000
 # past this many entries the gateway answers "busy" instead of growing.
 MAX_NONCES = 100_000
 TIFS = ("Alo", "Gtc", "Ioc")
+# What a trader may ask for: one order, one cancel, or moving the account's stop or take.
+KINDS = ("order", "cancel", "stop", "take")
 # Hyperliquid normalizes numbers before it checks a signature, so a non-canonical string
 # ("0.0010", "60000.0") signs one thing and verifies another. Only canonical ones pass.
 DECIMAL = re.compile(r"^(0|[1-9][0-9]{0,15})(\.[0-9]{0,9}[1-9])?$")
@@ -96,8 +98,8 @@ class Request:
         if not isinstance(body, dict):
             raise _bad("body must be a JSON object")
         kind = body.get("kind")
-        if kind not in ("order", "cancel"):
-            raise _bad("kind must be order or cancel")
+        if kind not in KINDS:
+            raise _bad(f"kind must be one of {', '.join(KINDS)}")
         fields = body.get(kind)
         if not isinstance(fields, dict):
             raise _bad(f"missing object {kind}")
@@ -120,8 +122,10 @@ class Request:
                 "reduceOnly": _flag(fields, "reduceOnly"),
                 "tif": tif,
             })
-        else:
+        elif kind == "cancel":
             message["oid"] = _uint(fields, "oid", U64, 1)
+        else:  # stop or take: where the trader wants the account's own one moved
+            message["triggerPx"] = _decimal(fields, "triggerPx")
         message["nonce"] = _uint(fields, "nonce", U64, 1)
         message["expiresAt"] = _uint(fields, "expiresAt", U64, 1)
         expected = set(message)
@@ -129,9 +133,16 @@ class Request:
             raise _bad(f"{kind} must carry exactly: {', '.join(sorted(expected))}")
         return Request(kind, message, signature)
 
+    def opens(self) -> bool:
+        """Whether this may open or grow a position: any order that isn't reduce-only."""
+        return self.kind == "order" and not self.message["reduceOnly"]
+
     def action(self) -> dict:
-        """The Hyperliquid action, with keys in the order Hyperliquid hashes them."""
+        """The Hyperliquid action, with keys in the order Hyperliquid hashes them. A stop or a
+        take request has none of its own: the gateway builds it from the account's book."""
         m = self.message
+        if self.kind in ("stop", "take"):
+            raise ValueError("a stop or take request is built from the account's book")
         if self.kind == "order":
             return {
                 "type": "order",

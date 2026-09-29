@@ -68,6 +68,8 @@ jobs:
         run: ./scripts/test-mutations-check.sh
       - name: every mutation still points at the code it guards
         run: python scripts/mutations.py --check
+      - name: every audit finding still points at a test that exists
+        run: python scripts/findings-check.py
 
   app:
     runs-on: ubuntu-latest

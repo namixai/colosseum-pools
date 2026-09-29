@@ -10,6 +10,8 @@ import eth_abi
 import requests
 from eth_utils import keccak, to_checksum_address
 
+from .protect import RuleLimits
+
 CHAIN_ID = 998
 USER_AGENT = "colosseum-pools-gateway"
 RATE_LIMITED = -32005  # what the public HyperEVM RPC answers when it throttles
@@ -27,6 +29,9 @@ class Throttled(RuntimeError):
 # ChallengeAccount.Status.Active and Pool.Stage.Funded
 CHALLENGE_ACTIVE = 2
 POOL_FUNDED = 2
+# The Rules and Terms structs of src/Types.sol, as ABI tuples. gateway/tests hold them to the source.
+RULES = "(uint16,uint16,uint32,uint32[])"
+TERMS = "(uint64,uint64,uint16,uint32,uint16,uint16,uint64)"
 
 
 class JsonRpcReader:
@@ -96,5 +101,21 @@ class JsonRpcReader:
         )[0]
 
     def allowed_assets(self, account: str) -> set[int]:
-        rules = self._call(account, "rules()", [], [], ["(uint16,uint16,uint32,uint32[])"])[0]
+        rules = self._call(account, "rules()", [], [], [RULES])[0]
         return set(rules[3])
+
+    # ── what the stop and the take are worked out from (gateway/protect.py) ───────────
+
+    def day_snapshot(self, account: str) -> tuple[int, int]:
+        """The UTC day of the latest daily snapshot and the equity it took (1e-6 USDC)."""
+        day = self._call(account, "day()", [], [], ["uint32"])[0]
+        start = self._call(account, "dayStartEquity()", [], [], ["int64"])[0]
+        return day, start
+
+    def rule_limits(self, account: str) -> RuleLimits:
+        challenge = self._call(self.factory, "isChallenge(address)", ["address"], [account], ["bool"])[0]
+        daily, drawdown, _, _ = self._call(account, "rules()", [], [], [RULES])[0]
+        base = self._call(account, "drawdownBase()", [], [], ["int64"])[0]
+        day, start = self.day_snapshot(account)
+        target = self._call(account, "terms()", [], [], [TERMS])[0][2]
+        return RuleLimits(challenge, daily, drawdown, base, day, start, target)

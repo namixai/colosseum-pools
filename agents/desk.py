@@ -27,7 +27,7 @@ TERMS = "(uint64,uint64,uint16,uint32,uint16,uint16,uint64)"
 
 # Enum names in declaration order; the tests hold them against the Solidity source.
 STATUS = ("None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled")
-STAGE = ("Idle", "Challenge", "Funded", "Closing")
+STAGE = ("Idle", "Challenge", "Funded", "Closing", "PassedAwaitingKey")
 BREACH = ("None", "Drawdown", "DailyLoss", "Leverage", "ForbiddenAsset")
 
 

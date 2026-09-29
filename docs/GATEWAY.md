@@ -1,6 +1,6 @@
 # Pool gateway
 
-Status: built and tested offline (`gateway/`), 17 September 2026; the demo signer added the same day. Running on the pools host since 18 September 2026, against the rehearsal deployment (docs/HOSTING.md).
+Status: built and tested offline (`gateway/`), 17 September 2026; the demo signer added the same day. Running on the pools host since 18 September 2026, against the rehearsal deployment (docs/HOSTING.md). The stop and the take on Hyperliquid (below) added on 28 September 2026, and checked live on testnet on 29 September through a gateway running this code: both placed before the order, the refusals and the moves, and each of them firing on its own (`spike/README.md`, "The live check through the gateway").
 
 The gateway sits between a trader and Hyperliquid. It asks one question before it forwards an
 order: is this key bound, on chain, to this account and this trader, and is the account allowed
@@ -36,9 +36,23 @@ mode is written for it, but the demo doesn't use that mode or the enclave.
 }
 ```
 
+To move the account's own stop or take (see "The stop and the take on Hyperliquid" below), the
+kind is `stop` or `take` and the fields are the price it should trigger at:
+
+```json
+{
+  "kind": "stop",
+  "stop": { "account": "0x…", "asset": 3, "triggerPx": "58000", "nonce": 1789600000002, "expiresAt": 1789600060000 },
+  "signature": "0x…"
+}
+```
+
 The trader signs the fields themselves, under the domain `colosseum-pools gateway`, version 2,
-chain 998, as `Order(address account,uint32 asset,bool isBuy,string limitPx,string size,bool reduceOnly,string tif,uint64 nonce,uint64 expiresAt)`
-or `Cancel(address account,uint32 asset,uint64 oid,uint64 nonce,uint64 expiresAt)`. The
+chain 998, as `Order(address account,uint32 asset,bool isBuy,string limitPx,string size,bool reduceOnly,string tif,uint64 nonce,uint64 expiresAt)`,
+`Cancel(address account,uint32 asset,uint64 oid,uint64 nonce,uint64 expiresAt)`,
+`Stop(address account,uint32 asset,string triggerPx,uint64 nonce,uint64 expiresAt)` or
+`Take(address account,uint32 asset,string triggerPx,uint64 nonce,uint64 expiresAt)`: two types
+with the same fields, so a signature for one can't be used as the other. The
 wallet shows the person the asset, the side, the price and the size. The gateway builds the
 Hyperliquid action from exactly these fields, in Hyperliquid's field order, so what is
 signed and what is submitted can't drift apart. Prices and sizes must be written the way
@@ -99,6 +113,138 @@ another.
    `receipt` carries the Signer's signed decision receipt when the Signer issues one. In `demo`
    mode `receipt` is always empty.
 
+## The stop and the take on Hyperliquid
+
+The contracts enforce a pool's rules after the fact: someone sees a broken rule, calls `breach`,
+and HyperCore closes the positions a few seconds after that block. The keeper looks every 30
+seconds. In a cascade that minute is most of the loss: in the cascade package (`stress/`, Bybit
+bars, not Hyperliquid) the worst entry of 10 October 2025 lost 83.7–94.1 % of the stress test's
+pool on the long side when each stop filled a minute late (from the next minute's open to the
+worst price inside that minute), and 3 of its 5 seats were liquidated. So the gateway also leaves
+the closing to Hyperliquid itself: **before it submits any order that may open or grow a position
+(every order that isn't reduce-only), the account has a stop at its rule line and a take at its
+target on the exchange**, and the order isn't sent if they can't be put there. The keeper and the
+contract stay behind it (docs/DESIGN.md, "Three layers").
+
+**What they are.** Hyperliquid position TP/SL orders (`grouping: "positionTpsl"`), one stop and
+one take per asset and direction: reduce-only, triggered by the mark price, executed as market
+orders, and sized `0`, which Hyperliquid reads as the whole position however large it grows.
+Measured on testnet on 28 September 2026 with one of our own wallets (`spike/tpsl_probe.py`, two
+positions of about 11 USDC in ETH, a minute each): Hyperliquid accepts them before the position
+exists and they wait for it; it answers `waitingForTrigger` and gives no oid (the gateway reads
+the oids back from `frontendOpenOrders`); several can stand side by side, of either direction, but
+one action may carry only one direction (an action mixing them is refused as a whole); when the
+position closes Hyperliquid removes every reduce-only order on it, these included, and when one
+order flips a long to a short, the short's orders placed beforehand stay; a `batchModify` moves
+one in a single action and gives it a new oid. So an order that may flip a position gets its new
+direction's stop before it goes, and the flip is guarded from its first fill.
+
+**Where the stop is: the rule line.** The price at which the account's equity would reach the
+nearest rule:
+
+- the floor is the higher of the static drawdown floor (`drawdownBase × (1 − maxDrawdownBps)`)
+  and the day's floor (`dayStartEquity × (1 − dailyLossBps)`, when there is a snapshot) — the
+  same comparison `RuledAccount.violation` makes;
+- the budget is equity minus the floor, equity being Hyperliquid's `accountValue`, the number
+  the contract reads through the precompile;
+- with several positions the budget is shared in proportion to their notional at the mark, so
+  every stop sits the same fraction of its mark away: `mark × (notional − budget) / notional` for
+  a long, `mark × (notional + budget) / notional` for a short. If all of them are hit together,
+  the account loses exactly the budget;
+- the take is worked out the same way from the room to the target.
+
+**Where the take is: the target.** In a challenge, the pass target that `graduate` checks,
+`capital × (1 + targetBps)`, so a take that fires leaves the account flat at the target, ready
+to graduate. A funded stage has no target and the pool's rules have no take, so there the take
+is at most one challenge target away: `targetBps` of the equity at the moment it is set. The
+trader may bring it nearer; nothing puts it further.
+
+**The assumptions, named.**
+
+1. Every position moves against the account at once, each by the same fraction of its mark. A
+   hedged book (a long in one coin, a short in another) loses less at its stops than the budget.
+2. Orders resting on the book that could open or grow a position, and the order on its way,
+   count as filled at the mark. A resting buy fills under the mark, so its real line is lower:
+   counting it at the mark never places a stop looser than its fill would need. On each asset
+   the larger of the two directions is what shares the budget.
+3. The day's snapshot is the one the contract holds. Until someone takes today's (the keeper
+   does at midnight), the contract measures the day from yesterday's, and so does the gateway:
+   it reads the snapshot again at most once a minute until today's appears, and a sweep then
+   moves the stop.
+4. Fees, funding and slippage are not in the line. The stop is at the rule line itself, so when
+   it fires the account is at its limit, the taker fee and the fill take it past, and the
+   keeper's `breach` then ends the stage as it always did. What changes is how far past.
+5. A stop is never further than half the mark away and never nearer than one tick: a position too
+   small to use up the budget has no rule line, and Hyperliquid still wants a price. Prices are
+   rounded towards the mark, to Hyperliquid's rules (five significant figures, at most
+   `6 − szDecimals` decimals, whole numbers always), so rounding never loosens a stop or puts a
+   take past the target.
+6. A market TP/SL fills within 10 % of its trigger (Hyperliquid's own tolerance); the order's
+   price field is set to that bound, so it never makes the close stricter than the venue's rule.
+
+**The slippage, said plainly.** A stop-market in a cascade fills below its trigger, sometimes far
+below: Hyperliquid's 10 % tolerance is the bound, not the expectation. What walking Hyperliquid's
+book costs has been measured only in a calm market (25–27 September 2026); the book in a cascade
+has not been measured: nobody recorded it on 10 October 2025, and Hyperliquid's public API serves
+the book as it is now. So how far past the line an exchange stop lands on a day like that is not
+known, and `--lag 0` in `stress/`, which fills exactly at the line, is not
+that number and is never quoted as one. The claim is the delay taken out, not a loss figure.
+
+**What the trader may do with them.** Move the stop nearer the mark, never away from where it is,
+with a `stop` request; move the take anywhere between the mark and the target with a `take`
+request. Both need a position on that asset. The gateway builds the `batchModify` from the book
+and signs it with the account's key. A `cancel` naming the oid of either is refused with 403
+`protective_order`, before anything is signed; any other cancel goes through as before.
+
+**Checks before an order that may open a position**, after the signer has cleared it and before
+it is submitted:
+
+- 409 `at_rule_line`: equity is at the floor already, so there is nothing left to protect with;
+- 409 `target_met`: a challenge at its target; its take would close the order at once, and the
+  trader should graduate instead;
+- 502 `protection_failed`: the stop and the take could not be put on the book (the signer
+  refused them, Hyperliquid refused or didn't confirm them, or it couldn't be reached). The
+  order is not submitted and its nonce comes back, so the same signed request can be retried.
+
+A 200 for such an order carries `protection`: for each asset and direction, the stop and the
+take, and whether each was `placed`, `moved` or `kept`.
+
+**One request at a time per account.** From the stop and the take placed for an order until
+Hyperliquid has answered for the order itself, the book doesn't show that order yet, so nothing
+else may act on the account in between: the account's other requests and the sweep wait. Otherwise
+a second order would be protected as if the first weren't coming, and a sweep would move a stop that
+guards nothing yet out to the line of a book without the order. The nonce check comes before the
+wait, so a replayed copy is refused at once.
+
+**The sweep.** Every `GATEWAY_PROTECT_EVERY` seconds (default 10) the gateway goes over the
+accounts it has traded since it started and puts back what is missing: a position that opened
+from an order that rested, a position opened again after its stop fired while another order
+still rested (Hyperliquid had removed the stop with the position), or a line a new day's snapshot
+has moved. A stop that guards a position is only ever moved nearer the mark; one that guards
+nothing yet follows the line. The sweep reads Hyperliquid; it reads the chain only when there is
+something to send, to check the key still trades the account, and for the day's snapshot. The
+list of accounts lives in memory: after a restart an account is swept again from its next
+request, and the stops already on the exchange stay where they are. A sweep costs Hyperliquid's
+info API 20 of weight for the marks (`metaAndAssetCtxs`) and 22 for each account it watches
+(`clearinghouseState` 2, `frontendOpenOrders` 20): at 10 seconds, about 250 a minute for one
+account, of the 1,200 an IP may spend, which the keeper on the same host shares. An account the
+gateway has nothing open for drops out of the list.
+
+**Signing them.** The gateway signs its own stop and take with the account's key under nonces of
+its own (never the trader's nonce of the request in hand). In `demo` mode the gateway's code
+signs them as kind `protect` only if the action is one or two position TP/SL orders, or one
+`batchModify` of one, each reduce-only, sized `0`, a market trigger, on an asset of the
+platform's list; nothing else goes out under that kind, and no cap applies because such an order
+can only close. `signer` mode would need the Signer to accept the same; the demo doesn't use it,
+and that is not done.
+
+**Not covered: HIP-3 markets.** The gateway reads the marks, positions and open orders of
+Hyperliquid's main perp dex only. A builder-deployed market (HIP-3: another dex, names like
+`xyz:GOLD`, asset `100000 + perp_dex_index × 10000 + index_in_meta`) has no mark there, so an
+order on one would be refused with 502 `no_market_price` before anything is sent, and a position
+on one would not be seen by the sweep or the keeper. The demo's platform list is BTC, ETH and SOL,
+all on the main dex; a pool that trades HIP-3 markets needs these reads for its dex first.
+
 ## Answers
 
 | HTTP | `status` | meaning |
@@ -112,6 +258,11 @@ another.
 | 502 | `gateway_error` (`upstream_failed`) | a chain read, the market read or the Signer call failed; nothing was submitted. A chain read the RPC throttled is tried three times, 0.25 s and 0.5 s apart, before this answer |
 | 502 | `refused_by_gateway` (`no_market_price`) | `demo` mode: Hyperliquid gave no mid for the asset of a sell, so it wasn't counted or signed |
 | 502 | `venue_unreachable` | the call to Hyperliquid failed; the order may or may not have arrived, so check the account |
+| 409 | `refused_by_gateway` (`at_rule_line`, `target_met`) | an order that may open a position, refused before it is sent: equity is at the rule line, or a challenge is at its target |
+| 502 | `refused_by_gateway` (`protection_failed`) | the stop and the take could not be put on Hyperliquid, so the order was not sent; its nonce comes back |
+| 403 | `refused_by_gateway` (`protective_order`) | a cancel of the account's stop or take |
+| 403 | `refused_by_gateway` (`stop_looser`, `stop_past_mark`, `take_beyond_target`, `take_past_mark`) | a `stop` or `take` request outside what the rules allow |
+| 409 | `refused_by_gateway` (`no_position`) | a `stop` or `take` request on an asset with no position |
 | 503 | (empty body) | more than 32 connections at once |
 
 A connection that sends nothing for 10 seconds is closed.
@@ -124,7 +275,8 @@ that the trader asked for each order.
 
 In the demo the gateway holds the keys. A key file can sign anything Hyperliquid lets an agent
 sign, and the caps above only bind what goes through this code, so whoever controls the gateway
-host can trade every account whose key is on it until someone stops that account.
+host can trade every account whose key is on it until someone stops that account. The same goes
+for the stop and the take: the gateway refuses to cancel them, but the key file could.
 
 ## Secrets and where it runs
 
@@ -133,3 +285,14 @@ In `demo` mode the gateway reads one owner-only `*.key` file per agent key from
 the address comes from the key. In `signer` mode it reads one bearer token per key from
 `SIGNER_TOKENS_FILE`. Either lives on the gateway host only, never in this repository.
 `GET /v1/health` names the mode and, in `demo` mode, how many keys it holds.
+
+**The gateway reads its own node, and that costs you requests.** Since 25 September 2026 it
+reads `rpc.hyperliquid-testnet.xyz` while the keeper reads `rpcs.chain.link`, because the two
+were sharing one per-IP budget on one host: an outsider's order costs the gateway five chain
+reads *before* it is refused, so a stream of refusable orders could spend the budget the keeper
+needed to notice a broken rule (audit A-03). Separating them fixed that and cost something
+visible from outside. The gateway's node allows about 100 calls a minute against the old one's
+200, so nginx is cut to match: **15 requests a minute across everyone, burst 10**, where it used
+to be 30 and 20. Past that you get `429` from nginx, not a refusal from the gateway. It is a
+smaller ceiling than before and it is deliberate: a keeper that cannot see a breach costs the
+investor money, a trader who waits a few seconds does not.
