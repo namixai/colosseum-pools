@@ -348,6 +348,28 @@ contract PoolHarness is Test {
     /// Makes the margin precompile report money on the perp side while `withdrawable` -- a
     /// different precompile, left real -- still reads zero. That is what a resting limit order
     /// looks like from a contract: the money is there and it cannot be taken out.
+    /// A pool in Closing whose result is taken and which holds LESS than the trader's share --
+    /// a loss after the stop -- with `perp1e6` left crossing. Written by the audit for A-12's
+    /// funded half.
+    function _fundedClosingShort(uint64 spot1e8, uint64 perp1e6) internal returns (Pool p, uint64 owed) {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        p = _readyPool();
+        _passed(p);
+        CoreSimulatorLib.nextBlock();
+        _trade(address(p), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 810000);
+        _trade(address(p), BTC, false, 0.005e8);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(trader);
+        p.stopFunded(c, a, SALT);
+        CoreSimulatorLib.nextBlock();
+        p.settleFunded(c, a); // takes the result and starts the drain
+        CoreSimulatorLib.nextBlock();
+        owed = p.fundedPayoutOwed();
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, spot1e8);
+        CoreSimulatorLib.forcePerpBalance(address(p), perp1e6);
+    }
+
     function _mockHeldMargin(address account, int64 accountValue) internal {
         vm.mockCall(
             address(0x080F),
