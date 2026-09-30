@@ -150,6 +150,7 @@ ETH, a minute each. Every answer is in `spike/results/2026-09-28.jsonl`.
 | 14 | What is left of them when the position closes? | **Nothing.** After a reduce-only IOC closed the position, every reduce-only order on it was gone, position TP/SL and the fixed-size `na` stop alike. |
 | 15 | Can both directions' position TP/SL stand on one asset, and go in one action? | **Stand, yes; one action, no.** An action carrying a sell stop and a buy stop was refused as a whole: "Trigger order has unexpected side". Sent as two actions, both were placed, next to a long, and so was a buy stop and buy take next to a long. |
 | 16 | Does a flip keep them? | **The new side's, yes.** A long flipped to a short by one sell: the long's sell stop was gone, and the buy stop placed beforehand stayed and stood guard over the short. |
+| 17 | Do `openOrders` and `frontendOpenOrders` list the same orders? (29 Sep, `tpsl_probe.py --fifth`, answers in `spike/results/2026-09-29.jsonl`) | **Yes, the same oids in the same order.** Read side by side next to a long with a position stop and take and a fixed-size `na` stop; again after the position closed (both empty); and again with a resting limit next to the three triggers waiting for a position. `openOrders` shows a position TP/SL with size `0.0` and its price, and no word that it is a trigger; `frontendOpenOrders` adds that. A position stop and take cancel by oid (`success`). The keeper reads only the second, once a pass (`ops/keeper.py`). |
 
 ## The live check through the gateway (29 September)
 

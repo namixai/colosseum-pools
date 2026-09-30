@@ -4056,5 +4056,264 @@
    "days_worst_entry_beyond_80pct": 1,
    "basis": "the stress test's own pool, long, execution at the next open"
   }
+ },
+ "levers": {
+  "note": "measured, not modelled: the cascade package's own tool (stress/make_levers.py) over the same eight crash days and the same pool of five seats, long side, one cell for each choice of where the stop sits, the leverage and the coins. A stop on the exchange is taken at the line itself; walking the order book is added from a separate measurement of Hyperliquid's book in a calm market. The book in a cascade has not been measured.",
+  "source": "stress/results/levers-2026-09-29.json",
+  "days": [
+   "2025-10-10",
+   "2026-02-05",
+   "2026-01-31",
+   "2025-11-03",
+   "2026-06-05",
+   "2025-11-04",
+   "2025-11-21",
+   "2025-12-01"
+  ],
+  "lists": {
+   "wide": "one seat on each of the first five coins by name: ADA, AVAX, BNB, BTC, DOGE",
+   "default": "BTC, ETH and SOL, the big seats on the calm coins: BTC 50k, ETH 25k, SOL 3 x 5k"
+  },
+  "cells": [
+   {
+    "stop": "exchange",
+    "lag": 0,
+    "leverage": 3.0,
+    "list": "wide",
+    "exec": "open",
+    "median_of_days_pct": 3.13,
+    "worst_day": "2025-10-10",
+    "worst_entry": "01:30",
+    "worst_pct": 3.1,
+    "worst_usd": 2822,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   },
+   {
+    "stop": "exchange",
+    "lag": 0,
+    "leverage": 3.0,
+    "list": "default",
+    "exec": "open",
+    "median_of_days_pct": 3.13,
+    "worst_day": "2025-10-10",
+    "worst_entry": "10:16",
+    "worst_pct": 3.1,
+    "worst_usd": 2822,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   },
+   {
+    "stop": "exchange",
+    "lag": 0,
+    "leverage": 5.0,
+    "list": "wide",
+    "exec": "open",
+    "median_of_days_pct": 3.23,
+    "worst_day": "2025-10-10",
+    "worst_entry": "16:16",
+    "worst_pct": 3.2,
+    "worst_usd": 2903,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   },
+   {
+    "stop": "exchange",
+    "lag": 0,
+    "leverage": 5.0,
+    "list": "default",
+    "exec": "open",
+    "median_of_days_pct": 3.23,
+    "worst_day": "2025-10-10",
+    "worst_entry": "02:59",
+    "worst_pct": 3.2,
+    "worst_usd": 2903,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   },
+   {
+    "stop": "keeper",
+    "lag": 1,
+    "leverage": 3.0,
+    "list": "wide",
+    "exec": "open",
+    "median_of_days_pct": 3.05,
+    "worst_day": "2025-10-10",
+    "worst_entry": "21:19",
+    "worst_pct": 64.9,
+    "worst_usd": 58370,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   },
+   {
+    "stop": "keeper",
+    "lag": 1,
+    "leverage": 3.0,
+    "list": "wide",
+    "exec": "worst",
+    "median_of_days_pct": 3.58,
+    "worst_day": "2025-10-10",
+    "worst_entry": "21:18",
+    "worst_pct": 92.0,
+    "worst_usd": 82827,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 3,
+    "days_with_liquidations": 1
+   },
+   {
+    "stop": "keeper",
+    "lag": 1,
+    "leverage": 3.0,
+    "list": "default",
+    "exec": "open",
+    "median_of_days_pct": 3.05,
+    "worst_day": "2025-10-10",
+    "worst_entry": "21:19",
+    "worst_pct": 14.3,
+    "worst_usd": 12887,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   },
+   {
+    "stop": "keeper",
+    "lag": 1,
+    "leverage": 3.0,
+    "list": "default",
+    "exec": "worst",
+    "median_of_days_pct": 3.59,
+    "worst_day": "2025-10-10",
+    "worst_entry": "21:19",
+    "worst_pct": 23.6,
+    "worst_usd": 21231,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   },
+   {
+    "stop": "keeper",
+    "lag": 1,
+    "leverage": 5.0,
+    "list": "wide",
+    "exec": "open",
+    "median_of_days_pct": 3.15,
+    "worst_day": "2025-10-10",
+    "worst_entry": "21:18",
+    "worst_pct": 83.7,
+    "worst_usd": 75299,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 3,
+    "days_with_liquidations": 1
+   },
+   {
+    "stop": "keeper",
+    "lag": 1,
+    "leverage": 5.0,
+    "list": "wide",
+    "exec": "worst",
+    "median_of_days_pct": 3.91,
+    "worst_day": "2025-10-10",
+    "worst_entry": "21:18",
+    "worst_pct": 94.1,
+    "worst_usd": 84712,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 3,
+    "days_with_liquidations": 1
+   },
+   {
+    "stop": "keeper",
+    "lag": 1,
+    "leverage": 5.0,
+    "list": "default",
+    "exec": "open",
+    "median_of_days_pct": 3.13,
+    "worst_day": "2025-10-10",
+    "worst_entry": "21:19",
+    "worst_pct": 23.9,
+    "worst_usd": 21478,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   },
+   {
+    "stop": "keeper",
+    "lag": 1,
+    "leverage": 5.0,
+    "list": "default",
+    "exec": "worst",
+    "median_of_days_pct": 3.83,
+    "worst_day": "2025-10-10",
+    "worst_entry": "21:19",
+    "worst_pct": 39.3,
+    "worst_usd": 35384,
+    "seats_hit_on_worst": 5,
+    "seats_liquidated_on_worst": 0,
+    "days_with_liquidations": 0
+   }
+  ],
+  "book": {
+   "source": "stress/results/hl-book-2026-09-27.json",
+   "measured": "our own collection of Hyperliquid's public order book (l2Book, mainnet), 34 hourly files of snapshots from 2026-09-25 to 2026-09-27, a calm market; the repository holds the derived bounds and the scripts that derive them, not the raw snapshots",
+   "half_spread_bps": {
+    "BTC": 0.059,
+    "ETH": 0.186,
+    "SOL": 0.413
+   },
+   "walk_bps": {
+    "BTC": {
+     "10000": {
+      "median": 0.059,
+      "p99": 1.077
+     },
+     "100000": {
+      "median": 0.059,
+      "p99": 1.506
+     },
+     "1000000": {
+      "median": 0.5,
+      "p99": 2.232
+     }
+    },
+    "ETH": {
+     "10000": {
+      "median": 0.186,
+      "p99": 1.302
+     },
+     "100000": {
+      "median": 0.186,
+      "p99": 1.982
+     },
+     "1000000": {
+      "median": 0.96,
+      "p99": 3.648
+     }
+    },
+    "SOL": {
+     "10000": {
+      "median": 0.413,
+      "p99": 2.387
+     },
+     "100000": {
+      "median": 0.808,
+      "p99": 3.887
+     },
+     "1000000": {
+      "median": 3.807,
+      "p99": 7.235
+     }
+    }
+   },
+   "seats_usd": [
+    5000,
+    25000,
+    50000
+   ],
+   "note": "upper bounds: a seat's notional is priced at the nearest measured size at or above it, on the worse side of the book; the taker fee is already inside the cells, so only walking the book is added"
+  }
  }
 }

@@ -78,3 +78,26 @@ changes and every file in `results/` came out byte-identical.
 
 Also: the loader refuses a series whose minutes repeat or run out of order, naming the coin and the
 minute (check 22, two breakages) — a duplicate bar would otherwise have moved the numbers silently.
+
+## 29 Sep 2026 — the levers: an addition, nothing published moved
+
+`make_levers.py` runs the tool, unchanged, once for each of three choices an investor makes around the
+rules: where the stop sits (`--lag 0`, on the exchange at the line; `--lag 1`, a keeper a minute
+late, at the open and at the worst price of the window), the leverage (3x, 5x), and the coins (the
+wide list; BTC, ETH and SOL with the big seats on the calm coins). Twelve cells, long side, written
+to `results/levers-2026-09-29.json`; README.md has the table. `test_anchor.py` runs it again and
+compares every cell, and checks the README's table against the file.
+
+Where a cell overlaps a published run it is that run: the keeper at 5x on the wide list is the
+headline's 83.7–94.1 %, three of five seats liquidated, and the exchange at 5x on it is the lag 0
+file's 3.2 %. The other result files were not re-made and did not change.
+
+`--lag 0` was published "for completeness" and never quoted as a bound. It still is never quoted
+as a bound on a keeper; the lever table uses it for what it is, a stop resting on the exchange at
+the line, before its fill in a book nobody has measured in a cascade. The sentence in README.md
+says so now.
+
+The book's cost on top of the line is in the lever file as well, derived by `make_levers.py` from
+`results/hl-book-2026-09-27.json`: the output of `book/analyze_l2.py` over our own l2Book snapshots of
+Hyperliquid mainnet, 25–27 Sep 2026, a calm market. Each cell is the worse of the two sides. The
+collector, the analyzer and their checks are in `book/`; the raw snapshots are not published.

@@ -232,8 +232,8 @@ out of the list, and with the list empty a sweep reads nothing.
 **The host's minute.** Hyperliquid allows an IP 1,200 of weight a minute, and the gateway and the
 keeper on one host draw on the same 1,200. Three things spend it:
 
-- the keeper: 20 a pass for the names of the markets and 22 for each active account, a pass every
-  30 seconds;
+- the keeper: 20 a pass for the names of the markets and 22 for each active account, the same two
+  reads as the sweep, once each for everything it decides about the account; a pass every 30 seconds;
 - the sweep: 20 for the marks and 22 for each account it watches, a sweep every 15 seconds;
 - an order that may open a position: at most 46, that is 20 and 22 for the stop and take's plan, 1
   each for the order and the protective action, and for a sell 2 more for the demo signer's mids
