@@ -2309,6 +2309,40 @@ MUTATIONS = [
      "the book taken from\n    ${esc(L.book.measured)}.",
      "the book measured on\n    ${esc(L.book.measured)}.",
      ["the levers name their side, and the book names its source"]),
+    # The Economics page's scenarios: base and good shown, bad kept in the table, and the demand at which the pool
+    # earns what lending stablecoins pays. "PD": the second window's prefix, run by node on its own test file.
+    ("PD1", "app/views/economics.js",
+     "export const SHOWN_SCENARIOS = [\"base\", \"good\"];",
+     "export const SHOWN_SCENARIOS = [\"bad\", \"base\", \"good\"];",
+     ["the page shows base and good; the table still holds bad, cell for cell"]),
+    ("PD2", "app/views/economics.js",
+     "  rate: 0.05,",
+     "  rate: 0.04,",
+     ["the demand line: the buyers a month at which the pool earns what lending stablecoins pays"]),
+    ("PD3", "app/views/economics.js",
+     "  return demandForReturn(tbl, { ...spec, scenario: \"base\" }, LENDING.rate);",
+     "  return demandForReturn(tbl, { ...spec, scenario: \"good\" }, LENDING.rate);",
+     ["the demand line: the buyers a month at which the pool earns what lending stablecoins pays"]),
+    ("PD4", "app/views/economics.js",
+     "    ${row(`To earn what lending stablecoins pays, ${percent(LENDING.rate, 0)} a year`, demandLine(tbl, base, demand))}\n",
+     "",
+     ["the demand line: the buyers a month at which the pool earns what lending stablecoins pays"]),
+    ("PD5", "app/views/economics.js",
+     "(demand * base.seat_capital / per).toFixed(1)",
+     "(demand).toFixed(1)",
+     ["the demand line: the buyers a month at which the pool earns what lending stablecoins pays"]),
+    ("PD6", "app/views/economics.js",
+     "    return `no demand the model takes brings this pool to ${percent(LENDING.rate, 0)} a year`;",
+     "    return \"\";",
+     ["the demand line says so when no demand gets there, and moves with the table"]),
+    ("PD7", "app/views/economics.js",
+     "  const assumed = tbl.scenarios.base.demand_per_100k;",
+     "  const assumed = 15;",
+     ["the demand line says so when no demand gets there, and moves with the table"]),
+    ("PD8", "app/views/economics.js",
+     "    runs = SHOWN_SCENARIOS.map((scenario) => [scenario, evaluate(tables, { ...spec, scenario })]);",
+     "    runs = [\"bad\", \"base\", \"good\"].map((scenario) => [scenario, evaluate(tables, { ...spec, scenario })]);",
+     ["the page shows base and good; the table still holds bad, cell for cell"]),
 ]
 
 RUNNERS = {
@@ -2343,6 +2377,7 @@ RUNNERS = {
     "PW": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_keeper_protect"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The levers on the Economics page: their own test file.
     "PL": (["node", "--test", "--test-reporter=tap", "app/tests/levers.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
+    "PD": (["node", "--test", "--test-reporter=tap", "app/tests/lending.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
 }
 
 
