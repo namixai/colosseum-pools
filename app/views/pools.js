@@ -4,7 +4,11 @@ import * as hl from "../lib/hl.js";
 import { esc, render, $, wire, pct, duration, badge, row } from "../lib/ui.js";
 import { minPrice, gridText } from "../lib/floor.js";
 import { DEMO_POOL as D } from "../lib/demo.js";
-import { stageName } from "../lib/stages.js";
+import { poolStatus } from "../lib/stages.js";
+import { saleBlocker } from "../lib/funding.js";
+import { totalPriceWords } from "../lib/outcomes.js";
+import { CONFIG } from "../config.js";
+import { LANDING, OTHERS_HEADING, KIND_NOTE, poolKind, cardBlockerLine, listOrder, tradeTarget } from "../lib/listing.js";
 
 function notDeployed(page) {
   render(page, `<section class="card"><h2>Not deployed yet</h2>
@@ -23,9 +27,11 @@ export async function rulesAndTerms(pool) {
   return { rules, terms, assets };
 }
 
-export function termsHtml(terms) {
+/** The pool's terms. With the factory's fee, the price row is followed by what a buyer pays in all. */
+export function termsHtml(terms, fee = null) {
   return [
     row("Challenge price", `${chain.usd6(terms.price)} USDC`),
+    ...(fee === null ? [] : [row("You pay in total", esc(totalPriceWords(terms.price, fee)))]),
     row("Challenge capital", `${chain.usd6(terms.capital)} USDC`),
     row("Profit target", pct(terms.targetBps)),
     row("Time limit", esc(duration(terms.duration))),
@@ -46,28 +52,59 @@ export function rulesHtml(rules, assets) {
 
 export async function listView(page) {
   if (!chain.deployed()) return notDeployed(page);
-  render(page, `<section><h2>Pools</h2><p class="muted">Loading…</p><div id="pools" class="grid"></div></section>`);
-  const addresses = await chain.factory().pools();
-  const box = $("#pools", page);
-  $(".muted", page).textContent = addresses.length
+  render(page, `<section>
+    <h2>Pools</h2>
+    <p class="lead">${esc(LANDING.line)}</p>
+    <p class="actions"><a class="button" href="${esc(LANDING.invest.href)}">${esc(LANDING.invest.label)}</a>
+      <a class="button" id="trade-in" aria-disabled="true">${esc(LANDING.trade.label)}</a>
+      <span class="small muted" id="trade-none"></span></p>
+    <p class="muted" id="count">Loading…</p>
+    <div id="pools" class="grid"></div>
+    <h3 id="others-heading" hidden>${esc(OTHERS_HEADING)}</h3>
+    <div id="others" class="grid"></div></section>`);
+  const [addresses, fee] = await Promise.all([chain.factory().pools(), chain.factory().challengeFee()]);
+  $("#count", page).textContent = addresses.length
     ? `${addresses.length} pool(s). Each one sells a single challenge at a time.`
     : "No pools yet.";
-  for (const address of [...addresses].reverse()) {
+  const items = [];
+  for (const [index, address] of addresses.entries()) {
     const pool = chain.contract("pool", address);
-    const [{ rules, terms, assets }, stage, owner, spotUsdc] = await Promise.all([
-      rulesAndTerms(pool), pool.stage(), pool.owner(), hl.spotUsdc(address),
+    const [{ rules, terms, assets }, stage, owner, spotUsdc, ready, challenge, neededSpot] = await Promise.all([
+      rulesAndTerms(pool), pool.stage(), pool.owner(), hl.spotUsdc(address), pool.accountReady(), pool.challenge(),
+      pool.capitalNeeded(),
     ]);
-    const open = Number(stage) === 0;
+    const ownerIsContract = (await chain.readProvider.getCode(owner)) !== "0x";
+    // The same reading the pool page decides its buy button from (funding.js), in the same units.
+    const blocker = saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed: Number(neededSpot) / 1e8 });
+    items.push({ index, address, rules, terms, assets, stage, owner, spotUsdc, blocker,
+      kind: poolKind({ owner, ownerIsContract, deployer: CONFIG.deployer }) });
+  }
+  const ordered = listOrder(items);
+  for (const item of ordered) {
+    const { address, rules, terms, assets, stage, owner, spotUsdc, blocker, kind } = item;
+    const status = poolStatus(stage, blocker);
     const card = document.createElement("article");
     card.className = "card";
+    const blocked = cardBlockerLine(blocker);
     card.innerHTML = `
-      <h3><a href="#/pool/${esc(address)}">${esc(chain.short(address))}</a>
-        ${badge(stageName(stage), open ? "ok" : "")}</h3>
+      <h3><a href="#/pool/${esc(address)}">${esc(chain.short(address))}</a> ${badge(status.name, status.tone)}</h3>
+      ${KIND_NOTE[kind] ? `<p class="small"><strong>${esc(KIND_NOTE[kind])}</strong></p>` : ""}
       <p class="muted">Investor ${esc(chain.short(owner))} · ${esc(spotUsdc.toFixed(2))} USDC on HyperCore spot</p>
-      ${termsHtml(terms)}
+      ${blocked ? `<p class="small">${esc(blocked)}</p>` : ""}
+      ${termsHtml(terms, fee)}
       ${rulesHtml(rules, assets)}
-      <p><a class="button" href="#/pool/${esc(address)}">${open ? "Open the pool" : "See the pool"}</a></p>`;
-    box.append(card);
+      <p><a class="button" href="#/pool/${esc(address)}">${blocker ? "See the pool" : "Open the pool"}</a></p>`;
+    (kind === "pool" ? $("#pools", page) : $("#others", page)).append(card);
+  }
+  if (ordered.some((i) => i.kind !== "pool")) $("#others-heading", page).hidden = false;
+  const target = tradeTarget(ordered);
+  const trade = $("#trade-in", page);
+  if (target) {
+    trade.href = `#/pool/${target}`;
+    trade.removeAttribute("aria-disabled");
+  } else {
+    trade.classList.add("disabled");
+    $("#trade-none", page).textContent = LANDING.trade.none;
   }
 }
 

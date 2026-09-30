@@ -140,6 +140,8 @@ button, .button {
 button.secondary { background: transparent; color: var(--accent); }
 button.small { padding: 3px 10px; font-size: 13px; }
 button:disabled { opacity: 0.55; cursor: progress; }
+.button.disabled, .button[aria-disabled="true"] { opacity: 0.55; pointer-events: none; }
+.lead { font-size: 17px; margin: 4px 0 10px; }
 
 .actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }

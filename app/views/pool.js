@@ -8,7 +8,9 @@ import { esc, render, $, wire, badge, row, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
 import { saleBlocker, topUpAdvice } from "../lib/funding.js";
-import { stageName as nameOf, stageWords, isFundedStage, awaitingKeyWords } from "../lib/stages.js";
+import { stageName as nameOf, isFundedStage, awaitingKeyWords, poolStatus } from "../lib/stages.js";
+import { outcomesHtml } from "../lib/outcomes.js";
+import { poolKind, KIND_NOTE } from "../lib/listing.js";
 
 export async function poolView(address, page) {
   const pool = chain.contract("pool", address);
@@ -29,7 +31,6 @@ export async function poolView(address, page) {
   const waiting = Number(stage) === 4
     ? await Promise.all([pool.passedAt(), pool.AWAIT_KEY_WINDOW()]).then(([passedAt, window]) => ({ passedAt, window }))
     : null;
-  const doing = waiting ? awaitingKeyWords({ ...waiting, now: Math.floor(Date.now() / 1000) }) : stageWords(stage);
   const isOwner = chain.same(me, owner);
   const isFunded = chain.same(me, fundedTrader);
   // Challenge capital, funded capital, and 1 USDC for creating the challenge's account.
@@ -39,11 +40,18 @@ export async function poolView(address, page) {
   // and the card that replaces it.
   const blocker = saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed });
   const shortOnCore = blocker && blocker.kind === "underfunded" ? blocker.short : 0;
+  // The badge and the sentence come from the same reading as the buy button: an idle pool that cannot sell a
+  // challenge says so, instead of "Idle: it can sell a challenge" under a row that names the gap.
+  const status = poolStatus(stage, blocker);
+  const kind = poolKind({ owner, ownerIsContract: (await chain.readProvider.getCode(owner)) !== "0x",
+    deployer: CONFIG.deployer });
+  const doing = waiting ? awaitingKeyWords({ ...waiting, now: Math.floor(Date.now() / 1000) }) : status.words;
 
   render(page, `
     <section class="card">
-      <h2>Pool ${esc(chain.short(address))} ${badge(stageName, Number(stage) === 0 ? "ok" : "")}</h2>
+      <h2>Pool ${esc(chain.short(address))} ${badge(status.name, status.tone)}</h2>
       <p class="muted mono">${esc(address)}</p>
+      ${KIND_NOTE[kind] ? `<p class="small"><strong>${esc(KIND_NOTE[kind])}</strong></p>` : ""}
       ${row("Investor", `<span class="mono">${esc(owner)}</span>`)}
       ${row("HyperCore spot", `${esc(spotUsdc.toFixed(2))} USDC (needs ${esc(needed.toFixed(2))} to sell a challenge)${
         shortOnCore > 0 ? ` — <strong>${esc(shortOnCore.toFixed(2))} short</strong>. Creating each challenge's
@@ -57,7 +65,7 @@ export async function poolView(address, page) {
       <p><a href="#/verify/${esc(address)}">Check this account yourself →</a></p>
     </section>
     <div class="grid">
-      <section class="card"><h3>Terms</h3>${termsHtml(terms)}</section>
+      <section class="card"><h3>Terms</h3>${termsHtml(terms, fee)}</section>
       <section class="card"><h3>Rules</h3>${rulesHtml(rules, assets)}</section>
     </div>
     <section class="card" id="buy"></section>
@@ -74,6 +82,7 @@ export async function poolView(address, page) {
       reserved for you. You never hold it: the pool gateway does, and your orders go through it,
       signed by your wallet. A profit share is paid to your address on HyperCore; if you have no
       account there yet, 1 USDC of it pays for creating one.</p>
+      ${outcomesHtml(terms, fee)}
       <button id="buy-btn">Pay and start</button>`;
     wire($("#buy-btn", page), async () => {
       // The pool pulls the price and the fee, so it is approved for exactly both.

@@ -66,3 +66,28 @@ export function awaitingKeyWords({ passedAt, window, now }) {
 export function isFundedStage(stage) {
   return Number(stage) === 2 || Number(stage) === 3;
 }
+
+/**
+ * What a page shows for a pool: the name on its badge, the badge's tone, and one sentence on what it is doing.
+ * The stage alone said "Idle: it can sell a challenge" for a pool that could not -- short on HyperCore, not
+ * prepared, or still settling the last challenge -- while the row above named the gap. `blocker` is
+ * funding.js saleBlocker's answer for the same pool, so the badge and the buy button decide from one reading.
+ */
+export function poolStatus(stage, blocker) {
+  if (Number(stage) !== 0 || !blocker || blocker.kind === "taken") {
+    return { name: stageName(stage), tone: Number(stage) === 0 ? "ok" : "", words: stageWords(stage) };
+  }
+  if (blocker.kind === "underfunded") {
+    return {
+      name: "Awaiting top-up", tone: "",
+      words: `Awaiting top-up: idle, but ${Number(blocker.short).toFixed(2)} USDC short on HyperCore, so it cannot `
+        + "sell a challenge until its investor moves USDC across.",
+    };
+  }
+  if (blocker.kind === "not-prepared") {
+    return { name: "Not prepared", tone: "", words: "Not prepared: idle, but its investor has not prepared the account, "
+      + "so it cannot sell a challenge yet." };
+  }
+  return { name: "Settling", tone: "", words: "Settling: idle, but the last challenge is still settling, so it cannot "
+    + "sell the next one until that ends." };
+}

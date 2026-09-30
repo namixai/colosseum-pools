@@ -17,6 +17,9 @@ export const CONFIG = {
   // First block of the deployment: what the check-it-yourself page names as the start of this
   // deployment's history. Nothing scans back towards it — see app/lib/keys.js.
   deployBlock: 65021402,
+  // The deploy key, copied from deployments/testnet-<label>.json: the pools it owns are our benches, which the
+  // list names as such (app/lib/listing.js). docs/EVIDENCE.md already names it.
+  deployer: "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
   usdc: "0x2B3370eE501B4a559b57D449569354196457D8Ab",
   // Perp indices the factory lists, copied from deployments/testnet-<label>.json after a deploy.
   // The chain stays the authority -- the new-pool form asks isPlatformAsset for each of these and
