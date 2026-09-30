@@ -105,15 +105,23 @@ class ProtectionCheck(KeeperTest):
         self.assertEqual(self.missing(), [{"account": CHALLENGE_A, "coin": "ETH", "size": "1"}])
 
     def test_a_failed_read_is_logged_and_the_pass_goes_on(self):
-        # One read of the orders serves the cancels and the check, so a refused read fails the account's
-        # pass as a refused read of the orders always did; the next pool is still gone through.
+        # One read of the orders serves the cancels and the check. It no longer fails the account's
+        # pass WHOLE, which is audit A-14: the contract's own rules -- drawdown, daily loss,
+        # leverage -- come off the margin precompile over EVM and are still answered, and what a
+        # refusal costs is the cancel list, the forbidden-asset candidates and the stop check. The
+        # round records the turn as NOT taken (`venue_incomplete`), so it comes back to this
+        # account before the ones it got through, instead of leaving the same tail unserved every
+        # pass. Rewritten with the A-14 merge; the name still says what it says.
         self.active_challenge([("BTC", "0.005")], [])
         self.chain.front_fails = True
         self.make().one_pass()
-        failed = [f for event, f in self.logged if event == "pool_failed"]
-        self.assertEqual(len(failed), 1)
-        self.assertIn("429", failed[0]["error"])
-        self.assertIn("pass_done", [event for event, _ in self.logged])
+        events = [event for event, _ in self.logged]
+        refused = [f for event, f in self.logged if event == "venue_read_failed"]
+        self.assertEqual(len(refused), 1)
+        self.assertIn("429", refused[0]["error"])
+        self.assertIn("venue_incomplete", events)
+        self.assertNotIn("pool_failed", events, "a refused venue read is not a broken pool")
+        self.assertIn("pass_done", events)
 
     def test_an_active_account_is_read_once_a_pass_22_of_hyperliquids_weight(self):
         # Hyperliquid's weights (rate-limits-and-user-limits): clearinghouseState 2, every other info

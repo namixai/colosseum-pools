@@ -33,11 +33,26 @@ early cuts the trader's profit short, so that call is the trader's. Testnet only
 
 Each pass makes about a dozen RPC reads per followed pool, and the public testnet RPC is rate
 limited, so keep the interval at tens of seconds unless the keeper has its own RPC.
+
+The reads of Hyperliquid's own API are limited too, and that budget is the host's rather than the
+keeper's: the public gateway draws on the same 1200 a minute. So a pass is not guaranteed to
+finish, and the pools it does not reach go unserved until the next one. It takes them in sorted
+order but begins where the last pass got to, not at the top every time -- under a fixed order the
+same accounts are last in every round, and where an address sorts is something its owner chooses
+(audit A-14). The place is `resume_at` in the state file, and an account whose venue read was
+refused does not count as a turn taken.
+
+For the same reason the contract is asked first and asked with an empty list. Drawdown, daily
+loss and leverage come off the margin precompile over EVM, which the keeper reads through its own
+node: those three are answered whatever Hyperliquid is doing, and a breach found that way is sent
+with no cancel list rather than not sent. Only the forbidden-asset rule needs the venue, because
+the contract holds the allowed set but not the account's open positions.
 """
 
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import os
 import pathlib
@@ -99,8 +114,27 @@ def view(addr: str, sig: str, out: str, types=(), args=()):
     return c.call_view(addr, sig, list(types), list(args), [out])[0]
 
 
+# The perp list, kept from the last pass that could read it. Hyperliquid lists new perps from
+# time to time and never renumbers the old ones, so a list one pass out of date is right about
+# every asset it names.
+_perp_names: dict[str, int] = {}
+
+
 def perp_index_by_name() -> dict[str, int]:
-    return {a["name"]: i for i, a in enumerate(c.info_post({"type": "meta"})["universe"])}
+    """The perp index by name, or the last one we had if Hyperliquid will not answer.
+
+    This read sits outside the per-pool guard, so a refusal here used to end the whole pass before
+    a single account was looked at -- and a pass that ends before it starts never moves the round
+    on, which makes one refused read the start of the tail A-14 is about. On the very first pass
+    there is nothing to fall back to and the names go empty: that costs the cancel list and the
+    forbidden-asset list, and leaves the contract's own rules, which need no names at all.
+    """
+    global _perp_names
+    try:
+        _perp_names = {a["name"]: i for i, a in enumerate(c.info_post({"type": "meta"})["universe"])}
+    except Exception as exc:
+        log("meta_read_failed", error=str(exc)[:200], names=len(_perp_names))
+    return _perp_names
 
 
 def read_book(account: str) -> tuple[dict, list]:
@@ -121,6 +155,48 @@ def stop_inputs(account: str, allowed: set[int], names: dict[str, int],
     extra = sorted({names[p["position"]["coin"]] for p in state.get("assetPositions", [])
                     if p["position"]["coin"] in names and names[p["position"]["coin"]] not in allowed})[:16]
     return cancels, extra
+
+
+class NotFullyChecked(Exception):
+    """The contract's rules were answered for this account; Hyperliquid's were not.
+
+    Raised at the end of a pool's turn, after everything the contract alone could decide has been
+    done and any breach it found has already been sent. It exists so the round does not count this
+    account as served: the forbidden-asset rule and the stop check both need the venue, and a
+    round that counted a refused read as done would leave the same accounts missing them pass
+    after pass -- which is the tail A-14 is about, arriving by a second door.
+    """
+
+
+def venue_book(account: str) -> tuple[dict, list] | None:
+    """`read_book`, or None when Hyperliquid would not answer.
+
+    A refused venue read must not decide anything about an account. What it costs is the list of
+    resting orders to cancel and the list of assets to name to the contract; what it does not cost
+    is the contract's own rules -- drawdown, daily loss and leverage all come off the margin
+    precompile over EVM (`RuledAccount.violation`), and the keeper reads EVM through its own node
+    with its own budget. Before A-14 this read came first and threw, so an account went entirely
+    unchecked exactly when the shared budget was tight: the one moment the check is worth having.
+    """
+    try:
+        return read_book(account)
+    except Exception as exc:
+        log("venue_read_failed", account=account, error=str(exc)[:200])
+        return None
+
+
+def stop_args(account: str, names: dict[str, int],
+              book: tuple[dict, list] | None) -> tuple[list, list]:
+    """The cancel list and the forbidden assets for a stop, empty when the venue will not answer.
+
+    A stop with no cancels leaves the resting orders for the next pass. A stop not sent leaves the
+    rule broken, which is the thing money is lost to.
+    """
+    if book is None:
+        book = venue_book(account)
+    if book is None:
+        return [], []
+    return stop_inputs(account, rules_assets(account), names, book)
 
 
 def send(wallet, addr: str, sig: str, types=(), args=(), dry=False) -> None:
@@ -197,7 +273,37 @@ def stop(wallet, addr: str, fn: str, cancels, extra, dry: bool) -> None:
          [cancels, extra, os.urandom(32)], dry=dry)
 
 
-def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> None:
+def whats_broken(account: str, names: dict[str, int]) -> tuple[int, tuple[dict, list] | None]:
+    """The contract's verdict on an account, and the venue reads if they were needed and answered.
+
+    The contract goes first and is asked with an empty list, because drawdown, daily loss and
+    leverage need nothing but the margin precompile. Only if it says nothing is broken do we ask
+    Hyperliquid, and then for one reason: the forbidden-asset rule is the one rule the contract
+    cannot check on its own -- it holds the allowed set, but the account's open positions are not
+    in its storage, so the candidate assets have to be named to it. It still verifies each one
+    against the chain before calling it a breach (`RuledAccount.violation`), so a wrong candidate
+    list cannot manufacture a stop; a missing one can only fail to find this rule, and leaves the
+    three money rules answered either way.
+
+    The account's book is read ONCE here and handed back, because everything else this pass does
+    with the account wants the same reading: the cancel list for a stop, and the stop check that
+    runs when nothing is broken. Reading it twice is 44 of Hyperliquid's weight an account instead
+    of 22, on a budget the gateway on this host shares.
+    """
+    reason = view(account, "violation(uint32[])", "uint8", ["uint32[]"], [[]])
+    if reason:
+        return reason, None
+    book = venue_book(account)
+    if book is None:
+        return 0, None
+    _, extra = stop_inputs(account, rules_assets(account), names, book)
+    if extra:
+        return view(account, "violation(uint32[])", "uint8", ["uint32[]"], [extra]), book
+    return 0, book
+
+
+def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> bool:
+    """One pass over a challenge. False when Hyperliquid refused a read this account needed."""
     status = view(ch, "status()", "uint8")
     if status == CREATED:
         if view(ch, "keySpoiled()", "bool"):
@@ -207,53 +313,65 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
             send(wallet, ch, "activate()", dry=dry)
         elif now > view(ch, "createdAt()", "uint64") + START_WINDOW:
             send(wallet, ch, "abort()", dry=dry)
-        return
+        return True
     if status != ACTIVE and status not in STOPPED:
-        return
-    book = read_book(ch)
-    cancels, extra = stop_inputs(ch, rules_assets(ch), names, book)
+        return True
     if status == ACTIVE:
         if in_checkpoint_window(now) and view(ch, "day()", "uint32") < now // 86400:
             send(wallet, ch, "checkpoint()", dry=dry)
-        reason = view(ch, "violation(uint32[])", "uint8", ["uint32[]"], [extra])
+        reason, book = whats_broken(ch, names)
         if reason:
             log("breach_found", account=ch, reason=reason)
+            cancels, extra = stop_args(ch, names, book)
             stop(wallet, ch, "breach", cancels, extra, dry)
         elif now > view(ch, "deadline()", "uint64"):
+            cancels, extra = stop_args(ch, names, book)
             stop(wallet, ch, "expire", cancels, extra, dry)
         else:
             check_protection(ch, book)
+        return book is not None
     else:
         recut_if_uncut(wallet, ch, latest, dry)
+        # Settling keeps the old behaviour: a refused read raises, the pass logs the pool and
+        # comes back to it. Nothing is at stake in the meantime -- the account is already stopped
+        # -- so there is no reason to spend a transaction on a settle step with no cancels in it.
+        cancels, extra = stop_inputs(ch, rules_assets(ch), names)
         send(wallet, ch, f"settle({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
+    return True
 
 
 def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> bool:
     """One pass over a pool and its challenge. False once the pool has nothing left to do."""
     stage = view(pool, "stage()", "uint8")
     challenge = to_checksum_address(view(pool, "challenge()", "address"))
+    checked = True
     if challenge != ZERO:
-        challenge_pass(wallet, challenge, names, now, latest, dry)
+        checked = challenge_pass(wallet, challenge, names, now, latest, dry)
     if stage == PASSED_AWAITING_KEY:
         # The trader met the target and the pass is already recorded; the stage only needs a
         # live key. The call is open to anyone and reverts NoFreeKey when there is none, so it
         # is worth trying every pass: the pool holds the investor's capital until it succeeds.
         send(wallet, pool, "openFundedStage()", dry=dry)
     if stage in (FUNDED, CLOSING):
-        book = read_book(pool)
-        cancels, extra = stop_inputs(pool, rules_assets(pool), names, book)
         if stage == FUNDED:
             if in_checkpoint_window(now) and view(pool, "day()", "uint32") < now // 86400:
                 send(wallet, pool, "checkpoint()", dry=dry)
-            reason = view(pool, "violation(uint32[])", "uint8", ["uint32[]"], [extra])
+            reason, book = whats_broken(pool, names)
             if reason:
                 log("breach_found", account=pool, reason=reason)
+                cancels, extra = stop_args(pool, names, book)
                 stop(wallet, pool, "breach", cancels, extra, dry)
             else:
                 check_protection(pool, book)
+            checked = checked and book is not None
         else:
             recut_if_uncut(wallet, pool, latest, dry)
+            cancels, extra = stop_inputs(pool, rules_assets(pool), names)
             send(wallet, pool, f"settleFunded({CANCEL},uint32[])", [CANCEL, "uint32[]"], [cancels, extra], dry=dry)
+    if not checked:
+        # After the work, not instead of it: a breach the contract found is already sent, and the
+        # pool stays in `live` because this says "not finished", not "gone".
+        raise NotFullyChecked(pool)
     # A pool waiting for a key is not finished with, even when its challenge has settled.
     return not (stage == IDLE and challenge == ZERO)
 
@@ -272,6 +390,22 @@ def pools_with_challenges(factory: str, lo: int, hi: int) -> set[str]:
     return found
 
 
+def ring(order: list[str], resume_at: str | None) -> list[str]:
+    """The pools of one pass, in the order this pass takes them: sorted, but begun where the last
+    pass broke off instead of at the top every time.
+
+    A pass is not guaranteed to finish. Hyperliquid's REST budget belongs to the host, not to the
+    keeper -- the public gateway draws on the same 1200 a minute -- and a pass that runs out of it
+    fails the pools it has not reached. Under a fixed order those are the same pools every pass:
+    the end of the sorted list is never served, and where an address sorts is something its owner
+    chooses. Rotating the start makes the tail a place in the round rather than a set of accounts.
+    """
+    if not order:
+        return []
+    start = bisect.bisect_left(order, resume_at) % len(order) if resume_at else 0
+    return order[start:] + order[:start]
+
+
 class Keeper:
     def __init__(self, factory: str, wallet, dry: bool, state_path: pathlib.Path, start_block: int,
                  window: int = MAX_LOG_WINDOW, max_windows: int = 50):
@@ -287,18 +421,25 @@ class Keeper:
         self.max_windows = max_windows
         self.next_block = start_block
         self.live: set[str] = set()
+        # Where the next pass begins its round. Read with a default, because a keeper started on
+        # a state file written before this existed -- the demo's, and the second keeper's, which
+        # was seeded from it -- must come up rather than die on a missing key.
+        self.resume_at: str | None = None
         if state_path.exists():
             state = json.loads(state_path.read_text())
             if to_checksum_address(state["factory"]) != self.factory:
                 raise SystemExit(f"{state_path} belongs to another factory")
             self.next_block = int(state["next_block"])
             self.live = {to_checksum_address(p) for p in state["live"]}
+            at = state.get("resume_at")
+            self.resume_at = to_checksum_address(at) if at else None
 
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"factory": self.factory, "next_block": self.next_block,
-                                   "live": sorted(self.live)}, indent=2) + "\n")
+                                   "live": sorted(self.live), "resume_at": self.resume_at},
+                                  indent=2) + "\n")
         tmp.replace(self.state_path)
 
     def one_pass(self) -> None:
@@ -325,14 +466,38 @@ class Keeper:
             self.save()
         names = perp_index_by_name()
         now = int(time.time())
-        for pool in sorted(self.live):
+        todo = ring(sorted(self.live), self.resume_at)
+        served = None
+        for i, pool in enumerate(todo):
             try:
                 if not pool_pass(self.wallet, pool, names, now, latest, self.dry):
                     self.live.discard(pool)
+                served = i
+            except NotFullyChecked:
+                # Not an error and not a turn taken: the contract's rules were answered, the
+                # venue's were not, and the round has to come back to this one before it comes
+                # back to the accounts it did get through.
+                log("venue_incomplete", pool=pool)
             except Exception as exc:
                 log("pool_failed", pool=pool, error=str(exc)[:200])
+        if served is not None:
+            # Next pass begins after the last pool this one actually got through, so a round cut
+            # short by the shared budget carries on instead of starting over.
+            #
+            # After the last SUCCESS, not at the first failure: a pool that throws for its own
+            # reasons -- a reverting view, an address the node dislikes -- would otherwise hold
+            # the place at its own position for good, and everything behind it would go unserved.
+            # That is the same starvation as the fixed order with a new cause. Success is what
+            # moves the round, so nothing that only fails can own a place in it.
+            #
+            # A round that gets through everything wraps back to its own top, and that is right:
+            # the order only has to move when a pass does not finish, which is the case this
+            # exists for. When nothing at all got through there is nothing to carry on from, and
+            # the next pass starts where this one did.
+            self.resume_at = todo[(served + 1) % len(todo)]
         self.save()
-        log("pass_done", following=len(self.live), next_block=self.next_block, latest=latest)
+        log("pass_done", following=len(self.live), next_block=self.next_block, latest=latest,
+            resume_at=self.resume_at)
 
 
 def deployment_block(record: dict) -> int:
