@@ -2522,6 +2522,40 @@ MUTATIONS = [
      "    every stop. Replayed on Bybit's one-minute data, not measured on Hyperliquid: the losses",
      "    every stop; the losses",
      ["the Economics page opens with the risk: who can lose what, what was checked where, and that it is a model"]),
+    # Connecting a wallet on a pool page (live site, 1 Oct 2026): one render per connection, a read provider that
+    # never sends more than the node's 20, and a refused batch named as one. "PB": the second window's prefix.
+    ("PB1", "app/lib/walletbutton.js",
+     "      await connect();\n",
+     "      await connect();\n      route();\n",
+     ["connecting a wallet draws the page once"]),
+    ("PB2", "app/app.js",
+     "    route,\n    report: (err) => alert(friendly(err)),",
+     "    route,\n    report: (err) => alert(friendly(err)),\n  });\n  btn.addEventListener(\"click\", () => chain.onAccount(() => route()), { once: true });\n  void ({",
+     ["connecting a wallet draws the page once"]),
+    ("PB3", "app/lib/batch.js",
+     "export const PROVIDER_OPTIONS = Object.freeze({ staticNetwork: true, batchMaxCount: MAX_BATCH });",
+     "export const PROVIDER_OPTIONS = Object.freeze({ staticNetwork: true });",
+     ["the read provider never sends a batch larger than the node takes"]),
+    ("PB4", "app/lib/chain.js",
+     "export const readProvider = new ethers.JsonRpcProvider(CONFIG.rpc, CONFIG.chainId, PROVIDER_OPTIONS);",
+     "export const readProvider = new ethers.JsonRpcProvider(CONFIG.rpc, CONFIG.chainId, { staticNetwork: true });",
+     ["the read provider never sends a batch larger than the node takes"]),
+    ("PB5", "app/lib/ui.js",
+     "  // Before BAD_DATA: a refused batch reaches here as BAD_DATA too, and it is not a mismatch with the deployment.\n  if (batchRefused(err)) {",
+     "  // Before BAD_DATA: a refused batch reaches here as BAD_DATA too, and it is not a mismatch with the deployment.\n  if (false) {",
+     ["a refused batch is named for what it is, not as a mismatch with the deployment"]),
+    ("PB6", "app/lib/ui.js",
+     "  if (batchRefused(err)) {\n    return `${RPC} refused this page's reads",
+     "  if (false) {\n    return `${RPC} refused this page's reads",
+     ["a refused batch is named for what it is, not as a mismatch with the deployment"]),
+    ("PB7", "app/lib/ui.js",
+     "    if (answers.some((a) => Number(a?.error?.code) === -32010)) return true;\n",
+     "",
+     ["a refused batch is named for what it is, not as a mismatch with the deployment"]),
+    ("PB8", "app/lib/ui.js",
+     "    if (Number(e.code) === -32010) return true;\n",
+     "",
+     ["a refused batch is named for what it is, not as a mismatch with the deployment"]),
 ]
 
 RUNNERS = {
@@ -2556,6 +2590,7 @@ RUNNERS = {
     "PW": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_keeper_protect"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The levers on the Economics page: their own test file.
     "PL": (["node", "--test", "--test-reporter=tap", "app/tests/levers.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
+    "PB": (["node", "--test", "--test-reporter=tap", "app/tests/wallet.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     "PD": (["node", "--test", "--test-reporter=tap", "app/tests/lending.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     "PU": (["node", "--test", "--test-reporter=tap", "app/tests/ux.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
 }

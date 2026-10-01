@@ -2,6 +2,7 @@
 import * as chain from "./lib/chain.js";
 import { render, $, esc, friendly, failureHint, view } from "./lib/ui.js";
 import { createNavigator, needsGate } from "./lib/nav.js";
+import { wireWallet } from "./lib/walletbutton.js";
 import { listView, newPoolView } from "./views/pools.js";
 import { poolView } from "./views/pool.js";
 import { challengeView } from "./views/challenge.js";
@@ -62,21 +63,15 @@ function route() {
 
 function walletButton() {
   const btn = $("#wallet");
-  const paint = (addr) => {
-    btn.textContent = addr ? chain.short(addr) : "Connect wallet";
-  };
-  btn.addEventListener("click", async () => {
-    try {
-      paint(await chain.connect());
-      route();
-    } catch (err) {
-      btn.textContent = "Connect wallet";
-      alert(friendly(err));
-    }
-  });
-  chain.onAccount((addr) => {
-    paint(addr);
-    route();
+  wireWallet({
+    button: btn,
+    connect: () => chain.connect(),
+    onAccount: (fn) => chain.onAccount(fn),
+    paint: (addr) => {
+      btn.textContent = addr ? chain.short(addr) : "Connect wallet";
+    },
+    route,
+    report: (err) => alert(friendly(err)),
   });
 }
 

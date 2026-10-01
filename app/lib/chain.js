@@ -2,6 +2,7 @@
 import { CONFIG } from "../config.js";
 import { ensureChain } from "./wallet.js";
 export { MAX_BATCH, readAll } from "./batch.js";
+import { PROVIDER_OPTIONS } from "./batch.js";
 
 const { ethers } = window;
 
@@ -110,7 +111,7 @@ export const STAGE = ["Idle", "Challenge", "Funded", "Closing", "PassedAwaitingK
 export const BREACH = ["None", "Drawdown", "Daily loss", "Leverage", "Forbidden asset"];
 export const KEY_STATE = ["Unknown", "Free", "Bound", "Retired"];
 
-export const readProvider = new ethers.JsonRpcProvider(CONFIG.rpc, CONFIG.chainId, { staticNetwork: true });
+export const readProvider = new ethers.JsonRpcProvider(CONFIG.rpc, CONFIG.chainId, PROVIDER_OPTIONS);
 
 let signer = null;
 const listeners = new Set();
