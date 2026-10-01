@@ -86,7 +86,8 @@ class Window(unittest.TestCase):
     def test_a_counter_file_can_lower_the_limits_but_not_raise_them(self):
         path = cli.session_path(Wallet.address, dk.to_checksum_address(ACCOUNT), NOW)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"orders_left": 99, "cancels_left": 99, "graduations_left": 99}))
+        path.write_text(json.dumps({"orders_left": 99, "cancels_left": 99, "graduations_left": 99,
+                                    "stops_left": 99}))
         for _ in range(cli.WINDOW_MAX_ORDERS_PER_DAY):
             self.order()
         with self.assertRaises(dk.Refused):

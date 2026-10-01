@@ -184,9 +184,38 @@ class DeskLimits(WithChain):
                                               "max_open_notional_by_rule_usdc": 3000.0})
         self.assertEqual(view["challenge"]["target_equity_usdc"], 1100.0)
         self.assertEqual(view["challenge"]["hours_left"], 36.0)
-        self.assertEqual(view["contract_verdict_now"], "inside the rules")
+        self.assertEqual(view["contract_verdict"], "inside the rules")
         self.chain.verdict = 3
-        self.assertEqual(self.desk().account_view()["contract_verdict_now"], "Leverage")
+        self.assertEqual(self.desk().account_view()["contract_verdict"], "Leverage")
+
+    def test_a_settled_account_says_what_the_contract_recorded_not_what_it_reads_now(self):
+        # Found by the trader bot on 1 October 2026: a challenge the contract stopped for Leverage
+        # showed "Drawdown", because a settled account has handed its money back and reads a
+        # hundred per cent below where it started. `app/lib/verdict.js` was fixed for exactly this
+        # on 24 September; the fix had not been carried here.
+        self.chain.status, self.chain.recorded, self.chain.verdict = 8, 3, 1   # Settled, Leverage, reads Drawdown
+        said = self.desk().account_view()["contract_verdict"]
+        self.assertIn("Leverage", said)
+        self.assertNotIn("Drawdown", said)
+        self.assertIn("recorded", said, "and it says where the answer comes from")
+
+    def test_a_pass_is_not_read_as_a_drawdown_either(self):
+        # Passed and settled with nothing recorded: as empty as a stopped one, and the live reading
+        # would call it a drawdown.
+        self.chain.status, self.chain.recorded, self.chain.verdict = 8, 0, 1
+        self.assertEqual(self.desk().account_view()["contract_verdict"], "finished with no rule broken")
+
+    def test_stop_funded_is_the_pools_call_and_only_once_a_session(self):
+        # `Pool.stopFunded` lets the owner OR the funded trader end the stage without a breach, so
+        # the bot can do its own; on a challenge there is no such call.
+        self.chain.challenge = True
+        with self.assertRaises(dk.Refused):
+            self.desk().stop_funded()     # a challenge has no funded stage to end
+        self.chain.challenge = False
+        d = self.desk()
+        self.assertEqual(d.stop_funded()["status"], "sent")
+        with self.assertRaises(dk.Refused):
+            d.stop_funded()               # and not twice in a session
 
     def test_account_view_keeps_the_two_shares_apart(self):
         # The fake's terms pay 0% for passing the challenge and 80% on the funded account.
