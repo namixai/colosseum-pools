@@ -140,9 +140,16 @@ indistinguishable from a funded stage that ended with nothing broken — every f
 reach for is cleared when a funded stage closes: `fundedTrader`, `fundedStart` (which is what
 `drawdownBase()` returns), and the payout fields all go back to zero (`src/Pool.sol:485-498`).
 `fundedEndReason` survives only when a stage was *stopped for a reason*, which is why deployment
-1's funded-stage row can be read from state at all. Here no funded stage ever started. **For an
-ending with no reason recorded, the event is the only witness** — `TraderFunded(trader, key,
-capital)` if a stage began, and nothing if it did not.
+1's funded-stage row can be read from state at all.
+
+**One field does tell them apart, and we had it the whole time: `cutBlock`.** A pool records the
+block where it cut the funded trader's key, and keeps it after the capital has come home. Only
+`_cutAgent` writes it (`src/RuledAccount.sol:169-178`), and `Pool.onChallengeSettled` retires a
+*reserved* key without going through that — so Idle with a cut block is a funded stage that is over,
+and Idle without one never had one. This pool answers `cutBlock()` **0**. The rule has been in
+`app/lib/verdict.js` as `pastFundedStage` since 24 September; an earlier draft of this section said
+the event was the only witness, which was wrong, and `TraderFunded(trader, key, capital)` is a
+second witness rather than the only one.
 
 **Honest limit, and it is ours.** Those four transactions took an `eth_getLogs` walk back from the
 head, and this node rate limited it repeatedly on the way — the shared minute of budget that

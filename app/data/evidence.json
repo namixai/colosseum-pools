@@ -120,9 +120,9 @@
       "block": 65746163,
       "sentBy": "0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa",
       "record": "stage Idle, fundedEndReason None \u2014 the reservation case, not a funded stage: key 0x99A4Ec10 released at block 65746163",
-      "check": ["stage() and fundedEndReason() on the pool", "TraderFunded(trader, key, capital) in the pool's events: none means no funded stage"],
+      "check": ["stage() and fundedEndReason() on the pool", "cutBlock() on the pool: 0 means no funded stage ever started"],
       "notes": [
-        "For an ending with no reason recorded, the event is the only witness \u2014 TraderFunded(trader, key, capital) if a stage began, and nothing if it did not"
+        "One field does tell them apart, and we had it the whole time: cutBlock. A pool records the block where it cut the funded trader's key, and keeps it after the capital has come home. Only _cutAgent writes it (src/RuledAccount.sol:169-178), and Pool.onChallengeSettled retires a *reserved* key without going through that \u2014 so Idle with a cut block is a funded stage that is over, and Idle without one never had one. This pool answers cutBlock() 0."
       ],
       "sources": [
         "| 0x237afA2D58B1612e19D47152FfB2E771c05Fe96D | pool | stage Idle, fundedEndReason None \u2014 the reservation case, not a funded stage: key 0x99A4Ec10 released at block 65746163 |",
