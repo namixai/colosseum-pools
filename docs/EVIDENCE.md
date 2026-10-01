@@ -144,8 +144,14 @@ Transactions read back from their receipts:
 - **The pair anyone can check, on the venue's own fills.** `userFills` for the challenge holds
   exactly two: the entry at **13:54:54.160 UTC** (oid 61567491731, BTC buy 0.00297 at 84076) and the
   close at **13:54:57.383** (oid 61567495468, sell 0.00297 at 84075), **3.223 seconds** apart. The
-  stop's block 65746123 carries 13:54:57, the same second as the close, so it was the keeper's stop
-  that closed it and not a resting protective order. **Read 3.223 as one draw, not a bound:** the
+  stop's block 65746123 carries 13:54:57, the same second as the close.
+  **What that fixes is the order, not the mechanism.** The equity the stop recorded is 69.884663,
+  which is capital 70 less the entry fee 0.112367 and the 0.00297 the position was down — the
+  account with one fee paid and the position still OPEN. So the close came after the stop was
+  written down. Which order filled it we did not establish: the keeper's journal would say and we
+  did not read it, and HyperCore runs a CoreWriter action a few seconds after the EVM block, so a
+  fill 0.383 s past that block is not on its own the stop's own close.
+  **Read 3.223 as one draw, not a bound:** the
   keeper polls and sleeps 30 seconds between passes, so noticing takes anywhere from nothing to a
   cycle depending on where in it the rule broke, and this one happened to break near the start of a
   pass. Each fill's fee is 0.112367 on 249.71 of notional — 4.50 bps, the taker rate the gateway's
@@ -177,7 +183,7 @@ and Idle without one never had one. This pool answers `cutBlock()` **0**. The ru
 the event was the only witness, which was wrong, and `TraderFunded(trader, key, capital)` is a
 second witness rather than the only one.
 
-**Honest limit, and it is ours.** Those four transactions took an `eth_getLogs` walk back from the
+**Honest limit, and it is ours.** Those three transactions took an `eth_getLogs` walk back from the
 head, and this node rate limited it repeatedly on the way — the shared minute of budget that
 finding A-14 is about, met from the reading side. A reader starting from the record's
 `published_keys` and calling `bindingOf` needs none of that; a reader trying to find the
