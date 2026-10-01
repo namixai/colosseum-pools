@@ -40,11 +40,16 @@ from typing import Any, Callable, Protocol
 from .checks import GatewayError
 
 BPS = Decimal(10_000)
-# What a challenge's take has to clear beyond the target, as a share of the closing notional.
-# Hyperliquid's taker fee is 4.5 bps a side; the rest is the spread a market close crosses and
-# room for the fee tier to differ. On 100 USDC of notional this is 0.10 USDC, which buys a pass
-# that `graduate` will actually accept instead of one that misses by a fee.
-CLOSE_COST_BPS = Decimal(10)
+# What a challenge's take has to clear beyond the target, in basis points of the notional, and
+# where each part of it comes from.
+TAKER_FEE_BPS = Decimal("4.5")   # `userFees` for the trader wallet, read 1 October 2026
+SLIPPAGE_BPS = Decimal(2)        # a stop filled 1.1 bps worse than its trigger, 29 Sep 2026
+SPARE_BPS = Decimal(5)           # so the margin is a multiple of the slippage, not equal to it
+# BOTH sides, not just the close. The take is placed with the order that opens the position, so
+# the entry's fee is debited after the line is fixed -- and `reconcile` will not pull a resting
+# take nearer, by design, since that is the trader's to move. Measured on the 10 bps this started
+# as: the margin over the target came to 1.01 bps of the notional, which one bad fill eats.
+CLOSE_COST_BPS = 2 * (TAKER_FEE_BPS + SLIPPAGE_BPS) + SPARE_BPS   # 18
 USD = Decimal(1_000_000)  # chain units per USDC (perp USD and equity are in 1e-6 USDC)
 # The farthest a stop or a take is put from the mark, as a fraction of it. A position too small to
 # use up the whole budget has no rule line at all; Hyperliquid still needs a price.

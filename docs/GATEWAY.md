@@ -162,10 +162,18 @@ A take placed exactly at the target therefore leaves the account flat a fee BELO
 of 70.175, and 70.13 once closed. Retrying did not help, because the next room was exactly that
 fee: every attempt ended on `target − fee`.
 
-So the room reaches past the target by `CLOSE_COST_BPS` — ten basis points of the notional, where
-Hyperliquid's taker fee is 4.5 a side and the rest covers the spread a market close crosses and a
-different fee tier. On 100 USDC of notional that is 0.10. The take also rounds AWAY from the mark,
-so a price tick cannot eat the allowance; the stop still rounds towards it.
+So the room reaches past the target by `CLOSE_COST_BPS`, and it carries **both** sides: the take is
+placed with the order that opens the position, so the entry's fee is debited after the line is
+fixed, and `reconcile` will not pull a resting take nearer — that is the trader's to move. Ten basis
+points, covering only the close, left a margin of **1.01 bps** of the notional, which is less than
+the 1.1 a stop had already slipped on 29 September. It is now `2 × (TAKER_FEE_BPS + SLIPPAGE_BPS) +
+SPARE_BPS` = 18 bps, each part named where it comes from: the taker fee read from `userFees`, the
+slippage measured on that stop, and a spare so the margin is a multiple of the slippage rather than
+equal to it. On 100 USDC of notional that is 0.18, and it holds at four basis points of slippage on
+both fills at once.
+
+The take also rounds AWAY from the mark, so a price tick cannot eat the allowance; the stop still
+rounds towards it.
 
 A funded stage has no target and the pool's rules have no take, so there the take is at most one
 challenge target away: `targetBps` of the equity at the moment it is set, with no allowance, since
