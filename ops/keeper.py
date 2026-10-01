@@ -74,16 +74,16 @@ STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 MAX_LOG_WINDOW = 50  # blocks per eth_getLogs call that HyperEVM accepts
 RECUT_AFTER_BLOCKS = 10  # CoreWriter actions land a few seconds after their block
 DEFAULT_EVERY_S = 30
-# The worst a breach the CONTRACT can see waits to be found, when one read on the way is refused:
-# the pass interval, plus the longest a refused read now waits before it gives up. Those rules --
-# drawdown, daily loss, leverage -- come off the margin precompile, so they are answered even when
-# Hyperliquid refuses everything; what a refusal costs is the venue's half, and the round comes
-# back to that account before the ones it got through.
+# What a refused read costs in time, and what it does NOT tell you.
 #
-# It is one refused read. A second in the same pass adds its own wait, and how many there are is
-# what the shared budget decides -- naming a single number for every case would be naming one we
-# could not keep.
-WORST_CASE_DETECTION_S = DEFAULT_EVERY_S + c.RPC_BACKOFF_TOTAL_S  # 93 seconds today
+# One refused read makes its pass up to `c.RPC_BACKOFF_TOTAL_S` longer, and the next pass starts
+# `DEFAULT_EVERY_S` after this one ENDS -- `main` sleeps between passes, not between accounts. The
+# sum of the two is NOT a bound on how late a breach is found, and the first version of this said
+# it was: it leaves out the rest of the pass (a breach that starts just after its own account was
+# read waits for every account behind it, then for the next pass to come round), the time the node
+# takes to answer, and how many reads were refused. The shared budget decides that last one, so
+# there is no honest single number here -- only these two, each exact about what it measures.
+DELAY_ADDED_BY_A_REFUSED_READ_S = c.RPC_BACKOFF_TOTAL_S  # 63
 
 # ChallengeAccount.Status and Pool.Stage. The tests hold these against the Solidity source.
 CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(1, 9)
