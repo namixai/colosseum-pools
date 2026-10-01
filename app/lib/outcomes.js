@@ -30,9 +30,12 @@ export function outcomes(terms, fee) {
     {
       what: `You pass: within the time limit the account reaches the ${pct(terms.targetBps)} target with every `
         + "position closed and no rule broken.",
-      you: `${share(terms.traderShareChallengeBps)} of the challenge's profit; then the pool funds you with `
-        + `${usd6(terms.fundedCapital)} USDC and you keep ${share(terms.traderShareFundedBps).toLowerCase()} of what that `
-        + "stage earns.",
+      // Pool.sol: the stage opens once a trading key is free, funds what the pool holds up to the terms, and pays the
+      // trader's share only when it ends with no rule broken and above where it started.
+      you: `${share(terms.traderShareChallengeBps)} of the challenge's profit. Then a funded stage of up to `
+        + `${usd6(terms.fundedCapital)} USDC opens for you once a trading key is free; if it ends with no rule broken `
+        + `and in profit, you keep ${share(terms.traderShareFundedBps).toLowerCase()} of that profit. A stage ended by a `
+        + "broken rule pays nothing, and if no key frees up it may never open.",
       paid: kept,
     },
     {

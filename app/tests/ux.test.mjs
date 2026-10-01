@@ -97,7 +97,9 @@ test("the whole price, and every way a challenge ends, before Pay and start", ()
   assert.equal(rows.length, 5);
   assert.deepEqual(rows[0], {
     what: "You pass: within the time limit the account reaches the 8% target with every position closed and no rule broken.",
-    you: "None of the challenge's profit; then the pool funds you with 700.00 USDC and you keep 80% of what that stage earns.",
+    you: "None of the challenge's profit. Then a funded stage of up to 700.00 USDC opens for you once a trading key is "
+      + "free; if it ends with no rule broken and in profit, you keep 80% of that profit. A stage ended by a broken rule "
+      + "pays nothing, and if no key frees up it may never open.",
     paid: "The price and the fee are not refunded.",
   });
   for (const r of rows.slice(1, 4)) {
@@ -111,6 +113,10 @@ test("the whole price, and every way a challenge ends, before Pay and start", ()
   assert.match(rows[4].what, /within an hour/);
   assert.equal(rows[4].paid, "The price comes back to your wallet; the fee does not.");
   assert.match(text("../../src/ChallengeAccount.sol"), /uint64 public constant START_WINDOW = 1 hours;/);
+  // The pass row's conditions, held to Pool.sol: funded up to the terms, paid only without a broken rule and in profit.
+  const poolSol = text("../../src/Pool.sol");
+  assert.match(poolSol, /uint64 funded = spot1e6 < _terms\.fundedCapital \? spot1e6 : _terms\.fundedCapital;/);
+  assert.match(poolSol, /fundedPayoutOwed = fundedEndReason == Breach\.None && result > fundedStart/);
   assert.match(text("../../src/Pool.sol"), /safeTransfer\(challengeTrader, price\);\s*emit ChallengeRefunded/);
   const shares = outcomes({ ...DEMO_TERMS, traderShareChallengeBps: 1000 }, 0n);
   assert.match(shares[0].you, /^10% of the challenge's profit/);
