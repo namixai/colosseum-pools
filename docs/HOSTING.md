@@ -333,22 +333,26 @@ in the Cloudflare dashboard:
 - `head_read_failed` or `venue_incomplete` in the keeper's log: a read was refused, the pass went
   on without it. Neither is a failed pass; `pass_failed` is.
 
-### How late a breach can be found
+### What a refused read costs in time
 
-**93 seconds**, when one read on the way is refused: the pass interval of 30 plus the 63 a
-refused read now waits before it gives up. A rate limit is counted over a minute, so a ladder
-that stops inside one is not a backoff — the old one topped out at 31 seconds and a keeper pass
-died on `eth_blockNumber: rate limited 6 times in a row` on 1 October 2026.
+A refused read makes its pass up to **63 seconds** longer: the backoff ladder is 1, 2, 4, 8, 16 and
+32 seconds across seven attempts. A rate limit is counted over a minute, so a ladder that stops
+inside one is not a backoff — the old one topped out at 31 seconds and a keeper pass died on
+`eth_blockNumber: rate limited 6 times in a row` on 1 October 2026.
 
-That number is for the rules the contract holds on its own — drawdown, daily loss, leverage. They
-come off the margin precompile, so they are answered even when Hyperliquid refuses everything.
-What a refusal costs is the venue's half: the cancel list, the forbidden-asset candidates and the
-stop check. The round comes back to that account before the ones it got through.
+Separately, the keeper sleeps **30 seconds** between passes — after a pass ends, not between
+accounts.
 
-A second refused read in the same pass adds its own wait. How many there are is what the shared
-request budget decides, which is why there is one number here and not a promise for every case.
-`ops/keeper.py` carries it as `WORST_CASE_DETECTION_S`, built from the two constants rather than
-typed, and a test holds this paragraph to it.
+🔴 **Those two do not add up to a bound on how late a breach is found, and nothing here claims they
+do.** A breach that starts just after its own account was read waits for every account behind it,
+then for the next pass to come round to it; the node's answer takes time of its own; and how many
+reads are refused is what the shared request budget decides. `ops/keeper.py` carries the first
+number as `DELAY_ADDED_BY_A_REFUSED_READ_S` and a test holds this paragraph to it.
+
+What a refusal does NOT cost is the rules the contract holds on its own — drawdown, daily loss and
+leverage come off the margin precompile and are answered even when Hyperliquid refuses everything.
+What it costs is the venue's half: the cancel list, the forbidden-asset candidates and the stop
+check. The round comes back to that account before the ones it got through.
 
 ## If the host is lost
 

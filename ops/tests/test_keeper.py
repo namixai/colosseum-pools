@@ -851,14 +851,13 @@ class TheNumberInTheDocument(unittest.TestCase):
     prose rots the moment either constant behind it moves, and nothing about a document going
     stale is visible from the code. So the document is held to the code here."""
 
-    def test_hosting_says_the_same_worst_case_the_code_computes(self):
+    def test_hosting_says_the_same_two_numbers_the_code_carries(self):
         doc = (ROOT / "docs/HOSTING.md").read_text()
-        said = re.findall(r"\*\*(\d+) seconds\*\*, when one read on the way is refused", doc)
-        self.assertEqual(said, [str(keeper.WORST_CASE_DETECTION_S)],
-                         "HOSTING.md and ops/keeper.py disagree about how late a breach can be found")
-        self.assertIn(f"the pass interval of {keeper.DEFAULT_EVERY_S} plus the "
-                      f"{keeper.c.RPC_BACKOFF_TOTAL_S} a", doc,
-                      "the document should name the two numbers it is built from")
+        self.assertIn(f"up to **{keeper.DELAY_ADDED_BY_A_REFUSED_READ_S} seconds** longer", doc,
+                      "HOSTING.md and ops/keeper.py disagree about what a refused read costs")
+        self.assertIn(f"sleeps **{keeper.DEFAULT_EVERY_S} seconds** between passes", doc)
+        # And it must not sell the sum as a bound, which the first version of it did.
+        self.assertIn("do not add up to a bound", doc)
 
 
 class Ring(unittest.TestCase):
