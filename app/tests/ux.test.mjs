@@ -121,3 +121,27 @@ test("the whole price, and every way a challenge ends, before Pay and start", ()
   assert.match(text("../views/pools.js"), /termsHtml\(terms, fee\)/);
   assert.match(outcomesHtml(DEMO_TERMS, FEE), /<th>How it ends<\/th><th>What you get<\/th><th>What you paid<\/th>/);
 });
+
+test("the Economics page opens with the risk: who can lose what, what was checked where, and that it is a model", async () => {
+  const { riskSummary } = await import("../views/economics.js");
+  const tables = JSON.parse(text("../data/calc_tables.json"));
+  const words = (html) => html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
+  assert.equal(words(riskSummary(tables)),
+    "A pool can lose its investor's capital; a trader can lose only what a challenge costs. "
+    + "Checked on Hyperliquid testnet, and readable on chain: the mechanism — the gateway puts a stop and a take on the "
+    + "exchange before any order that may open a position, and the contract enforces the rules and records every stop. "
+    + "Replayed on Bybit's one-minute data, not measured on Hyperliquid: the losses — on the worst of the 8 crash days, "
+    + "long side, at 5x on a list with alts, a stop on the exchange cost at most 3.6%, a stop a minute late 84% to 94% "
+    + "of the seats' capital. No pool has run with real traders or real money, so every return on this page is a model.");
+  // Read from the table, not written in: the lever first, then the keeper.
+  const t = JSON.parse(JSON.stringify(tables));
+  t.levers.cells.find((c) => c.stop === "keeper" && c.leverage === 5 && c.list === "wide" && c.exec === "worst").worst_pct = 97.2;
+  t.levers.days = t.levers.days.slice(0, 7);
+  const moved = words(riskSummary(t));
+  assert.match(moved, /the worst of the 7 crash days/);
+  assert.match(moved, /a stop on the exchange cost at most 3\.6%, a stop a minute late 84% to 97%/);
+  // At the top of the page, before the calculator.
+  const source = text("../views/economics.js");
+  assert.match(source, /<h2>Economics<\/h2>\s*<div id="risk" class="muted">…<\/div>/);
+  assert.match(source, /\$\("#risk", page\)\.innerHTML = riskSummary\(tables\);/);
+});

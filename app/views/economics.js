@@ -53,6 +53,7 @@ export async function economicsView(page) {
   render(page, `
     <section class="card">
       <h2>Economics</h2>
+      <div id="risk" class="muted">…</div>
       <p>What a pool of this design earns, what a trader can earn on it, and what it costs to run one.</p>
       <p class="notice"><strong>Every number the calculator returns is a model, not a measurement.</strong> The
       mechanics come from the contracts in this repository; who buys a challenge, how often, and how far a stop
@@ -84,6 +85,8 @@ export async function economicsView(page) {
       <div id="cascade" class="muted">…</div>
     </section>`);
   await loadTables();
+  $("#risk", page).className = "";
+  $("#risk", page).innerHTML = riskSummary(tables);
   $("#who", page).className = "";
   $("#who", page).innerHTML = leversCard(tables);
   formPanel(page);
@@ -294,6 +297,24 @@ export function exchangeBracket(tables, leverage) {
   const high = Math.max(...book.seats_usd.flatMap((seat) => Object.keys(book.walk_bps)
     .map((coin) => bound(coin, seat * leverage).p99))) * leverage / 100;
   return { line, low: line + low, high: line + high };
+}
+
+/**
+ * The risk in four sentences, at the top of the page: who can lose what, where the line runs between what was
+ * checked on Hyperliquid and what was replayed on Bybit's data, and that the returns are a model. The two losses
+ * are the lever table's, long side, 5x, the list with alts: the keeper a minute late at both ends of its minute,
+ * and the stop on the exchange with the book walked on top (exchangeBracket).
+ */
+export function riskSummary(tbl) {
+  const [open, worst] = ["open", "worst"].map((e) => leverCell(tbl, "keeper", 5, "wide", e));
+  return `<p class="lead"><strong>A pool can lose its investor's capital; a trader can lose only what a challenge
+    costs.</strong> Checked on Hyperliquid testnet, and readable on chain: the mechanism — the gateway puts a stop and
+    a take on the exchange before any order that may open a position, and the contract enforces the rules and records
+    every stop. Replayed on Bybit's one-minute data, not measured on Hyperliquid: the losses — on the worst of the
+    ${tbl.levers.days.length} crash days, long side, at 5x on a list with alts, a stop on the exchange cost at most
+    ${points(exchangeBracket(tbl, 5).high, 1)}, a stop a minute late ${points(open.worst_pct)} to
+    ${points(worst.worst_pct)} of the seats' capital. No pool has run with real traders or real money, so every return
+    on this page is a model.</p>`;
 }
 
 /**
