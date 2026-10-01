@@ -2101,8 +2101,8 @@ MUTATIONS = [
     ("PG4", "gateway/protect.py",
      "                    stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_CEILING),",
      "                    stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_FLOOR),",
-     ["test_the_challenge_take_is_the_pass_target",
-      "test_rounding_never_loosens_a_stop_or_puts_a_take_past_the_target"]),
+     ["test_the_challenge_take_clears_the_pass_target_by_what_closing_costs",
+      "test_rounding_never_loosens_a_stop_and_costs_a_take_at_most_a_tick"]),
     ("PG5", "gateway/protect.py",
      "                    stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_CEILING),\n                               valid_px(m.mark - step, m.sz_decimals, ROUND_FLOOR))",
      "                    stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_CEILING),\n                               valid_px(m.mark + step, m.sz_decimals, ROUND_FLOOR))",
@@ -2638,23 +2638,55 @@ def baseline(chosen) -> int:
     return problems
 
 
+def _test_names() -> set[str]:
+    """Every test a suite would actually run, by name.
+
+    Comment lines go first: a commented-out test still reads as a declaration to a regular
+    expression, and a mutation naming a disabled test is as blind as one naming a deleted one.
+    """
+    names: set[str] = set()
+    for d in ("test", "ops/tests", "gateway/tests", "agents/tests"):
+        for f in (ROOT / d).rglob("*"):
+            if f.suffix not in (".py", ".sol") or not f.is_file():
+                continue
+            live = "\n".join(l for l in f.read_text().split("\n")
+                              if not l.lstrip().startswith(("//", "#")))
+            names |= set(re.findall(r"function (test_\w+)", live))
+            names |= set(re.findall(r"def (test_\w+)", live))
+    return names
+
+
 def check() -> int:
-    """Every mutation still points at the code it guards, and no id is used twice.
+    """Every mutation still points at the code it guards, names tests that exist, and no id twice.
 
     A refactor moves a line and the mutation that guarded it stops matching anything. The full
     run says so, but the full run takes minutes and is called by hand, so a mutation can sit
     orphaned for days -- K7 and K10 did, from 23 to 24 Sep 2026, after their own author moved
     the lines they named. This check reads files and nothing else, so CI can afford it on every
     push: a mutation that matches no code, or matches twice, guards nothing either way.
+
+    The names are checked here too, as of 1 October 2026, because the anchors alone were not
+    enough: PG4 went on naming two tests after they were renamed in the same commit that renamed
+    them, `--check` passed, and only the review bot noticed. A mutation naming a test that does
+    not exist is reported SURVIVED by the full run whatever the code does -- it can never be
+    killed, so it guards nothing while looking like it does.
     """
     problems = 0
     seen: dict[str, int] = {}
-    for mid, rel, old, _new, _expected in MUTATIONS:
+    known = _test_names()
+    for mid, rel, old, _new, expected in MUTATIONS:
         seen[mid] = seen.get(mid, 0) + 1
         count = (ROOT / rel).read_text().count(old)
         if count != 1:
             print(f"{mid}: {count} matches in {rel}")
             problems += 1
+        # Only the entries that are test names. Some mutations name a SENTENCE that has to stop
+        # being true instead -- a page's wording, a document's claim -- and those are checked by
+        # the run, not by a file listing.
+        for name in expected:
+            if re.fullmatch(r"test_\w+", name) and name not in known:
+                print(f"{mid}: names {name}, which no test file defines")
+                problems += 1
     for mid, times in sorted(seen.items()):
         if times > 1:
             print(f"{mid}: used {times} times")
