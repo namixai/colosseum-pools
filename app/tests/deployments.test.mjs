@@ -89,6 +89,12 @@ test("the archive sells nothing: no buy button, no way to reach the purchase, no
   assert.match(list, /const blocker = archived \? \{ kind: "archived" \}/);
   assert.match(list, /for \(const item of archived\) \$\("#archive", page\)\.append\(poolCard\(item, fee\)\);/);
   assert.match(ARCHIVE.heading, /^First deployment, kept as an archive$/);
+  // Check-it-yourself agrees: an archived pool is never "Idle: it can sell", before or after a funded cycle.
+  const verify = text("../views/verify.js");
+  assert.match(verify, /settle\(fillsPanel\(account, address, page, kind, deployment\), \$\("#fills", page\)\);/);
+  assert.match(slice(verify, "async function fillsPanel(", "$(\"#fills\", page).className"), /const archived = isArchive\(deployment\);/);
+  assert.match(verify, /row\("What the pool is doing", esc\(poolStatus\(state, null, archived\)\.words\)\)/);
+  assert.match(verify, /\? ", and as part of the archived deployment it sells no further challenge"/);
   // With no investor's pool open on the live deployment, "I want to trade" goes to the list heading, never empty space.
   assert.match(list, /\$\("#count", page\)\.scrollIntoView\(\{ behavior: "smooth" \}\);/);
 });

@@ -4,7 +4,7 @@ import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, badge, row, isAddress, settle, wire } from "../lib/ui.js";
 import { ruleVerdict, liveReadingIsMoot, pastFundedStage } from "../lib/verdict.js";
-import { stageWords } from "../lib/stages.js";
+import { poolStatus } from "../lib/stages.js";
 import { keyFacts } from "../lib/keys.js";
 import { isArchive } from "../lib/deployments.js";
 
@@ -46,7 +46,7 @@ export async function verifyView(address, page) {
   // Raw errors used to be pasted in here, ethers payload and all. settle() says what failed
   // in words; the section that failed is named by the box it writes into.
   settle(keysPanel(account, address, page, deployment), $("#keys", page));
-  settle(fillsPanel(account, address, page, kind), $("#fills", page));
+  settle(fillsPanel(account, address, page, kind, deployment), $("#fills", page));
 }
 
 const KEYS_HELD = `
@@ -131,7 +131,9 @@ async function keyLog(account, cutBlock, page) {
   return "";
 }
 
-async function fillsPanel(account, address, page, kind) {
+async function fillsPanel(account, address, page, kind, deployment) {
+  // An archived pool sells nothing, so "idle" never means "can sell" there.
+  const archived = isArchive(deployment);
   const [rules, fills, list] = await Promise.all([account.rules(), hl.fills(address), hl.perps()]);
   const allowed = new Set(rules.assets.map(Number));
   const rows = fills.slice(0, 200).map((f) => {
@@ -170,7 +172,7 @@ async function fillsPanel(account, address, page, kind) {
   const verdict = ruleVerdict({ recorded, live, stopped, finished });
   $("#fills", page).className = "";
   $("#fills", page).innerHTML = `
-    ${kind === "pool" ? row("What the pool is doing", esc(stageWords(state))) : ""}
+    ${kind === "pool" ? row("What the pool is doing", esc(poolStatus(state, null, archived).words)) : ""}
     ${row("Fills on this account (Hyperliquid API)", String(fills.length))}
     ${row("Fills in an asset outside the rules", bad ? badge(String(bad), "bad") : badge("0", "ok"))}
     ${verdict.kind === "recorded"
@@ -183,7 +185,9 @@ async function fillsPanel(account, address, page, kind) {
           : row("The contract's verdict right now",
                 verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))}
     ${idleAfterFunding ? row("Funded stage on this pool",
-        `ended at block ${esc(String(cutBlock))}; the pool is idle again and can sell the next challenge`) : ""}
+        `ended at block ${esc(String(cutBlock))}; the pool is idle again${archived
+          ? ", and as part of the archived deployment it sells no further challenge"
+          : " and can sell the next challenge"}`) : ""}
     ${liveReadingIsMoot(verdict) ? `<p class="small muted">A verdict this page could compute from the
       account's state would be about the account as it stands now${idleAfterFunding
         ? `, and this pool is idle: its capital is home and the stage above is over. A reading of what
