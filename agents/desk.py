@@ -29,6 +29,7 @@ TERMS = "(uint64,uint64,uint16,uint32,uint16,uint16,uint64)"
 STATUS = ("None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled")
 STAGE = ("Idle", "Challenge", "Funded", "Closing", "PassedAwaitingKey")
 BREACH = ("None", "Drawdown", "DailyLoss", "Leverage", "ForbiddenAsset")
+CANCEL = "(uint32,uint64)[]"   # the same shape ops/keeper.py sends
 
 
 def view(addr: str, sig: str, out: str, types=(), args=()):
@@ -98,6 +99,7 @@ class Desk:
         self.send = send
         self.orders_left = limits.max_orders
         self.cancels_left = 2 * limits.max_orders
+        self.stops_left = 1
         self.graduations_left = 1
         self.is_challenge = view(self.factory, "isChallenge(address)", "bool", ["address"], [self.account])
         if not self.is_challenge and not view(self.factory, "isPool(address)", "bool", ["address"], [self.account]):
@@ -130,11 +132,42 @@ class Desk:
         verdict = view(self.account, "violation(uint32[])", "uint8", ["uint32[]"], [held_outside])
         base = usd(view(self.account, "drawdownBase()", "int64"))
         day_start = usd(view(self.account, "dayStartEquity()", "int64"))
+        # The same trap `app/lib/verdict.js` was fixed for on 24 September, and nobody carried the
+        # fix across to here: a settled account has handed its money back, so a live `violation()`
+        # reads a hundred per cent below where it started and answers Drawdown whatever the stop
+        # was actually for. The trader bot found it again on 1 October 2026, on a challenge the
+        # contract had stopped for Leverage. The recorded reason wins; an account that has finished
+        # trading with none recorded says so; only a live account gets a live reading.
+        number = view(self.account, "status()" if self.is_challenge else "stage()", "uint8")
+        recorded = view(self.account, "breachReason()" if self.is_challenge else "fundedEndReason()", "uint8")
+        # A challenge past Active has finished. A pool needs `cutBlock` as well as the stage: a
+        # funded stage that ended CLEANLY records `fundedEndReason` None, which is byte for byte
+        # what a pool that never funded anyone records -- and the reservation a pool gives back when
+        # nobody passes its challenge is exactly that (`Pool.sol` retires the spare key without
+        # going through `_cutAgent`, the only writer of `cutBlock`, `RuledAccount.sol:169-178`).
+        # So Idle with a cut block is a funded stage that is over; Idle without one never had one.
+        # `app/lib/verdict.js:pastFundedStage` is where this rule already lived; this is the same
+        # rule, not a second one.
+        #
+        # Measured on 1 October 2026, against the review bot's reading: a live `violation()` on an
+        # idle POOL answers None, not Drawdown, because `fundedStart` is cleared on close and
+        # `drawdownBase()` is then 0. So what this fixes is the WORD -- a pool that finished
+        # cleanly was called "inside the rules" instead of finished -- and not a false alarm. The
+        # Drawdown trap is the challenge's, whose drawdown base stays at its starting capital.
+        if self.is_challenge:
+            finished = number > 2
+        else:
+            finished = number == 3 or (number == 0 and view(self.account, "cutBlock()", "uint64") > 0)
+        if recorded:
+            said = f"stopped for {BREACH[recorded]} — what the contract recorded"
+        elif finished:
+            said = "finished with no rule broken"
+        else:
+            said = "inside the rules" if verdict == 0 else BREACH[verdict]
         out = {
             "account": self.account,
             "kind": "challenge" if self.is_challenge else "funded pool",
-            "state": (STATUS[view(self.account, "status()", "uint8")] if self.is_challenge
-                      else STAGE[view(self.account, "stage()", "uint8")]),
+            "state": STATUS[number] if self.is_challenge else STAGE[number],
             "equity_usdc": equity,
             "open_notional_usdc": notional,
             "margin_used_usdc": float(summary["totalMarginUsed"]),
@@ -151,7 +184,7 @@ class Desk:
                                             if day_start > 0 else None),
                 "max_open_notional_by_rule_usdc": round(max(equity, 0) * self.rules["leverage_x100"] / 100, 2),
             },
-            "contract_verdict_now": "inside the rules" if verdict == 0 else BREACH[verdict],
+            "contract_verdict": said,
             "positions": [{
                 "coin": p["coin"], "size": float(p["szi"]), "entry_price": float(p["entryPx"] or 0),
                 "unrealized_pnl_usdc": float(p["unrealizedPnl"]),
@@ -250,7 +283,18 @@ class Desk:
         problem: seen live on 25 Sep 2026, when two of a session's four orders went on `busy`.
         """
         if isinstance(answer, dict) and answer.get("status") == "busy":
-            setattr(self, counter, getattr(self, counter) + 1)
+            self._refund(counter)
+
+    def _refund(self, counter: str) -> None:
+        """Gives one attempt back, and there is exactly one rule for when.
+
+        Only an answer or an exception that proves NOTHING LEFT THE HOUSE: the gateway's `busy`,
+        where its own chain reads were rate limited so it refused before signing, and `c.NotSent`,
+        where the node never received the raw transaction. Anything else may have reached
+        Hyperliquid or the mempool whatever it said, and an attempt returned there is one sent
+        twice. Two detectors, one rule -- keep them pointing at this.
+        """
+        setattr(self, counter, getattr(self, counter) + 1)
 
     def cancel_order(self, coin: str, oid: int) -> dict:
         index, _ = self._perp(coin)
@@ -275,6 +319,24 @@ class Desk:
         price = mid * (1.02 if closing_buy else 0.98)  # crosses the book; reduce-only caps the size
         return self.place_order(coin, "buy" if closing_buy else "sell", abs(size), price, "ioc", reduce_only=True)
 
+    def stop_funded(self) -> dict:
+        """Ends the funded stage without a breach, which `Pool.stopFunded` lets the trader do.
+
+        The cancel and forbidden-asset lists go in empty. They are the keeper's to fill: it reads
+        the account's open orders each pass and sends them with its own settle step, and a list
+        this side guesses at would only be a second, staler copy. What empty costs is one more
+        keeper pass before the resting orders are gone, and nothing else.
+        """
+        if self.is_challenge:
+            raise Refused("stopFunded is for the pool, not the challenge; pass the pool's address")
+        if self.stops_left <= 0:
+            raise Refused("the funded stage was already stopped in this session")
+        self.stops_left -= 1
+        if not self.send:
+            return {"status": "not_sent", "call": "stopFunded"}
+        return self._spend("stops_left", f"stopFunded({CANCEL},uint32[],bytes32)",
+                           [CANCEL, "uint32[]", "bytes32"], [[], [], os.urandom(32)])
+
     def graduate(self) -> dict:
         if not self.is_challenge:
             raise Refused("only a challenge can graduate")
@@ -283,13 +345,39 @@ class Desk:
         self.graduations_left -= 1
         if not self.send:
             return {"status": "not_sent", "call": "graduate"}
+        return self._spend("graduations_left", "graduate(bytes32)", ["bytes32"], [os.urandom(32)])
+
+    def _spend(self, counter: str, signature: str, types: list[str], args: list) -> dict:
+        """Send one call out of a small budget, and give the attempt back only when the
+        transaction provably never left.
+
+        The budget is there so a bot cannot loop: one graduation a day, one stop a session. But a
+        contract's refusal surfaces at the GAS ESTIMATE, before anything is broadcast, and burning
+        the attempt there spends the budget on a call that never happened. On a stand with a
+        one-day term one premature `graduate` is the whole day's right to pass; on a funded stage
+        it is the only stop. `c.NotSent` is the one exception that says nothing reached the node
+        (`spike/hlspike/common.py`), and it is the only one that gets the attempt back.
+
+        Past the broadcast the attempt stays spent even when the error reads like a refusal: the
+        transaction may be in the mempool whatever the node answered, and a second one let through
+        there could land on top of the first.
+
+        `attempt_returned` says which happened, because the caller is a program deciding whether
+        it may try again today -- "refused" alone does not answer that.
+        """
         try:
-            receipt = c.transact(self.wallet, self.account, "graduate(bytes32)", ["bytes32"], [os.urandom(32)])
+            receipt = c.transact(self.wallet, self.account, signature, types, args)
+        except c.NotSent as exc:
+            self._refund(counter)
+            return {"status": "refused_by_contract", "reason": self._reason(exc), "attempt_returned": True}
         except Exception as exc:
-            if self._errors is None:
-                self._errors = _error_names()
-            return {"status": "refused_by_contract", "reason": revert_reason(exc, self._errors)}
+            return {"status": "refused_by_contract", "reason": self._reason(exc), "attempt_returned": False}
         return {"status": "sent", "tx": receipt["transactionHash"]}
+
+    def _reason(self, exc: Exception) -> str:
+        if self._errors is None:
+            self._errors = _error_names()
+        return revert_reason(exc, self._errors)
 
 
 # ── picking a pool ───────────────────────────────────────────────────────────────────────

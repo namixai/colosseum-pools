@@ -330,6 +330,29 @@ in the Cloudflare dashboard:
 - `journalctl -u colosseum-keeper`: `pass_done` and `pass_failed` lines.
 - The keeper's progress file changes on every pass. Older than five minutes means it stopped.
 - Through Cloudflare: `https://pools-api.usenami.io/v1/health`.
+- `head_read_failed` or `venue_incomplete` in the keeper's log: a read was refused, the pass went
+  on without it. Neither is a failed pass; `pass_failed` is.
+
+### What a refused read costs in time
+
+A refused read makes its pass up to **63 seconds** longer: the backoff ladder is 1, 2, 4, 8, 16 and
+32 seconds across seven attempts. A rate limit is counted over a minute, so a ladder that stops
+inside one is not a backoff — the old one topped out at 31 seconds and a keeper pass died on
+`eth_blockNumber: rate limited 6 times in a row` on 1 October 2026.
+
+Separately, the keeper sleeps **30 seconds** between passes — after a pass ends, not between
+accounts.
+
+🔴 **Those two do not add up to a bound on how late a breach is found, and nothing here claims they
+do.** A breach that starts just after its own account was read waits for every account behind it,
+then for the next pass to come round to it; the node's answer takes time of its own; and how many
+reads are refused is what the shared request budget decides. `ops/keeper.py` carries the first
+number as `DELAY_ADDED_BY_A_REFUSED_READ_S` and a test holds this paragraph to it.
+
+What a refusal does NOT cost is the rules the contract holds on its own — drawdown, daily loss and
+leverage come off the margin precompile and are answered even when Hyperliquid refuses everything.
+What it costs is the venue's half: the cancel list, the forbidden-asset candidates and the stop
+check. The round comes back to that account before the ones it got through.
 
 ## If the host is lost
 

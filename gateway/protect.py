@@ -40,6 +40,16 @@ from typing import Any, Callable, Protocol
 from .checks import GatewayError
 
 BPS = Decimal(10_000)
+# What a challenge's take has to clear beyond the target, in basis points of the notional, and
+# where each part of it comes from.
+TAKER_FEE_BPS = Decimal("4.5")   # `userFees` for the trader wallet, read 1 October 2026
+SLIPPAGE_BPS = Decimal(2)        # a stop filled 1.1 bps worse than its trigger, 29 Sep 2026
+SPARE_BPS = Decimal(5)           # so the margin is a multiple of the slippage, not equal to it
+# BOTH sides, not just the close. The take is placed with the order that opens the position, so
+# the entry's fee is debited after the line is fixed -- and `reconcile` will not pull a resting
+# take nearer, by design, since that is the trader's to move. Measured on the 10 bps this started
+# as: the margin over the target came to 1.01 bps of the notional, which one bad fill eats.
+CLOSE_COST_BPS = 2 * (TAKER_FEE_BPS + SLIPPAGE_BPS) + SPARE_BPS   # 18
 USD = Decimal(1_000_000)  # chain units per USDC (perp USD and equity are in 1e-6 USDC)
 # The farthest a stop or a take is put from the mark, as a fraction of it. A position too small to
 # use up the whole budget has no rule line at all; Hyperliquid still needs a price.
@@ -103,12 +113,27 @@ class RuleLimits:
             floor = max(floor, Decimal(self.day_start_equity) * (BPS - self.daily_loss_bps) / BPS / USD)
         return floor
 
-    def gain_room(self, equity: Decimal) -> Decimal:
+    def gain_room(self, equity: Decimal, notional: Decimal = Decimal(0)) -> Decimal:
         """How much equity may still gain before the take, in USDC. A challenge has a target
         (`graduate` asks for capital plus targetBps); a funded stage has none, so there it is
-        one target's worth of the equity it has now."""
+        one target's worth of the equity it has now.
+
+        For a challenge the room reaches PAST the target by what closing will cost. The take is a
+        market trigger: when it fires the position closes at market and pays a taker fee, so a
+        take placed exactly at the target leaves the account flat a fee BELOW it -- and `graduate`
+        asks for at least the target with no tolerance (`ChallengeAccount.sol:229-230`). Worked out
+        on 1 October 2026 against this function and the demo's pass pool (capital 70, target
+        25 bps), with the taker rate read from `userFees`: the take would sit at equity 70.17493
+        against a target of 70.175, and after the close the account would hold 70.13. Trying again
+        does not help: the next room is exactly that fee, so every attempt lands on `target - fee`
+        again. It is a fixed point, not a sequence creeping up.
+
+        No take at the target has fired on this deployment -- nobody has passed since 29 September
+        -- so those are figures from the arithmetic and the live fee rate, not from a run.
+        """
         if self.challenge:
-            return Decimal(self.drawdown_base) * (BPS + self.target_bps) / BPS / USD - equity
+            target = Decimal(self.drawdown_base) * (BPS + self.target_bps) / BPS / USD
+            return target - equity + notional * CLOSE_COST_BPS / BPS
         return equity * self.target_bps / BPS
 
 
@@ -236,7 +261,9 @@ def lines(limits: RuleLimits, equity: Decimal, exp: dict[int, dict[str, Decimal]
             return {}
         cap = MAX_DISTANCE * notional
         budget = min(max(equity - limits.floor(), Decimal(0)), cap)
-        room = min(max(limits.gain_room(equity), Decimal(0)), cap)
+        # The notional goes in because a challenge's room has to clear what closing costs,
+        # and that is a share of what is being closed.
+        room = min(max(limits.gain_room(equity, notional), Decimal(0)), cap)
         out = {}
         for asset, sides in exp.items():
             m = markets[asset]
@@ -245,16 +272,18 @@ def lines(limits: RuleLimits, equity: Decimal, exp: dict[int, dict[str, Decimal]
                 if size <= 0:
                     continue
                 if side == LONG:
-                    # Rounded towards the mark, so a stop is never looser than the line and a
-                    # take never further than the target; and at least one tick from the mark.
+                    # The stop rounds TOWARDS the mark, so it is never looser than the line. The
+                    # take rounds AWAY from it: the room already carries what closing will cost,
+                    # and rounding back towards the mark would eat a tick of exactly that. Both
+                    # stay at least one tick from the mark.
                     stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_CEILING),
                                valid_px(m.mark - step, m.sz_decimals, ROUND_FLOOR))
-                    take = max(valid_px(_moved(m.mark, notional, room), m.sz_decimals, ROUND_FLOOR),
+                    take = max(valid_px(_moved(m.mark, notional, room), m.sz_decimals, ROUND_CEILING),
                                valid_px(m.mark + step, m.sz_decimals, ROUND_CEILING))
                 else:
                     stop = max(valid_px(_moved(m.mark, notional, budget), m.sz_decimals, ROUND_FLOOR),
                                valid_px(m.mark + step, m.sz_decimals, ROUND_CEILING))
-                    take = min(valid_px(_moved(m.mark, notional, -room), m.sz_decimals, ROUND_CEILING),
+                    take = min(valid_px(_moved(m.mark, notional, -room), m.sz_decimals, ROUND_FLOOR),
                                valid_px(m.mark - step, m.sz_decimals, ROUND_FLOOR))
                 out[(asset, side)] = Line(stop, take)
         return out

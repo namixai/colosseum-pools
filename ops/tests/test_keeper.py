@@ -280,13 +280,29 @@ class Following(KeeperTest):
         self.assertEqual(on_disk["next_block"], 20)
         self.assertEqual(on_disk["live"], [keeper.to_checksum_address(POOL_A)])
 
-    def test_a_failed_pass_keeps_its_place(self):
+    def test_a_head_the_node_will_not_give_costs_the_scan_and_nothing_else(self):
+        # Rewritten 1 Oct 2026. This read sits outside the per-pool guard, so its refusal used to
+        # end the pass before a single account was looked at -- and a pass that ends before it
+        # starts never moves the round on, which is how one rate-limited minute became a tail of
+        # pools nobody checked. Measured on the host that day: `eth_blockNumber: rate limited
+        # 6 times in a row` killed a keeper pass. What a missing head really costs is the scan
+        # for new pools and the recut; the contract's own rules need no block number.
         self.follow_a(status=keeper.ACTIVE)
         k = self.make()
+        k.one_pass()                      # a first pass learns the pool from the factory's logs
+        self.assertIn(keeper.to_checksum_address(POOL_A), k.live)
+
+        # Now the rule breaks and the node stops answering, both at once -- the worst moment and
+        # the one that actually happened.
+        self.chain.challenges[CHALLENGE_A.lower()]["violation"] = 1
+        before = k.next_block
         self.chain.rpc = mock.Mock(side_effect=RuntimeError("eth_blockNumber: rate limited"))
-        with self.assertRaises(RuntimeError):
-            k.one_pass()
-        self.assertEqual(k.next_block, 1)  # nothing skipped
+        k.one_pass()  # does not raise
+
+        self.assertEqual(k.next_block, before, "nothing was scanned, so nothing is marked scanned")
+        self.assertIn("head_read_failed", [c.args[0] for c in keeper.log.call_args_list])
+        self.assertEqual([fn for fn, _ in self.chain.calls_to(CHALLENGE_A)], ["breach"],
+                         "the rule the contract holds is still enforced without a head")
 
     def test_the_service_logs_a_failed_pass_instead_of_dying(self):
         record = {"chain_id": 998, "PoolFactory": FACTORY, "block": 1}
@@ -828,6 +844,20 @@ class PerpNames(KeeperTest):
         self.make().one_pass()
         self.assertEqual([fn for fn, _ in chain.calls_to(CHALLENGE_A)], ["breach"],
                          "no names costs the cancel list, not the rules that need no names")
+
+
+class TheNumberInTheDocument(unittest.TestCase):
+    """`docs/HOSTING.md` tells an operator how late a breach can be found. A number written into
+    prose rots the moment either constant behind it moves, and nothing about a document going
+    stale is visible from the code. So the document is held to the code here."""
+
+    def test_hosting_says_the_same_two_numbers_the_code_carries(self):
+        doc = (ROOT / "docs/HOSTING.md").read_text()
+        self.assertIn(f"up to **{keeper.DELAY_ADDED_BY_A_REFUSED_READ_S} seconds** longer", doc,
+                      "HOSTING.md and ops/keeper.py disagree about what a refused read costs")
+        self.assertIn(f"sleeps **{keeper.DEFAULT_EVERY_S} seconds** between passes", doc)
+        # And it must not sell the sum as a bound, which the first version of it did.
+        self.assertIn("do not add up to a bound", doc)
 
 
 class Ring(unittest.TestCase):

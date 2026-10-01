@@ -1010,7 +1010,7 @@ MUTATIONS = [
     ("A19", "agents/desk.py",
      "        if self.graduations_left <= 0:",
      "        if False:",
-     ["test_graduation_once_with_a_readable_refusal"]),
+     ["test_a_graduation_that_went_out_and_reverted_stays_spent"]),
     ("A20", "agents/desk.py",
      '        if offer["total_to_pay_usdc"] > self.max_price:',
      '        if offer["price_usdc"] > self.max_price:',
@@ -1045,9 +1045,11 @@ MUTATIONS = [
      "        answer = self.client.cancel(self.account, index, oid)",
      ["test_cancels_are_counted_the_same_way"]),
     ("A38", "agents/desk.py",
-     '            setattr(self, counter, getattr(self, counter) + 1)',
-     "            pass",
-     ["test_a_busy_refusal_gives_the_attempt_back"]),
+     '        setattr(self, counter, getattr(self, counter) + 1)',
+     "        pass",
+     ["test_a_busy_refusal_gives_the_attempt_back",
+      "test_a_graduation_refused_before_it_was_sent_keeps_the_attempt",
+      "test_the_only_stop_survives_a_refusal_that_never_left_and_not_one_that_did"]),
     ("A33", "agents/desk.py",
      '                "trader_share_of_challenge_profit_pct": ch_share_bps / 100,\n'
      '                "trader_share_of_funded_profit_pct": funded_share_bps / 100,\n'
@@ -1064,7 +1066,101 @@ MUTATIONS = [
      '                "trader_share_of_funded_profit_pct": ch_share_bps / 100,\n'
      '                "passes_when":',
      ["test_account_view_keeps_the_two_shares_apart"]),
+    # The agent's view of an account, and the trader's own end to a funded stage.
+    ("A39", "agents/desk.py",
+     "        if recorded:",
+     "        if False:",
+     ["test_a_settled_account_says_what_the_contract_recorded_not_what_it_reads_now"]),
+    ("A40", "agents/desk.py",
+     "        elif finished:",
+     "        elif False:",
+     ["test_a_pass_is_not_read_as_a_drawdown_either"]),
+    ("A41", "agents/desk.py",
+     "        if self.stops_left <= 0:",
+     "        if False:",
+     ["test_stop_funded_is_the_pools_call_and_only_once_a_session"]),
+    # A counter added after a state file was written is absent from it. Indexing the saved dict
+    # made that a KeyError that killed the whole command, on a file the bot wrote itself.
+    # One attempt comes back only where nothing left the house. Both halves have to break: the
+    # boundary in send_tx that says so, and the desk's refusal to trust anything wider.
+    ("K81", "spike/hlspike/common.py",
+     "        raise NotSent(str(exc)) from exc",
+     "        raise RuntimeError(str(exc)) from exc",
+     ["test_a_revert_at_the_gas_estimate_never_left",
+      "test_a_read_before_the_estimate_never_left_either"]),
+    # A pool's cut block is the only state that separates a funded stage that ended cleanly from a
+    # reservation given back. Both mutations below are the two wrong answers: the old stage-only
+    # rule, and the wider one that calls an idle pool finished whatever it ever did.
+    ("A45", "agents/desk.py",
+     '            finished = number == 3 or (number == 0 and view(self.account, "cutBlock()", "uint64") > 0)',
+     "            finished = number == 3",
+     ["test_an_idle_pool_needs_its_cut_block_to_say_the_funded_stage_is_over"]),
+    ("A46", "agents/desk.py",
+     '            finished = number == 3 or (number == 0 and view(self.account, "cutBlock()", "uint64") > 0)',
+     "            finished = number != 2",
+     ["test_an_idle_pool_needs_its_cut_block_to_say_the_funded_stage_is_over"]),
+    ("A44", "agents/desk.py",
+     "        except c.NotSent as exc:\n            self._refund(counter)",
+     "        except Exception as exc:\n            self._refund(counter)",
+     ["test_a_graduation_that_went_out_and_reverted_stays_spent",
+      "test_the_only_stop_survives_a_refusal_that_never_left_and_not_one_that_did"]),
+    ("A42", "agents/client.py",
+     "            if name in saved:\n                setattr(obj, name, min(int(saved[name]), getattr(obj, name)))",
+     "            setattr(obj, name, min(int(saved[name]), getattr(obj, name)))",
+     ["test_a_file_from_before_a_counter_existed_still_loads"]),
+    # The two branches of `stop_funded` a sent-path test never reaches.
+    ("A43", "agents/desk.py",
+     "        if not self.send:\n            return {\"status\": \"not_sent\", \"call\": \"stopFunded\"}",
+     "        if False:\n            return {\"status\": \"not_sent\", \"call\": \"stopFunded\"}",
+     ["test_stop_funded_signs_nothing_on_a_dry_run_and_names_the_contracts_refusal"]),
     # ── keeper (Python unittest) ──
+    # The take has to clear the target by what closing costs, or a challenge the take closed
+    # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.
+    ("PG48", "gateway/protect.py",
+     "CLOSE_COST_BPS = 2 * (TAKER_FEE_BPS + SLIPPAGE_BPS) + SPARE_BPS",
+     "CLOSE_COST_BPS = Decimal(0)",
+     ["test_a_taker_entry_and_a_take_nobody_moved_still_passes",
+      "test_the_take_clears_the_target_by_what_closing_costs"]),
+    # Only the close, as the first fix had it: the entry's fee lands after the line is fixed.
+    ("PG52", "gateway/protect.py",
+     "CLOSE_COST_BPS = 2 * (TAKER_FEE_BPS + SLIPPAGE_BPS) + SPARE_BPS",
+     "CLOSE_COST_BPS = TAKER_FEE_BPS + SLIPPAGE_BPS",
+     ["test_the_allowance_carries_both_sides_not_only_the_close"]),
+    ("PG49", "gateway/protect.py",
+     "            return target - equity + notional * CLOSE_COST_BPS / BPS",
+     "            return target - equity",
+     ["test_a_taker_entry_and_a_take_nobody_moved_still_passes"]),
+    ("PG50", "gateway/protect.py",
+     "        room = min(max(limits.gain_room(equity, notional), Decimal(0)), cap)",
+     "        room = min(max(limits.gain_room(equity), Decimal(0)), cap)",
+     ["test_a_taker_entry_and_a_take_nobody_moved_still_passes"]),
+    # Rounding the take back towards the mark eats a tick of exactly that allowance.
+    ("PG51", "gateway/protect.py",
+     "                    take = max(valid_px(_moved(m.mark, notional, room), m.sz_decimals, ROUND_CEILING),",
+     "                    take = max(valid_px(_moved(m.mark, notional, room), m.sz_decimals, ROUND_FLOOR),",
+     ["test_the_challenge_take_clears_the_pass_target_by_what_closing_costs"]),
+    # The backoff, and the two places a refused read used to cost more than the read.
+    ("K76", "spike/hlspike/common.py",
+     "RPC_ATTEMPTS = 7",
+     "RPC_ATTEMPTS = 6",
+     ["test_six_refusals_in_a_row_are_waited_out_instead_of_lost",
+      "test_the_ladder_outlasts_the_minute_the_limit_is_counted_over"]),
+    ("K77", "ops/keeper.py",
+     '            log("head_read_failed", error=str(exc)[:200])\n            latest = None',
+     "            raise",
+     ["test_a_head_the_node_will_not_give_costs_the_scan_and_nothing_else"]),
+    ("K78", "ops/keeper.py",
+     "        while end is not None and self.next_block <= end:",
+     "        while self.next_block <= end:",
+     ["test_a_head_the_node_will_not_give_costs_the_scan_and_nothing_else"]),
+    ("K79", "ops/keeper.py",
+     "            if book is not None:\n                check_protection(ch, book)",
+     "            check_protection(ch, book)",
+     ["test_a_refused_read_is_not_tried_a_second_time_in_the_same_pass"]),
+    ("K80", "ops/keeper.py",
+     "                if book is not None:\n                    check_protection(pool, book)",
+     "                check_protection(pool, book)",
+     ["test_a_refused_read_is_not_tried_a_second_time_in_the_same_pass"]),
     # A-14: the contract is asked first, because its rules cost nothing at the venue.
     ("K67", "ops/keeper.py",
      'reason = view(account, "violation(uint32[])", "uint8", ["uint32[]"], [[]])',
@@ -2061,10 +2157,12 @@ MUTATIONS = [
      "            floor = min(floor, Decimal(self.day_start_equity) * (BPS - self.daily_loss_bps) / BPS / USD)",
      ["test_a_stop_sits_where_equity_reaches_the_nearest_rule",
       "test_the_drawdown_floor_binds_when_it_is_the_higher_one"]),
+    # Перенацелена 01.10: ветка челленджа в gain_room переписана (цель плюс стоимость закрытия),
+    # утверждение то же — у челленджа и у funded-стадии разные правила.
     ("PG2", "gateway/protect.py",
-     "        if self.challenge:\n            return Decimal(self.drawdown_base) * (BPS + self.target_bps) / BPS / USD - equity",
-     "        if False:\n            return Decimal(self.drawdown_base) * (BPS + self.target_bps) / BPS / USD - equity",
-     ["test_the_challenge_take_is_the_pass_target",
+     "        if self.challenge:\n            target = Decimal(self.drawdown_base)",
+     "        if False:\n            target = Decimal(self.drawdown_base)",
+     ["test_the_challenge_take_clears_the_pass_target_by_what_closing_costs",
       "test_the_funded_take_is_one_target_from_the_equity_it_has",
       "test_a_challenge_that_met_its_target_opens_nothing_more"]),
     ("PG3", "gateway/protect.py",
@@ -2074,8 +2172,8 @@ MUTATIONS = [
     ("PG4", "gateway/protect.py",
      "                    stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_CEILING),",
      "                    stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_FLOOR),",
-     ["test_the_challenge_take_is_the_pass_target",
-      "test_rounding_never_loosens_a_stop_or_puts_a_take_past_the_target"]),
+     ["test_the_challenge_take_clears_the_pass_target_by_what_closing_costs",
+      "test_rounding_never_loosens_a_stop_and_costs_a_take_at_most_a_tick"]),
     ("PG5", "gateway/protect.py",
      "                    stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_CEILING),\n                               valid_px(m.mark - step, m.sz_decimals, ROUND_FLOOR))",
      "                    stop = min(valid_px(_moved(m.mark, notional, -budget), m.sz_decimals, ROUND_CEILING),\n                               valid_px(m.mark + step, m.sz_decimals, ROUND_FLOOR))",
@@ -2274,11 +2372,11 @@ MUTATIONS = [
      "",
      ["test_a_take_a_stop_on_the_wrong_side_or_a_smaller_stop_is_not_a_stop"]),
     ("PW4", "ops/keeper.py",
-     "        else:\n            check_protection(ch, book)\n",
+     "        else:\n            if book is not None:\n                check_protection(ch, book)\n",
      "",
      ["test_an_open_position_without_a_stop_is_called_out"]),
     ("PW5", "ops/keeper.py",
-     "            else:\n                check_protection(pool, book)\n",
+     "            else:\n                if book is not None:\n                    check_protection(pool, book)\n",
      "",
      ["test_a_funded_pool_is_checked_and_a_closing_one_is_not"]),
     ("PW6", "ops/keeper.py",
@@ -2646,23 +2744,55 @@ def baseline(chosen) -> int:
     return problems
 
 
+def _test_names() -> set[str]:
+    """Every test a suite would actually run, by name.
+
+    Comment lines go first: a commented-out test still reads as a declaration to a regular
+    expression, and a mutation naming a disabled test is as blind as one naming a deleted one.
+    """
+    names: set[str] = set()
+    for d in ("test", "ops/tests", "gateway/tests", "agents/tests"):
+        for f in (ROOT / d).rglob("*"):
+            if f.suffix not in (".py", ".sol") or not f.is_file():
+                continue
+            live = "\n".join(l for l in f.read_text().split("\n")
+                              if not l.lstrip().startswith(("//", "#")))
+            names |= set(re.findall(r"function (test_\w+)", live))
+            names |= set(re.findall(r"def (test_\w+)", live))
+    return names
+
+
 def check() -> int:
-    """Every mutation still points at the code it guards, and no id is used twice.
+    """Every mutation still points at the code it guards, names tests that exist, and no id twice.
 
     A refactor moves a line and the mutation that guarded it stops matching anything. The full
     run says so, but the full run takes minutes and is called by hand, so a mutation can sit
     orphaned for days -- K7 and K10 did, from 23 to 24 Sep 2026, after their own author moved
     the lines they named. This check reads files and nothing else, so CI can afford it on every
     push: a mutation that matches no code, or matches twice, guards nothing either way.
+
+    The names are checked here too, as of 1 October 2026, because the anchors alone were not
+    enough: PG4 went on naming two tests after they were renamed in the same commit that renamed
+    them, `--check` passed, and only the review bot noticed. A mutation naming a test that does
+    not exist is reported SURVIVED by the full run whatever the code does -- it can never be
+    killed, so it guards nothing while looking like it does.
     """
     problems = 0
     seen: dict[str, int] = {}
-    for mid, rel, old, _new, _expected in MUTATIONS:
+    known = _test_names()
+    for mid, rel, old, _new, expected in MUTATIONS:
         seen[mid] = seen.get(mid, 0) + 1
         count = (ROOT / rel).read_text().count(old)
         if count != 1:
             print(f"{mid}: {count} matches in {rel}")
             problems += 1
+        # Only the entries that are test names. Some mutations name a SENTENCE that has to stop
+        # being true instead -- a page's wording, a document's claim -- and those are checked by
+        # the run, not by a file listing.
+        for name in expected:
+            if re.fullmatch(r"test_\w+", name) and name not in known:
+                print(f"{mid}: names {name}, which no test file defines")
+                problems += 1
     for mid, times in sorted(seen.items()):
         if times > 1:
             print(f"{mid}: used {times} times")

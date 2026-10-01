@@ -170,11 +170,27 @@ class DeskLimits(WithChain):
         desk.close_position("BTC")
         self.assertEqual(self.gateway.orders[-1][2:], (False, "58800", "0.0031", "Ioc", True))
 
-    def test_graduation_once_with_a_readable_refusal(self):
+    def test_a_graduation_refused_before_it_was_sent_keeps_the_attempt(self):
+        # A contract's refusal surfaces at the GAS ESTIMATE, before any broadcast, so the day's one
+        # attempt was not used. Burning it there spends a whole day's right to pass on a
+        # transaction that never existed -- on a one-day stand, the run.
         desk = self.desk()
-        selector = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
-        self.chain.revert = selector
-        self.assertEqual(desk.graduate(), {"status": "refused_by_contract", "reason": "NotFlat"})
+        self.chain.revert = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
+        self.assertEqual(desk.graduate(),
+                         {"status": "refused_by_contract", "reason": "NotFlat", "attempt_returned": True})
+        self.assertEqual(self.chain.sent, [], "nothing reached the chain")
+        self.chain.revert = None
+        self.assertEqual(desk.graduate()["status"], "sent", "so the attempt is still there to use")
+
+    def test_a_graduation_that_went_out_and_reverted_stays_spent(self):
+        # Past the broadcast the transaction may be in the mempool whatever the error says. An
+        # attempt returned here would let a second one land on top of the first.
+        desk = self.desk()
+        self.chain.revert_after_send = True
+        out = desk.graduate()
+        self.assertEqual(out["status"], "refused_by_contract")
+        self.assertIs(out["attempt_returned"], False)
+        self.assertEqual([s[1] for s in self.chain.sent], ["graduate"], "it did reach the chain")
         with self.assertRaises(Refused):
             desk.graduate()
 
@@ -184,9 +200,86 @@ class DeskLimits(WithChain):
                                               "max_open_notional_by_rule_usdc": 3000.0})
         self.assertEqual(view["challenge"]["target_equity_usdc"], 1100.0)
         self.assertEqual(view["challenge"]["hours_left"], 36.0)
-        self.assertEqual(view["contract_verdict_now"], "inside the rules")
+        self.assertEqual(view["contract_verdict"], "inside the rules")
         self.chain.verdict = 3
-        self.assertEqual(self.desk().account_view()["contract_verdict_now"], "Leverage")
+        self.assertEqual(self.desk().account_view()["contract_verdict"], "Leverage")
+
+    def test_a_settled_account_says_what_the_contract_recorded_not_what_it_reads_now(self):
+        # Found by the trader bot on 1 October 2026: a challenge the contract stopped for Leverage
+        # showed "Drawdown", because a settled account has handed its money back and reads a
+        # hundred per cent below where it started. `app/lib/verdict.js` was fixed for exactly this
+        # on 24 September; the fix had not been carried here.
+        self.chain.status, self.chain.recorded, self.chain.verdict = 8, 3, 1   # Settled, Leverage, reads Drawdown
+        said = self.desk().account_view()["contract_verdict"]
+        self.assertIn("Leverage", said)
+        self.assertNotIn("Drawdown", said)
+        self.assertIn("recorded", said, "and it says where the answer comes from")
+
+    def test_a_pass_is_not_read_as_a_drawdown_either(self):
+        # Passed and settled with nothing recorded: as empty as a stopped one, and the live reading
+        # would call it a drawdown.
+        self.chain.status, self.chain.recorded, self.chain.verdict = 8, 0, 1
+        self.assertEqual(self.desk().account_view()["contract_verdict"], "finished with no rule broken")
+
+    def test_an_idle_pool_needs_its_cut_block_to_say_the_funded_stage_is_over(self):
+        # A funded stage that ended cleanly records `fundedEndReason` None -- byte for byte what a
+        # pool that never funded anyone records, and what the reservation a pool gives back when
+        # nobody passes its challenge leaves behind. `cutBlock` is the only thing on the pool that
+        # tells them apart, and this mirrors `pastFundedStage` in app/lib/verdict.js.
+        #
+        # This is about the WORD, not a false alarm: measured on chain the same day, a live
+        # `violation()` on an idle pool answers None, because `fundedStart` is cleared on close and
+        # `drawdownBase()` is then 0. Record 2's payout ends exactly here, so the bot reading its
+        # own pool after `stop-funded` must not be told it is merely "inside the rules".
+        self.chain.challenge = False
+        self.chain.stage, self.chain.recorded, self.chain.verdict = 0, 0, 0
+        self.chain.cut_block = 0
+        self.assertEqual(self.desk().account_view()["contract_verdict"], "inside the rules",
+                         "a pool that only ever reserved a key has not finished a funded stage")
+        self.chain.cut_block = 65746163
+        self.assertEqual(self.desk().account_view()["contract_verdict"], "finished with no rule broken")
+
+    def test_stop_funded_is_the_pools_call_and_only_once_a_session(self):
+        # `Pool.stopFunded` lets the owner OR the funded trader end the stage without a breach, so
+        # the bot can do its own; on a challenge there is no such call.
+        self.chain.challenge = True
+        with self.assertRaises(dk.Refused):
+            self.desk().stop_funded()     # a challenge has no funded stage to end
+        self.chain.challenge = False
+        d = self.desk()
+        self.assertEqual(d.stop_funded()["status"], "sent")
+        with self.assertRaises(dk.Refused):
+            d.stop_funded()               # and not twice in a session
+
+    def test_stop_funded_signs_nothing_on_a_dry_run_and_names_the_contracts_refusal(self):
+        # The two branches the test above never reaches. `--dry-run` must not spend the counter's
+        # only stop on a transaction nobody sent, and a revert has to come back readable -- the
+        # bot ends its own stage, so a bare selector would leave it with nothing to act on.
+        self.chain.challenge = False
+        dry = self.desk(send=False)
+        self.assertEqual(dry.stop_funded()["status"], "not_sent")
+        self.assertEqual(self.chain.sent, [], "a dry run reaches the chain not at all")
+
+        self.chain.revert = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
+        self.assertEqual(self.desk().stop_funded(),
+                         {"status": "refused_by_contract", "reason": "NotFlat", "attempt_returned": True})
+
+    def test_the_only_stop_survives_a_refusal_that_never_left_and_not_one_that_did(self):
+        # `stopFunded` reverts while a position is open, and that refusal is the gas estimate's: the
+        # stage's only stop must still be there once the bot is flat. A stop that WAS broadcast is
+        # spent, because a second one could land on top of it.
+        self.chain.challenge = False
+        kept = self.desk()
+        self.chain.revert = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
+        self.assertIs(kept.stop_funded()["attempt_returned"], True)
+        self.chain.revert = None
+        self.assertEqual(kept.stop_funded()["status"], "sent")
+
+        spent = self.desk()
+        self.chain.revert_after_send = True
+        self.assertIs(spent.stop_funded()["attempt_returned"], False)
+        with self.assertRaises(dk.Refused):
+            spent.stop_funded()
 
     def test_account_view_keeps_the_two_shares_apart(self):
         # The fake's terms pay 0% for passing the challenge and 80% on the funded account.

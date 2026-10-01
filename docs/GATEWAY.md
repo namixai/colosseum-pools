@@ -153,11 +153,34 @@ nearest rule:
   the account loses exactly the budget;
 - the take is worked out the same way from the room to the target.
 
-**Where the take is: the target.** In a challenge, the pass target that `graduate` checks,
-`capital × (1 + targetBps)`, so a take that fires leaves the account flat at the target, ready
-to graduate. A funded stage has no target and the pool's rules have no take, so there the take
-is at most one challenge target away: `targetBps` of the equity at the moment it is set. The
-trader may bring it nearer; nothing puts it further.
+**Where the take is: the target, plus what closing costs.** In a challenge the pass target is
+`capital × (1 + targetBps)`, which is what `graduate` checks — and it checks it with no tolerance.
+The take is a market trigger, so when it fires the position closes at market and pays a taker fee.
+A take placed exactly at the target therefore leaves the account flat a fee BELOW it, and
+`graduate` refuses with `TargetNotMet`. **Worked out, not observed** — on 1 October 2026, against
+the real `lines()` and the demo's pass pool (capital 70, target 25 bps, 99.66 USDC of notional),
+with the taker rate read from `userFees` for the trader's wallet: equity at the take would be
+70.17493 against a target of 70.175, and 70.13 once closed. Retrying does not help, because the
+next room is exactly that fee: every attempt lands on `target − fee`. No take at the target has
+ever fired on this deployment — nobody has passed a challenge since 29 September — so the figures
+are arithmetic on the live rate, not a recording of a run.
+
+So the room reaches past the target by `CLOSE_COST_BPS`, and it carries **both** sides: the take is
+placed with the order that opens the position, so the entry's fee is debited after the line is
+fixed, and `reconcile` will not pull a resting take nearer — that is the trader's to move. Ten basis
+points, covering only the close, left a margin of **1.01 bps** of the notional, which is less than
+the 1.1 a stop had already slipped on 29 September. It is now `2 × (TAKER_FEE_BPS + SLIPPAGE_BPS) +
+SPARE_BPS` = 18 bps, each part named where it comes from: the taker fee read from `userFees`, the
+slippage measured on that stop, and a spare so the margin is a multiple of the slippage rather than
+equal to it. On 100 USDC of notional that is 0.18, and it holds at four basis points of slippage on
+both fills at once.
+
+The take also rounds AWAY from the mark, so a price tick cannot eat the allowance; the stop still
+rounds towards it.
+
+A funded stage has no target and the pool's rules have no take, so there the take is at most one
+challenge target away: `targetBps` of the equity at the moment it is set, with no allowance, since
+nothing has to be cleared. The trader may bring a take nearer the mark; nothing puts it further.
 
 **The assumptions, named.**
 
@@ -176,9 +199,10 @@ trader may bring it nearer; nothing puts it further.
    keeper's `breach` then ends the stage as it always did. What changes is how far past.
 5. A stop is never further than half the mark away and never nearer than one tick: a position too
    small to use up the budget has no rule line, and Hyperliquid still wants a price. Prices are
-   rounded towards the mark, to Hyperliquid's rules (five significant figures, at most
-   `6 − szDecimals` decimals, whole numbers always), so rounding never loosens a stop or puts a
-   take past the target.
+   rounded to Hyperliquid's rules (five significant figures, at most `6 − szDecimals` decimals,
+   whole numbers always): a stop towards the mark, so rounding never loosens it, and a take away
+   from the mark, so rounding never eats the room that pays for closing. A take may therefore sit
+   one tick beyond its line, never nearer.
 6. A market TP/SL fills within 10 % of its trigger (Hyperliquid's own tolerance); the order's
    price field is set to that bound, so it never makes the close stricter than the venue's rule.
 
@@ -191,8 +215,8 @@ known, and `--lag 0` in `stress/`, which fills exactly at the line, is not
 that number and is never quoted as one. The claim is the delay taken out, not a loss figure.
 
 **What the trader may do with them.** Move the stop nearer the mark, never away from where it is,
-with a `stop` request; move the take anywhere between the mark and the target with a `take`
-request. Both need a position on that asset. The gateway builds the `batchModify` from the book
+with a `stop` request; move the take anywhere between the mark and the line the gateway
+would place it on — the target plus the closing allowance — with a `take` request. Both need a position on that asset. The gateway builds the `batchModify` from the book
 and signs it with the account's key. A `cancel` naming the oid of either is refused with 403
 `protective_order`, before anything is signed; any other cancel goes through as before.
 

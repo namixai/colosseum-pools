@@ -31,6 +31,7 @@ MARKETS = {SOL: Market("SOL", Decimal("150"), 2), BTC: Market("BTC", Decimal("60
            ETH: Market("ETH", Decimal("3000"), 4)}
 DAY = 20_833  # the UTC day NOW (in ms) falls on
 USDC = 1_000_000
+BPS_I = 10_000
 
 
 def funded(equity_at_start=1000, day_start=1000, day=DAY) -> RuleLimits:
@@ -76,18 +77,25 @@ class Lines(unittest.TestCase):
         loss = Decimal("0.01") * (60000 - got[(BTC, LONG)].stop) + Decimal("0.1") * (3000 - got[(ETH, LONG)].stop)
         self.assertEqual(loss, 30)
 
-    def test_the_challenge_take_is_the_pass_target(self):
+    def test_the_challenge_take_clears_the_pass_target_by_what_closing_costs(self):
         # 3 USDC, 8% target -> 3.24; 0.0042 ETH at 2600 is 10.92 of notional. At 3.05 of equity
-        # the day's floor 2.91 leaves 0.14 to lose and 0.19 to gain (a funded stage would allow
-        # 0.244). The stop rounds up and the take down: both towards the mark.
+        # the day's floor 2.91 leaves 0.14 to lose and 0.19 to gain. The room then adds
+        # CLOSE_COST_BPS of the notional -- 0.019656 at 18 bps -- because the take is a MARKET
+        # trigger and the account has to be at or above the target after paying BOTH fees: the
+        # entry's lands after the line is fixed. The stop still rounds towards the mark; the take
+        # rounds away from it, so a tick does not eat that allowance.
         markets = {ETH: Market("ETH", Decimal("2600"), 4)}
         got = lines(challenge(), Decimal("3.05"), long(ETH, "0.0042"), markets)[(ETH, LONG)]
-        self.assertEqual((got.stop, got.take), (Decimal("2566.7"), Decimal("2645.2")))
+        self.assertEqual((got.stop, got.take), (Decimal("2566.7"), Decimal("2650.0")))
         self.assertLessEqual(Decimal("0.0042") * (2600 - got.stop), Decimal("0.14"))
-        self.assertLessEqual(Decimal("3.05") + Decimal("0.0042") * (got.take - 2600), Decimal("3.24"))
+        at_take = Decimal("3.05") + Decimal("0.0042") * (got.take - 2600)
+        self.assertGreater(at_take, Decimal("3.24"), "a take at the target would pass nothing")
+        allowance = Decimal("10.92") * protect.CLOSE_COST_BPS / Decimal(10_000)
+        self.assertLess(at_take - Decimal("3.24") - allowance, protect.tick(Decimal("2650"), 4),
+                        "over the target by the allowance and at most a tick more")
         # At the start, flat at 3: 0.09 to lose.
         got = lines(challenge(), Decimal(3), long(ETH, "0.0042"), markets)[(ETH, LONG)]
-        self.assertEqual(got.stop, Decimal("2578.6"))
+        self.assertEqual((got.stop, got.take), (Decimal("2578.6"), Decimal("2661.9")))
 
     def test_the_funded_take_is_one_target_from_the_equity_it_has(self):
         self.assertEqual(funded().gain_room(Decimal(1200)), Decimal(96))
@@ -106,7 +114,7 @@ class Lines(unittest.TestCase):
         got = lines(funded(), Decimal(1000), exposure(book, Extra(BTC, True, Decimal("0.004"))), MARKETS)
         self.assertEqual(got[(BTC, LONG)].stop, Decimal("57000"))
 
-    def test_rounding_never_loosens_a_stop_or_puts_a_take_past_the_target(self):
+    def test_rounding_never_loosens_a_stop_and_costs_a_take_at_most_a_tick(self):
         cases = [(mark, sz) for mark in ("1.23456", "12.3456", "123.456", "1234.56", "12345.6", "123456", "98765.4321")
                  for sz in (0, 2, 4, 5)] + [("0.123456", 0), ("0.123456", 2)]
         for mark, sz_decimals in cases:
@@ -120,7 +128,11 @@ class Lines(unittest.TestCase):
                     f = min((equity - limits.floor()) / notional, protect.MAX_DISTANCE)
                     g = min(limits.gain_room(equity) / notional, protect.MAX_DISTANCE)
                     self.assertGreaterEqual(got.stop, Decimal(mark) * (1 - f), (mark, sz_decimals, size))
-                    self.assertLessEqual(got.take, Decimal(mark) * (1 + g), (mark, sz_decimals, size))
+                    # The take now rounds AWAY from the mark, so it may sit one tick beyond its
+                    # line -- never nearer, which would cut into the room that pays for closing.
+                    self.assertLessEqual(got.take, Decimal(mark) * (1 + g) + protect.tick(Decimal(mark), sz_decimals),
+                                         (mark, sz_decimals, size))
+                    self.assertGreaterEqual(got.take, Decimal(mark) * (1 + g), (mark, sz_decimals, size))
                     self.assertLess(got.stop, Decimal(mark))
                     self.assertGreater(got.take, Decimal(mark))
                     for px in (got.stop, got.take):
@@ -144,6 +156,110 @@ class Lines(unittest.TestCase):
         self.assertEqual(wire_number(Decimal("57000.0")), "57000")
         self.assertEqual(wire_number(Decimal("0.10")), "0.1")
         self.assertEqual(wire_number(Decimal("1E+2")), "100")
+
+
+class TakeAndTheTarget(unittest.TestCase):
+    """A challenge the take closed has to be able to pass.
+
+    The take is a MARKET trigger. Placed exactly at the target it leaves the account flat a taker
+    fee BELOW the target, and `graduate` asks for at least the target with no tolerance
+    (`ChallengeAccount.sol:229-230`). Found by the CTO on 1 October 2026 from reading the code and
+    measured here: with the demo's pass pool (capital 70, target 25 bps, 99.66 USDC of notional)
+    the old line put equity at the take at 70.17493 against a target of 70.175, and the account
+    held **70.13** once closed. Retrying did not help either -- the next room was exactly that fee,
+    so every attempt landed on `target - fee` again: a fixed point, not a sequence creeping up.
+
+    `gain_room` now reaches past the target by `CLOSE_COST_BPS` of the notional, and the take
+    rounds away from the mark so a tick cannot eat it.
+    """
+
+    CAPITAL = Decimal(70)
+    TARGET_BPS = 25
+    MARK = Decimal("83750")
+    SIZE = Decimal("0.00119")       # about 99.66 USDC of notional, the client's cap being 100
+    TAKER = Decimal("0.00045")      # Hyperliquid's taker fee, a side
+
+    def setUp(self):
+        self.limits = RuleLimits(True, 1500, 2000, int(self.CAPITAL * USDC), DAY,
+                                 int(self.CAPITAL * USDC), self.TARGET_BPS)
+        self.notional = self.SIZE * self.MARK
+        self.target = self.CAPITAL * (BPS_I + self.TARGET_BPS) / BPS_I
+        self.take = lines(self.limits, self.CAPITAL, long(BTC, self.SIZE),
+                          {BTC: Market("BTC", self.MARK, 5)})[(BTC, LONG)].take
+
+    def equity_at(self, px: Decimal) -> Decimal:
+        return self.CAPITAL + self.SIZE * (px - self.MARK)
+
+    def flat_after(self, slip_bps: Decimal) -> Decimal:
+        """What the account holds, flat, after a taker entry and a take that fired.
+
+        Both fills are `slip_bps` worse than their price: the entry above the mark, the close below
+        the trigger. Both fees are taker, and the entry's is in here because the take is placed with
+        the order that opens the position -- the fee lands after the line is fixed, and `reconcile`
+        does not pull a resting take nearer.
+        """
+        entry = self.MARK * (1 + slip_bps / BPS_I)
+        out = self.take * (1 - slip_bps / BPS_I)
+        return (self.CAPITAL + self.SIZE * (out - entry)
+                - self.SIZE * entry * self.TAKER - self.SIZE * out * self.TAKER)
+
+    def test_the_take_clears_the_target_by_what_closing_costs(self):
+        # Measured against the FEE, not against the constant: the requirement is that the room
+        # covers what closing actually costs, and a constant that stopped covering it would make
+        # this test red rather than agree with itself.
+        over = self.equity_at(self.take) - self.target
+        self.assertGreaterEqual(over, self.SIZE * self.take * self.TAKER,
+                                f"the room over the target is {over}, the close costs "
+                                f"{self.SIZE * self.take * self.TAKER}")
+
+    def test_a_taker_entry_and_a_take_nobody_moved_still_passes(self):
+        """The CTO's case, 1 October 2026, and the one the bot's instructions actually walk: a
+        limit order into the market (so taker), the take left where the gateway put it, and the
+        fill a little worse than the trigger.
+
+        A stop filled 1.1 bps worse than its trigger on 29 September, so that is the number to
+        beat; four is twice as bad on both sides at once.
+        """
+        for slip in (Decimal(0), Decimal("1.1"), Decimal(2), Decimal(4)):
+            flat = self.flat_after(slip)
+            self.assertGreaterEqual(flat, self.target,
+                                    f"{slip} bps of slippage a side leaves {flat} against {self.target}")
+
+    def test_the_allowance_carries_both_sides_not_only_the_close(self):
+        # Pinned to its parts, not to 18: if the fee or the slippage is ever read again and found
+        # larger, this goes red instead of agreeing with a constant that stopped being true.
+        self.assertGreaterEqual(protect.CLOSE_COST_BPS,
+                                2 * (protect.TAKER_FEE_BPS + protect.SLIPPAGE_BPS),
+                                "the entry's fee is debited after the take is placed, so the room "
+                                "has to carry both sides")
+        # And the margin left over is a multiple of the slippage, not equal to it.
+        margin_bps = (self.flat_after(Decimal(0)) - self.target) / self.notional * BPS_I
+        self.assertGreater(margin_bps, 2 * protect.SLIPPAGE_BPS)
+
+    def test_the_line_without_the_allowance_is_the_defect_it_was(self):
+        # The arithmetic of the old line, kept so the fix cannot be removed quietly: room was
+        # exactly `target - equity`, which puts the take where equity only reaches the target.
+        room = self.target - self.CAPITAL
+        old_take = self.MARK * (self.notional + room) / self.notional
+        flat = self.equity_at(old_take) - self.SIZE * old_take * self.TAKER
+        self.assertLess(flat, self.target, "the old line did land under the target")
+        self.assertGreater(self.target - flat, Decimal("0.04"))
+
+    def test_ten_basis_points_was_not_enough_either(self):
+        # The first fix, measured on 1 October: it covered the close and not the entry, and the
+        # margin came to 1.01 bps of the notional -- less than the 1.1 a stop had already slipped.
+        room = self.target - self.CAPITAL + self.notional * Decimal(10) / BPS_I
+        take10 = protect.valid_px(self.MARK * (self.notional + room) / self.notional, 5, ROUND_CEILING)
+        entry_fee, exit_fee = self.notional * self.TAKER, self.SIZE * take10 * self.TAKER
+        margin = self.equity_at(take10) - entry_fee - exit_fee - self.target
+        self.assertLess(margin / self.notional * BPS_I, Decimal("1.1"),
+                        "ten basis points left less margin than one measured bad fill")
+
+    def test_one_attempt_is_enough_now_instead_of_a_fixed_point_below_the_target(self):
+        equity, cost = self.CAPITAL, self.SIZE * self.take * self.TAKER
+        room = self.limits.gain_room(equity, self.notional)
+        self.assertGreaterEqual(equity + room - cost, self.target,
+                                "one go reaches the target, so there is nothing to retry")
 
 
 class Wire(unittest.TestCase):

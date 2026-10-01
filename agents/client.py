@@ -137,7 +137,7 @@ STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 WINDOW_MAX_ORDER_USDC = 100.0
 WINDOW_MAX_ORDERS_PER_DAY = 4
 WINDOW_MAX_PRICE_USDC = 40.0  # a challenge's price plus the platform fee
-DESK_COUNTERS = ("orders_left", "cancels_left", "graduations_left")
+DESK_COUNTERS = ("orders_left", "cancels_left", "graduations_left", "stops_left")
 SHOP_COUNTERS = ("purchases_left",)
 
 
@@ -148,10 +148,29 @@ def session_path(wallet: str, subject: str, now: float) -> pathlib.Path:
 
 
 def load_counters(obj: Any, names: tuple[str, ...], path: pathlib.Path) -> None:
+    """Lower today's counters to what the file remembers. A name the file does not carry keeps
+    its fresh budget.
+
+    A counter added after a file was written is absent from it, and `saved[name]` made that a
+    KeyError that killed the whole command -- not just the new one. `agents/state/` still holds a
+    file from 18 September 2026 with exactly three names in it, written before `stops_left`
+    existed, so the bot's first call after a release that adds a counter would have died on its
+    own state.
+
+    Defaulting to the fresh budget is the right side to fail to, because these counters are a
+    courtesy limit on OUR OWN client, not the boundary: the gateway's caps and the contract's
+    rules are, and neither reads this file. For a per-day counter, "did not exist when this was
+    written" and "was never spent today" also give the same answer.
+
+    The same gap from the other side is not closed here and does not need to be: an OLDER client
+    running after a newer one writes only the names IT knows, dropping the new counter and
+    refilling that budget. One release runs at a time.
+    """
     if path.exists():
         saved = json.loads(path.read_text())
         for name in names:
-            setattr(obj, name, min(int(saved[name]), getattr(obj, name)))
+            if name in saved:
+                setattr(obj, name, min(int(saved[name]), getattr(obj, name)))
 
 
 def save_counters(obj: Any, names: tuple[str, ...], path: pathlib.Path) -> None:
@@ -174,7 +193,8 @@ def parser() -> argparse.ArgumentParser:
     buy.add_argument("pool")
     buy.add_argument("price", type=float, help="the price `pools` showed, in USDC")
     for name, what in (("account", "an account's equity, positions, orders and rules"),
-                       ("graduate", "ask the challenge contract to pass the challenge")):
+                       ("graduate", "ask the challenge contract to pass the challenge"),
+                       ("stop-funded", "end the funded stage of a pool you trade, without a breach")):
         sub.add_parser(name, help=what).add_argument("account")
     market = sub.add_parser("market", help="market data for a perp on the account's list")
     market.add_argument("account")
@@ -207,7 +227,7 @@ def run(args: argparse.Namespace, chain, reader_for, gateway_for) -> Any:
     factory, registry = deployments.resolve(args.deployment)
     send = not args.dry_run
     who = chain.address_of(args.wallet)  # the address only; the key is loaded to send
-    acts = args.command in ("buy", "order", "cancel", "close", "graduate")
+    acts = args.command in ("buy", "order", "cancel", "close", "graduate", "stop-funded")
     wallet = chain.account(args.wallet) if send and acts else None
     now = time.time()
 
@@ -248,6 +268,8 @@ def run(args: argparse.Namespace, chain, reader_for, gateway_for) -> Any:
             return d.cancel_order(args.coin, args.oid)
         if args.command == "close":
             return d.close_position(args.coin)
+        if args.command == "stop-funded":
+            return d.stop_funded()
         return d.graduate()
     finally:
         if send and acts:
