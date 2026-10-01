@@ -6,14 +6,21 @@
 // pool you are about to make, which they do not -- and a footnote does not undo a layout. The
 // one thing that does travel to that form is the minimum price for the pool actually being
 // created, which is a fact about that pool.
-import { evaluate, defaultLayout, SCENARIOS, cellKey } from "../lib/calc.js";
+import { evaluate, defaultLayout, demandForReturn, cellKey } from "../lib/calc.js";
 import { esc, render, $, badge, row } from "../lib/ui.js";
 
 const SIZES = [100_000, 500_000, 1_000_000];
 const MIN_POOL = 100_000;
 /** More seats than any pool here would hold; erlangB walks every one of them, three times. */
 export const MAX_SEATS = 1000;
-const SCENARIO_NAME = { bad: "bad", base: "base", good: "good" };
+/** The scenarios the page shows. The table keeps a third, "bad", with every cell; the page leaves it out and says
+ *  instead how many buyers a month the pool needs to earn what lending stablecoins pays. */
+export const SHOWN_SCENARIOS = ["base", "good"];
+/** What lending stablecoins pays a year, and where that comes from. */
+export const LENDING = {
+  rate: 0.05,
+  source: "DeFiLlama, 30 Sep 2026, 30-day yields: Maple 5.1%, Fluid 5.1%, Aave 4% to 5.6%",
+};
 
 let tables = null;
 
@@ -170,7 +177,7 @@ export function parseSeats(text) {
 }
 
 /**
- * The Erlang formula walks every seat of a group, for each of three scenarios, in the page's own
+ * The Erlang formula walks every seat of a group, for each scenario shown and each step of the demand search, in the page's own
  * thread, on every keystroke. Too many seats would freeze the tab rather than fail -- whether they
  * were typed as a count with extra zeros or came from a pool size with extra zeros. Both paths to
  * seats come through here, so neither can forget the cap.
@@ -251,7 +258,7 @@ function run(form, page) {
   }
   let runs;
   try {
-    runs = SCENARIOS.map((scenario) => [scenario, evaluate(tables, { ...spec, scenario })]);
+    runs = SHOWN_SCENARIOS.map((scenario) => [scenario, evaluate(tables, { ...spec, scenario })]);
   } catch (e) {
     box.className = "";
     box.innerHTML = `<p class="notice">${esc(String(e.message || e))}</p>`;
@@ -259,7 +266,7 @@ function run(form, page) {
     return;
   }
   box.className = "";
-  box.innerHTML = results(Object.fromEntries(runs));
+  box.innerHTML = results(tables, Object.fromEntries(runs), lendingDemand(tables, spec));
   cascadeBox.className = "";
   cascadeBox.innerHTML = cascade(Object.fromEntries(runs).base);
 }
@@ -281,7 +288,7 @@ export function leverCell(tables, stop, leverage, list, exec = "open") {
 /**
  * A stop on the exchange closes at the line; walking the book adds a little on top, measured only in a
  * calm market. The worst day's bracket: the line, plus at the low end half the spread of the calmest
- * coin, and at the high end the worst hour's walk, the highest over every seat and coin, each seat priced
+ * coin, and at the high end the 99th percentile of the walk, the highest over every seat and coin, each seat priced
  * at the nearest measured size at or above its notional. Wider than the truth on purpose: a seat sits on
  * one coin, not on all of them. Basis points are of the notional, so they count times the leverage
  * against the seat's own capital.
@@ -425,9 +432,29 @@ const SHARED_POOL = `
   withdrawals and a withdrawal queue in the contracts — <strong>the pool in this repository holds one trader and
   has none of those.</strong> It is the next step, not something running today.</p>`;
 
-function results(byScenario) {
+/**
+ * Buyers a month, for every $90 000 of seats, at which the pool earns what lending stablecoins pays: the base
+ * scenario in everything but demand. null when no demand the model takes gets there.
+ */
+export function lendingDemand(tbl, spec) {
+  return demandForReturn(tbl, { ...spec, scenario: "base" }, LENDING.rate);
+}
+
+function demandLine(tbl, base, demand) {
+  const per = tbl.demand.reference_seat_capital;
+  const assumed = tbl.scenarios.base.demand_per_100k;
+  if (demand === null) {
+    return `no demand the model takes brings this pool to ${percent(LENDING.rate, 0)} a year`;
+  }
+  const own = Math.abs(base.seat_capital - per) > 0.5
+    ? ` (${(demand * base.seat_capital / per).toFixed(1)} for this pool's ${money(base.seat_capital)})` : "";
+  return `<strong>${demand.toFixed(1)}</strong> buyers a month for every ${money(per)} of seats${own}; the base
+    scenario assumes ${assumed}`;
+}
+
+export function results(tbl, byScenario, demand) {
   const base = byScenario.base;
-  const returns = SCENARIOS.map((s) => `${SCENARIO_NAME[s]} ${percent(byScenario[s].annual_return)}`).join(" · ");
+  const returns = SHOWN_SCENARIOS.map((s) => `${s} ${percent(byScenario[s].annual_return)}`).join(" · ");
   const seatRows = base.groups.map((g) => `<tr>
     <td>${money(g.F)}</td><td>${g.count}</td>
     <td>${money2(g.price)}</td>
@@ -438,6 +465,7 @@ function results(byScenario) {
     <td>${fails(g.fails_funded)}</td></tr>`).join("");
   return `
     ${row("Investor's return, a year", `<strong>${esc(returns)}</strong>`)}
+    ${row(`To earn what lending stablecoins pays, ${percent(LENDING.rate, 0)} a year`, demandLine(tbl, base, demand))}
     ${row("Capital", `${money(base.capital)} — ${money(base.seat_capital)} in ${base.n_seats} seats,
       ${money(base.capital - base.seat_capital)} kept back`)}
     ${row("Platform's fee, a year (base)", money(base.platform_fee_year))}
@@ -455,9 +483,11 @@ function results(byScenario) {
     the second, which is the shape of the design, not a fault in it.</p>
     <p class="small muted">"What it costs the pool" is the minimum price: at or below it a sold challenge loses
     money for the investor. "The trader's ceiling" is what one trader takes if a funded seat runs all the way to
-    the take-profit of the base scenario. All of it is the model's, at the three scenarios named above: they
+    the take-profit of the base scenario. All of it is the model's, at the two scenarios named above: they
     differ in what nobody has measured — how many buyers a month, how far a stop overshoots, how strong the
-    traders are.</p>
+    traders are. The line under the return turns the question round: holding the base scenario's other
+    assumptions, it finds the demand at which the pool earns what lending stablecoins pays
+    (${esc(LENDING.source)}).</p>
     ${warnings(base)}`;
 }
 
