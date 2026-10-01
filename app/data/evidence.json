@@ -106,7 +106,7 @@
       ],
       "sources": [
         "| 0xBA0c90BB481D6CAd2534AE3885d1CC9B9C30dB54 | challenge | status 8 Settled, breachReason 3 Leverage, capital 70 returned, spot 0, key 0xeA688990 cut at block 65746123 |",
-        "- the stop, 0x1804fa06b93c9cb9332925d3f0c9dc10419894bb3adc8d9b0422959229931aac, block 65746123, sent by 0xD6F07317fC5f12302776b03A7206B1614FD49021, the host keeper's own wallet \u2014 nobody asked it to. The event is Stopped(status 3 Breached, reason 3 Leverage, equity 69.884663), and the same transaction cut the challenge's key. Note the equity: against capital 70 the account was down 0.115337 \u2014 it was stopped for leverage with the balance all but untouched, which is what a staged leverage breach looks like from the chain."
+        "- the stop, 0x1804fa06b93c9cb9332925d3f0c9dc10419894bb3adc8d9b0422959229931aac, block 65746123, sent by 0xD6F07317fC5f12302776b03A7206B1614FD49021. The event is Stopped(status 3 Breached, reason 3 Leverage, equity 69.884663), and the same transaction cut the challenge's key. Note the equity: against capital 70 the account was down 0.115337 \u2014 it was stopped for leverage with the balance all but untouched, which is what a staged leverage breach looks like from the chain."
       ]
     },
     {
@@ -126,7 +126,7 @@
       ],
       "sources": [
         "| 0x237afA2D58B1612e19D47152FfB2E771c05Fe96D | pool | stage Idle, fundedEndReason None \u2014 the reservation case, not a funded stage: key 0x99A4Ec10 released at block 65746163 |",
-        "- the last settle step, 0x9b1b842beab93c2323e7150764932871b7610ca7970d941da08980628ee87d11, block 65746163, sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa, the second keeper \u2014 a different service from the one that sent the stop. Two keepers, each doing a step of the same ending, neither prompted. That step is also where the pool gave up its reserved key."
+        "- the last settle step, 0x9b1b842beab93c2323e7150764932871b7610ca7970d941da08980628ee87d11, block 65746163, sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa \u2014 a different address from the one that sent the stop. That step is also where the pool gave up its reserved key."
       ]
     },
     {

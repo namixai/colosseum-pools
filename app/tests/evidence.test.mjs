@@ -52,6 +52,12 @@ const NOT_CLAIMED = [
   /automatic/i, /autonomous/i, /\bAI\b/, /\bbots?\b/i, /\b(exchange|Hyperliquid|venue)\b.{0,30}\b(refus|reject)/i,
   /\bmainnet\b/i, /guarantee/i, /trustless/i, /\bsafe\b/i, /\bsecure/i, /\baudited\b/i, /\byield/i, /\bearn/i,
   /\bprofit/i, /\bevery (breach|stop)\b/i, /\bnobody arranged\b/i,
+  // The chain shows WHICH address sent a transaction; it cannot show that nobody told it to.
+  // A document may claim it where its own section carries the keeper's journal — 1 October 2026
+  // the deployment 2 record claimed it from the chain alone, and the review bot, not a guard,
+  // caught that. A phrase guard over the documents cannot tell the claim from its denial, so the
+  // rule lives here, where it is exact: the page may not say it in its own voice.
+  /\bunprompted\b/i, /nobody asked\b/i, /on its own initiative/i,
 ];
 const OUR_WORDS = [...Object.values(TEXT).flat(), ...DATA.rows.map((r) => r.what)];
 

@@ -119,15 +119,20 @@ Transactions read back from their receipts:
   are in it: `0xeA688990` to the challenge and `0x99A4Ec10` to the pool. The second is the
   funded-stage reservation, taken at the sale and bound to the buyer.
 - the stop, `0x1804fa06b93c9cb9332925d3f0c9dc10419894bb3adc8d9b0422959229931aac`, block 65746123,
-  **sent by `0xD6F07317fC5f12302776b03A7206B1614FD49021`, the host keeper's own wallet** — nobody
-  asked it to. The event is `Stopped(status 3 Breached, reason 3 Leverage, equity 69.884663)`, and
-  the same transaction cut the challenge's key. Note the equity: against capital 70 the account
-  was down **0.115337** — it was stopped for leverage with the balance all but untouched, which is
-  what a staged leverage breach looks like from the chain.
+  sent by `0xD6F07317fC5f12302776b03A7206B1614FD49021`. The event is `Stopped(status 3 Breached,
+  reason 3 Leverage, equity 69.884663)`, and the same transaction cut the challenge's key. Note the
+  equity: against capital 70 the account was down **0.115337** — it was stopped for leverage with
+  the balance all but untouched, which is what a staged leverage breach looks like from the chain.
 - the last settle step, `0x9b1b842beab93c2323e7150764932871b7610ca7970d941da08980628ee87d11`,
-  block 65746163, **sent by `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`, the second keeper** —
-  a different service from the one that sent the stop. Two keepers, each doing a step of the same
-  ending, neither prompted. That step is also where the pool gave up its reserved key.
+  block 65746163, sent by `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa` — a different address from
+  the one that sent the stop. That step is also where the pool gave up its reserved key.
+- **What those two addresses are, and what is not claimed here.** Per our own host records they
+  are the two keepers' wallets, the first read from `/var/lib/colosseum-keeper/secrets/keeper.addr`
+  on 25 September; the chain shows only that these two addresses sent these two transactions. **We
+  did not read either keeper's journal for this run**, so this record does not say the stop was
+  unprompted. Deployment 1's leverage stop above does say that, and backs it with the keeper's own
+  journal timestamps and fills — that evidence is not here, and two services each sending a step
+  is not the same claim.
 
 **The second retired key is the trap the section at the top warns about.** Both retired keys name
 the same trader, and the pool reads Idle with `fundedEndReason` None. From state alone that is
