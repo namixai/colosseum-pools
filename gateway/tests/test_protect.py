@@ -710,6 +710,77 @@ class Chain(unittest.TestCase):
         self.assertEqual(r.day_snapshot(ACCOUNT), (DAY, 3_050_000))
 
 
+class HostMinute(FlowBase):
+    """What the gateway spends of Hyperliquid's 1,200 a minute per IP, which the keeper on the same host
+    shares, measured on the fake venue with Hyperliquid's weights (rate-limits-and-user-limits:
+    clearinghouseState and allMids 2, an exchange action 1 per 40 orders in it, every other info read 20)."""
+
+    def setUp(self):
+        super().setUp()
+        self.spent = 0
+        x = self.x
+        markets, book, submit = x.markets, x.book, x.submit
+
+        def weighed_markets():
+            self.spent += 20  # metaAndAssetCtxs
+            return markets()
+
+        def weighed_book(account, m):
+            self.spent += 2 + 20  # clearinghouseState, frontendOpenOrders
+            return book(account, m)
+
+        def weighed_submit(action, nonce, signature):
+            self.spent += 1 + len(action.get("orders", action.get("modifies", action.get("cancels", [])))) // 40
+            return submit(action, nonce, signature)
+
+        def weighed_mid(asset):
+            self.spent += 2  # the demo signer's allMids
+            return MARKETS[asset].mark
+
+        x.markets, x.book, x.submit = weighed_markets, weighed_book, weighed_submit
+        self.gw = Gateway(self.reader, DemoSigner([self.key], mid=weighed_mid), submit=weighed_submit,
+                          clock=lambda: self.now, venue=x)
+
+    def test_at_the_default_two_accounts_trading_at_nginxs_rate_fit_in_the_hosts_minute(self):
+        # A sell costs the most: the demo signer reads the mids only to cap a sell (gateway/demo_signer.py).
+        status, _ = self.send()
+        self.assertEqual(status, 200)
+        buy, self.spent = self.spent, 0
+        status, _ = self.send(isBuy=False, limitPx="50000", nonce=NOW + 1)
+        self.assertEqual(status, 200)
+        per_order, self.spent = self.spent, 0
+        self.assertEqual((buy, per_order), (44, 46))
+        # A sweep with the one account the orders went to, once it has nothing left to place; then one more.
+        self.x.positions[BTC] = Decimal("0.005")
+        self.gw.protector.sweep()
+        self.spent = 0
+        self.gw.protector.sweep()
+        one, self.spent = self.spent, 0
+        self.gw.protector.watch("0x" + "01" * 20, self.key.address)
+        self.gw.protector.sweep()
+        per_account = self.spent - one
+        self.assertEqual((one - per_account, per_account), (20, 22))
+
+        template = (pathlib.Path(__file__).resolve().parents[2] / "ops" / "host" / "nginx-pools-api.conf.in").read_text()
+        orders = int(re.search(r"zone=pools_all:\S+ rate=(\d+)r/m;", template).group(1))
+        self.assertEqual(orders, 15)
+
+        def minute(n, every=server.PROTECT_EVERY_S, with_orders=True):
+            keeper = 2 * (20 + 22 * n)  # ops/keeper.py: a pass every 30 seconds, one read of each account
+            return keeper + 60 / every * (20 + 22 * n) + (orders * per_order if with_orders else 0)
+
+        self.assertEqual(minute(2), 1074)
+        self.assertGreater(minute(3), 1200)
+        self.assertEqual(minute(2, every=10), 1202)
+        self.assertEqual(max(n for n in range(1, 50) if minute(n, with_orders=False) <= 1200), 8)
+        self.assertEqual(max(n for n in range(1, 50) if minute(n, every=10, with_orders=False) <= 1200), 5)
+        doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "GATEWAY.md").read_text()
+        self.assertIn("| two accounts | 1,074 | 1,202 |", doc)
+        self.assertIn("| most accounts under 1,200, with orders | 2 (three are 1,206) | 1 |", doc)
+        self.assertIn("| most accounts under 1,200, no orders | 8 (nine are 1,308) | 5 (six are 1,216) |", doc)
+        self.assertIn("(default 15)", doc)
+
+
 class Wiring(unittest.TestCase):
     def test_the_gateway_protects_on_the_real_venue_unless_told_otherwise(self):
         gw = Gateway(FakeReader("0x" + "00" * 20, "0x" + "00" * 20), object())
@@ -720,7 +791,7 @@ class Wiring(unittest.TestCase):
         body = inspect.getsource(server.main)
         self.assertIn("target=gateway.protector.run", body)
         self.assertIn("make_handler(gateway,", body)
-        self.assertEqual(server.PROTECT_EVERY_S, 10.0)
+        self.assertEqual(server.PROTECT_EVERY_S, 15.0)
 
 
 if __name__ == "__main__":

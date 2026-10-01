@@ -835,7 +835,47 @@ contract PoolFlowTest is PoolHarness {
         assertTrue(p.fundedPayoutDone(), "the payout happens on a later block");
         assertEq(p.fundedPayoutSent(), p.fundedPayoutOwed(), "and it is the whole share");
     }
-    /// Audit's recheck of the first A-01 fix: the amount comparison alone could still be held
+/// Audit A-11, the half the share test cannot reach. When no share is owed the payout branch
+    /// is skipped whole, and the only thing left between the drain and Stage.Idle is the block
+    /// number: every read here is the start of the block, so "nothing is held on perp" is true of
+    /// a moment before this very step sent the capital across. Ending Closing there ends the one
+    /// stage that can drain, while the money is still on its way to spot.
+    function test_regression_twoStepsInOneBlock_endTheStageBeforeTheCapitalLands() public {
+        CoreSimulatorLib.forceAccountActivation(trader);
+        vm.prank(investor);
+        Pool p = Pool(factory.createPool(_rules(), _terms()));
+        CoreSimulatorLib.forceSpotBalance(address(p), 0, p.capitalNeeded());
+        p.prepareAccount();
+        _passed(p); // the challenge's own return is left unsettled, as in the share test
+        CoreSimulatorLib.nextBlock();
+
+        // The stage ends a little below where it started, so nothing is owed and the payout
+        // branch -- which is what catches two steps in the share test -- is never entered.
+        _trade(address(p), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 760000);
+        _trade(address(p), BTC, false, 0.005e8);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        vm.prank(trader);
+        p.stopFunded(c, a, SALT);
+        CoreSimulatorLib.nextBlock();
+
+        new TwoStepsInOneBlock().run(p);
+
+        assertEq(p.fundedPayoutOwed(), 0, "the stage ended below its start, so no share is owed");
+        assertEq(
+            uint8(p.stage()), uint8(Pool.Stage.Closing),
+            "two steps in one block must not finish the stage before the capital has landed"
+        );
+
+        CoreSimulatorLib.nextBlock();
+        for (uint256 i = 0; i < 8 && p.stage() != Pool.Stage.Idle; ++i) {
+            p.settleFunded(c, a);
+            CoreSimulatorLib.nextBlock();
+        }
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle), "and it does finish, on a later block");
+    }
+
+        /// Audit's recheck of the first A-01 fix: the amount comparison alone could still be held
     /// open. When the account has nothing of its own to hand back, the first "return" IS the
     /// stranger's unit, and a unit of the same size after it is never "smaller than last time".
     /// The window is what ends it, and the stranger cannot restart the window.
@@ -956,7 +996,32 @@ contract PoolFlowTest is PoolHarness {
     /// instead. HyperCore accepts an address that already has an account as an agent by doing
     /// NOTHING and saying nothing (spike question 8), so a stage opened on a spoiled key would
     /// look funded and be unable to trade -- which is worse than any refusal.
-    function test_aSpoiledReservedKeyIsSwappedForALiveOne() public {
+/// Audit A-02, the other side of the swap below. When the reserved key is still live the funded
+    /// stage opens on exactly that key and takes no second one. Nothing else says so: the swap test
+    /// only names the key that is NOT used when the reserved one is spoiled, and a pool that
+    /// quietly assigned a fresh key every time would pass it while leaving the reserved key bound
+    /// to itself for good -- a registry that empties one key per pool with nobody able to say
+    /// where they went.
+    function test_theFundedStageOpensOnTheKeyReservedAtTheSale() public {
+        Pool p = _readyPool();
+        ChallengeAccount ch = _started(p);
+        address reserved = p.reservedKey();
+        uint256 freeBefore = registry.freeCount();
+        assertTrue(reserved != address(0), "the sale reserved one");
+
+        _trade(address(ch), BTC, true, 0.005e8);
+        CoreSimulatorLib.setMarkPx(BTC, 786920);
+        _trade(address(ch), BTC, false, 0.005e8);
+        ch.graduate(SALT);
+        p.openFundedStage();
+
+        assertEq(p.agentKey(), reserved, "the stage opened on the key reserved at the sale");
+        assertEq(p.reservedKey(), address(0), "and the pool is not still holding it");
+        assertEq(registry.freeCount(), freeBefore, "no second key was taken");
+        assertTrue(registry.isBound(reserved, address(p), trader));
+    }
+
+        function test_aSpoiledReservedKeyIsSwappedForALiveOne() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
         address reserved = p.reservedKey();
@@ -1291,6 +1356,43 @@ contract PoolFlowTest is PoolHarness {
         CoreSimulatorLib.forcePerpBalance(address(ch), 1e5);
         ch.settle(new Cancel[](0), none);
         assertFalse(ch.payoutDone(), "not paid out of a balance the release has not reached");
+    }
+
+    /// Audit A-12, the funded side: the same clock in settleFunded. After the result is taken the
+    /// pool holds less than the share (a loss after the stop), and a unit arrives on perp before
+    /// every step. The close still finishes, and the trader gets what there is. Written by the
+    /// audit; the two halves of A-12 were mine to open and only the challenge side had a test.
+    function test_settleFunded_shortShareWithDustEveryStep_stillFinishes() public {
+        (Pool p, uint64 owed) = _fundedClosingShort(1e8, 1);
+        assertLt(uint256(1e8) + 100, owed, "less on the pool than the trader is owed");
+        uint64 before = _spot(trader);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        for (uint256 i = 0; i < 60 && p.stage() != Pool.Stage.Idle; ++i) {
+            CoreSimulatorLib.forcePerpBalance(address(p), hyperCore.readPerpBalance(address(p)) + 1);
+            p.settleFunded(c, a);
+            CoreSimulatorLib.nextBlock();
+            vm.warp(block.timestamp + 60);
+        }
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle), "a stranger cannot hold the funded close open");
+        assertGt(_spot(trader) - before, 0, "and the trader got what there was");
+    }
+
+    /// Audit A-12, the funded side: the clock resets while margin is held, so a release that comes
+    /// in pieces cannot run it out.
+    function test_settleFunded_theShortShareClockRestartsWhenMarginIsHeldAgain() public {
+        (Pool p,) = _fundedClosingShort(1e8, 1e5); // short, with money crossing
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        p.settleFunded(c, a);
+        assertTrue(p.fundedPayoutShortAt() != 0, "the wait noted when it started");
+        _mockHeldMargin(address(p), int64(CoreOps.withdrawable(address(p))) + 5e6);
+        p.settleFunded(c, a);
+        assertEq(p.fundedPayoutShortAt(), 0, "held again, so the clock is back to nothing");
+        vm.warp(block.timestamp + p.PAYOUT_WAIT() + 1);
+        CoreSimulatorLib.nextBlock();
+        vm.clearMockedCalls(); // the last piece comes free and is crossing as it does
+        CoreSimulatorLib.forcePerpBalance(address(p), 1e5);
+        p.settleFunded(c, a);
+        assertFalse(p.fundedPayoutDone(), "not paid out of a balance the release has not reached");
     }
 
     function test_graduate_needsTargetAndFlat() public {

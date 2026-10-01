@@ -84,9 +84,49 @@ def check_assets() -> list[int]:
     return out
 
 
-def check_keys(lines: list[str]) -> list[str]:
+def registries_in_records(records_dir: pathlib.Path | None = None) -> dict[str, str]:
+    """Every key registry a deployment record names, and the record that named it first.
+
+    The records are the list of registries, not the list of keys. Keys get published to a live
+    registry long after the deployment that made it -- by hand, from the host, as the demo needs
+    more -- and none of that reaches a file here. A check that read `published_keys` would have
+    answered "all clear" for exactly the keys this is meant to catch, which is how it was built
+    first: measured 29 Sep 2026, a run against the twenty-four published into the demo's registry
+    that morning passed them, because no record names them.
+    """
+    directory = records_dir if records_dir is not None else ROOT / "deployments"
+    # A directory that is not there reads the same as one with nothing in it, and neither can be
+    # told from a wrong path. So the run prints how many records it consulted: "0 records" is a
+    # sentence somebody can notice, where a silent pass is not.
+    found: dict[str, str] = {}
+    for path in sorted(directory.glob("testnet-*.json")) if directory.is_dir() else []:
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"{path.name} cannot be read ({exc}); refusing rather than skipping "
+                             f"a record that may name a registry") from None
+        registry = record.get("KeyRegistry")
+        if registry:
+            found.setdefault(to_checksum_address(registry), path.name)
+    return found
+
+
+def key_is_known_to(registry: str, key: str) -> bool:
+    """Whether a registry has ever heard of this key. State 0 is Unknown; anything else it holds.
+
+    A registry never forgets a key, so Free, Bound and Retired all count. Free is the one that
+    matters here and the one nothing else catches: a spare key has no HyperCore account, which is
+    what `check_keys` tests for, so it passes every other rule while being an address two
+    registries would both hand out -- and then one key two accounts can each take as their agent.
+    """
+    binding = c.call_view(registry, "bindingOf(address)", ["address"], [key], ["(uint8,address,address)"])[0]
+    return int(binding[0]) != 0
+
+
+def check_keys(lines: list[str], records_dir: pathlib.Path | None = None) -> list[str]:
     """Key addresses from a keys file, checked the way KeyRegistry.publish would check them,
-    before anything is deployed."""
+    before anything is deployed -- and against every registry a deployment record names."""
+    registries = registries_in_records(records_dir)
     keys: list[str] = []
     for raw in lines:
         line = raw.strip()
@@ -100,6 +140,17 @@ def check_keys(lines: list[str]) -> list[str]:
             raise SystemExit("the zero address can't be a key")
         if key in keys:
             raise SystemExit(f"{key} is listed twice")
+        for registry, named_by in registries.items():
+            try:
+                known = key_is_known_to(registry, key)
+            except Exception as exc:  # a node that will not answer is not an all-clear
+                raise SystemExit(f"could not ask registry {registry} (from {named_by}) about "
+                                 f"{key}: {exc}") from None
+            if known:
+                raise SystemExit(f"{key} is already in registry {registry}, named by "
+                                 f"deployments/{named_by}. One address in two registries is one "
+                                 f"key two accounts can each take as their agent. Make new keys "
+                                 f"on the gateway host")
         if c.core_user_exists(key):
             raise SystemExit(f"{key} already exists on HyperCore; the registry would refuse it")
         keys.append(key)
@@ -190,7 +241,11 @@ def main() -> int:
         print(f"  would deploy     KeyRegistry, Pool, ChallengeAccount, PoolFactory (big blocks on, then off)")
         print(f"  would configure  setAccountSource, setPlatformAssets {assets}, "
               f"setChallengeFee {CHALLENGE_FEE}")
+        registries = registries_in_records()
         print(f"  would publish    {len(keys)} agent keys" if keys else "  would publish    no keys")
+        print(f"  keys checked     against {len(registries)} registr(y/ies) named by "
+              f"{len(list((ROOT / 'deployments').glob('testnet-*.json')))} deployment record(s)"
+              + (f": {', '.join(sorted(registries))}" if registries else ""))
         print("  would NOT touch  any existing deployment record or contract")
         if not keys:
             print()

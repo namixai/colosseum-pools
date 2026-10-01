@@ -216,7 +216,7 @@ a second order would be protected as if the first weren't coming, and a sweep wo
 guards nothing yet out to the line of a book without the order. The nonce check comes before the
 wait, so a replayed copy is refused at once.
 
-**The sweep.** Every `GATEWAY_PROTECT_EVERY` seconds (default 10) the gateway goes over the
+**The sweep.** Every `GATEWAY_PROTECT_EVERY` seconds (default 15) the gateway goes over the
 accounts it has traded since it started and puts back what is missing: a position that opened
 from an order that rested, a position opened again after its stop fired while another order
 still rested (Hyperliquid had removed the stop with the position), or a line a new day's snapshot
@@ -226,11 +226,35 @@ something to send, to check the key still trades the account, and for the day's 
 list of accounts lives in memory: after a restart an account is swept again from its next
 request, and the stops already on the exchange stay where they are. A sweep costs Hyperliquid's
 info API 20 of weight for the marks (`metaAndAssetCtxs`) and 22 for each account it watches
-(`clearinghouseState` 2, `frontendOpenOrders` 20): at 10 seconds, about 250 a minute for one
-account, of the 1,200 an IP may spend, which the keeper on the same host shares. The keeper spends
-20 a pass on the names of the markets and 22 on each active account, the same two reads, once each
-for everything it decides about the account; at a pass every 30 seconds, 40 a minute and 44 for
-each account. An account the gateway has nothing open for drops out of the list.
+(`clearinghouseState` 2, `frontendOpenOrders` 20). An account the gateway has nothing open for drops
+out of the list, and with the list empty a sweep reads nothing.
+
+**The host's minute.** Hyperliquid allows an IP 1,200 of weight a minute, and the gateway and the
+keeper on one host draw on the same 1,200. Three things spend it:
+
+- the keeper: 20 a pass for the names of the markets and 22 for each active account, the same two
+  reads as the sweep, once each for everything it decides about the account; a pass every 30 seconds;
+- the sweep: 20 for the marks and 22 for each account it watches, a sweep every 15 seconds;
+- an order that may open a position: at most 46, that is 20 and 22 for the stop and take's plan, 1
+  each for the order and the protective action, and for a sell 2 more for the demo signer's mids
+  (`allMids`); the table counts every order at 46.
+
+nginx lets 15 orders a minute through to the whole server, after a burst of 10. With n accounts that
+each hold a position, a minute costs:
+
+| | at 15 seconds | at the former 10 seconds |
+|---|---|---|
+| keeper | 40 + 44n | 40 + 44n |
+| sweep | 80 + 88n | 120 + 132n |
+| orders at nginx's rate | 15 × 46 = 690 | 690 |
+| two accounts | 1,074 | 1,202 |
+| most accounts under 1,200, with orders | 2 (three are 1,206) | 1 |
+| most accounts under 1,200, no orders | 8 (nine are 1,308) | 5 (six are 1,216) |
+
+Past that, Hyperliquid refuses reads. A refused read before an order refuses the order before
+anything is submitted, and its nonce can be used again; a refused sweep is logged and tried again at
+the next one. The burst of 10 can take one minute past the table. The sweep's interval is the lever:
+a position that opened again after its stop fired waits up to that long for a new one.
 
 **Signing them.** The gateway signs its own stop and take with the account's key under nonces of
 its own (never the trader's nonce of the request in hand). In `demo` mode the gateway's code
