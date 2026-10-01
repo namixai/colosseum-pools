@@ -7,7 +7,7 @@
 // with another's transaction. The documents are read from this checkout, so on main they are main's.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { TEXT, EVENTS, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict, eventText } from "../lib/evidence.js";
@@ -63,7 +63,7 @@ test("every row's source lines are in its section of the document", () => {
     else for (const s of r.sources) if (!body.includes(s)) lost.push(`${r.what}: «${s}»`);
   }
   assert.deepEqual(lost, []);
-  assert.equal(DATA.rows.length, 25);
+  assert.equal(DATA.rows.length, 27);
 });
 
 test("a row shows nothing its own source lines do not say", () => {
@@ -86,8 +86,54 @@ test("a row shows nothing its own source lines do not say", () => {
 
 test("a key is cut in the block of the transaction that stopped its account", () => {
   const cut = DATA.rows.filter((r) => r.tx && /cut at block \d+/.test(r.record));
-  assert.equal(cut.length, 2);
+  assert.equal(cut.length, 3);
   for (const r of cut) assert.equal(Number(r.record.match(/cut at block (\d+)/)[1]), r.block, r.what);
+});
+
+test("every deployment record that names a registry lists the keys published into it", () => {
+  // The document's whole "check it yourself" route starts at the record's `published_keys`: with
+  // no list there is nothing to call `bindingOf` on, and a reader cannot rebuild the set at all.
+  // Scanning the registry's events instead is not a way out -- the node rate limits
+  // `eth_getLogs` over a range this wide, which is finding A-14 from the other side.
+  //
+  // `deployments/testnet-demo2.json` had no list, because the keys were published by hand after
+  // the deploy script was refused and nothing wrote them back. The field is for a READER to
+  // enumerate; the deploy's own key checks still read the chain and must not start trusting it
+  // (ops/deploy_testnet.py, and the cross-registry trap its tests pin).
+  // A record may borrow another's registry instead of standing up its own -- the shared
+  // deployments do, which is why the rule is per REGISTRY and not per file.
+  const dir = join(ROOT, "deployments");
+  const records = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  assert.ok(records.length >= 3, "there are deployment records to check");
+  const listed = new Map();
+  const named = new Map();
+  for (const file of records) {
+    const rec = JSON.parse(readFileSync(join(dir, file), "utf8"));
+    if (!rec.KeyRegistry) continue;
+    named.set(rec.KeyRegistry, file);
+    const keys = rec.published_keys;
+    if (keys === undefined) continue;
+    assert.ok(Array.isArray(keys) && keys.length > 0, `${file}: published_keys is a non-empty list or absent`);
+    assert.equal(new Set(keys).size, keys.length, `${file}: no key is listed twice`);
+    for (const k of keys) assert.match(k, /^0x[0-9a-fA-F]{40}$/, `${file}: ${k} is an address`);
+    assert.ok(!listed.has(rec.KeyRegistry), `${rec.KeyRegistry}: listed by one record, not by ${file} and ${listed.get(rec.KeyRegistry)}`);
+    listed.set(rec.KeyRegistry, file);
+  }
+  for (const [registry, file] of named) {
+    assert.ok(listed.has(registry), `${registry}, named by ${file}, has its published keys in some record`);
+  }
+});
+
+test("the check-it-yourself route warns that a pool's retired key may be a reservation", () => {
+  // The route misled until 1 October 2026: it said a retired key was cut when its account
+  // stopped, which is false for a pool. Buying a challenge binds TWO keys in one transaction, the
+  // pool's being the funded-stage reservation, and a released reservation reads exactly like a
+  // funded stage that ended with nothing broken. Only the event separates them, so the route has
+  // to name it -- a reader who does not know this double-counts every challenge that did not pass.
+  const how = section("docs/EVIDENCE.md", "Checking it yourself");
+  assert.match(how, /retired key on a POOL is not by itself a funded stage/);
+  assert.match(how, /TraderFunded/);
+  assert.match(how, /published_keys/);
 });
 
 test("the calls and events a row names are the documents' own", () => {
@@ -111,8 +157,10 @@ test("every leverage stop is marked as staged, and the daily-loss stop as the on
   const two = DATA.rows.filter((r) => r.notes.some((n) => n.startsWith("The two leverage stops were staged")));
   assert.deepEqual(two, inTable);
   const leverage = DATA.rows.filter((r) => /\bLeverage\b/.test(r.record));
-  assert.equal(leverage.length, 3);
-  for (const r of leverage) assert.ok(r.notes.some((n) => /were staged|deliberately, by us/.test(n)), `${r.what}: says it was staged`);
+  assert.equal(leverage.length, 4);
+  // The fourth was arranged with a trader at arm's length rather than staged by us, so it says so
+  // in its own words. What may not happen is a leverage stop that claims nobody arranged it.
+  for (const r of leverage) assert.ok(r.notes.some((n) => /were staged|deliberately, by us|arranged on purpose/.test(n)), `${r.what}: says it was arranged`);
   const daily = DATA.rows.filter((r) => /DailyLoss/.test(r.record));
   assert.equal(daily.length, 1);
   assert.ok(daily[0].notes.some((n) => /nobody arranged/.test(n)), "the daily-loss stop says nobody arranged it");
@@ -134,7 +182,11 @@ test("the page links an account only where the app reads it", () => {
   const pools = DATA.pools.rows.map((p) => p.pool);
   for (const r of DATA.rows) {
     assert.ok([null, "challenge", "pool", "seat", "shared pool"].includes(r.kind), `${r.what}: kind ${r.kind}`);
-    assert.equal(r.factory, r.section === "The fourth ending, on the rehearsal deployment" ? "rehearsal" : "demo", r.what);
+    // Each section's rows belong to one deployment, and only "demo" is the one app/config.js
+    // reads -- so a row from any other gets no link, which the assertions below hold it to.
+    const expected = { "The fourth ending, on the rehearsal deployment": "rehearsal",
+                       "Deployment 2, and the first run where the trader was not us": "demo2" };
+    assert.equal(r.factory, expected[r.section] ?? "demo", r.what);
     const link = appLink(r);
     if (r.factory !== "demo" || !r.account) assert.equal(link, null, `${r.what}: the app does not read it`);
     else if (r.kind === "shared pool") {

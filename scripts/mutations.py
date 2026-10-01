@@ -1939,6 +1939,16 @@ MUTATIONS = [
     # The page "What happened on chain" (app/data/evidence.json, app/lib/evidence.js). "PE": the second window's
     # prefix, run by node on its own test file. A row that drifts from the documents, pairs one account with
     # another's record, or says more than they do has to turn it red, and so does a page that stops marking it.
+    # The reader's route starts at the record's key list, and the route itself has to warn that a
+    # pool's retired key may be a reservation rather than a funded stage.
+    ("PE33", "deployments/testnet-demo2.json",
+     '  "published_keys": [',
+     '  "keys_we_published_somewhere_else": [',
+     ["every deployment record that names a registry lists the keys published into it"]),
+    ("PE34", "docs/EVIDENCE.md",
+     "**A retired key on a POOL is not by itself a funded stage, and this is the one place the\n  shortcut above misleads.**",
+     "A retired key on a pool is a funded stage.",
+     ["the check-it-yourself route warns that a pool's retired key may be a reservation"]),
     ("PE1", "app/data/evidence.json",
      '"tx": "0xf2365bf087abb81f069d51fd48ce9573ca92fb563a826c9e9cb3ba89369d3c07",',
      '"tx": "0xf2365bf087abb81f069d51fd48ce9573ca92fb563a826c9e9cb3ba89369d3c08",',

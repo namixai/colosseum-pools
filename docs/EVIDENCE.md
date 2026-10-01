@@ -1,23 +1,36 @@
 # What the demo has actually done on chain
 
-Status: 25 September 2026, HyperEVM testnet (chain 998). Every line here is a state a contract
+Status: 1 October 2026, HyperEVM testnet (chain 998). Every line here is a state a contract
 holds right now, not a claim about a past run, so anyone can check it without trusting this file
 or a screenshot. Where a transaction is named it was read back from its receipt.
 
-The demo's deployment is in `deployments/testnet-demo.json`: factory
+Most of what follows is on the first deployment, `deployments/testnet-demo.json`: factory
 `0xf2707FCf99eD546BBA4612783761e7906FA1958e`, key registry
-`0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA`, 16 published agent keys.
+`0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA`, 16 published agent keys. The live demo has since
+moved to a second deployment of the same contracts, and its record has a section of its own
+below. Both are on chain and both still answer; the first one's accounts did not stop being true
+when the demo moved on.
 
 ## Checking it yourself
 
 You do not have to take the list below in order. The registry knows every account that has ever
 held a key, so the whole set can be rebuilt from two calls:
 
-- `KeyRegistry.bindingOf(key)` for each published key returns `(state, account, trader)`.
-  `state == 3` is Retired: the key was cut when that account stopped, and it is never reused.
+- `KeyRegistry.bindingOf(key)` for each key in the deployment record's `published_keys` returns
+  `(state, account, trader)`. `state == 3` is Retired, and a retired key is never reused.
 - The account then answers for itself: a challenge with `status()` and `breachReason()`, a pool
   with `stage()` and `fundedEndReason()`. Both enums are in `src/Types.sol`
   (`Breach`: 0 None, 1 Drawdown, 2 DailyLoss, 3 Leverage, 4 ForbiddenAsset).
+- **A retired key on a POOL is not by itself a funded stage, and this is the one place the
+  shortcut above misleads.** A pool takes its funded-stage key the moment the challenge is
+  *sold*, bound to the buyer, so that a trader who passes cannot find the registry emptied by a
+  stranger (`src/Pool.sol:232-238`). If nobody passes, `onChallengeSettled` gives that reserved
+  key back unused — retired, bound to the pool and to the trader, looking exactly like a funded
+  stage that ran. Worse, the pool then reads `stage()` Idle and `fundedEndReason()` **None**,
+  which is also what a funded stage that ended with nothing broken reads. The event tells them
+  apart: a funded stage that really started emitted `TraderFunded(trader, key, capital)`. No
+  `TraderFunded`, no funded stage. On deployment 2 below there are two retired keys for one
+  ending, and this is why.
 
 The app's `#/verify/<address>` page does the same reads in a browser.
 
@@ -26,6 +39,14 @@ The app's `#/verify/<address>` page does the same reads in a browser.
 Five keys were Retired when this was written, one Bound to a funded stage still running and ten
 Free. Those counts move as the demo runs — `freeCount()` and the bindings are the live answer,
 and the rows below are the part that does not change: a retired key stays retired.
+
+**One number will not reconcile, and the reason is ours.** That registry answered `freeCount()`
+**41** on 1 October 2026, which cannot come from sixteen published keys: `_free` grows only in
+`publish` and shrinks only when a key is handed out (`src/KeyRegistry.sol:103-135`), so keys were
+published into it that `deployments/testnet-demo.json` does not name. We did not record them, and
+no file here can tell you which they are. The rows below are about the sixteen the record does
+name, and each still answers for itself. Said plainly rather than left for a reader to trip over:
+a count in this file is checkable, and this one does not check out.
 
 | Account | What it is | The contract's own record |
 |---|---|---|
@@ -65,6 +86,65 @@ Transactions read back from their receipts:
 - second pass, `0x75f6d5f34563e31e8ffbfe6d42f856d2b795d5c78bffb3c11ddb6f5cc7c38b09`,
   block 65180551, sent by the trader.
 
+## Deployment 2, and the first run where the trader was not us
+
+Everything above is on the first deployment. The live demo now runs a second one,
+`deployments/testnet-demo2.json`: factory `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222`, key
+registry `0x53AF27F65Dd7473c890f633aC0025b261307779e`, 24 published agent keys, deployed at block
+65736733 from commit `e4287926`. Same contracts, its own registry, nothing shared with the first.
+
+**The ending itself is not new, and saying otherwise would be the easy lie.** A challenge stopped
+for leverage is the first row of the table above. What is new is who did it: the trader was a
+separate AI agent on the team, not an operator of this repository. We funded its wallet
+(`0xd4f31E7234308546c822C619705F1A4B5fC8f629`) with testnet USDC and gas so it could buy a
+challenge at all, and the leverage breach was **arranged on purpose** — the agent was asked to
+break the rule so the contract would have to write down what it does. That is a staged breach by
+a trader at arm's length, not a trader we were surprised by.
+
+Read today, from the accounts themselves:
+
+| Account | What it is | The contract's own record |
+|---|---|---|
+| `0xBA0c90BB481D6CAd2534AE3885d1CC9B9C30dB54` | challenge | `status` 8 Settled, `breachReason` **3 Leverage**, capital 70 returned, spot 0, key `0xeA688990` cut at block 65746123 |
+| `0x237afA2D58B1612e19D47152FfB2E771c05Fe96D` | pool | `stage` Idle, `fundedEndReason` **None** — the reservation case, **not** a funded stage: key `0x99A4Ec10` released at block 65746163 |
+
+`freeCount()` on that registry answers **22** of the 24, which is the two keys above and no
+others.
+
+Transactions read back from their receipts:
+
+- the purchase, `0x287a52091d812d40a27a9dba18db394772b181942d693e9d3131166512a7c102`, block
+  65746071, **sent by the trader itself** — price 7 USDC (`ChallengeSold`) and the platform's
+  0.7 (`ChallengeFeePaid`). **This one transaction binds two keys**, and both `KeyBound` events
+  are in it: `0xeA688990` to the challenge and `0x99A4Ec10` to the pool. The second is the
+  funded-stage reservation, taken at the sale and bound to the buyer.
+- the stop, `0x1804fa06b93c9cb9332925d3f0c9dc10419894bb3adc8d9b0422959229931aac`, block 65746123,
+  **sent by `0xD6F07317fC5f12302776b03A7206B1614FD49021`, the host keeper's own wallet** — nobody
+  asked it to. The event is `Stopped(status 3 Breached, reason 3 Leverage, equity 69.884663)`, and
+  the same transaction cut the challenge's key. Note the equity: against capital 70 the account
+  was down **0.115337** — it was stopped for leverage with the balance all but untouched, which is
+  what a staged leverage breach looks like from the chain.
+- the last settle step, `0x9b1b842beab93c2323e7150764932871b7610ca7970d941da08980628ee87d11`,
+  block 65746163, **sent by `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`, the second keeper** —
+  a different service from the one that sent the stop. Two keepers, each doing a step of the same
+  ending, neither prompted. That step is also where the pool gave up its reserved key.
+
+**The second retired key is the trap the section at the top warns about.** Both retired keys name
+the same trader, and the pool reads Idle with `fundedEndReason` None. From state alone that is
+indistinguishable from a funded stage that ended with nothing broken — every field a reader would
+reach for is cleared when a funded stage closes: `fundedTrader`, `fundedStart` (which is what
+`drawdownBase()` returns), and the payout fields all go back to zero (`src/Pool.sol:485-498`).
+`fundedEndReason` survives only when a stage was *stopped for a reason*, which is why deployment
+1's funded-stage row can be read from state at all. Here no funded stage ever started. **For an
+ending with no reason recorded, the event is the only witness** — `TraderFunded(trader, key,
+capital)` if a stage began, and nothing if it did not.
+
+**Honest limit, and it is ours.** Those four transactions took an `eth_getLogs` walk back from the
+head, and this node rate limited it repeatedly on the way — the shared minute of budget that
+finding A-14 is about, met from the reading side. A reader starting from the record's
+`published_keys` and calling `bindingOf` needs none of that; a reader trying to find the
+transactions without the key list would be walking the same wall we did.
+
 ## The gateway refused two things, for two different reasons
 
 Both were real refusals against the live gateway, not tests:
@@ -86,9 +166,15 @@ The state transitions and the records above are real. How they were reached, pla
   writes. The **daily-loss** stop was not. That was a real attempt at the target that lost, on a
   guard of ours set too close to the floor to catch it in time, and the keeper stopped the
   account for it. It is the only record here nobody arranged.
-- **The orders were placed by a person**, through the gateway, not by an autonomous trading
-  agent. Where a demo says "AI agent", read "a program holding a wallet that signs gateway
-  requests" — that part is built, but these trades were driven by hand.
+- **On the first deployment the orders were placed by a person**, through the gateway, not by an
+  autonomous trading agent. Where a demo said "AI agent", read "a program holding a wallet that
+  signs gateway requests" — that part was built, and those trades were driven by hand.
+  **On the second deployment that is no longer the case, and the record says which.** The
+  challenge in the deployment 2 section was bought and traded by another AI agent of this team,
+  holding its own wallet, through the same gateway: the purchase transaction was sent by that
+  wallet, not by us. What it is not is evidence the program trades well — it was asked to break
+  the leverage rule, and that is what it did. A trader passing a challenge on its own is still
+  not here.
 - **The keeper's stop was its own**, and it was run from a laptop. `ops/keeper.py` found the
   daily-loss violation and sent the transaction from the keeper's address
   (`0x75deec8b…`). Two honest qualifiers: that run was not the pools host, and its discovery
@@ -143,11 +229,15 @@ The state transitions and the records above are real. How they were reached, pla
   ours through the site's own form, capital sent by hand on HyperCore, not deployed by
   a script. So the softest thing about that record is nothing: the rule it broke is the rule a
   real pool would carry.
-- **Every wallet here is ours.** Three of them: the deploy key that owns the two benches
-  (`0x00d014df…`), the trader (`0xdc87191c…`), and the one that opened the demo
-  pool, which is named here only as that: the first two belong to the project and the third
-  belongs to a person, and a short address is still an address. So where a line says a pool's
-  investor or its trader did something, read "we did, wearing that hat". The mechanism is what the chain proves; an arm's-length trader is not.
+- **Every wallet here is ours.** Four of them: the deploy key that owns the two benches
+  (`0x00d014df…`), the trader (`0xdc87191c…`), the one that opened the demo
+  pool, which is named here only as that, and the deployment 2 trader
+  (`0xd4f31E7234308546c822C619705F1A4B5fC8f629`) — another AI agent of this team, whose testnet
+  USDC and gas we sent it, not an outside party. The first two belong to the project and the
+  third belongs to a person, and a short address is still an address. So where a line says a
+  pool's investor or its trader did something, read "we did, wearing that hat" — with the fourth
+  as the one exception, where a teammate's program wore it and we only paid for the seat.
+  The mechanism is what the chain proves; an arm's-length trader is not.
   The keeper's two addresses are ours as well, and the only actor here that decided anything
   without being told.
 - **The money is testnet money** and the USDC is mock.
