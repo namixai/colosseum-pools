@@ -10,7 +10,7 @@ import { tradePanel, stopInputs, equityPanel } from "./trading.js";
 import { saleBlocker, topUpAdvice } from "../lib/funding.js";
 import { stageName as nameOf, isFundedStage, awaitingKeyWords, poolStatus } from "../lib/stages.js";
 import { outcomesHtml } from "../lib/outcomes.js";
-import { poolKind, KIND_NOTE } from "../lib/listing.js";
+import { poolKind, holdsCode, KIND_NOTE } from "../lib/listing.js";
 
 export async function poolView(address, page) {
   const pool = chain.contract("pool", address);
@@ -43,7 +43,7 @@ export async function poolView(address, page) {
   // The badge and the sentence come from the same reading as the buy button: an idle pool that cannot sell a
   // challenge says so, instead of "Idle: it can sell a challenge" under a row that names the gap.
   const status = poolStatus(stage, blocker);
-  const kind = poolKind({ owner, ownerIsContract: (await chain.readProvider.getCode(owner)) !== "0x",
+  const kind = poolKind({ owner, ownerIsContract: await holdsCode((a) => chain.readProvider.getCode(a), owner),
     deployer: CONFIG.deployer });
   const doing = waiting ? awaitingKeyWords({ ...waiting, now: Math.floor(Date.now() / 1000) }) : status.words;
 

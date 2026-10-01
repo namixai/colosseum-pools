@@ -20,6 +20,18 @@ export function poolKind({ owner, ownerIsContract, deployer }) {
   return "pool";
 }
 
+/**
+ * Whether an address holds code, for poolKind. A label is not worth a page: a refused read (a node that rate-limits,
+ * say) answers false, so the pool is listed as anyone's, and the list and the pool page still load.
+ */
+export async function holdsCode(getCode, address) {
+  try {
+    return (await getCode(address)) !== "0x";
+  } catch {
+    return false;
+  }
+}
+
 export const KIND_NOTE = {
   bench: "Rehearsal pool: ours, with test parameters.",
   seat: "A seat of a shared pool: many investors hold shares in it.",

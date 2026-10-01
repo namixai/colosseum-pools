@@ -8,7 +8,7 @@ import { poolStatus } from "../lib/stages.js";
 import { saleBlocker } from "../lib/funding.js";
 import { totalPriceWords } from "../lib/outcomes.js";
 import { CONFIG } from "../config.js";
-import { LANDING, OTHERS_HEADING, KIND_NOTE, poolKind, cardBlockerLine, listOrder, tradeTarget } from "../lib/listing.js";
+import { LANDING, OTHERS_HEADING, KIND_NOTE, poolKind, holdsCode, cardBlockerLine, listOrder, tradeTarget } from "../lib/listing.js";
 
 function notDeployed(page) {
   render(page, `<section class="card"><h2>Not deployed yet</h2>
@@ -73,7 +73,7 @@ export async function listView(page) {
       rulesAndTerms(pool), pool.stage(), pool.owner(), hl.spotUsdc(address), pool.accountReady(), pool.challenge(),
       pool.capitalNeeded(),
     ]);
-    const ownerIsContract = (await chain.readProvider.getCode(owner)) !== "0x";
+    const ownerIsContract = await holdsCode((a) => chain.readProvider.getCode(a), owner);
     // The same reading the pool page decides its buy button from (funding.js), in the same units.
     const blocker = saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed: Number(neededSpot) / 1e8 });
     items.push({ index, address, rules, terms, assets, stage, owner, spotUsdc, blocker,

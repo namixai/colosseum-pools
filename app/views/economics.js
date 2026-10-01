@@ -314,12 +314,15 @@ export function exchangeBracket(tables, leverage) {
  */
 export function riskSummary(tbl) {
   const [open, worst] = ["open", "worst"].map((e) => leverCell(tbl, "keeper", 5, "wide", e));
+  // The line is the replay; the book on top is a calm market's, so it is "about", and a crash's is not measured.
+  const bracket = exchangeBracket(tbl, 5);
   return `<p class="lead"><strong>A pool can lose its investor's capital; a trader can lose only what a challenge
     costs.</strong> Checked on Hyperliquid testnet, and readable on chain: the mechanism — the gateway puts a stop and
     a take on the exchange before any order that may open a position, and the contract enforces the rules and records
     every stop. Replayed on Bybit's one-minute data, not measured on Hyperliquid: the losses — on the worst of the
-    ${tbl.levers.days.length} crash days, long side, at 5x on a list with alts, a stop on the exchange cost at most
-    ${points(exchangeBracket(tbl, 5).high, 1)}, a stop a minute late ${points(open.worst_pct)} to
+    ${tbl.levers.days.length} crash days, long side, at 5x on a list with alts, a stop on the exchange cost
+    ${points(bracket.line, 1)} at the line and about ${points(bracket.high, 1)} with a calm market's order book on top,
+    though a crash's book was never measured and could cost more; a stop a minute late cost ${points(open.worst_pct)} to
     ${points(worst.worst_pct)} of the seats' capital. No pool has run with real traders or real money, so every return
     on this page is a model.</p>`;
 }
