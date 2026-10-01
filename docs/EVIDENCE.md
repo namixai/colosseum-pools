@@ -108,9 +108,13 @@ agent's own client would have refused it: its cap is equity × the rule × 0.8, 
 gateway would not, because **the gateway does not check leverage at all** — it reads `rules()` for
 the daily and drawdown floors and discards the leverage field (`gateway/chain.py:117`), and the word
 does not appear in its code. Unlike `ForbiddenAsset` below, leverage has **one** enforcement layer,
-not two: the contract's `violation()` and a keeper that pulls the stop. That is a deliberate shape —
-a pre-trade check cannot stop a breach the mark creates after the order, and an equity read per
-order is the budget finding A-14 is about — but a reader should not have to infer it from silence.
+not two: the contract's `violation()` and a keeper that pulls the stop.
+
+**That is not a decision we recorded — the check was simply never built**, and saying otherwise would
+dress an absence up as a design. Two things such a check could not do are worth knowing, and they are
+limits rather than reasons: it could not stop a breach the mark creates after the order is already
+filled, and an equity read on every order is the per-minute budget that finding A-14 is about. What
+it would buy is speed, because the contract-and-keeper path cannot answer faster than a block.
 
 Read today, from the accounts themselves:
 
