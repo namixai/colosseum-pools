@@ -190,27 +190,44 @@ def wait_receipt(tx_hash: str, timeout_s: int = 180) -> dict:
     raise TimeoutError(f"no receipt for {tx_hash} after {timeout_s}s")
 
 
+class NotSent(RuntimeError):
+    """The transaction was never handed to the node, so nothing can have happened on chain.
+
+    Everything up to and including signing can fail: the nonce or gas-price read, the gas
+    estimate (where a contract's revert surfaces, before any broadcast), and signing itself. A
+    caller that spends a budget on an attempt -- one graduation a day, one stop a session -- may
+    give that attempt back for this exception and only for this one. Past the broadcast the
+    transaction may be in the mempool whatever the error says, and an attempt returned there would
+    let a second one land on top of the first.
+
+    The message is the original error's, so a caller can still read a revert selector out of it.
+    """
+
+
 def send_tx(acct: LocalAccount, to: str | None, data: bytes = b"", value: int = 0, gas: int | None = None) -> dict:
     """Sign and send one transaction on HyperEVM testnet, then wait for its receipt."""
-    assert_testnet()
-    nonce = int(rpc("eth_getTransactionCount", [acct.address, "pending"]), 16)
-    base_fee = int(rpc("eth_gasPrice"), 16)
-    tx: dict[str, Any] = {
-        "chainId": CHAIN_ID,
-        "nonce": nonce,
-        "value": value,
-        "data": data,
-        "type": 2,
-        "maxPriorityFeePerGas": 0,
-        "maxFeePerGas": base_fee * 2,
-    }
-    if to is not None:
-        tx["to"] = to_checksum_address(to)
-    probe = {"from": acct.address, "value": hex(value), "data": "0x" + data.hex()}
-    if to is not None:
-        probe["to"] = tx["to"]
-    tx["gas"] = gas if gas is not None else int(int(rpc("eth_estimateGas", [probe]), 16) * 1.25)
-    signed = acct.sign_transaction(tx)
+    try:
+        assert_testnet()
+        nonce = int(rpc("eth_getTransactionCount", [acct.address, "pending"]), 16)
+        base_fee = int(rpc("eth_gasPrice"), 16)
+        tx: dict[str, Any] = {
+            "chainId": CHAIN_ID,
+            "nonce": nonce,
+            "value": value,
+            "data": data,
+            "type": 2,
+            "maxPriorityFeePerGas": 0,
+            "maxFeePerGas": base_fee * 2,
+        }
+        if to is not None:
+            tx["to"] = to_checksum_address(to)
+        probe = {"from": acct.address, "value": hex(value), "data": "0x" + data.hex()}
+        if to is not None:
+            probe["to"] = tx["to"]
+        tx["gas"] = gas if gas is not None else int(int(rpc("eth_estimateGas", [probe]), 16) * 1.25)
+        signed = acct.sign_transaction(tx)
+    except Exception as exc:
+        raise NotSent(str(exc)) from exc
     tx_hash = "0x" + signed.hash.hex().removeprefix("0x")
     try:
         rpc("eth_sendRawTransaction", ["0x" + signed.raw_transaction.hex().removeprefix("0x")])

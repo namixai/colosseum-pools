@@ -1010,7 +1010,7 @@ MUTATIONS = [
     ("A19", "agents/desk.py",
      "        if self.graduations_left <= 0:",
      "        if False:",
-     ["test_graduation_once_with_a_readable_refusal"]),
+     ["test_a_graduation_that_went_out_and_reverted_stays_spent"]),
     ("A20", "agents/desk.py",
      '        if offer["total_to_pay_usdc"] > self.max_price:',
      '        if offer["price_usdc"] > self.max_price:',
@@ -1035,7 +1035,8 @@ MUTATIONS = [
     ("A35", "agents/desk.py",
      '        if isinstance(answer, dict) and answer.get("status") == "busy":',
      "        if False:",
-     ["test_a_busy_refusal_gives_the_attempt_back", "test_cancels_are_counted_the_same_way"]),
+     ["test_a_busy_refusal_gives_the_attempt_back",
+      "test_a_graduation_refused_before_it_was_sent_keeps_the_attempt", "test_cancels_are_counted_the_same_way"]),
     ("A36", "agents/desk.py",
      '        if isinstance(answer, dict) and answer.get("status") == "busy":',
      '        if isinstance(answer, dict) and answer.get("status") != "submitted":',
@@ -1045,8 +1046,8 @@ MUTATIONS = [
      "        answer = self.client.cancel(self.account, index, oid)",
      ["test_cancels_are_counted_the_same_way"]),
     ("A38", "agents/desk.py",
-     '            setattr(self, counter, getattr(self, counter) + 1)',
-     "            pass",
+     '        setattr(self, counter, getattr(self, counter) + 1)',
+     "        pass",
      ["test_a_busy_refusal_gives_the_attempt_back"]),
     ("A33", "agents/desk.py",
      '                "trader_share_of_challenge_profit_pct": ch_share_bps / 100,\n'
@@ -1079,6 +1080,18 @@ MUTATIONS = [
      ["test_stop_funded_is_the_pools_call_and_only_once_a_session"]),
     # A counter added after a state file was written is absent from it. Indexing the saved dict
     # made that a KeyError that killed the whole command, on a file the bot wrote itself.
+    # One attempt comes back only where nothing left the house. Both halves have to break: the
+    # boundary in send_tx that says so, and the desk's refusal to trust anything wider.
+    ("K81", "spike/hlspike/common.py",
+     "        raise NotSent(str(exc)) from exc",
+     "        raise RuntimeError(str(exc)) from exc",
+     ["test_a_revert_at_the_gas_estimate_never_left",
+      "test_a_read_before_the_estimate_never_left_either"]),
+    ("A44", "agents/desk.py",
+     "        except c.NotSent as exc:\n            self._refund(counter)",
+     "        except Exception as exc:\n            self._refund(counter)",
+     ["test_a_graduation_that_went_out_and_reverted_stays_spent",
+      "test_the_only_stop_survives_a_refusal_that_never_left_and_not_one_that_did"]),
     ("A42", "agents/client.py",
      "            if name in saved:\n                setattr(obj, name, min(int(saved[name]), getattr(obj, name)))",
      "            setattr(obj, name, min(int(saved[name]), getattr(obj, name)))",

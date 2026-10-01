@@ -157,10 +157,13 @@ nearest rule:
 `capital × (1 + targetBps)`, which is what `graduate` checks — and it checks it with no tolerance.
 The take is a market trigger, so when it fires the position closes at market and pays a taker fee.
 A take placed exactly at the target therefore leaves the account flat a fee BELOW it, and
-`graduate` refuses with `TargetNotMet`. Measured on 1 October 2026 with the demo's pass pool
-(capital 70, target 25 bps, 99.66 USDC of notional): equity at the take 70.17493 against a target
-of 70.175, and 70.13 once closed. Retrying did not help, because the next room was exactly that
-fee: every attempt ended on `target − fee`.
+`graduate` refuses with `TargetNotMet`. **Worked out, not observed** — on 1 October 2026, against
+the real `lines()` and the demo's pass pool (capital 70, target 25 bps, 99.66 USDC of notional),
+with the taker rate read from `userFees` for the trader's wallet: equity at the take would be
+70.17493 against a target of 70.175, and 70.13 once closed. Retrying does not help, because the
+next room is exactly that fee: every attempt lands on `target − fee`. No take at the target has
+ever fired on this deployment — nobody has passed a challenge since 29 September — so the figures
+are arithmetic on the live rate, not a recording of a run.
 
 So the room reaches past the target by `CLOSE_COST_BPS`, and it carries **both** sides: the take is
 placed with the order that opens the position, so the entry's fee is debited after the line is

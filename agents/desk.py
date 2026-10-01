@@ -266,7 +266,18 @@ class Desk:
         problem: seen live on 25 Sep 2026, when two of a session's four orders went on `busy`.
         """
         if isinstance(answer, dict) and answer.get("status") == "busy":
-            setattr(self, counter, getattr(self, counter) + 1)
+            self._refund(counter)
+
+    def _refund(self, counter: str) -> None:
+        """Gives one attempt back, and there is exactly one rule for when.
+
+        Only an answer or an exception that proves NOTHING LEFT THE HOUSE: the gateway's `busy`,
+        where its own chain reads were rate limited so it refused before signing, and `c.NotSent`,
+        where the node never received the raw transaction. Anything else may have reached
+        Hyperliquid or the mempool whatever it said, and an attempt returned there is one sent
+        twice. Two detectors, one rule -- keep them pointing at this.
+        """
+        setattr(self, counter, getattr(self, counter) + 1)
 
     def cancel_order(self, coin: str, oid: int) -> dict:
         index, _ = self._perp(coin)
@@ -306,14 +317,8 @@ class Desk:
         self.stops_left -= 1
         if not self.send:
             return {"status": "not_sent", "call": "stopFunded"}
-        try:
-            receipt = c.transact(self.wallet, self.account, f"stopFunded({CANCEL},uint32[],bytes32)",
-                                 [CANCEL, "uint32[]", "bytes32"], [[], [], os.urandom(32)])
-        except Exception as exc:
-            if self._errors is None:
-                self._errors = _error_names()
-            return {"status": "refused_by_contract", "reason": revert_reason(exc, self._errors)}
-        return {"status": "sent", "tx": receipt["transactionHash"]}
+        return self._spend("stops_left", f"stopFunded({CANCEL},uint32[],bytes32)",
+                           [CANCEL, "uint32[]", "bytes32"], [[], [], os.urandom(32)])
 
     def graduate(self) -> dict:
         if not self.is_challenge:
@@ -323,13 +328,39 @@ class Desk:
         self.graduations_left -= 1
         if not self.send:
             return {"status": "not_sent", "call": "graduate"}
+        return self._spend("graduations_left", "graduate(bytes32)", ["bytes32"], [os.urandom(32)])
+
+    def _spend(self, counter: str, signature: str, types: list[str], args: list) -> dict:
+        """Send one call out of a small budget, and give the attempt back only when the
+        transaction provably never left.
+
+        The budget is there so a bot cannot loop: one graduation a day, one stop a session. But a
+        contract's refusal surfaces at the GAS ESTIMATE, before anything is broadcast, and burning
+        the attempt there spends the budget on a call that never happened. On a stand with a
+        one-day term one premature `graduate` is the whole day's right to pass; on a funded stage
+        it is the only stop. `c.NotSent` is the one exception that says nothing reached the node
+        (`spike/hlspike/common.py`), and it is the only one that gets the attempt back.
+
+        Past the broadcast the attempt stays spent even when the error reads like a refusal: the
+        transaction may be in the mempool whatever the node answered, and a second one let through
+        there could land on top of the first.
+
+        `attempt_returned` says which happened, because the caller is a program deciding whether
+        it may try again today -- "refused" alone does not answer that.
+        """
         try:
-            receipt = c.transact(self.wallet, self.account, "graduate(bytes32)", ["bytes32"], [os.urandom(32)])
+            receipt = c.transact(self.wallet, self.account, signature, types, args)
+        except c.NotSent as exc:
+            self._refund(counter)
+            return {"status": "refused_by_contract", "reason": self._reason(exc), "attempt_returned": True}
         except Exception as exc:
-            if self._errors is None:
-                self._errors = _error_names()
-            return {"status": "refused_by_contract", "reason": revert_reason(exc, self._errors)}
+            return {"status": "refused_by_contract", "reason": self._reason(exc), "attempt_returned": False}
         return {"status": "sent", "tx": receipt["transactionHash"]}
+
+    def _reason(self, exc: Exception) -> str:
+        if self._errors is None:
+            self._errors = _error_names()
+        return revert_reason(exc, self._errors)
 
 
 # ── picking a pool ───────────────────────────────────────────────────────────────────────

@@ -170,11 +170,27 @@ class DeskLimits(WithChain):
         desk.close_position("BTC")
         self.assertEqual(self.gateway.orders[-1][2:], (False, "58800", "0.0031", "Ioc", True))
 
-    def test_graduation_once_with_a_readable_refusal(self):
+    def test_a_graduation_refused_before_it_was_sent_keeps_the_attempt(self):
+        # A contract's refusal surfaces at the GAS ESTIMATE, before any broadcast, so the day's one
+        # attempt was not used. Burning it there spends a whole day's right to pass on a
+        # transaction that never existed -- on a one-day stand, the run.
         desk = self.desk()
-        selector = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
-        self.chain.revert = selector
-        self.assertEqual(desk.graduate(), {"status": "refused_by_contract", "reason": "NotFlat"})
+        self.chain.revert = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
+        self.assertEqual(desk.graduate(),
+                         {"status": "refused_by_contract", "reason": "NotFlat", "attempt_returned": True})
+        self.assertEqual(self.chain.sent, [], "nothing reached the chain")
+        self.chain.revert = None
+        self.assertEqual(desk.graduate()["status"], "sent", "so the attempt is still there to use")
+
+    def test_a_graduation_that_went_out_and_reverted_stays_spent(self):
+        # Past the broadcast the transaction may be in the mempool whatever the error says. An
+        # attempt returned here would let a second one land on top of the first.
+        desk = self.desk()
+        self.chain.revert_after_send = True
+        out = desk.graduate()
+        self.assertEqual(out["status"], "refused_by_contract")
+        self.assertIs(out["attempt_returned"], False)
+        self.assertEqual([s[1] for s in self.chain.sent], ["graduate"], "it did reach the chain")
         with self.assertRaises(Refused):
             desk.graduate()
 
@@ -228,7 +244,24 @@ class DeskLimits(WithChain):
 
         self.chain.revert = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
         self.assertEqual(self.desk().stop_funded(),
-                         {"status": "refused_by_contract", "reason": "NotFlat"})
+                         {"status": "refused_by_contract", "reason": "NotFlat", "attempt_returned": True})
+
+    def test_the_only_stop_survives_a_refusal_that_never_left_and_not_one_that_did(self):
+        # `stopFunded` reverts while a position is open, and that refusal is the gas estimate's: the
+        # stage's only stop must still be there once the bot is flat. A stop that WAS broadcast is
+        # spent, because a second one could land on top of it.
+        self.chain.challenge = False
+        kept = self.desk()
+        self.chain.revert = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
+        self.assertIs(kept.stop_funded()["attempt_returned"], True)
+        self.chain.revert = None
+        self.assertEqual(kept.stop_funded()["status"], "sent")
+
+        spent = self.desk()
+        self.chain.revert_after_send = True
+        self.assertIs(spent.stop_funded()["attempt_returned"], False)
+        with self.assertRaises(dk.Refused):
+            spent.stop_funded()
 
     def test_account_view_keeps_the_two_shares_apart(self):
         # The fake's terms pay 0% for passing the challenge and 80% on the funded account.

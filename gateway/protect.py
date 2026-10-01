@@ -121,11 +121,15 @@ class RuleLimits:
         For a challenge the room reaches PAST the target by what closing will cost. The take is a
         market trigger: when it fires the position closes at market and pays a taker fee, so a
         take placed exactly at the target leaves the account flat a fee BELOW it -- and `graduate`
-        asks for at least the target with no tolerance (`ChallengeAccount.sol:229-230`). Measured
-        on 1 October 2026 with the demo's pass pool (capital 70, target 25 bps): the take landed
-        at equity 70.17493 against a target of 70.175, and after the close the account held
-        70.13. Trying again does not help: the next room is exactly that fee, so every attempt
-        lands on `target - fee` again. It is a fixed point, not a sequence creeping up.
+        asks for at least the target with no tolerance (`ChallengeAccount.sol:229-230`). Worked out
+        on 1 October 2026 against this function and the demo's pass pool (capital 70, target
+        25 bps), with the taker rate read from `userFees`: the take would sit at equity 70.17493
+        against a target of 70.175, and after the close the account would hold 70.13. Trying again
+        does not help: the next room is exactly that fee, so every attempt lands on `target - fee`
+        again. It is a fixed point, not a sequence creeping up.
+
+        No take at the target has fired on this deployment -- nobody has passed since 29 September
+        -- so those are figures from the arithmetic and the live fee rate, not from a run.
         """
         if self.challenge:
             target = Decimal(self.drawdown_base) * (BPS + self.target_bps) / BPS / USD

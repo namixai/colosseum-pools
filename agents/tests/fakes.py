@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import pathlib
 
+from spike.hlspike import common as c
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FACTORY = "0x00000000000000000000000000000000000000F1"
 REGISTRY = "0x00000000000000000000000000000000000000F2"
@@ -29,6 +31,11 @@ class FakeChain:
     """A challenge on BTC and ETH with 1000 USDC, 5% daily loss, 10% drawdown, 3x leverage,
     and three pools for sale, of which only POOL can sell now."""
 
+    # The tests put this object where `desk.c` is, so it stands in for the whole module -- and the
+    # exception the desk catches has to be the REAL class, not a look-alike, or the branch that
+    # gives an attempt back would be reached by nothing in production.
+    NotSent = c.NotSent
+
     def __init__(self):
         self.challenge = True
         self.rules = (500, 1000, 300, (3, 4))
@@ -44,7 +51,8 @@ class FakeChain:
         self.positions: list[dict] = []
         self.orders: list[dict] = []
         self.sent: list[tuple[str, str, list]] = []
-        self.revert: str | None = None
+        self.revert: str | None = None            # refused at the gas estimate: never broadcast
+        self.revert_after_send = False             # broadcast, then reverted on chain
         self.allowance = 0
         self.fee = 0
         self.pools = {
@@ -95,8 +103,15 @@ class FakeChain:
         raise AssertionError(f"unexpected info call {kind}")
 
     def transact(self, wallet, to, signature, types=(), args=()):
+        # Two shapes, and the difference is the whole point: a refusal at the GAS ESTIMATE never
+        # reached the node, which the real `send_tx` reports as `c.NotSent`; a transaction that was
+        # broadcast and reverted on chain is a plain error. A fake that raised one type for both
+        # would make the attempt-returned path untestable while looking like it tested it.
         if self.revert:
-            raise RuntimeError(f"eth_estimateGas: {{'code': 3, 'message': 'execution reverted', 'data': '{self.revert}'}}")
+            raise c.NotSent(f"eth_estimateGas: {{'code': 3, 'message': 'execution reverted', 'data': '{self.revert}'}}")
+        if self.revert_after_send:
+            self.sent.append((to.lower(), signature.split("(")[0], list(args)))
+            raise RuntimeError(f"transaction 0x{'cd' * 32} reverted")
         self.sent.append((to.lower(), signature.split("(")[0], list(args)))
         if signature == "buyChallenge()":
             self.pools[to.lower()]["challenge"] = NEW_CHALLENGE
