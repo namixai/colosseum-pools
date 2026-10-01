@@ -36,6 +36,9 @@ class FakeChain:
         # The two shares differ: a reader that takes one for the other changes a number.
         self.terms = (20_000_000, 1_000_000_000, 1000, 7 * 86400, 0, 8000, 5_000_000_000)
         self.verdict = 0
+        self.status = 2        # Active
+        self.stage = 2         # Funded
+        self.recorded = 0      # breachReason()/fundedEndReason(): ничего не записано
         self.equity, self.notional = 1000.0, 0.0
         self.mids = {"BTC": "60000", "ETH": "3000"}
         self.positions: list[dict] = []
@@ -63,9 +66,10 @@ class FakeChain:
             pool = self.pools[to]
             return {"stage": (pool["stage"],), "accountReady": (pool["ready"],), "challenge": (pool["challenge"],),
                     "terms": (self.terms,), "rules": (self.rules,), "capitalNeeded": (NEEDED,)}[name]
-        return {"rules": (self.rules,), "terms": (self.terms,), "violation": (self.verdict,), "status": (2,),
-                "stage": (2,), "drawdownBase": (1_000_000_000,), "dayStartEquity": (990_000_000,),
-                "deadline": (NOW + 36 * 3600,)}[name]
+        return {"rules": (self.rules,), "terms": (self.terms,), "violation": (self.verdict,),
+                "status": (self.status,), "stage": (self.stage,), "breachReason": (self.recorded,),
+                "fundedEndReason": (self.recorded,), "drawdownBase": (1_000_000_000,),
+                "dayStartEquity": (990_000_000,), "deadline": (NOW + 36 * 3600,)}[name]
 
     def core_spot_balance(self, user, token):
         return {"total": self.pools[user.lower()]["spot"]}

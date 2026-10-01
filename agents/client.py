@@ -137,7 +137,7 @@ STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 WINDOW_MAX_ORDER_USDC = 100.0
 WINDOW_MAX_ORDERS_PER_DAY = 4
 WINDOW_MAX_PRICE_USDC = 40.0  # a challenge's price plus the platform fee
-DESK_COUNTERS = ("orders_left", "cancels_left", "graduations_left")
+DESK_COUNTERS = ("orders_left", "cancels_left", "graduations_left", "stops_left")
 SHOP_COUNTERS = ("purchases_left",)
 
 
@@ -174,7 +174,8 @@ def parser() -> argparse.ArgumentParser:
     buy.add_argument("pool")
     buy.add_argument("price", type=float, help="the price `pools` showed, in USDC")
     for name, what in (("account", "an account's equity, positions, orders and rules"),
-                       ("graduate", "ask the challenge contract to pass the challenge")):
+                       ("graduate", "ask the challenge contract to pass the challenge"),
+                       ("stop-funded", "end the funded stage of a pool you trade, without a breach")):
         sub.add_parser(name, help=what).add_argument("account")
     market = sub.add_parser("market", help="market data for a perp on the account's list")
     market.add_argument("account")
@@ -207,7 +208,7 @@ def run(args: argparse.Namespace, chain, reader_for, gateway_for) -> Any:
     factory, registry = deployments.resolve(args.deployment)
     send = not args.dry_run
     who = chain.address_of(args.wallet)  # the address only; the key is loaded to send
-    acts = args.command in ("buy", "order", "cancel", "close", "graduate")
+    acts = args.command in ("buy", "order", "cancel", "close", "graduate", "stop-funded")
     wallet = chain.account(args.wallet) if send and acts else None
     now = time.time()
 
@@ -248,6 +249,8 @@ def run(args: argparse.Namespace, chain, reader_for, gateway_for) -> Any:
             return d.cancel_order(args.coin, args.oid)
         if args.command == "close":
             return d.close_position(args.coin)
+        if args.command == "stop-funded":
+            return d.stop_funded()
         return d.graduate()
     finally:
         if send and acts:

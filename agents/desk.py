@@ -29,6 +29,7 @@ TERMS = "(uint64,uint64,uint16,uint32,uint16,uint16,uint64)"
 STATUS = ("None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled")
 STAGE = ("Idle", "Challenge", "Funded", "Closing", "PassedAwaitingKey")
 BREACH = ("None", "Drawdown", "DailyLoss", "Leverage", "ForbiddenAsset")
+CANCEL = "(uint32,uint64)[]"   # the same shape ops/keeper.py sends
 
 
 def view(addr: str, sig: str, out: str, types=(), args=()):
@@ -98,6 +99,7 @@ class Desk:
         self.send = send
         self.orders_left = limits.max_orders
         self.cancels_left = 2 * limits.max_orders
+        self.stops_left = 1
         self.graduations_left = 1
         self.is_challenge = view(self.factory, "isChallenge(address)", "bool", ["address"], [self.account])
         if not self.is_challenge and not view(self.factory, "isPool(address)", "bool", ["address"], [self.account]):
@@ -130,11 +132,25 @@ class Desk:
         verdict = view(self.account, "violation(uint32[])", "uint8", ["uint32[]"], [held_outside])
         base = usd(view(self.account, "drawdownBase()", "int64"))
         day_start = usd(view(self.account, "dayStartEquity()", "int64"))
+        # The same trap `app/lib/verdict.js` was fixed for on 24 September, and nobody carried the
+        # fix across to here: a settled account has handed its money back, so a live `violation()`
+        # reads a hundred per cent below where it started and answers Drawdown whatever the stop
+        # was actually for. The trader bot found it again on 1 October 2026, on a challenge the
+        # contract had stopped for Leverage. The recorded reason wins; an account that has finished
+        # trading with none recorded says so; only a live account gets a live reading.
+        number = view(self.account, "status()" if self.is_challenge else "stage()", "uint8")
+        recorded = view(self.account, "breachReason()" if self.is_challenge else "fundedEndReason()", "uint8")
+        finished = number > 2 if self.is_challenge else number == 3   # past Active / Closing
+        if recorded:
+            said = f"stopped for {BREACH[recorded]} — what the contract recorded"
+        elif finished:
+            said = "finished with no rule broken"
+        else:
+            said = "inside the rules" if verdict == 0 else BREACH[verdict]
         out = {
             "account": self.account,
             "kind": "challenge" if self.is_challenge else "funded pool",
-            "state": (STATUS[view(self.account, "status()", "uint8")] if self.is_challenge
-                      else STAGE[view(self.account, "stage()", "uint8")]),
+            "state": STATUS[number] if self.is_challenge else STAGE[number],
             "equity_usdc": equity,
             "open_notional_usdc": notional,
             "margin_used_usdc": float(summary["totalMarginUsed"]),
@@ -151,7 +167,7 @@ class Desk:
                                             if day_start > 0 else None),
                 "max_open_notional_by_rule_usdc": round(max(equity, 0) * self.rules["leverage_x100"] / 100, 2),
             },
-            "contract_verdict_now": "inside the rules" if verdict == 0 else BREACH[verdict],
+            "contract_verdict": said,
             "positions": [{
                 "coin": p["coin"], "size": float(p["szi"]), "entry_price": float(p["entryPx"] or 0),
                 "unrealized_pnl_usdc": float(p["unrealizedPnl"]),
@@ -274,6 +290,30 @@ class Desk:
         closing_buy = size < 0
         price = mid * (1.02 if closing_buy else 0.98)  # crosses the book; reduce-only caps the size
         return self.place_order(coin, "buy" if closing_buy else "sell", abs(size), price, "ioc", reduce_only=True)
+
+    def stop_funded(self) -> dict:
+        """Ends the funded stage without a breach, which `Pool.stopFunded` lets the trader do.
+
+        The cancel and forbidden-asset lists go in empty. They are the keeper's to fill: it reads
+        the account's open orders each pass and sends them with its own settle step, and a list
+        this side guesses at would only be a second, staler copy. What empty costs is one more
+        keeper pass before the resting orders are gone, and nothing else.
+        """
+        if self.is_challenge:
+            raise Refused("stopFunded is for the pool, not the challenge; pass the pool's address")
+        if self.stops_left <= 0:
+            raise Refused("the funded stage was already stopped in this session")
+        self.stops_left -= 1
+        if not self.send:
+            return {"status": "not_sent", "call": "stopFunded"}
+        try:
+            receipt = c.transact(self.wallet, self.account, f"stopFunded({CANCEL},uint32[],bytes32)",
+                                 [CANCEL, "uint32[]", "bytes32"], [[], [], os.urandom(32)])
+        except Exception as exc:
+            if self._errors is None:
+                self._errors = _error_names()
+            return {"status": "refused_by_contract", "reason": revert_reason(exc, self._errors)}
+        return {"status": "sent", "tx": receipt["transactionHash"]}
 
     def graduate(self) -> dict:
         if not self.is_challenge:

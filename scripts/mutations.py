@@ -1064,6 +1064,19 @@ MUTATIONS = [
      '                "trader_share_of_funded_profit_pct": ch_share_bps / 100,\n'
      '                "passes_when":',
      ["test_account_view_keeps_the_two_shares_apart"]),
+    # The agent's view of an account, and the trader's own end to a funded stage.
+    ("A39", "agents/desk.py",
+     "        if recorded:",
+     "        if False:",
+     ["test_a_settled_account_says_what_the_contract_recorded_not_what_it_reads_now"]),
+    ("A40", "agents/desk.py",
+     "        elif finished:",
+     "        elif False:",
+     ["test_a_pass_is_not_read_as_a_drawdown_either"]),
+    ("A41", "agents/desk.py",
+     "        if self.stops_left <= 0:",
+     "        if False:",
+     ["test_stop_funded_is_the_pools_call_and_only_once_a_session"]),
     # ── keeper (Python unittest) ──
     # A-14: the contract is asked first, because its rules cost nothing at the venue.
     ("K67", "ops/keeper.py",
