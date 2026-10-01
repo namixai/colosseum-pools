@@ -78,6 +78,24 @@ class Throttling(unittest.TestCase):
             self.common.rpc("eth_estimateGas")
         self.assertEqual((self.post.call_count, self.sleeps), (1, []))
 
+    def test_six_refusals_in_a_row_are_waited_out_instead_of_lost(self):
+        # The case that happened on the host on 1 October 2026: `eth_blockNumber: rate limited
+        # 6 times in a row`, and a keeper pass died on it. The old ladder stopped at 31 seconds
+        # and a rate limit is counted over a MINUTE, so every attempt landed in the same spent
+        # minute. Six refusals and a seventh answer is now a slow call, not a lost one.
+        limited = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32005, "message": "rate limited"}}
+        self.answers(*[(200, limited)] * 6, (200, {"jsonrpc": "2.0", "id": 1, "result": "0x3e6"}))
+        self.assertEqual(self.common.rpc("eth_blockNumber"), "0x3e6")
+        self.assertEqual(self.sleeps, [1.0, 2.0, 4.0, 8.0, 16.0, 32.0])
+
+    def test_the_ladder_outlasts_the_minute_the_limit_is_counted_over(self):
+        # The number, not the shape: a ladder that adds up to less than a minute cannot outlast a
+        # limit measured per minute, however many steps it has.
+        self.assertGreater(self.common.RPC_BACKOFF_TOTAL_S, 60)
+        self.assertEqual(self.common.RPC_BACKOFF_TOTAL_S,
+                         sum(2 ** i for i in range(self.common.RPC_ATTEMPTS - 1)),
+                         "the constant and the ladder have to be the same number")
+
     def test_it_gives_up_in_the_end(self):
         limited = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32005, "message": "rate limited"}}
         self.answers(*[(200, limited)] * self.common.RPC_ATTEMPTS)

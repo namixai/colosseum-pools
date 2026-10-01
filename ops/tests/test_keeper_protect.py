@@ -123,6 +123,28 @@ class ProtectionCheck(KeeperTest):
         self.assertNotIn("pool_failed", events, "a refused venue read is not a broken pool")
         self.assertIn("pass_done", events)
 
+    def test_a_refused_read_is_not_tried_a_second_time_in_the_same_pass(self):
+        # The review's Low, measured 30 Sep 2026. On a refusal the book was read once for the
+        # rules and once more by the stop check, and when only frontendOpenOrders was refused
+        # that second read cost the full 20 -- 44 an account at exactly the moment the budget
+        # was already gone, which is the number reading it once was meant to remove.
+        self.active_challenge([("BTC", "0.005")], [])
+        self.chain.front_fails = True
+        self.make().one_pass()
+        per = [r for r in self.chain.reads if r != "meta"]
+        self.assertEqual(per, ["clearinghouseState", "frontendOpenOrders"],
+                         "one attempt at the book, not two")
+
+        # The pool's own side of the pass, the same way.
+        self.chain.challenges.clear()
+        self.chain.add_pool(POOL_A, stage=keeper.FUNDED)
+        self.chain.sizes[POOL_A.lower()] = [("SOL", "-2")]
+        self.chain.reads.clear()
+        self.make().one_pass()
+        per = [r for r in self.chain.reads if r != "meta"]
+        self.assertEqual(per, ["clearinghouseState", "frontendOpenOrders"],
+                         "one attempt at the book on the pool side too")
+
     def test_an_active_account_is_read_once_a_pass_22_of_hyperliquids_weight(self):
         # Hyperliquid's weights (rate-limits-and-user-limits): clearinghouseState 2, every other info
         # request 20 but a few. The stop check once read both again: 44 an account, and one keeper ran out
