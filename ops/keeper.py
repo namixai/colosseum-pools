@@ -73,6 +73,17 @@ CHALLENGE_CREATED = "0x" + keccak(text="ChallengeCreated(address,address,address
 STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 MAX_LOG_WINDOW = 50  # blocks per eth_getLogs call that HyperEVM accepts
 RECUT_AFTER_BLOCKS = 10  # CoreWriter actions land a few seconds after their block
+DEFAULT_EVERY_S = 30
+# The worst a breach the CONTRACT can see waits to be found, when one read on the way is refused:
+# the pass interval, plus the longest a refused read now waits before it gives up. Those rules --
+# drawdown, daily loss, leverage -- come off the margin precompile, so they are answered even when
+# Hyperliquid refuses everything; what a refusal costs is the venue's half, and the round comes
+# back to that account before the ones it got through.
+#
+# It is one refused read. A second in the same pass adds its own wait, and how many there are is
+# what the shared budget decides -- naming a single number for every case would be naming one we
+# could not keep.
+WORST_CASE_DETECTION_S = DEFAULT_EVERY_S + c.RPC_BACKOFF_TOTAL_S  # 93 seconds today
 
 # ChallengeAccount.Status and Pool.Stage. The tests hold these against the Solidity source.
 CREATED, ACTIVE, BREACHED, EXPIRED, FORFEITED, PASSED, ABORTED, SETTLED = range(1, 9)
@@ -257,7 +268,9 @@ def rules_assets(addr: str) -> set[int]:
     return set(rules[3])
 
 
-def recut_if_uncut(wallet, account: str, latest: int, dry: bool) -> None:
+def recut_if_uncut(wallet, account: str, latest: int | None, dry: bool) -> None:
+    if latest is None:
+        return  # whether a cut has had its blocks is a question about height, and we have none
     key = to_checksum_address(view(account, "cutKey()", "address"))
     if key == ZERO or latest < view(account, "cutBlock()", "uint64") + RECUT_AFTER_BLOCKS:
         return
@@ -328,7 +341,8 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
             cancels, extra = stop_args(ch, names, book)
             stop(wallet, ch, "expire", cancels, extra, dry)
         else:
-            check_protection(ch, book)
+            if book is not None:
+                check_protection(ch, book)
         return book is not None
     else:
         recut_if_uncut(wallet, ch, latest, dry)
@@ -362,7 +376,8 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
                 cancels, extra = stop_args(pool, names, book)
                 stop(wallet, pool, "breach", cancels, extra, dry)
             else:
-                check_protection(pool, book)
+                if book is not None:
+                    check_protection(pool, book)
             checked = checked and book is not None
         else:
             recut_if_uncut(wallet, pool, latest, dry)
@@ -443,15 +458,28 @@ class Keeper:
         tmp.replace(self.state_path)
 
     def one_pass(self) -> None:
-        latest = int(c.rpc("eth_blockNumber"), 16)
-        end = min(latest, self.next_block + self.window * self.max_windows - 1)
+        try:
+            latest = int(c.rpc("eth_blockNumber"), 16)
+        except Exception as exc:
+            # This read sits outside the per-pool guard, so its refusal used to end the pass
+            # before a single account was looked at -- and a pass that ends before it starts
+            # never moves the round on, which is how one rate-limited minute became a tail of
+            # pools nobody checked. Measured on the host on 1 October 2026: a keeper pass died
+            # on `eth_blockNumber: rate limited 6 times in a row`.
+            #
+            # Without the head there is no scan (a window needs an end) and no recut (a question
+            # about height). Every rule the contract holds is still answered: those come off the
+            # margin precompile, and an eth_call needs no block number.
+            log("head_read_failed", error=str(exc)[:200])
+            latest = None
+        end = None if latest is None else min(latest, self.next_block + self.window * self.max_windows - 1)
         # Window by window, and the place moves after each window that came back. A refused read
         # ends the scan for this pass and keeps what it read: a pass that threw its whole scan away
         # on the last window started again from the same block every time, so after a gap -- a
         # deployment older than the keeper, or any restart behind the head -- it never caught up.
         # Measured on the demo, 23 Sep 2026: 50 windows a pass against a node that allows 100 calls
         # a minute, every pass refused part way, `next_block` at the deployment block all along.
-        while self.next_block <= end:
+        while end is not None and self.next_block <= end:
             hi = min(self.next_block + self.window - 1, end)
             try:
                 self.live |= pools_with_challenges(self.factory, self.next_block, hi)
@@ -512,7 +540,7 @@ def main() -> int:
     p.add_argument("--deployment", required=True, help="label of a record in deployments/")
     p.add_argument("--wallet", default="keeper")
     p.add_argument("--once", action="store_true")
-    p.add_argument("--every", type=int, default=30, help="seconds between passes")
+    p.add_argument("--every", type=int, default=DEFAULT_EVERY_S, help="seconds between passes")
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")
     p.add_argument("--state", help="state file (default ops/state/keeper-<deployment>.json)")
     p.add_argument("--log-window", type=int, default=MAX_LOG_WINDOW,

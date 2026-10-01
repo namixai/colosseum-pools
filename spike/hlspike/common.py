@@ -97,12 +97,19 @@ def record(step: str, **fields: Any) -> dict:
 # ── HyperEVM JSON-RPC ────────────────────────────────────────────────────────────────
 
 RATE_LIMITED = -32005  # what the public HyperEVM RPC answers when it throttles
-RPC_ATTEMPTS = 6
+RPC_ATTEMPTS = 7
+# 1+2+4+8+16+32 seconds between seven attempts: 63 in all, which is the point of the number.
+# A rate limit is counted over a MINUTE, so a ladder that tops out inside one -- the old one
+# stopped at 31 seconds -- is not a backoff at all: every attempt lands in the same spent
+# minute and the call fails having waited half the time it needed. Measured on the host on
+# 1 October 2026, where a keeper pass died on `eth_blockNumber: rate limited 6 times in a row`.
+RPC_BACKOFF_TOTAL_S = 63
 
 
 def rpc(method: str, params: Sequence[Any] = ()) -> Any:
-    """One JSON-RPC call. A throttled call (HTTP 429 or error -32005) is retried after 1, 2,
-    4, 8 and 16 seconds; any other error is raised at once."""
+    """One JSON-RPC call. A throttled call (HTTP 429 or error -32005) is retried after 1, 2, 4,
+    8, 16 and 32 seconds -- 63 in all, so the wait crosses the minute the limit is counted over.
+    Any other error is raised at once."""
     delay = 1.0
     for attempt in range(RPC_ATTEMPTS):
         resp = _session.post(RPC_URL, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
