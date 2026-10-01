@@ -6,6 +6,7 @@ import { esc, render, $, badge, row, isAddress, settle, wire } from "../lib/ui.j
 import { ruleVerdict, liveReadingIsMoot, pastFundedStage } from "../lib/verdict.js";
 import { stageWords } from "../lib/stages.js";
 import { keyFacts } from "../lib/keys.js";
+import { isArchive } from "../lib/deployments.js";
 
 export async function verifyView(address, page) {
   if (!isAddress(address)) {
@@ -16,14 +17,18 @@ export async function verifyView(address, page) {
     page.insertAdjacentHTML("beforeend", `<section class="card"><h3>Who holds the keys</h3>${KEYS_HELD}</section>`);
     return;
   }
-  const [isPool, isChallenge] = chain.deployed()
-    ? await Promise.all([chain.factory().isPool(address), chain.factory().isChallenge(address)])
-    : [false, false];
-  const kind = isPool ? "pool" : isChallenge ? "challenge" : null;
+  // Either deployment the site reads, live or archive: each account is checked against the factory and the key
+  // registry of the deployment that made it.
+  const [asPool, asChallenge] = chain.deployed()
+    ? await Promise.all([chain.deploymentOf(address, "pool"), chain.deploymentOf(address, "challenge")])
+    : [null, null];
+  const kind = asPool ? "pool" : asChallenge ? "challenge" : null;
+  const deployment = asPool || asChallenge;
   render(page, `
     <section class="card">
       <h2>Check it yourself</h2>
-      <p class="mono">${esc(address)} ${badge(kind || "not ours", kind ? "ok" : "bad")}</p>
+      <p class="mono">${esc(address)} ${badge(kind || "not ours", kind ? "ok" : "bad")}${
+        deployment ? ` ${badge(isArchive(deployment) ? "first deployment, archive" : "live deployment")}` : ""}</p>
       <p class="muted">Everything below is read in your browser from HyperEVM testnet and Hyperliquid's public
       API. Where a step still rests on our word, it says so.</p>
     </section>
@@ -32,7 +37,7 @@ export async function verifyView(address, page) {
     <section class="card"><h3>3. Who holds the keys</h3>${KEYS_HELD}</section>`);
   if (!kind) {
     $("#keys", page).textContent = chain.deployed()
-      ? "This address was not created by the factory; there is nothing to check."
+      ? "This address was not created by either factory this site reads; there is nothing to check."
       : "The contracts are not deployed yet.";
     $("#fills", page).textContent = "";
     return;
@@ -40,7 +45,7 @@ export async function verifyView(address, page) {
   const account = chain.contract(kind, address);
   // Raw errors used to be pasted in here, ethers payload and all. settle() says what failed
   // in words; the section that failed is named by the box it writes into.
-  settle(keysPanel(account, address, page), $("#keys", page));
+  settle(keysPanel(account, address, page, deployment), $("#keys", page));
   settle(fillsPanel(account, address, page, kind), $("#fills", page));
 }
 
@@ -51,8 +56,8 @@ const KEYS_HELD = `
   <p class="small muted">Usenami Signer, our enclave signing service, is a separate product and takes no part
   in this demo. Its code is public in <code>namixai/signer</code>.</p>`;
 
-async function keysPanel(account, address, page) {
-  const reg = chain.registry();
+async function keysPanel(account, address, page, deployment) {
+  const reg = chain.registry(undefined, deployment);
   // Every read this panel makes on load, in one place: four from the chain, plus Hyperliquid's
   // own answer for each key it found. No event log — see app/lib/keys.js for why.
   const facts = await keyFacts({

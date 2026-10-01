@@ -5,12 +5,17 @@ import { esc, render, $, wire, badge, row, when, pct, settle } from "../lib/ui.j
 import { ruleVerdict } from "../lib/verdict.js";
 import { rulesHtml, assetNames } from "./pools.js";
 import { tradePanel, stopInputs, equityPanel } from "./trading.js";
+import { isArchive, ARCHIVE } from "../lib/deployments.js";
 
 export async function challengeView(address, page) {
-  if (!(await chain.factory().isChallenge(address))) {
-    render(page, `<section class="card"><h2>Not a challenge</h2><p>${esc(address)} was not created by this factory.</p></section>`);
+  // The live deployment or the archive: whichever factory made it.
+  const deployment = await chain.deploymentOf(address, "challenge");
+  if (!deployment) {
+    render(page, `<section class="card"><h2>Not a challenge</h2><p>${esc(address)} was not created by either factory
+      this site reads.</p></section>`);
     return;
   }
+  const archived = isArchive(deployment);
   const ch = chain.contract("challenge", address);
   const me = chain.currentAddress();
   const [status, reason, trader, pool, rules, terms, createdAt, deadline, key, payoutOwed, payoutSent, arrived, spoiled] =
@@ -32,6 +37,7 @@ export async function challengeView(address, page) {
     <section class="card">
       <h2>Challenge ${esc(chain.short(address))} ${badge(name, tone)}</h2>
       <p class="muted mono">${esc(address)}</p>
+      ${archived ? `<p class="notice">${esc(ARCHIVE.challengeNote)}</p>` : ""}
       ${row("Trader", `<span class="mono">${esc(trader)}</span>${isTrader ? " (you)" : ""}`)}
       ${row("Pool", `<a href="#/pool/${esc(pool)}">${esc(chain.short(pool))}</a>`)}
       ${row("Capital", `${chain.usd6(terms.capital)} USDC, target ${esc(target.toFixed(2))} USDC (+${pct(terms.targetBps)})`)}
@@ -62,13 +68,15 @@ export async function challengeView(address, page) {
     $("#equity", page).textContent = arrived ? "The capital has arrived. Start the challenge." : "Waiting for the capital to reach HyperCore.";
   }
 
-  if (s === 2 && isTrader) settle(tradePanel($("#trade", page), address, rules), $("#trade", page));
+  // The gateway serves the live deployment only: an archived challenge has no panel to trade from.
+  if (s === 2 && isTrader && !archived) settle(tradePanel($("#trade", page), address, rules), $("#trade", page));
   else $("#trade", page).remove();
 
   const actions = $("#actions", page);
   const buttons = [];
   if (s === 1) {
-    if (!spoiled) buttons.push(`<button id="activate">Start</button>`);
+    // Nothing new starts on the archive; abort and the stops below only end what is there.
+    if (!spoiled && !archived) buttons.push(`<button id="activate">Start</button>`);
     buttons.push(spoiled
       ? `<button id="abort">Abort and refund (the key is unusable)</button>`
       : `<button id="abort" class="secondary">Abort (capital never arrived)</button>`);

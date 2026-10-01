@@ -5,7 +5,8 @@
 export const LANDING = {
   line: "Investors open pools with rules; traders and AI agents take challenges without ever holding a key.",
   invest: { label: "I want to invest", href: "#/shared" },
-  trade: { label: "I want to trade", none: "No pool can sell a challenge right now." },
+  trade: { label: "I want to trade", none: "No investor's pool on the live deployment can sell a challenge right now: "
+    + "the list is below." },
 };
 
 /**
@@ -57,8 +58,9 @@ export function listOrder(items) {
   return [...items].sort((a, b) => group(a) - group(b) || b.index - a.index);
 }
 
-/** Where "I want to trade" goes: the first pool in the page's order that can sell a challenge, or null. */
+/** Where "I want to trade" goes: the first investor's pool of the live deployment that can sell a challenge, or
+ *  null -- then the button takes the visitor to the list, never to one of our benches or to the archive. */
 export function tradeTarget(ordered) {
-  const open = ordered.find((i) => i.kind === "pool" && !i.blocker) ?? ordered.find((i) => !i.blocker);
+  const open = ordered.find((i) => i.kind === "pool" && !i.blocker && !i.archived);
   return open ? open.address : null;
 }

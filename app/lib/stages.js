@@ -73,7 +73,12 @@ export function isFundedStage(stage) {
  * prepared, or still settling the last challenge -- while the row above named the gap. `blocker` is
  * funding.js saleBlocker's answer for the same pool, so the badge and the buy button decide from one reading.
  */
-export function poolStatus(stage, blocker) {
+export function poolStatus(stage, blocker, archived = false) {
+  // A pool of the archived deployment sells nothing whatever it holds: the gateway and the keepers serve the live one.
+  if (archived && Number(stage) === 0) {
+    return { name: "Archive", tone: "", words: "Archive: this pool belongs to the first deployment, which sells no "
+      + "challenges." };
+  }
   if (Number(stage) !== 0 || !blocker || blocker.kind === "taken") {
     return { name: stageName(stage), tone: Number(stage) === 0 ? "ok" : "", words: stageWords(stage) };
   }
