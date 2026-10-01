@@ -58,6 +58,10 @@ const NOT_CLAIMED = [
   // caught that. A phrase guard over the documents cannot tell the claim from its denial, so the
   // rule lives here, where it is exact: the page may not say it in its own voice.
   /\bunprompted\b/i, /nobody asked\b/i, /on its own initiative/i,
+  // "Arm's length" means an independent party, and there is none here: the deployment 2 trader is
+  // another AI agent of this team on a wallet we funded. The documents' own limit says so; the page
+  // claimed the opposite in a row title until 1 October 2026.
+  /arm.s[- ]length/i, /independent trader/i,
 ];
 const OUR_WORDS = [...Object.values(TEXT).flat(), ...DATA.rows.map((r) => r.what)];
 
@@ -164,7 +168,7 @@ test("every leverage stop is marked as staged, and the daily-loss stop as the on
   assert.deepEqual(two, inTable);
   const leverage = DATA.rows.filter((r) => /\bLeverage\b/.test(r.record));
   assert.equal(leverage.length, 4);
-  // The fourth was arranged with a trader at arm's length rather than staged by us, so it says so
+  // The fourth was arranged with a separate AI agent of the team rather than staged by us, so it says so
   // in its own words. What may not happen is a leverage stop that claims nobody arranged it.
   for (const r of leverage) assert.ok(r.notes.some((n) => /were staged|deliberately, by us|arranged on purpose/.test(n)), `${r.what}: says it was arranged`);
   const daily = DATA.rows.filter((r) => /DailyLoss/.test(r.record));
@@ -255,8 +259,13 @@ test("a quote cut at either end is marked, so a fragment does not pass for a sen
 test("how to check: the receipt for a transaction, userFills for fills, then the row's own calls", () => {
   const stop = DATA.rows.find((r) => /DailyLoss/.test(r.record));
   assert.deepEqual(howToCheck(stop), ["eth_getTransactionReceipt for the transaction", "status() and breachReason() on the account"]);
-  const trades = DATA.rows.find((r) => r.fills);
+  // A row whose only evidence is fills says just that. Picked by "fills and no transaction" rather
+  // than "the first row with fills": a later row gained both, and `find` would have taken it.
+  const trades = DATA.rows.find((r) => r.fills && !r.tx);
   assert.deepEqual(howToCheck(trades), [`userFills for ${trades.account} on Hyperliquid's testnet info API`]);
+  const both = DATA.rows.find((r) => r.fills && r.tx);
+  assert.deepEqual(howToCheck(both), ["eth_getTransactionReceipt for the transaction", ...both.check,
+                                      `userFills for ${both.account} on Hyperliquid's testnet info API`]);
   for (const r of DATA.rows) assert.ok(howToCheck(r).length > 0, `${r.what}: says how to check it`);
 });
 

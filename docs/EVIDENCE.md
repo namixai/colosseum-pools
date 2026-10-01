@@ -99,7 +99,18 @@ separate AI agent on the team, not an operator of this repository. We funded its
 (`0xd4f31E7234308546c822C619705F1A4B5fC8f629`) with testnet USDC and gas so it could buy a
 challenge at all, and the leverage breach was **arranged on purpose** — the agent was asked to
 break the rule so the contract would have to write down what it does. That is a staged breach by
-a trader at arm's length, not a trader we were surprised by.
+a separate AI agent of the team, not a trader we were surprised by — and not an arm's-length one
+either, which the limit further down says plainly.
+
+**How it was able to break the rule, since the gateway holds every key.** The entry was 0.00297 BTC
+at 84076, which is **249.71 USDC of notional on 70 of capital — 3.57× against a 3× rule**. The
+agent's own client would have refused it: its cap is equity × the rule × 0.8, or 168 USDC here. The
+gateway would not, because **the gateway does not check leverage at all** — it reads `rules()` for
+the daily and drawdown floors and discards the leverage field (`gateway/chain.py:117`), and the word
+does not appear in its code. Unlike `ForbiddenAsset` below, leverage has **one** enforcement layer,
+not two: the contract's `violation()` and a keeper that pulls the stop. That is a deliberate shape —
+a pre-trade check cannot stop a breach the mark creates after the order, and an equity read per
+order is the budget finding A-14 is about — but a reader should not have to infer it from silence.
 
 Read today, from the accounts themselves:
 
@@ -126,6 +137,17 @@ Transactions read back from their receipts:
 - the last settle step, `0x9b1b842beab93c2323e7150764932871b7610ca7970d941da08980628ee87d11`,
   block 65746163, sent by `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa` — a different address from
   the one that sent the stop. That step is also where the pool gave up its reserved key.
+- **The pair anyone can check, on the venue's own fills.** `userFills` for the challenge holds
+  exactly two: the entry at **13:54:54.160 UTC** (oid 61567491731, BTC buy 0.00297 at 84076) and the
+  close at **13:54:57.383** (oid 61567495468, sell 0.00297 at 84075), **3.223 seconds** apart. The
+  stop's block 65746123 carries 13:54:57, the same second as the close, so it was the keeper's stop
+  that closed it and not a resting protective order. **Read 3.223 as one draw, not a bound:** the
+  keeper polls and sleeps 30 seconds between passes, so noticing takes anywhere from nothing to a
+  cycle depending on where in it the rule broke, and this one happened to break near the start of a
+  pass. Each fill's fee is 0.112367 on 249.71 of notional — 4.50 bps, the taker rate the gateway's
+  own allowance is derived from. The two fills are
+  `0x211da471d0ba0e8a2297042aa7c611010600bc576bbd2d5cc4e64fc48fbde874` and
+  `0x29a6f21eddb279042b20042aa7c6480103000a0478b597d6cd6f9d719cb652ee`.
 - **What those two addresses are, and what is not claimed here.** Per our own host records they
   are the two keepers' wallets, the first read from `/var/lib/colosseum-keeper/secrets/keeper.addr`
   on 25 September; the chain shows only that these two addresses sent these two transactions. **We
