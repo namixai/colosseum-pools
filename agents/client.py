@@ -148,10 +148,29 @@ def session_path(wallet: str, subject: str, now: float) -> pathlib.Path:
 
 
 def load_counters(obj: Any, names: tuple[str, ...], path: pathlib.Path) -> None:
+    """Lower today's counters to what the file remembers. A name the file does not carry keeps
+    its fresh budget.
+
+    A counter added after a file was written is absent from it, and `saved[name]` made that a
+    KeyError that killed the whole command -- not just the new one. `agents/state/` still holds a
+    file from 18 September 2026 with exactly three names in it, written before `stops_left`
+    existed, so the bot's first call after a release that adds a counter would have died on its
+    own state.
+
+    Defaulting to the fresh budget is the right side to fail to, because these counters are a
+    courtesy limit on OUR OWN client, not the boundary: the gateway's caps and the contract's
+    rules are, and neither reads this file. For a per-day counter, "did not exist when this was
+    written" and "was never spent today" also give the same answer.
+
+    The same gap from the other side is not closed here and does not need to be: an OLDER client
+    running after a newer one writes only the names IT knows, dropping the new counter and
+    refilling that budget. One release runs at a time.
+    """
     if path.exists():
         saved = json.loads(path.read_text())
         for name in names:
-            setattr(obj, name, min(int(saved[name]), getattr(obj, name)))
+            if name in saved:
+                setattr(obj, name, min(int(saved[name]), getattr(obj, name)))
 
 
 def save_counters(obj: Any, names: tuple[str, ...], path: pathlib.Path) -> None:

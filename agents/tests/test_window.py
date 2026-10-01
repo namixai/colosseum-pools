@@ -93,6 +93,21 @@ class Window(unittest.TestCase):
         with self.assertRaises(dk.Refused):
             self.order()
 
+    def test_a_file_from_before_a_counter_existed_still_loads(self):
+        # The three names a client wrote before `stops_left` was added -- the exact shape of the
+        # file `agents/state/` still holds from 18 September 2026. `saved[name]` made this a
+        # KeyError that killed the command, so the bot's first call after the release would have
+        # died on its own state file. The counters the file DOES carry still bind.
+        path = cli.session_path(Wallet.address, dk.to_checksum_address(ACCOUNT), NOW)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"orders_left": 1, "cancels_left": 8, "graduations_left": 1}))
+        self.order()                       # the one order the file left
+        with self.assertRaises(dk.Refused):
+            self.order()                   # and the old name still lowers the budget
+        saved = json.loads(path.read_text())
+        self.assertEqual(saved["stops_left"], 1,
+                         "the counter the file never had starts fresh, and is written back")
+
     def test_the_per_order_cap_is_the_windows(self):
         with self.assertRaises(dk.Refused):
             self.run_cli("order", ACCOUNT, "BTC", "buy", "0.002", "60000")  # 120 USDC

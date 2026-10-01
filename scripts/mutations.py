@@ -1077,6 +1077,17 @@ MUTATIONS = [
      "        if self.stops_left <= 0:",
      "        if False:",
      ["test_stop_funded_is_the_pools_call_and_only_once_a_session"]),
+    # A counter added after a state file was written is absent from it. Indexing the saved dict
+    # made that a KeyError that killed the whole command, on a file the bot wrote itself.
+    ("A42", "agents/client.py",
+     "            if name in saved:\n                setattr(obj, name, min(int(saved[name]), getattr(obj, name)))",
+     "            setattr(obj, name, min(int(saved[name]), getattr(obj, name)))",
+     ["test_a_file_from_before_a_counter_existed_still_loads"]),
+    # The two branches of `stop_funded` a sent-path test never reaches.
+    ("A43", "agents/desk.py",
+     "        if not self.send:\n            return {\"status\": \"not_sent\", \"call\": \"stopFunded\"}",
+     "        if False:\n            return {\"status\": \"not_sent\", \"call\": \"stopFunded\"}",
+     ["test_stop_funded_signs_nothing_on_a_dry_run_and_names_the_contracts_refusal"]),
     # ── keeper (Python unittest) ──
     # The take has to clear the target by what closing costs, or a challenge the take closed
     # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.

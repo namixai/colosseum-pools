@@ -217,6 +217,19 @@ class DeskLimits(WithChain):
         with self.assertRaises(dk.Refused):
             d.stop_funded()               # and not twice in a session
 
+    def test_stop_funded_signs_nothing_on_a_dry_run_and_names_the_contracts_refusal(self):
+        # The two branches the test above never reaches. `--dry-run` must not spend the counter's
+        # only stop on a transaction nobody sent, and a revert has to come back readable -- the
+        # bot ends its own stage, so a bare selector would leave it with nothing to act on.
+        self.chain.challenge = False
+        dry = self.desk(send=False)
+        self.assertEqual(dry.stop_funded()["status"], "not_sent")
+        self.assertEqual(self.chain.sent, [], "a dry run reaches the chain not at all")
+
+        self.chain.revert = "0x" + dk.keccak(text="NotFlat()")[:4].hex()
+        self.assertEqual(self.desk().stop_funded(),
+                         {"status": "refused_by_contract", "reason": "NotFlat"})
+
     def test_account_view_keeps_the_two_shares_apart(self):
         # The fake's terms pay 0% for passing the challenge and 80% on the funded account.
         # Reading one field where the other is meant swaps these two numbers.
