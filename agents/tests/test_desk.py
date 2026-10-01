@@ -221,6 +221,24 @@ class DeskLimits(WithChain):
         self.chain.status, self.chain.recorded, self.chain.verdict = 8, 0, 1
         self.assertEqual(self.desk().account_view()["contract_verdict"], "finished with no rule broken")
 
+    def test_an_idle_pool_needs_its_cut_block_to_say_the_funded_stage_is_over(self):
+        # A funded stage that ended cleanly records `fundedEndReason` None -- byte for byte what a
+        # pool that never funded anyone records, and what the reservation a pool gives back when
+        # nobody passes its challenge leaves behind. `cutBlock` is the only thing on the pool that
+        # tells them apart, and this mirrors `pastFundedStage` in app/lib/verdict.js.
+        #
+        # This is about the WORD, not a false alarm: measured on chain the same day, a live
+        # `violation()` on an idle pool answers None, because `fundedStart` is cleared on close and
+        # `drawdownBase()` is then 0. Record 2's payout ends exactly here, so the bot reading its
+        # own pool after `stop-funded` must not be told it is merely "inside the rules".
+        self.chain.challenge = False
+        self.chain.stage, self.chain.recorded, self.chain.verdict = 0, 0, 0
+        self.chain.cut_block = 0
+        self.assertEqual(self.desk().account_view()["contract_verdict"], "inside the rules",
+                         "a pool that only ever reserved a key has not finished a funded stage")
+        self.chain.cut_block = 65746163
+        self.assertEqual(self.desk().account_view()["contract_verdict"], "finished with no rule broken")
+
     def test_stop_funded_is_the_pools_call_and_only_once_a_session(self):
         # `Pool.stopFunded` lets the owner OR the funded trader end the stage without a breach, so
         # the bot can do its own; on a challenge there is no such call.

@@ -140,7 +140,24 @@ class Desk:
         # trading with none recorded says so; only a live account gets a live reading.
         number = view(self.account, "status()" if self.is_challenge else "stage()", "uint8")
         recorded = view(self.account, "breachReason()" if self.is_challenge else "fundedEndReason()", "uint8")
-        finished = number > 2 if self.is_challenge else number == 3   # past Active / Closing
+        # A challenge past Active has finished. A pool needs `cutBlock` as well as the stage: a
+        # funded stage that ended CLEANLY records `fundedEndReason` None, which is byte for byte
+        # what a pool that never funded anyone records -- and the reservation a pool gives back when
+        # nobody passes its challenge is exactly that (`Pool.sol` retires the spare key without
+        # going through `_cutAgent`, the only writer of `cutBlock`, `RuledAccount.sol:169-178`).
+        # So Idle with a cut block is a funded stage that is over; Idle without one never had one.
+        # `app/lib/verdict.js:pastFundedStage` is where this rule already lived; this is the same
+        # rule, not a second one.
+        #
+        # Measured on 1 October 2026, against the review bot's reading: a live `violation()` on an
+        # idle POOL answers None, not Drawdown, because `fundedStart` is cleared on close and
+        # `drawdownBase()` is then 0. So what this fixes is the WORD -- a pool that finished
+        # cleanly was called "inside the rules" instead of finished -- and not a false alarm. The
+        # Drawdown trap is the challenge's, whose drawdown base stays at its starting capital.
+        if self.is_challenge:
+            finished = number > 2
+        else:
+            finished = number == 3 or (number == 0 and view(self.account, "cutBlock()", "uint64") > 0)
         if recorded:
             said = f"stopped for {BREACH[recorded]} — what the contract recorded"
         elif finished:

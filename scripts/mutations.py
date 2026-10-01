@@ -1088,6 +1088,17 @@ MUTATIONS = [
      "        raise RuntimeError(str(exc)) from exc",
      ["test_a_revert_at_the_gas_estimate_never_left",
       "test_a_read_before_the_estimate_never_left_either"]),
+    # A pool's cut block is the only state that separates a funded stage that ended cleanly from a
+    # reservation given back. Both mutations below are the two wrong answers: the old stage-only
+    # rule, and the wider one that calls an idle pool finished whatever it ever did.
+    ("A45", "agents/desk.py",
+     '            finished = number == 3 or (number == 0 and view(self.account, "cutBlock()", "uint64") > 0)',
+     "            finished = number == 3",
+     ["test_an_idle_pool_needs_its_cut_block_to_say_the_funded_stage_is_over"]),
+    ("A46", "agents/desk.py",
+     '            finished = number == 3 or (number == 0 and view(self.account, "cutBlock()", "uint64") > 0)',
+     "            finished = number != 2",
+     ["test_an_idle_pool_needs_its_cut_block_to_say_the_funded_stage_is_over"]),
     ("A44", "agents/desk.py",
      "        except c.NotSent as exc:\n            self._refund(counter)",
      "        except Exception as exc:\n            self._refund(counter)",

@@ -53,6 +53,9 @@ class FakeChain:
         self.sent: list[tuple[str, str, list]] = []
         self.revert: str | None = None            # refused at the gas estimate: never broadcast
         self.revert_after_send = False             # broadcast, then reverted on chain
+        # A pool keeps the block where it cut the funded trader's key. 0 means it never funded
+        # anyone -- which is also what a released reservation leaves behind.
+        self.cut_block = 0
         self.allowance = 0
         self.fee = 0
         self.pools = {
@@ -76,7 +79,8 @@ class FakeChain:
                     "terms": (self.terms,), "rules": (self.rules,), "capitalNeeded": (NEEDED,)}[name]
         return {"rules": (self.rules,), "terms": (self.terms,), "violation": (self.verdict,),
                 "status": (self.status,), "stage": (self.stage,), "breachReason": (self.recorded,),
-                "fundedEndReason": (self.recorded,), "drawdownBase": (1_000_000_000,),
+                "fundedEndReason": (self.recorded,), "cutBlock": (self.cut_block,),
+                "drawdownBase": (1_000_000_000,),
                 "dayStartEquity": (990_000_000,), "deadline": (NOW + 36 * 3600,)}[name]
 
     def core_spot_balance(self, user, token):
