@@ -90,6 +90,49 @@
     },
     {
       "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2, and the first run where the trader was not us",
+      "what": "A second-deployment challenge traded into a leverage breach on purpose, and stopped by a keeper",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0xBA0c90BB481D6CAd2534AE3885d1CC9B9C30dB54",
+      "tx": "0x1804fa06b93c9cb9332925d3f0c9dc10419894bb3adc8d9b0422959229931aac",
+      "fills": ["0x211da471d0ba0e8a2297042aa7c611010600bc576bbd2d5cc4e64fc48fbde874", "0x29a6f21eddb279042b20042aa7c6480103000a0478b597d6cd6f9d719cb652ee"],
+      "block": 65746123,
+      "sentBy": "0xD6F07317fC5f12302776b03A7206B1614FD49021",
+      "record": "status 8 Settled, breachReason 3 Leverage, capital 70 returned, spot 0, key 0xeA688990 cut at block 65746123",
+      "check": ["status() and breachReason() on the account", "bindingOf(key) on the registry, for the key the record names"],
+      "notes": [
+        "the trader was a separate AI agent on the team, not an operator of this repository",
+        "the leverage breach was arranged on purpose \u2014 the agent was asked to break the rule so the contract would have to write down what it does"
+      ],
+      "sources": [
+        "| 0xBA0c90BB481D6CAd2534AE3885d1CC9B9C30dB54 | challenge | status 8 Settled, breachReason 3 Leverage, capital 70 returned, spot 0, key 0xeA688990 cut at block 65746123 |",
+        "- the stop, 0x1804fa06b93c9cb9332925d3f0c9dc10419894bb3adc8d9b0422959229931aac, block 65746123, sent by 0xD6F07317fC5f12302776b03A7206B1614FD49021. The event is Stopped(status 3 Breached, reason 3 Leverage, equity 69.884663), and the same transaction cut the challenge's key. Note the equity: against capital 70 the account was down 0.115337 \u2014 it was stopped for leverage with the balance all but untouched, which is what a staged leverage breach looks like from the chain.",
+        "- The pair anyone can check, on the venue's own fills. userFills for the challenge holds exactly two: the entry at 13:54:54.160 UTC (oid 61567491731, BTC buy 0.00297 at 84076) and the close at 13:54:57.383 (oid 61567495468, sell 0.00297 at 84075), 3.223 seconds apart. The stop's block 65746123 carries 13:54:57, the same second as the close. What that fixes is the order, not the mechanism. The equity the stop recorded is 69.884663, which is capital 70 less the entry fee 0.112367 and the 0.00297 the position was down \u2014 the account with one fee paid and the position still OPEN. So the close came after the stop was written down. Which order filled it we did not establish: the keeper's journal would say and we did not read it, and HyperCore runs a CoreWriter action a few seconds after the EVM block, so a fill 0.383 s past that block is not on its own the stop's own close. Read 3.223 as one draw, not a bound: the keeper polls and sleeps 30 seconds between passes, so noticing takes anywhere from nothing to a cycle depending on where in it the rule broke, and this one happened to break near the start of a pass. Each fill's fee is 0.112367 on 249.71 of notional \u2014 4.50 bps, the taker rate the gateway's own allowance is derived from. The two fills are 0x211da471d0ba0e8a2297042aa7c611010600bc576bbd2d5cc4e64fc48fbde874 and 0x29a6f21eddb279042b20042aa7c6480103000a0478b597d6cd6f9d719cb652ee."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2, and the first run where the trader was not us",
+      "what": "A reserved key given back, which is not a funded stage",
+      "kind": "pool",
+      "factory": "demo2",
+      "account": "0x237afA2D58B1612e19D47152FfB2E771c05Fe96D",
+      "tx": "0x9b1b842beab93c2323e7150764932871b7610ca7970d941da08980628ee87d11",
+      "block": 65746163,
+      "sentBy": "0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa",
+      "record": "stage Idle, fundedEndReason None \u2014 the reservation case, not a funded stage: key 0x99A4Ec10 released at block 65746163",
+      "check": ["stage() and fundedEndReason() on the pool", "cutBlock() on the pool: 0 means no funded stage ever started"],
+      "notes": [
+        "One field does tell them apart, and we had it the whole time: cutBlock. A pool records the block where it cut the funded trader's key, and keeps it after the capital has come home. Only _cutAgent writes it (src/RuledAccount.sol:169-178), and Pool.onChallengeSettled retires a *reserved* key without going through that \u2014 so Idle with a cut block is a funded stage that is over, and Idle without one never had one. This pool answers cutBlock() 0."
+      ],
+      "sources": [
+        "| 0x237afA2D58B1612e19D47152FfB2E771c05Fe96D | pool | stage Idle, fundedEndReason None \u2014 the reservation case, not a funded stage: key 0x99A4Ec10 released at block 65746163 |",
+        "- the last settle step, 0x9b1b842beab93c2323e7150764932871b7610ca7970d941da08980628ee87d11, block 65746163, sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa \u2014 a different address from the one that sent the stop. That step is also where the pool gave up its reserved key."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
       "section": "What is staged, and what is not",
       "what": "The keeper on the pools host returned capital left in a passed challenge",
       "kind": null,
@@ -471,11 +514,12 @@
     "quotes": [
       "The state transitions and the records above are real.",
       "Two of the stops were deliberate, one was not.",
-      "The orders were placed by a person, through the gateway, not by an autonomous trading agent.",
+      "On the first deployment the orders were placed by a person, through the gateway, not by an autonomous trading agent. Where a demo said \"AI agent\", read \"a program holding a wallet that signs gateway requests\" \u2014 that part was built, and those trades were driven by hand.",
+      "On the second deployment that is no longer the case, and the record says which. The challenge in the deployment 2 section was bought and traded by another AI agent of this team, holding its own wallet, through the same gateway: the purchase transaction was sent by that wallet, not by us. What it is not is evidence the program trades well \u2014 it was asked to break the leverage rule, and that is what it did. A trader passing a challenge on its own is still not here.",
       "Two of the three pools above are benches with soft targets.",
       "The third is not a bench, and neither are its terms.",
       "Every wallet here is ours.",
-      "Three of them: the deploy key that owns the two benches (0x00d014df…), the trader (0xdc87191c…), and the one that opened the demo pool, which is named here only as that: the first two belong to the project and the third belongs to a person, and a short address is still an address.",
+      "Four of them: the deploy key that owns the two benches (0x00d014df\u2026), the trader (0xdc87191c\u2026), the one that opened the demo pool, which is named here only as that, and the deployment 2 trader (0xd4f31E7234308546c822C619705F1A4B5fC8f629) \u2014 another AI agent of this team, whose testnet USDC and gas we sent it, not an outside party.",
       "The mechanism is what the chain proves; an arm's-length trader is not.",
       "The keeper's two addresses are ours as well, and the only actor here that decided anything without being told.",
       "The money is testnet money and the USDC is mock."
