@@ -1035,8 +1035,7 @@ MUTATIONS = [
     ("A35", "agents/desk.py",
      '        if isinstance(answer, dict) and answer.get("status") == "busy":',
      "        if False:",
-     ["test_a_busy_refusal_gives_the_attempt_back",
-      "test_a_graduation_refused_before_it_was_sent_keeps_the_attempt", "test_cancels_are_counted_the_same_way"]),
+     ["test_a_busy_refusal_gives_the_attempt_back", "test_cancels_are_counted_the_same_way"]),
     ("A36", "agents/desk.py",
      '        if isinstance(answer, dict) and answer.get("status") == "busy":',
      '        if isinstance(answer, dict) and answer.get("status") != "submitted":',
@@ -1048,7 +1047,9 @@ MUTATIONS = [
     ("A38", "agents/desk.py",
      '        setattr(self, counter, getattr(self, counter) + 1)',
      "        pass",
-     ["test_a_busy_refusal_gives_the_attempt_back"]),
+     ["test_a_busy_refusal_gives_the_attempt_back",
+      "test_a_graduation_refused_before_it_was_sent_keeps_the_attempt",
+      "test_the_only_stop_survives_a_refusal_that_never_left_and_not_one_that_did"]),
     ("A33", "agents/desk.py",
      '                "trader_share_of_challenge_profit_pct": ch_share_bps / 100,\n'
      '                "trader_share_of_funded_profit_pct": funded_share_bps / 100,\n'
