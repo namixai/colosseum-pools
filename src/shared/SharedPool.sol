@@ -100,9 +100,9 @@ contract SharedPool {
     uint16 public immutable feeBps;
 
     uint256 public totalShares;
-    /// Set the first time a deposit from outside becomes shares. From then on the set of seats
-    /// is fixed: holders put money into the pool they could read, and that is the pool they get.
-    bool public depositsBegun;
+    /// The operator says when the book of seats is finished. Until then nobody can open a
+    /// deposit ticket; afterwards nobody can add a seat. It never goes back.
+    bool public seatsSealed;
     mapping(address holder => uint256) public sharesOf;
     uint256 public seedValue;
     uint256 public seedShares;
@@ -147,6 +147,7 @@ contract SharedPool {
     uint64 public lastPoint;
 
     event Started(address indexed platform, uint256 seed);
+    event SeatsSealed(uint256 seats);
     event SeatAdded(address indexed seat, uint256 capitalNeeded, uint32 fundedTerm);
     event SeatArmed(address indexed seat, uint64 amount);
     event SeatReleased(address indexed seat, uint64 amount);
@@ -168,6 +169,9 @@ contract SharedPool {
     error SeedTooSmall(uint256 seedValue, uint256 planCapital);
     error TooMany();
     error SeatsClosed();
+    error SeatsNotSealed();
+    error AlreadySealed();
+    error NoSeats();
     error NotSeat(address seat);
     error SeatBusy(address seat);
     error TooSoon(address seat);
@@ -240,25 +244,31 @@ contract SharedPool {
     /// @notice Publishes a seat: a new pool owned by this contract, with the platform's rules and terms,
     ///         and how long a funded stage may run on it. The starting shares must stay worth at least
     ///         `SEED_BPS` of the whole seat plan.
+    /// @notice Finishes the book of seats. From here nobody can add one and anybody can deposit.
+    /// @dev    One way only, and it needs at least one seat: a pool sealed empty could never take
+    ///         a deposit worth anything and could never be given a seat either, which is the same
+    ///         dead end A-13 described, reached by the operator's own hand instead of a stranger's.
+    function seal() external onlyOperator started {
+        if (seatsSealed) revert AlreadySealed();
+        if (_seats.length == 0) revert NoSeats();
+        seatsSealed = true;
+        emit SeatsSealed(_seats.length);
+    }
+
     function addSeat(Rules calldata rules_, Terms calldata terms_, uint32 fundedTerm_)
         external
         onlyOperator
         started
         returns (address seat)
     {
-        // Audit A-06. This contract's own header and docs/SHARED-POOL.md both promise that the
-        // seats, their rules and their terms are published BEFORE anyone deposits, and nothing
-        // used to hold the operator to it. A seat added afterwards -- 99.99% drawdown, 50x
-        // leverage, the whole profit to the trader -- would take holders' money the next time
-        // anyone armed a seat, and they cannot leave quickly: only a queue, a lock and
-        // settlement points. So the promise is now the rule.
-        // Closed at the first OPEN TICKET, not at the first recognised deposit. A depositor pays
-        // into a ticket and the shares are minted later, at a settlement point; a seat added in
-        // between would be one they never saw when they paid, which is the thing this promise is
-        // about. Nobody can pay into a ticket that does not exist, so "no tickets open" is the
-        // honest reading of "before anyone deposits". Raised on review of the first version,
-        // which closed one step too late.
-        if (depositsBegun || _open.length != 0) revert SeatsClosed();
+        // The seats, their rules and their terms are published before anyone deposits -- this
+        // contract's header and docs/SHARED-POOL.md both say so, and now the code makes it an
+        // order the operator sets rather than a race. The first version of this rule closed the
+        // door when a deposit was RECOGNISED, which is after the money went in; the second closed
+        // it at the first open ticket, which anyone could trigger by opening an empty one and
+        // never paying -- a stranger could freeze a pool at zero seats for the price of gas, and
+        // an empty ticket never leaves the open list, so it stayed frozen. Audit A-06, A-13.
+        if (seatsSealed) revert SeatsClosed();
         if (_seats.length >= MAX_SEATS) revert TooMany();
         if (fundedTerm_ == 0) revert BadTerm();
         seat = factory.createPool(rules_, terms_);
@@ -386,6 +396,10 @@ contract SharedPool {
     ///         settlement point that names it turns what it holds into shares. The first transfer to
     ///         the address creates its HyperCore account, which HyperCore charges the sender 1 USDC for.
     function openTicket() external started returns (address ticket) {
+        // Nobody deposits until the seats are published. Before A-13 this was the other way
+        // round -- the first ticket closed the seats -- which let anybody decide when the
+        // operator had finished.
+        if (!seatsSealed) revert SeatsNotSealed();
         uint256 n = ticketCount[msg.sender]++;
         ticket = Clones.cloneDeterministic(ticketImpl, _salt(msg.sender, n));
         DepositTicket(ticket).init(msg.sender);
@@ -434,7 +448,6 @@ contract SharedPool {
             _mint(tk.depositor, minted);
             basis[tk.depositor] += amount;
             lastDeposit[tk.depositor] = uint64(block.timestamp);
-            depositsBegun = true;
             emit DepositRecognized(tk.depositor, t, amount, minted);
         }
         _sweepClosed();

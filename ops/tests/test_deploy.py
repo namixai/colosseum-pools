@@ -57,14 +57,93 @@ class Provenance(unittest.TestCase):
             self.head(status=" M lib/hyper-evm-lib\n")
 
 
+ZERO = "0x" + "00" * 20
 KEY_A = "0x00000000000000000000000000000000000000a1"
 KEY_B = "0x00000000000000000000000000000000000000b2"
 
 
 class Keys(unittest.TestCase):
-    def check(self, lines, on_core=()):
-        with mock.patch.object(deploy.c, "core_user_exists", side_effect=lambda a: a.lower() in on_core):
-            return deploy.check_keys(lines)
+    REGISTRY = "0x00000000000000000000000000000000000000e0"
+
+    def setUp(self):
+        # An empty records directory by default, so these tests say nothing about whatever
+        # deployments this checkout happens to carry.
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.records = pathlib.Path(self.tmp.name)
+        self.asked: list[tuple[str, str]] = []
+
+    def record(self, label: str, **fields) -> None:
+        (self.records / f"testnet-{label}.json").write_text(json.dumps(fields))
+
+    def check(self, lines, on_core=(), known=(), records=None, registry_fails=False, only=None):
+        held = {deploy.to_checksum_address(k) for k in known}
+        only_at = deploy.to_checksum_address(only) if only else None
+
+        def call_view(to, sig, types, args, out):
+            self.asked.append((to, args[0]))
+            if registry_fails:
+                raise RuntimeError("429 Too Many Requests")
+            hit = deploy.to_checksum_address(args[0]) in held and only_at in (None, to)
+            return ((2 if hit else 0, ZERO, ZERO),)
+
+        with mock.patch.object(deploy.c, "core_user_exists", side_effect=lambda a: a.lower() in on_core), \
+             mock.patch.object(deploy.c, "call_view", side_effect=call_view):
+            return deploy.check_keys(lines, self.records if records is None else records)
+
+    def test_a_key_a_live_registry_already_holds_is_refused(self):
+        # The case no other check here can see. A spare key has no HyperCore account -- that is
+        # what makes it spare -- so it passes every rule `publish` has. Publishing it again leaves
+        # one address in two registries, which is one key two accounts can each take as an agent.
+        self.record("demo", KeyRegistry=self.REGISTRY)
+        self.assertEqual(self.check([KEY_B]), [deploy.to_checksum_address(KEY_B)])
+        with self.assertRaises(SystemExit) as caught:
+            self.check([KEY_B, KEY_A], known={KEY_A})
+        self.assertIn(self.REGISTRY, str(caught.exception).lower())
+        self.assertIn("testnet-demo.json", str(caught.exception))
+
+    def test_the_records_supply_the_registries_and_the_chain_supplies_the_answer(self):
+        # Keys reach a live registry long after the deployment that made it -- by hand, from the
+        # host -- and no record names them. Reading `published_keys` would have passed exactly
+        # the keys this exists to catch.
+        self.record("demo", KeyRegistry=self.REGISTRY, published_keys=[])
+        with self.assertRaises(SystemExit):
+            self.check([KEY_A], known={KEY_A})
+        self.assertEqual(self.asked, [(deploy.to_checksum_address(self.REGISTRY),
+                                       deploy.to_checksum_address(KEY_A))])
+
+    def test_a_registry_that_will_not_answer_is_not_an_all_clear(self):
+        self.record("demo", KeyRegistry=self.REGISTRY)
+        with self.assertRaises(SystemExit) as caught:
+            self.check([KEY_A], registry_fails=True)
+        self.assertIn("could not ask", str(caught.exception))
+
+    def test_a_key_is_accepted_only_after_every_registry_has_been_asked(self):
+        # A hit stops the run at the registry that has it, so the thing worth pinning is the other
+        # way round: a key that came back clean came back clean from all of them.
+        other = "0x00000000000000000000000000000000000000e1"
+        self.record("demo", KeyRegistry=self.REGISTRY)
+        self.record("rehearsal", KeyRegistry=other)
+
+        self.assertEqual(self.check([KEY_A]), [deploy.to_checksum_address(KEY_A)])
+        self.assertEqual(sorted(to for to, _ in self.asked),
+                         sorted(deploy.to_checksum_address(r) for r in (self.REGISTRY, other)))
+
+        with self.assertRaises(SystemExit) as caught:  # known only to the second one
+            self.check([KEY_A], known={KEY_A}, only=other)
+        self.assertIn("testnet-rehearsal.json", str(caught.exception))
+
+    def test_records_it_cannot_read_stop_it_instead_of_being_skipped(self):
+        (self.records / "testnet-broken.json").write_text("{not json")
+        with self.assertRaises(SystemExit):
+            self.check([KEY_B])
+
+    def test_a_missing_records_directory_reads_as_no_records(self):
+        # It cannot be told from an empty one, and neither can be told from a wrong path, so this
+        # does not pretend to: what the run prints is how many registries it consulted, and nobody
+        # is protected by a refusal that fires on the first deployment there has ever been.
+        self.assertEqual(self.check([KEY_B], records=self.records / "not-there"),
+                         [deploy.to_checksum_address(KEY_B)])
 
     def test_the_registry_rules_are_checked_before_anything_is_deployed(self):
         self.assertEqual(self.check(["# demo agent keys", "", KEY_A, f"  {KEY_B}  "]),

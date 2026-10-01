@@ -148,10 +148,19 @@ contract SharedPoolTest is Test {
     Pool internal pending;
     Pool internal pending2;
 
-    function _funded(uint64 deposit) internal {
-        _start(SEED);
+    /// Start, put one seat in, finish the book. Since A-13 a ticket cannot be opened before the
+    /// seats are sealed, so any test that deposits has to go through this order -- which is the
+    /// order a real operator now follows too.
+    function _openForDeposits(uint64 seed) internal {
+        _start(seed);
         vm.prank(operator);
         pending = Pool(sp.addSeat(_rules(), _terms(), TERM));
+        vm.prank(operator);
+        sp.seal();
+    }
+
+    function _funded(uint64 deposit) internal {
+        _openForDeposits(SEED);
         address t = _ticket(alice, deposit);
         sp.settle(_list(t));
         CoreSimulatorLib.nextBlock();
@@ -349,7 +358,7 @@ contract SharedPoolTest is Test {
     // ── tickets ──────────────────────────────────────────────────────────────────────
 
     function test_ticket_isKnownBeforehand_andPaysOnlyIntoItsPool() public {
-        _start(SEED);
+        _openForDeposits(SEED);
         address predicted = sp.ticketAddress(alice, 0);
         vm.prank(alice);
         address t = sp.openTicket();
@@ -378,7 +387,7 @@ contract SharedPoolTest is Test {
     /// The pool has made 50% (value 15 on 10 shares). Alice's 20 and Bob's 30 come in at 1.5 both,
     /// priced at the value without them, and the price of a share doesn't move.
     function test_settle_pricesDepositsAtTheValueWithoutThem_allAtOnePrice() public {
-        _start(SEED);
+        _openForDeposits(SEED);
         address ta = _ticket(alice, 20e8);
         address tb = _ticket(bob, 30e8);
         CoreSimulatorLib.forceSpotBalance(address(sp), 0, 15e8);
@@ -397,7 +406,7 @@ contract SharedPoolTest is Test {
     }
 
     function test_settle_takesATicketOnlyFromTheMinimum() public {
-        _start(SEED);
+        _openForDeposits(SEED);
         address t = _ticket(alice, MIN - 1);
         sp.settle(_list(t));
         assertEq(sp.sharesOf(alice), 0, "below the minimum");
@@ -410,7 +419,7 @@ contract SharedPoolTest is Test {
     }
 
     function test_ticketIsRecognizedOnce() public {
-        _start(SEED);
+        _openForDeposits(SEED);
         address t = _ticket(alice, MIN);
         sp.settle(_list(t));
         uint256 minted = sp.sharesOf(alice);
@@ -421,7 +430,7 @@ contract SharedPoolTest is Test {
     }
 
     function test_closedTicket_countsUntilItsMoneyLands_thenIsForgotten() public {
-        _start(SEED);
+        _openForDeposits(SEED);
         address t = _ticket(alice, MIN);
         sp.settle(_list(t));
         assertEq(sp.closedTickets().length, 1);
@@ -487,7 +496,7 @@ contract SharedPoolTest is Test {
     }
 
     function test_settle_isOpenToAnyone() public {
-        _start(SEED);
+        _openForDeposits(SEED);
         address t = _ticket(alice, MIN);
         vm.prank(stranger);
         sp.settle(_list(t));
@@ -707,7 +716,7 @@ contract SharedPoolTest is Test {
 
     function test_requestRedeem_onlyFreeShares_afterTheLock_neverTheSeed() public {
         vm.warp(10 days); // a clock well past the lock, so a deposit time of zero would not pass for one
-        _start(SEED);
+        _openForDeposits(SEED);
         address t = _ticket(alice, MIN);
         uint64 at = uint64(block.timestamp);
         sp.settle(_list(t));
@@ -832,9 +841,7 @@ contract SharedPoolTest is Test {
     function test_settle_paysEveryRequestTheSameFraction_whenMoneyIsShort() public {
         CoreSimulatorLib.forceAccountActivation(alice);
         CoreSimulatorLib.forceAccountActivation(bob);
-        _start(SEED);
-        vm.prank(operator); // the seat goes in before the deposits, as A-06 now requires
-        pending = Pool(sp.addSeat(_rules(), _terms(), TERM));
+        _openForDeposits(SEED);
         address ta = _ticket(alice, 60e8);
         address tb = _ticket(bob, 60e8);
         sp.settle(_list(ta, tb));
@@ -1043,22 +1050,51 @@ contract SharedPoolTest is Test {
     /// to it. A seat added afterwards -- near-total drawdown allowed, fifty times leverage, the
     /// whole profit to the trader -- takes holders' money the next time anyone arms a seat, and
     /// they cannot leave quickly: only a queue, a lock and settlement points.
-    /// Raised on review of the first version of this rule, and it was right: shares are minted at
-    /// a settlement point, but the money goes into a ticket before that. A seat added in between
-    /// would be one the depositor never saw when they paid. Nobody can pay into a ticket that does
-    /// not exist, so an open ticket is where the door has to close.
-    function test_addSeat_isRefusedOnceATicketIsOpen_beforeAnySettlement() public {
+    /// Audit A-13, inverted: their version asserts the freeze and is green on the commit before
+    /// this one. A stranger used to be able to call openTicket the moment a pool started, pay
+    /// nothing into it, and close the seat set for ever — an empty ticket never leaves the open
+    /// list, so the pool sat at however many seats had been added, possibly none, with the
+    /// platform's seed locked inside it. It cost them gas and it worked on every new pool.
+    /// Now nobody can open a ticket until the operator says the book is finished.
+    function test_aStrangersEmptyTicket_cannotFreezeTheSeatSet() public {
         _start(SEED);
-        vm.prank(alice);
-        sp.openTicket();
-        assertFalse(sp.depositsBegun(), "nothing has been recognised yet");
 
+        vm.prank(stranger);
+        vm.expectRevert(SharedPool.SeatsNotSealed.selector);
+        sp.openTicket();
+
+        // The operator finishes the book in their own time, and only then can anyone deposit.
         vm.prank(operator);
-        vm.expectRevert(SharedPool.SeatsClosed.selector);
-        sp.addSeat(_rules(), _terms(), TERM);
+        Pool seat = Pool(sp.addSeat(_rules(), _terms(), TERM));
+        vm.prank(operator);
+        sp.seal();
+        assertEq(sp.seats().length, 1, "a seat, added without anybody racing for it");
+
+        vm.prank(stranger);
+        sp.openTicket();
+        assertEq(sp.openTicketCount(), 1);
+        seat;
     }
 
-    function test_addSeat_isRefusedOnceAnyoneHasDeposited() public {
+    /// The same dead end reached by the operator's own hand: a pool sealed with no seats could
+    /// never take a useful deposit and could never be given a seat either, and nothing undoes a
+    /// seal. Refused rather than left to be discovered.
+    function test_seal_refusesAnEmptyBook_andHappensOnlyOnce() public {
+        _start(SEED);
+        vm.prank(operator);
+        vm.expectRevert(SharedPool.NoSeats.selector);
+        sp.seal();
+
+        vm.prank(operator);
+        sp.addSeat(_rules(), _terms(), TERM);
+        vm.prank(operator);
+        sp.seal();
+        vm.prank(operator);
+        vm.expectRevert(SharedPool.AlreadySealed.selector);
+        sp.seal();
+    }
+
+    function test_addSeat_isRefusedOnceTheBookIsSealed() public {
         _funded(150e8);
         Rules memory hostile = _rules();
         hostile.maxDrawdownBps = 9999;
@@ -1075,7 +1111,7 @@ contract SharedPoolTest is Test {
         vm.prank(operator);
         vm.expectRevert(SharedPool.SeatsClosed.selector);
         sp.addSeat(_rules(), _terms(), TERM);
-        assertTrue(sp.depositsBegun(), "the door closed when the first deposit became shares");
+        assertTrue(sp.seatsSealed(), "the book was finished before anyone could deposit");
     }
 
     function test_addSeat_needsAFundedTerm() public {
