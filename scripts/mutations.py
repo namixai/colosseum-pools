@@ -1065,6 +1065,26 @@ MUTATIONS = [
      '                "passes_when":',
      ["test_account_view_keeps_the_two_shares_apart"]),
     # ── keeper (Python unittest) ──
+    # The take has to clear the target by what closing costs, or a challenge the take closed
+    # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.
+    ("PG48", "gateway/protect.py",
+     "CLOSE_COST_BPS = Decimal(10)",
+     "CLOSE_COST_BPS = Decimal(0)",
+     ["test_the_account_is_above_the_target_once_the_close_is_paid",
+      "test_the_take_clears_the_target_by_what_closing_costs"]),
+    ("PG49", "gateway/protect.py",
+     "            return target - equity + notional * CLOSE_COST_BPS / BPS",
+     "            return target - equity",
+     ["test_the_account_is_above_the_target_once_the_close_is_paid"]),
+    ("PG50", "gateway/protect.py",
+     "        room = min(max(limits.gain_room(equity, notional), Decimal(0)), cap)",
+     "        room = min(max(limits.gain_room(equity), Decimal(0)), cap)",
+     ["test_the_account_is_above_the_target_once_the_close_is_paid"]),
+    # Rounding the take back towards the mark eats a tick of exactly that allowance.
+    ("PG51", "gateway/protect.py",
+     "                    take = max(valid_px(_moved(m.mark, notional, room), m.sz_decimals, ROUND_CEILING),",
+     "                    take = max(valid_px(_moved(m.mark, notional, room), m.sz_decimals, ROUND_FLOOR),",
+     ["test_the_challenge_take_clears_the_pass_target_by_what_closing_costs"]),
     # A-14: the contract is asked first, because its rules cost nothing at the venue.
     ("K67", "ops/keeper.py",
      'reason = view(account, "violation(uint32[])", "uint8", ["uint32[]"], [[]])',
@@ -2061,10 +2081,12 @@ MUTATIONS = [
      "            floor = min(floor, Decimal(self.day_start_equity) * (BPS - self.daily_loss_bps) / BPS / USD)",
      ["test_a_stop_sits_where_equity_reaches_the_nearest_rule",
       "test_the_drawdown_floor_binds_when_it_is_the_higher_one"]),
+    # Перенацелена 01.10: ветка челленджа в gain_room переписана (цель плюс стоимость закрытия),
+    # утверждение то же — у челленджа и у funded-стадии разные правила.
     ("PG2", "gateway/protect.py",
-     "        if self.challenge:\n            return Decimal(self.drawdown_base) * (BPS + self.target_bps) / BPS / USD - equity",
-     "        if False:\n            return Decimal(self.drawdown_base) * (BPS + self.target_bps) / BPS / USD - equity",
-     ["test_the_challenge_take_is_the_pass_target",
+     "        if self.challenge:\n            target = Decimal(self.drawdown_base)",
+     "        if False:\n            target = Decimal(self.drawdown_base)",
+     ["test_the_challenge_take_clears_the_pass_target_by_what_closing_costs",
       "test_the_funded_take_is_one_target_from_the_equity_it_has",
       "test_a_challenge_that_met_its_target_opens_nothing_more"]),
     ("PG3", "gateway/protect.py",

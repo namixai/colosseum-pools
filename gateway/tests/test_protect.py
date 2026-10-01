@@ -31,6 +31,7 @@ MARKETS = {SOL: Market("SOL", Decimal("150"), 2), BTC: Market("BTC", Decimal("60
            ETH: Market("ETH", Decimal("3000"), 4)}
 DAY = 20_833  # the UTC day NOW (in ms) falls on
 USDC = 1_000_000
+BPS_I = 10_000
 
 
 def funded(equity_at_start=1000, day_start=1000, day=DAY) -> RuleLimits:
@@ -76,15 +77,19 @@ class Lines(unittest.TestCase):
         loss = Decimal("0.01") * (60000 - got[(BTC, LONG)].stop) + Decimal("0.1") * (3000 - got[(ETH, LONG)].stop)
         self.assertEqual(loss, 30)
 
-    def test_the_challenge_take_is_the_pass_target(self):
+    def test_the_challenge_take_clears_the_pass_target_by_what_closing_costs(self):
         # 3 USDC, 8% target -> 3.24; 0.0042 ETH at 2600 is 10.92 of notional. At 3.05 of equity
-        # the day's floor 2.91 leaves 0.14 to lose and 0.19 to gain (a funded stage would allow
-        # 0.244). The stop rounds up and the take down: both towards the mark.
+        # the day's floor 2.91 leaves 0.14 to lose and 0.19 to gain. The room then adds 10 bps of
+        # the notional -- 0.01092 -- because the take is a MARKET trigger and the account has to
+        # be at or above the target AFTER paying to close. The stop still rounds towards the mark;
+        # the take now rounds away from it, so a tick does not eat that allowance.
         markets = {ETH: Market("ETH", Decimal("2600"), 4)}
         got = lines(challenge(), Decimal("3.05"), long(ETH, "0.0042"), markets)[(ETH, LONG)]
-        self.assertEqual((got.stop, got.take), (Decimal("2566.7"), Decimal("2645.2")))
+        self.assertEqual((got.stop, got.take), (Decimal("2566.7"), Decimal("2647.9")))
         self.assertLessEqual(Decimal("0.0042") * (2600 - got.stop), Decimal("0.14"))
-        self.assertLessEqual(Decimal("3.05") + Decimal("0.0042") * (got.take - 2600), Decimal("3.24"))
+        at_take = Decimal("3.05") + Decimal("0.0042") * (got.take - 2600)
+        self.assertGreater(at_take, Decimal("3.24"), "a take at the target would pass nothing")
+        self.assertLess(at_take - Decimal("3.24"), Decimal("0.02"), "and not by more than the fee and a tick")
         # At the start, flat at 3: 0.09 to lose.
         got = lines(challenge(), Decimal(3), long(ETH, "0.0042"), markets)[(ETH, LONG)]
         self.assertEqual(got.stop, Decimal("2578.6"))
@@ -106,7 +111,7 @@ class Lines(unittest.TestCase):
         got = lines(funded(), Decimal(1000), exposure(book, Extra(BTC, True, Decimal("0.004"))), MARKETS)
         self.assertEqual(got[(BTC, LONG)].stop, Decimal("57000"))
 
-    def test_rounding_never_loosens_a_stop_or_puts_a_take_past_the_target(self):
+    def test_rounding_never_loosens_a_stop_and_costs_a_take_at_most_a_tick(self):
         cases = [(mark, sz) for mark in ("1.23456", "12.3456", "123.456", "1234.56", "12345.6", "123456", "98765.4321")
                  for sz in (0, 2, 4, 5)] + [("0.123456", 0), ("0.123456", 2)]
         for mark, sz_decimals in cases:
@@ -120,7 +125,11 @@ class Lines(unittest.TestCase):
                     f = min((equity - limits.floor()) / notional, protect.MAX_DISTANCE)
                     g = min(limits.gain_room(equity) / notional, protect.MAX_DISTANCE)
                     self.assertGreaterEqual(got.stop, Decimal(mark) * (1 - f), (mark, sz_decimals, size))
-                    self.assertLessEqual(got.take, Decimal(mark) * (1 + g), (mark, sz_decimals, size))
+                    # The take now rounds AWAY from the mark, so it may sit one tick beyond its
+                    # line -- never nearer, which would cut into the room that pays for closing.
+                    self.assertLessEqual(got.take, Decimal(mark) * (1 + g) + protect.tick(Decimal(mark), sz_decimals),
+                                         (mark, sz_decimals, size))
+                    self.assertGreaterEqual(got.take, Decimal(mark) * (1 + g), (mark, sz_decimals, size))
                     self.assertLess(got.stop, Decimal(mark))
                     self.assertGreater(got.take, Decimal(mark))
                     for px in (got.stop, got.take):
@@ -144,6 +153,69 @@ class Lines(unittest.TestCase):
         self.assertEqual(wire_number(Decimal("57000.0")), "57000")
         self.assertEqual(wire_number(Decimal("0.10")), "0.1")
         self.assertEqual(wire_number(Decimal("1E+2")), "100")
+
+
+class TakeAndTheTarget(unittest.TestCase):
+    """A challenge the take closed has to be able to pass.
+
+    The take is a MARKET trigger. Placed exactly at the target it leaves the account flat a taker
+    fee BELOW the target, and `graduate` asks for at least the target with no tolerance
+    (`ChallengeAccount.sol:229-230`). Found by the CTO on 1 October 2026 from reading the code and
+    measured here: with the demo's pass pool (capital 70, target 25 bps, 99.66 USDC of notional)
+    the old line put equity at the take at 70.17493 against a target of 70.175, and the account
+    held **70.13** once closed. Retrying did not help either -- the next room was exactly that fee,
+    so every attempt landed on `target - fee` again: a fixed point, not a sequence creeping up.
+
+    `gain_room` now reaches past the target by `CLOSE_COST_BPS` of the notional, and the take
+    rounds away from the mark so a tick cannot eat it.
+    """
+
+    CAPITAL = Decimal(70)
+    TARGET_BPS = 25
+    MARK = Decimal("83750")
+    SIZE = Decimal("0.00119")       # about 99.66 USDC of notional, the client's cap being 100
+    TAKER = Decimal("0.00045")      # Hyperliquid's taker fee, a side
+
+    def setUp(self):
+        self.limits = RuleLimits(True, 1500, 2000, int(self.CAPITAL * USDC), DAY,
+                                 int(self.CAPITAL * USDC), self.TARGET_BPS)
+        self.notional = self.SIZE * self.MARK
+        self.target = self.CAPITAL * (BPS_I + self.TARGET_BPS) / BPS_I
+        self.take = lines(self.limits, self.CAPITAL, long(BTC, self.SIZE),
+                          {BTC: Market("BTC", self.MARK, 5)})[(BTC, LONG)].take
+
+    def equity_at(self, px: Decimal) -> Decimal:
+        return self.CAPITAL + self.SIZE * (px - self.MARK)
+
+    def test_the_take_clears_the_target_by_what_closing_costs(self):
+        # Measured against the FEE, not against the constant: the requirement is that the room
+        # covers what closing actually costs, and a constant that stopped covering it would make
+        # this test red rather than agree with itself.
+        over = self.equity_at(self.take) - self.target
+        self.assertGreaterEqual(over, self.SIZE * self.take * self.TAKER,
+                                f"the room over the target is {over}, the close costs "
+                                f"{self.SIZE * self.take * self.TAKER}")
+
+    def test_the_account_is_above_the_target_once_the_close_is_paid(self):
+        # The whole point: flat, and `graduate` would take it.
+        flat = self.equity_at(self.take) - self.SIZE * self.take * self.TAKER
+        self.assertGreaterEqual(flat, self.target,
+                                f"flat at {flat} against a target of {self.target}")
+
+    def test_the_line_without_the_allowance_is_the_defect_it_was(self):
+        # The arithmetic of the old line, kept so the fix cannot be removed quietly: room was
+        # exactly `target - equity`, which puts the take where equity only reaches the target.
+        room = self.target - self.CAPITAL
+        old_take = self.MARK * (self.notional + room) / self.notional
+        flat = self.equity_at(old_take) - self.SIZE * old_take * self.TAKER
+        self.assertLess(flat, self.target, "the old line did land under the target")
+        self.assertGreater(self.target - flat, Decimal("0.04"))
+
+    def test_one_attempt_is_enough_now_instead_of_a_fixed_point_below_the_target(self):
+        equity, cost = self.CAPITAL, self.SIZE * self.take * self.TAKER
+        room = self.limits.gain_room(equity, self.notional)
+        self.assertGreaterEqual(equity + room - cost, self.target,
+                                "one go reaches the target, so there is nothing to retry")
 
 
 class Wire(unittest.TestCase):
