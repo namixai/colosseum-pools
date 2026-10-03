@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { poolStatus } from "../lib/stages.js";
 import { saleBlocker } from "../lib/funding.js";
 import { LANDING, poolKind, holdsCode, KIND_NOTE, OTHERS_HEADING, cardBlockerLine, listOrder, tradeTarget } from "../lib/listing.js";
+import { DEPLOYMENTS, liveDeployment } from "../lib/deployments.js";
 import { totalPrice, totalPriceWords, outcomes, outcomesHtml } from "../lib/outcomes.js";
 
 const text = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -82,11 +83,38 @@ test("our benches and the shared pools' seats are named and listed apart, by who
   assert.equal(KIND_NOTE.bench, "Rehearsal pool: ours, with test parameters.");
   assert.equal(KIND_NOTE.seat, "A seat of a shared pool: many investors hold shares in it.");
   assert.equal(KIND_NOTE.pool, "");
-  assert.equal(OTHERS_HEADING, "Rehearsal pools and shared-pool seats");
+  assert.equal(OTHERS_HEADING, "Our own pools and shared-pool seats");
   const list = text("../views/pools.js");
-  assert.match(list, /poolKind\(\{ owner, ownerIsContract, deployer: deployment\.deployer \}\)/);
+  assert.match(list, /poolKind\(\{ owner, ownerIsContract, deployer: deployment\.deployer, address,\s+liveRunPool: deployment\.liveRunPool \}\)/);
   assert.match(list, /\(item\.kind === "pool" \? \$\("#pools", page\) : \$\("#others", page\)\)\.append\(poolCard\(item, fee\)\);/);
   assert.match(text("../views/pool.js"), /KIND_NOTE\[kind\]/);
+});
+
+// Seen on the published site on 3 Oct 2026: the pool opened for the live run, on the terms the run is held to, carried
+// "Rehearsal pool: ours, with test parameters." -- the deploy key owns it, and every pool of the deploy key was a bench.
+test("the pool opened for the live run is ours and is not called a rehearsal", () => {
+  const live = liveDeployment();
+  const deployer = live.deployer;
+  const pool = "0x70066669eC7Eb992055c82B615eD822CFF14e44A";
+  assert.equal(live.liveRunPool, pool);
+  // Only the live deployment names one: nothing runs on the archive.
+  assert.deepEqual(DEPLOYMENTS.filter((d) => "liveRunPool" in d).map((d) => d.label), [live.label]);
+  const kind = (over) => poolKind({ owner: deployer, ownerIsContract: false, deployer, address: pool, liveRunPool: pool, ...over });
+  assert.equal(kind({}), "live-run");
+  // As a node and a link spell them: the case of either address does not decide.
+  assert.equal(kind({ owner: deployer.toLowerCase(), address: pool.toLowerCase() }), "live-run");
+  // Every other pool of the deploy key is still a bench, and so is this one on a deployment that names none.
+  assert.equal(kind({ address: "0x237afA2D58B1612e19D47152FfB2E771c05Fe96D" }), "bench");
+  assert.equal(kind({ liveRunPool: undefined }), "bench");
+  // The address alone does not make a pool ours: the owner does.
+  assert.equal(kind({ owner: "0x21538eBF6598e5866BA496A954dE8E39097bFB59" }), "pool");
+  assert.equal(KIND_NOTE["live-run"], "Live-run pool: ours, the team is its investor.");
+  assert.doesNotMatch(KIND_NOTE["live-run"], /rehearsal|test parameters/i);
+  // Still ours, so still under our own heading and never where "I want to trade" leads.
+  const items = [{ index: 0, address: "0xlive", kind: "live-run", blocker: null }, { index: 1, address: "0xshort", kind: "pool", blocker: { kind: "underfunded", short: 1 } }];
+  assert.deepEqual(listOrder(items).map((i) => i.address), ["0xshort", "0xlive"]);
+  assert.equal(tradeTarget(listOrder(items)), null);
+  assert.match(text("../views/pool.js"), /deployer: deployment\.deployer, address, liveRunPool: deployment\.liveRunPool \}\)/);
 });
 
 test("the whole price, and every way a challenge ends, before Pay and start", () => {

@@ -23,6 +23,10 @@ export const CONFIG = {
   //   sharedPool         the shared pool whose seats this deployment's factory makes: what #/shared opens when the
   //                      link names no address (deployments/testnet-shared-<label>.json). The archive has none: its
   //                      shared pools open by address and take no deposit.
+  //   liveRunPool        the pool the team opened for the live run on 3 Oct 2026 (createPool in block 65902379).
+  //                      The deploy key owns it as it owns the benches, and its terms are not a bench's, so the
+  //                      list names it apart (app/lib/listing.js). No record in deployments/ carries it: those
+  //                      say what was deployed, and this pool was opened on the deployment afterwards.
   // The live one is what the pool gateway and the keepers serve since 1 Oct 2026: pools are bought, traded and opened
   // there. The archive is the first deployment, kept so its records can still be read and checked: it sells nothing.
   deployments: [
@@ -35,6 +39,7 @@ export const CONFIG = {
       deployer: "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
       platformAssets: [3, 4, 0],
       sharedPool: "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
+      liveRunPool: "0x70066669eC7Eb992055c82B615eD822CFF14e44A",
     },
     {
       label: "demo",

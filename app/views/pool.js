@@ -50,7 +50,7 @@ export async function poolView(address, page) {
   // challenge says so, instead of "Idle: it can sell a challenge" under a row that names the gap.
   const status = poolStatus(stage, archived ? null : blocker, archived);
   const kind = poolKind({ owner, ownerIsContract: await holdsCode((a) => chain.readProvider.getCode(a), owner),
-    deployer: deployment.deployer });
+    deployer: deployment.deployer, address, liveRunPool: deployment.liveRunPool });
   const doing = waiting ? awaitingKeyWords({ ...waiting, now: Math.floor(Date.now() / 1000) }) : status.words;
 
   render(page, `
