@@ -142,6 +142,13 @@ def check_caps(kind: str, action: Any, mid: Callable[[int], Decimal]) -> None:
 
 
 class DemoSigner:
+    # What this signer refuses above, per order, so `/v1/health` can say it and a client need not
+    # guess. A client that guesses high sends an order the signer rejects, and the refusal is not
+    # `busy`, so it costs the agent one of its few daily orders for a number it could have read.
+    # The ENCLAVE signer has no such attribute on purpose: it enforces its own caps and this
+    # gateway does not know them, so the field is absent rather than wrong.
+    max_order_notional_usdc = float(MAX_NOTIONAL)
+
     def __init__(self, keys: list[LocalAccount], mid: Callable[[int], Decimal] = market_mid):
         self._keys = {k.address.lower(): k for k in keys}
         self._mid = mid

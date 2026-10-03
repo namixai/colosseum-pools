@@ -952,15 +952,15 @@ MUTATIONS = [
      "wallet = chain.account(args.wallet) if send else None",
      ["test_reads_and_dry_runs_load_no_key_and_send_nothing"]),
     ("A29", "agents/client.py",
-     "WINDOW_MAX_ORDER_USDC = 100.0",
-     "WINDOW_MAX_ORDER_USDC = 1000.0",
-     ["test_the_per_order_cap_is_the_windows"]),
+     "WINDOW_MAX_ORDER_SHARE_OF_RULE = 0.4",
+     "WINDOW_MAX_ORDER_SHARE_OF_RULE = 1.0",
+     ["test_at_small_capital_the_share_binds_and_not_the_gateway"]),
     ("A23", "agents/ai_trader.py",
      "    except Refused as exc:\n        raise ToolError(str(exc)) from None",
      "    except ZeroDivisionError as exc:\n        raise ToolError(str(exc)) from None",
      ["test_a_desk_refusal_reaches_the_model_as_a_tool_error"]),
     ("A7", "agents/desk.py",
-     "            if notional > self.limits.max_notional:",
+     "            if notional > cap:",
      "            if False:",
      ["test_minimum_and_per_order_cap"]),
     ("A8", "agents/desk.py",
@@ -1091,6 +1091,18 @@ MUTATIONS = [
     # A pool's cut block is the only state that separates a funded stage that ended cleanly from a
     # reservation given back. Both mutations below are the two wrong answers: the old stage-only
     # rule, and the wider one that calls an idle pool finished whatever it ever did.
+    # The per-order cap is a share of the rule AND no more than the gateway will take. Each half
+    # has to break on its own: without the share it stops moving with capital, and without the
+    # clamp the agent sends an order the signer rejects, which costs it a daily order.
+    ("A47", "agents/desk.py",
+     "        return min(by_rule, self.gateway_max_notional)",
+     "        return by_rule",
+     ["test_the_per_order_cap_is_whichever_of_the_two_binds",
+      "test_minimum_and_per_order_cap"]),
+    ("A48", "agents/desk.py",
+     "        by_rule = max(equity, 0.0) * leverage_x100 / 100 * self.max_order_share_of_rule",
+     "        by_rule = 100.0",
+     ["test_at_small_capital_the_share_binds_and_not_the_gateway"]),
     ("A45", "agents/desk.py",
      '            finished = number == 3 or (number == 0 and view(self.account, "cutBlock()", "uint64") > 0)',
      "            finished = number == 3",
@@ -1116,6 +1128,10 @@ MUTATIONS = [
     # ── keeper (Python unittest) ──
     # The take has to clear the target by what closing costs, or a challenge the take closed
     # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.
+    ("G81", "gateway/server.py",
+     '    cap = getattr(signer, "max_order_notional_usdc", None)\n    if cap is not None:\n        out["max_order_notional_usdc"] = float(cap)',
+     '    out["max_order_notional_usdc"] = float(getattr(signer, "max_order_notional_usdc", 400.0))',
+     ["test_a_signer_that_does_not_report_one_leaves_the_field_out"]),
     ("PG48", "gateway/protect.py",
      "CLOSE_COST_BPS = 2 * (TAKER_FEE_BPS + SLIPPAGE_BPS) + SPARE_BPS",
      "CLOSE_COST_BPS = Decimal(0)",

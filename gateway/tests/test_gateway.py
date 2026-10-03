@@ -552,6 +552,29 @@ class Http(unittest.TestCase):
         self.assertEqual(self.call("GET", "/v1/health")[0], 200)
 
 
+class WhatHealthSays(unittest.TestCase):
+    """The per-order cap is the SIGNER's, so `/v1/health` reports it only where the signer in use
+    has one. The enclave enforces its own and does not tell this gateway, and a number published
+    from here would be a guess clients then size against."""
+
+    def test_the_demo_signer_publishes_its_cap(self):
+        from gateway.demo_signer import MAX_NOTIONAL, DemoSigner
+        from gateway.server import health_summary
+        said = health_summary("demo", DemoSigner([]), 15.0)
+        self.assertEqual(said["max_order_notional_usdc"], float(MAX_NOTIONAL))
+        self.assertEqual((said["signer"], said["keys"], said["protect_every"]), ("demo", 0, 15.0))
+
+    def test_a_signer_that_does_not_report_one_leaves_the_field_out(self):
+        from gateway.server import health_summary
+
+        class Enclave:
+            pass
+
+        said = health_summary("signer", Enclave(), 15.0)
+        self.assertNotIn("max_order_notional_usdc", said)
+        self.assertEqual(said["signer"], "signer")
+
+
 class HttpLimits(unittest.TestCase):
     """Timeouts, the connection cap and bad headers, on a real socket."""
 

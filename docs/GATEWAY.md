@@ -100,6 +100,13 @@ another.
        reduce-only order passes it: Hyperliquid won't let it grow a position, and a position
        that grew with the price couldn't otherwise be closed in one order. The size cap and
        every other check above still bind it, and it reads no mid.
+     - **`/v1/health` publishes that number**, as `max_order_notional_usdc`, so an agent can
+       size against it instead of guessing. It is the SIGNER's number, read off the signer in
+       use: in `signer` mode the field is **absent**, because the enclave enforces its own caps
+       and this gateway does not know them — a number published from here would be a guess a
+       client then sized against. An agent that guesses high sends an order the signer rejects,
+       and that refusal is not `busy`, so it costs the agent one of its few daily orders for a
+       number it could have read.
    - `signer` mode, not used in the demo: it sends the action to a Usenami Signer gateway
      (`POST /sign`, exchange `hyperliquid_testnet`, the same `kind`, the action, the trader's
      `nonce`) with the bearer token of the tenant that holds `key`.

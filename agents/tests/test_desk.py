@@ -93,7 +93,7 @@ class DeskLimits(WithChain):
         self.assertEqual(self.gateway.orders, [])
 
     def test_minimum_and_per_order_cap(self):
-        desk = self.desk(max_notional=100)
+        desk = self.desk(gateway_max_notional=100)
         with self.assertRaises(Refused):
             desk.place_order("BTC", "buy", 0.0001, 60000, "limit", False)  # 6 USDC
         with self.assertRaises(Refused):
@@ -103,7 +103,7 @@ class DeskLimits(WithChain):
 
     def test_headroom_under_the_leverage_rule(self):
         self.chain.equity, self.chain.notional = 100.0, 200.0  # rule 3x: 300; headroom 0.8: 240
-        desk = self.desk(max_notional=100)
+        desk = self.desk(gateway_max_notional=100)
         with self.assertRaises(Refused):
             desk.place_order("ETH", "buy", 0.02, 3000, "ioc", False)  # +60 -> 260
         desk.place_order("ETH", "buy", 0.013, 3000, "ioc", False)  # +39 -> 239
@@ -111,7 +111,7 @@ class DeskLimits(WithChain):
         self.assertEqual([o[5:] for o in self.gateway.orders], [("Ioc", False), ("Ioc", True)])
 
     def test_a_sell_under_the_market_counts_at_the_mid(self):
-        desk = self.desk(max_notional=100)  # the fake's mids: BTC 60000, ETH 3000
+        desk = self.desk(gateway_max_notional=100)  # the fake's mids: BTC 60000, ETH 3000
         with self.assertRaises(Refused):
             desk.place_order("BTC", "sell", 0.0017, 50000, "ioc", False)  # 85 at its limit, 102 at the mid
         with self.assertRaises(Refused):
@@ -121,7 +121,7 @@ class DeskLimits(WithChain):
         self.assertEqual([o[2:5] for o in self.gateway.orders], [(False, "50000", "0.0016"), (False, "62000", "0.0016")])
 
     def test_a_sell_without_a_usable_mid_is_refused(self):
-        desk = self.desk(max_notional=100)
+        desk = self.desk(gateway_max_notional=100)
         self.chain.positions = [{"coin": "BTC", "szi": "0.0031", "entryPx": "59000", "unrealizedPnl": "3.1"}]
         for mids in ({}, {"BTC": "NaN"}, {"BTC": "inf"}, {"BTC": "0"}, {"BTC": "-1"}, {"BTC": "abc"},
                      {"BTC": None}, ["BTC"]):
@@ -136,7 +136,7 @@ class DeskLimits(WithChain):
 
     def test_headroom_counts_a_sell_at_the_mid(self):
         self.chain.equity, self.chain.notional = 100.0, 200.0  # rule 3x: 300; headroom 0.8: 240
-        desk = self.desk(max_notional=100)
+        desk = self.desk(gateway_max_notional=100)
         with self.assertRaises(Refused):
             desk.place_order("ETH", "sell", 0.014, 2500, "ioc", False)  # 35 at its limit, 42 at the mid -> 242
         desk.place_order("ETH", "sell", 0.013, 2500, "ioc", False)  # 39 at the mid -> 239
