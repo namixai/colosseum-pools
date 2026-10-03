@@ -147,5 +147,5 @@ test("the records page says on each row which deployment it is about", () => {
   assert.match(text("../views/evidence.js"), /const acct = accountCell\(row\);/);
   assert.match(TEXT.intro.join(" "), /The first deployment is kept as an archive: its records stand and can be checked, and it sells nothing\. The second is the live one/);
   // The rows that carry no mark are named too, so a reader does not take them for rows the page forgot.
-  assert.match(TEXT.intro.join(" "), /A shared pool carries no such mark: it is not a factory's account, and the table of the three pools names the factory its seats come from\./);
+  assert.match(TEXT.intro.join(" "), /A shared pool carries no such mark: it is not a factory's account, and the table of the shared pools names the factory its seats come from\./);
 });

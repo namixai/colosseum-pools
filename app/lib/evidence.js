@@ -32,11 +32,11 @@ export const TEXT = {
     "Each pool and challenge is marked with the deployment it belongs to. The first deployment is kept as an "
       + "archive: its records stand and can be checked, and it sells nothing. The second is the live one, which the "
       + "gateway and the keepers serve. A rehearsal deployment is neither, and this site does not read it. A shared "
-      + "pool carries no such mark: it is not a factory's account, and the table of the three pools names the factory "
+      + "pool carries no such mark: it is not a factory's account, and the table of the shared pools names the factory "
       + "its seats come from.",
   ],
   columns: ["What happened", "Account", "Transaction", "How to check it"],
-  pools: "The three shared pools",
+  pools: "The shared pools",
   poolColumns: ["Pool", "Factory of its seats", "Open it in the app", "What it showed"],
   limits: "What none of this shows",
   receipt: "Read the receipt",

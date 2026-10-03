@@ -6,19 +6,20 @@ this demo. Nobody has reviewed it. Every line below is either a state a contract
 anyone can read, or a transaction that was read back from its receipt. The demo's own record is in
 [EVIDENCE.md](EVIDENCE.md).
 
-## The three pools
+## The shared pools
 
 | Pool | Factory of its seats | Open it in the app | What it showed |
 |---|---|---|---|
 | `0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A` | its own, `0x436d9074AB42001538D5a999a0eEe721deC516Db` | `#/shared/0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A` | one depositor: deposit, shares, a request, payment at two points while the capital was in a challenge |
 | `0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0` | the demo's | `#/shared/0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0` | two depositors: a short payment split between them, the same fraction at one price |
 | `0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6` | the demo's | `#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6` | a seat a trader bought and traded |
+| `0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717` | the second deployment's, `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222` | `#/shared/0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717` | a pool deployed with the seal: started, one seat published, the book sealed before any deposit |
 
-All three are pools of the earlier rounds: two have their seats on the first deployment's factory, which
-is an archive now, and one on a factory of its own. The app opens each by its address, shows its record,
-and takes no deposit into it; a holder can still ask to withdraw. `#/shared` with no address opens a
-fourth pool, `0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717`, deployed on 3 October 2026 with its seats on the second deployment's factory
-(`deployments/testnet-shared-demo2.json`). What that pool has done is not in this document yet.
+The first three are pools of the earlier rounds: two have their seats on the first deployment's factory,
+which is an archive now, and one on a factory of its own. The app opens each by its address, shows its
+record, and takes no deposit into it; a holder can still ask to withdraw. The fourth has its seats on
+the second deployment's factory, the one the gateway and the keepers serve; `#/shared` with no address
+opens it.
 
 ## Checking it yourself
 
@@ -146,8 +147,41 @@ depositors, `0xbD97438655835138daBeE38f3B7d96275eDc315a` and `0x278AbBC5B78F34F7
 The tables above are the pool's state at the points they name. Read now, `value()` and `totalShares()`
 give what this section left: 1.975713 and 2e8. Every step's hash is in `spike/results/2026-10-03.jsonl`.
 
+## The pool on the second deployment (3 October)
+
+`0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717`, deployed in
+`0x1ad996f5295dab3f32eabd5be888cc5b8c522eb30bf8d8f05c689fb2161edec0` (block 65899174) with its seats
+on the second deployment's factory, `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222`
+(`deployments/testnet-shared-demo2.json`). A smallest deposit of 20 USDC, a lock of ten minutes, a fee
+of 10% of a holder's own profit.
+
+- **Started.** `start` in `0x4f08a713d6f763b48b7551049aaf8c1c089701c7ab0e2659300d452b27883228` turned 2 USDC
+  from the operator into the platform's 2e8 starting shares.
+- **One seat, published.** `addSeat` in `0xbdc52e52ac568b57df7bab0e86902a569e15768cb4fe0048aed7e78c4afc088d`
+  made the seat `0x7eb971134b0ad523f55c76b44b2fbd6ed7885371`: 3 USDC of challenge capital and 30 funded, a
+  1.5 USDC price, an 8% target, a 5% daily loss, a 10% drawdown, a day for the challenge and a day for
+  a funded stage. `PoolFactory.isPool(seat)` on the second deployment's factory is true, and the seat's
+  `owner()` is the shared pool.
+- **Sealed before any deposit.** `seal` in `0x6860ec99f69152efa4d32236944aa549861bb584d2eb995c260b11e02e164c6b`
+  closed the book: `seatsSealed()` reads true. This pool has one seat and can never be given another.
+  Until that transaction the contract refused to open a deposit ticket.
+
+**A stand, not a product.** The seat's numbers are small on purpose: 3 USDC at 5× leverage holds a
+position above the exchange's minimum order of $10. They show the mechanics on testnet money. They are
+not terms anyone is offered.
+
+**Who runs what.** Every wallet here is ours. The seat is a pool of the second deployment's factory, so
+the gateway and the keepers on the host see it like any other pool there; no challenge has been sold
+on it, so that has not been exercised. The shared pool's own keeper, `ops/shared_keeper.py`, is not
+installed on the host. It has not been run for this pool yet; when it is, it runs from the team's
+machine, not from the host.
+
+At 08:38 UTC on 3 October the pool held 2 USDC on 2e8 shares, its seat was idle and empty, and nobody
+had deposited. Every step's hash is in `spike/results/2026-10-03.jsonl`.
+
 ## What this does not show
 
 - A passed challenge or a funded stage on a seat, and the funded term running out.
+- A deposit into the pool on the second deployment, or a challenge sold on its seat.
 - A stop on a seat. The rules above would stop the challenge at 2.70 USDC of equity, or at 2.85 on
   the day; the trader stayed well inside.

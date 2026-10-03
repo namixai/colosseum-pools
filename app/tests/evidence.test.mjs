@@ -74,7 +74,7 @@ test("every row's source lines are in its section of the document", () => {
     else for (const s of r.sources) if (!body.includes(s)) lost.push(`${r.what}: «${s}»`);
   }
   assert.deepEqual(lost, []);
-  assert.equal(DATA.rows.length, 29);
+  assert.equal(DATA.rows.length, 31);
 });
 
 test("a row shows nothing its own source lines do not say", () => {
@@ -201,20 +201,21 @@ test("the page links an account only where the app reads it", () => {
     // Each section's rows belong to one deployment. The site reads two (app/config.js, since 1 Oct 2026): demo2,
     // live, and demo, the archive -- a row of either gets its link, a row of any other (the rehearsal) none.
     const expected = { "The fourth ending, on the rehearsal deployment": "rehearsal",
-                       "Deployment 2, and the first run where the trader was not us": "demo2" };
+                       "Deployment 2, and the first run where the trader was not us": "demo2",
+                       "The pool on the second deployment (3 October)": "demo2" };
     assert.equal(r.factory, expected[r.section] ?? "demo", r.what);
     const link = appLink(r);
     if (!READ.includes(r.factory) || !r.account) assert.equal(link, null, `${r.what}: the app does not read it`);
     else if (r.kind === "shared pool") {
-      assert.ok(pools.includes(r.account), `${r.what}: one of the three shared pools`);
+      assert.ok(pools.includes(r.account), `${r.what}: one of the shared pools in the table`);
       assert.equal(link, `#/shared/${r.account}`);
     } else assert.equal(link, `#/verify/${r.account}`, r.what);
   }
 });
 
-test("the three shared pools are the document's table, cell for cell", () => {
+test("the shared pools are the document's table, cell for cell", () => {
   const body = section(DATA.pools.doc, DATA.pools.section);
-  assert.equal(DATA.pools.rows.length, 3);
+  assert.equal(DATA.pools.rows.length, 4);
   for (const p of DATA.pools.rows) {
     const line = `| ${p.pool} | ${p.factory} | ${p.open} | ${p.showed} |`;
     assert.ok(body.includes(line), line);

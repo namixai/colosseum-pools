@@ -516,11 +516,43 @@
         "The rest. Point 0x4c1836407ecd83e083ac69ee62eee49f08c6b619380eea9dc42cd6c42c29ac63 paid each depositor the remaining 15.50713 USDC and emptied the queue. Each depositor's HyperCore spot balance read 19.757129 USDC afterwards: 20e8 shares at 0.98785645, rounded down to the millionth a payment carries.",
         "What is left. The pool holds 1.975713 USDC on the platform's 2e8 starting shares, which never leave. Its seat is idle and empty."
       ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "The pool on the second deployment (3 October)",
+      "what": "The shared pool on the second deployment published its one seat",
+      "kind": "shared pool",
+      "factory": "demo2",
+      "account": "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
+      "tx": "0xbdc52e52ac568b57df7bab0e86902a569e15768cb4fe0048aed7e78c4afc088d",
+      "record": "made the seat 0x7eb971134b0ad523f55c76b44b2fbd6ed7885371: 3 USDC of challenge capital and 30 funded, a 1.5 USDC price, an 8% target, a 5% daily loss, a 10% drawdown, a day for the challenge and a day for a funded stage.",
+      "check": ["PoolFactory.isPool(seat) on the second deployment's factory", "owner() on the seat"],
+      "notes": ["The seat's numbers are small on purpose: 3 USDC at 5× leverage holds a position above the exchange's minimum order of $10. They show the mechanics on testnet money. They are not terms anyone is offered."],
+      "sources": [
+        "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717, deployed in 0x1ad996f5295dab3f32eabd5be888cc5b8c522eb30bf8d8f05c689fb2161edec0 (block 65899174) with its seats on the second deployment's factory, 0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222",
+        "One seat, published. addSeat in 0xbdc52e52ac568b57df7bab0e86902a569e15768cb4fe0048aed7e78c4afc088d made the seat 0x7eb971134b0ad523f55c76b44b2fbd6ed7885371: 3 USDC of challenge capital and 30 funded, a 1.5 USDC price, an 8% target, a 5% daily loss, a 10% drawdown, a day for the challenge and a day for a funded stage."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "The pool on the second deployment (3 October)",
+      "what": "The book of seats was sealed before any deposit",
+      "kind": "shared pool",
+      "factory": "demo2",
+      "account": "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
+      "tx": "0x6860ec99f69152efa4d32236944aa549861bb584d2eb995c260b11e02e164c6b",
+      "record": "closed the book: seatsSealed() reads true. This pool has one seat and can never be given another.",
+      "check": ["seatsSealed() on the pool"],
+      "notes": ["Until that transaction the contract refused to open a deposit ticket."],
+      "sources": [
+        "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717, deployed in",
+        "Sealed before any deposit. seal in 0x6860ec99f69152efa4d32236944aa549861bb584d2eb995c260b11e02e164c6b closed the book: seatsSealed() reads true. This pool has one seat and can never be given another. Until that transaction the contract refused to open a deposit ticket."
+      ]
     }
   ],
   "pools": {
     "doc": "docs/EVIDENCE-SHARED-POOL.md",
-    "section": "The three pools",
+    "section": "The shared pools",
     "rows": [
       {
         "pool": "0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A",
@@ -539,6 +571,12 @@
         "factory": "the demo's",
         "open": "#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6",
         "showed": "a seat a trader bought and traded"
+      },
+      {
+        "pool": "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
+        "factory": "the second deployment's, 0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222",
+        "open": "#/shared/0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
+        "showed": "a pool deployed with the seal: started, one seat published, the book sealed before any deposit"
       }
     ]
   },

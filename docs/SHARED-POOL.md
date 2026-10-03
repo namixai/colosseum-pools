@@ -306,7 +306,8 @@ pool was deployed with its seats on the second deployment's factory:
 `ops/deploy_shared.py --label shared-demo2 --on-factory-of demo2` deployed the SharedPool alone,
 `0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717` (`deployments/testnet-shared-demo2.json`): a smallest
 deposit of 20 USDC, a lock of ten minutes, a fee of 10% of a holder's own profit. It is the first
-pool deployed with the seal, and the page's default.
+pool deployed with the seal, and the page's default. The same day it was started with 2 USDC, given
+one seat and sealed; nobody has deposited into it at the time of writing.
 
 The same day both depositors of the third pool asked for everything and were paid at the price of a
 share, 0.98785645, in two points with `releaseSeat` between them; that pool now holds only the
