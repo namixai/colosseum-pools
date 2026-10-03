@@ -166,6 +166,18 @@ of 10% of a holder's own profit.
 - **Sealed before any deposit.** `seal` in `0x6860ec99f69152efa4d32236944aa549861bb584d2eb995c260b11e02e164c6b`
   closed the book: `seatsSealed()` reads true. This pool has one seat and can never be given another.
   Until that transaction the contract refused to open a deposit ticket.
+- **Two deposits, at a price of 1.** `0xbD97438655835138daBeE38f3B7d96275eDc315a` opened the ticket
+  `0x1739a40eeb6de7aa0a9dbccc69188ef012a9348f` in
+  `0xb2b57aa7c564103e73bd75809a99fc32d3d71b9c2670c02d1245e9cb016718e9`, and
+  `0x278AbBC5B78F34F77829dDd7887566E182beBD83` the ticket
+  `0xad4819148054d513a8bec833f73113cebeeda50a` in
+  `0x0cb386e01f761623331478730bf9c202ab1e106e4c76e35ab3f198b246102a3f`. Each sent 20 USDC to its ticket on
+  HyperCore. Point `0x96e762b459f887f7644b1a0dcd34fadf07f0d100d99b61e35a858f393d81e6aa` (block 65903404)
+  took both in: `totalShares()` went from 2e8 to 42e8, each depositor's `sharesOf` and `basis` read
+  20e8, and `value()` reads 42 USDC, a price of 1 a share. Both tickets read as closed.
+- **Where the depositors' money came from.** The two depositors are the ones who left the third pool
+  the same morning with 19.757129 USDC each. The operator sent each 1.242871 more, so that each held
+  21: the deposit and the 1 USDC HyperCore charges for creating a ticket's account.
 
 **A stand, not a product.** The seat's numbers are small on purpose: 3 USDC at 5× leverage holds a
 position above the exchange's minimum order of $10. They show the mechanics on testnet money. They are
@@ -181,12 +193,13 @@ machine, not from the host.
 prepared. Once a seat has its capital and its account is prepared, anyone can buy its challenge from
 the site. So this one is armed only right before the sale it is meant for, not earlier.
 
-At 08:38 UTC on 3 October the pool held 2 USDC on 2e8 shares, its seat was idle and empty, and nobody
-had deposited. Every step's hash is in `spike/results/2026-10-03.jsonl`.
+At 08:59 UTC on 3 October the pool held 42 USDC on 42e8 shares, all of it free on HyperCore, with
+nothing waiting to be paid. Its seat was idle, empty and not armed. Every step's hash is in
+`spike/results/2026-10-03.jsonl`.
 
 ## What this does not show
 
 - A passed challenge or a funded stage on a seat, and the funded term running out.
-- A deposit into the pool on the second deployment, or a challenge sold on its seat.
+- A challenge sold on the seat of the pool on the second deployment: the seat has not been armed.
 - A stop on a seat. The rules above would stop the challenge at 2.70 USDC of equity, or at 2.85 on
   the day; the trader stayed well inside.
