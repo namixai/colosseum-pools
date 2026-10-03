@@ -178,9 +178,10 @@ A take placed exactly at the target therefore leaves the account flat a fee BELO
 the real `lines()` and the demo's pass pool (capital 70, target 25 bps, 99.66 USDC of notional),
 with the taker rate read from `userFees` for the trader's wallet: equity at the take would be
 70.17493 against a target of 70.175, and 70.13 once closed. Retrying does not help, because the
-next room is exactly that fee: every attempt lands on `target − fee`. No take at the target has
-ever fired on this deployment — nobody has passed a challenge since 29 September — so the figures
-are arithmetic on the live rate, not a recording of a run.
+next room is exactly that fee: every attempt lands on `target − fee`. No take at the target had
+fired when this was worked out — nobody had passed a challenge since 29 September — so those
+figures are arithmetic on the live rate, not a recording of a run. The first take that did fire
+is below, under "Funding moves the line", and it was measured.
 
 So the room reaches past the target by `CLOSE_COST_BPS`, and it carries **both** sides: the take is
 placed with the order that opens the position, so the entry's fee is debited after the line is
@@ -195,9 +196,39 @@ both fills at once.
 The take also rounds AWAY from the mark, so a price tick cannot eat the allowance; the stop still
 rounds towards it.
 
+**Funding moves the line, and the take has to follow it.** The first take that fired, on
+3 October 2026 on the second deployment, left its challenge below the target. **Measured**, from
+Hyperliquid's own records of the account: capital 70, target 40 bps (70.28), 0.00117 BTC bought at
+84995, and a take on the book with the opening order at 85378. Over six hours the position paid
+funding six times, 0.178665 USDC in all. The take fired, the fill was 85399, and the account held
+**70.204304** — 0.075696 short. Without the funding it would have held 70.382969: the allowance
+did what it was sized for, and funding is not in it.
+
+The sweep had the right line every time, because it reads the equity as it is: about 85578 by the
+sixth charge. It did not move the take. One nearer the market than the line was taken for the
+trader's own choice and left alone. Funding lowers the equity, and that moves the stop's line
+towards the market, where the sweep follows, and the take's line away from it, where it did not.
+
+In a challenge the sweep now carries the gateway's own take out to the line once it stands short
+of it by more than `TAKE_LAG_BPS` of the mark: 6.5 bps, the entry's own fee and slippage, which
+leave a take that far short the moment the position opens. A take inside that lag still clears the
+target by the close and the whole spare. **Worked out, not observed**: replayed on the six charges
+of that day, the take moves three times, after the first, the fourth and the sixth, and at 85399
+it would not have fired. A take the **trader** moved stays where they put it, short of the target
+or not: taking the profit early is theirs to decide. The gateway keeps that in memory only, so
+after a restart every take is its own until the trader moves it again.
+
+What this does not cover. First, a charge that lands and a take that fires before the next sweep,
+15 seconds by default: that take is short by the one charge, which the spare absorbs up to 5 bps
+of the notional. Second, an account with exposure on more than one asset. There each take's line
+moves with the other position's price, a take that followed it would be modified out and back in
+with every swing between the two, and so those takes are left as they were before: they can still
+stand short of the target.
+
 A funded stage has no target and the pool's rules have no take, so there the take is at most one
 challenge target away: `targetBps` of the equity at the moment it is set, with no allowance, since
-nothing has to be cleared. The trader may bring a take nearer the mark; nothing puts it further.
+nothing has to be cleared. Its line recedes as the position gains, so nothing follows it: the
+trader may bring that take nearer the mark, and nothing puts it further.
 
 **The assumptions, named.**
 
