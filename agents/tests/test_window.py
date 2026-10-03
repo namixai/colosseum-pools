@@ -117,6 +117,18 @@ class Window(unittest.TestCase):
         self.run_cli("order", ACCOUNT, "BTC", "buy", "0.006", "60000")  # 360 USDC
         self.assertEqual(len(self.gateway.orders), 1)
 
+    def test_account_reports_the_cap_the_order_path_will_apply(self):
+        # `account` sends nothing, so it used to skip asking the gateway and reported the fallback
+        # while `order` applied a lower published cap. The field is what the trader file tells the
+        # bot to size from, so a field that differs from the rule is a field that lies.
+        self.gateway.says_cap = 50.0
+        said = self.run_cli("account", ACCOUNT)["session"]["max_order_notional_usdc"]
+        self.assertEqual(said, 50.0, "the published cap, not the 400 fallback")
+        with self.assertRaises(dk.Refused):
+            self.run_cli("order", ACCOUNT, "BTC", "buy", "0.001", "60000")  # 60 USDC, over 50
+        self.run_cli("order", ACCOUNT, "BTC", "buy", "0.0008", "60000")  # 48 USDC
+        self.assertEqual(len(self.gateway.orders), 1)
+
     def test_at_small_capital_the_share_binds_and_not_the_gateway(self):
         # The reason the cap stopped being a number: at 70 of capital the share allows
         # 0.4 x 70 x 3 = 84, far under the gateway's 400, and the flat 100 this replaced would
