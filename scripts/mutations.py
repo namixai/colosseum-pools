@@ -1096,6 +1096,10 @@ MUTATIONS = [
     # clamp the agent sends an order the signer rejects, which costs it a daily order.
     # What the gateway reports has to be finite and positive, and the field `account` shows has to
     # be the one the order path applies. Both were found by review, not by me.
+    ("A51", "agents/client.py",
+     "        if isinstance(said, bool):\n            return fallback",
+     "        if False:\n            return fallback",
+     ["test_every_way_it_can_fail_lands_on_the_fallback"]),
     ("A49", "agents/client.py",
      "        if cap is None or not math.isfinite(cap) or cap <= 0:",
      "        if cap is None:",
