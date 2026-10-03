@@ -361,6 +361,32 @@ class ShopLimits(WithChain):
         self.assertEqual(shop.buy(POOL, 20.0)["status"], "not_sent")
         self.assertEqual(self.chain.sent, [])
 
+    def test_a_purchase_that_never_reached_the_node_is_not_spent(self):
+        # A wallet short of the price and the fee: the pool's pull is refused at the gas estimate, so
+        # nothing is broadcast. Found before a run on 3 Oct 2026 -- the agent's wallet held 4.60 USDC
+        # against 7.70 -- and the day's one purchase would have gone on it.
+        shop = self.shop()
+        shop.listing()
+        self.chain.revert = "0xe450d38c"
+        with self.assertRaises(Refused) as said:
+            shop.buy(POOL, 20.0)
+        self.assertIn("today's purchase is not spent", str(said.exception))
+        self.assertEqual(shop.purchases_left, 1)
+        self.assertEqual(self.chain.sent, [])
+        # Topped up, the same session buys: the attempt really is still there.
+        self.chain.revert = None
+        self.assertEqual(shop.buy(POOL, 20.0)["status"], "bought")
+        self.assertEqual(shop.purchases_left, 0)
+
+    def test_a_purchase_that_was_broadcast_stays_spent(self):
+        # Mined and reverted: the transaction left, so a second one today could land on top of it.
+        shop = self.shop()
+        shop.listing()
+        self.chain.revert_after_send = True
+        with self.assertRaises(self.chain.Reverted):
+            shop.buy(POOL, 20.0)
+        self.assertEqual(shop.purchases_left, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
