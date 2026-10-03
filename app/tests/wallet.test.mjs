@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { wireWallet } from "../lib/walletbutton.js";
 import { MAX_BATCH, PROVIDER_OPTIONS } from "../lib/batch.js";
-import { friendly, failureHint, batchRefused } from "../lib/ui.js";
+import { friendly, failureHint, batchRefused, rateLimited } from "../lib/ui.js";
 
 const text = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
@@ -98,4 +98,36 @@ test("a refused batch is named for what it is, not as a mismatch with the deploy
   const decode = { code: "BAD_DATA", shortMessage: "could not decode result data", message: "could not decode result data", value: "0x" };
   assert.equal(batchRefused(decode), false);
   assert.match(failureHint(decode), /the app and the deployment it points at do not match\. Reloading will not help\./);
+});
+
+// What ethers 6.17.0 threw on 3 Oct 2026 for the sixth batch of twenty reads in a row, cut to the fields the app
+// reads: the node's rate limit, answered once for the whole batch and with no id.
+const THROTTLED_BATCH = {
+  code: "BAD_DATA",
+  shortMessage: "missing response for request",
+  message: "missing response for request (value=[ { \"error\": { \"code\": -32005, \"message\": \"rate limited\" }, "
+    + "\"id\": null, \"jsonrpc\": \"2.0\" } ], info={...}, code=BAD_DATA, version=6.17.0)",
+  value: [{ error: { code: -32005, message: "rate limited" }, id: null, jsonrpc: "2.0" }],
+  info: { payload: { method: "eth_call", id: 61, jsonrpc: "2.0" } },
+};
+
+test("a rate limit met inside a batch says wait, and never that the deployment does not match", () => {
+  assert.equal(rateLimited(THROTTLED_BATCH), true);
+  assert.equal(batchRefused(THROTTLED_BATCH), false);
+  assert.equal(friendly(THROTTLED_BATCH),
+    "The public HyperEVM RPC is refusing further requests from this browser right now (rate limited). "
+    + "Wait a few seconds and try again.");
+  // One sentence, and no second one under it: "reloading will not help" was printed here on 3 Oct 2026.
+  assert.equal(failureHint(THROTTLED_BATCH), "");
+  // Read from the node's answer, not from a message that happens to quote it: a wrapper with a shorter message.
+  const short = { code: "BAD_DATA", shortMessage: "missing response for request", message: "missing response for request",
+    value: [{ error: { code: -32005 } }] };
+  assert.equal(rateLimited(short), true);
+  assert.equal(failureHint(short), "");
+  // Wrapped once more, the way a contract call hands it up.
+  assert.equal(failureHint({ code: "CALL_EXCEPTION", message: "call failed", error: THROTTLED_BATCH }), "");
+  // A decode error is still a decode error: an answer that is data, not the node's refusal.
+  const decode = { code: "BAD_DATA", shortMessage: "could not decode result data", message: "could not decode result data", value: "0x" };
+  assert.equal(rateLimited(decode), false);
+  assert.match(failureHint(decode), /do not match\. Reloading will not help\./);
 });

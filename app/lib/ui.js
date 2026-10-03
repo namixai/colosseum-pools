@@ -90,9 +90,15 @@ const HYPERLIQUID = "Hyperliquid's testnet API";
  * The public RPC answers -32005 "rate limited". ethers wraps that answer, sometimes twice, and
  * the raw wrapper carries a whole JSON-RPC payload: pasting it into the page put what looks
  * like a stack trace in the most honest section of the site. Recognise it and say it in words.
+ *
+ * Inside a batch the same refusal comes back as one answer with no id, so ethers finds no response
+ * for its call and throws BAD_DATA "missing response for request" with the node's answer in `value`
+ * (measured on 3 Oct 2026, ethers 6.17.0: the sixth batch of twenty in a row). It is read from
+ * `value`, not from the message that happens to quote it.
  */
 export function rateLimitedBy(err) {
   for (const e of layers(err)) {
+    if (answers(e).some((a) => Number(a?.error?.code) === -32005)) return RPC;
     // app/lib/hl.js puts the HTTP status on its own error; nothing else in this app does.
     if (Number(e.status) === 429) return HYPERLIQUID;
     if (Number(e.code) === -32005) return RPC;
@@ -117,10 +123,15 @@ export function batchRefused(err) {
   for (const e of layers(err)) {
     if (Number(e.code) === -32010) return true;
     if (/batch request was too large|Exceeded max limit of \d+/i.test(String(e.message || ""))) return true;
-    const answers = Array.isArray(e.value) ? e.value : e.value ? [e.value] : [];
-    if (answers.some((a) => Number(a?.error?.code) === -32010)) return true;
+    if (answers(e).some((a) => Number(a?.error?.code) === -32010)) return true;
   }
   return false;
+}
+
+/** What the node answered, as ethers keeps it on a BAD_DATA error: `value`, one answer or a list. */
+function answers(e) {
+  if (Array.isArray(e.value)) return e.value;
+  return e.value && typeof e.value === "object" ? [e.value] : [];
 }
 
 /**
@@ -130,7 +141,10 @@ export function batchRefused(err) {
  */
 export function failureHint(err) {
   // A rate limit gets no line of its own: friendly() has already named who refused and said when
-  // to try again, and 429 is not a status this reads as a service that could not be reached.
+  // to try again, and 429 is not a status this reads as a service that could not be reached. It is
+  // asked first: a limit met inside a batch reaches here as BAD_DATA, and under "wait a few seconds"
+  // the page then said the deployment does not match and reloading will not help.
+  if (rateLimited(err)) return "";
   const all = layers(err);
   // Before BAD_DATA: a refused batch reaches here as BAD_DATA too, and it is not a mismatch with the deployment.
   if (batchRefused(err)) {
