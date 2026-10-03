@@ -1116,6 +1116,14 @@ MUTATIONS = [
     # The live-run pool is created by one script whose refusals are its only safety: step one
     # moves capital out of a finished stand, so a reason to stop found after that leaves the money
     # moved and no pool made.
+    ("K85", "ops/create_live_pool.py",
+     '    if len(assets) != len(set(assets)):',
+     "    if False:",
+     ["test_duplicate_assets"]),
+    ("K86", "ops/create_live_pool.py",
+     "    if not assets:",
+     "    if False:",
+     ["test_an_empty_asset_list"]),
     ("K82", "ops/create_live_pool.py",
      "        if not listed.get(a):",
      "        if not listed.get(a, True):",
