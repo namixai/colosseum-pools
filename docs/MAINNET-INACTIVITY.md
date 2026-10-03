@@ -44,9 +44,20 @@ old and that the days in between were actually observed:
 - `lastSeenActive`: a timestamp written by `checkpoint()` whenever that call finds a position open
   or an equity different from the previous snapshot. Written at the funded start too, so a stage
   that never trades still has a beginning to count from.
-- `daysObserved`: how many checkpoints landed since the mark. The end requires at least, say, 28 of
-  the 30 — a figure to pick, not one to assume — so two missed days are tolerated and a dead keeper
-  blocks the rule instead of firing it.
+- `daysObserved`: how many checkpoints landed since the mark. The end requires **all thirty**, with
+  no tolerance.
+
+  An earlier draft of this page allowed two missed days, and that was a hole in the guarantee stated
+  just above: on a missed day there is no observation at all, so a trader who traded that day is
+  invisible, and twenty-eight idle-looking days would end an account that had been trading. Review
+  caught the contradiction. The tolerance was leniency about **our** operational reliability bought
+  at the trader's expense, which is the wrong way round.
+
+  The cost of no tolerance is that any keeper gap postpones the rule, and that is the direction to
+  fail in: a postponed end costs the investor idle capital for a few days and fixes itself when the
+  keeper does, while a false end takes a funded stage away from someone who earned it. It also puts
+  the incentive where it belongs — a keeper we let rot costs the investor time, and the investor is
+  the side we are on.
 
 **Where this is blind, stated plainly.** A snapshot is one instant. A trader who opens a position
 after the window and closes it before the next one reads as idle at every snapshot, and a trader
@@ -101,8 +112,11 @@ spends a section defending.
 ## What must be decided before any code
 
 1. Pays or voids (above). Recommendation: pays.
-2. Thirty days of what — the mark's age, with a minimum of observed days. The tolerance (28 of 30 is
-   a guess) needs picking.
+2. What counts as "the equity moved". It is the test doing the real work against the snapshot blind
+   spot, and right now it is exact equality — which a single wei of funding drift would break in the
+   trader's favour, and which says nothing about how far a day of round trips moves equity at
+   mainnet fees. That number is a measurement, and it turns this test from a judgement into a
+   threshold. **Not** the observed-days count: that is thirty of thirty, settled above.
 3. Whether the challenge gets the rule at all, given it already has a deadline.
 4. Whether `lastSeenActive` is worth the storage on the challenge, which is cloned per purchase.
 
