@@ -1113,6 +1113,25 @@ MUTATIONS = [
      "        if not self.send:\n            return {\"status\": \"not_sent\", \"call\": \"stopFunded\"}",
      "        if False:\n            return {\"status\": \"not_sent\", \"call\": \"stopFunded\"}",
      ["test_stop_funded_signs_nothing_on_a_dry_run_and_names_the_contracts_refusal"]),
+    # Two guards the review found held by nothing: the head-is-None return in `recut_if_uncut`,
+    # and treating a mined duplicate ("nonce too low") as an error.
+    ("K87", "ops/keeper.py",
+     "    if latest is None:\n        return",
+     "    if False:\n        return",
+     ["test_a_stopped_account_is_still_settled_without_a_head_and_its_recut_waits"]),
+    ("K88", "spike/hlspike/common.py",
+     '        if "already known" not in str(exc) and "nonce too low" not in str(exc).lower():',
+     '        if "already known" not in str(exc):',
+     ["test_nonce_too_low_also_waits_for_the_receipt"]),
+    # The word: a contract saying no, against a node or a timeout. Both halves break on their own.
+    ("A52", "agents/desk.py",
+     "        said_no = by_contract if by_contract is not None else reason in self._errors.values()",
+     "        said_no = True",
+     ["test_a_node_that_refused_the_read_is_not_called_a_contract_refusal"]),
+    ("A53", "agents/desk.py",
+     '            return {**self._refusal(exc, by_contract=True), "attempt_returned": False}',
+     '            return {**self._refusal(exc, by_contract=False), "attempt_returned": False}',
+     ["test_a_graduation_that_went_out_and_reverted_stays_spent"]),
     # ── keeper (Python unittest) ──
     # The take has to clear the target by what closing costs, or a challenge the take closed
     # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.
@@ -1407,7 +1426,7 @@ MUTATIONS = [
      "        if True:",
      ["test_a_throttled_call_is_retried"]),
     ("K33", "spike/hlspike/common.py",
-     '        if "already known" not in str(exc):',
+     '        if "already known" not in str(exc) and "nonce too low" not in str(exc).lower():',
      "        if True:",
      ["test_already_known_waits_for_the_receipt"]),
     ("K34", "ops/deploy_testnet.py",

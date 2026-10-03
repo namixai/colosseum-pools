@@ -182,6 +182,18 @@ class DeskLimits(WithChain):
         self.chain.revert = None
         self.assertEqual(desk.graduate()["status"], "sent", "so the attempt is still there to use")
 
+    def test_a_node_that_refused_the_read_is_not_called_a_contract_refusal(self):
+        # The word, not the counter. `NotSent` covers a contract reverting at the gas estimate AND
+        # a node refusing the nonce read, and both used to come back `refused_by_contract` -- which
+        # tells a reader the contract said no when it was never asked.
+        desk = self.desk()
+        self.chain.revert = None
+        self.chain.not_sent = "eth_getTransactionCount: rate limited 7 times in a row"
+        out = desk.graduate()
+        self.assertEqual(out["status"], "failed")
+        self.assertIs(out["attempt_returned"], True, "it still never left, so the attempt is back")
+        self.assertIn("rate limited", out["reason"])
+
     def test_a_graduation_that_went_out_and_reverted_stays_spent(self):
         # Past the broadcast the transaction may be in the mempool whatever the error says. An
         # attempt returned here would let a second one land on top of the first.

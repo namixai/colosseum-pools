@@ -190,6 +190,15 @@ def wait_receipt(tx_hash: str, timeout_s: int = 180) -> dict:
     raise TimeoutError(f"no receipt for {tx_hash} after {timeout_s}s")
 
 
+class Reverted(RuntimeError):
+    """The transaction was mined and the contract rejected it.
+
+    Distinct from a transport failure after the broadcast: both leave an attempt spent, but only
+    this one is the contract having said no. The receipt carries no revert data, so the reason
+    cannot be named -- which is why it needs a type rather than a parsed message.
+    """
+
+
 class NotSent(RuntimeError):
     """The transaction was never handed to the node, so nothing can have happened on chain.
 
@@ -232,12 +241,15 @@ def send_tx(acct: LocalAccount, to: str | None, data: bytes = b"", value: int = 
     try:
         rpc("eth_sendRawTransaction", ["0x" + signed.raw_transaction.hex().removeprefix("0x")])
     except RuntimeError as exc:
-        # A send that was throttled after it reached the node comes back as a duplicate.
-        if "already known" not in str(exc):
+        # A send that was throttled after it reached the node comes back as a duplicate -- and if
+        # it was not only accepted but already MINED, the node answers "nonce too low" instead.
+        # Both mean the transaction exists, so both wait for its receipt. Raising on the second
+        # would report a refusal for a transaction that went through (review, 3 Oct 2026).
+        if "already known" not in str(exc) and "nonce too low" not in str(exc).lower():
             raise
     rcpt = wait_receipt(tx_hash)
     if int(rcpt["status"], 16) != 1:
-        raise RuntimeError(f"transaction {tx_hash} reverted")
+        raise Reverted(f"transaction {tx_hash} reverted")
     return rcpt
 
 
