@@ -5,7 +5,7 @@ import { readProvider, deploymentOf } from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, friendly } from "../lib/ui.js";
 import { DOCS, TEXT, EVENTS, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict, factoryQuestion,
-  withDeployment } from "../lib/evidence.js";
+  withDeployment, accountCell } from "../lib/evidence.js";
 
 const EVENT_ABI = new ethers.Interface(EVENTS);
 
@@ -35,11 +35,7 @@ const quotes = (list) => (list || []).map((q) => `<p class="quote">${esc(quoted(
 
 function rowHtml(row, i) {
   const [what, account, tx, how] = TEXT.columns;
-  const link = appLink(row);
-  const acct = row.account
-    ? `${row.kind ? `<span class="badge">${esc(row.kind)}</span> ` : ""}<code>${esc(row.account)}</code>`
-      + (link ? `<br><a href="${esc(link)}">${esc(TEXT.open)}</a>` : "")
-    : `<span class="muted">${esc(TEXT.noAccount)}</span>`;
+  const acct = accountCell(row);
   const txCell = row.tx
     ? `<code>${esc(row.tx)}</code>${row.block ? `<br><span class="muted">block ${esc(row.block)}</span>` : ""}`
       + (row.sentBy ? `<br><span class="muted">${esc(row.sentBy)}</span>` : "")

@@ -108,10 +108,37 @@ class Window(unittest.TestCase):
         self.assertEqual(saved["stops_left"], 1,
                          "the counter the file never had starts fresh, and is written back")
 
-    def test_the_per_order_cap_is_the_windows(self):
+    def test_the_per_order_cap_is_whichever_of_the_two_binds(self):
+        # The cap is a share of the leverage rule, no larger than what the gateway says it takes.
+        # The fake account holds 1000 against a 3x rule, so the share allows 0.4 x 3000 = 1200 and
+        # the gateway's 400 is what binds: an order of 420 is refused, 360 goes.
         with self.assertRaises(dk.Refused):
-            self.run_cli("order", ACCOUNT, "BTC", "buy", "0.002", "60000")  # 120 USDC
-        self.run_cli("order", ACCOUNT, "BTC", "buy", "0.0015", "60000")  # 90 USDC
+            self.run_cli("order", ACCOUNT, "BTC", "buy", "0.007", "60000")  # 420 USDC
+        self.run_cli("order", ACCOUNT, "BTC", "buy", "0.006", "60000")  # 360 USDC
+        self.assertEqual(len(self.gateway.orders), 1)
+
+    def test_account_reports_the_cap_the_order_path_will_apply(self):
+        # `account` sends nothing, so it used to skip asking the gateway and reported the fallback
+        # while `order` applied a lower published cap. The field is what the trader file tells the
+        # bot to size from, so a field that differs from the rule is a field that lies.
+        self.gateway.says_cap = 50.0
+        said = self.run_cli("account", ACCOUNT)["session"]["max_order_notional_usdc"]
+        self.assertEqual(said, 50.0, "the published cap, not the 400 fallback")
+        with self.assertRaises(dk.Refused):
+            self.run_cli("order", ACCOUNT, "BTC", "buy", "0.001", "60000")  # 60 USDC, over 50
+        self.run_cli("order", ACCOUNT, "BTC", "buy", "0.0008", "60000")  # 48 USDC
+        self.assertEqual(len(self.gateway.orders), 1)
+
+    def test_at_small_capital_the_share_binds_and_not_the_gateway(self):
+        # The reason the cap stopped being a number: at 70 of capital the share allows
+        # 0.4 x 70 x 3 = 84, far under the gateway's 400, and the flat 100 this replaced would
+        # have let the agent commit more than half the headroom in one order.
+        self.chain.equity = 70.0
+        said = self.run_cli("account", ACCOUNT)["session"]["max_order_notional_usdc"]
+        self.assertEqual(said, 84.0, "and the field an agent reads before sizing says so")
+        with self.assertRaises(dk.Refused):
+            self.run_cli("order", ACCOUNT, "BTC", "buy", "0.0015", "60000")  # 90 USDC, over 84
+        self.run_cli("order", ACCOUNT, "BTC", "buy", "0.0013", "60000")  # 78 USDC
         self.assertEqual(len(self.gateway.orders), 1)
 
     def test_no_option_raises_a_limit(self):

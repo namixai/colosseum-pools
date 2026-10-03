@@ -81,9 +81,32 @@ def market_mid(coin: str) -> float:
 
 @dataclass
 class Limits:
-    max_notional: float = 100.0
+    """What one session may do. The per-order cap is a SHARE of the rule's own ceiling rather
+    than a number, so it moves with the capital it is protecting.
+
+    A flat 100 USDC was sized for a 70-USDC challenge. On a funded stage of 700 the same number
+    left the agent at 0.57x of a 5x rule -- ten times tamer than the audition it had just passed,
+    which is not a cap on recklessness but a cap on the product.
+
+    The share is 0.4 against a headroom of 0.8, so two orders reach the whole exposure the headroom
+    allows and two of the four daily orders are left for a correction. 0.5 would also take two, but
+    it lets a single order commit 62% of the headroom where 0.4 commits exactly half: same order
+    budget, smaller mistake.
+
+    `gateway_max_notional` is what the gateway said it would take, from `/v1/health`. The share can
+    exceed it on large capital -- 0.4 of 3500 is 1400 against the demo signer's 400 -- and an order
+    the signer rejects costs the agent one of its few daily orders, because that refusal is not
+    `busy` and `_refund` does not give it back. So the cap is the SMALLER of the two.
+    """
+    gateway_max_notional: float = 400.0
+    max_order_share_of_rule: float = 0.4
     max_orders: int = 4
     leverage_headroom: float = 0.8  # new exposure stays under this share of the leverage rule
+
+    def order_cap(self, equity: float, leverage_x100: int) -> float:
+        """The most one order may carry, given the account's equity now."""
+        by_rule = max(equity, 0.0) * leverage_x100 / 100 * self.max_order_share_of_rule
+        return min(by_rule, self.gateway_max_notional)
 
 
 class Desk:
@@ -194,8 +217,11 @@ class Desk:
                 "coin": o["coin"], "side": "buy" if o["side"] == "B" else "sell",
                 "limit_price": float(o["limitPx"]), "size": float(o["sz"]), "oid": o["oid"],
             } for o in c.info_post({"type": "openOrders", "user": self.account})[:30]],
+            # Computed from the equity above, not a constant: this is the field an agent should
+            # read before sizing an order, and it has to be the number the order path will use.
             "session": {"orders_left": self.orders_left, "cancels_left": self.cancels_left,
-                        "max_order_notional_usdc": self.limits.max_notional},
+                        "max_order_notional_usdc": round(
+                            self.limits.order_cap(equity, self.rules["leverage_x100"]), 2)},
         }
         if self.is_challenge:
             _, capital, target_bps, _, ch_share_bps, funded_share_bps, _ = c.call_view(
@@ -255,10 +281,16 @@ class Desk:
                 # A sell priced under the market fills at the market: it counts at the mid when
                 # that is higher than its limit, as the gateway counts it.
                 notional = max(float(px), market_mid(coin)) * float(sz)
-            if notional > self.limits.max_notional:
-                raise Refused(f"{notional:.2f} USDC is over this session's cap of {self.limits.max_notional} per order")
+            # The per-order cap now depends on equity, so it is checked AFTER the read the leverage
+            # ceiling needs anyway -- one state read serves both, as it did before.
             summary = self._state()["marginSummary"]
             equity, open_notional = float(summary["accountValue"]), float(summary["totalNtlPos"])
+            cap = self.limits.order_cap(equity, self.rules["leverage_x100"])
+            if notional > cap:
+                raise Refused(f"{notional:.2f} USDC is over this session's cap of {cap:.2f} per order "
+                              f"({self.limits.max_order_share_of_rule:g} of the leverage rule on "
+                              f"{equity:.2f} of equity, and no more than the gateway's "
+                              f"{self.limits.gateway_max_notional:.2f})")
             ceiling = max(equity, 0) * self.rules["leverage_x100"] / 100 * self.limits.leverage_headroom
             if open_notional + notional > ceiling:
                 raise Refused(f"open notional would reach {open_notional + notional:.2f} USDC; the leverage rule "
@@ -369,15 +401,29 @@ class Desk:
             receipt = c.transact(self.wallet, self.account, signature, types, args)
         except c.NotSent as exc:
             self._refund(counter)
-            return {"status": "refused_by_contract", "reason": self._reason(exc), "attempt_returned": True}
+            return {**self._refusal(exc), "attempt_returned": True}
+        except c.Reverted as exc:
+            return {**self._refusal(exc, by_contract=True), "attempt_returned": False}
         except Exception as exc:
-            return {"status": "refused_by_contract", "reason": self._reason(exc), "attempt_returned": False}
+            return {**self._refusal(exc), "attempt_returned": False}
         return {"status": "sent", "tx": receipt["transactionHash"]}
 
-    def _reason(self, exc: Exception) -> str:
+    def _refusal(self, exc: Exception, by_contract: bool | None = None) -> dict:
+        """The status and the reason for a call that did not go through.
+
+        `refused_by_contract` where the contract actually said no: a custom error of ours decoded
+        out of the gas estimate, or `c.Reverted` -- mined and rejected, whose receipt carries no
+        revert data to name. Everything else is `failed`: a node refusing the read before the
+        estimate, a timeout after the send. Calling those a contract refusal tells a reader the
+        contract said no when it was never asked (review, 3 October 2026). `attempt_returned` was
+        already right either way; it was the word that misled.
+        """
         if self._errors is None:
             self._errors = _error_names()
-        return revert_reason(exc, self._errors)
+        reason = revert_reason(exc, self._errors)
+        said_no = by_contract if by_contract is not None else reason in self._errors.values()
+        return {"status": "refused_by_contract" if said_no else "failed", "reason": reason}
+
 
 
 # ── picking a pool ───────────────────────────────────────────────────────────────────────

@@ -70,6 +70,16 @@ another.
 4. `key = RuledAccount.agentKey(account)` and `KeyRegistry.isBound(key, account, trader)`.
 5. The asset is in the account's rules. The signer checks the platform list and the caps again
    before it signs.
+   - 🔴 **The leverage rule is NOT checked here, or anywhere in this gateway.** It reads `rules()`
+     for the daily and drawdown floors and discards the leverage field (`gateway/chain.py:117`);
+     the word does not appear in its code. So where `ForbiddenAsset` has two layers — refused here
+     before signing, and `violation()` after — **leverage has one**: the contract and a keeper that
+     pulls the stop. The protective stop resting on Hyperliquid does not cover it either, because
+     that stop sits on the drawdown and daily floors, and a position can break the leverage rule
+     while the account is barely down. After A-14 — where a shared request budget can leave a
+     keeper's pass unfinished — this is the most exposed of the three rules. A pre-trade check is
+     an intent for after the submission, not a thing that exists; it was never built, and that is
+     not a decision recorded anywhere.
 6. `(trader, nonce)` hasn't been seen. The pair is claimed here, before the enclave is asked,
    so a copy arriving meanwhile is refused without an enclave call. If the request then never
    reaches Hyperliquid (the Signer fails or refuses, or its signature is malformed or from the
@@ -100,6 +110,13 @@ another.
        reduce-only order passes it: Hyperliquid won't let it grow a position, and a position
        that grew with the price couldn't otherwise be closed in one order. The size cap and
        every other check above still bind it, and it reads no mid.
+     - **`/v1/health` publishes that number**, as `max_order_notional_usdc`, so an agent can
+       size against it instead of guessing. It is the SIGNER's number, read off the signer in
+       use: in `signer` mode the field is **absent**, because the enclave enforces its own caps
+       and this gateway does not know them — a number published from here would be a guess a
+       client then sized against. An agent that guesses high sends an order the signer rejects,
+       and that refusal is not `busy`, so it costs the agent one of its few daily orders for a
+       number it could have read.
    - `signer` mode, not used in the demo: it sends the action to a Usenami Signer gateway
      (`POST /sign`, exchange `hyperliquid_testnet`, the same `kind`, the action, the trader's
      `nonce`) with the bearer token of the tenant that holds `key`.

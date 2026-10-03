@@ -4,7 +4,8 @@
 // reads the chain: the page does, only when a reader asks, and these helpers put what the node answered
 // next to what the row says.
 
-import { deploymentNamed } from "./deployments.js";
+import { deploymentNamed, isArchive } from "./deployments.js";
+import { esc } from "./ui.js";
 
 export const DOCS = "https://github.com/namixai/colosseum-pools/blob/main/";
 
@@ -28,6 +29,11 @@ export const TEXT = {
       + "node: the Read the receipt button does it from your browser, and the last column names the call or event.",
     "HyperEVM testnet and mock USDC. Every wallet in these records is ours. Where the documents say how a record "
       + "was reached, staged or not and who sent it, the row quotes them.",
+    "Each pool and challenge is marked with the deployment it belongs to. The first deployment is kept as an "
+      + "archive: its records stand and can be checked, and it sells nothing. The second is the live one, which the "
+      + "gateway and the keepers serve. A rehearsal deployment is neither, and this site does not read it. A shared "
+      + "pool carries no such mark: it is not a factory's account, and the table of the three pools names the factory "
+      + "its seats come from.",
   ],
   columns: ["What happened", "Account", "Transaction", "How to check it"],
   pools: "The three shared pools",
@@ -68,6 +74,35 @@ export function appLink(row) {
   if (row.kind === "shared pool") return `#/shared/${row.account}`;
   if (deploymentNamed(row.factory) && ["challenge", "pool", "seat"].includes(row.kind)) return `#/verify/${row.account}`;
   return null;
+}
+
+/**
+ * The deployment a row's account belongs to, as the page marks it: the archive, the live one, or a rehearsal the
+ * site does not read. Empty for a shared pool (its seats come from a factory the table of pools names) and for a
+ * row of a deployment this page has no word for.
+ */
+export function deploymentBadge(row) {
+  if (row.kind === "shared pool") return "";
+  if (row.factory === "rehearsal") return "rehearsal deployment";
+  const named = deploymentNamed(row.factory);
+  if (!named) return "";
+  return isArchive(named) ? "first deployment, archive" : "live deployment";
+}
+
+/**
+ * The account cell of a row, as HTML: its kind, the deployment it belongs to, the account and the link into the
+ * app; or, for a row with no account, the deployment and a word saying so. Here and not in the view, so a test
+ * can read what the page actually prints.
+ */
+export function accountCell(row) {
+  const link = appLink(row);
+  // Which deployment the row is about, said on the row: the first is an archive, the second is live.
+  const where = deploymentBadge(row);
+  const mark = where ? `<span class="badge">${esc(where)}</span>` : "";
+  return row.account
+    ? `${row.kind ? `<span class="badge">${esc(row.kind)}</span> ` : ""}${mark}${mark ? "<br>" : ""}<code>${esc(row.account)}</code>`
+      + (link ? `<br><a href="${esc(link)}">${esc(TEXT.open)}</a>` : "")
+    : `${mark}${mark ? "<br>" : ""}<span class="muted">${esc(TEXT.noAccount)}</span>`;
 }
 
 /** Which factory to ask about a row's account, "pool" or "challenge", or null when the site reads no deployment the

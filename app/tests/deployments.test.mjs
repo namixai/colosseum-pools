@@ -10,7 +10,7 @@ import { CONFIG } from "../config.js";
 import { DEPLOYMENTS, liveDeployment, isArchive, pickDeployment, deploymentNamed, ARCHIVE } from "../lib/deployments.js";
 import { poolStatus } from "../lib/stages.js";
 import { tradeTarget } from "../lib/listing.js";
-import { appLink, factoryQuestion, withDeployment } from "../lib/evidence.js";
+import { TEXT, appLink, factoryQuestion, withDeployment, deploymentBadge, accountCell } from "../lib/evidence.js";
 
 const text = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const record = (label) => JSON.parse(text(`../../deployments/testnet-${label}.json`));
@@ -117,4 +117,35 @@ test("the records page holds each row to the deployment it names", () => {
     { ok: false, text: "The node says: block 1. The row names the demo deployment, but neither factory this site reads made it." });
   assert.equal(withDeployment(green, row("rehearsal"), undefined), green);
   assert.match(text("../views/evidence.js"), /return withDeployment\(receiptVerdict\(row, receipt, decode\(receipt\)\), row, madeBy\);/);
+});
+
+test("the records page says on each row which deployment it is about", () => {
+  const row = (factory, kind = "pool") => ({ account: "0x237afA2D58", factory, kind });
+  assert.equal(deploymentBadge(row("demo")), "first deployment, archive");
+  assert.equal(deploymentBadge(row("demo", "challenge")), "first deployment, archive");
+  assert.equal(deploymentBadge(row("demo2")), "live deployment");
+  assert.equal(deploymentBadge(row("rehearsal", "challenge")), "rehearsal deployment");
+  // A shared pool is not a factory's account: the table of pools names where its seats come from.
+  assert.equal(deploymentBadge(row("demo", "shared pool")), "");
+  assert.equal(deploymentBadge(row("somewhere else")), "");
+  // Every pool, challenge and seat in the records carries one, and both deployments the site reads appear.
+  const data = JSON.parse(text("../data/evidence.json"));
+  const marked = data.rows.filter((r) => ["pool", "challenge", "seat"].includes(r.kind)).map(deploymentBadge);
+  assert.ok(marked.every(Boolean));
+  assert.ok(marked.includes("first deployment, archive") && marked.includes("live deployment"));
+  // What the page prints, for a row with an account and for one without: the mark comes before either.
+  assert.equal(accountCell({ account: "0xabc", kind: "pool", factory: "demo" }),
+    '<span class="badge">pool</span> <span class="badge">first deployment, archive</span><br><code>0xabc</code>'
+    + '<br><a href="#/verify/0xabc">Open it in the app</a>');
+  assert.equal(accountCell({ account: "0xabc", kind: "challenge", factory: "demo2" }),
+    '<span class="badge">challenge</span> <span class="badge">live deployment</span><br><code>0xabc</code>'
+    + '<br><a href="#/verify/0xabc">Open it in the app</a>');
+  assert.equal(accountCell({ factory: "rehearsal" }),
+    '<span class="badge">rehearsal deployment</span><br><span class="muted">not named in the document</span>');
+  assert.equal(accountCell({ account: "0xabc", kind: "shared pool", factory: "demo" }),
+    '<span class="badge">shared pool</span> <code>0xabc</code><br><a href="#/shared/0xabc">Open it in the app</a>');
+  assert.match(text("../views/evidence.js"), /const acct = accountCell\(row\);/);
+  assert.match(TEXT.intro.join(" "), /The first deployment is kept as an archive: its records stand and can be checked, and it sells nothing\. The second is the live one/);
+  // The rows that carry no mark are named too, so a reader does not take them for rows the page forgot.
+  assert.match(TEXT.intro.join(" "), /A shared pool carries no such mark: it is not a factory's account, and the table of the three pools names the factory its seats come from\./);
 });
