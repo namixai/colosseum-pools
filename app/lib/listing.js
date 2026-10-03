@@ -41,7 +41,7 @@ export async function holdsCode(getCode, address) {
 
 export const KIND_NOTE = {
   bench: "Rehearsal pool: ours, with test parameters.",
-  "live-run": "Live-run pool: ours, the team is its investor.",
+  "live-run": "Live-run pool: ours, opened by the team for its own run.",
   seat: "A seat of a shared pool: many investors hold shares in it.",
   pool: "",
 };
