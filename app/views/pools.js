@@ -64,7 +64,8 @@ async function readPoolItem(address, index, deployment) {
   const blocker = archived ? { kind: "archived" }
     : saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed: Number(neededSpot) / 1e8 });
   return { index, address, rules, terms, assets, stage, owner, spotUsdc, blocker, archived, deployment,
-    kind: poolKind({ owner, ownerIsContract, deployer: deployment.deployer }) };
+    kind: poolKind({ owner, ownerIsContract, deployer: deployment.deployer, address,
+      liveRunPool: deployment.liveRunPool }) };
 }
 
 function poolCard(item, fee) {

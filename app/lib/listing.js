@@ -14,8 +14,14 @@ export const LANDING = {
  * deploy key, with test parameters, and seats of the shared pools, which a contract owns. They stay listed --
  * the On chain page links to them -- but under their own heading, named for what they are. A pool anyone else
  * opens is listed as it is.
+ *
+ * The pool opened for the live run is the deploy key's as well, and it is not a bench: its terms are the ones the
+ * run is held to, so the page must not call them test parameters. The owner alone cannot tell the two apart; the
+ * deployment's config names that one pool (`liveRunPool`), and only a pool the deploy key owns can be it.
  */
-export function poolKind({ owner, ownerIsContract, deployer }) {
+export function poolKind({ owner, ownerIsContract, deployer, address, liveRunPool }) {
+  const same = (a, b) => Boolean(a && b) && String(a).toLowerCase() === String(b).toLowerCase();
+  if (same(owner, deployer) && same(address, liveRunPool)) return "live-run";
   if (deployer && String(owner).toLowerCase() === String(deployer).toLowerCase()) return "bench";
   if (ownerIsContract) return "seat";
   return "pool";
@@ -35,11 +41,12 @@ export async function holdsCode(getCode, address) {
 
 export const KIND_NOTE = {
   bench: "Rehearsal pool: ours, with test parameters.",
+  "live-run": "Live-run pool: ours, the team is its investor.",
   seat: "A seat of a shared pool: many investors hold shares in it.",
   pool: "",
 };
 
-export const OTHERS_HEADING = "Rehearsal pools and shared-pool seats";
+export const OTHERS_HEADING = "Our own pools and shared-pool seats";
 
 /** The line a card carries when the pool cannot sell a challenge; empty when it can. */
 export function cardBlockerLine(blocker) {
