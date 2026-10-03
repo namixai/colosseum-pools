@@ -108,8 +108,12 @@ test("the pool opened for the live run is ours and is not called a rehearsal", (
   assert.equal(kind({ liveRunPool: undefined }), "bench");
   // The address alone does not make a pool ours: the owner does.
   assert.equal(kind({ owner: "0x21538eBF6598e5866BA496A954dE8E39097bFB59" }), "pool");
-  assert.equal(KIND_NOTE["live-run"], "Live-run pool: ours, the team is its investor.");
+  assert.equal(KIND_NOTE["live-run"], "Live-run pool: ours, opened by the team for its own run.");
   assert.doesNotMatch(KIND_NOTE["live-run"], /rehearsal|test parameters/i);
+  // The line over the list says no investor's pool can sell a challenge. This pool is idle and can, so its own
+  // line must not call the team its investor: the two would contradict each other on one page.
+  assert.match(LANDING.trade.none, /^No investor's pool on the live deployment can sell a challenge right now/);
+  assert.doesNotMatch(KIND_NOTE["live-run"], /investor/i);
   // Still ours, so still under our own heading and never where "I want to trade" leads.
   const items = [{ index: 0, address: "0xlive", kind: "live-run", blocker: null }, { index: 1, address: "0xshort", kind: "pool", blocker: { kind: "underfunded", short: 1 } }];
   assert.deepEqual(listOrder(items).map((i) => i.address), ["0xshort", "0xlive"]);
