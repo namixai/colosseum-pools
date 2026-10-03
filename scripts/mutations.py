@@ -1094,6 +1094,16 @@ MUTATIONS = [
     # The per-order cap is a share of the rule AND no more than the gateway will take. Each half
     # has to break on its own: without the share it stops moving with capital, and without the
     # clamp the agent sends an order the signer rejects, which costs it a daily order.
+    # What the gateway reports has to be finite and positive, and the field `account` shows has to
+    # be the one the order path applies. Both were found by review, not by me.
+    ("A49", "agents/client.py",
+     "        if cap is None or not math.isfinite(cap) or cap <= 0:",
+     "        if cap is None:",
+     ["test_every_way_it_can_fail_lands_on_the_fallback"]),
+    ("A50", "agents/client.py",
+     '    gw = gateway_for(wallet, args.gateway) if (trading or args.command == "account") else None',
+     "    gw = gateway_for(wallet, args.gateway) if trading else None",
+     ["test_account_reports_the_cap_the_order_path_will_apply"]),
     ("A47", "agents/desk.py",
      "        return min(by_rule, self.gateway_max_notional)",
      "        return by_rule",

@@ -184,6 +184,13 @@ class HealthUrlAndTheCapItCarries(unittest.TestCase):
         for name, kw in (("field absent", {"payload": {"ok": True}}),
                          ("field null", {"payload": {"max_order_notional_usdc": None}}),
                          ("field not a number", {"payload": {"max_order_notional_usdc": "soon"}}),
+                         # float("NaN") parses, and min(by_rule, NaN) keeps by_rule -- the clamp
+                         # would disappear without a sound. Zero and negative would refuse every
+                         # opening order instead.
+                         ("field NaN", {"payload": {"max_order_notional_usdc": "NaN"}}),
+                         ("field infinity", {"payload": {"max_order_notional_usdc": "Infinity"}}),
+                         ("field zero", {"payload": {"max_order_notional_usdc": 0}}),
+                         ("field negative", {"payload": {"max_order_notional_usdc": -5}}),
                          ("body not json", {"boom": "json"}),
                          ("request refused", {"boom": "http"})):
             with self.subTest(name):

@@ -88,9 +88,16 @@ class GatewayClient:
         except Exception:
             return fallback
         try:
-            return float(said) if said is not None else fallback
+            cap = float(said) if said is not None else None
         except (TypeError, ValueError):
             return fallback
+        # Finite and positive or nothing. `float("NaN")` parses, and `min(by_rule, NaN)` keeps
+        # by_rule -- the clamp would vanish silently, which is the same trap `market_mid` in
+        # `desk.py` already carries a docstring about for `max`. A negative or zero cap would
+        # refuse every opening order instead.
+        if cap is None or not math.isfinite(cap) or cap <= 0:
+            return fallback
+        return cap
 
     def _post(self, kind: str, fields: dict) -> Any:
         body = {"kind": kind, kind: fields, "signature": auth.sign(self.wallet, kind, fields)}
@@ -289,7 +296,11 @@ def run(args: argparse.Namespace, chain, reader_for, gateway_for) -> Any:
             raise desk.Refused("this wallet is not the account's trader")
     # One gateway object: asked for its cap even on a dry run, so `--dry-run` reports the same
     # number a real order would be held to, and handed to the desk only when it may send.
-    gw = gateway_for(wallet, args.gateway) if trading else None
+    # `account` asks too, although it sends nothing: the cap it reports is the number an agent
+    # sizes from, and it has to be the one the order path will apply. Reporting the fallback here
+    # while `order` used a lower published cap would make the field a liar -- and the field is what
+    # the trader file tells the bot to trust.
+    gw = gateway_for(wallet, args.gateway) if (trading or args.command == "account") else None
     cap = gw.max_order_notional(GATEWAY_ORDER_CAP_BEFORE_PUBLISHED) if gw else GATEWAY_ORDER_CAP_BEFORE_PUBLISHED
     limits = desk.Limits(gateway_max_notional=cap, max_orders=WINDOW_MAX_ORDERS_PER_DAY,
                          max_order_share_of_rule=WINDOW_MAX_ORDER_SHARE_OF_RULE)
