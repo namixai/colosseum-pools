@@ -7,9 +7,10 @@ import { sendUsdc } from "../lib/hlsend.js";
 import { esc, render, $, wire, badge, row, when, duration, pct, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import { stageName } from "../lib/stages.js";
+import { deploymentNamed, isArchive } from "../lib/deployments.js";
 import {
   SHARED_POOL, SHARED_ABI, TICKET_STATE, blockerText, amount, spot1e8, shares, worth, price, depositPlan,
-  ticketsToName, lockedUntil, explain, plain, usd, openedTicket, paidSummary,
+  ticketsToName, lockedUntil, explain, plain, usd, openedTicket, paidSummary, depositState, sealLine,
 } from "../lib/shared.js";
 
 const { ethers } = window;
@@ -49,22 +50,37 @@ async function write(address, method, args = []) {
 export async function sharedView(address, page) {
   const at = ethers.getAddress(address || SHARED_POOL);
   const sp = contract(at);
-  const [value, total, seed, queued, minDeposit, lock, feeBps, blocker, seatList, points, lastPoint, evm, core] =
+  const [value, total, seed, queued, minDeposit, lock, feeBps, blocker, seatList, points, lastPoint, evm, core,
+    seatFactory, sealed] =
     await Promise.all([
       sp.value(), sp.totalShares(), sp.seedShares(), sp.queuedShares(), sp.minDeposit(), sp.lock(), sp.feeBps(),
       sp.blocker(), sp.seats(), sp.points(), sp.lastPoint(), chain.usdc().balanceOf(at), spotOf(at),
+      sp.factory(),
+      // The pools of the earlier rounds are older than the seal: they revert, and only that means "no seal
+      // here". Anything else, a rate limit say, fails the page with its own words.
+      sp.seatsSealed().catch((err) => {
+        if (err?.code === "CALL_EXCEPTION") return null;
+        throw err;
+      }),
     ]);
   const reason = Number(blocker[0]);
+  // The deployment whose factory makes this pool's seats: the live one, the archive, or none the site reads.
+  const deployment = deploymentNamed(seatFactory);
+  const started = BigInt(total) > 0n;
+  const deposit = depositState({ deployment, started, sealed });
+  const where = !deployment ? "seats on a factory of its own"
+    : isArchive(deployment) ? "first deployment, archive" : "live deployment";
+  const seatBook = sealLine(sealed);
 
   render(page, `
     <section class="card">
-      <h2>Shared pool ${badge("testnet, not reviewed")}</h2>
+      <h2>Shared pool ${badge("testnet, not reviewed")} ${badge(where)}</h2>
       <p class="muted mono">${esc(at)}</p>
       <p>Here many investors share one pool. Their money sits in seats: each seat is an ordinary pool
       of this site, with its own challenge and funded stage, and this contract owns all of them. A seat's
       rules and the price of its challenge go on the chain before the seat gets any money, and they never
-      change after that. The operator can add seats. You don't set these limits. You look at the
-      published ones and decide whether to come in.</p>
+      change after that. ${sealed === null ? "The operator can add seats. " : ""}You don't set these limits. You look
+      at the published ones and decide whether to come in.</p>
       <p class="muted">This part is new. It runs on Hyperliquid testnet with mock USDC, and nobody has
       reviewed it yet. <a href="${esc(DOC)}" target="_blank" rel="noopener">How it works</a>.</p>
     </section>
@@ -78,6 +94,7 @@ export async function sharedView(address, page) {
         ${row("Free on HyperCore", `${usd(core, 8)} USDC`)}
         ${row("Waiting to be paid", `${shares(queued)} shares, worth ${usd(worth(queued, value, total), 8)} USDC`)}
         ${row("The platform's starting shares", `${shares(seed)}, worth ${usd(worth(seed, value, total), 8)} USDC; they never leave`)}
+        ${seatBook ? row("The book of seats", esc(seatBook)) : ""}
         ${row("Smallest deposit", `${usd(minDeposit, 8)} USDC`)}
         ${row("Lock", `${esc(duration(lock))} after your latest deposit`)}
         ${row("The platform's fee", `${pct(feeBps)} of your own profit, taken when you withdraw`)}
@@ -90,9 +107,10 @@ export async function sharedView(address, page) {
         run one when nothing is holding it up.</p>
         ${row("Points so far", esc(points))}
         ${row("The latest", esc(when(lastPoint)))}
-        ${row("Can one run now?", `${badge(reason === 0 ? "yes" : "not now", reason === 0 ? "ok" : "bad")}
+        ${row("Can one run now?", !started ? `${badge("not now", "bad")} The pool hasn't started yet.`
+          : `${badge(reason === 0 ? "yes" : "not now", reason === 0 ? "ok" : "bad")}
           ${esc(blockerText(reason))}${reason ? ` <span class="mono">${esc(chain.short(blocker[1]))}</span>` : ""}`)}
-        <p><button id="point"${reason ? " disabled" : ""}>Run a settlement point</button></p>
+        <p><button id="point"${reason || !started ? " disabled" : ""}>Run a settlement point</button></p>
       </section>
     </div>
     <section class="card" id="you"><h3>You</h3><p class="muted">Loading…</p></section>
@@ -108,7 +126,7 @@ export async function sharedView(address, page) {
 
   // One after the other: ethers sends reads made in the same moment as one JSON-RPC batch, and the
   // public RPC refuses a batch over twenty (app/lib/batch.js). Side by side, these two would pass it.
-  await settle(holderPanel($("#you", page), sp, at, { value, total, minDeposit, lock }, chain.currentAddress()),
+  await settle(holderPanel($("#you", page), sp, at, { value, total, minDeposit, lock, deposit }, chain.currentAddress()),
     $("#you", page));
   await settle(seats($("#seats", page), sp, seatList), $("#seats", page));
 }
@@ -132,11 +150,14 @@ async function ticketsWithDeposits(sp, minDeposit) {
 }
 
 /** What `me` holds in the pool, has been paid and has on its way, with the forms to deposit and to
- *  ask to withdraw. The forms act through the connected wallet. */
+ *  ask to withdraw. The forms act through the connected wallet. `pool.deposit` (lib/shared.js,
+ *  depositState) says whether the page takes a deposit: where it doesn't, there is no form and no
+ *  button that sends money to a ticket, only the reason; asking to withdraw stays. */
 export async function holderPanel(box, sp, at, pool, me) {
+  const closed = pool.deposit.open ? "" : `<p class="notice">${esc(pool.deposit.note)}</p>`;
   if (!me) {
-    box.innerHTML = `<h3>You</h3><p class="muted">Connect your wallet to deposit, ask to withdraw, or see
-      what the pool has paid you.</p>`;
+    box.innerHTML = `<h3>You</h3><p class="muted">Connect your wallet to ${pool.deposit.open ? "deposit, " : ""}ask
+      to withdraw, or see what the pool has paid you.</p>${closed}`;
     return;
   }
   const [held, waiting, cost, last, count, paid] = await Promise.all([
@@ -161,7 +182,7 @@ export async function holderPanel(box, sp, at, pool, me) {
 
   const ticketRows = tickets.map((t, i) => {
     const state = TICKET_STATE[Number(states[i].state)] || "?";
-    const waitingToSend = state === "Open" && spots[i] === 0n;
+    const waitingToSend = pool.deposit.open && state === "Open" && spots[i] === 0n;
     return `<div class="kv"><span class="mono">${esc(chain.short(t))}</span><span>${esc(state)}, ${usd(spots[i], 8)} USDC
       on HyperCore${waitingToSend ? ` <button class="small secondary" data-ticket="${esc(t)}">Send to it</button>` : ""}</span></div>`;
   }).join("");
@@ -172,13 +193,13 @@ export async function holderPanel(box, sp, at, pool, me) {
     ${row("Waiting to be paid", `${shares(waiting)} shares`)}
     ${row("Paid to you so far", paidText)}
     <h4>Deposit</h4>
-    <p>Each deposit goes to an address of its own, a ticket. Your wallet opens the ticket on HyperEVM,
+    ${pool.deposit.open ? `<p>Each deposit goes to an address of its own, a ticket. Your wallet opens the ticket on HyperEVM,
     then signs a USDC transfer to it on HyperCore. HyperCore charges 1 USDC for creating the ticket's
     account, so a deposit of ${usd(pool.minDeposit, 8)} costs you
     ${usd(BigInt(pool.minDeposit) + 100_000_000n, 8)}. At the next settlement point the deposit turns into
     shares, priced at what the pool was worth without it.</p>
     <div class="inline"><input id="dep" type="number" step="0.01" min="${esc(plain(pool.minDeposit, 8))}"
-      placeholder="USDC"><button id="dep-btn">Open a ticket and send</button></div>
+      placeholder="USDC"><button id="dep-btn">Open a ticket and send</button></div>` : closed}
     ${ticketRows ? `<p class="small muted">Your latest tickets:</p>${ticketRows}` : ""}
     <h4>Withdraw</h4>
     <p>Ask for some of your shares or all of them. Until they're paid they still gain and lose with the
@@ -190,7 +211,7 @@ export async function holderPanel(box, sp, at, pool, me) {
     <div class="inline"><input id="wd" type="number" step="any" min="0" value="${esc(plain(free, 8))}"
       placeholder="shares"><button id="wd-btn" class="secondary">Ask to withdraw</button></div>`;
 
-  wire($("#dep-btn", box), async () => {
+  if (pool.deposit.open) wire($("#dep-btn", box), async () => {
     const text = hl.canonical($("#dep", box).value);
     depositPlan(text, pool.minDeposit);
     const signer = chain.currentSigner() || (await chain.connect(), chain.currentSigner());
@@ -246,7 +267,8 @@ async function seats(box, sp, seatList) {
       ${rulesHtml(rules, assets)}
       ${known ? `<p><a href="#/pool/${esc(seat)}">The seat's pool page →</a></p>`
         : `<p class="small muted">This seat was made by a factory of the shared pool's own. The pool,
-      challenge and trading pages of this site only know the demo's factory, so they won't open it.</p>`}
+      challenge and trading pages of this site only know the factories of its two deployments, so they
+      won't open it.</p>`}
     </article>`;
   }, 3); // six reads a seat at once, three seats a round: eighteen in one batch
   box.innerHTML = cards.join("");

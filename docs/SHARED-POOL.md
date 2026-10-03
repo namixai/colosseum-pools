@@ -153,17 +153,28 @@ the first time the stage is seen, so it runs late by however long nobody looked.
 
 ## In the app
 
-`#/shared` is the pool's page. It shows the value, the price of a share, what waits to be paid,
-whether a settlement point can run now and what holds it up, and the seats with their rules and
-terms. A connected wallet also sees its own shares, what they cost it, and what the pool has paid it
+`#/shared` is the pool's page. With no address it opens the pool whose seats the live deployment's
+factory makes (`app/config.js`, held to `deployments/testnet-shared-demo2.json` by the page's test);
+any other pool opens by `#/shared/<address>`. It shows the value, the price of a share, what waits
+to be paid, whether the book of seats is sealed, whether a settlement point can run now and what
+holds it up, and the seats with their rules and terms. A connected wallet also sees its own shares, what they cost it, and what the pool has paid it
 so far, each part where it was paid. From the page it can deposit (the wallet opens a ticket, then
 signs the transfer to it on HyperCore), ask to withdraw, and run a settlement point. The page's ABI
 is in `app/lib/shared.js`; its test reads this contract's source back, so a renamed function or two
 swapped fields fail there first.
 
-A seat the demo's factory made, like the second round's, opens on the pool page like any other
-pool, and its challenge is bought and traded there. The first run's seat comes from a factory of its
-own, which the pool, challenge and trading pages don't know; the shared pool's page says so.
+The page takes a deposit only where one makes sense, and says why where it doesn't. It asks the pool
+for its factory and for `seatsSealed()`: a pool whose seats come from the first deployment's factory,
+an archive now, or from a factory of its own gets no deposit form, because nobody can buy a challenge
+on those seats; neither does a pool that hasn't started or whose book isn't sealed, where the
+contract would refuse the ticket anyway. Asking to withdraw is never closed. The pools of the
+earlier rounds are older than the seal and revert on that read, which the page takes for "no seal
+here" and for nothing else.
+
+A seat made by a factory the site reads opens on the pool page like any other pool. On the live
+deployment its challenge is bought and traded there; a seat of the first deployment, like the second
+round's, is shown as part of the archive. The first run's seat comes from a factory of its own, which
+the pool, challenge and trading pages don't know; the shared pool's page says so.
 
 ## The keeper
 
@@ -278,8 +289,7 @@ USDC of challenge capital and 30 funded: a 10% drawdown, a 5% daily loss, an 8% 
 rules the Economics page prices. Two deposits of 20 armed it. A trader bought its challenge and
 traded $11 of BTC through the pool gateway, in and out; the account is flat at 2.98997 USDC. The
 seat opens on the app's pool page like any demo pool, and the shared pool by
-`#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6`; the page's default is still the second
-round's pool. The main transactions, and how the trader acted (the gateway client, not a click),
+`#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6`. The main transactions, and how the trader acted (the gateway client, not a click),
 are in [EVIDENCE-SHARED-POOL.md](EVIDENCE-SHARED-POOL.md); every step's hash is in
 `spike/results/2026-09-25.jsonl`.
 
@@ -287,6 +297,26 @@ On the same pool, once its value was no longer its number of shares, a new holde
 0.98785643 a share, got 20.24585701e8 shares for it, and later took 19.999999 out at the same price.
 Nobody else's holding moved but for the millionth the payment left behind, which is theirs now. The
 table is in the evidence page.
+
+## The pool on the second deployment (3 October)
+
+Since 1 October the gateway and the keepers serve the second deployment, and the first is an archive.
+A shared pool whose seats the archive's factory makes can no longer sell a challenge, so a fourth
+pool was deployed with its seats on the second deployment's factory:
+`ops/deploy_shared.py --label shared-demo2 --on-factory-of demo2` deployed the SharedPool alone,
+`0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717` (`deployments/testnet-shared-demo2.json`): a smallest
+deposit of 20 USDC, a lock of ten minutes, a fee of 10% of a holder's own profit. It is the first
+pool deployed with the seal, and the page's default.
+
+The same day both depositors of the third pool asked for everything and were paid at the price of a
+share, 0.98785645, in two points with `releaseSeat` between them; that pool now holds only the
+platform's starting shares. The transactions are in
+[EVIDENCE-SHARED-POOL.md](EVIDENCE-SHARED-POOL.md), and every step's hash is in
+`spike/results/2026-10-03.jsonl`.
+
+`ops/shared_run.py` gained the step the seal needs: `seal`, sent by the operator after the seats are
+published and before the first deposit. `deposit` refuses, before it sends anything, while the book
+is open.
 
 ## Not done yet
 

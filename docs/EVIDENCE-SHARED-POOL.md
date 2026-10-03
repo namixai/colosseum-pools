@@ -11,8 +11,14 @@ anyone can read, or a transaction that was read back from its receipt. The demo'
 | Pool | Factory of its seats | Open it in the app | What it showed |
 |---|---|---|---|
 | `0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A` | its own, `0x436d9074AB42001538D5a999a0eEe721deC516Db` | `#/shared/0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A` | one depositor: deposit, shares, a request, payment at two points while the capital was in a challenge |
-| `0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0` | the demo's | `#/shared` (the page's default) | two depositors: a short payment split between them, the same fraction at one price |
+| `0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0` | the demo's | `#/shared/0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0` | two depositors: a short payment split between them, the same fraction at one price |
 | `0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6` | the demo's | `#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6` | a seat a trader bought and traded |
+
+All three are pools of the earlier rounds: two have their seats on the first deployment's factory, which
+is an archive now, and one on a factory of its own. The app opens each by its address, shows its record,
+and takes no deposit into it; a holder can still ask to withdraw. `#/shared` with no address opens a
+fourth pool, `0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717`, deployed on 3 October 2026 with its seats on the second deployment's factory
+(`deployments/testnet-shared-demo2.json`). What that pool has done is not in this document yet.
 
 ## Checking it yourself
 
@@ -115,6 +121,30 @@ USDC through a ticket of its own. Once the lock had run, it asked for everything
   address: 18.499999 on HyperCore (`0x05302871574daf0506a9042a2861550103004056f240cdd7a8f8d3c4164188ef`)
   and 1.5 on HyperEVM (`0x04ced3f1dbe84f83f48a7848f3fa5c9a834caa9e5f7de6352b6cca39b68e0819`).
   Its two new HyperCore accounts, the holder's and the ticket's, cost 2 USDC; that money is gone.
+
+## Both earlier depositors leave, at the price of a share (3 October)
+
+On `0x547067e2…26a6`, eight days after the trade, the pool held 41.489971 USDC on 42e8 shares, a price of
+0.98785645 a share: 8.500001 free on HyperCore and 32.98997 on its seat, which was idle. Both earlier
+depositors, `0xbD97438655835138daBeE38f3B7d96275eDc315a` and `0x278AbBC5B78F34F77829dDd7887566E182beBD83`, asked for all of their 20e8 shares
+(`0x1b18a7821e2e060d7c7ba213cb066c02bee2855017e09713fe81edf59f825b0a` and
+`0x856ee70f18da440f53e651d04959715671013ab6cdd546304a94b4124620644d`).
+
+- **A short payment, split evenly.** Point `0x2f0345103f2c0ee46b27164ddb02cbb7f73b9992cc87e4b1fcb49919918b5c1c` had
+  8.500001 free against 39.514258 asked. It paid each depositor 4.249999 USDC for 4.30224401e8 of their
+  shares, and left 15.69775599e8 of each waiting.
+- **The seat gave its capital back.** `releaseSeat`
+  `0x87a44b73807c59d3a57b622ceb7a51ff7cb4bf86a3fe86786d4ff31b004c81d4` returned the seat's 32.98997 USDC to the
+  pool. The pool's own payments on HyperCore are given five minutes to land, so the next point waited
+  that long.
+- **The rest.** Point `0x4c1836407ecd83e083ac69ee62eee49f08c6b619380eea9dc42cd6c42c29ac63` paid each depositor the
+  remaining 15.50713 USDC and emptied the queue. Each depositor's HyperCore spot balance read 19.757129
+  USDC afterwards: 20e8 shares at 0.98785645, rounded down to the millionth a payment carries.
+- **What is left.** The pool holds 1.975713 USDC on the platform's 2e8 starting shares, which never
+  leave. Its seat is idle and empty.
+
+The tables above are the pool's state at the points they name. Read now, `value()` and `totalShares()`
+give what this section left: 1.975713 and 2e8. Every step's hash is in `spike/results/2026-10-03.jsonl`.
 
 ## What this does not show
 

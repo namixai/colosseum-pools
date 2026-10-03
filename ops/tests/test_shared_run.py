@@ -68,6 +68,82 @@ class SeatTerms(unittest.TestCase):
             self.assertEqual(c.transact.call_count, 1)
 
 
+class SealedSeats(unittest.TestCase):
+    """Since audit A-13 a pool takes no deposit until its operator has sealed the book of seats."""
+
+    RECORD = {"SharedPool": POOL, "factory_from": "demo2", "platform_assets": {"BTC": 3}}
+
+    def answering(self, c, sealed, seats=("0x" + "5e" * 20,)):
+        def call_view(to, sig, types, args, out):
+            if sig == "seatsSealed()":
+                if isinstance(sealed, Exception):
+                    raise sealed
+                return [sealed]
+            if sig == "seats()":
+                return [list(seats)]
+            if sig == "ticketCount(address)":
+                return [0]
+            return ["0x" + "71" * 20]
+        c.call_view.side_effect = call_view
+        c.transact.return_value = {"transactionHash": "0x" + "ab" * 32}
+
+    def test_a_pool_older_than_the_seal_is_not_taken_for_an_unsealed_one(self):
+        with mock.patch.object(run, "c") as c:
+            self.answering(c, True)
+            self.assertIs(run.seats_sealed(self.RECORD), True)
+            self.answering(c, False)
+            self.assertIs(run.seats_sealed(self.RECORD), False)
+            # The three pools deployed before A-13 have no such call: the node answers with a revert.
+            self.answering(c, RuntimeError("eth_call: execution reverted"))
+            self.assertIsNone(run.seats_sealed(self.RECORD))
+            # A node that refuses is not an older pool.
+            self.answering(c, RuntimeError("eth_call: rate limited 6 times in a row"))
+            with self.assertRaisesRegex(RuntimeError, "rate limited"):
+                run.seats_sealed(self.RECORD)
+
+    def test_seal_is_one_call_from_the_operator_and_needs_a_seat(self):
+        with mock.patch.object(run, "c") as c:
+            self.answering(c, False)
+            run.cmd_seal(self.RECORD, argparse.Namespace())
+            [call] = c.transact.call_args_list
+            self.assertEqual(call.args[1:3], (POOL, "seal()"))
+            c.account.assert_called_with("shared-operator")
+        with mock.patch.object(run, "c") as c:
+            self.answering(c, False, seats=())
+            with self.assertRaisesRegex(SystemExit, "no seat yet"):
+                run.cmd_seal(self.RECORD, argparse.Namespace())
+            c.transact.assert_not_called()
+        with mock.patch.object(run, "c") as c:
+            self.answering(c, RuntimeError("execution reverted"))
+            with self.assertRaisesRegex(SystemExit, "older than the seal"):
+                run.cmd_seal(self.RECORD, argparse.Namespace())
+            c.transact.assert_not_called()
+
+    def test_a_deposit_before_the_seal_is_refused_and_nothing_is_sent(self):
+        args = argparse.Namespace(who="shared-dep-a", usdc=20.0)
+        with mock.patch.object(run, "c") as c:
+            self.answering(c, False)
+            with self.assertRaisesRegex(SystemExit, "isn't sealed yet"):
+                run.cmd_deposit(self.RECORD, args)
+            c.transact.assert_not_called()
+            c.exchange.assert_not_called()
+
+    def test_a_deposit_goes_out_once_sealed_and_on_a_pool_older_than_the_seal(self):
+        args = argparse.Namespace(who="shared-dep-a", usdc=20.0)
+        for sealed in (True, RuntimeError("execution reverted")):
+            with mock.patch.object(run, "c") as c, mock.patch.object(run, "wait_until"):
+                self.answering(c, sealed)
+                c.exchange.return_value.spot_transfer.return_value = {"status": "ok"}
+                run.cmd_deposit(self.RECORD, args)
+                self.assertEqual(c.transact.call_args.args[2], "openTicket()")
+
+    def test_a_seat_on_the_second_deployments_factory_keeps_a_tenth_too(self):
+        with mock.patch.object(run, "c") as c:
+            with self.assertRaisesRegex(SystemExit, "a tenth of the funded capital"):
+                run.cmd_seat(self.RECORD, seat_args())  # 2 and 8: the first run's seat
+            c.transact.assert_not_called()
+
+
 class Request(unittest.TestCase):
     def call(self, now, last_deposit=1_000_000, lock=600):
         record = {"SharedPool": POOL}

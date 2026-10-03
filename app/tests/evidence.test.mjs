@@ -74,7 +74,7 @@ test("every row's source lines are in its section of the document", () => {
     else for (const s of r.sources) if (!body.includes(s)) lost.push(`${r.what}: «${s}»`);
   }
   assert.deepEqual(lost, []);
-  assert.equal(DATA.rows.length, 27);
+  assert.equal(DATA.rows.length, 29);
 });
 
 test("a row shows nothing its own source lines do not say", () => {
@@ -218,7 +218,8 @@ test("the three shared pools are the document's table, cell for cell", () => {
   for (const p of DATA.pools.rows) {
     const line = `| ${p.pool} | ${p.factory} | ${p.open} | ${p.showed} |`;
     assert.ok(body.includes(line), line);
-    assert.match(p.open, /^#\/shared(\/0x[0-9a-fA-F]{40})?( |$)/);
+    // Each opens by its own address: `#/shared` alone is the live deployment's pool, which is none of these.
+    assert.equal(p.open, `#/shared/${p.pool}`);
   }
 });
 

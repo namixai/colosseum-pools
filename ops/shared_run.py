@@ -4,6 +4,7 @@
     spike/.venv/bin/python ops/shared_run.py --deployment shared-run wallets
     spike/.venv/bin/python ops/shared_run.py --deployment shared-run start --seed 1
     spike/.venv/bin/python ops/shared_run.py --deployment shared-run seat
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-run seal
     spike/.venv/bin/python ops/shared_run.py --deployment shared-run arm
     spike/.venv/bin/python ops/shared_run.py --deployment shared-run deposit --who shared-dep-a --usdc 20
     spike/.venv/bin/python ops/shared_run.py --deployment shared-run settle
@@ -107,6 +108,19 @@ def seats(record: dict) -> list[str]:
     return list(view(pool_of(record), "seats()", [], [], ["address[]"])[0])
 
 
+def seats_sealed(record: dict) -> bool | None:
+    """Whether the operator has sealed the book of seats. Since audit A-13 a pool takes no deposit until
+    it is: openTicket reverts SeatsNotSealed. None for a pool deployed before that, which has no such
+    call and took deposits as soon as it had started; any other failure of the read is raised, so a
+    node that refuses is never taken for an older pool."""
+    try:
+        return bool(view(pool_of(record), "seatsSealed()", [], [], ["bool"])[0])
+    except Exception as exc:
+        if "revert" in str(exc).lower():
+            return None
+        raise
+
+
 def snapshot(record: dict) -> dict:
     """What the run looks like now: the pool's value and shares, the queue, each seat, balances."""
     sp = pool_of(record)
@@ -116,6 +130,7 @@ def snapshot(record: dict) -> dict:
         "total_shares": view(sp, "totalShares()", [], [], ["uint256"])[0],
         "queued_shares": view(sp, "queuedShares()", [], [], ["uint256"])[0],
         "blocker": view(sp, "blocker()", [], [], ["uint8", "address"]),
+        "seats_sealed": seats_sealed(record),
         "pool_spot_1e8": c.core_spot_balance(sp, c.USDC_TOKEN)["total"],
         "pool_evm_usdc_1e6": c.erc20_balance(c.TESTNET_USDC_ERC20, sp),
         "holders": {},
@@ -246,11 +261,12 @@ def cmd_seat(record: dict, args) -> None:
     # The demo's pools sell a challenge a tenth the size of the funded capital, under rules the
     # Economics page has a figure for; that is the pool it prices. A seat on the demo's factory keeps
     # to both.
-    if record.get("factory_from") == "demo":
+    # Any deployment the site reads, the first or the second: its pools are listed and priced there.
+    if record.get("factory_from"):
         if t["fundedCapital"] != 10 * t["capital"]:
-            raise SystemExit("a seat on the demo's factory keeps the challenge at a tenth of the funded capital")
+            raise SystemExit("a seat on a deployment's own factory keeps the challenge at a tenth of the funded capital")
         if not on_model_grid(daily, drawdown, t["targetBps"]):
-            raise SystemExit("a seat on the demo's factory keeps to rules the Economics page's model has a figure for")
+            raise SystemExit("a seat on a deployment's own factory keeps to rules the Economics page's model has a figure for")
     rcpt = c.transact(op, pool_of(record), f"addSeat({RULES_TYPE},{TERMS_TYPE},uint32)",
                       [RULES_TYPE, TERMS_TYPE, "uint32"],
                       [(daily, drawdown, leverage, assets),
@@ -258,6 +274,18 @@ def cmd_seat(record: dict, args) -> None:
                         t["traderShareFundedBps"], t["fundedCapital"]), args.term])
     c.record("shared_seat_added", tx=rcpt["transactionHash"], terms=t, rules=[daily, drawdown, leverage],
              funded_term=args.term, seats=seats(record))
+
+
+def cmd_seal(record: dict, _args) -> None:
+    """Finishes the book of seats: from here nobody can add one and anybody can deposit. One way only,
+    and it needs at least one seat (SharedPool.seal)."""
+    op = c.account("shared-operator")
+    if seats_sealed(record) is None:
+        raise SystemExit("this pool is older than the seal: it has nothing to seal and takes deposits as it is")
+    if not seats(record):
+        raise SystemExit("no seat yet: a pool sealed empty could never be given one")
+    rcpt = c.transact(op, pool_of(record), "seal()")
+    c.record("shared_seats_sealed", tx=rcpt["transactionHash"], seats=seats(record), sealed=seats_sealed(record))
 
 
 def cmd_arm(record: dict, _args) -> None:
@@ -278,6 +306,9 @@ def cmd_deposit(record: dict, args) -> None:
     """The depositor opens a ticket on HyperEVM and sends USDC to it on HyperCore."""
     who = c.account(args.who)
     sp = pool_of(record)
+    # Before the ticket, not after: openTicket reverts SeatsNotSealed, and a revert reads like a node problem.
+    if seats_sealed(record) is False:
+        raise SystemExit("the book of seats isn't sealed yet, so the pool takes no deposit: run `seal` first")
     n = view(sp, "ticketCount(address)", ["address"], [who.address], ["uint256"])[0]
     rcpt = c.transact(who, sp, "openTicket()")
     ticket = view(sp, "ticketAddress(address,uint256)", ["address", "uint256"], [who.address, n], ["address"])[0]
@@ -399,6 +430,7 @@ def main() -> int:
     st.add_argument("--target-bps", type=int, help="profit target, bps (default 100)")
     st.add_argument("--daily-bps", type=int, help="daily loss limit, bps (default 300)")
     st.add_argument("--drawdown-bps", type=int, help="drawdown limit, bps (default 600)")
+    sub.add_parser("seal")
     sub.add_parser("arm")
     d = sub.add_parser("deposit")
     d.add_argument("--who", choices=DEPOSITORS, required=True)
@@ -416,7 +448,8 @@ def main() -> int:
     record = deployments.load(args.deployment)
     if "SharedPool" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no shared pool")
-    steps = {"status": cmd_status, "wallets": cmd_wallets, "start": cmd_start, "seat": cmd_seat, "arm": cmd_arm,
+    steps = {"status": cmd_status, "wallets": cmd_wallets, "start": cmd_start, "seat": cmd_seat, "seal": cmd_seal,
+             "arm": cmd_arm,
              "deposit": cmd_deposit, "settle": cmd_settle, "buy": cmd_buy, "request": cmd_request,
              "expire": cmd_expire, "release": cmd_release}
     steps[args.step](record, args)

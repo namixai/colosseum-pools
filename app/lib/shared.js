@@ -5,10 +5,12 @@
 // Pool, PoolFactory, ChallengeAccount and KeyRegistry, which it uses unchanged. docs/SHARED-POOL.md
 // has the design and the testnet run.
 
-/** The pool of the second testnet round, whose seats the demo's factory makes
- *  (deployments/testnet-shared-demo.json). The first run's pool, on a factory of its own, is still
- *  there: #/shared/0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A. */
-export const SHARED_POOL = "0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0";
+import { liveDeployment, isArchive } from "./deployments.js";
+
+/** The pool `#/shared` opens when the link names no address: the live deployment's
+ *  (app/config.js, deployments/testnet-shared-demo2.json). The three pools of the earlier rounds are
+ *  still there and open by address, the way docs/EVIDENCE-SHARED-POOL.md lists them. */
+export const SHARED_POOL = liveDeployment().sharedPool;
 
 export const SHARED_ABI = [
   "function value() view returns (uint256)",
@@ -19,6 +21,8 @@ export const SHARED_ABI = [
   "function lock() view returns (uint32)",
   "function feeBps() view returns (uint16)",
   "function platform() view returns (address)",
+  "function factory() view returns (address)",
+  "function seatsSealed() view returns (bool)",
   "function blocker() view returns (uint8 reason, address account)",
   "function seats() view returns (address[])",
   "function fundedTerm(address seat) view returns (uint32)",
@@ -39,6 +43,7 @@ export const SHARED_ABI = [
   "function requestRedeem(uint256 shares)",
   "function settle(address[] recognize)",
   "error NotStarted()",
+  "error SeatsNotSealed()",
   "error TooMany()",
   "error NotQuiet(uint8 reason, address account)",
   "error NoValue()",
@@ -52,6 +57,40 @@ export const MAX_PER_POINT = 8;
 /** What HyperCore charges the sender for creating a new address's account: every ticket is new. */
 export const NEW_ACCOUNT_FEE = 100_000_000n;
 export const TICKET_STATE = ["None", "Open", "Closed"];
+
+/**
+ * Whether this page takes a deposit into the pool, and if not, why, in words. Three things close it:
+ *   - the pool's seats come from a factory the gateway and the keepers don't serve (the archive's, or
+ *     one of the pool's own): money put there would sit in seats nobody can buy;
+ *   - the pool hasn't started: there is no share to price a deposit by;
+ *   - the operator hasn't sealed the book of seats: the contract itself refuses a ticket until then.
+ * `sealed` is null for a pool deployed before the seal existed, which takes deposits as it always did.
+ * Withdrawals are never closed by any of this.
+ */
+export function depositState({ deployment, started, sealed }) {
+  if (!deployment) {
+    return { open: false, note: "This pool's seats come from a factory of its own, which the gateway and the "
+      + "keepers don't serve. Its record can be read here; the page takes no deposit into it." };
+  }
+  if (isArchive(deployment)) {
+    return { open: false, note: "This pool's seats belong to the first deployment, kept as an archive: nobody can "
+      + "buy a challenge on them, so the page takes no deposit into it. Its record can still be read and checked, "
+      + "and a holder can still ask to withdraw." };
+  }
+  if (!started) return { open: false, note: "The pool hasn't started yet: the platform's starting shares come first." };
+  if (sealed === false) {
+    return { open: false, note: "The operator hasn't sealed the book of seats yet. Until then the contract opens "
+      + "no deposit ticket; after it, nobody can add a seat." };
+  }
+  return { open: true, note: "" };
+}
+
+/** What the page says about the book of seats, by `seatsSealed()`; "" for a pool older than the seal. */
+export function sealLine(sealed) {
+  if (sealed === null) return "";
+  return sealed ? "Sealed: nobody can add a seat any more."
+    : "Open: the operator can still add seats, and the pool takes no deposit until the book is sealed.";
+}
 
 /** Why a settlement point can't run now, in words, by `blocker()`'s reason. */
 export const BLOCKER = [
@@ -196,6 +235,7 @@ export function explain(err) {
   if (name === "NothingRequested") return "Ask for more than zero shares.";
   if (name === "TooMany") return "Too many at once. A point takes at most eight tickets, and at most 16 people can wait to be paid.";
   if (name === "NotStarted") return "The pool hasn't started yet.";
+  if (name === "SeatsNotSealed") return "The operator hasn't sealed the book of seats yet, so the pool opens no deposit ticket.";
   if (name === "NoValue") return "The pool holds nothing to price a share by.";
   return "";
 }

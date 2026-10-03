@@ -20,6 +20,9 @@ export const CONFIG = {
   //   deployer           the deploy key: the pools it owns are our benches, which the list names (app/lib/listing.js);
   //   platformAssets     the perp indices the factory lists. The chain stays the authority -- the new-pool form asks
   //                      isPlatformAsset for each -- this only keeps the form from probing every perp at once.
+  //   sharedPool         the shared pool whose seats this deployment's factory makes: what #/shared opens when the
+  //                      link names no address (deployments/testnet-shared-<label>.json). The archive has none: its
+  //                      shared pools open by address and take no deposit.
   // The live one is what the pool gateway and the keepers serve since 1 Oct 2026: pools are bought, traded and opened
   // there. The archive is the first deployment, kept so its records can still be read and checked: it sells nothing.
   deployments: [
@@ -31,6 +34,7 @@ export const CONFIG = {
       deployBlock: 65736733,
       deployer: "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
       platformAssets: [3, 4, 0],
+      sharedPool: "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
     },
     {
       label: "demo",

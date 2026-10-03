@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   SHARED_ABI, BLOCKER, TICKET_STATE, MAX_PER_POINT, blockerText, amount, usd, plain, spot1e8, shares, worth, price,
-  depositPlan, ticketsToName, lockedUntil, paymentsLine, explain, openedTicket, paidSummary,
+  depositPlan, ticketsToName, lockedUntil, paymentsLine, explain, openedTicket, paidSummary, depositState, sealLine,
+  SHARED_POOL,
 } from "../lib/shared.js";
+import { DEPLOYMENTS, liveDeployment, deploymentNamed } from "../lib/deployments.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SOURCE = readFileSync(join(ROOT, "src", "shared", "SharedPool.sol"), "utf8");
@@ -127,9 +129,78 @@ test("the pool's reverts are said in words; anything else is left to the page", 
     "Your shares are locked until 2026-09-24 23:12 UTC, a fixed time after your latest deposit.");
   assert.equal(explain(revert("NotFree", [976_923_154n])), "You can ask for at most 9.76 shares now.");
   assert.match(explain(revert("NotQuiet", [5n, "0x6cAA4Ce577728F8386FF15fcFaA8F224E261486A"])), /five minutes/);
+  assert.match(explain(revert("SeatsNotSealed", [])), /hasn't sealed the book of seats/);
   assert.equal(explain(revert("SeatBusy", ["0x0"])), "");
   assert.equal(explain(new Error("user rejected")), "");
   assert.equal(explain(undefined), "");
+});
+
+// ── which pool the page opens, and whether it takes a deposit ─────────────────────────
+
+const VIEW = readFileSync(join(ROOT, "app", "views", "shared.js"), "utf8");
+const record = (label) => JSON.parse(readFileSync(join(ROOT, "deployments", `testnet-${label}.json`), "utf8"));
+
+test("the shared page with no address opens the live deployment's shared pool, as its record names it", () => {
+  const live = liveDeployment();
+  const r = record(`shared-${live.label}`);
+  assert.equal(r.status, "complete");
+  assert.equal(r.factory_from, live.label);
+  assert.equal(r.PoolFactory, live.factory, "the pool's seats come from the live factory");
+  assert.equal(live.sharedPool, r.SharedPool);
+  assert.equal(SHARED_POOL, r.SharedPool);
+  // Only the live deployment has one: the archive's shared pools open by address.
+  assert.deepEqual(DEPLOYMENTS.filter((d) => "sharedPool" in d).map((d) => d.label), [live.label]);
+  assert.match(VIEW, /const at = ethers\.getAddress\(address \|\| SHARED_POOL\);/);
+});
+
+test("the page takes a deposit only into a started, sealed pool on the live factory", () => {
+  const [live, archive] = DEPLOYMENTS;
+  assert.deepEqual(depositState({ deployment: live, started: true, sealed: true }), { open: true, note: "" });
+  // A pool older than the seal has no such reading; where the page would open it at all, it deposits as before.
+  assert.equal(depositState({ deployment: live, started: true, sealed: null }).open, true);
+
+  const unsealed = depositState({ deployment: live, started: true, sealed: false });
+  assert.equal(unsealed.open, false);
+  assert.match(unsealed.note, /hasn't sealed the book of seats/);
+  const unstarted = depositState({ deployment: live, started: false, sealed: false });
+  assert.equal(unstarted.open, false);
+  assert.match(unstarted.note, /hasn't started yet/);
+  const archived = depositState({ deployment: archive, started: true, sealed: null });
+  assert.equal(archived.open, false);
+  assert.match(archived.note, /first deployment, kept as an archive/);
+  assert.match(archived.note, /can still ask to withdraw/);
+  const own = depositState({ deployment: null, started: true, sealed: null });
+  assert.equal(own.open, false);
+  assert.match(own.note, /a factory of its own/);
+
+  // The three pools of the earlier rounds, by the factory each record names: none of them is the live one's.
+  for (const label of ["shared-demo", "shared-trade", "shared-run"]) {
+    const d = deploymentNamed(record(label).PoolFactory);
+    assert.equal(depositState({ deployment: d, started: true, sealed: null }).open, false, label);
+  }
+});
+
+test("the book of seats is said as the contract holds it, and not at all for a pool older than the seal", () => {
+  assert.match(sealLine(true), /^Sealed: nobody can add a seat/);
+  assert.match(sealLine(false), /^Open: .*takes no deposit until the book is sealed/);
+  assert.equal(sealLine(null), "");
+});
+
+test("the page reads the seal and the factory from the pool, and offers no way to send money where deposits are closed", () => {
+  // The deployment is the one whose factory the pool itself names, not one the link or the config says.
+  assert.match(VIEW, /sp\.factory\(\),/);
+  assert.match(VIEW, /const deployment = deploymentNamed\(seatFactory\);/);
+  assert.match(VIEW, /const deposit = depositState\(\{ deployment, started, sealed \}\);/);
+  // Only a revert means "older than the seal"; a failed read is not taken for it.
+  assert.match(VIEW, /sp\.seatsSealed\(\)\.catch\(\(err\) => \{\s+if \(err\?\.code === "CALL_EXCEPTION"\) return null;\s+throw err;/);
+  // The form, its button's handler and the "Send to it" button of an open ticket all hang on the same answer.
+  assert.match(VIEW, /\$\{pool\.deposit\.open \? `<p>Each deposit goes to an address of its own/);
+  assert.match(VIEW, /if \(pool\.deposit\.open\) wire\(\$\("#dep-btn", box\)/);
+  assert.match(VIEW, /const waitingToSend = pool\.deposit\.open && state === "Open" && spots\[i\] === 0n;/);
+  // Asking to withdraw is not behind it.
+  assert.match(VIEW, /\n  wire\(\$\("#wd-btn", box\), async/);
+  // An unstarted pool can't run a settlement point, and the page doesn't offer one.
+  assert.match(VIEW, /<button id="point"\$\{reason \|\| !started \? " disabled" : ""\}>/);
 });
 
 // ── the ABI against the contract's source ─────────────────────────────────────────────
