@@ -124,7 +124,7 @@ class DuplicateSend(unittest.TestCase):
 
         waited = []
         with mock.patch.object(common, "rpc", side_effect=rpc), \
-                mock.patch.object(common, "wait_receipt", side_effect=lambda h: waited.append(h) or {"status": "0x1"}):
+                mock.patch.object(common, "wait_receipt", side_effect=lambda h, t=None: waited.append((h, t)) or {"status": "0x1"}):
             receipt = common.send_tx(Account.create(), "0x" + "11" * 20, b"", 0)
         return receipt, waited
 
@@ -132,7 +132,7 @@ class DuplicateSend(unittest.TestCase):
         receipt, waited = self.send("{'code': -32000, 'message': 'already known'}")
         self.assertEqual(receipt, {"status": "0x1"})
         self.assertEqual(len(waited), 1)
-        self.assertEqual(len(waited[0]), 66)
+        self.assertEqual(len(waited[0][0]), 66)
 
     def test_nonce_too_low_also_waits_for_the_receipt(self):
         # A throttled send that reached the node AND was mined comes back "nonce too low", not
@@ -141,6 +141,20 @@ class DuplicateSend(unittest.TestCase):
         receipt, waited = self.send("{'code': -32000, 'message': 'nonce too low'}")
         self.assertEqual(receipt, {"status": "0x1"})
         self.assertEqual(len(waited), 1)
+
+    def test_a_nonce_taken_by_something_else_is_not_waited_out(self):
+        # "nonce too low" has two causes and only one is ours: our own transaction already mined
+        # (its receipt exists the moment the node says so), or ANOTHER transaction from this
+        # account taking the nonce after we read it -- and then our hash never lands, so the full
+        # 180 seconds is three minutes of polling for nothing (review, 3 October 2026).
+        _, waited = self.send("{'code': -32000, 'message': 'nonce too low'}")
+        self.assertEqual(waited[0][1], common_module().NONCE_TAKEN_RECEIPT_WAIT_S)
+
+    def test_a_duplicate_still_gets_the_full_wait(self):
+        # The other cause: a throttled send that reached the node. That transaction exists, and
+        # cutting its wait short would report a failure for something on its way into a block.
+        _, waited = self.send("{'code': -32000, 'message': 'already known'}")
+        self.assertIsNone(waited[0][1], "the ordinary call, with the ordinary timeout")
 
     def test_another_send_error_is_raised(self):
         with self.assertRaises(RuntimeError):
@@ -172,7 +186,7 @@ class NothingReachedTheNode(unittest.TestCase):
             return answers[method]
 
         with mock.patch.object(common, "rpc", side_effect=rpc), \
-                mock.patch.object(common, "wait_receipt", side_effect=lambda h: {"status": receipt_status}):
+                mock.patch.object(common, "wait_receipt", side_effect=lambda h, t=None: {"status": receipt_status}):
             common.send_tx(Account.create(), "0x" + "11" * 20, b"", 0)
 
     def test_a_revert_at_the_gas_estimate_never_left(self):
@@ -202,3 +216,7 @@ class NothingReachedTheNode(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             self.run_send("eth_sendRawTransaction")
         self.assertNotIsInstance(caught.exception, common.NotSent)
+
+def common_module():
+    from spike.hlspike import common
+    return common

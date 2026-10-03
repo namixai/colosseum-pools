@@ -179,6 +179,13 @@ def erc20_balance(token: str, addr: str) -> int:
     return call_view(token, "balanceOf(address)", ["address"], [addr], ["uint256"])[0]
 
 
+# How long to look for the receipt of a transaction the node answered "nonce too low" about when
+# the nonce was taken by something ELSE: that hash will never land, so the usual 180 seconds would
+# be three minutes of polling for nothing. Enough for an RPC that holds the block but has not
+# indexed it yet, and no more.
+NONCE_TAKEN_RECEIPT_WAIT_S = 5
+
+
 def wait_receipt(tx_hash: str, timeout_s: int = 180) -> dict:
     # Big blocks come about once a minute, so allow a few of them.
     deadline = time.time() + timeout_s
@@ -238,16 +245,28 @@ def send_tx(acct: LocalAccount, to: str | None, data: bytes = b"", value: int = 
     except Exception as exc:
         raise NotSent(str(exc)) from exc
     tx_hash = "0x" + signed.hash.hex().removeprefix("0x")
+    wait_s = None
     try:
         rpc("eth_sendRawTransaction", ["0x" + signed.raw_transaction.hex().removeprefix("0x")])
     except RuntimeError as exc:
-        # A send that was throttled after it reached the node comes back as a duplicate -- and if
-        # it was not only accepted but already MINED, the node answers "nonce too low" instead.
-        # Both mean the transaction exists, so both wait for its receipt. Raising on the second
-        # would report a refusal for a transaction that went through (review, 3 Oct 2026).
-        if "already known" not in str(exc) and "nonce too low" not in str(exc).lower():
+        message = str(exc)
+        duplicate = "already known" in message
+        nonce_gone = "nonce too low" in message.lower()
+        if not duplicate and not nonce_gone:
             raise
-    rcpt = wait_receipt(tx_hash)
+        # A send throttled after it reached the node comes back a duplicate, and waiting out its
+        # receipt is right: that transaction exists.
+        #
+        # "nonce too low" has TWO causes and only one of them is ours. Either this transaction was
+        # already MINED -- and then its receipt exists the moment the node says so -- or ANOTHER
+        # transaction from this account took the nonce after we read it, and then our hash never
+        # lands at all. A few seconds separates the two, because a mined receipt is already there;
+        # raising instead would report a refusal for a transaction that went through, and waiting
+        # the full time would be three minutes of nothing (review, 3 Oct 2026).
+        if nonce_gone and not duplicate:
+            wait_s = NONCE_TAKEN_RECEIPT_WAIT_S
+    # The ordinary path keeps the ordinary call; only the foreign-nonce case asks for less.
+    rcpt = wait_receipt(tx_hash) if wait_s is None else wait_receipt(tx_hash, wait_s)
     if int(rcpt["status"], 16) != 1:
         raise Reverted(f"transaction {tx_hash} reverted")
     return rcpt
