@@ -132,6 +132,111 @@ class DeployArguments(unittest.TestCase):
     def test_one_of_the_two_is_needed(self):
         self.refused()
 
+    def test_a_named_deployment_and_a_keys_file_are_still_two(self):
+        self.refused("--on-factory-of", "demo2", "--keys-file", "keys.txt")
+
+    def test_the_demo_flag_names_one_deployment_and_cannot_be_given_another(self):
+        with mock.patch.object(sys, "argv", ["deploy_shared.py", "--label", "x", "--on-demo-factory",
+                                             "--on-factory-of", "demo2"]), \
+                mock.patch.object(deploy_shared, "c") as c:
+            with self.assertRaisesRegex(SystemExit, "name one deployment"):
+                deploy_shared.main()
+            self.assertEqual(c.mock_calls, [])
+
+
+BASE = {"label": "demo2", "commit": "e" * 40, "PoolFactory": "0x" + "f2" * 20, "KeyRegistry": "0x" + "a1" * 20,
+        "PoolImpl": "0x" + "b1" * 20, "ChallengeAccountImpl": "0x" + "c1" * 20}
+OPERATOR = "0x" + "0e" * 20
+
+
+class OnAnotherDeploymentsFactory(unittest.TestCase):
+    """--on-factory-of: the SharedPool alone, on the factory of the deployment named, and a dry run of it."""
+
+    def run_main(self, *argv, gas_wei=7 * 10**15, listed=True, exists=False):
+        self.loaded, self.deployed, self.saved, self.blocks = [], [], [], []
+        out = mock.MagicMock()
+        out.exists.return_value = exists
+        out.relative_to.return_value = "deployments/testnet-x.json"
+
+        def call_view(to, sig, types, values, outs):
+            return [listed] if sig.startswith("isPlatformAsset") else [700000]
+
+        def deploy_contract(op, path, record, key, contract, types, values):
+            self.deployed.append((contract, values, dict(record)))
+            return "0x" + "5a" * 20, {"blockNumber": hex(123)}
+
+        # unsafe: the module calls c.assert_testnet(), a name a plain mock takes for a misspelt assertion.
+        with mock.patch.object(sys, "argv", ["deploy_shared.py", "--label", "x", *argv]), \
+                mock.patch.object(deploy_shared, "c", new_callable=lambda: mock.MagicMock(unsafe=True)) as c, \
+                mock.patch.object(deploy_shared.deployments, "load", side_effect=lambda l: self.loaded.append(l) or BASE), \
+                mock.patch.object(deploy_shared, "git", return_value=""), \
+                mock.patch.object(deploy_shared, "git_head", return_value="h" * 40), \
+                mock.patch.object(deploy_shared.subprocess, "run"), \
+                mock.patch.object(deploy_shared, "check_assets", return_value=[3, 4, 0]), \
+                mock.patch.object(deploy_shared, "big_blocks", side_effect=lambda op, on: self.blocks.append(on)), \
+                mock.patch.object(deploy_shared, "deploy_contract", side_effect=deploy_contract), \
+                mock.patch.object(deploy_shared, "save", side_effect=lambda path, rec: self.saved.append(dict(rec))), \
+                mock.patch.object(deploy_shared, "ROOT") as root, \
+                mock.patch("builtins.print") as said:
+            self.said = said
+            root.__truediv__.return_value.__truediv__.return_value = out
+            c.CHAIN_ID = 998
+            c.account.return_value.address = OPERATOR
+            c.core_user_exists.return_value = True
+            c.call_view.side_effect = call_view
+            c.rpc.return_value = hex(gas_wei)
+            self.c = c
+            return deploy_shared.main()
+
+    def test_a_dry_run_makes_every_check_and_sends_nothing(self):
+        self.assertEqual(self.run_main("--on-factory-of", "demo2", "--dry-run"), 0)
+        self.assertEqual(self.loaded, ["demo2"], "the checks are against the deployment named")
+        self.assertEqual((self.deployed, self.saved, self.blocks), ([], [], []), "a dry run sent or wrote something")
+        self.c.transact.assert_not_called()
+        self.c.record.assert_not_called()
+        asked = [call.args[1] for call in self.c.call_view.call_args_list]
+        self.assertEqual(asked.count("isPlatformAsset(uint32)"), 3)
+        text = "\n".join(str(call.args[0]) for call in self.said.call_args_list)
+        self.assertIn("nothing was sent", text)
+        self.assertIn(f"of demo2: PoolFactory {BASE['PoolFactory']}, KeyRegistry {BASE['KeyRegistry']}", text)
+        self.assertIn("min deposit 2000000000, lock 600 s, fee 1000 bps", text)
+
+    def test_the_real_run_deploys_the_shared_pool_on_that_factory_and_says_so_in_the_record(self):
+        self.assertEqual(self.run_main("--on-factory-of", "demo2"), 0)
+        self.assertEqual(self.loaded, ["demo2"], "the factory and the implementations are the named deployment's")
+        self.assertEqual(self.blocks, [True, False], "big blocks on for the deployment, then off")
+        [(contract, values, record)] = self.deployed
+        self.assertEqual(contract, "SharedPool")
+        self.assertEqual(values, [BASE["PoolFactory"], OPERATOR, OPERATOR, 2_000_000_000, 600, 1000])
+        self.assertEqual((record["factory_from"], record["PoolFactory"], record["KeyRegistry"]),
+                         ("demo2", BASE["PoolFactory"], BASE["KeyRegistry"]))
+        self.assertEqual(record["implementations_from"], BASE["commit"])
+        self.assertEqual((self.saved[-1]["status"], self.saved[-1]["block"]), ("complete", 123))
+
+    def test_the_demo_flag_is_the_first_deployment(self):
+        self.run_main("--on-demo-factory", "--dry-run")
+        self.assertEqual(self.loaded, ["demo"])
+
+    def test_an_operator_without_gas_is_refused_before_anything_is_sent(self):
+        # 0.0005 HYPE is what one SharedPool cost; the floor is four times that, and far under the
+        # four-contract floor of ops/deploy_testnet.py, which refused a wallet holding fourteen times enough.
+        self.assertEqual(deploy_shared.SHARED_GAS_FLOOR_WEI, 2 * 10**15)
+        with self.assertRaisesRegex(SystemExit, "below the 0.002 this deployment needs"):
+            self.run_main("--on-factory-of", "demo2", gas_wei=10**15)
+        self.assertEqual((self.deployed, self.blocks), ([], []))
+        self.assertEqual(self.run_main("--on-factory-of", "demo2", "--dry-run", gas_wei=7 * 10**15), 0)
+
+    def test_a_factory_that_does_not_list_an_asset_is_refused(self):
+        with self.assertRaisesRegex(SystemExit, "the factory of demo2 doesn't list asset 3"):
+            self.run_main("--on-factory-of", "demo2", "--dry-run", listed=False)
+
+    def test_a_dry_run_is_only_for_a_named_factory(self):
+        with mock.patch.object(sys, "argv", ["deploy_shared.py", "--label", "x", "--keys-file", "k.txt", "--dry-run"]), \
+                mock.patch.object(deploy_shared, "c") as c:
+            with self.assertRaisesRegex(SystemExit, "--dry-run is for --on-factory-of"):
+                deploy_shared.main()
+            self.assertEqual(c.mock_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

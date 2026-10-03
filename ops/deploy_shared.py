@@ -1,15 +1,20 @@
-"""Deploy a shared pool on testnet (chain 998), on a factory and key registry of its own or on the demo's.
+"""Deploy a shared pool on testnet (chain 998), on a factory and key registry of its own or on an
+existing deployment's.
 
     spike/.venv/bin/python ops/deploy_shared.py --label shared-run --keys-file <addresses.txt> \\
         --min-deposit 20 --lock 600 --fee-bps 1000
-    spike/.venv/bin/python ops/deploy_shared.py --label shared-demo --on-demo-factory \\
-        --min-deposit 20 --lock 600 --fee-bps 1000
+    spike/.venv/bin/python ops/deploy_shared.py --label shared-demo2 --on-factory-of demo2 \\
+        --min-deposit 20 --lock 600 --fee-bps 1000 [--dry-run]
 
-With --on-demo-factory only the SharedPool is deployed, and its seats are made by the demo's
-factory: they are pools of the demo like any other, served by its gateway, its pages and its keeper
-on the operator's host, and a challenge on them takes a key from the demo's registry. Don't run
-ops/keeper.py with such a deployment yourself: it follows every challenge of the demo's factory, the
-demo's own pools included.
+With --on-factory-of <label> only the SharedPool is deployed, and its seats are made by that
+deployment's factory: they are pools of it like any other, served by its gateway, its pages and its
+keeper on the operator's host, and a challenge on them takes a key from its registry. Don't run
+ops/keeper.py with such a deployment yourself: it follows every challenge of that factory, the
+deployment's own pools included. --on-demo-factory is --on-factory-of demo, the first deployment.
+
+--dry-run makes every check a real run makes -- the label is free, the base deployment's source is
+this commit's, the contracts build, the factory lists the assets, the operator is on HyperCore and
+holds gas -- and sends nothing.
 
 The run's seats don't trade, so its agent keys never go near the gateway host: a registry of its
 own keeps them apart from the demo's, and a factory of its own keeps the run's seats out of the
@@ -55,23 +60,56 @@ CORE_SOURCES = ("src/Pool.sol", "src/ChallengeAccount.sol", "src/RuledAccount.so
 USDC_1E8 = 100_000_000
 
 
-def on_demo_factory(args, out_path: pathlib.Path, commit: str, demo: dict, assets: list[int]) -> int:
-    """The SharedPool alone, owning seats the demo's factory makes. Nothing of the demo's is changed."""
-    factory, registry = demo["PoolFactory"], demo["KeyRegistry"]
+# One SharedPool through big blocks. The three deployed so far used 5.1 to 5.2 million gas at 0.1 gwei,
+# about 0.0005 HYPE each (their receipts, read 3 Oct 2026); four times that is a refusal to start, not
+# an estimate. ops/deploy_testnet.py's floor is for four contracts and would refuse a wallet that
+# holds fourteen times what this takes.
+SHARED_GAS_FLOOR_WEI = 2 * 10**15
+
+
+def gas_or_refuse(op, floor: int = SHARED_GAS_FLOOR_WEI) -> int:
+    """The operator's HYPE, in wei; refuses below `floor`. Checked before anything is sent: a
+    deployment that runs out half way leaves a record marked incomplete, and an empty wallet reads
+    like a node problem until somebody looks."""
+    gas_wei = int(c.rpc("eth_getBalance", [op.address, "latest"]), 16)
+    if gas_wei < floor:
+        raise SystemExit(f"shared-operator holds {gas_wei / 1e18:.4f} HYPE, which is below the "
+                         f"{floor / 1e18:.3f} this deployment needs; fund it first")
+    return gas_wei
+
+
+def on_factory_of(args, out_path: pathlib.Path, commit: str, base: dict, assets: list[int]) -> int:
+    """The SharedPool alone, owning seats the base deployment's factory makes. Nothing of the base
+    deployment is changed."""
+    label = base["label"]
+    factory, registry = base["PoolFactory"], base["KeyRegistry"]
     for idx in assets:
         if not c.call_view(factory, "isPlatformAsset(uint32)", ["uint32"], [idx], ["bool"])[0]:
-            raise SystemExit(f"the demo's factory doesn't list asset {idx}")
+            raise SystemExit(f"the factory of {label} doesn't list asset {idx}")
     op = c.account("shared-operator")
     if not c.core_user_exists(op.address):
         raise SystemExit("shared-operator has no HyperCore account yet; fund it first")
+    gas_wei = gas_or_refuse(op)
     min_deposit = int(round(args.min_deposit * USDC_1E8))
     fee = c.call_view(factory, "challengeFee()", [], [], ["uint256"])[0]
+    if args.dry_run:
+        print("deploy_shared --dry-run: nothing was sent.")
+        print(f"  label            {args.label}  (deployments/testnet-{args.label}.json is free)")
+        print(f"  commit           {commit}")
+        print(f"  on the factory   of {label}: PoolFactory {factory}, KeyRegistry {registry}")
+        print(f"  its assets       {assets} are all listed; its challenge fee is {fee}")
+        print(f"  operator         {op.address}, {gas_wei / 1e18:.4f} HYPE, on HyperCore; it is the platform too")
+        print(f"  would deploy     SharedPool(factory, operator, platform, min deposit {min_deposit}, "
+              f"lock {args.lock} s, fee {args.fee_bps} bps)  (big blocks on, then off)")
+        print(f"  would write      deployments/testnet-{args.label}.json")
+        print("  would NOT touch  any existing deployment record or contract, and publishes no key")
+        return 0
     record: dict = {"chain_id": c.CHAIN_ID, "label": args.label, "commit": commit, "status": "deploying",
                     "deployer": op.address, "operator": op.address, "platform": op.address,
-                    "factory_from": "demo", "PoolFactory": factory, "KeyRegistry": registry,
+                    "factory_from": label, "PoolFactory": factory, "KeyRegistry": registry,
                     "platform_assets": PLATFORM_ASSETS, "challenge_fee": fee,
-                    "PoolImpl": demo["PoolImpl"], "ChallengeAccountImpl": demo["ChallengeAccountImpl"],
-                    "implementations_from": demo["commit"], "min_deposit": min_deposit, "lock": args.lock,
+                    "PoolImpl": base["PoolImpl"], "ChallengeAccountImpl": base["ChallengeAccountImpl"],
+                    "implementations_from": base["commit"], "min_deposit": min_deposit, "lock": args.lock,
                     "fee_bps": args.fee_bps, "tx": {}}
     big_blocks(op, True)
     try:
@@ -95,15 +133,25 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--label", required=True)
     p.add_argument("--keys-file", help="agent key addresses for this deployment's own registry, one per line")
-    p.add_argument("--on-demo-factory", action="store_true",
-                   help="make the seats on the demo's factory; deploys the SharedPool alone")
+    p.add_argument("--on-factory-of", metavar="LABEL",
+                   help="make the seats on that deployment's factory (deployments/testnet-<LABEL>.json); "
+                        "deploys the SharedPool alone")
+    p.add_argument("--on-demo-factory", action="store_true", help="the same as --on-factory-of demo")
+    p.add_argument("--dry-run", action="store_true",
+                   help="run every check and send nothing; says what a real run would do")
     p.add_argument("--min-deposit", type=float, default=20.0, help="USDC")
     p.add_argument("--lock", type=int, default=600, help="seconds after a deposit before a request")
     p.add_argument("--fee-bps", type=int, default=1000)
     args = p.parse_args()
+    if args.on_demo_factory and args.on_factory_of not in (None, "demo"):
+        raise SystemExit("--on-demo-factory is --on-factory-of demo; name one deployment")
+    base_label = "demo" if args.on_demo_factory else args.on_factory_of
     # Before anything reaches the chain. An empty --keys-file is still one.
-    if args.on_demo_factory == (args.keys_file is not None):
-        raise SystemExit("either --keys-file for a registry of its own, or --on-demo-factory, whose registry has its keys")
+    if (base_label is not None) == (args.keys_file is not None):
+        raise SystemExit("either --keys-file for a registry of its own, or --on-factory-of <label> "
+                         "(--on-demo-factory for the first deployment), whose registry has its keys")
+    if args.dry_run and base_label is None:
+        raise SystemExit("--dry-run is for --on-factory-of: a registry of its own has no dry run yet")
 
     c.assert_testnet()
     out_path = ROOT / "deployments" / f"testnet-{args.label}.json"
@@ -112,14 +160,17 @@ def main() -> int:
     if args.min_deposit < 1 or not 0 < args.lock < 2**32 or not 0 <= args.fee_bps <= 10_000:
         raise SystemExit("--min-deposit is at least 1 USDC, --lock a positive uint32, --fee-bps 0..10000")
     commit = git_head()
-    demo = deployments.load("demo")
-    changed = git("diff", "--name-only", demo["commit"], "HEAD", "--", *CORE_SOURCES).strip()
+    # The implementations the seats clone: the base deployment's, or the first deployment's for a
+    # run on a factory of its own.
+    base = deployments.load(base_label or "demo")
+    changed = git("diff", "--name-only", base["commit"], "HEAD", "--", *CORE_SOURCES).strip()
     if changed:
-        raise SystemExit(f"the demo's implementations were built from other source; changed: {changed}")
+        raise SystemExit(f"the implementations of {base['label']} were built from other source; changed: {changed}")
     subprocess.run(["forge", "build"], cwd=ROOT, check=True, capture_output=True)
     assets = check_assets()
-    if args.on_demo_factory:
-        return on_demo_factory(args, out_path, commit, demo, assets)
+    if base_label is not None:
+        return on_factory_of(args, out_path, commit, base, assets)
+    demo = base
     keys = check_keys(pathlib.Path(args.keys_file).read_text().splitlines())
     if not keys:
         raise SystemExit("no agent keys: every challenge reserves one")
