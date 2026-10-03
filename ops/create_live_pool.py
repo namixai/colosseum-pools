@@ -180,7 +180,7 @@ def main() -> int:
     # ── what the chain says now, not what we asked for ───────────────────────────────────
     print("\nПРОВЕРКА ПО ЦЕПИ:")
     back_terms = c.call_view(pool, "terms()", [], [], [TERMS])[0]
-    back_rules = c.call_view(pool, "rules()", [], [], ["(uint32,uint32,uint16,uint32[])"])[0]
+    back_rules = c.call_view(pool, "rules()", [], [], [RULES])[0]
     ok = {
         "stage Idle": c.call_view(pool, "stage()", [], [], ["uint8"])[0] == 0,
         "accountReady": c.call_view(pool, "accountReady()", [], [], ["bool"])[0],

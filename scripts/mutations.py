@@ -1163,6 +1163,15 @@ MUTATIONS = [
      '        if source["owner"].lower() != deployer.lower():',
      "        if False:",
      ["test_a_source_pool_somebody_else_owns"]),
+    # The check after the pool is made read `rules()` back with a type that was not the struct's.
+    ("K91", "ops/create_live_pool.py",
+     '    back_rules = c.call_view(pool, "rules()", [], [], [RULES])[0]',
+     '    back_rules = c.call_view(pool, "rules()", [], [], ["(uint32,uint32,uint16,uint32[])"])[0]',
+     ["test_both_are_read_back_with_those_types"]),
+    ("K92", "ops/create_live_pool.py",
+     'RULES = "(uint16,uint16,uint32,uint32[])"',
+     'RULES = "(uint32,uint32,uint16,uint32[])"',
+     ["test_the_types_are_the_structs_in_the_source"]),
     # Two guards the review found held by nothing: the head-is-None return in `recut_if_uncut`,
     # and treating a mined duplicate ("nonce too low") as an error.
     ("K87", "ops/keeper.py",

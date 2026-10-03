@@ -9,9 +9,13 @@ has to be seen failing at least once. That is what these are.
 
 from __future__ import annotations
 
+import pathlib
+import re
 import unittest
 
-from ops.create_live_pool import NEW_ACCOUNT_FEE, SPOT_PER_PERP, preconditions
+from ops.create_live_pool import NEW_ACCOUNT_FEE, RULES, SPOT_PER_PERP, TERMS, preconditions
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 DEPLOYER = "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4"
 STAND = "0x237afA2D58B1612e19D47152FfB2E771c05Fe96D"
@@ -84,3 +88,22 @@ class WhatStopsIt(unittest.TestCase):
         # the next attempt, with money already moved.
         said = self.ask(assets=[9], listed={}, spot=0, source=stand(stage=2, owner="0x00"))
         self.assertEqual(len(said), 4, said)
+
+
+class WhatItReadsBack(unittest.TestCase):
+    """After the pool is made the script reads `rules()` and `terms()` back and compares them with
+    what was asked. It read `rules()` as (uint32,uint32,uint16,uint32[]) while the struct is
+    (uint16,uint16,uint32,uint32[]): every field is a full word on the wire, so the planned numbers
+    decoded all the same and the check was honest for them -- by luck, not by the type."""
+
+    def test_the_types_are_the_structs_in_the_source(self):
+        source = (ROOT / "src" / "Types.sol").read_text()
+        for name, const in (("Rules", RULES), ("Terms", TERMS)):
+            body = re.search(r"struct %s \{(.*?)\n\}" % name, source, re.S).group(1)
+            fields = re.findall(r"^\s*(u?int\d+(?:\[\])?|address|bool)\s+\w+;", body, re.M)
+            self.assertEqual("(" + ",".join(fields) + ")", const, name)
+
+    def test_both_are_read_back_with_those_types(self):
+        script = (ROOT / "ops" / "create_live_pool.py").read_text()
+        self.assertIn('c.call_view(pool, "terms()", [], [], [TERMS])', script)
+        self.assertIn('c.call_view(pool, "rules()", [], [], [RULES])', script)
