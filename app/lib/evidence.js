@@ -5,6 +5,7 @@
 // next to what the row says.
 
 import { deploymentNamed, isArchive } from "./deployments.js";
+import { esc } from "./ui.js";
 
 export const DOCS = "https://github.com/namixai/colosseum-pools/blob/main/";
 
@@ -86,6 +87,22 @@ export function deploymentBadge(row) {
   const named = deploymentNamed(row.factory);
   if (!named) return "";
   return isArchive(named) ? "first deployment, archive" : "live deployment";
+}
+
+/**
+ * The account cell of a row, as HTML: its kind, the deployment it belongs to, the account and the link into the
+ * app; or, for a row with no account, the deployment and a word saying so. Here and not in the view, so a test
+ * can read what the page actually prints.
+ */
+export function accountCell(row) {
+  const link = appLink(row);
+  // Which deployment the row is about, said on the row: the first is an archive, the second is live.
+  const where = deploymentBadge(row);
+  const mark = where ? `<span class="badge">${esc(where)}</span>` : "";
+  return row.account
+    ? `${row.kind ? `<span class="badge">${esc(row.kind)}</span> ` : ""}${mark}${mark ? "<br>" : ""}<code>${esc(row.account)}</code>`
+      + (link ? `<br><a href="${esc(link)}">${esc(TEXT.open)}</a>` : "")
+    : `${mark}${mark ? "<br>" : ""}<span class="muted">${esc(TEXT.noAccount)}</span>`;
 }
 
 /** Which factory to ask about a row's account, "pool" or "challenge", or null when the site reads no deployment the
