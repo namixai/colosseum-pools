@@ -199,6 +199,9 @@ test("the page reads the seal and the factory from the pool, and offers no way t
   assert.match(VIEW, /const waitingToSend = pool\.deposit\.open && state === "Open" && spots\[i\] === 0n;/);
   // Asking to withdraw is not behind it.
   assert.match(VIEW, /\n  wire\(\$\("#wd-btn", box\), async/);
+  // Whether seats can still be added is said from seatsSealed() alone. A pool older than the seal may have closed
+  // its seats another way, so the page claims nothing about it.
+  assert.doesNotMatch(VIEW, /operator can (still )?add seats/i);
   // An unstarted pool can't run a settlement point, and the page doesn't offer one.
   assert.match(VIEW, /<button id="point"\$\{reason \|\| !started \? " disabled" : ""\}>/);
 });

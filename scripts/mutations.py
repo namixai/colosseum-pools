@@ -1956,6 +1956,10 @@ MUTATIONS = [
      '<button id="point"${reason || !started ? " disabled" : ""}>',
      '<button id="point"${reason ? " disabled" : ""}>',
      ['the page reads the seal and the factory from the pool, and offers no way to send money where deposits are closed']),
+    ('PJ30', 'app/views/shared.js',
+     "      change after that. You don't set these limits.",
+     "      change after that. The operator can add seats. You don't set these limits.",
+     ['the page reads the seal and the factory from the pool, and offers no way to send money where deposits are closed']),
     # The shared pool's keeper (ops/shared_keeper.py). "PK": the second window's prefix, run by unittest.
     ('PK1', 'ops/shared_keeper.py',
      'queue_due = queued > 0 and now >= self.last_queue_point + self.queue_every',

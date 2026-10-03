@@ -1,7 +1,8 @@
 # Design: the shared pool
 
-Status: 25 September 2026: shares, deposits, the pool's value, settlement points, withdrawals and
-their queue, the funded term and the platform's fee; run on testnet with one depositor, then two.
+Status: 3 October 2026: shares, deposits, the pool's value, settlement points, withdrawals and
+their queue, the funded term, the platform's fee and the seal of the book of seats; run on testnet
+with one depositor, then two, and deployed again on the second deployment.
 Testnet only, and not part of the reviewed core: `Pool`, `PoolFactory`, `ChallengeAccount` and
 `KeyRegistry` are used as they are, unchanged.
 

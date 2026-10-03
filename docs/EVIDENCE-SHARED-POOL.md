@@ -1,10 +1,11 @@
 # What the shared pool has actually done on chain
 
-Status: 25 September 2026, HyperEVM testnet (chain 998) and Hyperliquid testnet, mock USDC. The
+Status: 3 October 2026, HyperEVM testnet (chain 998) and Hyperliquid testnet, mock USDC. The
 shared pool (`src/shared/SharedPool.sol`, [the design](SHARED-POOL.md)) is a layer over the pools of
-this demo. Nobody has reviewed it. Every line below is either a state a contract holds now, which
-anyone can read, or a transaction that was read back from its receipt. The demo's own record is in
-[EVIDENCE.md](EVIDENCE.md).
+this demo. Nobody has reviewed it. Every line below is either a state a contract held when its
+section was written, which anyone can read, or a transaction that was read back from its receipt.
+The sections of 25 September stand as they were written; where 3 October changed a state they name,
+the later section says so. The demo's own record is in [EVIDENCE.md](EVIDENCE.md).
 
 ## The shared pools
 

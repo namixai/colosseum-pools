@@ -79,8 +79,8 @@ export async function sharedView(address, page) {
       <p>Here many investors share one pool. Their money sits in seats: each seat is an ordinary pool
       of this site, with its own challenge and funded stage, and this contract owns all of them. A seat's
       rules and the price of its challenge go on the chain before the seat gets any money, and they never
-      change after that. ${sealed === null ? "The operator can add seats. " : ""}You don't set these limits. You look
-      at the published ones and decide whether to come in.</p>
+      change after that. You don't set these limits. You look at the published ones and decide whether to
+      come in.</p>
       <p class="muted">This part is new. It runs on Hyperliquid testnet with mock USDC, and nobody has
       reviewed it yet. <a href="${esc(DOC)}" target="_blank" rel="noopener">How it works</a>.</p>
     </section>
