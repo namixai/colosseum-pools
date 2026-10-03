@@ -10,7 +10,7 @@ import { CONFIG } from "../config.js";
 import { DEPLOYMENTS, liveDeployment, isArchive, pickDeployment, deploymentNamed, ARCHIVE } from "../lib/deployments.js";
 import { poolStatus } from "../lib/stages.js";
 import { tradeTarget } from "../lib/listing.js";
-import { TEXT, appLink, factoryQuestion, withDeployment, deploymentBadge } from "../lib/evidence.js";
+import { TEXT, appLink, factoryQuestion, withDeployment, deploymentBadge, accountCell } from "../lib/evidence.js";
 
 const text = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const record = (label) => JSON.parse(text(`../../deployments/testnet-${label}.json`));
@@ -133,9 +133,18 @@ test("the records page says on each row which deployment it is about", () => {
   const marked = data.rows.filter((r) => ["pool", "challenge", "seat"].includes(r.kind)).map(deploymentBadge);
   assert.ok(marked.every(Boolean));
   assert.ok(marked.includes("first deployment, archive") && marked.includes("live deployment"));
-  const view = text("../views/evidence.js");
-  assert.match(view, /const where = deploymentBadge\(row\);/);
-  assert.match(view, /const mark = where \? `<span class="badge">\$\{esc\(where\)\}<\/span>` : "";/);
+  // What the page prints, for a row with an account and for one without: the mark comes before either.
+  assert.equal(accountCell({ account: "0xabc", kind: "pool", factory: "demo" }),
+    '<span class="badge">pool</span> <span class="badge">first deployment, archive</span><br><code>0xabc</code>'
+    + '<br><a href="#/verify/0xabc">Open it in the app</a>');
+  assert.equal(accountCell({ account: "0xabc", kind: "challenge", factory: "demo2" }),
+    '<span class="badge">challenge</span> <span class="badge">live deployment</span><br><code>0xabc</code>'
+    + '<br><a href="#/verify/0xabc">Open it in the app</a>');
+  assert.equal(accountCell({ factory: "rehearsal" }),
+    '<span class="badge">rehearsal deployment</span><br><span class="muted">not named in the document</span>');
+  assert.equal(accountCell({ account: "0xabc", kind: "shared pool", factory: "demo" }),
+    '<span class="badge">shared pool</span> <code>0xabc</code><br><a href="#/shared/0xabc">Open it in the app</a>');
+  assert.match(text("../views/evidence.js"), /const acct = accountCell\(row\);/);
   assert.match(TEXT.intro.join(" "), /The first deployment is kept as an archive: its records stand and can be checked, and it sells nothing\. The second is the live one/);
   // The rows that carry no mark are named too, so a reader does not take them for rows the page forgot.
   assert.match(TEXT.intro.join(" "), /A shared pool carries no such mark: it is not a factory's account, and the table of the three pools names the factory its seats come from\./);
