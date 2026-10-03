@@ -135,6 +135,16 @@ class DeployArguments(unittest.TestCase):
     def test_a_named_deployment_and_a_keys_file_are_still_two(self):
         self.refused("--on-factory-of", "demo2", "--keys-file", "keys.txt")
 
+    def test_an_empty_label_is_refused_and_never_becomes_the_first_deployment(self):
+        for label in ("", "   "):
+            with mock.patch.object(sys, "argv", ["deploy_shared.py", "--label", "x", "--on-factory-of", label]), \
+                    mock.patch.object(deploy_shared, "c") as c, \
+                    mock.patch.object(deploy_shared.deployments, "load") as load:
+                with self.assertRaisesRegex(SystemExit, "--on-factory-of needs the label of a deployment"):
+                    deploy_shared.main()
+                self.assertEqual(c.mock_calls, [], "nothing reached the chain")
+                load.assert_not_called()
+
     def test_the_demo_flag_names_one_deployment_and_cannot_be_given_another(self):
         with mock.patch.object(sys, "argv", ["deploy_shared.py", "--label", "x", "--on-demo-factory",
                                              "--on-factory-of", "demo2"]), \

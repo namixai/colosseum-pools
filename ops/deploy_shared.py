@@ -145,6 +145,10 @@ def main() -> int:
     args = p.parse_args()
     if args.on_demo_factory and args.on_factory_of not in (None, "demo"):
         raise SystemExit("--on-demo-factory is --on-factory-of demo; name one deployment")
+    # An empty label is not "no label": it would pass for a deployment named and then fall back to the first
+    # one, and the pool would be deployed on a factory nobody asked for.
+    if args.on_factory_of is not None and not args.on_factory_of.strip():
+        raise SystemExit("--on-factory-of needs the label of a deployment, as in deployments/testnet-<label>.json")
     base_label = "demo" if args.on_demo_factory else args.on_factory_of
     # Before anything reaches the chain. An empty --keys-file is still one.
     if (base_label is not None) == (args.keys_file is not None):
@@ -162,7 +166,7 @@ def main() -> int:
     commit = git_head()
     # The implementations the seats clone: the base deployment's, or the first deployment's for a
     # run on a factory of its own.
-    base = deployments.load(base_label or "demo")
+    base = deployments.load("demo" if base_label is None else base_label)
     changed = git("diff", "--name-only", base["commit"], "HEAD", "--", *CORE_SOURCES).strip()
     if changed:
         raise SystemExit(f"the implementations of {base['label']} were built from other source; changed: {changed}")
