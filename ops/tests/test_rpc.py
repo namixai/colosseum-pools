@@ -134,6 +134,14 @@ class DuplicateSend(unittest.TestCase):
         self.assertEqual(len(waited), 1)
         self.assertEqual(len(waited[0]), 66)
 
+    def test_nonce_too_low_also_waits_for_the_receipt(self):
+        # A throttled send that reached the node AND was mined comes back "nonce too low", not
+        # "already known". Raising there reports a refusal for a transaction that went through
+        # (review, 3 October 2026).
+        receipt, waited = self.send("{'code': -32000, 'message': 'nonce too low'}")
+        self.assertEqual(receipt, {"status": "0x1"})
+        self.assertEqual(len(waited), 1)
+
     def test_another_send_error_is_raised(self):
         with self.assertRaises(RuntimeError):
             self.send("{'code': -32000, 'message': 'insufficient funds'}")

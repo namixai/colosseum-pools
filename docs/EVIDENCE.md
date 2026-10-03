@@ -154,8 +154,9 @@ Transactions read back from their receipts:
   **Read 3.223 as one draw, not a bound:** the
   keeper polls and sleeps 30 seconds between passes, so noticing takes anywhere from nothing to a
   cycle depending on where in it the rule broke, and this one happened to break near the start of a
-  pass. Each fill's fee is 0.112367 on 249.71 of notional — 4.50 bps, the taker rate the gateway's
-  own allowance is derived from. The two fills are
+  pass. The entry's fee is 0.112367 on 249.71 of notional and the close's is 0.112366 — 4.50 bps
+  either way, the taker rate the gateway's allowance is derived from, and the one-unit difference is
+  the close pricing a dollar lower. The two fills are
   `0x211da471d0ba0e8a2297042aa7c611010600bc576bbd2d5cc4e64fc48fbde874` and
   `0x29a6f21eddb279042b20042aa7c6480103000a0478b597d6cd6f9d719cb652ee`.
 - **What those two addresses are, and what is not claimed here.** Per our own host records they

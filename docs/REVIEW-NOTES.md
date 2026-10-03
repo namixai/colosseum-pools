@@ -1,9 +1,9 @@
 # Review notes
 
-An internal review of this repository, done between 25 and 29 September 2026 by a reviewer who did
+An internal review of this repository, done between 25 September and 3 October 2026 by a reviewer who did
 not write the code. It is not an external audit. Each finding was reproduced by a test when it was
 reported. Most were fixed on a branch as they came in, and the fixes were checked again on main at
-commit `c45a32e6`, where that branch was merged. Nothing here is deployed unless it says so.
+commit `9a79ae69`. Nothing here is deployed unless it says so.
 
 ## Scope
 
@@ -17,8 +17,8 @@ Reviewed at commit `2e1ffcd` (main, 25 September 2026):
 - the pool gateway in `gateway/`: `demo` mode in full, and the client side of `signer` mode;
 - the keeper in `ops/keeper.py` and the host configuration in `ops/host/`.
 
-After that, the fix branch was read again at every commit the developer sent, and main once more at
-`c45a32e6` after the merge. Code that reached main after the pinned commit was not reviewed as code.
+After that, the fix branch was read again at every commit the developer sent, and main at `c45a32e6`,
+`e4287926` and `9a79ae69`. Code that reached main after the pinned commit was not reviewed as code.
 The gateway's stop-and-take protection (`gateway/protect.py`, and the keeper's check that goes with
 it) was only measured for what it costs in Hyperliquid's request budget (A-14). The stress package in
 `stress/` and the deployment rehearsal in `ops/deploy_testnet.py` were not looked at.
@@ -44,7 +44,7 @@ transaction was sent, and no load was put on the running gateway.
 
 ## Findings
 
-Status is as of commit `c45a32e6` on main.
+Status is as of commit `9a79ae69` on main.
 
 | ID | Severity | Finding | Status |
 |---|---|---|---|
@@ -53,15 +53,15 @@ Status is as of commit `c45a32e6` on main.
 | A-03 | High | The public gateway and the keeper read the chain through one node with a per-IP limit, from one host. Refusable orders sent to the gateway, five reads each before the refusal, could use up the keeper's budget and delay stops. | Fixed: they now read different nodes, and the gateway's limits were cut to fit its node. Applied on the running host on 25 September 2026; the operator's checks are in `docs/HOSTING.md`. The two still share Hyperliquid's own request budget, which is A-14. |
 | A-04 | Medium | A trader's share is paid once nothing is withdrawable, on a passed challenge and at the end of a funded stage alike. Resting orders keep margin out of `withdrawable`, so the share can be paid short from whatever reached spot. A pool that is all on perp after the pass has little on spot. | Fixed, on both sides. The share waits while a resting order holds margin. In the step that releases the margin, it waits until spot covers the share or nothing more is on its way. The second half of this fix opened A-12, which is fixed as well. |
 | A-05 | Medium | USDC sent to a challenge's perp balance counts toward its target and its profit share, so a pass can be bought for the target less the trader's share. | Documented as a limit in `docs/DESIGN.md`. |
-| A-06 | Medium | The shared pool's operator can add seats, with rules of its choosing, after holders have deposited. The documents said seats are published before anyone deposits. | Fixed: `addSeat` is refused as soon as any deposit ticket is open. That fix opened A-13. |
+| A-06 | Medium | The shared pool's operator can add seats, with rules of its choosing, after holders have deposited. The documents said seats are published before anyone deposits. | Fixed: the operator seals the book of seats, no ticket can open before the seal, and no seat can be added after it. An intermediate version of this fix opened A-13. |
 | A-07 | Low | A seventeenth withdrawal request is refused, not queued as the documents said. | Fixed in the documents and the contract comment, which now say it is refused. |
 | A-08 | Low | `buyChallenge` checks the pool's balance at the start of the block, so a withdrawal earlier in the same block makes the sale fail. The buyer gets the price back after an hour and loses the platform fee. In a shared pool that withdrawal is `releaseSeat`: anyone may call it while the withdrawal queue is short of money, and the shared pool's keeper calls it on its own. | Fixed: a sale is refused in the block of any `withdrawOnCore` call, and `releaseSeat` makes one. |
 | A-09 | Info | `docs/DESIGN.md` described zero-price pools, which the factory refuses, and called the platform fee the only brake on using up keys. | Fixed: `docs/DESIGN.md` is corrected in four places. |
 | A-10 | Info | The hosting notes listed `graduate` among the keeper's calls. The keeper never makes it. | Fixed (pull request #68). |
 | A-11 | High | Found in an intermediate fix for A-01: two closing steps in one block paid a funded trader's share from the balance as it stood before the proceeds arrived, nearly nothing on a pool that is all on perp. | Fixed (`9f6bd6e`) before it was merged or deployed. |
-| A-12 | Low | Found in the fix for A-04. Say a passed challenge ends up holding less than the trader's share. Then a stranger who puts a unit on its perp balance before every settlement step keeps it from settling for as long as they keep doing it: the share waits for money on its way, and there always is some. Meanwhile the pool can't sell another challenge. It takes a loss after the pass, on a position opened by an order that was still open when the trader passed. Before the A-04 fix, the two five-minute waits bounded it. | Fixed: that wait now has a five-minute clock of its own, on both sides, which starts over while margin is held so that a release in pieces can't run it out. With a unit of dust every minute, a short challenge settled in about twenty minutes and paid the trader what the account held. The repository's tests pin the challenge side. The funded side runs the same code and passed the review's own tests. |
-| A-13 | Medium | Found in the second fix for A-06. `addSeat` needs the pool started, and it is refused once any deposit ticket is open. Anyone may open a ticket as soon as the pool starts, without paying into it, and an open ticket leaves the list only when a settlement point takes in a deposit from it. So a stranger who opens one between the operator's `start()` and its seats fixes the pool at the seats it has, possibly none, for good. The platform's starting shares, at least 5% of the seat plan, never leave the pool. | Open. |
-| A-14 | Medium | The keeper and the gateway run on one host and read Hyperliquid's API from one IP, and Hyperliquid limits an IP to a request weight of 1200 a minute. A-03 separated their chain nodes, not this. The keeper spends 20 a pass plus 44 for each active account, every 30 seconds. The gateway's stop-and-take spends 46 on each order that may open a position, and sweeps every 10 seconds at 20 plus 22 for each account with a position. With two trading accounts that is 600 a minute before any order, and 1290 with orders at the rate nginx lets through; from five it is over the limit with no orders at all. Past the limit, reads fail. The keeper skips the pool whose read failed and walks its pools in the same order every pass, so the same pools at the end go unchecked each time, and the gateway refuses orders and stops moving stops. The stops already on Hyperliquid still hold the drawdown line. What goes unwatched is the daily line once it moves, leverage, and the keeper's other steps for those pools. | Open. |
+| A-12 | Low | Found in the fix for A-04. Say a passed challenge ends up holding less than the trader's share. Then a stranger who puts a unit on its perp balance before every settlement step keeps it from settling for as long as they keep doing it: the share waits for money on its way, and there always is some. Meanwhile the pool can't sell another challenge. It takes a loss after the pass, on a position opened by an order that was still open when the trader passed. Before the A-04 fix, the two five-minute waits bounded it. | Fixed: that wait now has a five-minute clock of its own, on both sides, which starts over while margin is held so that a release in pieces can't run it out. With a unit of dust every minute, a short challenge settled in about twenty minutes and paid the trader what the account held. Tests in the repository pin both sides. |
+| A-13 | Medium | Found in the second fix for A-06. `addSeat` needs the pool started, and it is refused once any deposit ticket is open. Anyone may open a ticket as soon as the pool starts, without paying into it, and an open ticket leaves the list only when a settlement point takes in a deposit from it. So a stranger who opens one between the operator's `start()` and its seats fixes the pool at the seats it has, possibly none, for good. The platform's starting shares, at least 5% of the seat plan, never leave the pool. | Fixed: the operator now seals the book of seats, and tickets open only after the seal (see A-06). |
+| A-14 | Medium | The keeper and the gateway run on one host and read Hyperliquid's API from one IP, and Hyperliquid limits an IP to a request weight of 1200 a minute. A-03 separated their chain nodes, not this. The keeper spends 20 a pass plus 44 for each active account, every 30 seconds. The gateway's stop-and-take spends 46 on each order that may open a position, and sweeps every 10 seconds at 20 plus 22 for each account with a position. With two trading accounts that is 600 a minute before any order, and 1290 with orders at the rate nginx lets through; from five it is over the limit with no orders at all. Past the limit, reads fail. The keeper skips the pool whose read failed and walks its pools in the same order every pass, so the same pools at the end go unchecked each time, and the gateway refuses orders and stops moving stops. The stops already on Hyperliquid still hold the drawdown line. What goes unwatched is the daily line once it moves, leverage, and the keeper's other steps for those pools. | Partly fixed. The keeper asks the contract first, so drawdown, daily loss and leverage are checked and a breach is sent even when Hyperliquid refuses every read. It reads each account once a pass, 22 instead of 44, and starts each pass where the last one broke off. The gateway sweeps every 15 seconds instead of 10. The two still share one IP: with orders at the rate nginx lets through, the host stays under the limit with two trading accounts, and with eight when no orders come. |
 
 ## What this review could not check
 
@@ -90,3 +90,8 @@ Status is as of commit `c45a32e6` on main.
   implementations and USDC addresses. The two demo pools are EIP-1167 clones of that `Pool`. The
   contracts' source at that commit is the reviewed one: `git diff` of `src/` between it and
   `2e1ffcd` touches only `shared/` and `spike/`.
+- The second demo deployment (factory `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222`, 1 October 2026)
+  matches a clean build of its deployment commit `e4287926`: `KeyRegistry` and both implementations
+  byte for byte, `PoolFactory` byte for byte outside its immutable slots. The pool and the challenge
+  of its first run are EIP-1167 clones of those implementations. That commit is the one whose fixes
+  this review checked in full.

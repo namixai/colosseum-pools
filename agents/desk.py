@@ -369,15 +369,29 @@ class Desk:
             receipt = c.transact(self.wallet, self.account, signature, types, args)
         except c.NotSent as exc:
             self._refund(counter)
-            return {"status": "refused_by_contract", "reason": self._reason(exc), "attempt_returned": True}
+            return {**self._refusal(exc), "attempt_returned": True}
+        except c.Reverted as exc:
+            return {**self._refusal(exc, by_contract=True), "attempt_returned": False}
         except Exception as exc:
-            return {"status": "refused_by_contract", "reason": self._reason(exc), "attempt_returned": False}
+            return {**self._refusal(exc), "attempt_returned": False}
         return {"status": "sent", "tx": receipt["transactionHash"]}
 
-    def _reason(self, exc: Exception) -> str:
+    def _refusal(self, exc: Exception, by_contract: bool | None = None) -> dict:
+        """The status and the reason for a call that did not go through.
+
+        `refused_by_contract` where the contract actually said no: a custom error of ours decoded
+        out of the gas estimate, or `c.Reverted` -- mined and rejected, whose receipt carries no
+        revert data to name. Everything else is `failed`: a node refusing the read before the
+        estimate, a timeout after the send. Calling those a contract refusal tells a reader the
+        contract said no when it was never asked (review, 3 October 2026). `attempt_returned` was
+        already right either way; it was the word that misled.
+        """
         if self._errors is None:
             self._errors = _error_names()
-        return revert_reason(exc, self._errors)
+        reason = revert_reason(exc, self._errors)
+        said_no = by_contract if by_contract is not None else reason in self._errors.values()
+        return {"status": "refused_by_contract" if said_no else "failed", "reason": reason}
+
 
 
 # ── picking a pool ───────────────────────────────────────────────────────────────────────
