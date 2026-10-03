@@ -137,6 +137,14 @@ BUSY = {"http": 429, "status": "busy", "code": "upstream_busy",
 
 
 class FakeGateway:
+        # The desk asks the gateway what it will take per order. The fake answers the demo signer's
+    # real number so the tests size against the same cap production does; a test that wants the
+    # unpublished case sets `says_cap = None`.
+    says_cap: float | None = 400.0
+
+    def max_order_notional(self, fallback):
+        return fallback if self.says_cap is None else self.says_cap
+
     def __init__(self, busy_for=0):
         self.orders, self.cancels = [], []
         self.busy_for = busy_for   # answer this many calls with busy before accepting any

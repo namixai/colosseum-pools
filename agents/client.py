@@ -49,6 +49,14 @@ def order_url(base: str) -> str:
     return parts._replace(path=parts.path.rstrip("/") + "/v1/order", query="", fragment="").geturl()
 
 
+def health_url(order: str) -> str:
+    """`/v1/health` beside an already-checked order URL, so the scheme rule above holds for both
+    and neither is assembled from the raw argument twice."""
+    parts = urlsplit(order)
+    base = parts.path[: -len("/v1/order")] if parts.path.endswith("/v1/order") else parts.path
+    return parts._replace(path=base.rstrip("/") + "/v1/health", query="", fragment="").geturl()
+
+
 class GatewayClient:
     def __init__(self, wallet: LocalAccount, gateway_url: str, timeout: float = 20.0):
         self.wallet = wallet
@@ -61,6 +69,28 @@ class GatewayClient:
         nonce = max(int(time.time() * 1000), self._last_nonce + 1)
         self._last_nonce = nonce
         return nonce, nonce + 45_000
+
+    def max_order_notional(self, fallback: float) -> float:
+        """What the gateway says it will take per order, or `fallback` when it does not say.
+
+        A gateway that has not been rolled forward yet, or one running the enclave signer (which
+        enforces its own caps and does not report them), has no such field. The fallback is then
+        the number the demo gateway has been refusing above all along, so a client sizing against
+        it is not guessing -- and the published value supersedes it the moment it appears.
+
+        A health read that fails must not stop a command: this only ever LOWERS the cap, so the
+        conservative answer on failure is the fallback.
+        """
+        try:
+            resp = requests.get(health_url(self.url), timeout=self.timeout,
+                                headers={"User-Agent": USER_AGENT})
+            said = resp.json().get("max_order_notional_usdc")
+        except Exception:
+            return fallback
+        try:
+            return float(said) if said is not None else fallback
+        except (TypeError, ValueError):
+            return fallback
 
     def _post(self, kind: str, fields: dict) -> Any:
         body = {"kind": kind, kind: fields, "signature": auth.sign(self.wallet, kind, fields)}
@@ -134,7 +164,12 @@ def round_size(sz: float, sz_decimals: int) -> str:
 
 STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 # In code on purpose: an option would let whoever runs the command raise them.
-WINDOW_MAX_ORDER_USDC = 100.0
+# The share of the leverage rule one order may carry, and the cap to assume while a gateway has
+# not published its own. 400 is not a guess: it is what the demo signer has been refusing above
+# since 17 September 2026 (`gateway/demo_signer.py`), and `/v1/health` supersedes it as soon as a
+# rolled-forward gateway says its own number.
+WINDOW_MAX_ORDER_SHARE_OF_RULE = 0.4
+GATEWAY_ORDER_CAP_BEFORE_PUBLISHED = 400.0
 WINDOW_MAX_ORDERS_PER_DAY = 4
 WINDOW_MAX_PRICE_USDC = 40.0  # a challenge's price plus the platform fee
 DESK_COUNTERS = ("orders_left", "cancels_left", "graduations_left", "stops_left")
@@ -252,8 +287,13 @@ def run(args: argparse.Namespace, chain, reader_for, gateway_for) -> Any:
             raise desk.Refused("the account isn't trading right now")
         if not reader.is_bound(key, args.account, wallet.address):
             raise desk.Refused("this wallet is not the account's trader")
-    limits = desk.Limits(max_notional=WINDOW_MAX_ORDER_USDC, max_orders=WINDOW_MAX_ORDERS_PER_DAY)
-    client = gateway_for(wallet, args.gateway) if trading and send else None
+    # One gateway object: asked for its cap even on a dry run, so `--dry-run` reports the same
+    # number a real order would be held to, and handed to the desk only when it may send.
+    gw = gateway_for(wallet, args.gateway) if trading else None
+    cap = gw.max_order_notional(GATEWAY_ORDER_CAP_BEFORE_PUBLISHED) if gw else GATEWAY_ORDER_CAP_BEFORE_PUBLISHED
+    limits = desk.Limits(gateway_max_notional=cap, max_orders=WINDOW_MAX_ORDERS_PER_DAY,
+                         max_order_share_of_rule=WINDOW_MAX_ORDER_SHARE_OF_RULE)
+    client = gw if send else None
     d = desk.Desk(factory, args.account, limits, client, wallet, send)
     path = session_path(who, d.account, now)
     load_counters(d, DESK_COUNTERS, path)

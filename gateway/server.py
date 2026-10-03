@@ -315,6 +315,28 @@ def make_handler(gw: Gateway, allow_origin: str = "", request_timeout: float = R
     return Handler
 
 
+def health_summary(mode: str, signer: Any, protect_every: float) -> dict:
+    """What `/v1/health` tells a client about this gateway.
+
+    The per-order notional cap belongs to the SIGNER in use, not to this process. The demo signer
+    holds one and reports it; the enclave enforces its own and does not tell us, so the field is
+    ABSENT in that mode rather than carrying a number from here. A constant published here would
+    be a guess about the enclave that clients would then size against.
+
+    Why publish it at all: an agent that guesses high sends an order the signer rejects, and that
+    refusal is not `busy`, so it costs the agent one of its few daily orders for a number it could
+    have read (`agents/desk.py`, `Limits.order_cap`).
+    """
+    out: dict = {"signer": mode}
+    if mode == "demo":
+        out["keys"] = len(signer)
+    cap = getattr(signer, "max_order_notional_usdc", None)
+    if cap is not None:
+        out["max_order_notional_usdc"] = float(cap)
+    out["protect_every"] = protect_every
+    return out
+
+
 def main() -> int:
     rpc = os.environ.get("GATEWAY_RPC_URL", DEFAULT_RPC)
     reader = JsonRpcReader(rpc, os.environ["GATEWAY_FACTORY"], os.environ["GATEWAY_REGISTRY"])
@@ -323,10 +345,10 @@ def main() -> int:
     host, _, port = os.environ.get("GATEWAY_BIND", "127.0.0.1:8787").partition(":")
     allow_origin = os.environ.get("GATEWAY_ALLOW_ORIGIN", "")  # the app's origin, if it calls from a browser
     every = float(os.environ.get("GATEWAY_PROTECT_EVERY", PROTECT_EVERY_S))
-    health = {"signer": mode, "keys": len(signer)} if mode == "demo" else {"signer": mode}
+    health = health_summary(mode, signer, every)
     gateway = Gateway(reader, signer)
     threading.Thread(target=gateway.protector.run, args=(every,), name="protect-sweep", daemon=True).start()
-    server = BoundedServer((host, int(port)), make_handler(gateway, allow_origin, health={**health, "protect_every": every}))
+    server = BoundedServer((host, int(port)), make_handler(gateway, allow_origin, health=health))
     print(f"gateway listening on {host}:{port}, signer: {mode}, stop and take swept every {every:g} s", flush=True)
     server.serve_forever()
     return 0

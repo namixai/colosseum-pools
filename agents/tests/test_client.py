@@ -18,7 +18,7 @@ from unittest import mock
 from eth_account import Account
 
 from agents import client
-from agents.client import GatewayClient, order_url, round_price, round_size
+from agents.client import GatewayClient, health_url, order_url, round_price, round_size
 from gateway.checks import DECIMAL, NonceBook, Request, check
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -142,6 +142,52 @@ class GatewayUrl(unittest.TestCase):
         for bad in ("http://gateway.example.org", "http://127.0.0.1.example.org", "ftp://127.0.0.1"):
             with self.assertRaises(ValueError, msg=bad):
                 order_url(bad)
+
+
+class HealthUrlAndTheCapItCarries(unittest.TestCase):
+    """`/v1/health` is derived from the already-checked order URL, and the cap read from it only
+    ever LOWERS what the client will send -- so every way the read can go wrong has to land on the
+    caller's fallback rather than on a number the gateway never said."""
+
+    def test_health_sits_beside_the_order_url(self):
+        for base in ("http://127.0.0.1:8787", "https://gateway.example.org/pools",
+                     "https://gateway.example.org/pools/?tenant=a#top"):
+            with self.subTest(base):
+                self.assertEqual(health_url(order_url(base)),
+                                 order_url(base).replace("/v1/order", "/v1/health"))
+
+    def client(self):
+        from eth_account import Account
+        return GatewayClient(Account.create(), "https://gateway.example.org")
+
+    def ask(self, payload=None, boom=None):
+        from unittest import mock
+
+        class Resp:
+            def json(self):
+                if boom == "json":
+                    raise ValueError("not json")
+                return payload
+
+        def get(*a, **k):
+            if boom == "http":
+                raise OSError("no route to host")
+            return Resp()
+
+        with mock.patch("agents.client.requests.get", side_effect=get):
+            return self.client().max_order_notional(400.0)
+
+    def test_what_the_gateway_says_wins(self):
+        self.assertEqual(self.ask({"ok": True, "max_order_notional_usdc": 250}), 250.0)
+
+    def test_every_way_it_can_fail_lands_on_the_fallback(self):
+        for name, kw in (("field absent", {"payload": {"ok": True}}),
+                         ("field null", {"payload": {"max_order_notional_usdc": None}}),
+                         ("field not a number", {"payload": {"max_order_notional_usdc": "soon"}}),
+                         ("body not json", {"boom": "json"}),
+                         ("request refused", {"boom": "http"})):
+            with self.subTest(name):
+                self.assertEqual(self.ask(**kw), 400.0)
 
 
 class NumbersMatchTheApp(unittest.TestCase):
