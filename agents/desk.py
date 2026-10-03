@@ -497,7 +497,17 @@ class Shop:
         # The pool pulls the price and the fee; approve exactly both, so a fee raised after
         # the listing makes the purchase fail instead of costing more.
         total = offer["_price_units"] + self.fee_units
-        c.transact(self.wallet, self.usdc, "approve(address,uint256)", ["address", "uint256"], [pool, total])
-        receipt = c.transact(self.wallet, pool, "buyChallenge()")
+        try:
+            c.transact(self.wallet, self.usdc, "approve(address,uint256)", ["address", "uint256"], [pool, total])
+            receipt = c.transact(self.wallet, pool, "buyChallenge()")
+        except c.NotSent as exc:
+            # The one purchase a day is spent before the send so a bot cannot loop, and it comes back
+            # only here, under the rule `Desk._refund` states: `c.NotSent` proves nothing reached the
+            # node, so nothing was bought. A wallet short of the price and the fee ends exactly here,
+            # at the gas estimate of `buyChallenge`, and used to lose its whole day for it. Past the
+            # broadcast the purchase stays spent: it may be in the mempool whatever the error says.
+            self.purchases_left += 1
+            raise Refused("the purchase never reached the node, so nothing was bought and today's purchase "
+                          f"is not spent: {str(exc)[:200]}") from exc
         challenge = to_checksum_address(view(pool, "challenge()", "address"))
         return {"status": "bought", "pool": pool, "challenge": challenge, "tx": receipt["transactionHash"]}

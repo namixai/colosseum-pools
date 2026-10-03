@@ -1163,6 +1163,15 @@ MUTATIONS = [
      '        if source["owner"].lower() != deployer.lower():',
      "        if False:",
      ["test_a_source_pool_somebody_else_owns"]),
+    # The check after the pool is made read `rules()` back with a type that was not the struct's.
+    ("K91", "ops/create_live_pool.py",
+     '    back_rules = c.call_view(pool, "rules()", [], [], [RULES])[0]',
+     '    back_rules = c.call_view(pool, "rules()", [], [], ["(uint32,uint32,uint16,uint32[])"])[0]',
+     ["test_both_are_read_back_with_those_types"]),
+    ("K92", "ops/create_live_pool.py",
+     'RULES = "(uint16,uint16,uint32,uint32[])"',
+     'RULES = "(uint32,uint32,uint16,uint32[])"',
+     ["test_the_types_are_the_structs_in_the_source"]),
     # Two guards the review found held by nothing: the head-is-None return in `recut_if_uncut`,
     # and treating a mined duplicate ("nonce too low") as an error.
     ("K87", "ops/keeper.py",
@@ -1191,6 +1200,16 @@ MUTATIONS = [
      '            return {**self._refusal(exc, by_contract=True), "attempt_returned": False}',
      '            return {**self._refusal(exc, by_contract=False), "attempt_returned": False}',
      ["test_a_graduation_that_went_out_and_reverted_stays_spent"]),
+    # The shop spends the day's one purchase before it sends, and gave it back for nothing: a wallet
+    # short of the price and the fee is refused at the gas estimate, and the day went with it.
+    ("A54", "agents/desk.py",
+     "            self.purchases_left += 1\n",
+     "",
+     ["test_a_purchase_that_never_reached_the_node_is_not_spent"]),
+    ("A55", "agents/desk.py",
+     "        except c.NotSent as exc:\n            # The one purchase a day is spent before the send",
+     "        except Exception as exc:\n            # The one purchase a day is spent before the send",
+     ["test_a_purchase_that_was_broadcast_stays_spent"]),
     # ── keeper (Python unittest) ──
     # The take has to clear the target by what closing costs, or a challenge the take closed
     # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.
