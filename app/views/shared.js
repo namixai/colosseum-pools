@@ -223,10 +223,10 @@ async function seats(box, sp, seatList) {
   }
   const cards = await chain.readAll([...seatList], async (seat) => {
     const pool = chain.contract("pool", seat);
-    // A seat the app's own factory made opens on the pool page like any other pool; one from a
-    // factory of the shared pool's own doesn't.
+    // A seat one of the app's factories made (live or archive) opens on the pool page like any other pool; one from
+    // a factory of the shared pool's own doesn't.
     const [{ rules, terms, assets }, stage, challenge, term, spot, known] = await Promise.all([
-      rulesAndTerms(pool), pool.stage(), pool.challenge(), sp.fundedTerm(seat), spotOf(seat), chain.factory().isPool(seat),
+      rulesAndTerms(pool), pool.stage(), pool.challenge(), sp.fundedTerm(seat), spotOf(seat), chain.deploymentOf(seat, "pool"),
     ]);
     let status = "";
     if (challenge !== ZERO) {

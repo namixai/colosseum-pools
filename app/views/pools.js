@@ -7,7 +7,7 @@ import { DEMO_POOL as D } from "../lib/demo.js";
 import { poolStatus } from "../lib/stages.js";
 import { saleBlocker } from "../lib/funding.js";
 import { totalPriceWords } from "../lib/outcomes.js";
-import { CONFIG } from "../config.js";
+import { DEPLOYMENTS, liveDeployment, isArchive, ARCHIVE } from "../lib/deployments.js";
 import { LANDING, OTHERS_HEADING, KIND_NOTE, poolKind, holdsCode, cardBlockerLine, listOrder, tradeTarget } from "../lib/listing.js";
 
 function notDeployed(page) {
@@ -50,8 +50,43 @@ export function rulesHtml(rules, assets) {
   ].join("");
 }
 
+/** One pool as the list shows it, read from the deployment it belongs to. */
+async function readPoolItem(address, index, deployment) {
+  const pool = chain.contract("pool", address);
+  const [{ rules, terms, assets }, stage, owner, spotUsdc, ready, challenge, neededSpot] = await Promise.all([
+    rulesAndTerms(pool), pool.stage(), pool.owner(), hl.spotUsdc(address), pool.accountReady(), pool.challenge(),
+    pool.capitalNeeded(),
+  ]);
+  const ownerIsContract = await holdsCode((a) => chain.readProvider.getCode(a), owner);
+  const archived = isArchive(deployment);
+  // The same reading the pool page decides its buy button from (funding.js), in the same units. An archived pool
+  // sells nothing, so it carries no blocker of its own: the deployment is the reason.
+  const blocker = archived ? { kind: "archived" }
+    : saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed: Number(neededSpot) / 1e8 });
+  return { index, address, rules, terms, assets, stage, owner, spotUsdc, blocker, archived, deployment,
+    kind: poolKind({ owner, ownerIsContract, deployer: deployment.deployer }) };
+}
+
+function poolCard(item, fee) {
+  const { address, rules, terms, assets, stage, owner, spotUsdc, blocker, kind, archived } = item;
+  const status = poolStatus(stage, archived ? null : blocker, archived);
+  const card = document.createElement("article");
+  card.className = "card";
+  const blocked = archived ? "" : cardBlockerLine(blocker);
+  card.innerHTML = `
+    <h3><a href="#/pool/${esc(address)}">${esc(chain.short(address))}</a> ${badge(status.name, status.tone)}</h3>
+    ${KIND_NOTE[kind] ? `<p class="small"><strong>${esc(KIND_NOTE[kind])}</strong></p>` : ""}
+    <p class="muted">Investor ${esc(chain.short(owner))} · ${esc(spotUsdc.toFixed(2))} USDC on HyperCore spot</p>
+    ${blocked ? `<p class="small">${esc(blocked)}</p>` : ""}
+    ${termsHtml(terms, archived ? null : fee)}
+    ${rulesHtml(rules, assets)}
+    <p><a class="button" href="#/pool/${esc(address)}">${blocker ? "See the pool" : "Open the pool"}</a></p>`;
+  return card;
+}
+
 export async function listView(page) {
-  if (!chain.deployed()) return notDeployed(page);
+  const live = liveDeployment();
+  if (!chain.deployed(live)) return notDeployed(page);
   render(page, `<section>
     <h2>Pools</h2>
     <p class="lead">${esc(LANDING.line)}</p>
@@ -61,49 +96,46 @@ export async function listView(page) {
     <p class="muted" id="count">Loading…</p>
     <div id="pools" class="grid"></div>
     <h3 id="others-heading" hidden>${esc(OTHERS_HEADING)}</h3>
-    <div id="others" class="grid"></div></section>`);
-  const [addresses, fee] = await Promise.all([chain.factory().pools(), chain.factory().challengeFee()]);
-  $("#count", page).textContent = addresses.length
-    ? `${addresses.length} pool(s). Each one sells a single challenge at a time.`
-    : "No pools yet.";
+    <div id="others" class="grid"></div>
+    <div id="archive-block" hidden>
+      <h3>${esc(ARCHIVE.heading)}</h3>
+      <p class="muted">${esc(ARCHIVE.note)}</p>
+      <div id="archive" class="grid"></div>
+    </div></section>`);
+  // Live first, then the archive: a deployment at a time, so the reads of one never meet the other's in a batch.
   const items = [];
-  for (const [index, address] of addresses.entries()) {
-    const pool = chain.contract("pool", address);
-    const [{ rules, terms, assets }, stage, owner, spotUsdc, ready, challenge, neededSpot] = await Promise.all([
-      rulesAndTerms(pool), pool.stage(), pool.owner(), hl.spotUsdc(address), pool.accountReady(), pool.challenge(),
-      pool.capitalNeeded(),
-    ]);
-    const ownerIsContract = await holdsCode((a) => chain.readProvider.getCode(a), owner);
-    // The same reading the pool page decides its buy button from (funding.js), in the same units.
-    const blocker = saleBlocker({ stage, ready, challenge, spot: spotUsdc, needed: Number(neededSpot) / 1e8 });
-    items.push({ index, address, rules, terms, assets, stage, owner, spotUsdc, blocker,
-      kind: poolKind({ owner, ownerIsContract, deployer: CONFIG.deployer }) });
+  let fee = 0n;
+  for (const deployment of DEPLOYMENTS) {
+    if (!chain.deployed(deployment)) continue;
+    const factory = chain.factory(undefined, deployment);
+    const [addresses, depFee] = await Promise.all([factory.pools(), factory.challengeFee()]);
+    if (deployment === live) fee = depFee;
+    for (const [index, address] of addresses.entries()) items.push(await readPoolItem(address, index, deployment));
   }
-  const ordered = listOrder(items);
+  const liveItems = items.filter((i) => !i.archived);
+  $("#count", page).textContent = liveItems.length
+    ? `${liveItems.length} pool(s) on the live deployment. Each one sells a single challenge at a time.`
+    : "No pools on the live deployment yet.";
+  const ordered = listOrder(liveItems);
   for (const item of ordered) {
-    const { address, rules, terms, assets, stage, owner, spotUsdc, blocker, kind } = item;
-    const status = poolStatus(stage, blocker);
-    const card = document.createElement("article");
-    card.className = "card";
-    const blocked = cardBlockerLine(blocker);
-    card.innerHTML = `
-      <h3><a href="#/pool/${esc(address)}">${esc(chain.short(address))}</a> ${badge(status.name, status.tone)}</h3>
-      ${KIND_NOTE[kind] ? `<p class="small"><strong>${esc(KIND_NOTE[kind])}</strong></p>` : ""}
-      <p class="muted">Investor ${esc(chain.short(owner))} · ${esc(spotUsdc.toFixed(2))} USDC on HyperCore spot</p>
-      ${blocked ? `<p class="small">${esc(blocked)}</p>` : ""}
-      ${termsHtml(terms, fee)}
-      ${rulesHtml(rules, assets)}
-      <p><a class="button" href="#/pool/${esc(address)}">${blocker ? "See the pool" : "Open the pool"}</a></p>`;
-    (kind === "pool" ? $("#pools", page) : $("#others", page)).append(card);
+    (item.kind === "pool" ? $("#pools", page) : $("#others", page)).append(poolCard(item, fee));
   }
   if (ordered.some((i) => i.kind !== "pool")) $("#others-heading", page).hidden = false;
+  const archived = listOrder(items.filter((i) => i.archived));
+  for (const item of archived) $("#archive", page).append(poolCard(item, fee));
+  if (archived.length) $("#archive-block", page).hidden = false;
   const target = tradeTarget(ordered);
   const trade = $("#trade-in", page);
+  trade.removeAttribute("aria-disabled");
   if (target) {
     trade.href = `#/pool/${target}`;
-    trade.removeAttribute("aria-disabled");
   } else {
-    trade.classList.add("disabled");
+    // Honestly to the list: no investor's pool of the live deployment can sell, and our benches are not an offer.
+    trade.href = "#/";
+    trade.addEventListener("click", (e) => {
+      e.preventDefault();
+      $("#count", page).scrollIntoView({ behavior: "smooth" });
+    });
     $("#trade-none", page).textContent = LANDING.trade.none;
   }
 }

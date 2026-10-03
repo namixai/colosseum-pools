@@ -1,10 +1,11 @@
 // "What happened on chain" (#/evidence). The rows are static (app/data/evidence.json, held to the documents
 // by app/tests/evidence.test.mjs); the page reads the chain only when a reader presses a button, and then says
 // whether the node agrees with the row.
-import { readProvider } from "../lib/chain.js";
+import { readProvider, deploymentOf } from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, friendly } from "../lib/ui.js";
-import { DOCS, TEXT, EVENTS, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict } from "../lib/evidence.js";
+import { DOCS, TEXT, EVENTS, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict, factoryQuestion,
+  withDeployment } from "../lib/evidence.js";
 
 const EVENT_ABI = new ethers.Interface(EVENTS);
 
@@ -116,8 +117,12 @@ export async function evidenceView(page) {
   for (const button of page.querySelectorAll("button[data-receipt]")) {
     const row = data.rows[Number(button.dataset.receipt)];
     ask(button, async () => {
-      const receipt = await readProvider.getTransactionReceipt(row.tx);
-      return receiptVerdict(row, receipt, decode(receipt));
+      // Each row is held to the deployment it names: the receipt, and which factory made the row's account.
+      const question = factoryQuestion(row);
+      const [receipt, madeBy] = await Promise.all([
+        readProvider.getTransactionReceipt(row.tx), question ? deploymentOf(row.account, question) : undefined,
+      ]);
+      return withDeployment(receiptVerdict(row, receipt, decode(receipt)), row, madeBy);
     });
   }
   for (const button of page.querySelectorAll("button[data-fills]")) {

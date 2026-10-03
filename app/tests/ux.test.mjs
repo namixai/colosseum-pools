@@ -40,12 +40,12 @@ test("a pool that cannot sell a challenge says so on its badge and in its senten
 
 test("both pages decide the badge, the card and the buy button from one reading", () => {
   const pool = text("../views/pool.js");
-  assert.match(pool, /const status = poolStatus\(stage, blocker\);/);
+  assert.match(pool, /const status = poolStatus\(stage, archived \? null : blocker, archived\);/);
   assert.match(pool, /badge\(status\.name, status\.tone\)/);
   assert.match(pool, /: status\.words;/);
   const list = text("../views/pools.js");
-  assert.match(list, /const blocker = saleBlocker\(\{ stage, ready, challenge, spot: spotUsdc, needed: Number\(neededSpot\) \/ 1e8 \}\);/);
-  assert.match(list, /const status = poolStatus\(stage, blocker\);/);
+  assert.match(list, /: saleBlocker\(\{ stage, ready, challenge, spot: spotUsdc, needed: Number\(neededSpot\) \/ 1e8 \}\);/);
+  assert.match(list, /const status = poolStatus\(stage, archived \? null : blocker, archived\);/);
   assert.match(list, /\$\{blocker \? "See the pool" : "Open the pool"\}/);
   assert.doesNotMatch(list, /badge\(stageName\(stage\)/);
 });
@@ -64,16 +64,17 @@ test("the list says what the site is, and offers a way in for each role", () => 
   const ordered = listOrder(items);
   assert.deepEqual(ordered.map((i) => i.address), ["0xopen", "0xshort", "0xseat", "0xbench"]);
   assert.equal(tradeTarget(ordered), "0xopen", "a pool anyone opened, that can sell, first");
-  assert.equal(tradeTarget(listOrder(items.filter((i) => i.address !== "0xopen"))), "0xbench", "then any that can sell");
-  assert.equal(tradeTarget(listOrder(items.filter((i) => !["0xopen", "0xbench"].includes(i.address)))), null);
+  // Never one of our benches, and never the archive: with no investor's pool open, the button goes to the list.
+  assert.equal(tradeTarget(listOrder(items.filter((i) => i.address !== "0xopen"))), null);
+  assert.equal(tradeTarget([{ address: "0xold", kind: "pool", blocker: null, archived: true }]), null);
   const list = text("../views/pools.js");
   assert.match(list, /LANDING\.trade\.none/);
   assert.match(list, /tradeTarget\(ordered\)/);
 });
 
 test("our benches and the shared pools' seats are named and listed apart, by who owns them", () => {
-  const deployer = JSON.parse(text("../../deployments/testnet-demo.json")).deployer;
-  assert.match(text("../config.js"), new RegExp(`deployer: "${deployer}"`));
+  // The deploy key comes from app/config.js, which deployments.test.mjs holds to each deployment's record.
+  const deployer = JSON.parse(text("../../deployments/testnet-demo2.json")).deployer;
   assert.equal(poolKind({ owner: deployer.toLowerCase(), ownerIsContract: false, deployer }), "bench");
   assert.equal(poolKind({ owner: "0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6", ownerIsContract: true, deployer }), "seat");
   assert.equal(poolKind({ owner: "0x21538eBF6598e5866BA496A954dE8E39097bFB59", ownerIsContract: false, deployer }), "pool");
@@ -83,8 +84,8 @@ test("our benches and the shared pools' seats are named and listed apart, by who
   assert.equal(KIND_NOTE.pool, "");
   assert.equal(OTHERS_HEADING, "Rehearsal pools and shared-pool seats");
   const list = text("../views/pools.js");
-  assert.match(list, /poolKind\(\{ owner, ownerIsContract, deployer: CONFIG\.deployer \}\)/);
-  assert.match(list, /\(kind === "pool" \? \$\("#pools", page\) : \$\("#others", page\)\)\.append\(card\);/);
+  assert.match(list, /poolKind\(\{ owner, ownerIsContract, deployer: deployment\.deployer \}\)/);
+  assert.match(list, /\(item\.kind === "pool" \? \$\("#pools", page\) : \$\("#others", page\)\)\.append\(poolCard\(item, fee\)\);/);
   assert.match(text("../views/pool.js"), /KIND_NOTE\[kind\]/);
 });
 
@@ -123,8 +124,8 @@ test("the whole price, and every way a challenge ends, before Pay and start", ()
   assert.equal(shares[1].paid, "The price is not refunded.");
   const pool = text("../views/pool.js");
   assert.match(pool, /\$\{outcomesHtml\(terms, fee\)\}\s*<button id="buy-btn">Pay and start<\/button>/);
-  assert.match(pool, /termsHtml\(terms, fee\)/);
-  assert.match(text("../views/pools.js"), /termsHtml\(terms, fee\)/);
+  assert.match(pool, /termsHtml\(terms, archived \? null : fee\)/);
+  assert.match(text("../views/pools.js"), /termsHtml\(terms, archived \? null : fee\)/);
   assert.match(outcomesHtml(DEMO_TERMS, FEE), /<th>How it ends<\/th><th>What you get<\/th><th>What you paid<\/th>/);
 });
 

@@ -60,6 +60,9 @@ export function wire(button, action, { done = "Done.", confirm } = {}) {
 export function friendly(err) {
   if (!err) return "Something went wrong.";
   if (err.code === "ACTION_REJECTED" || err.code === 4001) return "Cancelled in the wallet.";
+  if (batchRefused(err)) {
+    return `${RPC} refused this page's reads: it takes at most 20 in one batch, and the page sent more at once.`;
+  }
   const limiter = rateLimitedBy(err);
   if (limiter) {
     return `${limiter} is refusing further requests from this browser right now (rate limited). `
@@ -105,6 +108,22 @@ export function rateLimited(err) {
 }
 
 /**
+ * The public RPC refused a batch as too large: -32010 "The batch request was too large", "Exceeded max limit of 20".
+ * It answers the whole batch with one error and no ids, so ethers finds no response for its first call and throws
+ * BAD_DATA "missing response for request" with the node's answer in `value`. BAD_DATA alone reads as a contract of
+ * another version, which this is not: the app asked too much at once. Measured on 1 Oct 2026, ethers 6.17.0.
+ */
+export function batchRefused(err) {
+  for (const e of layers(err)) {
+    if (Number(e.code) === -32010) return true;
+    if (/batch request was too large|Exceeded max limit of \d+/i.test(String(e.message || ""))) return true;
+    const answers = Array.isArray(e.value) ? e.value : e.value ? [e.value] : [];
+    if (answers.some((a) => Number(a?.error?.code) === -32010)) return true;
+  }
+  return false;
+}
+
+/**
  * The line under a page that failed to load: what the failure means for the visitor, said only
  * when the error shows it. It used to say "the public testnet RPC is rate limited" under every
  * failure, the decode error too -- and that one no wait and no reload fixes.
@@ -113,6 +132,11 @@ export function failureHint(err) {
   // A rate limit gets no line of its own: friendly() has already named who refused and said when
   // to try again, and 429 is not a status this reads as a service that could not be reached.
   const all = layers(err);
+  // Before BAD_DATA: a refused batch reaches here as BAD_DATA too, and it is not a mismatch with the deployment.
+  if (batchRefused(err)) {
+    return "That is a fault in this app asking too much at once, not in the contracts or the deployment. Reloading "
+      + "the page usually gets past it.";
+  }
   // ethers says BAD_DATA when a view's answer does not decode against the app's ABI: a contract
   // of another version, or no contract at the address at all, whose answer is "0x".
   if (all.some((e) => e.code === "BAD_DATA")) {

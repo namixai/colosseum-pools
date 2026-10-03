@@ -2,6 +2,8 @@
 import { CONFIG } from "../config.js";
 import { ensureChain } from "./wallet.js";
 export { MAX_BATCH, readAll } from "./batch.js";
+import { PROVIDER_OPTIONS } from "./batch.js";
+import { DEPLOYMENTS, liveDeployment, pickDeployment } from "./deployments.js";
 
 const { ethers } = window;
 
@@ -110,7 +112,7 @@ export const STAGE = ["Idle", "Challenge", "Funded", "Closing", "PassedAwaitingK
 export const BREACH = ["None", "Drawdown", "Daily loss", "Leverage", "Forbidden asset"];
 export const KEY_STATE = ["Unknown", "Free", "Bound", "Retired"];
 
-export const readProvider = new ethers.JsonRpcProvider(CONFIG.rpc, CONFIG.chainId, { staticNetwork: true });
+export const readProvider = new ethers.JsonRpcProvider(CONFIG.rpc, CONFIG.chainId, PROVIDER_OPTIONS);
 
 let signer = null;
 const listeners = new Set();
@@ -127,8 +129,9 @@ export function currentAddress() {
   return signer ? signer.address : null;
 }
 
-export function deployed() {
-  return Boolean(CONFIG.factory && CONFIG.registry);
+/** Whether the deployment (the live one unless named) has its addresses in app/config.js. */
+export function deployed(deployment = liveDeployment()) {
+  return Boolean(deployment && deployment.factory && deployment.registry);
 }
 
 export async function connect() {
@@ -156,12 +159,12 @@ export function contract(kind, address, runner) {
   return new ethers.Contract(address, ABI[kind], runner || readProvider);
 }
 
-export function factory(runner) {
-  return contract("factory", CONFIG.factory, runner);
+export function factory(runner, deployment = liveDeployment()) {
+  return contract("factory", deployment.factory, runner);
 }
 
-export function registry(runner) {
-  return contract("registry", CONFIG.registry, runner);
+export function registry(runner, deployment = liveDeployment()) {
+  return contract("registry", deployment.registry, runner);
 }
 
 export function usdc(runner) {
@@ -188,12 +191,22 @@ export async function approveIfNeeded(spender, amount) {
 }
 
 /** The block the contracts were deployed in, from the app's config. */
-export function deployBlock() {
-  return CONFIG.deployBlock || 0;
+/**
+ * Which deployment `address` belongs to: the one whose factory says isPool (or isChallenge) for it, live first; null
+ * when none made it. One read per deployment, so a page of either can be shown and checked.
+ */
+export async function deploymentOf(address, kind = "pool") {
+  const ask = kind === "challenge" ? "isChallenge" : "isPool";
+  const answers = await Promise.all(DEPLOYMENTS.map((d) => factory(undefined, d)[ask](address)));
+  return pickDeployment(DEPLOYMENTS, answers);
 }
 
-export function platformAssets() {
-  return CONFIG.platformAssets || [];
+export function deployBlock(deployment = liveDeployment()) {
+  return deployment.deployBlock || 0;
+}
+
+export function platformAssets(deployment = liveDeployment()) {
+  return deployment.platformAssets || [];
 }
 
 export function randomSalt() {

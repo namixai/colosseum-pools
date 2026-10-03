@@ -11,6 +11,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { TEXT, EVENTS, groups, quoted, appLink, howToCheck, receiptVerdict, fillsVerdict, eventText } from "../lib/evidence.js";
+import { DEPLOYMENTS } from "../lib/deployments.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DATA = JSON.parse(readFileSync(join(ROOT, "app", "data", "evidence.json"), "utf8"));
@@ -190,15 +191,20 @@ test("the page links an account only where the app reads it", () => {
   const rehearsal = section("docs/EVIDENCE.md", "The fourth ending, on the rehearsal deployment");
   assert.match(rehearsal, /not on the demo's factory/);
   const pools = DATA.pools.rows.map((p) => p.pool);
+  // The deployments the site reads, by label, from the config the deployments test holds to deployments/.
+  const READ = DEPLOYMENTS.map((d) => d.label);
+  assert.deepEqual(READ, ["demo2", "demo"]);
+  assert.ok(DATA.rows.some((r) => r.factory === "demo2" && appLink(r) === `#/verify/${r.account}`),
+    "deployment 2's rows open on the check-it-yourself page");
   for (const r of DATA.rows) {
     assert.ok([null, "challenge", "pool", "seat", "shared pool"].includes(r.kind), `${r.what}: kind ${r.kind}`);
-    // Each section's rows belong to one deployment, and only "demo" is the one app/config.js
-    // reads -- so a row from any other gets no link, which the assertions below hold it to.
+    // Each section's rows belong to one deployment. The site reads two (app/config.js, since 1 Oct 2026): demo2,
+    // live, and demo, the archive -- a row of either gets its link, a row of any other (the rehearsal) none.
     const expected = { "The fourth ending, on the rehearsal deployment": "rehearsal",
                        "Deployment 2, and the first run where the trader was not us": "demo2" };
     assert.equal(r.factory, expected[r.section] ?? "demo", r.what);
     const link = appLink(r);
-    if (r.factory !== "demo" || !r.account) assert.equal(link, null, `${r.what}: the app does not read it`);
+    if (!READ.includes(r.factory) || !r.account) assert.equal(link, null, `${r.what}: the app does not read it`);
     else if (r.kind === "shared pool") {
       assert.ok(pools.includes(r.account), `${r.what}: one of the three shared pools`);
       assert.equal(link, `#/shared/${r.account}`);

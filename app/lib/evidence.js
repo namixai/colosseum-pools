@@ -4,6 +4,8 @@
 // reads the chain: the page does, only when a reader asks, and these helpers put what the node answered
 // next to what the row says.
 
+import { deploymentNamed } from "./deployments.js";
+
 export const DOCS = "https://github.com/namixai/colosseum-pools/blob/main/";
 
 // The events a row may claim, as the contracts declare them (src/Pool.sol, src/ChallengeAccount.sol; an enum is a
@@ -58,13 +60,38 @@ export function quoted(text) {
   return `“${head}${t}${tail}”`;
 }
 
-/** Where the app itself reads an account, or null. The verify page asks the demo's factory, so an account of
- *  another deployment gets no link: that page would call it "not ours". */
+/** Where the app itself reads an account, or null. The verify page asks the factories of the deployments the site
+ *  reads (app/config.js), live and archive, so an account of either gets a link; one of another deployment (a
+ *  rehearsal) gets none: that page would call it "not ours". */
 export function appLink(row) {
   if (!row.account) return null;
   if (row.kind === "shared pool") return `#/shared/${row.account}`;
-  if (row.factory === "demo" && ["challenge", "pool", "seat"].includes(row.kind)) return `#/verify/${row.account}`;
+  if (deploymentNamed(row.factory) && ["challenge", "pool", "seat"].includes(row.kind)) return `#/verify/${row.account}`;
   return null;
+}
+
+/** Which factory to ask about a row's account, "pool" or "challenge", or null when the site reads no deployment the
+ *  row names, or the row's account is not a pool or a challenge. */
+export function factoryQuestion(row) {
+  if (!row.account || !deploymentNamed(row.factory)) return null;
+  if (row.kind === "challenge") return "challenge";
+  return ["pool", "seat"].includes(row.kind) ? "pool" : null;
+}
+
+/**
+ * The receipt's verdict with the deployment checked too: each row is held to the deployment it names, the first or
+ * the second. `madeBy` is the deployment whose factory made the row's account (chain.deploymentOf), null when
+ * neither did, undefined when the row was not asked about (factoryQuestion said null).
+ */
+export function withDeployment(verdict, row, madeBy) {
+  if (madeBy === undefined) return verdict;
+  const named = deploymentNamed(row.factory);
+  if (madeBy && named && madeBy.label === named.label) {
+    return verdict.ok ? { ok: true, text: `${verdict.text} The account was made by the ${named.label} factory, as the `
+      + "row says." } : verdict;
+  }
+  const said = madeBy ? `the ${madeBy.label} factory made it` : "neither factory this site reads made it";
+  return { ok: false, text: `${verdict.text} The row names the ${row.factory} deployment, but ${said}.` };
 }
 
 /** How to check a row without this page, in the order a reader would go. */

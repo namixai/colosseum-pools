@@ -4,8 +4,9 @@ import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, badge, row, isAddress, settle, wire } from "../lib/ui.js";
 import { ruleVerdict, liveReadingIsMoot, pastFundedStage } from "../lib/verdict.js";
-import { stageWords } from "../lib/stages.js";
+import { poolStatus } from "../lib/stages.js";
 import { keyFacts } from "../lib/keys.js";
+import { isArchive } from "../lib/deployments.js";
 
 export async function verifyView(address, page) {
   if (!isAddress(address)) {
@@ -16,14 +17,18 @@ export async function verifyView(address, page) {
     page.insertAdjacentHTML("beforeend", `<section class="card"><h3>Who holds the keys</h3>${KEYS_HELD}</section>`);
     return;
   }
-  const [isPool, isChallenge] = chain.deployed()
-    ? await Promise.all([chain.factory().isPool(address), chain.factory().isChallenge(address)])
-    : [false, false];
-  const kind = isPool ? "pool" : isChallenge ? "challenge" : null;
+  // Either deployment the site reads, live or archive: each account is checked against the factory and the key
+  // registry of the deployment that made it.
+  const [asPool, asChallenge] = chain.deployed()
+    ? await Promise.all([chain.deploymentOf(address, "pool"), chain.deploymentOf(address, "challenge")])
+    : [null, null];
+  const kind = asPool ? "pool" : asChallenge ? "challenge" : null;
+  const deployment = asPool || asChallenge;
   render(page, `
     <section class="card">
       <h2>Check it yourself</h2>
-      <p class="mono">${esc(address)} ${badge(kind || "not ours", kind ? "ok" : "bad")}</p>
+      <p class="mono">${esc(address)} ${badge(kind || "not ours", kind ? "ok" : "bad")}${
+        deployment ? ` ${badge(isArchive(deployment) ? "first deployment, archive" : "live deployment")}` : ""}</p>
       <p class="muted">Everything below is read in your browser from HyperEVM testnet and Hyperliquid's public
       API. Where a step still rests on our word, it says so.</p>
     </section>
@@ -32,7 +37,7 @@ export async function verifyView(address, page) {
     <section class="card"><h3>3. Who holds the keys</h3>${KEYS_HELD}</section>`);
   if (!kind) {
     $("#keys", page).textContent = chain.deployed()
-      ? "This address was not created by the factory; there is nothing to check."
+      ? "This address was not created by either factory this site reads; there is nothing to check."
       : "The contracts are not deployed yet.";
     $("#fills", page).textContent = "";
     return;
@@ -40,8 +45,8 @@ export async function verifyView(address, page) {
   const account = chain.contract(kind, address);
   // Raw errors used to be pasted in here, ethers payload and all. settle() says what failed
   // in words; the section that failed is named by the box it writes into.
-  settle(keysPanel(account, address, page), $("#keys", page));
-  settle(fillsPanel(account, address, page, kind), $("#fills", page));
+  settle(keysPanel(account, address, page, deployment), $("#keys", page));
+  settle(fillsPanel(account, address, page, kind, deployment), $("#fills", page));
 }
 
 const KEYS_HELD = `
@@ -51,8 +56,8 @@ const KEYS_HELD = `
   <p class="small muted">Usenami Signer, our enclave signing service, is a separate product and takes no part
   in this demo. Its code is public in <code>namixai/signer</code>.</p>`;
 
-async function keysPanel(account, address, page) {
-  const reg = chain.registry();
+async function keysPanel(account, address, page, deployment) {
+  const reg = chain.registry(undefined, deployment);
   // Every read this panel makes on load, in one place: four from the chain, plus Hyperliquid's
   // own answer for each key it found. No event log — see app/lib/keys.js for why.
   const facts = await keyFacts({
@@ -126,7 +131,9 @@ async function keyLog(account, cutBlock, page) {
   return "";
 }
 
-async function fillsPanel(account, address, page, kind) {
+async function fillsPanel(account, address, page, kind, deployment) {
+  // An archived pool sells nothing, so "idle" never means "can sell" there.
+  const archived = isArchive(deployment);
   const [rules, fills, list] = await Promise.all([account.rules(), hl.fills(address), hl.perps()]);
   const allowed = new Set(rules.assets.map(Number));
   const rows = fills.slice(0, 200).map((f) => {
@@ -165,7 +172,7 @@ async function fillsPanel(account, address, page, kind) {
   const verdict = ruleVerdict({ recorded, live, stopped, finished });
   $("#fills", page).className = "";
   $("#fills", page).innerHTML = `
-    ${kind === "pool" ? row("What the pool is doing", esc(stageWords(state))) : ""}
+    ${kind === "pool" ? row("What the pool is doing", esc(poolStatus(state, null, archived).words)) : ""}
     ${row("Fills on this account (Hyperliquid API)", String(fills.length))}
     ${row("Fills in an asset outside the rules", bad ? badge(String(bad), "bad") : badge("0", "ok"))}
     ${verdict.kind === "recorded"
@@ -178,7 +185,9 @@ async function fillsPanel(account, address, page, kind) {
           : row("The contract's verdict right now",
                 verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))}
     ${idleAfterFunding ? row("Funded stage on this pool",
-        `ended at block ${esc(String(cutBlock))}; the pool is idle again and can sell the next challenge`) : ""}
+        `ended at block ${esc(String(cutBlock))}; the pool is idle again${archived
+          ? ", and as part of the archived deployment it sells no further challenge"
+          : " and can sell the next challenge"}`) : ""}
     ${liveReadingIsMoot(verdict) ? `<p class="small muted">A verdict this page could compute from the
       account's state would be about the account as it stands now${idleAfterFunding
         ? `, and this pool is idle: its capital is home and the stage above is over. A reading of what
