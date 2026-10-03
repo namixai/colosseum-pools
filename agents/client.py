@@ -87,6 +87,11 @@ class GatewayClient:
             said = resp.json().get("max_order_notional_usdc")
         except Exception:
             return fallback
+        # `bool` is a subclass of `int`, so `float(True)` is 1.0 and would pass every check below
+        # as a one-dollar cap -- refusing every order, since Hyperliquid's minimum is ten. That
+        # fails safe where NaN failed dangerous, and it is still a number this side invented.
+        if isinstance(said, bool):
+            return fallback
         try:
             cap = float(said) if said is not None else None
         except (TypeError, ValueError):

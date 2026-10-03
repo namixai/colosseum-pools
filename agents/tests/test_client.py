@@ -191,6 +191,11 @@ class HealthUrlAndTheCapItCarries(unittest.TestCase):
                          ("field infinity", {"payload": {"max_order_notional_usdc": "Infinity"}}),
                          ("field zero", {"payload": {"max_order_notional_usdc": 0}}),
                          ("field negative", {"payload": {"max_order_notional_usdc": -5}}),
+                         # `bool` subclasses `int`: float(True) is 1.0, finite and positive, and
+                         # would be enforced as a one-dollar cap. float(False) is 0.0 and the
+                         # positive check already catches that one.
+                         ("field true", {"payload": {"max_order_notional_usdc": True}}),
+                         ("field false", {"payload": {"max_order_notional_usdc": False}}),
                          ("body not json", {"boom": "json"}),
                          ("request refused", {"boom": "http"})):
             with self.subTest(name):
