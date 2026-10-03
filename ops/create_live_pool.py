@@ -63,6 +63,12 @@ def preconditions(*, assets: list[int], listed: dict[int, bool], spot: int, need
     one failing here is a withdrawal already done and a pool not created.
     """
     out = []
+    # `_checkRules` rejects an empty list and duplicates too. Leaving those to the factory means
+    # finding out at step two, with the withdrawal already done.
+    if not assets:
+        out.append("список активов пуст")
+    if len(assets) != len(set(assets)):
+        out.append("в списке активов есть дубликаты")
     for a in assets:
         if not listed.get(a):
             out.append(f"актив {a} не в списке платформы этой фабрики")
@@ -133,7 +139,16 @@ def main() -> int:
             time.sleep(3)
             if int(c.core_spot_balance(dep.address, 0)["total"]) >= spot + coming:
                 break
-        print(f"   спот деплойщика: {int(c.core_spot_balance(dep.address, 0)['total'])/1e8:.4f}")
+        # The loop gives up after two minutes either way, so the balance decides, not the loop.
+        # What matters is whether `need` is covered -- not whether the exact expected total
+        # arrived, which a fee or a rounding on the way could leave a unit short. Creating a pool
+        # the next step cannot fund leaves a pool with no capital, which is worse than no pool.
+        now = int(c.core_spot_balance(dep.address, 0)["total"])
+        print(f"   спот деплойщика: {now/1e8:.4f}")
+        if now < need:
+            print(f"   🔴 вывод не дошёл: {now/1e8:.4f} против нужных {need/1e8:.2f}. "
+                  f"Пул НЕ создан, деньги у деплойщика — можно запустить снова.")
+            return 1
 
     # ── 2. the pool ──────────────────────────────────────────────────────────────────────
     print("\n2. createPool…")

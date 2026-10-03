@@ -43,6 +43,17 @@ class WhatStopsIt(unittest.TestCase):
         # True through a dict default.
         self.assertTrue(self.ask(assets=[3, 9], listed={3: True}))
 
+    def test_an_empty_asset_list(self):
+        # `_checkRules` rejects it too, but at step two -- with the withdrawal already done.
+        said = self.ask(assets=[], listed={})
+        self.assertEqual(len(said), 1)
+        self.assertIn("пуст", said[0])
+
+    def test_duplicate_assets(self):
+        said = self.ask(assets=[3, 3], listed={3: True})
+        self.assertEqual(len(said), 1)
+        self.assertIn("дубликаты", said[0])
+
     def test_a_source_pool_that_is_not_idle(self):
         said = self.ask(source=stand(stage=1))
         self.assertTrue(any("не Idle" in s for s in said), said)
