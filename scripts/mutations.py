@@ -1113,6 +1113,22 @@ MUTATIONS = [
      "        if not self.send:\n            return {\"status\": \"not_sent\", \"call\": \"stopFunded\"}",
      "        if False:\n            return {\"status\": \"not_sent\", \"call\": \"stopFunded\"}",
      ["test_stop_funded_signs_nothing_on_a_dry_run_and_names_the_contracts_refusal"]),
+    # The live-run pool is created by one script whose refusals are its only safety: step one
+    # moves capital out of a finished stand, so a reason to stop found after that leaves the money
+    # moved and no pool made.
+    ("K82", "ops/create_live_pool.py",
+     "        if not listed.get(a):",
+     "        if not listed.get(a, True):",
+     ["test_an_asset_missing_from_the_reads_is_not_a_pass"]),
+    ("K83", "ops/create_live_pool.py",
+     '        coming = source["spot"]',
+     "        coming = 0",
+     ["test_the_withdrawal_is_counted_towards_the_capital",
+      "test_the_live_run_as_planned_passes"]),
+    ("K84", "ops/create_live_pool.py",
+     '        if source["owner"].lower() != deployer.lower():',
+     "        if False:",
+     ["test_a_source_pool_somebody_else_owns"]),
     # ── keeper (Python unittest) ──
     # The take has to clear the target by what closing costs, or a challenge the take closed
     # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.
