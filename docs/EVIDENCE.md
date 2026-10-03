@@ -33,8 +33,8 @@ held a key, so the whole set can be rebuilt from two calls:
   ending, and this is why.
 
 The app's `#/verify/<address>` page does the same reads in a browser, and it reads **both**
-deployments: the second is the live one, where pools are bought, traded and opened, and the first
-is an archive, kept so its accounts can still be checked — it sells nothing. The page asks each
+deployments: the second is the live one, where pools are opened and challenges are bought and
+traded, and the first is an archive, kept so its accounts can still be checked — it sells nothing. The page asks each
 factory whether it made the address and then reads that deployment's own key registry, so an
 account of either opens by the same link and the page says which it is. Read on the published
 site, `https://pools.usenami.io`, on 3 October 2026:
@@ -48,9 +48,9 @@ site, `https://pools.usenami.io`, on 3 October 2026:
 - `#/verify/0xd4f31E7234308546c822C619705F1A4B5fC8f629`, the deployment 2 trader's own wallet —
   `not ours`: neither factory made it, and the page says there is nothing to check.
 
-Those reads go from your browser to the public testnet RPC, which limits how much one address may
-ask. A load it refuses says so on the page, and reloading gets past it: the first of our loads
-that day was refused, and the same link loaded on a reload.
+Those reads go from your browser to the public testnet RPC, which limits how many requests one
+visitor may send. A load it refuses says so on the page, and reloading gets past it: the first of
+our loads that day was refused, and the same link loaded on a reload.
 
 ## The end states recorded so far
 
