@@ -176,6 +176,10 @@ on it, so that has not been exercised. The shared pool's own keeper, `ops/shared
 installed on the host. It has not been run for this pool yet; when it is, it runs from the team's
 machine, not from the host.
 
+**Not armed, on purpose.** The seat holds no capital yet, and the list of pools shows it as not
+prepared. Once a seat has its capital and its account is prepared, anyone can buy its challenge from
+the site. So this one is armed only right before the sale it is meant for, not earlier.
+
 At 08:38 UTC on 3 October the pool held 2 USDC on 2e8 shares, its seat was idle and empty, and nobody
 had deposited. Every step's hash is in `spike/results/2026-10-03.jsonl`.
 
