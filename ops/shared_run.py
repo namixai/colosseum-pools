@@ -46,6 +46,15 @@ buys its challenge and trades it through the pool gateway with agents.client, th
     spike/.venv/bin/python -m agents.client --deployment demo --wallet shared-trader --gateway GATEWAY_URL \\
         order CHALLENGE BTC buy SIZE PRICE --type ioc
 
+A pool with several seats of different sizes: `seat` once for each, then `seal`. The steps that act on
+one seat, `arm`, `buy`, `expire` and `release`, then need to be told which, by its place in the pool's
+list (from 1) or by its address; with one seat they need nothing:
+
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo2b seat --capital 10 --funded 100 --price 2 ...
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo2b seat --capital 20 --funded 200 --price 4 ...
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo2b seal
+    spike/.venv/bin/python ops/shared_run.py --deployment shared-demo2b arm --seat 2
+
 A deposit at a price other than 1, and the way out at the same price: a third depositor on that pool,
 once its value is no longer its number of shares. The point mints the deposit times the shares over
 the value, and the price of a share, and everyone else's holding, stay where they were:
@@ -106,6 +115,30 @@ def view(to: str, sig: str, types: list, args: list, out: list) -> tuple:
 
 def seats(record: dict) -> list[str]:
     return list(view(pool_of(record), "seats()", [], [], ["address[]"])[0])
+
+
+def seat_of(record: dict, args) -> str:
+    """The seat a step acts on. A pool with one seat needs no telling. With several, `--seat` names it
+    by its place in the pool's list, from 1, or by its address; a step that guessed would move another
+    seat's money."""
+    all_seats = seats(record)
+    if not all_seats:
+        raise SystemExit("the pool has no seat yet")
+    chosen = getattr(args, "seat", None)
+    if chosen is None:
+        if len(all_seats) > 1:
+            raise SystemExit(f"this pool has {len(all_seats)} seats: say which with --seat, 1 to {len(all_seats)} "
+                             "or its address")
+        return all_seats[0]
+    chosen = str(chosen).strip()
+    if chosen.lower().startswith("0x"):
+        match = [s for s in all_seats if s.lower() == chosen.lower()]
+        if not match:
+            raise SystemExit(f"{chosen} is not a seat of this pool")
+        return match[0]
+    if not chosen.isdigit() or not 1 <= int(chosen) <= len(all_seats):
+        raise SystemExit(f"--seat takes 1 to {len(all_seats)} or a seat's address, not {chosen!r}")
+    return all_seats[int(chosen) - 1]
 
 
 def seats_sealed(record: dict) -> bool | None:
@@ -288,10 +321,10 @@ def cmd_seal(record: dict, _args) -> None:
     c.record("shared_seats_sealed", tx=rcpt["transactionHash"], seats=seats(record), sealed=seats_sealed(record))
 
 
-def cmd_arm(record: dict, _args) -> None:
+def cmd_arm(record: dict, args) -> None:
     """Tops the seat up from the pool, waits for it to land, then prepares the seat's account."""
     op = c.account("shared-operator")
-    seat = seats(record)[0]
+    seat = seat_of(record, args)
     need = view(seat, "capitalNeeded()", [], [], ["uint64"])[0]
     rcpt = c.transact(op, pool_of(record), "armSeat(address)", ["address"], [seat])
     c.record("shared_seat_armed", seat=seat, tx=rcpt["transactionHash"])
@@ -339,12 +372,12 @@ def cmd_settle(record: dict, _args) -> None:
     c.record("shared_after_point", **snapshot(record))
 
 
-def cmd_buy(record: dict, _args) -> None:
+def cmd_buy(record: dict, args) -> None:
     """The trader pays the price and the fee on HyperEVM; anyone starts the challenge once its
     capital is there."""
     tr = c.account(TRADER)
     op = c.account("shared-operator")
-    seat = seats(record)[0]
+    seat = seat_of(record, args)
     price, capital = view(seat, "terms()", [], [], [TERMS_TYPE])[0][:2]
     fee = view(record["PoolFactory"], "challengeFee()", [], [], ["uint256"])[0]
     c.transact(tr, c.TESTNET_USDC_ERC20, "approve(address,uint256)", ["address", "uint256"], [seat, price + fee])
@@ -372,10 +405,10 @@ def cmd_request(record: dict, args) -> None:
     c.record("shared_requested", who=who.address, shares=amount, tx=rcpt["transactionHash"])
 
 
-def cmd_expire(record: dict, _args) -> None:
+def cmd_expire(record: dict, args) -> None:
     """Ends the seat's challenge once its time is up and settles it back into the seat."""
     op = c.account("shared-operator")
-    seat = seats(record)[0]
+    seat = seat_of(record, args)
     ch = view(seat, "challenge()", [], [], ["address"])[0]
     if not int(ch, 16):
         raise SystemExit("the seat has no challenge")
@@ -397,9 +430,9 @@ def cmd_expire(record: dict, _args) -> None:
     c.record("shared_after_expire", **snapshot(record))
 
 
-def cmd_release(record: dict, _args) -> None:
+def cmd_release(record: dict, args) -> None:
     op = c.account("shared-operator")
-    seat = seats(record)[0]
+    seat = seat_of(record, args)
     rcpt = c.transact(op, pool_of(record), "releaseSeat(address)", ["address"], [seat])
     c.record("shared_seat_released", seat=seat, tx=rcpt["transactionHash"])
     wait_until("the seat's capital to land", lambda: c.core_spot_balance(seat, c.USDC_TOKEN)["total"],
@@ -431,17 +464,19 @@ def main() -> int:
     st.add_argument("--daily-bps", type=int, help="daily loss limit, bps (default 300)")
     st.add_argument("--drawdown-bps", type=int, help="drawdown limit, bps (default 600)")
     sub.add_parser("seal")
-    sub.add_parser("arm")
+    which = {"help": "the seat to act on, by its place in the pool's list (from 1) or by its address; "
+                     "needed once the pool has more than one"}
+    sub.add_parser("arm").add_argument("--seat", **which)
     d = sub.add_parser("deposit")
     d.add_argument("--who", choices=DEPOSITORS, required=True)
     d.add_argument("--usdc", type=float, default=20.0)
     sub.add_parser("settle")
-    sub.add_parser("buy")
+    sub.add_parser("buy").add_argument("--seat", **which)
     r = sub.add_parser("request")
     r.add_argument("--who", choices=DEPOSITORS, required=True)
     r.add_argument("--shares", default="all")
-    sub.add_parser("expire")
-    sub.add_parser("release")
+    sub.add_parser("expire").add_argument("--seat", **which)
+    sub.add_parser("release").add_argument("--seat", **which)
     args = p.parse_args()
 
     c.assert_testnet()
