@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import pathlib
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -19,6 +20,39 @@ from agents import desk as dk
 from agents.tests.fakes import ACCOUNT, FACTORY, NOW, POOL, REGISTRY, FakeChain, FakeGateway, Wallet
 
 DAY = 86400
+
+
+class TheInstructionNamesTheLiveDeployment(unittest.TestCase):
+    """The prompt tells the trader one command, with a deployment in it. For three days after the
+    demo moved to its second deployment that command still named the first -- an archive whose
+    pools sell nothing and whose accounts the gateway does not sign for (found 4 October 2026).
+    The site already says which deployment is live, and holds itself to the records; the prompt and
+    the README's table are held to the site here."""
+
+    ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def live(self) -> dict:
+        config = (self.ROOT / "app" / "config.js").read_text()
+        entries = re.findall(r'\{\s*label: "([\w-]+)",\s*role: "(\w+)",\s*factory: "(0x[0-9a-fA-F]{40})",'
+                             r'\s*registry: "(0x[0-9a-fA-F]{40})"', config)
+        live = [e for e in entries if e[1] == "live"]
+        self.assertEqual(len(live), 1, entries)
+        return dict(zip(("label", "role", "factory", "registry"), live[0]))
+
+    def test_the_prompts_command_names_it(self):
+        prompt = (self.ROOT / "agents" / "WINDOW-TRADER.md").read_text()
+        commands = re.findall(r"python -m agents\.client --deployment ([\w-]+) ", prompt)
+        self.assertEqual(commands, [self.live()["label"]])
+
+    def test_the_readmes_table_is_the_live_deployments(self):
+        live = self.live()
+        readme = (self.ROOT / "README.md").read_text()
+        where = readme[readme.index("## Where it runs"):readme.index("## How an order travels")]
+        self.assertIn(f"deployments/testnet-{live['label']}.json", where)
+        self.assertIn(f"| `PoolFactory` | `{live['factory']}` |", where)
+        self.assertIn(f"| `KeyRegistry` | `{live['registry']}` |", where)
+        record = json.loads((self.ROOT / "deployments" / f"testnet-{live['label']}.json").read_text())
+        self.assertIn(f"| deployed at block | {record['block']}; {len(record['published_keys'])} agent keys published", where)
 
 
 class Reader:
