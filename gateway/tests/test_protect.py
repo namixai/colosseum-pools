@@ -491,12 +491,14 @@ class Reconcile(unittest.TestCase):
         self.assertEqual(follow("67961"), [])
         self.assertEqual(follow("67960"), out)
         # The trader's own take stays, short or not ...
-        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): Decimal("67900")}), [])
+        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67900")})}), [])
         # ... while it stands exactly where they put it, and on that asset and that side.
-        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): Decimal("67000")}), out)
-        self.assertEqual(follow("67900", trader_takes={(BTC, SHORT): Decimal("67900")}), out)
+        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67000")})}), out)
+        self.assertEqual(follow("67900", trader_takes={(BTC, SHORT): frozenset({Decimal("67900")})}), out)
+        # Any trigger they asked for counts, not only the last one.
+        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67900"), Decimal("67000")})}), [])
         # Beyond the line it comes in, as it always did, whoever put it there.
-        self.assertEqual(follow("69000", trader_takes={(BTC, LONG): Decimal("69000")}), out)
+        self.assertEqual(follow("69000", trader_takes={(BTC, LONG): frozenset({Decimal("69000")})}), out)
 
     def test_a_shorts_take_follows_the_same_way(self):
         want = {(BTC, SHORT): protect.Line(Decimal("63000"), Decimal("52000"))}
@@ -953,10 +955,25 @@ class FollowingTheLine(FlowBase):
         self.gw.protector.sweep()
         self.assertEqual(self.takes(), ["76308"])
 
+    def test_a_refused_second_move_leaves_the_first_one_the_traders(self):
+        # Found in review, 3 Oct 2026: the second request overwrote what the gateway remembered, the
+        # venue refused it and left the first take standing -- and the sweep then took that take for
+        # its own and carried it out to the line.
+        self.open_long()
+        self.send("take", triggerPx="70000", nonce=NOW + 1)
+        self.x.refuse = {"status": "err", "response": "refused"}
+        status, out = self.send("take", triggerPx="72000", nonce=NOW + 2)
+        self.assertNotEqual(status, 200)
+        self.x.refuse = None
+        self.assertEqual(self.takes(), ["70000"])
+        self.x.equity = Decimal("999")
+        self.gw.protector.sweep()
+        self.assertEqual(self.takes(), ["70000"])
+
     def test_the_next_positions_take_is_the_gateways_again(self):
         self.open_long()
         self.send("take", triggerPx="70000", nonce=NOW + 1)
-        self.assertEqual(self.gw.protector._takes_of(ACCOUNT), {(BTC, LONG): Decimal("70000")})
+        self.assertEqual(self.gw.protector._takes_of(ACCOUNT), {(BTC, LONG): frozenset({Decimal("70000")})})
         # The position closes: Hyperliquid takes the stop and the take away with it.
         self.x.positions.clear()
         self.x.orders.clear()

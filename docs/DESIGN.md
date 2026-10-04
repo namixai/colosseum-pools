@@ -245,6 +245,16 @@ before it can sell again.
   HyperCore offers no precompile that separates an incoming transfer from a realised gain.
   So read a pass as "the account reached the target", not as "this trader can trade", and
   price the pool on the first reading. Found by the audit, 25 September 2026.
+- **Nor profit from funding, so a pass can be collected with no price risk.** Funding paid to
+  the account is perp equity like any other, and the target counts it. A trader who is short on
+  the challenge while longs are paying, and holds the same size long on a wallet of their own,
+  has a position the price cannot move: the challenge collects funding hour after hour, the
+  hedge pays the same amount out, and the challenge reaches its target. What that pass costs is
+  the funding paid on the hedge — the target itself — less the trader's share of it, plus the
+  fees: the price of the bought pass above, paid by the hour instead of at once. The size of it
+  was measured from the other side on 3 October 2026, when a long of about 99 USDC paid
+  0.178665 USDC in six hours; a short of that size would have been paid the same. No fix on
+  chain, for the same reason as above. Named by the audit, 3 October 2026.
 - It does not check a trader's intent: the operator runs the gateway and could submit an
   order that fits the rules without the trader asking for it.
 - In the demo the gateway holds the agent keys. A key file can sign anything Hyperliquid lets
