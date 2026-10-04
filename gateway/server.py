@@ -347,6 +347,11 @@ def main() -> int:
     every = float(os.environ.get("GATEWAY_PROTECT_EVERY", PROTECT_EVERY_S))
     health = health_summary(mode, signer, every)
     gateway = Gateway(reader, signer)
+    # Before the sweep starts: the accounts this signer's keys trade right now, so one with a position
+    # open is swept from the first pass and not from its trader's next order.
+    addresses = getattr(signer, "addresses", None)
+    taken = gateway.protector.take_on(addresses()) if addresses else []
+    log_line(event="protect_took_on", accounts=taken, keys_listed=addresses is not None)
     threading.Thread(target=gateway.protector.run, args=(every,), name="protect-sweep", daemon=True).start()
     server = BoundedServer((host, int(port)), make_handler(gateway, allow_origin, health=health))
     print(f"gateway listening on {host}:{port}, signer: {mode}, stop and take swept every {every:g} s", flush=True)

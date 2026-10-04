@@ -63,6 +63,11 @@ CLOSE_COST_BPS = 2 * (TAKER_FEE_BPS + SLIPPAGE_BPS) + SPARE_BPS   # 18
 # entry's own fee and slippage leave it this far short the moment the position exists: that is the
 # allowance above being spent as planned, and a modify sent for it would go with every opening. A
 # take within this still clears the target by the close and the whole spare.
+#
+# The same distance BEYOND the line is left alone too. The mark the line is computed from and the
+# mark inside the account's equity are two reads, a moment apart, and they differ by a few basis
+# points. A take pulled in for every tick of that is walked in by modifies until it is short enough
+# to be carried out again: the audit counted 39 in an hour of nothing happening (4 Oct 2026).
 TAKE_LAG_BPS = TAKER_FEE_BPS + SLIPPAGE_BPS   # 6.5
 USD = Decimal(1_000_000)  # chain units per USDC (perp USD and equity are in 1e-6 USDC)
 # The farthest a stop or a take is put from the mark, as a fraction of it. A position too small to
@@ -347,11 +352,12 @@ def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, 
     within the target.
 
     With `follow_takes` -- a challenge, whose target is an amount and not a distance -- one take is
-    not left: the gateway's own, once it stands short of the line by more than TAKE_LAG_BPS of the
-    mark. Funding lowers the equity, which moves the stop's line TOWARDS the market and the take's
-    line AWAY from it; "only ever nearer" follows the first and ignores the second, and the take
-    then closes the position below the target. `trader_takes` holds the triggers the trader asked
-    for, by asset and direction: a take standing exactly on one of them is theirs and stays.
+    held to the line instead: the gateway's own. It is moved to the line when it stands more than
+    TAKE_LAG_BPS of the mark away from it, short or beyond, and left alone inside that. Funding
+    lowers the equity, which moves the stop's line TOWARDS the market and the take's line AWAY from
+    it; "only ever nearer" follows the first and ignores the second, and the take then closes the
+    position below the target. `trader_takes` holds the triggers the trader asked for, by asset and
+    direction: a take standing exactly on one of them is theirs and is treated as before.
 
     A funded stage has no target of its own -- its line is one target's worth of the equity it has
     NOW, so it recedes as the position gains -- and a take that followed it would never fire.
@@ -384,14 +390,16 @@ def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, 
             row.update(take=wire_number(line.take), takeWas="placed")
         else:
             near = min(takes, key=lambda p: p.trigger) if side == LONG else max(takes, key=lambda p: p.trigger)
+            # How far the standing take is short of the line: above zero it is nearer the market than
+            # the line, below zero it is beyond it.
+            short_by = line.take - near.trigger if side == LONG else near.trigger - line.take
             if not held:
                 keep = near.trigger == line.take
-            elif not within(near.trigger, line.take, side):
-                keep = False
+            elif follow_takes and near.trigger not in (trader_takes or {}).get((asset, side), ()):
+                lag = m.mark * TAKE_LAG_BPS / BPS
+                keep = -lag <= short_by <= lag
             else:
-                short_by = line.take - near.trigger if side == LONG else near.trigger - line.take
-                theirs = near.trigger in (trader_takes or {}).get((asset, side), ())
-                keep = not follow_takes or theirs or short_by <= m.mark * TAKE_LAG_BPS / BPS
+                keep = short_by >= 0
             if keep:
                 row.update(take=wire_number(near.trigger), takeWas="kept")
             else:
@@ -411,6 +419,8 @@ class LimitsReader(Protocol):
     def day_snapshot(self, account: str) -> tuple[int, int]: ...
 
     def trading_key(self, account: str) -> str | None: ...
+
+    def account_of(self, key: str) -> str | None: ...
 
 
 # Signs one of the gateway's own actions with the account's key and submits it, under a nonce other
@@ -582,6 +592,31 @@ class Protector:
     def watch(self, account: str, key: str) -> None:
         with self._guard:
             self._watch[account] = key
+
+    def take_on(self, keys: list[str]) -> list[str]:
+        """Watches every account one of these keys trades right now, and says which.
+
+        The list of accounts to sweep lives in this process and is filled by orders. A gateway that
+        has just started has an empty one, so an account with a position open would not be swept
+        again until its trader sent the next order: a day's new snapshot would not tighten its stop,
+        and its take would not follow funding. The registry knows which account each key is bound
+        to, and the account says whether that key trades it now.
+
+        One key failing is logged and skipped. An account taken on with nothing open costs one
+        read: the first sweep lets it go.
+        """
+        taken = []
+        for key in keys:
+            try:
+                account = self.reader.account_of(key)
+                if account is None or (self.reader.trading_key(account) or "").lower() != key.lower():
+                    continue
+            except Exception as exc:
+                log_line(event="protect_take_on_failed", key=key, error=str(exc)[:200])
+                continue
+            self.watch(account, key)
+            taken.append(account)
+        return taken
 
     def watching(self) -> dict[str, str]:
         with self._guard:

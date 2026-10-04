@@ -218,6 +218,21 @@ it would not have fired. A take the **trader** moved stays where they put it, sh
 or not: taking the profit early is theirs to decide. The gateway keeps that in memory only, so
 after a restart every take is its own until the trader moves it again.
 
+The lag works both ways. The gateway's own take is left alone while it stands within 6.5 bps of
+the mark from the line, on either side, and is put on the line outside that. The line is computed
+from one read of the mark and the account's equity carries another, taken a moment apart, and the
+two differ by a few basis points. With no lag on the far side a take was pulled in for every tick
+of that difference: the review counted 39 modifies in an hour in which nothing was paid and the
+price stood still.
+
+**After a restart.** The list of accounts the sweep goes round lives in the gateway's memory and
+is filled by orders. A gateway that had just started watched nothing, so an account with a position
+open was not swept again until its trader's next order: a new day's snapshot did not tighten its
+stop, and its take followed nothing. Before the first sweep the gateway now asks the registry which
+account each of its keys is bound to, and takes on those the key trades right now. This works
+where the signer lists its keys, which the demo signer does and the enclave signer does not. What
+a restart still loses is which takes were the trader's.
+
 What this does not cover. First, a charge that lands and a take that fires before the next sweep,
 15 seconds by default: that take is short by the one charge, which the spare absorbs up to 5 bps
 of the notional. Second, an account with exposure on more than one asset. There each take's line
