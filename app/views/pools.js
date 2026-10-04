@@ -9,6 +9,7 @@ import { saleBlocker } from "../lib/funding.js";
 import { totalPriceWords } from "../lib/outcomes.js";
 import { DEPLOYMENTS, liveDeployment, isArchive, ARCHIVE } from "../lib/deployments.js";
 import { LANDING, OTHERS_HEADING, KIND_NOTE, poolKind, holdsCode, cardBlockerLine, listOrder, tradeTarget } from "../lib/listing.js";
+import { agentTradability, agentCardLine, agentFormWarning } from "../lib/agentcap.js";
 
 function notDeployed(page) {
   render(page, `<section class="card"><h2>Not deployed yet</h2>
@@ -73,11 +74,15 @@ function poolCard(item, fee) {
   const card = document.createElement("article");
   card.className = "card";
   const blocked = archived ? "" : cardBlockerLine(blocker);
+  // An archived pool sells nothing, so what an agent could do with its challenge is not a question there.
+  const agent = archived ? "" : agentCardLine(agentTradability({ capital: Number(terms.capital) / 1e6,
+    fundedCapital: Number(terms.fundedCapital) / 1e6, leverageX100: rules.maxLeverageX100 }));
   card.innerHTML = `
     <h3><a href="#/pool/${esc(address)}">${esc(chain.short(address))}</a> ${badge(status.name, status.tone)}</h3>
     ${KIND_NOTE[kind] ? `<p class="small"><strong>${esc(KIND_NOTE[kind])}</strong></p>` : ""}
     <p class="muted">Investor ${esc(chain.short(owner))} · ${esc(spotUsdc.toFixed(2))} USDC on HyperCore spot</p>
     ${blocked ? `<p class="small">${esc(blocked)}</p>` : ""}
+    ${agent ? `<p class="small">${esc(agent)}</p>` : ""}
     ${termsHtml(terms, archived ? null : fee)}
     ${rulesHtml(rules, assets)}
     <p><a class="button" href="#/pool/${esc(address)}">${blocker ? "See the pool" : "Open the pool"}</a></p>`;
@@ -179,6 +184,7 @@ export async function newPoolView(page) {
             <input name="fundedShare" type="number" step="1" min="0" max="100" value="${D.fundedShare}"></label>
           <label>Funded capital after passing, USDC <input name="funded" type="number" step="1" min="11" value="${D.funded}"></label>
         </fieldset>
+        <p class="small" id="agent-warning"></p>
         <button type="button" id="create">Create the pool</button>
       </form>
       <p class="small" id="floor"></p>
@@ -188,6 +194,7 @@ export async function newPoolView(page) {
   // The rest of the calculator is on the Economics page, because it describes a pool of several
   // seats with a shared reserve, which is not what this button makes.
   priceFloor(page).catch(() => { $("#floor", page).textContent = ""; });
+  agentWarning(page);
 
   wire($("#create", page), async () => {
     const form = $("#pool-form", page);
@@ -219,6 +226,26 @@ export async function newPoolView(page) {
     if (log) location.hash = `#/pool/${log.args.pool}`;
     return "Pool created.";
   });
+}
+
+/**
+ * Above the button, before anything is sent: whether an agent could trade the pool this form would create through
+ * the repository's client (lib/agentcap.js). A warning and not a refusal: the contract takes such a pool, and a
+ * person can trade it from this site.
+ */
+function agentWarning(page) {
+  const box = $("#agent-warning", page);
+  const form = $("#pool-form", page);
+  if (!box || !form) return;
+  const show = () => {
+    const f = new FormData(form);
+    const leverageX100 = Math.round(Number(f.get("lev")) * 100);
+    const words = agentFormWarning(agentTradability({ capital: Number(f.get("capital")),
+      fundedCapital: Number(f.get("funded")), leverageX100 }), leverageX100);
+    box.innerHTML = words ? `${badge("an agent could not trade this pool", "bad")} ${esc(words)}` : "";
+  };
+  form.addEventListener("input", show);
+  show();
 }
 
 /**
