@@ -101,6 +101,20 @@ class DeskLimits(WithChain):
         desk.place_order("BTC", "buy", 0.0015, 60000, "limit", False)  # 90 USDC
         self.assertEqual(self.gateway.orders, [(dk.to_checksum_address(ACCOUNT), 3, True, "60000", "0.0015", "Gtc", False)])
 
+    def test_a_position_worth_less_than_the_minimum_can_still_be_closed(self):
+        # 0.0001 BTC at 60000 is 6 USDC. An order that opened it would be refused, and so was the one
+        # that closes it: the minimum was checked before anyone asked whether the order only reduces.
+        self.chain.positions = [{"coin": "BTC", "szi": "0.0001"}]
+        desk = self.desk()
+        desk.close_position("BTC")
+        account, asset, buys, _, size, tif, reduce_only = self.gateway.orders[-1]
+        self.assertEqual((asset, buys, size, tif, reduce_only), (3, False, "0.0001", "Ioc", True))
+        # Opening that much is still refused, and so is growing the position by it.
+        with self.assertRaises(Refused):
+            desk.place_order("BTC", "sell", 0.0001, 60000, "ioc", False)
+        with self.assertRaises(Refused):
+            desk.place_order("BTC", "buy", 0.0001, 60000, "limit", False)
+
     def test_headroom_under_the_leverage_rule(self):
         self.chain.equity, self.chain.notional = 100.0, 200.0  # rule 3x: 300; headroom 0.8: 240
         desk = self.desk(gateway_max_notional=100)

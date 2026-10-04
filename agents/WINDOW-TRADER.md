@@ -38,8 +38,8 @@ no open position.
 1. Run `pools`, pick the pool that gives you the best chance of passing, say why in two
    sentences, and buy it.
 2. Run `account` on the challenge, then `market` for each perp you consider.
-3. Trade only when you can say why. Leave a margin to every limit. The smallest order is
-   10 USDC.
+3. Trade only when you can say why. Leave a margin to every limit. The smallest order that
+   opens or adds to a position is 10 USDC.
 4. If something is refused, read the reason. Don't send the same thing again unchanged.
 5. To pass: once equity is at the target, close every position, check `account`, then
    `graduate`.

@@ -274,7 +274,14 @@ class Desk:
         except ValueError as exc:
             raise Refused(str(exc)) from None
         notional = float(px) * float(sz)
-        if notional < MIN_ORDER_USDC:
+        # The minimum is checked on an order that may open or grow a position. One that only reduces
+        # a position is not refused here for being small: a position that has shrunk under the
+        # minimum -- the price moved, or part of it was closed -- would otherwise have no way out
+        # through this client at all, and `close` is how a trader gets flat before `graduate`.
+        # Whether Hyperliquid takes such an order is Hyperliquid's to say. Its documentation gives
+        # the 10 USDC minimum and names no exception for reduce-only orders (read 4 October 2026),
+        # and none has been sent from here: if it refuses, the answer comes back as the venue's.
+        if notional < MIN_ORDER_USDC and not reduce_only:
             raise Refused(f"{notional:.2f} USDC is under Hyperliquid's minimum order of {MIN_ORDER_USDC:.0f} USDC")
         if not reduce_only:
             if side != "buy":
