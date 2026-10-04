@@ -2411,7 +2411,7 @@ MUTATIONS = [
      "                keep = True",
      ["test_in_a_challenge_the_gateways_own_take_is_carried_out_to_the_line"]),
     ("PG54", "gateway/protect.py",
-     "            elif follow_takes and near.trigger not in (trader_takes or {}).get(asset, ()):",
+     "            elif follow_takes and near.trigger not in (trader_takes or {}).get((asset, side), ()):",
      "            elif follow_takes:",
      ["test_a_take_the_trader_moved_stays_where_they_put_it"]),
     ("PG55", "gateway/protect.py",
@@ -2427,21 +2427,21 @@ MUTATIONS = [
      "                    plan = reconcile(book, want, markets, False, self._takes_of(account),",
      ["test_funding_carries_the_gateways_take_out_and_an_entry_fee_does_not"]),
     ("PG58", "gateway/server.py",
-     "        self._trader_asked(req)  # confirmed, or an answer that confirms nothing: either way it may stand\n",
+     "        self._trader_asked(req, action)  # confirmed, or an answer that confirms nothing: either way it may stand\n",
      "",
      ["test_a_take_the_trader_moved_stays_where_they_put_it"]),
     ("PG66", "gateway/protect.py",
-     "            self._trader_takes.setdefault((account.lower(), asset), set()).add(trigger)",
-     "            self._trader_takes[(account.lower(), asset)] = {trigger}",
+     "            self._trader_takes.setdefault((account.lower(), asset, side), set()).add(trigger)",
+     "            self._trader_takes[(account.lower(), asset, side)] = {trigger}",
      ["test_a_second_move_that_never_got_an_answer_leaves_the_first_one_the_traders"]),
     # A take is the trader's once Hyperliquid has not refused it: a refusal claims nothing, a silence may
     # have landed.
     ("PG76", "gateway/server.py",
      "        if refusal is not None:\n            return 422,",
-     "        self._trader_asked(req)\n        if refusal is not None:\n            return 422,",
+     "        self._trader_asked(req, action)\n        if refusal is not None:\n            return 422,",
      ["test_a_refused_request_for_where_the_take_already_stands_claims_nothing"]),
     ("PG77", "gateway/server.py",
-     "            self._trader_asked(req)  # it may have reached Hyperliquid all the same\n",
+     "            self._trader_asked(req, action)  # it may have reached Hyperliquid all the same\n",
      "",
      ["test_a_move_that_landed_and_was_never_answered_is_the_traders_too"]),
     # The keys that failed at start are tried again after the accounts, not before them.
@@ -2449,6 +2449,11 @@ MUTATIONS = [
      "            self._sweep_watched()\n        finally:\n            self._retry_pending()",
      "            self._retry_pending()\n        finally:\n            self._sweep_watched()",
      ["test_the_accounts_already_watched_are_swept_before_a_key_is_tried_again"]),
+    # A take placed for the other direction says nothing about this one's (review, 4 Oct 2026).
+    ("PG79", "gateway/protect.py",
+     "                if report is None or any(r[\"asset\"] == k[1] and r[\"side\"] == k[2] and r.get(\"takeWas\") != \"kept\"",
+     "                if report is None or any(r[\"asset\"] == k[1] and r.get(\"takeWas\") != \"kept\"",
+     ["test_a_take_placed_for_the_other_direction_leaves_the_traders_take_theirs"]),
     # Found by the audit, 4 Oct 2026: with no lag on the far side the take was pulled in for every tick
     # between two reads of the mark.
     ("PG67", "gateway/protect.py",

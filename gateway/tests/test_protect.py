@@ -537,15 +537,16 @@ class Reconcile(unittest.TestCase):
         self.assertEqual(follow("67961"), [])
         self.assertEqual(follow("67960"), out)
         # The trader's own take stays, short or not ...
-        self.assertEqual(follow("67900", trader_takes={BTC: frozenset({Decimal("67900")})}), [])
-        # ... while it stands exactly where they put it, and on that asset.
-        self.assertEqual(follow("67900", trader_takes={BTC: frozenset({Decimal("67000")})}), out)
-        self.assertEqual(follow("67900", trader_takes={ETH: frozenset({Decimal("67900")})}), out)
+        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67900")})}), [])
+        # ... while it stands exactly where they put it, and on that asset and that side.
+        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67000")})}), out)
+        self.assertEqual(follow("67900", trader_takes={(BTC, SHORT): frozenset({Decimal("67900")})}), out)
+        self.assertEqual(follow("67900", trader_takes={(ETH, LONG): frozenset({Decimal("67900")})}), out)
         # Any trigger they asked for counts, not only the last one.
-        self.assertEqual(follow("67900", trader_takes={BTC: frozenset({Decimal("67900"), Decimal("67000")})}), [])
+        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67900"), Decimal("67000")})}), [])
         # Beyond the line the trader's comes in at once, as it always did ...
-        self.assertEqual(follow("69000", trader_takes={BTC: frozenset({Decimal("69000")})}), out)
-        self.assertEqual(follow("68001", trader_takes={BTC: frozenset({Decimal("68001")})}), out)
+        self.assertEqual(follow("69000", trader_takes={(BTC, LONG): frozenset({Decimal("69000")})}), out)
+        self.assertEqual(follow("68001", trader_takes={(BTC, LONG): frozenset({Decimal("68001")})}), out)
         # ... and the gateway's own only past the same lag: the mark behind the line and the mark
         # inside the equity are two reads, and a take pulled in for a tick of that is walked in.
         self.assertEqual(follow("68039"), [])
@@ -1179,10 +1180,24 @@ class FollowingTheLine(FlowBase):
         self.gw.protector.sweep()
         self.assertEqual(self.takes(), ["70000"])
 
+    def test_a_take_placed_for_the_other_direction_leaves_the_traders_take_theirs(self):
+        # Found in review, 4 Oct 2026. A sell that could open a short gets a stop and a take of its own.
+        # Placing those says nothing about the long's take, which the trader had moved: with the record
+        # kept by asset alone it was forgotten here, and the next sweep carried it out to the line.
+        self.open_long()
+        self.send("take", triggerPx="61000", nonce=NOW + 1)
+        status, out = self.send(isBuy=False, size="0.004", nonce=NOW + 2)
+        self.assertEqual(status, 200)
+        self.assertEqual([r["takeWas"] for r in out["protection"]], ["kept", "placed"])  # the long's, the short's
+        self.x.equity = Decimal("999")
+        self.gw.protector.sweep()
+        self.assertEqual([o["triggerPx"] for o in self.x.orders
+                          if o["orderType"].startswith("Take") and o["side"] == "A"], ["61000"])
+
     def test_the_next_positions_take_is_the_gateways_again(self):
         self.open_long()
         self.send("take", triggerPx="70000", nonce=NOW + 1)
-        self.assertEqual(self.gw.protector._takes_of(ACCOUNT), {BTC: frozenset({Decimal("70000")})})
+        self.assertEqual(self.gw.protector._takes_of(ACCOUNT), {(BTC, LONG): frozenset({Decimal("70000")})})
         # The position closes: Hyperliquid takes the stop and the take away with it.
         self.x.positions.clear()
         self.x.orders.clear()
