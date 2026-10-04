@@ -1,11 +1,11 @@
 # What the shared pool has actually done on chain
 
-Status: 3 October 2026, HyperEVM testnet (chain 998) and Hyperliquid testnet, mock USDC. The
+Status: 4 October 2026, HyperEVM testnet (chain 998) and Hyperliquid testnet, mock USDC. The
 shared pool (`src/shared/SharedPool.sol`, [the design](SHARED-POOL.md)) is a layer over the pools of
 this demo. Nobody has reviewed it. Every line below is either a state a contract held when its
 section was written, which anyone can read, or a transaction that was read back from its receipt.
-The sections of 25 September stand as they were written; where 3 October changed a state they name,
-the later section says so. The demo's own record is in [EVIDENCE.md](EVIDENCE.md).
+The earlier sections stand as they were written; where a later day changed a state they name, the
+later section says so. The demo's own record is in [EVIDENCE.md](EVIDENCE.md).
 
 ## The shared pools
 
@@ -166,6 +166,18 @@ of 10% of a holder's own profit.
 - **Sealed before any deposit.** `seal` in `0x6860ec99f69152efa4d32236944aa549861bb584d2eb995c260b11e02e164c6b`
   closed the book: `seatsSealed()` reads true. This pool has one seat and can never be given another.
   Until that transaction the contract refused to open a deposit ticket.
+- **Two deposits, at a price of 1.** `0xbD97438655835138daBeE38f3B7d96275eDc315a` opened the ticket
+  `0x1739a40eeb6de7aa0a9dbccc69188ef012a9348f` in
+  `0xb2b57aa7c564103e73bd75809a99fc32d3d71b9c2670c02d1245e9cb016718e9`, and
+  `0x278AbBC5B78F34F77829dDd7887566E182beBD83` the ticket
+  `0xad4819148054d513a8bec833f73113cebeeda50a` in
+  `0x0cb386e01f761623331478730bf9c202ab1e106e4c76e35ab3f198b246102a3f`. Each sent 20 USDC to its ticket on
+  HyperCore. Point `0x96e762b459f887f7644b1a0dcd34fadf07f0d100d99b61e35a858f393d81e6aa` (block 65903404)
+  took both in: `totalShares()` went from 2e8 to 42e8, each depositor's `sharesOf` and `basis` read
+  20e8, and `value()` reads 42 USDC, a price of 1 a share. Both tickets read as closed.
+- **Where the depositors' money came from.** The two depositors are the ones who left the third pool
+  the same morning with 19.757129 USDC each. The operator sent each 1.242871 more, so that each held
+  21: the deposit and the 1 USDC HyperCore charges for creating a ticket's account.
 
 **A stand, not a product.** The seat's numbers are small on purpose: 3 USDC at 5× leverage holds a
 position above the exchange's minimum order of $10. They show the mechanics on testnet money. They are
@@ -181,12 +193,49 @@ machine, not from the host.
 prepared. Once a seat has its capital and its account is prepared, anyone can buy its challenge from
 the site. So this one is armed only right before the sale it is meant for, not earlier.
 
-At 08:38 UTC on 3 October the pool held 2 USDC on 2e8 shares, its seat was idle and empty, and nobody
-had deposited. Every step's hash is in `spike/results/2026-10-03.jsonl`.
+At 08:59 UTC on 3 October the pool held 42 USDC on 42e8 shares, all of it free on HyperCore, with
+nothing waiting to be paid. Its seat was idle, empty and not armed. Every step's hash is in
+`spike/results/2026-10-03.jsonl`.
+
+## A challenge sold on the seat, and started by the host's keeper (4 October)
+
+On `0x43f7562C…a717`, the seat `0x7eb971134b0ad523f55c76b44b2fbd6ed7885371`. One sale, the only one this pool is meant to
+have: each takes two keys from the second deployment's registry.
+
+- **Armed, then bought within the minute.** `armSeat` in
+  `0xb6ca52290d1e0d03add35fc5379008af8cdcc3a2c3f8398e72e1b13422a858a5` moved 34 USDC from the pool to the
+  seat, and `prepareAccount` in `0x71892ba4e699cc1f482bc5753a268406878873671c7e27be55bf1b6b02a7b7c9`
+  prepared its account. Creating the seat's HyperCore account cost the pool 1 USDC more.
+- **The trader.** `0xc6E83B1B88110C54e34977AD215E94cfdbC0374E` bought its challenge
+  `0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262`, paying the 1.5 price and the 0.7 platform fee
+  (`buyChallenge` in `0x690aaaf73646e224884059d0104ba9a86328a98646f3129473587074e60f4b6d`, block 65983974). The
+  operator had sent the trader 2.11 USDC on HyperEVM for it
+  (`0xe8033a88728c2af2a01eb2a0fa0735817fa3e9dddea673de840b1dae855f9246`).
+- **Started by the keeper on the host.** `activate` in
+  `0xd137d81e9f6256d8f6b9bae3f3f05eeba820529d6a5eefe26bc021185e39eedb`, block 65983979, five blocks after the
+  purchase, sent by `0xD6F07317fC5f12302776b03A7206B1614FD49021`, the address of the keeper on the host. This
+  run did not send it. `status()` on the challenge reads 2, Active, with a deadline of 5 October 07:00:15 UTC.
+- **The key.** `KeyRegistry.bindingOf(0x7d2650bd3dD9A6eD6Cd0c6C393BB79De837FBe19)` on the second deployment's
+  registry `0x53AF27F65Dd7473c890f633aC0025b261307779e` is `(2, challenge, trader)`: Bound, to that challenge, for
+  that trader. `freeCount()` went from 18 to 16.
+- **Nothing was traded.** The trader acts through `agents.client`, the gateway client in this repository, and
+  that client caps one order at 0.4 of the leverage rule: 6.00 USDC on 3 USDC of equity at 5×. Hyperliquid takes
+  no order under 10 USDC. Asked without sending anything (`--dry-run`), the client answered an order of 11.07
+  USDC with "over this session's cap of 6.00 per order" and one of 5.96 with "under Hyperliquid's minimum order
+  of 10 USDC". The challenge account holds its 3 USDC, with no position and no order. The cap is the client's
+  own; the gateway and the contracts would have taken an order inside the leverage rule, and none was sent to
+  them another way.
+- **What it did to the pool.** `value()` reads 41.5 USDC on 42e8 shares, a price of 0.98809524 a share: 7 free
+  on HyperCore, 30 on the seat, 3 on the challenge account, and the 1.5 price on HyperEVM at the seat. Two new
+  HyperCore accounts, the seat's and the challenge's, cost 2 USDC; the price brought 1.5 in.
+
+Every wallet here is ours. The keeper's transaction was sent by the host, not by this run. Every step's
+hash, and the client's two answers, are in `spike/results/2026-10-04.jsonl`.
 
 ## What this does not show
 
 - A passed challenge or a funded stage on a seat, and the funded term running out.
-- A deposit into the pool on the second deployment, or a challenge sold on its seat.
+- A trade on the seat of the pool on the second deployment: the challenge was sold and started, and the
+  trader's client refused every order on its 3 USDC.
 - A stop on a seat. The rules above would stop the challenge at 2.70 USDC of equity, or at 2.85 on
   the day; the trader stayed well inside.

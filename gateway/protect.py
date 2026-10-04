@@ -26,6 +26,16 @@ would need. The take is split the same way.
 The trader may move a stop nearer the mark, never away from it, and may move a take anywhere
 between the mark and the target. Cancelling either is refused. A background sweep repeats the
 check, so a position that opens later, from an order that rested, gets the same protection.
+
+A challenge's target is an amount, so its take has to keep up with everything the account pays while
+the position is open, and funding is paid every hour. The sweep carries a take the GATEWAY placed
+out to the line once it stands short of it; a take the TRADER moved stays where the trader put it,
+short or not, because taking the profit early is theirs to decide. Only for an account whose
+exposure is one position on one asset: with a second asset, or with an order resting that would
+grow the position, the line moves with the price. A funded stage's take is placed and then left
+where it is. Measured on 3 October 2026: a
+take placed at 85378 stood there for six hours while funding took 0.178665 USDC, fired, and left
+the account at 70.204304 against a target of 70.28.
 """
 
 from __future__ import annotations
@@ -50,6 +60,17 @@ SPARE_BPS = Decimal(5)           # so the margin is a multiple of the slippage, 
 # take nearer, by design, since that is the trader's to move. Measured on the 10 bps this started
 # as: the margin over the target came to 1.01 bps of the notional, which one bad fill eats.
 CLOSE_COST_BPS = 2 * (TAKER_FEE_BPS + SLIPPAGE_BPS) + SPARE_BPS   # 18
+# How far a take the gateway placed may stand short of the line before the sweep carries it out, in
+# basis points of the mark. The take goes on the book with the order that opens the position, so the
+# entry's own fee and slippage leave it this far short the moment the position exists: that is the
+# allowance above being spent as planned, and a modify sent for it would go with every opening. A
+# take within this still clears the target by the close and the whole spare.
+#
+# The same distance BEYOND the line is left alone too. The mark the line is computed from and the
+# mark inside the account's equity are two reads, a moment apart, and they differ by a few basis
+# points. A take pulled in for every tick of that is walked in by modifies until it is short enough
+# to be carried out again: the audit counted 39 in an hour of nothing happening (4 Oct 2026).
+TAKE_LAG_BPS = TAKER_FEE_BPS + SLIPPAGE_BPS   # 6.5
 USD = Decimal(1_000_000)  # chain units per USDC (perp USD and equity are in 1e-6 USDC)
 # The farthest a stop or a take is put from the mark, as a fraction of it. A position too small to
 # use up the whole budget has no rule line at all; Hyperliquid still needs a price.
@@ -324,11 +345,33 @@ class Plan:
     report: list[dict]
 
 
-def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, Market]) -> Plan:
+def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, Market],
+              follow_takes: bool = False,
+              trader_takes: dict[tuple[int, str], frozenset[Decimal]] | None = None,
+              hold_takes: bool = False) -> Plan:
     """What to send so every (asset, direction) with exposure has its stop and its take. A stop
     that guards a position is only ever moved nearer the market; one that guards nothing yet
     (the position isn't there) simply follows the line. A take is left where it is while it is
-    within the target."""
+    within the target.
+
+    With `follow_takes` -- a challenge, whose target is an amount and not a distance -- one take is
+    held to the line instead: the gateway's own. It is moved to the line when it stands more than
+    TAKE_LAG_BPS of the mark away from it, short or beyond, and left alone inside that. Funding
+    lowers the equity, which moves the stop's line TOWARDS the market and the take's line AWAY from
+    it; "only ever nearer" follows the first and ignores the second, and the take then closes the
+    position below the target. `trader_takes` holds the triggers the trader asked for, by asset and
+    direction: a take standing exactly on one of them is theirs and is treated as before.
+
+    A funded stage has no target of its own -- its line is one target's worth of the equity it has
+    NOW, so it recedes as the position gains -- and a take that followed it would never fire.
+
+    With `hold_takes` -- a funded stage -- a take that stands with its position is not moved at all.
+    Its line is worked out from the mark and the equity of the moment, so when the position LOSES
+    the line comes after the price, and "a take beyond the line comes in" pulled the take along with
+    it, onto the losing side of the entry. Measured on 4 October 2026: a short entered at 84955 with
+    its take at 84715, the price went to 85206, and the take stood at 84967. A take is placed one
+    target from where the position is opened, and stays there.
+    """
     actions, report = [], []
     for (asset, side), line in sorted(want.items()):
         moves: list[dict] = []
@@ -357,7 +400,18 @@ def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, 
             row.update(take=wire_number(line.take), takeWas="placed")
         else:
             near = min(takes, key=lambda p: p.trigger) if side == LONG else max(takes, key=lambda p: p.trigger)
-            keep = within(near.trigger, line.take, side) if held else near.trigger == line.take
+            # How far the standing take is short of the line: above zero it is nearer the market than
+            # the line, below zero it is beyond it.
+            short_by = line.take - near.trigger if side == LONG else near.trigger - line.take
+            if not held:
+                keep = near.trigger == line.take
+            elif hold_takes:
+                keep = True
+            elif follow_takes and near.trigger not in (trader_takes or {}).get((asset, side), ()):
+                lag = m.mark * TAKE_LAG_BPS / BPS
+                keep = -lag <= short_by <= lag
+            else:
+                keep = short_by >= 0
             if keep:
                 row.update(take=wire_number(near.trigger), takeWas="kept")
             else:
@@ -378,6 +432,8 @@ class LimitsReader(Protocol):
 
     def trading_key(self, account: str) -> str | None: ...
 
+    def account_of(self, key: str) -> str | None: ...
+
 
 # Signs one of the gateway's own actions with the account's key and submits it, under a nonce other
 # than the one given: (why it failed, whether Hyperliquid confirmed it, Hyperliquid's answer).
@@ -396,6 +452,13 @@ class Protector:
         self.clock = clock
         self._limits: dict[tuple[str, str], tuple[RuleLimits, float]] = {}
         self._watch: dict[str, str] = {}  # account -> key, for the sweep
+        # (account, asset, direction) -> the take triggers the trader asked for and Hyperliquid did
+        # not refuse. By direction, because an order the other way gets a take of its own, and placing
+        # that one says nothing about this one. In memory only: after a restart every take is the
+        # gateway's until its trader moves it again.
+        self._trader_takes: dict[tuple[str, int, str], set[Decimal]] = {}
+        # Keys whose account could not be read when the gateway started; each sweep tries them again.
+        self._pending: list[str] = []
         self._locks: dict[str, threading.RLock] = {}
         self._guard = threading.Lock()
 
@@ -432,7 +495,60 @@ class Protector:
         book = self.venue.book(account, markets)
         limits = self.limits(account, key)
         want = lines(limits, book.equity, exposure(book, extra), markets)
-        return reconcile(book, want, markets), markets, limits, book
+        # Nothing follows here. With an order on its way the line prices more than the position
+        # holds, so it moves with the mark; the sweep follows once the order has filled.
+        return reconcile(book, want, markets, hold_takes=not limits.challenge), markets, limits, book
+
+    @staticmethod
+    def _follows(book: Book, exp: dict) -> bool:
+        """Whether a challenge's takes follow the line: exposure on ONE asset, and all of it a
+        position already held. (A funded stage holds its takes, and `reconcile` asks that first.)
+
+        Then the line hardly moves with the price -- the position's own gain is in the equity and in
+        the room alike -- and only what the account pays moves it. Two things break that, and with
+        either the takes are left as they were before, where they can still stand short of the
+        target (a limit of this, said in the docs):
+
+        - two assets: each take's line moves with the OTHER position's price, and a take that
+          followed it would be modified out and back in with every swing between them;
+        - an order resting on the book that would grow the position: the line prices the larger
+          size while the equity moves with the smaller, so the line runs ahead of a rising mark
+          and a take that followed it would never be reached (review, 4 Oct 2026: 0.001 held,
+          0.004 resting, a 60 USD rise moves the line 48 with nothing paid).
+        """
+        if len(exp) != 1:
+            return False
+        (asset, sides), = exp.items()
+        q = book.positions.get(asset, Decimal(0))
+        return sides == {LONG: max(q, Decimal(0)), SHORT: max(-q, Decimal(0))}
+
+    def _takes_of(self, account: str) -> dict[tuple[int, str], frozenset[Decimal]]:
+        """The takes the trader asked for on this account, by asset and direction."""
+        with self._guard:
+            return {(asset, side): frozenset(asked) for (a, asset, side), asked in self._trader_takes.items()
+                    if a == account.lower()}
+
+    def trader_asked(self, account: str, asset: int, side: str, trigger: Decimal) -> None:
+        """Remembers a take the trader asked for. Called once Hyperliquid has NOT refused it.
+
+        Every trigger asked for on the position is kept, not only the last, and a take counts as the
+        trader's while it stands exactly on one of them. An answer that never came, or that confirms
+        nothing, leaves the gateway not knowing which take stands: the old one or the new. Either is
+        the trader's. A refusal is different -- Hyperliquid said the take did not move -- and a
+        request it refused claims nothing, even when it named the very trigger the gateway's own
+        take stands on (review, 4 Oct 2026).
+        """
+        with self._guard:
+            self._trader_takes.setdefault((account.lower(), asset, side), set()).add(trigger)
+
+    def _forget_takes(self, account: str, report: list[dict] | None = None) -> None:
+        """A take the gateway placed or moved is the gateway's again. With no report, the account
+        has nothing open and none of its takes is anybody's."""
+        with self._guard:
+            for k in [k for k in self._trader_takes if k[0] == account.lower()]:
+                if report is None or any(r["asset"] == k[1] and r["side"] == k[2] and r.get("takeWas") != "kept"
+                                         for r in report):
+                    del self._trader_takes[k]
 
     def apply(self, key: str, plan: Plan, avoid_nonce: int | None = None) -> None:
         for action in plan.actions:
@@ -455,6 +571,7 @@ class Protector:
                 raise GatewayError(409, "target_met",
                                    "the challenge has met its target; close and graduate instead of opening more")
             self.apply(key, plan, avoid_nonce)
+            self._forget_takes(account, plan.report)
         self.watch(account, key)
         return plan.report
 
@@ -511,6 +628,37 @@ class Protector:
         with self._guard:
             self._watch[account] = key
 
+    def take_on(self, keys: list[str]) -> list[str]:
+        """Watches every account one of these keys trades right now, and says which.
+
+        The list of accounts to sweep lives in this process and is filled by orders. A gateway that
+        has just started has an empty one, so an account with a position open would not be swept
+        again until its trader sent the next order: a day's new snapshot would not tighten its stop,
+        and its take would not follow funding. The registry knows which account each key is bound
+        to, and the account says whether that key trades it now.
+
+        A key whose read fails is kept and tried again by every sweep until the node answers:
+        dropped, its account would stay unwatched until the next order or the next restart, which
+        is the gap this closes. An account taken on with nothing open costs one read: the first
+        sweep lets it go.
+        """
+        taken, failed = [], []
+        for key in keys:
+            try:
+                account = self.reader.account_of(key)
+                if account is None or (self.reader.trading_key(account) or "").lower() != key.lower():
+                    continue
+            except Exception as exc:
+                failed.append(key)
+                if key not in self._pending:  # said once, not every fifteen seconds
+                    log_line(event="protect_take_on_failed", key=key, error=str(exc)[:200])
+                continue
+            self.watch(account, key)
+            taken.append(account)
+        with self._guard:
+            self._pending = failed
+        return taken
+
     def watching(self) -> dict[str, str]:
         with self._guard:
             return dict(self._watch)
@@ -523,6 +671,27 @@ class Protector:
         """One pass over the accounts the gateway has traded: a position that opened from an
         order that rested, a stop that fired while an order still rested, or a new day's
         snapshot that moved the line all get their stop and take here."""
+        try:
+            self._sweep_watched()
+        finally:
+            self._retry_pending()
+
+    def _retry_pending(self) -> None:
+        """Keys the node would not read at start, tried again -- AFTER the accounts, never before.
+
+        A read of a throttled node waits out its retries, close to four seconds a call. A pass
+        that spent them first would tighten the stops of the accounts it already watches that much
+        later, and send the same calls into the same throttled node (the audit, 4 Oct 2026). An
+        account taken on here is swept from the next pass.
+        """
+        with self._guard:
+            pending = list(self._pending)
+        if pending:
+            taken = self.take_on(pending)
+            if taken:
+                log_line(event="protect_took_on", accounts=taken, after="a read that failed at start")
+
+    def _sweep_watched(self) -> None:
         watched = self.watching()
         if not watched:
             return
@@ -534,9 +703,12 @@ class Protector:
                     exp = exposure(book)
                     if not exp:
                         self._unwatch(account)
+                        self._forget_takes(account)
                         continue
-                    want = lines(self.limits(account, key), book.equity, exp, markets)
-                    plan = reconcile(book, want, markets)
+                    limits = self.limits(account, key)
+                    want = lines(limits, book.equity, exp, markets)
+                    plan = reconcile(book, want, markets, self._follows(book, exp), self._takes_of(account),
+                                     hold_takes=not limits.challenge)
                     if not plan.actions:
                         continue
                     # Something to send: only while this key still trades this account.
@@ -545,6 +717,7 @@ class Protector:
                         log_line(event="protect_unwatched", account=account, reason="not trading with this key")
                         continue
                     self.apply(key, plan)
+                    self._forget_takes(account, plan.report)
                     log_line(event="protect_swept", account=account, protection=plan.report)
             except Exception as exc:  # one account must not stop the sweep
                 log_line(event="protect_sweep_failed", account=account, error=str(exc)[:200])

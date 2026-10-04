@@ -74,7 +74,7 @@ test("every row's source lines are in its section of the document", () => {
     else for (const s of r.sources) if (!body.includes(s)) lost.push(`${r.what}: «${s}»`);
   }
   assert.deepEqual(lost, []);
-  assert.equal(DATA.rows.length, 31);
+  assert.equal(DATA.rows.length, 33);
 });
 
 test("a row shows nothing its own source lines do not say", () => {
@@ -202,7 +202,8 @@ test("the page links an account only where the app reads it", () => {
     // live, and demo, the archive -- a row of either gets its link, a row of any other (the rehearsal) none.
     const expected = { "The fourth ending, on the rehearsal deployment": "rehearsal",
                        "Deployment 2, and the first run where the trader was not us": "demo2",
-                       "The pool on the second deployment (3 October)": "demo2" };
+                       "The pool on the second deployment (3 October)": "demo2",
+                       "A challenge sold on the seat, and started by the host's keeper (4 October)": "demo2" };
     assert.equal(r.factory, expected[r.section] ?? "demo", r.what);
     const link = appLink(r);
     if (!READ.includes(r.factory) || !r.account) assert.equal(link, null, `${r.what}: the app does not read it`);

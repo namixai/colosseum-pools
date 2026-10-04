@@ -174,6 +174,11 @@ class DemoSigner:
     def has_key(self, key: str) -> bool:
         return key.lower() in self._keys
 
+    def addresses(self) -> list[str]:
+        """The keys this signer holds, by address: what the gateway asks the registry about when it
+        starts. The enclave signer has no such list here, and a gateway on it takes nothing on."""
+        return [k.address for k in self._keys.values()]
+
     def sign(self, key: str, kind: str, action: dict, nonce: int) -> SignResult:
         check_caps(kind, action, self._mid)
         signature = sign_l1_action(self._keys[key.lower()], action, None, nonce, None, False)

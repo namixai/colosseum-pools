@@ -55,6 +55,10 @@ class FakeChain:
         self.revert: str | None = None            # refused at the gas estimate: never broadcast
         self.revert_after_send = False             # broadcast, then reverted on chain
         self.not_sent: str | None = None           # never left, and no revert data: a node said no
+        # Which call the three flags above apply to; None is every call, so the first one fails. A
+        # purchase is two transactions, and a wallet short of the price has the approval go through and
+        # the purchase refused: a fake that could only fail the approval cannot show that.
+        self.failing_call: str | None = None
         # A pool keeps the block where it cut the funded trader's key. 0 means it never funded
         # anyone -- which is also what a released reservation leaves behind.
         self.cut_block = 0
@@ -113,11 +117,12 @@ class FakeChain:
         # reached the node, which the real `send_tx` reports as `c.NotSent`; a transaction that was
         # broadcast and reverted on chain is a plain error. A fake that raised one type for both
         # would make the attempt-returned path untestable while looking like it tested it.
-        if self.not_sent:
+        fails = self.failing_call is None or signature == self.failing_call
+        if self.not_sent and fails:
             raise c.NotSent(self.not_sent)
-        if self.revert:
+        if self.revert and fails:
             raise c.NotSent(f"eth_estimateGas: {{'code': 3, 'message': 'execution reverted', 'data': '{self.revert}'}}")
-        if self.revert_after_send:
+        if self.revert_after_send and fails:
             self.sent.append((to.lower(), signature.split("(")[0], list(args)))
             raise c.Reverted(f"transaction 0x{'cd' * 32} reverted")
         self.sent.append((to.lower(), signature.split("(")[0], list(args)))

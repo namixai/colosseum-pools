@@ -11,6 +11,7 @@ import { saleBlocker, topUpAdvice } from "../lib/funding.js";
 import { stageName as nameOf, isFundedStage, awaitingKeyWords, poolStatus } from "../lib/stages.js";
 import { outcomesHtml } from "../lib/outcomes.js";
 import { poolKind, holdsCode, KIND_NOTE } from "../lib/listing.js";
+import { agentTradability, agentNote } from "../lib/agentcap.js";
 import { isArchive, ARCHIVE } from "../lib/deployments.js";
 
 export async function poolView(address, page) {
@@ -50,8 +51,12 @@ export async function poolView(address, page) {
   // challenge says so, instead of "Idle: it can sell a challenge" under a row that names the gap.
   const status = poolStatus(stage, archived ? null : blocker, archived);
   const kind = poolKind({ owner, ownerIsContract: await holdsCode((a) => chain.readProvider.getCode(a), owner),
-    deployer: deployment.deployer });
+    deployer: deployment.deployer, address, liveRunPool: deployment.liveRunPool });
   const doing = waiting ? awaitingKeyWords({ ...waiting, now: Math.floor(Date.now() / 1000) }) : status.words;
+  // Said under the pool's name and again in the buy card, before the price is paid: an agent that buys this challenge through the repository's
+  // client could not send one order on it. An archived pool sells nothing, so it says nothing of the kind.
+  const agent = archived ? "" : agentNote(agentTradability({ capital: Number(terms.capital) / 1e6,
+    fundedCapital: Number(terms.fundedCapital) / 1e6, leverageX100: rules.maxLeverageX100 }));
 
   render(page, `
     <section class="card">
@@ -59,6 +64,7 @@ export async function poolView(address, page) {
       ${archived ? `<p class="notice">${esc(ARCHIVE.poolNote)}</p>` : ""}
       <p class="muted mono">${esc(address)}</p>
       ${KIND_NOTE[kind] ? `<p class="small"><strong>${esc(KIND_NOTE[kind])}</strong></p>` : ""}
+      ${agent ? `<p class="notice">${esc(agent)}</p>` : ""}
       ${row("Investor", `<span class="mono">${esc(owner)}</span>`)}
       ${row("HyperCore spot", archived ? `${esc(spotUsdc.toFixed(2))} USDC`
         : `${esc(spotUsdc.toFixed(2))} USDC (needs ${esc(needed.toFixed(2))} to sell a challenge)${
@@ -90,6 +96,7 @@ export async function poolView(address, page) {
       reserved for you. You never hold it: the pool gateway does, and your orders go through it,
       signed by your wallet. A profit share is paid to your address on HyperCore; if you have no
       account there yet, 1 USDC of it pays for creating one.</p>
+      ${agent ? `<p class="notice">${esc(agent)}</p>` : ""}
       ${outcomesHtml(terms, fee)}
       <button id="buy-btn">Pay and start</button>`;
     wire($("#buy-btn", page), async () => {
