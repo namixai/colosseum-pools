@@ -136,7 +136,9 @@ def seat_of(record: dict, args) -> str:
         if not match:
             raise SystemExit(f"{chosen} is not a seat of this pool")
         return match[0]
-    if not chosen.isdigit() or not 1 <= int(chosen) <= len(all_seats):
+    # ASCII digits only: str.isdigit() is also true for "²" and its kind, which int() then refuses with a
+    # traceback instead of this step's own words.
+    if not (chosen.isascii() and chosen.isdigit()) or not 1 <= int(chosen) <= len(all_seats):
         raise SystemExit(f"--seat takes 1 to {len(all_seats)} or a seat's address, not {chosen!r}")
     return all_seats[int(chosen) - 1]
 

@@ -186,7 +186,8 @@ class SeveralSeats(unittest.TestCase):
         self.assertEqual(self.seat(self.SEATS, seat="3"), self.SEATS[2])
         # The address in any case, as a node or a page may print it; the pool's own spelling comes back.
         self.assertEqual(self.seat(self.SEATS, seat=self.SEATS[1].lower()), self.SEATS[1])
-        for wrong in ("0", "4", "-1", "two", ""):
+        # "²" and "٣" are digits to str.isdigit(); the first is not a number to int(), and neither is a place here.
+        for wrong in ("0", "4", "-1", "two", "", "²", "٣", "1²"):
             with self.assertRaisesRegex(SystemExit, "--seat takes 1 to 3 or a seat's address"):
                 self.seat(self.SEATS, seat=wrong)
         with self.assertRaisesRegex(SystemExit, "is not a seat of this pool"):
