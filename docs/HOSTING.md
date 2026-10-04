@@ -113,7 +113,7 @@ compared with the site, byte for byte, apart from the one script Cloudflare adds
 
       COLOSSEUM_KEY_DIR=<its own key directory> \
       COLOSSEUM_RPC_URL=https://rpcs.chain.link/hyperevm/testnet \
-      python -m ops.keeper --deployment demo --state <its own file>.json --every 30
+      python -m ops.keeper --deployment demo2 --state <its own file>.json --every 30
 
   The wallet is a separate `<name>.key`/`<name>.addr` pair with its own gas (a stop cost 194,818
   gas at 0.1 gwei on 25 Sep 2026, about 0.0000195 HYPE). The state file must not be shared: it

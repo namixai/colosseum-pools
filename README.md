@@ -22,19 +22,27 @@ built in the window. [AI-USE.md](AI-USE.md) describes how we used AI tools.
 
 ## Where it runs
 
-Testnet only, chain 998. The demo deployment is in `deployments/testnet-demo.json`; the numbers
-below come from it and from that record's own `block`.
+Testnet only, chain 998. The live deployment is the second one, `deployments/testnet-demo2.json`:
+the gateway and the keepers have served it since 1 October 2026, and it is where pools are opened
+and challenges are bought and traded. The numbers below come from that record and from its own
+`block`.
 
 | | |
 |---|---|
 | app | <https://pools.usenami.io> |
 | gateway | <https://pools-api.usenami.io> (`/v1/health` answers without a wallet) |
-| `PoolFactory` | `0xf2707FCf99eD546BBA4612783761e7906FA1958e` |
-| `KeyRegistry` | `0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA` |
-| deployed at block | 65021402, with 16 agent keys published |
+| `PoolFactory` | `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222` |
+| `KeyRegistry` | `0x53AF27F65Dd7473c890f633aC0025b261307779e` |
+| deployed at block | 65736733; 36 agent keys published, 24 on 1 October and 12 on 4 October |
 
-What has actually happened on those contracts, and how to rebuild the list from the registry
-rather than believe it: [docs/EVIDENCE.md](docs/EVIDENCE.md).
+The first deployment, `deployments/testnet-demo.json`, is an archive: factory
+`0xf2707FCf99eD546BBA4612783761e7906FA1958e`, key registry
+`0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA`, deployed at block 65021402 with 16 agent keys in its
+record. Its accounts still answer and the app still reads them; the app sells nothing there and
+the gateway signs for none of its accounts.
+
+What has actually happened on both sets of contracts, and how to rebuild the list from the
+registry rather than believe it: [docs/EVIDENCE.md](docs/EVIDENCE.md).
 
 ## How an order travels
 

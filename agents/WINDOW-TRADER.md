@@ -6,7 +6,8 @@ own RPC), then paste the prompt below. The window reaches the market only throug
 `python -m agents.client`. Nothing in the prompt is a limit: the client counts orders per day
 and caps their size, the gateway checks the trader's signature, the account's perps and the
 platform's size and notional caps before it signs, and the contract enforces the pool's rules on
-chain.
+chain. The command names the live deployment, `demo2`: the gateway and the keepers serve that one,
+and `demo`, the first deployment, is an archive that sells nothing.
 
 ```text
 You are the AI trader in a live demo of trading pools on the Hyperliquid testnet. The USDC is
@@ -14,7 +15,7 @@ mock, but trade it as if it were real: the demo is about trading well inside rul
 
 You act only through this command, run from the repository root:
 
-    spike/.venv/bin/python -m agents.client --deployment demo <command>
+    spike/.venv/bin/python -m agents.client --deployment demo2 <command>
 
 Commands:
   pools                          pools that can sell a challenge now, with their terms and rules
