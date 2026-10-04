@@ -88,6 +88,25 @@ test("the words say whose refusal it is, with the number, and nothing where an a
   assert.match(agentFormWarning(both, 250), /With 2\.5× leverage the challenge capital and the funded capital have to be at least 10\.00 USDC/);
 });
 
+test("a form that is not filled in yet gets no warning, and never one that names Infinity", () => {
+  const warn = (capital, fundedCapital, leverageX100) =>
+    agentFormWarning(agentTradability({ capital, fundedCapital, leverageX100 }), leverageX100);
+  // A leverage of 0, or a cleared field, which the form reads as 0: there is no smallest capital to name.
+  assert.equal(agentTradability({ capital: 70, fundedCapital: 700, leverageX100: 0 }).minCapital, Infinity);
+  for (const lev of [0, NaN, -100]) assert.equal(warn(70, 700, lev), "", `leverage ${lev}`);
+  // A cleared capital field is not a pool of 0 USDC.
+  assert.equal(warn(0, 700, 500), "");
+  assert.equal(warn(70, 0, 500), "");
+  assert.equal(warn(NaN, 700, 500), "");
+  // What is typed in full is still judged, at any leverage above 0.
+  assert.match(warn(11, 110, 100), /at least 25\.00 USDC/);
+  assert.match(warn(3, 30, 500), /at least 5\.00 USDC/);
+  assert.equal(warn(70, 700, 500), "");
+  for (const [c, f, l] of [[3, 30, 500], [11, 110, 100], [0, 0, 0], [5, 4, 50]]) {
+    assert.doesNotMatch(warn(c, f, l), /Infinity|NaN/, `${c} / ${f} at ${l}`);
+  }
+});
+
 test("the list, the pool page and the form all say it, from the pool's own terms and rules", () => {
   const pools = text("../views/pools.js");
   const pool = text("../views/pool.js");

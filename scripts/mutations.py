@@ -2042,6 +2042,10 @@ MUTATIONS = [
      "of the leverage rule on the stage's starting capital), and `",
      "of the leverage rule on the stage's capital), and `",
      ['the words say whose refusal it is, with the number, and nothing where an agent can trade']),
+    ('PA16', 'app/lib/agentcap.js',
+     '  if (!(t.challengeCap > 0) || !(t.fundedCap > 0)) return "";\n',
+     '',
+     ['a form that is not filled in yet gets no warning, and never one that names Infinity']),
     # The shared pool's keeper (ops/shared_keeper.py). "PK": the second window's prefix, run by unittest.
     ('PK1', 'ops/shared_keeper.py',
      'queue_due = queued > 0 and now >= self.last_queue_point + self.queue_every',
