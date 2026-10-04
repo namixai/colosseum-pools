@@ -347,7 +347,7 @@ class Plan:
 
 def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, Market],
               follow_takes: bool = False,
-              trader_takes: dict[int, frozenset[Decimal]] | None = None,
+              trader_takes: dict[tuple[int, str], frozenset[Decimal]] | None = None,
               hold_takes: bool = False) -> Plan:
     """What to send so every (asset, direction) with exposure has its stop and its take. A stop
     that guards a position is only ever moved nearer the market; one that guards nothing yet
@@ -359,8 +359,8 @@ def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, 
     TAKE_LAG_BPS of the mark away from it, short or beyond, and left alone inside that. Funding
     lowers the equity, which moves the stop's line TOWARDS the market and the take's line AWAY from
     it; "only ever nearer" follows the first and ignores the second, and the take then closes the
-    position below the target. `trader_takes` holds the triggers the trader asked for, by asset:
-    a take standing exactly on one of them is theirs and is treated as before.
+    position below the target. `trader_takes` holds the triggers the trader asked for, by asset and
+    direction: a take standing exactly on one of them is theirs and is treated as before.
 
     A funded stage has no target of its own -- its line is one target's worth of the equity it has
     NOW, so it recedes as the position gains -- and a take that followed it would never fire.
@@ -407,7 +407,7 @@ def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, 
                 keep = near.trigger == line.take
             elif hold_takes:
                 keep = True
-            elif follow_takes and near.trigger not in (trader_takes or {}).get(asset, ()):
+            elif follow_takes and near.trigger not in (trader_takes or {}).get((asset, side), ()):
                 lag = m.mark * TAKE_LAG_BPS / BPS
                 keep = -lag <= short_by <= lag
             else:
@@ -452,9 +452,11 @@ class Protector:
         self.clock = clock
         self._limits: dict[tuple[str, str], tuple[RuleLimits, float]] = {}
         self._watch: dict[str, str] = {}  # account -> key, for the sweep
-        # (account, asset) -> the take triggers the trader asked for and Hyperliquid did not refuse.
-        # In memory only: after a restart every take is the gateway's until its trader moves it again.
-        self._trader_takes: dict[tuple[str, int], set[Decimal]] = {}
+        # (account, asset, direction) -> the take triggers the trader asked for and Hyperliquid did
+        # not refuse. By direction, because an order the other way gets a take of its own, and placing
+        # that one says nothing about this one. In memory only: after a restart every take is the
+        # gateway's until its trader moves it again.
+        self._trader_takes: dict[tuple[str, int, str], set[Decimal]] = {}
         # Keys whose account could not be read when the gateway started; each sweep tries them again.
         self._pending: list[str] = []
         self._locks: dict[str, threading.RLock] = {}
@@ -520,13 +522,13 @@ class Protector:
         q = book.positions.get(asset, Decimal(0))
         return sides == {LONG: max(q, Decimal(0)), SHORT: max(-q, Decimal(0))}
 
-    def _takes_of(self, account: str) -> dict[int, frozenset[Decimal]]:
-        """The takes the trader asked for on this account, by asset."""
+    def _takes_of(self, account: str) -> dict[tuple[int, str], frozenset[Decimal]]:
+        """The takes the trader asked for on this account, by asset and direction."""
         with self._guard:
-            return {asset: frozenset(asked) for (a, asset), asked in self._trader_takes.items()
+            return {(asset, side): frozenset(asked) for (a, asset, side), asked in self._trader_takes.items()
                     if a == account.lower()}
 
-    def trader_asked(self, account: str, asset: int, trigger: Decimal) -> None:
+    def trader_asked(self, account: str, asset: int, side: str, trigger: Decimal) -> None:
         """Remembers a take the trader asked for. Called once Hyperliquid has NOT refused it.
 
         Every trigger asked for on the position is kept, not only the last, and a take counts as the
@@ -537,14 +539,15 @@ class Protector:
         take stands on (review, 4 Oct 2026).
         """
         with self._guard:
-            self._trader_takes.setdefault((account.lower(), asset), set()).add(trigger)
+            self._trader_takes.setdefault((account.lower(), asset, side), set()).add(trigger)
 
     def _forget_takes(self, account: str, report: list[dict] | None = None) -> None:
         """A take the gateway placed or moved is the gateway's again. With no report, the account
         has nothing open and none of its takes is anybody's."""
         with self._guard:
             for k in [k for k in self._trader_takes if k[0] == account.lower()]:
-                if report is None or any(r["asset"] == k[1] and r.get("takeWas") != "kept" for r in report):
+                if report is None or any(r["asset"] == k[1] and r["side"] == k[2] and r.get("takeWas") != "kept"
+                                         for r in report):
                     del self._trader_takes[k]
 
     def apply(self, key: str, plan: Plan, avoid_nonce: int | None = None) -> None:
