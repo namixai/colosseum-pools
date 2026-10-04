@@ -548,6 +548,45 @@
         "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717, deployed in",
         "Sealed before any deposit. seal in 0x6860ec99f69152efa4d32236944aa549861bb584d2eb995c260b11e02e164c6b closed the book: seatsSealed() reads true. This pool has one seat and can never be given another. Until that transaction the contract refused to open a deposit ticket."
       ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A challenge sold on the seat, and started by the host's keeper (4 October)",
+      "what": "A challenge sold on the seat of the shared pool on the live deployment",
+      "kind": "seat",
+      "factory": "demo2",
+      "account": "0x7eb971134b0ad523f55c76b44b2fbd6ed7885371",
+      "tx": "0x690aaaf73646e224884059d0104ba9a86328a98646f3129473587074e60f4b6d",
+      "block": 65983974,
+      "from": "0xc6E83B1B88110C54e34977AD215E94cfdbC0374E",
+      "record": "0xc6E83B1B88110C54e34977AD215E94cfdbC0374E bought its challenge 0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262, paying the 1.5 price and the 0.7 platform fee",
+      "check": [],
+      "notes": ["value() reads 41.5 USDC on 42e8 shares, a price of 0.98809524 a share: 7 free on HyperCore, 30 on the seat, 3 on the challenge account, and the 1.5 price on HyperEVM at the seat."],
+      "sources": [
+        "On 0x43f7562C…a717, the seat 0x7eb971134b0ad523f55c76b44b2fbd6ed7885371.",
+        "The trader. 0xc6E83B1B88110C54e34977AD215E94cfdbC0374E bought its challenge 0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262, paying the 1.5 price and the 0.7 platform fee (buyChallenge in 0x690aaaf73646e224884059d0104ba9a86328a98646f3129473587074e60f4b6d, block 65983974).",
+        "What it did to the pool. value() reads 41.5 USDC on 42e8 shares, a price of 0.98809524 a share: 7 free on HyperCore, 30 on the seat, 3 on the challenge account, and the 1.5 price on HyperEVM at the seat."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A challenge sold on the seat, and started by the host's keeper (4 October)",
+      "what": "The keeper on the host started it, and the registry bound its key",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262",
+      "tx": "0xd137d81e9f6256d8f6b9bae3f3f05eeba820529d6a5eefe26bc021185e39eedb",
+      "block": 65983979,
+      "from": "0xD6F07317fC5f12302776b03A7206B1614FD49021",
+      "record": "status() on the challenge reads 2, Active, with a deadline of 5 October 07:00:15 UTC.",
+      "check": ["status() on the challenge", "KeyRegistry.bindingOf(0x7d2650bd3dD9A6eD6Cd0c6C393BB79De837FBe19) on the second deployment's registry", "freeCount() on the registry, which went from 18 to 16"],
+      "notes": ["This run did not send it.", "The challenge account holds its 3 USDC, with no position and no order. The cap is the client's own; the gateway and the contracts would have taken an order inside the leverage rule, and none was sent to them another way."],
+      "sources": [
+        "bought its challenge 0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262",
+        "Started by the keeper on the host. activate in 0xd137d81e9f6256d8f6b9bae3f3f05eeba820529d6a5eefe26bc021185e39eedb, block 65983979, five blocks after the purchase, sent by 0xD6F07317fC5f12302776b03A7206B1614FD49021, the address of the keeper on the host. This run did not send it. status() on the challenge reads 2, Active, with a deadline of 5 October 07:00:15 UTC.",
+        "The key. KeyRegistry.bindingOf(0x7d2650bd3dD9A6eD6Cd0c6C393BB79De837FBe19) on the second deployment's registry 0x53AF27F65Dd7473c890f633aC0025b261307779e is (2, challenge, trader): Bound, to that challenge, for that trader. freeCount() went from 18 to 16.",
+        "The challenge account holds its 3 USDC, with no position and no order."
+      ]
     }
   ],
   "pools": {
