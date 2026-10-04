@@ -1,10 +1,12 @@
 # What the demo has actually done on chain
 
-Status: 4 October 2026, HyperEVM testnet (chain 998). Every line here is a state a contract
-holds right now, not a claim about a past run, so anyone can check it without trusting this file
-or a screenshot. Where a transaction is named it was read back from its receipt. The accounts in
-the tables were asked again on that day and answer as written; a count of keys carries its own
-date, because counts move.
+Status: 4 October 2026, HyperEVM testnet (chain 998). Two kinds of line are here, and they are
+checked differently. **What a contract holds** is given as the state it answered on the day
+named, so anyone can ask it again without trusting this file or a screenshot: the accounts in the
+tables were asked again on 4 October and answer as written, and a count of keys carries its own
+date, because counts move. **What happened in a run** is a dated record, not a snapshot: it is in
+the transactions, each read back from its receipt, and in Hyperliquid's own fills, funding and
+orders for the account.
 
 Most of what follows is on the first deployment, `deployments/testnet-demo.json`: factory
 `0xf2707FCf99eD546BBA4612783761e7906FA1958e`, key registry
@@ -215,7 +217,7 @@ finding A-14 is about, met from the reading side. A reader starting from the rec
 `published_keys` and calling `bindingOf` needs none of that; a reader trying to find the
 transactions without the key list would be walking the same wall we did.
 
-## Deployment 2: a pass, and a funded stage closed at a loss by our own take
+## Deployment 2: a pass, and a funded-stage position closed at a loss by our own take
 
 The second record on the second deployment is the whole walk: bought, passed, funded, ended. It
 ran on 3 and 4 October 2026 on a bench, pool `0xa6d07e9d7354f61b82173F0eBFcF4164EF742096`, and the
