@@ -108,9 +108,10 @@ def trade_tools(desk: Desk) -> list:
                     order_type: Literal["limit", "post_only", "ioc"], reduce_only: bool) -> str:
         """Send one order through the pool gateway, signed by this agent's wallet. Price and size
         are rounded to the exchange's steps. Refused before sending if the perp isn't on the
-        list, the order is under 10 USDC, over the per-order cap, or would take open notional
-        past the agent's headroom under the leverage rule; reduce-only orders skip the last two
-        checks. The answer shows what the gateway and Hyperliquid said.
+        list. An order that opens or adds to a position is also refused if it is under 10 USDC,
+        over the per-order cap, or would take open notional past the agent's headroom under the
+        leverage rule; a reduce-only order skips those three checks and may be under 10 USDC.
+        The answer shows what the gateway and Hyperliquid said.
 
         Args:
             coin: Perp name from the account's list.
@@ -176,7 +177,7 @@ How to work:
 - Trade only when you can say why. A session with no trade is fine.
 - Keep a margin from every limit. Size positions so that an ordinary move against you breaks \
 neither the daily loss nor the drawdown floor, and keep leverage well below the rule.
-- Price limit orders near the market. The smallest order is 10 USDC.
+- Price limit orders near the market. The smallest order that opens or adds to a position is 10 USDC.
 - If the gateway or the exchange refuses an order, read the reason and don't send the same order \
 again unchanged.
 - To pass a challenge, close every position once equity is at the target, check get_account, then \

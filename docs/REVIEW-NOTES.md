@@ -1,9 +1,9 @@
 # Review notes
 
-An internal review of this repository, done between 25 September and 3 October 2026 by a reviewer who did
+An internal review of this repository, done between 25 September and 4 October 2026 by a reviewer who did
 not write the code. It is not an external audit. Each finding was reproduced by a test when it was
 reported. Most were fixed on a branch as they came in, and the fixes were checked again on main at
-commit `9a79ae69`. Nothing here is deployed unless it says so.
+commit `772b4f35`. Nothing here is deployed unless it says so.
 
 ## Scope
 
@@ -18,7 +18,7 @@ Reviewed at commit `2e1ffcd` (main, 25 September 2026):
 - the keeper in `ops/keeper.py` and the host configuration in `ops/host/`.
 
 After that, the fix branch was read again at every commit the developer sent, and main at `c45a32e6`,
-`e4287926` and `9a79ae69`. Code that reached main after the pinned commit was not reviewed as code.
+`e4287926` and `772b4f35`. Code that reached main after the pinned commit was not reviewed as code.
 The gateway's stop-and-take protection was read for its load on Hyperliquid's request budget (A-14)
 and for how it places and moves the take (A-15, A-16); the rest of it was not reviewed as code. The
 stress package in
@@ -45,7 +45,7 @@ transaction was sent, and no load was put on the running gateway.
 
 ## Findings
 
-Status is as of commit `9a79ae69` on main.
+Status is as of commit `772b4f35` on main.
 
 | ID | Severity | Finding | Status |
 |---|---|---|---|

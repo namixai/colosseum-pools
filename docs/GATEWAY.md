@@ -71,15 +71,15 @@ another.
 5. The asset is in the account's rules. The signer checks the platform list and the caps again
    before it signs.
    - 🔴 **The leverage rule is NOT checked here, or anywhere in this gateway.** It reads `rules()`
-     for the daily and drawdown floors and discards the leverage field (`gateway/chain.py:117`);
-     the word does not appear in its code. So where `ForbiddenAsset` has two layers — refused here
-     before signing, and `violation()` after — **leverage has one**: the contract and a keeper that
-     pulls the stop. The protective stop resting on Hyperliquid does not cover it either, because
-     that stop sits on the drawdown and daily floors, and a position can break the leverage rule
-     while the account is barely down. After A-14 — where a shared request budget can leave a
-     keeper's pass unfinished — this is the most exposed of the three rules. A pre-trade check is
-     an intent for after the submission, not a thing that exists; it was never built, and that is
-     not a decision recorded anywhere.
+     for the daily and drawdown floors and discards the leverage field (`rule_limits` in
+     `gateway/chain.py`); the word does not appear in its code. So where `ForbiddenAsset` has two
+     layers — refused here before signing, and `violation()` after — **leverage has one**: the
+     contract and a keeper that pulls the stop. The protective stop resting on Hyperliquid does
+     not cover it either, because that stop sits on the drawdown and daily floors, and a position
+     can break the leverage rule while the account is barely down. After A-14 — where a shared
+     request budget can leave a keeper's pass unfinished — this is the most exposed of the three
+     rules. A pre-trade check is an intent for after the submission, not a thing that exists; it
+     was never built, and that is not a decision recorded anywhere.
 6. `(trader, nonce)` hasn't been seen. The pair is claimed here, before the enclave is asked,
    so a copy arriving meanwhile is refused without an enclave call. If the request then never
    reaches Hyperliquid (the Signer fails or refuses, or its signature is malformed or from the

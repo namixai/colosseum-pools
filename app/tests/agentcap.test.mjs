@@ -29,8 +29,9 @@ test("the share of the rule and the smallest order are the trader client's own n
   assert.equal(number(DESK, /^MIN_ORDER_USDC = ([\d.]+)$/m, "the smallest order"), MIN_ORDER_USDC);
   // The formula, as the desk writes it: equity times the leverage rule times the share.
   assert.match(DESK, /by_rule = max\(equity, 0\.0\) \* leverage_x100 \/ 100 \* self\.max_order_share_of_rule/);
-  // And the two refusals an opening order meets: under the minimum, or over the cap.
-  assert.match(DESK, /if notional < MIN_ORDER_USDC:/);
+  // And the two refusals an opening order meets: under the minimum, or over the cap. The minimum is asked of
+  // opening orders only: one that just reduces a position is not refused for being small.
+  assert.match(DESK, /if notional < MIN_ORDER_USDC and not reduce_only:/);
   assert.match(DESK, /if notional > cap:/);
 });
 
