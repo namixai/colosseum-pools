@@ -124,9 +124,10 @@ either, which the limit further down says plainly.
 at 84076, which is **249.71 USDC of notional on 70 of capital — 3.57× against a 3× rule**. The
 agent's own client would have refused it: its cap is equity × the rule × 0.8, or 168 USDC here. The
 gateway would not, because **the gateway does not check leverage at all** — it reads `rules()` for
-the daily and drawdown floors and discards the leverage field (`gateway/chain.py:117`), and the word
-does not appear in its code. Unlike `ForbiddenAsset` below, leverage has **one** enforcement layer,
-not two: the contract's `violation()` and a keeper that pulls the stop.
+the daily and drawdown floors and discards the leverage field (`rule_limits` in
+`gateway/chain.py`), and the word does not appear in its code. Unlike `ForbiddenAsset` below,
+leverage has **one** enforcement layer, not two: the contract's `violation()` and a keeper that
+pulls the stop.
 
 **That is not a decision we recorded — the check was simply never built**, and saying otherwise would
 dress an absence up as a design. Two things such a check could not do are worth knowing, and they are
