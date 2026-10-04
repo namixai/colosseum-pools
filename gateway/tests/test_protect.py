@@ -537,15 +537,15 @@ class Reconcile(unittest.TestCase):
         self.assertEqual(follow("67961"), [])
         self.assertEqual(follow("67960"), out)
         # The trader's own take stays, short or not ...
-        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67900")})}), [])
-        # ... while it stands exactly where they put it, and on that asset and that side.
-        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67000")})}), out)
-        self.assertEqual(follow("67900", trader_takes={(BTC, SHORT): frozenset({Decimal("67900")})}), out)
+        self.assertEqual(follow("67900", trader_takes={BTC: frozenset({Decimal("67900")})}), [])
+        # ... while it stands exactly where they put it, and on that asset.
+        self.assertEqual(follow("67900", trader_takes={BTC: frozenset({Decimal("67000")})}), out)
+        self.assertEqual(follow("67900", trader_takes={ETH: frozenset({Decimal("67900")})}), out)
         # Any trigger they asked for counts, not only the last one.
-        self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67900"), Decimal("67000")})}), [])
+        self.assertEqual(follow("67900", trader_takes={BTC: frozenset({Decimal("67900"), Decimal("67000")})}), [])
         # Beyond the line the trader's comes in at once, as it always did ...
-        self.assertEqual(follow("69000", trader_takes={(BTC, LONG): frozenset({Decimal("69000")})}), out)
-        self.assertEqual(follow("68001", trader_takes={(BTC, LONG): frozenset({Decimal("68001")})}), out)
+        self.assertEqual(follow("69000", trader_takes={BTC: frozenset({Decimal("69000")})}), out)
+        self.assertEqual(follow("68001", trader_takes={BTC: frozenset({Decimal("68001")})}), out)
         # ... and the gateway's own only past the same lag: the mark behind the line and the mark
         # inside the equity are two reads, and a take pulled in for a tick of that is walked in.
         self.assertEqual(follow("68039"), [])
@@ -1041,12 +1041,33 @@ class AfterARestart(FlowBase):
         self.x.positions[BTC] = Decimal("0.005")
         self.assertEqual(self.gw.protector.take_on([self.key.address]), [])
         self.assertEqual(self.gw.protector.watching(), {})
-        self.gw.protector.sweep()
+        self.gw.protector.sweep()  # tries the key again, at the end of the pass
         self.assertEqual(list(self.gw.protector.watching()), [ACCOUNT])
+        self.gw.protector.sweep()  # and the next pass sweeps the account it took on
         self.assertEqual(self.x.own_actions(), [protect.place_action(
             [order_wire(BTC, LONG, "sl", Decimal("54000"), 5), order_wire(BTC, LONG, "tp", Decimal("76000"), 5)])])
         self.gw.protector.sweep()
         self.assertEqual(len(calls), 2)  # answered once, asked no more
+
+    def test_the_accounts_already_watched_are_swept_before_a_key_is_tried_again(self):
+        # The audit, 4 Oct 2026: a throttled node makes every retried read wait out its backoff, and a
+        # pass that retried first tightened the stops of the accounts it has that much later.
+        self.send()
+        self.x.positions[BTC] = Decimal("0.005")
+        order, book, account_of = [], self.x.book, self.reader.account_of
+
+        def read_book(account, markets):
+            order.append("an account's book")
+            return book(account, markets)
+
+        def read_key(key):
+            order.append("a key that failed at start")
+            return account_of(key)
+
+        self.x.book, self.reader.account_of = read_book, read_key
+        self.gw.protector._pending = ["0x" + "c7" * 20]
+        self.gw.protector.sweep()
+        self.assertEqual(order, ["an account's book", "a key that failed at start"])
 
     def test_the_demo_signer_lists_the_keys_it_holds(self):
         self.assertEqual(DemoSigner([self.key]).addresses(), [self.key.address])
@@ -1111,10 +1132,57 @@ class FollowingTheLine(FlowBase):
         self.gw.protector.sweep()
         self.assertEqual(self.takes(), ["70000"])
 
+    def test_a_refused_request_for_where_the_take_already_stands_claims_nothing(self):
+        # Found in review, 4 Oct 2026. The trader asks for the trigger the gateway's own take is on, and
+        # Hyperliquid refuses. Nothing moved and nothing was granted: the take is still the gateway's,
+        # and it still follows.
+        self.open_long()
+        self.x.refuse = {"status": "err", "response": "refused"}
+        status, out = self.send("take", triggerPx="76108", nonce=NOW + 1)
+        self.assertEqual((status, out["status"]), (422, "refused_by_venue"))
+        self.x.refuse = None
+        self.x.equity = Decimal("999")
+        self.gw.protector.sweep()
+        self.assertEqual(self.takes(), ["76308"])
+
+    def test_a_second_move_that_never_got_an_answer_leaves_the_first_one_the_traders(self):
+        # Hyperliquid cannot be reached: the gateway does not know whether 72000 stands or 70000 still
+        # does. Here it is 70000, and it is the trader's as much as before.
+        self.open_long()
+        self.send("take", triggerPx="70000", nonce=NOW + 1)
+
+        def unreachable(action, nonce, signature):
+            raise OSError("no route")
+
+        through, self.gw.submit = self.gw.submit, unreachable
+        status, out = self.send("take", triggerPx="72000", nonce=NOW + 2)
+        self.assertEqual((status, out["status"]), (502, "venue_unreachable"))
+        self.gw.submit = through
+        self.x.equity = Decimal("999")
+        self.gw.protector.sweep()
+        self.assertEqual(self.takes(), ["70000"])
+
+    def test_a_move_that_landed_and_was_never_answered_is_the_traders_too(self):
+        self.open_long()
+        through = self.gw.submit
+
+        def lands_then_drops(action, nonce, signature):
+            through(action, nonce, signature)
+            raise OSError("the answer was lost")
+
+        self.gw.submit = lands_then_drops
+        status, out = self.send("take", triggerPx="70000", nonce=NOW + 1)
+        self.assertEqual((status, out["status"]), (502, "venue_unreachable"))
+        self.gw.submit = through
+        self.assertEqual(self.takes(), ["70000"])
+        self.x.equity = Decimal("999")
+        self.gw.protector.sweep()
+        self.assertEqual(self.takes(), ["70000"])
+
     def test_the_next_positions_take_is_the_gateways_again(self):
         self.open_long()
         self.send("take", triggerPx="70000", nonce=NOW + 1)
-        self.assertEqual(self.gw.protector._takes_of(ACCOUNT), {(BTC, LONG): frozenset({Decimal("70000")})})
+        self.assertEqual(self.gw.protector._takes_of(ACCOUNT), {BTC: frozenset({Decimal("70000")})})
         # The position closes: Hyperliquid takes the stop and the take away with it.
         self.x.positions.clear()
         self.x.orders.clear()

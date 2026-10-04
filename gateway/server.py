@@ -155,16 +155,23 @@ class Gateway:
         try:
             venue = self.submit(action, req.nonce, signature)
         except Exception as e:
+            self._trader_asked(req)  # it may have reached Hyperliquid all the same
             log_line(event="venue_unreachable", error=type(e).__name__)
             return 502, {**base, "status": "venue_unreachable",
                          "detail": "the order may or may not have reached Hyperliquid; check the account"}
         refusal, confirmed = hl.venue_outcome(venue)
         if refusal is not None:
             return 422, {**base, "status": "refused_by_venue", "reason": refusal, "venue": venue}
+        self._trader_asked(req)  # confirmed, or an answer that confirms nothing: either way it may stand
         if not confirmed:
             return 502, {**base, "status": "venue_unconfirmed", "venue": venue,
                          "detail": "Hyperliquid's answer confirms nothing; check the account"}
         return 200, {**base, "status": "submitted", "venue": venue}
+
+    def _trader_asked(self, req: Request) -> None:
+        """A take the trader asked to move is theirs from here on, unless Hyperliquid refused it."""
+        if req.kind == "take":
+            self.protector.trader_asked(req.account, req.asset, Decimal(req.message["triggerPx"]))
 
     def _sign(self, req: Request, cleared, action: dict, kind: str) -> tuple[dict | None, int, dict]:
         """Asks the signer and checks its answer. Returns the signature only if it is

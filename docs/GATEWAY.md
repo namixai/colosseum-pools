@@ -215,8 +215,10 @@ leave a take that far short the moment the position opens. A take inside that la
 target by the close and the whole spare. **Worked out, not observed**: replayed on the six charges
 of that day, the take moves three times, after the first, the fourth and the sixth, and at 85399
 it would not have fired. A take the **trader** moved stays where they put it, short of the target
-or not: taking the profit early is theirs to decide. The gateway keeps that in memory only, so
-after a restart every take is its own until the trader moves it again.
+or not: taking the profit early is theirs to decide. A request Hyperliquid refused moves nothing
+and claims nothing; one that got no answer may have landed, and whichever take then stands is the
+trader's. The gateway keeps that in memory only, so after a restart every take is its own until
+the trader moves it again.
 
 The lag works both ways. The gateway's own take is left alone while it stands within 6.5 bps of
 the mark from the line, on either side, and is put on the line outside that. The line is computed
@@ -231,8 +233,9 @@ open was not swept again until its trader's next order: a new day's snapshot did
 stop, and its take followed nothing. Before the first sweep the gateway now asks the registry which
 account each of its keys is bound to, and takes on those the key trades right now. This works
 where the signer lists its keys, which the demo signer does and the enclave signer does not. A key
-the node would not read at that moment is tried again by every sweep until it answers. What a
-restart still loses is which takes were the trader's.
+the node would not read at that moment is tried again by every sweep until it answers, after the
+accounts the sweep already has and never before them. What a restart still loses is which takes
+were the trader's.
 
 What this does not cover. First, a charge that lands and a take that fires before the next sweep,
 15 seconds by default: that take is short by the one charge, which the spare absorbs up to 5 bps
