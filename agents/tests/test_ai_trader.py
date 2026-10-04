@@ -106,6 +106,38 @@ class Session(WithChain):
         self.assertEqual(self.gateway.orders, [])
 
 
+class WhatTheTraderIsTold(WithChain):
+    """The trader reads about the smallest order in three places: the system prompt, the
+    description of the tool that sends the order, and the window trader's instructions. The desk
+    has one rule: the minimum is asked of an order that opens or adds to a position, and a
+    reduce-only order may be smaller. A text that gives the minimum without that tells the trader
+    not to send the small close the desk would take -- and when the rule changed, the prompt was
+    changed and the tool's description, seventy lines above it, was not (review, 4 October 2026).
+    """
+
+    def texts(self) -> dict[str, str]:
+        tools = {tool.name: tool.description for tool in ai.trade_tools(self.desk(send=False))}
+        return {"the system prompt": ai.TRADE_SYSTEM, "the place_order tool": tools["place_order"],
+                "the window trader's instructions": (ROOT / "agents" / "WINDOW-TRADER.md").read_text()}
+
+    def test_the_minimum_never_comes_without_its_exception(self):
+        for where, words in self.texts().items():
+            with self.subTest(where=where):
+                self.assertIn("10 USDC", words)
+                for part in re.split(r"(?<=[.;])\s+", " ".join(words.split())):
+                    if "10 USDC" in part:
+                        self.assertRegex(part, r"opens or adds to a position|reduce-only", f"{where}: {part}")
+
+    def test_the_tool_says_what_a_reduce_only_order_skips(self):
+        # The desk skips the minimum, the per-order cap and the headroom for a reduce-only order,
+        # and the tool says three, not the two it said before the minimum joined them.
+        self.chain.positions = [{"coin": "BTC", "szi": "0.0001"}]
+        self.desk().place_order("BTC", "sell", 0.0001, 60000, "ioc", True)  # 6 USDC, reduce-only: sent
+        self.assertEqual(len(self.gateway.orders), 1)
+        self.assertIn("a reduce-only order skips those three checks and may be under 10 USDC",
+                      " ".join(self.texts()["the place_order tool"].split()))
+
+
 class Requests(unittest.TestCase):
     def test_opus_asks_for_adaptive_thinking_and_default_fallbacks(self):
         p = ai.request_params("claude-opus-5", "high", 16000, "sys", "go", [], 8, fallbacks=True)
