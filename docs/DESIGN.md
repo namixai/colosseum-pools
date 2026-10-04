@@ -267,11 +267,15 @@ before it can sell again.
   held 771.556173 USDC: three calls asking for 771.56 were mined, each with its event, and
   nothing left the pool; a fourth, for 771.55, sent it. The log of that pool now holds three
   withdrawals that did not happen. The second deployment's `Pool` is the same code. So read a
-  withdrawal off the spot balance, never off the transaction. Not changed in the contract: a
-  check against the balance precompile would refuse the over-ask and would still not see a
-  second withdrawal in the same block, which is the blindness of A-08. On mainnet the call has
-  to compare the amount with the balance before it asks, and the event has to be read as a
-  request, not as a receipt.
+  withdrawal off the spot balance, never off the transaction — **and read it in a later block.**
+  HyperCore acts on the request after the block that carried it: in the seven transfers read
+  back on 4 October 2026 its ledger shows the action 0.36 to 0.51 of a second after the block's
+  timestamp. The balance precompile answers with the state at the start of its block, so a
+  balance that has not moved inside that block says nothing yet, and a second request made on
+  the strength of it is a second withdrawal. Not changed in the contract: a check against the
+  balance precompile would refuse the over-ask and would still not see a second withdrawal in
+  the same block, which is the blindness of A-08. On mainnet the call has to compare the amount
+  with the balance before it asks, and the event has to be read as a request, not as a receipt.
 - It does not check a trader's intent: the operator runs the gateway and could submit an
   order that fits the rules without the trader asking for it.
 - In the demo the gateway holds the agent keys. A key file can sign anything Hyperliquid lets
