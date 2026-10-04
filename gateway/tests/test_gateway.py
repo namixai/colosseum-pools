@@ -69,6 +69,9 @@ class FakeReader:
     def is_bound(self, key, account, trader):
         return key == self.key and account.lower() == ACCOUNT.lower() and trader.lower() == self.trader.lower()
 
+    def account_of(self, key):
+        return ACCOUNT if key.lower() == self.key.lower() else None
+
     def allowed_assets(self, account):
         return self.assets
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 import os
 import pathlib
+import random
 import re
 import threading
 import unittest
@@ -497,8 +498,13 @@ class Reconcile(unittest.TestCase):
         self.assertEqual(follow("67900", trader_takes={(BTC, SHORT): frozenset({Decimal("67900")})}), out)
         # Any trigger they asked for counts, not only the last one.
         self.assertEqual(follow("67900", trader_takes={(BTC, LONG): frozenset({Decimal("67900"), Decimal("67000")})}), [])
-        # Beyond the line it comes in, as it always did, whoever put it there.
+        # Beyond the line the trader's comes in at once, as it always did ...
         self.assertEqual(follow("69000", trader_takes={(BTC, LONG): frozenset({Decimal("69000")})}), out)
+        self.assertEqual(follow("68001", trader_takes={(BTC, LONG): frozenset({Decimal("68001")})}), out)
+        # ... and the gateway's own only past the same lag: the mark behind the line and the mark
+        # inside the equity are two reads, and a take pulled in for a tick of that is walked in.
+        self.assertEqual(follow("68039"), [])
+        self.assertEqual(follow("68040"), out)
 
     def test_a_shorts_take_follows_the_same_way(self):
         want = {(BTC, SHORT): protect.Line(Decimal("63000"), Decimal("52000"))}
@@ -911,6 +917,74 @@ class Sweep(FlowBase):
         self.assertEqual(len(self.x.own_actions()), 2)
 
 
+class NothingPaidNothingSent(FlowBase):
+    """The audit's finding of 4 October 2026, turned over. The line cancels the price only when the
+    mark it is computed from and the mark inside the account's equity are of one instant. They are
+    two requests. With the sweep's mark up to 30 USD (3.5 bps) off, a take that had been carried out
+    was pulled back in a tick at a time: 39 modifies in an hour in which nothing was paid and the
+    price stood still. The numbers are the challenge of 3 October."""
+
+    def setUp(self):
+        super().setUp()
+        self.reader.limits = RuleLimits(True, 1500, 2000, 70 * USDC, DAY, 70 * USDC, 40)
+        self.x.equity = Decimal(70)
+        self.x.markets_now[BTC] = Market("BTC", Decimal("84995"), 5)
+
+    def take_moves(self, actions):
+        return [a for a in actions if a["type"] == "batchModify"
+                and a["modifies"][0]["order"]["t"]["trigger"]["tpsl"] == "tp"]
+
+    def test_an_hour_of_sweeps_with_a_mark_a_little_off_moves_the_take_not_once(self):
+        size = Decimal("0.00117")
+        self.assertEqual(self.send(size=str(size), limitPx="85100")[0], 200)
+        self.x.positions[BTC] = size
+        self.x.equity = Decimal(70) - size * Decimal("84995") * Decimal("0.00045") - Decimal("0.178665")
+        self.gw.protector.sweep()
+        carried = [o["triggerPx"] for o in self.x.orders if o["orderType"].startswith("Take")]
+        self.assertEqual(len(self.take_moves(self.x.own_actions())), 1)  # carried out, once
+        rng, before = random.Random(7), len(self.x.own_actions())
+        for _ in range(240):  # an hour at fifteen seconds
+            self.x.markets_now[BTC] = Market("BTC", Decimal("84995") + Decimal(rng.randint(-30, 30)), 5)
+            self.gw.protector.sweep()
+        self.assertEqual(self.take_moves(self.x.own_actions()[before:]), [])
+        self.assertEqual([o["triggerPx"] for o in self.x.orders if o["orderType"].startswith("Take")], carried)
+
+
+class AfterARestart(FlowBase):
+    """A gateway that has just started has sent no order, so it watches no account."""
+
+    def test_an_account_with_a_position_open_is_swept_without_waiting_for_its_next_order(self):
+        self.x.positions[BTC] = Decimal("0.005")
+        self.assertEqual(self.gw.protector.watching(), {})
+        self.gw.protector.sweep()
+        self.assertEqual(self.x.sent, [])  # the gap: a position, and nothing looks at it
+        self.assertEqual(self.gw.protector.take_on([self.key.address]), [ACCOUNT])
+        self.gw.protector.sweep()
+        self.assertEqual(self.x.own_actions(), [protect.place_action(
+            [order_wire(BTC, LONG, "sl", Decimal("54000"), 5), order_wire(BTC, LONG, "tp", Decimal("76000"), 5)])])
+
+    def test_a_key_that_trades_nothing_now_is_not_taken_on(self):
+        stranger = Account.create(os.urandom(32)).address
+        self.assertEqual(self.gw.protector.take_on([stranger]), [])  # bound to no account
+        self.reader.trading = False                                  # bound, and its account has stopped
+        self.assertEqual(self.gw.protector.take_on([self.key.address]), [])
+        self.assertEqual(self.gw.protector.watching(), {})
+
+    def test_one_key_that_cannot_be_read_does_not_stop_the_others(self):
+        good = self.reader.account_of
+
+        def flaky(key):
+            if key == "0xbad":
+                raise RuntimeError("the node refused")
+            return good(key)
+
+        self.reader.account_of = flaky
+        self.assertEqual(self.gw.protector.take_on(["0xbad", self.key.address]), [ACCOUNT])
+
+    def test_the_demo_signer_lists_the_keys_it_holds(self):
+        self.assertEqual(DemoSigner([self.key]).addresses(), [self.key.address])
+
+
 class FollowingTheLine(FlowBase):
     """A challenge of 1000 USDC with an 8% target on the fake exchange: 0.005 BTC at 60000 is 300 of
     notional, the take goes at 76108, and the lag allowed is 39."""
@@ -1097,6 +1171,13 @@ class Chain(unittest.TestCase):
         self.assertEqual(r.rule_limits(ACCOUNT), RuleLimits(True, 300, 600, 3_000_000, DAY, 3_050_000, 800))
         self.assertEqual(r.day_snapshot(ACCOUNT), (DAY, 3_050_000))
 
+    def test_the_account_of_a_key_is_the_one_it_is_bound_to_now(self):
+        r = chain.JsonRpcReader("http://rpc.invalid", "0x" + "f1" * 20, "0x" + "f2" * 20)
+        trader = "0x" + "d1" * 20
+        for state, want in ((1, None), (2, ACCOUNT), (3, None)):  # Free, Bound, Retired
+            r._call = lambda to, sig, types, args, out, state=state: ((state, ACCOUNT.lower(), trader),)
+            self.assertEqual(r.account_of("0x" + "c1" * 20), want, state)
+
 
 class HostMinute(FlowBase):
     """What the gateway spends of Hyperliquid's 1,200 a minute per IP, which the keeper on the same host
@@ -1178,6 +1259,9 @@ class Wiring(unittest.TestCase):
     def test_main_starts_the_sweep(self):
         body = inspect.getsource(server.main)
         self.assertIn("target=gateway.protector.run", body)
+        # ... and, before it, takes on the accounts its signer's keys trade.
+        self.assertIn("gateway.protector.take_on(addresses())", body)
+        self.assertLess(body.index("gateway.protector.take_on("), body.index("target=gateway.protector.run"))
         self.assertIn("make_handler(gateway,", body)
         self.assertEqual(server.PROTECT_EVERY_S, 15.0)
 

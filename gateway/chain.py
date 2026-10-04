@@ -20,6 +20,7 @@ RATE_LIMITED = -32005  # what the public HyperEVM RPC answers when it throttles
 # three, the trader's order came back as a gateway error, and the very same reads went through
 # seconds later. Four seconds of patience is cheap next to telling a visitor the demo is broken.
 RPC_ATTEMPTS = 5
+KEY_BOUND = 2  # KeyRegistry.State: 1 Free, 2 Bound, 3 Retired
 
 
 class Throttled(RuntimeError):
@@ -93,6 +94,13 @@ class JsonRpcReader:
             return None
         key = self._call(account, "agentKey()", [], [], ["address"])[0]
         return None if int(key, 16) == 0 else to_checksum_address(key)
+
+    def account_of(self, key: str) -> str | None:
+        """The account this key is bound to in the registry right now, or None for a key that is
+        free or retired. `bindingOf` answers (state, account, trader)."""
+        state, account, _ = self._call(self.registry, "bindingOf(address)", ["address"], [key],
+                                       ["(uint8,address,address)"])[0]
+        return to_checksum_address(account) if state == KEY_BOUND else None
 
     def is_bound(self, key: str, account: str, trader: str) -> bool:
         return self._call(
