@@ -77,6 +77,10 @@ export function agentCardLine(t) {
 /** What the new-pool form says before the pool is created; "" when an agent could trade both stages. */
 export function agentFormWarning(t, leverageX100) {
   if (t.challenge && t.funded) return "";
+  // A form that is not filled in yet claims nothing. A cleared field reads as 0, and a capital or a leverage of 0
+  // gives a cap of 0 -- with a leverage of 0 there is no smallest capital at all, and the line used to end
+  // "at least Infinity USDC". The form's own limits speak for those fields when the button is pressed.
+  if (!(t.challengeCap > 0) || !(t.fundedCap > 0)) return "";
   const lev = `${(Number(leverageX100) / 100).toFixed(2).replace(/\.?0+$/, "")}×`;
   const which = !t.challenge && !t.funded ? "challenge capital and the funded capital have"
     : !t.challenge ? "challenge capital has" : "funded capital has";

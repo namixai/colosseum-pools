@@ -144,6 +144,104 @@ class SealedSeats(unittest.TestCase):
             c.transact.assert_not_called()
 
 
+class SeveralSeats(unittest.TestCase):
+    """A pool with seats of different sizes: the steps that act on one seat are told which, and never guess."""
+
+    RECORD = {"SharedPool": POOL, "factory_from": "demo2", "platform_assets": {"BTC": 3},
+              "PoolFactory": "0x" + "fa" * 20}
+    SEATS = ("0x" + "a1" * 20, "0x" + "B2" * 20, "0x" + "c3" * 20)
+
+    def answering(self, c, seats):
+        def call_view(to, sig, types, args, out):
+            if sig == "seats()":
+                return [list(seats)]
+            if sig == "capitalNeeded()":
+                return [111 * 10**8]
+            if sig == "accountReady()":
+                return [True]
+            if sig == "seatsSealed()":
+                return [True]
+            if sig == "challenge()":
+                return ["0x" + "00" * 20]
+            if sig == "terms()":  # price and capital first: 4 USDC, 20 USDC
+                return [(4_000_000, 20_000_000, 1000, 604800, 0, 8000, 200_000_000)]
+            if sig == "challengeFee()":
+                return [700_000]
+            return [0]
+        c.call_view.side_effect = call_view
+        c.transact.return_value = {"transactionHash": "0x" + "ab" * 32}
+        c.core_spot_balance.return_value = {"total": 0}
+        c.erc20_balance.return_value = 0
+
+    def seat(self, seats, **args):
+        with mock.patch.object(run, "c") as c:
+            self.answering(c, seats)
+            return run.seat_of(self.RECORD, argparse.Namespace(**args))
+
+    def test_one_seat_needs_no_telling_and_several_do(self):
+        self.assertEqual(self.seat(self.SEATS[:1]), self.SEATS[0])
+        self.assertEqual(self.seat(self.SEATS[:1], seat=None), self.SEATS[0])
+        with self.assertRaisesRegex(SystemExit, "this pool has 3 seats: say which with --seat, 1 to 3"):
+            self.seat(self.SEATS)
+        with self.assertRaisesRegex(SystemExit, "no seat yet"):
+            self.seat(())
+
+    def test_a_seat_is_named_by_its_place_from_one_or_by_its_address(self):
+        self.assertEqual(self.seat(self.SEATS, seat="1"), self.SEATS[0])
+        self.assertEqual(self.seat(self.SEATS, seat="3"), self.SEATS[2])
+        # The address in any case, as a node or a page may print it; the pool's own spelling comes back.
+        self.assertEqual(self.seat(self.SEATS, seat=self.SEATS[1].lower()), self.SEATS[1])
+        # "²" and "٣" are digits to str.isdigit(); the first is not a number to int(), and neither is a place here.
+        for wrong in ("0", "4", "-1", "two", "", "²", "٣", "1²"):
+            with self.assertRaisesRegex(SystemExit, "--seat takes 1 to 3 or a seat's address"):
+                self.seat(self.SEATS, seat=wrong)
+        with self.assertRaisesRegex(SystemExit, "is not a seat of this pool"):
+            self.seat(self.SEATS, seat="0x" + "dd" * 20)
+
+    def test_arm_and_release_act_on_the_seat_named_and_refuse_to_guess(self):
+        for step, sig in ((run.cmd_arm, "armSeat(address)"), (run.cmd_release, "releaseSeat(address)")):
+            with mock.patch.object(run, "c") as c, mock.patch.object(run, "wait_until"):
+                self.answering(c, self.SEATS)
+                step(self.RECORD, argparse.Namespace(seat="2"))
+                call = c.transact.call_args_list[0]
+                self.assertEqual(call.args[1:3], (POOL, sig))
+                self.assertEqual(call.args[4], [self.SEATS[1]])
+            with mock.patch.object(run, "c") as c, mock.patch.object(run, "wait_until"):
+                self.answering(c, self.SEATS)
+                with self.assertRaisesRegex(SystemExit, "say which with --seat"):
+                    step(self.RECORD, argparse.Namespace(seat=None))
+                c.transact.assert_not_called()
+
+    def test_buy_pays_the_seat_named_and_no_other(self):
+        """The approval names the seat as the spender, and buyChallenge goes to the same seat: a step that
+        refused an empty --seat but took the first seat when given one would pay the wrong pool."""
+        for named, seat in (("2", self.SEATS[1]), (self.SEATS[2].lower(), self.SEATS[2]), ("1", self.SEATS[0])):
+            with mock.patch.object(run, "c") as c, mock.patch.object(run, "wait_until"):
+                self.answering(c, self.SEATS)
+                run.cmd_buy(self.RECORD, argparse.Namespace(seat=named))
+                approve, buy = c.transact.call_args_list[:2]
+                self.assertEqual(approve.args[2], "approve(address,uint256)")
+                self.assertEqual(approve.args[4], [seat, 4_000_000 + 700_000])
+                self.assertEqual(buy.args[1:3], (seat, "buyChallenge()"))
+                # The price and the capital were read from that seat too, not from the first.
+                asked = {call.args[0] for call in c.call_view.call_args_list if call.args[1] == "terms()"}
+                self.assertEqual(asked, {seat})
+
+    def test_expire_and_buy_read_the_seat_named(self):
+        with mock.patch.object(run, "c") as c:
+            self.answering(c, self.SEATS)  # challenge() answers the zero address
+            with self.assertRaisesRegex(SystemExit, "the seat has no challenge"):
+                run.cmd_expire(self.RECORD, argparse.Namespace(seat="3"))
+            asked = [call.args[0] for call in c.call_view.call_args_list if call.args[1] == "challenge()"]
+            self.assertEqual(asked, [self.SEATS[2]])
+        for step in (run.cmd_expire, run.cmd_buy):
+            with mock.patch.object(run, "c") as c:
+                self.answering(c, self.SEATS)
+                with self.assertRaisesRegex(SystemExit, "say which with --seat"):
+                    step(self.RECORD, argparse.Namespace(seat=None))
+                c.transact.assert_not_called()
+
+
 class Request(unittest.TestCase):
     def call(self, now, last_deposit=1_000_000, lock=600):
         record = {"SharedPool": POOL}
