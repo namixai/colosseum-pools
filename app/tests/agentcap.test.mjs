@@ -21,9 +21,11 @@ const number = (source, pattern, what) => {
 };
 
 test("the share of the rule and the smallest order are the trader client's own numbers", () => {
-  // The default the desk carries, and the number the command-line client hands it: one figure, written twice there.
-  assert.equal(number(DESK, /^ {4}max_order_share_of_rule: float = ([\d.]+)$/m, "the desk's share"), ORDER_SHARE_OF_RULE);
+  // The number in force is the client's constant, and the client hands it to the desk. The desk's own figure is only
+  // the default of its dataclass; it is held too, so the two cannot part unnoticed.
   assert.equal(number(CLIENT, /^WINDOW_MAX_ORDER_SHARE_OF_RULE = ([\d.]+)$/m, "the client's share"), ORDER_SHARE_OF_RULE);
+  assert.match(CLIENT, /max_order_share_of_rule=WINDOW_MAX_ORDER_SHARE_OF_RULE\)/);
+  assert.equal(number(DESK, /^ {4}max_order_share_of_rule: float = ([\d.]+)$/m, "the desk's default"), ORDER_SHARE_OF_RULE);
   assert.equal(number(DESK, /^MIN_ORDER_USDC = ([\d.]+)$/m, "the smallest order"), MIN_ORDER_USDC);
   // The formula, as the desk writes it: equity times the leverage rule times the share.
   assert.match(DESK, /by_rule = max\(equity, 0\.0\) \* leverage_x100 \/ 100 \* self\.max_order_share_of_rule/);
@@ -66,7 +68,8 @@ test("the words say whose refusal it is, with the number, and nothing where an a
   const small = agentTradability({ capital: 3, fundedCapital: 30, leverageX100: 500 });
   const note = agentNote(small);
   assert.match(note, /^An agent using this repository's trader client can't open a position in this pool's challenge:/);
-  assert.match(note, /caps one order at 6\.00 USDC \(0\.4 of the leverage rule on the stage's capital\)/);
+  // The cap follows the account's equity; a page can only speak of the capital a stage starts with, and says so.
+  assert.match(note, /caps one order at 6\.00 USDC \(0\.4 of the leverage rule on the stage's starting capital\)/);
   assert.match(note, /Hyperliquid takes no order under 10 USDC\./);
   // Not the contract's rule and not the gateway's: the site's own trade panel is not held to it, and the page says so
   // rather than call the pool untradable.

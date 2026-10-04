@@ -8,9 +8,14 @@
 // This is the client's caution, not a rule of the contracts and not a check of the gateway: the gateway signs an
 // order up to its own cap, so the trade panel on this site is not held to it. The page says whose refusal it is.
 // The two numbers are the client's own; app/tests/agentcap.test.mjs reads them back from agents/.
+//
+// The client counts the cap on the account's equity at the moment of the order. What a page can know before a
+// stage begins is its starting capital, so this is the cap at the start: a loss lowers it, and an account that
+// began just over the edge can fall under it. The words say "starting capital" for that reason.
 // No browser globals here, so node's test runner loads it.
 
-/** The share of the leverage rule one order may carry (agents/desk.py, Limits.max_order_share_of_rule). */
+/** The share of the leverage rule one order may carry: agents/client.py, WINDOW_MAX_ORDER_SHARE_OF_RULE, which the
+ *  client hands to the desk's Limits.max_order_share_of_rule. */
 export const ORDER_SHARE_OF_RULE = 0.4;
 /** Hyperliquid's smallest order, in USDC (agents/desk.py, MIN_ORDER_USDC). */
 export const MIN_ORDER_USDC = 10;
@@ -56,7 +61,7 @@ export function agentNote(t) {
   const stage = !t.challenge ? "challenge" : "funded stage";
   const cap = !t.challenge ? t.challengeCap : t.fundedCap;
   return `An agent using this repository's trader client can't open a position in this pool's ${stage}: the client `
-    + `caps one order at ${usd(cap)} USDC (${ORDER_SHARE_OF_RULE} of the leverage rule on the stage's capital), and `
+    + `caps one order at ${usd(cap)} USDC (${ORDER_SHARE_OF_RULE} of the leverage rule on the stage's starting capital), and `
     + `Hyperliquid takes no order under ${MIN_ORDER_USDC} USDC. ${WHOSE}`;
 }
 
