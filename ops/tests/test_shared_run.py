@@ -147,7 +147,8 @@ class SealedSeats(unittest.TestCase):
 class SeveralSeats(unittest.TestCase):
     """A pool with seats of different sizes: the steps that act on one seat are told which, and never guess."""
 
-    RECORD = {"SharedPool": POOL, "factory_from": "demo2", "platform_assets": {"BTC": 3}}
+    RECORD = {"SharedPool": POOL, "factory_from": "demo2", "platform_assets": {"BTC": 3},
+              "PoolFactory": "0x" + "fa" * 20}
     SEATS = ("0x" + "a1" * 20, "0x" + "B2" * 20, "0x" + "c3" * 20)
 
     def answering(self, c, seats):
@@ -162,6 +163,10 @@ class SeveralSeats(unittest.TestCase):
                 return [True]
             if sig == "challenge()":
                 return ["0x" + "00" * 20]
+            if sig == "terms()":  # price and capital first: 4 USDC, 20 USDC
+                return [(4_000_000, 20_000_000, 1000, 604800, 0, 8000, 200_000_000)]
+            if sig == "challengeFee()":
+                return [700_000]
             return [0]
         c.call_view.side_effect = call_view
         c.transact.return_value = {"transactionHash": "0x" + "ab" * 32}
@@ -206,6 +211,21 @@ class SeveralSeats(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "say which with --seat"):
                     step(self.RECORD, argparse.Namespace(seat=None))
                 c.transact.assert_not_called()
+
+    def test_buy_pays_the_seat_named_and_no_other(self):
+        """The approval names the seat as the spender, and buyChallenge goes to the same seat: a step that
+        refused an empty --seat but took the first seat when given one would pay the wrong pool."""
+        for named, seat in (("2", self.SEATS[1]), (self.SEATS[2].lower(), self.SEATS[2]), ("1", self.SEATS[0])):
+            with mock.patch.object(run, "c") as c, mock.patch.object(run, "wait_until"):
+                self.answering(c, self.SEATS)
+                run.cmd_buy(self.RECORD, argparse.Namespace(seat=named))
+                approve, buy = c.transact.call_args_list[:2]
+                self.assertEqual(approve.args[2], "approve(address,uint256)")
+                self.assertEqual(approve.args[4], [seat, 4_000_000 + 700_000])
+                self.assertEqual(buy.args[1:3], (seat, "buyChallenge()"))
+                # The price and the capital were read from that seat too, not from the first.
+                asked = {call.args[0] for call in c.call_view.call_args_list if call.args[1] == "terms()"}
+                self.assertEqual(asked, {seat})
 
     def test_expire_and_buy_read_the_seat_named(self):
         with mock.patch.object(run, "c") as c:
