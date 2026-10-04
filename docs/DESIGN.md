@@ -259,6 +259,19 @@ before it can sell again.
   was measured from the other side on 3 October 2026, when a long of about 99 USDC paid
   0.178665 USDC in six hours; a short of that size would have been paid the same. No fix on
   chain, for the same reason as above. Named by the audit, 3 October 2026.
+- **The owner's withdrawal does not check the balance, and neither its receipt nor its event
+  shows that money moved.** `withdrawOnCore` asks HyperCore to send the amount and emits
+  `WithdrawnOnCore(owner, amount)` whatever the pool holds (`src/Pool.sol`). HyperCore acts on
+  the request a moment later, or drops it without a word, and it drops one that asks for more
+  than the spot balance. **Measured** on 4 October 2026 on a pool of the first deployment that
+  held 771.556173 USDC: three calls asking for 771.56 were mined, each with its event, and
+  nothing left the pool; a fourth, for 771.55, sent it. The log of that pool now holds three
+  withdrawals that did not happen. The second deployment's `Pool` is the same code. So read a
+  withdrawal off the spot balance, never off the transaction. Not changed in the contract: a
+  check against the balance precompile would refuse the over-ask and would still not see a
+  second withdrawal in the same block, which is the blindness of A-08. On mainnet the call has
+  to compare the amount with the balance before it asks, and the event has to be read as a
+  request, not as a receipt.
 - It does not check a trader's intent: the operator runs the gateway and could submit an
   order that fits the rules without the trader asking for it.
 - In the demo the gateway holds the agent keys. A key file can sign anything Hyperliquid lets
