@@ -374,6 +374,51 @@ class FundingAndTheTake(unittest.TestCase):
         self.assertEqual(as_it_filled, [4, 5, 6])
 
 
+class TheFundedTakeStays(unittest.TestCase):
+    """A funded stage's take that came after the price, with the numbers Hyperliquid gave.
+
+    4 October 2026, the second deployment, the stand's funded stage: 70 USDC, a "target" of 40 bps
+    to measure the take by. A short of 0.00117 BTC entered at 84955 and its take went on at 84715.
+    The price rose to 85206. A funded stage's line is one target's worth of the equity it has NOW
+    from the mark it has NOW, so it rose with the price; a take beyond the line comes in; and the
+    take was found standing at 84967, twelve ABOVE the entry of a short. Had the price come back
+    it would have closed the position at a loss and called it a take.
+
+    Measured: the entry, the fee, the two funding payments, the high, both triggers. The line at
+    the high is worked out here and lands on the trigger that was on the book, to the tick.
+    """
+
+    SIZE = Decimal("0.00117")
+    ENTRY, FEE_IN = Decimal("84955"), Decimal("0.044728")
+    HIGH = Decimal("85206")
+    FUNDING = Decimal("0.009585") + Decimal("0.019258")  # paid TO the short, 05:00 and 06:00 UTC
+
+    def setUp(self):
+        self.limits = RuleLimits(False, 1500, 2000, 70 * USDC, DAY, 70 * USDC, 40)
+        self.equity_at_high = Decimal(70) - self.FEE_IN + self.FUNDING - self.SIZE * (self.HIGH - self.ENTRY)
+
+    def line(self, mark: Decimal, equity: Decimal) -> Decimal:
+        short = {BTC: {LONG: Decimal(0), SHORT: self.SIZE}}
+        return lines(self.limits, equity, short, {BTC: Market("BTC", mark, 5)})[(BTC, SHORT)].take
+
+    def test_the_line_at_the_high_is_the_trigger_that_was_on_the_book(self):
+        self.assertEqual(self.line(self.ENTRY, Decimal(70)), Decimal("84715"))
+        self.assertEqual(self.equity_at_high, Decimal("69.690445"))
+        self.assertEqual(self.line(self.HIGH, self.equity_at_high), Decimal("84967"))
+        self.assertGreater(Decimal("84967"), self.ENTRY)  # a short's take above its entry
+
+    def test_the_old_rule_pulled_the_take_there_and_a_funded_stage_now_leaves_it(self):
+        markets = {BTC: Market("BTC", self.HIGH, 5)}
+        book = Book(self.equity_at_high, {BTC: -self.SIZE}, {}, [stop_at(1, BTC, SHORT, "93000"),
+                                                                  take_at(2, BTC, SHORT, "84715")])
+        want = lines(self.limits, book.equity, exposure(book), markets)
+        self.assertEqual(reconcile(book, want, markets).actions,
+                         [protect.modify_action(2, order_wire(BTC, SHORT, "tp", Decimal("84967"), 5))])
+        self.assertEqual(reconcile(book, want, markets, hold_takes=True).actions, [])
+        # Holding comes first: a funded stage's take is not carried after its line either.
+        self.assertEqual(reconcile(book, want, markets, True, None, True).actions, [])
+
+
 class Wire(unittest.TestCase):
     def test_orders_are_reduce_only_market_triggers_for_the_whole_position(self):
         self.assertEqual(order_wire(ETH, LONG, "sl", Decimal("2578.6"), 4), {
@@ -981,6 +1026,28 @@ class AfterARestart(FlowBase):
         self.reader.account_of = flaky
         self.assertEqual(self.gw.protector.take_on(["0xbad", self.key.address]), [ACCOUNT])
 
+    def test_a_key_that_could_not_be_read_is_tried_again_by_the_sweep(self):
+        # Found in review, 4 Oct 2026: a node that refuses one read while the gateway starts left that
+        # key's account unwatched for good -- until its next order, or the next restart.
+        good, calls = self.reader.account_of, []
+
+        def down_once(key):
+            calls.append(key)
+            if len(calls) == 1:
+                raise RuntimeError("the node refused")
+            return good(key)
+
+        self.reader.account_of = down_once
+        self.x.positions[BTC] = Decimal("0.005")
+        self.assertEqual(self.gw.protector.take_on([self.key.address]), [])
+        self.assertEqual(self.gw.protector.watching(), {})
+        self.gw.protector.sweep()
+        self.assertEqual(list(self.gw.protector.watching()), [ACCOUNT])
+        self.assertEqual(self.x.own_actions(), [protect.place_action(
+            [order_wire(BTC, LONG, "sl", Decimal("54000"), 5), order_wire(BTC, LONG, "tp", Decimal("76000"), 5)])])
+        self.gw.protector.sweep()
+        self.assertEqual(len(calls), 2)  # answered once, asked no more
+
     def test_the_demo_signer_lists_the_keys_it_holds(self):
         self.assertEqual(DemoSigner([self.key]).addresses(), [self.key.address])
 
@@ -1079,14 +1146,31 @@ class FollowingTheLine(FlowBase):
         self.gw.protector.sweep()
         self.assertEqual(self.takes(), ["76308"])
 
-    def test_an_order_that_adds_a_little_carries_it_out_too(self):
-        # The stop and take are planned before every opening order, not only by the sweep. With 12 more
-        # of BTC on its way the notional is 312 and the room 90.5616: the line is 77416.
+    def test_an_order_on_its_way_carries_nothing_and_the_sweep_does_once_it_has_filled(self):
+        # With 12 more of BTC on its way the line prices 312 of notional while the equity moves with 300:
+        # such a line moves with the mark, so nothing follows it. Filled, the position IS the exposure,
+        # the room is 90.5616, and the sweep puts the take on 77416.
         self.open_long()
         self.x.equity = Decimal("990")
         status, _ = self.send(size="0.0002", nonce=NOW + 1)
         self.assertEqual(status, 200)
+        self.assertEqual(self.takes(), ["76108"])
+        self.x.positions[BTC] = Decimal("0.0052")
+        self.gw.protector.sweep()
         self.assertEqual(self.takes(), ["77416"])
+
+    def test_an_order_resting_on_the_book_stops_the_following(self):
+        # Found in review, 4 Oct 2026. 0.001 held and 0.004 resting: the line prices 0.005 and the equity
+        # moves with 0.001, so a rise of 60 moves the line 48 with nothing paid -- past the lag of 39, and
+        # the take would be carried ahead of a rising mark for as long as the order rests.
+        self.send()
+        self.x.positions[BTC] = Decimal("0.001")
+        self.x.orders.append(resting("BTC", "B", "0.004", 77))
+        self.assertEqual(self.takes(), ["76108"])
+        self.x.markets_now[BTC] = Market("BTC", Decimal("60060"), 5)
+        self.x.equity = Decimal("1000.06")
+        self.gw.protector.sweep()
+        self.assertEqual(self.takes(), ["76108"])
 
     def test_with_two_assets_the_takes_are_left_as_they_were(self):
         # BTC's line now moves with ETH's price. Following it would mean a modify out and a modify back
@@ -1097,8 +1181,10 @@ class FollowingTheLine(FlowBase):
         self.gw.protector.sweep()
         self.assertEqual([o["triggerPx"] for o in self.x.orders
                           if o["orderType"].startswith("Take") and o["coin"] == "BTC"], ["76108"])
+        # The sweep itself went through: ETH, which had nothing, has its stop and its take.
+        self.assertEqual(len([o for o in self.x.orders if o["coin"] == "ETH" and o["isTrigger"]]), 2)
 
-    def test_a_funded_stage_is_swept_as_before(self):
+    def test_a_funded_take_is_not_carried_after_its_line(self):
         self.reader.limits = funded()
         self.send()
         self.x.positions[BTC] = Decimal("0.005")
@@ -1106,6 +1192,28 @@ class FollowingTheLine(FlowBase):
         self.x.equity = Decimal("1010")  # its line is now 76160, past the take at 76000
         self.gw.protector.sweep()
         self.assertEqual(len(self.x.sent), before)
+        self.assertEqual(self.takes(), ["76000"])
+
+    def test_a_funded_take_does_not_come_after_the_price_when_the_position_loses(self):
+        # The price falls 5% against the long: the line is 72760 now, and the take used to be pulled to
+        # it -- one more fall and it would stand under the entry.
+        self.reader.limits = funded()
+        self.send()
+        self.x.positions[BTC] = Decimal("0.005")
+        before = len(self.x.sent)
+        self.x.markets_now[BTC] = Market("BTC", Decimal("57000"), 5)
+        self.x.equity = Decimal("985")
+        self.gw.protector.sweep()
+        self.assertEqual(len(self.x.sent), before)
+        self.assertEqual(self.takes(), ["76000"])
+
+    def test_adding_to_a_funded_position_leaves_its_take_where_it_was(self):
+        # The price of holding: for twice the size one target is 68000 away, and the take stays at 76000.
+        self.reader.limits = funded()
+        self.send()
+        self.x.positions[BTC] = Decimal("0.005")
+        status, _ = self.send(nonce=NOW + 1)
+        self.assertEqual(status, 200)
         self.assertEqual(self.takes(), ["76000"])
 
 

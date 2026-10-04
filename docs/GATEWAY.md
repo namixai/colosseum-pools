@@ -230,20 +230,29 @@ is filled by orders. A gateway that had just started watched nothing, so an acco
 open was not swept again until its trader's next order: a new day's snapshot did not tighten its
 stop, and its take followed nothing. Before the first sweep the gateway now asks the registry which
 account each of its keys is bound to, and takes on those the key trades right now. This works
-where the signer lists its keys, which the demo signer does and the enclave signer does not. What
-a restart still loses is which takes were the trader's.
+where the signer lists its keys, which the demo signer does and the enclave signer does not. A key
+the node would not read at that moment is tried again by every sweep until it answers. What a
+restart still loses is which takes were the trader's.
 
 What this does not cover. First, a charge that lands and a take that fires before the next sweep,
 15 seconds by default: that take is short by the one charge, which the spare absorbs up to 5 bps
 of the notional. Second, an account with exposure on more than one asset. There each take's line
 moves with the other position's price, a take that followed it would be modified out and back in
 with every swing between the two, and so those takes are left as they were before: they can still
-stand short of the target.
+stand short of the target. Third, a position with an order resting on the book that would grow
+it. The line prices the larger size while the equity moves with the smaller, so the line moves
+with the mark, and the take is not followed until that order has filled or gone.
 
 A funded stage has no target and the pool's rules have no take, so there the take is at most one
 challenge target away: `targetBps` of the equity at the moment it is set, with no allowance, since
-nothing has to be cleared. Its line recedes as the position gains, so nothing follows it: the
-trader may bring that take nearer the mark, and nothing puts it further.
+nothing has to be cleared. Once it stands with its position the gateway does not move it. Its line
+is worked out from the mark and the equity of the moment, so the line recedes as the position
+gains and comes after the price as the position loses, and a take held to that line did the
+second. **Measured** on 4 October 2026: a short entered at 84955 with its take at 84715, the price
+went to 85206, and the take was found at 84967 — above the entry, where it would have closed the
+position at a loss and called it a take. The trader may still bring it nearer the mark. What
+holding it costs: after the position is added to, the take stands further than one target for
+the new size.
 
 **The assumptions, named.**
 
