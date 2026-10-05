@@ -67,6 +67,17 @@ export const UNREAD = "The withdrawal's transaction is in a block, but the pool'
   + "and only then decide.";
 
 /**
+ * Whether a reading shows the withdrawal carried out: the balance down by at least the amount asked for. The page
+ * stops waiting on this and on nothing less. Something else can take money from the pool while a withdrawal is on
+ * its way -- a challenge bought in the next block pays its capital out of the same balance -- and a fall smaller
+ * than the amount is that, not the withdrawal.
+ */
+export function arrivedBy(before, reading, amount) {
+  if (reading === null || reading === undefined) return false;
+  return BigInt(before) - BigInt(reading) >= BigInt(amount);
+}
+
+/**
  * The outcome from every reading made after the transaction, in order; `null` is a reading that failed.
  * A reading that shows the balance down by the amount settles it. Otherwise only the LAST reading may speak, and
  * only if it came back: an older "not moved" is not news, and a failed reading is not "not moved". With nothing
@@ -75,7 +86,7 @@ export const UNREAD = "The withdrawal's transaction is in a block, but the pool'
  */
 export function withdrawOutcome({ before, amount, reads }) {
   const b = BigInt(before);
-  const arrived = reads.find((r) => r !== null && b > BigInt(r) && b - BigInt(r) >= BigInt(amount));
+  const arrived = reads.find((r) => arrivedBy(b, r, amount));
   if (arrived !== undefined) return { ...withdrawVerdict({ before, after: arrived, amount }), after: arrived };
   const last = reads.length ? reads[reads.length - 1] : null;
   if (last === null) return { ok: false, unread: true, text: UNREAD };

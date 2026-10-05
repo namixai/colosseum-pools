@@ -13,7 +13,9 @@ import { outcomesHtml } from "../lib/outcomes.js";
 import { poolKind, holdsCode, KIND_NOTE } from "../lib/listing.js";
 import { agentTradability, agentNote } from "../lib/agentcap.js";
 import { isArchive, ARCHIVE } from "../lib/deployments.js";
-import { usdcTotal1e8, allOf, withdrawPlan, withdrawOutcome, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS } from "../lib/withdraw.js";
+import {
+  usdcTotal1e8, allOf, withdrawPlan, withdrawOutcome, arrivedBy, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS,
+} from "../lib/withdraw.js";
 import { usd } from "../lib/shared.js";
 
 export async function poolView(address, page) {
@@ -221,7 +223,9 @@ export async function poolView(address, page) {
       await new Promise((resolve) => setTimeout(resolve, WITHDRAW_POLL_MS));
       const now = await readPoolSpot(address).catch(() => null);
       reads.push(now);
-      if (now !== null && now < before) break;
+      // Not on any fall: a challenge bought meanwhile takes its capital from the same balance, and stopping there
+      // would report a withdrawal still on its way as one that fell short.
+      if (arrivedBy(before, now, amount)) break;
     }
     const outcome = withdrawOutcome({ before, amount, reads });
     if (outcome.after !== undefined) $("#wd-balance", page).textContent = usd(outcome.after, 8);

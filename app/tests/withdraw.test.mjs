@@ -8,7 +8,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  usdcTotal1e8, allOf, withdrawPlan, withdrawVerdict, withdrawOutcome, UNREAD, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS,
+  usdcTotal1e8, allOf, withdrawPlan, withdrawVerdict, withdrawOutcome, arrivedBy, UNREAD, WITHDRAW_WAIT_MS,
+  WITHDRAW_POLL_MS,
 } from "../lib/withdraw.js";
 
 const text = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -100,6 +101,38 @@ test("a reading that fails after the transaction is said as unread, never as not
   assert.match(dropped.text, /HyperCore has not moved the money: the pool still holds 771\.556173 USDC/);
 });
 
+test("a challenge bought while a withdrawal is on its way is not taken for the withdrawal", () => {
+  // A pool holding 771.556173, a withdrawal of 500 asked for, and a challenge sold in the next block: 71 USDC leave
+  // for the challenge's account before HyperCore carries the withdrawal out.
+  const amount = 50_000_000_000n;
+  const bought = HELD - 7_100_000_000n;
+  const both = bought - amount;
+  // The page waits for a fall of at least the amount, so the purchase alone does not end the waiting.
+  assert.equal(arrivedBy(HELD, bought, amount), false);
+  assert.equal(arrivedBy(HELD, both, amount), true);
+  assert.equal(arrivedBy(HELD, HELD - amount, amount), true, "exactly the amount is the amount");
+  assert.equal(arrivedBy(HELD, HELD - amount + 1n, amount), false);
+  assert.equal(arrivedBy(HELD, HELD, amount), false);
+  assert.equal(arrivedBy(HELD, HELD + 1n, amount), false, "money that came in is not a withdrawal");
+  assert.equal(arrivedBy(HELD, null, amount), false);
+  assert.equal(arrivedBy(HELD, undefined, amount), false);
+  // The withdrawal then lands: the outcome is "arrived", read from the reading that shows it.
+  const landed = withdrawOutcome({ before: HELD, amount, reads: [bought, bought, both] });
+  assert.equal(landed.ok, true);
+  assert.equal(landed.after, both);
+  // The withdrawal was dropped and only the purchase moved the balance: after the whole wait the page says the
+  // balance fell by less than was asked, which is what happened, and does not say "arrived".
+  const dropped = withdrawOutcome({ before: HELD, amount, reads: [bought, bought, bought] });
+  assert.equal(dropped.ok, false);
+  assert.equal(dropped.after, bought);
+  assert.match(dropped.text, /fell by 71\.00 USDC, not the 500\.00 asked for: it holds 700\.556173 now/);
+  assert.doesNotMatch(dropped.text, /Arrived/);
+  // The loop on the page ends on that same test and on no smaller fall.
+  const pool = text("../views/pool.js");
+  assert.match(pool, /reads\.push\(now\);[\s\S]{0,260}if \(arrivedBy\(before, now, amount\)\) break;/);
+  assert.doesNotMatch(pool, /now < before\) break/);
+});
+
 test("the investor's panel shows the balance, refuses above it, and reports from the balance afterwards", () => {
   const pool = text("../views/pool.js");
   // The exact balance stands by the field, with a button that fills it in.
@@ -111,7 +144,7 @@ test("the investor's panel shows the balance, refuses above it, and reports from
   // After the transaction it waits for the balance to fall. A reading that fails is kept as a failed reading, not
   // thrown: the transaction is in a block by then, and a bare error would read as if nothing had been sent.
   assert.match(pool, /for \(let waited = 0; waited < WITHDRAW_WAIT_MS; waited \+= WITHDRAW_POLL_MS\)/);
-  assert.match(pool, /const now = await readPoolSpot\(address\)\.catch\(\(\) => null\);\s+reads\.push\(now\);\s+if \(now !== null && now < before\) break;/);
+  assert.match(pool, /const now = await readPoolSpot\(address\)\.catch\(\(\) => null\);\s+reads\.push\(now\);/);
   // What it says comes from all the readings together, and the balance on the page only from a reading that came back.
   assert.match(pool, /const outcome = withdrawOutcome\(\{ before, amount, reads \}\);\s+if \(outcome\.after !== undefined\) \$\("#wd-balance", page\)\.textContent = usd\(outcome\.after, 8\);\s+if \(!outcome\.ok\) throw new Error\(outcome\.text\);\s+return outcome\.text;/);
   assert.doesNotMatch(pool, /Sent to your HyperCore account/);
