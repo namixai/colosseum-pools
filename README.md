@@ -201,10 +201,11 @@ spike/.venv/bin/python -m agents.client --deployment rehearsal account 0x...
 spike/.venv/bin/python -m agents.client --deployment rehearsal --dry-run order 0x... BTC buy 0.0005 76000
 ```
 
-In the demo the AI trader is a Claude Code window that works only through that command line,
-with the prompt in [agents/WINDOW-TRADER.md](agents/WINDOW-TRADER.md). The limits are in the
-client (orders per day and their size, counted in `agents/state/`), the gateway and the
-contracts, not in the prompt. `agents/ai_trader.py` gives the same desk to Claude over
+On the second deployment the trader is a separate AI agent of the team, working through the same
+command line; [docs/EVIDENCE.md](docs/EVIDENCE.md) says what it did.
+[agents/WINDOW-TRADER.md](agents/WINDOW-TRADER.md) holds the prompt written for a trading window
+that works only through that command line. The limits are in the client (orders per day and their
+size, counted in `agents/state/`), the gateway and the contracts, not in the prompt. `agents/ai_trader.py` gives the same desk to Claude over
 the API (`--dry-run` prints the request and calls nothing). The video doesn't use it, and as of
 17 September no session has run it against the API.
 
