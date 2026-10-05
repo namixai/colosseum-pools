@@ -106,7 +106,10 @@ compared with the site, byte for byte, apart from the one script Cloudflare adds
   with a caller check are `forfeit` (the trader alone) and `stopFunded` (the investor or the
   funded trader), and the keeper makes neither. `graduate` is open to anyone as well, and the
   keeper still leaves it alone on purpose — passing the moment the target is touched cuts the
-  trader's run short, so the timing is theirs. The keeper's own header says so. So a second keeper has exactly
+  trader's run short, so the timing is theirs. The keeper's own header says so. Open to anyone
+  also means a stranger can make that call: an account that is flat and at its target can be
+  passed at a moment its trader did not choose. No money is lost by it, and the funded stage goes
+  to the trader on record, not to the caller. So a second keeper has exactly
   the powers of the first, and needs no permission from it or from us.
 
   What it needs is its own wallet and its own state file:

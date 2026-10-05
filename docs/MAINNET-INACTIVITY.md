@@ -92,7 +92,7 @@ clock at all.
 that did nothing has none, so in the ordinary case nothing is owed and the question looks academic.
 It is not: a stage can go idle while **up**, and then the rule decides who keeps the gain.
 
-🔴 **This is the decision, and it is Alex's, not a technical one.** Two shapes:
+**This was the decision, and it was Alex's, not a technical one.** Two shapes:
 
 1. **A clean end that pays.** Reason recorded as `None`, so `fundedPayoutOwed` pays the trader their
    80% of what the stage actually earned (`Pool.sol:408-410` as it stands today), and the rest goes
@@ -102,7 +102,9 @@ It is not: a stage can go idle while **up**, and then the rule decides who keeps
 2. **An ending that voids the share.** A new reason, so the payout does not fire and the whole
    balance returns to the pool.
 
-**Recommended: the first.** Beyond fairness, the second creates an incentive we should not want: if
+**Decided on 5 October 2026: the first.** A funded stage that ends for inactivity pays the trader
+their share of what it had already earned, and with no gain there is nothing to pay. It was also
+what this page recommended. Beyond fairness, the second creates an incentive we should not want: if
 going quiet voids the payout, the platform and the investor are better off when a *winning* trader
 goes quiet, and nobody is obliged to remind them. A rule that pays what was earned has no such
 pull. It also keeps `fundedEndReason` meaning what it means today — a rule was broken — rather than
@@ -111,7 +113,7 @@ spends a section defending.
 
 ## What must be decided before any code
 
-1. Pays or voids (above). Recommendation: pays.
+1. Pays or voids (above). Decided on 5 October 2026: pays. The three below are still open.
 2. What counts as "the equity moved". It is the test doing the real work against the snapshot blind
    spot, and right now it is exact equality — which a single wei of funding drift would break in the
    trader's favour, and which says nothing about how far a day of round trips moves equity at

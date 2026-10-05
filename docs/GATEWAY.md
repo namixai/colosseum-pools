@@ -273,7 +273,10 @@ the stop nearer when the line says so. The stop is what holds the pool's rule, a
 floor or a payment out of the account has to reach it. Over time the difference between two
 requests costs the trader room. A single placement can stand that difference too far, until a
 later sweep: with the market's answer 2.5 behind, a stop placed for 0.037 ETH stood 2.5 beyond the
-rule's line, 0.09 USDC, and the take placed with it 2.5 short of its own, where it stays. Fifth, a
+rule's line, 0.09 USDC, and the take placed with it 2.5 short of its own, where it stays. A stop
+moved to a new line can stand too far the same way: brought in for the next day's floor with the
+market's answer 2.5 behind, it went to 2680.1 where the line was 2682.6, and the next sweep put it
+on 2682.6. Fifth, a
 stop that had already come
 nearer for that difference before this change stays where it is until its position closes: the
 gateway cannot tell it from a stop the trader tightened, and it does not move a stop away.
