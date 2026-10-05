@@ -13,7 +13,7 @@ import { outcomesHtml } from "../lib/outcomes.js";
 import { poolKind, holdsCode, KIND_NOTE } from "../lib/listing.js";
 import { agentTradability, agentNote } from "../lib/agentcap.js";
 import { isArchive, ARCHIVE } from "../lib/deployments.js";
-import { usdcTotal1e8, allOf, withdrawPlan, withdrawVerdict, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS } from "../lib/withdraw.js";
+import { usdcTotal1e8, allOf, withdrawPlan, withdrawOutcome, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS } from "../lib/withdraw.js";
 import { usd } from "../lib/shared.js";
 
 export async function poolView(address, page) {
@@ -213,16 +213,20 @@ export async function poolView(address, page) {
     $("#wd-balance", page).textContent = usd(before, 8);
     const amount = withdrawPlan($("#wd", page).value, before);
     await chain.write("pool", address, "withdrawOnCore", [amount]);
-    // The transaction only asks. What HyperCore did is in the pool's balance, a few seconds later.
-    let after = before;
-    for (let waited = 0; waited < WITHDRAW_WAIT_MS && after >= before; waited += WITHDRAW_POLL_MS) {
+    // The transaction only asks. What HyperCore did is in the pool's balance, a few seconds later. From here on
+    // the transaction is in a block: a reading that fails must not come out as a bare error, as if nothing had
+    // been sent, so it is kept as a failed reading and the outcome is decided from all of them (lib/withdraw.js).
+    const reads = [];
+    for (let waited = 0; waited < WITHDRAW_WAIT_MS; waited += WITHDRAW_POLL_MS) {
       await new Promise((resolve) => setTimeout(resolve, WITHDRAW_POLL_MS));
-      after = await readPoolSpot(address);
+      const now = await readPoolSpot(address).catch(() => null);
+      reads.push(now);
+      if (now !== null && now < before) break;
     }
-    $("#wd-balance", page).textContent = usd(after, 8);
-    const verdict = withdrawVerdict({ before, after, amount });
-    if (!verdict.ok) throw new Error(verdict.text);
-    return verdict.text;
+    const outcome = withdrawOutcome({ before, amount, reads });
+    if (outcome.after !== undefined) $("#wd-balance", page).textContent = usd(outcome.after, 8);
+    if (!outcome.ok) throw new Error(outcome.text);
+    return outcome.text;
   });
 }
 

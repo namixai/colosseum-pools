@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  usdcTotal1e8, allOf, withdrawPlan, withdrawVerdict, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS,
+  usdcTotal1e8, allOf, withdrawPlan, withdrawVerdict, withdrawOutcome, UNREAD, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS,
 } from "../lib/withdraw.js";
 
 const text = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -68,6 +68,38 @@ test("arrived is said only from the balance read back, never from the transactio
   for (const v of [arrived, dropped, part]) assert.ok(v.text.length <= 300, v.text);
 });
 
+test("a reading that fails after the transaction is said as unread, never as nothing sent and never as not moved", () => {
+  const amount = 77_155_000_000n;
+  const left = 617_300n;
+  // Every reading failed: the transaction is in a block and the page knows nothing more.
+  const blind = withdrawOutcome({ before: HELD, amount, reads: [null, null, null] });
+  assert.deepEqual(blind, { ok: false, unread: true, text: UNREAD });
+  assert.match(UNREAD, /^The withdrawal's transaction is in a block, but the pool's balance could not be read afterwards/);
+  assert.match(UNREAD, /Don't ask again yet/);
+  assert.doesNotMatch(UNREAD, /has not moved|Arrived|Sent/);
+  assert.ok(UNREAD.length <= 300, String(UNREAD.length));
+  assert.equal(blind.after, undefined);
+  // No reading at all is the same.
+  assert.equal(withdrawOutcome({ before: HELD, amount, reads: [] }).unread, true);
+  // An earlier "not moved" followed by a failed reading is not news: the last word has to be a fresh one.
+  const stale = withdrawOutcome({ before: HELD, amount, reads: [HELD, HELD, null] });
+  assert.equal(stale.unread, true);
+  assert.equal(stale.text, UNREAD);
+  // A reading that shows the money gone settles it, whatever failed before or after.
+  for (const reads of [[left], [null, left], [HELD, null, left], [left, null]]) {
+    const done = withdrawOutcome({ before: HELD, amount, reads });
+    assert.equal(done.ok, true, JSON.stringify(reads, (k, v) => (typeof v === "bigint" ? String(v) : v)));
+    assert.equal(done.after, left);
+    assert.match(done.text, /^Arrived: the pool's HyperCore balance went from 771\.556173 to 0\.006173 USDC\./);
+  }
+  // Fresh readings to the end and no change: that, and only that, is "not moved".
+  const dropped = withdrawOutcome({ before: HELD, amount: 77_156_000_000n, reads: [null, HELD, HELD] });
+  assert.equal(dropped.ok, false);
+  assert.equal(dropped.unread, undefined);
+  assert.equal(dropped.after, HELD);
+  assert.match(dropped.text, /HyperCore has not moved the money: the pool still holds 771\.556173 USDC/);
+});
+
 test("the investor's panel shows the balance, refuses above it, and reports from the balance afterwards", () => {
   const pool = text("../views/pool.js");
   // The exact balance stands by the field, with a button that fills it in.
@@ -76,9 +108,12 @@ test("the investor's panel shows the balance, refuses above it, and reports from
   assert.match(pool, /\$\("#wd", page\)\.value = allOf\(now\);/);
   // The click reads the balance again, checks the amount against it, and only then asks the wallet.
   assert.match(pool, /const before = await readPoolSpot\(address\);\s+\$\("#wd-balance", page\)\.textContent = usd\(before, 8\);\s+const amount = withdrawPlan\(\$\("#wd", page\)\.value, before\);\s+await chain\.write\("pool", address, "withdrawOnCore", \[amount\]\);/);
-  // After the transaction it waits for the balance to fall, and what it says comes from the verdict alone.
-  assert.match(pool, /for \(let waited = 0; waited < WITHDRAW_WAIT_MS && after >= before; waited \+= WITHDRAW_POLL_MS\)/);
-  assert.match(pool, /const verdict = withdrawVerdict\(\{ before, after, amount \}\);\s+if \(!verdict\.ok\) throw new Error\(verdict\.text\);\s+return verdict\.text;/);
+  // After the transaction it waits for the balance to fall. A reading that fails is kept as a failed reading, not
+  // thrown: the transaction is in a block by then, and a bare error would read as if nothing had been sent.
+  assert.match(pool, /for \(let waited = 0; waited < WITHDRAW_WAIT_MS; waited \+= WITHDRAW_POLL_MS\)/);
+  assert.match(pool, /const now = await readPoolSpot\(address\)\.catch\(\(\) => null\);\s+reads\.push\(now\);\s+if \(now !== null && now < before\) break;/);
+  // What it says comes from all the readings together, and the balance on the page only from a reading that came back.
+  assert.match(pool, /const outcome = withdrawOutcome\(\{ before, amount, reads \}\);\s+if \(outcome\.after !== undefined\) \$\("#wd-balance", page\)\.textContent = usd\(outcome\.after, 8\);\s+if \(!outcome\.ok\) throw new Error\(outcome\.text\);\s+return outcome\.text;/);
   assert.doesNotMatch(pool, /Sent to your HyperCore account/);
   assert.match(pool, /return usdcTotal1e8\(await hl\.spot\(address\)\);/);
   // Long enough for HyperCore, short enough to answer while the investor is still there.

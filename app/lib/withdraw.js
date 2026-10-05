@@ -60,3 +60,24 @@ export function withdrawVerdict({ before, after, amount }) {
   return { ok: false, text: `The pool's HyperCore balance fell by ${usd(fell, 8)} USDC, not the ${usd(amount, 8)} `
     + `asked for: it holds ${usd(a, 8)} now. Reload to see where it settles.` };
 }
+
+/** Said when the transaction is in a block and no reading of the balance came back after it. */
+export const UNREAD = "The withdrawal's transaction is in a block, but the pool's balance could not be read "
+  + "afterwards, so the page cannot say whether the money moved. Don't ask again yet: reload, look at the balance, "
+  + "and only then decide.";
+
+/**
+ * The outcome from every reading made after the transaction, in order; `null` is a reading that failed.
+ * A reading that shows the balance down by the amount settles it. Otherwise only the LAST reading may speak, and
+ * only if it came back: an older "not moved" is not news, and a failed reading is not "not moved". With nothing
+ * fresh to go on the answer is UNREAD, which names the one thing the investor must not do -- ask again blind,
+ * for a transaction that may still be carried out.
+ */
+export function withdrawOutcome({ before, amount, reads }) {
+  const b = BigInt(before);
+  const arrived = reads.find((r) => r !== null && b > BigInt(r) && b - BigInt(r) >= BigInt(amount));
+  if (arrived !== undefined) return { ...withdrawVerdict({ before, after: arrived, amount }), after: arrived };
+  const last = reads.length ? reads[reads.length - 1] : null;
+  if (last === null) return { ok: false, unread: true, text: UNREAD };
+  return { ...withdrawVerdict({ before, after: last, amount }), after: last };
+}
