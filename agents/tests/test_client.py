@@ -202,6 +202,47 @@ class HealthUrlAndTheCapItCarries(unittest.TestCase):
                 self.assertEqual(self.ask(**kw), 400.0)
 
 
+class EveryStopIsOneJsonObject(unittest.TestCase):
+    """`agents/WINDOW-TRADER.md` tells the trading window that each command prints one JSON object.
+    A check that stops before anything runs, and an error nobody foresaw, used to print a sentence
+    or a traceback instead."""
+
+    def said(self, **patches):
+        import contextlib
+        import io
+        import json
+
+        from spike.hlspike import common
+
+        out = io.StringIO()
+        with mock.patch.object(common, "assert_testnet", patches.get("testnet", lambda: None)), \
+                mock.patch.object(client, "run", patches.get("run", lambda *a: {"state": "Active"})), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = client.main(["--deployment", "demo2", "account", "0x" + "11" * 20])
+        return code, json.loads(out.getvalue())
+
+    def test_a_command_that_ran(self):
+        self.assertEqual(self.said(), (0, {"ok": True, "result": {"state": "Active"}}))
+
+    def test_a_check_that_stops_before_anything_runs(self):
+        def wrong_chain():
+            raise SystemExit("refusing to run: RPC chain id is 999, expected 998")
+        self.assertEqual(self.said(testnet=wrong_chain),
+                         (1, {"ok": False, "error": "refusing to run: RPC chain id is 999, expected 998"}))
+
+    def test_a_refusal_keeps_its_own_word(self):
+        from agents.desk import Refused
+
+        def refuses(*a):
+            raise Refused("no orders left in this session")
+        self.assertEqual(self.said(run=refuses), (2, {"ok": False, "refused": "no orders left in this session"}))
+
+    def test_an_error_nobody_foresaw(self):
+        def breaks(*a):
+            raise KeyError("marginSummary")
+        self.assertEqual(self.said(run=breaks), (1, {"ok": False, "error": "KeyError: 'marginSummary'"}))
+
+
 class NumbersMatchTheApp(unittest.TestCase):
     def cases(self, fn: str) -> list[tuple[float, int, str]]:
         found = re.findall(rf'assert\.equal\({fn}\(([\d.]+), (\d)\), "([\d.]+)"\)', APP_TESTS)
