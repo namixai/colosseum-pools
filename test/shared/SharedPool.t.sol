@@ -836,6 +836,34 @@ contract SharedPoolTest is Test {
         assertEq(_spot(bob), 35.4e8, "36 less 0.6");
     }
 
+    /// A pool whose platform takes no share of anyone's profit: `feeBps` 0, as the pool deployed on
+    /// 5 October 2026 has it. The same two holders as above -- Alice in at 1, Bob at 1.5, both out at
+    /// 1.8 -- and each leaves with the whole 36. Every other pool in this file is built with 1000, so
+    /// until this test a contract that took a tenth whatever it was told would have passed them all.
+    function test_fee_ofZero_leavesEachHolderTheirWholeProfit() public {
+        sp = new SharedPool(factory, operator, platform, MIN, LOCK, 0);
+        assertEq(sp.feeBps(), 0);
+        CoreSimulatorLib.forceAccountActivation(alice);
+        CoreSimulatorLib.forceAccountActivation(bob);
+        _funded(MIN); // value 30, 30 shares
+        CoreSimulatorLib.forceSpotBalance(address(sp), 0, 45e8); // 1.5
+        address t = _ticket(bob, 30e8);
+        sp.settle(_list(t));
+        assertEq(sp.sharesOf(bob), 20e8);
+        CoreSimulatorLib.nextBlock();
+        CoreSimulatorLib.forceSpotBalance(address(sp), 0, 90e8); // 1.8 on 50 shares
+        vm.warp(block.timestamp + LOCK);
+        _request(alice, 20e8);
+        _request(bob, 20e8);
+
+        sp.settle(new address[](0));
+        assertEq(sp.sharesOf(platform), SEED, "the platform's shares are its seed and nothing more");
+        assertEq(sp.totalShares(), SEED, "every share the two held was burned, none kept back");
+        CoreSimulatorLib.nextBlock();
+        assertEq(_spot(alice), 36e8, "20 shares at 1.8, whole");
+        assertEq(_spot(bob), 36e8, "20 shares at 1.8, whole");
+    }
+
     /// Alice and Bob ask for everything while most of the capital is in a seat: both get the same share
     /// of what is free, the earned price on HyperEVM first, and both wait for the rest.
     function test_settle_paysEveryRequestTheSameFraction_whenMoneyIsShort() public {
