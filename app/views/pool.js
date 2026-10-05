@@ -13,6 +13,11 @@ import { outcomesHtml } from "../lib/outcomes.js";
 import { poolKind, holdsCode, KIND_NOTE } from "../lib/listing.js";
 import { agentTradability, agentNote } from "../lib/agentcap.js";
 import { isArchive, ARCHIVE } from "../lib/deployments.js";
+import {
+  usdcTotal1e8, allOf, withdrawPlan, withdrawOutcome, transferOf, hashesOf, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS,
+  CLOCK_SKEW_MS,
+} from "../lib/withdraw.js";
+import { usd } from "../lib/shared.js";
 
 export async function poolView(address, page) {
   const pool = chain.contract("pool", address);
@@ -174,6 +179,9 @@ export async function poolView(address, page) {
     return;
   }
   const advice = topUpAdvice({ short: shortOnCore, earned: Number(earned) / 1e6 });
+  // A reading that fails costs the two buttons that need it, not the page: everything else here still works.
+  const poolSpot = await readPoolSpot(address).catch(() => null);
+  const off = poolSpot === null ? " disabled" : "";
   inv.innerHTML = `<h3>Investor</h3>
     ${archived ? "" : `    <p>Capital goes to the pool on HyperCore: a spot transfer of USDC from your HyperCore account to
       <span class="mono">${esc(address)}</span>. The button below asks your wallet to sign that transfer;
@@ -190,18 +198,69 @@ export async function poolView(address, page) {
         ? `Withdraw the ${esc(advice.fromEarned.toFixed(2))} USDC above, then send it to the pool with the field at the top of this card.`
         : "There is no income held here to cover it."}${advice.stillNeeded > 0
         ? ` That still leaves ${esc(advice.stillNeeded.toFixed(2))} USDC to come from you.` : ""}</p>` : ""}
-    <div class="inline"><input id="wd" type="number" step="0.01" min="0" placeholder="USDC"><button id="wd-btn" class="secondary">Withdraw on HyperCore</button></div>`;
+    ${poolSpot === null
+      ? `<p class="notice">The pool's balance on HyperCore could not be read just now, so withdrawing on HyperCore is
+      off until it can be: an amount above the balance would be dropped without a word. Reload in a moment.</p>`
+      : `<p class="small muted">The pool holds <span id="wd-balance">${esc(usd(poolSpot, 8))}</span> USDC on HyperCore.
+      HyperCore drops a transfer above the balance without a word, so the page refuses one before your wallet is
+      asked.</p>`}
+    <div class="inline"><input id="wd" type="number" step="any" min="0" placeholder="USDC"${off}><button id="wd-all" class="secondary" type="button"${off}>All</button><button id="wd-btn" class="secondary"${off}>Withdraw on HyperCore</button></div>`;
   // An archived pool keeps only the two ways out: what it earned, and what it holds on HyperCore.
   if (!archived) wireFunding(page, address);
   wire($("#earned", page), async () => {
     await chain.write("pool", address, "withdrawEarned");
     return "Withdrawn.";
   });
-  wire($("#wd-btn", page), async () => {
-    const amount = chain.toUnits($("#wd", page).value, 8);
-    await chain.write("pool", address, "withdrawOnCore", [amount]);
-    return "Sent to your HyperCore account.";
+  if (poolSpot === null) return;
+  const showBalance = (now) => { $("#wd-balance", page).textContent = usd(now, 8); };
+  // Through wire like every other button here: a reading that fails is said next to the button, not lost.
+  wire($("#wd-all", page), async () => {
+    const now = await readPoolSpot(address);
+    showBalance(now);
+    $("#wd", page).value = allOf(now);
+    return `Filled in: ${allOf(now)} USDC, all the pool holds.`;
   });
+  wire($("#wd-btn", page), async () => {
+    // Read again at the click: the balance on the page may be minutes old. The ledger is read too, before anything
+    // is sent, so that what is already in it cannot be taken for this withdrawal afterwards. If either reading
+    // fails, nothing has been sent and the error says so by being the only thing that happened.
+    const since = Date.now();
+    const [before, known] = await Promise.all([
+      readPoolSpot(address), hl.ledger(address, since - LEDGER_LOOKBACK_MS).then(hashesOf),
+    ]);
+    showBalance(before);
+    const amount = withdrawPlan($("#wd", page).value, before);
+    await chain.write("pool", address, "withdrawOnCore", [amount]);
+    // The transaction only asks. Whether HyperCore carried it out is in its ledger for the pool's account. From
+    // here on the transaction is in a block: a reading that fails must not come out as a bare error, as if nothing
+    // had been sent, so each is kept as a failed reading and the outcome is decided from all of them.
+    const who = { pool: address, owner, amount, known, since };
+    const ledgers = [];
+    const reads = [];
+    for (let waited = 0; waited < WITHDRAW_WAIT_MS; waited += WITHDRAW_POLL_MS) {
+      await new Promise((resolve) => setTimeout(resolve, WITHDRAW_POLL_MS));
+      const [ledger, now] = await Promise.all([
+        hl.ledger(address, since - CLOCK_SKEW_MS).catch(() => null), readPoolSpot(address).catch(() => null),
+      ]);
+      ledgers.push(ledger);
+      reads.push(now);
+      // Only the transfer itself ends the waiting. A fall in the balance does not: a challenge bought meanwhile
+      // takes its capital from the same balance.
+      if (ledger !== null && transferOf(ledger, who)) break;
+    }
+    const outcome = withdrawOutcome({ before, ...who, ledgers, reads });
+    if (outcome.after !== undefined) showBalance(outcome.after);
+    if (!outcome.ok) throw new Error(outcome.text);
+    return outcome.text;
+  });
+}
+
+/** How far back the ledger is read before a withdrawal, to know what was already there. */
+const LEDGER_LOOKBACK_MS = 10 * 60_000;
+
+/** The pool's spot USDC on HyperCore, exactly, in 1e8 units. */
+async function readPoolSpot(address) {
+  return usdcTotal1e8(await hl.spot(address));
 }
 
 /** The investor's two ways in -- capital on HyperCore and preparing the account -- for a pool that sells challenges. */
