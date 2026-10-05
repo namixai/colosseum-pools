@@ -108,8 +108,10 @@ compared with the site, byte for byte, apart from the one script Cloudflare adds
   keeper still leaves it alone on purpose — passing the moment the target is touched cuts the
   trader's run short, so the timing is theirs. The keeper's own header says so. Open to anyone
   also means a stranger can make that call: an account that is flat and at its target can be
-  passed at a moment its trader did not choose. No money is lost by it, and the funded stage goes
-  to the trader on record, not to the caller. So a second keeper has exactly
+  passed at a moment its trader did not choose. The call ends the challenge at the equity it has
+  then: the trader's share of its profit is counted from that equity, and nothing more can be
+  added to it. Nothing already earned is lost, and the funded stage goes to the trader on record,
+  not to the caller. So a second keeper has exactly
   the powers of the first, and needs no permission from it or from us.
 
   What it needs is its own wallet and its own state file:
