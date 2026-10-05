@@ -624,6 +624,9 @@ class Exchange:
         self.market_reads = 0
         self.rest_trader_orders = False  # a trader's order joins the book when it is submitted
         self.during_trader_submit = None  # runs while a trader's order is on its way
+        # Runs once, after the positions are answered and before the orders are: on Hyperliquid they
+        # are two requests, and what happens between them is in one answer and not in the other.
+        self.between_the_two_requests = None
         # asset -> the mark the account's own answer values its position at. Hyperliquid gives a
         # position's value in the same answer as the equity; `markets()` is another request.
         self.valued_at: dict[int, Decimal] = {}
@@ -638,6 +641,9 @@ class Exchange:
         state = {"marginSummary": {"accountValue": str(self.equity)},
                  "assetPositions": [{"position": {"coin": coin[a], "szi": str(q), **self._value(a, q)}}
                                     for a, q in self.positions.items()]}
+        if self.between_the_two_requests is not None:
+            between, self.between_the_two_requests = self.between_the_two_requests, None
+            between()
         return parse_book(state, self.orders, markets)
 
     def _value(self, asset, size):
@@ -954,7 +960,10 @@ class Sweep(FlowBase):
         self.send()
         self.x.orders.clear()
         self.gw.protector.sweep()
+        self.assertIn(ACCOUNT, self.gw.protector.watching())  # one such answer is not believed
+        self.gw.protector.sweep()
         self.assertNotIn(ACCOUNT, self.gw.protector.watching())
+        self.assertEqual(self.gw.protector._flat, set())  # and nothing is kept about it
 
     def test_a_new_days_snapshot_is_read_and_tightens_the_stop(self):
         self.send()  # stop at 54000: 30 to lose from 1000
@@ -1155,6 +1164,53 @@ class OneAnswerOneInstant(FlowBase):
         self.at(market="2702.5", account="2700")
         status, _ = self.send("take", asset=ETH, triggerPx="2701", nonce=NOW + 3)
         self.assertEqual(status, 200)
+
+
+class OneFlatAnswerIsNotBelieved(FlowBase):
+    """An account's positions and its open orders are two requests to Hyperliquid. An order that
+    fills between them is in neither answer: not yet a position in the first, no longer an order in
+    the second. The account then reads as if it had nothing open, and the sweep let it go on that:
+    a position with its stop and take on the book, and nothing keeping them up until the trader's
+    next order. An account is let go at the second such answer in a row."""
+
+    def setUp(self):
+        super().setUp()
+        self.x.rest_trader_orders = True
+        self.assertEqual(self.send()[0], 200)  # a limit order resting, its stop and take placed first
+
+    def fill(self):
+        self.x.orders = [o for o in self.x.orders if o["isTrigger"]]
+        self.x.positions[BTC] = Decimal("0.005")
+
+    def test_an_order_that_fills_between_the_two_requests_does_not_lose_the_account(self):
+        self.x.between_the_two_requests = self.fill
+        self.gw.protector.sweep()  # no position in the first answer, no order in the second
+        self.assertIn(ACCOUNT, self.gw.protector.watching())
+        # A new day's snapshot still tightens its stop, which is what being swept is for: the day's
+        # floor is 989.4 with equity at 1000, and the stop goes from 54000 to meet it.
+        self.now = (DAY + 1) * 86400 + 120
+        self.reader.limits = funded(day_start=1020, day=DAY + 1)
+        self.gw.protector.sweep()
+        self.assertEqual([o["triggerPx"] for o in self.x.orders if o["orderType"] == "Stop Market"], ["57880"])
+
+    def test_two_such_answers_with_a_position_seen_between_them_do_not_let_it_go(self):
+        self.x.between_the_two_requests = self.fill
+        self.gw.protector.sweep()  # looked flat
+        self.gw.protector.sweep()  # the position is there
+        self.x.positions.clear()   # it closes, and its stop and take go with it
+        self.x.orders.clear()
+        self.gw.protector.sweep()  # nothing open: the first such answer since
+        self.assertIn(ACCOUNT, self.gw.protector.watching())
+        self.gw.protector.sweep()
+        self.assertNotIn(ACCOUNT, self.gw.protector.watching())
+
+    def test_a_new_order_is_given_two_answers_of_its_own(self):
+        self.x.orders.clear()      # the first order was cancelled: nothing open
+        self.gw.protector.sweep()  # ...seen once
+        self.assertEqual(self.send(nonce=NOW + 1)[0], 200)  # the trader orders again, and it rests
+        self.x.between_the_two_requests = self.fill
+        self.gw.protector.sweep()  # and fills between the two requests
+        self.assertIn(ACCOUNT, self.gw.protector.watching())
 
 
 class AfterARestart(FlowBase):
@@ -1362,6 +1418,9 @@ class FollowingTheLine(FlowBase):
         # The position closes: Hyperliquid takes the stop and the take away with it.
         self.x.positions.clear()
         self.x.orders.clear()
+        self.gw.protector.sweep()
+        # One answer with nothing open may be an order filling between two requests: still theirs.
+        self.assertEqual(self.gw.protector._takes_of(ACCOUNT), {(BTC, LONG): frozenset({Decimal("70000")})})
         self.gw.protector.sweep()
         self.assertEqual(self.gw.protector._takes_of(ACCOUNT), {})
 

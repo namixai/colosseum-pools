@@ -482,6 +482,9 @@ class Protector:
         self.clock = clock
         self._limits: dict[tuple[str, str], tuple[RuleLimits, float]] = {}
         self._watch: dict[str, str] = {}  # account -> key, for the sweep
+        # Accounts whose last answer showed nothing open. One such answer is not believed: the sweep
+        # says why.
+        self._flat: set[str] = set()
         # (account, asset, direction) -> the take triggers the trader asked for and Hyperliquid did
         # not refuse. By direction, because an order the other way gets a take of its own, and placing
         # that one says nothing about this one. In memory only: after a restart every take is the
@@ -663,6 +666,7 @@ class Protector:
     def watch(self, account: str, key: str) -> None:
         with self._guard:
             self._watch[account] = key
+            self._flat.discard(account)  # an order is on its way: what was seen before it is old
 
     def take_on(self, keys: list[str]) -> list[str]:
         """Watches every account one of these keys trades right now, and says which.
@@ -675,7 +679,7 @@ class Protector:
 
         A key whose read fails is kept and tried again by every sweep until the node answers:
         dropped, its account would stay unwatched until the next order or the next restart, which
-        is the gap this closes. An account taken on with nothing open costs one read: the first
+        is the gap this closes. An account taken on with nothing open costs two reads: the second
         sweep lets it go.
         """
         taken, failed = [], []
@@ -702,6 +706,15 @@ class Protector:
     def _unwatch(self, account: str) -> None:
         with self._guard:
             self._watch.pop(account, None)
+
+    def _flat_again(self, account: str) -> bool:
+        """Whether the answer before this one showed the account with nothing open as well."""
+        with self._guard:
+            if account in self._flat:
+                self._flat.discard(account)
+                return True
+            self._flat.add(account)
+            return False
 
     def sweep(self) -> None:
         """One pass over the accounts the gateway has traded: a position that opened from an
@@ -739,9 +752,18 @@ class Protector:
                     markets = as_the_book_saw(market, book)
                     exp = exposure(book)
                     if not exp:
-                        self._unwatch(account)
-                        self._forget_takes(account)
+                        # Nothing open, by this answer. The positions and the orders are two
+                        # requests, and an order that fills between them is in neither: not yet a
+                        # position in the first, no longer an order in the second. Let go on that,
+                        # the account would hold a position that nothing sweeps, and a take its
+                        # trader moved would stop being theirs. So one such answer is not believed,
+                        # and the account goes at the second in a row.
+                        if self._flat_again(account):
+                            self._unwatch(account)
+                            self._forget_takes(account)
                         continue
+                    with self._guard:
+                        self._flat.discard(account)
                     limits = self.limits(account, key)
                     want = lines(limits, book.equity, exp, markets)
                     plan = reconcile(book, want, markets, self._follows(book, exp), self._takes_of(account),

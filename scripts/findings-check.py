@@ -26,7 +26,7 @@ TEST_DIRS = ["test", "ops/tests", "gateway/tests"]
 # rather than a shrug.
 REASON_WORDS = ("no test", "no behaviour test", "no contract test")
 # The findings the table has carried. It may grow; it may not shrink without somebody saying so.
-MIN_FINDINGS = 18
+MIN_FINDINGS = 19
 
 
 def test_names() -> set[str]:

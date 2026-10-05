@@ -342,18 +342,24 @@ a second order would be protected as if the first weren't coming, and a sweep wo
 guards nothing yet out to the line of a book without the order. The nonce check comes before the
 wait, so a replayed copy is refused at once.
 
-**The sweep.** Every `GATEWAY_PROTECT_EVERY` seconds (default 15) the gateway goes over the
-accounts it has traded since it started and puts back what is missing: a position that opened
-from an order that rested, a position opened again after its stop fired while another order
-still rested (Hyperliquid had removed the stop with the position), or a line a new day's snapshot
-has moved. A stop that guards a position is only ever moved nearer the mark; one that guards
-nothing yet follows the line. The sweep reads Hyperliquid; it reads the chain only when there is
-something to send, to check the key still trades the account, and for the day's snapshot. The
-list of accounts lives in memory: after a restart an account is swept again from its next
-request, and the stops already on the exchange stay where they are. A sweep costs Hyperliquid's
-info API 20 of weight for the marks (`metaAndAssetCtxs`) and 22 for each account it watches
-(`clearinghouseState` 2, `frontendOpenOrders` 20). An account the gateway has nothing open for drops
-out of the list, and with the list empty a sweep reads nothing.
+**The sweep.** Every `GATEWAY_PROTECT_EVERY` seconds (default 15) the gateway goes over the accounts
+it watches — those it took on when it started and those it has traded since — and puts back what is
+missing: a position that opened from an order that rested, a position opened again after its stop
+fired while another order still rested (Hyperliquid had removed the stop with the position), or a
+line a new day's snapshot has moved. A stop that guards a position is only ever moved nearer the
+mark; one that guards nothing yet follows the line. The sweep reads Hyperliquid; it reads the chain
+only when there is something to send, to check the key still trades the account, and for the day's
+snapshot. The list of accounts lives in memory: a gateway that has just started fills it from the
+keys it holds, as "After a restart" above says, and the stops already on the exchange stay where
+they are. A sweep costs Hyperliquid's info API 20 of weight for the marks (`metaAndAssetCtxs`) and
+22 for each account it watches (`clearinghouseState` 2, `frontendOpenOrders` 20). An account with
+nothing open drops out of the list at the second sweep in a row that finds it so, and with the list
+empty a sweep reads nothing. One such answer is not enough: the positions and the orders are two
+requests, and an order that fills between them is in neither — not yet a position in the first, no
+longer an order in the second. Let go on that, the account would hold a position nothing sweeps
+until its trader's next order. Two such answers in a row can still both be wrong: an order filling
+between the requests of one sweep, then that position closing and another order filling between the
+requests of the next.
 
 **The host's minute.** Hyperliquid allows an IP 1,200 of weight a minute, and the gateway and the
 keeper on one host draw on the same 1,200. Three things spend it:

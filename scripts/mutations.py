@@ -2661,6 +2661,34 @@ MUTATIONS = [
      "            if value > 0:\n                book.marks",
      "            if True:\n                book.marks",
      ["test_the_accounts_answer_carries_the_mark_its_equity_was_counted_at"]),
+    # An account's positions and its orders are two requests, and an order that fills between them
+    # is in neither: the account reads as flat with a position open. One such answer is not
+    # believed. Each piece of that, taken out.
+    ("PG88", "gateway/protect.py",
+     "                        if self._flat_again(account):\n",
+     "                        if True:\n",
+     ["test_an_order_that_fills_between_the_two_requests_does_not_lose_the_account",
+      "test_an_account_with_nothing_open_is_let_go"]),
+    # ...in a row: an answer with something open between two flat ones starts the count again.
+    ("PG89", "gateway/protect.py",
+     "                    with self._guard:\n                        self._flat.discard(account)\n",
+     "",
+     ["test_two_such_answers_with_a_position_seen_between_them_do_not_let_it_go"]),
+    # A new order is given two answers of its own, whatever was seen before it.
+    ("PG90", "gateway/protect.py",
+     "            self._flat.discard(account)  # an order is on its way: what was seen before it is old\n",
+     "",
+     ["test_a_new_order_is_given_two_answers_of_its_own"]),
+    # Nothing is kept about an account that was let go.
+    ("PG91", "gateway/protect.py",
+     "                self._flat.discard(account)\n                return True\n",
+     "                return True\n",
+     ["test_an_account_with_nothing_open_is_let_go"]),
+    # A take the trader moved is still theirs after one flat answer: it may be that order filling.
+    ("PG92", "gateway/protect.py",
+     "                        if self._flat_again(account):\n                            self._unwatch(account)\n                            self._forget_takes(account)\n",
+     "                        self._forget_takes(account)\n                        if self._flat_again(account):\n                            self._unwatch(account)\n",
+     ["test_the_next_positions_take_is_the_gateways_again"]),
     # Found by the audit, 4 Oct 2026: with no lag on the far side the take was pulled in for every tick
     # between two reads of the mark.
     ("PG67", "gateway/protect.py",
@@ -2689,8 +2717,8 @@ MUTATIONS = [
      "TAKE_LAG_BPS = CLOSE_COST_BPS",
      ["test_hour_by_hour_a_take_that_fires_leaves_the_target_met"]),
     ("PG60", "gateway/protect.py",
-     "                        self._unwatch(account)\n                        self._forget_takes(account)\n",
-     "                        self._unwatch(account)\n",
+     "                            self._unwatch(account)\n                            self._forget_takes(account)\n",
+     "                            self._unwatch(account)\n",
      ["test_the_next_positions_take_is_the_gateways_again"]),
     ("PG61", "gateway/protect.py",
      "                    self.apply(key, plan)\n                    self._forget_takes(account, plan.report)\n",
@@ -2788,8 +2816,8 @@ MUTATIONS = [
      "                    if False:",
      ["test_an_account_the_key_no_longer_trades_is_let_go"]),
     ("PG25", "gateway/protect.py",
-     "                    if not exp:\n                        self._unwatch(account)",
-     "                    if not exp:\n                        pass",
+     "                        if self._flat_again(account):\n                            self._unwatch(account)",
+     "                        if self._flat_again(account):\n                            pass",
      ["test_an_account_with_nothing_open_is_let_go"]),
     ("PG26", "gateway/protect.py",
      "            if limits.day >= int(now // 86400) or now - read_at < SNAPSHOT_RECHECK_S:",
