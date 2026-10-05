@@ -11,7 +11,7 @@ import { SHOWN_SCENARIOS, LENDING, lendingDemand, results, specFrom } from "../v
 
 const tables = JSON.parse(readFileSync(new URL("../data/calc_tables.json", import.meta.url), "utf8"));
 const words = (html) => html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
-const spec = (pool) => specFrom({ mode: "default", pool: String(pool), chmode: "real", feePct: "0", assetList: "default" });
+const spec = (pool) => specFrom({ mode: "default", pool: String(pool), chmode: "real", assetList: "default" });
 const page = (pool) => {
   const s = spec(pool);
   const runs = Object.fromEntries(SHOWN_SCENARIOS.map((scenario) => [scenario, evaluate(tables, { ...s, scenario })]));
@@ -25,7 +25,7 @@ test("the page shows base and good; the table still holds bad, cell for cell", (
   assert.ok(cells("bad") > 0);
   assert.equal(cells("bad"), cells("base"));
   const text = page(100_000);
-  assert.match(text, /Investor's return, a year base 16\.6% · good 35\.2%/);
+  assert.match(text, /Investor's return, a year, before the platform's charges base 16\.6% · good 35\.2%/);
   // "bad" as a word nowhere in what the page says (the warning badges use it only as a class, which words() drops).
   assert.doesNotMatch(text, /\bbad\b/);
   assert.doesNotMatch(text, /4\.4%/);

@@ -8,6 +8,7 @@
 // created, which is a fact about that pool.
 import { evaluate, defaultLayout, demandForReturn, cellKey } from "../lib/calc.js";
 import { esc, render, $, badge, row } from "../lib/ui.js";
+import { earnsText } from "../lib/platformfees.js";
 
 const SIZES = [100_000, 500_000, 1_000_000];
 const MIN_POOL = 100_000;
@@ -72,6 +73,10 @@ export async function economicsView(page) {
     </section>
     <section class="card"><h3>The pool</h3><div id="form" class="muted">Loading the model…</div></section>
     <section class="card"><h3>What it comes to</h3><div id="out" class="muted">…</div></section>
+    <section class="card" id="earns">
+      <h3>How the platform earns</h3>
+      ${earnsText().map((p) => `<p>${esc(p)}</p>`).join("\n      ")}
+    </section>
     <section class="card">
       <h3>Who takes the loss</h3>
       <p>The capital in a pool is the investor's, so the investor takes the loss. A trader risks what a
@@ -141,7 +146,6 @@ function formPanel(page) {
             <option value="real">real — a tenth of the seat, traded for real</option>
             <option value="demo">paper — the pool's capital is not at risk until the trader passes</option>
           </select></label>
-        <label>Platform's cut of the price, % <input name="feePct" type="number" step="5" min="0" max="100" value="20"></label>
       </fieldset>
     </form>
     <p class="small muted">The rules on offer are the ones the model has cells for. It refuses a rule off its
@@ -204,7 +208,9 @@ export function specFrom(values) {
   const base = {
     asset_list: values.assetList || "default",
     mode: values.chmode,
-    fee_pct_price: Number(values.feePct) / 100,
+    // The calculator shows the pool before the platform's charges; what those are is said under "How the platform
+    // earns". The model's fee on top of the price is a tariff that was dropped, so the form has no field for it.
+    fee_pct_price: 0,
     price_pct: Number(values.pricePct ?? 1) / 100,
   };
   if (values.mode === "custom") {
@@ -467,11 +473,10 @@ export function results(tbl, byScenario, demand) {
     <td>${fails(g.fails_challenge)}</td>
     <td>${fails(g.fails_funded)}</td></tr>`).join("");
   return `
-    ${row("Investor's return, a year", `<strong>${esc(returns)}</strong>`)}
+    ${row("Investor's return, a year, before the platform's charges", `<strong>${esc(returns)}</strong>`)}
     ${row(`To earn what lending stablecoins pays, ${percent(LENDING.rate, 0)} a year`, demandLine(tbl, base, demand))}
     ${row("Capital", `${money(base.capital)} — ${money(base.seat_capital)} in ${base.n_seats} seats,
       ${money(base.capital - base.seat_capital)} kept back`)}
-    ${row("Platform's fee, a year (base)", money(base.platform_fee_year))}
     ${row("Challenges sold a year (base)", base.sold_per_year.toFixed(1))}
     ${row("Seats busy (base)", percent(base.seat_busy_share, 0))}
     ${row("Capital idle (base)", percent(base.idle_share, 0))}
@@ -486,7 +491,8 @@ export function results(tbl, byScenario, demand) {
     the second, which is the shape of the design, not a fault in it.</p>
     <p class="small muted">"What it costs the pool" is the minimum price: at or below it a sold challenge loses
     money for the investor. "The trader's ceiling" is what one trader takes if a funded seat runs all the way to
-    the take-profit of the base scenario. All of it is the model's, at the two scenarios named above: they
+    the take-profit of the base scenario. Every figure here is before the platform's charges, which are set
+    out under "How the platform earns" below. All of it is the model's, at the two scenarios named above: they
     differ in what nobody has measured — how many buyers a month, how far a stop overshoots, how strong the
     traders are. The line under the return turns the question round: holding the base scenario's other
     assumptions, it finds the demand at which the pool earns what lending stablecoins pays

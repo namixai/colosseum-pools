@@ -21,7 +21,7 @@ test("seats are read as size x count, and a line that is not one is refused", ()
 });
 
 test("the default mode is the decision's pool, and nothing below the minimum is one", () => {
-  const spec = specFrom({ mode: "default", pool: "100000", chmode: "real", feePct: "20" });
+  const spec = specFrom({ mode: "default", pool: "100000", chmode: "real" });
   assert.deepEqual(spec.seats, [{ F: 50000, count: 1 }, { F: 25000, count: 1 }, { F: 5000, count: 3 }]);
   assert.equal(spec.reserve, 10000);
   assert.equal(spec.price_pct, 0.01);
@@ -29,18 +29,18 @@ test("the default mode is the decision's pool, and nothing below the minimum is 
   assert.equal(spec.max_drawdown, 0.06);
   assert.equal(spec.daily_loss, 0.03);
 
-  const million = specFrom({ mode: "default", pool: "1000000", chmode: "real", feePct: "20" });
+  const million = specFrom({ mode: "default", pool: "1000000", chmode: "real" });
   assert.equal(million.seats.reduce((a, s) => a + s.count, 0), 50, "ten copies of the template");
 
   // A pool of its own starts at $100k; below that the page offers the shared pool instead.
-  assert.throws(() => specFrom({ mode: "default", pool: "50000", chmode: "real", feePct: "20" }),
+  assert.throws(() => specFrom({ mode: "default", pool: "50000", chmode: "real" }),
     (e) => e.tooSmall === true);
 });
 
 test("the custom mode passes the investor's own terms through", () => {
   const spec = specFrom({
     mode: "custom", seats: "20000x2", reserve: "5000", share: "50", pricePct: "2",
-    dd: "5", daily: "2", target: "12", chmode: "demo", feePct: "0",
+    dd: "5", daily: "2", target: "12", chmode: "demo",
   });
   assert.deepEqual(spec.seats, [{ F: 20000, count: 2 }]);
   assert.equal(spec.reserve, 5000);
@@ -128,12 +128,12 @@ test("the asset list reaches the calculator, and the page cannot show a tail wit
   // The measured tail of a spread pool is two to three times larger on a wide list than on BTC/ETH/SOL,
   // while every seat on one coin reaches the whole of its capital at the worst price on either list. A
   // page that shows one number without the list it belongs to is wrong for one of the two pools.
-  const spec = specFrom({ mode: "default", pool: "100000", chmode: "real", feePct: "20", assetList: "wide" });
+  const spec = specFrom({ mode: "default", pool: "100000", chmode: "real", assetList: "wide" });
   assert.equal(spec.asset_list, "wide");
-  assert.equal(specFrom({ mode: "default", pool: "100000", chmode: "real", feePct: "20" }).asset_list, "default",
+  assert.equal(specFrom({ mode: "default", pool: "100000", chmode: "real" }).asset_list, "default",
     "no list named means the list the demo deploys with");
 
-  const dflt = evaluate(tables, { ...specFrom({ mode: "default", pool: "100000", chmode: "real", feePct: "20" }), scenario: "base" });
+  const dflt = evaluate(tables, { ...specFrom({ mode: "default", pool: "100000", chmode: "real" }), scenario: "base" });
   const wide = evaluate(tables, { ...spec, scenario: "base" });
   assert.deepEqual(dflt.cascade.coins, ["BTC", "ETH", "SOL"]);
   assert.ok(wide.cascade.coins.length > dflt.cascade.coins.length);
@@ -207,7 +207,7 @@ test("a seat count cannot freeze the page", () => {
 test("a pool size cannot freeze the page either", () => {
   // The default layout gives five seats for every $100k, so a pool typed with extra zeros is the
   // same freeze as a seat count typed with them -- through the other door.
-  const pool = (v) => specFrom({ mode: "default", pool: v, chmode: "real", feePct: "20" });
+  const pool = (v) => specFrom({ mode: "default", pool: v, chmode: "real" });
   assert.throws(() => pool("1000000000000"), /more than this calculator takes/);
   assert.throws(() => pool("Infinity"), /number of dollars/);
   assert.throws(() => pool("1e308"), /more than this calculator takes/);
@@ -224,7 +224,7 @@ test("the reserve is zero or more dollars, never a division by zero", () => {
   assert.throws(() => reserveFrom("abc"), /zero or more/);
   assert.throws(() => reserveFrom("Infinity"), /zero or more/);
   assert.throws(() => specFrom({ mode: "custom", seats: "1000x1", reserve: "-1000", share: "80", pricePct: "1",
-    dd: "6", daily: "3", target: "10", chmode: "real", feePct: "20" }), /zero or more/);
+    dd: "6", daily: "3", target: "10", chmode: "real" }), /zero or more/);
 });
 
 test("the page names what the model covers and what it does not", () => {
