@@ -2,10 +2,11 @@
 //
 // The rates are the plan, not what the testnet contracts do: there a withdrawal, an order and a new pool cost
 // nothing, a challenge carries a flat fee on top of its price, and a shared pool takes the share of a holder's
-// profit it was deployed with (0 for the current one, 10% for the earlier ones). The yearly figures are the model's, at the base
-// scenario, run on 5 Oct 2026. Two of the three parts follow from the calculator on the Economics page -- the share
-// of the challenge price and the charge on a withdrawal -- and app/tests/platformfees.test.mjs recomputes them. The
-// third, the builder fee, rests on a trading volume the calculator's table does not carry and nobody has measured.
+// profit it was deployed with (0 for the current one, 10% for the earlier ones). The yearly figures are the model's,
+// at the base scenario, run on 5 Oct 2026. Two of the three parts follow from the calculator on the Economics page
+// -- the share of the challenge price and the charge on a withdrawal -- and app/tests/platformfees.test.mjs
+// recomputes them. The third, the builder fee, rests on a trading volume the calculator's table does not carry and
+// nobody has measured, and how it divides between the traders and the pool is not computed.
 // No browser globals here, so node's test runner loads it.
 
 /** The charges, as agreed on 4 and 5 Oct 2026. First rates: they may go down, not up. */
@@ -29,8 +30,10 @@ export const MODELLED = [
 export const platformIncome = (m) => m.challenge + m.withdrawal + m.builder;
 
 /**
- * What the charges cost the pool's investor, as a share of the capital a year: the two that come out of the pool.
- * The model counts the builder fee as the traders' cost, since it is charged on their orders.
+ * What two of the charges cost the pool's investor, as a share of the capital a year: the share of the challenge
+ * price and the charge on a withdrawal. The builder fee is left out. The model books it to the traders and does not
+ * split it, yet it is taken from the trading account, which holds the pool's capital, so part of it can fall on the
+ * pool. How much is not computed here.
  */
 export const investorCost = (m) => (m.challenge + m.withdrawal) / m.pool;
 
@@ -56,9 +59,10 @@ export function earnsText() {
     `In the model, at the base scenario, the first three bring the platform about ${about(platformIncome(small))} a `
       + `year from a ${dollars(small.pool)} pool. The first two fall on its investor, and cost about ${points(small)} `
       + `points of a ${(small.investorReturn * 100).toFixed(1)}% return. For a ${dollars(large.pool)} pool it is about `
-      + `${about(platformIncome(large))} and ${points(large)} points. The builder fee is counted as the traders' `
-      + "cost, not the investor's. It is more than half of the platform's income here, and it rests on a trading "
-      + "volume nobody has measured yet.",
+      + `${about(platformIncome(large))} and ${points(large)} points. Those points leave the builder fee out. The `
+      + "model books that fee to the traders and does not split it, but it is taken from the trading account, which "
+      + "holds the pool's capital, so part of it can fall on the pool. It is more than half of the platform's income "
+      + "here, and it rests on a trading volume nobody has measured yet.",
     "This is the design for mainnet. The testnet contracts charge nothing for a withdrawal, for an order or for "
       + "creating a pool, and the challenge fee in the factory is a flat placeholder, paid on top of the price. The "
       + "shared pool's contract can still take a share of a holder's own profit: the current shared pool was deployed "

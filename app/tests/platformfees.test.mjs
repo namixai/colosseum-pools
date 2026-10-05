@@ -63,10 +63,15 @@ test("what the text says the charges come to is what the numbers give", () => {
   // Three charges make the platform's income; two of them make the investor's cost, and the words keep the two apart.
   assert.equal(model, "In the model, at the base scenario, the first three bring the platform about $1,600 a year from a "
     + "$100,000 pool. The first two fall on its investor, and cost about 0.7 points of a 16.6% return. For a "
-    + "$1,000,000 pool it is about $18,800 and 0.8 points. The builder fee is counted as the traders' cost, not the "
-    + "investor's. It is more than half of the platform's income here, and it rests on a trading volume nobody has "
-    + "measured yet.");
+    + "$1,000,000 pool it is about $18,800 and 0.8 points. Those points leave the builder fee out. The model books "
+    + "that fee to the traders and does not split it, but it is taken from the trading account, which holds the "
+    + "pool's capital, so part of it can fall on the pool. It is more than half of the platform's income here, and it "
+    + "rests on a trading volume nobody has measured yet.");
   assert.doesNotMatch(model, /first three[^.]*cost its investor/);
+  // The builder fee is not said to be nobody's but the traders': a trader trades the pool's capital, and the fee is
+  // taken from that account. The page says the estimate leaves it out, and the code says its division is not computed.
+  assert.doesNotMatch(earnsText().join(" "), /not the investor's/);
+  assert.match(text("../lib/platformfees.js"), /The builder fee is left out\.[^/]*so part of it can fall on the\s+\* pool\. How much is not computed here\./);
   // And none of it is charged on testnet, which the last paragraph says.
   assert.equal(earnsText()[3], "This is the design for mainnet. The testnet contracts charge nothing for a withdrawal, "
     + "for an order or for creating a pool, and the challenge fee in the factory is a flat placeholder, paid on top of "
