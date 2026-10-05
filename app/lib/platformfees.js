@@ -54,8 +54,8 @@ export function earnsText() {
       + `platform on Hyperliquid carry a builder fee of ${rate(RATES.builder)} of the notional. Creating a pool costs `
       + `${RATES.poolHype} HYPE. These are first rates, meant to go down, not up.`,
     `In the model, at the base scenario, the first three bring the platform about ${about(platformIncome(small))} a `
-      + `year from a ${dollars(small.pool)} pool and cost its investor about ${points(small)} points of a `
-      + `${(small.investorReturn * 100).toFixed(1)}% return. For a ${dollars(large.pool)} pool it is about `
+      + `year from a ${dollars(small.pool)} pool. The first two fall on its investor, and cost about ${points(small)} `
+      + `points of a ${(small.investorReturn * 100).toFixed(1)}% return. For a ${dollars(large.pool)} pool it is about `
       + `${about(platformIncome(large))} and ${points(large)} points. The builder fee is counted as the traders' `
       + "cost, not the investor's. It is more than half of the platform's income here, and it rests on a trading "
       + "volume nobody has measured yet.",

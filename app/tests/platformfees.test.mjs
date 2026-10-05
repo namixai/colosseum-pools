@@ -60,10 +60,13 @@ test("what the text says the charges come to is what the numbers give", () => {
   assert.equal(Math.round(builderShare(small) * 100), 56);
   assert.equal(Math.round(builderShare(large) * 100), 60);
   const model = earnsText()[2];
+  // Three charges make the platform's income; two of them make the investor's cost, and the words keep the two apart.
   assert.equal(model, "In the model, at the base scenario, the first three bring the platform about $1,600 a year from a "
-    + "$100,000 pool and cost its investor about 0.7 points of a 16.6% return. For a $1,000,000 pool it is about "
-    + "$18,800 and 0.8 points. The builder fee is counted as the traders' cost, not the investor's. It is more than "
-    + "half of the platform's income here, and it rests on a trading volume nobody has measured yet.");
+    + "$100,000 pool. The first two fall on its investor, and cost about 0.7 points of a 16.6% return. For a "
+    + "$1,000,000 pool it is about $18,800 and 0.8 points. The builder fee is counted as the traders' cost, not the "
+    + "investor's. It is more than half of the platform's income here, and it rests on a trading volume nobody has "
+    + "measured yet.");
+  assert.doesNotMatch(model, /first three[^.]*cost its investor/);
   // And none of it is charged on testnet, which the last paragraph says.
   assert.equal(earnsText()[3], "This is the design for mainnet. The testnet contracts charge nothing for a withdrawal, "
     + "for an order or for creating a pool, and the challenge fee in the factory is a flat placeholder, paid on top of "
