@@ -1254,7 +1254,8 @@ class APositionTheAnswerGivesNoValueFor(FlowBase):
         self.assertEqual(self.triggers(), [("Stop Market", "2643.3"), ("Take Profit Market", "2894.1")])
 
     def test_a_stop_placed_from_a_market_read_behind_stands_too_far_until_a_later_sweep(self):
-        # Placed, not moved: there is no stop to be "only nearer" than. With the market's answer 2.5
+        # Placed, or moved to a new line as in the test below. "Only nearer" does not help in either:
+        # there is no stop yet, or the one there is further out still. With the market's answer 2.5
         # behind, the stop is put 2.5 beyond the rule's line, which is 0.0925 USDC more than the rule
         # allows on 0.037 ETH. The next sweep whose two answers agree brings it in.
         self.x.orders.clear()
@@ -1265,6 +1266,19 @@ class APositionTheAnswerGivesNoValueFor(FlowBase):
         self.sweep()
         # The take was placed 2.5 short of its line by the same difference, and is not moved.
         self.assertEqual(self.triggers(), [("Stop Market", "2643.3"), ("Take Profit Market", "2891.6")])
+
+    def test_a_stop_moved_to_a_new_line_from_a_market_read_behind_stands_too_far_as_well(self):
+        # The next day's floor puts the line at 2682.6, as in the test of that floor above. With the
+        # market's answer 2.5 behind, the stop is moved to 2680.1 instead, 2.5 beyond the line. The
+        # next sweep whose two answers agree brings it in.
+        self.now = (DAY + 1) * 86400 + 120
+        self.reader.limits = RuleLimits(True, 300, 600, 70 * USDC, DAY + 1, int(Decimal("71.5") * USDC), 1000)
+        self.x.markets_now[ETH] = Market("ETH", Decimal("2697.5"), 4)
+        self.sweep()
+        self.assertEqual(self.triggers(), [("Stop Market", "2680.1"), ("Take Profit Market", "2894.1")])
+        self.x.markets_now[ETH] = Market("ETH", Decimal("2700"), 4)
+        self.sweep()
+        self.assertEqual(self.triggers(), [("Stop Market", "2682.6"), ("Take Profit Market", "2894.1")])
 
     def test_it_is_said_again_for_the_next_position_once_the_account_was_let_go(self):
         self.assertEqual(len(self.sweep()), 1)
