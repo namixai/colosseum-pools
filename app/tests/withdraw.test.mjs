@@ -1,0 +1,87 @@
+// node --test app/tests/withdraw.test.mjs
+//
+// An investor's withdrawal of a pool's capital on HyperCore (app/lib/withdraw.js, app/views/pool.js). The call is
+// a HyperEVM transaction that asks HyperCore to move the money, and it succeeds whatever HyperCore then does. On
+// 4 Oct 2026 an investor asked for 771.56 against 771.556173: two transactions went through, nothing moved, and
+// the page said "Sent" twice. The numbers below are that day's.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import {
+  usdcTotal1e8, allOf, withdrawPlan, withdrawVerdict, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS,
+} from "../lib/withdraw.js";
+
+const text = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+const HELD = 77_155_617_300n; // 771.556173 USDC
+
+test("the pool's balance is read exactly, and All fills in every decimal of it", () => {
+  assert.equal(usdcTotal1e8({ balances: [{ coin: "HYPE", total: "1.0" }, { coin: "USDC", total: "771.556173" }] }), HELD);
+  assert.equal(usdcTotal1e8({ balances: [] }), 0n);
+  assert.equal(usdcTotal1e8(undefined), 0n);
+  // Not 771.56: the field gets what the pool holds, and nothing is rounded up.
+  assert.equal(allOf(HELD), "771.556173");
+  assert.equal(allOf(617_300n), "0.006173");
+  assert.equal(allOf(0n), "0");
+  assert.equal(withdrawPlan(allOf(HELD), HELD), HELD);
+});
+
+test("an amount above the balance is refused before the wallet is asked, in words that say why", () => {
+  // The amount of 4 October: 0.003827 above what the pool held.
+  assert.throws(() => withdrawPlan("771.56", HELD), (err) => {
+    assert.match(err.message, /^The pool holds 771\.556173 USDC on HyperCore and you asked for 771\.56\./);
+    assert.match(err.message, /HyperCore drops a transfer above the balance without a word, so nothing was sent\./);
+    assert.match(err.message, /Use All for the whole balance\.$/);
+    // The page prints at most 300 characters of an error.
+    assert.ok(err.message.length <= 300, String(err.message.length));
+    return true;
+  });
+  // One unit above is above, and the refusal shows the digit that differs.
+  assert.throws(() => withdrawPlan("771.55617301", HELD), /holds 771\.556173 USDC on HyperCore and you asked for 771\.55617301\./);
+  // At the balance and under it, the amount is the number typed, exactly.
+  assert.equal(withdrawPlan("771.556173", HELD), HELD);
+  assert.equal(withdrawPlan("771.55", HELD), 77_155_000_000n);
+  assert.equal(withdrawPlan(" 0.00000001 ", HELD), 1n);
+  // Nothing, zero, and anything that is not a plain decimal of at most eight places.
+  assert.throws(() => withdrawPlan("0", HELD), /above zero/);
+  assert.throws(() => withdrawPlan("0.00000000", HELD), /above zero/);
+  for (const bad of ["", "abc", "1e3", "-5", "1,5", "771.556173123", ".5"]) {
+    assert.throws(() => withdrawPlan(bad, HELD), /at most eight decimals/, bad);
+  }
+});
+
+test("arrived is said only from the balance read back, never from the transaction", () => {
+  // What the third attempt of 4 October did: 771.55 left, 0.006173 stayed.
+  const arrived = withdrawVerdict({ before: HELD, after: 617_300n, amount: 77_155_000_000n });
+  assert.deepEqual(arrived, { ok: true,
+    text: "Arrived: the pool's HyperCore balance went from 771.556173 to 0.006173 USDC." });
+  // What the first two did: the transaction went through and the balance did not move.
+  const dropped = withdrawVerdict({ before: HELD, after: HELD, amount: 77_156_000_000n });
+  assert.equal(dropped.ok, false);
+  assert.match(dropped.text, /^The transaction went through, but HyperCore has not moved the money: the pool still holds 771\.556173 USDC\./);
+  assert.doesNotMatch(dropped.text, /Sent|Arrived/);
+  // Money that came in meanwhile is not a withdrawal.
+  assert.equal(withdrawVerdict({ before: HELD, after: HELD + 1n, amount: 1n }).ok, false);
+  // Less than asked is said as less.
+  const part = withdrawVerdict({ before: 10_000_000_000n, after: 6_000_000_000n, amount: 5_000_000_000n });
+  assert.equal(part.ok, false);
+  assert.match(part.text, /fell by 40\.00 USDC, not the 50\.00 asked for: it holds 60\.00 now/);
+  for (const v of [arrived, dropped, part]) assert.ok(v.text.length <= 300, v.text);
+});
+
+test("the investor's panel shows the balance, refuses above it, and reports from the balance afterwards", () => {
+  const pool = text("../views/pool.js");
+  // The exact balance stands by the field, with a button that fills it in.
+  assert.match(pool, /The pool holds <span id="wd-balance">\$\{esc\(usd\(poolSpot, 8\)\)\}<\/span> USDC on HyperCore\./);
+  assert.match(pool, /<button id="wd-all" class="secondary" type="button">All<\/button>/);
+  assert.match(pool, /\$\("#wd", page\)\.value = allOf\(now\);/);
+  // The click reads the balance again, checks the amount against it, and only then asks the wallet.
+  assert.match(pool, /const before = await readPoolSpot\(address\);\s+\$\("#wd-balance", page\)\.textContent = usd\(before, 8\);\s+const amount = withdrawPlan\(\$\("#wd", page\)\.value, before\);\s+await chain\.write\("pool", address, "withdrawOnCore", \[amount\]\);/);
+  // After the transaction it waits for the balance to fall, and what it says comes from the verdict alone.
+  assert.match(pool, /for \(let waited = 0; waited < WITHDRAW_WAIT_MS && after >= before; waited \+= WITHDRAW_POLL_MS\)/);
+  assert.match(pool, /const verdict = withdrawVerdict\(\{ before, after, amount \}\);\s+if \(!verdict\.ok\) throw new Error\(verdict\.text\);\s+return verdict\.text;/);
+  assert.doesNotMatch(pool, /Sent to your HyperCore account/);
+  assert.match(pool, /return usdcTotal1e8\(await hl\.spot\(address\)\);/);
+  // Long enough for HyperCore, short enough to answer while the investor is still there.
+  assert.ok(WITHDRAW_WAIT_MS >= 20_000 && WITHDRAW_WAIT_MS <= 60_000);
+  assert.ok(WITHDRAW_POLL_MS >= 1_000 && WITHDRAW_POLL_MS < WITHDRAW_WAIT_MS);
+});
