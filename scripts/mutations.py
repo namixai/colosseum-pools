@@ -1209,6 +1209,20 @@ MUTATIONS = [
      'RULES = "(uint16,uint16,uint32,uint32[])"',
      'RULES = "(uint32,uint32,uint16,uint32[])"',
      ["test_the_types_are_the_structs_in_the_source"]),
+    # The deploy script sends the host only what is on origin/main. It used to say that a commit was
+    # not there and send it all the same.
+    ("K93", "ops/host/deploy.sh",
+     "nothing was sent. Fetch, or merge it first.\" >&2\n  exit 1\n",
+     "nothing was sent. Fetch, or merge it first.\" >&2\n",
+     ["test_a_commit_that_is_not_on_origin_main_is_not_sent",
+      "test_once_it_is_merged_and_fetched_the_same_commit_goes"]),
+    # ...and what is on it, it does send: the release, and the one before it for a rollback.
+    ("K94", "ops/host/deploy.sh",
+     'if git merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then',
+     'if false; then',
+     ["test_a_commit_on_origin_main_is_sent",
+      "test_an_earlier_commit_of_origin_main_is_sent_too",
+      "test_once_it_is_merged_and_fetched_the_same_commit_goes"]),
     # Two guards the review found held by nothing: the head-is-None return in `recut_if_uncut`,
     # and treating a mined duplicate ("nonce too low") as an error.
     ("K87", "ops/keeper.py",

@@ -19,10 +19,13 @@ if [ -n "${COLOSSEUM_SSH_KEY:-}" ]; then
 fi
 ssh+=("$target")
 
+# Only what is on origin/main goes to the host. This used to say so and carry on, which left the
+# stopping to whoever was reading the screen.
 if git merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
   echo "deploy: $sha is on origin/main"
 else
-  echo "deploy: $sha is NOT on origin/main"
+  echo "deploy: $sha is NOT on origin/main; nothing was sent. Fetch, or merge it first." >&2
+  exit 1
 fi
 
 upload="/opt/colosseum-pools/releases/.$sha.upload"
