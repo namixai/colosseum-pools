@@ -196,8 +196,10 @@ prepared. Once a seat has its capital and its account is prepared, anyone can bu
 the site. So this one is armed only right before the sale it is meant for, not earlier.
 
 At 08:59 UTC on 3 October the pool held 42 USDC on 42e8 shares, all of it free on HyperCore, with
-nothing waiting to be paid. Its seat was idle, empty and not armed. Every step's hash is in
-`spike/results/2026-10-03.jsonl`.
+nothing waiting to be paid. Its seat was idle, empty and not armed. Every transaction this run sent
+on HyperEVM is in `spike/results/2026-10-03.jsonl` with its hash. Its six transfers on HyperCore —
+the operator's perp to spot, the seed, the two wallets and the two deposits — are there with
+Hyperliquid's answer and no hash: the answer gives none.
 
 ## A challenge sold on the seat, and started by the host's keeper (4 October)
 
@@ -341,9 +343,12 @@ enough for is the trader's client, which needs 5 USDC of capital at 5× to send 
   follows the rule line and the target; the numbers are of that reading.
 
 Read at 08:11 UTC on 5 October: `value()` 668.147546 USDC on 670e8 shares, with a position open. The other
-two seats were Idle and unsold. Every step this run sent, from the start to the arming of the three
-seats, is in `spike/results/2026-10-05.jsonl` with its hash. The purchase, the start and the trade were
-not ours to send and are not in that log; their hashes are the ones given above.
+two seats were Idle and unsold. Every transaction this run sent on HyperEVM, from the start to the
+arming of the three seats, is in `spike/results/2026-10-05.jsonl` with its hash. Its five transfers
+on HyperCore — the seed of 34 USDC, 319 to each of the two depositors' wallets and their two deposits
+of 318 — are there with Hyperliquid's answer and no hash: the answer gives none. The purchase, the
+start and the trade were not ours to send and are not in that log; their hashes are the ones given
+above.
 
 ## What this does not show
 

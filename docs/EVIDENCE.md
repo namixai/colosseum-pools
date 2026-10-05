@@ -337,10 +337,10 @@ the money home. The pool's spot balance on HyperCore reads 140.737654: the 142 i
 1 for creating the challenge's account, less the 70 that went to the challenge and plus the
 70.387327 that came back, less the 70 for the funded stage and plus the 69.350327 that came back.
 
-**What it does not show.** A payout on this deployment: there was none to make. A stop: no rule
-was broken. A trader we do not control: the agent is the team's, we funded its wallet, and the
-bench was built for it to pass. And an unprompted keeper: the two addresses that sent the service
-steps are the ones named in the section above, and for this run too we read neither keeper's
+**What it does not show.** A payout on this deployment: there was none to make. A stop: no rule was
+broken. It does not show a trader we do not control: the agent is the team's, we funded its wallet,
+and the bench was built for it to pass. And an unprompted keeper: the two addresses that sent the
+service steps are the ones named in the section above, and for this run too we read neither keeper's
 journal, so they are senders here and nothing more.
 
 **The live run is open and has no ending yet.** The same wallet bought a challenge on the
