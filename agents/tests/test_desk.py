@@ -260,6 +260,13 @@ class DeskLimits(WithChain):
         self.chain.status, self.chain.recorded, self.chain.verdict = 8, 0, 1
         self.assertEqual(self.desk().account_view()["contract_verdict"], "finished with no rule broken")
 
+    def test_a_challenge_that_is_not_active_yet_is_not_called_a_breach(self):
+        # Created, nothing recorded, and a live reading of Drawdown: equity 0 before the capital
+        # arrives, against a drawdown base that is already the capital.
+        self.chain.status, self.chain.recorded, self.chain.verdict = 1, 0, 1
+        self.assertEqual(self.desk().account_view()["contract_verdict"],
+                         "not active yet: nothing is judged before activation")
+
     def test_an_idle_pool_needs_its_cut_block_to_say_the_funded_stage_is_over(self):
         # A funded stage that ended cleanly records `fundedEndReason` None -- byte for byte what a
         # pool that never funded anyone records, and what the reservation a pool gives back when

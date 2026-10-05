@@ -1281,6 +1281,11 @@ MUTATIONS = [
      "    except Exception as exc:  # noqa: BLE001\n        # Not foreseen",
      "    except ZeroDivisionError as exc:  # noqa: BLE001\n        # Not foreseen",
      ["test_an_error_nobody_foresaw"]),
+    # A challenge that is Created reads Drawdown from a live `violation()` and cannot be stopped.
+    ("A67", "agents/desk.py",
+     "        elif self.is_challenge and number == 1:\n",
+     "        elif self.is_challenge and number == 0:\n",
+     ["test_a_challenge_that_is_not_active_yet_is_not_called_a_breach"]),
     # ── keeper (Python unittest) ──
     # The take has to clear the target by what closing costs, or a challenge the take closed
     # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.

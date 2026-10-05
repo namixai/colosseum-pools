@@ -226,6 +226,13 @@ class Desk:
             said = f"stopped for {BREACH[recorded]} — what the contract recorded"
         elif finished:
             said = "finished with no rule broken"
+        elif self.is_challenge and number == 1:
+            # Created: bought, and not activated. Until its capital arrives the equity reads 0
+            # against a drawdown base that is already the capital, so a live `violation()` answers
+            # Drawdown. The contract judges nothing there -- `breach` is for an Active account
+            # alone -- and a trader reading "Drawdown" on a challenge they have just bought is
+            # reading a stop that cannot happen.
+            said = "not active yet: nothing is judged before activation"
         else:
             said = "inside the rules" if verdict == 0 else BREACH[verdict]
         out = {
