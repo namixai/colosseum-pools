@@ -654,6 +654,12 @@ MUTATIONS = [
      "        if (evm6 == 0 && sent == 0) return onCore;\n",
      "",
      ["test_payments_noteNothing_whenNothingIsSent"]),
+    # A pool deployed with a fee of zero takes nothing. Every other pool in the test file has 1000,
+    # so a contract that took a tenth whatever it was told passed all of them (5 Oct 2026).
+    ("P66", "src/shared/SharedPool.sol",
+     "                uint256 fee = ((gross - cost) * feeBps) / Units.BPS;",
+     "                uint256 fee = ((gross - cost) * 1000) / Units.BPS;",
+     ["test_fee_ofZero_leavesEachHolderTheirWholeProfit"]),
     ("G1", "gateway/server.py",
      "if recovered.lower() != cleared.key.lower():",
      "if False:",
