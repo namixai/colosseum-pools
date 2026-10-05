@@ -65,7 +65,10 @@ recipient, and not refunded. A challenge uses
 one agent key for good, so without a fee a pool's owner could sell challenges to themselves at
 whatever price they liked and use up the published keys cheaply. Not for nothing, though: the
 paragraph above says a price of zero is refused at creation, and it is (`PoolFactory`), so the
-owner would be paying themselves the price while the fee is the only part that leaves.
+owner would be paying themselves the price while the fee is the only part that leaves. This is the
+fee of the contracts on testnet, a flat placeholder. What the platform is meant to charge on mainnet
+is set out on the site's Economics page, under "How the platform earns"; the contracts described
+here charge none of it.
 
 Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0), in units of
 1e-6 USDC. Precompiles return the state at the start of the block.
