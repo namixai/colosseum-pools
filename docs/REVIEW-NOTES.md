@@ -1,8 +1,9 @@
 # Review notes
 
 An internal review of this repository, done between 25 September and 5 October 2026 by a reviewer who did
-not write the code. It is not an external audit. Each finding was reproduced by a test when it was
-reported. Most were fixed on a branch as they came in, and the fixes were checked again on main at
+not write the code. It is not an external audit. Each finding of the review was reproduced by a test when
+it was reported. A-20 and A-21 came from a separate static pass and were confirmed by reading the code.
+Most were fixed on a branch as they came in, and the fixes were checked again on main at
 commit `53197068`. Nothing here is deployed unless it says so. Where a row gives the time a fix reached
 the demo's host, that is the operator's record; the review did not check the host.
 
@@ -71,6 +72,8 @@ Status is as of commit `53197068` on main.
 | A-17 | Low | The reference client caps one order at 0.4 of the equity times the leverage rule, and Hyperliquid's smallest order is 10 USDC. A pool whose challenge capital is too small for both can't open a position through the client: with 3 USDC and 5x the cap is 6. Neither the factory nor `addSeat` refuses such terms, and the buyer still pays the price and the platform fee. | Open. |
 | A-18 | Medium | The gateway worked out a stop and a take from two reads of Hyperliquid taken a moment apart: the mark from one request, the account's equity from another. When the price moved in between, both lines shifted by the difference. A stop is only ever moved nearer the market, so it kept the largest difference it had seen and gave none back. On 5 October 2026 a stop went from 2661.5 to 2662.9 in 22 minutes, in three steps, with nothing paid and no order sent. The rule was not exceeded, but the trader had less room than the rules give. A fast move against the position between the two reads could put the stop on the wrong side of the market. | Fixed for every asset the account holds: its mark is taken from the account's own answer, the one that gave the equity, so the two are of one instant. A stop that had already come nearer stays there until its position closes. An asset with an order and no position is still priced at the market's mark. On the demo's host since 5 October 2026, 07:35 UTC. |
 | A-19 | Low | The account's book is two reads as well, positions and then orders. An order that filled between them was in neither, the account looked flat, and the sweep stopped watching it until its next order: the stop and the take stayed on the book but were no longer kept up. | Fixed: an account is let go at the second sweep in a row that finds nothing open, not at the first. On the demo's host since 5 October 2026, 07:35 UTC. |
+| A-20 | Low | `PoolFactory.setOperator` hands the factory's operator role to any address in one call, the zero address included. `KeyRegistry` makes the new operator accept first. A wrong address loses the role for good, and the platform fee, the builder and the asset list then stay as they were. A second step would guard against that mistake and not against a stolen key: whoever holds the operator's key can set the fee and the builder directly. Pools that exist keep working, and the operator can't move their capital. Found by a separate static pass on 5 October 2026, not by this review; the reviewer confirmed it in the code. | Open. `docs/DESIGN.md` now says what the factory's operator can do and that the role moves in one call. The fix is a change to the contract. |
+| A-21 | Low | The reference client in `agents/` took the names of a contract's errors from Foundry's build output. In a clone where `forge build` had not run, the first refusal by a contract ended the client with "run `forge build` first", and the trader never saw the reason. No money is at risk. `agents/` was outside this review's scope. Found by a separate static pass on 5 October 2026, not by this review; the reviewer confirmed it in the code. | Fixed (pull request #123): the client carries the error names itself, and `scripts/abi-check.py` holds its table against the compiled contracts. |
 
 ## What this review could not check
 
