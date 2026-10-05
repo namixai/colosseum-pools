@@ -2689,6 +2689,41 @@ MUTATIONS = [
      "                        if self._flat_again(account):\n                            self._unwatch(account)\n                            self._forget_takes(account)\n",
      "                        self._forget_takes(account)\n                        if self._flat_again(account):\n                            self._unwatch(account)\n",
      ["test_the_next_positions_take_is_the_gateways_again"]),
+    # A position the account's answer gives no value for has only the market's mark, another
+    # request. The sweep says so once, and does not move its take; the stop is still brought nearer,
+    # because it is what holds the pool's rule. Each piece of that, taken out.
+    ("PG93", "gateway/protect.py",
+     "            elif hold_takes or asset in unvalued:\n",
+     "            elif hold_takes:\n",
+     ["test_its_take_is_not_moved_by_what_the_price_did_between_two_requests",
+      "test_what_two_requests_still_cost_it_is_on_the_stop"]),
+    ("PG94", "gateway/protect.py",
+     "                                     hold_takes=not limits.challenge,\n                                     unvalued=self._unvalued(account, book, market))",
+     "                                     hold_takes=not limits.challenge)",
+     ["test_its_take_is_not_moved_by_what_the_price_did_between_two_requests",
+      "test_it_is_said_once_and_again_only_after_a_value_came_and_went"]),
+    # Said once, not every fifteen seconds...
+    ("PG95", "gateway/protect.py",
+     "        for asset in sorted(blind - known):",
+     "        for asset in sorted(blind):",
+     ["test_it_is_said_once_and_again_only_after_a_value_came_and_went"]),
+    # ...and again once a value has come and gone.
+    ("PG96", "gateway/protect.py",
+     "            known, self._unvalued_seen[account] = self._unvalued_seen.get(account, frozenset()), blind",
+     "            known = self._unvalued_seen.get(account, frozenset())\n            self._unvalued_seen[account] = blind | known",
+     ["test_it_is_said_once_and_again_only_after_a_value_came_and_went"]),
+    # The stop is not held with the take: a new day's floor has to reach it.
+    ("PG97", "gateway/protect.py",
+     "            keep = tighter(best.trigger, line.stop, side) if held else best.trigger == line.stop",
+     "            keep = (asset in unvalued or tighter(best.trigger, line.stop, side)) if held else best.trigger == line.stop",
+     ["test_its_stop_still_comes_nearer_for_a_new_days_floor",
+      "test_what_two_requests_still_cost_it_is_on_the_stop"]),
+    # Only a position with no value: one the answer does value keeps a take that follows its line.
+    ("PG98", "gateway/protect.py",
+     "    return frozenset(a for a in book.positions if a not in book.marks)",
+     "    return frozenset(book.positions)",
+     ["test_a_position_with_a_value_is_not_spoken_of",
+      "test_what_the_account_paid_still_moves_both"]),
     # Found by the audit, 4 Oct 2026: with no lag on the far side the take was pulled in for every tick
     # between two reads of the mark.
     ("PG67", "gateway/protect.py",
@@ -2735,12 +2770,12 @@ MUTATIONS = [
      "        return reconcile(book, want, markets, hold_takes=False), markets, limits, book",
      ["test_adding_to_a_funded_position_leaves_its_take_where_it_was"]),
     ("PG72", "gateway/protect.py",
-     "            elif hold_takes:\n                keep = True\n",
+     "            elif hold_takes or asset in unvalued:\n                keep = True\n",
      "",
      ["test_the_old_rule_pulled_the_take_there_and_a_funded_stage_now_leaves_it"]),
     ("PG73", "gateway/protect.py",
-     "                                     hold_takes=not limits.challenge)",
-     "                                     hold_takes=False)",
+     "                                     hold_takes=not limits.challenge,\n",
+     "                                     hold_takes=False,\n",
      ["test_a_funded_take_does_not_come_after_the_price_when_the_position_loses"]),
     # Following needs a line the price does not move: one asset, and nothing counted but the position.
     ("PG64", "gateway/protect.py",

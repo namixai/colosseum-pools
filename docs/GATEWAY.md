@@ -264,8 +264,13 @@ with the mark, and the take is not followed until that order has filled or gone.
 the account has an order on and no position in is still priced at the market's mark; while such an
 order rests beside a position, that position's lines move a little with the difference between
 the two requests, by the order's share of the exposure. The same goes for a position the account's
-answer gives no value for: Hyperliquid's gives one for every position, and if it stopped, the lines
-would be worked out from two requests again. Fifth, a stop that had already come
+answer gives no value for. Hyperliquid's gives one for every position; if it stopped, that
+position's lines would be worked out from two requests again. The sweep then says so in its
+journal, once for the position (`protect_no_position_value`), and does not move its take: a take
+pulled in by the difference between two requests closes the position short of its target. It
+still brings the stop nearer when the line says so. The stop is what holds the pool's rule, and a
+new day's floor has to reach it; the difference between two requests can only cost the trader
+room. Fifth, a stop that had already come
 nearer for that difference before this change stays where it is until its position closes: the
 gateway cannot tell it from a stop the trader tightened, and it does not move a stop away.
 **Measured** on the live challenge on 5 October 2026 at 05:55 UTC, with this change run beside

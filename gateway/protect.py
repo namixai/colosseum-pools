@@ -292,6 +292,15 @@ def as_the_book_saw(markets: dict[int, Market], book: Book) -> dict[int, Market]
     return {asset: replace(m, mark=book.marks[asset]) if asset in book.marks else m for asset, m in markets.items()}
 
 
+def unvalued(book: Book) -> frozenset[int]:
+    """The assets the account holds a position in and its answer gave no value for.
+
+    Hyperliquid's answer gives a value for every position. Were it to stop, the mark of such a
+    position could only be the market's, another request, and its lines would be worked out from
+    two requests again with nothing to say so."""
+    return frozenset(a for a in book.positions if a not in book.marks)
+
+
 def _moved(mark: Decimal, notional: Decimal, amount: Decimal) -> Decimal:
     """Where the mark is when a position of this notional has gained `amount` (lost, if negative)."""
     return mark * (notional + amount) / notional
@@ -378,7 +387,7 @@ class Plan:
 def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, Market],
               follow_takes: bool = False,
               trader_takes: dict[tuple[int, str], frozenset[Decimal]] | None = None,
-              hold_takes: bool = False) -> Plan:
+              hold_takes: bool = False, unvalued: frozenset[int] = frozenset()) -> Plan:
     """What to send so every (asset, direction) with exposure has its stop and its take. A stop
     that guards a position is only ever moved nearer the market; one that guards nothing yet
     (the position isn't there) simply follows the line. A take is left where it is while it is
@@ -401,6 +410,13 @@ def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, 
     it, onto the losing side of the entry. Measured on 4 October 2026: a short entered at 84955 with
     its take at 84715, the price went to 85206, and the take stood at 84967. A take is placed one
     target from where the position is opened, and stays there.
+
+    `unvalued` names the assets whose position the account's answer gave no value for. Their lines
+    are worked out from two requests, so a take that stands with such a position is not moved
+    either: pulled in by what the price did between the requests, it would close the position short
+    of its target. The stop is still brought nearer when the line says so. The stop is what holds
+    the pool's rule, and a new day's floor has to reach it; the difference between two requests
+    can only cost the trader room.
     """
     actions, report = [], []
     for (asset, side), line in sorted(want.items()):
@@ -435,7 +451,7 @@ def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, 
             short_by = line.take - near.trigger if side == LONG else near.trigger - line.take
             if not held:
                 keep = near.trigger == line.take
-            elif hold_takes:
+            elif hold_takes or asset in unvalued:
                 keep = True
             elif follow_takes and near.trigger not in (trader_takes or {}).get((asset, side), ()):
                 lag = m.mark * TAKE_LAG_BPS / BPS
@@ -485,6 +501,8 @@ class Protector:
         # Accounts whose last answer showed nothing open. One such answer is not believed: the sweep
         # says why.
         self._flat: set[str] = set()
+        # account -> the assets its last answer gave no value for, so that it is said once.
+        self._unvalued_seen: dict[str, frozenset[int]] = {}
         # (account, asset, direction) -> the take triggers the trader asked for and Hyperliquid did
         # not refuse. By direction, because an order the other way gets a take of its own, and placing
         # that one says nothing about this one. In memory only: after a restart every take is the
@@ -707,6 +725,18 @@ class Protector:
         with self._guard:
             self._watch.pop(account, None)
 
+    def _unvalued(self, account: str, book: Book, market: dict[int, Market]) -> frozenset[int]:
+        """The assets `unvalued` names for this account, each said in the journal once: again only
+        after the answer has given a value for it and stopped."""
+        blind = unvalued(book)
+        with self._guard:
+            known, self._unvalued_seen[account] = self._unvalued_seen.get(account, frozenset()), blind
+        for asset in sorted(blind - known):
+            log_line(event="protect_no_position_value", account=account, coin=market[asset].coin,
+                     detail="the account's answer gives no value for this position: its lines are worked "
+                            "out from two requests, and its take is not moved")
+        return blind
+
     def _flat_again(self, account: str) -> bool:
         """Whether the answer before this one showed the account with nothing open as well."""
         with self._guard:
@@ -767,7 +797,8 @@ class Protector:
                     limits = self.limits(account, key)
                     want = lines(limits, book.equity, exp, markets)
                     plan = reconcile(book, want, markets, self._follows(book, exp), self._takes_of(account),
-                                     hold_takes=not limits.challenge)
+                                     hold_takes=not limits.challenge,
+                                     unvalued=self._unvalued(account, book, market))
                     if not plan.actions:
                         continue
                     # Something to send: only while this key still trades this account.
