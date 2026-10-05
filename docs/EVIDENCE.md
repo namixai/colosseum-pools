@@ -356,12 +356,18 @@ is not written until it ends.
 
 **What the gateway has done on it so far, and one more defect of ours.** Between the release of 4
 October and the end of that day the gateway moved the live challenge's take five times, all of them
-in Hyperliquid's order history. Three were the take following its line in, as funding paid to the
-long brought the target nearer: by 1.8 at 16:14:09 UTC, by 1.8 at 20:00:03 and by 1.9 at 22:05:57.
-The other two were a pair: in by 2.5 at 20:47:12 and back out by 2.5 seventeen seconds later, with
-no order of the trader's and no payment between. That pair is finding A-18. The gateway worked a
-line out from two requests to Hyperliquid a moment apart, and what the price did between them moved
-the line. On the next position the same defect brought the stop 1.4 nearer in three steps, between
+in Hyperliquid's order history. Three brought it in after funding paid to the long had moved the
+target nearer: by 1.8 at 16:14:09 UTC, by 1.8 at 20:00:03 and by 1.9 at 22:05:57. Only the second
+followed the line: it came three seconds after a payment and put the take on 2879.5. The first and
+the third came fourteen and six minutes after a payment, with no order of the trader's and no
+payment in those minutes. Counted from 2879.5 by the funding in Hyperliquid's history, the line
+stood at 2881.8 for the first and at 2878.2 for the third. They put the take at 2881.3 and at
+2877.6. About 1.3 of each move was funding; the rest left the take 0.5 and 0.6 nearer than its
+line. The other two were a pair: in by 2.5 at 20:47:12 and back out by 2.5 seventeen seconds
+later, to 2879.5 again, with no order of the trader's and no payment between. That pair is finding
+A-18, and the first and the third move show the same defect. The gateway worked a line out from
+two requests to Hyperliquid a moment apart, and what the price did between them moved the line. On
+the next position the same defect brought the stop 1.4 nearer in three steps, between
 00:26 and 00:37 UTC on 5 October, and a stop is never moved away. No take fired short and no stop
 fired for it. It is fixed from commit `53197068`. By our own account that commit has been on the
 host since 5 October, 07:35 UTC: nothing that can be asked from outside says which release the host
