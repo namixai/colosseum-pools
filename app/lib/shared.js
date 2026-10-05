@@ -7,10 +7,15 @@
 
 import { liveDeployment, isArchive } from "./deployments.js";
 
-/** The pool `#/shared` opens when the link names no address: the live deployment's
- *  (app/config.js, deployments/testnet-shared-demo2.json). The three pools of the earlier rounds are
- *  still there and open by address, the way docs/EVIDENCE-SHARED-POOL.md lists them. */
+/** The pool `#/shared` opens when the link names no address: the live deployment's current one
+ *  (app/config.js, `sharedPool` and the record `sharedPoolRecord` names). The pools of the earlier
+ *  rounds are still there and open by address, the way docs/EVIDENCE-SHARED-POOL.md lists them. */
 export const SHARED_POOL = liveDeployment().sharedPool;
+
+/** Whether `address` is the pool the page takes deposits into. */
+export function isCurrentPool(address, current = SHARED_POOL) {
+  return String(address ?? "").toLowerCase() === String(current ?? "").toLowerCase() && Boolean(current);
+}
 
 export const SHARED_ABI = [
   "function value() view returns (uint256)",
@@ -59,15 +64,17 @@ export const NEW_ACCOUNT_FEE = 100_000_000n;
 export const TICKET_STATE = ["None", "Open", "Closed"];
 
 /**
- * Whether this page takes a deposit into the pool, and if not, why, in words. Three things close it:
+ * Whether this page takes a deposit into the pool, and if not, why, in words. Four things close it:
  *   - the pool's seats come from a factory the gateway and the keepers don't serve (the archive's, or
  *     one of the pool's own): money put there would sit in seats nobody can buy;
+ *   - the pool is an earlier one of the live deployment, not the one the site names (`current` false):
+ *     it is kept as a record, and new money belongs in the current pool;
  *   - the pool hasn't started: there is no share to price a deposit by;
  *   - the operator hasn't sealed the book of seats: the contract itself refuses a ticket until then.
  * `sealed` is null for a pool deployed before the seal existed, which takes deposits as it always did.
  * Withdrawals are never closed by any of this.
  */
-export function depositState({ deployment, started, sealed }) {
+export function depositState({ deployment, started, sealed, current }) {
   if (!deployment) {
     return { open: false, note: "This pool's seats come from a factory of its own, which the gateway and the "
       + "keepers don't serve. Its record can be read here; the page takes no deposit into it." };
@@ -77,12 +84,25 @@ export function depositState({ deployment, started, sealed }) {
       + "buy a challenge on them, so the page takes no deposit into it. Its record can still be read and checked, "
       + "and a holder can still ask to withdraw." };
   }
+  if (!current) {
+    return { open: false, note: "This is an earlier shared pool of the live deployment, kept as a record. The page "
+      + "takes deposits into the current pool only, the one the Shared pool link opens. A holder here can still ask "
+      + "to withdraw." };
+  }
   if (!started) return { open: false, note: "The pool hasn't started yet: the platform's starting shares come first." };
   if (sealed === false) {
     return { open: false, note: "The operator hasn't sealed the book of seats yet. Until then the contract opens "
       + "no deposit ticket; after it, nobody can add a seat." };
   }
   return { open: true, note: "" };
+}
+
+/** The platform's share of a holder's own gain, as the page says it. A pool deployed with 0 takes nothing, and
+ *  "0% of your own profit, taken when you withdraw" would read as if something were taken. */
+export function feeLine(feeBps) {
+  const bps = Number(feeBps);
+  if (bps === 0) return "none: the platform takes nothing from a holder's profit";
+  return `${(bps / 100).toFixed(2).replace(/\.?0+$/, "")}% of your own profit, taken when you withdraw`;
 }
 
 /** What the page says about the book of seats, by `seatsSealed()`; "" for a pool older than the seal. */

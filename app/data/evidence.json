@@ -133,6 +133,87 @@
     },
     {
       "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "A second-deployment challenge passed, and the pass was sent by its trader",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0xa571193573d068414a524dcb3d134f685f1e022f",
+      "tx": "0x26ecb66a2aadefd2501659cbd2c682804b7ee6253bbd1f6dff4efb97ef7ae4f6",
+      "block": 65973266,
+      "sentBy": "sent by the trader itself",
+      "record": "Passed(equity 70387327, payout 0) — 70.387327 USDC — and the same transaction cut the challenge's key.",
+      "check": ["status() and breachReason() on the account"],
+      "notes": ["The payout is 0 because this pool's share on a challenge is 0, not because anything failed.", "The first attempt at the target was cut short by our take.", "A trader we do not control: the agent is the team's, we funded its wallet, and the bench was built for it to pass."],
+      "sources": [
+        "| 0xa571193573d068414a524dcb3d134f685f1e022f | challenge |",
+        "the pass, 0x26ecb66a2aadefd2501659cbd2c682804b7ee6253bbd1f6dff4efb97ef7ae4f6, block 65973266 (4 October, 04:04:38), sent by the trader itself: Passed(equity 70387327, payout 0) — 70.387327 USDC — and the same transaction cut the challenge's key. The payout is 0 because this pool's share on a challenge is 0, not because anything failed.",
+        "The first attempt at the target was cut short by our take.",
+        "What it does not show. A payout on this deployment: there was none to make. A stop: no rule was broken. A trader we do not control: the agent is the team's, we funded its wallet, and the bench was built for it to pass."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "Its funded stage opened on the key reserved at the sale",
+      "kind": "pool",
+      "factory": "demo2",
+      "account": "0xa6d07e9d7354f61b82173F0eBFcF4164EF742096",
+      "tx": "0x6101fb75c362ac0319a83774d84cfde0d082e57b55f21406996957467858f0ef",
+      "block": 65973273,
+      "record": "TraderFunded(trader, key 0xA8698472, capital 70) — the event the top of this file names as the witness of a funded stage.",
+      "check": ["cutBlock() on the pool"],
+      "notes": ["This pool answers a block, so its second retired key is a funded stage; the pool of that section answers 0, so its second key was a reservation."],
+      "sources": [
+        "| 0xa6d07e9d7354f61b82173F0eBFcF4164EF742096 | pool |",
+        "the funded stage opened, 0x6101fb75c362ac0319a83774d84cfde0d082e57b55f21406996957467858f0ef, block 65973273, seven seconds later, sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa: TraderFunded(trader, key 0xA8698472, capital 70) — the event the top of this file names as the witness of a funded stage.",
+        "cutBlock is the field the section above singles out. This pool answers a block, so its second retired key is a funded stage; the pool of that section answers 0, so its second key was a reservation."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "The funded stage's one position was closed at a loss by our own take, and its trader ended the stage",
+      "kind": "pool",
+      "factory": "demo2",
+      "account": "0xa6d07e9d7354f61b82173F0eBFcF4164EF742096",
+      "tx": "0xeba468d3d9c4f6bbe3dd1682b5995076cf3829a61be83b3bae66ae4aa4b885b3",
+      "block": 65997980,
+      "sentBy": "sent by the trader itself",
+      "fills": ["0x2c3c9ac977b6e4362db6042adbe068010300b2af12ba0308d005461c36babe20", "0x571dc51cf337e6ee5897042ae11da7000058dd028e3b05c0fae6706fb23bc0d8"],
+      "record": "FundedStopped(reason 0 None, equity 69350327) — 69.350327 USDC — and the same transaction cut the key.",
+      "check": ["fundedEndReason() on the pool"],
+      "notes": ["The gateway moved that take 139 times, every time towards the market: from 84715, past the entry at 84955, to 85520. It fired at 85521, 0.66222 USDC down on the position.", "Nothing stopped this stage. Its trader let it go, fourteen minutes after the take had closed its position.", "Neither fix was running when it mattered."],
+      "sources": [
+        "| 0xa6d07e9d7354f61b82173F0eBFcF4164EF742096 | pool |",
+        "the end of the funded stage, 0xeba468d3d9c4f6bbe3dd1682b5995076cf3829a61be83b3bae66ae4aa4b885b3, block 65997980 (10:49:47), sent by the trader itself as stopFunded: FundedStopped(reason 0 None, equity 69350327) — 69.350327 USDC — and the same transaction cut the key. Nothing stopped this stage. Its trader let it go, fourteen minutes after the take had closed its position.",
+        "The gateway moved that take 139 times, every time towards the market: from 84715, past the entry at 84955, to 85520. It fired at 85521, 0.66222 USDC down on the position.",
+        "| 4 Oct 04:06:45.887 | pool, funded stage | open short 0.00117 BTC at 84955 | 0.044728 | | 0x2c3c9ac977b6e4362db6042adbe068010300b2af12ba0308d005461c36babe20 |",
+        "| 4 Oct 10:35:39.274 | pool, funded stage | close at 85521, by the take | 0.045026 | −0.66222 | 0x571dc51cf337e6ee5897042ae11da7000058dd028e3b05c0fae6706fb23bc0d8 |",
+        "Neither fix was running when it mattered."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "The stage's result was settled, and nothing was paid",
+      "kind": "pool",
+      "factory": "demo2",
+      "account": "0xa6d07e9d7354f61b82173F0eBFcF4164EF742096",
+      "tx": "0x934c069a36a024d4008844bdf86a72625d39155a6b42f3bf73781dc18d7b9697",
+      "block": 65997999,
+      "from": "0xD6F07317fC5f12302776b03A7206B1614FD49021",
+      "record": "Nothing was paid: the stage ended under the 70 it started with.",
+      "event": { "name": "FundedResult", "text": "FundedResult(realized 69350327, payout 0)", "values": { "realized": "69350327", "payout": "0" } },
+      "check": ["the event FundedResult(realized 69350327, payout 0) in its receipt"],
+      "notes": ["On the funded stage 70 − 0.044728 + 0.102301 − 0.66222 − 0.045026 is 69.350327, the equity in FundedStopped and the amount FundedResult realized."],
+      "sources": [
+        "| 0xa6d07e9d7354f61b82173F0eBFcF4164EF742096 | pool |",
+        "settleFunded, 0x934c069a36a024d4008844bdf86a72625d39155a6b42f3bf73781dc18d7b9697, block 65997999, sent by 0xD6F07317fC5f12302776b03A7206B1614FD49021: FundedResult(realized 69350327, payout 0). Nothing was paid: the stage ended under the 70 it started with.",
+        "On the funded stage 70 − 0.044728 + 0.102301 − 0.66222 − 0.045026 is 69.350327, the equity in FundedStopped and the amount FundedResult realized."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
       "section": "What is staged, and what is not",
       "what": "The keeper on the pools host returned capital left in a passed challenge",
       "kind": null,
@@ -235,10 +316,17 @@
       "factory": "rehearsal",
       "account": "0x71bd0281f0099b87634464dd00c512aca4972018",
       "tx": "0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc",
-      "record": "It holds status 4 (Expired) with breachReason 0 (None) — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong.",
-      "check": ["status() and breachReason() on the account"],
-      "notes": ["that one is not on the demo's factory — it is on the rehearsal deployment (deployments/testnet-rehearsal.json, factory 0x52A141515570eA66053D29bBCb61042e5693970D), which runs the same contracts under a registry of its own."],
-      "sources": ["Challenge 0x71bd0281f0099b87634464dd00c512aca4972018, bought 25 September and given seven days, was expired the moment its deadline passed, by expire (0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc). It holds status 4 (Expired) with breachReason 0 (None) — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong."]
+      "block": 65198575,
+      "from": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
+      "record": "The ending is Stopped(status 4 Expired, reason 0 None, equity 19980359) in that transaction — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong.",
+      "event": { "name": "Stopped", "text": "Stopped(status 4 Expired, reason 0 None, equity 19980359)", "values": { "status": "4", "reason": "0", "equity": "19980359" } },
+      "check": ["the event Stopped(status 4 Expired, reason 0 None, equity 19980359) in its receipt", "status() on the account, which answers 8 today"],
+      "notes": ["Read this one from the event, not from status().", "that one is not on the demo's factory — it is on the rehearsal deployment (deployments/testnet-rehearsal.json, factory 0x52A141515570eA66053D29bBCb61042e5693970D), which runs the same contracts under a registry of its own."],
+      "sources": [
+        "Challenge 0x71bd0281f0099b87634464dd00c512aca4972018, started on 18 September and given seven days, was expired the moment its deadline passed, by expire (0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc, block 65198575, sent by 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4, the deploy key): the deadline was 25 September at 08:13:26 UTC and the transaction landed at 08:14:01.",
+        "Read this one from the event, not from status(). The ending is Stopped(status 4 Expired, reason 0 None, equity 19980359) in that transaction — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong.",
+        "so status() answers 8 today"
+      ]
     },
     {
       "doc": "docs/EVIDENCE.md",
@@ -587,6 +675,106 @@
         "The key. KeyRegistry.bindingOf(0x7d2650bd3dD9A6eD6Cd0c6C393BB79De837FBe19) on the second deployment's registry 0x53AF27F65Dd7473c890f633aC0025b261307779e is (2, challenge, trader): Bound, to that challenge, for that trader. freeCount() went from 18 to 16.",
         "The challenge account holds its 3 USDC, with no position and no order."
       ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "The seat's challenge runs out, the host settles it, and both depositors leave (5 October)",
+      "what": "The seat's challenge ran out of time and was expired by the keepers on the host",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262",
+      "tx": "0x4641ad99435632adf219302db9146b83bdc02a186fe7ab02468e9988ca38c3cb",
+      "block": 66071763,
+      "from": "0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa",
+      "record": "The ending is Stopped(status 4 Expired, reason 0 None, equity 3000000): it ran out of time, no rule was broken, and its 3 USDC were untouched.",
+      "event": { "name": "Stopped", "text": "Stopped(status 4 Expired, reason 0 None, equity 3000000)", "values": { "status": "4", "reason": "0", "equity": "3000000" } },
+      "check": ["the event Stopped(status 4 Expired, reason 0 None, equity 3000000) in its receipt", "status() on the challenge"],
+      "notes": ["This run sent none of the four."],
+      "sources": [
+        "On 0x43f7562C…a717, the challenge 0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262 sold the day before. Its deadline was 5 October 07:00:15 UTC.",
+        "Expired by the keepers on the host, eighteen seconds after the deadline. expire in 0x4641ad99435632adf219302db9146b83bdc02a186fe7ab02468e9988ca38c3cb, block 66071763 (07:00:33 UTC), sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa. The ending is Stopped(status 4 Expired, reason 0 None, equity 3000000): it ran out of time, no rule was broken, and its 3 USDC were untouched.",
+        "After them status() reads 8, the seat is Idle with 33 USDC on HyperCore, and the 1.5 price is still held at the seat on HyperEVM. This run sent none of the four."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "The seat's challenge runs out, the host settles it, and both depositors leave (5 October)",
+      "what": "One point paid both depositors in full, sent by the shared pool's keeper from the team's machine",
+      "kind": "shared pool",
+      "factory": "demo2",
+      "account": "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
+      "tx": "0x1654ea6b81944b8601d9fcdd90f4307863d56f3e76924026dcd0b1ff64f8fcb0",
+      "block": 66075727,
+      "from": "0x75deec8b513Ee3f5D15d6b40B706A3314cf26590",
+      "record": "19.761904 USDC, which is 20e8 shares at 0.98809524 rounded down to the millionth.",
+      "check": ["payments(holder) on the pool, which reads (1791187532, 750000, 1901190400) for both"],
+      "notes": ["Each depositor's HyperCore spot balance read 19.011904 USDC and each wallet 0.75 USDC on HyperEVM after the point. A receipt only says the payment was asked for; HyperCore carries it out afterwards.", "The shared pool's keeper is still not installed on the host."],
+      "sources": [
+        "On 0x43f7562C…a717, the challenge",
+        "The shared pool's keeper, run from the team's machine. One pass of ops/shared_keeper.py, told not to arm anything, from the wallet 0x75deec8b513Ee3f5D15d6b40B706A3314cf26590.",
+        "and settle in 0x1654ea6b81944b8601d9fcdd90f4307863d56f3e76924026dcd0b1ff64f8fcb0, block 66075727, five blocks later. The shared pool's keeper is still not installed on the host.",
+        "19.761904 USDC, which is 20e8 shares at 0.98809524 rounded down to the millionth.",
+        "payments(holder) reads (1791187532, 750000, 1901190400) for both.",
+        "Each depositor's HyperCore spot balance read 19.011904 USDC and each wallet 0.75 USDC on HyperEVM after the point. A receipt only says the payment was asked for; HyperCore carries it out afterwards."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "A second pool on the second deployment was sealed with three seats, and takes no fee on a holder's gain",
+      "kind": "shared pool",
+      "factory": "demo2",
+      "account": "0xa2eEe2CF75d5f740E436a08007345dA5789a4499",
+      "tx": "0x33ee1b7d844a54092749995b13a4f37df85b241bd50f405b594448abf88ba811",
+      "record": "Three seats, and never a fourth.",
+      "check": ["feeBps() on the pool, which reads 0", "planCapital() on the pool, which reads 663 USDC"],
+      "notes": ["A challenge on these seats runs seven days and a funded stage at most one. Those terms are there so that a pass and the end of a funded term can be seen within a week on testnet money. They are not terms anyone is offered."],
+      "sources": [
+        "0xa2eEe2CF75d5f740E436a08007345dA5789a4499, deployed in 0x814ec30da330aea2e9e4c8c30a3f6d6a0e686c72a4bb69ab4591e1dd00b13153 (block 66066301) with its seats on the second deployment's factory",
+        "a fee of 0: feeBps() reads 0, so the platform takes nothing from what a holder gains.",
+        "planCapital() reads 663 USDC against a seed of 34: the contract asks for at least a twentieth.",
+        "Sealed before any deposit. seal in 0x33ee1b7d844a54092749995b13a4f37df85b241bd50f405b594448abf88ba811. Three seats, and never a fourth.",
+        "A challenge on these seats runs seven days and a funded stage at most one. Those terms are there so that a pass and the end of a funded term can be seen within a week on testnet money. They are not terms anyone is offered."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "Its first seat was sold to the team's agent",
+      "kind": "seat",
+      "factory": "demo2",
+      "account": "0xf40da2862f1e3f20ab7d1ed7b5e67a83d333cb3b",
+      "tx": "0xa8bf8df694b54b65f067f9142c7d3d6e1e9c017e7285f6abbbf5c5f18084eb11",
+      "block": 66068662,
+      "from": "0xd4f31E7234308546c822C619705F1A4B5fC8f629",
+      "record": "bought the challenge 0x48f948a895F82a32fb39eE57C457c05FdA7A7779 on the seat 0xf40da2862f1e3f20ab7d1ed7b5e67a83d333cb3b, paying the 2 price and the 0.7 platform fee",
+      "check": [],
+      "notes": ["We funded that wallet and asked the agent to buy; it is not a trader we do not control."],
+      "sources": [
+        "The trader. 0xd4f31E7234308546c822C619705F1A4B5fC8f629, the same wallet of the team's agent as in the second deployment's record in EVIDENCE.md, bought the challenge 0x48f948a895F82a32fb39eE57C457c05FdA7A7779 on the seat 0xf40da2862f1e3f20ab7d1ed7b5e67a83d333cb3b, paying the 2 price and the 0.7 platform fee (buyChallenge in 0xa8bf8df694b54b65f067f9142c7d3d6e1e9c017e7285f6abbbf5c5f18084eb11, block 66068662, 5 October 06:09:43 UTC). We funded that wallet and asked the agent to buy; it is not a trader we do not control."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "The host started the challenge, and the agent traded it through the client",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0x48f948a895F82a32fb39eE57C457c05FdA7A7779",
+      "tx": "0x418a526dac82ed383c1a23cad9686a05f8fd3cfa8312ebd4e77952bca16cb3c1",
+      "block": 66068666,
+      "from": "0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa",
+      "fills": ["0xc4f16fdff253ec0ec66b042af0c24001050087c58d570ae068ba1b32b157c5f9"],
+      "record": "status() reads 2, Active, with a deadline of 12 October 06:09:47 UTC.",
+      "check": ["status() on the challenge", "KeyRegistry.bindingOf(0x8c2eDe5DEd6B6188E22e222300a691Cf7509A7e6) on the registry"],
+      "notes": ["The client's cap on this account is 20 USDC, so the order fits where the one on the 3 USDC seat could not.", "Read at 08:12 UTC, the account carried two reduce-only position orders placed by the gateway, a stop at 2656.7 and a take at 2869.2."],
+      "sources": [
+        "bought the challenge 0x48f948a895F82a32fb39eE57C457c05FdA7A7779",
+        "Started by the host four blocks later. activate in 0x418a526dac82ed383c1a23cad9686a05f8fd3cfa8312ebd4e77952bca16cb3c1, block 66068666, sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa. status() reads 2, Active, with a deadline of 12 October 06:09:47 UTC.",
+        "The key. KeyRegistry.bindingOf(0x8c2eDe5DEd6B6188E22e222300a691Cf7509A7e6) on the registry 0x53AF27F65Dd7473c890f633aC0025b261307779e is (2, challenge, trader). freeCount() went from 28 to 26.",
+        "Hyperliquid's fills for the challenge account (userFills) carry the hash 0xc4f16fdff253ec0ec66b042af0c24001050087c58d570ae068ba1b32b157c5f9 (oid 61879888823), 0.0024 at 2703.5 and 0.0038 at 2703.2. The client's cap on this account is 20 USDC, so the order fits where the one on the 3 USDC seat could not.",
+        "Read at 08:12 UTC, the account carried two reduce-only position orders placed by the gateway, a stop at 2656.7 and a take at 2869.2."
+      ]
     }
   ],
   "pools": {
@@ -616,6 +804,12 @@
         "factory": "the second deployment's, 0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222",
         "open": "#/shared/0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
         "showed": "a pool deployed with the seal: started, one seat published, the book sealed before any deposit"
+      },
+      {
+        "pool": "0xa2eEe2CF75d5f740E436a08007345dA5789a4499",
+        "factory": "the second deployment's, 0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222",
+        "open": "#/shared/0xa2eEe2CF75d5f740E436a08007345dA5789a4499",
+        "showed": "three seats of different sizes, a fee of 0 on a holder's gain, and a seat an agent trades through the client"
       }
     ]
   },

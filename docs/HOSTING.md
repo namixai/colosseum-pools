@@ -251,9 +251,11 @@ demo and used nowhere else.
 
     COLOSSEUM_SSH_KEY=<key file> ops/host/deploy.sh <commit> <user@host>
 
-It says whether the commit is on `origin/main`, uploads its tracked files and runs that
-commit's `ops/host/install.sh` on the host. Without `COLOSSEUM_SSH_KEY`, ssh uses its own
-configuration. That script:
+It sends only a commit that is on `origin/main` as this clone knows it, and stops before anything
+leaves the machine otherwise; until 5 October 2026 it said so and went on. An earlier commit of the
+branch is on it too, which is how a release is rolled back. Then it uploads the commit's tracked
+files and runs that commit's `ops/host/install.sh` on the host. Without `COLOSSEUM_SSH_KEY`, ssh
+uses its own configuration. That script:
 
 - builds the venv when the requirements changed;
 - installs the units, and the nginx site once there is a certificate;

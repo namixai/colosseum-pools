@@ -2,9 +2,13 @@
 existing deployment's.
 
     spike/.venv/bin/python ops/deploy_shared.py --label shared-run --keys-file <addresses.txt> \\
-        --min-deposit 20 --lock 600 --fee-bps 1000
-    spike/.venv/bin/python ops/deploy_shared.py --label shared-demo2 --on-factory-of demo2 \\
-        --min-deposit 20 --lock 600 --fee-bps 1000 [--dry-run]
+        --min-deposit 20 --lock 600
+    spike/.venv/bin/python ops/deploy_shared.py --label shared-demo2b --on-factory-of demo2 \\
+        --min-deposit 50 --lock 600 [--dry-run]
+
+The fee is the platform's share of a holder's own gain, fixed in the contract for good. It is 0
+unless --fee-bps says otherwise: the platform takes no part of what an investor gains. The pools
+deployed before 5 October 2026 were given 1000 by hand, when that was the default here.
 
 With --on-factory-of <label> only the SharedPool is deployed, and its seats are made by that
 deployment's factory: they are pools of it like any other, served by its gateway, its pages and its
@@ -65,6 +69,9 @@ USDC_1E8 = 100_000_000
 # an estimate. ops/deploy_testnet.py's floor is for four contracts and would refuse a wallet that
 # holds fourteen times what this takes.
 SHARED_GAS_FLOOR_WEI = 2 * 10**15
+# The platform's share of a holder's own gain, in bps, when --fee-bps is not given. It was 1000 until
+# 5 October 2026; a number that goes into a contract for good should not arrive by default.
+DEFAULT_FEE_BPS = 0
 
 
 def gas_or_refuse(op, floor: int = SHARED_GAS_FLOOR_WEI) -> int:
@@ -141,7 +148,8 @@ def main() -> int:
                    help="run every check and send nothing; says what a real run would do")
     p.add_argument("--min-deposit", type=float, default=20.0, help="USDC")
     p.add_argument("--lock", type=int, default=600, help="seconds after a deposit before a request")
-    p.add_argument("--fee-bps", type=int, default=1000)
+    p.add_argument("--fee-bps", type=int, default=DEFAULT_FEE_BPS,
+                   help="the platform's share of a holder's own gain, bps; fixed for good (default 0)")
     args = p.parse_args()
     if args.on_demo_factory and args.on_factory_of not in (None, "demo"):
         raise SystemExit("--on-demo-factory is --on-factory-of demo; name one deployment")

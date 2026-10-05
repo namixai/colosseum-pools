@@ -372,6 +372,23 @@ class OnAnotherDeploymentsFactory(unittest.TestCase):
             self.c = c
             return deploy_shared.main()
 
+    def test_the_fee_is_zero_unless_the_command_names_one(self):
+        """The fee goes into the contract for good. Left unsaid it is 0, not the 10% it used to default to."""
+        self.assertEqual(deploy_shared.DEFAULT_FEE_BPS, 0)
+        self.assertEqual(self.run_main("--on-factory-of", "demo2"), 0)
+        [(contract, values, record)] = self.deployed
+        self.assertEqual(contract, "SharedPool")
+        self.assertEqual(values[-1], 0)
+        self.assertEqual(record["fee_bps"], 0)
+        self.assertEqual(self.saved[-1]["fee_bps"], 0)
+        # Named, it is what was named, in the constructor and in the record alike.
+        self.assertEqual(self.run_main("--on-factory-of", "demo2", "--fee-bps", "250"), 0)
+        [(_, values, record)] = self.deployed
+        self.assertEqual((values[-1], record["fee_bps"]), (250, 250))
+        # And the dry run says the number it would deploy with.
+        self.assertEqual(self.run_main("--on-factory-of", "demo2", "--dry-run"), 0)
+        self.assertIn("fee 0 bps", " ".join(str(call) for call in self.said.call_args_list))
+
     def test_a_dry_run_makes_every_check_and_sends_nothing(self):
         self.assertEqual(self.run_main("--on-factory-of", "demo2", "--dry-run"), 0)
         self.assertEqual(self.loaded, ["demo2"], "the checks are against the deployment named")
@@ -383,7 +400,7 @@ class OnAnotherDeploymentsFactory(unittest.TestCase):
         text = "\n".join(str(call.args[0]) for call in self.said.call_args_list)
         self.assertIn("nothing was sent", text)
         self.assertIn(f"of demo2: PoolFactory {BASE['PoolFactory']}, KeyRegistry {BASE['KeyRegistry']}", text)
-        self.assertIn("min deposit 2000000000, lock 600 s, fee 1000 bps", text)
+        self.assertIn("min deposit 2000000000, lock 600 s, fee 0 bps", text)
 
     def test_the_real_run_deploys_the_shared_pool_on_that_factory_and_says_so_in_the_record(self):
         self.assertEqual(self.run_main("--on-factory-of", "demo2"), 0)
@@ -391,7 +408,7 @@ class OnAnotherDeploymentsFactory(unittest.TestCase):
         self.assertEqual(self.blocks, [True, False], "big blocks on for the deployment, then off")
         [(contract, values, record)] = self.deployed
         self.assertEqual(contract, "SharedPool")
-        self.assertEqual(values, [BASE["PoolFactory"], OPERATOR, OPERATOR, 2_000_000_000, 600, 1000])
+        self.assertEqual(values, [BASE["PoolFactory"], OPERATOR, OPERATOR, 2_000_000_000, 600, 0])
         self.assertEqual((record["factory_from"], record["PoolFactory"], record["KeyRegistry"]),
                          ("demo2", BASE["PoolFactory"], BASE["KeyRegistry"]))
         self.assertEqual(record["implementations_from"], BASE["commit"])

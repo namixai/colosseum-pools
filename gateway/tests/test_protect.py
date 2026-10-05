@@ -15,6 +15,7 @@ import re
 import threading
 import unittest
 from decimal import ROUND_CEILING, Decimal
+from unittest import mock
 
 from eth_account import Account
 
@@ -628,8 +629,12 @@ class Exchange:
         # are two requests, and what happens between them is in one answer and not in the other.
         self.between_the_two_requests = None
         # asset -> the mark the account's own answer values its position at. Hyperliquid gives a
-        # position's value in the same answer as the equity; `markets()` is another request.
+        # position's value in the same answer as the equity; `markets()` is another request. Where
+        # a test names no mark of its own, the two answers are of one instant and say the same.
         self.valued_at: dict[int, Decimal] = {}
+        # Assets whose position the answer gives no value for. Hyperliquid's gives one for every
+        # position; this is what the gateway does if it stopped.
+        self.no_value: set[int] = set()
 
     # Venue
     def markets(self):
@@ -647,7 +652,9 @@ class Exchange:
         return parse_book(state, self.orders, markets)
 
     def _value(self, asset, size):
-        return {"positionValue": str(abs(size) * self.valued_at[asset])} if asset in self.valued_at else {}
+        if asset in self.no_value:
+            return {}
+        return {"positionValue": str(abs(size) * self.valued_at.get(asset, self.markets_now[asset].mark))}
 
     def _oid(self):
         self.next_oid += 1
@@ -1164,6 +1171,87 @@ class OneAnswerOneInstant(FlowBase):
         self.at(market="2702.5", account="2700")
         status, _ = self.send("take", asset=ETH, triggerPx="2701", nonce=NOW + 3)
         self.assertEqual(status, 200)
+
+
+class APositionTheAnswerGivesNoValueFor(FlowBase):
+    """The mark of a position comes from the value the account's answer gives for it. Hyperliquid's
+    answer gives one for every position. If it stopped, the only mark left would be the market's,
+    another request: the lines would be worked out from two requests again, and nothing would say so.
+
+    The sweep says so, once for the position, and does not move its take. It still brings the stop
+    nearer: the stop is what holds the pool's rule, and a new day's floor has to reach it.
+
+    The numbers are the live challenge's: 70 USDC, a 10% target, 3% a day, 0.037 ETH."""
+
+    SIZE = Decimal("0.037")
+
+    def setUp(self):
+        super().setUp()
+        self.reader.limits = RuleLimits(True, 300, 600, 70 * USDC, DAY, 70 * USDC, 1000)
+        self.x.equity = Decimal(70)
+        self.x.markets_now[ETH] = Market("ETH", Decimal("2700"), 4)
+        self.assertEqual(self.send(asset=ETH, size=str(self.SIZE), limitPx="2701")[0], 200)
+        self.x.positions[ETH] = self.SIZE
+        self.gw.protector.sweep()
+        self.sent_before = len(self.x.own_actions())
+        self.assertEqual(self.triggers(), [("Stop Market", "2643.3"), ("Take Profit Market", "2894.1")])
+        self.x.no_value.add(ETH)
+
+    def triggers(self):
+        return sorted((o["orderType"], o["triggerPx"]) for o in self.x.orders)
+
+    def sent(self):
+        return self.x.own_actions()[self.sent_before:]
+
+    def sweep(self):
+        """One sweep, and what it said of a position with no value."""
+        with mock.patch.object(protect, "log_line") as said:
+            self.gw.protector.sweep()
+        return [c.kwargs for c in said.call_args_list if c.kwargs["event"] == "protect_no_position_value"]
+
+    def test_its_take_is_not_moved_by_what_the_price_did_between_two_requests(self):
+        # The market's answer 2.5 behind, more than the take's lag. The take went in by that much
+        # on 4 October 2026 at 20:47:12, and a take that fires there closes the position short.
+        self.x.markets_now[ETH] = Market("ETH", Decimal("2697.5"), 4)
+        said = self.sweep()
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(self.triggers(), [("Stop Market", "2643.3"), ("Take Profit Market", "2894.1")])
+        self.assertEqual([(e["account"], e["coin"]) for e in said], [(ACCOUNT, "ETH")])
+
+    def test_it_is_said_once_and_again_only_after_a_value_came_and_went(self):
+        self.assertEqual(len(self.sweep()), 1)
+        self.assertEqual(self.sweep() + self.sweep(), [])  # not every fifteen seconds
+        self.x.no_value.clear()
+        self.assertEqual(self.sweep(), [])                 # the answer gives a value again
+        self.x.no_value.add(ETH)
+        self.assertEqual(len(self.sweep()), 1)             # and stops: said again
+
+    def test_a_position_with_a_value_is_not_spoken_of(self):
+        self.x.no_value.clear()
+        self.gw.protector._unvalued_seen.clear()  # as a gateway that has just started
+        self.assertEqual(self.sweep(), [])
+
+    def test_its_stop_still_comes_nearer_for_a_new_days_floor(self):
+        # The next day was snapshotted at 71.5 and the equity is 70: the day's floor is 69.355, so
+        # 0.645 is left to lose, 17.43 under the mark. A stop left at 2643.3 would let the position
+        # lose 2.1 against a rule that allows 0.645.
+        self.now = (DAY + 1) * 86400 + 120
+        self.reader.limits = RuleLimits(True, 300, 600, 70 * USDC, DAY + 1, int(Decimal("71.5") * USDC), 1000)
+        self.sweep()
+        self.assertEqual(self.triggers(), [("Stop Market", "2682.6"), ("Take Profit Market", "2894.1")])
+
+    def test_what_two_requests_still_cost_it_is_on_the_stop(self):
+        # The market's answer 2.5 ahead: the stop comes 2.5 nearer and stays, which is what the line
+        # did for every position before its mark came from the account's answer. The take, which
+        # the same difference would have carried out to 2896.6, stays where it is.
+        self.x.markets_now[ETH] = Market("ETH", Decimal("2702.5"), 4)
+        self.sweep()
+        self.assertEqual(self.triggers(), [("Stop Market", "2645.8"), ("Take Profit Market", "2894.1")])
+
+    def test_a_stop_and_a_take_that_are_missing_are_still_placed(self):
+        self.x.orders.clear()
+        self.sweep()
+        self.assertEqual(self.triggers(), [("Stop Market", "2643.3"), ("Take Profit Market", "2894.1")])
 
 
 class OneFlatAnswerIsNotBelieved(FlowBase):
