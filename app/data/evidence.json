@@ -133,6 +133,87 @@
     },
     {
       "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "A second-deployment challenge passed, and the pass was sent by its trader",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0xa571193573d068414a524dcb3d134f685f1e022f",
+      "tx": "0x26ecb66a2aadefd2501659cbd2c682804b7ee6253bbd1f6dff4efb97ef7ae4f6",
+      "block": 65973266,
+      "sentBy": "sent by the trader itself",
+      "record": "Passed(equity 70387327, payout 0) — 70.387327 USDC — and the same transaction cut the challenge's key.",
+      "check": ["status() and breachReason() on the account"],
+      "notes": ["The payout is 0 because this pool's share on a challenge is 0, not because anything failed.", "The first attempt at the target was cut short by our take.", "A trader we do not control: the agent is the team's, we funded its wallet, and the bench was built for it to pass."],
+      "sources": [
+        "| 0xa571193573d068414a524dcb3d134f685f1e022f | challenge |",
+        "the pass, 0x26ecb66a2aadefd2501659cbd2c682804b7ee6253bbd1f6dff4efb97ef7ae4f6, block 65973266 (4 October, 04:04:38), sent by the trader itself: Passed(equity 70387327, payout 0) — 70.387327 USDC — and the same transaction cut the challenge's key. The payout is 0 because this pool's share on a challenge is 0, not because anything failed.",
+        "The first attempt at the target was cut short by our take.",
+        "What it does not show. A payout on this deployment: there was none to make. A stop: no rule was broken. A trader we do not control: the agent is the team's, we funded its wallet, and the bench was built for it to pass."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "Its funded stage opened on the key reserved at the sale",
+      "kind": "pool",
+      "factory": "demo2",
+      "account": "0xa6d07e9d7354f61b82173F0eBFcF4164EF742096",
+      "tx": "0x6101fb75c362ac0319a83774d84cfde0d082e57b55f21406996957467858f0ef",
+      "block": 65973273,
+      "record": "TraderFunded(trader, key 0xA8698472, capital 70) — the event the top of this file names as the witness of a funded stage.",
+      "check": ["cutBlock() on the pool"],
+      "notes": ["This pool answers a block, so its second retired key is a funded stage; the pool of that section answers 0, so its second key was a reservation."],
+      "sources": [
+        "| 0xa6d07e9d7354f61b82173F0eBFcF4164EF742096 | pool |",
+        "the funded stage opened, 0x6101fb75c362ac0319a83774d84cfde0d082e57b55f21406996957467858f0ef, block 65973273, seven seconds later, sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa: TraderFunded(trader, key 0xA8698472, capital 70) — the event the top of this file names as the witness of a funded stage.",
+        "cutBlock is the field the section above singles out. This pool answers a block, so its second retired key is a funded stage; the pool of that section answers 0, so its second key was a reservation."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "The funded stage's one position was closed at a loss by our own take, and its trader ended the stage",
+      "kind": "pool",
+      "factory": "demo2",
+      "account": "0xa6d07e9d7354f61b82173F0eBFcF4164EF742096",
+      "tx": "0xeba468d3d9c4f6bbe3dd1682b5995076cf3829a61be83b3bae66ae4aa4b885b3",
+      "block": 65997980,
+      "sentBy": "sent by the trader itself",
+      "fills": ["0x2c3c9ac977b6e4362db6042adbe068010300b2af12ba0308d005461c36babe20", "0x571dc51cf337e6ee5897042ae11da7000058dd028e3b05c0fae6706fb23bc0d8"],
+      "record": "FundedStopped(reason 0 None, equity 69350327) — 69.350327 USDC — and the same transaction cut the key.",
+      "check": ["fundedEndReason() on the pool"],
+      "notes": ["The gateway moved that take 139 times, every time towards the market: from 84715, past the entry at 84955, to 85520. It fired at 85521, 0.66222 USDC down on the position.", "Nothing stopped this stage. Its trader let it go, fourteen minutes after the take had closed its position.", "Neither fix was running when it mattered."],
+      "sources": [
+        "| 0xa6d07e9d7354f61b82173F0eBFcF4164EF742096 | pool |",
+        "the end of the funded stage, 0xeba468d3d9c4f6bbe3dd1682b5995076cf3829a61be83b3bae66ae4aa4b885b3, block 65997980 (10:49:47), sent by the trader itself as stopFunded: FundedStopped(reason 0 None, equity 69350327) — 69.350327 USDC — and the same transaction cut the key. Nothing stopped this stage. Its trader let it go, fourteen minutes after the take had closed its position.",
+        "The gateway moved that take 139 times, every time towards the market: from 84715, past the entry at 84955, to 85520. It fired at 85521, 0.66222 USDC down on the position.",
+        "| 4 Oct 04:06:45.887 | pool, funded stage | open short 0.00117 BTC at 84955 | 0.044728 | | 0x2c3c9ac977b6e4362db6042adbe068010300b2af12ba0308d005461c36babe20 |",
+        "| 4 Oct 10:35:39.274 | pool, funded stage | close at 85521, by the take | 0.045026 | −0.66222 | 0x571dc51cf337e6ee5897042ae11da7000058dd028e3b05c0fae6706fb23bc0d8 |",
+        "Neither fix was running when it mattered."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "The stage's result was settled, and nothing was paid",
+      "kind": "pool",
+      "factory": "demo2",
+      "account": "0xa6d07e9d7354f61b82173F0eBFcF4164EF742096",
+      "tx": "0x934c069a36a024d4008844bdf86a72625d39155a6b42f3bf73781dc18d7b9697",
+      "block": 65997999,
+      "from": "0xD6F07317fC5f12302776b03A7206B1614FD49021",
+      "record": "Nothing was paid: the stage ended under the 70 it started with.",
+      "event": { "name": "FundedResult", "text": "FundedResult(realized 69350327, payout 0)", "values": { "realized": "69350327", "payout": "0" } },
+      "check": ["the event FundedResult(realized 69350327, payout 0) in its receipt"],
+      "notes": ["On the funded stage 70 − 0.044728 + 0.102301 − 0.66222 − 0.045026 is 69.350327, the equity in FundedStopped and the amount FundedResult realized."],
+      "sources": [
+        "| 0xa6d07e9d7354f61b82173F0eBFcF4164EF742096 | pool |",
+        "settleFunded, 0x934c069a36a024d4008844bdf86a72625d39155a6b42f3bf73781dc18d7b9697, block 65997999, sent by 0xD6F07317fC5f12302776b03A7206B1614FD49021: FundedResult(realized 69350327, payout 0). Nothing was paid: the stage ended under the 70 it started with.",
+        "On the funded stage 70 − 0.044728 + 0.102301 − 0.66222 − 0.045026 is 69.350327, the equity in FundedStopped and the amount FundedResult realized."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
       "section": "What is staged, and what is not",
       "what": "The keeper on the pools host returned capital left in a passed challenge",
       "kind": null,
@@ -235,10 +316,17 @@
       "factory": "rehearsal",
       "account": "0x71bd0281f0099b87634464dd00c512aca4972018",
       "tx": "0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc",
-      "record": "It holds status 4 (Expired) with breachReason 0 (None) — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong.",
-      "check": ["status() and breachReason() on the account"],
-      "notes": ["that one is not on the demo's factory — it is on the rehearsal deployment (deployments/testnet-rehearsal.json, factory 0x52A141515570eA66053D29bBCb61042e5693970D), which runs the same contracts under a registry of its own."],
-      "sources": ["Challenge 0x71bd0281f0099b87634464dd00c512aca4972018, bought 25 September and given seven days, was expired the moment its deadline passed, by expire (0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc). It holds status 4 (Expired) with breachReason 0 (None) — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong."]
+      "block": 65198575,
+      "from": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
+      "record": "The ending is Stopped(status 4 Expired, reason 0 None, equity 19980359) in that transaction — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong.",
+      "event": { "name": "Stopped", "text": "Stopped(status 4 Expired, reason 0 None, equity 19980359)", "values": { "status": "4", "reason": "0", "equity": "19980359" } },
+      "check": ["the event Stopped(status 4 Expired, reason 0 None, equity 19980359) in its receipt", "status() on the account, which answers 8 today"],
+      "notes": ["Read this one from the event, not from status().", "that one is not on the demo's factory — it is on the rehearsal deployment (deployments/testnet-rehearsal.json, factory 0x52A141515570eA66053D29bBCb61042e5693970D), which runs the same contracts under a registry of its own."],
+      "sources": [
+        "Challenge 0x71bd0281f0099b87634464dd00c512aca4972018, started on 18 September and given seven days, was expired the moment its deadline passed, by expire (0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc, block 65198575, sent by 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4, the deploy key): the deadline was 25 September at 08:13:26 UTC and the transaction landed at 08:14:01.",
+        "Read this one from the event, not from status(). The ending is Stopped(status 4 Expired, reason 0 None, equity 19980359) in that transaction — the distinction the whole design turns on: the account stopped, and nothing says the trader did anything wrong.",
+        "so status() answers 8 today"
+      ]
     },
     {
       "doc": "docs/EVIDENCE.md",

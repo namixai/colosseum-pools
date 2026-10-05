@@ -113,8 +113,9 @@ Transactions read back from their receipts:
 
 Everything above is on the first deployment. The live demo now runs a second one,
 `deployments/testnet-demo2.json`: factory `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222`, key
-registry `0x53AF27F65Dd7473c890f633aC0025b261307779e`, 24 published agent keys, deployed at block
-65736733 from commit `e4287926`. Same contracts, its own registry, nothing shared with the first.
+registry `0x53AF27F65Dd7473c890f633aC0025b261307779e`, 24 published agent keys at first and 36
+since 4 October, deployed at block 65736733 from commit `e4287926`. Same contracts, its own
+registry, nothing shared with the first.
 
 **The ending itself is not new, and saying otherwise would be the easy lie.** A challenge stopped
 for leverage is the first row of the table above. What is new is who did it: the trader was a
@@ -148,10 +149,13 @@ Read today, from the accounts themselves:
 | `0x237afA2D58B1612e19D47152FfB2E771c05Fe96D` | pool | `stage` Idle, `fundedEndReason` **None** — the reservation case, **not** a funded stage: key `0x99A4Ec10` released at block 65746163 |
 
 `freeCount()` on that registry answered **22** of the 24 on 1 October, which is the two keys above
-and no others. On 4 October it answers **16**, and the eight that are out are all accounted for:
-four Retired — the two above and the two of the next section — and four Bound, a challenge and its
-pool's reservation on the live run, named at the end of the next section, and the same pair on the
-shared pool's seat (`docs/EVIDENCE-SHARED-POOL.md`).
+and no others. On 4 October at 13:08 UTC it answered **16**, and the eight that were out are all
+accounted for: four Retired — the two above and the two of the next section — and four Bound, a
+challenge and its pool's reservation on the live run, named at the end of the next section, and
+the same pair on the shared pool's seat (`docs/EVIDENCE-SHARED-POOL.md`). Twelve more keys were
+published that afternoon, in `0x55f93b790f1c01c16022be1cbaa78d1500742567c790bc15b68f6db7e667c054`,
+block 66012241 (14:44:47 UTC), and since then it answers **28** of 36: the same eight out, and the
+twelve new ones Free.
 
 Transactions read back from their receipts:
 
@@ -237,7 +241,8 @@ them the numbers below read better than they are.**
 
 Both are fixed in the gateway on main, from commit `772b4f35`. **Neither fix was running when it
 mattered.** That commit reached main at 10:18 UTC on 4 October, seventeen minutes before the second
-take fired, and by our own account it had not been deployed to the host.
+take fired, and it was deployed to the host at 14:33 UTC, four hours after. From outside, that
+release shows in the gateway's health answer, which has carried `max_order_notional_usdc` since.
 
 The bench's terms, from `terms()` and `rules()`: price 7 USDC, challenge capital 70, **target 40
 bps** (70.28), one day to pass, the trader's share 0 on the challenge and 80% on the funded stage,
@@ -265,8 +270,8 @@ Transactions read back from their receipts, in order:
   sent by `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`: `Started` with capital 70 and a deadline
   of 4 October, 06:09:41.
 - **the pass**, `0x26ecb66a2aadefd2501659cbd2c682804b7ee6253bbd1f6dff4efb97ef7ae4f6`, block
-  65973266 (4 October, 04:04:38), **sent by the trader itself**: `Passed(equity 70.387327, payout
-  0)`, and the same transaction cut the challenge's key. The payout is 0 because this pool's share
+  65973266 (4 October, 04:04:38), **sent by the trader itself**: `Passed(equity 70387327, payout 0)` —
+  70.387327 USDC — and the same transaction cut the challenge's key. The payout is 0 because this pool's share
   on a challenge is 0, not because anything failed.
 - the funded stage opened, `0x6101fb75c362ac0319a83774d84cfde0d082e57b55f21406996957467858f0ef`,
   block 65973273, seven seconds later, sent by `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`:
@@ -278,12 +283,12 @@ Transactions read back from their receipts, in order:
   65973307.
 - **the end of the funded stage**,
   `0xeba468d3d9c4f6bbe3dd1682b5995076cf3829a61be83b3bae66ae4aa4b885b3`, block 65997980 (10:49:47),
-  **sent by the trader itself** as `stopFunded`: `FundedStopped(reason 0 None, equity 69.350327)`,
-  and the same transaction cut the key. Nothing stopped this stage. Its trader let it go, fourteen
+  **sent by the trader itself** as `stopFunded`: `FundedStopped(reason 0 None, equity 69350327)` —
+  69.350327 USDC — and the same transaction cut the key. Nothing stopped this stage. Its trader let it go, fourteen
   minutes after the take had closed its position.
 - `settleFunded`, `0x934c069a36a024d4008844bdf86a72625d39155a6b42f3bf73781dc18d7b9697`, block
   65997999, sent by `0xD6F07317fC5f12302776b03A7206B1614FD49021`: `FundedResult(realized
-  69.350327, payout 0)`. **Nothing was paid**: the stage ended under the 70 it started with.
+  69350327, payout 0)`. **Nothing was paid**: the stage ended under the 70 it started with.
 - `FundedClosed`, `0x973ad58c11118209256c339ad3eaacc0c92dff404f081353962818d2c5bab451`, block
   65998006, sent by `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`.
 
@@ -482,13 +487,18 @@ factory — it is on the rehearsal deployment (`deployments/testnet-rehearsal.js
 its own. Said plainly so the counts above still add up: the key it cut is not one of the demo's
 sixteen.
 
-Challenge `0x71bd0281f0099b87634464dd00c512aca4972018`, bought 25 September and given seven days,
-was expired the moment its deadline passed, by `expire`
-(`0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc`). It holds `status` 4
-(Expired) with `breachReason` **0 (None)** — the distinction the whole design turns on: the
-account stopped, and nothing says the trader did anything wrong. Three `settle` calls returned
-the capital and the pool went back to Idle, whereupon its owner withdrew it
-(`0x1183d9590d1a2db7655cc431f64dd57f9f58a53c41c832d2bfc6199fa38ed924`).
+Challenge `0x71bd0281f0099b87634464dd00c512aca4972018`, started on 18 September and given seven
+days, was expired the moment its deadline passed, by `expire`
+(`0xa51f272a6ff7a5a295e8672de2d2f75a57d7796d27b22d480f160e58d7c644dc`, block 65198575, sent by
+`0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4`, the deploy key): the deadline was 25 September at
+08:13:26 UTC and the transaction landed at 08:14:01. **Read this one from the event, not from
+`status()`.** The ending is `Stopped(status 4 Expired, reason 0 None, equity 19980359)` in that
+transaction — the distinction the whole design turns on: the account stopped, and nothing says
+the trader did anything wrong. Three `settle` calls returned the capital and the pool went back
+to Idle, whereupon its owner withdrew it
+(`0x1183d9590d1a2db7655cc431f64dd57f9f58a53c41c832d2bfc6199fa38ed924`). Those calls also carried
+the account on to `Settled`, so `status()` answers **8** today, as it does for the walk-away
+below.
 
 
 ## A trader walked away

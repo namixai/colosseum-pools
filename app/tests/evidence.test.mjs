@@ -74,7 +74,7 @@ test("every row's source lines are in its section of the document", () => {
     else for (const s of r.sources) if (!body.includes(s)) lost.push(`${r.what}: «${s}»`);
   }
   assert.deepEqual(lost, []);
-  assert.equal(DATA.rows.length, 33);
+  assert.equal(DATA.rows.length, 37);
 });
 
 test("a row shows nothing its own source lines do not say", () => {
@@ -202,6 +202,7 @@ test("the page links an account only where the app reads it", () => {
     // live, and demo, the archive -- a row of either gets its link, a row of any other (the rehearsal) none.
     const expected = { "The fourth ending, on the rehearsal deployment": "rehearsal",
                        "Deployment 2, and the first run where the trader was not us": "demo2",
+                       "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take": "demo2",
                        "The pool on the second deployment (3 October)": "demo2",
                        "A challenge sold on the seat, and started by the host's keeper (4 October)": "demo2" };
     assert.equal(r.factory, expected[r.section] ?? "demo", r.what);
@@ -331,7 +332,7 @@ test("the events the page reads are the contracts' own, field for field", () => 
 
 test("a row that names an event carries it as the document writes it", () => {
   const named = DATA.rows.filter((r) => r.check.some((c) => /\b(FundedResult|FundedPayoutSent|Stopped)\(/.test(c)));
-  assert.equal(named.length, 3);
+  assert.equal(named.length, 5);
   for (const r of named) {
     assert.ok(r.event, `${r.what}: carries the event it names`);
     assert.ok(r.sources.some((s) => s.includes(r.event.text)), `${r.what}: ${r.event.text} is in its sources`);
@@ -346,7 +347,8 @@ test("a row that names an event carries it as the document writes it", () => {
 });
 
 test("the node's receipt bears out a named event only with its values, from the row's account", () => {
-  const row = DATA.rows.find((r) => r.event?.name === "FundedResult");
+  // The stage that paid, of 25 September: two rows name a FundedResult now, and the other one paid nothing.
+  const row = DATA.rows.find((r) => r.event?.name === "FundedResult" && r.event.values.payout === "1017840");
   const receipt = { status: 1, blockNumber: 65199083, from: "0xdc87191c63ab838434806d6dc4752904efab59b0", to: row.account };
   const event = { address: row.account.toUpperCase().replace("0X", "0x"), name: "FundedResult",
     args: { trader: "0xdc87191c63ab838434806d6dc4752904efab59b0", realized: 10012723n, payout: 1017840n } };
