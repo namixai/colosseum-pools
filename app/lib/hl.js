@@ -32,6 +32,8 @@ export const spot = (user) => info({ type: "spotClearinghouseState", user });
 export const openOrders = (user) => info({ type: "openOrders", user });
 export const fills = (user) => info({ type: "userFills", user });
 export const mids = () => info({ type: "allMids" });
+/** An account's deposits, withdrawals and transfers since `startTime` (ms), as Hyperliquid's own ledger has them. */
+export const ledger = (user, startTime) => info({ type: "userNonFundingLedgerUpdates", user, startTime });
 
 export async function spotUsdc(user) {
   const s = await spot(user);
