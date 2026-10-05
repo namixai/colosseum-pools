@@ -1253,6 +1253,30 @@ class APositionTheAnswerGivesNoValueFor(FlowBase):
         self.sweep()
         self.assertEqual(self.triggers(), [("Stop Market", "2643.3"), ("Take Profit Market", "2894.1")])
 
+    def test_a_stop_placed_from_a_market_read_behind_stands_too_far_until_a_later_sweep(self):
+        # Placed, not moved: there is no stop to be "only nearer" than. With the market's answer 2.5
+        # behind, the stop is put 2.5 beyond the rule's line, which is 0.0925 USDC more than the rule
+        # allows on 0.037 ETH. The next sweep whose two answers agree brings it in.
+        self.x.orders.clear()
+        self.x.markets_now[ETH] = Market("ETH", Decimal("2697.5"), 4)
+        self.sweep()
+        self.assertEqual(self.triggers(), [("Stop Market", "2640.8"), ("Take Profit Market", "2891.6")])
+        self.x.markets_now[ETH] = Market("ETH", Decimal("2700"), 4)
+        self.sweep()
+        # The take was placed 2.5 short of its line by the same difference, and is not moved.
+        self.assertEqual(self.triggers(), [("Stop Market", "2643.3"), ("Take Profit Market", "2891.6")])
+
+    def test_it_is_said_again_for_the_next_position_once_the_account_was_let_go(self):
+        self.assertEqual(len(self.sweep()), 1)
+        self.x.positions.clear()  # the position closes, and its stop and take go with it
+        self.x.orders.clear()
+        self.sweep()
+        self.sweep()              # nothing open at two answers running: let go
+        self.assertNotIn(ACCOUNT, self.gw.protector.watching())
+        self.assertEqual(self.send(asset=ETH, size=str(self.SIZE), limitPx="2701", nonce=NOW + 1)[0], 200)
+        self.x.positions[ETH] = self.SIZE
+        self.assertEqual(len(self.sweep()), 1)  # a new position, and no value for it either
+
 
 class OneFlatAnswerIsNotBelieved(FlowBase):
     """An account's positions and its open orders are two requests to Hyperliquid. An order that

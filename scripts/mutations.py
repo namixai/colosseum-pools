@@ -2792,6 +2792,11 @@ MUTATIONS = [
      "    return frozenset(book.positions)",
      ["test_a_position_with_a_value_is_not_spoken_of",
       "test_what_the_account_paid_still_moves_both"]),
+    # What was said of an account goes when the account is let go: its next position is said anew.
+    ("PG99", "gateway/protect.py",
+     "            self._unvalued_seen.pop(account, None)  # its next position is said anew\n",
+     "",
+     ["test_it_is_said_again_for_the_next_position_once_the_account_was_let_go"]),
     # Found by the audit, 4 Oct 2026: with no lag on the far side the take was pulled in for every tick
     # between two reads of the mark.
     ("PG67", "gateway/protect.py",

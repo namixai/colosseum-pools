@@ -266,11 +266,15 @@ order rests beside a position, that position's lines move a little with the diff
 the two requests, by the order's share of the exposure. The same goes for a position the account's
 answer gives no value for. Hyperliquid's gives one for every position; if it stopped, that
 position's lines would be worked out from two requests again. The sweep then says so in its
-journal, once for the position (`protect_no_position_value`), and does not move its take: a take
-pulled in by the difference between two requests closes the position short of its target. It
-still brings the stop nearer when the line says so. The stop is what holds the pool's rule, and a
-new day's floor has to reach it; the difference between two requests can only cost the trader
-room. Fifth, a stop that had already come
+journal (`protect_no_position_value`), once for the account and the asset — again after a value
+has come and gone, or after the account was let go — and does not move its take: a take pulled in
+by the difference between two requests closes the position short of its target. It still brings
+the stop nearer when the line says so. The stop is what holds the pool's rule, and a new day's
+floor or a payment out of the account has to reach it. Over time the difference between two
+requests costs the trader room. A single placement can stand that difference too far, until a
+later sweep: with the market's answer 2.5 behind, a stop placed for 0.037 ETH stood 2.5 beyond the
+rule's line, 0.09 USDC, and the take placed with it 2.5 short of its own, where it stays. Fifth, a
+stop that had already come
 nearer for that difference before this change stays where it is until its position closes: the
 gateway cannot tell it from a stop the trader tightened, and it does not move a stop away.
 **Measured** on the live challenge on 5 October 2026 at 05:55 UTC, with this change run beside
