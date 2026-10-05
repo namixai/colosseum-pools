@@ -221,11 +221,26 @@ trader's. The gateway keeps that in memory only, so after a restart every take i
 the trader moves it again.
 
 The lag works both ways. The gateway's own take is left alone while it stands within 6.5 bps of
-the mark from the line, on either side, and is put on the line outside that. The line is computed
-from one read of the mark and the account's equity carries another, taken a moment apart, and the
-two differ by a few basis points. With no lag on the far side a take was pulled in for every tick
-of that difference: the review counted 39 modifies in an hour in which nothing was paid and the
-price stood still.
+the mark from the line, on either side, and is put on the line outside that.
+
+**One answer, one instant.** A line is a distance from the mark, worked out from the equity. The
+line used to take its mark from the market's answer, while the account's equity — another request,
+a moment apart — carried the position's gain at a mark of its own. Whatever the price did between
+the two moved the stop and the take by that much. With no lag on the far side a take was pulled in
+for every tick of it: the review counted 39 modifies in an hour in which nothing was paid and the
+price stood still. The lag was meant to cover that difference, and the difference turned out
+larger than the lag. **Measured** on the live challenge, from Hyperliquid's own order history: on
+4 October 2026 at 20:47:12 UTC a take went from 2879.5 to 2877.0 and seventeen seconds later back,
+with no order of the trader's and no payment between — the two reads 2.5 USD apart on ETH, 9 bps.
+On 5 October at 00:37:11 a stop came 1.1 nearer for the same reason, and stayed, because a stop
+never moves away.
+
+The mark of every asset the account holds now comes from the account's own answer: Hyperliquid
+gives each position's value beside the equity it counted from it, and the value over the size is
+the mark. The two are then of one instant, and what the price does between two requests moves
+neither line. An asset the account does not hold keeps the market's mark, since nothing in the
+equity depends on it. Whether a stop or a take the trader asks for "would close at once" is still
+asked of the market's mark, which is the later of the two.
 
 **After a restart.** The list of accounts the sweep goes round lives in the gateway's memory and
 is filled by orders. A gateway that had just started watched nothing, so an account with a position
@@ -244,7 +259,18 @@ moves with the other position's price, a take that followed it would be modified
 with every swing between the two, and so those takes are left as they were before: they can still
 stand short of the target. Third, a position with an order resting on the book that would grow
 it. The line prices the larger size while the equity moves with the smaller, so the line moves
-with the mark, and the take is not followed until that order has filled or gone.
+with the mark, and the take is not followed until that order has filled or gone. Fourth, an asset
+the account has an order on and no position in is still priced at the market's mark; while such an
+order rests beside a position, that position's lines move a little with the difference between
+the two requests, by the order's share of the exposure. Fifth, a stop that had already come
+nearer for that difference before this change stays where it is until its position closes: the
+gateway cannot tell it from a stop the trader tightened, and it does not move a stop away.
+**Measured** on the live challenge on 5 October 2026 at 05:55 UTC, with this change run beside
+the code then on the host against the same two answers: the stop stood at 2662.9 and the line at
+2658.5, 4.4 nearer, 0.16 USDC of the 1.45 the account had left to its day's floor. Of the 4.4, the
+order history shows 1.4 from the two requests, in three steps. The other 3.0 is the funding the
+position had been paid since it opened, 0.109428 USDC: paid funding moves the line away, and the
+stop does not follow it.
 
 A funded stage has no target and the pool's rules have no take, so there the take is at most one
 challenge target away: `targetBps` of the equity at the moment it is set, with no allowance, since

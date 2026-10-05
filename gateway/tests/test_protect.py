@@ -21,8 +21,8 @@ from eth_account import Account
 from gateway import auth, chain, hl, protect, server
 from gateway.checks import GatewayError
 from gateway.demo_signer import DemoSigner, check_caps
-from gateway.protect import (LONG, SHORT, Book, Extra, Market, Protective, Protector, RuleLimits, exposure, lines,
-                             order_wire, parse_book, parse_markets, reconcile, valid_px, wire_number)
+from gateway.protect import (LONG, SHORT, Book, Extra, Market, Protective, Protector, RuleLimits, as_the_book_saw,
+                             exposure, lines, order_wire, parse_book, parse_markets, reconcile, valid_px, wire_number)
 from gateway.server import Gateway
 from gateway.tests.test_gateway import ACCOUNT, NOW, FakeReader
 
@@ -465,6 +465,33 @@ class Wire(unittest.TestCase):
         self.assertEqual(book.opening, {BTC: {LONG: Decimal("0.002"), SHORT: Decimal(0)}})
         self.assertEqual(book.protective, [Protective(61270164942, ETH, LONG, "sl", Decimal("2550.1")),
                                            Protective(61270164943, ETH, LONG, "tp", Decimal("2707.9"))])
+        # That answer had no value for the position, so there is no mark of the account's own.
+        self.assertEqual(book.marks, {})
+
+    def test_the_accounts_answer_carries_the_mark_its_equity_was_counted_at(self):
+        # The live challenge's own answer, 5 October 2026, 05:53:47 UTC. The market's answer, asked
+        # just before, said 2697.8.
+        markets = {ETH: Market("ETH", Decimal("2697.8"), 4), BTC: Market("BTC", Decimal("85000"), 5)}
+        state = {"marginSummary": {"accountValue": "70.917844"},
+                 "assetPositions": [{"position": {"coin": "ETH", "szi": "0.0367", "entryPx": "2718.8",
+                                                  "positionValue": "99.00559", "unrealizedPnl": "-0.77437"}},
+                                    {"position": {"coin": "BTC", "szi": "-0.001", "positionValue": "85.021"}}]}
+        book = parse_book(state, [], markets)
+        self.assertEqual(book.marks, {ETH: Decimal("2697.7"), BTC: Decimal("85021")})  # a short's size is negative
+        own = as_the_book_saw(markets, book)
+        self.assertEqual(own[ETH], Market("ETH", Decimal("2697.7"), 4))
+        self.assertEqual(own[BTC], Market("BTC", Decimal("85021"), 5))
+        # An asset the account does not hold keeps the market's mark, and so does a position whose
+        # value the answer did not give.
+        flat = parse_book({"marginSummary": {"accountValue": "70"}, "assetPositions": []}, [], markets)
+        self.assertIs(as_the_book_saw(markets, flat), markets)
+        bare = parse_book({"marginSummary": {"accountValue": "70"},
+                           "assetPositions": [{"position": {"coin": "ETH", "szi": "0.0367"}}]}, [], markets)
+        self.assertEqual(as_the_book_saw(markets, bare)[ETH].mark, Decimal("2697.8"))
+        zero = parse_book({"marginSummary": {"accountValue": "70"},
+                           "assetPositions": [{"position": {"coin": "ETH", "szi": "0.0367", "positionValue": "0.0"}}]},
+                          [], markets)
+        self.assertEqual(zero.marks, {})
 
     def test_hyperliquids_answer_to_a_stop_or_take_confirms_it(self):
         placed = {"status": "ok", "response": {"type": "order", "data": {"statuses": ["waitingForTrigger",
@@ -597,6 +624,9 @@ class Exchange:
         self.market_reads = 0
         self.rest_trader_orders = False  # a trader's order joins the book when it is submitted
         self.during_trader_submit = None  # runs while a trader's order is on its way
+        # asset -> the mark the account's own answer values its position at. Hyperliquid gives a
+        # position's value in the same answer as the equity; `markets()` is another request.
+        self.valued_at: dict[int, Decimal] = {}
 
     # Venue
     def markets(self):
@@ -606,8 +636,12 @@ class Exchange:
     def book(self, account, markets):
         coin = {i: m.coin for i, m in markets.items()}
         state = {"marginSummary": {"accountValue": str(self.equity)},
-                 "assetPositions": [{"position": {"coin": coin[a], "szi": str(q)}} for a, q in self.positions.items()]}
+                 "assetPositions": [{"position": {"coin": coin[a], "szi": str(q), **self._value(a, q)}}
+                                    for a, q in self.positions.items()]}
         return parse_book(state, self.orders, markets)
+
+    def _value(self, asset, size):
+        return {"positionValue": str(abs(size) * self.valued_at[asset])} if asset in self.valued_at else {}
 
     def _oid(self):
         self.next_oid += 1
@@ -994,6 +1028,115 @@ class NothingPaidNothingSent(FlowBase):
             self.gw.protector.sweep()
         self.assertEqual(self.take_moves(self.x.own_actions()[before:]), [])
         self.assertEqual([o["triggerPx"] for o in self.x.orders if o["orderType"].startswith("Take")], carried)
+
+
+class OneAnswerOneInstant(FlowBase):
+    """A line is a distance from the mark, worked out from the equity. The equity already holds the
+    position's gain at one mark, and the market's answer -- another request -- carries another.
+    Whatever the price did between the two moved the stop and the take by that much, with nothing
+    paid. Measured on the live challenge, from Hyperliquid's order history: on 4 October 2026 at
+    20:47:12 UTC a take went from 2879.5 to 2877.0 and at 20:47:29 back, with no order of the
+    trader's and no payment between; on 5 October at 00:37:11 a stop came 1.1 nearer and stayed,
+    since a stop never moves away. The two reads were 9 bps apart. The take's lag, 6.5 bps, had been
+    sized for the entry's fee and slippage, and the test beside this one tried it at 3.5.
+
+    The numbers are that challenge's: 70 USDC, a 10% target, 3% a day, 0.037 ETH."""
+
+    SIZE = Decimal("0.037")
+
+    def setUp(self):
+        super().setUp()
+        self.reader.limits = RuleLimits(True, 300, 600, 70 * USDC, DAY, 70 * USDC, 1000)
+        self.x.equity = Decimal(70)
+        self.at(market="2700", account="2700")
+        self.assertEqual(self.send(asset=ETH, size=str(self.SIZE), limitPx="2701")[0], 200)
+        self.x.positions[ETH] = self.SIZE
+        self.gw.protector.sweep()
+        self.sent_before = len(self.x.own_actions())
+        self.standing = self.triggers()
+
+    def at(self, market, account):
+        """The market's answer says one mark; the account's answer values the position at another."""
+        self.x.markets_now[ETH] = Market("ETH", Decimal(market), 4)
+        self.x.valued_at[ETH] = Decimal(account)
+
+    def triggers(self):
+        return sorted((o["orderType"], o["triggerPx"]) for o in self.x.orders)
+
+    def sent(self):
+        return self.x.own_actions()[self.sent_before:]
+
+    def test_where_they_stand_to_begin_with(self):
+        # 2.1 to lose before the day's floor at 67.9: 56.76 under the mark. The take clears 77 by
+        # what closing costs. Nothing was sent by the sweep that found them there.
+        self.assertEqual(self.standing, [("Stop Market", "2643.3"), ("Take Profit Market", "2894.1")])
+        self.assertEqual(self.sent(), [])
+
+    def test_the_market_read_behind_the_accounts_pulls_no_take_in(self):
+        # 20:47:12 on 4 October: 2.5 apart, more than the lag. The take went in by that much.
+        self.at(market="2697.5", account="2700")
+        self.gw.protector.sweep()
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(self.triggers(), self.standing)
+
+    def test_the_market_read_ahead_of_the_accounts_brings_no_stop_nearer(self):
+        # 00:37:11 on 5 October. A stop that comes nearer for this stays nearer: it never moves away.
+        self.at(market="2702.5", account="2700")
+        self.gw.protector.sweep()
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(self.triggers(), self.standing)
+
+    def test_an_hour_of_sweeps_with_the_two_answers_three_dollars_apart_sends_nothing(self):
+        rng = random.Random(11)
+        for _ in range(240):  # an hour at fifteen seconds; 3 USD on 2700 is 11 bps
+            self.at(market=str(Decimal(2700) + Decimal(rng.randint(-30, 30)) / 10), account="2700")
+            self.gw.protector.sweep()
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(self.triggers(), self.standing)
+
+    def test_the_price_moving_in_both_answers_moves_neither_line(self):
+        # The mark is up 20 in both and the equity holds the gain: the same two prices as before.
+        self.at(market="2720", account="2720")
+        self.x.equity = Decimal(70) + self.SIZE * 20
+        self.gw.protector.sweep()
+        self.assertEqual(self.sent(), [])
+
+    def test_what_the_account_paid_still_moves_both(self):
+        # 0.2 paid, the two answers 2.5 apart: the lines move by what was paid, 5.4 of price, and by
+        # nothing else. The stop comes nearer; the take goes out, past its lag.
+        self.at(market="2702.5", account="2700")
+        self.x.equity = Decimal("69.8")
+        self.gw.protector.sweep()
+        moved = sorted(a["modifies"][0]["order"]["t"]["trigger"]["tpsl"] for a in self.sent())
+        self.assertEqual(moved, ["sl", "tp"])
+        self.assertEqual(self.triggers(), [("Stop Market", "2648.7"), ("Take Profit Market", "2899.5")])
+
+    def test_an_order_on_its_way_is_planned_at_the_accounts_mark_too(self):
+        self.at(market="2702.5", account="2700")
+        plan, markets, _, book = self.gw.protector.plan(ACCOUNT, self.key.address)
+        self.assertEqual((markets[ETH].mark, book.marks), (Decimal("2700"), {ETH: Decimal("2700")}))
+        self.assertEqual(plan.actions, [])
+        # An asset with no position has nothing in the equity that hangs on its mark: the market's.
+        self.assertEqual(markets[BTC].mark, MARKETS[BTC].mark)
+
+    def test_the_traders_own_take_is_held_to_the_line_at_the_accounts_mark(self):
+        # The line is 2894.1. With the market's answer 2.5 ahead it read 2896.8, and a take a
+        # dollar past the target was let through.
+        self.at(market="2702.5", account="2700")
+        status, out = self.send("take", asset=ETH, triggerPx="2895.1", nonce=NOW + 1)
+        self.assertEqual((status, out.get("code")), (403, "take_beyond_target"))
+        self.assertIn("2894.1", out["detail"])
+        status, _ = self.send("take", asset=ETH, triggerPx="2894.1", nonce=NOW + 2)
+        self.assertEqual(status, 200)
+
+    def test_past_the_mark_is_still_asked_of_the_markets_own_mark(self):
+        # A stop at 2701 would close at once by the account's answer and not by the market's, which
+        # is the later of the two. That question stays with the market.
+        self.at(market="2702.5", account="2700")
+        status, _ = self.send("stop", asset=ETH, triggerPx="2701", nonce=NOW + 1)
+        self.assertEqual(status, 200)
+        status, out = self.send("stop", asset=ETH, triggerPx="2702.5", nonce=NOW + 2)
+        self.assertEqual((status, out.get("code")), (403, "stop_past_mark"))
 
 
 class AfterARestart(FlowBase):

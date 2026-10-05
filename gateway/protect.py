@@ -66,10 +66,14 @@ CLOSE_COST_BPS = 2 * (TAKER_FEE_BPS + SLIPPAGE_BPS) + SPARE_BPS   # 18
 # allowance above being spent as planned, and a modify sent for it would go with every opening. A
 # take within this still clears the target by the close and the whole spare.
 #
-# The same distance BEYOND the line is left alone too. The mark the line is computed from and the
-# mark inside the account's equity are two reads, a moment apart, and they differ by a few basis
-# points. A take pulled in for every tick of that is walked in by modifies until it is short enough
-# to be carried out again: the audit counted 39 in an hour of nothing happening (4 Oct 2026).
+# The same distance BEYOND the line is left alone too. Until 5 October 2026 the mark the line was
+# computed from and the mark inside the account's equity were two requests, a moment apart. A take
+# pulled in for every tick between them was walked in by modifies until it was short enough to be
+# carried out again: the audit counted 39 in an hour of nothing happening (4 Oct 2026). For a
+# position the account holds the two are one answer now (`as_the_book_saw`), and the difference
+# that outgrew this lag -- 9 bps, measured -- is gone. The far side stays all the same: an order
+# resting with no position behind it is still priced at the market's mark, and a tick of rounding
+# is still a tick.
 TAKE_LAG_BPS = TAKER_FEE_BPS + SLIPPAGE_BPS   # 6.5
 USD = Decimal(1_000_000)  # chain units per USDC (perp USD and equity are in 1e-6 USDC)
 # The farthest a stop or a take is put from the mark, as a fraction of it. A position too small to
@@ -182,6 +186,9 @@ class Book:
     positions: dict[int, Decimal] = field(default_factory=dict)  # asset -> signed size
     opening: dict[int, dict[str, Decimal]] = field(default_factory=dict)  # asset -> side -> resting size
     protective: list[Protective] = field(default_factory=list)
+    # asset -> the mark this answer valued the position at: its value over its size. The equity
+    # above was counted at exactly these marks, in the same answer.
+    marks: dict[int, Decimal] = field(default_factory=dict)
 
 
 class Venue(Protocol):
@@ -212,6 +219,9 @@ def parse_book(state: Any, orders: Any, markets: dict[int, Market]) -> Book:
             if p["coin"] not in index:
                 raise GatewayError(502, "no_market_price", f"no mark for {p['coin']}")
             book.positions[index[p["coin"]]] = size
+            value = Decimal(p.get("positionValue") or 0)
+            if value > 0:
+                book.marks[index[p["coin"]]] = value / abs(size)
     for o in orders:
         asset = index.get(o["coin"])
         if asset is None:
@@ -260,6 +270,26 @@ def exposure(book: Book, extra: Extra | None = None) -> dict[int, dict[str, Deci
 class Line:
     stop: Decimal
     take: Decimal
+
+
+def as_the_book_saw(markets: dict[int, Market], book: Book) -> dict[int, Market]:
+    """The markets, with the mark of every asset the account holds taken from the account's own
+    answer instead of from the market's.
+
+    A line is a distance from the mark, and the distance is worked out from the equity. The equity
+    already holds the position's gain at one mark; the market's answer is another request and
+    carries another. Whatever the price did between the two requests moved the stop and the take by
+    exactly that much, with nothing paid and nothing changed. Measured on the live challenge on
+    4 and 5 October 2026, from Hyperliquid's own order history: a take pulled 2.5 USD in on ETH
+    and put back seventeen seconds later, and a stop that came 1.1 nearer and stayed, since a stop
+    never moves away. The two reads were 9 bps apart; the take's lag is 6.5.
+
+    Taken from one answer the two are of one instant, and that difference is gone. An asset with
+    no position has nothing in the equity that depends on its mark, so the market's is used there.
+    """
+    if not book.marks:
+        return markets
+    return {asset: replace(m, mark=book.marks[asset]) if asset in book.marks else m for asset, m in markets.items()}
 
 
 def _moved(mark: Decimal, notional: Decimal, amount: Decimal) -> Decimal:
@@ -493,6 +523,7 @@ class Protector:
     def plan(self, account: str, key: str, extra: Extra | None = None) -> tuple[Plan, dict, RuleLimits, Book]:
         markets = self.venue.markets()
         book = self.venue.book(account, markets)
+        markets = as_the_book_saw(markets, book)
         limits = self.limits(account, key)
         want = lines(limits, book.equity, exposure(book, extra), markets)
         # Nothing follows here. With an order on its way the line prices more than the position
@@ -591,7 +622,9 @@ class Protector:
             book = self.venue.book(account, markets)
             if asset not in markets:
                 raise GatewayError(502, "no_market_price", f"no mark for asset {asset}")
-            m = markets[asset]
+            # "Past the mark" is asked of the market's own mark, as before. The bound a stop or a
+            # take is held to is a line, and a line is worked out at the account's marks.
+            m, markets = markets[asset], as_the_book_saw(markets, book)
             q = book.positions.get(asset, Decimal(0))
             if q == 0:
                 raise GatewayError(409, "no_position", "there is no position on this asset to move a stop or take for")
@@ -695,11 +728,12 @@ class Protector:
         watched = self.watching()
         if not watched:
             return
-        markets = self.venue.markets()
+        market = self.venue.markets()
         for account, key in watched.items():
             try:
                 with self._lock(account):
-                    book = self.venue.book(account, markets)
+                    book = self.venue.book(account, market)
+                    markets = as_the_book_saw(market, book)
                     exp = exposure(book)
                     if not exp:
                         self._unwatch(account)

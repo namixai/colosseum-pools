@@ -2619,6 +2619,45 @@ MUTATIONS = [
      "                if report is None or any(r[\"asset\"] == k[1] and r[\"side\"] == k[2] and r.get(\"takeWas\") != \"kept\"",
      "                if report is None or any(r[\"asset\"] == k[1] and r.get(\"takeWas\") != \"kept\"",
      ["test_a_take_placed_for_the_other_direction_leaves_the_traders_take_theirs"]),
+    # A line is worked out from the equity and from a mark, and the two came from two requests: what
+    # the price did between them moved the stop and the take with nothing paid (measured on the live
+    # challenge, 4 and 5 Oct 2026). The mark now comes from the answer that gave the equity.
+    ("PG80", "gateway/protect.py",
+     "    return {asset: replace(m, mark=book.marks[asset]) if asset in book.marks else m for asset, m in markets.items()}",
+     "    return markets",
+     ["test_the_market_read_behind_the_accounts_pulls_no_take_in",
+      "test_the_market_read_ahead_of_the_accounts_brings_no_stop_nearer"]),
+    ("PG81", "gateway/protect.py",
+     "                    markets = as_the_book_saw(market, book)\n",
+     "                    markets = market\n",
+     ["test_an_hour_of_sweeps_with_the_two_answers_three_dollars_apart_sends_nothing"]),
+    ("PG82", "gateway/protect.py",
+     "        markets = as_the_book_saw(markets, book)\n        limits = self.limits(account, key)\n",
+     "        limits = self.limits(account, key)\n",
+     ["test_an_order_on_its_way_is_planned_at_the_accounts_mark_too"]),
+    ("PG83", "gateway/protect.py",
+     "            m, markets = markets[asset], as_the_book_saw(markets, book)",
+     "            m = markets[asset]",
+     ["test_the_traders_own_take_is_held_to_the_line_at_the_accounts_mark"]),
+    # "Would close at once" is the market's to say: its answer is the later of the two.
+    ("PG84", "gateway/protect.py",
+     "            m, markets = markets[asset], as_the_book_saw(markets, book)",
+     "            markets = as_the_book_saw(markets, book)\n            m = markets[asset]",
+     ["test_past_the_mark_is_still_asked_of_the_markets_own_mark"]),
+    # The mark is the position's value over its size: not the value, not signed, and not from a
+    # position the answer priced at nothing.
+    ("PG85", "gateway/protect.py",
+     "                book.marks[index[p[\"coin\"]]] = value / abs(size)",
+     "                book.marks[index[p[\"coin\"]]] = value",
+     ["test_the_accounts_answer_carries_the_mark_its_equity_was_counted_at"]),
+    ("PG86", "gateway/protect.py",
+     "                book.marks[index[p[\"coin\"]]] = value / abs(size)",
+     "                book.marks[index[p[\"coin\"]]] = value / size",
+     ["test_the_accounts_answer_carries_the_mark_its_equity_was_counted_at"]),
+    ("PG87", "gateway/protect.py",
+     "            if value > 0:\n                book.marks",
+     "            if True:\n                book.marks",
+     ["test_the_accounts_answer_carries_the_mark_its_equity_was_counted_at"]),
     # Found by the audit, 4 Oct 2026: with no lag on the far side the take was pulled in for every tick
     # between two reads of the mark.
     ("PG67", "gateway/protect.py",
