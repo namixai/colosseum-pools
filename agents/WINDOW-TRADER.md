@@ -2,8 +2,8 @@
 
 A trading window is an AI agent that trades only through this repository's command line. On the
 second deployment the trader is a separate AI agent of the team, holding its own wallet and trading
-through the gateway; `docs/EVIDENCE.md` says what it did, including one order this command line
-would have refused. To run a window, open it in this repository with
+through the same gateway; `docs/EVIDENCE.md` says what it did. To run a window, open it in this
+repository with
 `COLOSSEUM_KEY_DIR` and `COLOSSEUM_GATEWAY_URL` set (and `COLOSSEUM_RPC_URL`, if we have our
 own RPC), then paste the prompt below. The window reaches the market only through
 `python -m agents.client`. Nothing in the prompt is a limit: the client counts orders per day
