@@ -143,12 +143,12 @@
       "sentBy": "sent by the trader itself",
       "record": "Passed(equity 70387327, payout 0) — 70.387327 USDC — and the same transaction cut the challenge's key.",
       "check": ["status() and breachReason() on the account"],
-      "notes": ["The payout is 0 because this pool's share on a challenge is 0, not because anything failed.", "The first attempt at the target was cut short by our take.", "A trader we do not control: the agent is the team's, we funded its wallet, and the bench was built for it to pass."],
+      "notes": ["The payout is 0 because this pool's share on a challenge is 0, not because anything failed.", "The first attempt at the target was cut short by our take.", "It does not show a trader we do not control: the agent is the team's, we funded its wallet, and the bench was built for it to pass."],
       "sources": [
         "| 0xa571193573d068414a524dcb3d134f685f1e022f | challenge |",
         "the pass, 0x26ecb66a2aadefd2501659cbd2c682804b7ee6253bbd1f6dff4efb97ef7ae4f6, block 65973266 (4 October, 04:04:38), sent by the trader itself: Passed(equity 70387327, payout 0) — 70.387327 USDC — and the same transaction cut the challenge's key. The payout is 0 because this pool's share on a challenge is 0, not because anything failed.",
         "The first attempt at the target was cut short by our take.",
-        "What it does not show. A payout on this deployment: there was none to make. A stop: no rule was broken. A trader we do not control: the agent is the team's, we funded its wallet, and the bench was built for it to pass."
+        "What it does not show. A payout on this deployment: there was none to make. A stop: no rule was broken. It does not show a trader we do not control: the agent is the team's, we funded its wallet, and the bench was built for it to pass."
       ]
     },
     {

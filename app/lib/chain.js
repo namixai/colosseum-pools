@@ -114,6 +114,13 @@ export const KEY_STATE = ["Unknown", "Free", "Bound", "Retired"];
 
 export const readProvider = new ethers.JsonRpcProvider(CONFIG.rpc, CONFIG.chainId, PROVIDER_OPTIONS);
 
+/** The chain's own clock: the time of its latest block, in seconds. HyperCore stamps its ledger by the same clock. */
+export async function blockTime() {
+  const block = await readProvider.getBlock("latest");
+  if (!block) throw new Error("The chain's latest block could not be read.");
+  return block.timestamp;
+}
+
 let signer = null;
 const listeners = new Set();
 

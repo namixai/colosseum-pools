@@ -415,8 +415,9 @@ def reconcile(book: Book, want: dict[tuple[int, str], Line], markets: dict[int, 
     are worked out from two requests, so a take that stands with such a position is not moved
     either: pulled in by what the price did between the requests, it would close the position short
     of its target. The stop is still brought nearer when the line says so. The stop is what holds
-    the pool's rule, and a new day's floor has to reach it; the difference between two requests
-    can only cost the trader room.
+    the pool's rule, and a new day's floor or a payment out of the account has to reach it. Over
+    time the difference between two requests costs the trader room; a single placement can stand
+    that difference too far, until a later sweep.
     """
     actions, report = [], []
     for (asset, side), line in sorted(want.items()):
@@ -724,10 +725,11 @@ class Protector:
     def _unwatch(self, account: str) -> None:
         with self._guard:
             self._watch.pop(account, None)
+            self._unvalued_seen.pop(account, None)  # its next position is said anew
 
     def _unvalued(self, account: str, book: Book, market: dict[int, Market]) -> frozenset[int]:
         """The assets `unvalued` names for this account, each said in the journal once: again only
-        after the answer has given a value for it and stopped."""
+        after the answer has given a value for it and stopped, or after the account was let go."""
         blind = unvalued(book)
         with self._guard:
             known, self._unvalued_seen[account] = self._unvalued_seen.get(account, frozenset()), blind
