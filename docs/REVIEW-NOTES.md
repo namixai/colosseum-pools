@@ -3,7 +3,8 @@
 An internal review of this repository, done between 25 September and 5 October 2026 by a reviewer who did
 not write the code. It is not an external audit. Each finding was reproduced by a test when it was
 reported. Most were fixed on a branch as they came in, and the fixes were checked again on main at
-commit `53197068`. Nothing here is deployed unless it says so.
+commit `53197068`. Nothing here is deployed unless it says so. Where a row gives the time a fix reached
+the demo's host, that is the operator's record; the review did not check the host.
 
 ## Scope
 
