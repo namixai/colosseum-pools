@@ -1,6 +1,6 @@
 # What the shared pool has actually done on chain
 
-Status: 4 October 2026, HyperEVM testnet (chain 998) and Hyperliquid testnet, mock USDC. The
+Status: 5 October 2026, HyperEVM testnet (chain 998) and Hyperliquid testnet, mock USDC. The
 shared pool (`src/shared/SharedPool.sol`, [the design](SHARED-POOL.md)) is a layer over the pools of
 this demo. Nobody has reviewed it. Every line below is either a state a contract held when its
 section was written, which anyone can read, or a transaction that was read back from its receipt.
@@ -15,12 +15,14 @@ later section says so. The demo's own record is in [EVIDENCE.md](EVIDENCE.md).
 | `0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0` | the demo's | `#/shared/0x2f05940CA0da8302464ED6e82B91fa5628D9B0C0` | two depositors: a short payment split between them, the same fraction at one price |
 | `0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6` | the demo's | `#/shared/0x547067e2D6c5627C5463c4cf62086eeD1B2C26a6` | a seat a trader bought and traded |
 | `0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717` | the second deployment's, `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222` | `#/shared/0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717` | a pool deployed with the seal: started, one seat published, the book sealed before any deposit |
+| `0xa2eEe2CF75d5f740E436a08007345dA5789a4499` | the second deployment's, `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222` | `#/shared/0xa2eEe2CF75d5f740E436a08007345dA5789a4499` | three seats of different sizes, a fee of 0 on a holder's gain, and a seat an agent trades through the client |
 
 The first three are pools of the earlier rounds: two have their seats on the first deployment's factory,
 which is an archive now, and one on a factory of its own. The app opens each by its address, shows its
-record, and takes no deposit into it; a holder can still ask to withdraw. The fourth has its seats on
-the second deployment's factory, the one the gateway and the keepers serve; `#/shared` with no address
-opens it.
+record, and takes no deposit into it; a holder can still ask to withdraw. The fourth and the fifth have
+their seats on the second deployment's factory, the one the gateway and the keepers serve. `#/shared`
+with no address opens the fifth, and it is the one pool the app takes a deposit into. The fourth is
+kept as a record: its one seat is too small for an agent to trade through this repository's client.
 
 ## Checking it yourself
 
@@ -232,10 +234,121 @@ have: each takes two keys from the second deployment's registry.
 Every wallet here is ours. The keeper's transaction was sent by the host, not by this run. Every step's
 hash, and the client's two answers, are in `spike/results/2026-10-04.jsonl`.
 
+## The seat's challenge runs out, the host settles it, and both depositors leave (5 October)
+
+On `0x43f7562C…a717`, the challenge `0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262` sold the day before. Its
+deadline was 5 October 07:00:15 UTC. Nobody of this run was watching at that hour.
+
+- **Expired by the keepers on the host, eighteen seconds after the deadline.** `expire` in
+  `0x4641ad99435632adf219302db9146b83bdc02a186fe7ab02468e9988ca38c3cb`, block 66071763 (07:00:33 UTC),
+  sent by `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`. The ending is `Stopped(status 4 Expired, reason 0
+  None, equity 3000000)`: it ran out of time, no rule was broken, and its 3 USDC were untouched.
+- **Settled in three steps, two minutes in all.** `settle` in
+  `0x46c3b230d7f185c8fa084f45d60c0b0da053fa098f8c4ffbbb9e37c35cc05762` and in
+  `0xbd85f0c1d62cc8a96d9d093dd855d105ec59845d1bae5e69e6ee3acc30ffe53a`, both from the same address, and in
+  `0x47312683bd34d268075988efc423671c0536293b955b98e9ad5bbef605cfc6a8`, block 66071867 (07:02:15 UTC), from
+  `0xD6F07317fC5f12302776b03A7206B1614FD49021`. After them `status()` reads 8, the seat is Idle with 33
+  USDC on HyperCore, and the 1.5 price is still held at the seat on HyperEVM. This run sent none of the four.
+- **Both depositors asked for everything.** `0xbD97438655835138daBeE38f3B7d96275eDc315a` in
+  `0xe781f6f2f8c4a118cae70ababb34f5793e9f40b40ad1a6228eafbc008c97c572` and
+  `0x278AbBC5B78F34F77829dDd7887566E182beBD83` in
+  `0xae12e7e7f577c5a4b12e39e95b5abbf5208e67b74e2b819e7afc06c2cd0e4dc5`, 20e8 shares each.
+- **The shared pool's keeper, run from the team's machine.** One pass of `ops/shared_keeper.py`, told not to
+  arm anything, from the wallet `0x75deec8b513Ee3f5D15d6b40B706A3314cf26590`. It sent two calls anyone may
+  make: `releaseSeat` in `0x0b590ba6b8f4c6aa384442aa19cc26ea4a086d9275b5913bd9163be53c45128e`, block 66075722,
+  which brought the seat's 33 USDC back, and `settle` in
+  `0x1654ea6b81944b8601d9fcdd90f4307863d56f3e76924026dcd0b1ff64f8fcb0`, block 66075727, five blocks later.
+  The shared pool's keeper is still not installed on the host.
+- **One point paid both in full.** `PointSettled(point 2, value 4150000000, sharesBefore 4200000000,
+  sharesAfter 200000000)`, and for each depositor `Paid(shares 2000000000, feeShares 0, evm 750000, core
+  1901190400)`: 19.761904 USDC, which is 20e8 shares at 0.98809524 rounded down to the millionth. The point
+  took the 1.5 price from the seat and paid it out on HyperEVM, half to each. `payments(holder)` reads
+  `(1791187532, 750000, 1901190400)` for both.
+- **Read back from the balances, not from the receipt.** Each depositor's HyperCore spot balance read
+  19.011904 USDC and each wallet 0.75 USDC on HyperEVM after the point. A receipt only says the payment
+  was asked for; HyperCore carries it out afterwards.
+- **No fee was taken.** This pool was deployed with a fee of 10% of a holder's own gain, and neither
+  holder had one: each paid 20 and got 19.761904 back.
+- **What is left.** The pool holds 1.976192 USDC on the platform's 2e8 starting shares. Its seat is idle
+  and empty.
+
+On 3 October the same way out took two points and a wait of five minutes, because the first point paid
+before the seat's capital was back. Here the seat was released first and one point was enough. Every
+step's hash is in `spike/results/2026-10-05.jsonl`; the host's four are marked there as read from the
+chain.
+
+## A second pool on the second deployment, with three seats (5 October)
+
+`0xa2eEe2CF75d5f740E436a08007345dA5789a4499`, deployed in
+`0x814ec30da330aea2e9e4c8c30a3f6d6a0e686c72a4bb69ab4591e1dd00b13153` (block 66066301) with its seats on the
+second deployment's factory (`deployments/testnet-shared-demo2b.json`). A smallest deposit of 50 USDC, a
+lock of ten minutes, and **a fee of 0**: `feeBps()` reads 0, so the platform takes nothing from what a
+holder gains. The number is fixed in the contract and cannot be changed.
+
+- **Started.** `start` in `0x259e5d27abd94a61778054a5e5f7b76977158047d77ebb20f799d178d568352e`: 34 USDC from
+  the operator became the platform's 34e8 starting shares.
+- **Three seats, published.** All under the rules of the live-run pool: a 3% daily loss, a 6% drawdown,
+  5× leverage, SOL, BTC and ETH, a 10% target, 0 to the trader on the challenge and 80% on the funded
+  stage.
+
+  | Seat | Challenge capital | Funded capital | Price | `addSeat` |
+  |---|---|---|---|---|
+  | `0xf40da2862f1e3f20ab7d1ed7b5e67a83d333cb3b` | 10 | 100 | 2 | `0x9efc68b450db0a077de5499176ddedbd352ac35f72b3d08d2c13ea8a0f98129f` |
+  | `0x4e8884ceb7f8f72aa4877bc71e217958567750a9` | 20 | 200 | 4 | `0x3719e296a3afe70b7482fe54ea9c1c1fd79dd925171aacd89d511fc672679651` |
+  | `0x17df6fb2e45b13c7bd5340d30551749609607b3b` | 30 | 300 | 6 | `0xb97c1ae82e6d0ab14a1e68d7559941e51f6741ee27c9154155e2c91d4acd41b6` |
+
+  `planCapital()` reads 663 USDC against a seed of 34: the contract asks for at least a twentieth.
+- **Sealed before any deposit.** `seal` in
+  `0x33ee1b7d844a54092749995b13a4f37df85b241bd50f405b594448abf88ba811`. Three seats, and never a fourth.
+- **Two deposits of 318, at a price of 1.** Tickets opened in
+  `0xb675dc236f779e21b743fdcbe0f3e4435b99a73e07816c0d912bab748b5e7713` and
+  `0x9b39c4c3ce985d26c28ab7b2857897c2c7613d8207cf102eec4bdf9b8b279eec`; point
+  `0x45abc4b1ca63476f45a1d2099ddcaffe700233d9be95b973f417740c8410bfd8` (block 66066642) took both in.
+  `totalShares()` reads 670e8 and `value()` 670 USDC.
+- **All three armed.** `armSeat` in
+  `0xb1123cdbd0b9cdeeec872da904e9091db44b7429aae69a7d4b18673a30ea336e`,
+  `0x9b46cf2daf75adaf43e7eb759ede3228618b552f8c7a8f07738f758855df5fd5` and
+  `0x9dac9aee35c3e1eed05a193ab37656be91a5bc9f3b31112b04ea89daac33cf95` moved 111, 221 and 331 USDC to the
+  seats, each followed by `prepareAccount`. Three new HyperCore accounts cost the pool 3 USDC: `value()`
+  read 667 on 670e8 shares, and 4 USDC stayed free.
+
+**Short on purpose.** A challenge on these seats runs seven days and a funded stage at most one. Those
+terms are there so that a pass and the end of a funded term can be seen within a week on testnet money.
+They are not terms anyone is offered. The sizes are small for the same reason; what they are large
+enough for is the trader's client, which needs 5 USDC of capital at 5× to send one order.
+
+### The first seat sold, and traded by an agent
+
+- **The trader.** `0xd4f31E7234308546c822C619705F1A4B5fC8f629`, the same wallet of the team's agent as in
+  the second deployment's record in [EVIDENCE.md](EVIDENCE.md), bought the challenge
+  `0x48f948a895F82a32fb39eE57C457c05FdA7A7779` on the seat `0xf40da2862f1e3f20ab7d1ed7b5e67a83d333cb3b`, paying the
+  2 price and the 0.7 platform fee (`buyChallenge` in
+  `0xa8bf8df694b54b65f067f9142c7d3d6e1e9c017e7285f6abbbf5c5f18084eb11`, block 66068662, 5 October 06:09:43
+  UTC). We funded that wallet and asked the agent to buy; it is not a trader we do not control.
+- **Started by the host four blocks later.** `activate` in
+  `0x418a526dac82ed383c1a23cad9686a05f8fd3cfa8312ebd4e77952bca16cb3c1`, block 66068666, sent by
+  `0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa`. `status()` reads 2, Active, with a deadline of 12 October
+  06:09:47 UTC.
+- **The key.** `KeyRegistry.bindingOf(0x8c2eDe5DEd6B6188E22e222300a691Cf7509A7e6)` on the registry
+  `0x53AF27F65Dd7473c890f633aC0025b261307779e` is `(2, challenge, trader)`. `freeCount()` went from 28 to 26.
+- **A trade, through the client.** Two and a half minutes after the start the agent bought 0.0062 ETH,
+  16.76 USDC, in one order: Hyperliquid's fills for the challenge account (`userFills`) carry the hash
+  `0xc4f16fdff253ec0ec66b042af0c24001050087c58d570ae068ba1b32b157c5f9` (oid 61879888823), 0.0024 at 2703.5
+  and 0.0038 at 2703.2. The client's cap on this account is 20 USDC, so the order fits where the one on
+  the 3 USDC seat could not.
+- **The stop and the take are the exchange's.** Read at 08:12 UTC, the account carried two reduce-only
+  position orders placed by the gateway, a stop at 2656.7 and a take at 2869.2. They move as the gateway
+  follows the rule line and the target; the numbers are of that reading.
+
+Read at 08:11 UTC on 5 October: `value()` 668.147546 USDC on 670e8 shares, with a position open. The other
+two seats were Idle and unsold. Every step's hash is in `spike/results/2026-10-05.jsonl`.
+
 ## What this does not show
 
-- A passed challenge or a funded stage on a seat, and the funded term running out.
-- A trade on the seat of the pool on the second deployment: the challenge was sold and started, and the
-  trader's client refused every order on its 3 USDC.
+- A passed challenge or a funded stage on a seat, and the funded term running out. The seats of the
+  fifth pool are short for that; none had passed at the time of writing.
+- A holder leaving with a gain. Every way out recorded here was at a price under 1, so no fee on a
+  gain was ever due, under the 10% of the earlier pools or the 0 of the fifth.
+- A trader we do not control on a seat. The agent that bought the fifth pool's first seat is the team's.
 - A stop on a seat. The rules above would stop the challenge at 2.70 USDC of equity, or at 2.85 on
   the day; the trader stayed well inside.

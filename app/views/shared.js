@@ -4,13 +4,15 @@
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { sendUsdc } from "../lib/hlsend.js";
-import { esc, render, $, wire, badge, row, when, duration, pct, settle } from "../lib/ui.js";
+import { esc, render, $, wire, badge, row, when, duration, settle } from "../lib/ui.js";
 import { rulesAndTerms, termsHtml, rulesHtml } from "./pools.js";
 import { stageName } from "../lib/stages.js";
 import { deploymentNamed, isArchive } from "../lib/deployments.js";
+import { agentTradability, agentCardLine } from "../lib/agentcap.js";
 import {
   SHARED_POOL, SHARED_ABI, TICKET_STATE, blockerText, amount, spot1e8, shares, worth, price, depositPlan,
-  ticketsToName, lockedUntil, explain, plain, usd, openedTicket, paidSummary, depositState, sealLine,
+  ticketsToName, lockedUntil, explain, plain, usd, openedTicket, paidSummary, depositState, sealLine, feeLine,
+  isCurrentPool,
 } from "../lib/shared.js";
 
 const { ethers } = window;
@@ -67,9 +69,11 @@ export async function sharedView(address, page) {
   // The deployment whose factory makes this pool's seats: the live one, the archive, or none the site reads.
   const deployment = deploymentNamed(seatFactory);
   const started = BigInt(total) > 0n;
-  const deposit = depositState({ deployment, started, sealed });
+  const current = isCurrentPool(at);
+  const deposit = depositState({ deployment, started, sealed, current });
   const where = !deployment ? "seats on a factory of its own"
-    : isArchive(deployment) ? "first deployment, archive" : "live deployment";
+    : isArchive(deployment) ? "first deployment, archive"
+    : current ? "live deployment" : "live deployment, an earlier pool";
   const seatBook = sealLine(sealed);
 
   render(page, `
@@ -97,7 +101,7 @@ export async function sharedView(address, page) {
         ${seatBook ? row("The book of seats", esc(seatBook)) : ""}
         ${row("Smallest deposit", `${usd(minDeposit, 8)} USDC`)}
         ${row("Lock", `${esc(duration(lock))} after your latest deposit`)}
-        ${row("The platform's fee", `${pct(feeBps)} of your own profit, taken when you withdraw`)}
+        ${row("The platform's fee", esc(feeLine(feeBps)))}
         <p class="small muted">The value is what the pool would have if it closed every account at the
         mark price now and paid every trader it owes.</p>
       </section>
@@ -258,6 +262,9 @@ async function seats(box, sp, seatList) {
       status = row("Challenge", `${name}, ${esc(chain.STATUS[Number(s)])}${
         Number(deadline) ? `, until ${esc(when(deadline))}` : ""}`);
     }
+    // The same line the list of pools carries: whether an agent could trade this seat through the repository's client.
+    const agent = agentCardLine(agentTradability({ capital: Number(terms.capital) / 1e6,
+      fundedCapital: Number(terms.fundedCapital) / 1e6, leverageX100: rules.maxLeverageX100 }));
     return `<article class="card">
       <h3><span class="mono">${esc(chain.short(seat))}</span> ${badge(stageName(stage), Number(stage) === 0 ? "ok" : "")}</h3>
       ${row("On HyperCore spot", `${usd(spot, 8)} USDC`)}
@@ -265,6 +272,7 @@ async function seats(box, sp, seatList) {
       ${row("Longest funded stage", esc(duration(term)))}
       ${termsHtml(terms)}
       ${rulesHtml(rules, assets)}
+      ${agent ? `<p class="small">${esc(agent)}</p>` : ""}
       ${known ? `<p><a href="#/pool/${esc(seat)}">The seat's pool page →</a></p>`
         : `<p class="small muted">This seat was made by a factory of the shared pool's own. The pool,
       challenge and trading pages of this site only know the factories of its two deployments, so they

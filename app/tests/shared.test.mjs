@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import {
   SHARED_ABI, BLOCKER, TICKET_STATE, MAX_PER_POINT, blockerText, amount, usd, plain, spot1e8, shares, worth, price,
   depositPlan, ticketsToName, lockedUntil, paymentsLine, explain, openedTicket, paidSummary, depositState, sealLine,
-  SHARED_POOL,
+  SHARED_POOL, isCurrentPool, feeLine,
 } from "../lib/shared.js";
 import { DEPLOYMENTS, liveDeployment, deploymentNamed } from "../lib/deployments.js";
 
@@ -142,7 +142,10 @@ const record = (label) => JSON.parse(readFileSync(join(ROOT, "deployments", `tes
 
 test("the shared page with no address opens the live deployment's shared pool, as its record names it", () => {
   const live = liveDeployment();
-  const r = record(`shared-${live.label}`);
+  // The record the config names: a deployment has held more than one shared pool since 5 Oct 2026.
+  assert.equal(live.sharedPoolRecord, "shared-demo2b");
+  const r = record(live.sharedPoolRecord);
+  assert.equal(r.label, live.sharedPoolRecord);
   assert.equal(r.status, "complete");
   assert.equal(r.factory_from, live.label);
   assert.equal(r.PoolFactory, live.factory, "the pool's seats come from the live factory");
@@ -150,34 +153,69 @@ test("the shared page with no address opens the live deployment's shared pool, a
   assert.equal(SHARED_POOL, r.SharedPool);
   // Only the live deployment has one: the archive's shared pools open by address.
   assert.deepEqual(DEPLOYMENTS.filter((d) => "sharedPool" in d).map((d) => d.label), [live.label]);
+  assert.deepEqual(DEPLOYMENTS.filter((d) => "sharedPoolRecord" in d).map((d) => d.label), [live.label]);
+  // The pool before it on the same factory is another record, and is not the default any more.
+  const earlier = record("shared-demo2");
+  assert.equal(earlier.PoolFactory, live.factory);
+  assert.notEqual(earlier.SharedPool, SHARED_POOL);
   assert.match(VIEW, /const at = ethers\.getAddress\(address \|\| SHARED_POOL\);/);
 });
 
-test("the page takes a deposit only into a started, sealed pool on the live factory", () => {
+test("the page takes a deposit only into the current pool: started, sealed, on the live factory", () => {
   const [live, archive] = DEPLOYMENTS;
-  assert.deepEqual(depositState({ deployment: live, started: true, sealed: true }), { open: true, note: "" });
+  const current = true;
+  assert.deepEqual(depositState({ deployment: live, started: true, sealed: true, current }), { open: true, note: "" });
   // A pool older than the seal has no such reading; where the page would open it at all, it deposits as before.
-  assert.equal(depositState({ deployment: live, started: true, sealed: null }).open, true);
+  assert.equal(depositState({ deployment: live, started: true, sealed: null, current }).open, true);
 
-  const unsealed = depositState({ deployment: live, started: true, sealed: false });
+  const unsealed = depositState({ deployment: live, started: true, sealed: false, current });
   assert.equal(unsealed.open, false);
   assert.match(unsealed.note, /hasn't sealed the book of seats/);
-  const unstarted = depositState({ deployment: live, started: false, sealed: false });
+  const unstarted = depositState({ deployment: live, started: false, sealed: false, current });
   assert.equal(unstarted.open, false);
   assert.match(unstarted.note, /hasn't started yet/);
-  const archived = depositState({ deployment: archive, started: true, sealed: null });
+  const archived = depositState({ deployment: archive, started: true, sealed: null, current: false });
   assert.equal(archived.open, false);
   assert.match(archived.note, /first deployment, kept as an archive/);
   assert.match(archived.note, /can still ask to withdraw/);
-  const own = depositState({ deployment: null, started: true, sealed: null });
+  const own = depositState({ deployment: null, started: true, sealed: null, current: false });
   assert.equal(own.open, false);
   assert.match(own.note, /a factory of its own/);
+
+  // An earlier pool of the live deployment: started, sealed, on the live factory -- and still closed, because the
+  // site names another. Until 5 Oct 2026 this was open: the pool of 3 October would have kept its deposit form.
+  const earlier = depositState({ deployment: live, started: true, sealed: true, current: false });
+  assert.equal(earlier.open, false);
+  assert.match(earlier.note, /an earlier shared pool of the live deployment, kept as a record/);
+  assert.match(earlier.note, /A holder here can still ask to withdraw\./);
+  // Left out, `current` closes the form: a caller that forgot to say is not taken for the current pool.
+  assert.equal(depositState({ deployment: live, started: true, sealed: true }).open, false);
+  // Which pool is current is the config's address, whatever the case of the link.
+  assert.equal(isCurrentPool(SHARED_POOL), true);
+  assert.equal(isCurrentPool(SHARED_POOL.toLowerCase()), true);
+  assert.equal(isCurrentPool(record("shared-demo2").SharedPool), false);
+  assert.equal(isCurrentPool(undefined), false);
+  assert.equal(isCurrentPool("0x1", ""), false);
+  // A config that names no pool makes no pool current, not every empty address.
+  assert.equal(isCurrentPool("", ""), false);
+  assert.equal(isCurrentPool(undefined, undefined), false);
 
   // The three pools of the earlier rounds, by the factory each record names: none of them is the live one's.
   for (const label of ["shared-demo", "shared-trade", "shared-run"]) {
     const d = deploymentNamed(record(label).PoolFactory);
-    assert.equal(depositState({ deployment: d, started: true, sealed: null }).open, false, label);
+    assert.equal(depositState({ deployment: d, started: true, sealed: null, current: false }).open, false, label);
   }
+});
+
+test("the platform's fee is said as a share of a holder's profit, and as none where the pool takes none", () => {
+  assert.equal(feeLine(1000), "10% of your own profit, taken when you withdraw");
+  assert.equal(feeLine(1000n), "10% of your own profit, taken when you withdraw");
+  assert.equal(feeLine(250), "2.5% of your own profit, taken when you withdraw");
+  // A pool deployed with 0, as the current one is: nothing is taken, and the line does not read as if it were.
+  assert.equal(feeLine(0), "none: the platform takes nothing from a holder's profit");
+  assert.equal(feeLine(0n), "none: the platform takes nothing from a holder's profit");
+  assert.equal(record(liveDeployment().sharedPoolRecord).fee_bps, 0);
+  assert.match(VIEW, /row\("The platform's fee", esc\(feeLine\(feeBps\)\)\)/);
 });
 
 test("the book of seats is said as the contract holds it, and not at all for a pool older than the seal", () => {
@@ -190,7 +228,12 @@ test("the page reads the seal and the factory from the pool, and offers no way t
   // The deployment is the one whose factory the pool itself names, not one the link or the config says.
   assert.match(VIEW, /sp\.factory\(\),/);
   assert.match(VIEW, /const deployment = deploymentNamed\(seatFactory\);/);
-  assert.match(VIEW, /const deposit = depositState\(\{ deployment, started, sealed \}\);/);
+  assert.match(VIEW, /const current = isCurrentPool\(at\);\s+const deposit = depositState\(\{ deployment, started, sealed, current \}\);/);
+  // An earlier pool of the live deployment is named as one on its badge.
+  assert.match(VIEW, /: current \? "live deployment" : "live deployment, an earlier pool";/);
+  // Each seat's card says whether an agent could trade it through the repository's client, from the seat's own terms.
+  assert.match(VIEW, /const agent = agentCardLine\(agentTradability\(\{ capital: Number\(terms\.capital\) \/ 1e6,\s+fundedCapital: Number\(terms\.fundedCapital\) \/ 1e6, leverageX100: rules\.maxLeverageX100 \}\)\);/);
+  assert.match(VIEW, /\$\{agent \? `<p class="small">\$\{esc\(agent\)\}<\/p>` : ""\}/);
   // Only a revert means "older than the seal"; a failed read is not taken for it.
   assert.match(VIEW, /sp\.seatsSealed\(\)\.catch\(\(err\) => \{\s+if \(err\?\.code === "CALL_EXCEPTION"\) return null;\s+throw err;/);
   // The form, its button's handler and the "Send to it" button of an open ticket all hang on the same answer.
