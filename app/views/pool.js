@@ -13,10 +13,6 @@ import { outcomesHtml } from "../lib/outcomes.js";
 import { poolKind, holdsCode, KIND_NOTE } from "../lib/listing.js";
 import { agentTradability, agentNote } from "../lib/agentcap.js";
 import { isArchive, ARCHIVE } from "../lib/deployments.js";
-import {
-  usdcTotal1e8, allOf, withdrawPlan, withdrawOutcome, arrivedBy, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS,
-} from "../lib/withdraw.js";
-import { usd } from "../lib/shared.js";
 
 export async function poolView(address, page) {
   const pool = chain.contract("pool", address);
@@ -178,7 +174,6 @@ export async function poolView(address, page) {
     return;
   }
   const advice = topUpAdvice({ short: shortOnCore, earned: Number(earned) / 1e6 });
-  const poolSpot = await readPoolSpot(address);
   inv.innerHTML = `<h3>Investor</h3>
     ${archived ? "" : `    <p>Capital goes to the pool on HyperCore: a spot transfer of USDC from your HyperCore account to
       <span class="mono">${esc(address)}</span>. The button below asks your wallet to sign that transfer;
@@ -195,48 +190,18 @@ export async function poolView(address, page) {
         ? `Withdraw the ${esc(advice.fromEarned.toFixed(2))} USDC above, then send it to the pool with the field at the top of this card.`
         : "There is no income held here to cover it."}${advice.stillNeeded > 0
         ? ` That still leaves ${esc(advice.stillNeeded.toFixed(2))} USDC to come from you.` : ""}</p>` : ""}
-    <p class="small muted">The pool holds <span id="wd-balance">${esc(usd(poolSpot, 8))}</span> USDC on HyperCore. HyperCore
-      drops a transfer above the balance without a word, so the page refuses one before your wallet is asked.</p>
-    <div class="inline"><input id="wd" type="number" step="any" min="0" placeholder="USDC"><button id="wd-all" class="secondary" type="button">All</button><button id="wd-btn" class="secondary">Withdraw on HyperCore</button></div>`;
+    <div class="inline"><input id="wd" type="number" step="0.01" min="0" placeholder="USDC"><button id="wd-btn" class="secondary">Withdraw on HyperCore</button></div>`;
   // An archived pool keeps only the two ways out: what it earned, and what it holds on HyperCore.
   if (!archived) wireFunding(page, address);
   wire($("#earned", page), async () => {
     await chain.write("pool", address, "withdrawEarned");
     return "Withdrawn.";
   });
-  $("#wd-all", page).addEventListener("click", async () => {
-    const now = await readPoolSpot(address);
-    $("#wd-balance", page).textContent = usd(now, 8);
-    $("#wd", page).value = allOf(now);
-  });
   wire($("#wd-btn", page), async () => {
-    // Read again at the click: the balance on the page may be minutes old.
-    const before = await readPoolSpot(address);
-    $("#wd-balance", page).textContent = usd(before, 8);
-    const amount = withdrawPlan($("#wd", page).value, before);
+    const amount = chain.toUnits($("#wd", page).value, 8);
     await chain.write("pool", address, "withdrawOnCore", [amount]);
-    // The transaction only asks. What HyperCore did is in the pool's balance, a few seconds later. From here on
-    // the transaction is in a block: a reading that fails must not come out as a bare error, as if nothing had
-    // been sent, so it is kept as a failed reading and the outcome is decided from all of them (lib/withdraw.js).
-    const reads = [];
-    for (let waited = 0; waited < WITHDRAW_WAIT_MS; waited += WITHDRAW_POLL_MS) {
-      await new Promise((resolve) => setTimeout(resolve, WITHDRAW_POLL_MS));
-      const now = await readPoolSpot(address).catch(() => null);
-      reads.push(now);
-      // Not on any fall: a challenge bought meanwhile takes its capital from the same balance, and stopping there
-      // would report a withdrawal still on its way as one that fell short.
-      if (arrivedBy(before, now, amount)) break;
-    }
-    const outcome = withdrawOutcome({ before, amount, reads });
-    if (outcome.after !== undefined) $("#wd-balance", page).textContent = usd(outcome.after, 8);
-    if (!outcome.ok) throw new Error(outcome.text);
-    return outcome.text;
+    return "Sent to your HyperCore account.";
   });
-}
-
-/** The pool's spot USDC on HyperCore, exactly, in 1e8 units. */
-async function readPoolSpot(address) {
-  return usdcTotal1e8(await hl.spot(address));
 }
 
 /** The investor's two ways in -- capital on HyperCore and preparing the account -- for a pool that sells challenges. */

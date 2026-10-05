@@ -341,7 +341,9 @@ enough for is the trader's client, which needs 5 USDC of capital at 5× to send 
   follows the rule line and the target; the numbers are of that reading.
 
 Read at 08:11 UTC on 5 October: `value()` 668.147546 USDC on 670e8 shares, with a position open. The other
-two seats were Idle and unsold. Every step's hash is in `spike/results/2026-10-05.jsonl`.
+two seats were Idle and unsold. Every step this run sent, from the start to the arming of the three
+seats, is in `spike/results/2026-10-05.jsonl` with its hash. The purchase, the start and the trade were
+not ours to send and are not in that log; their hashes are the ones given above.
 
 ## What this does not show
 
