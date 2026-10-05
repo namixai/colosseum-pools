@@ -20,9 +20,11 @@ export const CONFIG = {
   //   deployer           the deploy key: the pools it owns are our benches, which the list names (app/lib/listing.js);
   //   platformAssets     the perp indices the factory lists. The chain stays the authority -- the new-pool form asks
   //                      isPlatformAsset for each -- this only keeps the form from probing every perp at once.
-  //   sharedPool         the shared pool whose seats this deployment's factory makes: what #/shared opens when the
-  //                      link names no address (deployments/testnet-shared-<label>.json). The archive has none: its
-  //                      shared pools open by address and take no deposit.
+  //   sharedPool         the shared pool #/shared opens when the link names no address, and the only one the page
+  //                      takes a deposit into. Its seats are made by this deployment's factory.
+  //   sharedPoolRecord   the label of that pool's record, deployments/testnet-<label>.json: the page's test holds
+  //                      the address to it. A deployment may come to hold several shared pools; this names the
+  //                      current one. The archive has none: its shared pools open by address and take no deposit.
   //   liveRunPool        the pool the team opened for the live run on 3 Oct 2026 (createPool in block 65902379).
   //                      The deploy key owns it as it owns the benches, and its terms are not a bench's, so the
   //                      list names it apart (app/lib/listing.js). No record in deployments/ carries it: those
@@ -38,7 +40,8 @@ export const CONFIG = {
       deployBlock: 65736733,
       deployer: "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
       platformAssets: [3, 4, 0],
-      sharedPool: "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
+      sharedPool: "0xa2eEe2CF75d5f740E436a08007345dA5789a4499",
+      sharedPoolRecord: "shared-demo2b",
       liveRunPool: "0x70066669eC7Eb992055c82B615eD822CFF14e44A",
     },
     {
