@@ -263,7 +263,9 @@ it. The line prices the larger size while the equity moves with the smaller, so 
 with the mark, and the take is not followed until that order has filled or gone. Fourth, an asset
 the account has an order on and no position in is still priced at the market's mark; while such an
 order rests beside a position, that position's lines move a little with the difference between
-the two requests, by the order's share of the exposure. Fifth, a stop that had already come
+the two requests, by the order's share of the exposure. The same goes for a position the account's
+answer gives no value for: Hyperliquid's gives one for every position, and if it stopped, the lines
+would be worked out from two requests again. Fifth, a stop that had already come
 nearer for that difference before this change stays where it is until its position closes: the
 gateway cannot tell it from a stop the trader tightened, and it does not move a stop away.
 **Measured** on the live challenge on 5 October 2026 at 05:55 UTC, with this change run beside
