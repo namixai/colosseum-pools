@@ -239,8 +239,9 @@ The mark of every asset the account holds now comes from the account's own answe
 gives each position's value beside the equity it counted from it, and the value over the size is
 the mark. The two are then of one instant, and what the price does between two requests moves
 neither line. An asset the account does not hold keeps the market's mark, since nothing in the
-equity depends on it. Whether a stop or a take the trader asks for "would close at once" is still
-asked of the market's mark, which is the later of the two.
+equity depends on it. The market is read first and the account after it, so the account's answer
+is also the later of the two: whether a stop or a take the trader asks for "would close at once"
+is asked of it too.
 
 **After a restart.** The list of accounts the sweep goes round lives in the gateway's memory and
 is filled by orders. A gateway that had just started watched nothing, so an account with a position

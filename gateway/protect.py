@@ -622,9 +622,12 @@ class Protector:
             book = self.venue.book(account, markets)
             if asset not in markets:
                 raise GatewayError(502, "no_market_price", f"no mark for asset {asset}")
-            # "Past the mark" is asked of the market's own mark, as before. The bound a stop or a
-            # take is held to is a line, and a line is worked out at the account's marks.
-            m, markets = markets[asset], as_the_book_saw(markets, book)
+            # The market is read first and the account after it, so the account's answer is the
+            # later of the two, and the one its equity was counted in. Both questions are asked of
+            # it: whether a stop or a take would close at once, and where the line it is held to
+            # stands.
+            markets = as_the_book_saw(markets, book)
+            m = markets[asset]
             q = book.positions.get(asset, Decimal(0))
             if q == 0:
                 raise GatewayError(409, "no_position", "there is no position on this asset to move a stop or take for")

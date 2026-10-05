@@ -2630,20 +2630,23 @@ MUTATIONS = [
     ("PG81", "gateway/protect.py",
      "                    markets = as_the_book_saw(market, book)\n",
      "                    markets = market\n",
-     ["test_an_hour_of_sweeps_with_the_two_answers_three_dollars_apart_sends_nothing"]),
+     ["test_an_hour_of_sweeps_with_the_two_answers_three_dollars_apart_sends_nothing",
+      "test_a_fall_between_the_two_requests_does_not_put_the_stop_over_the_price"]),
     ("PG82", "gateway/protect.py",
      "        markets = as_the_book_saw(markets, book)\n        limits = self.limits(account, key)\n",
      "        limits = self.limits(account, key)\n",
      ["test_an_order_on_its_way_is_planned_at_the_accounts_mark_too"]),
     ("PG83", "gateway/protect.py",
-     "            m, markets = markets[asset], as_the_book_saw(markets, book)",
-     "            m = markets[asset]",
-     ["test_the_traders_own_take_is_held_to_the_line_at_the_accounts_mark"]),
-    # "Would close at once" is the market's to say: its answer is the later of the two.
-    ("PG84", "gateway/protect.py",
-     "            m, markets = markets[asset], as_the_book_saw(markets, book)",
      "            markets = as_the_book_saw(markets, book)\n            m = markets[asset]",
-     ["test_past_the_mark_is_still_asked_of_the_markets_own_mark"]),
+     "            m = markets[asset]",
+     ["test_the_traders_own_take_is_held_to_the_line_at_the_accounts_mark",
+      "test_would_close_at_once_is_asked_of_the_accounts_answer"]),
+    # "Would close at once" is asked of the account's answer too. The market is read first, so the
+    # account's mark is the later of the two.
+    ("PG84", "gateway/protect.py",
+     "            markets = as_the_book_saw(markets, book)\n            m = markets[asset]",
+     "            m, markets = markets[asset], as_the_book_saw(markets, book)",
+     ["test_would_close_at_once_is_asked_of_the_accounts_answer"]),
     # The mark is the position's value over its size: not the value, not signed, and not from a
     # position the answer priced at nothing.
     ("PG85", "gateway/protect.py",

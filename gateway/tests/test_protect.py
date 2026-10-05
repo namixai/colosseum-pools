@@ -1086,6 +1086,17 @@ class OneAnswerOneInstant(FlowBase):
         self.assertEqual(self.sent(), [])
         self.assertEqual(self.triggers(), self.standing)
 
+    def test_a_fall_between_the_two_requests_does_not_put_the_stop_over_the_price(self):
+        # The market answered at 2700 and the account, a moment later, at 2650, with the loss in its
+        # equity: 0.25 left to the day's floor, 6.76 under the mark, which is where the stop stands
+        # already. Counted from the market's answer the stop came out at 2693.3, over the price, and
+        # a stop put there closes the position at once.
+        self.x.equity = Decimal(70) - self.SIZE * 50
+        self.at(market="2700", account="2650")
+        self.gw.protector.sweep()
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(self.triggers(), self.standing)
+
     def test_an_hour_of_sweeps_with_the_two_answers_three_dollars_apart_sends_nothing(self):
         rng = random.Random(11)
         for _ in range(240):  # an hour at fifteen seconds; 3 USD on 2700 is 11 bps
@@ -1129,14 +1140,21 @@ class OneAnswerOneInstant(FlowBase):
         status, _ = self.send("take", asset=ETH, triggerPx="2894.1", nonce=NOW + 2)
         self.assertEqual(status, 200)
 
-    def test_past_the_mark_is_still_asked_of_the_markets_own_mark(self):
-        # A stop at 2701 would close at once by the account's answer and not by the market's, which
-        # is the later of the two. That question stays with the market.
+    def test_would_close_at_once_is_asked_of_the_accounts_answer(self):
+        # The market is read first and the account after it: the account's mark is the later of the
+        # two. A stop at 2701 is under the market's mark and over the account's. It would close at
+        # once.
         self.at(market="2702.5", account="2700")
-        status, _ = self.send("stop", asset=ETH, triggerPx="2701", nonce=NOW + 1)
-        self.assertEqual(status, 200)
-        status, out = self.send("stop", asset=ETH, triggerPx="2702.5", nonce=NOW + 2)
+        status, out = self.send("stop", asset=ETH, triggerPx="2701", nonce=NOW + 1)
         self.assertEqual((status, out.get("code")), (403, "stop_past_mark"))
+        # One at 2699 is over the market's mark and under the account's: it rests.
+        self.at(market="2698", account="2700")
+        status, _ = self.send("stop", asset=ETH, triggerPx="2699", nonce=NOW + 2)
+        self.assertEqual(status, 200)
+        # A take the same way round: 2701 is over the account's mark and under the market's.
+        self.at(market="2702.5", account="2700")
+        status, _ = self.send("take", asset=ETH, triggerPx="2701", nonce=NOW + 3)
+        self.assertEqual(status, 200)
 
 
 class AfterARestart(FlowBase):
