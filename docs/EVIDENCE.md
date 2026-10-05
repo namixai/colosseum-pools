@@ -154,8 +154,9 @@ accounted for: four Retired â€” the two above and the two of the next section â€
 challenge and its pool's reservation on the live run, named at the end of the next section, and
 the same pair on the shared pool's seat (`docs/EVIDENCE-SHARED-POOL.md`). Twelve more keys were
 published that afternoon, in `0x55f93b790f1c01c16022be1cbaa78d1500742567c790bc15b68f6db7e667c054`,
-block 66012241 (14:44:47 UTC), and since then it answers **28** of 36: the same eight out, and the
-twelve new ones Free.
+block 66012241 (14:44:47 UTC), and at 14:46 UTC it answered **28** of 36: the same eight out, and
+the twelve new ones Free. The next sale, on 5 October, took two of them
+(`docs/EVIDENCE-SHARED-POOL.md`).
 
 Transactions read back from their receipts:
 
