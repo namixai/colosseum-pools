@@ -1,6 +1,6 @@
 # Design: the shared pool
 
-Status: 3 October 2026: shares, deposits, the pool's value, settlement points, withdrawals and
+Status: 5 October 2026: shares, deposits, the pool's value, settlement points, withdrawals and
 their queue, the funded term, the platform's fee and the seal of the book of seats; run on testnet
 with one depositor, then two, and deployed again on the second deployment.
 Testnet only, and not part of the reviewed core: `Pool`, `PoolFactory`, `ChallengeAccount` and
@@ -322,6 +322,24 @@ platform's starting shares. The transactions are in
 `ops/shared_run.py` gained the step the seal needs: `seal`, sent by the operator after the seats are
 published and before the first deposit. `deposit` refuses, before it sends anything, while the book
 is open.
+
+## A pool with three seats, and no fee on a holder's gain (5 October)
+
+The seat of 3 USDC could not be traded by an agent: this repository's trader client caps one order
+at 0.4 of the leverage rule, and on 3 USDC at 5× that is under the exchange's smallest order. A
+sealed pool cannot be given another seat, so a fifth pool was deployed,
+`0xa2eEe2CF75d5f740E436a08007345dA5789a4499` (`deployments/testnet-shared-demo2b.json`), with three
+seats of 10, 20 and 30 USDC of challenge capital and ten times that funded. It is the page's default
+now, and the only shared pool the page takes a deposit into.
+
+Its fee is 0: the platform takes nothing from what a holder gains, and the number is fixed in the
+contract. `ops/deploy_shared.py` now deploys with a fee of 0 unless told otherwise.
+
+With more than one seat, the steps of `ops/shared_run.py` that act on a seat are told which by
+`--seat`. The same day the fourth pool's challenge ran out: the keepers on the host expired and
+settled it, and one pass of `ops/shared_keeper.py` from the team's machine released the seat and
+paid both depositors in one point. The transactions are in
+[EVIDENCE-SHARED-POOL.md](EVIDENCE-SHARED-POOL.md).
 
 ## Not done yet
 

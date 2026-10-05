@@ -74,7 +74,7 @@ test("every row's source lines are in its section of the document", () => {
     else for (const s of r.sources) if (!body.includes(s)) lost.push(`${r.what}: «${s}»`);
   }
   assert.deepEqual(lost, []);
-  assert.equal(DATA.rows.length, 37);
+  assert.equal(DATA.rows.length, 42);
 });
 
 test("a row shows nothing its own source lines do not say", () => {
@@ -204,7 +204,9 @@ test("the page links an account only where the app reads it", () => {
                        "Deployment 2, and the first run where the trader was not us": "demo2",
                        "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take": "demo2",
                        "The pool on the second deployment (3 October)": "demo2",
-                       "A challenge sold on the seat, and started by the host's keeper (4 October)": "demo2" };
+                       "A challenge sold on the seat, and started by the host's keeper (4 October)": "demo2",
+                       "The seat's challenge runs out, the host settles it, and both depositors leave (5 October)": "demo2",
+                       "A second pool on the second deployment, with three seats (5 October)": "demo2" };
     assert.equal(r.factory, expected[r.section] ?? "demo", r.what);
     const link = appLink(r);
     if (!READ.includes(r.factory) || !r.account) assert.equal(link, null, `${r.what}: the app does not read it`);
@@ -217,7 +219,7 @@ test("the page links an account only where the app reads it", () => {
 
 test("the shared pools are the document's table, cell for cell", () => {
   const body = section(DATA.pools.doc, DATA.pools.section);
-  assert.equal(DATA.pools.rows.length, 4);
+  assert.equal(DATA.pools.rows.length, 5);
   for (const p of DATA.pools.rows) {
     const line = `| ${p.pool} | ${p.factory} | ${p.open} | ${p.showed} |`;
     assert.ok(body.includes(line), line);
@@ -332,7 +334,7 @@ test("the events the page reads are the contracts' own, field for field", () => 
 
 test("a row that names an event carries it as the document writes it", () => {
   const named = DATA.rows.filter((r) => r.check.some((c) => /\b(FundedResult|FundedPayoutSent|Stopped)\(/.test(c)));
-  assert.equal(named.length, 5);
+  assert.equal(named.length, 6);
   for (const r of named) {
     assert.ok(r.event, `${r.what}: carries the event it names`);
     assert.ok(r.sources.some((s) => s.includes(r.event.text)), `${r.what}: ${r.event.text} is in its sources`);

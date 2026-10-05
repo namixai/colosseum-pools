@@ -675,6 +675,106 @@
         "The key. KeyRegistry.bindingOf(0x7d2650bd3dD9A6eD6Cd0c6C393BB79De837FBe19) on the second deployment's registry 0x53AF27F65Dd7473c890f633aC0025b261307779e is (2, challenge, trader): Bound, to that challenge, for that trader. freeCount() went from 18 to 16.",
         "The challenge account holds its 3 USDC, with no position and no order."
       ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "The seat's challenge runs out, the host settles it, and both depositors leave (5 October)",
+      "what": "The seat's challenge ran out of time and was expired by the keepers on the host",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262",
+      "tx": "0x4641ad99435632adf219302db9146b83bdc02a186fe7ab02468e9988ca38c3cb",
+      "block": 66071763,
+      "from": "0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa",
+      "record": "The ending is Stopped(status 4 Expired, reason 0 None, equity 3000000): it ran out of time, no rule was broken, and its 3 USDC were untouched.",
+      "event": { "name": "Stopped", "text": "Stopped(status 4 Expired, reason 0 None, equity 3000000)", "values": { "status": "4", "reason": "0", "equity": "3000000" } },
+      "check": ["the event Stopped(status 4 Expired, reason 0 None, equity 3000000) in its receipt", "status() on the challenge"],
+      "notes": ["This run sent none of the four."],
+      "sources": [
+        "On 0x43f7562C…a717, the challenge 0xC9435A77Aba8bd9FCA244EeD6cE4Ff9727aE9262 sold the day before. Its deadline was 5 October 07:00:15 UTC.",
+        "Expired by the keepers on the host, eighteen seconds after the deadline. expire in 0x4641ad99435632adf219302db9146b83bdc02a186fe7ab02468e9988ca38c3cb, block 66071763 (07:00:33 UTC), sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa. The ending is Stopped(status 4 Expired, reason 0 None, equity 3000000): it ran out of time, no rule was broken, and its 3 USDC were untouched.",
+        "After them status() reads 8, the seat is Idle with 33 USDC on HyperCore, and the 1.5 price is still held at the seat on HyperEVM. This run sent none of the four."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "The seat's challenge runs out, the host settles it, and both depositors leave (5 October)",
+      "what": "One point paid both depositors in full, sent by the shared pool's keeper from the team's machine",
+      "kind": "shared pool",
+      "factory": "demo2",
+      "account": "0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
+      "tx": "0x1654ea6b81944b8601d9fcdd90f4307863d56f3e76924026dcd0b1ff64f8fcb0",
+      "block": 66075727,
+      "from": "0x75deec8b513Ee3f5D15d6b40B706A3314cf26590",
+      "record": "19.761904 USDC, which is 20e8 shares at 0.98809524 rounded down to the millionth.",
+      "check": ["payments(holder) on the pool, which reads (1791187532, 750000, 1901190400) for both"],
+      "notes": ["Each depositor's HyperCore spot balance read 19.011904 USDC and each wallet 0.75 USDC on HyperEVM after the point. A receipt only says the payment was asked for; HyperCore carries it out afterwards.", "The shared pool's keeper is still not installed on the host."],
+      "sources": [
+        "On 0x43f7562C…a717, the challenge",
+        "The shared pool's keeper, run from the team's machine. One pass of ops/shared_keeper.py, told not to arm anything, from the wallet 0x75deec8b513Ee3f5D15d6b40B706A3314cf26590.",
+        "and settle in 0x1654ea6b81944b8601d9fcdd90f4307863d56f3e76924026dcd0b1ff64f8fcb0, block 66075727, five blocks later. The shared pool's keeper is still not installed on the host.",
+        "19.761904 USDC, which is 20e8 shares at 0.98809524 rounded down to the millionth.",
+        "payments(holder) reads (1791187532, 750000, 1901190400) for both.",
+        "Each depositor's HyperCore spot balance read 19.011904 USDC and each wallet 0.75 USDC on HyperEVM after the point. A receipt only says the payment was asked for; HyperCore carries it out afterwards."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "A second pool on the second deployment was sealed with three seats, and takes no fee on a holder's gain",
+      "kind": "shared pool",
+      "factory": "demo2",
+      "account": "0xa2eEe2CF75d5f740E436a08007345dA5789a4499",
+      "tx": "0x33ee1b7d844a54092749995b13a4f37df85b241bd50f405b594448abf88ba811",
+      "record": "Three seats, and never a fourth.",
+      "check": ["feeBps() on the pool, which reads 0", "planCapital() on the pool, which reads 663 USDC"],
+      "notes": ["A challenge on these seats runs seven days and a funded stage at most one. Those terms are there so that a pass and the end of a funded term can be seen within a week on testnet money. They are not terms anyone is offered."],
+      "sources": [
+        "0xa2eEe2CF75d5f740E436a08007345dA5789a4499, deployed in 0x814ec30da330aea2e9e4c8c30a3f6d6a0e686c72a4bb69ab4591e1dd00b13153 (block 66066301) with its seats on the second deployment's factory",
+        "a fee of 0: feeBps() reads 0, so the platform takes nothing from what a holder gains.",
+        "planCapital() reads 663 USDC against a seed of 34: the contract asks for at least a twentieth.",
+        "Sealed before any deposit. seal in 0x33ee1b7d844a54092749995b13a4f37df85b241bd50f405b594448abf88ba811. Three seats, and never a fourth.",
+        "A challenge on these seats runs seven days and a funded stage at most one. Those terms are there so that a pass and the end of a funded term can be seen within a week on testnet money. They are not terms anyone is offered."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "Its first seat was sold to the team's agent",
+      "kind": "seat",
+      "factory": "demo2",
+      "account": "0xf40da2862f1e3f20ab7d1ed7b5e67a83d333cb3b",
+      "tx": "0xa8bf8df694b54b65f067f9142c7d3d6e1e9c017e7285f6abbbf5c5f18084eb11",
+      "block": 66068662,
+      "from": "0xd4f31E7234308546c822C619705F1A4B5fC8f629",
+      "record": "bought the challenge 0x48f948a895F82a32fb39eE57C457c05FdA7A7779 on the seat 0xf40da2862f1e3f20ab7d1ed7b5e67a83d333cb3b, paying the 2 price and the 0.7 platform fee",
+      "check": [],
+      "notes": ["We funded that wallet and asked the agent to buy; it is not a trader we do not control."],
+      "sources": [
+        "The trader. 0xd4f31E7234308546c822C619705F1A4B5fC8f629, the same wallet of the team's agent as in the second deployment's record in EVIDENCE.md, bought the challenge 0x48f948a895F82a32fb39eE57C457c05FdA7A7779 on the seat 0xf40da2862f1e3f20ab7d1ed7b5e67a83d333cb3b, paying the 2 price and the 0.7 platform fee (buyChallenge in 0xa8bf8df694b54b65f067f9142c7d3d6e1e9c017e7285f6abbbf5c5f18084eb11, block 66068662, 5 October 06:09:43 UTC). We funded that wallet and asked the agent to buy; it is not a trader we do not control."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "The host started the challenge, and the agent traded it through the client",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0x48f948a895F82a32fb39eE57C457c05FdA7A7779",
+      "tx": "0x418a526dac82ed383c1a23cad9686a05f8fd3cfa8312ebd4e77952bca16cb3c1",
+      "block": 66068666,
+      "from": "0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa",
+      "fills": ["0xc4f16fdff253ec0ec66b042af0c24001050087c58d570ae068ba1b32b157c5f9"],
+      "record": "status() reads 2, Active, with a deadline of 12 October 06:09:47 UTC.",
+      "check": ["status() on the challenge", "KeyRegistry.bindingOf(0x8c2eDe5DEd6B6188E22e222300a691Cf7509A7e6) on the registry"],
+      "notes": ["The client's cap on this account is 20 USDC, so the order fits where the one on the 3 USDC seat could not.", "Read at 08:12 UTC, the account carried two reduce-only position orders placed by the gateway, a stop at 2656.7 and a take at 2869.2."],
+      "sources": [
+        "bought the challenge 0x48f948a895F82a32fb39eE57C457c05FdA7A7779",
+        "Started by the host four blocks later. activate in 0x418a526dac82ed383c1a23cad9686a05f8fd3cfa8312ebd4e77952bca16cb3c1, block 66068666, sent by 0xcbd5C0299669e0C686D375cc6C07584Ad5C4fECa. status() reads 2, Active, with a deadline of 12 October 06:09:47 UTC.",
+        "The key. KeyRegistry.bindingOf(0x8c2eDe5DEd6B6188E22e222300a691Cf7509A7e6) on the registry 0x53AF27F65Dd7473c890f633aC0025b261307779e is (2, challenge, trader). freeCount() went from 28 to 26.",
+        "Hyperliquid's fills for the challenge account (userFills) carry the hash 0xc4f16fdff253ec0ec66b042af0c24001050087c58d570ae068ba1b32b157c5f9 (oid 61879888823), 0.0024 at 2703.5 and 0.0038 at 2703.2. The client's cap on this account is 20 USDC, so the order fits where the one on the 3 USDC seat could not.",
+        "Read at 08:12 UTC, the account carried two reduce-only position orders placed by the gateway, a stop at 2656.7 and a take at 2869.2."
+      ]
     }
   ],
   "pools": {
@@ -704,6 +804,12 @@
         "factory": "the second deployment's, 0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222",
         "open": "#/shared/0x43f7562CF3aDD90942416a74aBFC8Ee0A3F6a717",
         "showed": "a pool deployed with the seal: started, one seat published, the book sealed before any deposit"
+      },
+      {
+        "pool": "0xa2eEe2CF75d5f740E436a08007345dA5789a4499",
+        "factory": "the second deployment's, 0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222",
+        "open": "#/shared/0xa2eEe2CF75d5f740E436a08007345dA5789a4499",
+        "showed": "three seats of different sizes, a fee of 0 on a holder's gain, and a seat an agent trades through the client"
       }
     ]
   },
