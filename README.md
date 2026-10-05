@@ -201,8 +201,9 @@ spike/.venv/bin/python -m agents.client --deployment rehearsal account 0x...
 spike/.venv/bin/python -m agents.client --deployment rehearsal --dry-run order 0x... BTC buy 0.0005 76000
 ```
 
-On the second deployment the trader is a separate AI agent of the team, working through the same
-command line; [docs/EVIDENCE.md](docs/EVIDENCE.md) says what it did.
+On the second deployment the trader is a separate AI agent of the team, holding its own wallet and
+trading through the gateway; [docs/EVIDENCE.md](docs/EVIDENCE.md) says what it did, including one
+order this command line would have refused.
 [agents/WINDOW-TRADER.md](agents/WINDOW-TRADER.md) holds the prompt written for a trading window
 that works only through that command line. The limits are in the client (orders per day and their
 size, counted in `agents/state/`), the gateway and the contracts, not in the prompt. `agents/ai_trader.py` gives the same desk to Claude over
