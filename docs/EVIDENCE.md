@@ -128,8 +128,9 @@ either, which the limit further down says plainly.
 
 **How it was able to break the rule, since the gateway holds every key.** The entry was 0.00297 BTC
 at 84076, which is **249.71 USDC of notional on 70 of capital — 3.57× against a 3× rule**. The
-agent's own client would have refused it: its cap is equity × the rule × 0.8, or 168 USDC here. The
-gateway would not, because **the gateway does not check leverage at all** — it reads `rules()` for
+agent's own client would have refused it: it keeps everything an account has open under equity ×
+the rule × 0.8, 168 USDC here, and since 3 October it also keeps one order under half of that, 84.
+The gateway would not, because **the gateway does not check leverage at all** — it reads `rules()` for
 the daily and drawdown floors and discards the leverage field (`rule_limits` in
 `gateway/chain.py`), and the word does not appear in its code. Unlike `ForbiddenAsset` below,
 leverage has **one** enforcement layer, not two: the contract's `violation()` and a keeper that
@@ -352,6 +353,18 @@ daily loss 3%, drawdown 6%, leverage 5×, BTC, ETH and SOL, the trader's share 0
 and 80% on a funded stage of 700. The challenge read `status` 2 Active at 13:03 UTC on 4 October,
 with a position open. It is named here so the two keys it holds are not a puzzle; what it ends as
 is not written until it ends.
+
+**What the gateway has done on it so far, and one more defect of ours.** Between the release of
+4 October and the end of that day the gateway moved the live challenge's take five times, all of
+them in Hyperliquid's order history. Three were the take following its line in, as funding paid to
+the long brought the target nearer: by 1.8 at 16:14:09 UTC, by 1.8 at 20:00:03 and by 1.9 at
+22:05:57. The other two were a pair: in by 2.5 at 20:47:12 and back out by 2.5 seventeen seconds
+later, with no order of the trader's and no payment between. That pair is finding A-18. The
+gateway worked a line out from two requests to Hyperliquid a moment apart, and what the price did
+between them moved the line. On the next position the same defect brought the stop 1.4 nearer in
+three steps, between 00:26 and 00:37 UTC on 5 October, and a stop is never moved away. No take
+fired short and no stop fired for it. It is fixed from commit `53197068`, on the host since
+5 October, 07:35 UTC; the stop that had come nearer stays where it is until its position closes.
 
 ## The gateway refused two things, for two different reasons
 
