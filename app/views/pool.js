@@ -14,8 +14,8 @@ import { poolKind, holdsCode, KIND_NOTE } from "../lib/listing.js";
 import { agentTradability, agentNote } from "../lib/agentcap.js";
 import { isArchive, ARCHIVE } from "../lib/deployments.js";
 import {
-  usdcTotal1e8, allOf, withdrawPlan, withdrawOutcome, transferOf, hashesOf, WITHDRAW_WAIT_MS, WITHDRAW_POLL_MS,
-  CLOCK_SKEW_MS,
+  usdcTotal1e8, allOf, withdrawPlan, withdrawOutcome, transferOf, hashesOf, ledgerCutoff, WITHDRAW_WAIT_MS,
+  WITHDRAW_POLL_MS,
 } from "../lib/withdraw.js";
 import { usd } from "../lib/shared.js";
 
@@ -222,12 +222,12 @@ export async function poolView(address, page) {
   });
   wire($("#wd-btn", page), async () => {
     // Read again at the click: the balance on the page may be minutes old. The ledger is read too, before anything
-    // is sent, so that what is already in it cannot be taken for this withdrawal afterwards. If either reading
-    // fails, nothing has been sent and the error says so by being the only thing that happened.
-    const since = Date.now();
-    const [before, known] = await Promise.all([
-      readPoolSpot(address), hl.ledger(address, since - LEDGER_LOOKBACK_MS).then(hashesOf),
-    ]);
+    // is sent, so that what is already in it cannot be taken for this withdrawal afterwards. If a reading fails,
+    // nothing has been sent and the error says so by being the only thing that happened.
+    // The cut between before and after is taken from the chain's clock, which HyperCore stamps its ledger by. The
+    // browser's clock is not asked: one running ahead would put the transfer before the click.
+    const [before, since] = await Promise.all([readPoolSpot(address), chain.blockTime().then(ledgerCutoff)]);
+    const known = hashesOf(await hl.ledger(address, since - LEDGER_LOOKBACK_MS));
     showBalance(before);
     const amount = withdrawPlan($("#wd", page).value, before);
     await chain.write("pool", address, "withdrawOnCore", [amount]);
@@ -240,7 +240,7 @@ export async function poolView(address, page) {
     for (let waited = 0; waited < WITHDRAW_WAIT_MS; waited += WITHDRAW_POLL_MS) {
       await new Promise((resolve) => setTimeout(resolve, WITHDRAW_POLL_MS));
       const [ledger, now] = await Promise.all([
-        hl.ledger(address, since - CLOCK_SKEW_MS).catch(() => null), readPoolSpot(address).catch(() => null),
+        hl.ledger(address, since).catch(() => null), readPoolSpot(address).catch(() => null),
       ]);
       ledgers.push(ledger);
       reads.push(now);

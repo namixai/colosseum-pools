@@ -8,8 +8,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  usdcTotal1e8, allOf, withdrawPlan, hashesOf, transferOf, withdrawOutcome, UNREAD, WITHDRAW_WAIT_MS,
-  WITHDRAW_POLL_MS, CLOCK_SKEW_MS,
+  usdcTotal1e8, allOf, withdrawPlan, hashesOf, transferOf, withdrawOutcome, ledgerCutoff, UNREAD, WITHDRAW_WAIT_MS,
+  WITHDRAW_POLL_MS, BLOCK_SECOND_MS,
 } from "../lib/withdraw.js";
 
 const text = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -83,13 +83,56 @@ test("the withdrawal is one ledger entry: USDC, from the pool, to the owner, of 
   assert.equal(transferOf([ENTRY], who({ known: hashesOf([ENTRY]) })), null);
   assert.equal(hashesOf([ENTRY]).has(ENTRY.hash), true);
   assert.equal(hashesOf(undefined).size, 0);
-  // Nor is an entry older than the click by more than the two clocks may differ.
-  assert.equal(transferOf([ENTRY], who({ since: ENTRY.time + CLOCK_SKEW_MS })), ENTRY);
-  assert.equal(transferOf([ENTRY], who({ since: ENTRY.time + CLOCK_SKEW_MS + 1 })), null);
+  // Nor is an entry older than the cut: at the cut it is this withdrawal, a millisecond before it another one.
+  assert.equal(transferOf([ENTRY], who({ since: ENTRY.time })), ENTRY);
+  assert.equal(transferOf([ENTRY], who({ since: ENTRY.time + 1 })), null);
   // A ledger that is empty, missing, or holds something unreadable answers null and does not throw.
   assert.equal(transferOf([], who()), null);
   assert.equal(transferOf(undefined, who()), null);
   assert.equal(transferOf([{ time: ENTRY.time, hash: "0x1" }, { ...ENTRY, delta: { ...ENTRY.delta, amount: "n/a" } }], who()), null);
+});
+
+// Transfers HyperCore carried out for this repository's shared pools on 5 October: the HyperEVM block that asked,
+// that block's time in seconds, and the time of the ledger entry in ms.
+const ON_RECORD = [
+  [66066670, 1791178623, 1791178623431],
+  [66066691, 1791178644, 1791178644385],
+  [66066711, 1791178664, 1791178664439],
+  [66075727, 1791187532, 1791187532401],
+];
+
+test("the cut between before and after is on the chain's clock, never the browser's", () => {
+  // One second under the block's time, for a block's whole seconds against the ledger's milliseconds.
+  assert.equal(BLOCK_SECOND_MS, 1_000);
+  assert.equal(ledgerCutoff(1791178623), 1791178622000);
+  assert.equal(ledgerCutoff(1791178623n), 1791178622000);
+  // Every transfer on record is stamped after its block's time and inside the same second, so a cut taken at a
+  // block read before the click keeps the transfer, with nothing borrowed from the browser.
+  for (const [block, seconds, entryMs] of ON_RECORD) {
+    assert.ok(entryMs >= seconds * 1000 && entryMs - seconds * 1000 < 1_000, `block ${block}`);
+    const entry = { ...ENTRY, time: entryMs };
+    assert.equal(transferOf([entry], who({ since: ledgerCutoff(seconds) })), entry, `block ${block}`);
+    // A block read some seconds before the transaction cuts earlier still, and loses nothing.
+    assert.equal(transferOf([entry], who({ since: ledgerCutoff(seconds - 30) })), entry);
+    // A transfer of the same amount made before that block's second began is on the other side of the cut.
+    assert.equal(transferOf([{ ...entry, time: seconds * 1000 - BLOCK_SECOND_MS - 1 }], who({ since: ledgerCutoff(seconds) })), null);
+  }
+  // A clock that could not be read is an error before anything is sent, not a cut at zero that lets everything in.
+  for (const bad of [undefined, null, NaN, 0, -5, "soon"]) assert.throws(() => ledgerCutoff(bad), /chain's clock could not be read/);
+  // The panel asks the chain for the time and never the browser: a browser clock a minute ahead would put the
+  // transfer before the click, and the page would report no transfer of a withdrawal that arrived.
+  const pool = text("../views/pool.js");
+  const click = pool.slice(pool.indexOf('wire($("#wd-btn", page)'), pool.indexOf("const outcome = withdrawOutcome("));
+  assert.ok(click.length > 500);
+  assert.doesNotMatch(click, /Date\.now|new Date|performance\.now/);
+  assert.match(click, /const \[before, since\] = await Promise\.all\(\[readPoolSpot\(address\), chain\.blockTime\(\)\.then\(ledgerCutoff\)\]\);/);
+  // The same cut goes to the reading taken before, to every reading after, and to the matcher.
+  assert.match(click, /const known = hashesOf\(await hl\.ledger\(address, since - LEDGER_LOOKBACK_MS\)\);/);
+  assert.match(click, /hl\.ledger\(address, since\)\.catch\(\(\) => null\)/);
+  assert.match(click, /const who = \{ pool: address, owner, amount, known, since \};/);
+  assert.match(text("../lib/withdraw.js"), /if \(Number\(entry\.time\) < Number\(since\)\) continue;/);
+  // The chain's clock is its latest block's time.
+  assert.match(text("../lib/chain.js"), /export async function blockTime\(\) \{\s+const block = await readProvider\.getBlock\("latest"\);\s+if \(!block\) throw new Error\("The chain's latest block could not be read\."\);\s+return block\.timestamp;\s+\}/);
 });
 
 test("arrived is said from the ledger alone, and never from the transaction or the balance", () => {
@@ -161,12 +204,12 @@ test("the investor's panel refuses above the balance, waits for the transfer, an
   assert.match(pool, /The pool holds <span id="wd-balance">\$\{esc\(usd\(poolSpot, 8\)\)\}<\/span> USDC on HyperCore\./);
   assert.match(pool, /<button id="wd-all" class="secondary" type="button"\$\{off\}>All<\/button>/);
   // The click reads the balance and the ledger before anything is sent, checks the amount, and only then asks the wallet.
-  assert.match(pool, /const since = Date\.now\(\);\s+const \[before, known\] = await Promise\.all\(\[\s+readPoolSpot\(address\), hl\.ledger\(address, since - LEDGER_LOOKBACK_MS\)\.then\(hashesOf\),\s+\]\);\s+showBalance\(before\);\s+const amount = withdrawPlan\(\$\("#wd", page\)\.value, before\);\s+await chain\.write\("pool", address, "withdrawOnCore", \[amount\]\);/);
+  assert.match(pool, /const \[before, since\] = await Promise\.all\(\[readPoolSpot\(address\), chain\.blockTime\(\)\.then\(ledgerCutoff\)\]\);\s+const known = hashesOf\(await hl\.ledger\(address, since - LEDGER_LOOKBACK_MS\)\);\s+showBalance\(before\);\s+const amount = withdrawPlan\(\$\("#wd", page\)\.value, before\);\s+await chain\.write\("pool", address, "withdrawOnCore", \[amount\]\);/);
   // The transfer it looks for is the pool's, to the pool's owner as the chain names it, not to whoever is connected.
   assert.match(pool, /const who = \{ pool: address, owner, amount, known, since \};/);
   // After the transaction a reading that fails is kept as a failed reading, not thrown: the transaction is in a
   // block by then, and a bare error would read as if nothing had been sent.
-  assert.match(pool, /hl\.ledger\(address, since - CLOCK_SKEW_MS\)\.catch\(\(\) => null\), readPoolSpot\(address\)\.catch\(\(\) => null\),/);
+  assert.match(pool, /hl\.ledger\(address, since\)\.catch\(\(\) => null\), readPoolSpot\(address\)\.catch\(\(\) => null\),/);
   // Only the transfer itself ends the waiting; a fall in the balance does not.
   assert.match(pool, /if \(ledger !== null && transferOf\(ledger, who\)\) break;/);
   assert.doesNotMatch(pool, /now < before\) break|arrivedBy/);

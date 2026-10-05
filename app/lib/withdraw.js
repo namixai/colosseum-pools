@@ -10,14 +10,30 @@
 // that amount to the owner, made after the click. The pool's balance is not that witness. A challenge bought in the
 // same seconds takes its capital out of the same balance, and a fall as large as the withdrawal would pass for it.
 // Where the ledger shows no such transfer, the page says what it read and names no cause.
+//
+// "After the click" is measured on the chain's clock, the one HyperCore stamps its ledger by, and never on the
+// browser's. A browser clock a minute ahead would put the transfer before the click, and the page would say it saw
+// no transfer of a withdrawal that arrived.
 // No browser globals here, so node's test runner loads it (app/tests/withdraw.test.mjs).
 import { spot1e8, usd, plain } from "./shared.js";
 
 /** How long the page waits for HyperCore to carry a withdrawal out, and how often it looks. */
 export const WITHDRAW_WAIT_MS = 30_000;
 export const WITHDRAW_POLL_MS = 2_000;
-/** A ledger entry may carry a time a little before the click, by the two clocks; older than this is another transfer. */
-export const CLOCK_SKEW_MS = 5_000;
+/** A block's time is in whole seconds and a ledger entry's in milliseconds: one second covers the rounding. */
+export const BLOCK_SECOND_MS = 1_000;
+
+/**
+ * Where the ledger is cut between "before this withdrawal" and "after it", in ms: the time of the chain's latest
+ * block, read before anything is sent, less the rounding. HyperCore carries a transfer out in the block that asked
+ * for it or a later one, and stamps it by the same clock: on the transfers this repository has on record the entry
+ * is 0.37 to 0.55 s after its block's time. The same cut goes to the ledger's query and to `transferOf`.
+ */
+export function ledgerCutoff(blockSeconds) {
+  const seconds = Number(blockSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) throw new Error("The chain's clock could not be read.");
+  return seconds * 1000 - BLOCK_SECOND_MS;
+}
 
 /** A pool's spot USDC, exactly, in 1e8 units, out of Hyperliquid's `spotClearinghouseState` answer. */
 export function usdcTotal1e8(state) {
@@ -58,8 +74,8 @@ export function hashesOf(ledger) {
 
 /**
  * The ledger entry that is this withdrawal, or null: a spot transfer of USDC, from the pool, to the owner, of
- * exactly the amount, not among the entries read before the click (`known`) and not older than the click.
- * `ledger` is Hyperliquid's `userNonFundingLedgerUpdates` for the pool's account.
+ * exactly the amount, not among the entries read before the click (`known`) and not older than `since`, the cut
+ * `ledgerCutoff` gives. `ledger` is Hyperliquid's `userNonFundingLedgerUpdates` for the pool's account.
  */
 export function transferOf(ledger, { pool, owner, amount, known, since }) {
   for (const entry of ledger || []) {
@@ -67,7 +83,7 @@ export function transferOf(ledger, { pool, owner, amount, known, since }) {
     if (!d || d.type !== "spotTransfer" || d.token !== "USDC") continue;
     if (!same(d.user, pool) || !same(d.destination, owner)) continue;
     if (known.has(String(entry.hash).toLowerCase())) continue;
-    if (Number(entry.time) < Number(since) - CLOCK_SKEW_MS) continue;
+    if (Number(entry.time) < Number(since)) continue;
     let sent;
     try {
       sent = spot1e8(d.amount);
