@@ -383,10 +383,14 @@ above.
   a take on the book for that order a second before it, at 19:00:30, and re-lined them twice. The order
   went; the two stayed. Read at 12:43 UTC on 6 October, the account holds no position and two position
   orders of the gateway, a stop at 2596.4 and a take at 3121.2. They can do nothing while nothing is open,
-  and the gateway lets an account with nothing open go after two such answers (A-19), so nothing now
-  removes them. Before a later order that opens in the same direction, the gateway moves this pair to
-  that order's line; a later short would start with the pair standing beside its own, as the review
-  measured on the gateway's test stand. Not fixed.
+  orders of the gateway, a stop at 2596.4 and a take at 3121.2. They can do nothing while nothing is open,
+  and the gateway let an account with nothing open go after two such answers (A-19), so nothing removed
+  them. Before a later order that opens in the same direction, the gateway moves this pair to that
+  order's line; a later short would have started with the pair standing beside its own, as the review
+  measured on the gateway's test stand. Finding A-22 in [REVIEW-NOTES.md](REVIEW-NOTES.md). Fixed (pull
+  request #128): the sweep takes such a pair off at the second answer in a row that shows nothing behind
+  it, and lets an account go only once none is left; the pair above goes the same way once a gateway
+  with the fix takes the account on.
 
 ### The third seat, bought and traded by the team's trader bot (6 October)
 

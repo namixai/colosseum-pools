@@ -236,7 +236,7 @@ class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> "NoReturn":  # type: ignore[override]
         # argparse prints its usage to stderr and exits with 2, the code of a refusal, and the
         # window reading stdout for one JSON object gets nothing. Raise instead; `main` answers.
-        raise BadArguments(f"{message} (usage: {self.format_usage().strip()})")
+        raise BadArguments(f"{message}; {self.format_usage().strip()}")
 
 
 def parser() -> argparse.ArgumentParser:
