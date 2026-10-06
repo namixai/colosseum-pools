@@ -1293,7 +1293,7 @@ MUTATIONS = [
      '        print(json.dumps({"ok": False, "error": f"bad arguments: {exc}"}))\n        return 2\n',
      ["test_a_command_line_the_client_cannot_read"]),
     ("A69", "agents/client.py",
-     '        raise BadArguments(f"{message} (usage: {self.format_usage().strip()})")\n',
+     '        raise BadArguments(f"{message}; {self.format_usage().strip()}")\n',
      '        super().error(message)\n',
      ["test_a_command_line_the_client_cannot_read"]),
     # ── keeper (Python unittest) ──
@@ -2938,7 +2938,7 @@ MUTATIONS = [
     # is in neither: the account reads as flat with a position open. One such answer is not
     # believed. Each piece of that, taken out.
     ("PG88", "gateway/protect.py",
-     "                        if self._flat_again(account):\n",
+     "                        if self._flat_again(account) and not stray:\n",
      "                        if True:\n",
      ["test_an_order_that_fills_between_the_two_requests_does_not_lose_the_account",
       "test_an_account_with_nothing_open_is_let_go"]),
@@ -2959,8 +2959,8 @@ MUTATIONS = [
      ["test_an_account_with_nothing_open_is_let_go"]),
     # A take the trader moved is still theirs after one flat answer: it may be that order filling.
     ("PG92", "gateway/protect.py",
-     "                        if self._flat_again(account):\n                            self._unwatch(account)\n                            self._forget_takes(account)\n",
-     "                        self._forget_takes(account)\n                        if self._flat_again(account):\n                            self._unwatch(account)\n",
+     "                        if self._flat_again(account) and not stray:\n                            self._unwatch(account)\n                            self._forget_takes(account)\n",
+     "                        self._forget_takes(account)\n                        if self._flat_again(account) and not stray:\n                            self._unwatch(account)\n",
      ["test_the_next_positions_take_is_the_gateways_again"]),
     # A position the account's answer gives no value for has only the market's mark, another
     # request. The sweep says so once, and does not move its take; the stop is still brought nearer,
@@ -3002,6 +3002,25 @@ MUTATIONS = [
      "            self._unvalued_seen.pop(account, None)  # its next position is said anew\n",
      "",
      ["test_it_is_said_again_for_the_next_position_once_the_account_was_let_go"]),
+    # The team's red team, 5 Oct 2026: a stop and a take placed for a resting order stayed on the
+    # book after the order was cancelled, and the account was let go with them standing (A-22).
+    ("PG100", "gateway/protect.py",
+     "                        self.apply(key, Plan([cancel_action(p.asset, p.oid) for p in gone], []))\n",
+     "",
+     ["test_a_pair_placed_for_a_resting_order_goes_when_the_order_does",
+      "test_an_order_that_went_without_a_cancel_through_the_gateway_leaves_the_same_way"]),
+    ("PG102", "gateway/protect.py",
+     "        return [p for p in stray if (p.asset, p.closes) in before]\n",
+     "        return list(stray)\n",
+     ["test_a_pair_whose_order_filled_between_the_two_requests_stays"]),
+    ("PG103", "gateway/protect.py",
+     "                    stray = [p for p in book.protective if (p.asset, p.closes) not in backed]\n",
+     "                    stray = [] if exp else list(book.protective)\n",
+     ["test_a_pair_on_one_asset_goes_while_a_position_on_another_keeps_its_own"]),
+    ("PG101", "gateway/server.py",
+     '        kind = "cancel" if action.get("type") == "cancel" else "protect"\n',
+     '        kind = "protect"\n',
+     ["test_a_pair_placed_for_a_resting_order_goes_when_the_order_does"]),
     # Found by the audit, 4 Oct 2026: with no lag on the far side the take was pulled in for every tick
     # between two reads of the mark.
     ("PG67", "gateway/protect.py",
@@ -3129,8 +3148,8 @@ MUTATIONS = [
      "                    if False:",
      ["test_an_account_the_key_no_longer_trades_is_let_go"]),
     ("PG25", "gateway/protect.py",
-     "                        if self._flat_again(account):\n                            self._unwatch(account)",
-     "                        if self._flat_again(account):\n                            pass",
+     "                        if self._flat_again(account) and not stray:\n                            self._unwatch(account)",
+     "                        if self._flat_again(account) and not stray:\n                            pass",
      ["test_an_account_with_nothing_open_is_let_go"]),
     ("PG26", "gateway/protect.py",
      "            if limits.day >= int(now // 86400) or now - read_at < SNAPSHOT_RECHECK_S:",

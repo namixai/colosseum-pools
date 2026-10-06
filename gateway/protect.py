@@ -370,6 +370,11 @@ def order_wire(asset: int, side: str, tpsl: str, trigger: Decimal, sz_decimals: 
             "t": {"trigger": {"isMarket": True, "triggerPx": wire_number(trigger), "tpsl": tpsl}}}
 
 
+def cancel_action(asset: int, oid: int) -> dict:
+    """One cancel by oid, in the shape a trader's cancel takes (`gateway/checks.py`)."""
+    return {"type": "cancel", "cancels": [{"a": asset, "o": oid}]}
+
+
 def place_action(wires: list[dict]) -> dict:
     return {"type": "order", "orders": wires, "grouping": "positionTpsl"}
 
@@ -504,6 +509,9 @@ class Protector:
         self._flat: set[str] = set()
         # account -> the assets its last answer gave no value for, so that it is said once.
         self._unvalued_seen: dict[str, frozenset[int]] = {}
+        # Protective orders seen standing for a direction with nothing behind them, by account:
+        # the answer before this one has to have shown the same before they are taken off (A-22).
+        self._stray_seen: dict[str, frozenset[tuple[int, str]]] = {}
         # (account, asset, direction) -> the take triggers the trader asked for and Hyperliquid did
         # not refuse. By direction, because an order the other way gets a take of its own, and placing
         # that one says nothing about this one. In memory only: after a restart every take is the
@@ -726,6 +734,19 @@ class Protector:
         with self._guard:
             self._watch.pop(account, None)
             self._unvalued_seen.pop(account, None)  # its next position is said anew
+            self._stray_seen.pop(account, None)
+
+    def _stray_again(self, account: str, stray: list[Protective]) -> list[Protective]:
+        """Of the gateway's own stops and takes that stand for a direction with nothing behind
+        them -- no position and no order that could open one -- those the answer before this one
+        showed standing so as well. One answer is not believed, as with an empty account: the
+        positions and the orders are two requests, and an order that fills between them is in
+        neither, so its pair looks like it guards nothing for exactly one sweep (A-19)."""
+        now = frozenset((p.asset, p.closes) for p in stray)
+        with self._guard:
+            before = self._stray_seen.get(account, frozenset())
+            self._stray_seen[account] = now
+        return [p for p in stray if (p.asset, p.closes) in before]
 
     def _unvalued(self, account: str, book: Book, market: dict[int, Market]) -> frozenset[int]:
         """The assets `unvalued` names for this account, each said in the journal once: again only
@@ -783,14 +804,37 @@ class Protector:
                     book = self.venue.book(account, market)
                     markets = as_the_book_saw(market, book)
                     exp = exposure(book)
+                    # A stop or a take standing for a direction with nothing behind it: a pair goes
+                    # on the book before an order that may open a position, and an order that
+                    # rested and went without filling leaves its pair standing, which the trader
+                    # cannot cancel and `reconcile` never sees, since it walks the directions with
+                    # exposure alone. The team's red team left one such pair on 5 October 2026
+                    # (A-22). It is taken off at the second answer in a row that shows it standing
+                    # for nothing, one cancel each, only while this key still trades the account;
+                    # a cancel Hyperliquid does not confirm raises, the account stays watched, and
+                    # the next sweep tries again. An account is let go only once none is left.
+                    backed = {(a, side) for a, sides in exp.items() for side, q in sides.items() if q > 0}
+                    stray = [p for p in book.protective if (p.asset, p.closes) not in backed]
+                    gone = self._stray_again(account, stray)
+                    if gone:
+                        if key.lower() != (self.reader.trading_key(account) or "").lower():  # the pair is the next key's
+                            self._unwatch(account)
+                            log_line(event="protect_unwatched", account=account,
+                                     reason="not trading with this key; its stray pair is the next key's")
+                            continue
+                        self.apply(key, Plan([cancel_action(p.asset, p.oid) for p in gone], []))
+                        log_line(event="protect_cleared", account=account,
+                                 cancelled=[{"asset": p.asset, "tpsl": p.tpsl, "oid": p.oid} for p in gone])
+                        stray = [p for p in stray if p not in gone]
                     if not exp:
                         # Nothing open, by this answer. The positions and the orders are two
                         # requests, and an order that fills between them is in neither: not yet a
                         # position in the first, no longer an order in the second. Let go on that,
                         # the account would hold a position that nothing sweeps, and a take its
                         # trader moved would stop being theirs. So one such answer is not believed,
-                        # and the account goes at the second in a row.
-                        if self._flat_again(account):
+                        # and the account goes at the second in a row -- with nothing of its own
+                        # left standing on the book.
+                        if self._flat_again(account) and not stray:
                             self._unwatch(account)
                             self._forget_takes(account)
                         continue

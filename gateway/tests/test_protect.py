@@ -621,6 +621,7 @@ class Exchange:
         self.orders: list[dict] = []  # frontendOpenOrders
         self.sent: list[dict] = []
         self.refuse = None  # an answer for the gateway's own actions
+        self.refuse_cancel = None  # an answer for a cancel, the gateway's or the trader's
         self.next_oid = 1000
         self.market_reads = 0
         self.rest_trader_orders = False  # a trader's order joins the book when it is submitted
@@ -679,6 +680,8 @@ class Exchange:
             self.orders.append(self._protective(m["order"], oid))
             return {"status": "ok", "response": {"type": "order", "data": {"statuses": [{"resting": {"oid": oid}}]}}}
         if action["type"] == "cancel":
+            if self.refuse_cancel is not None:
+                return self.refuse_cancel
             oid = action["cancels"][0]["o"]
             self.orders = [o for o in self.orders if o["oid"] != oid]
             return {"status": "ok", "response": {"type": "cancel", "data": {"statuses": ["success"]}}}
@@ -971,6 +974,98 @@ class Sweep(FlowBase):
         self.gw.protector.sweep()
         self.assertNotIn(ACCOUNT, self.gw.protector.watching())
         self.assertEqual(self.gw.protector._flat, set())  # and nothing is kept about it
+
+    def _rest_a_buy_and_lose_it(self, through_the_gateway: bool) -> list[int]:
+        """A buy far from the market rests with its pair, then goes without filling. Returns the
+        pair's oids, which are still on the book."""
+        self.x.rest_trader_orders = True
+        self.send(limitPx="40000")
+        buys = [o for o in self.x.orders if not o["isPositionTpsl"]]
+        self.assertEqual(len(buys), 1)
+        if through_the_gateway:
+            self.assertEqual(self.send("cancel", oid=buys[0]["oid"], nonce=NOW + 1)[0], 200)
+        else:
+            self.x.orders = [o for o in self.x.orders if o["isPositionTpsl"]]
+        pair = sorted(o["oid"] for o in self.x.orders if o["isPositionTpsl"])
+        self.assertEqual(len(pair), 2)
+        self.sent_before = len(self.x.sent)
+        return pair
+
+    def cancels_sent(self) -> list[int]:
+        """The oids the sweep cancelled: the gateway's own cancels, not the trader's."""
+        return [a["cancels"][0]["o"] for a in self.x.sent[self.sent_before:] if a["type"] == "cancel"]
+
+    def test_a_pair_placed_for_a_resting_order_goes_when_the_order_does(self):
+        # The team's red team, 5 October 2026: a buy of 0.005 ETH rested at 2000 for 82 seconds,
+        # the gateway had put a stop and a take on the book for it, and the pair was still there
+        # the next day. The account was let go with nothing open, and nothing swept it after.
+        pair = self._rest_a_buy_and_lose_it(through_the_gateway=True)
+        self.gw.protector.sweep()
+        self.assertEqual(sorted(o["oid"] for o in self.x.orders), pair, "one empty answer is not believed")
+        self.assertEqual(self.cancels_sent(), [])
+        self.assertIn(ACCOUNT, self.gw.protector.watching())
+        self.gw.protector.sweep()
+        self.assertEqual(self.x.orders, [], "taken off at the second")
+        self.assertEqual(sorted(self.cancels_sent()), pair, "one cancel each, signed with the account's key")
+        self.assertNotIn(ACCOUNT, self.gw.protector.watching(), "and let go only then")
+
+    def test_an_order_that_went_without_a_cancel_through_the_gateway_leaves_the_same_way(self):
+        # Refused by the exchange, cancelled by it, or cancelled by the keeper at a stop: the pair
+        # is just as much on its own.
+        pair = self._rest_a_buy_and_lose_it(through_the_gateway=False)
+        self.gw.protector.sweep()
+        self.gw.protector.sweep()
+        self.assertEqual((self.x.orders, sorted(self.cancels_sent())), ([], pair))
+        self.assertNotIn(ACCOUNT, self.gw.protector.watching())
+
+    def test_a_pair_whose_order_filled_between_the_two_requests_stays(self):
+        # The first answer shows neither the order nor the position (A-19); the second shows the
+        # position. Taken off at the first, the pair would leave a fresh position bare.
+        self._rest_a_buy_and_lose_it(through_the_gateway=False)
+        self.gw.protector.sweep()
+        self.x.positions[BTC] = Decimal("0.005")  # it had filled
+        self.gw.protector.sweep()
+        self.assertEqual(self.cancels_sent(), [])
+        self.assertEqual(len([o for o in self.x.orders if o["isPositionTpsl"]]), 2)
+        self.assertIn(ACCOUNT, self.gw.protector.watching())
+
+    def test_a_pair_on_one_asset_goes_while_a_position_on_another_keeps_its_own(self):
+        # A position in BTC and a lost order in ETH: `reconcile` walks the directions with
+        # exposure alone, so the ETH pair sat beside a live account for good.
+        self.send()
+        self.x.positions[BTC] = Decimal("0.005")
+        self.x.rest_trader_orders = True
+        self.send(asset=ETH, limitPx="1500", size="0.01", nonce=NOW + 1)
+        self.x.orders = [o for o in self.x.orders if o["isPositionTpsl"]]  # the ETH buy went
+        btc_pair = sorted(o["oid"] for o in self.x.orders if o["coin"] == "BTC")
+        eth_pair = sorted(o["oid"] for o in self.x.orders if o["coin"] == "ETH")
+        self.assertEqual((len(btc_pair), len(eth_pair)), (2, 2))
+        self.sent_before = len(self.x.sent)
+        self.gw.protector.sweep()
+        self.gw.protector.sweep()
+        self.assertEqual(sorted(self.cancels_sent()), eth_pair)
+        self.assertEqual(sorted(o["oid"] for o in self.x.orders), btc_pair, "the BTC pair is not touched")
+        self.assertIn(ACCOUNT, self.gw.protector.watching())
+
+    def test_a_cancel_the_exchange_refuses_keeps_the_account_and_is_tried_again(self):
+        pair = self._rest_a_buy_and_lose_it(through_the_gateway=False)
+        self.gw.protector.sweep()
+        self.x.refuse_cancel = {"status": "err", "response": "Order was never placed, already canceled, or filled."}
+        self.gw.protector.sweep()
+        self.assertEqual(sorted(o["oid"] for o in self.x.orders), pair)
+        self.assertIn(ACCOUNT, self.gw.protector.watching(), "not let go with its pair still standing")
+        self.x.refuse_cancel = None
+        self.gw.protector.sweep()
+        self.assertEqual(self.x.orders, [])
+        self.assertNotIn(ACCOUNT, self.gw.protector.watching())
+
+    def test_a_pair_is_not_cancelled_with_a_key_that_no_longer_trades_the_account(self):
+        self._rest_a_buy_and_lose_it(through_the_gateway=False)
+        self.gw.protector.sweep()
+        self.reader.trading = False  # stopped: the key was cut
+        self.gw.protector.sweep()
+        self.assertEqual(self.cancels_sent(), [])
+        self.assertNotIn(ACCOUNT, self.gw.protector.watching())
 
     def test_a_new_days_snapshot_is_read_and_tightens_the_stop(self):
         self.send()  # stop at 54000: 30 to lose from 1000
@@ -1757,7 +1852,9 @@ class HostMinute(FlowBase):
         per_order, self.spent = self.spent, 0
         self.assertEqual((buy, per_order), (44, 46))
         # A sweep with the one account the orders went to, once it has nothing left to place; then one more.
+        # The sell above never rested, so its pair stands for nothing: two sweeps take it off (A-22).
         self.x.positions[BTC] = Decimal("0.005")
+        self.gw.protector.sweep()
         self.gw.protector.sweep()
         self.spent = 0
         self.gw.protector.sweep()

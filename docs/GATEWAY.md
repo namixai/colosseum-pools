@@ -373,7 +373,14 @@ requests, and an order that fills between them is in neither — not yet a posit
 longer an order in the second. Let go on that, the account would hold a position nothing sweeps
 until its trader's next order. Two such answers in a row can still both be wrong: an order filling
 between the requests of one sweep, then that position closing and another order filling between the
-requests of the next.
+requests of the next. A stop or a take of the gateway's own that stands for a direction with
+nothing behind it, no position and no order that could open one, is taken off at the second sweep
+in a row that finds it so, one cancel each, and the journal says so (`protect_cleared`); an account
+is let go only once none is left. A pair goes on the book before an order that may open a
+position, and an order that rested and went without filling left its pair standing, which the
+trader could not cancel and the sweep never looked at, since it walks the directions with exposure
+alone: the team's red team left one such pair on 5 October 2026 (A-22). A cancel Hyperliquid does
+not confirm keeps the account on the list, and the next sweep tries again.
 
 **The host's minute.** Hyperliquid allows an IP 1,200 of weight a minute, and the gateway and the
 keeper on one host draw on the same 1,200. Three things spend it:

@@ -210,11 +210,13 @@ class Gateway:
 
     def _act(self, key: str, action: dict, avoid_nonce: int | None = None) -> tuple[str | None, bool, Any]:
         """Signs the gateway's own stop or take with the account's key, checks the signature the
-        way a trader's is checked, and submits it. Returns (why it failed, whether Hyperliquid
-        confirmed it, Hyperliquid's answer)."""
+        way a trader's is checked, and submits it. A cancel of its own stop or take is signed as a
+        cancel: the signer's policy for the gateway's protection knows orders and modifies alone.
+        Returns (why it failed, whether Hyperliquid confirmed it, Hyperliquid's answer)."""
         nonce = self._next_nonce(avoid_nonce)
+        kind = "cancel" if action.get("type") == "cancel" else "protect"
         try:
-            signed = self.signer.sign(key, "protect", action, nonce)
+            signed = self.signer.sign(key, kind, action, nonce)
         except GatewayError as e:
             return f"the signer refused it: {e.code} {e.detail}", False, None
         signature = signature_parts(signed.signature) if signed.http_status == 200 else None
