@@ -775,6 +775,80 @@
         "Hyperliquid's fills for the challenge account (userFills) carry the hash 0xc4f16fdff253ec0ec66b042af0c24001050087c58d570ae068ba1b32b157c5f9 (oid 61879888823), 0.0024 at 2703.5 and 0.0038 at 2703.2. The client's cap on this account is 20 USDC, so the order fits where the one on the 3 USDC seat could not.",
         "Read at 08:12 UTC, the account carried two reduce-only position orders placed by the gateway, a stop at 2656.7 and a take at 2869.2."
       ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "Its second seat was sold to the team's red team",
+      "kind": "seat",
+      "factory": "demo2",
+      "account": "0x4e8884ceb7f8f72aa4877bc71e217958567750a9",
+      "tx": "0x2ec9115e76fd79ff32410ee8a0dea83372abbba701b400a0a57e6ef70b357c39",
+      "block": 66114957,
+      "from": "0x5520a19389Cbd5dd6526315451799E8246b27C10",
+      "record": "bought the challenge 0x7aa03B872FAd788030456616f644344dEa209feE on the seat 0x4e8884ceb7f8f72aa4877bc71e217958567750a9, paying the 4 price and the 0.7 platform fee",
+      "check": [],
+      "notes": ["It is not a trader we do not control."],
+      "sources": [
+        "The buyer. 0x5520a19389Cbd5dd6526315451799E8246b27C10, a wallet the team funded for its own red team, a bot set to try the rules rather than to trade well. It bought the challenge 0x7aa03B872FAd788030456616f644344dEa209feE on the seat 0x4e8884ceb7f8f72aa4877bc71e217958567750a9, paying the 4 price and the 0.7 platform fee (buyChallenge in 0x2ec9115e76fd79ff32410ee8a0dea83372abbba701b400a0a57e6ef70b357c39, block 66114957, 5 October 18:48:39 UTC). It is not a trader we do not control."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "The host started that challenge, and its one short was closed at a loss",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0x7aa03B872FAd788030456616f644344dEa209feE",
+      "tx": "0x37cfbaff33471429930e6e431941c105f1efd2f22136071d51404a7ce672a028",
+      "block": 66114989,
+      "record": "Closed PnL −0.027 USDC; accountValue read 19.939413 after it.",
+      "check": ["userFills for the challenge account on Hyperliquid's testnet info API"],
+      "notes": ["The stop and the take stood the whole time.", "The order went; the two stayed.", "Read at 12:43 UTC on 6 October, the account holds no position and two position orders of the gateway, a stop at 2596.4 and a take at 3121.2.", "Not fixed."],
+      "sources": [
+        "It bought the challenge 0x7aa03B872FAd788030456616f644344dEa209feE",
+        "Started by the host 31 seconds later. activate in 0x37cfbaff33471429930e6e431941c105f1efd2f22136071d51404a7ce672a028, block 66114989, 18:49:10 UTC. The deadline is 12 October 18:49:10 UTC",
+        "Two orders in, one out. Through the client: a sell of 0.004 ETH at 18:52:06 UTC, filled at 2702.2, then 0.010 at 18:53:06, filled at 2702.2 and 2702.3; a reduce-only buy of 0.014 at 18:56:47 closed the short at 2704.1 and 2704.2 (Hyperliquid's userFills). Closed PnL −0.027 USDC; accountValue read 19.939413 after it.",
+        "The stop and the take stood the whole time.",
+        "One more defect of ours, still there at the time of writing. At 19:00:31 UTC the bot rested a buy of 0.005 ETH at 2000, far from the market, and cancelled it at 19:01:53. The gateway had put a stop and a take on the book for that order a second before it, at 19:00:30, and re-lined them twice. The order went; the two stayed. Read at 12:43 UTC on 6 October, the account holds no position and two position orders of the gateway, a stop at 2596.4 and a take at 3121.2.",
+        "Not fixed."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "Its third seat was sold to the team's agent",
+      "kind": "seat",
+      "factory": "demo2",
+      "account": "0x17df6fb2e45b13c7bd5340d30551749609607b3b",
+      "tx": "0x6fb6616d79cac32cc1f5adf8b63ec4683aa90b35e6c9fc3874ba7a41d022b211",
+      "block": 66155662,
+      "from": "0xd4f31E7234308546c822C619705F1A4B5fC8f629",
+      "record": "bought the challenge 0x67de5E792c251384C1c6A80C1e7766E7CCF82ea0 on the seat 0x17df6fb2e45b13c7bd5340d30551749609607b3b, paying the 6 price and the 0.7 platform fee",
+      "check": [],
+      "notes": ["Not a trader we do not control either."],
+      "sources": [
+        "The buyer. 0xd4f31E7234308546c822C619705F1A4B5fC8f629, the wallet of the team's agent, the same that bought the first seat. It bought the challenge 0x67de5E792c251384C1c6A80C1e7766E7CCF82ea0 on the seat 0x17df6fb2e45b13c7bd5340d30551749609607b3b, paying the 6 price and the 0.7 platform fee (buyChallenge in 0x6fb6616d79cac32cc1f5adf8b63ec4683aa90b35e6c9fc3874ba7a41d022b211, block 66155662, 6 October 05:55:57 UTC). Not a trader we do not control either."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "The host started that challenge too, and its one short was closed at a loss",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0x67de5E792c251384C1c6A80C1e7766E7CCF82ea0",
+      "tx": "0xd04cdbc9decccbcc6ef366873dcf17d32e8e7124c88a17721b57f60d743a39b9",
+      "block": 66155680,
+      "record": "A reduce-only buy at 10:18:55 closed it at 86310: closed PnL −0.495 USDC, accountValue 29.499179 after it, inside the rules.",
+      "check": ["userFills for the challenge account on Hyperliquid's testnet info API"],
+      "notes": ["On 30 USDC the target is 33, the drawdown line 28.2 and the first day's line 29.1.", "Both position orders went with the position."],
+      "sources": [
+        "It bought the challenge 0x67de5E792c251384C1c6A80C1e7766E7CCF82ea0",
+        "Started by the host 17 seconds later. activate in 0xd04cdbc9decccbcc6ef366873dcf17d32e8e7124c88a17721b57f60d743a39b9, block 66155680, 05:56:14 UTC. The deadline is 13 October 05:56:14 UTC",
+        "On 30 USDC the target is 33, the drawdown line 28.2 and the first day's line 29.1.",
+        "One short, closed at a loss. A sell of 0.00053 BTC at 06:16:11 UTC, filled at 85376 and 85378, with the gateway's stop at 87047 and take at 79534 placed a second before, the stop brought to 87036 at 06:16:28. A reduce-only buy at 10:18:55 closed it at 86310: closed PnL −0.495 USDC, accountValue 29.499179 after it, inside the rules. Both position orders went with the position."
+      ]
     }
   ],
   "pools": {

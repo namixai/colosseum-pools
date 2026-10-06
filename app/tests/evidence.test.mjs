@@ -94,7 +94,7 @@ test("every row's source lines are in its section of the document", () => {
     else for (const s of r.sources) if (!body.includes(s)) lost.push(`${r.what}: «${s}»`);
   }
   assert.deepEqual(lost, []);
-  assert.equal(DATA.rows.length, 42);
+  assert.equal(DATA.rows.length, 46);
 });
 
 test("a row shows nothing its own source lines do not say", () => {
@@ -196,6 +196,35 @@ test("every leverage stop is marked as staged, and the daily-loss stop as the on
   assert.equal(daily.length, 1);
   assert.ok(daily[0].notes.some((n) => /nobody arranged/.test(n)), "the daily-loss stop says nobody arranged it");
   assert.ok(daily[0].notes.some((n) => /run from a laptop/.test(n)), "and that the keeper ran from a laptop");
+});
+
+test("every seat sold on the three-seat pool says its buyer is the team's, and each sale has its challenge's row", () => {
+  const SECTION = "A second pool on the second deployment, with three seats (5 October)";
+  const body = section("docs/EVIDENCE-SHARED-POOL.md", SECTION);
+  const sold = DATA.rows.filter((r) => r.section === SECTION && r.kind === "seat");
+  // Three seats, three sales: the first on 5 October, the second that evening, the third on the 6th.
+  assert.equal(sold.length, 3);
+  const said = /not a trader we do not control/i;
+  for (const r of sold) {
+    // The buyer is ours each time, and the row says so in the document's words, beside the purchase.
+    assert.ok(r.notes.some((n) => said.test(n)), `${r.what}: says the buyer is not a trader we do not control`);
+    assert.ok(r.from && r.sources.some((s) => s.includes(r.from) && s.includes("buyChallenge in " + r.tx)), `${r.what}: the buyer sent the purchase`);
+    // The challenge the purchase names has a row of its own, straight after it, for its start and its trades.
+    const challenge = r.record.match(/bought the challenge (0x[0-9a-fA-F]{40}) on the seat (0x[0-9a-fA-F]{40})/);
+    assert.ok(challenge, `${r.what}: the record names the challenge and the seat`);
+    assert.equal(challenge[2], r.account);
+    const next = DATA.rows[DATA.rows.indexOf(r) + 1];
+    assert.equal(next?.kind, "challenge", `${r.what}: its challenge's row follows`);
+    assert.equal(next.account, challenge[1]);
+    assert.ok(next.sources.some((s) => s.includes("activate in " + next.tx)), `${next.what}: the start is the row's transaction`);
+    assert.ok(next.block > r.block, `${next.what}: started after it was bought`);
+  }
+  // The document says it of each buyer, so the count on the page is the document's.
+  assert.equal((body.match(/not a trader we do not control/gi) || []).length, sold.length);
+  // The page's own words for the sales and their challenges name no trade as a success and no buyer as an outsider.
+  for (const r of DATA.rows.filter((x) => x.section === SECTION && ["seat", "challenge"].includes(x.kind))) {
+    assert.doesNotMatch(r.what, /\bpassed\b|\bwon\b|independent|outsider/i);
+  }
 });
 
 test("the leverage stop that ran on the demo pool says so, with the pool's terms", () => {
