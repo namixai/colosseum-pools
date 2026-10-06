@@ -350,6 +350,57 @@ of 318 — are there with Hyperliquid's answer and no hash: the answer gives non
 start and the trade were not ours to send and are not in that log; their hashes are the ones given
 above.
 
+### The second seat, bought and traded by the team's red team (5 October)
+
+- **The buyer.** `0x5520a19389Cbd5dd6526315451799E8246b27C10`, a wallet the team funded for its own red
+  team, a bot set to try the rules rather than to trade well. It bought the challenge
+  `0x7aa03B872FAd788030456616f644344dEa209feE` on the seat `0x4e8884ceb7f8f72aa4877bc71e217958567750a9`,
+  paying the 4 price and the 0.7 platform fee (`buyChallenge` in
+  `0x2ec9115e76fd79ff32410ee8a0dea83372abbba701b400a0a57e6ef70b357c39`, block 66114957, 5 October 18:48:39
+  UTC). It is not a trader we do not control.
+- **Started by the host 31 seconds later.** `activate` in
+  `0x37cfbaff33471429930e6e431941c105f1efd2f22136071d51404a7ce672a028`, block 66114989, 18:49:10 UTC. The
+  deadline is 12 October 18:49:10 UTC; the key is `0x21dAb145…`.
+- **Two orders in, one out.** Through the client: a sell of 0.004 ETH at 18:52:06 UTC, filled at 2702.2,
+  then 0.010 at 18:53:06, filled at 2702.2 and 2702.3; a reduce-only buy of 0.014 at 18:56:47 closed the
+  short at 2704.1 and 2704.2 (Hyperliquid's `userFills`). Closed PnL −0.027 USDC; `accountValue` read
+  19.939413 after it.
+- **The stop and the take stood the whole time.** Hyperliquid's order history for the account: a stop at
+  2852.4 and a take at 2197.5 placed at 18:52:05, a second before the first fill; the stop brought to
+  2850.9 at 18:52:17; both re-lined for the larger position at 18:53:04 and 18:53:05, to 2744.9 and
+  2554.3, before the second fill; the stop to 2743.8 at 18:53:08. Each replacement is a cancel and a new
+  order in the same second. Both went with the position at 18:56:47 (`reduceOnlyCanceled`). Against the
+  seat's rules on 20 USDC the lines hold: a 3% day is 0.60, and 0.004 × (2852.4 − 2702.2) = 0.60; a 10%
+  target is 22, and 0.004 × (2702.2 − 2197.5) = 2.02.
+- **Two refusals from the contract, read through the client.** `graduate` with the short open was refused
+  `NotFlat()`; flat and below the target, `TargetNotMet(19.939413, 22.0)`. The client of that day ended on
+  both with "run `forge build` first" instead of the reason: finding A-21 in
+  [REVIEW-NOTES.md](REVIEW-NOTES.md), fixed since.
+- **One more defect of ours, still there at the time of writing.** At 19:00:31 UTC the bot rested a buy
+  of 0.005 ETH at 2000, far from the market, and cancelled it at 19:01:53. The gateway had put a stop and
+  a take on the book for that order a second before it, at 19:00:30, and re-lined them twice. The order
+  went; the two stayed. Read at 12:43 UTC on 6 October, the account holds no position and two position
+  orders of the gateway, a stop at 2596.4 and a take at 3121.2. They can do nothing while nothing is open,
+  and the gateway lets an account with nothing open go after two such answers (A-19), so nothing now
+  removes them: a position opened later on this account would start with a stale pair on the book. Not
+  fixed.
+
+### The third seat, bought and traded by the team's trader bot (6 October)
+
+- **The buyer.** `0xd4f31E7234308546c822C619705F1A4B5fC8f629`, the wallet of the team's agent, the same
+  that bought the first seat. It bought the challenge `0x67de5E792c251384C1c6A80C1e7766E7CCF82ea0` on
+  the seat `0x17df6fb2e45b13c7bd5340d30551749609607b3b`, paying the 6 price and the 0.7 platform fee
+  (`buyChallenge` in `0x6fb6616d79cac32cc1f5adf8b63ec4683aa90b35e6c9fc3874ba7a41d022b211`, block
+  66155662, 6 October 05:55:57 UTC). Not a trader we do not control either.
+- **Started by the host 17 seconds later.** `activate` in
+  `0xd04cdbc9decccbcc6ef366873dcf17d32e8e7124c88a17721b57f60d743a39b9`, block 66155680, 05:56:14 UTC. The
+  deadline is 13 October 05:56:14 UTC; the key is `0x21DAF17b…`. On 30 USDC the target is 33, the
+  drawdown line 28.2 and the first day's line 29.1.
+- **One short, closed at a loss.** A sell of 0.00053 BTC at 06:16:11 UTC, filled at 85376 and 85378,
+  with the gateway's stop at 87047 and take at 79534 placed a second before, the stop brought to 87036
+  at 06:16:28. A reduce-only buy at 10:18:55 closed it at 86310: closed PnL −0.495 USDC, `accountValue`
+  29.499179 after it, inside the rules. Both position orders went with the position.
+
 ## What this does not show
 
 - A passed challenge or a funded stage on a seat, and the funded term running out. The seats of the
