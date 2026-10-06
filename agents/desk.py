@@ -42,14 +42,55 @@ def usd(units: int, decimals: int = 6) -> float:
 
 # ── contract errors, for readable reverts ────────────────────────────────────────────────
 
+# Every custom error in the ABI of `ChallengeAccount` and of `Pool`, by its signature. The table
+# is carried here because a clone has no ABI until `forge build` has run, and a refusal has to be
+# named without one. Read from the build output, the names took the client down with "run `forge
+# build` first" on the first contract refusal in a clone that had installed only the Python side:
+# no JSON, and for a transaction that was mined and reverted, no word that it had gone out
+# (5 October 2026). `scripts/abi-check.py` holds this table against the compiled contracts.
+CONTRACT_ERRORS = (
+    "AlreadyCheckpointed()",
+    "BadStage(uint8)",
+    "BadStatus(uint8)",
+    "CapitalArrived()",
+    "CoreWriterLib__CannotSelfTransfer()",
+    "InvalidInitialization()",
+    "KeyAvailable()",
+    "KeySpoiled()",
+    "NoBreach()",
+    "NotAllowed()",
+    "NotChallenge()",
+    "NotEnoughCapital(uint64,uint64)",
+    "NotFlat()",
+    "NotInitializing()",
+    "NotOwner()",
+    "NotReady()",
+    "NotStartedOnCore()",
+    "NotStopped()",
+    "NotTrader()",
+    "OutsideCheckpointWindow()",
+    "PrecompileLib__AccountMarginSummaryPrecompileFailed()",
+    "PrecompileLib__CoreUserExistsPrecompileFailed()",
+    "PrecompileLib__MarkPxPrecompileFailed()",
+    "PrecompileLib__PerpAssetInfoPrecompileFailed()",
+    "PrecompileLib__Position2PrecompileFailed()",
+    "PrecompileLib__SpotBalancePrecompileFailed()",
+    "PrecompileLib__WithdrawablePrecompileFailed()",
+    "RuleBroken(uint8)",
+    "SafeCastOverflowedUintDowncast(uint8,uint256)",
+    "SafeERC20FailedOperation(address)",
+    "TargetNotMet(int64,int256)",
+    "TooEarly()",
+    "TooLate()",
+    "TooManyAssets()",
+    "TooManyCancels()",
+    "UnsupportedSizeDecimals(uint32,uint8)",
+    "WithdrawnThisBlock()",
+)
+
+
 def _error_names() -> dict[str, str]:
-    names = {}
-    for contract in ("ChallengeAccount", "Pool"):
-        for item in c.artifact(contract)["abi"]:
-            if item["type"] == "error":
-                sig = f"{item['name']}({','.join(i['type'] for i in item['inputs'])})"
-                names["0x" + keccak(text=sig)[:4].hex()] = item["name"]
-    return names
+    return {"0x" + keccak(text=sig)[:4].hex(): sig.split("(")[0] for sig in CONTRACT_ERRORS}
 
 
 def revert_reason(exc: Exception, names: dict[str, str]) -> str:
@@ -185,6 +226,13 @@ class Desk:
             said = f"stopped for {BREACH[recorded]} — what the contract recorded"
         elif finished:
             said = "finished with no rule broken"
+        elif self.is_challenge and number == 1:
+            # Created: bought, and not activated. Until its capital arrives the equity reads 0
+            # against a drawdown base that is already the capital, so a live `violation()` answers
+            # Drawdown. The contract judges nothing there -- `breach` is for an Active account
+            # alone -- and a trader reading "Drawdown" on a challenge they have just bought is
+            # reading a stop that cannot happen.
+            said = "not active yet: nothing is judged before activation"
         else:
             said = "inside the rules" if verdict == 0 else BREACH[verdict]
         out = {

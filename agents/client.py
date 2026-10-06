@@ -26,6 +26,7 @@ import os
 import pathlib
 import sys
 import time
+import traceback
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -339,13 +340,26 @@ def main(argv: list[str] | None = None) -> int:
     from .desk import Refused
 
     args = parser().parse_args(argv)
-    chain.assert_testnet()
     try:
+        chain.assert_testnet()
         result = run(args, chain, lambda f, r: JsonRpcReader(chain.RPC_URL, f, r),
                      lambda w, url: GatewayClient(w, url))
     except Refused as exc:
         print(json.dumps({"ok": False, "refused": str(exc)}))
         return 2
+    except SystemExit as exc:
+        # The checks before anything runs stop with a sentence: the wrong chain, a key file others
+        # can read, a deployment that is not there. The caller is a program reading one JSON object.
+        if not isinstance(exc.code, str):
+            raise
+        print(json.dumps({"ok": False, "error": exc.code}))
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        # Not foreseen, so nothing here says whether an order or a transaction went out: the
+        # caller reads `account` before it tries again. The trace goes to stderr.
+        traceback.print_exc()
+        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}))
+        return 1
     print(json.dumps({"ok": True, "result": result}, default=str))
     return 0
 

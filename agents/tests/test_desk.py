@@ -196,6 +196,19 @@ class DeskLimits(WithChain):
         self.chain.revert = None
         self.assertEqual(desk.graduate()["status"], "sent", "so the attempt is still there to use")
 
+    def test_a_refusal_is_named_in_a_clone_that_was_never_built(self):
+        # The fake chain has no build output, like a clone that installed only the Python side. A
+        # refusal with arguments is named too, and the table that names them is whole: a signature
+        # each, no selector twice.
+        desk = self.desk()
+        self.chain.revert = ("0x" + dk.keccak(text="TargetNotMet(int64,int256)")[:4].hex()
+                             + f"{19_939_413:064x}{22_000_000:064x}")
+        self.assertEqual(desk.graduate(),
+                         {"status": "refused_by_contract", "reason": "TargetNotMet", "attempt_returned": True})
+        for signature in dk.CONTRACT_ERRORS:
+            self.assertRegex(signature, r"^[A-Za-z_]\w*\(([a-z0-9]+(,[a-z0-9]+)*)?\)$")
+        self.assertEqual(len(dk._error_names()), len(dk.CONTRACT_ERRORS))
+
     def test_a_node_that_refused_the_read_is_not_called_a_contract_refusal(self):
         # The word, not the counter. `NotSent` covers a contract reverting at the gas estimate AND
         # a node refusing the nonce read, and both used to come back `refused_by_contract` -- which
@@ -246,6 +259,13 @@ class DeskLimits(WithChain):
         # would call it a drawdown.
         self.chain.status, self.chain.recorded, self.chain.verdict = 8, 0, 1
         self.assertEqual(self.desk().account_view()["contract_verdict"], "finished with no rule broken")
+
+    def test_a_challenge_that_is_not_active_yet_is_not_called_a_breach(self):
+        # Created, nothing recorded, and a live reading of Drawdown: equity 0 before the capital
+        # arrives, against a drawdown base that is already the capital.
+        self.chain.status, self.chain.recorded, self.chain.verdict = 1, 0, 1
+        self.assertEqual(self.desk().account_view()["contract_verdict"],
+                         "not active yet: nothing is judged before activation")
 
     def test_an_idle_pool_needs_its_cut_block_to_say_the_funded_stage_is_over(self):
         # A funded stage that ended cleanly records `fundedEndReason` None -- byte for byte what a

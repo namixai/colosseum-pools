@@ -31,7 +31,10 @@ Commands:
   graduate <address>             ask the challenge contract to pass the challenge
 
 Each prints one JSON object. {"ok": false, "refused": ...} means the client sent nothing.
-An order that went out shows what the gateway and Hyperliquid answered.
+{"ok": false, "error": ...} means it stopped on something else and does not say whether anything
+went out: read `account` before you try again.
+An order that went out shows what the gateway and Hyperliquid answered. `graduate` answers with a
+status: "refused_by_contract" carries the contract's own reason, such as NotFlat or TargetNotMet.
 
 The account is a contract. The key that signs its orders is held by the order gateway, and you
 never see it. The contract holds the pool's rules: a maximum daily loss, a maximum drawdown, a

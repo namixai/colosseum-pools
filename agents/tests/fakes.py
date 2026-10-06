@@ -131,8 +131,9 @@ class FakeChain:
         return {"transactionHash": "0x" + "ab" * 32}
 
     def artifact(self, contract):
-        return {"abi": [{"type": "error", "name": "NotFlat", "inputs": []},
-                        {"type": "error", "name": "TargetNotMet", "inputs": [{"type": "int64"}, {"type": "int256"}]}]}
+        # A clone where `forge build` has not run, as `spike/hlspike/common.py` answers in one. The
+        # desk has to name a contract's refusal without the build output.
+        raise SystemExit(f"missing out/{contract}.sol/{contract}.json; run `forge build` first")
 
 
 # What the live gateway answers when its own chain reads are rate limited: it refuses BEFORE it

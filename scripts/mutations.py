@@ -1267,6 +1267,25 @@ MUTATIONS = [
      "        except c.NotSent as exc:\n            # The one purchase a day is spent before the send",
      "        except Exception as exc:\n            # The one purchase a day is spent before the send",
      ["test_a_purchase_that_was_broadcast_stays_spent"]),
+    # A contract's refusal is named from a table the client carries, not from the build output, and
+    # every stop of the command line is one JSON object: the trading window is told so.
+    ("A64", "agents/desk.py",
+     '    return {"0x" + keccak(text=sig)[:4].hex(): sig.split("(")[0] for sig in CONTRACT_ERRORS}',
+     '    return {"0x" + keccak(text=sig)[:4].hex(): sig.split("(")[0] for sig in CONTRACT_ERRORS if "," not in sig}',
+     ["test_a_refusal_is_named_in_a_clone_that_was_never_built"]),
+    ("A65", "agents/client.py",
+     '        print(json.dumps({"ok": False, "error": exc.code}))\n        return 1\n',
+     '        raise\n',
+     ["test_a_check_that_stops_before_anything_runs"]),
+    ("A66", "agents/client.py",
+     "    except Exception as exc:  # noqa: BLE001\n        # Not foreseen",
+     "    except ZeroDivisionError as exc:  # noqa: BLE001\n        # Not foreseen",
+     ["test_an_error_nobody_foresaw"]),
+    # A challenge that is Created reads Drawdown from a live `violation()` and cannot be stopped.
+    ("A67", "agents/desk.py",
+     "        elif self.is_challenge and number == 1:\n",
+     "        elif self.is_challenge and number == 0:\n",
+     ["test_a_challenge_that_is_not_active_yet_is_not_called_a_breach"]),
     # ── keeper (Python unittest) ──
     # The take has to clear the target by what closing costs, or a challenge the take closed
     # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.

@@ -21,12 +21,12 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MAP = ROOT / "docs/AUDIT-FINDINGS.md"
-TEST_DIRS = ["test", "ops/tests", "gateway/tests"]
+TEST_DIRS = ["test", "ops/tests", "gateway/tests", "agents/tests"]
 # A row that names no test has to explain itself; these are the words that count as an explanation
 # rather than a shrug.
 REASON_WORDS = ("no test", "no behaviour test", "no contract test")
 # The findings the table has carried. It may grow; it may not shrink without somebody saying so.
-MIN_FINDINGS = 19
+MIN_FINDINGS = 21
 
 
 def test_names() -> set[str]:

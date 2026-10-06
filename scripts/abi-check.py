@@ -34,8 +34,8 @@ def cannot_run(message: str) -> "NoReturn":
     raise SystemExit(2)
 
 
-def compiled(contract: str, function: str) -> dict[str, list[tuple[str, str]]]:
-    """{argument name: [(type, name), ...]} for every struct argument of `function`."""
+def abi_of(contract: str) -> list[dict]:
+    """The compiled ABI of `contract`, as forge prints it."""
     try:
         out = subprocess.run(["forge", "inspect", contract, "abi", "--json"],
                              cwd=ROOT, capture_output=True, text=True, timeout=600)
@@ -53,6 +53,12 @@ def compiled(contract: str, function: str) -> dict[str, list[tuple[str, str]]]:
         cannot_run(f"forge inspect did not print an ABI: {out.stdout.strip()[:120]!r}")
     if not isinstance(abi, list) or not all(isinstance(f, dict) for f in abi):
         cannot_run(f"forge inspect printed JSON that is not an ABI: {out.stdout.strip()[:120]!r}")
+    return abi
+
+
+def compiled(contract: str, function: str) -> dict[str, list[tuple[str, str]]]:
+    """{argument name: [(type, name), ...]} for every struct argument of `function`."""
+    abi = abi_of(contract)
     fns = [f for f in abi if f.get("name") == function]
     if len(fns) != 1:
         cannot_run(f"expected one {function} in {contract}'s ABI, found {len(fns)}")
@@ -114,6 +120,24 @@ def py_struct(source: str, name: str) -> list[tuple[str, str]]:
     return fields
 
 
+def error_signatures(contract: str) -> set[str]:
+    """`Name(type,...)` for every custom error in the contract's ABI."""
+    return {f"{e['name']}({','.join(i['type'] for i in e['inputs'])})"
+            for e in abi_of(contract) if e.get("type") == "error"}
+
+
+def py_strings(source: str, name: str) -> list[str]:
+    """`NAME = (\n    "a",\n    "b",\n)` in agents/desk.py: a tuple of strings, one to a line."""
+    m = re.search(rf"^{name} = \(\n(.*?)^\)", source, re.M | re.S)
+    if not m:
+        cannot_run(f"no {name} in agents/desk.py -- did it move?")
+    lines = [ln.strip() for ln in m.group(1).splitlines() if ln.strip()]
+    for ln in lines:
+        if not re.fullmatch(r'"[^"]+",', ln):
+            cannot_run(f"agents/desk.py {name} has a line that is not one string: {ln[:60]!r}")
+    return [ln[1:-2] for ln in lines]
+
+
 def inner(text: str, name: str, where: str) -> str:
     text = text.strip()
     if not (text.startswith("(") and text.endswith(")")):
@@ -160,6 +184,21 @@ def main() -> int:
         if names != stages:
             problems.append(f"{where} is {names}, the contract says {stages}")
 
+    # The custom errors. The agents' client names a contract's refusal from its own table of them,
+    # because a trader's clone may never have run `forge build`. An error the table lacks comes
+    # back to the trader as raw bytes; one it carries and the contracts do not is a name for
+    # nothing.
+    errors: set[str] = set()
+    for contract in ("ChallengeAccount", "Pool"):
+        errors |= error_signatures(contract)
+    carried = py_strings(py, "CONTRACT_ERRORS")
+    for sig in sorted(errors - set(carried)):
+        problems.append(f"agents/desk.py CONTRACT_ERRORS lacks {sig}, which a contract can answer")
+    for sig in sorted(set(carried) - errors):
+        problems.append(f"agents/desk.py CONTRACT_ERRORS carries {sig}, which neither contract has")
+    if len(carried) != len(set(carried)):
+        problems.append("agents/desk.py CONTRACT_ERRORS names an error twice")
+
     if problems:
         print("abi-check: the contracts and their copies disagree.")
         for p in problems:
@@ -169,7 +208,7 @@ def main() -> int:
         print("both at the moment somebody's pool is actually in that stage.")
         return 1
     fields = sum(len(v) for v in structs.values())
-    print(f"abi-check: clean ({fields} fields and {len(stages)} stages x 2 copies).")
+    print(f"abi-check: clean ({fields} fields and {len(stages)} stages x 2 copies, {len(errors)} errors x 1).")
     return 0
 
 

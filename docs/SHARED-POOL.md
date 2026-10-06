@@ -128,7 +128,9 @@ payment would come from.
 
 The platform's fee is its share of each holder's own profit, taken when they are paid: the payment
 over what the paid shares cost that holder, never on a loss. It stays in the pool as the platform's
-shares rather than being paid out.
+shares rather than being paid out. That is the fee this contract can take, and it is a testnet
+contract's. It is not how the platform is meant to earn on mainnet: the site's Economics page sets
+that out under "How the platform earns".
 
 While someone waits, the queue comes first. A seat is armed only from money the queue doesn't need:
 what is left on HyperCore after the top-up, with the USDC on HyperEVM, must still cover the queue at

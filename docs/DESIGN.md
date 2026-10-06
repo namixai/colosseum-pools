@@ -65,7 +65,10 @@ recipient, and not refunded. A challenge uses
 one agent key for good, so without a fee a pool's owner could sell challenges to themselves at
 whatever price they liked and use up the published keys cheaply. Not for nothing, though: the
 paragraph above says a price of zero is refused at creation, and it is (`PoolFactory`), so the
-owner would be paying themselves the price while the fee is the only part that leaves.
+owner would be paying themselves the price while the fee is the only part that leaves. This is the
+fee of the contracts on testnet, a flat placeholder. What the platform is meant to charge on mainnet
+is set out on the site's Economics page, under "How the platform earns"; the contracts described
+here charge none of it.
 
 Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0), in units of
 1e-6 USDC. Precompiles return the state at the start of the block.
@@ -309,6 +312,15 @@ before it can sell again.
   road and not on the other. It used to say "the only brake", which was wrong in both halves.
   The operator sets the fee and can change it at any time, including between a buyer's approval and
   purchase; a buyer who approves exactly price plus fee can't be charged more.
+- The factory's operator sets the platform fee and who receives it, the builder and its largest fee,
+  and the list of assets a new pool may choose from. None of this moves a pool's capital or changes
+  the rules of a pool that exists. A new fee applies to purchases made after it, and a new asset
+  list to pools created after it. A new builder is approved by an account when it is prepared or
+  activated, and anyone may call `prepareAccount` on an existing pool again; a builder is paid only
+  on an order that names it, and orders are signed with the agent key. The role itself moves in one
+  call, `setOperator`, to any address, with no acceptance step. `KeyRegistry` has an operator of its
+  own, a separate role, and that one moves in two steps: the new operator must accept. A wrong
+  address loses the factory's role for good, and these settings then stay as they were (A-20).
 - USDC sent to a pool on HyperEVM is lost on testnet: the bridge doesn't credit contracts.
   The contracts have no entry point for it, and the app says so, but nothing stops a plain
   ERC-20 transfer to the pool's address.

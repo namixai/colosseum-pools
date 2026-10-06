@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Falsifies scripts/abi-check.py: drifts each copy of the structs in turn and requires the check
+# Falsifies scripts/abi-check.py: drifts each copy of the structs, and the client's table of the
+# contracts' errors, in turn and requires the check
 # to go red and to name the copy it is unhappy with. Then breaks a copy so it no longer parses,
 # and requires exit 2 -- "could not run", never mistaken for "the copies disagree". Then puts the
 # tree back and requires green.
@@ -134,6 +135,15 @@ expect 1 "a field missing from the agents' copy" "agents/desk.py TERMS"
 drift "$PY" 'RULES = "(uint16,' 'RULES = "(uint32,'
 expect 1 "a type in the agents' copy" "agents/desk.py RULES"
 
+# 4a. The client's table of errors loses one the contracts can answer: a trader would get raw
+#     bytes for it instead of its name.
+drift "$PY" '    "NotFlat()",' ''
+expect 1 "an error the client's table lacks" "CONTRACT_ERRORS lacks NotFlat()"
+
+# 4b. The table carries an error neither contract has.
+drift "$PY" '    "TooLate()",' '    "TooLateByFar()",'
+expect 1 "an error neither contract has" "CONTRACT_ERRORS carries TooLateByFar()"
+
 # ── exit 2: the check could not run, and says what it could not read ──────────────────────
 
 # 5. A field of the app's copy loses its name: a type alone is not "type name".
@@ -147,6 +157,10 @@ expect 2 "the app's copy moved" "no TERMS in app/lib/chain.js"
 # 7. The agents' copy stops being a tuple.
 drift "$PY" 'RULES = "(' 'RULES = "'
 expect 2 "the agents' copy is not a tuple" "agents/desk.py RULES is not a tuple"
+
+# 7a. The client's table of errors moves or is renamed.
+drift "$PY" 'CONTRACT_ERRORS = (' 'CONTRACT_ERRORS_V2 = ('
+expect 2 "the client's table of errors moved" "no CONTRACT_ERRORS in agents/desk.py"
 
 # 8. forge answers with something that is not JSON.
 fake_forge 'Error: this is not an ABI'
