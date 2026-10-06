@@ -1447,9 +1447,14 @@ class OneFlatAnswerIsNotBelieved(FlowBase):
         self.x.orders.clear()      # the first order was cancelled: nothing open
         self.gw.protector.sweep()  # ...seen once
         self.assertEqual(self.send(nonce=NOW + 1)[0], 200)  # the trader orders again, and it rests
-        self.x.between_the_two_requests = self.fill
-        self.gw.protector.sweep()  # and fills between the two requests
+        # It fills, the position closes and the pair goes with it, all before the next sweep: that
+        # answer shows nothing at all. Counted from before the order it would be the second such
+        # answer and the account would go; the order started the count again, so it is the first.
+        self.x.orders.clear()
+        self.gw.protector.sweep()
         self.assertIn(ACCOUNT, self.gw.protector.watching())
+        self.gw.protector.sweep()  # the second of the order's own
+        self.assertNotIn(ACCOUNT, self.gw.protector.watching())
 
 
 class AfterARestart(FlowBase):
