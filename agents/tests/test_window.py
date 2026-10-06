@@ -177,7 +177,8 @@ class Window(unittest.TestCase):
 
     def test_no_option_raises_a_limit(self):
         for option in ("--max-notional", "--max-orders", "--max-price", "--budget-usd"):
-            with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()), mock.patch("sys.stderr"):
+            # The parser raises instead of exiting, so `main` can answer with one JSON object.
+            with self.assertRaises(cli.BadArguments):
                 cli.parser().parse_args(["--deployment", "demo", option, "999", "pools"])
 
     def test_a_wallet_that_is_not_the_accounts_trader_sends_nothing(self):

@@ -27,7 +27,7 @@ import pathlib
 import sys
 import time
 import traceback
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
 import requests
@@ -228,9 +228,20 @@ def save_counters(obj: Any, names: tuple[str, ...], path: pathlib.Path) -> None:
     tmp.replace(path)
 
 
+class BadArguments(Exception):
+    """A command line the client could not read. Nothing was sent."""
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> "NoReturn":  # type: ignore[override]
+        # argparse prints its usage to stderr and exits with 2, the code of a refusal, and the
+        # window reading stdout for one JSON object gets nothing. Raise instead; `main` answers.
+        raise BadArguments(f"{message} (usage: {self.format_usage().strip()})")
+
+
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="python -m agents.client", description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = _Parser(prog="python -m agents.client", description=__doc__,
+                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--deployment", required=True, help="label of a record in deployments/")
     p.add_argument("--wallet", default="ai-trader", help="key name in COLOSSEUM_KEY_DIR")
     p.add_argument("--gateway", default=os.environ.get("COLOSSEUM_GATEWAY_URL", "http://127.0.0.1:8787"))
@@ -339,7 +350,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from .desk import Refused
 
-    args = parser().parse_args(argv)
+    try:
+        args = parser().parse_args(argv)
+    except BadArguments as exc:
+        # Nothing was sent, as with a refusal; the code is its own, so a program can tell the two
+        # apart without reading the text.
+        print(json.dumps({"ok": False, "error": f"bad arguments: {exc}"}))
+        return 3
     try:
         chain.assert_testnet()
         result = run(args, chain, lambda f, r: JsonRpcReader(chain.RPC_URL, f, r),

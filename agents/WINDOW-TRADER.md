@@ -32,7 +32,8 @@ Commands:
 
 Each prints one JSON object. {"ok": false, "refused": ...} means the client sent nothing.
 {"ok": false, "error": ...} means it stopped on something else and does not say whether anything
-went out: read `account` before you try again.
+went out: read `account` before you try again. One case of it is a command line the client could
+not read, "bad arguments: ..." with the usage; nothing was sent, and the exit code is 3.
 An order that went out shows what the gateway and Hyperliquid answered. `graduate` answers with a
 status: "refused_by_contract" carries the contract's own reason, such as NotFlat or TargetNotMet.
 
