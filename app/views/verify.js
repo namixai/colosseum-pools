@@ -3,7 +3,9 @@
 import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { esc, render, $, badge, row, isAddress, settle, wire } from "../lib/ui.js";
-import { ruleVerdict, liveReadingIsMoot, pastFundedStage } from "../lib/verdict.js";
+import {
+  ruleVerdict, liveReadingIsMoot, pastFundedStage, notActiveYet, NOT_ACTIVE_YET, WHY_NOT_JUDGED,
+} from "../lib/verdict.js";
 import { poolStatus } from "../lib/stages.js";
 import { keyFacts } from "../lib/keys.js";
 import { isArchive } from "../lib/deployments.js";
@@ -169,7 +171,9 @@ async function fillsPanel(account, address, page, kind, deployment) {
   // Every line below is about the LAST funded stage once the pool is idle again, never about the
   // pool as it stands: idle means it is ready to sell the next challenge.
   const past = idleAfterFunding ? "the last funded stage" : "this account";
-  const verdict = ruleVerdict({ recorded, live, stopped, finished });
+  // A challenge that is bought and not started is judged by nothing: a verdict computed on it would be Drawdown
+  // until its capital arrives, for a stop the contract cannot make.
+  const verdict = ruleVerdict({ recorded, live, stopped, finished, waiting: notActiveYet({ kind, status: state }) });
   $("#fills", page).className = "";
   $("#fills", page).innerHTML = `
     ${kind === "pool" ? row("What the pool is doing", esc(poolStatus(state, null, archived).words)) : ""}
@@ -182,13 +186,16 @@ async function fillsPanel(account, address, page, kind, deployment) {
         ? row(`Rules while ${esc(past)} traded`, badge("none broken; the contract recorded no stop", "ok"))
         : verdict.kind === "stopped-without-a-recorded-reason"
           ? row("This account is stopped", badge("stopped; it keeps no reason of its own", "bad"))
-          : row("The contract's verdict right now",
-                verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))}
+          : verdict.kind === "not-active-yet"
+            ? row("The contract's verdict", badge(NOT_ACTIVE_YET, ""))
+            : row("The contract's verdict right now",
+                  verdict.reason ? badge(chain.BREACH[verdict.reason], "bad") : badge("inside the rules", "ok"))}
     ${idleAfterFunding ? row("Funded stage on this pool",
         `ended at block ${esc(String(cutBlock))}; the pool is idle again${archived
           ? ", and as part of the archived deployment it sells no further challenge"
           : " and can sell the next challenge"}`) : ""}
-    ${liveReadingIsMoot(verdict) ? `<p class="small muted">A verdict this page could compute from the
+    ${verdict.kind === "not-active-yet" ? `<p class="small muted">${esc(WHY_NOT_JUDGED)}</p>`
+      : liveReadingIsMoot(verdict) ? `<p class="small muted">A verdict this page could compute from the
       account's state would be about the account as it stands now${idleAfterFunding
         ? `, and this pool is idle: its capital is home and the stage above is over. A reading of what
         it holds today says nothing about how that stage went`

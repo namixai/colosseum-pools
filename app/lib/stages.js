@@ -20,7 +20,7 @@ export function stageName(stage) {
 
 const WORDS = [
   "Idle: it can sell a challenge.",
-  "A challenge is running on it.",
+  "A challenge is on it: its own page says whether it has started.",
   "A funded stage is running: the trader who passed trades the pool's own capital.",
   "Closing: the funded stage has ended and is settling; the pool is idle again once it has.",
   "Passed, waiting for a key: the trader passed the challenge, and the funded stage opens as soon as a "

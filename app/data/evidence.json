@@ -834,6 +834,8 @@
     { "doc": "docs/EVIDENCE.md", "section": "Not demonstrated yet", "quote": "Drawdown, the last of the three rules the pools enforce." },
     { "doc": "docs/EVIDENCE.md", "section": "ForbiddenAsset, and why it is not in the list above", "quote": "Breach.ForbiddenAsset cannot be reached through this demo, and that is by construction rather than for want of trying." },
     { "doc": "docs/EVIDENCE-SHARED-POOL.md", "section": "What this does not show", "quote": "A passed challenge or a funded stage on a seat, and the funded term running out." },
+    { "doc": "docs/EVIDENCE-SHARED-POOL.md", "section": "What this does not show", "quote": "A holder leaving with a gain." },
+    { "doc": "docs/EVIDENCE-SHARED-POOL.md", "section": "What this does not show", "quote": "A trader we do not control on a seat." },
     { "doc": "docs/EVIDENCE-SHARED-POOL.md", "section": "What this does not show", "quote": "A stop on a seat." },
     { "doc": "docs/EVIDENCE-SHARED-POOL.md", "section": "", "quote": "The shared pool (src/shared/SharedPool.sol, the design) is a layer over the pools of this demo. Nobody has reviewed it." }
   ]
