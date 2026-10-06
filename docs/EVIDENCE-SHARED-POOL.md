@@ -370,7 +370,9 @@ above.
   2850.9 at 18:52:17; both re-lined for the larger position at 18:53:04 and 18:53:05, to 2744.9 and
   2554.3, before the second fill; the stop to 2743.8 at 18:53:08. Each replacement is a cancel and a new
   order in the same second. Both went with the position at 18:56:47 (`reduceOnlyCanceled`). Against the
-  seat's rules on 20 USDC the lines hold: a 3% day is 0.60, and 0.004 × (2852.4 − 2702.2) = 0.60; a 10%
+  seat's rules on 20 USDC: a 3% day is 0.60 to lose. The first stop, placed a second before the fill
+  from the mark of that moment, stood 0.0008 over it: 0.004 × (2852.4 − 2702.2) = 0.6008, before fees.
+  The sweep twelve seconds later brought it to 2850.9, 0.004 × (2850.9 − 2702.2) = 0.5948, inside. A 10%
   target is 22, and 0.004 × (2702.2 − 2197.5) = 2.02.
 - **Two refusals from the contract, read through the client.** `graduate` with the short open was refused
   `NotFlat()`; flat and below the target, `TargetNotMet(19.939413, 22.0)`. The client of that day ended on
@@ -382,8 +384,9 @@ above.
   went; the two stayed. Read at 12:43 UTC on 6 October, the account holds no position and two position
   orders of the gateway, a stop at 2596.4 and a take at 3121.2. They can do nothing while nothing is open,
   and the gateway lets an account with nothing open go after two such answers (A-19), so nothing now
-  removes them: a position opened later on this account would start with a stale pair on the book. Not
-  fixed.
+  removes them. Before a later order that opens in the same direction, the gateway moves this pair to
+  that order's line; a later short would start with the pair standing beside its own, as the review
+  measured on the gateway's test stand. Not fixed.
 
 ### The third seat, bought and traded by the team's trader bot (6 October)
 
