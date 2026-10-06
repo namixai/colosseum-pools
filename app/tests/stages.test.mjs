@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { STAGE_NAMES, STAGE_IDS, stageName, stageWords, isFundedStage, spanWords, awaitingKeyWords } from "../lib/stages.js";
 import { saleBlocker } from "../lib/funding.js";
-import { pastFundedStage } from "../lib/verdict.js";
+import { pastFundedStage, ruleVerdict, liveReadingIsMoot, notActiveYet, NOT_ACTIVE_YET, WHY_NOT_JUDGED } from "../lib/verdict.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SOURCE = readFileSync(join(ROOT, "src", "Pool.sol"), "utf8");
@@ -93,4 +93,63 @@ test("where the contract has stage 4, it has the clock the pool page reads", () 
       assert.match(awaitingKeyWords({ passedAt, window, now }), /if there is still no key to be had, anyone may/);
     }
   }
+});
+
+test("a challenge that is bought and not started is shown as not judged, never as a drawdown", () => {
+  const view = (name) => readFileSync(join(ROOT, "app", "views", name), "utf8");
+  // Status 1 is Created in the contract's own list, and the only status `breach` takes is Active.
+  const account = readFileSync(join(ROOT, "src", "ChallengeAccount.sol"), "utf8");
+  const statuses = account.match(/enum Status\s*\{([^}]*)\}/)[1].replace(/\/\/[^\n]*/g, "").split(",").map((x) => x.trim()).filter(Boolean);
+  assert.equal(statuses[1], "Created");
+  assert.equal(statuses[2], "Active");
+  assert.match(account, /function breach\([^)]*\)\s+external\s+inStatus\(Status\.Active\)/);
+  // What the contract answers for such an account until its capital arrives: equity 0 against a line that is
+  // already the capital, so `violation()` says Drawdown (1). That is the reading the page must not show.
+  assert.match(account, /function drawdownBase\(\) public view override returns \(int64\) \{\s+return int64\(_terms\.capital\);/);
+  const ruled = readFileSync(join(ROOT, "src", "RuledAccount.sol"), "utf8");
+  assert.match(ruled, /if \(eq \* bps < base \* \(bps - int256\(uint256\(_rules\.maxDrawdownBps\)\)\)\) return Breach\.Drawdown;/);
+
+  assert.equal(notActiveYet({ kind: "challenge", status: 1 }), true);
+  assert.equal(notActiveYet({ kind: "challenge", status: 1n }), true);
+  for (const status of [0, 2, 3, 4, 5, 6, 7, 8]) assert.equal(notActiveYet({ kind: "challenge", status }), false, `status ${status}`);
+  // A pool's stage 1 is a pool with a challenge on it, not an account waiting to start.
+  assert.equal(notActiveYet({ kind: "pool", status: 1 }), false);
+  assert.equal(notActiveYet(), false);
+
+  // Bought, capital not there yet: the live reading is Drawdown, and the verdict is "not active yet".
+  const waiting = ruleVerdict({ recorded: 0, live: 1, stopped: false, finished: false, waiting: true });
+  assert.deepEqual(waiting, { kind: "not-active-yet" });
+  assert.equal(liveReadingIsMoot(waiting), true, "a reading of an account that is not judged is not shown as a verdict");
+  // The same once the capital has arrived and the reading turns to None: still not judged, not "inside the rules".
+  assert.deepEqual(ruleVerdict({ live: 0, waiting: true }), { kind: "not-active-yet" });
+  // Without the flag an Active account with the same reading is a live verdict, as before.
+  assert.deepEqual(ruleVerdict({ recorded: 0, live: 1 }), { kind: "live", reason: 1 });
+  // Anything the contract wrote down, or an account that has ended, still comes first.
+  assert.deepEqual(ruleVerdict({ recorded: 3, live: 1, waiting: true }), { kind: "recorded", reason: 3 });
+  assert.deepEqual(ruleVerdict({ live: 1, stopped: true, finished: true, waiting: true }), { kind: "finished-with-no-rule-broken" });
+  assert.deepEqual(ruleVerdict({ live: 1, stopped: true, waiting: true }), { kind: "stopped-without-a-recorded-reason" });
+
+  // The words are the client's own for the same state.
+  assert.equal(NOT_ACTIVE_YET, "not active yet: nothing is judged before activation");
+  assert.match(WHY_NOT_JUDGED, /bought and not started/);
+  assert.match(WHY_NOT_JUDGED, /stops an Active challenge only/);
+  assert.match(WHY_NOT_JUDGED, /not a stop, so this page does not show it\.$/);
+
+  // The check-it-yourself page: the one page that asks `violation()` whatever the status.
+  const verify = view("verify.js");
+  assert.match(verify, /const verdict = ruleVerdict\(\{ recorded, live, stopped, finished, waiting: notActiveYet\(\{ kind, status: state \}\) \}\);/);
+  assert.match(verify, /verdict\.kind === "not-active-yet"\s+\? row\("The contract's verdict", badge\(NOT_ACTIVE_YET, ""\)\)/);
+  assert.match(verify, /\$\{verdict\.kind === "not-active-yet" \? `<p class="small muted">\$\{esc\(WHY_NOT_JUDGED\)\}<\/p>`\s+: liveReadingIsMoot\(verdict\) \?/);
+  // The challenge page reads no equity and no verdict before the start, and gives the trade panel to Active alone.
+  const challenge = view("challenge.js");
+  assert.match(challenge, /if \(s >= 2\) settle\(equityPanel\(/);
+  assert.match(challenge, /if \(s === 2 && isTrader && !archived\) settle\(tradePanel\(/);
+  assert.match(challenge, /\$\{s >= 2 \? row\("Deadline", esc\(when\(deadline\)\)\) : ""\}/);
+  assert.match(challenge, /const tone = s === 2 \? "ok" : s === 6 \|\| s === 8 \? "ok" : stopped \? "bad" : "";/);
+  // A shared pool's seat names the challenge's status as the contract has it, and a deadline only once there is one.
+  const shared = view("shared.js");
+  assert.match(shared, /status = row\("Challenge", `\$\{name\}, \$\{esc\(chain\.STATUS\[Number\(s\)\]\)\}\$\{\s+Number\(deadline\) \? `, until \$\{esc\(when\(deadline\)\)\}` : ""\}`\);/);
+  // A pool with a challenge on it does not say the challenge is running: it may not have started.
+  assert.equal(stageWords(1), "A challenge is on it: its own page says whether it has started.");
+  assert.doesNotMatch(stageWords(1), /running|active/i);
 });

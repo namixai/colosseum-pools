@@ -35,6 +35,26 @@ function read(path) {
 const DOCS = new Map(["docs/EVIDENCE.md", "docs/EVIDENCE-SHARED-POOL.md"].map((p) => [p, read(p)]));
 const section = (doc, name) => DOCS.get(doc)?.sections.get(name);
 
+// The documents' own lists of what the records do not show: the bullets under these two headings. The page's
+// "What none of this shows" is taken from them, and LIMIT_LISTS is where that is written down.
+const LIMIT_LISTS = [
+  ["docs/EVIDENCE.md", "Not demonstrated yet"],
+  ["docs/EVIDENCE-SHARED-POOL.md", "What this does not show"],
+];
+/** A heading that announces such a list, by its words. */
+const SAYS_NOT_SHOWN = /\b(not|never|nothing) (shown?|demonstrated|recorded|proved|proven)\b|\bdoes(n't| not) (show|prove|demonstrate)\b/i;
+/** The headings of a document, `##` and deeper, as written. */
+const headings = (path) => [...readFileSync(join(ROOT, path), "utf8").matchAll(/^#{2,} +(.+?) *$/gm)].map((m) => m[1]);
+/** The bullets of one `##` section, each as the rows quote the documents: one line, no markdown. */
+function bullets(path, name) {
+  const md = readFileSync(join(ROOT, path), "utf8");
+  const part = md.split(/^## /m).slice(1).find((x) => x.slice(0, x.indexOf("\n")).trim() === name);
+  if (part === undefined) return undefined;
+  return part.slice(part.indexOf("\n") + 1).split(/^- /m).slice(1).map((b) => plain(b.split(/^#{2,} /m)[0]));
+}
+/** The sentence a bullet opens with: what the page shows of it. */
+const opening = (text) => (text.match(/^.*?[.!?](?=\s|$)/) || [text])[0];
+
 /** The text names the address in full or as the documents shorten it, "0x547067e2…26a6". */
 function mentions(text, address) {
   if (text.includes(address)) return true;
@@ -235,9 +255,48 @@ test("what was staged, and what none of this shows, are quoted from their sectio
     assert.ok(DATA.staged.quotes.some((q) => must.test(q)), `staged: ${must}`);
   }
   for (const l of DATA.limits) assert.ok(section(l.doc, l.section)?.includes(l.quote), l.quote);
-  for (const must of [/^Drawdown/, /ForbiddenAsset/, /A stop on a seat/, /A passed challenge or a funded stage on a seat/, /Nobody has reviewed it/]) {
+  for (const must of [/^Drawdown/, /ForbiddenAsset/, /A stop on a seat/, /A passed challenge or a funded stage on a seat/, /A holder leaving with a gain/, /A trader we do not control on a seat/, /Nobody has reviewed it/]) {
     assert.ok(DATA.limits.some((l) => must.test(l.quote)), `limits: ${must}`);
   }
+});
+
+test("what none of this shows is every bullet of the documents' own lists, in their order", () => {
+  for (const [doc, name] of LIMIT_LISTS) {
+    const listed = bullets(doc, name);
+    assert.ok(listed, `${doc} has no section "${name}": the page's limits are taken from it`);
+    assert.ok(listed.length > 0, `${doc}, "${name}": the section holds no bullets`);
+    const shown = DATA.limits.filter((l) => l.doc === doc && l.section === name).map((l) => l.quote);
+    // One line on the page for each bullet, in the document's order, each the bullet's opening sentence. A bullet
+    // added to the document and not to the page is a limit the page would keep quiet about; a line left on the
+    // page after its bullet has gone is a limit the documents no longer state.
+    assert.deepEqual(shown, listed.map(opening), `${doc}, "${name}"`);
+    for (const q of shown) assert.match(q, /[.!?]$/, `«${q}» is a whole sentence`);
+  }
+  // Today's lists, so that a parser that read nothing cannot pass: one bullet in the first, four in the second.
+  assert.deepEqual(bullets("docs/EVIDENCE.md", "Not demonstrated yet").map(opening),
+    ["Drawdown, the last of the three rules the pools enforce."]);
+  assert.deepEqual(bullets("docs/EVIDENCE-SHARED-POOL.md", "What this does not show").map(opening), [
+    "A passed challenge or a funded stage on a seat, and the funded term running out.",
+    "A holder leaving with a gain.",
+    "A trader we do not control on a seat.",
+    "A stop on a seat.",
+  ]);
+  // A bullet's second sentence does not leak into its line: "A stop on a seat. The rules above would stop…".
+  assert.equal(opening("A stop on a seat. The rules above would stop the challenge at 2.70 USDC of equity."), "A stop on a seat.");
+  assert.equal(opening("No full stop here"), "No full stop here");
+  // A new list of the same kind in either document has to be named here, or its bullets reach no page.
+  const named = new Set(LIMIT_LISTS.map(([doc, name]) => `${doc}#${name}`));
+  for (const doc of DOCS.keys()) {
+    for (const h of headings(doc)) {
+      if (SAYS_NOT_SHOWN.test(h)) assert.ok(named.has(`${doc}#${h}`), `${doc}: the list "${h}" is not on the page`);
+    }
+  }
+  assert.equal(SAYS_NOT_SHOWN.test("What this does not show"), true);
+  assert.equal(SAYS_NOT_SHOWN.test("Not demonstrated yet"), true);
+  assert.equal(SAYS_NOT_SHOWN.test("What is staged, and what is not"), false);
+  // The lines that are not bullets of a list stay tied to their own sections by the test above.
+  const outside = DATA.limits.filter((l) => !named.has(`${l.doc}#${l.section}`)).map((l) => l.section);
+  assert.deepEqual(outside, ["ForbiddenAsset, and why it is not in the list above", ""]);
 });
 
 test("the page's own words claim nothing the documents do not", () => {

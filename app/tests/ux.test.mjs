@@ -33,7 +33,7 @@ test("a pool that cannot sell a challenge says so on its badge and in its senten
     assert.notEqual(poolStatus(0, b).tone, "ok");
   }
   // A stage that is not idle keeps its own name and words.
-  assert.deepEqual(poolStatus(1, { kind: "taken" }), { name: "Challenge", tone: "", words: "A challenge is running on it." });
+  assert.deepEqual(poolStatus(1, { kind: "taken" }), { name: "Challenge", tone: "", words: "A challenge is on it: its own page says whether it has started." });
   assert.equal(cardBlockerLine(short), "Can't sell a challenge: 0.97 USDC short on HyperCore until its investor tops it up.");
   assert.equal(cardBlockerLine(null), "");
   assert.equal(cardBlockerLine({ kind: "taken" }), "");

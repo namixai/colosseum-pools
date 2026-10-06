@@ -14,18 +14,40 @@
 /**
  * `recorded` is breachReason() where the account keeps one (a challenge) and 0 otherwise;
  * `live` is violation() computed now; `stopped` is isStopped(); `finished` says the account has
- * stopped trading for good -- a challenge past Active, a pool in Closing.
+ * stopped trading for good -- a challenge past Active, a pool in Closing; `waiting` says it has not
+ * begun -- a challenge that is bought and not started (`notActiveYet`).
  *
  * A challenge that passed is as empty as one that was stopped: it hands its capital back and
  * ends at Settled with no reason recorded, so without `finished` the live reading would call a
  * pass a drawdown. Review caught that before the first graduate could show it to anyone.
  */
-export function ruleVerdict({ recorded = 0, live = 0, stopped = false, finished = false } = {}) {
+export function ruleVerdict({ recorded = 0, live = 0, stopped = false, finished = false, waiting = false } = {}) {
   if (Number(recorded)) return { kind: "recorded", reason: Number(recorded) };
   if (finished) return { kind: "finished-with-no-rule-broken" };
   if (stopped) return { kind: "stopped-without-a-recorded-reason" };
+  if (waiting) return { kind: "not-active-yet" };
   return { kind: "live", reason: Number(live) };
 }
+
+/**
+ * A challenge that is bought and not started: status Created (1).
+ *
+ * The contract judges nothing there. `breach` takes an Active challenge and reverts on any other, so no rule
+ * can stop this account yet. A live `violation()` still answers, and until the capital arrives it answers
+ * Drawdown: the account's equity reads 0 against a drawdown line that is already the challenge's capital. A page
+ * that showed that reading would show a buyer a stop that cannot happen, on the challenge they have just paid for.
+ * The repository's client says the same of this state, in the same words (agents/desk.py).
+ */
+export function notActiveYet({ kind, status } = {}) {
+  return kind === "challenge" && Number(status) === 1;
+}
+
+/** What a page says in place of a verdict for such a challenge, and why no reading is shown beside it. */
+export const NOT_ACTIVE_YET = "not active yet: nothing is judged before activation";
+export const WHY_NOT_JUDGED = "This challenge is bought and not started. The contract stops an Active challenge "
+  + "only, so no rule applies to it yet. Its violation() still answers when asked, and until the capital arrives "
+  + "it answers Drawdown: the account's equity reads 0 against a line already set from the capital. That is a "
+  + "reading of an empty account, not a stop, so this page does not show it.";
 
 /** True when a live reading would be about an account that no longer holds what it was judged on. */
 export function liveReadingIsMoot(verdict) {
