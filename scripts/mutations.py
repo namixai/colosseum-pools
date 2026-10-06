@@ -1286,6 +1286,16 @@ MUTATIONS = [
      "        elif self.is_challenge and number == 1:\n",
      "        elif self.is_challenge and number == 0:\n",
      ["test_a_challenge_that_is_not_active_yet_is_not_called_a_breach"]),
+    # A command line the client cannot read is one JSON object with a code of its own, not usage on
+    # stderr with the code of a refusal.
+    ("A68", "agents/client.py",
+     '        print(json.dumps({"ok": False, "error": f"bad arguments: {exc}"}))\n        return 3\n',
+     '        print(json.dumps({"ok": False, "error": f"bad arguments: {exc}"}))\n        return 2\n',
+     ["test_a_command_line_the_client_cannot_read"]),
+    ("A69", "agents/client.py",
+     '        raise BadArguments(f"{message} (usage: {self.format_usage().strip()})")\n',
+     '        super().error(message)\n',
+     ["test_a_command_line_the_client_cannot_read"]),
     # ── keeper (Python unittest) ──
     # The take has to clear the target by what closing costs, or a challenge the take closed
     # cannot pass: `graduate` has no tolerance and a market close pays a taker fee.

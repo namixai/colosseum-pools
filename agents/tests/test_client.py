@@ -237,6 +237,21 @@ class EveryStopIsOneJsonObject(unittest.TestCase):
             raise Refused("no orders left in this session")
         self.assertEqual(self.said(run=refuses), (2, {"ok": False, "refused": "no orders left in this session"}))
 
+    def test_a_command_line_the_client_cannot_read(self):
+        # argparse would print its usage to stderr and exit with 2, which is the code of a refusal.
+        import contextlib
+        import io
+        import json
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = client.main(["--deployment", "demo2", "orde", "0x" + "11" * 20])
+        said = json.loads(out.getvalue())
+        self.assertEqual(code, 3)
+        self.assertFalse(said["ok"])
+        self.assertTrue(said["error"].startswith("bad arguments: "), said["error"])
+        self.assertIn("usage:", said["error"])
+
     def test_an_error_nobody_foresaw(self):
         def breaks(*a):
             raise KeyError("marginSummary")
