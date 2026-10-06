@@ -804,14 +804,15 @@
       "block": 66114989,
       "record": "Closed PnL −0.027 USDC; accountValue read 19.939413 after it.",
       "check": ["userFills for the challenge account on Hyperliquid's testnet info API"],
-      "notes": ["The stop and the take stood the whole time.", "The order went; the two stayed.", "Read at 12:43 UTC on 6 October, the account holds no position and two position orders of the gateway, a stop at 2596.4 and a take at 3121.2.", "Not fixed."],
+      "notes": ["The stop and the take stood the whole time.", "The first stop, placed a second before the fill from the mark of that moment, stood 0.0008 over it: 0.004 × (2852.4 − 2702.2) = 0.6008, before fees.", "The sweep twelve seconds later brought it to 2850.9, 0.004 × (2850.9 − 2702.2) = 0.5948, inside.", "The order went; the two stayed.", "Read at 12:43 UTC on 6 October, the account holds no position and two position orders of the gateway, a stop at 2596.4 and a take at 3121.2.", "Before a later order that opens in the same direction, the gateway moves this pair to that order's line; a later short would start with the pair standing beside its own, as the review measured on the gateway's test stand.", "Not fixed."],
       "sources": [
         "It bought the challenge 0x7aa03B872FAd788030456616f644344dEa209feE",
         "Started by the host 31 seconds later. activate in 0x37cfbaff33471429930e6e431941c105f1efd2f22136071d51404a7ce672a028, block 66114989, 18:49:10 UTC. The deadline is 12 October 18:49:10 UTC",
         "Two orders in, one out. Through the client: a sell of 0.004 ETH at 18:52:06 UTC, filled at 2702.2, then 0.010 at 18:53:06, filled at 2702.2 and 2702.3; a reduce-only buy of 0.014 at 18:56:47 closed the short at 2704.1 and 2704.2 (Hyperliquid's userFills). Closed PnL −0.027 USDC; accountValue read 19.939413 after it.",
         "The stop and the take stood the whole time.",
+        "a 3% day is 0.60 to lose. The first stop, placed a second before the fill from the mark of that moment, stood 0.0008 over it: 0.004 × (2852.4 − 2702.2) = 0.6008, before fees. The sweep twelve seconds later brought it to 2850.9, 0.004 × (2850.9 − 2702.2) = 0.5948, inside.",
         "One more defect of ours, still there at the time of writing. At 19:00:31 UTC the bot rested a buy of 0.005 ETH at 2000, far from the market, and cancelled it at 19:01:53. The gateway had put a stop and a take on the book for that order a second before it, at 19:00:30, and re-lined them twice. The order went; the two stayed. Read at 12:43 UTC on 6 October, the account holds no position and two position orders of the gateway, a stop at 2596.4 and a take at 3121.2.",
-        "Not fixed."
+        "Before a later order that opens in the same direction, the gateway moves this pair to that order's line; a later short would start with the pair standing beside its own, as the review measured on the gateway's test stand. Not fixed."
       ]
     },
     {
