@@ -694,6 +694,11 @@ class Protector:
         with self._guard:
             self._watch[account] = key
             self._flat.discard(account)  # an order is on its way: what was seen before it is old
+            # And so is a pair seen standing for nothing: the order may be the one it was placed
+            # for, or one that reuses it, and if it fills between the two requests of the next
+            # sweep the pair looks like it guards nothing once more. Counted from before the
+            # order, that would be the second time, and a fresh position would lose its stop.
+            self._stray_seen.pop(account, None)
 
     def take_on(self, keys: list[str]) -> list[str]:
         """Watches every account one of these keys trades right now, and says which.

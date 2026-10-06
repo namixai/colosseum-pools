@@ -1047,6 +1047,24 @@ class Sweep(FlowBase):
         self.assertEqual(sorted(o["oid"] for o in self.x.orders), btc_pair, "the BTC pair is not touched")
         self.assertIn(ACCOUNT, self.gw.protector.watching())
 
+    def test_a_new_order_after_a_pair_seen_standing_for_nothing_starts_the_count_again(self):
+        # The review bot's case: a sweep sees the pair standing for nothing; the trader sends a new
+        # buy in that direction, which reuses the pair; the buy fills between the two requests of
+        # the next sweep, so that answer shows neither the order nor the position (A-19). Counted
+        # from before the order, that is the second empty answer, and the pair would go with a
+        # position behind it.
+        self._rest_a_buy_and_lose_it(through_the_gateway=False)
+        self.gw.protector.sweep()  # seen once
+        self.x.rest_trader_orders = False
+        self.assertEqual(self.send(limitPx="60000", nonce=NOW + 2)[0], 200)  # a new buy; it fills
+        self.gw.protector.sweep()  # the answer that shows neither the order nor the position
+        self.assertEqual(self.cancels_sent(), [], "the count starts again with the order")
+        self.assertEqual(len([o for o in self.x.orders if o["isPositionTpsl"]]), 2)
+        self.x.positions[BTC] = Decimal("0.005")
+        self.gw.protector.sweep()
+        self.assertEqual(self.cancels_sent(), [])
+        self.assertIn(ACCOUNT, self.gw.protector.watching())
+
     def test_a_cancel_the_exchange_refuses_keeps_the_account_and_is_tried_again(self):
         pair = self._rest_a_buy_and_lose_it(through_the_gateway=False)
         self.gw.protector.sweep()
