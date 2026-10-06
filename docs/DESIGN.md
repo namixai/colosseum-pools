@@ -318,8 +318,9 @@ before it can sell again.
   list to pools created after it. A new builder is approved by an account when it is prepared or
   activated, and anyone may call `prepareAccount` on an existing pool again; a builder is paid only
   on an order that names it, and orders are signed with the agent key. The role itself moves in one
-  call, `setOperator`, to any address, with no second step; `KeyRegistry` makes its new operator
-  accept. A wrong address loses the role for good, and these settings then stay as they were (A-20).
+  call, `setOperator`, to any address, with no acceptance step. `KeyRegistry` has an operator of its
+  own, a separate role, and that one moves in two steps: the new operator must accept. A wrong
+  address loses the factory's role for good, and these settings then stay as they were (A-20).
 - USDC sent to a pool on HyperEVM is lost on testnet: the bridge doesn't credit contracts.
   The contracts have no entry point for it, and the app says so, but nothing stops a plain
   ERC-20 transfer to the pool's address.
