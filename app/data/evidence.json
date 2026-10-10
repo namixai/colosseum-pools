@@ -852,9 +852,9 @@
       "kind": "challenge",
       "factory": "demo2",
       "account": "0x7aa03B872FAd788030456616f644344dEa209feE",
-      "record": "The account has held no open order since.",
+      "record": "On 7 October at 02:05:31 UTC, with ETH under 2596.4, the exchange triggered the stop and rejected it, a reduce-only order with no position behind it (reduceOnlyRejected in the order history).",
       "check": ["openOrders for the challenge account on Hyperliquid's testnet info API", "historicalOrders for the same account, for the stop and the take"],
-      "notes": ["On 7 October at 02:05:31 UTC, with ETH under 2596.4, the exchange triggered the stop and rejected it, a reduce-only order with no position behind it (reduceOnlyRejected in the order history).", "At 09:34:34 UTC, thirty-five seconds after a gateway with the fix took the account on, the sweep cancelled the take (protect_cleared in the host's journal, canceled in the order history)."],
+      "notes": ["At 09:34:34 UTC, thirty-five seconds after a gateway with the fix took the account on, the sweep cancelled the take (protect_cleared in the host's journal, canceled in the order history)."],
       "sources": [
         "It bought the challenge 0x7aa03B872FAd788030456616f644344dEa209feE",
         "It did, and the pair went in two ways. On 7 October at 02:05:31 UTC, with ETH under 2596.4, the exchange triggered the stop and rejected it, a reduce-only order with no position behind it (reduceOnlyRejected in the order history). At 09:34:34 UTC, thirty-five seconds after a gateway with the fix took the account on, the sweep cancelled the take (protect_cleared in the host's journal, canceled in the order history). The account has held no open order since."

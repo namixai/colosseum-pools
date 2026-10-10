@@ -243,7 +243,7 @@ test("a stop that fired on the exchange is a row with no transaction, checked on
     assert.equal(r.kind, "challenge");
     assert.ok(r.check.length > 0 && r.check.every((c) => /Hyperliquid's testnet info API|for the same account/.test(c)), `${r.what}: checked on Hyperliquid`);
     assert.deepEqual(howToCheck(r), r.check, `${r.what}: nothing but the exchange's records to check`);
-    assert.match(r.record, /7 October|no open order since/);
+    assert.match(r.record, /7 October/);
   }
   const [live, one, two] = night;
   // The live run's stop: what it cost, that the balance above the capital is the whole run's, and that it fired
@@ -265,9 +265,13 @@ test("a stop that fired on the exchange is a row with no transaction, checked on
   assert.match(one.record, /the stop, then at 2656\.7, closed the long of 0\.0062 ETH at 2658\.4/);
   assert.ok(one.notes.some((n) => /^From the capital of 10 that is three things/.test(n)));
   // The stale pair: the stop was not filled but turned away, and the take went only with the fix.
-  assert.ok(two.notes.some((n) => /reduceOnlyRejected in the order history/.test(n)));
+  assert.match(two.record, /reduceOnlyRejected in the order history/);
   assert.ok(two.notes.some((n) => /a gateway with the fix took the account on/.test(n)));
   assert.ok(two.check.some((c) => /^openOrders /.test(c)));
+  // The row says what happened to the pair at two named moments. It does not say the account "has held no open
+  // order since": that is true only until the next order, and the row would go on saying it. Whether the book is
+  // empty now is what the openOrders check is for.
+  for (const r of night) assert.doesNotMatch([r.record, ...r.notes].join(" "), /no open order since|nothing open(?! until)/);
   // A row quotes what was read after the stop, not that the account is idle now: these accounts trade on, and a
   // static row saying "nothing open" would be wrong the day the next order goes in. The live run's sentence carries
   // its own end, "until 9 October"; the first seat's is cut before the words.
