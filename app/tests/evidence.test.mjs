@@ -246,12 +246,18 @@ test("a stop that fired on the exchange is a row with no transaction, checked on
     assert.match(r.record, /7 October|no open order since/);
   }
   const [live, one, two] = night;
-  // The live run's stop: what it cost, that the balance above the capital is the whole run's, and the defect's part
-  // in it -- it fired nearer the market than the rule's line -- with the document's reason it changed nothing.
+  // The live run's stop: what it cost, that the balance above the capital is the whole run's, and that it fired
+  // nearer the market than the rule's line -- by how much, which part of that is a defect of ours and which the rule
+  // as written -- with the document's sentence that the price went through both.
   assert.match(live.record, /that stop at 2662\.9 triggered and closed the long of 0\.0367 ETH/);
-  assert.ok(live.notes.some((n) => /^Closed PnL −2\.07 from the entry at 2718\.8/.test(n)));
+  assert.ok(live.notes.some((n) => /^Closed PnL −2\.07 from the entry at 2718\.8/.test(n) && /nothing open until 9 October\.$/.test(n)));
   assert.ok(live.notes.some((n) => /^That figure is the whole run's and not this close's/.test(n)));
-  assert.ok(live.notes.some((n) => /^It fired nearer the market than the rule's line/.test(n) && /26\.9 under it\.$/.test(n)));
+  assert.ok(live.notes.includes("It fired nearer the market than the rule's line."));
+  assert.ok(live.notes.some((n) => /put the line at 2636\.0, 26\.9 under the stop\.$/.test(n)));
+  // Both parts of the gap, or neither: the defect's 1.4 alone would make the stop look almost right, and the 25.5
+  // alone would hide that a defect of ours is in it.
+  assert.ok(live.notes.some((n) => /^Of that, 1\.4 is the defect of 5 October \(A-18\)/.test(n)));
+  assert.ok(live.notes.some((n) => /^The other 25\.5 is the rule as written/.test(n)));
   assert.ok(live.notes.includes("The price went through both."));
   // The first seat's: the loss, and where the balance came from.
   assert.match(one.record, /the stop, then at 2656\.7, closed the long of 0\.0062 ETH at 2658\.4/);
@@ -261,8 +267,9 @@ test("a stop that fired on the exchange is a row with no transaction, checked on
   assert.ok(two.notes.some((n) => /a gateway with the fix took the account on/.test(n)));
   assert.ok(two.check.some((c) => /^openOrders /.test(c)));
   // A row quotes what was read after the stop, not that the account is idle now: these accounts trade on, and a
-  // static row saying "nothing open" would be wrong the day the next order goes in.
-  for (const r of [live, one]) assert.ok(r.notes.every((n) => !/stays Active with nothing open/.test(n)), r.what);
+  // static row saying "nothing open" would be wrong the day the next order goes in. The live run's sentence carries
+  // its own end, "until 9 October"; the first seat's is cut before the words.
+  for (const r of night) assert.ok(r.notes.every((n) => !/stays Active with nothing open/.test(n)), r.what);
   // The page's own words for them claim no loss avoided and no rule kept.
   for (const r of night) assert.doesNotMatch(r.what, /saved|protected|kept|inside the rules|worked/i);
 });
