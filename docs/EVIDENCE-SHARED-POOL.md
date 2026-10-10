@@ -342,9 +342,13 @@ enough for is the trader's client, which needs 5 USDC of capital at 5× to send 
   position orders placed by the gateway, a stop at 2656.7 and a take at 2869.2. They move as the gateway
   follows the rule line and the target; the numbers are of that reading.
 - **The stop fired.** On 7 October at 02:00:01 UTC the stop, then at 2656.7, closed the long of 0.0062 ETH
-  at 2658.4; the take, then at 2843.9, went with it. Closed PnL −0.278; `accountValue` 9.885776 after it,
-  under the capital of 10 by that loss and inside the rules, and the challenge stays Active with nothing
-  open. The numbers are Hyperliquid's, from `userFills` and the account's order history.
+  at 2658.4; the take, then at 2843.9, went with it. `accountValue` read 9.885776 after it, inside the
+  rules, and the challenge stays Active with nothing open. From the capital of 10 that is three things:
+  0.27848 lost on the price, the 0.0062 ETH bought for 16.76056 and sold for 16.48208; 0.014957 paid in
+  fees on the three fills; and 0.179213 of funding paid to the long, in 44 hourly payments. 10 − 0.27848 −
+  0.014957 + 0.179213 = 9.885776. Hyperliquid's `closedPnl` for the close reads −0.278442, the same close
+  counted from an entry of 2703.31, where the two fills average 2703.316. The numbers are Hyperliquid's,
+  from `userFills`, `userFunding` and the account's order history.
 
 Read at 08:11 UTC on 5 October: `value()` 668.147546 USDC on 670e8 shares, with a position open. The other
 two seats were Idle and unsold. Every transaction this run sent on HyperEVM, from the start to the

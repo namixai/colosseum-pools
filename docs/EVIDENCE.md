@@ -377,11 +377,15 @@ runs. The stop that had come nearer stays where it is until its position closes.
 and closed the long of 0.0367 ETH in five fills between 2661.7 and 2662.5, 0.4 to 1.2 under the
 trigger; the take, then at 2839.9, went with it (`siblingFilledCanceled`). Closed PnL −2.07 from the
 entry at 2718.8; `accountValue` read 70.641745 after it, above the capital of 70, and the challenge
-stays Active with nothing open. It is the first stop of the gateway's to fire on the live run. It
-fired nearer the market than the rule's line: the stop had been brought in by the difference between
-two requests on 5 October and is never moved away, and a replay of the gateway's own code against
-the account's answer on 6 October at 12:45 UTC put the line at 2636.0, 26.9 under it. The price went
-through both. Every number here is Hyperliquid's, from `userFills` and the account's order history.
+stays Active with nothing open. That figure is the whole run's and not this close's: over the three
+positions since 4 October the closes came to −0.64121 (`closedPnl` of +0.18921, +1.2432 and
+−2.07362), the fees on ten fills to 0.269103, and the longs were paid 1.552058 of funding in 67
+hourly payments. 70 − 0.64121 − 0.269103 + 1.552058 = 70.641745. It is the first stop of the
+gateway's to fire on the live run. It fired nearer the market than the rule's line: the stop had
+been brought in by the difference between two requests on 5 October and is never moved away, and a
+replay of the gateway's own code against the account's answer on 6 October at 12:45 UTC put the line
+at 2636.0, 26.9 under it. The price went through both. Every number here is Hyperliquid's, from
+`userFills`, `userFunding` and the account's order history.
 
 ## The gateway refused two things, for two different reasons
 
