@@ -373,6 +373,24 @@ fired for it. It is fixed from commit `53197068`. By our own account that commit
 host since 5 October, 07:35 UTC: nothing that can be asked from outside says which release the host
 runs. The stop that had come nearer stays where it is until its position closes.
 
+**The stop fired.** On 7 October at 01:58:28 UTC, with ETH falling, that stop at 2662.9 triggered
+and closed the long of 0.0367 ETH in five fills between 2661.7 and 2662.5, 0.4 to 1.2 under the
+trigger; the take, then at 2839.9, went with it (`siblingFilledCanceled`). Closed PnL −2.07 from the
+entry at 2718.8; `accountValue` read 70.641745 after it, above the capital of 70, and the challenge
+stayed Active, with nothing open until 9 October. That figure is the whole run's and not this
+close's: over the three positions since 4 October the closes came to −0.64121 (`closedPnl` of
++0.18921, +1.2432 and −2.07362), the fees on ten fills to 0.269103, and the longs were paid 1.552058
+of funding in 67 hourly payments. 70 − 0.64121 − 0.269103 + 1.552058 = 70.641745. It is the first
+stop of the gateway's to fire on the live run. It fired nearer the market than the rule's line. A
+replay of the gateway's own code against the account's answer on 6 October at 12:45 UTC put the line
+at 2636.0, 26.9 under the stop. Of that, 1.4 is the defect of 5 October (A-18): the difference
+between two requests brought the stop in from 2661.5. The other 25.5 is the rule as written: the
+0.85 of funding paid to the long by then and the next day's floor moved the line away, and a stop
+that guards a position is never moved away. The price went through both. The fills, the funding and
+the orders here are Hyperliquid's, from `userFills`, `userFunding` and the account's order history;
+the line of 2636.0 and its two parts are our own arithmetic on them, from the gateway's code and the
+audit's reading.
+
 ## The gateway refused two things, for two different reasons
 
 Both were real refusals against the live gateway, not tests:

@@ -214,6 +214,21 @@
     },
     {
       "doc": "docs/EVIDENCE.md",
+      "section": "Deployment 2: a pass, and a funded-stage position closed at a loss by our own take",
+      "what": "On the live run a stop of the gateway's fired for the first time, nearer the market than the rule's line",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0xe3fEf7523607aEF26B3bfC06d414D59525b10dBB",
+      "record": "On 7 October at 01:58:28 UTC, with ETH falling, that stop at 2662.9 triggered and closed the long of 0.0367 ETH in five fills between 2661.7 and 2662.5, 0.4 to 1.2 under the trigger; the take, then at 2839.9, went with it (siblingFilledCanceled).",
+      "check": ["userFills for the challenge account on Hyperliquid's testnet info API", "userFunding for the same account, for the funding it was paid", "historicalOrders for the same account, for the stop and the take"],
+      "notes": ["Closed PnL −2.07 from the entry at 2718.8; accountValue read 70.641745 after it, above the capital of 70, and the challenge stayed Active, with nothing open until 9 October.", "That figure is the whole run's and not this close's: over the three positions since 4 October the closes came to −0.64121 (closedPnl of +0.18921, +1.2432 and −2.07362), the fees on ten fills to 0.269103, and the longs were paid 1.552058 of funding in 67 hourly payments.", "It fired nearer the market than the rule's line.", "A replay of the gateway's own code against the account's answer on 6 October at 12:45 UTC put the line at 2636.0, 26.9 under the stop.", "Of that, 1.4 is the defect of 5 October (A-18): the difference between two requests brought the stop in from 2661.5.", "The other 25.5 is the rule as written: the 0.85 of funding paid to the long by then and the next day's floor moved the line away, and a stop that guards a position is never moved away.", "The price went through both.", "The fills, the funding and the orders here are Hyperliquid's, from userFills, userFunding and the account's order history; the line of 2636.0 and its two parts are our own arithmetic on them, from the gateway's code and the audit's reading."],
+      "sources": [
+        "key 0x24a2BAc8 bound to the challenge 0xe3fEf7523607aEF26B3bfC06d414D59525b10dBB",
+        "The stop fired. On 7 October at 01:58:28 UTC, with ETH falling, that stop at 2662.9 triggered and closed the long of 0.0367 ETH in five fills between 2661.7 and 2662.5, 0.4 to 1.2 under the trigger; the take, then at 2839.9, went with it (siblingFilledCanceled). Closed PnL −2.07 from the entry at 2718.8; accountValue read 70.641745 after it, above the capital of 70, and the challenge stayed Active, with nothing open until 9 October. That figure is the whole run's and not this close's: over the three positions since 4 October the closes came to −0.64121 (closedPnl of +0.18921, +1.2432 and −2.07362), the fees on ten fills to 0.269103, and the longs were paid 1.552058 of funding in 67 hourly payments. 70 − 0.64121 − 0.269103 + 1.552058 = 70.641745. It is the first stop of the gateway's to fire on the live run. It fired nearer the market than the rule's line. A replay of the gateway's own code against the account's answer on 6 October at 12:45 UTC put the line at 2636.0, 26.9 under the stop. Of that, 1.4 is the defect of 5 October (A-18): the difference between two requests brought the stop in from 2661.5. The other 25.5 is the rule as written: the 0.85 of funding paid to the long by then and the next day's floor moved the line away, and a stop that guards a position is never moved away. The price went through both. The fills, the funding and the orders here are Hyperliquid's, from userFills, userFunding and the account's order history; the line of 2636.0 and its two parts are our own arithmetic on them, from the gateway's code and the audit's reading."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE.md",
       "section": "What is staged, and what is not",
       "what": "The keeper on the pools host returned capital left in a passed challenge",
       "kind": null,
@@ -779,6 +794,21 @@
     {
       "doc": "docs/EVIDENCE-SHARED-POOL.md",
       "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "The stop on the first seat's challenge fired and closed its long at a loss",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0x48f948a895F82a32fb39eE57C457c05FdA7A7779",
+      "record": "On 7 October at 02:00:01 UTC the stop, then at 2656.7, closed the long of 0.0062 ETH at 2658.4; the take, then at 2843.9, went with it.",
+      "check": ["userFills for the challenge account on Hyperliquid's testnet info API", "userFunding for the same account, for the funding it was paid", "historicalOrders for the same account, for the stop and the take"],
+      "notes": ["accountValue read 9.885776 after it, inside the rules", "From the capital of 10 that is three things: 0.27848 lost on the price, the 0.0062 ETH bought for 16.76056 and sold for 16.48208; 0.014957 paid in fees on the three fills; and 0.179213 of funding paid to the long, in 44 hourly payments.", "The numbers are Hyperliquid's, from userFills, userFunding and the account's order history."],
+      "sources": [
+        "bought the challenge 0x48f948a895F82a32fb39eE57C457c05FdA7A7779",
+        "The stop fired. On 7 October at 02:00:01 UTC the stop, then at 2656.7, closed the long of 0.0062 ETH at 2658.4; the take, then at 2843.9, went with it. accountValue read 9.885776 after it, inside the rules, and the challenge stays Active with nothing open. From the capital of 10 that is three things: 0.27848 lost on the price, the 0.0062 ETH bought for 16.76056 and sold for 16.48208; 0.014957 paid in fees on the three fills; and 0.179213 of funding paid to the long, in 44 hourly payments. 10 − 0.27848 − 0.014957 + 0.179213 = 9.885776. Hyperliquid's closedPnl for the close reads −0.278442, the same close counted from an entry of 2703.31, where the two fills average 2703.316. The numbers are Hyperliquid's, from userFills, userFunding and the account's order history."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
       "what": "Its second seat was sold to the team's red team",
       "kind": "seat",
       "factory": "demo2",
@@ -813,6 +843,21 @@
         "a 3% day is 0.60 to lose. The first stop, placed a second before the fill from the mark of that moment, stood 0.0008 over it: 0.004 × (2852.4 − 2702.2) = 0.6008, before fees. The sweep twelve seconds later brought it to 2850.9, 0.004 × (2850.9 − 2702.2) = 0.5948, inside.",
         "One more defect of ours, still there at the time of writing. At 19:00:31 UTC the bot rested a buy of 0.005 ETH at 2000, far from the market, and cancelled it at 19:01:53. The gateway had put a stop and a take on the book for that order a second before it, at 19:00:30, and re-lined them twice. The order went; the two stayed. Read at 12:43 UTC on 6 October, the account holds no position and two position orders of the gateway, a stop at 2596.4 and a take at 3121.2.",
         "Before a later order that opens in the same direction, the gateway moves this pair to that order's line; a later short would have started with the pair standing beside its own, as the review measured on the gateway's test stand. Finding A-22 in REVIEW-NOTES.md. Fixed (pull request #128): the sweep takes such a pair off at the second answer in a row that shows nothing behind it, and lets an account go only once none is left; the pair above goes the same way once a gateway with the fix takes the account on."
+      ]
+    },
+    {
+      "doc": "docs/EVIDENCE-SHARED-POOL.md",
+      "section": "A second pool on the second deployment, with three seats (5 October)",
+      "what": "The pair left on the second seat's account went: the stop when the price reached it, the take when a gateway with the fix took the account on",
+      "kind": "challenge",
+      "factory": "demo2",
+      "account": "0x7aa03B872FAd788030456616f644344dEa209feE",
+      "record": "On 7 October at 02:05:31 UTC, with ETH under 2596.4, the exchange triggered the stop and rejected it, a reduce-only order with no position behind it (reduceOnlyRejected in the order history).",
+      "check": ["openOrders for the challenge account on Hyperliquid's testnet info API", "historicalOrders for the same account, for the stop and the take"],
+      "notes": ["At 09:34:34 UTC, thirty-five seconds after a gateway with the fix took the account on, the sweep cancelled the take (protect_cleared in the host's journal, canceled in the order history)."],
+      "sources": [
+        "It bought the challenge 0x7aa03B872FAd788030456616f644344dEa209feE",
+        "It did, and the pair went in two ways. On 7 October at 02:05:31 UTC, with ETH under 2596.4, the exchange triggered the stop and rejected it, a reduce-only order with no position behind it (reduceOnlyRejected in the order history). At 09:34:34 UTC, thirty-five seconds after a gateway with the fix took the account on, the sweep cancelled the take (protect_cleared in the host's journal, canceled in the order history). The account has held no open order since."
       ]
     },
     {
