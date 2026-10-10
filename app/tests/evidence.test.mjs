@@ -259,6 +259,8 @@ test("a stop that fired on the exchange is a row with no transaction, checked on
   assert.ok(live.notes.some((n) => /^Of that, 1\.4 is the defect of 5 October \(A-18\)/.test(n)));
   assert.ok(live.notes.some((n) => /^The other 25\.5 is the rule as written/.test(n)));
   assert.ok(live.notes.includes("The price went through both."));
+  // The line and its two parts are our own arithmetic, not the exchange's record, and the row says whose they are.
+  assert.ok(live.notes.some((n) => /the line of 2636\.0 and its two parts are our own arithmetic on them/.test(n)));
   // The first seat's: the loss, and where the balance came from.
   assert.match(one.record, /the stop, then at 2656\.7, closed the long of 0\.0062 ETH at 2658\.4/);
   assert.ok(one.notes.some((n) => /^From the capital of 10 that is three things/.test(n)));
