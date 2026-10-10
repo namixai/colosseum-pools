@@ -386,8 +386,10 @@ replay of the gateway's own code against the account's answer on 6 October at 12
 at 2636.0, 26.9 under the stop. Of that, 1.4 is the defect of 5 October (A-18): the difference
 between two requests brought the stop in from 2661.5. The other 25.5 is the rule as written: the
 0.85 of funding paid to the long by then and the next day's floor moved the line away, and a stop
-that guards a position is never moved away. The price went through both. Every number here is
-Hyperliquid's, from `userFills`, `userFunding` and the account's order history.
+that guards a position is never moved away. The price went through both. The fills, the funding and
+the orders here are Hyperliquid's, from `userFills`, `userFunding` and the account's order history;
+the line of 2636.0 and its two parts are our own arithmetic on them, from the gateway's code and the
+audit's reading.
 
 ## The gateway refused two things, for two different reasons
 
