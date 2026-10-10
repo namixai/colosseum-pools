@@ -94,7 +94,7 @@ test("every row's source lines are in its section of the document", () => {
     else for (const s of r.sources) if (!body.includes(s)) lost.push(`${r.what}: «${s}»`);
   }
   assert.deepEqual(lost, []);
-  assert.equal(DATA.rows.length, 46);
+  assert.equal(DATA.rows.length, 49);
 });
 
 test("a row shows nothing its own source lines do not say", () => {
@@ -225,6 +225,46 @@ test("every seat sold on the three-seat pool says its buyer is the team's, and e
   for (const r of DATA.rows.filter((x) => x.section === SECTION && ["seat", "challenge"].includes(x.kind))) {
     assert.doesNotMatch(r.what, /\bpassed\b|\bwon\b|independent|outsider/i);
   }
+});
+
+test("a stop that fired on the exchange is a row with no transaction, checked on Hyperliquid, and says what it cost and where it stood", () => {
+  // 7 October: two stops of the gateway's fired, and a stale pair left the book. None of it is a transaction on
+  // HyperEVM: an order on Hyperliquid has no receipt to read, so these rows offer none and name the exchange's own
+  // records in its place.
+  const LIVE = "0xe3fEf7523607aEF26B3bfC06d414D59525b10dBB";
+  const SEAT_ONE = "0x48f948a895F82a32fb39eE57C457c05FdA7A7779";
+  const SEAT_TWO = "0x7aa03B872FAd788030456616f644344dEa209feE";
+  const night = DATA.rows.filter((r) => r.sources.some((s) => /On 7 October at 0[12]:\d\d:\d\d UTC/.test(s)));
+  assert.deepEqual(night.map((r) => r.account), [LIVE, SEAT_ONE, SEAT_TWO]);
+  for (const r of night) {
+    assert.equal(r.tx, undefined, `${r.what}: no transaction`);
+    assert.equal(r.block, undefined);
+    assert.equal(r.fills, undefined, `${r.what}: the document names no fill by its hash`);
+    assert.equal(r.kind, "challenge");
+    assert.ok(r.check.length > 0 && r.check.every((c) => /Hyperliquid's testnet info API|for the same account/.test(c)), `${r.what}: checked on Hyperliquid`);
+    assert.deepEqual(howToCheck(r), r.check, `${r.what}: nothing but the exchange's records to check`);
+    assert.match(r.record, /7 October|no open order since/);
+  }
+  const [live, one, two] = night;
+  // The live run's stop: what it cost, that the balance above the capital is the whole run's, and the defect's part
+  // in it -- it fired nearer the market than the rule's line -- with the document's reason it changed nothing.
+  assert.match(live.record, /that stop at 2662\.9 triggered and closed the long of 0\.0367 ETH/);
+  assert.ok(live.notes.some((n) => /^Closed PnL −2\.07 from the entry at 2718\.8/.test(n)));
+  assert.ok(live.notes.some((n) => /^That figure is the whole run's and not this close's/.test(n)));
+  assert.ok(live.notes.some((n) => /^It fired nearer the market than the rule's line/.test(n) && /26\.9 under it\.$/.test(n)));
+  assert.ok(live.notes.includes("The price went through both."));
+  // The first seat's: the loss, and where the balance came from.
+  assert.match(one.record, /the stop, then at 2656\.7, closed the long of 0\.0062 ETH at 2658\.4/);
+  assert.ok(one.notes.some((n) => /^From the capital of 10 that is three things/.test(n)));
+  // The stale pair: the stop was not filled but turned away, and the take went only with the fix.
+  assert.ok(two.notes.some((n) => /reduceOnlyRejected in the order history/.test(n)));
+  assert.ok(two.notes.some((n) => /a gateway with the fix took the account on/.test(n)));
+  assert.ok(two.check.some((c) => /^openOrders /.test(c)));
+  // A row quotes what was read after the stop, not that the account is idle now: these accounts trade on, and a
+  // static row saying "nothing open" would be wrong the day the next order goes in.
+  for (const r of [live, one]) assert.ok(r.notes.every((n) => !/stays Active with nothing open/.test(n)), r.what);
+  // The page's own words for them claim no loss avoided and no rule kept.
+  for (const r of night) assert.doesNotMatch(r.what, /saved|protected|kept|inside the rules|worked/i);
 });
 
 test("the leverage stop that ran on the demo pool says so, with the pool's terms", () => {
