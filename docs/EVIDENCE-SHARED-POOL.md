@@ -341,6 +341,14 @@ enough for is the trader's client, which needs 5 USDC of capital at 5× to send 
 - **The stop and the take are the exchange's.** Read at 08:12 UTC, the account carried two reduce-only
   position orders placed by the gateway, a stop at 2656.7 and a take at 2869.2. They move as the gateway
   follows the rule line and the target; the numbers are of that reading.
+- **The stop fired.** On 7 October at 02:00:01 UTC the stop, then at 2656.7, closed the long of 0.0062 ETH
+  at 2658.4; the take, then at 2843.9, went with it. `accountValue` read 9.885776 after it, inside the
+  rules, and the challenge stays Active with nothing open. From the capital of 10 that is three things:
+  0.27848 lost on the price, the 0.0062 ETH bought for 16.76056 and sold for 16.48208; 0.014957 paid in
+  fees on the three fills; and 0.179213 of funding paid to the long, in 44 hourly payments. 10 − 0.27848 −
+  0.014957 + 0.179213 = 9.885776. Hyperliquid's `closedPnl` for the close reads −0.278442, the same close
+  counted from an entry of 2703.31, where the two fills average 2703.316. The numbers are Hyperliquid's,
+  from `userFills`, `userFunding` and the account's order history.
 
 Read at 08:11 UTC on 5 October: `value()` 668.147546 USDC on 670e8 shares, with a position open. The other
 two seats were Idle and unsold. Every transaction this run sent on HyperEVM, from the start to the
@@ -383,14 +391,17 @@ above.
   a take on the book for that order a second before it, at 19:00:30, and re-lined them twice. The order
   went; the two stayed. Read at 12:43 UTC on 6 October, the account holds no position and two position
   orders of the gateway, a stop at 2596.4 and a take at 3121.2. They can do nothing while nothing is open,
-  orders of the gateway, a stop at 2596.4 and a take at 3121.2. They can do nothing while nothing is open,
   and the gateway let an account with nothing open go after two such answers (A-19), so nothing removed
   them. Before a later order that opens in the same direction, the gateway moves this pair to that
   order's line; a later short would have started with the pair standing beside its own, as the review
   measured on the gateway's test stand. Finding A-22 in [REVIEW-NOTES.md](REVIEW-NOTES.md). Fixed (pull
   request #128): the sweep takes such a pair off at the second answer in a row that shows nothing behind
   it, and lets an account go only once none is left; the pair above goes the same way once a gateway
-  with the fix takes the account on.
+  with the fix takes the account on. It did, and the pair went in two ways. On 7 October at 02:05:31
+  UTC, with ETH under 2596.4, the exchange triggered the stop and rejected it, a reduce-only order with
+  no position behind it (`reduceOnlyRejected` in the order history). At 09:34:34 UTC, thirty-five seconds
+  after a gateway with the fix took the account on, the sweep cancelled the take (`protect_cleared` in
+  the host's journal, `canceled` in the order history). The account has held no open order since.
 
 ### The third seat, bought and traded by the team's trader bot (6 October)
 
