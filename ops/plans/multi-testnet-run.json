@@ -1,0 +1,61 @@
+{
+  "_note": "A plan for checking the mechanism on the testnet by hand, with a whole term in one day. These are not terms anyone is offered: the exam's target, its cost and its hour are small so that one person can pass an exam quickly, the funded account has no target so that it can be ended without a trade, and the pool's term is six hours, which only a deployment made with --min-term-days and --notice-days takes. The creation form's defaults are in docs/POOL-PARAMETERS.md.",
+  "menu": [
+    {
+      "size_usdc": 5,
+      "price_usdc": 0.05
+    },
+    {
+      "size_usdc": 10,
+      "price_usdc": 0.1
+    },
+    {
+      "size_usdc": 25,
+      "price_usdc": 0.25
+    }
+  ],
+  "exam_rules": {
+    "daily_loss_bps": 300,
+    "max_drawdown_bps": 600,
+    "max_leverage_x100": 500,
+    "assets": [
+      "BTC",
+      "ETH",
+      "SOL"
+    ]
+  },
+  "exam": {
+    "targets_bps": [
+      10
+    ],
+    "step_days": 0.0416666667,
+    "max_idle_days": 0,
+    "min_trading_days": 0,
+    "cost_ppm": 100,
+    "fill_delay_blocks": 2,
+    "fill_window_blocks": 300
+  },
+  "funded_rules": {
+    "daily_loss_bps": 300,
+    "max_drawdown_bps": 600,
+    "max_leverage_x100": 500,
+    "assets": [
+      "BTC",
+      "ETH",
+      "SOL"
+    ]
+  },
+  "funded": {
+    "target_bps": 0,
+    "trader_share_bps": 8000,
+    "after_target": "trader_stops",
+    "max_retakes": 0,
+    "idle_days": 1
+  },
+  "pool": {
+    "in_work_bps": 8000,
+    "max_seats": 8,
+    "claim_window_days": 0.0416666667,
+    "term_days": 0.25
+  }
+}
