@@ -24,7 +24,7 @@ source, so they recover to some other address on mainnet.
 |---|---|---|---|---|
 | Daily loss | Opens nothing once equity is at the nearest rule line (`409 at_rule_line`). An order above the line is not sized against it: the stop is. | A stop at the higher of the day's floor and the drawdown floor, placed once the trader's order is signed and before it is submitted, for every order that may open or grow a position. A new day's snapshot brings it nearer. | `violation()` → `DailyLoss`; anyone may `breach`. | Takes the day's snapshot after midnight; breaches whatever `violation()` names; logs an open position with no stop. |
 | Drawdown | As above. | The same stop: the line is the higher floor. | `Drawdown`. | As above. |
-| Leverage | **Not checked.** The gateway does not read this rule. | **Not on its line.** The stop sits on the floors. | `Leverage`. | Breaches it. With no layer before, the contract and the keeper are the whole of it. |
+| Leverage | **On the host: not checked.** Release `4900bcb1` does not read this rule. **This commit:** an order after which the account could break it is refused before it is signed (`403 over_leverage`); on the host only once a release with it is deployed and `scripts/verify-gateway-deploy.sh` prints PASS. | **Not on its line.** The stop sits on the floors. | `Leverage`. | Breaches it. Until the check holds on the host, the contract and the keeper are the whole of it. |
 | List of assets | An asset outside the account's rules is refused (`403`); the demo signer also refuses anything off the platform's list. | — | `ForbiddenAsset`, for an asset named to it. | Names the positions and orders outside the list to `breach`. |
 | Size caps (0.005 BTC, 0.15 ETH, 4 SOL; 400 USDC of notional to open or grow) | The demo signer refuses over a cap before signing (`403 over_cap`). | — | None: the contracts know no caps. | — |
 
@@ -47,9 +47,9 @@ What holds each row:
   `nothing_opens_at_the_rule_line`, `a_new_days_snapshot_is_read_and_tightens_the_stop`,
   `orders_are_reduce_only_market_triggers_for_the_whole_position`), `gateway/tests/test_gateway.py`
   (`asset_outside_the_rules`), `gateway/tests/test_demo_signer.py` (`only_listed_assets`,
-  `each_asset_has_its_size_cap`, `notional_cap`), and `gateway/tests/test_rule_layers.py`: an order
-  past the leverage rule is signed and sent, the record of deployment 2 replayed; the venue and the
-  signature are testnet's;
+  `each_asset_has_its_size_cap`, `notional_cap`), and `gateway/tests/test_rule_layers.py`: the record
+  of deployment 2 replayed, an order past the leverage rule is refused before anything is signed
+  and one inside it goes with its stop first; the venue and the signature are testnet's;
 - the contract: `test/PoolFlow.t.sol` (`dailyLoss_boundary`, `drawdown_boundary`, `leverage_boundary`,
   `forbiddenAsset_onlyWhenNamed`);
 - the keeper: `ops/tests/test_keeper.py` (`every_reason_the_contract_names_is_stopped_leverage_among_them`,
@@ -119,16 +119,32 @@ another.
 4. `key = RuledAccount.agentKey(account)` and `KeyRegistry.isBound(key, account, trader)`.
 5. The asset is in the account's rules. The signer checks the platform list and the caps again
    before it signs.
-   - 🔴 **The leverage rule is NOT checked here, or anywhere in this gateway.** It reads `rules()`
-     for the daily and drawdown floors and discards the leverage field (`rule_limits` in
-     `gateway/chain.py`); the word does not appear in its code. So where `ForbiddenAsset` has two
-     layers — refused here before signing, and `violation()` after — **leverage has one**: the
-     contract and a keeper that pulls the stop. The protective stop resting on Hyperliquid does
-     not cover it either, because that stop sits on the drawdown and daily floors, and a position
-     can break the leverage rule while the account is barely down. After A-14 — where a shared
-     request budget can leave a keeper's pass unfinished — this is the most exposed of the three
-     rules. A pre-trade check is an intent for after the submission, not a thing that exists; it
-     was never built, and that is not a decision recorded anywhere.
+   - **Leverage, before the signature — not on the pools host yet.** The check below is written and
+     tested; the gateway on the host will make it once it is deployed with it. Until then leverage
+     has one layer there, after the fact: the contract's `violation()` and the keeper that stops an
+     account in breach. `scripts/verify-gateway-deploy.sh` says which commit the host runs and runs
+     the check's tests on that commit; until it prints PASS, nothing should say that leverage is
+     blocked before a trade.
+   - What the check will do: for an order that may open or grow a position, the gateway reads the
+     pool's leverage rule from `rules()` with the other rules (`rule_limits` in `gateway/chain.py`)
+     and the account from Hyperliquid: its equity (`accountValue`) and its notional
+     (`totalNtlPos`) from one `clearinghouseState` answer, the `ntlPos` of the margin summary the
+     contract's rule reads. It counts the order and every resting order that may open or grow a
+     position as filled, each asset at the larger of how long and how short it could get, at the
+     answer's own mark, and refuses the order before anything is signed when
+     `notional × 100 > equity × rule`: the contract's comparison in `RuledAccount.violation`. An
+     order that does not raise what the account could hold is never refused there, so a trader over
+     the rule can always come back under it; a reduce-only order is not asked about. The read is
+     the one the stop and the take are then placed from (`before_signing` and `before_opening` in
+     `gateway/protect.py`), so the check costs no request of its own.
+   - It will be a second layer, before the signature; the first stays, after the fact. The check
+     binds only what goes through this code; a price move after the fill raises the leverage of a
+     position the gateway let through, and that is the contract's and the keeper's to catch.
+   - Before this check (written in October 2026) the gateway read `rules()` for the daily and
+     drawdown floors and discarded the leverage field, so leverage had one layer where
+     `ForbiddenAsset` had two. The protective stop resting on Hyperliquid does not cover leverage
+     either, because it sits on the drawdown and daily floors, and a position can break the
+     leverage rule while the account is barely down.
 6. `(trader, nonce)` hasn't been seen. The pair is claimed here, before the enclave is asked,
    so a copy arriving meanwhile is refused without an enclave call. If the request then never
    reaches Hyperliquid (the Signer fails or refuses, or its signature is malformed or from the
@@ -487,6 +503,9 @@ all on the main dex; a pool that trades HIP-3 markets needs these reads for its 
 | 502 | `refused_by_gateway` (`no_market_price`) | `demo` mode: Hyperliquid gave no mid for the asset of a sell, so it wasn't counted or signed |
 | 502 | `venue_unreachable` | the call to Hyperliquid failed; the order may or may not have arrived, so check the account |
 | 409 | `refused_by_gateway` (`at_rule_line`, `target_met`) | an order that may open a position, refused before it is sent: equity is at the rule line, or a challenge is at its target |
+| 403 | `refused_by_gateway` (`over_leverage`) | once deployed with the leverage check: an order after which the account could break the pool's leverage rule, refused before it is signed; `detail` gives the notional, the equity and the rule. Its nonce comes back |
+| 503 | `refused_by_gateway` (`leverage_unknown`) | once deployed with the leverage check: the pool's leverage rule was not read, so nothing that may open a position is signed |
+| 502 | `refused_by_gateway` (`no_notional`) | once deployed with the leverage check: Hyperliquid's answer for the account gave no notional, so the leverage could not be counted and nothing that may open a position is signed |
 | 502 | `refused_by_gateway` (`protection_failed`) | the stop and the take could not be put on Hyperliquid, so the order was not sent; its nonce comes back |
 | 403 | `refused_by_gateway` (`protective_order`) | a cancel of the account's stop or take |
 | 403 | `refused_by_gateway` (`stop_looser`, `stop_past_mark`, `take_beyond_target`, `take_past_mark`) | a `stop` or `take` request outside what the rules allow |
@@ -512,7 +531,7 @@ In `demo` mode the gateway reads one owner-only `*.key` file per agent key from
 `GATEWAY_KEYS_DIR` (an owner-only directory) and refuses to start if either is open to others;
 the address comes from the key. In `signer` mode it reads one bearer token per key from
 `SIGNER_TOKENS_FILE`. Either lives on the gateway host only, never in this repository.
-`GET /v1/health` names the mode and, in `demo` mode, how many keys it holds.
+`GET /v1/health` names the mode and, in `demo` mode, how many keys it holds. A gateway deployed by `ops/host/deploy.sh` from a commit with the leverage check also names, as `commit`, the commit its release is (the `REVISION` file `install.sh` writes); an older one says nothing of it.
 
 **The gateway reads its own node, and that costs you requests.** Since 25 September 2026 it
 reads `rpc.hyperliquid-testnet.xyz` while the keeper reads `rpcs.chain.link`, because the two

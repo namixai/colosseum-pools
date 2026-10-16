@@ -355,9 +355,9 @@ class ChallengeCalls(KeeperTest):
     def test_every_reason_the_contract_names_is_stopped_leverage_among_them(self):
         """The keeper does not judge the rules: whatever `violation()` names, it breaches, in a
         challenge and in a funded pool alike -- drawdown (1), daily loss (2), leverage (3), a
-        forbidden asset (4). For leverage this is the first layer that acts: the gateway does not
-        read that rule, and the stop on the exchange is not on its line (docs/GATEWAY.md, "The
-        rules, layer by layer")."""
+        forbidden asset (4). For leverage this is the first layer that acts until the gateway's
+        check before signing holds on the host: the stop on the exchange is not on its line
+        (docs/GATEWAY.md, "The rules, layer by layer")."""
         for reason in (1, 2, 3, 4):
             with self.subTest(reason=reason):
                 self.chain = FakeChain()

@@ -67,8 +67,10 @@ The caps don't know the account's equity, so they can't enforce rules that depen
 stop on the exchange holds the daily-loss and drawdown lines without waiting for anyone, though
 a fast market can fill it past them. The contracts enforce daily loss, drawdown and leverage
 after the fact, reading HyperCore through its read precompiles, and anyone may trigger the stop.
-**Leverage has no layer before that one**: the gateway does not check it and the exchange stop
-is not on its line. Rule by rule: [docs/GATEWAY.md](docs/GATEWAY.md), "The rules, layer by layer".
+**Leverage has no layer before that one on the host today**: the deployed gateway does not
+check it and the exchange stop is not on its line. The gateway in this repository refuses, before
+signing, an order after which the account could break it; that holds on the host once it is
+deployed and `scripts/verify-gateway-deploy.sh` prints PASS. Rule by rule: [docs/GATEWAY.md](docs/GATEWAY.md), "The rules, layer by layer".
 
 More detail: [docs/DESIGN.md](docs/DESIGN.md) for the contracts and
 [docs/GATEWAY.md](docs/GATEWAY.md) for the gateway. What the demo has already done on chain,

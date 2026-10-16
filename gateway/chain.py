@@ -122,8 +122,8 @@ class JsonRpcReader:
 
     def rule_limits(self, account: str) -> RuleLimits:
         challenge = self._call(self.factory, "isChallenge(address)", ["address"], [account], ["bool"])[0]
-        daily, drawdown, _, _ = self._call(account, "rules()", [], [], [RULES])[0]
+        daily, drawdown, leverage, _ = self._call(account, "rules()", [], [], [RULES])[0]
         base = self._call(account, "drawdownBase()", [], [], ["int64"])[0]
         day, start = self.day_snapshot(account)
         target = self._call(account, "terms()", [], [], [TERMS])[0][2]
-        return RuleLimits(challenge, daily, drawdown, base, day, start, target)
+        return RuleLimits(challenge, daily, drawdown, base, day, start, target, leverage)

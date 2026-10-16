@@ -4,6 +4,7 @@ import { render, $, esc, friendly, failureHint, view } from "./lib/ui.js";
 import { waitWords } from "./lib/gentle.js";
 import { createNavigator, needsGate, scrollTarget, LOADING } from "./lib/nav.js";
 import { wireWallet } from "./lib/walletbutton.js";
+import { BUILD_FILE, buildLink } from "./lib/build.js";
 import { listView, newPoolView } from "./views/pools.js";
 import { poolView } from "./views/pool.js";
 import { challengeView } from "./views/challenge.js";
@@ -178,7 +179,27 @@ function setUpGate() {
   dialog.addEventListener("cancel", (e) => e.preventDefault());
 }
 
+// The commit this copy was packed from, in the footer, when the copy carries one (app/lib/build.js).
+function showBuild() {
+  const link = $("#build");
+  if (!link) return;
+  fetch(BUILD_FILE, { cache: "no-store" })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((build) => {
+      const shown = buildLink(build);
+      if (!shown) return;
+      link.textContent = shown.text;
+      link.href = shown.href;
+      link.title = shown.title;
+      link.hidden = false;
+    })
+    .catch(() => {
+      // no build file, or not JSON: a copy that was not packed says nothing
+    });
+}
+
 keepScroll();
+showBuild();
 window.addEventListener("hashchange", route);
 walletButton();
 rpcWaitNotice();

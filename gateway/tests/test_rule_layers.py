@@ -1,18 +1,17 @@
-"""Each of a pool's rules against the gateway as it is deployed: what the gateway refuses before it
-signs, what it leaves to the stop and the take on the exchange, and what it leaves to the contract
-and the keeper alone. `gateway/` here is the code the pools host runs (release 4900bcb1 since
-7 October 2026, the same files as this commit's). docs/GATEWAY.md, "The rules, layer by layer",
-is the table these tests hold.
+"""Each of a pool's rules against the gateway: what it refuses before it signs, what it leaves to
+the stop and the take on the exchange, and what it leaves to the contract and the keeper alone.
+docs/GATEWAY.md, "The rules, layer by layer", is the table these tests hold.
 
-Leverage is the one rule with no layer before the fact: the gateway never reads it, and the stop
-sits on the drawdown and daily floors. When a leverage check before signing reaches the host
-(PR #141 at the time of writing), the two tests that say so here are the ones to turn round, and
-the table with them.
+Leverage is refused before the signature by this commit's gateway: an order after which the
+account could break the pool's leverage rule is not signed (`403 over_leverage`). The pools host
+ran release 4900bcb1 when this was written, which does not read the rule; the check holds there
+only once a release with it is deployed and scripts/verify-gateway-deploy.sh prints PASS.
 """
 
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from decimal import Decimal
 from unittest import mock
 
@@ -29,45 +28,53 @@ from gateway.tests.test_protect import MARKETS, Exchange, FlowBase, Reader, chal
 BTC = 3
 
 
-class LeverageHasNoLayerBeforeTheFact(FlowBase):
+class LeverageIsRefusedBeforeTheSignature(FlowBase):
     """The record of deployment 2 (docs/EVIDENCE.md, "Deployment 2, and the first run where the
     trader was not us"): 0.00297 BTC at 84076 on a challenge of 70 USDC, 249.71 of notional,
-    3.57x against a 3x rule. The gateway signed it, and the contract stopped the challenge for
-    leverage afterwards."""
+    3.57x against a 3x rule. The gateway the host ran then signed it, and the contract stopped the
+    challenge for leverage afterwards. Replayed here against the same rule, it is refused before
+    anything is signed."""
 
     def setUp(self):
         super().setUp()
         self.markets = dict(MARKETS)
         self.markets[BTC] = Market("BTC", Decimal("84076"), 5)
-        self.reader = Reader(self.key.address, self.trader.address, challenge(capital=Decimal(70)))
+        self.rules = replace(challenge(capital=Decimal(70)), max_leverage_x100=300)
+        self.reader = Reader(self.key.address, self.trader.address, self.rules)
         self.x = Exchange(equity="70", markets=self.markets)
         self.gw = Gateway(self.reader, DemoSigner([self.key], mid=lambda a: self.markets[a].mark),
                           submit=self.x.submit, clock=lambda: self.now, venue=self.x)
 
-    def test_the_gateway_reads_no_leverage_rule(self):
-        # What the gateway knows of an account's rules: the floors and the target. A leverage rule
-        # has nowhere to go, so nothing downstream of this can act on it.
+    def test_the_gateway_reads_the_leverage_rule(self):
+        # What the gateway knows of an account's rules: the floors, the target, and the leverage.
         self.assertEqual(list(RuleLimits.__dataclass_fields__),
                          ["challenge", "daily_loss_bps", "max_drawdown_bps", "drawdown_base", "day",
-                          "day_start_equity", "target_bps"])
+                          "day_start_equity", "target_bps", "max_leverage_x100"])
+        self.assertEqual(self.rules.max_leverage_x100, 300)
 
-    def test_an_order_past_the_leverage_rule_is_signed_and_sent(self):
+    def test_an_order_past_the_leverage_rule_is_refused_before_anything_is_signed(self):
         status, out = self.send(limitPx="84076", size="0.00297")
-        self.assertEqual((status, out["status"]), (200, "submitted"))
         self.assertGreater(Decimal("0.00297") * 84076 / 70, 3)  # 3.57x against a 3x rule
-        # The stop and the take went first, and the stop is on the floors' line: the same line the
-        # account would get under any leverage rule at all.
+        self.assertEqual((status, out["status"], out["code"]), (403, "refused_by_gateway", "over_leverage"))
+        # Neither the stop and the take nor the order: nothing was signed or sent.
+        self.assertEqual(self.x.sent, [])
+
+    def test_an_order_inside_the_leverage_rule_is_signed_and_sent_with_its_stop_first(self):
+        status, out = self.send(limitPx="84076", size="0.0024")
+        self.assertLess(Decimal("0.0024") * 84076 / 70, 3)  # 2.88x
+        self.assertEqual((status, out["status"]), (200, "submitted"))
         protective, order = self.x.sent
         self.assertEqual(protective["grouping"], "positionTpsl")
-        self.assertEqual(order["orders"][0]["s"], "0.00297")
-        line = lines(challenge(capital=Decimal(70)), Decimal(70), {BTC: {LONG: Decimal("0.00297")}}, self.markets)
+        self.assertEqual(order["orders"][0]["s"], "0.0024")
+        line = lines(self.rules, Decimal(70), {BTC: {LONG: Decimal("0.0024")}}, self.markets)
         self.assertEqual(out["protection"][0]["stop"], str(line[(BTC, LONG)].stop))
 
-    def test_an_account_far_past_any_leverage_still_opens_while_it_is_above_its_floor(self):
-        # 0.02 BTC held on 70 of equity is 24x; above the floors, one more order still goes.
+    def test_an_account_already_past_its_leverage_opens_nothing_more_while_it_is_above_its_floor(self):
+        # 0.02 BTC held on 70 of equity is 24x: above the floors, and still no order that adds goes.
         self.x.positions = {BTC: Decimal("0.02")}
         status, out = self.send(limitPx="84076", size="0.001")
-        self.assertEqual((status, out["status"]), (200, "submitted"))
+        self.assertEqual((status, out["status"], out["code"]), (403, "refused_by_gateway", "over_leverage"))
+        self.assertEqual(self.x.sent, [])
 
 
 class TheVenueIsHyperliquidsTestnet(unittest.TestCase):

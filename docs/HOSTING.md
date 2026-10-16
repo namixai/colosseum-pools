@@ -306,6 +306,14 @@ Deploy the nginx file in the same pass: the gateway's new node allows about 100 
 against the old one's 200, and the limits were recut for that. Running the old limits against the new
 node makes the gateway refuse honest traders with `upstream_busy` out of its own budget.
 
+After a deploy, from the Mac:
+
+    ./scripts/verify-gateway-deploy.sh
+
+It asks `/v1/health` which commit the gateway runs, checks that the commit is on `origin/main`, and
+runs on that commit the tests of the leverage check before the signature; its last line is PASS or
+FAIL. It reads and runs tests only; it changes nothing on the host.
+
 ## Choosing the deployment and starting
 
     echo rehearsal | sudo tee /etc/colosseum/deployment      # on the host
