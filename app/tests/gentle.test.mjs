@@ -802,6 +802,9 @@ test("coming back to the list shows what was read before, says how old it is, an
   // The pools are shown when the chain has said what they are; "I want to trade" leads somewhere only once every
   // balance is in, because a balance decides whether a pool can sell.
   assert.match(pools, /const read = await readList\(live, kept \? undefined : \(items, fee\) => paint\(page, \{ items, fee \}, false\)\);/);
+  // Nothing is painted before the live deployment has answered: the archive alone would make the line above the
+  // list say there are no pools on the live deployment.
+  assert.match(pools, /if \(sofar\.has\(live\)\) seen\(DEPLOYMENTS\.flatMap\(\(d\) => sofar\.get\(d\)\?\.items \?\? \[\]\), sofar\.get\(live\)\.fee\);/);
   assert.match(pools, /if \(!complete\) return;\s+\/\/[^\n]*\n\s+const target = tradeTarget\(ordered\.filter\(\(i\) => i\.spotUsdc !== null\)\);/);
   assert.match(pools, /const held = known \? `\$\{esc\(spotUsdc\.toFixed\(2\)\)\} USDC on HyperCore spot`\s+: esc\(item\.unread \? LIST_KEPT\.unread : LIST_KEPT\.balance\);/);
   // One balance Hyperliquid does not give costs that card its balance and its verdict, never the list on screen.
