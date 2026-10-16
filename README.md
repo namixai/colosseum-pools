@@ -102,6 +102,31 @@ Where the checks stop, and what we don't claim:
   policy, and each pool's rules live in its contract, which enforces them after the fact by
   stopping the account.
 
+## Tested by TestSprite
+
+Live URL: <https://pools.usenami.io> (Hyperliquid testnet, chain 998, mock USDC).
+
+A small [TestSprite](https://www.testsprite.com) suite runs against the live site, not against
+the code in a pull request: the site is served from one deployment, with no preview per PR.
+Every test only reads pages. None connects a wallet, submits the new-pool form, buys a seat,
+trades or signs anything.
+
+What the suite covers (8 tests, all passing on 16 October 2026):
+
+| Test | What it checks |
+| --- | --- |
+| Accept demo gate and load pools home | the "testnet demo" notice can be accepted and the pools list opens |
+| Open Terms page | the Terms link in the footer opens `#/terms` |
+| Open Economics page from header navigation | the Economics link opens `#/economics` |
+| Use the economics calculator | the calculator on `#/economics` responds to its inputs |
+| Load the evidence page from header navigation | the "On chain" link opens `#/evidence` |
+| Open a pool verification page | the "Check it yourself" page opens for a known account |
+| Open a non-existent route | an unknown address shows "Not found" |
+| Verify header navigation remains available after entry | the header links stay in place after the demo notice |
+
+Tests that read the chain go through the public testnet node, which limits requests per
+address, so the suite is run only when needed.
+
 ## Repository
 
 | path | contents |
