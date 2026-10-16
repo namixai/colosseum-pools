@@ -36,6 +36,8 @@ SDK_TESTNET_SIG = {
 }
 
 ACCOUNT = "0x00000000000000000000000000000000000000A1"
+# A leverage rule of 10 000x, for the tests that are about something else: no order of theirs comes near it.
+LOOSE = 1_000_000
 NOW = 1_800_000_000_000
 
 
@@ -77,7 +79,7 @@ class FakeReader:
 
     def rule_limits(self, account):
         # A funded pool with 1000 USDC of equity at the start: floors of 950 (drawdown) and 970 (day).
-        return RuleLimits(False, 300, 500, 1_000_000_000, 20_833, 1_000_000_000, 800)
+        return RuleLimits(False, 300, 500, 1_000_000_000, 20_833, 1_000_000_000, 800, max_leverage_x100=LOOSE)
 
     def day_snapshot(self, account):
         return 20_833, 1_000_000_000
@@ -100,7 +102,8 @@ class QuietVenue:
             mark = self.MARKETS[asset].mark
             step = Decimal("1") if asset == 3 else Decimal("0.1")
             protective += [Protective(oid, asset, LONG, "sl", mark - step), Protective(oid + 1, asset, LONG, "tp", mark + step)]
-        return Book(Decimal("1000"), {3: Decimal("0.001"), 4: Decimal("0.01")}, {}, protective)
+        # 0.001 BTC at 60000 and 0.01 ETH at 3000: 90 USDC of positions, as Hyperliquid's answer would total them.
+        return Book(Decimal("1000"), {3: Decimal("0.001"), 4: Decimal("0.01")}, {}, protective, notional=Decimal("90"))
 
 
 class FakeSigner:

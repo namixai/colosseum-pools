@@ -129,6 +129,9 @@ class RuleLimits:
     day: int  # UTC day of the latest daily snapshot
     day_start_equity: int  # 1e-6 USDC; 0 before any snapshot
     target_bps: int
+    # The pool's leverage rule, times 100, as `rules()` gives it. None is a rule nobody read: the
+    # gateway then signs nothing that may open or grow a position (`leverage_check`).
+    max_leverage_x100: int | None = None
 
     def floor(self) -> Decimal:
         """Equity at which the nearest rule breaks, in USDC: the same comparison as
@@ -189,6 +192,10 @@ class Book:
     # asset -> the mark this answer valued the position at: its value over its size. The equity
     # above was counted at exactly these marks, in the same answer.
     marks: dict[int, Decimal] = field(default_factory=dict)
+    # The notional of every position, in USDC, as the same answer counts it (`totalNtlPos`): the
+    # `ntlPos` of the margin summary the contract's leverage rule reads (`RuledAccount.violation`).
+    # None when the answer did not give it.
+    notional: Decimal | None = None
 
 
 class Venue(Protocol):
@@ -211,7 +218,9 @@ def parse_markets(meta_and_ctxs: Any) -> dict[int, Market]:
 def parse_book(state: Any, orders: Any, markets: dict[int, Market]) -> Book:
     """`clearinghouseState` and `frontendOpenOrders` for one account."""
     index = {m.coin: i for i, m in markets.items()}
-    book = Book(equity=Decimal(state["marginSummary"]["accountValue"]))
+    summary = state["marginSummary"]
+    notional = summary.get("totalNtlPos")
+    book = Book(equity=Decimal(summary["accountValue"]), notional=None if notional is None else Decimal(notional))
     for entry in state.get("assetPositions", []):
         p = entry["position"]
         size = Decimal(p["szi"])
@@ -270,6 +279,46 @@ def exposure(book: Book, extra: Extra | None = None) -> dict[int, dict[str, Deci
 class Line:
     stop: Decimal
     take: Decimal
+
+
+def worst_notional(book: Book, markets: dict[int, Market], extra: Extra | None = None) -> Decimal:
+    """The most the account's positions could come to, in USDC, if every resting order that may open
+    or grow one filled, and `extra` with them: the notional the answer gives, with each asset that
+    could change counted at the larger of how long and how short it could get, at the answer's mark.
+    Counted as `exposure` counts for the stop and the take, so a short that a resting sell would
+    shrink first is not credited for it: the number can only be higher than what would happen."""
+    total = book.notional
+    for asset, sides in exposure(book, extra).items():
+        if asset not in markets:
+            raise GatewayError(502, "no_market_price", f"no mark for asset {asset}")
+        mark = markets[asset].mark
+        total += max(sides[LONG], sides[SHORT]) * mark - abs(book.positions.get(asset, Decimal(0))) * mark
+    return total
+
+
+def leverage_check(limits: RuleLimits, book: Book, markets: dict[int, Market], extra: Extra) -> None:
+    """Refuses, before anything is signed, an order after which the account's positions could break
+    the pool's leverage rule. The comparison is the contract's (`RuledAccount.violation`): notional
+    times 100 against equity times the rule, on the notional and the equity of Hyperliquid's own
+    answer. An order that does not raise what the account could hold is never refused here, so a
+    trader can always come back under the rule.
+
+    The rule had one layer until this: the contract after the fact, and the keeper that stops the
+    account. This is a second layer before the signature; the contract and the keeper stay."""
+    if limits.max_leverage_x100 is None:
+        raise GatewayError(503, "leverage_unknown", "the pool's leverage rule could not be read; nothing that may open is signed")
+    if book.notional is None:
+        raise GatewayError(502, "no_notional", "Hyperliquid's answer gave no notional for the account")
+    before = worst_notional(book, markets)
+    after = worst_notional(book, markets, extra)
+    if after <= before:
+        return
+    if book.equity <= 0 or after * 100 > book.equity * limits.max_leverage_x100:
+        cap = Decimal(limits.max_leverage_x100) / 100
+        held = "no equity" if book.equity <= 0 else f"{after / book.equity:.2f}x"
+        raise GatewayError(403, "over_leverage",
+                           f"after this order the account could hold {after:.2f} USDC of positions against {book.equity:.2f} "
+                           f"of equity: {held}, over the pool's {cap.normalize():f}x")
 
 
 def as_the_book_saw(markets: dict[int, Market], book: Book) -> dict[int, Market]:
@@ -550,10 +599,25 @@ class Protector:
         self._limits[k] = (limits, now)
         return limits
 
-    def plan(self, account: str, key: str, extra: Extra | None = None) -> tuple[Plan, dict, RuleLimits, Book]:
+    def read(self, account: str) -> tuple[dict[int, Market], Book]:
+        """One read of the account: the markets, and the account's answer, with the marks of what it
+        holds taken from that answer (`as_the_book_saw`)."""
         markets = self.venue.markets()
         book = self.venue.book(account, markets)
-        markets = as_the_book_saw(markets, book)
+        return as_the_book_saw(markets, book), book
+
+    def before_signing(self, account: str, key: str, asset: int, buys: bool, size: Decimal) -> tuple[dict[int, Market], Book]:
+        """For an order that may open or grow a position, before it is signed: refuses it if the
+        account could then break the pool's leverage rule (`leverage_check`). Returns the read, for
+        the stop and the take to be placed from the same answer."""
+        with self._lock(account):
+            read = self.read(account)
+            leverage_check(self.limits(account, key), read[1], read[0], Extra(asset, buys, size))
+            return read
+
+    def plan(self, account: str, key: str, extra: Extra | None = None,
+             read: tuple[dict[int, Market], Book] | None = None) -> tuple[Plan, dict, RuleLimits, Book]:
+        markets, book = read if read is not None else self.read(account)
         limits = self.limits(account, key)
         want = lines(limits, book.equity, exposure(book, extra), markets)
         # Nothing follows here. With an order on its way the line prices more than the position
@@ -619,12 +683,13 @@ class Protector:
                                    f"Hyperliquid did not confirm the stop and take: {refusal or venue}"[:300])
 
     def before_opening(self, account: str, key: str, asset: int, buys: bool, size: Decimal,
-                       avoid_nonce: int | None = None) -> list[dict]:
+                       avoid_nonce: int | None = None, read: tuple[dict[int, Market], Book] | None = None) -> list[dict]:
         """Puts the stop and the take in place for an order that may open or grow a position,
         before the order goes. Refuses the order if they can't be placed, or if the account has
-        nothing left to lose before its rule line, or a challenge has already met its target."""
+        nothing left to lose before its rule line, or a challenge has already met its target.
+        `read` is the account as `before_signing` read it, under the same lock: one answer for both."""
         with self._lock(account):
-            plan, _, limits, book = self.plan(account, key, Extra(asset, buys, size))
+            plan, _, limits, book = self.plan(account, key, Extra(asset, buys, size), read)
             if book.equity - limits.floor() <= 0:
                 raise GatewayError(409, "at_rule_line",
                                    "equity is at the pool's rule line; nothing may open until the account is stopped")
