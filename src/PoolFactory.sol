@@ -30,16 +30,25 @@ contract PoolFactory is IAccountSource, IFactoryView {
     address public feeRecipient;
 
     mapping(uint32 asset => bool) public isPlatformAsset;
+    /// Perp assets a funded account of a MultiPool may trade: those whose book one account cannot
+    /// move, by the operator's reading of their depth (deep audit, N6).
+    mapping(uint32 asset => bool) public isFundedAsset;
     mapping(address => bool) public isPool;
     mapping(address => bool) public isChallenge;
+    /// MultiPools the operator has recognized. Only a pool one of them owns may put a trader of its
+    /// own choosing on its capital, and so take a key from the registry with no challenge sold:
+    /// anyone else's pool run by its owner would take and retire a key for gas (audit K-3).
+    mapping(address => bool) public isMultiPool;
     address[] private _pools;
 
     event PoolCreated(address indexed pool, address indexed owner);
     event ChallengeCreated(address indexed challenge, address indexed pool, address indexed trader);
     event PlatformAssetSet(uint32 indexed asset, bool allowed);
+    event FundedAssetSet(uint32 indexed asset, bool allowed);
     event BuilderSet(address indexed builder, uint64 maxFee);
     event OperatorSet(address indexed operator);
     event ChallengeFeeSet(uint256 fee, address indexed recipient);
+    event MultiPoolSet(address indexed pool, bool recognized);
 
     error NotOperator();
     error NotPool();
@@ -78,11 +87,25 @@ contract PoolFactory is IAccountSource, IFactoryView {
         }
     }
 
+    /// @notice Lists or delists perp assets a MultiPool's funded accounts may trade. Delisting doesn't
+    ///         touch pools that already name the asset.
+    function setFundedAssets(uint32[] calldata assets, bool allowed) external onlyOperator {
+        for (uint256 i = 0; i < assets.length; ++i) {
+            isFundedAsset[assets[i]] = allowed;
+            emit FundedAssetSet(assets[i], allowed);
+        }
+    }
+
     function setChallengeFee(uint256 fee, address recipient) external onlyOperator {
         if (fee != 0 && recipient == address(0)) revert BadFee();
         challengeFee = fee;
         feeRecipient = recipient;
         emit ChallengeFeeSet(fee, recipient);
+    }
+
+    function setMultiPool(address pool, bool recognized) external onlyOperator {
+        isMultiPool[pool] = recognized;
+        emit MultiPoolSet(pool, recognized);
     }
 
     function setBuilder(address builder_, uint64 maxFee) external onlyOperator {

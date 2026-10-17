@@ -330,9 +330,11 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
     if status != ACTIVE and status not in STOPPED:
         return True
     if status == ACTIVE:
-        if in_checkpoint_window(now) and view(ch, "day()", "uint32") < now // 86400:
-            send(wallet, ch, "checkpoint()", dry=dry)
+        # A breach before the day's snapshot: the contract refuses the snapshot while a rule is
+        # broken, so that midnight forgives nothing (deep audit, F12).
         reason, book = whats_broken(ch, names)
+        if not reason and in_checkpoint_window(now) and view(ch, "day()", "uint32") < now // 86400:
+            send(wallet, ch, "checkpoint()", dry=dry)
         if reason:
             log("breach_found", account=ch, reason=reason)
             cancels, extra = stop_args(ch, names, book)
@@ -368,9 +370,9 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
         send(wallet, pool, "openFundedStage()", dry=dry)
     if stage in (FUNDED, CLOSING):
         if stage == FUNDED:
-            if in_checkpoint_window(now) and view(pool, "day()", "uint32") < now // 86400:
-                send(wallet, pool, "checkpoint()", dry=dry)
             reason, book = whats_broken(pool, names)
+            if not reason and in_checkpoint_window(now) and view(pool, "day()", "uint32") < now // 86400:
+                send(wallet, pool, "checkpoint()", dry=dry)
             if reason:
                 log("breach_found", account=pool, reason=reason)
                 cancels, extra = stop_args(pool, names, book)

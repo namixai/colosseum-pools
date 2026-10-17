@@ -198,11 +198,15 @@ contract PoolFlowTest is PoolHarness {
     function test_drawdown_boundary() public {
         ChallengeAccount ch = _started(_readyPool());
         // Floor is 90 USDC: exactly 90 is allowed, a micro-dollar less is not. The day
-        // limit (95 from the first day's base) would trip first, so take a new day's
-        // snapshot at 90.
+        // limit (95 from the first day's base) would trip first, so walk down inside it,
+        // a day at a time: a snapshot is not taken while a rule is broken (deep audit F12).
         _nextMidnight();
-        _mockMargin(address(ch), 90e6, 0);
+        _mockMargin(address(ch), 95e6, 0);
         ch.checkpoint();
+        _nextMidnight();
+        _mockMargin(address(ch), 91e6, 0);
+        ch.checkpoint();
+        _mockMargin(address(ch), 90e6, 0);
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.None));
         _mockMargin(address(ch), 90e6 - 1, 0);
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.Drawdown));
@@ -259,7 +263,7 @@ contract PoolFlowTest is PoolHarness {
         _mockMargin(address(ch), 120e6, 0);
         ch.checkpoint();
         _mockMargin(address(ch), 113e6, 0); // above the 108 target, 5.8% under today's 120
-        vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.RuleBroken.selector, Breach.DailyLoss));
+        vm.expectRevert(abi.encodeWithSelector(RuledAccount.RuleBroken.selector, Breach.DailyLoss));
         ch.graduate(SALT);
     }
     function test_leverage_boundary() public {
@@ -639,7 +643,11 @@ contract PoolFlowTest is PoolHarness {
         vm.expectRevert(abi.encodeWithSelector(Pool.BadStage.selector, Pool.Stage.PassedAwaitingKey));
         p.withdrawOnCore(1e8);
 
-        // Opening the stage is what needs a key, and it can simply be tried again.
+        // Opening the stage is what needs a key, and it can simply be tried again. More spoiled keys
+        // than one `assign` skips need a purge first, which anyone may send (the keeper does).
+        vm.expectRevert(KeyRegistry.TooManySpoiledKeys.selector);
+        p.openFundedStage();
+        registry.purgeSpoiled(keys.length);
         vm.expectRevert(KeyRegistry.NoFreeKey.selector);
         p.openFundedStage();
 

@@ -16,6 +16,10 @@ import {Pool} from "../src/Pool.sol";
 import {ChallengeAccount} from "../src/ChallengeAccount.sol";
 import {RuledAccount} from "../src/RuledAccount.sol";
 import {CoreOps} from "../src/lib/CoreOps.sol";
+import {TermsBook} from "../src/multi/TermsBook.sol";
+import {Plan} from "../src/multi/MultiPool.sol";
+import {PoolShares} from "../src/multi/PoolShares.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 contract CloseHarness {
     function close(uint32[] memory perps) external returns (uint256) {
@@ -47,6 +51,16 @@ contract TwoStepsInOneBlock {
     }
 }
 
+/// The simulator keeps no oracle price of its own. On the chain the oracle and the mark are two
+/// prices; here the oracle reads the mark unless a test sets it apart (`_setOracle`).
+contract OracleFollowsMark {
+    fallback(bytes calldata data) external returns (bytes memory) {
+        (bool ok, bytes memory r) = address(0x0000000000000000000000000000000000000806).staticcall(data);
+        require(ok);
+        return r;
+    }
+}
+
 /// The stand every pools test runs on: the simulator, a factory, a registry, and the
 /// helpers that drive them. It holds no tests of its own, so a suite that inherits it does
 /// not re-run somebody else's -- which is what happened the first time an audit regression
@@ -63,6 +77,11 @@ contract PoolHarness is Test {
     uint64 constant BTC_MARK = 764000; // 76400.0, one decimal (szDecimals 5)
     uint64 constant ETH_MARK = 241370; // 2413.70, two decimals (szDecimals 4)
     bytes32 constant SALT = keccak256("test-salt");
+    /// The terms the test pools name, kept in a book at a fixed address so that a pure plan can name it.
+    address constant TERMS_BOOK = address(0x7E4A5);
+    string constant TERMS_TEXT = "the pool's terms, every clause";
+    /// The terms of the pool a test made last (`_tie`).
+    bytes32 internal TERMS;
 
     HyperCore hyperCore;
     MockUsdc usdc;
@@ -75,9 +94,50 @@ contract PoolHarness is Test {
     address stranger = makeAddr("stranger");
     address[] keys;
 
+    /// The plan with terms written for it, as a pool takes them (deep audit F13): a text in the
+    /// book that begins `Plan 0x<hash of the plan, its terms fields zero>`, then `body`. Kept with
+    /// cheatcodes, not a call, so that it can stand inside an expected revert.
+    function _tie(Plan memory p, string memory body) internal returns (Plan memory) {
+        p.terms = 0;
+        p.termsBook = address(0);
+        bytes memory text = abi.encodePacked(
+            "Plan ", Strings.toHexString(uint256(keccak256(abi.encode(p))), 32), "\n", body
+        );
+        bytes32 h = keccak256(text);
+        address at = address(uint160(uint256(keccak256(abi.encode("terms text", h)))));
+        vm.etch(at, abi.encodePacked(hex"00", text));
+        vm.store(TERMS_BOOK, keccak256(abi.encode(h, uint256(0))), bytes32(uint256(uint160(at))));
+        p.terms = h;
+        p.termsBook = TERMS_BOOK;
+        TERMS = h;
+        return p;
+    }
+
+    function _tie(Plan memory p) internal returns (Plan memory) {
+        return _tie(p, TERMS_TEXT);
+    }
+
+    address constant ORACLE_PX = 0x0000000000000000000000000000000000000807;
+
+    /// The oracle price of `asset` from now on, apart from its mark.
+    function _setOracle(uint32 asset, uint64 px) internal {
+        vm.mockCall(ORACLE_PX, abi.encode(asset), abi.encode(px));
+    }
+
+    /// The terms of a pool owned by `s`: their second line names its raise, the amount and the
+    /// smallest deposit, as `ops/terms.py` writes it and `PoolShares.bind` checks (deep audit, N5).
+    function _tieShares(PoolShares s, Plan memory p) internal returns (Plan memory) {
+        return _tie(p, string.concat(_sharesLine(s.target(), s.minDeposit()), TERMS_TEXT));
+    }
+
+    function _sharesLine(uint256 target, uint64 minDeposit) internal pure returns (string memory) {
+        return string.concat("Shares ", Strings.toHexString(uint256(keccak256(abi.encode(target, uint256(minDeposit)))), 32), "\n");
+    }
+
     function setUp() public {
         hyperCore = CoreSimulatorLib.init();
         hyperCore.setUseRealL1Read(false);
+        vm.etch(ORACLE_PX, type(OracleFollowsMark).runtimeCode);
         CoreSimulatorLib.setRevertOnFailure(true);
         // Fees are not what these tests are about; without them the arithmetic is exact.
         CoreSimulatorLib.setPerpMakerFee(0);
@@ -98,13 +158,18 @@ contract PoolHarness is Test {
         CoreSimulatorLib.setMarkPx(BTC, BTC_MARK);
         CoreSimulatorLib.setMarkPx(ETH, ETH_MARK);
 
+        vm.etch(TERMS_BOOK, type(TermsBook).runtimeCode);
+        TermsBook(TERMS_BOOK).publish(TERMS_TEXT);
+
         MockUsdc impl = new MockUsdc();
         vm.etch(HLConstants.usdc(), address(impl).code);
         usdc = MockUsdc(HLConstants.usdc());
 
         registry = new KeyRegistry(operator);
         factory = new PoolFactory(registry, address(new Pool()), address(new ChallengeAccount()), operator);
-        for (uint256 i = 0; i < 6; ++i) {
+        // More than a pool's sixteen seats: a MultiPool sells only while a key is free for every seat
+        // it has spoken for (deep audit, N3).
+        for (uint256 i = 0; i < 20; ++i) {
             keys.push(makeAddr(string.concat("enclave-key-", vm.toString(i))));
         }
         uint32[] memory listed = new uint32[](2);
@@ -114,7 +179,17 @@ contract PoolHarness is Test {
         registry.setAccountSource(factory);
         registry.publish(keys);
         factory.setPlatformAssets(listed, true);
+        factory.setFundedAssets(listed, true);
         vm.stopPrank();
+        _everyOwnerRecognized();
+    }
+
+    /// The operator recognizes each MultiPool it deploys (`setMultiPool`, deploy_multi.py), and
+    /// only a pool such an owner runs may fund a trader of its choosing (audit K-3). The suites
+    /// build MultiPools and owner-run pools in many places, so here the factory says yes to every
+    /// owner; the tests of the rule itself (test/multi/DeepKeys.t.sol) clear this first.
+    function _everyOwnerRecognized() internal {
+        vm.mockCall(address(factory), abi.encodeWithSelector(factory.isMultiPool.selector), abi.encode(true));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────

@@ -391,6 +391,14 @@ class ChallengeCalls(KeeperTest):
         k.one_pass()
         self.assertEqual(self.chain.calls_to(CHALLENGE_A), [("checkpoint", [])])
 
+    def test_a_broken_rule_at_midnight_is_breached_not_snapshotted(self):
+        # The contract refuses the day's snapshot while a rule is broken (deep audit F12); the
+        # keeper breaches first and sends no checkpoint that pass.
+        self.follow_a(status=keeper.ACTIVE, deadline=NOON + 5 * DAY, violation=1)
+        self.at(JUST_AFTER_MIDNIGHT)
+        self.make().one_pass()
+        self.assertEqual([fn for fn, _ in self.chain.calls_to(CHALLENGE_A)], ["breach"])
+
     def test_every_stopped_challenge_is_settled_and_a_settled_one_is_left_alone(self):
         for status in keeper.STOPPED + (keeper.SETTLED,):
             self.chain.sent.clear()

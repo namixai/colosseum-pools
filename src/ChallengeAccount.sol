@@ -84,7 +84,6 @@ contract ChallengeAccount is RuledAccount {
     error TooLate();
     error NotFlat();
     error TargetNotMet(int64 equity, int256 target);
-    error RuleBroken(Breach reason);
     error KeySpoiled();
 
     constructor() {

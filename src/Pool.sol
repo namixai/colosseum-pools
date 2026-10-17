@@ -15,6 +15,7 @@ interface IPoolFactory is IFactoryView {
     function challengeFee() external view returns (uint256);
     function feeRecipient() external view returns (address);
     function createChallenge(address trader) external returns (address);
+    function isMultiPool(address pool) external view returns (bool);
 }
 
 /// @title Pool
@@ -43,6 +44,11 @@ contract Pool is RuledAccount {
     address public owner;
     Terms internal _terms;
     bool public accountReady;
+    /// Set once by the owner: this pool sells no challenge of its own, and its owner funds the
+    /// traders it has examined elsewhere (`openFundedFor`).
+    bool public ownerRun;
+    /// On a pool its owner runs, whether the funded trader may end the stage themselves.
+    bool public traderMayStop;
 
     Stage public stage;
     address public challenge;
@@ -92,6 +98,13 @@ contract Pool is RuledAccount {
     /// anyone may release the pool -- the pass and the challenge share stay with the trader, and
     /// the event says the platform never funded them.
     uint64 public constant AWAIT_KEY_WINDOW = 7 days;
+    /// A funded stage whose key was spoiled may take a fresh one in its first day, twice at most,
+    /// and only on its trader's word (deep audit F10, AUD-2).
+    uint64 public constant REKEY_WINDOW = 1 days;
+    uint8 public constant MAX_REKEYS = 2;
+    /// When the funded stage running now opened, and how many fresh keys it has taken.
+    uint64 public fundedAt;
+    uint8 public rekeys;
 
     event AccountReady();
     event ChallengeSold(address indexed challenge, address indexed trader, uint256 price);
@@ -106,6 +119,7 @@ contract Pool is RuledAccount {
     event FundedClosed(address indexed trader);
     event WithdrawnOnCore(address indexed to, uint64 amount);
     event EarnedWithdrawn(address indexed to, uint256 amount);
+    event RunByOwner(bool traderMayStop);
 
     error NotOwner();
     error NotChallenge();
@@ -116,6 +130,10 @@ contract Pool is RuledAccount {
     error TooEarly();
     error KeyAvailable();
     error WithdrawnThisBlock();
+    error SalesClosed();
+    error NotOwnerRun();
+    error KeyWorks();
+    error RekeyClosed();
 
     constructor() {
         _disableInitializers();
@@ -178,11 +196,83 @@ contract Pool is RuledAccount {
         emit WithdrawnOnCore(owner, amount1e8);
     }
 
+    /// @notice Sends spot USDC on HyperCore to `to` on the owner's word, as `withdrawOnCore` does
+    ///         to the owner. Only while no trader holds the pool.
+    function sendOnCore(address to, uint64 amount1e8) external onlyOwner inStage(Stage.Idle) {
+        withdrewAtBlock = uint64(block.number);
+        CoreOps.sendUsdc(to, amount1e8);
+        emit WithdrawnOnCore(to, amount1e8);
+    }
+
     function withdrawEarned() external onlyOwner {
         uint256 amount = earned;
         earned = 0;
         IPoolFactory(address(factory)).usdc().safeTransfer(owner, amount);
         emit EarnedWithdrawn(owner, amount);
+    }
+
+    // ── a pool its owner runs ───────────────────────────────────────────
+
+    /// @notice Hands the choice of trader to the owner, for good: from now on this pool sells no
+    ///         challenge, and only `openFundedFor` puts a trader on its capital. For an owner that
+    ///         examines traders some other way. `traderMayStop_` says whether a trader funded
+    ///         this way may end the stage themselves, as a trader who passed a challenge may.
+    function runByOwner(bool traderMayStop_) external onlyOwner inStage(Stage.Idle) {
+        // A challenge sold before this could still pass, and would fund its trader the old way.
+        if (ownerRun || challenge != address(0)) revert NotAllowed();
+        ownerRun = true;
+        traderMayStop = traderMayStop_;
+        emit RunByOwner(traderMayStop_);
+    }
+
+    /// @notice Funds `trader_` on this pool's capital, at once and in full. Only the owner of a
+    ///         pool it runs may call it, and only an owner the factory knows as a MultiPool: each
+    ///         stage takes a key from the shared registry and retires it, so a pool anyone could
+    ///         run this way would empty the registry for gas (audit K-3).
+    /// @dev    Unlike `openFundedStage`, this never funds less than the terms say: there is no
+    ///         challenge whose activation fee could have eaten into the capital, so a short
+    ///         balance is the owner's to top up first. The balance read is the start of the
+    ///         block, so a withdrawal earlier in the same block is refused the way a sale is
+    ///         (audit A-08).
+    function openFundedFor(address trader_) external onlyOwner inStage(Stage.Idle) {
+        if (!ownerRun || !IPoolFactory(address(factory)).isMultiPool(owner)) revert NotOwnerRun();
+        if (!accountReady) revert NotReady();
+        if (withdrewAtBlock >= block.number) revert WithdrawnThisBlock();
+        uint64 funded = _terms.fundedCapital;
+        uint64 needed = funded * Units.SPOT_PER_PERP;
+        uint64 spot = CoreOps.spotUsdc(address(this));
+        if (spot < needed) revert NotEnoughCapital(spot, needed);
+
+        address key = factory.registry().assign(trader_);
+        stage = Stage.Funded;
+        fundedAt = uint64(block.timestamp);
+        rekeys = 0;
+        fundedTrader = trader_;
+        fundedEndReason = Breach.None;
+        _setAgent(key);
+        int64 start = CoreOps.equity(address(this)) + int64(funded);
+        fundedStart = start;
+        CoreOps.toPerp(funded);
+        _startDay(start);
+        emit TraderFunded(trader_, key, funded);
+    }
+
+    /// @notice Gives a funded stage a fresh key when its own has gained a HyperCore account, which
+    ///         HyperCore does not take as an agent: a transfer that lands in the block the key is
+    ///         bound spoils it. The trader keeps the stage they earned and the capital does not sit
+    ///         idle (deep audit, F10). Only the stage's trader, in its first day, twice at most: a
+    ///         key HyperCore already took keeps working after it gains an account, so on anyone's
+    ///         word a stranger's 1 USDC would replace a working key, and the registry's free keys
+    ///         could be spent one by one (deep audit, AUD-2). A key that has no account stays.
+    function rekey() external inStage(Stage.Funded) {
+        if (msg.sender != fundedTrader) revert NotAllowed();
+        if (block.timestamp > uint256(fundedAt) + REKEY_WINDOW || rekeys >= MAX_REKEYS) revert RekeyClosed();
+        address old = agentKey;
+        if (!CoreOps.exists(old)) revert KeyWorks();
+        ++rekeys;
+        KeyRegistry registry = factory.registry();
+        registry.retire(old);
+        _setAgent(registry.assign(fundedTrader));
     }
 
     // ── challenge ────────────────────────────────────────────────────────────────────
@@ -197,6 +287,7 @@ contract Pool is RuledAccount {
     /// @notice Buys a challenge. The pool must be idle and hold enough spot USDC for the
     ///         challenge capital and for funding the trader afterwards.
     function buyChallenge() external inStage(Stage.Idle) returns (address ch) {
+        if (ownerRun) revert SalesClosed();
         if (!accountReady) revert NotReady();
         // Audit A-08. The capital check below reads a precompile, which answers with the start of
         // the block, so a withdrawal earlier in the SAME block is invisible to it: the sale would
@@ -286,6 +377,8 @@ contract Pool is RuledAccount {
             key = factory.registry().assign(fundedTrader);
         }
         stage = Stage.Funded;
+        fundedAt = uint64(block.timestamp);
+        rekeys = 0;
         _setAgent(key);
         // Sending the challenge capital may have cost an activation fee, so fund what is
         // there, up to the terms.
@@ -372,6 +465,7 @@ contract Pool is RuledAccount {
         inStage(Stage.Funded)
     {
         if (msg.sender != owner && msg.sender != fundedTrader) revert NotAllowed();
+        if (msg.sender != owner && ownerRun && !traderMayStop) revert NotAllowed();
         _endFunded(Breach.None, cancels, extraAssets, salt);
     }
 
