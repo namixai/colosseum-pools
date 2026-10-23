@@ -43,6 +43,11 @@ contract Pool is RuledAccount {
     address public owner;
     Terms internal _terms;
     bool public accountReady;
+    /// Set once by the owner: this pool sells no challenge of its own, and its owner funds the
+    /// traders it has examined elsewhere (`openFundedFor`).
+    bool public ownerRun;
+    /// On a pool its owner runs, whether the funded trader may end the stage themselves.
+    bool public traderMayStop;
 
     Stage public stage;
     address public challenge;
@@ -106,6 +111,7 @@ contract Pool is RuledAccount {
     event FundedClosed(address indexed trader);
     event WithdrawnOnCore(address indexed to, uint64 amount);
     event EarnedWithdrawn(address indexed to, uint256 amount);
+    event RunByOwner(bool traderMayStop);
 
     error NotOwner();
     error NotChallenge();
@@ -116,6 +122,8 @@ contract Pool is RuledAccount {
     error TooEarly();
     error KeyAvailable();
     error WithdrawnThisBlock();
+    error SalesClosed();
+    error NotOwnerRun();
 
     constructor() {
         _disableInitializers();
@@ -185,6 +193,48 @@ contract Pool is RuledAccount {
         emit EarnedWithdrawn(owner, amount);
     }
 
+    // ── a pool its owner runs ───────────────────────────────────────────
+
+    /// @notice Hands the choice of trader to the owner, for good: from now on this pool sells no
+    ///         challenge, and only `openFundedFor` puts a trader on its capital. For an owner that
+    ///         examines traders some other way. `traderMayStop_` says whether a trader funded
+    ///         this way may end the stage themselves, as a trader who passed a challenge may.
+    function runByOwner(bool traderMayStop_) external onlyOwner inStage(Stage.Idle) {
+        // A challenge sold before this could still pass, and would fund its trader the old way.
+        if (ownerRun || challenge != address(0)) revert NotAllowed();
+        ownerRun = true;
+        traderMayStop = traderMayStop_;
+        emit RunByOwner(traderMayStop_);
+    }
+
+    /// @notice Funds `trader_` on this pool's capital, at once and in full. Only the owner of a
+    ///         pool it runs may call it.
+    /// @dev    Unlike `openFundedStage`, this never funds less than the terms say: there is no
+    ///         challenge whose activation fee could have eaten into the capital, so a short
+    ///         balance is the owner's to top up first. The balance read is the start of the
+    ///         block, so a withdrawal earlier in the same block is refused the way a sale is
+    ///         (audit A-08).
+    function openFundedFor(address trader_) external onlyOwner inStage(Stage.Idle) {
+        if (!ownerRun) revert NotOwnerRun();
+        if (!accountReady) revert NotReady();
+        if (withdrewAtBlock >= block.number) revert WithdrawnThisBlock();
+        uint64 funded = _terms.fundedCapital;
+        uint64 needed = funded * Units.SPOT_PER_PERP;
+        uint64 spot = CoreOps.spotUsdc(address(this));
+        if (spot < needed) revert NotEnoughCapital(spot, needed);
+
+        address key = factory.registry().assign(trader_);
+        stage = Stage.Funded;
+        fundedTrader = trader_;
+        fundedEndReason = Breach.None;
+        _setAgent(key);
+        int64 start = CoreOps.equity(address(this)) + int64(funded);
+        fundedStart = start;
+        CoreOps.toPerp(funded);
+        _startDay(start);
+        emit TraderFunded(trader_, key, funded);
+    }
+
     // ── challenge ────────────────────────────────────────────────────────────────────
 
     /// @notice Spot USDC the pool needs to sell a challenge (1e8 = 1 USDC): the challenge
@@ -197,6 +247,7 @@ contract Pool is RuledAccount {
     /// @notice Buys a challenge. The pool must be idle and hold enough spot USDC for the
     ///         challenge capital and for funding the trader afterwards.
     function buyChallenge() external inStage(Stage.Idle) returns (address ch) {
+        if (ownerRun) revert SalesClosed();
         if (!accountReady) revert NotReady();
         // Audit A-08. The capital check below reads a precompile, which answers with the start of
         // the block, so a withdrawal earlier in the SAME block is invisible to it: the sale would
@@ -372,6 +423,7 @@ contract Pool is RuledAccount {
         inStage(Stage.Funded)
     {
         if (msg.sender != owner && msg.sender != fundedTrader) revert NotAllowed();
+        if (msg.sender != owner && ownerRun && !traderMayStop) revert NotAllowed();
         _endFunded(Breach.None, cancels, extraAssets, salt);
     }
 
