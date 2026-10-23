@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# The self-audit of factory v3, frozen at 23772e2d (docs/FREEZE-v3.md): the bot's strictest
+# profile. This pull request is for reading only and is not merged.
+language: en-US
+reviews:
+  profile: assertive
+  high_level_summary: true
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false

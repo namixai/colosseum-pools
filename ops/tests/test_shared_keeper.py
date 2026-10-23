@@ -135,7 +135,10 @@ class SharedKeeperTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
         self.clock = mock.patch.object(sk.time, "time", return_value=NOW)
         self.clock.start()
-        self.addCleanup(self.clock.stop)
+        # The clock that is on when the test ends: `at` puts a new one in its place, and a cleanup
+        # bound to the first left the last one on, so `time.time` stayed frozen for every module
+        # after this one (it hid mutation K251 in test_multi_keeper).
+        self.addCleanup(lambda: self.clock.stop())
         self.logged: list[tuple[str, dict]] = []
         quiet = mock.patch.object(sk, "log", side_effect=lambda event, **f: self.logged.append((event, f)))
         quiet.start()

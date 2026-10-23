@@ -45,6 +45,9 @@ def pool_created_log(block: int, pool: str) -> dict:
 class FakeChain:
     """Pools, challenges, logs and the info API, with every send recorded."""
 
+    RPC_URL = "http://fake-node/evm"
+    CHAIN_ID = 998
+
     def __init__(self):
         self.latest = 100
         self.logs: list[dict] = []
@@ -55,13 +58,20 @@ class FakeChain:
         self.orders: dict[str, list] = {}
         self.positions: dict[str, list] = {}
         self.sent: list[tuple[str, str, list]] = []
+        self.gas_limits: list[int | None] = []
         self.fail_sends_to: set[str] = set()
         self.roles: dict[str, dict] = {}
+        self.agents: dict[str, list] = {}
+        self.fail_info: set[str] = set()
         # The factory's own `pools()`, in creation order. None: the call is refused.
         self.factory_list: list[str] | None = []
         self.factory_reads = 0
         # A node that answers reads but not old logs: the one the keeper ran on from 18 Oct 2026.
         self.logs_refused = False
+        # The v3 factory's own list of pools that sold a challenge (audit, K-1). None: a factory
+        # deployed before it, which reverts on the call.
+        self.challenged: list[str] | None = None
+        self.challenged_reads: list[tuple[int, int]] = []
 
     def add_pool(self, addr, stage=keeper.IDLE, challenge=ZERO, on_factory=True, **over):
         if on_factory and self.factory_list is not None:
@@ -71,7 +81,7 @@ class FakeChain:
 
     def add_challenge(self, addr, status, **over):
         self.challenges[addr.lower()] = {"status": status, "capitalArrived": False, "keySpoiled": False,
-                                         "createdAt": NOON - 60,
+                                         "sentToDexAt": 0, "createdAt": NOON - 60,
                                          "day": 19_999, "violation": 0, "deadline": NOON + DAY, "assets": (3,),
                                          "cutKey": ZERO, "cutBlock": 0, **over}
 
@@ -101,6 +111,14 @@ class FakeChain:
 
     def call_view(self, to, signature, types, args, out):
         name = signature.split("(")[0]
+        if to.lower() == FACTORY.lower() and name in ("challengedCount", "challengedFrom"):
+            if self.challenged is None:
+                raise RuntimeError("eth_call: execution reverted")
+            if name == "challengedCount":
+                return (len(self.challenged),)
+            start, n = args
+            self.challenged_reads.append((start, n))
+            return (list(self.challenged[start:start + n]),)
         if to.lower() == FACTORY.lower() and name == "pools":
             self.factory_reads += 1
             if self.factory_list is None:
@@ -119,6 +137,10 @@ class FakeChain:
 
     def info_post(self, body):
         kind = body["type"]
+        if kind in self.fail_info:
+            raise RuntimeError("429 Too Many Requests")
+        if kind == "extraAgents":
+            return self.agents.get(body["user"].lower(), [])
         if kind == "meta":
             return {"universe": [{"name": n} for n in ("SOL", "APT", "ATOM", "BTC", "ETH")]}
         if kind == "frontendOpenOrders":
@@ -129,9 +151,10 @@ class FakeChain:
             return {"assetPositions": [{"position": {"coin": coin}} for coin in self.positions.get(body["user"].lower(), [])]}
         raise AssertionError(f"unexpected info call {kind}")
 
-    def transact(self, wallet, to, signature, types, args):
+    def transact(self, wallet, to, signature, types, args, gas=None):
         if to.lower() in self.fail_sends_to:
             raise RuntimeError("execution reverted")
+        self.gas_limits.append(gas)
         self.sent.append((to.lower(), signature.split("(")[0], args))
         return {"transactionHash": "0x" + "ab" * 32}
 
@@ -147,7 +170,10 @@ class KeeperTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.clock = mock.patch.object(keeper.time, "time", return_value=NOON)
         self.clock.start()
-        self.addCleanup(self.clock.stop)
+        # The clock that is on when the test ends: `at` puts a new one in its place, and a cleanup
+        # bound to the first left the last one on, so `time.time` stayed frozen for every module
+        # after this one (it hid mutation K251 in test_multi_keeper).
+        self.addCleanup(lambda: self.clock.stop())
         quiet = mock.patch.object(keeper, "log")
         quiet.start()
         self.addCleanup(quiet.stop)
@@ -492,6 +518,13 @@ class ChallengeCalls(KeeperTest):
         self.make().one_pass()
         self.assertEqual(self.chain.calls_to(CHALLENGE_A), [("activate", [])])
 
+    def test_a_start_whose_capital_went_to_its_dex_is_activated_again_not_aborted(self):
+        # On a builder dex the first activate() sent the capital there: spot has none, and the
+        # start window may be over. The second call starts it, or sends it again (В4-2).
+        self.follow_a(status=keeper.CREATED, sentToDexAt=NOON - 30, createdAt=NOON - keeper.START_WINDOW - 1)
+        self.make().one_pass()
+        self.assertEqual(self.chain.calls_to(CHALLENGE_A), [("activate", [])])
+
     def test_a_spoiled_key_is_aborted_at_once(self):
         self.follow_a(status=keeper.CREATED, capitalArrived=True, keySpoiled=True)
         self.make().one_pass()
@@ -555,6 +588,14 @@ class ChallengeCalls(KeeperTest):
         self.chain.challenges[CHALLENGE_A.lower()]["day"] = JUST_AFTER_MIDNIGHT // DAY
         k.one_pass()
         self.assertEqual(self.chain.calls_to(CHALLENGE_A), [("checkpoint", [])])
+
+    def test_a_broken_rule_at_midnight_is_breached_not_snapshotted(self):
+        # The contract refuses the day's snapshot while a rule is broken (deep audit F12); the
+        # keeper breaches first and sends no checkpoint that pass.
+        self.follow_a(status=keeper.ACTIVE, deadline=NOON + 5 * DAY, violation=1)
+        self.at(JUST_AFTER_MIDNIGHT)
+        self.make().one_pass()
+        self.assertEqual([fn for fn, _ in self.chain.calls_to(CHALLENGE_A)], ["breach"])
 
     def test_every_stopped_challenge_is_settled_and_a_settled_one_is_left_alone(self):
         for status in keeper.STOPPED + (keeper.SETTLED,):
@@ -725,6 +766,20 @@ class FailedSend(KeeperTest):
         (event, *_), fields = logged.call_args
         self.assertEqual(event, "send_failed")
         return fields
+
+    def test_a_start_waiting_for_its_dex_is_not_a_failed_send(self):
+        # В5-3: activate() and openFundedStage() refuse NotOnDex until the dex shows the capital.
+        from ops.contract_errors import BY_SELECTOR
+        sel = next(s for s, e in BY_SELECTOR.items() if e == "NotOnDex()")
+        self.chain.transact = mock.Mock(side_effect=RuntimeError(f"{{'code': 3, 'data': '{sel}'}}"))
+        with mock.patch.object(keeper, "log") as logged:
+            keeper.send(mock.Mock(), CHALLENGE_A, "activate()")
+        (event, *_), _ = logged.call_args
+        self.assertEqual(event, "waiting_for_dex")
+        self.chain.transact = mock.Mock(side_effect=RuntimeError("{'code': 3, 'data': '0x1234abcd'}"))
+        with mock.patch.object(keeper, "log") as logged:
+            keeper.send(mock.Mock(), CHALLENGE_A, "activate()")
+        self.assertEqual(logged.call_args.args[0], "send_failed", "any other refusal still is one")
 
     def test_an_empty_wallet_is_named_as_one(self):
         fields = self.failed_send(balance=0)
@@ -1055,6 +1110,218 @@ class Ring(unittest.TestCase):
                          "past the end wraps to the top rather than serving nobody")
 
 
+class TheChallengedList(KeeperTest):
+    """The audit's K-1: the sweep read every pool the factory made, and anyone creates pools for free.
+    A v3 factory keeps the pools that have sold a challenge apart; the sweep reads only those, in
+    pages, and never asks a pool that has sold none."""
+
+    def v3(self, *pools):
+        self.chain.challenged = [p for p in pools]
+
+    def test_only_the_list_is_read_and_a_pool_that_sold_none_is_never_asked(self):
+        self.chain.add_pool(POOL_A, stage=keeper.CHALLENGE, challenge=CHALLENGE_A)
+        self.chain.add_challenge(CHALLENGE_A, status=keeper.ACTIVE)
+        self.chain.add_pool(POOL_B, refused=True)  # asked, it would end the sweep in a refusal
+        self.v3(POOL_A)
+        k = self.make()
+        k.one_pass()
+        self.assertEqual(k.live, {keeper.to_checksum_address(POOL_A)})
+        self.assertEqual(self.chain.factory_reads, 0, "the factory's whole list is not read")
+        self.assertEqual(self.logged("sweep_failed"), [])
+
+    def test_pages_of_sweep_max_and_the_next_sweep_carries_on(self):
+        others = [f"0x{n:040x}" for n in range(0x31, 0x36)]
+        for p in others:
+            self.chain.add_pool(p)
+        self.chain.pools[others[4].lower()]["stage"] = keeper.CHALLENGE
+        self.v3(*others)
+        with mock.patch.object(keeper, "SWEEP_MAX", 2):
+            k = self.make(sweep_every=1)
+            k.one_pass()
+            self.assertEqual(k.live, set(), "two asked about")
+            self.assertTrue(all(n <= 2 for _, n in self.chain.challenged_reads))
+            k.one_pass()
+            self.assertEqual(k.live, set())
+            k.one_pass()
+            self.assertEqual(k.live, {keeper.to_checksum_address(others[4])})
+
+    def test_a_refused_page_ends_the_sweep_and_costs_nothing_else(self):
+        self.follow_a(status=keeper.ACTIVE)
+        self.v3(POOL_A)
+        real = self.chain.call_view
+
+        def refuse_pages(to, signature, types, args, out):
+            if signature.startswith("challengedFrom"):
+                raise RuntimeError("eth_call: rate limited")
+            return real(to, signature, types, args, out)
+
+        self.chain.call_view = refuse_pages
+        self.at(JUST_AFTER_MIDNIGHT)
+        k = self.make()
+        k.one_pass()
+        self.assertEqual([fn for fn, _ in self.chain.calls_to(CHALLENGE_A)], ["checkpoint"])
+        self.assertEqual(len(self.logged("sweep_failed")), 1)
+
+    def test_a_refused_count_is_a_failed_sweep_not_a_fall_back_to_every_pool(self):
+        self.chain.add_pool(POOL_B)
+        self.v3()
+        real = self.chain.call_view
+
+        def refuse_count(to, signature, types, args, out):
+            if signature.startswith("challengedCount"):
+                raise RuntimeError("429 Too Many Requests")
+            return real(to, signature, types, args, out)
+
+        self.chain.call_view = refuse_count
+        self.make().one_pass()
+        self.assertEqual(self.chain.factory_reads, 0)
+        self.assertEqual(len(self.logged("sweep_failed")), 1)
+
+    def test_a_factory_before_v3_is_swept_on_its_pool_list(self):
+        self.chain.add_pool(POOL_A, stage=keeper.CHALLENGE, challenge=CHALLENGE_A)
+        self.chain.add_challenge(CHALLENGE_A, status=keeper.ACTIVE)
+        k = self.make()
+        k.one_pass()
+        self.assertEqual(self.chain.factory_reads, 1)
+        self.assertIn(keeper.to_checksum_address(POOL_A), k.live)
+
+
+class OwnNode(unittest.TestCase):
+    """The audit's M-1: the keeper and the gateway read one node, with one IP's budget. Said at the
+    start on testnet, where it is accepted; on mainnet the keeper does not start on it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.env = pathlib.Path(self.tmp.name) / "gateway.env"
+        self.env.write_text("GATEWAY_SIGNER=demo\nGATEWAY_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm\n")
+
+    def test_the_gateways_node_is_said_on_testnet_and_refused_on_mainnet(self):
+        own = "https://rpc.hyperliquid-testnet.xyz/evm/"
+        self.assertTrue(keeper.node_shared_with_gateway(own, self.env))
+        with mock.patch.object(keeper, "log") as logged:
+            keeper.check_node(own, 998, self.env)
+        self.assertEqual(logged.call_args.args[0], "node_shared_with_gateway")
+        with self.assertRaises(SystemExit):
+            keeper.check_node(own, keeper.MAINNET_CHAIN_ID, self.env)
+
+    def test_a_node_of_its_own_or_no_gateway_here_is_nothing_to_say(self):
+        with mock.patch.object(keeper, "log") as logged:
+            keeper.check_node("https://another.node/evm", keeper.MAINNET_CHAIN_ID, self.env)
+            keeper.check_node("https://rpc.hyperliquid-testnet.xyz/evm", keeper.MAINNET_CHAIN_ID,
+                              pathlib.Path(self.tmp.name) / "absent.env")
+        logged.assert_not_called()
+
+    def test_the_keeper_asks_at_its_start(self):
+        src = (ROOT / "ops" / "keeper.py").read_text()
+        self.assertLess(src.index("    check_node(c.RPC_URL, c.CHAIN_ID)"), src.index("    record = deployments.load(args.deployment)"))
+
+
+class Renew(KeeperTest):
+    """An agent approved with no name lived fourteen days and was gone (a live challenge's, 18 October
+    2026). The contracts approve every agent as `pools` for 179 days, and HyperCore shows the term: the
+    keeper renews it with a fresh key in the last fourteen days of the term HyperCore shows. A key
+    HyperCore no longer lists before its term ends, any other address it lists for the account, and a
+    term that ended unrenewed are alarms, never a second approval (the CTO, 19 October 2026)."""
+
+    KEY = "0x" + "a9" * 20
+    MS = 1000
+
+    def follow(self, ends, shown_until=None, account=CHALLENGE_A, others=()):
+        self.follow_a(status=keeper.ACTIVE, agentKey=self.KEY, agentValidUntil=ends * self.MS)
+        listed = [{"address": o, "name": "pools", "validUntil": ends * self.MS} for o in others]
+        if shown_until is not None:
+            listed.insert(0, {"address": self.KEY.lower(), "name": "pools", "validUntil": shown_until * self.MS})
+        self.chain.agents[account.lower()] = listed
+
+    def run_pass(self):
+        with mock.patch.object(keeper, "log") as logged:
+            self.make().one_pass()
+        return [call.args[0] for call in logged.call_args_list]
+
+    def renewed(self, account=CHALLENGE_A):
+        return ("renewAgent", []) in self.chain.calls_to(account)
+
+    def test_in_the_last_fourteen_days_of_the_term_hypercore_shows(self):
+        self.follow(NOON + 14 * DAY, shown_until=NOON + 14 * DAY)
+        events = self.run_pass()
+        self.assertTrue(self.renewed())
+        self.assertNotIn("agent_missing", events)
+
+    def test_not_a_second_sooner(self):
+        self.follow(NOON + 14 * DAY + 1, shown_until=NOON + 14 * DAY + 1)
+        self.run_pass()
+        self.assertFalse(self.renewed())
+
+    def test_a_term_that_has_ended_is_an_alarm_and_a_renewal(self):
+        # Audit window 2, A5-2: the window passed unrenewed; a fresh key after the end.
+        self.follow(NOON, shown_until=NOON)
+        events = self.run_pass()
+        self.assertTrue(self.renewed())
+        self.assertIn("agent_term_over", events)
+        self.chain.sent.clear()
+        self.follow(NOON - 30 * DAY, shown_until=NOON + 100 * DAY)
+        self.run_pass()
+        self.assertTrue(self.renewed(), "whatever term HyperCore shows, once the one asked for has ended")
+
+    def test_a_key_hypercore_does_not_list_is_an_alarm_not_an_approval(self):
+        self.follow(NOON + 100 * DAY)
+        events = self.run_pass()
+        self.assertIn("agent_missing", events)
+        self.assertEqual(self.chain.calls_to(CHALLENGE_A), [], "nothing is sent for it")
+
+    def test_no_alarm_in_the_hour_after_an_approval(self):
+        approved = NOON - keeper.AGENT_SETTLE + 1
+        self.follow(approved + keeper.AGENT_TERM)
+        self.assertNotIn("agent_missing", self.run_pass())
+        self.chain.challenges[CHALLENGE_A.lower()]["agentValidUntil"] = (approved - 1 + keeper.AGENT_TERM) * self.MS
+        self.assertIn("agent_missing", self.run_pass(), "an hour on, it is")
+
+    def test_any_other_address_listed_is_an_alarm(self):
+        self.follow(NOON + 100 * DAY, shown_until=NOON + 100 * DAY, others=("0x" + "77" * 20,))
+        events = self.run_pass()
+        self.assertIn("agent_unexpected", events)
+        self.assertNotIn("agent_missing", events)
+        self.assertFalse(self.renewed())
+
+    def test_a_later_term_on_hypercore_waits_and_is_named(self):
+        self.follow(NOON + 14 * DAY, shown_until=NOON + 100 * DAY)
+        events = self.run_pass()
+        self.assertFalse(self.renewed(), "HyperCore holds the key longer than the account asked")
+        self.assertIn("agent_term_differs", events)
+
+    def test_the_term_asked_for_when_hypercore_would_not_say(self):
+        self.chain.fail_info.add("extraAgents")
+        self.follow(NOON + 100 * DAY)
+        events = self.run_pass()
+        self.assertFalse(self.renewed())
+        self.assertNotIn("agent_missing", events, "not an alarm: HyperCore would not say")
+        self.chain.challenges[CHALLENGE_A.lower()]["agentValidUntil"] = (NOON + 14 * DAY) * self.MS
+        self.run_pass()
+        self.assertTrue(self.renewed())
+
+    def test_a_funded_stage_too(self):
+        self.chain.add_pool(POOL_A, stage=keeper.FUNDED, agentKey=self.KEY, agentValidUntil=(NOON + 13 * DAY) * self.MS)
+        self.chain.logs.append(challenge_log(10, POOL_A))
+        self.chain.agents[POOL_A.lower()] = [
+            {"address": self.KEY.lower(), "name": "pools", "validUntil": (NOON + 13 * DAY) * self.MS}]
+        self.run_pass()
+        self.assertTrue(self.renewed(POOL_A))
+
+    def test_an_account_from_before_named_agents_is_passed_over(self):
+        self.follow_a(status=keeper.ACTIVE, agentKey=self.KEY)  # no agentValidUntil to read
+        events = self.run_pass()
+        self.assertFalse(self.renewed())
+        self.assertNotIn("agent_missing", events)
+
+    def test_the_contracts_term_and_window_are_the_keepers(self):
+        src = (ROOT / "src" / "RuledAccount.sol").read_text()
+        self.assertIn("uint64 public constant AGENT_TERM = 179 days;", src)
+        self.assertIn("uint64 public constant RENEW_WINDOW = 14 days;", src)
+        self.assertEqual(keeper.AGENT_TERM, 179 * DAY)
+        self.assertEqual(keeper.RENEW_WINDOW, 14 * DAY)
+
+
 class HostTemplates(unittest.TestCase):
     """What a fresh host gets (ops/host): the node the keeper ran on after 18 Oct 2026, and a scan
     small enough per pass for a node that times old eth_getLogs out."""
@@ -1072,3 +1339,72 @@ class HostTemplates(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# The worst stop as spike/run.py stopgas measured it (22 October 2026): the rules' sixteen positions
+# with neither cancels nor extra, then each cancel and each extra position (read and closed).
+BASE, PER_CANCEL, PER_EXTRA = 1_430_000, 27_200, 59_000
+
+
+def stop_gas(cancels, extra):
+    return BASE + PER_CANCEL * len(cancels) + PER_EXTRA * len(extra)
+
+
+class SmallBlock(KeeperTest):
+    """A stop or a settlement step names what fits a small block, the rest the next step (audit window
+    2, В6-3; the CTO, 22 October 2026)."""
+
+    CANCELS = [(3, i) for i in range(1, 33)]
+    EXTRA = list(range(100, 116))
+
+    def test_a_call_that_fits_goes_whole(self):
+        self.assertEqual(keeper.fit(stop_gas, self.CANCELS[:2], self.EXTRA[:1]),
+                         (self.CANCELS[:2], self.EXTRA[:1], stop_gas(self.CANCELS[:2], self.EXTRA[:1]), True))
+
+    def test_the_worst_stop_keeps_the_extra_positions_first_then_the_cancels(self):
+        cancels, extra, gas, fits = keeper.fit(stop_gas, self.CANCELS, self.EXTRA)
+        self.assertTrue(fits)
+        self.assertEqual(len(extra), 6, "1.43 million and six positions at 59,000: 1,784,000")
+        self.assertEqual(len(cancels), 0, "a cancel more is over 1.8 million")
+        self.assertEqual(extra, self.EXTRA[:6], "the first ones, in order")
+        self.assertLessEqual(gas, keeper.FIT_GAS)
+        cancels, extra, gas, _ = keeper.fit(stop_gas, self.CANCELS, [])
+        self.assertEqual(len(cancels), 13, "with no extra, as many cancels as stay under 1.8 million")
+        self.assertEqual(gas, stop_gas(self.CANCELS[:13], []))
+        self.assertGreater(stop_gas(self.CANCELS[:14], []), keeper.FIT_GAS)
+
+    def test_a_call_that_cannot_be_estimated_goes_whole_and_the_send_says_why(self):
+        self.assertEqual(keeper.fit(lambda a, b: None, self.CANCELS, self.EXTRA), (self.CANCELS, self.EXTRA, None, True))
+
+    def test_nothing_fits_when_the_call_with_neither_is_over(self):
+        self.assertEqual(keeper.fit(lambda a, b: keeper.FIT_GAS + 1, self.CANCELS, self.EXTRA)[3], False)
+
+    def test_a_stop_is_sent_cut_and_capped_at_the_block(self):
+        with mock.patch.object(keeper, "estimate", lambda w, to, sig, types, args: stop_gas(args[0], args[1])):
+            keeper.stop(mock.Mock(), CHALLENGE_A, "breach", self.CANCELS, self.EXTRA, False)
+        [(fn, args)] = self.chain.calls_to(CHALLENGE_A)
+        self.assertEqual((fn, args[0], args[1]), ("breach", [], self.EXTRA[:6]))
+        self.assertEqual(self.chain.gas_limits, [keeper.SMALL_BLOCK_GAS], "a quarter over the estimate, at most the block")
+        self.assertEqual(self.logged("named_in_part"), [{"to": CHALLENGE_A, "call": "breach", "cancels": "0/32",
+                                                         "extra": "6/16"}])
+
+    def test_a_settlement_step_is_cut_the_same_way(self):
+        self.follow_a(status=keeper.BREACHED)
+        self.chain.orders[CHALLENGE_A.lower()] = [{"coin": "BTC", "oid": i} for i in range(1, 33)]
+        with mock.patch.object(keeper, "estimate", lambda w, to, sig, types, args: stop_gas(args[0], args[1])):
+            self.make().one_pass()
+        [(fn, args)] = [call for call in self.chain.calls_to(CHALLENGE_A) if call[0] == "settle"]
+        self.assertEqual(len(args[0]), 13)
+
+    def test_a_call_over_a_small_block_with_nothing_named_is_not_sent(self):
+        with mock.patch.object(keeper, "estimate", lambda *a: keeper.FIT_GAS + 1):
+            keeper.stop(mock.Mock(), CHALLENGE_A, "breach", self.CANCELS, [], False)
+        self.assertEqual(self.chain.calls_to(CHALLENGE_A), [], "it would hold the wallet's later sends behind it")
+        self.assertEqual(self.logged("call_over_small_block"),
+                         [{"to": CHALLENGE_A, "call": "breach", "cancels": 32, "extra": 0}])
+
+    def test_a_stop_with_nothing_to_cut_is_not_estimated(self):
+        with mock.patch.object(keeper, "estimate", side_effect=AssertionError("estimated")):
+            keeper.stop(mock.Mock(), CHALLENGE_A, "breach", [], [], False)
+        self.assertEqual([fn for fn, _ in self.chain.calls_to(CHALLENGE_A)], ["breach"])
+        self.assertEqual(self.chain.gas_limits, [None], "the node's estimate and a quarter, as before")

@@ -95,10 +95,10 @@ def registries_in_records(records_dir: pathlib.Path | None = None) -> dict[str, 
     that morning passed them, because no record names them.
     """
     directory = records_dir if records_dir is not None else ROOT / "deployments"
+    found = journal_registries(directory)
     # A directory that is not there reads the same as one with nothing in it, and neither can be
     # told from a wrong path. So the run prints how many records it consulted: "0 records" is a
     # sentence somebody can notice, where a silent pass is not.
-    found: dict[str, str] = {}
     for path in sorted(directory.glob("testnet-*.json")) if directory.is_dir() else []:
         try:
             record = json.loads(path.read_text())
@@ -109,6 +109,37 @@ def registries_in_records(records_dir: pathlib.Path | None = None) -> dict[str, 
         if registry:
             found.setdefault(to_checksum_address(registry), path.name)
     return found
+
+
+# Every key registry this project has deployed, whether or not its deployment record is in this
+# checkout: the multi stand's (testnet-multi-1.json) lives on a branch of its own, and its spare keys
+# passed this check (audit window 2, A5-3). A deployment that makes a registry adds it here.
+REGISTRY_JOURNAL = "registries.json"
+
+
+def journal_registries(directory: pathlib.Path) -> dict[str, str]:
+    """The journal's registries on this chain, each with where it came from."""
+    path = directory / REGISTRY_JOURNAL
+    if not path.exists():
+        return {}
+    try:
+        entries = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"{path.name} cannot be read ({exc}); refusing rather than skipping the "
+                         f"journal of every registry") from None
+    return {to_checksum_address(e["address"]): f"{REGISTRY_JOURNAL}: {e['deployment']}"
+            for e in entries if int(e["chain_id"]) == c.CHAIN_ID}
+
+
+def journal_registry(directory: pathlib.Path, registry: str, deployment: str) -> None:
+    """Adds a registry just deployed to the journal, once."""
+    path = directory / REGISTRY_JOURNAL
+    entries = json.loads(path.read_text()) if path.exists() else []
+    if any(to_checksum_address(e["address"]) == to_checksum_address(registry) for e in entries):
+        return
+    entries.append({"address": to_checksum_address(registry), "chain_id": c.CHAIN_ID, "deployment": deployment})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(entries, indent=2) + "\n")
 
 
 def key_is_known_to(registry: str, key: str) -> bool:
@@ -186,12 +217,14 @@ def mark_incomplete(path: pathlib.Path, record: dict, exc: BaseException) -> Non
 
 
 def deploy_contract(deployer, path: pathlib.Path, record: dict, key: str, contract: str,
-                    types: list, values: list) -> tuple[str, dict]:
+                    types: list, values: list, libraries: dict[str, str] | None = None) -> tuple[str, dict]:
     """Deploy one contract and put its address on disk before the next transaction is sent."""
-    addr, rcpt = c.deploy(deployer, contract, types, values)
+    addr, rcpt = c.deploy(deployer, contract, types, values, libraries) if libraries else c.deploy(deployer, contract, types, values)
     record[key] = addr
     record["tx"][key] = rcpt["transactionHash"]
     save(path, record)
+    if contract == "KeyRegistry":
+        journal_registry(path.parent, addr, path.name)
     return addr, rcpt
 
 
@@ -267,12 +300,13 @@ def main() -> int:
         try:
             registry, _ = deploy_contract(deployer, out_path, record, "KeyRegistry", "KeyRegistry",
                                           ["address"], [deployer.address])
-            pool_impl, _ = deploy_contract(deployer, out_path, record, "PoolImpl", "Pool", [], [])
+            libs = {"AccountOps": deploy_contract(deployer, out_path, record, "AccountOps", "AccountOps", [], [])[0]}
+            pool_impl, _ = deploy_contract(deployer, out_path, record, "PoolImpl", "Pool", [], [], libs)
             challenge_impl, _ = deploy_contract(deployer, out_path, record, "ChallengeAccountImpl",
-                                                "ChallengeAccount", [], [])
+                                                "ChallengeAccount", [], [], libs)
             factory, rcpt = deploy_contract(deployer, out_path, record, "PoolFactory", "PoolFactory",
-                                            ["address", "address", "address", "address"],
-                                            [registry, pool_impl, challenge_impl, deployer.address])
+                                            ["address", "address", "address", "address", "address"],
+                                            [registry, pool_impl, challenge_impl, deployer.address, c.TESTNET_USDC_ERC20])
         finally:
             big_blocks(deployer, False)
     except BaseException as exc:  # a deployment or the switch back to small blocks failed
@@ -284,7 +318,8 @@ def main() -> int:
 
     steps = [
         ("setAccountSource", registry, "setAccountSource(address)", ["address"], [factory]),
-        ("setPlatformAssets", factory, "setPlatformAssets(uint32[],bool)", ["uint32[]", "bool"], [assets, True]),
+        ("setPlatformAssets", factory, "setPlatformAssets(uint32[],string[],bool)", ["uint32[]", "string[]", "bool"],
+         [assets, list(PLATFORM_ASSETS), True]),
         ("setChallengeFee", factory, "setChallengeFee(uint256,address)", ["uint256", "address"],
          [CHALLENGE_FEE, deployer.address]),
     ]

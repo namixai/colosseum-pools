@@ -84,7 +84,6 @@ contract ChallengeAccount is RuledAccount {
     error TooLate();
     error NotFlat();
     error TargetNotMet(int64 equity, int256 target);
-    error RuleBroken(Breach reason);
     error KeySpoiled();
 
     constructor() {
@@ -140,23 +139,34 @@ contract ChallengeAccount is RuledAccount {
     }
 
     /// @notice Starts the challenge once the capital has reached this account on HyperCore.
-    ///         Anyone may call it.
+    ///         Anyone may call it. On a builder dex it takes two calls: the first sends the
+    ///         capital to the dex, a later one starts the challenge once the dex shows it, so a
+    ///         transfer HyperCore dropped is never read as the trader's loss (audit window 2, В4-2).
     function activate() external inStatus(Status.Created) {
-        if (!capitalArrived()) revert NotStartedOnCore();
-        if (CoreOps.exists(agentKey)) revert KeySpoiled();
-
-        CoreOps.separateBalances(address(this));
-        CoreOps.toPerp(_terms.capital);
+        uint64 capital = _terms.capital;
+        if (sentToDexAt == 0) {
+            if (!capitalArrived()) revert NotStartedOnCore();
+            if (CoreOps.exists(agentKey)) revert KeySpoiled();
+            CoreOps.separateBalances(address(this));
+            if (dex != 0) {
+                _sendToDex(capital);
+                return;
+            }
+            CoreOps.toPerp(capital, dex);
+        } else {
+            if (!_landed(int64(capital))) return;
+            if (CoreOps.exists(agentKey)) revert KeySpoiled();
+        }
         (address builder_, uint64 maxFee) = pool.builder();
         CoreOps.approveBuilder(builder_, maxFee);
         _setAgent(agentKey);
 
         startedAt = uint64(block.timestamp);
         deadline = startedAt + _terms.duration;
-        _startDay(int64(_terms.capital));
+        _startDay(int64(capital));
         status = Status.Active;
         pool.onChallengeStarted();
-        emit Started(trader, agentKey, _terms.capital, deadline);
+        emit Started(trader, agentKey, capital, deadline);
     }
 
     /// @notice If the capital never arrived, anyone may call this after the start window; if
@@ -166,7 +176,10 @@ contract ChallengeAccount is RuledAccount {
     function abort() external inStatus(Status.Created) {
         if (!keySpoiled()) {
             if (block.timestamp <= createdAt + START_WINDOW) revert TooEarly();
-            if (capitalArrived()) revert CapitalArrived();
+            // Capital sent to a builder dex has arrived once the dex shows it.
+            if (sentToDexAt != 0 ? accountEquity() >= int64(_terms.capital) : capitalArrived()) {
+                revert CapitalArrived();
+            }
         }
         status = Status.Aborted;
         address key = agentKey;
@@ -216,15 +229,32 @@ contract ChallengeAccount is RuledAccount {
         _end(Status.Forfeited, Breach.None, cancels, extraAssets, salt);
     }
 
+    /// @notice Renews this challenge's agent from the last fourteen days of its term on: the old key is
+    ///         retired for good and the trader gets a fresh one, approved for a new term. Anyone may
+    ///         call it; the keeper does fourteen days before the term HyperCore shows ends (the CTO,
+    ///         19 October 2026). A challenge shorter than the term never needs it.
+    function renewAgent() external inStatus(Status.Active) {
+        _renewAgent(trader);
+    }
+
+    /// @notice Gives the challenge a fresh key when its own was spoiled in the block it was approved
+    ///         in, at the activation or a renewal: the trader's alone, within a day of that approval,
+    ///         twice at most for it (audit window 2, A5-1's residue for a challenge, the CTO,
+    ///         21 October 2026).
+    function rekey() external inStatus(Status.Active) {
+        if (msg.sender != trader) revert NotTrader();
+        _rekey(trader);
+    }
+
     /// @notice Passes the challenge: no rule broken, account flat, target met, in time.
     ///         Anyone may call it. The pool then funds the trader with a new key.
     function graduate(bytes32 salt) external inStatus(Status.Active) {
         if (block.timestamp > deadline) revert TooLate();
         Breach reason = violation(new uint32[](0));
         if (reason != Breach.None) revert RuleBroken(reason);
-        if (CoreOps.margin(address(this)).ntlPos != 0) revert NotFlat();
+        if (CoreOps.margin(address(this), dex).ntlPos != 0) revert NotFlat();
 
-        int64 eq = CoreOps.equity(address(this));
+        int64 eq = accountEquity();
         int256 capital = int256(uint256(_terms.capital));
         int256 target = capital + (capital * int256(uint256(_terms.targetBps))) / int256(uint256(Units.BPS));
         if (int256(eq) < target) revert TargetNotMet(eq, target);
@@ -245,7 +275,7 @@ contract ChallengeAccount is RuledAccount {
         _cutAgent(salt);
         _cancelAll(cancels);
         _closeAll(extraAssets);
-        emit Stopped(s, reason, CoreOps.equity(address(this)));
+        emit Stopped(s, reason, accountEquity());
     }
 
     // ── after it ends ────────────────────────────────────────────────────────────────
@@ -361,12 +391,7 @@ contract ChallengeAccount is RuledAccount {
     ///         so it cannot reopen a settlement or alter what anybody was paid.
     function sweep() external {
         if (status != Status.Settled) revert BadStatus(status);
-        uint64 free = CoreOps.withdrawable(address(this));
-        if (free != 0) {
-            CoreOps.toSpot(free);
-            emit MovedToSpot(free);
-            return; // it lands next block; call again then
-        }
+        if (_toSpotAll() != 0) return; // it lands next block; call again then
         uint64 spot = CoreOps.spotUsdc(address(this));
         if (spot != 0) {
             CoreOps.sendUsdc(address(pool), spot);

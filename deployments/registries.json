@@ -1,0 +1,27 @@
+[
+  {
+    "address": "0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA",
+    "chain_id": 998,
+    "deployment": "testnet-demo.json"
+  },
+  {
+    "address": "0x53AF27F65Dd7473c890f633aC0025b261307779e",
+    "chain_id": 998,
+    "deployment": "testnet-demo2.json"
+  },
+  {
+    "address": "0xAcB4af764984CD624098662A4057d7bA85E1176E",
+    "chain_id": 998,
+    "deployment": "testnet-rehearsal.json"
+  },
+  {
+    "address": "0xe9903F9523889e9C3C2499210ad9Ed6c67f52Dbf",
+    "chain_id": 998,
+    "deployment": "testnet-shared-run.json"
+  },
+  {
+    "address": "0xACb08c6C826C8E3a376B36DAcB1222E1392F6c35",
+    "chain_id": 998,
+    "deployment": "testnet-multi-1.json (on branch kolizey/testnet-multi-1-record-2026-10-15)"
+  }
+]

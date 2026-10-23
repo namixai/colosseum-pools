@@ -145,10 +145,19 @@ def inner(text: str, name: str, where: str) -> str:
     return text[1:-1]
 
 
-def compare(label: str, solidity: list[tuple[str, str]], copy: list[tuple[str, str]]) -> list[str]:
+# Fields a struct gained at its end, which a copy that only reads it may leave off: a decoder of the
+# fields before them reads an older deployment's struct and a newer one's alike. Rules'
+# assetLeverageX100 came with v3 (the CTO, 21 October 2026), while the app, the gateway and the
+# agents still read deployments before it. What the app SENDS is held below with no field left off.
+APPENDED = {"RULES": ("assetLeverageX100",)}
+
+
+def compare(label: str, solidity: list[tuple[str, str]], copy: list[tuple[str, str]],
+            appended: tuple[str, ...] = ()) -> list[str]:
     """Names are compared only where the copy carries one: desk.py keeps types alone on purpose."""
     problems = []
-    if len(solidity) != len(copy):
+    left_off = [name for _, name in solidity[len(copy):]]
+    if len(solidity) != len(copy) and not (left_off and all(name in appended for name in left_off)):
         problems.append(f"{label}: {len(copy)} fields, the contract has {len(solidity)}")
     for i, (want, got) in enumerate(zip(solidity, copy)):
         if want[0] != got[0]:
@@ -173,8 +182,9 @@ def main() -> int:
     for arg, name in (("rules", "RULES"), ("terms", "TERMS")):
         if arg not in structs:
             cannot_run(f"createPool has no struct argument '{arg}'")
-        problems += compare(f"app/lib/chain.js {name}", structs[arg], js_struct(js, name))
-        problems += compare(f"agents/desk.py {name}", structs[arg], py_struct(py, name))
+        tail = APPENDED.get(name, ())
+        problems += compare(f"app/lib/chain.js {name}", structs[arg], js_struct(js, name), tail)
+        problems += compare(f"agents/desk.py {name}", structs[arg], py_struct(py, name), tail)
     # The rules the app SENDS (createPool), held to the contracts with no field left off: a copy short
     # of one encodes another function and the factory reverts (AUDIT В6-1, 21 Oct 2026). The app keeps
     # one for a factory before v3 and one for v3, which appends each asset's own cap. The one with the
@@ -204,14 +214,16 @@ def main() -> int:
     # because a trader's clone may never have run `forge build`. An error the table lacks comes
     # back to the trader as raw bytes; one it carries and the contracts do not is a name for
     # nothing.
+    # AccountOps is the library both link to: its errors come back from the account by
+    # DELEGATECALL, as the account's own (HIP-3 moved the closing orders there, 21 October 2026).
     errors: set[str] = set()
-    for contract in ("ChallengeAccount", "Pool"):
+    for contract in ("ChallengeAccount", "Pool", "AccountOps"):
         errors |= error_signatures(contract)
     carried = py_strings(py, "CONTRACT_ERRORS")
     for sig in sorted(errors - set(carried)):
         problems.append(f"agents/desk.py CONTRACT_ERRORS lacks {sig}, which a contract can answer")
     for sig in sorted(set(carried) - errors):
-        problems.append(f"agents/desk.py CONTRACT_ERRORS carries {sig}, which neither contract has")
+        problems.append(f"agents/desk.py CONTRACT_ERRORS carries {sig}, which none of them has")
     if len(carried) != len(set(carried)):
         problems.append("agents/desk.py CONTRACT_ERRORS names an error twice")
 

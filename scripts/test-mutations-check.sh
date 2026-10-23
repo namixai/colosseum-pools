@@ -49,6 +49,21 @@ else
   echo "FAIL a mutation matching twice: rc=$rc"; echo "$out"; fail=1
 fi
 
+# A Python mutant that does not parse: every test fails on it, so it guards nothing.
+python3 - "$STAND" "$COPY" <<'PY'
+import pathlib, sys
+src, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+text = src.read_text()
+old = 'MUTATIONS = [\n'
+dst.write_text(text.replace(old, old + '    ("Z4", "scripts/abi-check.py", "def compare(", "def compare((", ["nothing"]),\n', 1))
+PY
+rc=0; out="$(python3 "$COPY" --check)" || rc=$?
+if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q "Z4: the mutant of scripts/abi-check.py does not parse"; then
+  echo "ok   a Python mutant that does not parse is caught"
+else
+  echo "FAIL a Python mutant that does not parse: rc=$rc"; echo "$out"; fail=1
+fi
+
 # The same id twice: the second one is invisible in a run that names ids.
 python3 - "$STAND" "$COPY" <<'PY'
 import pathlib, sys, re
