@@ -59,4 +59,9 @@ export const CONFIG = {
       platformAssets: [3, 4, 0],
     },
   ],
+  // Pools of many traders (app/views/multi.js), one entry a deployment, every field copied from
+  // deployments/testnet-<label>.json as ops/deploy_multi.py writes it: the label, "MultiPool", "PoolFactory",
+  // "KeyRegistry", "PaperExamImpl", the commit and the bounds. None is made yet: the contracts are drafts.
+  // app/tests/multi.test.mjs holds each entry to its record, and goes red for a record that has none here.
+  multi: [],
 };
