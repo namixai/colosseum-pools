@@ -62,6 +62,26 @@ KEY_A = "0x00000000000000000000000000000000000000a1"
 KEY_B = "0x00000000000000000000000000000000000000b2"
 
 
+class Linking(unittest.TestCase):
+    """The accounts link to AccountOps (HIP-3 took them over the size a contract may have): a
+    deployment writes the library's address where forge's linkReferences say, and refuses a
+    contract whose library it was not given."""
+
+    ART = {"bytecode": {"object": "0x6000" + "__$0123456789abcdef0123456789abcdef01$__" + "6001",
+                        "linkReferences": {"src/lib/AccountOps.sol": {"AccountOps": [{"start": 2, "length": 20}]}}}}
+
+    def test_the_library_address_goes_where_the_references_say(self):
+        lib = "0x" + "ab" * 20
+        self.assertEqual(deploy.c.link(self.ART, {"AccountOps": lib}),
+                         bytes.fromhex("6000" + "ab" * 20 + "6001"))
+
+    def test_a_library_not_given_is_refused_by_name(self):
+        with self.assertRaises(SystemExit) as caught:
+            deploy.c.link(self.ART, {})
+        self.assertIn("AccountOps", str(caught.exception))
+        self.assertEqual(deploy.c.link({"bytecode": {"object": "0x6001"}}), bytes.fromhex("6001"))
+
+
 class Keys(unittest.TestCase):
     REGISTRY = "0x00000000000000000000000000000000000000e0"
 
@@ -132,6 +152,49 @@ class Keys(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:  # known only to the second one
             self.check([KEY_A], known={KEY_A}, only=other)
         self.assertIn("testnet-rehearsal.json", str(caught.exception))
+
+    def journal(self, *entries) -> None:
+        (self.records / deploy.REGISTRY_JOURNAL).write_text(json.dumps(list(entries)))
+
+    def test_A53_a_key_known_to_a_registry_only_the_journal_names_is_refused(self):
+        # Audit window 2, A5-3: the multi stand's registry had no record in this checkout, and its
+        # spare keys passed. The journal names every registry deployed, record or not.
+        self.journal({"address": self.REGISTRY, "chain_id": deploy.c.CHAIN_ID, "deployment": "testnet-multi-1.json"})
+        with self.assertRaises(SystemExit) as caught:
+            self.check([KEY_A], known={KEY_A})
+        self.assertIn(self.REGISTRY, str(caught.exception).lower())
+        self.assertIn("registries.json", str(caught.exception))
+        self.assertEqual(self.check([KEY_B]), [deploy.to_checksum_address(KEY_B)])
+
+    def test_A53_the_journal_counts_this_chain_only(self):
+        self.journal({"address": self.REGISTRY, "chain_id": 999, "deployment": "mainnet"})
+        self.assertEqual(self.check([KEY_A], known={KEY_A}), [deploy.to_checksum_address(KEY_A)])
+        self.assertEqual(self.asked, [])
+
+    def test_A53_a_journal_it_cannot_read_stops_it(self):
+        (self.records / deploy.REGISTRY_JOURNAL).write_text("[{not json")
+        with self.assertRaises(SystemExit):
+            self.check([KEY_A])
+
+    def test_A53_a_registry_deployed_goes_into_the_journal_once(self):
+        path = self.records / "testnet-v3.json"
+        registry = deploy.to_checksum_address(self.REGISTRY)
+        with mock.patch.object(deploy.c, "deploy", return_value=(registry, {"transactionHash": "0x01"})):
+            for _ in range(2):
+                deploy.deploy_contract(None, path, {"tx": {}}, "KeyRegistry", "KeyRegistry", ["address"], [ZERO])
+            deploy.deploy_contract(None, path, {"tx": {}}, "PoolFactory", "PoolFactory", [], [])
+        entries = json.loads((self.records / deploy.REGISTRY_JOURNAL).read_text())
+        self.assertEqual(entries, [{"address": registry, "chain_id": deploy.c.CHAIN_ID, "deployment": "testnet-v3.json"}])
+
+    def test_A53_the_journal_holds_every_registry_a_record_here_names_and_the_multi_stands(self):
+        directory = deploy.ROOT / "deployments"
+        journal = deploy.journal_registries(directory)
+        self.assertIn(deploy.to_checksum_address("0xACb08c6C826C8E3a376B36DAcB1222E1392F6c35"), journal,
+                      "the multi stand's, whose record is on a branch of its own")
+        for path in directory.glob("testnet-*.json"):
+            registry = json.loads(path.read_text()).get("KeyRegistry")
+            if registry:
+                self.assertIn(deploy.to_checksum_address(registry), journal, path.name)
 
     def test_records_it_cannot_read_stop_it_instead_of_being_skipped(self):
         (self.records / "testnet-broken.json").write_text("{not json")
@@ -207,9 +270,11 @@ class Deployment(unittest.TestCase):
         self.big_blocks = []
 
     def deployed(self, fail_on=None):
-        addresses = iter(f"0x{i:040x}" for i in range(0xE1, 0xE5))
+        addresses = iter(f"0x{i:040x}" for i in range(0xE1, 0xE6))
+        self.linked = {}
 
-        def deploy_one(acct, name, types, values):
+        def deploy_one(acct, name, types, values, libraries=None):
+            self.linked[name] = libraries
             self.on_disk.append(json.loads(self.record_path.read_text()) if self.record_path.exists() else None)
             if name == fail_on:
                 raise RuntimeError("replacement transaction underpriced")
@@ -264,19 +329,26 @@ class Deployment(unittest.TestCase):
         self.assertEqual(self.big_blocks, [True, False])
         self.assertIsNone(self.on_disk[0])
         self.assertEqual([sorted(r["tx"]) for r in self.on_disk[1:]],
-                         [["KeyRegistry"], ["KeyRegistry", "PoolImpl"],
-                          ["ChallengeAccountImpl", "KeyRegistry", "PoolImpl"]])
-        self.assertEqual([r["PoolImpl"] for r in self.on_disk[2:]], ["0x" + f"{0xE2:040x}"] * 2)
+                         [["KeyRegistry"], ["AccountOps", "KeyRegistry"], ["AccountOps", "KeyRegistry", "PoolImpl"],
+                          ["AccountOps", "ChallengeAccountImpl", "KeyRegistry", "PoolImpl"]])
+        self.assertEqual([r["PoolImpl"] for r in self.on_disk[3:]], ["0x" + f"{0xE3:040x}"] * 2)
+        # The accounts link to the library deployed before them.
+        library = {"AccountOps": "0x" + f"{0xE2:040x}"}
+        self.assertEqual((self.linked["Pool"], self.linked["ChallengeAccount"]), (library, library))
+        self.assertIsNone(self.linked["PoolFactory"])
         record = self.record()
         self.assertEqual((record["status"], record["block"], record["published_keys"]),
                          ("complete", 0x10, [deploy.to_checksum_address(KEY_A)]))
         # The demo's platform fee: 0.7 test USDC to the operator, on the new factory.
-        factory = "0x" + f"{0xE4:040x}"
+        factory = "0x" + f"{0xE5:040x}"
         fee = [(to, values) for to, sig, values in self.transactions if sig == "setChallengeFee(uint256,address)"]
         self.assertEqual(fee, [(factory, [700_000, Deployer.address])])
         self.assertEqual((record["challenge_fee"], "setChallengeFee" in record["tx"]), (700_000, True))
+        # Each market listed by its name, which the factory checks against HyperCore's (HIP-3).
+        listing = [values for to, sig, values in self.transactions if sig.startswith("setPlatformAssets")]
+        self.assertEqual(listing, [[[3, 4, 0], ["BTC", "ETH", "SOL"], True]])
         with mock.patch.object(deployments, "ROOT", self.root):
-            self.assertEqual(deployments.load("t")["PoolFactory"], "0x" + f"{0xE4:040x}")
+            self.assertEqual(deployments.load("t")["PoolFactory"], "0x" + f"{0xE5:040x}")
 
     def test_a_failed_deployment_keeps_the_earlier_ones_and_goes_back_to_small_blocks(self):
         with self.assertRaises(RuntimeError):
@@ -284,8 +356,8 @@ class Deployment(unittest.TestCase):
         record = self.record()
         self.assertEqual(record["status"], "incomplete")
         self.assertIn("underpriced", record["error"])
-        self.assertEqual(sorted(record["tx"]), ["KeyRegistry", "PoolImpl"])
-        self.assertEqual(record["PoolImpl"], "0x" + f"{0xE2:040x}")
+        self.assertEqual(sorted(record["tx"]), ["AccountOps", "KeyRegistry", "PoolImpl"])
+        self.assertEqual(record["PoolImpl"], "0x" + f"{0xE3:040x}")
         self.assertNotIn("ChallengeAccountImpl", record)
         self.assertEqual(self.big_blocks, [True, False])
         self.assert_not_loadable()
@@ -300,8 +372,8 @@ class Deployment(unittest.TestCase):
         record = self.record()
         self.assertEqual(record["status"], "incomplete")
         self.assertIn("could not switch big blocks", record["error"])
-        self.assertEqual(record["PoolFactory"], "0x" + f"{0xE4:040x}")
-        self.assertEqual(len(record["tx"]), 4)
+        self.assertEqual(record["PoolFactory"], "0x" + f"{0xE5:040x}")
+        self.assertEqual(len(record["tx"]), 5)
         self.assert_not_loadable()
 
     def test_a_late_failure_leaves_the_addresses_on_disk(self):
@@ -316,8 +388,8 @@ class Deployment(unittest.TestCase):
         record = self.record()
         self.assertEqual(record["status"], "incomplete")
         self.assertIn("execution reverted", record["error"])
-        self.assertEqual(record["PoolFactory"], "0x" + f"{0xE4:040x}")
-        self.assertEqual(set(record["tx"]), {"KeyRegistry", "PoolImpl", "ChallengeAccountImpl", "PoolFactory",
+        self.assertEqual(record["PoolFactory"], "0x" + f"{0xE5:040x}")
+        self.assertEqual(set(record["tx"]), {"KeyRegistry", "AccountOps", "PoolImpl", "ChallengeAccountImpl", "PoolFactory",
                                              "setAccountSource", "setPlatformAssets", "setChallengeFee"})
         self.assert_not_loadable()
 
