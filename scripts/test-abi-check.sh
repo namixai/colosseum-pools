@@ -131,6 +131,10 @@ expect 1 "two same-width fields swapped by name" "app/lib/chain.js TERMS"
 drift "$PY" 'TERMS = "(uint64,' 'TERMS = "('
 expect 1 "a field missing from the agents' copy" "agents/desk.py TERMS"
 
+# 3a. The agents' copy leaves off a field that is NOT one appended at the struct's end.
+drift "$PY" 'RULES = "(uint16,uint16,uint32,uint32[])"' 'RULES = "(uint16,uint16,uint32)"'
+expect 1 "a field missing from the agents' copy, not an appended one" "agents/desk.py RULES: 3 fields"
+
 # 4. A type in the agents' copy drifts.
 drift "$PY" 'RULES = "(uint16,' 'RULES = "(uint32,'
 expect 1 "a type in the agents' copy" "agents/desk.py RULES"
@@ -145,12 +149,13 @@ drift "$PY" '    "TooLate()",' '    "TooLateByFar()",'
 expect 1 "an error neither contract has" "CONTRACT_ERRORS carries TooLateByFar()"
 
 # 4c. The copy the app SENDS loses a field: no field may be left off a copy that sends (AUDIT В6-1).
-drift "$JS" $'maxLeverageX100, "\n  + "uint32[] assets)";' 'maxLeverageX100)";'
-expect 1 "a field missing from the copy createPool sends" "no RULES_WRITE copy has the contracts' 4 fields"
+#     The contracts' Rules has five fields since v3, so the copy held to them is RULES_WRITE_V3.
+drift "$JS" '"uint32[] assets, uint32[] assetLeverageX100)";' '"uint32[] assets)";'
+expect 1 "a field missing from the copy createPool sends" "no RULES_WRITE copy has the contracts' 5 fields"
 
 # 4c2. A type in the copy the app sends drifts: compared field for field.
-drift "$JS" '  + "uint32[] assets)";' '  + "uint64[] assets)";'
-expect 1 "a type in the copy createPool sends" "app/lib/chain.js RULES_WRITE field 3"
+drift "$JS" '"uint32[] assets, uint32[] assetLeverageX100)";' '"uint64[] assets, uint32[] assetLeverageX100)";'
+expect 1 "a type in the copy createPool sends" "app/lib/chain.js RULES_WRITE_V3 field 3"
 
 # 4d. The v3 copy is no longer the other with the appended field.
 drift "$JS" '"uint32[] assets, uint32[] assetLeverageX100)";' '"uint32[] assets, uint64[] assetLeverageX100)";'

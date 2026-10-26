@@ -23,8 +23,9 @@ checked.
 
 - `KeyRegistry`: the operator publishes agent key addresses. A key moves `Free → Bound →
   Retired` and never back. A bound key belongs to one account and one trader. A key is
-  approved on HyperCore once in its life (Hyperliquid warns that actions signed by a removed
-  agent can be replayed once its nonces are pruned).
+  approved on HyperCore for one account in its life, never for another (Hyperliquid warns that
+  actions signed by a removed agent can be replayed once its nonces are pruned). How long
+  HyperCore keeps a key approved, and how the key is approved again: the next section.
 - `PoolFactory`: clones `Pool` and `ChallengeAccount` (EIP-1167), keeps the platform asset
   list (perp indices from the testnet `meta`), and is the only source of truth for "this
   address is one of ours".
@@ -42,6 +43,118 @@ trader's positions. The setting held on testnet (spike question 7). A plain agen
 switch it back. The pool gateway signs only orders and cancels, so a trader can't; whoever
 holds the gateway's key files could.
 
+### The agent key: its term and its renewal
+
+An agent approved with no name does not last. The live challenge's agent (0xe3fe) was approved
+through CoreWriter with no name on 4 October 2026 at 04:05Z and still acted on 18 October at
+04:09Z. By 10:00Z HyperCore answered "does not exist": fourteen days on.
+
+КОЛИЗЕЙ-2 measured on testnet on 19 October 2026:
+- CoreWriter takes a term in the agent's name, `<name> valid_until <ms>`, and `extraAgents` shows
+  that term.
+- The name is the part before the term. An approval under the same name replaces the agent (a key
+  approved as `pools valid_until T1`, then another as `pools valid_until T2`: the first is gone).
+- A term is taken up to 180 days from HyperCore's clock, which runs a few seconds behind the EVM
+  block's. Four seconds under was taken; one second over was refused without a word, and the
+  account had no agent at all.
+- A second approval of a key HyperCore holds is ignored, under the same name or another: the term
+  is not extended, and the nonces are not reset.
+- An agent past its term goes on acting until a cleanup pass removes it; in the measurement, about
+  fourteen minutes after the term.
+- An agent named with no term gets 90 days. HyperCore shows no term for an unnamed agent at all.
+
+So every agent is approved as `pools valid_until <ms>` for `AGENT_TERM`, 179 days
+(`CoreOps.setAgent`; `agentValidUntil()` gives the term in milliseconds). A challenge shorter than
+that never needs more.
+
+A stage that runs longer, a funded stage first of all, renews its agent with `renewAgent()`, never
+with the same key:
+- Anyone may call it while the account trades, from the last `RENEW_WINDOW`, 14 days, of the term
+  on, and at any time after the end. A window that passed unrenewed, the keeper down, would
+  otherwise leave the stage with no key; a fresh key after the end carries no risk (audit window
+  2, A5-2).
+- It retires the key for good and gives the same trader a fresh key from the registry, approved
+  under `pools` for a new term, as `rekey` does. The gateway reads `agentKey()` for every order and
+  takes the fresh key.
+- No key is ever approved twice. HyperCore would ignore it, and Hyperliquid warns that a key it has
+  let go may have its signed actions sent again once their nonces are pruned (audit window 2, A4-1).
+- Each renewal takes one more key out of the registry.
+- A transfer that lands in the renewal's block can spoil the fresh key, as at a stage's opening.
+  So `rekey` runs for a day from the key's latest approval, not from the opening. It allows two
+  fresh keys for each key the account opens or is renewed with (audit window 2, A5-1). The trader
+  calls it, on a funded stage and on a challenge alike (the CTO, 21 October 2026).
+
+The keeper renews fourteen days before the term `extraAgents` shows for the key ends; when HyperCore
+would not say, it goes by the term the account asked for. It approves nothing itself. These are
+alarms:
+- a key HyperCore no longer lists before its term ends;
+- any other address HyperCore lists for the account;
+- a term that ended unrenewed, which the keeper then renews.
+
+A stop, and a `recut`, approve the keyless address under `pools` for a term from now. It replaces
+the key, and a key past its term is not cut under a term HyperCore would refuse.
+
+The implementations are immutable in the factory, so this takes a new factory. Accounts created
+before keep their unnamed agent (the CTO, 19 October 2026).
+
+### Markets on a builder-deployed dex (HIP-3)
+
+An account may trade markets on a builder-deployed perp dex, such as xyz's stock perps, as well as
+on the main one (the CTO, 21 October 2026). КОЛИЗЕЙ-2's spike q9 measured on testnet on 21 October:
+- CoreWriter's order and cancel name such a market by its order id, 100000 + dex * 10000 + i
+  (xyz is dex 65, so its first market is 750000).
+- The precompiles (markPx, oraclePx, perpAssetInfo, position2) take that id less 100000. A wrong
+  one does not fail, it reads another dex's market: 750000 read by a precompile is dex 75's.
+- A contract moves its capital from spot to the dex with sendAsset (action 13), and
+  accountMarginSummary(dex, account) reads it there.
+
+So:
+- Rules hold order ids. `CoreOps.pxIndex` gives the precompiles theirs, and `dexOf` the dex.
+- One dex an account. The factory refuses rules naming markets on two dexes, and the account
+  keeps its capital on its markets' dex (`dex()`). At the activation and at a funded stage's
+  opening it goes there by sendAsset, and on settlement it comes back the same way.
+- Its equity, notional and margin are the main dex's and its dex's together.
+- Nothing is off the perp side until the dex is empty: HyperCore shows no withdrawable for a
+  builder dex, and a resting order's margin there could not be told apart.
+- A start on the dex takes two calls (audit window 2, В4-2). HyperCore drops an action without a
+  trace, and an owner may halt their dex. An account that started as soon as its transfer was
+  queued would read a dropped transfer as a total loss, and anyone could stop it.
+  - The first `activate()` (or `openFundedStage()`, `openFundedFor()`) sends the capital and
+    records it (`sentToDexAt`, `sentToDex`).
+  - A later call starts the challenge, or opens the funded stage, once a later block shows the
+    capital on the dex. Until then the call refuses with `NotOnDex`.
+  - A send the dex still does not show a minute on (`RESEND_WAIT`) is made again.
+  - A funded stage waits in `PassedAwaitingKey` with its key held. A pool released from there
+    sends what is on the dex back to spot, for its owner.
+  - The main dex keeps the one call: its class transfer has gone through on every run.
+- The factory checks each market's name when it is listed (`setPlatformAssets`,
+  `setFundedAssets` take the names). One id off is refused instead of listing another market. So
+  is an id from 100000 to 109999 (В4-4): `dexOf` reads it as dex 0, and the precompiles read the
+  main dex's market under an order id HyperCore does not give it.
+- Pool and ChallengeAccount link to `AccountOps`, a library holding the closing orders, the stop's
+  keyless address and the agent's approval. These came over the size a contract may have. Its
+  functions run by DELEGATECALL, so CoreWriter still sees the account.
+
+КОЛИЗЕЙ-2's spike q10 (`spike/run.py q10`) measured on testnet on 21 October:
+- a contract's IOC by the order id 750000 fills on xyz:XYZ100;
+- an agent the contract approved places the position's Stop Market and Take Profit Market there
+  (positionTpsl), and the SDK names the market by the same id;
+- the contract closes the position itself, reduce-only IOC by the same id, and the position's stop
+  and take go with it: nothing is left to cancel. A plain order or a normalTpsl stop still has to
+  be named in a stop's or a settlement step's cancels;
+- an agent approved as `<name> valid_until <ms>` gets exactly that term: so v3's `pools` agent,
+  approved for AGENT_TERM from its approval, has 179 days.
+
+Not measured: the exchange firing such a stop; a normalTpsl stop sent with a partly filled opening
+order; what is left after the dex's owner halts a market.
+
+Markets are listed and delisted after a deployment with `ops/list_assets.py`, a dry run unless told
+to send. It takes a builder dex only if the run trusts it (xyz and mkts unless `--trust` names
+others; the owner of a dex sets its oracle and may halt and settle its markets, H-3) and only if its
+collateral is USDC (H-2). No precompile shows a dex's collateral, so the contracts cannot check that
+themselves. A transfer of USDC to a dex on other collateral is expected not to land (not measured),
+and then the two-step start does not start on it. The factory is asked by eth_call before anything is sent.
+
 ## Rules and terms
 
 Rules (per pool, copied into each challenge):
@@ -51,6 +164,15 @@ Rules (per pool, copied into each challenge):
 - `maxLeverageX100`: notional over equity (both from precompile `0x80F`), above this is a
   breach;
 - `assets`: perp indices the trader may hold, a subset of the platform list.
+- `assetLeverageX100` (the CTO, 21 October 2026): each asset's own cap on its position's notional
+  over equity, in the order of `assets`, each from 1x to `maxLeverageX100`; empty, the account's cap
+  alone.
+  - Above it is a `Leverage` breach, though the account as a whole is under its own. The notional is
+    size times mark, both read at the asset's precompile index (`AccountOps.overAssetCap`).
+  - A paper exam judges it at the oracle price and refuses a fill that would pass it.
+  - Appended to the struct, so a reader of the first four fields reads them as before.
+  - The deployments' defaults are in `ops/leverage.py`: BTC 10x, ETH 10x, SOL 5x, HYPE 5x, SP500
+    10x, XYZ100 8x, CL 3x, BRENTOIL 2x, each at most the account's cap.
 
 Terms (per pool): challenge price (HyperEVM USDC), challenge capital, profit target, duration,
 trader's share of the challenge profit, trader's share of the funded profit, capital for a
@@ -86,7 +208,8 @@ Equity is `accountValue` from `accountMarginSummary` (precompile `0x80F`, dex 0)
    pool until the challenge starts, so it can be refunded.
 2. **Start** (`activate`, anyone, a later block). Requires the account to exist on HyperCore
    and hold the capital. Sets separate balances (16), moves the capital to perp (7), approves
-   the reserved key as the account's unnamed agent (9), approves the builder fee if one is set
+   the reserved key as the account's agent, named `pools` for 179 days (9; "The agent key"
+   above), approves the builder fee if one is set
    (12), and takes the first daily snapshot. If the capital hasn't arrived an hour after the
    purchase, `abort` refunds the price and retires the key; once the capital is there,
    `abort` is refused, unless the reserved key has gained a HyperCore account
@@ -175,6 +298,36 @@ A pool's rules are held in three places, each covering what the one before can't
    of a block; the keeper looks every 30 seconds, cuts the key, cancels and closes (above). It
    also says in its log when an open position has no stop on the exchange, which it can't place
    itself: it holds no agent key.
+
+### A stop's gas
+
+A small HyperEVM block holds 2 million gas; a big one holds 30 million, once a minute. The worst
+stop is about 3.4 million gas. That is sixteen assets in the rules, each capped and open, sixteen
+extra positions and thirty-two cancels (audit window 2, В6-3). It was measured on 22 October 2026
+in two parts:
+- `src/spike/StopGasProbe.sol` makes every precompile read and CoreWriter action of the stop. It
+  ran by a read-only eth_call on testnet (`spike/run.py stopgas`):
+  - 3,230,951 gas on xyz, 3,187,668 on the main dex;
+  - 27,158 a cancel, 58,966 a closing order;
+- `test/spike/StopGas.t.sol` measures the stop's own work beside it on the simulator: 179,792.
+
+A closing order reads the market's size decimals once (`CoreOps.sizeDecimals`). It used to read
+them twice, at 71,700 an order.
+
+So the keeper fits each stop and each settlement step to a small block (`keeper.fit`, the CTO's
+decision of 22 October 2026):
+- The contract closes the rules' own positions whatever is named. With neither cancels nor extra
+  positions that is at most 1.43 million, and it fits.
+- The keeper names the extra positions first, then the cancels, as many as eth_estimateGas puts
+  under 1.8 million. Its gas limit is the estimate and a quarter, at most the block's.
+- The next settlement step names the rest.
+- A call that does not fit even with neither is not sent: the keeper logs
+  `call_over_small_block`. A transaction no small block takes would hold the wallet's later ones
+  behind its nonce.
+
+Big blocks for the keeper's wallet (`evmUserModify`, `usingBigBlocks`) are the fallback and are
+not switched on. A stop there waits up to a minute, and in a cascade that minute is the loss the
+second layer exists to take out.
 
 The second layer exists because of the delay in the third. In the cascade package (`stress/`,
 Bybit bars, not Hyperliquid), the worst entry of 10 October 2025 lost 83.7–94.1 % of the stress
