@@ -16,6 +16,7 @@ import {Pool} from "../src/Pool.sol";
 import {ChallengeAccount} from "../src/ChallengeAccount.sol";
 import {RuledAccount} from "../src/RuledAccount.sol";
 import {CoreOps} from "../src/lib/CoreOps.sol";
+import {TermsBook} from "../src/multi/TermsBook.sol";
 
 contract CloseHarness {
     function close(uint32[] memory perps) external returns (uint256) {
@@ -63,6 +64,9 @@ contract PoolHarness is Test {
     uint64 constant BTC_MARK = 764000; // 76400.0, one decimal (szDecimals 5)
     uint64 constant ETH_MARK = 241370; // 2413.70, two decimals (szDecimals 4)
     bytes32 constant SALT = keccak256("test-salt");
+    /// The terms the test pools name, kept in a book at a fixed address so that a pure plan can name it.
+    address constant TERMS_BOOK = address(0x7E4A5);
+    string constant TERMS_TEXT = "the pool's terms, every clause";
 
     HyperCore hyperCore;
     MockUsdc usdc;
@@ -97,6 +101,9 @@ contract PoolHarness is Test {
         );
         CoreSimulatorLib.setMarkPx(BTC, BTC_MARK);
         CoreSimulatorLib.setMarkPx(ETH, ETH_MARK);
+
+        vm.etch(TERMS_BOOK, type(TermsBook).runtimeCode);
+        TermsBook(TERMS_BOOK).publish(TERMS_TEXT);
 
         MockUsdc impl = new MockUsdc();
         vm.etch(HLConstants.usdc(), address(impl).code);
