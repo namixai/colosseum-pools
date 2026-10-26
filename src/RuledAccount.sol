@@ -5,6 +5,7 @@ import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.s
 import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {Rules, Cancel, Breach, Units} from "./Types.sol";
 import {CoreOps} from "./lib/CoreOps.sol";
+import {AccountOps} from "./lib/AccountOps.sol";
 import {KeyRegistry} from "./KeyRegistry.sol";
 
 interface IFactoryView {
@@ -35,6 +36,20 @@ abstract contract RuledAccount is Initializable {
 
     Rules internal _rules;
     mapping(uint32 asset => bool) internal _allowedAsset;
+    /// The perp dex the account's assets trade on, 0 for the main one: one dex an account, where
+    /// its capital is (HIP-3, the CTO, 21 October 2026).
+    uint32 public dex;
+    /// A start on a builder dex takes two steps (audit window 2, В4-2): the capital is sent, and the
+    /// account starts once a later block shows it there. When it was sent, and how much; zero when
+    /// nothing is on its way.
+    uint64 public sentToDexAt;
+    uint64 public sentToDex;
+    /// What was over the target when the account started on its dex (1e6): somebody's units, or a
+    /// send that was only late landing with its repeat. It stays where it is and is no part of the
+    /// account's equity, so it is never the trader's gain, nor more to trade with or to lose,
+    /// whatever HyperCore does with a transfer; the settlement takes it back with the rest
+    /// (self-audit v3, round 1, T1).
+    uint64 public startSurplus;
 
     /// UTC day of the latest daily snapshot, and equity at that snapshot (1e6 = 1 USDC).
     uint32 public day;
@@ -42,6 +57,11 @@ abstract contract RuledAccount is Initializable {
 
     /// Agent key currently approved on this account, if any.
     address public agentKey;
+    /// When HyperCore was asked to approve `agentKey`, for `AGENT_TERM` from then
+    /// (`agentValidUntil`). An agent approved with no name lived fourteen days and was gone (a live
+    /// challenge's, 18 October 2026); one approved by name carries its term, which HyperCore shows
+    /// (КОЛИЗЕЙ-2's measurement, 19 October 2026).
+    uint64 public agentApprovedAt;
     uint256 private _keylessNonce;
     /// The key the last stop cut off, and the block of the latest replacement. A replacement
     /// can fail on HyperCore without a trace; anyone who sees `cutKey` still acting as this
@@ -60,8 +80,13 @@ abstract contract RuledAccount is Initializable {
     event UnnamedPositionOpen(uint64 notional);
 
     error TooManyAssets();
+    error NotRenewable(uint64 opens);
+    error KeyWorks();
+    error RekeyClosed();
     error TooManyCancels();
+    error NotOnDex();
     error NoBreach();
+    error RuleBroken(Breach reason);
     error NotStopped();
     error OutsideCheckpointWindow();
     error AlreadyCheckpointed();
@@ -76,6 +101,8 @@ abstract contract RuledAccount is Initializable {
             _rules.assets.push(rules_.assets[i]);
             _allowedAsset[rules_.assets[i]] = true;
         }
+        _rules.assetLeverageX100 = rules_.assetLeverageX100;
+        if (rules_.assets.length != 0) dex = CoreOps.dexOf(rules_.assets[0]);
     }
 
     // ── views ────────────────────────────────────────────────────────────────────────
@@ -88,6 +115,17 @@ abstract contract RuledAccount is Initializable {
         return _allowedAsset[asset];
     }
 
+    /// @notice Perp account value (1e6 = 1 USDC): the main dex's and the account's dex's, less what
+    ///         was over the target at the start (`startSurplus`).
+    function accountEquity() public view returns (int64) {
+        return CoreOps.equity(address(this), dex) - int64(startSurplus);
+    }
+
+    /// @notice Notional open on the main dex and the account's dex (1e6).
+    function openNotional() external view returns (uint64) {
+        return CoreOps.margin(address(this), dex).ntlPos;
+    }
+
     /// @notice Equity the static drawdown is measured from (1e6 = 1 USDC).
     function drawdownBase() public view virtual returns (int64);
 
@@ -97,8 +135,8 @@ abstract contract RuledAccount is Initializable {
     /// @notice Which rule the account breaks right now, if any. `extraAssets` are assets
     ///         outside the pool's list that the caller believes the account holds.
     function violation(uint32[] memory extraAssets) public view returns (Breach) {
-        PrecompileLib.AccountMarginSummary memory m = CoreOps.margin(address(this));
-        int256 eq = m.accountValue;
+        PrecompileLib.AccountMarginSummary memory m = CoreOps.margin(address(this), dex);
+        int256 eq = m.accountValue - int64(startSurplus);
         int256 bps = int256(uint256(Units.BPS));
 
         int256 base = drawdownBase();
@@ -113,6 +151,7 @@ abstract contract RuledAccount is Initializable {
         if (m.ntlPos > 0) {
             if (eq <= 0) return Breach.Drawdown;
             if (uint256(m.ntlPos) * 100 > uint256(eq) * _rules.maxLeverageX100) return Breach.Leverage;
+            if (AccountOps.overAssetCap(_rules, uint256(eq))) return Breach.Leverage;
         }
 
         if (extraAssets.length > Units.MAX_ASSETS) revert TooManyAssets();
@@ -146,8 +185,12 @@ abstract contract RuledAccount is Initializable {
         if (block.timestamp % 1 days >= CHECKPOINT_WINDOW) revert OutsideCheckpointWindow();
         uint32 today = _today();
         if (today <= day) revert AlreadyCheckpointed();
+        // A day's base is never the equity that broke yesterday's rule: while a money rule is
+        // broken the snapshot waits, and `breach` stops the account (deep audit, F12).
+        Breach reason = violation(new uint32[](0));
+        if (reason != Breach.None) revert RuleBroken(reason);
         day = today;
-        dayStartEquity = CoreOps.equity(address(this));
+        dayStartEquity = accountEquity();
         emit DaySnapshot(today, dayStartEquity);
     }
 
@@ -157,19 +200,78 @@ abstract contract RuledAccount is Initializable {
         emit DaySnapshot(day, equity_);
     }
 
+    /// The term every agent is approved for. HyperCore takes 180 days at most, counted from its own
+    ///      clock, which runs a few seconds behind the block's: one second over is refused without a
+    ///      word, and the account is left with no agent (КОЛИЗЕЙ-2, 19 October 2026). So 179.
+    uint64 public constant AGENT_TERM = 179 days;
+    /// The last days of a term, in which the agent may be renewed with a fresh key (`_renewAgent`).
+    uint64 public constant RENEW_WINDOW = 14 days;
+    /// A key spoiled in the block it was approved in may be replaced within a day of that approval,
+    /// twice at most for each key the account opened or was renewed with, on its trader's word alone
+    /// (deep audit F10, AUD-2; audit window 2, A5-1).
+    uint64 public constant REKEY_WINDOW = 1 days;
+    uint8 public constant MAX_REKEYS = 2;
+    /// Fresh keys taken since the account last opened a stage or was renewed.
+    uint8 public rekeys;
+
+    /// @notice When the approval of the agent ends, in HyperCore's milliseconds: the term in the name
+    ///         it was approved under.
+    function agentValidUntil() public view returns (uint64) {
+        return (agentApprovedAt + AGENT_TERM) * 1000;
+    }
+
     function _setAgent(address key) internal {
         agentKey = key;
-        CoreOps.setAgent(key);
+        agentApprovedAt = uint64(block.timestamp);
+        AccountOps.setAgent(key, agentValidUntil());
         emit AgentSet(key);
+    }
+
+    /// @dev Retires the agent key for good and gives `trader_` a fresh one from the registry, approved
+    ///      under the same name, so that it replaces the old one on HyperCore.
+    function _freshKey(address trader_) internal {
+        KeyRegistry registry = factory.registry();
+        registry.retire(agentKey);
+        _setAgent(registry.assign(trader_));
+    }
+
+    /// @dev A term that runs out while the account trades is renewed with a fresh key, never with the
+    ///      same one: HyperCore ignores a second approval of a key it holds, and a key it has let go
+    ///      may have its signed actions sent again once their nonces are pruned (Hyperliquid's docs;
+    ///      КОЛИЗЕЙ-2 and audit window 2, 19 October 2026). From the last `RENEW_WINDOW` of the term
+    ///      on, and at any time after it: a stage whose window passed unrenewed would otherwise be
+    ///      left with no key, and a fresh key carries no risk once HyperCore has let the old one go
+    ///      (audit window 2, A5-2). The caller checks the account trades.
+    function _renewAgent(address trader_) internal {
+        uint64 opens = agentApprovedAt + AGENT_TERM - RENEW_WINDOW;
+        if (block.timestamp < opens) revert NotRenewable(opens);
+        rekeys = 0;
+        _freshKey(trader_);
+    }
+
+    /// @dev A fresh key for `trader_` when the account's own has gained a HyperCore account, which
+    ///      HyperCore does not take as an agent: a transfer that lands in the block the key is
+    ///      approved in spoils it. Within a day of the approval, twice at most for each key the
+    ///      account opened or was renewed with: a key HyperCore already took keeps working after it
+    ///      gains an account, and on anyone's word a stranger's 1 USDC would replace a working key and
+    ///      spend the registry's free keys one by one (deep audit, AUD-2). The caller checks that the
+    ///      trader asks and that the account trades. A key that has no account stays.
+    function _rekey(address trader_) internal {
+        if (block.timestamp > uint256(agentApprovedAt) + REKEY_WINDOW || rekeys >= MAX_REKEYS) revert RekeyClosed();
+        if (!CoreOps.exists(agentKey)) revert KeyWorks();
+        ++rekeys;
+        _freshKey(trader_);
     }
 
     /// @dev Replaces the agent with a fresh keyless address and retires the old key for good.
     ///      Never reverts on the choice of address, so nobody can block a stop by funding
-    ///      the candidates in advance.
+    ///      the candidates in advance. The keyless address is approved under the key's name,
+    ///      `pools`, which is all HyperCore takes for the name, for a term of its own from now: a key
+    ///      past its term would otherwise be cut under a term HyperCore refuses.
     function _cutAgent(bytes32 salt) internal {
         address old = agentKey;
-        address keyless = CoreOps.keylessAddress(address(this), _keylessNonce++, salt);
-        CoreOps.setAgent(keyless);
+        address keyless = AccountOps.keylessAddress(address(this), _keylessNonce++, salt);
+        AccountOps.setAgent(keyless, (block.timestamp + AGENT_TERM) * 1000);
         agentKey = address(0);
         cutBlock = uint64(block.number);
         if (old != address(0)) {
@@ -177,6 +279,46 @@ abstract contract RuledAccount is Initializable {
             factory.registry().retire(old);
         }
         emit AgentCut(old, keyless);
+    }
+
+    /// @dev Moves what the perp side can give to spot, the account's dex's whole value first, and
+    ///      returns what was asked to move (1e6).
+    /// A send a builder dex still does not show this long after is made again.
+    uint64 public constant RESEND_WAIT = 1 minutes;
+
+    /// Sends a start's capital to the account's dex, for the start to end on a later block.
+    function _sendToDex(uint64 amount) internal {
+        CoreOps.toPerp(amount, dex);
+        sentToDex = amount;
+        sentToDexAt = uint64(block.timestamp);
+    }
+
+    /// Whether the capital a start sent shows on the dex: equity at `target` or over it, read in a
+    /// later second than the send, as a precompile answers with the start of the block. Anybody may
+    /// send the account a unit, and nobody but the account can take one off, so a unit never holds
+    /// the start; only somebody sending as much as the send itself could stand in for it, with their
+    /// own money. HyperCore drops an action without a trace, so a send the dex still does not show
+    /// after RESEND_WAIT is made again, and this says false; before that it refuses. What is over
+    /// `target` neither holds the start nor moves its clock: it is the start's surplus, outside the
+    /// account's equity from then on (self-audit v3, round 1, T1; audit window 2, В5-1).
+    function _landed(int64 target) internal returns (bool) {
+        uint64 at = sentToDexAt;
+        if (block.timestamp > at) {
+            int64 eq = accountEquity();
+            if (eq >= target) {
+                sentToDexAt = 0;
+                startSurplus = uint64(eq - target);
+                return true;
+            }
+        }
+        if (block.timestamp <= at + RESEND_WAIT) revert NotOnDex();
+        _sendToDex(sentToDex);
+        return false;
+    }
+
+    function _toSpotAll() internal returns (uint64 free) {
+        free = AccountOps.toSpotAll(dex);
+        if (free != 0) emit MovedToSpot(free);
     }
 
     function _cancelAll(Cancel[] memory cancels) internal {
@@ -187,32 +329,8 @@ abstract contract RuledAccount is Initializable {
         }
     }
 
-    /// @dev The pool's assets plus whatever the caller adds, without duplicates.
-    function _assetsWith(uint32[] memory extra) internal view returns (uint32[] memory all) {
-        uint256 n = _rules.assets.length;
-        if (n + extra.length > Units.MAX_ASSETS) revert TooManyAssets();
-        all = new uint32[](n + extra.length);
-        for (uint256 i = 0; i < n; ++i) {
-            all[i] = _rules.assets[i];
-        }
-        uint256 k = n;
-        for (uint256 i = 0; i < extra.length; ++i) {
-            bool seen = false;
-            for (uint256 j = 0; j < k; ++j) {
-                if (all[j] == extra[i]) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (!seen) all[k++] = extra[i];
-        }
-        assembly {
-            mstore(all, k)
-        }
-    }
-
     function _closeAll(uint32[] memory extra) internal returns (uint256 open) {
-        open = CoreOps.closePositions(address(this), _assetsWith(extra), CLOSE_SLIPPAGE_BPS);
+        open = AccountOps.closeAll(_rules, extra, CLOSE_SLIPPAGE_BPS);
         if (open != 0) emit ClosingOrders(open);
     }
 
@@ -228,9 +346,13 @@ abstract contract RuledAccount is Initializable {
     ///      reading comes out of whatever happened to reach spot in time (audit A-04). Somebody
     ///      else's dust does not trip this: a donation is withdrawable, so it keeps equity and
     ///      withdrawable equal.
+    ///      The value is the main dex's and the account's dex's together, and withdrawable is the
+    ///      main dex's alone: on a builder-deployed dex nothing is held only once its side is empty,
+    ///      HyperCore showing no withdrawable for it and a resting order's margin there not to be
+    ///      told apart.
     function _nothingHeldOnPerp() internal view returns (bool) {
-        return CoreOps.margin(address(this)).ntlPos == 0
-            && CoreOps.equity(address(this)) <= int64(CoreOps.withdrawable(address(this)));
+        PrecompileLib.AccountMarginSummary memory m = CoreOps.margin(address(this), dex);
+        return m.ntlPos == 0 && m.accountValue <= int64(CoreOps.withdrawable(address(this)));
     }
 
     function _drainStep(Cancel[] memory cancels, uint32[] memory extra)
@@ -240,16 +362,12 @@ abstract contract RuledAccount is Initializable {
         _cancelAll(cancels);
         open = _closeAll(extra);
         if (open != 0) return (open, 0, 0);
-        uint64 notional = CoreOps.margin(address(this)).ntlPos;
+        uint64 notional = CoreOps.margin(address(this), dex).ntlPos;
         if (notional != 0) {
             emit UnnamedPositionOpen(notional);
             return (1, 0, 0);
         }
-        free = CoreOps.withdrawable(address(this));
-        if (free != 0) {
-            CoreOps.toSpot(free);
-            emit MovedToSpot(free);
-        }
+        free = _toSpotAll();
         spot = CoreOps.spotUsdc(address(this));
     }
 }

@@ -2079,7 +2079,10 @@ class Chain(unittest.TestCase):
             body = re.search(rf"struct {struct} \{{(.*?)\}}", source, re.S).group(1)
             return [m.group(1) for m in re.finditer(r"^\s*(u?int\d+(?:\[\])?) \w+;", body, re.M)]
 
-        self.assertEqual(chain.RULES, "(" + ",".join(fields("Rules")) + ")")
+        # The first four: assetLeverageX100 is appended (v3), and a reader of the four reads an
+        # older deployment's rules and a v3 one's alike (scripts/abi-check.py, APPENDED).
+        self.assertEqual(fields("Rules")[4:], ["uint32[]"])
+        self.assertEqual(chain.RULES, "(" + ",".join(fields("Rules")[:4]) + ")")
         self.assertEqual(chain.TERMS, "(" + ",".join(fields("Terms")) + ")")
         self.assertEqual(fields("Terms")[2], "uint16")  # targetBps, the third
 

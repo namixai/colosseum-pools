@@ -140,6 +140,10 @@ expect 1 "two same-width fields swapped by name" "app/lib/chain.js TERMS"
 drift "$PY" 'TERMS = "(uint64,' 'TERMS = "('
 expect 1 "a field missing from the agents' copy" "agents/desk.py TERMS"
 
+# 3a. The agents' copy leaves off a field that is NOT one appended at the struct's end.
+drift "$PY" 'RULES = "(uint16,uint16,uint32,uint32[])"' 'RULES = "(uint16,uint16,uint32)"'
+expect 1 "a field missing from the agents' copy, not an appended one" "agents/desk.py RULES: 3 fields"
+
 # 4. A type in the agents' copy drifts.
 drift "$PY" 'RULES = "(uint16,' 'RULES = "(uint32,'
 expect 1 "a type in the agents' copy" "agents/desk.py RULES"
@@ -154,12 +158,13 @@ drift "$PY" '    "TooLate()",' '    "TooLateByFar()",'
 expect 1 "an error neither contract has" "CONTRACT_ERRORS carries TooLateByFar()"
 
 # 4c. The copy the app SENDS loses a field: no field may be left off a copy that sends (AUDIT В6-1).
-drift "$JS" $'maxLeverageX100, "\n  + "uint32[] assets)";' 'maxLeverageX100)";'
-expect 1 "a field missing from the copy createPool sends" "no RULES_WRITE copy has the contracts' 4 fields"
+#     The contracts' Rules has five fields since v3, so the copy held to them is RULES_WRITE_V3.
+drift "$JS" '"uint32[] assets, uint32[] assetLeverageX100)";' '"uint32[] assets)";'
+expect 1 "a field missing from the copy createPool sends" "no RULES_WRITE copy has the contracts' 5 fields"
 
 # 4c2. A type in the copy the app sends drifts: compared field for field.
-drift "$JS" '  + "uint32[] assets)";' '  + "uint64[] assets)";'
-expect 1 "a type in the copy createPool sends" "app/lib/chain.js RULES_WRITE field 3"
+drift "$JS" '"uint32[] assets, uint32[] assetLeverageX100)";' '"uint64[] assets, uint32[] assetLeverageX100)";'
+expect 1 "a type in the copy createPool sends" "app/lib/chain.js RULES_WRITE_V3 field 3"
 
 # 4d. The v3 copy is no longer the other with the appended field.
 drift "$JS" '"uint32[] assets, uint32[] assetLeverageX100)";' '"uint32[] assets, uint64[] assetLeverageX100)";'
@@ -179,7 +184,7 @@ drift "$GW" 'RULES_V3 = "(uint16,uint16,uint32,uint32[],uint32[])"' 'RULES_V3 = 
 expect 1 "the gateway's v3 copy drifts" "gateway/chain.py:"
 
 # 4h. A copy drifts in its first fields, so it no longer begins as Rules: its name still finds it.
-drift "$LIVE" 'RULES = "(uint16,uint16,uint32,uint32[])"' 'RULES = "(uint32,uint32,uint16,uint32[])"'
+drift "$LIVE" 'RULES = "(uint16,uint16,uint32,uint32[],uint32[])"' 'RULES = "(uint32,uint32,uint16,uint32[],uint32[])"'
 expect 1 "a copy drifted where it begins" "ops/create_live_pool.py:"
 
 # 4i. A new copy anywhere, of a third shape.
@@ -195,13 +200,13 @@ drift "$SHARED" 'f"addSeat({RULES_TYPE},{TERMS_TYPE},uint32)"' 'f"addSeatAt({RUL
 expect 1 "a signature to an unknown function" "a function this check does not know"
 
 # 4l. A copy in single quotes is a copy all the same (Gemini on cp#173).
-drift "$LIVE" 'RULES = "(uint16,uint16,uint32,uint32[])"' "RULES = '(uint32,uint32,uint16,uint32[])'"
+drift "$LIVE" 'RULES = "(uint16,uint16,uint32,uint32[],uint32[])"' "RULES = '(uint32,uint32,uint16,uint32[],uint32[])'"
 expect 1 "a copy in single quotes" "ops/create_live_pool.py:"
 
 # 4m. A signature spaced otherwise, its constants in single quotes: still read, still clean.
 drift "$SHARED" 'f"addSeat({RULES_TYPE},{TERMS_TYPE},uint32)"' "f'addSeat({RULES_TYPE}, {TERMS_TYPE}, uint32)'"
-drift "$SHARED" 'RULES_TYPE = "(uint16,uint16,uint32,uint32[])"' "RULES_TYPE = '(uint16,uint16,uint32,uint32[])'"
-expect 0 "a signature spaced otherwise" "3 signatures that carry it"
+drift "$SHARED" 'RULES_TYPE = "(uint16,uint16,uint32,uint32[],uint32[])"' "RULES_TYPE = '(uint16,uint16,uint32,uint32[],uint32[])'"
+expect 0 "a signature spaced otherwise" "2 signatures that carry it"
 
 # 4n. The same signature in single quotes, the structs the wrong way round: red.
 drift "$SHARED" 'f"addSeat({RULES_TYPE},{TERMS_TYPE},uint32)"' "f'addSeat({TERMS_TYPE}, {RULES_TYPE}, uint32)'"
@@ -212,7 +217,7 @@ drift "$JS" "const RULES_WRITE =" "const RULES_WRITE="
 expect 0 "a JavaScript copy spaced otherwise" "abi-check: clean"
 
 # 4p. A copy spaced inside its tuple is a copy all the same (CodeRabbit on cp#173).
-drift "$LIVE" 'RULES = "(uint16,uint16,uint32,uint32[])"' 'RULES = "(uint16, uint16, uint64, uint32[])"'
+drift "$LIVE" 'RULES = "(uint16,uint16,uint32,uint32[],uint32[])"' 'RULES = "(uint16, uint16, uint64, uint32[], uint32[])"'
 expect 1 "a copy spaced inside its tuple" "ops/create_live_pool.py:"
 
 # 4q. An exported JavaScript copy is read field for field.
@@ -224,7 +229,7 @@ drift "$JS" "const RULES_WRITE =" $'const OTHER_RULES = \'(uint16 dailyLossBps, 
 expect 0 "a JavaScript copy in single quotes" "abi-check: clean"
 
 # 4s. A signature written out whole that is no function of its contract.
-drift "$SHARED" 'RULES_TYPE = "(uint16,uint16,uint32,uint32[])"' $'RULES_TYPE = "(uint16,uint16,uint32,uint32[])"\nSEAT_SIG = "addSeat((uint16,uint16,uint32,uint32[]),uint32)"'
+drift "$SHARED" 'RULES_TYPE = "(uint16,uint16,uint32,uint32[],uint32[])"' $'RULES_TYPE = "(uint16,uint16,uint32,uint32[],uint32[])"\nSEAT_SIG = "addSeat((uint16,uint16,uint32,uint32[],uint32[]),uint32)"'
 expect 1 "a signature written out whole" "ops/shared_run.py:"
 
 # ── exit 2: the check could not run, and says what it could not read ──────────────────────

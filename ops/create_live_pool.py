@@ -25,8 +25,10 @@ sys.path.insert(0, str(ROOT / "spike"))
 sys.path.insert(0, str(ROOT))
 
 from hlspike import common as c  # noqa: E402
+from ops.deploy_testnet import PLATFORM_ASSETS  # noqa: E402
+from ops.leverage import asset_caps, bad_caps  # noqa: E402
 
-RULES = "(uint16,uint16,uint32,uint32[])"
+RULES = "(uint16,uint16,uint32,uint32[],uint32[])"
 TERMS = "(uint64,uint64,uint16,uint32,uint16,uint16,uint64)"
 # `Pool.capitalNeeded`: both capitals in spot units, plus the fee for the challenge account.
 SPOT_PER_PERP, NEW_ACCOUNT_FEE = 100, 10**8
@@ -46,8 +48,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--days", type=int, default=90, help="how long a challenge may run")
     p.add_argument("--daily-loss-bps", type=int, default=300)
     p.add_argument("--drawdown-bps", type=int, default=600)
-    p.add_argument("--leverage-x100", type=int, default=500)
+    # The account's cap at the highest of ops/leverage.py's, so each asset's own one binds (the CTO).
+    p.add_argument("--leverage-x100", type=int, default=1000)
     p.add_argument("--assets", default="3,4,0", help="perp indices: BTC 3, ETH 4, SOL 0")
+    p.add_argument("--asset-leverage-x100", default="",
+                   help="each asset's own cap, as BTC=300,ETH=200; the rest from ops/leverage.py")
     p.add_argument("--share-challenge-bps", type=int, default=0,
                    help="trader's share of challenge profit; 0 because the challenge is the audition")
     p.add_argument("--share-funded-bps", type=int, default=8000)
@@ -93,7 +98,12 @@ def main() -> int:
     assets = [int(a) for a in args.assets.split(",") if a.strip()]
     need = int((round(args.capital * 1e6) + round(args.funded_capital * 1e6)) * SPOT_PER_PERP) + NEW_ACCOUNT_FEE
 
-    rules = (args.daily_loss_bps, args.drawdown_bps, args.leverage_x100, assets)
+    names = [{i: n for n, i in PLATFORM_ASSETS.items()}.get(a, str(a)) for a in assets]
+    chosen = dict(kv.split("=") for kv in args.asset_leverage_x100.split(",") if kv.strip())
+    caps = asset_caps(names, args.leverage_x100, chosen)
+    if bad_caps(names, caps, args.leverage_x100):
+        raise SystemExit(f"each asset's leverage is 100 to the account's {args.leverage_x100}: {caps}")
+    rules = (args.daily_loss_bps, args.drawdown_bps, args.leverage_x100, assets, caps)
     terms = (round(args.price * 1e6), round(args.capital * 1e6), args.target_bps, args.days * 86400,
              args.share_challenge_bps, args.share_funded_bps, round(args.funded_capital * 1e6))
 
@@ -187,8 +197,8 @@ def main() -> int:
         "spot >= capitalNeeded": int(c.core_spot_balance(pool, 0)["total"]) >= int(
             c.call_view(pool, "capitalNeeded()", [], [], ["uint64"])[0]),
         "terms как просили": tuple(back_terms) == terms,
-        "rules как просили": (back_rules[0], back_rules[1], back_rules[2], list(back_rules[3])) == (
-            rules[0], rules[1], rules[2], assets),
+        "rules как просили": (back_rules[0], back_rules[1], back_rules[2], list(back_rules[3]),
+                              list(back_rules[4])) == (rules[0], rules[1], rules[2], assets, caps),
     }
     for k, v in ok.items():
         print(f"  {'✓' if v else '🔴'} {k}")

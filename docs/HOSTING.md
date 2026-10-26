@@ -604,6 +604,16 @@ When the keepers' node is down for long:
 5. **Afterwards,** `pass_done` with `latest` near the head on both keepers, and `day()` of every
    active account equal to today after the next 00:15 UTC.
 
+### Before mainnet: a node of the keeper's own (audit M-1)
+
+On testnet the keeper and the gateway read Hyperliquid's node, `COLOSSEUM_RPC_URL` in keeper.env and
+`GATEWAY_RPC_URL` in gateway.env the same URL. A node's budget is per IP, so a gateway busy with
+orders leaves the keeper's stops and snapshots waiting, and the other way round. That is accepted on
+testnet (the CTO, 20 October 2026). The keeper says so at its start (`node_shared_with_gateway`).
+On mainnet it does not start on the gateway's node: keeper.env names a node of its own first. Which
+provider answers the HyperCore precompiles and recent `eth_getLogs` for it is still to be chosen;
+drpc's did not read the precompiles.
+
 ## If the host is lost
 
 No service level is promised here; what follows is what the code makes true, so that whoever has

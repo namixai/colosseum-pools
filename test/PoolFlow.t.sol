@@ -167,7 +167,7 @@ contract PoolFlowTest is PoolHarness {
         ch.activate();
         (address[] memory from, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
 
-        // Separate balances, capital to perp, then the reserved key as the unnamed agent.
+        // Separate balances, capital to perp, then the reserved key as the agent named `pools`, for 179 days.
         assertEq(kind.length, 3);
         assertEq(from[0], address(ch));
         assertEq(kind[0], 16);
@@ -175,7 +175,8 @@ contract PoolFlowTest is PoolHarness {
         assertEq(kind[1], 7);
         assertEq(args[1], abi.encode(uint64(100e6), true));
         assertEq(kind[2], 9);
-        assertEq(args[2], abi.encode(key, ""));
+        assertEq(args[2], abi.encode(key, _agentName(block.timestamp)));
+        assertEq(ch.agentValidUntil(), (block.timestamp + 179 days) * 1000);
 
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Active));
         assertEq(p.earned(), 25e6, "price becomes the investor's once the challenge starts");
@@ -198,11 +199,15 @@ contract PoolFlowTest is PoolHarness {
     function test_drawdown_boundary() public {
         ChallengeAccount ch = _started(_readyPool());
         // Floor is 90 USDC: exactly 90 is allowed, a micro-dollar less is not. The day
-        // limit (95 from the first day's base) would trip first, so take a new day's
-        // snapshot at 90.
+        // limit (95 from the first day's base) would trip first, so walk down inside it,
+        // a day at a time: a snapshot is not taken while a rule is broken (deep audit F12).
         _nextMidnight();
-        _mockMargin(address(ch), 90e6, 0);
+        _mockMargin(address(ch), 95e6, 0);
         ch.checkpoint();
+        _nextMidnight();
+        _mockMargin(address(ch), 91e6, 0);
+        ch.checkpoint();
+        _mockMargin(address(ch), 90e6, 0);
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.None));
         _mockMargin(address(ch), 90e6 - 1, 0);
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.Drawdown));
@@ -259,7 +264,7 @@ contract PoolFlowTest is PoolHarness {
         _mockMargin(address(ch), 120e6, 0);
         ch.checkpoint();
         _mockMargin(address(ch), 113e6, 0); // above the 108 target, 5.8% under today's 120
-        vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.RuleBroken.selector, Breach.DailyLoss));
+        vm.expectRevert(abi.encodeWithSelector(RuledAccount.RuleBroken.selector, Breach.DailyLoss));
         ch.graduate(SALT);
     }
     function test_leverage_boundary() public {
@@ -311,7 +316,7 @@ contract PoolFlowTest is PoolHarness {
         assertEq(kind[0], 9);
         (address keyless, string memory name) = abi.decode(args[0], (address, string));
         assertTrue(keyless != key && keyless != address(0));
-        assertEq(bytes(name).length, 0);
+        assertEq(name, _agentName(block.timestamp), "the key's name, pools, for a term from now");
         assertFalse(PrecompileLib.coreUserExists(keyless));
         assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
         assertEq(ch.agentKey(), address(0));
@@ -639,7 +644,11 @@ contract PoolFlowTest is PoolHarness {
         vm.expectRevert(abi.encodeWithSelector(Pool.BadStage.selector, Pool.Stage.PassedAwaitingKey));
         p.withdrawOnCore(1e8);
 
-        // Opening the stage is what needs a key, and it can simply be tried again.
+        // Opening the stage is what needs a key, and it can simply be tried again. More spoiled keys
+        // than one `assign` skips need a purge first, which anyone may send (the keeper does).
+        vm.expectRevert(KeyRegistry.TooManySpoiledKeys.selector);
+        p.openFundedStage();
+        registry.purgeSpoiled(keys.length);
         vm.expectRevert(KeyRegistry.NoFreeKey.selector);
         p.openFundedStage();
 
@@ -745,6 +754,7 @@ contract PoolFlowTest is PoolHarness {
         (ChallengeAccount ch,) = _passed(p);
         ch;
         (Cancel[] memory c, uint32[] memory a) = _none();
+        CoreSimulatorLib.nextBlock(); // no stage ends in its opening block (self-audit v3, round 1)
         vm.prank(investor);
         p.stopFunded(c, a, SALT);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing));
@@ -1377,6 +1387,24 @@ contract PoolFlowTest is PoolHarness {
         assertGt(_spot(trader) - before, 0, "and the trader got what there was");
     }
 
+    /// F29 (the known-findings package): the short share's clock is cleared with the rest of the
+    /// stage's close on the return to Idle, so the next stage's close starts its wait afresh.
+    function test_round1_F29_theShortShareClockIsClearedOnTheReturnToIdle() public {
+        (Pool p,) = _fundedClosingShort(1e8, 1);
+        (Cancel[] memory c, uint32[] memory a) = _none();
+        bool noted;
+        for (uint256 i = 0; i < 60 && p.stage() != Pool.Stage.Idle; ++i) {
+            CoreSimulatorLib.forcePerpBalance(address(p), hyperCore.readPerpBalance(address(p)) + 1);
+            p.settleFunded(c, a);
+            noted = noted || p.fundedPayoutShortAt() != 0;
+            CoreSimulatorLib.nextBlock();
+            vm.warp(block.timestamp + 60);
+        }
+        assertTrue(noted, "the close waited on a short share");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+        assertEq(p.fundedPayoutShortAt(), 0);
+    }
+
     /// Audit A-12, the funded side: the clock resets while margin is held, so a release that comes
     /// in pieces cannot run it out.
     function test_settleFunded_theShortShareClockRestartsWhenMarginIsHeldAgain() public {
@@ -1428,7 +1456,7 @@ contract PoolFlowTest is PoolHarness {
         bool sawPerp;
         for (uint256 i = 0; i < kind.length; ++i) {
             if (from[i] != address(p)) continue;
-            if (kind[i] == 9 && keccak256(args[i]) == keccak256(abi.encode(newKey, ""))) sawAgent = true;
+            if (kind[i] == 9 && keccak256(args[i]) == keccak256(abi.encode(newKey, _agentName(block.timestamp)))) sawAgent = true;
             if (kind[i] == 7 && keccak256(args[i]) == keccak256(abi.encode(uint64(200e6), true))) sawPerp = true;
         }
         assertTrue(sawAgent && sawPerp);

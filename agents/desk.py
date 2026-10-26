@@ -64,7 +64,8 @@ def usd(units: int, decimals: int = 6) -> float:
 
 # ── contract errors, for readable reverts ────────────────────────────────────────────────
 
-# Every custom error in the ABI of `ChallengeAccount` and of `Pool`, by its signature. The table
+# Every custom error in the ABI of `ChallengeAccount`, of `Pool` and of `AccountOps`, the library
+# both link to, whose errors reach a caller as the account's, by its signature. The table
 # is carried here because a clone has no ABI until `forge build` has run, and a refusal has to be
 # named without one. Read from the build output, the names took the client down with "run `forge
 # build` first" on the first contract refusal in a clone that had installed only the Python side:
@@ -78,6 +79,7 @@ CONTRACT_ERRORS = (
     "CoreWriterLib__CannotSelfTransfer()",
     "InvalidInitialization()",
     "KeyAvailable()",
+    "KeyWorks()",
     "KeySpoiled()",
     "NoBreach()",
     "NotAllowed()",
@@ -85,8 +87,11 @@ CONTRACT_ERRORS = (
     "NotEnoughCapital(uint64,uint64)",
     "NotFlat()",
     "NotInitializing()",
+    "NotOnDex()",
     "NotOwner()",
+    "NotOwnerRun()",
     "NotReady()",
+    "NotRenewable(uint64)",
     "NotStartedOnCore()",
     "NotStopped()",
     "NotTrader()",
@@ -98,9 +103,11 @@ CONTRACT_ERRORS = (
     "PrecompileLib__Position2PrecompileFailed()",
     "PrecompileLib__SpotBalancePrecompileFailed()",
     "PrecompileLib__WithdrawablePrecompileFailed()",
+    "RekeyClosed()",
     "RuleBroken(uint8)",
     "SafeCastOverflowedUintDowncast(uint8,uint256)",
     "SafeERC20FailedOperation(address)",
+    "SalesClosed()",
     "TargetNotMet(int64,int256)",
     "TooEarly()",
     "TooLate()",

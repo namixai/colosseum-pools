@@ -204,8 +204,9 @@ def main() -> int:
             registry, _ = deploy_contract(op, out_path, record, "KeyRegistry", "KeyRegistry",
                                           ["address"], [op.address])
             factory, rcpt = deploy_contract(op, out_path, record, "PoolFactory", "PoolFactory",
-                                            ["address", "address", "address", "address"],
-                                            [registry, demo["PoolImpl"], demo["ChallengeAccountImpl"], op.address])
+                                            ["address", "address", "address", "address", "address"],
+                                            [registry, demo["PoolImpl"], demo["ChallengeAccountImpl"], op.address,
+                                             c.TESTNET_USDC_ERC20])
             shared, _ = deploy_contract(op, out_path, record, "SharedPool", "SharedPool",
                                         ["address", "address", "address", "uint64", "uint32", "uint16"],
                                         [factory, op.address, op.address, min_deposit, args.lock, args.fee_bps])
@@ -219,7 +220,8 @@ def main() -> int:
     save(out_path, record)
     steps = [
         ("setAccountSource", registry, "setAccountSource(address)", ["address"], [factory]),
-        ("setPlatformAssets", factory, "setPlatformAssets(uint32[],bool)", ["uint32[]", "bool"], [assets, True]),
+        ("setPlatformAssets", factory, "setPlatformAssets(uint32[],string[],bool)", ["uint32[]", "string[]", "bool"],
+         [assets, list(PLATFORM_ASSETS), True]),
         ("setChallengeFee", factory, "setChallengeFee(uint256,address)", ["uint256", "address"],
          [CHALLENGE_FEE, op.address]),
         ("publish", registry, "publish(address[])", ["address[]"], [keys]),

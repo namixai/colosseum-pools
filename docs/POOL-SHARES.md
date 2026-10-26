@@ -1,0 +1,197 @@
+# A pool of several investors
+
+`src/multi/PoolShares.sol` holds many investors' money in one pool of many traders
+(`docs/MULTI-POOL.md`). It is the `MultiPool`'s owner, and a share is a claim on a part of the
+pool's value. On the creation form this is the choice called "Shared pool".
+
+The rules are Alex's: the money is locked for the term, as tokens are in a token lock, and it can
+only be a stablecoin; the creator extends; each investor decides, ahead of the end, whether to
+stay or to take their part.
+
+**Draft. Nothing here is deployed, no page uses it, and the audit has not read it.**
+
+## The creator
+
+Whoever creates the pool has the platform's factory create this contract,
+`PoolFactory.createPoolShares(code, minDeposit, target)`, from PoolShares' creation code, which has
+to be the code whose hash the operator set (`setSharesCode`); the factory keeps, for it, the hash of
+the code it was created from (`isPoolShares`, zero for an address it did not create).
+Then they deploy the `MultiPool` with this contract as its owner and the same factory, and bind the
+two with `bind(pool, terms)`: once, by the creator, on a pool owned here that
+has no exam or account running, with both accounts already on HyperCore (so that no transfer
+between them pays 1 USDC for creating one). `terms` is the hash of the pool's terms, and its text
+has to be in the plan's book (`TermsBook`): terms nobody can read are not accepted. Its second
+line names this contract's raise, `Shares 0x<keccak256(abi.encode(target, minDeposit))>`, which no
+plan holds: terms written for another amount or another smallest deposit are refused, so a creator
+cannot state a raise of 100,000 and bind them to a contract that raises nothing (deep audit N5).
+Every ticket names the same hash. The pool has to be of the factory that created this contract,
+and one it knows, selling an exam the operator approved (`PoolFactory.isPlatformPool`; the cloud
+audit, section 6): a creator who ran a factory of their own would have it say yes to anything. The
+money this contract counts is the factory's token (`PoolFactory.usdc`: the chain's USDC, or on
+testnet the demo's own), which the factory passes and the creator does not name. A token of the
+creator's own would say whatever balance they liked and set the price of every deposit (the audit's
+AUD-3); a contract deployed by hand with one is not the platform's. The app checks one thing: that the platform's factory names a hash for this
+contract (`isPoolShares`), and that it is the hash of a version the app has checked. The operator
+may set another code since, and a contract made from the code before keeps its own hash (audit
+window 2, A3-1). A shares contract deployed any other way names whoever deployed it as its
+`factory`, and binds no pool of the platform's.
+
+Whatever the pool holds while there are no shares -- what the creator put into it before the
+bind, or what is left once every share has gone -- becomes the creator's shares, one per unit, at
+the next settlement point and before any deposit there is priced. So a first deposit buys in at
+the value as it stands, and does not take what was there before it. A rule in `bind` alone, that
+the pool be empty, would not do: binding needs both accounts on HyperCore, which takes a transfer
+that stays on the balance, and the pool would still be open to the second case.
+
+Free exams (docs/MULTI-POOL.md, "Free exams") are the creator's too: how many a month, and the
+address that signs the invitations, are in the pool's plan, fixed when it is created, so an
+investor sees them before putting money in.
+
+**The raise.** `bind(pool, terms)` starts a raise of 30 days for the `target` the contract was
+made with (zero starts the pool at once). Deposits wait here, and nobody asks to leave. Once
+the target is in, anyone may `launch()`: every deposit goes on into the pool and the pool's term
+begins (`MultiPool.begin`). What the pool held before the launch is the creator's, as shares at
+the raise's price. Short of the target after 30 days, nothing launches: `refund(holder)` turns a
+holder's shares into what they are owed, every holder at one price taken once, less the
+platform's 0.5 % on a withdrawal, and `pay` sends it; `payFee()` sends the platform its part.
+From the moment that price is taken nothing more is counted, and what reaches an open ticket goes
+back to whoever opened it at the next settlement point, and again whenever more arrives (audit
+H-1), less the platform's 0.5 % like every deposit handed back (the terms, D7 and D10). Both parts
+leave from the ticket itself: nothing is owed or counted for it, so nothing can be paid twice while
+a transfer lands. A platform's part too small to open the platform's own HyperCore account is not
+taken. What the pool itself held, the creator's money from before the raise, comes back to the
+creator the same way, less the 0.5 %: `reclaim()`, by anyone, ends the pool, which never began,
+takes what it holds, and owes it to the creator (audit M-1). It takes the refund's price first, if
+nobody has: what it owes the creator is owed at once and lands later, and a price taken while it was
+on its way would count the holders' money short by all of it (the cloud audit, N10).
+
+From then on the creator can do two things in this contract: extend the pool in its last fourteen
+days, which moves its end and nothing else, and stop it (`stop()`), after which it ends at the end
+of its term. They hold
+no share for being the creator, and they have no way to the money. The pool answers only this
+contract, and this contract pays only holders.
+
+## Putting money in
+
+A deposit is USDC on HyperCore, sent to an address made for it. `openTicket()` makes one for the
+caller, as in the shared pool people can see today: a contract can't see who sent a HyperCore
+transfer, so the address is the attribution. The first transfer to it costs the sender 1 USDC for
+creating the account.
+
+`settle(tickets)`, by anyone, is a settlement point. Each named ticket holding at least the
+smallest deposit (1 USDC or more, set at deployment) becomes shares, all at one price: the value
+before them. The first shares are one per unit, 1e8 to a dollar. From the ticket the money goes
+straight into the pool, where the traders' accounts are funded from; once the pool has stopped it
+comes here instead. No ticket opens after the end.
+
+## Leaving
+
+- **Saying so.** `requestExit(shares)` asks for shares to leave at the end of the term, and
+  `cancelExit(shares)` takes that back. Either works up to fourteen days before the end (the
+  pool's `notice`). The shares asked out stay the investor's and go on bearing the pool's result.
+- **The last fourteen days.** What was said holds: nothing is asked or taken back. The creator
+  now knows who leaves and decides whether to extend.
+- **The renewal.** The term renews by itself for ninety days, and whoever said nothing stays.
+  Those who asked to leave are paid at the end of the term or after it, at the pool's value then,
+  and never in its last days (the terms, D5 and D6; Alex, "делаем А", DECISIONS 103; the deep
+  audit's F38). Once that end has passed, anyone may `renew()`: the round closes, the shares asked
+  out are priced at the value now and leave the count, and what they are worth comes out of the
+  pool. If the pool cannot give that much, because the money is in the traders' accounts, the pool
+  stops at once instead (deep audit F5), and they are paid once its accounts are closed: nobody
+  who asked to leave is held for a renewal. While shares are asked out the pool sells nothing
+  against what they are worth (its reserve). `extend(term)`, by the creator in the last days,
+  moves the end and nothing else; the round still waits for the end it was asked for.
+- **Who closes the round.** The platform's keeper (`ops/multi_keeper.py`) does, as soon as that
+  end has passed, whenever somebody asked to leave (the CTO's decision, 15 October 2026), and
+  anyone else may (audit M-2, Alex's word). Until somebody does, the term runs on for those who
+  stay and the round stands as it was at that end, nothing asked or taken back. The pool lets the
+  money reserved for that end out once, whenever the call comes (`MultiPool.reserveFor`), up to
+  that part of the pool; the reserve is rounded up, so shares asked out always reserve something
+  (deep audit F6). What can hold a call up for a while is the pool itself (`blocker()`):
+  a payment still landing, a seat still settling, or a seat breaking a rule, which the keeper
+  stops and settles; and for a round, the minute after the pool sent a seat money, which it counts
+  against its balance for that minute (`PoolSending`). Only the pool's word that the money is not
+  there, in work (`BufferNeeded`) or off its balance (`NotEnoughFree`), turns a round into a stop;
+  any other refusal is passed on and the round waits, since a stop cannot be taken back. And a sale
+  leaves the leavers' part of the pool on its balance, or does not happen, so nobody can stop the
+  pool by buying an exam just before the round (deep audit F3).
+- **An extension made earlier** would move the end, and with it the moment to decide, away from
+  an investor who had not decided yet. So there is none.
+- **A stop.** The pool ends only when the creator stops it, or when it cannot pay those leaving.
+  At its end its accounts are closed (`endSeat`, by anyone), and from then on any investor may ask
+  to leave; `closeRound()`, by anyone, closes a round at
+  that day's price and takes what it owes out of the pool. Until the accounts are closed and
+  settled the pool cannot give the money, and the round waits.
+- **The platform's 0.5 %.** What a round owes a leaver is what their shares are worth less 0.5 %
+  (the terms, D6 and D10). The pool keeps that part of what it pays here; on money this contract
+  already held, `payFee()` sends it. Nothing is charged twice.
+- **Tickets.** A depositor holds four open tickets at most (`MAX_OPEN_PER_DEPOSITOR`); a ticket
+  counted frees its place. An empty ticket stays open and can be paid into later. New addresses
+  can open more, for gas: the keeper's reads of tickets are bounded per pass, and anyone, the
+  depositor or the app, may name a ticket to `settle` (deep audit F15).
+- **Being paid.** `pay(holder)`, by anyone, pays what a holder's closed rounds owe: USDC on
+  HyperEVM first (the exams' prices), the rest on HyperCore once it has landed here. A holder with
+  no HyperCore account pays 1 USDC out of that part for creating it. A HyperCore part no larger
+  than that would send nothing, so it stays owed until the account exists or USDC on HyperEVM
+  covers it. A holder may name another address for the HyperCore part (`setPayTo`): a holder that
+  is a contract may have no way to move what lands on its own HyperCore account (the cloud audit,
+  N9; a contract that cannot make that call either should not hold shares). `MultiPoolReader.positionOf(shares, holder)`
+  shows shares that stay, shares asked out and what is owed, and `ticketAddress(shares, depositor,
+  n)` where a ticket is or will be: the views that only read are the reader's, out of this contract,
+  which is close to the size a contract may have (the CTO, 18 October 2026).
+
+With 60 put in by one investor and 40 by another, and the pool worth 110 at the end of the term:
+the second asks to leave before the last fourteen days, the round closes in those days, 44 leave
+the pool and are paid to them, and the first investor's 60 shares are still worth 66 for the
+renewal.
+
+## Value, and what holds a price back
+
+`value()` is the pool's value, what this contract holds on HyperCore and HyperEVM and what sits on
+counted tickets, less what closed rounds owe. Every price is struck from it: deposits and rounds
+alike. It counts the traders' open positions at the mark, as `MultiPool` does.
+
+`blocker()` says when no price may be struck, and who holds it up:
+
+- a funded account that has broken a rule and is not closed yet, or one being closed;
+- a payment to a holder in the last minute, which may not have left this balance yet;
+- money the pool sent here in the last minute, which the pool still counts against itself.
+
+Money on its way from a ticket into the pool holds nothing back: HyperCore moves it between the
+two accounts in one step, so the value reads the same before and after. That is also why this
+contract's own HyperCore balance sees nothing leave but payments to holders: nobody can hold a
+payment up by making that balance move.
+
+## Weak points
+
+- **If many leave at once,** and the money is in the traders' accounts, there is no extension: the
+  pool stops at its end for those who wanted to stay as well. The other way round, paying the
+  leavers part now and the rest later, would hold their money past the term they agreed to, and
+  `MultiPool` lets money out only at the end of a term.
+- **Whoever says nothing stays.** An investor who forgets is kept for the next term. The other
+  default would have to pay every silent holder at each extension, a list with no bound.
+- **A price moves with open positions,** as in every pool: an investor who comes in while a
+  trader's position is up pays for it.
+- **Whoever closes the round chooses the moment of the leavers' price.** The round closes when
+  somebody calls, at any moment of the last fourteen days or after an end that passed with it
+  open, at the value then, open positions at the mark: the creator, the keeper, a holder, or one
+  of those leaving. A caller who holds shares and stays could pick a minute of low marks, and one
+  who leaves a minute of high ones (the audit's earlier S-3, wider now). A fixed moment would need
+  someone to call at exactly that minute and would still take the marks of that minute; it is
+  left as it is, and said here.
+- **Shares cannot be passed on.** There is no transfer.
+- **Rounding.** What a round owes is rounded down for each holder; the remainder, under a unit
+  (1e-8 USDC) per holder, stays counted as owed.
+
+## Tests
+
+`test/multi/PoolShares.t.sol`, 46 tests on the hyper-evm-lib simulator, and the deep audit's
+proofs turned round in `test/multi/Deep*.t.sol`. In `scripts/mutations.py`, 136 mutations of
+`PoolShares` and `ShareTicket`, each caught by a named test, run with the rest of `test/multi/`
+(`Y1`–`Y466`).
+
+## Not done yet
+
+- A script that deploys it, and the app's pages.
+- A run on the testnet, the keeper's with it.
+- The audit's reading of its fixes for H-1, M-1 and M-2.

@@ -34,6 +34,7 @@ class Throttled(RuntimeError):
 CHALLENGE_ACTIVE = 2
 POOL_FUNDED = 2
 # The Rules and Terms structs of src/Types.sol, as ABI tuples. gateway/tests hold them to the source.
+# Rules' first four fields: v3 appends each asset's cap, and four read either deployment's rules.
 RULES = "(uint16,uint16,uint32,uint32[])"
 # A v3 account's rules: each asset's own leverage cap appended, in the order of its assets (CTO, 21 Oct 2026).
 RULES_V3 = "(uint16,uint16,uint32,uint32[],uint32[])"

@@ -43,6 +43,8 @@ PRECOMPILE = {
     "spotBalance": "0x0000000000000000000000000000000000000801",
     "withdrawable": "0x0000000000000000000000000000000000000803",
     "markPx": "0x0000000000000000000000000000000000000806",
+    "oraclePx": "0x0000000000000000000000000000000000000807",
+    "perpAssetInfo": "0x000000000000000000000000000000000000080a",
     "l1BlockNumber": "0x0000000000000000000000000000000000000809",
     "accountMarginSummary": "0x000000000000000000000000000000000000080F",
     "coreUserExists": "0x0000000000000000000000000000000000000810",
@@ -279,15 +281,33 @@ def artifact(contract: str) -> dict:
     return json.loads(path.read_text())
 
 
-def deploy(acct: LocalAccount, contract: str, ctor_types: Sequence[str], ctor_args: Sequence[Any]) -> tuple[str, dict]:
+def link(art: dict, libraries: dict[str, str] | None = None) -> bytes:
+    """A contract's creation code with every library it links to at the address given for it, and
+    a missing one refused by name. Positions are bytes, as forge's linkReferences give them."""
+    code = art["bytecode"]["object"].removeprefix("0x")
+    for _source, libs in (art["bytecode"].get("linkReferences") or {}).items():
+        for name, refs in libs.items():
+            if not libraries or name not in libraries:
+                raise SystemExit(f"{name} is a library this contract links to; deploy it first and name it")
+            addr = to_checksum_address(libraries[name])[2:].lower()
+            for ref in refs:
+                at = 2 * ref["start"]
+                code = code[:at] + addr + code[at + 2 * ref["length"]:]
+    return bytes.fromhex(code)
+
+
+def deploy(acct: LocalAccount, contract: str, ctor_types: Sequence[str], ctor_args: Sequence[Any],
+           libraries: dict[str, str] | None = None) -> tuple[str, dict]:
     art = artifact(contract)
-    code = bytes.fromhex(art["bytecode"]["object"].removeprefix("0x"))
+    code = link(art, libraries)
     rcpt = send_tx(acct, None, code + eth_abi.encode(list(ctor_types), list(ctor_args)))
     return to_checksum_address(rcpt["contractAddress"]), rcpt
 
 
-def transact(acct: LocalAccount, to: str, signature: str, types: Sequence[str] = (), args: Sequence[Any] = ()) -> dict:
-    return send_tx(acct, to, encode_call(signature, types, args))
+def transact(acct: LocalAccount, to: str, signature: str, types: Sequence[str] = (), args: Sequence[Any] = (),
+             gas: int | None = None) -> dict:
+    """gas: the transaction's limit; left out, the node's estimate and a quarter."""
+    return send_tx(acct, to, encode_call(signature, types, args), gas=gas)
 
 
 def wait_blocks(n: int = 2, poll_s: float = 1.0) -> int:
@@ -307,8 +327,9 @@ def info() -> Info:
     return Info(API_URL, skip_ws=True)
 
 
-def exchange(acct: LocalAccount, account_address: str | None = None) -> Exchange:
-    return Exchange(acct, API_URL, account_address=account_address)
+def exchange(acct: LocalAccount, account_address: str | None = None, perp_dexs: list[str] | None = None) -> Exchange:
+    """perp_dexs names the builder dexes whose markets the SDK resolves ("" is the main dex)."""
+    return Exchange(acct, API_URL, account_address=account_address, perp_dexs=perp_dexs)
 
 
 def info_post(body: dict) -> Any:

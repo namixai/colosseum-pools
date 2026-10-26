@@ -74,7 +74,7 @@ contract SharedPoolTest is Test {
         usdc = SharedMockUsdc(HLConstants.usdc());
 
         registry = new KeyRegistry(operator);
-        factory = new PoolFactory(registry, address(new Pool()), address(new ChallengeAccount()), operator);
+        factory = new PoolFactory(registry, address(new Pool()), address(new ChallengeAccount()), operator, usdc);
         for (uint256 i = 0; i < 8; ++i) {
             keys.push(makeAddr(string.concat("shared-key-", vm.toString(i))));
         }
@@ -83,7 +83,9 @@ contract SharedPoolTest is Test {
         vm.startPrank(operator);
         registry.setAccountSource(factory);
         registry.publish(keys);
-        factory.setPlatformAssets(listed, true);
+        string[] memory names = new string[](1);
+        names[0] = "BTC";
+        factory.setPlatformAssets(listed, names, true);
         vm.stopPrank();
 
         sp = new SharedPool(factory, operator, platform, MIN, LOCK, FEE_BPS);
@@ -94,7 +96,7 @@ contract SharedPoolTest is Test {
     function _rules() internal pure returns (Rules memory r) {
         uint32[] memory assets = new uint32[](1);
         assets[0] = BTC;
-        r = Rules({dailyLossBps: 500, maxDrawdownBps: 1000, maxLeverageX100: 500, assets: assets});
+        r = Rules({dailyLossBps: 500, maxDrawdownBps: 1000, maxLeverageX100: 500, assets: assets, assetLeverageX100: new uint32[](0)});
     }
 
     function _terms() internal pure returns (Terms memory) {
@@ -1224,5 +1226,79 @@ contract SharedPoolTest is Test {
         vm.warp(t1 + TERM);
         vm.expectRevert(abi.encodeWithSelector(SharedPool.TermNotOver.selector, t2 + TERM));
         sp.endFundedTerm(address(seat), new Cancel[](0), new uint32[](0), SALT);
+    }
+
+    // ── self-audit v3, round 1: a seat on a builder dex ─────────────────────────────────────
+
+    uint32 constant XYZ = 110_000; // the order id; the precompiles take XYZ_PX
+    uint32 constant XYZ_PX = 10_000;
+    uint32 constant DEX = 1;
+
+    function _unitOnTheDex(address account) internal {
+        int64 have = PrecompileLib.accountMarginSummary(DEX, account).accountValue;
+        CoreSimulatorLib.forcePerpBalance(account, DEX, uint64(have) + 1);
+    }
+
+    /// T1: what was over the target at a start is no part of the account's equity, and is the pool's
+    /// money all the same. The pool's value does not move when a challenge or a funded stage starts
+    /// with somebody's unit on its dex.
+    function test_round1_T1_aStartsSurplusStaysInThePoolsValue() public {
+        hyperCore.registerPerpAssetInfo(
+            XYZ_PX,
+            PrecompileLib.PerpAssetInfo({coin: "xyz:XYZ100", marginTableId: 30, szDecimals: 4, maxLeverage: 30, onlyIsolated: false})
+        );
+        CoreSimulatorLib.setMarkPx(XYZ_PX, 29_333_00);
+        uint32[] memory listed = new uint32[](1);
+        listed[0] = XYZ;
+        string[] memory names = new string[](1);
+        names[0] = "xyz:XYZ100";
+        vm.prank(operator);
+        factory.setPlatformAssets(listed, names, true);
+        Rules memory r = _rules();
+        r.assets[0] = XYZ;
+        _start(SEED);
+        vm.prank(operator);
+        Pool seat = Pool(sp.addSeat(r, _terms(), TERM));
+        vm.prank(operator);
+        sp.seal();
+        sp.settle(_list(_ticket(alice, NEED)));
+        CoreSimulatorLib.nextBlock();
+        sp.armSeat(address(seat));
+        CoreSimulatorLib.nextBlock();
+        seat.prepareAccount();
+        CoreSimulatorLib.nextBlock();
+
+        deal(address(usdc), trader, 1e6);
+        vm.startPrank(trader);
+        usdc.approve(address(seat), 1e6);
+        ChallengeAccount ch = ChallengeAccount(seat.buyChallenge());
+        vm.stopPrank();
+        CoreSimulatorLib.nextBlock();
+        ch.activate(); // the capital to the dex
+        CoreSimulatorLib.nextBlock();
+        _unitOnTheDex(address(ch));
+        uint256 before = sp.value();
+        uint256 earned = seat.earned();
+        ch.activate();
+        assertEq(ch.startSurplus(), 1);
+        // The start books the challenge's price as the seat's (`earned`); the unit is still counted.
+        assertEq(sp.value(), before + (seat.earned() - earned) * 100, "the challenge's unit is still counted");
+
+        CoreSimulatorLib.nextBlock();
+        vm.mockCall(
+            address(0x080F),
+            abi.encode(DEX, address(ch)),
+            abi.encode(PrecompileLib.AccountMarginSummary({accountValue: 22e6 + 1, marginUsed: 0, ntlPos: 0, rawUsd: 22e6 + 1}))
+        );
+        ch.graduate(SALT);
+        vm.clearMockedCalls();
+        seat.openFundedStage(); // the stage's capital to the dex
+        CoreSimulatorLib.nextBlock();
+        _unitOnTheDex(address(seat));
+        before = sp.value();
+        seat.openFundedStage();
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
+        assertEq(seat.startSurplus(), 1);
+        assertEq(sp.value(), before, "and so is the stage's");
     }
 }
