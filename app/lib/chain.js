@@ -5,6 +5,7 @@ export { MAX_BATCH, readAll } from "./batch.js";
 import { PROVIDER_OPTIONS } from "./batch.js";
 import { DEPLOYMENTS, liveDeployment, pickDeployment, rulesFields } from "./deployments.js";
 import { createGentle } from "./gentle.js";
+import { MULTI_ABI, EXAM_ABI } from "./multi.js";
 import { MULTICALL3 } from "./multicall.js";
 
 const { ethers } = window;
@@ -118,6 +119,9 @@ export const ABI = {
     "function allowance(address owner, address spender) view returns (uint256)",
     "function approve(address spender, uint256 amount) returns (bool)",
   ],
+  // A pool of many traders and the paper exams it sells: drafts, taken from their source (app/lib/multi.js).
+  multi: MULTI_ABI,
+  exam: EXAM_ABI,
 };
 
 export const STATUS = ["None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled"];

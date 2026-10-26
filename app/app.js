@@ -13,6 +13,7 @@ import { verifyView } from "./views/verify.js";
 import { economicsView } from "./views/economics.js";
 import { sharedView } from "./views/shared.js";
 import { evidenceView } from "./views/evidence.js";
+import { multiListView, multiPoolView, examView } from "./views/multi.js";
 
 const GATE_KEY = "pools-gate-v1";
 
@@ -31,6 +32,10 @@ function termsView(page) {
 const routes = [
   [/^#?\/?$/, (m, page) => listView(page)],
   [/^#\/new$/, (m, page) => newPoolView(page)],
+  // A pool of many traders and its paper exams: drafts, linked from no page until a deployment is listed.
+  [/^#\/multi$/, (m, page) => multiListView(page)],
+  [/^#\/multi\/(0x[0-9a-fA-F]{40})$/, (m, page) => multiPoolView(m[1], page)],
+  [/^#\/exam\/(0x[0-9a-fA-F]{40})$/, (m, page) => examView(m[1], page)],
   [/^#\/pool\/(0x[0-9a-fA-F]{40})$/, (m, page) => poolView(m[1], page)],
   [/^#\/challenge\/(0x[0-9a-fA-F]{40})$/, (m, page) => challengeView(m[1], page)],
   [/^#\/verify(?:\/(.*))?$/, (m, page) => verifyView(m[1] || "", page)],
