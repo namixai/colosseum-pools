@@ -28,8 +28,9 @@
 </head>
 <body>
   <header>
+    <div class="shell">
     <a class="brand" href="#/"><img src="brand/mark-small.svg" alt="" width="24" height="24">Pools <span>on Hyperliquid</span></a>
-    <nav>
+    <nav aria-label="Main">
       <a href="#/">Pools</a>
       <a href="#/new">New pool</a>
       <a href="#/shared">Shared pool</a>
@@ -38,6 +39,7 @@
       <a href="#/evidence">On chain</a>
     </nav>
     <button id="wallet" class="secondary">Connect wallet</button>
+    </div>
   </header>
   <div class="notice">Hyperliquid <strong>testnet</strong> and mock USDC.</div>
   <div class="notice" id="rpc-wait" role="status" hidden></div>
