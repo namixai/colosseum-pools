@@ -3888,36 +3888,65 @@
      "cases": {
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
-       "open": 0.23864444444444444,
-       "worst": 0.4003777777777778,
+       "open": 0.401875,
+       "worst": 0.6723875,
        "open_at": "long",
-       "worst_at": "short",
-       "layout": "big seats on the calm coins: BTC 50k, ETH 25k, SOL 3 x 5k",
+       "worst_at": "long",
+       "leverage": {
+        "open": "BTC and ETH 10x, SOL 5x",
+        "worst": "BTC and ETH 10x, SOL 5x"
+       },
+       "layout": {
+        "open": "BTC 44.4k at 10x, ETH 22.2k at 10x, SOL 3 x 4.4k at 5x",
+        "worst": "BTC 44.4k at 10x, ETH 22.2k at 10x, SOL 3 x 4.4k at 5x"
+       },
        "seats_liquidated": {
         "open": 0,
-        "worst": 3
+        "worst": 0
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
-       "open": 0.3166555555555556,
-       "worst": 0.6999888888888889,
-       "open_at": "long",
+       "open": 0.4246375,
+       "worst": 0.844425,
+       "open_at": "short",
        "worst_at": "short",
-       "layout": "big seats on the risky coin: SOL 50k, ETH 25k, BTC 3 x 5k",
+       "leverage": {
+        "open": "BTC and ETH 10x, SOL 5x",
+        "worst": "BTC and ETH 10x, SOL 5x"
+       },
+       "layout": {
+        "open": "SOL 44.4k at 5x, ETH 22.2k at 10x, BTC 3 x 4.4k at 10x",
+        "worst": "SOL 44.4k at 5x, ETH 22.2k at 10x, BTC 3 x 4.4k at 10x"
+       },
        "seats_liquidated": {
         "open": 0,
         "worst": 1
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
-       "open": 0.4524,
+       "label": "every seat on one coin of the list, the worst of the three",
+       "open": 0.6822875,
        "worst": 1.0,
-       "open_at": "SOL long",
-       "worst_at": "SOL short"
+       "open_at": "ETH short",
+       "worst_at": "SOL short",
+       "leverage": {
+        "open": "ETH 10x",
+        "worst": "SOL 5x"
+       },
+       "layout": {
+        "open": "ETH 44.4k at 10x, ETH 22.2k at 10x, ETH 3 x 4.4k at 10x",
+        "worst": "SOL 44.4k at 5x, SOL 22.2k at 5x, SOL 3 x 4.4k at 5x"
+       },
+       "seats_liquidated": {
+        "open": 0,
+        "worst": 5
+       }
       }
-     }
+     },
+     "source": "stress/results/cascade-v1.2-2026-10-29.json",
+     "leverage": "BTC and ETH 10x, SOL 5x",
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "wide": {
      "coins": [
@@ -3943,6 +3972,10 @@
        "seats_liquidated": {
         "open": 3,
         "worst": 4
+       },
+       "leverage": {
+        "open": "5x each",
+        "worst": "5x each"
        }
       },
       "single_coin": {
@@ -3950,9 +3983,14 @@
        "open": 0.9206,
        "worst": 1.0,
        "open_at": "ADA long",
-       "worst_at": "ADA long"
+       "worst_at": "ADA long",
+       "leverage": {
+        "open": "5x each",
+        "worst": "5x each"
+       }
       }
-     }
+     },
+     "leverage": "5x each"
     }
    }
   },

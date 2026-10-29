@@ -2,7 +2,8 @@
 //
 // The Economics page's measured tail (app/data/calc_tables.json, the block `tail`) is the published cascade package's
 // results (stress/results), read the way the table's own tool reads them: for each way of executing the stop, the pool's
-// worse side on the cascade day. Every figure the page shows from that block is derived again here from the package, so a
+// worse side on the cascade day. The default list is measured at the leverage rule v1.2, each seat at its coin's
+// (stress/make_cascade.py); the wide list, which the rule does not allow, stays at the stress test's own 5x. Every figure the page shows from that block is derived again here from the package, so a
 // new version of the package that moves a number turns this red until the table is rebuilt.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,7 +15,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (...p) => JSON.parse(readFileSync(join(ROOT, ...p), "utf8"));
 const T = read("app", "data", "calc_tables.json").tail;
 const RUN = { open: read("stress", "results", "pool-stress-2026-09-25-lag1.json"), worst: read("stress", "results", "pool-stress-2026-09-25-lag1-worst.json") };
-const LAYOUTS = read("stress", "results", "layouts-default-list-2026-09-25.json");
+const CASCADE = read("stress", "results", "cascade-v1.2-2026-10-29.json");
 const MODES = ["open", "worst"];
 const DAY = "2025-10-10";
 const SEAT_CAPITAL = 90_000;                                       // five seats: 50k, 25k and three of 5k
@@ -39,20 +40,40 @@ function singleCoin(coins) {
     .filter((r) => r["сутки"] === DAY && coins.includes(coin(r["монета"]))).map((r) => r["убыток_макс_%"] / 100))]));
 }
 
-function layout(id) {
-  return (mode) => LAYOUTS.runs.find((r) => r.layout === id && r.exec === mode).rows;
-}
-
-test("the default list's cascade is the package's layouts and its worst coin", () => {
-  const cases = T.cascade.lists.default.cases;
-  assert.deepEqual(T.cascade.lists.default.coins, ["BTC", "ETH", "SOL"]);
-  for (const [name, id] of [["spread_calm", "calm-seats-big"], ["spread_risky", "risky-seat-big"]]) {
-    const p = poolCase(layout(id));
-    for (const mode of MODES) close(cases[name][mode], p[mode].share, `${name} ${mode}`);
-    assert.deepEqual(cases[name].seats_liquidated, { open: p.open.liquidated, worst: p.worst.liquidated }, name);
+test("the default list's cascade is the cascade file's layouts at the rule's leverage, and its worst coin", () => {
+  const list = T.cascade.lists.default;
+  assert.equal(list.source, "stress/results/cascade-v1.2-2026-10-29.json");
+  assert.deepEqual(list.coins, ["BTC", "ETH", "SOL"]);
+  assert.deepEqual(list.cases, CASCADE.cases, "the table carries the file's cases, cell for cell");
+  // Each seat at the leverage the rule allows its coin, in every run of the file.
+  const RULE = { BTCUSDT: 10, ETHUSDT: 10, SOLUSDT: 5 };
+  for (const run of CASCADE.runs) assert.deepEqual(run.seat_leverage, run.seat_coins.map((c) => RULE[c]), run.layout);
+  // Derived again from the tool's rows: the worse side of the worse layout, a share of the seats' capital.
+  const seats = CASCADE.pool.usd * CASCADE.pool.in_work_bps / 10000;
+  const worse = (ids, mode) => CASCADE.runs.filter((r) => ids.includes(r.layout) && r.exec === mode).flatMap((r) => r.rows)
+    .reduce((a, b) => (b["худший_убыток_usd"] > a["худший_убыток_usd"] ? b : a));
+  for (const [name, ids] of [["spread_calm", ["calm-seats-big"]], ["spread_risky", ["risky-seat-big"]],
+    ["single_coin", ["all-on-btc", "all-on-eth", "all-on-sol"]]]) {
+    for (const mode of MODES) {
+      const row = worse(ids, mode);
+      close(list.cases[name][mode], row["худший_убыток_usd"] / seats, `${name} ${mode}`);
+      assert.equal(list.cases[name].seats_liquidated[mode], row["мест_ликвидировано_в_худшем"], `${name} ${mode} liquidated`);
+    }
   }
-  const one = singleCoin(["BTC", "ETH", "SOL"]);
-  for (const mode of MODES) close(cases.single_coin[mode], one[mode], `single_coin ${mode}`);
+  // The big seats on the calm coins are the levers' cell at the rule's leverage: there the worse side is the long one.
+  const levers = read("stress", "results", "levers-2026-10-29.json");
+  for (const mode of MODES) {
+    const cell = levers.cells.find((c) => c.stop === "keeper" && c.leverage === "v1.2" && c.list === "default" && c.exec === mode);
+    assert.equal(Math.round(list.cases.spread_calm[mode] * 1000) / 10, cell.worst_pct, mode);
+    assert.equal(list.cases.spread_calm[`${mode}_at`], "long");
+  }
+  // What the page shows, pinned: each case's range and the leverage of each end.
+  const pct = (name) => MODES.map((m) => Math.round(list.cases[name][m] * 1000) / 10);
+  assert.deepEqual(pct("spread_calm"), [40.2, 67.2]);
+  assert.deepEqual(pct("spread_risky"), [42.5, 84.4]);
+  assert.deepEqual(pct("single_coin"), [68.2, 100]);
+  assert.deepEqual(list.cases.single_coin.leverage, { open: "ETH 10x", worst: "SOL 5x" });
+  for (const name of ["spread_calm", "spread_risky"]) assert.deepEqual(list.cases[name].leverage, { open: "BTC and ETH 10x, SOL 5x", worst: "BTC and ETH 10x, SOL 5x" });
 });
 
 test("the wide list's cascade is the stress test's own pool and its worst coin", () => {
@@ -80,6 +101,17 @@ test("a stop's overshoot is the package's summaries, side by side and execution 
   }
   close(T.o99.low, Math.min(T.overshoot.long.open.p99, T.overshoot.long.worst.p99), "o99 low");
   close(T.o99.high, Math.max(T.overshoot.long.open.p99, T.overshoot.long.worst.p99), "o99 high");
+});
+
+test("the default list's note names the rule's leverage; the overshoot's note is the stress test's own pool at 5x", () => {
+  const note = T.cascade.lists.default.note;
+  assert.doesNotMatch(note, /[А-Яа-яЁё]/);
+  assert.doesNotMatch(note, /pf#|cp#|#\d{3,}/);
+  assert.match(note, /each seat at the leverage the leverage rule v1\.2 allows its coin \(BTC and ETH 10x, SOL 5x\)/);
+  assert.match(note, /the worse of the two sides/);
+  assert.match(note, /possible, not an expectation/);
+  assert.doesNotMatch(note, /from the start, 5x/, "the stress test's one leverage for every seat");
+  assert.match(T.note, /5x/, "the stress test's pool, which the overshoot is measured on, names its leverage");
 });
 
 test("the rules measured are the package's, and the note the page prints is English and names what was measured", () => {

@@ -139,6 +139,23 @@ none of those alts, and none of those cells is quoted here. The 29 Sep file stay
 With the seats at 90% of the pool, as then (`make_levers.py --in-work-bps 9000`), the script still gives
 its twelve cells field for field, and `test_anchor.py` checks that it does.
 
+## The cascade on the default list, at the leverage rule v1.2 (29 Oct 2026)
+
+`make_cascade.py` runs the tool on 10 Oct 2025 for three ways of spreading the five seats over BTC, ETH and SOL, each
+seat at the leverage the rule allows its coin, both sides, the keeper a minute late at the open and at the worst price
+of the window. Every seat on one coin is run for each coin, and the worst of the three is the case. The file is
+`results/cascade-v1.2-2026-10-29.json`; the Economics page reads its cases. The worse side, as a share of the seats'
+capital:
+
+| how the seats sit | leverage | open → worst |
+|---|---|---|
+| seats spread over the list, the big ones on the calm coins | BTC and ETH 10x, SOL 5x | 40.2–67.2 % |
+| seats spread over the list, the big one on the riskiest coin | BTC and ETH 10x, SOL 5x | 42.5–84.4 % |
+| every seat on one coin of the list, the worst of the three | ETH 10x – SOL 5x | 68.2–100.0 % |
+
+At 5x on every seat with the seats at 90% of the pool (`make_cascade.py --lev 5 --in-work-bps 9000`), the script
+gives the six runs of `results/layouts-default-list-2026-09-25.json` row for row, and `test_anchor.py` checks it.
+
 `--lag 0` is here for what it is: a stop that rests on the exchange and closes at the line itself.
 That is the line, not a fill in a real book. Walking the order book comes on top, and the book in a
 cascade has not been measured by anyone, so a stop at the line on a day like 10 Oct 2025 could fill
@@ -209,11 +226,12 @@ Requirements: Python 3.10+ and numpy (the stress test uses it; the downloader is
 | `test_anchor.py` | the anchor: the snapshot must still produce the published numbers (`--selftest` checks the comparison alone) |
 | `make_results.py` | the one command that writes every file in `results/` but the levers |
 | `make_levers.py` | the lever runs: where the stop sits, the leverage (the rule's for each coin, or one for all), the coins; and the book's bounds |
+| `make_cascade.py` | the cascade of 10 Oct 2025 on the default list at the rule's leverage: three layouts, both sides |
 | `book/` | the order book measurement: the collector, the walk, the analyzer and their checks |
 | `CHANGES.md` | what the review of 25 Sep 2026 changed, number by number |
 | `fetch_bybit_minutes.py` | downloads the exact bars from Bybit's public API |
 | `data/` | the snapshot: 10 symbols × 8 days × 1440 minutes, with `SHA256SUMS` |
-| `results/` | the four runs (lag 0 / 1 / 2 at the open, lag 1 at the worst price) and the layout run, produced on 25 Sep 2026 by `make_results.py`; the 20 Sep 2026 figures they replace are in `CHANGES.md`; and the lever runs, produced on 29 Sep and 29 Oct 2026 by `make_levers.py`; and `hl-book-2026-09-27.json`, the analyzer's output that the lever file's book is taken from |
+| `results/` | the four runs (lag 0 / 1 / 2 at the open, lag 1 at the worst price) and the layout run, produced on 25 Sep 2026 by `make_results.py`; the 20 Sep 2026 figures they replace are in `CHANGES.md`; and the lever runs, produced on 29 Sep and 29 Oct 2026 by `make_levers.py`; and the cascade at the rule's leverage, produced on 29 Oct 2026 by `make_cascade.py`; and `hl-book-2026-09-27.json`, the analyzer's output that the lever file's book is taken from |
 
 The tool's comments and its JSON keys are in the author's language (Russian). They are kept as they
 are: this package publishes a measurement, and rewriting 400 lines of audited code to translate it

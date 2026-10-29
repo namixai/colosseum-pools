@@ -128,81 +128,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 21478.0,
-        "high": 36034.0
+        "low": 36168.75,
+        "high": 60514.875
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 11478.0,
-        "high": 26034.0
+        "low": 26168.75,
+        "high": 50514.875
        },
        "years_of_base_return": {
-        "low": 4.934939324385595,
-        "high": 8.279430282843398
+        "low": 8.310391409296559,
+        "high": 13.904331704431451
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 28499.000000000004,
-        "high": 62999.0
+        "low": 38217.375,
+        "high": 75998.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 18499.000000000004,
-        "high": 52999.0
+        "low": 28217.375,
+        "high": 65998.25
        },
        "years_of_base_return": {
-        "low": 6.548134640360605,
-        "high": 14.475102081058203
+        "low": 8.781098182432764,
+        "high": 17.461902994202788
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 40716.0,
+        "low": 61405.87500000001,
         "high": 90000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.6140587500000001,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 30716.0,
+        "low": 51405.87500000001,
         "high": 80000.0
        },
        "years_of_base_return": {
-        "low": 9.355200183056331,
+        "low": 14.109054254856426,
         "high": 20.679045497471996
        }
       }
@@ -352,81 +352,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 21478.0,
-        "high": 36034.0
+        "low": 36168.75,
+        "high": 60514.875
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 11478.0,
-        "high": 26034.0
+        "low": 26168.75,
+        "high": 50514.875
        },
        "years_of_base_return": {
-        "low": 3.777901381575461,
-        "high": 6.338248365010251
+        "low": 6.361950395514361,
+        "high": 10.644344439350327
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 28499.000000000004,
-        "high": 62999.0
+        "low": 38217.375,
+        "high": 75998.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 18499.000000000004,
-        "high": 52999.0
+        "low": 28217.375,
+        "high": 65998.25
        },
        "years_of_base_return": {
-        "low": 5.012869516413031,
-        "high": 11.081292910786502
+        "low": 6.7222960151172115,
+        "high": 13.36781328207083
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 40716.0,
+        "low": 61405.87500000001,
         "high": 90000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.6140587500000001,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 30716.0,
+        "low": 51405.87500000001,
         "high": 80000.0
        },
        "years_of_base_return": {
-        "low": 7.161794983342326,
+        "low": 10.801068069622408,
         "high": 15.830669724452532
        }
       }
@@ -576,81 +576,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 21478.0,
-        "high": 36034.0
+        "low": 36168.75,
+        "high": 60514.875
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 11478.0,
-        "high": 26034.0
+        "low": 26168.75,
+        "high": 50514.875
        },
        "years_of_base_return": {
-        "low": 1.295436339878225,
-        "high": 2.1733752244702464
+        "low": 2.1815026128117396,
+        "high": 3.6499286794947525
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 28499.000000000004,
-        "high": 62999.0
+        "low": 38217.375,
+        "high": 75998.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 18499.000000000004,
-        "high": 52999.0
+        "low": 28217.375,
+        "high": 65998.25
        },
        "years_of_base_return": {
-        "low": 1.7189049376194028,
-        "high": 3.7997576113226694
+        "low": 2.3050645492947934,
+        "high": 4.583801788674472
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 40716.0,
+        "low": 61405.87500000001,
         "high": 90000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.6140587500000001,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 30716.0,
+        "low": 51405.87500000001,
         "high": 80000.0
        },
        "years_of_base_return": {
-        "low": 2.455768042391368,
+        "low": 3.7036689615895244,
         "high": 5.4283113227041735
        }
       }
@@ -800,81 +800,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 21478.0,
-        "high": 36034.0
+        "low": 36168.75,
+        "high": 60514.875
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 11478.0,
-        "high": 26034.0
+        "low": 26168.75,
+        "high": 50514.875
        },
        "years_of_base_return": {
-        "low": 1.204604334781137,
-        "high": 2.020984849590441
+        "low": 2.0285423705007566,
+        "high": 3.3940069253998817
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 28499.000000000004,
-        "high": 62999.0
+        "low": 38217.375,
+        "high": 75998.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 18499.000000000004,
-        "high": 52999.0
+        "low": 28217.375,
+        "high": 65998.25
        },
        "years_of_base_return": {
-        "low": 1.5983806190952428,
-        "high": 3.533330314129661
+        "low": 2.1434405246743764,
+        "high": 4.262399729294187
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 40716.0,
+        "low": 61405.87500000001,
         "high": 90000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.6140587500000001,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 30716.0,
+        "low": 51405.87500000001,
         "high": 80000.0
        },
        "years_of_base_return": {
-        "low": 2.283577153131054,
+        "low": 3.4439791044803365,
         "high": 5.047694856611525
        }
       }
@@ -1024,81 +1024,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 21478.0,
-        "high": 36034.0
+        "low": 36168.75,
+        "high": 60514.875
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 11478.0,
-        "high": 26034.0
+        "low": 26168.75,
+        "high": 50514.875
        },
        "years_of_base_return": {
-        "low": 0.61012446947315,
-        "high": 1.0236160318928897
+        "low": 1.0274438683889093,
+        "high": 1.7190430209800256
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 28499.000000000004,
-        "high": 62999.0
+        "low": 38217.375,
+        "high": 75998.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 18499.000000000004,
-        "high": 52999.0
+        "low": 28217.375,
+        "high": 65998.25
        },
        "years_of_base_return": {
-        "low": 0.8095696645644522,
-        "high": 1.7896094353449568
+        "low": 1.0856390560821039,
+        "high": 2.1588784785425936
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 40716.0,
+        "low": 61405.87500000001,
         "high": 90000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.6140587500000001,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 30716.0,
+        "low": 51405.87500000001,
         "high": 80000.0
        },
        "years_of_base_return": {
-        "low": 1.1566173712202616,
+        "low": 1.7443536133210529,
         "high": 2.5566254889926205
        }
       }
@@ -1248,81 +1248,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 21478.0,
-        "high": 36034.0
+        "low": 36168.75,
+        "high": 60514.875
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 11478.0,
-        "high": 26034.0
+        "low": 26168.75,
+        "high": 50514.875
        },
        "years_of_base_return": {
-        "low": 0.5919272866059395,
-        "high": 0.9930863136958015
+        "low": 0.9967999835845318,
+        "high": 1.6677719414306549
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 28499.000000000004,
-        "high": 62999.0
+        "low": 38217.375,
+        "high": 75998.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 18499.000000000004,
-        "high": 52999.0
+        "low": 28217.375,
+        "high": 65998.25
        },
        "years_of_base_return": {
-        "low": 0.7854239566525129,
-        "high": 1.7362336869767943
+        "low": 1.0532594787667227,
+        "high": 2.0944891474671685
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 40716.0,
+        "low": 61405.87500000001,
         "high": 90000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.6140587500000001,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 30716.0,
+        "low": 51405.87500000001,
         "high": 80000.0
        },
        "years_of_base_return": {
-        "low": 1.1221208399966214,
+        "low": 1.692327636205117,
         "high": 2.4803732095416033
        }
       }
@@ -1472,81 +1472,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 107390.0,
-        "high": 180170.0
+        "low": 180843.75,
+        "high": 302574.375
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 57390.0,
-        "high": 130170.0
+        "low": 130843.75,
+        "high": 252574.375
        },
        "years_of_base_return": {
-        "low": 4.583782597771406,
-        "high": 7.690288766556237
+        "low": 7.719046784297633,
+        "high": 12.91493765393947
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 142495.0,
-        "high": 314995.0
+        "low": 191086.875,
+        "high": 379991.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 92495.0,
-        "high": 264995.0
+        "low": 141086.875,
+        "high": 329991.25
        },
        "years_of_base_return": {
-        "low": 6.082187366323089,
-        "high": 13.44509357840585
+        "low": 8.156259356434678,
+        "high": 16.219361942968657
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 203580.0,
+        "low": 307029.375,
         "high": 450000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 153580.0,
+        "low": 257029.375,
         "high": 400000.0
        },
        "years_of_base_return": {
-        "low": 8.689509835685845,
+        "low": 13.105092710025433,
         "high": 19.207581422824592
        }
       }
@@ -1696,81 +1696,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 107390.0,
-        "high": 180170.0
+        "low": 180843.75,
+        "high": 302574.375
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 57390.0,
-        "high": 130170.0
+        "low": 130843.75,
+        "high": 252574.375
        },
        "years_of_base_return": {
-        "low": 3.510273199698679,
-        "high": 5.889244085945721
+        "low": 5.911267054269559,
+        "high": 9.890294435963106
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 142495.0,
-        "high": 314995.0
+        "low": 191086.875,
+        "high": 379991.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 92495.0,
-        "high": 264995.0
+        "low": 141086.875,
+        "high": 329991.25
        },
        "years_of_base_return": {
-        "low": 4.65775565314334,
-        "high": 10.296289287075943
+        "low": 6.24608563298884,
+        "high": 12.42083155782662
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 203580.0,
+        "low": 307029.375,
         "high": 450000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 153580.0,
+        "low": 257029.375,
         "high": 400000.0
        },
        "years_of_base_return": {
-        "low": 6.654450302585502,
+        "low": 10.035915695900322,
         "high": 14.709218175476353
        }
       }
@@ -1920,81 +1920,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 107390.0,
-        "high": 180170.0
+        "low": 180843.75,
+        "high": 302574.375
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 57390.0,
-        "high": 130170.0
+        "low": 130843.75,
+        "high": 252574.375
        },
        "years_of_base_return": {
-        "low": 1.047216488600931,
-        "high": 1.756932626419869
+        "low": 1.7635027177616596,
+        "high": 2.950562198790589
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 142495.0,
-        "high": 314995.0
+        "low": 191086.875,
+        "high": 379991.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 92495.0,
-        "high": 264995.0
+        "low": 141086.875,
+        "high": 329991.25
        },
        "years_of_base_return": {
-        "low": 1.3895438452666886,
-        "high": 3.071682259305804
+        "low": 1.86338882815183,
+        "high": 3.7054949485434263
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 203580.0,
+        "low": 307029.375,
         "high": 450000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 153580.0,
+        "low": 257029.375,
         "high": 400000.0
        },
        "years_of_base_return": {
-        "low": 1.9852158743772936,
+        "low": 2.9940052517444684,
         "high": 4.388187167058562
        }
       }
@@ -2144,81 +2144,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 107390.0,
-        "high": 180170.0
+        "low": 180843.75,
+        "high": 302574.375
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 57390.0,
-        "high": 130170.0
+        "low": 130843.75,
+        "high": 252574.375
        },
        "years_of_base_return": {
-        "low": 0.9743683697835223,
-        "high": 1.6347141184830731
+        "low": 1.6408271708076996,
+        "high": 2.7453105550518497
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 142495.0,
-        "high": 314995.0
+        "low": 191086.875,
+        "high": 379991.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 92495.0,
-        "high": 264995.0
+        "low": 141086.875,
+        "high": 329991.25
        },
        "years_of_base_return": {
-        "low": 1.2928822129835462,
-        "high": 2.8580050716077907
+        "low": 1.7337648466410065,
+        "high": 3.44772748667942
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 203580.0,
+        "low": 307029.375,
         "high": 450000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 153580.0,
+        "low": 257029.375,
         "high": 400000.0
        },
        "years_of_base_return": {
-        "low": 1.8471171684563692,
+        "low": 2.7857315540963192,
         "high": 4.082929196411072
        }
       }
@@ -2368,81 +2368,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 107390.0,
-        "high": 180170.0
+        "low": 180843.75,
+        "high": 302574.375
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 57390.0,
-        "high": 130170.0
+        "low": 130843.75,
+        "high": 252574.375
        },
        "years_of_base_return": {
-        "low": 0.44127076848535046,
-        "high": 0.7403273522488648
+        "low": 0.7430958239898743,
+        "high": 1.243292922806822
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 142495.0,
-        "high": 314995.0
+        "low": 191086.875,
+        "high": 379991.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 92495.0,
-        "high": 264995.0
+        "low": 141086.875,
+        "high": 329991.25
        },
        "years_of_base_return": {
-        "low": 0.5855189324454793,
-        "high": 1.2943298791232236
+        "low": 0.7851853261822711,
+        "high": 1.5614026529957066
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 203580.0,
+        "low": 307029.375,
         "high": 450000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 153580.0,
+        "low": 257029.375,
         "high": 400000.0
        },
        "years_of_base_return": {
-        "low": 0.8365201885487257,
+        "low": 1.2615987359514558,
         "high": 1.8490720348115068
        }
       }
@@ -2592,81 +2592,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 107390.0,
-        "high": 180170.0
+        "low": 180843.75,
+        "high": 302574.375
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 57390.0,
-        "high": 130170.0
+        "low": 130843.75,
+        "high": 252574.375
        },
        "years_of_base_return": {
-        "low": 0.4282769708379065,
-        "high": 0.7185274405053135
+        "low": 0.7212143909578885,
+        "high": 1.206682528896292
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 142495.0,
-        "high": 314995.0
+        "low": 191086.875,
+        "high": 379991.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 92495.0,
-        "high": 264995.0
+        "low": 141086.875,
+        "high": 329991.25
        },
        "years_of_base_return": {
-        "low": 0.5682775580551959,
-        "high": 1.256216634966816
+        "low": 0.762064512448847,
+        "high": 1.5154251000550296
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 203580.0,
+        "low": 307029.375,
         "high": 450000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 153580.0,
+        "low": 257029.375,
         "high": 400000.0
        },
        "years_of_base_return": {
-        "low": 0.8118877523343049,
+        "low": 1.2244493033174007,
         "high": 1.7946236788998782
        }
       }
@@ -2816,81 +2816,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 214780.0,
-        "high": 360340.0
+        "low": 361687.5,
+        "high": 605148.75
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 114780.0,
-        "high": 260340.0
+        "low": 261687.5,
+        "high": 505148.75
        },
        "years_of_base_return": {
-        "low": 4.582982059667645,
-        "high": 7.688945690383831
+        "low": 7.717698685659938,
+        "high": 12.912682115095917
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 284990.0,
-        "high": 629990.0
+        "low": 382173.75,
+        "high": 759982.5
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 184990.0,
-        "high": 529990.0
+        "low": 282173.75,
+        "high": 659982.5
        },
        "years_of_base_return": {
-        "low": 6.081125138209714,
-        "high": 13.442745450088557
+        "low": 8.154834900483786,
+        "high": 16.21652930049989
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 407160.0,
+        "low": 614058.75,
         "high": 900000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 307160.0,
+        "low": 514058.75,
         "high": 800000.0
        },
        "years_of_base_return": {
-        "low": 8.687992249810405,
+        "low": 13.102803961411396,
         "high": 19.2042269005535
        }
       }
@@ -3040,81 +3040,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 214780.0,
-        "high": 360340.0
+        "low": 361687.5,
+        "high": 605148.75
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 114780.0,
-        "high": 260340.0
+        "low": 261687.5,
+        "high": 505148.75
        },
        "years_of_base_return": {
-        "low": 3.509662208957583,
-        "high": 5.888219016555431
+        "low": 5.9102381516079046,
+        "high": 9.888572952197226
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 284990.0,
-        "high": 629990.0
+        "low": 382173.75,
+        "high": 759982.5
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 184990.0,
-        "high": 529990.0
+        "low": 282173.75,
+        "high": 659982.5
        },
        "years_of_base_return": {
-        "low": 4.65694493402934,
-        "high": 10.294497136703548
+        "low": 6.244998452512352,
+        "high": 12.41866961411261
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 407160.0,
+        "low": 614058.75,
         "high": 900000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 307160.0,
+        "low": 514058.75,
         "high": 800000.0
        },
        "years_of_base_return": {
-        "low": 6.653292043016899,
+        "low": 10.03416886560542,
         "high": 14.70665792001967
        }
       }
@@ -3264,81 +3264,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 214780.0,
-        "high": 360340.0
+        "low": 361687.5,
+        "high": 605148.75
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 114780.0,
-        "high": 260340.0
+        "low": 261687.5,
+        "high": 505148.75
        },
        "years_of_base_return": {
-        "low": 1.0285443233251041,
-        "high": 1.7256060222877736
+        "low": 1.7320589670483686,
+        "high": 2.8979528428148926
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 284990.0,
-        "high": 629990.0
+        "low": 382173.75,
+        "high": 759982.5
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 184990.0,
-        "high": 529990.0
+        "low": 282173.75,
+        "high": 659982.5
        },
        "years_of_base_return": {
-        "low": 1.364767886695323,
-        "high": 3.016913298498847
+        "low": 1.8301640799253538,
+        "high": 3.639424928770933
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 407160.0,
+        "low": 614058.75,
         "high": 900000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 307160.0,
+        "low": 514058.75,
         "high": 800000.0
        },
        "years_of_base_return": {
-        "low": 1.949818915564994,
+        "low": 2.9406212938849485,
         "high": 4.309944552530933
        }
       }
@@ -3488,81 +3488,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 214780.0,
-        "high": 360340.0
+        "low": 361687.5,
+        "high": 605148.75
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 114780.0,
-        "high": 260340.0
+        "low": 261687.5,
+        "high": 505148.75
        },
        "years_of_base_return": {
-        "low": 0.9570359774341194,
-        "high": 1.6056352738085975
+        "low": 1.6116395851019791,
+        "high": 2.6964760473474514
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 284990.0,
-        "high": 629990.0
+        "low": 382173.75,
+        "high": 759982.5
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 184990.0,
-        "high": 529990.0
+        "low": 282173.75,
+        "high": 659982.5
        },
        "years_of_base_return": {
-        "low": 1.2698839892399185,
-        "high": 2.807165915931283
+        "low": 1.7029240542923587,
+        "high": 3.38639815029484
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 407160.0,
+        "low": 614058.75,
         "high": 900000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 307160.0,
+        "low": 514058.75,
         "high": 800000.0
        },
        "years_of_base_return": {
-        "low": 1.814260026874365,
+        "low": 2.7361780240628715,
         "high": 4.010300678325298
        }
       }
@@ -3712,81 +3712,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 214780.0,
-        "high": 360340.0
+        "low": 361687.5,
+        "high": 605148.75
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 114780.0,
-        "high": 260340.0
+        "low": 261687.5,
+        "high": 505148.75
        },
        "years_of_base_return": {
-        "low": 0.40917684158233086,
-        "high": 0.6864828340431004
+        "low": 0.6890499529276902,
+        "high": 1.1528673722529823
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 284990.0,
-        "high": 629990.0
+        "low": 382173.75,
+        "high": 759982.5
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 184990.0,
-        "high": 529990.0
+        "low": 282173.75,
+        "high": 659982.5
        },
        "years_of_base_return": {
-        "low": 0.542933737231346,
-        "high": 1.2001923755864263
+        "low": 0.7280782566378402,
+        "high": 1.4478407626773617
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 407160.0,
+        "low": 614058.75,
         "high": 900000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 307160.0,
+        "low": 514058.75,
         "high": 800000.0
        },
        "years_of_base_return": {
-        "low": 0.7756794991091436,
+        "low": 1.1698417910000658,
         "high": 1.7145877522306443
        }
       }
@@ -3936,81 +3936,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 214780.0,
-        "high": 360340.0
+        "low": 361687.5,
+        "high": 605148.75
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 114780.0,
-        "high": 260340.0
+        "low": 261687.5,
+        "high": 505148.75
        },
        "years_of_base_return": {
-        "low": 0.397165031115728,
-        "high": 0.666330418624832
+        "low": 0.6688221770726784,
+        "high": 1.1190237551140418
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 284990.0,
-        "high": 629990.0
+        "low": 382173.75,
+        "high": 759982.5
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 184990.0,
-        "high": 529990.0
+        "low": 282173.75,
+        "high": 659982.5
        },
        "years_of_base_return": {
-        "low": 0.5269953543983208,
-        "high": 1.1649594839025863
+        "low": 0.7067047644583502,
+        "high": 1.405337895799929
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 407160.0,
+        "low": 614058.75,
         "high": 900000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.61405875,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 307160.0,
+        "low": 514058.75,
         "high": 800000.0
        },
        "years_of_base_return": {
-        "low": 0.7529086230984254,
+        "low": 1.1354998721977607,
         "high": 1.6642542508806928
        }
       }
@@ -4165,81 +4165,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 42956.0,
-        "high": 72068.0
+        "low": 72337.5,
+        "high": 121029.75
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 2.9830555555555556,
-        "high": 5.004722222222222
+        "low": 5.0234375,
+        "high": 8.40484375
        },
        "loss_beyond_reserve_usd": {
-        "low": 22956.0,
-        "high": 52068.0
+        "low": 52337.5,
+        "high": 101029.75
        },
        "years_of_base_return": {
-        "low": 1.0070750896610343,
-        "high": 1.6895867297162541
+        "low": 1.6959049794756276,
+        "high": 2.8374626672153496
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 56998.00000000001,
-        "high": 125998.0
+        "low": 76434.75,
+        "high": 151996.5
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 3.9581944444444446,
-        "high": 8.74986111111111
+        "low": 5.30796875,
+        "high": 10.5553125
        },
        "loss_beyond_reserve_usd": {
-        "low": 36998.00000000001,
-        "high": 105998.0
+        "low": 56434.75,
+        "high": 131996.5
        },
        "years_of_base_return": {
-        "low": 1.3362805186818985,
-        "high": 2.953940011805359
+        "low": 1.7919623035075132,
+        "high": 3.5634576977759425
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 81432.0,
+        "low": 122811.75000000001,
         "high": 180000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.6140587500000001,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 5.655,
+        "low": 8.52859375,
         "high": 12.5
        },
        "loss_beyond_reserve_usd": {
-        "low": 61432.0,
+        "low": 102811.75000000001,
         "high": 160000.0
        },
        "years_of_base_return": {
-        "low": 1.909119533971444,
+        "low": 2.8792404819507995,
         "high": 4.219981286409027
        }
       }
@@ -4390,24 +4390,24 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 21478.0,
-        "high": 36034.0
+        "low": 36168.75,
+        "high": 60514.875
        },
        "loss_share_of_pool": {
-        "low": 0.21478,
-        "high": 0.36034
+        "low": 0.3616875,
+        "high": 0.60514875
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 11478.0,
-        "high": 26034.0
+        "low": 26168.75,
+        "high": 50514.875
        },
        "years_of_base_return": {
         "low": null,
@@ -4417,24 +4417,24 @@
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 28499.000000000004,
-        "high": 62999.0
+        "low": 38217.375,
+        "high": 75998.25
        },
        "loss_share_of_pool": {
-        "low": 0.28499,
-        "high": 0.62999
+        "low": 0.38217375,
+        "high": 0.7599825
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 18499.000000000004,
-        "high": 52999.0
+        "low": 28217.375,
+        "high": 65998.25
        },
        "years_of_base_return": {
         "low": null,
@@ -4442,25 +4442,25 @@
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 40716.0,
+        "low": 61405.87500000001,
         "high": 90000.0
        },
        "loss_share_of_pool": {
-        "low": 0.40716,
+        "low": 0.6140587500000001,
         "high": 0.9
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 30716.0,
+        "low": 51405.87500000001,
         "high": 80000.0
        },
        "years_of_base_return": {
@@ -4614,81 +4614,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 21478.0,
-        "high": 36034.0
+        "low": 36168.75,
+        "high": 60514.875
        },
        "loss_share_of_pool": {
-        "low": 0.23732596685082874,
-        "high": 0.3981657458563536
+        "low": 0.3996546961325967,
+        "high": 0.6686726519337016
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 20978.0,
-        "high": 35534.0
+        "low": 35668.75,
+        "high": 60014.875
        },
        "years_of_base_return": {
-        "low": 4.934939324385595,
-        "high": 8.279430282843398
+        "low": 8.310391409296559,
+        "high": 13.904331704431451
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 28499.000000000004,
-        "high": 62999.0
+        "low": 38217.375,
+        "high": 75998.25
        },
        "loss_share_of_pool": {
-        "low": 0.31490607734806636,
-        "high": 0.696121546961326
+        "low": 0.4222914364640884,
+        "high": 0.8397596685082873
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 27999.000000000004,
-        "high": 62499.0
+        "low": 37717.375,
+        "high": 75498.25
        },
        "years_of_base_return": {
-        "low": 6.5481346403606056,
-        "high": 14.475102081058203
+        "low": 8.781098182432764,
+        "high": 17.46190299420279
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 40716.0,
+        "low": 61405.87500000001,
         "high": 90000.0
        },
        "loss_share_of_pool": {
-        "low": 0.4499005524861878,
+        "low": 0.6785179558011051,
         "high": 0.994475138121547
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 40216.0,
+        "low": 60905.87500000001,
         "high": 89500.0
        },
        "years_of_base_return": {
-        "low": 9.35520018305633,
+        "low": 14.109054254856426,
         "high": 20.679045497471996
        }
       }
@@ -4812,81 +4812,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 17182.399999999998,
-        "high": 28827.2
+        "low": 28935.0,
+        "high": 48411.9
        },
        "loss_share_of_pool": {
-        "low": 0.19749885057471261,
-        "high": 0.3313471264367816
+        "low": 0.3325862068965517,
+        "high": 0.5564586206896552
        },
        "multiple_of_rules_cap": {
-        "low": 4.772888888888889,
-        "high": 8.007555555555555
+        "low": 8.0375,
+        "high": 13.44775
        },
        "loss_beyond_reserve_usd": {
-        "low": 2182.399999999998,
-        "high": 13827.2
+        "low": 13935.0,
+        "high": 33411.9
        },
        "years_of_base_return": {
-        "low": 0.4490345014286621,
-        "high": 0.7533526969215202
+        "low": 0.756169877248716,
+        "high": 1.2651674608735828
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 22799.2,
-        "high": 50399.2
+        "low": 30573.9,
+        "high": 60798.6
        },
        "loss_share_of_pool": {
-        "low": 0.2620597701149425,
-        "high": 0.5793011494252873
+        "low": 0.3514241379310345,
+        "high": 0.6988344827586207
        },
        "multiple_of_rules_cap": {
-        "low": 6.333111111111111,
-        "high": 13.999777777777776
+        "low": 8.49275,
+        "high": 16.888499999999997
        },
        "loss_beyond_reserve_usd": {
-        "low": 7799.200000000001,
-        "high": 35399.2
+        "low": 15573.900000000001,
+        "high": 45798.6
        },
        "years_of_base_return": {
-        "low": 0.5958205725028142,
-        "high": 1.3171023631392254
+        "low": 0.7989999035774847,
+        "high": 1.588874024499526
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 32572.800000000003,
+        "low": 49124.700000000004,
         "high": 72000.0
        },
        "loss_share_of_pool": {
-        "low": 0.3744,
+        "low": 0.5646517241379311,
         "high": 0.8275862068965517
        },
        "multiple_of_rules_cap": {
-        "low": 9.048,
+        "low": 13.64575,
         "high": 20.0
        },
        "loss_beyond_reserve_usd": {
-        "low": 17572.800000000003,
+        "low": 34124.700000000004,
         "high": 57000.0
        },
        "years_of_base_return": {
-        "low": 0.8512379532623805,
+        "low": 1.2837953471187145,
         "high": 1.8816046712254209
        }
       }
@@ -5007,81 +5007,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 26250.888888888887,
-        "high": 44041.555555555555
+        "low": 44206.25,
+        "high": 73962.625
        },
        "loss_share_of_pool": {
-        "low": 0.1875063492063492,
-        "high": 0.3145825396825397
+        "low": 0.31575892857142857,
+        "high": 0.5283044642857143
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 0.0,
-        "high": 14041.555555555555
+        "low": 14206.25,
+        "high": 43962.625
        },
        "years_of_base_return": {
-        "low": 0.5882421459121041,
-        "high": 0.9869036914888146
+        "low": 0.99059424131476,
+        "high": 1.6573889528635228
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 34832.11111111112,
-        "high": 76998.77777777778
+        "low": 46710.125,
+        "high": 92886.75
        },
        "loss_share_of_pool": {
-        "low": 0.2488007936507937,
-        "high": 0.5499912698412699
+        "low": 0.33364375,
+        "high": 0.6634767857142857
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 4832.111111111117,
-        "high": 46998.77777777778
+        "low": 16710.125,
+        "high": 62886.75
        },
        "years_of_base_return": {
-        "low": 0.780534170609417,
-        "high": 1.7254244785509196
+        "low": 1.0467022386221996,
+        "high": 2.0814495607395735
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 49764.0,
+        "low": 75051.625,
         "high": 110000.0
        },
        "loss_share_of_pool": {
-        "low": 0.35545714285714286,
+        "low": 0.5360830357142857,
         "high": 0.7857142857142857
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 19764.0,
+        "low": 45051.625,
         "high": 80000.0
        },
        "years_of_base_return": {
-        "low": 1.1151348921201802,
+        "low": 1.6817917721207947,
         "high": 2.4649312381082673
        }
       }
@@ -5200,81 +5200,81 @@
       "spread_calm": {
        "label": "seats spread over the list, the big ones on the calm coins",
        "loss_share_of_seats": {
-        "low": 0.23864444444444444,
-        "high": 0.4003777777777778
+        "low": 0.401875,
+        "high": 0.6723875
        },
        "loss_usd": {
-        "low": 15511.888888888889,
-        "high": 26024.555555555555
+        "low": 26121.875,
+        "high": 43705.1875
        },
        "loss_share_of_pool": {
-        "low": 0.2068251851851852,
-        "high": 0.34699407407407407
+        "low": 0.34829166666666667,
+        "high": 0.5827358333333333
        },
        "multiple_of_rules_cap": {
-        "low": 3.9774074074074073,
-        "high": 6.672962962962963
+        "low": 6.697916666666667,
+        "high": 11.206458333333334
        },
        "loss_beyond_reserve_usd": {
-        "low": 5511.888888888889,
-        "high": 16024.555555555555
+        "low": 16121.875,
+        "high": 33705.1875
        },
        "years_of_base_return": {
-        "low": 1.3510485693534073,
-        "high": 2.2666767924425306
+        "low": 2.2751530842164565,
+        "high": 3.8066177154926097
        }
       },
       "spread_risky": {
        "label": "seats spread over the list, the big one on the riskiest coin",
        "loss_share_of_seats": {
-        "low": 0.3166555555555556,
-        "high": 0.6999888888888889
+        "low": 0.4246375,
+        "high": 0.844425
        },
        "loss_usd": {
-        "low": 20582.611111111113,
-        "high": 45499.27777777778
+        "low": 27601.4375,
+        "high": 54887.625
        },
        "loss_share_of_pool": {
-        "low": 0.27443481481481485,
-        "high": 0.6066570370370371
+        "low": 0.3680191666666667,
+        "high": 0.731835
        },
        "multiple_of_rules_cap": {
-        "low": 5.277592592592593,
-        "high": 11.666481481481481
+        "low": 7.0772916666666665,
+        "high": 14.07375
        },
        "loss_beyond_reserve_usd": {
-        "low": 10582.611111111113,
-        "high": 35499.27777777778
+        "low": 17601.4375,
+        "high": 44887.625
        },
        "years_of_base_return": {
-        "low": 1.7926963952883304,
-        "high": 3.9628787047534835
+        "low": 2.404019453310023,
+        "high": 4.780581382617683
        }
       },
       "single_coin": {
-       "label": "every seat on the riskiest coin of the list",
+       "label": "every seat on one coin of the list, the worst of the three",
        "loss_share_of_seats": {
-        "low": 0.4524,
+        "low": 0.6822875,
         "high": 1.0
        },
        "loss_usd": {
-        "low": 29406.0,
+        "low": 44348.6875,
         "high": 65000.0
        },
        "loss_share_of_pool": {
-        "low": 0.39208,
+        "low": 0.5913158333333334,
         "high": 0.8666666666666667
        },
        "multiple_of_rules_cap": {
-        "low": 7.540000000000001,
+        "low": 11.371458333333335,
         "high": 16.666666666666668
        },
        "loss_beyond_reserve_usd": {
-        "low": 19406.0,
+        "low": 34348.6875,
         "high": 55000.0
        },
        "years_of_base_return": {
-        "low": 2.561192548179222,
+        "low": 3.8626650325283625,
         "high": 5.661345155126486
        }
       }

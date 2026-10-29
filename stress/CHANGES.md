@@ -121,3 +121,16 @@ between two hundredths, and rounding a float lands either side of it.
 
 `results/levers-2026-09-29.json` stays as it was published. `test_anchor.py` makes both runs and checks
 the new file, the twelve old cells at 90%, the rule's three cells and the README's table.
+
+## 29 Oct 2026 — the cascade at the leverage rule v1.2: an addition, nothing published moved
+
+`make_cascade.py` runs the tool on 10 Oct 2025 for the layouts of `make_results.py` on BTC, ETH and SOL, each seat at
+the leverage the rule allows its coin, both sides, the keeper a minute late at the open and at the worst price of the
+window; and every seat on each coin in turn, since at the rule's leverage the riskiest coin is not known in advance.
+It writes `results/cascade-v1.2-2026-10-29.json`, with the cases the Economics page reads: the worse side of the worse
+layout as a share of the seats' capital. The big seats on the calm coins take 40.2–67.2 %, the big seat on SOL
+42.5–84.4 %, every seat on one coin 68.2 % (ETH at 10x) to 100 % (SOL at 5x).
+
+Run at 5x on every seat with the seats at 90% of the pool, the script gives the six runs of the 25 Sep layout file row
+for row; `test_anchor.py` makes both runs. The layout file stays as it was published, and so do the four run files
+the overshoot and the wide list are read from, at 5x.

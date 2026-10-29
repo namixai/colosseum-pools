@@ -358,6 +358,40 @@ def main() -> int:
             missing = [q for q in quoted if q not in readme]
             (ok("the README's lever table is the lever file") if not missing and "make_levers.py" in readme
              else bad("README levers", f"not in README.md: {missing}"))
+    # The cascade on the default list at the rule's leverage (make_cascade.py, 29 Oct 2026): the file again, and at 5x
+    # with the seats at 90%, the layout file of 25 Sep 2026, row for row.
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as tmp5:
+        runs = [subprocess.run([sys.executable, os.path.join(HERE, "make_cascade.py"), "--out", out, *extra],
+                               capture_output=True, text=True)
+                for out, extra in ((tmp, ()), (tmp5, ("--lev", "5", "--in-work-bps", "9000")))]
+        fresh_path, path5 = (os.path.join(d, "cascade-v1.2-2026-10-29.json") for d in (tmp, tmp5))
+        if any(r.returncode for r in runs) or not (os.path.exists(fresh_path) and os.path.exists(path5)):
+            bad("cascade", f"make_cascade.py failed: {[r.stderr[-300:] for r in runs if r.returncode]}")
+        else:
+            with open(os.path.join(RESULTS, "cascade-v1.2-2026-10-29.json"), encoding="utf-8") as f:
+                cascade = json.load(f)
+            with open(fresh_path, encoding="utf-8") as f:
+                fresh = json.load(f)
+            (ok(f"make_cascade.py reproduces results/cascade-v1.2-2026-10-29.json, all {len(cascade['runs'])} runs and the cases")
+             if fresh == cascade else bad("cascade", "a fresh run differs from results/cascade-v1.2-2026-10-29.json"))
+            with open(path5, encoding="utf-8") as f:
+                at5 = {(r["layout"], r["exec"]): r for r in json.load(f)["runs"]}
+            with open(os.path.join(RESULTS, "layouts-default-list-2026-09-25.json"), encoding="utf-8") as f:
+                sep = json.load(f)
+            # Every field of the 25 Sep rows; the new rows carry one more, the pool's share.
+            moved = [(r["layout"], r["exec"]) for r in sep["runs"]
+                     if [{k: x[k] for k in old} for old, x in zip(r["rows"], at5.get((r["layout"], r["exec"]), {}).get("rows", []))] != r["rows"]]
+            (ok("at 5x with the seats at 90% the script gives the 25 Sep layout file's six runs, row for row")
+             if not moved and len(sep["runs"]) == 6 else bad("cascade at 5x", f"moved: {moved}"))
+            pct = {n: [round(c[m] * 100, 1) for m in ("open", "worst")] for n, c in cascade["cases"].items()}
+            want = {"spread_calm": [40.2, 67.2], "spread_risky": [42.5, 84.4], "single_coin": [68.2, 100.0]}
+            (ok("the rule's cascade on BTC, ETH, SOL: 40.2-67.2 / 42.5-84.4 / 68.2-100% of the seats")
+             if pct == want else bad("cascade cases", f"{pct}"))
+            quoted = [f"| {c['label']} | {c['leverage']['open'] if c['leverage']['open'] == c['leverage']['worst'] else c['leverage']['open'] + ' – ' + c['leverage']['worst']} | "
+                      f"{pct[n][0]}–{pct[n][1]} % |" for n, c in cascade["cases"].items()]
+            missing = [q for q in quoted if q not in readme]
+            (ok("the README's cascade table is the cascade file") if not missing and "make_cascade.py" in readme
+             else bad("README cascade", f"not in README.md: {missing}"))
     # The seats' share of the pool is a share: none, or more than the whole pool, is refused before any run.
     with tempfile.TemporaryDirectory() as tmp:
         refused = [subprocess.run([sys.executable, os.path.join(HERE, "make_levers.py"), "--in-work-bps", bps, "--out", tmp],

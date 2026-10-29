@@ -161,7 +161,6 @@ function formPanel(page) {
         <label>Assets the rules allow
           <select name="assetList">
             <option value="default">BTC, ETH, SOL — what the demo deploys with</option>
-            <option value="wide">a wide list, ten coins including SUI and DOGE</option>
           </select></label>
         <label>Challenge account
           <select name="chmode">
@@ -296,7 +295,7 @@ function run(form, page) {
   box.className = "";
   box.innerHTML = results(tables, Object.fromEntries(runs), lendingDemand(tables, spec), spec.mode);
   cascadeBox.className = "";
-  cascadeBox.innerHTML = cascade(Object.fromEntries(runs).base);
+  cascadeBox.innerHTML = cascadeCard(Object.fromEntries(runs).base, tables);
 }
 
 /** A share already in percent, as the lever cells carry it. */
@@ -448,11 +447,18 @@ export function leversCard(tables) {
  * seats sit on alts are two different pools. A single headline figure with no list attached is wrong
  * for one of them.
  */
-function cascade(r) {
+export function cascadeCard(r, tables) {
   const c = r.cascade;
+  // The list's own measurement: the leverage of each case and the note on how it was taken, from the table.
+  const list = tables.tail.cascade.lists[c.asset_list];
   const span = (o, f) => `${f(o.low)} – ${f(o.high)}`;
-  const rows = Object.values(c.cases).map((k) => `<tr>
+  const leverage = (name) => {
+    const { open, worst } = list.cases[name].leverage;
+    return open === worst ? open : `${open} – ${worst}`;
+  };
+  const rows = Object.entries(c.cases).map(([name, k]) => `<tr>
     <td>${esc(k.label)}</td>
+    <td>${esc(leverage(name))}</td>
     <td>${span(k.loss_share_of_seats, (v) => percent(v))}</td>
     <td>${span(k.loss_usd, money)}</td>
     <td>${span(k.loss_share_of_pool, (v) => percent(v, 0))}</td>
@@ -462,23 +468,24 @@ function cascade(r) {
   </tr>`).join("");
   const worst = Math.max(...Object.values(c.cases).map((k) => k.loss_share_of_seats.high));
   return `
-    ${row("Measured on", `${esc(c.day)}, a pool whose rules allow <strong>${esc(c.coins.join(", "))}</strong>`)}
+    ${row("Measured on", `${esc(c.day)}, a pool whose rules allow <strong>${esc(c.coins.join(", "))}</strong>, the seats at ${esc(list.leverage)}`)}
     ${row("What the rules allowed that day", `${money(c.rules_cap_usd)} — ${percent(c.measured_rules.max_drawdown, 0)} of the seats' capital`)}
     ${row("What a cascade actually took", `<strong>up to ${percent(worst)} of the seats' capital</strong>`)}
     <div class="scroll"><table>
-      <thead><tr><th>how the seats sit on the list</th><th>of the seats' capital</th><th>in dollars</th>
+      <thead><tr><th>how the seats sit on the list</th><th>leverage</th><th>of the seats' capital</th><th>in dollars</th>
       <th>of the whole pool</th><th>times what the rules allowed</th><th>past the reserve</th>
       <th>years of the base return</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
     <p class="small">Each cell is a range: the low end is a stop that executes at the next open, the high end at
     the worst price of the delay window. A price that moves that far in a minute is not bound by a line checked
     once a minute, on this venue or any other — this is a property of trading, not of this code.</p>
-    <p class="notice"><strong>${esc(c.note)}</strong></p>
+    <p class="notice"><strong>${esc(list.note ?? c.note)}</strong></p>
     ${c.rules_match ? "" : `<p class="notice">${badge("these are not the rules the cascade was measured on", "bad")}
       It was measured at ${percent(c.measured_rules.daily_loss, 0)} a day and
       ${percent(c.measured_rules.max_drawdown, 0)} from the start; yours differ, so read the table as a guide and
       not as your pool's number.</p>`}
-    <p class="small muted">The 1-in-100 overshoot the rest of the page uses comes from the same measurement:
+    <p class="small muted">The 1-in-100 overshoot the rest of the page uses is measured on the stress test's own pool,
+    every coin of the snapshot at ${c.measured_rules.leverage}x each, over the same crash days:
     ${span(r.worst_overshoot_range, (v) => percent(v))} of equity past the line, not the thin tail of a formula.</p>`;
 }
 
