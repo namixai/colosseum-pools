@@ -256,8 +256,8 @@ The code is unaudited. We reviewed the contracts internally and fixed what we fo
 limits that remain are listed in [docs/DESIGN.md](docs/DESIGN.md#what-the-design-does-not-do).
 The hackathon version leaves out several traders per pool, a leaderboard, collusion detection,
 a token and mainnet. Pool shares exist only in the shared pool, a layer over these pools with
-one trader per seat ([docs/SHARED-POOL.md](docs/SHARED-POOL.md)); it runs on testnet and is not
-part of the reviewed core.
+one trader per seat ([docs/SHARED-POOL.md](docs/SHARED-POOL.md)); it runs on testnet, and it was
+in the scope of the same internal review ([docs/REVIEW-NOTES.md](docs/REVIEW-NOTES.md)).
 
 The app asks each visitor once to confirm they understand it is a testnet demo with mock funds.
 
