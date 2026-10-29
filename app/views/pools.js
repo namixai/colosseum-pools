@@ -149,7 +149,9 @@ async function readList(live, seen = () => {}) {
     const fromChain = await chain.readAll([...addresses.entries()],
       ([index, address]) => readPoolChain(address, index, deployment), POOLS_AT_ONCE);
     sofar.set(deployment, { items: fromChain, fee });
-    seen(DEPLOYMENTS.flatMap((d) => sofar.get(d)?.items ?? []), sofar.get(live)?.fee ?? 0n);
+    // Nothing is shown before the live deployment has answered: with the archive's pools alone, the line above
+    // the list would say "No pools on the live deployment yet" of a deployment that has not been heard from.
+    if (sofar.has(live)) seen(DEPLOYMENTS.flatMap((d) => sofar.get(d)?.items ?? []), sofar.get(live).fee);
     return { deployment, fee, items: await Promise.all(fromChain.map(withSpot)) };
   }));
   return { items: parts.flatMap((part) => part.items), fee: parts.find((part) => part.deployment === live)?.fee ?? 0n };

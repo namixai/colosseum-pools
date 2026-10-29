@@ -13,6 +13,7 @@ import { verifyView } from "./views/verify.js";
 import { economicsView } from "./views/economics.js";
 import { sharedView } from "./views/shared.js";
 import { evidenceView } from "./views/evidence.js";
+import { poolFormView } from "./views/poolform.js";
 
 const GATE_KEY = "pools-gate-v1";
 
@@ -31,6 +32,8 @@ function termsView(page) {
 const routes = [
   [/^#?\/?$/, (m, page) => listView(page)],
   [/^#\/new$/, (m, page) => newPoolView(page)],
+  // A draft of the form for a pool of many traders. No page links to it: its contracts are not deployed.
+  [/^#\/new\/many$/, (m, page) => poolFormView(page)],
   [/^#\/pool\/(0x[0-9a-fA-F]{40})$/, (m, page) => poolView(m[1], page)],
   [/^#\/challenge\/(0x[0-9a-fA-F]{40})$/, (m, page) => challengeView(m[1], page)],
   [/^#\/verify(?:\/(.*))?$/, (m, page) => verifyView(m[1] || "", page)],
