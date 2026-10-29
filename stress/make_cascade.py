@@ -47,7 +47,7 @@ def k(usd: float) -> str:
 
 def human(coins: list[str], levs: list[float], capital: list[float]) -> str:
     """The layout in words: each seat's coin, size and leverage, the repeated ones once."""
-    seats, out = list(zip(coins, capital, levs)), []
+    seats, out = list(zip(coins, capital, levs, strict=True)), []
     for seat in dict.fromkeys(seats):
         n = seats.count(seat)
         coin, usd, lev = seat
@@ -76,7 +76,10 @@ def case(runs: list[dict], ids: tuple[str, ...], label: str, total: float) -> di
     for mode in ("open", "worst"):
         rows = [(r, x) for r in runs if r["layout"] in ids and r["exec"] == mode for x in r["rows"]]
         worse[mode] = max(rows, key=lambda rx: rx[1]["худший_убыток_usd"])
-    at = lambda r, x: SIDES[x["сторона"]] if len(ids) == 1 else f"{r['seat_coins'][0][:-4]} {SIDES[x['сторона']]}"
+
+    def at(r, x):
+        return SIDES[x["сторона"]] if len(ids) == 1 else f"{r['seat_coins'][0][:-4]} {SIDES[x['сторона']]}"
+
     return {"label": label,
             **{mode: x["худший_убыток_usd"] / total for mode, (r, x) in worse.items()},
             **{f"{mode}_at": at(r, x) for mode, (r, x) in worse.items()},

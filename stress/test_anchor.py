@@ -379,8 +379,10 @@ def main() -> int:
             with open(os.path.join(RESULTS, "layouts-default-list-2026-09-25.json"), encoding="utf-8") as f:
                 sep = json.load(f)
             # Every field of the 25 Sep rows; the new rows carry one more, the pool's share.
-            moved = [(r["layout"], r["exec"]) for r in sep["runs"]
-                     if [{k: x[k] for k in old} for old, x in zip(r["rows"], at5.get((r["layout"], r["exec"]), {}).get("rows", []))] != r["rows"]]
+            def same(r):
+                new = at5.get((r["layout"], r["exec"]), {}).get("rows", [])
+                return len(new) == len(r["rows"]) and [{k: x[k] for k in old} for old, x in zip(r["rows"], new)] == r["rows"]
+            moved = [(r["layout"], r["exec"]) for r in sep["runs"] if not same(r)]
             (ok("at 5x with the seats at 90% the script gives the 25 Sep layout file's six runs, row for row")
              if not moved and len(sep["runs"]) == 6 else bad("cascade at 5x", f"moved: {moved}"))
             pct = {n: [round(c[m] * 100, 1) for m in ("open", "worst")] for n, c in cascade["cases"].items()}

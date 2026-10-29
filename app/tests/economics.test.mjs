@@ -153,6 +153,9 @@ test("the asset list reaches the calculator, and the page cannot show a tail wit
     assert.ok(c.loss_share_of_seats.high >= c.loss_share_of_seats.low);
   }
   assert.ok(lists.default.note.length > 80, "the mandatory caption travels with the numbers");
+  // Every reader of evaluate() gets the note of the list it measured, not the stress test's pool's.
+  assert.equal(dflt.cascade.note, lists.default.note);
+  assert.equal(wide.cascade.note, tables.tail.note);
   assert.equal(dflt.cascade.rules_match, true, "the default rules are the ones it was measured on");
 });
 

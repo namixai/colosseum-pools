@@ -215,7 +215,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -439,7 +439,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -663,7 +663,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -887,7 +887,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -1111,7 +1111,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -1335,7 +1335,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -1559,7 +1559,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -1783,7 +1783,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -2007,7 +2007,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -2231,7 +2231,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -2455,7 +2455,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -2679,7 +2679,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -2903,7 +2903,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -3127,7 +3127,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -3351,7 +3351,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -3575,7 +3575,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -3799,7 +3799,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -4023,7 +4023,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -4252,7 +4252,7 @@
       "leverage": 5.0
      },
      "rules_match": false,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_short_of_a_shock",
@@ -4477,7 +4477,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "price_below_cost",
@@ -4701,7 +4701,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "reserve_takes_few_failures",
@@ -4899,7 +4899,7 @@
       "leverage": 5.0
      },
      "rules_match": false,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "cascade_beyond_rules",
@@ -5094,7 +5094,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "cascade_beyond_rules",
@@ -5287,7 +5287,7 @@
       "leverage": 5.0
      },
      "rules_match": true,
-     "note": "measured, not modelled: one-minute bars from Bybit over the eight worst crash days since 10 Oct 2025, these rules (3% a day, 6% from the start, 5x), entry at every minute of the day with the watchdog closing a minute later. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
+     "note": "measured, not modelled: one-minute bars from Bybit on 10 Oct 2025, the worst crash day in the data, these rules (3% a day, 6% from the start) with each seat at the leverage the leverage rule v1.2 allows its coin (BTC and ETH 10x, SOL 5x), entry at every minute of the day with the watchdog closing a minute later, the worse of the two sides. Hyperliquid itself is not checked -- liquidation there follows an oracle rather than the last trade. The figures are the worst entry of the day with every seat in a full position on the same side: possible, not an expectation. How often a cascade happens is not measured -- there is one in the data."
     },
     "warnings": [
      "cascade_beyond_rules",

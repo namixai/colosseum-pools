@@ -5753,6 +5753,10 @@ MUTATIONS = [
      '     "leverage": "BTC and ETH 10x, SOL 5x",',
      '     "leverage": "5x each",',
      ['the asset list reaches the calculator, and the page cannot show a tail without naming it', "the cascade card names the leverage of the measurement and of every case, and the overshoot's own"]),
+    ('J186', 'app/lib/calc.js',
+     'note: lists[name].note ?? t.note,',
+     'note: t.note,',
+     ['the asset list reaches the calculator, and the page cannot show a tail without naming it', 'evaluate gives the numbers of closed.py, case by case']),
     # The v3 mark on the site (the CTO, 28 October 2026). J107-J110 are taken on gateway-v3-fixset.
     ('J111', 'app/index.html',
      '  <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">\n',
