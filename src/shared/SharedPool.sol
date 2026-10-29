@@ -486,7 +486,7 @@ contract SharedPool {
                 s == ChallengeAccount.Status.Breached || s == ChallengeAccount.Status.Expired
                     || s == ChallengeAccount.Status.Forfeited
             ) {
-                if (CoreOps.margin(ch).ntlPos != 0) return (Blocker.PositionsOpen, ch);
+                if (c.openNotional() != 0) return (Blocker.PositionsOpen, ch);
             } else if (s == ChallengeAccount.Status.Passed) {
                 if (c.payoutDone() && _payoutLanding(c)) return (Blocker.PayoutInFlight, ch);
             }
@@ -520,7 +520,7 @@ contract SharedPool {
 
     function _seatValue(Pool p) internal view returns (int256 v) {
         SeatTerms memory t = seatTerms[address(p)];
-        int256 eq = CoreOps.equity(address(p));
+        int256 eq = p.accountEquity();
         v = int256(uint256(CoreOps.spotUsdc(address(p)))) + eq * int256(uint256(Units.SPOT_PER_PERP))
             + int256(p.earned() * Units.SPOT_PER_PERP);
         Pool.Stage st = p.stage();
@@ -534,7 +534,7 @@ contract SharedPool {
     }
 
     function _challengeValue(ChallengeAccount c, SeatTerms memory t) internal view returns (int256 v) {
-        int256 eq = CoreOps.equity(address(c));
+        int256 eq = c.accountEquity();
         v = int256(uint256(CoreOps.spotUsdc(address(c)))) + eq * int256(uint256(Units.SPOT_PER_PERP));
         ChallengeAccount.Status s = c.status();
         if (s == ChallengeAccount.Status.Passed) {
