@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseSeats, specFrom, gridValues, onGrid, reserveFrom, MAX_SEATS } from "../views/economics.js";
+import { parseSeats, specFrom, gridValues, onGrid, reserveFrom, MAX_SEATS, cascadeCard } from "../views/economics.js";
 import { minPrice, ratioOff, gridText, CHALLENGE_RATIO } from "../lib/floor.js";
 import { readAll, MAX_BATCH } from "../lib/batch.js";
 import { evaluate } from "../lib/calc.js";
@@ -125,9 +125,12 @@ test("the new-pool form asks about the deployment's assets, not about every perp
 });
 
 test("the asset list reaches the calculator, and the page cannot show a tail without naming it", () => {
-  // The measured tail of a spread pool is two to three times larger on a wide list than on BTC/ETH/SOL,
-  // while every seat on one coin reaches the whole of its capital at the worst price on either list. A
-  // page that shows one number without the list it belongs to is wrong for one of the two pools.
+  // The form offers the list the leverage rule v1.2 allows, BTC, ETH and SOL, and no other: the rule allows none of
+  // the wide list's alts. The table keeps the wide list, measured at 5x each, and the calculator still reads it by
+  // name; every case of either list carries the leverage it was measured at.
+  const form = readFileSync(new URL("../views/economics.js", import.meta.url), "utf8");
+  assert.match(form, /<option value="default">BTC, ETH, SOL/);
+  assert.doesNotMatch(form, /<option value="wide"/, "the form offers a list the rule does not allow");
   const spec = specFrom({ mode: "default", pool: "100000", chmode: "real", assetList: "wide" });
   assert.equal(spec.asset_list, "wide");
   assert.equal(specFrom({ mode: "default", pool: "100000", chmode: "real" }).asset_list, "default",
@@ -137,28 +140,56 @@ test("the asset list reaches the calculator, and the page cannot show a tail wit
   const wide = evaluate(tables, { ...spec, scenario: "base" });
   assert.deepEqual(dflt.cascade.coins, ["BTC", "ETH", "SOL"]);
   assert.ok(wide.cascade.coins.length > dflt.cascade.coins.length);
-
-  const spread = ["spread_calm", "spread_risky"].map((k) => dflt.cascade.cases[k].loss_share_of_seats.high);
-  assert.ok(wide.cascade.cases.reference_mix.loss_share_of_seats.low > Math.max(...spread),
-    "the wide list's own pool loses more at its lower bound than any spread of the default list at its upper one");
-  // The figure the decision quotes -- more than four fifths -- belongs to the wide list. On the
-  // default list the smallest case is nowhere near it, which is why the page prints the list.
-  const calm = dflt.cascade.cases.spread_calm.loss_share_of_seats;
-  assert.ok(calm.high < 0.5, `${calm.high} on BTC/ETH/SOL with the big seats on the calm coins`);
-  assert.ok(wide.cascade.cases.reference_mix.loss_share_of_seats.low > 0.8);
+  const lists = tables.tail.cascade.lists;
+  assert.equal(lists.default.leverage, "BTC and ETH 10x, SOL 5x");
+  assert.equal(lists.wide.leverage, "5x each");
+  for (const [name, list] of Object.entries(lists)) {
+    assert.deepEqual(Object.keys(list.cases).sort(), Object.keys(name === "default" ? dflt.cascade.cases : wide.cascade.cases).sort());
+    for (const c of Object.values(list.cases)) for (const end of ["open", "worst"]) assert.ok(c.leverage[end], `${name} ${c.label} ${end}`);
+  }
 
   // Both ends of every range, never one: low is the next open, high the worst price of the window.
   for (const c of Object.values(dflt.cascade.cases)) {
     assert.ok(c.loss_share_of_seats.high >= c.loss_share_of_seats.low);
   }
-  assert.ok(dflt.cascade.note.length > 80, "the mandatory caption travels with the numbers");
+  assert.ok(lists.default.note.length > 80, "the mandatory caption travels with the numbers");
+  // Every reader of evaluate() gets the note of the list it measured, not the stress test's pool's.
+  assert.equal(dflt.cascade.note, lists.default.note);
+  assert.equal(wide.cascade.note, tables.tail.note);
   assert.equal(dflt.cascade.rules_match, true, "the default rules are the ones it was measured on");
+});
+
+test("the cascade card names the leverage of the measurement and of every case, and the overshoot's own", () => {
+  const words = (html) => html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
+  const r = evaluate(tables, { ...specFrom({ mode: "default", pool: "100000", chmode: "real" }), scenario: "base" });
+  const card = words(cascadeCard(r, tables));
+  assert.match(card, /a pool whose rules allow BTC, ETH, SOL , the seats at BTC and ETH 10x, SOL 5x/);
+  assert.match(card, /up to 100\.0% of the seats' capital/);
+  assert.match(card, /how the seats sit on the list leverage of the seats' capital/);
+  assert.match(card, /the big ones on the calm coins BTC and ETH 10x, SOL 5x 40\.2% – 67\.2%/);
+  assert.match(card, /the big one on the riskiest coin BTC and ETH 10x, SOL 5x 42\.5% – 84\.4%/);
+  assert.match(card, /the worst of the three ETH 10x – SOL 5x 68\.2% – 100\.0%/);
+  assert.match(card, /each seat at the leverage the leverage rule v1\.2 allows its coin \(BTC and ETH 10x, SOL 5x\)/);
+  assert.doesNotMatch(card, /from the start, 5x/, "the stress test's note on the rule's measurement");
+  assert.match(card, /The 1-in-100 overshoot the rest of the page uses is measured on the stress test's own pool, every coin of the snapshot at 5x each, over the same crash days: 3\.0% – 8\.0% of equity past the line/);
+  // Read from the table, not written in.
+  const t = JSON.parse(JSON.stringify(tables));
+  const list = t.tail.cascade.lists.default;
+  list.leverage = "BTC 7x";
+  list.cases.spread_risky.leverage = { open: "SOL 3x", worst: "SOL 4x" };
+  list.note = "a note of the measurement, long enough to be one";
+  t.tail.rules_measured.leverage = 6;
+  const moved = words(cascadeCard({ ...r, cascade: { ...r.cascade, measured_rules: { ...r.cascade.measured_rules, leverage: 6 } } }, t));
+  assert.match(moved, /the seats at BTC 7x/);
+  assert.match(moved, /the big one on the riskiest coin SOL 3x – SOL 4x/);
+  assert.match(moved, /a note of the measurement, long enough to be one/);
+  assert.match(moved, /every coin of the snapshot at 6x each/);
 });
 
 test("the Economics page shows the coins and the caption, not just a percentage", () => {
   const source = readFileSync(new URL("../views/economics.js", import.meta.url), "utf8");
   assert.match(source, /c\.coins/, "the page prints a tail without naming the assets it was measured on");
-  assert.match(source, /c\.note/, "the page drops the mandatory caption");
+  assert.match(source, /list\.note \?\? c\.note/, "the page drops the mandatory caption, or prints another list's");
   assert.match(source, /loss_share_of_seats/, "the page stopped showing the measured loss");
   // No hand-typed cascade percentage: the page prints what the measurement says for the list chosen.
   assert.doesNotMatch(source, /8[37]\.[17]\s*%|four fifths/,

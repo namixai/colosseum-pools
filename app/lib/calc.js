@@ -136,7 +136,7 @@ export function cascadeBlock(tables, spec, seatCapital, capital, dd, daily, annu
   const mr = t.rules_measured;
   return {
     asset_list: name, coins: [...lists[name].coins], day: t.cascade.day, cases, rules_cap_usd: dd * seatCapital, reserve, measured_rules: { ...mr },
-    rules_match: Math.abs(dd - mr.max_drawdown) < 1e-12 && Math.abs(daily - mr.daily_loss) < 1e-12, note: t.note,
+    rules_match: Math.abs(dd - mr.max_drawdown) < 1e-12 && Math.abs(daily - mr.daily_loss) < 1e-12, note: lists[name].note ?? t.note,
   };
 }
 
