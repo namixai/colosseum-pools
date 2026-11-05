@@ -77,6 +77,43 @@ export function deploymentNamed(name, list = DEPLOYMENTS) {
   return list.find((d) => d.factory.toLowerCase() === n || d.label.toLowerCase() === n) ?? null;
 }
 
+/**
+ * The deployments the site only reads (app/config.js, readOnlyDeployments): it shows their pools and accounts as the
+ * chain has them and offers nothing on them, no purchase, no order, no new pool. Never part of DEPLOYMENTS, which
+ * the pages buy, trade and open pools on.
+ */
+export const READ_ONLY_DEPLOYMENTS = CONFIG.readOnlyDeployments ?? [];
+
+/** Whether the site only reads `deployment`. */
+export function isReadOnly(deployment) {
+  return deployment?.role === "read-only";
+}
+
+/** Every deployment an address may belong to: the ones the site serves, live first, then the ones it only reads. */
+export function everyDeployment() {
+  return [...DEPLOYMENTS, ...READ_ONLY_DEPLOYMENTS];
+}
+
+/** The token `deployment`'s pools take a challenge's price in: its own when it names one, else the exchange's USDC. */
+export function usdcOf(deployment) {
+  return deployment?.usdc ?? CONFIG.usdc;
+}
+
+/** The gateway instance that serves `deployment`'s accounts: its own when it names one, else the site's. */
+export function gatewayOf(deployment) {
+  return deployment?.gateway ?? CONFIG.gateway;
+}
+
+export const READ_ONLY = {
+  heading: "HIP-3 deployment (v3), read only",
+  note: "These pools belong to the v3 deployment, whose accounts trade on a builder's dex (HIP-3). The site shows "
+    + "them as the chain has them; it sells no challenges here and takes no orders for them.",
+  poolNote: "This pool belongs to the v3 deployment on a builder's dex (HIP-3), which this site only reads: it sells "
+    + "no challenge here. What it shows is read from the chain.",
+  challengeNote: "This challenge belongs to the v3 deployment on a builder's dex (HIP-3), which this site only reads: "
+    + "orders for this account are not taken here. What it shows is read from the chain.",
+};
+
 export const ARCHIVE = {
   heading: "First deployment, kept as an archive",
   note: "These pools belong to the first deployment. It is kept so its records can be read and checked; the gateway "

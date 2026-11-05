@@ -59,4 +59,30 @@ export const CONFIG = {
       platformAssets: [3, 4, 0],
     },
   ],
+  // Deployments the site reads and offers nothing on: no purchase, no order, no new pool (app/lib/deployments.js,
+  // READ_ONLY_DEPLOYMENTS). They are kept out of `deployments` above, which the pages buy, trade and open pools on.
+  // demo3 is the v3 factory, whose accounts trade on a builder's dex (HIP-3); its contracts were built at commit
+  // 23772e2d and its record is deployments/testnet-v3-demo3.json, which app/tests/readonly.test.mjs holds this entry to.
+  // The fields of `deployments` above, and:
+  //   assetLeverage  as above: a v3 factory, whose rules carry each asset's own cap.
+  //   usdc           the token its pools take a challenge's price in: the deployment's own test dollar.
+  //   gateway        its own gateway instance, which serves its accounts' orders and its faucet.
+  //   builtAt        the commit its contracts were built from. app/data/abi-v3-demo3.json is their ABI at that commit,
+  //                  and the test holds every call the app makes to them to it.
+  readOnlyDeployments: [
+    {
+      label: "demo3",
+      record: "v3-demo3",
+      role: "read-only",
+      factory: "0x070D0c7dd79D41e4329B2d231b308BA88089d81a",
+      registry: "0x8e2E527aed19a0969aEa49e16aE1Abbc7B84Cc85",
+      deployBlock: 67915896,
+      deployer: "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
+      platformAssets: [3, 4, 0],
+      assetLeverage: true,
+      usdc: "0xa73D107dC507851CE4dD4A426e163e2F3368300D",
+      gateway: "https://pools-api.usenami.io/demo3",
+      builtAt: "23772e2dbf9f4913dc265efa68768030ab7d4d2a",
+    },
+  ],
 };
