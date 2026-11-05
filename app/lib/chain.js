@@ -3,7 +3,7 @@ import { CONFIG } from "../config.js";
 import { ensureChain } from "./wallet.js";
 export { MAX_BATCH, readAll } from "./batch.js";
 import { PROVIDER_OPTIONS } from "./batch.js";
-import { DEPLOYMENTS, liveDeployment, pickDeployment, rulesFields } from "./deployments.js";
+import { DEPLOYMENTS, READ_ONLY_DEPLOYMENTS, liveDeployment, pickDeployment, rulesFields } from "./deployments.js";
 import { createGentle } from "./gentle.js";
 import { MULTICALL3 } from "./multicall.js";
 import { refusalName } from "./ui.js";
@@ -125,6 +125,19 @@ export const ABI = {
     "function approve(address spender, uint256 amount) returns (bool)",
   ],
 };
+
+// What a v3 account, a pool or a challenge, answers that an account before v3 does not: the dex it trades on, its
+// trading key's approval (app/lib/agentterm.js) and what it has sent to that dex. Read on a v3 deployment only
+// (v3Facts); app/data/abi-v3-demo3.json is the ABI they are held to, as deployed.
+const V3_ACCOUNT = [
+  "function dex() view returns (uint32)",
+  "function agentApprovedAt() view returns (uint64)",
+  "function agentValidUntil() view returns (uint64)",
+  "function sentToDex() view returns (uint64)",
+  "function accountEquity() view returns (int64)",
+];
+ABI.poolV3 = [...ABI.pool, ...V3_ACCOUNT];
+ABI.challengeV3 = [...ABI.challenge, ...V3_ACCOUNT];
 
 export const STATUS = ["None", "Created", "Active", "Breached", "Expired", "Forfeited", "Passed", "Aborted", "Settled"];
 export const STAGE = ["Idle", "Challenge", "Funded", "Closing", "PassedAwaitingKey"];
@@ -357,6 +370,31 @@ export async function deploymentOf(address, kind = "pool", runner = undefined) {
   const ask = kind === "challenge" ? "isChallenge" : "isPool";
   const answers = await Promise.all(DEPLOYMENTS.map((d) => factory(runner, d)[ask](address)));
   return pickDeployment(DEPLOYMENTS, answers);
+}
+
+/**
+ * The same question asked of the deployments the site only reads (READ_ONLY_DEPLOYMENTS): which one made `address`,
+ * or null. Kept apart from deploymentOf, whose answer the pages buy and trade on.
+ */
+export async function readOnlyDeploymentOf(address, kind = "pool", runner = undefined) {
+  const question = kind === "challenge" ? "isChallenge" : "isPool";
+  const answers = await Promise.all(READ_ONLY_DEPLOYMENTS.map((d) => factory(runner, d)[question](address)));
+  return pickDeployment(READ_ONLY_DEPLOYMENTS, answers);
+}
+
+/**
+ * What a v3 account (`kind` "pool" or "challenge") says of itself beyond what every account says: the dex it trades
+ * on, its trading key and that key's approval (app/lib/agentterm.js, keyTerm), and, in USDC, what it has sent to its
+ * dex and its equity as the contract reads it. Null for an account of a deployment before v3, which has none of it.
+ * On v3 `capitalArrived()` reads the spot, which the capital has left for the dex: `sentToDex` is where it went.
+ */
+export async function v3Facts(address, kind, deployment, runner = undefined) {
+  if (!deployment?.assetLeverage) return null;
+  const c = contract(kind === "challenge" ? "challengeV3" : "poolV3", address, runner);
+  const [dex, agentKey, approvedAt, validUntilMs, sent, equity] = await Promise.all([
+    c.dex(), c.agentKey(), c.agentApprovedAt(), c.agentValidUntil(), c.sentToDex(), c.accountEquity()]);
+  return { dex: Number(dex), agentKey, approvedAt: Number(approvedAt), validUntilMs: Number(validUntilMs),
+    sentToDex: Number(sent) / 1e6, equity: Number(equity) / 1e6 };
 }
 
 export function deployBlock(deployment = liveDeployment()) {
