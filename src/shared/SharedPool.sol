@@ -26,7 +26,8 @@ import {DepositTicket} from "./DepositTicket.sol";
 /// @dev Value and shares are in HyperCore spot units, 1e8 = 1 USDC; the first shares are one per unit.
 ///      Settlement points are open to anyone. `blocker()` is the one place that decides whether a point
 ///      may run: while a loss is still moving or a payment is in flight, no price is struck.
-///      Testnet only; not part of the reviewed core.
+///      Testnet only. It was in the scope of the internal review (docs/REVIEW-NOTES.md, at commit
+///      2e1ffcd), done by a reviewer who did not write it; that review is not an external audit.
 contract SharedPool {
     using SafeERC20 for IERC20;
 
