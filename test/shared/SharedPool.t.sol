@@ -74,7 +74,7 @@ contract SharedPoolTest is Test {
         usdc = SharedMockUsdc(HLConstants.usdc());
 
         registry = new KeyRegistry(operator);
-        factory = new PoolFactory(registry, address(new Pool()), address(new ChallengeAccount()), operator);
+        factory = new PoolFactory(registry, address(new Pool()), address(new ChallengeAccount()), operator, usdc);
         for (uint256 i = 0; i < 8; ++i) {
             keys.push(makeAddr(string.concat("shared-key-", vm.toString(i))));
         }
@@ -83,7 +83,9 @@ contract SharedPoolTest is Test {
         vm.startPrank(operator);
         registry.setAccountSource(factory);
         registry.publish(keys);
-        factory.setPlatformAssets(listed, true);
+        string[] memory names = new string[](1);
+        names[0] = "BTC";
+        factory.setPlatformAssets(listed, names, true);
         vm.stopPrank();
 
         sp = new SharedPool(factory, operator, platform, MIN, LOCK, FEE_BPS);
@@ -94,7 +96,7 @@ contract SharedPoolTest is Test {
     function _rules() internal pure returns (Rules memory r) {
         uint32[] memory assets = new uint32[](1);
         assets[0] = BTC;
-        r = Rules({dailyLossBps: 500, maxDrawdownBps: 1000, maxLeverageX100: 500, assets: assets});
+        r = Rules({dailyLossBps: 500, maxDrawdownBps: 1000, maxLeverageX100: 500, assets: assets, assetLeverageX100: new uint32[](0)});
     }
 
     function _terms() internal pure returns (Terms memory) {
