@@ -1,0 +1,1035 @@
+{
+ "label": "модель, не обещание",
+ "table": "pool-quote-units-2026-10-13.json",
+ "cases": [
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "closed"
+   },
+   "out": {
+    "bad": {
+     "pct_term": 3.513349,
+     "pct_year": 3.513349,
+     "usd_term": 3513.349395,
+     "pass_pct": 16.293026,
+     "sold": 59.981287,
+     "no_seat_pct": 0.031188,
+     "traders_pay": 7046.000785,
+     "traders_get": 1495.516109,
+     "platform": 740.557232,
+     "builder": 185.159643
+    },
+    "base": {
+     "pct_term": 14.243047,
+     "pct_year": 14.243047,
+     "usd_term": 14243.046862,
+     "pass_pct": 16.249388,
+     "sold": 177.893618,
+     "no_seat_pct": 1.170212,
+     "traders_pay": 20714.88472,
+     "traders_get": 4480.136744,
+     "platform": 1229.805781,
+     "builder": 552.145695
+    },
+    "good": {
+     "pct_term": 32.666696,
+     "pct_year": 32.666696,
+     "usd_term": 32666.69591,
+     "pass_pct": 16.601414,
+     "sold": 418.325855,
+     "no_seat_pct": 12.84878,
+     "traders_pay": 44411.279986,
+     "traders_get": 9935.7339,
+     "platform": 2095.008462,
+     "builder": 1206.285249
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.125,
+     "keeps_pct": -0.125,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "stays"
+   },
+   "out": {
+    "bad": {
+     "pct_term": 2.935643,
+     "pct_year": 2.935643,
+     "usd_term": 2935.642855,
+     "pass_pct": 16.293026,
+     "sold": 59.979819,
+     "no_seat_pct": 0.033635,
+     "traders_pay": 7045.690433,
+     "traders_get": 1792.2902,
+     "platform": 772.800203,
+     "builder": 220.307214
+    },
+    "base": {
+     "pct_term": 13.077806,
+     "pct_year": 13.077806,
+     "usd_term": 13077.805759,
+     "pass_pct": 16.249388,
+     "sold": 177.750628,
+     "no_seat_pct": 1.249651,
+     "traders_pay": 20685.600718,
+     "traders_get": 5386.135345,
+     "platform": 1330.905643,
+     "builder": 659.24746
+    },
+    "good": {
+     "pct_term": 30.203283,
+     "pct_year": 30.203283,
+     "usd_term": 30203.282756,
+     "pass_pct": 16.601414,
+     "sold": 415.782706,
+     "no_seat_pct": 13.378603,
+     "traders_pay": 43953.580781,
+     "traders_get": 11849.494815,
+     "platform": 2302.294915,
+     "builder": 1428.239158
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.8,
+     "keeps_pct": -0.8,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "self"
+   },
+   "out": {
+    "bad": {
+     "pct_term": 3.471398,
+     "pct_year": 3.471398,
+     "usd_term": 3471.39822,
+     "pass_pct": 16.293026,
+     "sold": 59.981941,
+     "no_seat_pct": 0.030099,
+     "traders_pay": 7046.139158,
+     "traders_get": 1623.402976,
+     "platform": 724.049673,
+     "builder": 168.862202
+    },
+    "base": {
+     "pct_term": 14.056238,
+     "pct_year": 14.056238,
+     "usd_term": 14056.238051,
+     "pass_pct": 16.249388,
+     "sold": 178.094098,
+     "no_seat_pct": 1.058834,
+     "traders_pay": 20755.974777,
+     "traders_get": 4880.560027,
+     "platform": 1070.368096,
+     "builder": 393.441297
+    },
+    "good": {
+     "pct_term": 34.308304,
+     "pct_year": 34.308304,
+     "usd_term": 34308.304457,
+     "pass_pct": 16.601414,
+     "sold": 424.733289,
+     "no_seat_pct": 11.513898,
+     "traders_pay": 45576.859892,
+     "traders_get": 9378.615859,
+     "platform": 1533.493884,
+     "builder": 630.693481
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.8,
+     "keeps_pct": -0.8,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 6,
+    "mode": "closed"
+   },
+   "out": {
+    "bad": {
+     "pct_term": 1.506675,
+     "pct_year": 3.013349,
+     "usd_term": 1506.674697,
+     "pass_pct": 16.293026,
+     "sold": 29.990643,
+     "no_seat_pct": 0.031188,
+     "traders_pay": 3523.000393,
+     "traders_get": 747.758054,
+     "platform": 620.278616,
+     "builder": 92.579822
+    },
+    "base": {
+     "pct_term": 6.871523,
+     "pct_year": 13.743047,
+     "usd_term": 6871.523431,
+     "pass_pct": 16.249388,
+     "sold": 88.946809,
+     "no_seat_pct": 1.170212,
+     "traders_pay": 10357.44236,
+     "traders_get": 2240.068372,
+     "platform": 864.902891,
+     "builder": 276.072847
+    },
+    "good": {
+     "pct_term": 16.083348,
+     "pct_year": 32.166696,
+     "usd_term": 16083.347955,
+     "pass_pct": 16.601414,
+     "sold": 209.162927,
+     "no_seat_pct": 12.84878,
+     "traders_pay": 22205.639993,
+     "traders_get": 4967.86695,
+     "platform": 1297.504231,
+     "builder": 603.142624
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.125,
+     "keeps_pct": -0.125,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 24,
+    "mode": "closed",
+    "withdraw": "profit"
+   },
+   "out": {
+    "bad": {
+     "pct_term": 8.026699,
+     "pct_year": 4.013349,
+     "usd_term": 8026.698789,
+     "pass_pct": 16.293026,
+     "sold": 119.962574,
+     "no_seat_pct": 0.031188,
+     "traders_pay": 14092.00157,
+     "traders_get": 2991.032217,
+     "platform": 481.114464,
+     "builder": 370.319286
+    },
+    "base": {
+     "pct_term": 29.486094,
+     "pct_year": 14.743047,
+     "usd_term": 29486.093724,
+     "pass_pct": 16.249388,
+     "sold": 355.787235,
+     "no_seat_pct": 1.170212,
+     "traders_pay": 41429.76944,
+     "traders_get": 8960.273488,
+     "platform": 1459.611562,
+     "builder": 1104.29139
+    },
+    "good": {
+     "pct_term": 66.333392,
+     "pct_year": 33.166696,
+     "usd_term": 66333.39182,
+     "pass_pct": 16.601414,
+     "sold": 836.651709,
+     "no_seat_pct": 12.84878,
+     "traders_pay": 88822.559973,
+     "traders_get": 19871.4678,
+     "platform": 3190.016925,
+     "builder": 2412.570497
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.125,
+     "keeps_pct": -0.125,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 250000,
+    "months": 18,
+    "mode": "closed",
+    "exam": "2x10+5",
+    "drawdown": 0.04
+   },
+   "out": {
+    "bad": {
+     "pct_term": 8.378677,
+     "pct_year": 5.585785,
+     "usd_term": 20946.692572,
+     "pass_pct": 5.905906,
+     "sold": 224.999998,
+     "no_seat_pct": 1e-06,
+     "traders_pay": 26437.499562,
+     "traders_get": 2017.42281,
+     "platform": 1733.09103,
+     "builder": 239.362363
+    },
+    "base": {
+     "pct_term": 27.737082,
+     "pct_year": 18.491388,
+     "usd_term": 69342.705976,
+     "pass_pct": 5.923271,
+     "sold": 674.935729,
+     "no_seat_pct": 0.009522,
+     "traders_pay": 79298.76806,
+     "traders_get": 6068.21589,
+     "platform": 2725.890827,
+     "builder": 724.659771
+    },
+    "good": {
+     "pct_term": 69.254476,
+     "pct_year": 46.169651,
+     "usd_term": 173136.189526,
+     "pass_pct": 6.15433,
+     "sold": 1705.646953,
+     "no_seat_pct": 5.241836,
+     "traders_pay": 193390.543757,
+     "traders_get": 15338.699646,
+     "platform": 4902.628974,
+     "builder": 1809.363745
+    },
+    "gambler": {
+     "pass_max_pct": 20.454545,
+     "need_price_pct": 0.467532,
+     "keeps_pct": 0.532468,
+     "ok": true
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 1000000,
+    "months": 12,
+    "mode": "stays",
+    "exam": "2x8+5",
+    "drawdown": 0.03,
+    "target": 0.08
+   },
+   "out": {
+    "bad": {
+     "pct_term": 4.669086,
+     "pct_year": 4.669086,
+     "usd_term": 46690.862209,
+     "pass_pct": 8.072051,
+     "sold": 600.0,
+     "no_seat_pct": 0.0,
+     "traders_pay": 70500.0,
+     "traders_get": 9500.789726,
+     "platform": 6546.640951,
+     "builder": 934.387875
+    },
+    "base": {
+     "pct_term": 16.733677,
+     "pct_year": 16.733677,
+     "usd_term": 167336.771036,
+     "pass_pct": 8.160641,
+     "sold": 1800.0,
+     "no_seat_pct": 0.0,
+     "traders_pay": 211500.0,
+     "traders_get": 29411.954726,
+     "platform": 9750.557202,
+     "builder": 2827.043277
+    },
+    "good": {
+     "pct_term": 46.383057,
+     "pct_year": 46.383057,
+     "usd_term": 463830.568229,
+     "pass_pct": 8.381576,
+     "sold": 4785.991179,
+     "no_seat_pct": 0.29185,
+     "traders_pay": 561309.094702,
+     "traders_get": 80319.588263,
+     "platform": 17748.654626,
+     "builder": 7586.176649
+    },
+    "gambler": {
+     "pass_max_pct": 23.376623,
+     "need_price_pct": 0.561039,
+     "keeps_pct": 0.438961,
+     "ok": true
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 500000,
+    "months": 9,
+    "mode": "self",
+    "drawdown": 0.1,
+    "share": 0.9,
+    "work": 0.7
+   },
+   "out": {
+    "bad": {
+     "pct_term": 2.33585,
+     "pct_year": 3.114466,
+     "usd_term": 11679.248367,
+     "pass_pct": 16.293026,
+     "sold": 225.0,
+     "no_seat_pct": 0.0,
+     "traders_pay": 26437.5,
+     "traders_get": 6877.830371,
+     "platform": 3345.959773,
+     "builder": 642.519769
+    },
+    "base": {
+     "pct_term": 10.151034,
+     "pct_year": 13.534712,
+     "usd_term": 50755.171654,
+     "pass_pct": 16.249388,
+     "sold": 674.999353,
+     "no_seat_pct": 9.6e-05,
+     "traders_pay": 79312.36306,
+     "traders_get": 21210.093132,
+     "platform": 4695.588472,
+     "builder": 1531.412729
+    },
+    "good": {
+     "pct_term": 29.005177,
+     "pct_year": 38.67357,
+     "usd_term": 145025.886405,
+     "pass_pct": 16.601414,
+     "sold": 1740.670138,
+     "no_seat_pct": 3.296103,
+     "traders_pay": 200195.45838,
+     "traders_get": 46527.028658,
+     "platform": 7075.420634,
+     "builder": 2833.107229
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 3.375,
+     "keeps_pct": -2.375,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "closed",
+    "menu": [
+     5000,
+     10000
+    ]
+   },
+   "out": {
+    "bad": {
+     "pct_term": 0.94971,
+     "pct_year": 0.94971,
+     "usd_term": 949.70992,
+     "pass_pct": 16.293026,
+     "sold": 42.0,
+     "no_seat_pct": 0.0,
+     "traders_pay": 2550.0,
+     "traders_get": 541.238384,
+     "platform": 587.045624,
+     "builder": 67.01065
+    },
+    "base": {
+     "pct_term": 4.936485,
+     "pct_year": 4.936485,
+     "usd_term": 4936.485298,
+     "pass_pct": 16.249388,
+     "sold": 125.999999,
+     "no_seat_pct": 1e-06,
+     "traders_pay": 7649.999941,
+     "traders_get": 1654.512989,
+     "platform": 769.47624,
+     "builder": 203.907219
+    },
+    "good": {
+     "pct_term": 14.71323,
+     "pct_year": 14.71323,
+     "usd_term": 14713.229678,
+     "pass_pct": 16.601414,
+     "sold": 335.964617,
+     "no_seat_pct": 0.010531,
+     "traders_pay": 20397.353751,
+     "traders_get": 4563.315428,
+     "platform": 1232.46168,
+     "builder": 554.026521
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.125,
+     "keeps_pct": -0.125,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 300000,
+    "months": 12,
+    "mode": "closed",
+    "target": 0.2,
+    "share": 0.5,
+    "work": 0.9,
+    "menu": [
+     25000
+    ]
+   },
+   "out": {
+    "bad": {
+     "pct_term": 2.590398,
+     "pct_year": 2.590398,
+     "usd_term": 7771.194529,
+     "pass_pct": 16.293026,
+     "sold": 54.0,
+     "no_seat_pct": 0.0,
+     "traders_pay": 13500.0,
+     "traders_get": 893.480999,
+     "platform": 2034.587124,
+     "builder": 420.498207
+    },
+    "base": {
+     "pct_term": 11.05414,
+     "pct_year": 11.05414,
+     "usd_term": 33162.42103,
+     "pass_pct": 16.249388,
+     "sold": 161.999735,
+     "no_seat_pct": 0.000164,
+     "traders_pay": 40499.933652,
+     "traders_get": 2694.777186,
+     "platform": 3155.716617,
+     "builder": 1279.033928
+    },
+    "good": {
+     "pct_term": 31.635161,
+     "pct_year": 31.635161,
+     "usd_term": 94905.484033,
+     "pass_pct": 16.601414,
+     "sold": 428.310725,
+     "no_seat_pct": 0.853999,
+     "traders_pay": 107077.681301,
+     "traders_get": 7550.907184,
+     "platform": 5936.177004,
+     "builder": 3416.338929
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 0.865385,
+     "keeps_pct": 0.134615,
+     "ok": true
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "closed",
+    "exam": "1x8",
+    "target": 0.05,
+    "drawdown": 0.08
+   },
+   "out": {
+    "bad": {
+     "pct_term": 2.680982,
+     "pct_year": 2.680982,
+     "usd_term": 2680.982156,
+     "pass_pct": 22.290002,
+     "sold": 59.985106,
+     "no_seat_pct": 0.024824,
+     "traders_pay": 7046.809582,
+     "traders_get": 2259.201717,
+     "platform": 735.489503,
+     "builder": 184.27062
+    },
+    "base": {
+     "pct_term": 11.754453,
+     "pct_year": 11.754453,
+     "usd_term": 11754.452727,
+     "pass_pct": 22.406833,
+     "sold": 178.187005,
+     "no_seat_pct": 1.007219,
+     "traders_pay": 20775.029775,
+     "traders_get": 6758.38136,
+     "platform": 1223.560931,
+     "builder": 558.105618
+    },
+    "good": {
+     "pct_term": 28.01853,
+     "pct_year": 28.01853,
+     "usd_term": 28018.529792,
+     "pass_pct": 22.621299,
+     "sold": 425.589296,
+     "no_seat_pct": 11.335563,
+     "traders_pay": 45733.950652,
+     "traders_get": 15184.33093,
+     "platform": 2108.619147,
+     "builder": 1236.640199
+    },
+    "gambler": {
+     "pass_max_pct": 42.857143,
+     "need_price_pct": 1.054945,
+     "keeps_pct": -0.054945,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 2000000,
+    "months": 24,
+    "mode": "stays",
+    "exam": "2x10+5",
+    "drawdown": 0.05,
+    "target": 0.15,
+    "share": 0.7,
+    "work": 0.6,
+    "menu": [
+     10000,
+     25000
+    ]
+   },
+   "out": {
+    "bad": {
+     "pct_term": 8.643597,
+     "pct_year": 4.321798,
+     "usd_term": 172871.9384,
+     "pass_pct": 5.905906,
+     "sold": 1080.0,
+     "no_seat_pct": 0.0,
+     "traders_pay": 216000.0,
+     "traders_get": 11594.967729,
+     "platform": 14466.158094,
+     "builder": 2467.20363
+    },
+    "base": {
+     "pct_term": 28.957972,
+     "pct_year": 14.478986,
+     "usd_term": 579159.445082,
+     "pass_pct": 5.923271,
+     "sold": 3240.0,
+     "no_seat_pct": -0.0,
+     "traders_pay": 648000.0,
+     "traders_get": 34721.88109,
+     "platform": 23665.890605,
+     "builder": 7465.290379
+    },
+    "good": {
+     "pct_term": 79.232576,
+     "pct_year": 39.616288,
+     "usd_term": 1584651.512299,
+     "pass_pct": 6.15433,
+     "sold": 8601.113449,
+     "no_seat_pct": 0.450076,
+     "traders_pay": 1719162.82702,
+     "traders_get": 97731.578009,
+     "platform": 47147.203337,
+     "builder": 20538.065019
+    },
+    "gambler": {
+     "pass_max_pct": 20.454545,
+     "need_price_pct": 0.715909,
+     "keeps_pct": 0.284091,
+     "ok": true
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "closed",
+    "leverage": 1.0
+   },
+   "out": {
+    "bad": {
+     "pct_term": 3.968179,
+     "pct_year": 3.968179,
+     "usd_term": 3968.178857,
+     "pass_pct": 13.77537,
+     "sold": 59.935491,
+     "no_seat_pct": 0.107514,
+     "traders_pay": 7036.386699,
+     "traders_get": 1099.856147,
+     "platform": 878.386592,
+     "builder": 320.751499
+    },
+    "base": {
+     "pct_term": 14.583972,
+     "pct_year": 14.583972,
+     "usd_term": 14583.97208,
+     "pass_pct": 14.525015,
+     "sold": 175.50146,
+     "no_seat_pct": 2.499189,
+     "traders_pay": 20227.403575,
+     "traders_get": 3491.733498,
+     "platform": 1565.552677,
+     "builder": 888.616804
+    },
+    "good": {
+     "pct_term": 30.576876,
+     "pct_year": 30.576876,
+     "usd_term": 30576.876034,
+     "pass_pct": 15.422556,
+     "sold": 393.830066,
+     "no_seat_pct": 17.95207,
+     "traders_pay": 40110.599792,
+     "traders_get": 7891.771009,
+     "platform": 2538.2564,
+     "builder": 1681.538195
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.125,
+     "keeps_pct": -0.125,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "stays",
+    "leverage": 2.0
+   },
+   "out": {
+    "bad": {
+     "pct_term": 3.003965,
+     "pct_year": 3.003965,
+     "usd_term": 3003.965465,
+     "pass_pct": 16.123026,
+     "sold": 59.978253,
+     "no_seat_pct": 0.036245,
+     "traders_pay": 7045.35948,
+     "traders_get": 1761.377402,
+     "platform": 784.748952,
+     "builder": 231.914288
+    },
+    "base": {
+     "pct_term": 13.259763,
+     "pct_year": 13.259763,
+     "usd_term": 13259.762984,
+     "pass_pct": 16.009394,
+     "sold": 177.665125,
+     "no_seat_pct": 1.297153,
+     "traders_pay": 20668.098599,
+     "traders_get": 5250.768474,
+     "platform": 1350.701037,
+     "builder": 678.216006
+    },
+    "good": {
+     "pct_term": 30.235877,
+     "pct_year": 30.235877,
+     "usd_term": 30235.876921,
+     "pass_pct": 16.53101,
+     "sold": 414.963633,
+     "no_seat_pct": 13.549243,
+     "traders_pay": 43806.752347,
+     "traders_get": 11595.045114,
+     "platform": 2326.702459,
+     "builder": 1453.217054
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.8,
+     "keeps_pct": -0.8,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "self",
+    "leverage": 1.5
+   },
+   "out": {
+    "bad": {
+     "pct_term": 3.622827,
+     "pct_year": 3.622827,
+     "usd_term": 3622.827398,
+     "pass_pct": 15.707551,
+     "sold": 59.976427,
+     "no_seat_pct": 0.039289,
+     "traders_pay": 7044.973924,
+     "traders_get": 1537.754027,
+     "platform": 755.151482,
+     "builder": 199.208887
+    },
+    "base": {
+     "pct_term": 14.220668,
+     "pct_year": 14.220668,
+     "usd_term": 14220.668118,
+     "pass_pct": 15.714888,
+     "sold": 177.802511,
+     "no_seat_pct": 1.220827,
+     "traders_pay": 20696.224097,
+     "traders_get": 4688.334065,
+     "platform": 1117.433047,
+     "builder": 439.97872
+    },
+    "good": {
+     "pct_term": 34.104374,
+     "pct_year": 34.104374,
+     "usd_term": 34104.374339,
+     "pass_pct": 16.252994,
+     "sold": 421.743332,
+     "no_seat_pct": 12.136806,
+     "traders_pay": 45030.714886,
+     "traders_get": 9111.578817,
+     "platform": 1575.712559,
+     "builder": 676.667656
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.8,
+     "keeps_pct": -0.8,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "closed",
+    "leverage": 3.0
+   },
+   "out": {
+    "bad": {
+     "pct_term": 3.513349,
+     "pct_year": 3.513349,
+     "usd_term": 3513.349395,
+     "pass_pct": 16.293026,
+     "sold": 59.981287,
+     "no_seat_pct": 0.031188,
+     "traders_pay": 7046.000785,
+     "traders_get": 1495.516109,
+     "platform": 740.557232,
+     "builder": 185.159643
+    },
+    "base": {
+     "pct_term": 14.243047,
+     "pct_year": 14.243047,
+     "usd_term": 14243.046862,
+     "pass_pct": 16.249388,
+     "sold": 177.893618,
+     "no_seat_pct": 1.170212,
+     "traders_pay": 20714.88472,
+     "traders_get": 4480.136744,
+     "platform": 1229.805781,
+     "builder": 552.145695
+    },
+    "good": {
+     "pct_term": 32.666696,
+     "pct_year": 32.666696,
+     "usd_term": 32666.69591,
+     "pass_pct": 16.601414,
+     "sold": 418.325855,
+     "no_seat_pct": 12.84878,
+     "traders_pay": 44411.279986,
+     "traders_get": 9935.7339,
+     "platform": 2095.008462,
+     "builder": 1206.285249
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.125,
+     "keeps_pct": -0.125,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "closed",
+    "leverage": 10.0
+   },
+   "out": {
+    "bad": {
+     "pct_term": 3.513349,
+     "pct_year": 3.513349,
+     "usd_term": 3513.349395,
+     "pass_pct": 16.293026,
+     "sold": 59.981287,
+     "no_seat_pct": 0.031188,
+     "traders_pay": 7046.000785,
+     "traders_get": 1495.516109,
+     "platform": 740.557232,
+     "builder": 185.159643
+    },
+    "base": {
+     "pct_term": 14.243047,
+     "pct_year": 14.243047,
+     "usd_term": 14243.046862,
+     "pass_pct": 16.249388,
+     "sold": 177.893618,
+     "no_seat_pct": 1.170212,
+     "traders_pay": 20714.88472,
+     "traders_get": 4480.136744,
+     "platform": 1229.805781,
+     "builder": 552.145695
+    },
+    "good": {
+     "pct_term": 32.666696,
+     "pct_year": 32.666696,
+     "usd_term": 32666.69591,
+     "pass_pct": 16.601414,
+     "sold": 418.325855,
+     "no_seat_pct": 12.84878,
+     "traders_pay": 44411.279986,
+     "traders_get": 9935.7339,
+     "platform": 2095.008462,
+     "builder": 1206.285249
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.125,
+     "keeps_pct": -0.125,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 400000,
+    "months": 15,
+    "mode": "closed",
+    "exam": "2x10+5",
+    "drawdown": 0.04,
+    "leverage": 1.2
+   },
+   "out": {
+    "bad": {
+     "pct_term": 7.090288,
+     "pct_year": 5.672231,
+     "usd_term": 28361.153428,
+     "pass_pct": 5.118602,
+     "sold": 300.0,
+     "no_seat_pct": 0.0,
+     "traders_pay": 35249.999999,
+     "traders_get": 2092.93514,
+     "platform": 2777.942992,
+     "builder": 449.124382
+    },
+    "base": {
+     "pct_term": 23.342772,
+     "pct_year": 18.674217,
+     "usd_term": 93371.086412,
+     "pass_pct": 5.424339,
+     "sold": 899.990363,
+     "no_seat_pct": 0.001071,
+     "traders_pay": 105747.981048,
+     "traders_get": 6941.148346,
+     "platform": 4336.594158,
+     "builder": 1328.602562
+    },
+    "good": {
+     "pct_term": 57.832548,
+     "pct_year": 46.266038,
+     "usd_term": 231330.190416,
+     "pass_pct": 5.819662,
+     "sold": 2263.948269,
+     "no_seat_pct": 5.668822,
+     "traders_pay": 256343.36123,
+     "traders_get": 18668.01517,
+     "platform": 7597.174312,
+     "builder": 3142.943986
+    },
+    "gambler": {
+     "pass_max_pct": 20.454545,
+     "need_price_pct": 0.467532,
+     "keeps_pct": 0.532468,
+     "ok": true
+    },
+    "label": "модель, не обещание"
+   }
+  },
+  {
+   "in": {
+    "pool_usd": 100000,
+    "months": 12,
+    "mode": "stays",
+    "leverage": 2.3,
+    "share": 0.7
+   },
+   "out": {
+    "bad": {
+     "pct_term": 3.184352,
+     "pct_year": 3.184352,
+     "usd_term": 3184.351807,
+     "pass_pct": 16.225026,
+     "sold": 59.979202,
+     "no_seat_pct": 0.034663,
+     "traders_pay": 7045.559958,
+     "traders_get": 1557.434563,
+     "platform": 778.692366,
+     "builder": 224.950235
+    },
+    "base": {
+     "pct_term": 13.813817,
+     "pct_year": 13.813817,
+     "usd_term": 13813.81703,
+     "pass_pct": 16.15339,
+     "sold": 177.716616,
+     "no_seat_pct": 1.268546,
+     "traders_pay": 20678.637862,
+     "traders_get": 4665.475331,
+     "platform": 1342.16199,
+     "builder": 666.840072
+    },
+    "good": {
+     "pct_term": 31.677498,
+     "pct_year": 31.677498,
+     "usd_term": 31677.497943,
+     "pass_pct": 16.573252,
+     "sold": 415.455024,
+     "no_seat_pct": 13.44687,
+     "traders_pay": 43894.806125,
+     "traders_get": 10279.089196,
+     "platform": 2319.422829,
+     "builder": 1438.252829
+    },
+    "gambler": {
+     "pass_max_pct": 37.5,
+     "need_price_pct": 1.575,
+     "keeps_pct": -0.575,
+     "ok": false
+    },
+    "label": "модель, не обещание"
+   }
+  }
+ ]
+}
