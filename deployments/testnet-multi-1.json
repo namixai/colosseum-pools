@@ -1,0 +1,116 @@
+{
+  "ChallengeAccountImpl": "0x0222968FE248290a2b891c5586fa4a607f431bB0",
+  "KeyRegistry": "0xACb08c6C826C8E3a376B36DAcB1222E1392F6c35",
+  "MultiPool": "0x56155A9a4bEf9f6C19064f62D371258b9F84A16a",
+  "PaperExamImpl": "0x699f9bccAFed4da340c44B7767B766FCCdF7aAeE",
+  "PoolFactory": "0x1200D7bd2F6303429b848941Ff87BB51D52c59F8",
+  "PoolImpl": "0xd7E5Df7036e4BBD57fE3C34FAC1Fb21Eb6C6Af50",
+  "block": 66957866,
+  "bounds_are_the_products": false,
+  "bounds_s": {
+    "max_term": 86400,
+    "min_term": 3600,
+    "notice": 1800
+  },
+  "chain_id": 998,
+  "challenge_fee": 700000,
+  "commit": "c4d68b5112cb2ffdc398357ddc02b814b65f339f",
+  "deployer": "0x586DC201c94Ce06D89Aaa97bd4d9A591fA7EE089",
+  "gas_used_MultiPool": 6722620,
+  "label": "multi-1",
+  "operator": "0x586DC201c94Ce06D89Aaa97bd4d9A591fA7EE089",
+  "owner": "0x586DC201c94Ce06D89Aaa97bd4d9A591fA7EE089",
+  "plan": {
+    "_note": "A plan for checking the mechanism on the testnet by hand, with a whole term in one day. These are not terms anyone is offered: the exam's target, its cost and its hour are small so that one person can pass an exam quickly, the funded account has no target so that it can be ended without a trade, and the pool's term is six hours, which only a deployment made with --min-term-days and --notice-days takes. The creation form's defaults are in docs/POOL-PARAMETERS.md.",
+    "exam": {
+      "cost_ppm": 100,
+      "fill_delay_blocks": 2,
+      "fill_window_blocks": 300,
+      "max_idle_days": 0,
+      "min_trading_days": 0,
+      "step_days": 0.0416666667,
+      "targets_bps": [
+        10
+      ]
+    },
+    "exam_rules": {
+      "assets": [
+        "BTC",
+        "ETH",
+        "SOL"
+      ],
+      "daily_loss_bps": 300,
+      "max_drawdown_bps": 600,
+      "max_leverage_x100": 500
+    },
+    "funded": {
+      "after_target": "trader_stops",
+      "idle_days": 1,
+      "max_retakes": 0,
+      "target_bps": 0,
+      "trader_share_bps": 8000
+    },
+    "funded_rules": {
+      "assets": [
+        "BTC",
+        "ETH",
+        "SOL"
+      ],
+      "daily_loss_bps": 300,
+      "max_drawdown_bps": 600,
+      "max_leverage_x100": 500
+    },
+    "menu": [
+      {
+        "price_usdc": 0.05,
+        "size_usdc": 5
+      },
+      {
+        "price_usdc": 0.1,
+        "size_usdc": 10
+      },
+      {
+        "price_usdc": 0.25,
+        "size_usdc": 25
+      }
+    ],
+    "pool": {
+      "claim_window_days": 0.0416666667,
+      "in_work_bps": 8000,
+      "max_seats": 8,
+      "term_days": 0.25
+    }
+  },
+  "platform_assets": {
+    "BTC": 3,
+    "ETH": 4,
+    "SOL": 0
+  },
+  "published_keys": [
+    "0x8707920A6Ea3C05F208a84fc0827F4E855f9f51e",
+    "0x0F8a036C7815deA5cD9F5fF41B291e327f38D33F",
+    "0xD4D185CE41131eF2E3cD6ABFdcc4dC4B1dE62CAC",
+    "0x9B097a68828b11DE6840651C1237b6E566D52374",
+    "0x4a55BCF8B5E1d41a0719fFED78EFC051d3f76642",
+    "0xabF9ee578aB91F08f03F2e38E3b2dFca16CBa4e1",
+    "0x8D3De5208c8364d4f73204f6b0d0E03569574dA8",
+    "0xB1F6153813Be0386a7B8E5FaAf55817A3EfcB690",
+    "0x0560ac0Daf45Edef280dDc83A913a05548BA4ce4",
+    "0x232D28d4e737bEECa546DB7e0EA4B686CeFE2c39",
+    "0x734c3d496A1bC28166c3C2868C8a4C5f80198a5d",
+    "0x9b1A09d0919B8CCd96A9E319F3391cAEB217C2a3"
+  ],
+  "status": "complete",
+  "tx": {
+    "ChallengeAccountImpl": "0x858d9cadb352ddc8017af271b8a27015b1feb4e5726648c8817909442ef2d921",
+    "KeyRegistry": "0x8d632e5d48635266379ca7dbf5dd9ad69815bbe140bddcdfc4df64278edf45b2",
+    "MultiPool": "0xbd55f8808152e0f207a385f3a013f4c27c77a477296fc775c5eed79780132cb4",
+    "PaperExamImpl": "0xc25fe53231e1cf4af94e539134a8d31fd099985ac569ad5dca45181525f0c726",
+    "PoolFactory": "0xc4302b94005e807eadd95f30500af2ee15d327efc9cb42ea845fc909776c6e2f",
+    "PoolImpl": "0x0b56699681ca73ae9f78915292b5a82328debd09f2a6726559ae1c3077190d06",
+    "publish": "0x6ae2a5396b38ff96bc60a76a0ac5b2cf37dcd048f111ea7bfb9b52a1bb55e3c0",
+    "setAccountSource": "0x48a32a4a47856cb042b408c8f0dc5689140986b3481b30dd67e00c7d1465dc01",
+    "setChallengeFee": "0xef1f2f48a7db84bdd3fb08a7d659e05fcdd218072a4f85d9bbeef012142153a1",
+    "setPlatformAssets": "0x4bad93c792f764e240f19dbd3056bc29f0659366bdc9811839fba2080c9673f3"
+  }
+}
