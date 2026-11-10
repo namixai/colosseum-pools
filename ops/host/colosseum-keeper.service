@@ -9,8 +9,9 @@ Wants=network-online.target
 User=colosseum-keeper
 Group=colosseum-keeper
 WorkingDirectory=/opt/colosseum-pools/current
-EnvironmentFile=/etc/colosseum/deployment.env
+# The record's file last, as the gateway's: it wins over a line by hand in keeper.env.
 EnvironmentFile=/etc/colosseum/keeper.env
+EnvironmentFile=/etc/colosseum/deployment.env
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.keeper --deployment ${COLOSSEUM_DEPLOYMENT} \
     --state /var/lib/colosseum-keeper/keeper-${COLOSSEUM_DEPLOYMENT}.json --every 30 --max-windows 5

@@ -189,7 +189,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S21 | https://hyperliquid.gitbook.io/hyperliquid-docs/trading/auto-deleveraging | `Auto-deleveraging` |
 | S22 | `gateway/server.py:68` | `PROTECT_EVERY_S = 30.0` |
 | S23 | `gateway/protect.py:748` | `CLOSE_AFTER_S = 30.0` |
-| S24 | `ops/host/colosseum-keeper.service:16` | `--every 30` |
+| S24 | `ops/host/colosseum-keeper.service:17` | `--every 30` |
 | S25 | `gateway/protect.py:588` | `a market halted by its deployer takes every order off` |
 | S26 | `src/shared/SharedPool.sol:382` | `if (block.timestamp < until) revert Locked(until);` |
 | S27 | `deployments/testnet-shared-demo2c.json:16` | `"lock": 600,` |

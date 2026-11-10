@@ -31,6 +31,43 @@
     "BTC",
     "ETH"
   ],
+  "gateway_limits": {
+    "perp_dexes": [
+      "xyz"
+    ],
+    "perps": [
+      {
+        "asset": 3,
+        "leverage": "10",
+        "name": "BTC",
+        "size": "0.005"
+      },
+      {
+        "asset": 4,
+        "leverage": "10",
+        "name": "ETH",
+        "size": "0.15"
+      },
+      {
+        "asset": 0,
+        "leverage": "5",
+        "name": "SOL",
+        "size": "4"
+      },
+      {
+        "asset": 750000,
+        "leverage": "8",
+        "name": "xyz:XYZ100",
+        "size": "0.015"
+      },
+      {
+        "asset": 750003,
+        "leverage": "20",
+        "name": "xyz:GOLD",
+        "size": "0.1"
+      }
+    ]
+  },
   "initcode_keccak": {
     "AccountOps": "0x1f6f156067fb80c5312409085f211c232a737aae65e46ea8094b9b8932180912",
     "ChallengeAccountImpl": "0x52fee46cacbf133ba2050fb0d7a11ba46798336f0477298a1191257c1e0e967d",

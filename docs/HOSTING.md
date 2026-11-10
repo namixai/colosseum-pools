@@ -220,7 +220,7 @@ after Chainlink's went down and both keepers missed a day's snapshot. Both units
 | `/opt/colosseum-pools/venv` | link to `venv-<hash of spike/requirements.txt>`, Python 3.12 | root |
 | `/etc/colosseum/gateway.env`, `keeper.env` | paths, URLs, the app's origin; no secret | root, 644 |
 | `/etc/colosseum/deployment` | the label of the deployment the services use | root, 644 |
-| `/etc/colosseum/deployment.env` | written by `install.sh` from that label's record: label, factory, registry | root, 644 |
+| `/etc/colosseum/deployment.env` | written by `install.sh` from that label's record: label, factory, registry, and the gateway's limits where the record has them; read after `gateway.env` and `keeper.env`, so it wins | root, 644 |
 | `/etc/colosseum/tls/origin.key` | TLS key for `pools-api.usenami.io`, made on the host | root, 600 |
 | `/etc/colosseum/tls/origin.csr`, `origin.crt` | its request and Cloudflare's Origin CA certificate, both public | root, 644 |
 | `/var/lib/colosseum-gw/keys` | the demo's agent keys, one `*.key` file each | `colosseum-gw`, 700 and 600 |
@@ -372,8 +372,33 @@ The checks after a release then read the host through SSM. The public `/v1/healt
 keeper: its journal (`pass_done`, `pass_failed`), its progress file and its read failures can be read
 only on the host, through SSM once the rule is gone.
 
+### What the record sets
+
+A deployment whose record has `gateway_limits` (`deployments/testnet-v3-demo3.json` since 10 November 2026)
+takes its gateway's limits from the release instead of from a line by hand. `install.sh` writes
+`/etc/colosseum/deployment-<name>.env` (`deployment.env` for the first instance) from
+`python -m ops.host_instances deployment-env <label>` at every deploy, and that file now carries, besides the
+addresses, `GATEWAY_SIZE_CAPS`, `GATEWAY_LEVERAGE_CAPS` and `GATEWAY_PERP_DEXES` for the gateway and
+`COLOSSEUM_PERP_DEXES` for the keeper, all from the record's list of perps (name, order number, size per
+order, leverage cap) and builder dexes.
+
+**The record wins.** The gateway and keeper units read the record's file after the instance's own
+`gateway-<name>.env` / `keeper-<name>.env`, and systemd keeps the last value it reads: a line by hand for one
+of these variables is ignored once the record has `gateway_limits`. A perp is added, taken off or given
+another cap by a change to the record, its review and a deploy, not by an edit on the host. A deployment
+whose record has none, as demo2's today, renders the addresses alone, and its `gateway.env` still says its
+limits as below. `ops/tests/test_host_instances.py` holds the rendered lines to what the gateway reads and
+each leverage cap to the default `ops/leverage.py` gives the same market.
+
+demo3's record says what its gateway had by hand on 10 November 2026, and xyz:GOLD besides:
+
+    GATEWAY_SIZE_CAPS={"3": "0.005", "4": "0.15", "0": "4", "750000": "0.015", "750003": "0.1"}
+    GATEWAY_LEVERAGE_CAPS={"3": "10", "4": "10", "0": "5", "750000": "8", "750003": "20"}
+    GATEWAY_PERP_DEXES=xyz
+    COLOSSEUM_PERP_DEXES=xyz
+
 🔴 **By hand before the first release with HIP-3 (the platform's list as a setting, 21 October
-2026):** the demo signer no longer holds the platform's perps in code. It reads them, with a size
+2026), for a deployment whose record has no `gateway_limits`:** the demo signer no longer holds the platform's perps in code. It reads them, with a size
 cap for each, from `GATEWAY_SIZE_CAPS` in `/etc/colosseum/gateway.env`, and the gateway refuses to
 start without it rather than sign nothing. `bootstrap.sh` writes that file only when it is missing,
 so a running host needs the line added before the restart. The testnet's list and caps since
@@ -385,7 +410,8 @@ so a running host needs the line added before the restart. The testnet's list an
 A perp of another dex (HIP-3) goes on the list by its order number, and its dex's name into
 `GATEWAY_PERP_DEXES`, for example `xyz` with `"750000": "0.015"` for `xyz:XYZ100` on testnet, or
 `"750003": "0.1"` for `xyz:GOLD` (about 400 USDC at a mark near 4,000; 110003 on mainnet).
-Adding or taking a perp off is a change to this file and a restart, not a release. The keeper reads
+Adding or taking a perp off is a change to this file and a restart, not a release (for a deployment
+whose record has `gateway_limits`, a change to the record and a deploy: above). The keeper reads
 the same dexes from `COLOSSEUM_PERP_DEXES` in `/etc/colosseum/keeper.env` (comma-separated, none by
 default): with `xyz` there it sees an account's positions and orders on xyz, checks their stop and
 names them to a stop, and logs `hip3_open_over_weekend` for a position still open from Friday 16:30

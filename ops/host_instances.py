@@ -13,7 +13,7 @@ colosseum-gateway@<name> and colosseum-keeper@<name>. Its gateway listens where
     python -m ops.host_instances list /etc/colosseum             one line per instance: name label port
     python -m ops.host_instances nginx /etc/colosseum            the nginx locations for them
     python -m ops.host_instances nginx-upstreams /etc/colosseum  and their upstreams
-    python -m ops.host_instances deployment-env <label>          COLOSSEUM_DEPLOYMENT, GATEWAY_FACTORY, ...
+    python -m ops.host_instances deployment-env <label>          COLOSSEUM_DEPLOYMENT, GATEWAY_FACTORY, the limits, ...
     python -m ops.host_instances first-label /etc/colosseum      the first deployment's label, as served
 
 Testnet only, as the host is.
@@ -21,10 +21,12 @@ Testnet only, as the host is.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import sys
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 from ops import deployments
 
@@ -150,14 +152,70 @@ def nginx_locations(found: list[Instance]) -> str:
     return "\n".join(blocks)
 
 
+DEX = re.compile(r"[a-z][a-z0-9]{0,15}")
+HIP3_BASE, DEX_STRIDE = 100_000, 10_000  # gateway/assets.py
+
+
+def _number(text: object, least: Decimal, what: str) -> str:
+    """A size or a leverage as the record writes it: a decimal string, at least `least` (above 0 for a size)."""
+    try:
+        value = Decimal(text) if isinstance(text, str) else None
+    except InvalidOperation:
+        value = None
+    if value is None or not value.is_finite() or value < least or (least == 0 and value == 0):
+        raise SystemExit(f"gateway_limits: {what} {text!r} is not a number of at least {least}")
+    return text
+
+
+def gateway_limits(record: dict) -> str:
+    """The gateway's limits for its deployment, from `gateway_limits` in the record, as the env lines the gateway
+    and the keeper read: GATEWAY_SIZE_CAPS and GATEWAY_LEVERAGE_CAPS by order number, in the form
+    gateway/demo_signer.py `size_caps` and gateway/protect.py `leverage_caps` take, and the builder dexes they
+    read, GATEWAY_PERP_DEXES and COLOSSEUM_PERP_DEXES. A record without it gives none: the instance's
+    gateway-<name>.env still says them, as before."""
+    limits = record.get("gateway_limits")
+    if limits is None:
+        return ""
+    dexes = limits.get("perp_dexes")
+    perps = limits.get("perps")
+    if not isinstance(dexes, list) or not all(isinstance(d, str) and DEX.fullmatch(d) for d in dexes):
+        raise SystemExit(f"gateway_limits: perp_dexes must be a list of dex names, not {dexes!r}")
+    if not isinstance(perps, list) or not perps:
+        raise SystemExit("gateway_limits: perps must list at least one perp")
+    sizes, leverages, names = {}, {}, set()
+    for perp in perps:
+        name, asset = perp.get("name"), perp.get("asset")
+        if not isinstance(name, str) or name in names:
+            raise SystemExit(f"gateway_limits: {name!r} is not a name of its own")
+        names.add(name)
+        dex = name.split(":")[0] if ":" in name else ""
+        if not isinstance(asset, int) or isinstance(asset, bool) or str(asset) in sizes:
+            raise SystemExit(f"gateway_limits: {name}: {asset!r} is not an order number of its own")
+        # The first dex numbers its perps from 0 below 10000; a builder dex from 110000 (gateway/assets.py).
+        ours = asset >= HIP3_BASE + DEX_STRIDE if dex else 0 <= asset < DEX_STRIDE
+        if not ours:
+            raise SystemExit(f"gateway_limits: {name}: {asset} is not an order number of its dex")
+        if dex and dex not in dexes:
+            raise SystemExit(f"gateway_limits: {name}: dex {dex} is not in perp_dexes")
+        sizes[str(asset)] = _number(perp.get("size"), Decimal(0), f"{name} size")
+        leverages[str(asset)] = _number(perp.get("leverage"), Decimal(1), f"{name} leverage")
+    return (f"GATEWAY_SIZE_CAPS={json.dumps(sizes)}\n"
+            f"GATEWAY_LEVERAGE_CAPS={json.dumps(leverages)}\n"
+            f"GATEWAY_PERP_DEXES={','.join(dexes)}\n"
+            f"COLOSSEUM_PERP_DEXES={','.join(dexes)}\n")
+
+
 def deployment_env(label: str) -> str:
-    """What a gateway and a keeper read of their deployment, from its committed record."""
+    """What a gateway and a keeper read of their deployment, from its committed record: its addresses, and its
+    gateway's limits where the record has them (`gateway_limits`). systemd reads this file after the instance's
+    own gateway-<name>.env and keeper-<name>.env, so what the record says wins over a line by hand."""
     if not LABEL.fullmatch(label):
         raise SystemExit(f"odd label {label!r}")
     record = deployments.load(label)
     return (f"COLOSSEUM_DEPLOYMENT={label}\n"
             f"GATEWAY_FACTORY={record['PoolFactory']}\n"
-            f"GATEWAY_REGISTRY={record['KeyRegistry']}\n")
+            f"GATEWAY_REGISTRY={record['KeyRegistry']}\n"
+            + gateway_limits(record))
 
 
 def main(argv: list[str]) -> int:

@@ -508,10 +508,10 @@
     },
     {
       "id": "S24",
-      "where": "ops/host/colosseum-keeper.service:16",
+      "where": "ops/host/colosseum-keeper.service:17",
       "kind": "line",
       "text": "--every 30",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/ops/host/colosseum-keeper.service#L16"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/ops/host/colosseum-keeper.service#L17"
     },
     {
       "id": "S25",

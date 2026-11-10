@@ -86,6 +86,95 @@ class Instances(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout), (0, "demo3 v3-demo3 8788\n"), out.stderr)
 
 
+DEMO3_ENV = (
+    "COLOSSEUM_DEPLOYMENT=v3-demo3\n"
+    "GATEWAY_FACTORY=0x070D0c7dd79D41e4329B2d231b308BA88089d81a\n"
+    "GATEWAY_REGISTRY=0x8e2E527aed19a0969aEa49e16aE1Abbc7B84Cc85\n"
+    'GATEWAY_SIZE_CAPS={"3": "0.005", "4": "0.15", "0": "4", "750000": "0.015", "750003": "0.1"}\n'
+    'GATEWAY_LEVERAGE_CAPS={"3": "10", "4": "10", "0": "5", "750000": "8", "750003": "20"}\n'
+    "GATEWAY_PERP_DEXES=xyz\n"
+    "COLOSSEUM_PERP_DEXES=xyz\n")
+
+
+class GatewayLimits(unittest.TestCase):
+    """The gateway's limits ride with the release, from the record (`gateway_limits`), instead of a line by hand
+    in gateway-<name>.env: install.sh writes deployment-<name>.env from `deployment-env` at every deploy, and
+    systemd reads it after the hand-kept file, so the record wins (10 Nov 2026)."""
+
+    def limits(self, *perps, dexes=("xyz",)):
+        return {"PoolFactory": "0x" + "f1" * 20, "KeyRegistry": "0x" + "f2" * 20,
+                "gateway_limits": {"perp_dexes": list(dexes), "perps": list(perps)}}
+
+    def test_demo3s_record_says_what_its_host_has_and_gold(self):
+        # On the host, by hand, until now (10 Nov 2026): BTC, ETH, SOL and xyz:XYZ100 at these sizes and caps,
+        # xyz read. xyz:GOLD comes with the record: 0.1 an order (about 400 USDC near 4,000) and 20x.
+        self.assertEqual(hi.deployment_env("v3-demo3"), DEMO3_ENV)
+
+    def test_a_record_without_limits_says_its_addresses_alone(self):
+        # demo2's record has none: its gateway.env still says them, as it did.
+        text = hi.deployment_env("demo2")
+        self.assertEqual([l.split("=")[0] for l in text.splitlines()],
+                         ["COLOSSEUM_DEPLOYMENT", "GATEWAY_FACTORY", "GATEWAY_REGISTRY"])
+
+    def test_the_lines_are_what_the_gateway_reads(self):
+        from gateway.demo_signer import size_caps
+        from gateway.protect import leverage_caps
+        env = dict(l.split("=", 1) for l in hi.deployment_env("v3-demo3").splitlines())
+        sizes, caps = size_caps(env["GATEWAY_SIZE_CAPS"]), leverage_caps(env["GATEWAY_LEVERAGE_CAPS"])
+        self.assertEqual(sorted(sizes), [0, 3, 4, 750000, 750003])
+        # The gateway with the demo signer will not start while a perp has a size and no leverage cap.
+        self.assertEqual(sorted(caps), sorted(sizes))
+
+    def test_each_cap_is_the_platforms_default_for_its_market(self):
+        # One number in two places: the gateway's ceiling for a market and the default ops/leverage.py gives a
+        # pool's rules for it. A market the table withdraws (None) has no cap here either.
+        from decimal import Decimal
+        from ops.leverage import ASSET_LEVERAGE_X100
+        record = json.loads((ROOT / "deployments" / "testnet-v3-demo3.json").read_text())
+        for perp in record["gateway_limits"]["perps"]:
+            coin = perp["name"].split(":")[-1]
+            with self.subTest(perp["name"]):
+                self.assertIsNotNone(ASSET_LEVERAGE_X100.get(coin), "a market with no default has no gateway cap")
+                self.assertEqual(Decimal(perp["leverage"]) * 100, ASSET_LEVERAGE_X100[coin])
+
+    def test_a_perp_the_record_lists_is_numbered_as_the_record_numbers_it(self):
+        record = json.loads((ROOT / "deployments" / "testnet-v3-demo3.json").read_text())
+        listed = record["platform_assets"]
+        for perp in record["gateway_limits"]["perps"]:
+            if perp["name"] in listed:
+                self.assertEqual(perp["asset"], listed[perp["name"]], perp["name"])
+
+    def test_limits_that_the_gateway_would_refuse_are_refused_here(self):
+        btc = {"name": "BTC", "asset": 3, "size": "0.005", "leverage": "10"}
+        gold = {"name": "xyz:GOLD", "asset": 750003, "size": "0.1", "leverage": "20"}
+        bad = {
+            "a builder dex not read": self.limits(btc, gold, dexes=()),
+            "two perps on one number": self.limits(btc, {**btc, "name": "ETH"}),
+            "one name twice": self.limits(btc, {**btc, "asset": 4}),
+            "a leverage under 1x": self.limits({**btc, "leverage": "0.5"}),
+            "a size of nothing": self.limits({**btc, "size": "0"}),
+            "a number as JSON, not a string": self.limits({**btc, "size": 0.005}),
+            "a builder dex's market on the first dex's numbers": self.limits({**gold, "asset": 10003}),
+            "a first-dex market on a builder dex's numbers": self.limits({**btc, "asset": 750000}),
+            "a dex name that is not one": self.limits(btc, dexes=("XYZ",)),
+            "no perps": self.limits(),
+        }
+        for why, record in bad.items():
+            with self.subTest(why), mock.patch.object(hi.deployments, "load", return_value=record):
+                with self.assertRaises(SystemExit):
+                    hi.deployment_env("v3-demo3")
+        with mock.patch.object(hi.deployments, "load", return_value=self.limits(btc, gold)):
+            self.assertIn('GATEWAY_LEVERAGE_CAPS={"3": "10", "750003": "20"}', hi.deployment_env("v3-demo3"))
+
+    def test_the_records_file_is_read_last_so_it_wins_over_a_line_by_hand(self):
+        for unit, own in (("colosseum-gateway.service", "gateway.env"), ("colosseum-keeper.service", "keeper.env"),
+                          ("colosseum-gateway@.service", "gateway-%i.env"), ("colosseum-keeper@.service", "keeper-%i.env")):
+            envs = [l for l in (HOST / unit).read_text().splitlines() if l.startswith("EnvironmentFile=")]
+            record = "deployment-%i.env" if "@" in unit else "deployment.env"
+            with self.subTest(unit):
+                self.assertEqual(envs, [f"EnvironmentFile=/etc/colosseum/{own}", f"EnvironmentFile=/etc/colosseum/{record}"])
+
+
 class Nginx(unittest.TestCase):
     """The locations install.sh puts in the site, by the same awk install.sh runs."""
 

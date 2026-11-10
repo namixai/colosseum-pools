@@ -12,8 +12,10 @@ User=colosseum-gw
 Group=colosseum-gw
 WorkingDirectory=/opt/colosseum-pools/current
 # Addresses and paths only; the keys stay in GATEWAY_KEYS_DIR.
-EnvironmentFile=/etc/colosseum/deployment-%i.env
+# The record's file last: what it says (the addresses, and the limits where the record has them) wins over a
+# line by hand in gateway-%i.env (docs/HOSTING.md, "What the record sets").
 EnvironmentFile=/etc/colosseum/gateway-%i.env
+EnvironmentFile=/etc/colosseum/deployment-%i.env
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/colosseum-pools/venv/bin/python -m gateway.server
 Restart=always
