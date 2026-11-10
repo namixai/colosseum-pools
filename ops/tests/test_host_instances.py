@@ -158,6 +158,13 @@ class GatewayLimits(unittest.TestCase):
             "a first-dex market on a builder dex's numbers": self.limits({**btc, "asset": 750000}),
             "a dex name that is not one": self.limits(btc, dexes=("XYZ",)),
             "no perps": self.limits(),
+            "a perp that is not an object": self.limits(btc, None),
+            "limits that are not an object": {**self.limits(btc), "gateway_limits": ["xyz"]},
+            "a size with a space around it": self.limits({**btc, "size": " 0.005"}),
+            "a size with a tab in it": self.limits({**btc, "size": "0.005\t"}),
+            "a leverage with an underscore": self.limits({**btc, "leverage": "1_0"}),
+            "a leverage with an exponent": self.limits({**btc, "leverage": "1e1"}),
+            "a size with no digit before the point": self.limits({**btc, "size": ".5"}),
         }
         for why, record in bad.items():
             with self.subTest(why), mock.patch.object(hi.deployments, "load", return_value=record):

@@ -26,7 +26,7 @@ import pathlib
 import re
 import sys
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from ops import deployments
 
@@ -154,16 +154,17 @@ def nginx_locations(found: list[Instance]) -> str:
 
 DEX = re.compile(r"[a-z][a-z0-9]{0,15}")
 HIP3_BASE, DEX_STRIDE = 100_000, 10_000  # gateway/assets.py
+# Digits, and a point between digits: nothing that JSON would escape or systemd would read otherwise (it takes
+# a backslash in an unquoted value as an escape), and no spelling the review could miss: no spaces, no
+# underscores, no exponent.
+DECIMAL = re.compile(r"[0-9]+(\.[0-9]+)?")
 
 
 def _number(text: object, least: Decimal, what: str) -> str:
-    """A size or a leverage as the record writes it: a decimal string, at least `least` (above 0 for a size)."""
-    try:
-        value = Decimal(text) if isinstance(text, str) else None
-    except InvalidOperation:
-        value = None
-    if value is None or not value.is_finite() or value < least or (least == 0 and value == 0):
-        raise SystemExit(f"gateway_limits: {what} {text!r} is not a number of at least {least}")
+    """A size or a leverage as the record writes it: a plain decimal string, at least `least` (above 0 for a
+    size), written into the env file as it is."""
+    if not isinstance(text, str) or not DECIMAL.fullmatch(text) or Decimal(text) < least or Decimal(text) == 0:
+        raise SystemExit(f"gateway_limits: {what} {text!r} is not a plain decimal of at least {least}, above 0")
     return text
 
 
@@ -176,6 +177,8 @@ def gateway_limits(record: dict) -> str:
     limits = record.get("gateway_limits")
     if limits is None:
         return ""
+    if not isinstance(limits, dict):
+        raise SystemExit(f"gateway_limits must be an object, not {limits!r}")
     dexes = limits.get("perp_dexes")
     perps = limits.get("perps")
     if not isinstance(dexes, list) or not all(isinstance(d, str) and DEX.fullmatch(d) for d in dexes):
@@ -184,6 +187,8 @@ def gateway_limits(record: dict) -> str:
         raise SystemExit("gateway_limits: perps must list at least one perp")
     sizes, leverages, names = {}, {}, set()
     for perp in perps:
+        if not isinstance(perp, dict):
+            raise SystemExit(f"gateway_limits: a perp must be an object, not {perp!r}")
         name, asset = perp.get("name"), perp.get("asset")
         if not isinstance(name, str) or name in names:
             raise SystemExit(f"gateway_limits: {name!r} is not a name of its own")
