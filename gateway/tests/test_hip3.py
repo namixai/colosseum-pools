@@ -576,7 +576,7 @@ class OnXyz(FlowBase):
         self.assertIn("hold_over_weekend=hold)", body)
 
     def test_the_gateway_says_the_names_at_its_start(self):
-        body = inspect.getsource(server.main)
+        body = inspect.getsource(server.take_on_at_start)
         self.assertIn("gateway.protector.check_names(", body)
         self.assertIn('log_line(event="market_names"', body)
 
