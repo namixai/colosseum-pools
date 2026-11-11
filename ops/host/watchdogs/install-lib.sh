@@ -34,9 +34,10 @@ root_own="-o root -g root"
 watch_own="-o colosseum-watch -g colosseum-watch"
 watch_keep=5          # releases of the watchdogs kept; the one `current` names is always among them
 watch_smoke_wait=120  # seconds the first runs may take, all together, before the install goes on
+watch_multis=""       # the instances whose record names a MultiPool: install.sh sets it before watchdogs_install
 
 # What a release's ops/host/watchdogs has to carry to run at all: the wrapper, the two checks, the ladder.
-watch_runtime="watchdog-run.sh keys_watch.py keeper_watch.py watch_backoff.py"
+watch_runtime="watchdog-run.sh keys_watch.py keeper_watch.py watch_backoff.py multi_watch.py"
 # What an earlier, hand-made install put in /opt/colosseum-watch itself: the files this one replaces.
 watch_legacy="watchdog-run.sh watchdogs/hl_take.py watchdogs/pools-keeper-watch.py watchdogs/pools-keys-watch.py watchdogs/pools_watch_backoff.py"
 
@@ -68,6 +69,20 @@ watchdogs_pick() {
       watch_units="$watch_units colosseum-watch-keys-$name colosseum-watch-keeper-$name"
     fi
   done <<< "$instances"
+  # A MultiPool's keeper is watched by one templated unit, colosseum-watch-multi@<name>, for each instance whose
+  # record names a MultiPool (watch_multis) and whose deployment-<name>.env is here.
+  for name in $watch_multis; do
+    if [ -f "$etc_dir/deployment-$name.env" ]; then
+      watch_units="$watch_units colosseum-watch-multi@$name"
+    else
+      say "instance $name: no $etc_dir/deployment-$name.env, so its MultiPool watchdog is not installed"
+    fi
+  done
+}
+
+# watchdogs_file <unit>: the file a unit is installed from, the template's for an instance of one (a@b -> a@).
+watchdogs_file() {
+  case "$1" in *@*) printf '%s@' "${1%%@*}" ;; *) printf '%s' "$1" ;; esac
 }
 
 watchdogs_install() {
@@ -81,8 +96,9 @@ watchdogs_install() {
   done
   watchdogs_pick "$src" "$instances"
   for unit in $watch_units; do
-    [ -f "$src/$unit.service" ] && [ -f "$src/$unit.timer" ] \
-      || fail "release $sha carries no complete unit $unit (.service and .timer); nothing switched"
+    file="$(watchdogs_file "$unit")"
+    [ -f "$src/$file.service" ] && [ -f "$src/$file.timer" ] \
+      || fail "release $sha carries no complete unit $file (.service and .timer); nothing switched"
   done
 
   # The user and the directories. The user exists on a host that was set up before; a new host gets it here.
@@ -107,8 +123,9 @@ watchdogs_install() {
   mv "$dest.partial" "$dest"
 
   for unit in $watch_units; do
+    file="$(watchdogs_file "$unit")"
     # shellcheck disable=SC2086
-    install -m 0644 $root_own "$src/$unit.service" "$src/$unit.timer" "$unit_dir/"
+    install -m 0644 $root_own "$src/$file.service" "$src/$file.timer" "$unit_dir/"
     timers="$timers $unit.timer"
   done
   systemctl daemon-reload

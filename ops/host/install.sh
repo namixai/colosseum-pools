@@ -13,7 +13,9 @@
 #   5. the watchdogs come with the release: their files, units and timers are put in place from it
 #      before the switch (ops/host/watchdogs/install-lib.sh), and each is run once after the restarts;
 #   6. an instance whose record names a test publisher has its keeper's made keys copied to its gateway:
-#      colosseum-key-copy@<name>.path and .timer are enabled and the copier run once (ops/host/key_copy.py).
+#      colosseum-key-copy@<name>.path and .timer are enabled and the copier run once (ops/host/key_copy.py);
+#   7. an instance whose record names a MultiPool has its keeper enabled, colosseum-multi-keeper@<name>
+#      (ops/multi_keeper.py), and the watchdog on it.
 #
 # It makes no key and reads none; the copier it starts moves an instance's agent keys from its keeper to
 # its gateway, and nothing else. Testnet only.
@@ -61,6 +63,7 @@ install -m 0644 -o root -g root "$rel/ops/host/colosseum-shared-keeper.service" 
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.service" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.path" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-multi-keeper@.service" /etc/systemd/system/
 systemctl daemon-reload
 
 # The further instances, read once: a file that names one badly stops the release here, before nginx
@@ -108,6 +111,28 @@ while read -r name label _; do
   [ "$(lower <<< "$had")" = "$(lower <<< "$publisher")" ] \
     || fail "instance $name: $own/secrets/publisher.addr says ${had:-nothing}, its record's publisher is $publisher; nothing switched"
   publishers+="$name "
+done <<< "$instances"
+
+# A deployment whose record names a MultiPool has its calls made by colosseum-multi-keeper@<name>
+# (ops/multi_keeper.py), with a wallet of its own beside the instance keeper's: one key in two processes would
+# race for its nonces. It is served as an instance, and its wallet is checked here, or that keeper would start,
+# die on the missing key and restart for ever.
+multis=""
+if [ -n "$first_label" ]; then
+  first_multi="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi "$first_label")" \
+    || fail "deployment $first_label: could not read its MultiPool; nothing switched"
+  [ -z "$first_multi" ] \
+    || fail "deployment $first_label names a MultiPool: serve it as an instance (bootstrap.sh --instance); nothing switched"
+fi
+while read -r name label _; do
+  [ -n "$name" ] || continue
+  multi="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi "$label")" \
+    || fail "deployment $label: could not read its MultiPool; nothing switched"
+  [ -n "$multi" ] || continue
+  own="/var/lib/colosseum-keeper/instances/$name"
+  [ -f "$own/secrets/multi-keeper.key" ] && [ -f "$own/secrets/multi-keeper.addr" ] \
+    || fail "instance $name: its record names the MultiPool $multi, so its keeper needs its own wallet, $own/secrets/multi-keeper.key and .addr (docs/HOSTING.md, \"A MultiPool's keeper\"); nothing switched"
+  multis+="$name "
 done <<< "$instances"
 
 # The shared pool's keeper, when its settings are on the host: a complete record with a SharedPool in this
@@ -177,6 +202,7 @@ done <<< "$instances"
 # The watchdogs ride with the release. Their files are checked and put in place here, still before
 # the switch, from the deployment env files just written (docs/HOSTING.md, "The host's watchdogs").
 . "$rel/ops/host/watchdogs/install-lib.sh"
+watch_multis="$multis"
 watchdogs_install "$rel" "$sha" "$instances"
 
 # 4. Switch, restart what is enabled, keep the three newest releases.
@@ -190,10 +216,16 @@ for name in $publishers; do
   systemctl start "colosseum-key-copy@$name.service"
   say "instance $name: its test publisher's keys go to its gateway (colosseum-key-copy@$name)"
 done
+# A MultiPool's keeper is enabled by its record (checked above), and restarts below with the rest.
+for name in $multis; do
+  systemctl enable --quiet "colosseum-multi-keeper@$name"
+  say "instance $name: its MultiPool's keeper is enabled (colosseum-multi-keeper@$name)"
+done
 units=(colosseum-gateway colosseum-keeper)
 while read -r name _; do
   [ -n "$name" ] && units+=("colosseum-gateway@$name" "colosseum-keeper@$name")
 done <<< "$instances"
+for name in $multis; do units+=("colosseum-multi-keeper@$name"); done
 units+=(colosseum-shared-keeper)
 for unit in "${units[@]}"; do
   if systemctl is-enabled --quiet "$unit"; then

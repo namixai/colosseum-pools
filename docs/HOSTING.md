@@ -738,6 +738,28 @@ instance set up before 11 November 2026 has no `made-keys`: `sudo install -d -m 
 colosseum-keeper /var/lib/colosseum-keeper/instances/<name>/made-keys`. demo2 and demo3 are on a registry and
 change in nothing.
 
+### A MultiPool's keeper
+
+A pool of many traders (MultiPool, docs/MULTI-POOL.md) leaves its calls to anyone: each running paper exam's
+snapshot of the day (`checkpoint`, in the first fifteen minutes of a UTC day and never after), its breach, its
+expiry, the fill of an order it has waiting, a seat's arming, opening and end. `ops/multi_keeper.py` makes them.
+Without it the snapshot the daily loss limit is measured from is taken by whoever it suits that day, the trader
+included, or by nobody.
+
+On the host it is `colosseum-multi-keeper@<name>`, the instance keeper's unit with its own program, its own
+wallet (`multi-keeper` in the instance's secrets: one key in two processes would race for its nonces) and its own
+state file, `/var/lib/colosseum-keeper/multi-<label>.json`. Its node is the record's (`keeper_nodes`, through
+`deployment-<name>.env`), as the instance keeper's. `install.sh` installs it from every release and enables it for
+an instance whose record names a `MultiPool`: before it switches it checks that the wallet is there and stops the
+release otherwise, and it refuses such a record as the first deployment. For every other instance the unit is
+never started; no record on the host names a MultiPool on 12 November 2026. Its watchdog,
+`colosseum-watch-multi@<name>`, comes with it (below, "The host's watchdogs").
+
+By hand, once, before the deploy whose record names the MultiPool:
+
+    sudo -u colosseum-keeper /opt/colosseum-pools/venv/bin/python /opt/colosseum-pools/current/ops/make_demo_keys.py \
+        --wallet multi-keeper --dir /var/lib/colosseum-keeper/instances/<name>/secrets   # fund this address with HYPE
+
 ## The shared pool's keeper
 
 `colosseum-shared-keeper.service` runs `ops/shared_keeper.py` for the shared pools that
@@ -793,7 +815,7 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
 ## The host's watchdogs
 
 A service that is "active" with its logs going says nothing about the work being done: on 25 September 2026 a
-keeper had followed no pool for days and fallen 175 thousand blocks behind with nobody told. So two checks
+keeper had followed no pool for days and fallen 175 thousand blocks behind with nobody told. So the checks
 look at the RESULT, from outside the keeper's and the gateway's own files, through public chain reads only.
 Each runs every quarter of an hour as a systemd timer, as its own unprivileged user `colosseum-watch`, which
 cannot see `/var/lib/colosseum-keeper` or `/var/lib/colosseum-gw`:
@@ -803,6 +825,7 @@ cannot see `/var/lib/colosseum-keeper` or `/var/lib/colosseum-gw`:
 | `colosseum-watch-keys` | the free agent keys of the registry: their count against the threshold (16, strict: the alarm is at 15), and for each free key whether its address has gained an account on HyperCore, which spoils it | `*:00/15` |
 | `colosseum-watch-keeper` | for each live account of the factory, what the keeper is bound to do: stop a breach, close at the deadline, activate within 15 minutes of the purchase | `*:07/15` |
 | `colosseum-watch-keys-demo3`, `colosseum-watch-keeper-demo3` | the same two, for the instance demo3 | `*:03/15`, `*:11/15` |
+| `colosseum-watch-multi@<name>` | for an instance whose record names a MultiPool (`multi_watch.py`): each running paper exam and funded seat has today's snapshot once the day's window has closed, an exam past its deadline is expired, a broken one breached, a broken seat stopped; the exams are found as the contracts the pool made, from its nonce, with no log read | `*:05/15` |
 
 The files are `ops/host/watchdogs`: `keys_watch.py`, `keeper_watch.py`, their one retry ladder
 `watch_backoff.py`, the wrapper `watchdog-run.sh`, and a service and a timer for each unit.
