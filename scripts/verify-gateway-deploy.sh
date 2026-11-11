@@ -24,6 +24,11 @@ if printf '%s' "$health" | grep -q '"code": "gateway_restarting"'; then
   echo "FAIL the gateway is restarting and nginx answers for it; run this again in 30 seconds"
   exit 1
 fi
+if printf '%s' "$health" | grep -q '"ready": false'; then
+  # The gateway listens, and still reads the accounts its keys trade (gateway/server.py, take_on_at_start).
+  echo "FAIL the gateway has just started and still reads its keys' accounts; run this again in a few seconds"
+  exit 1
+fi
 sha="$(printf '%s' "$health" | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("commit") or "")' 2>/dev/null)"
 if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
   echo "FAIL the gateway does not say which commit it runs: it is older than the leverage check, or not deployed by ops/host/deploy.sh"

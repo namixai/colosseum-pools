@@ -686,12 +686,13 @@ and a client counts it as an attempt.
 | 400 | `refused_by_gateway` (`not_an_order_id`) | the asset is no perp's order number: under 10000 is Hyperliquid's own dex, 110000 and over a builder dex's. 10000 to 109999 is neither, and the v3 factory refuses it too (`NotAnOrderId`) |
 | 429 | `busy` (`rate_limited`), `Retry-After: 60` | nginx's own answer past its limits: 12 orders a minute from one network and 15 from everyone, bursts of 10; for the faucet and contacts, their own (`ops/host/nginx-pools-api.conf.in`). The request was passed on to nobody, so nothing was sent (`sent: false`); send it again in a minute. Before 5 Nov 2026 this was nginx's HTML page, which a client could not read |
 | 429 | `busy` (`gateway_restarting`), `Retry-After: 30` | nginx's own answer while the gateway does not listen: a restart, from its stop until it listens again. The gateway was handed nothing, so nothing was sent (`sent: false`); send it again in 30 seconds |
+| 429 | `busy` (`gateway_starting`), `Retry-After: 5` | the gateway's own answer just after a start, while it reads the accounts its keys trade; `/v1/health` says `"ready": false` meanwhile. Nothing was sent (`sent: false`); send it again in 5 seconds. Before 11 Nov 2026 the gateway read them before it listened, and nothing answered for 22 to 42 seconds on the host |
 
 A connection that sends nothing for 10 seconds is closed.
 
 **When the answer settles nothing: a 502, a 503, a page that is not JSON, or no answer at all.** The
 order may be on Hyperliquid or may not. Wait 60 seconds. Then read `/v1/health`: wait until it
-answers 200. Then read the account on Hyperliquid, its open orders, fills and positions. If the order
+answers 200 with `"ready": true`. Then read the account on Hyperliquid, its open orders, fills and positions. If the order
 is not there, send it once more, and only once. Do not send it again sooner: a copy may still be on its
 way. `agents/desk.py` keeps such an order spent for the moment and records it. Three minutes after the
 attempt (`SETTLE_AFTER_S`), it reads the account's order history on Hyperliquid. If the order is not
@@ -736,6 +737,18 @@ In `demo` mode the gateway reads one owner-only `*.key` file per agent key from
 the address comes from the key. In `signer` mode it reads one bearer token per key from
 `SIGNER_TOKENS_FILE`. Either lives on the gateway host only, never in this repository.
 `GET /v1/health` names the mode and, in `demo` mode, how many keys it holds. A gateway deployed by `ops/host/deploy.sh` from a commit with the leverage check also names, as `commit`, the commit its release is (the `REVISION` file `install.sh` writes); an older one says nothing of it.
+
+**It answers from the first second of a start.** The gateway binds its port once its settings are checked,
+the RPC's chain with them, and reads the accounts its keys trade after that, in a thread of its own
+(`take_on_at_start` in `gateway/server.py`). Until it has, `/v1/health` says `"ready": false`, with
+`starting_for_s` and, if the reading failed as a whole and is being tried again, `start_failed_attempts` and
+`start_last_error`; an order gets `429 busy` (`gateway_starting`) and nothing is sent. Then the names of
+those accounts' markets are checked, the sweep starts, and `/v1/health` says `"ready": true`. A key whose
+own read the node refused is not waited for: `keys_unread` counts those, and every sweep tries them again.
+Before 11 Nov 2026 the reading came before the port: on 10 Nov 2026 the host's demo2 gateway, 92 keys on
+the throttled public node, answered nothing for 41.8 s and then 22.1 s after its restarts, and demo3's, 24
+keys, for 7.8 s. Started on a laptop against the same node with 92 keys of its own, it answered
+`/v1/health` 38.3 s after the start before this change, and 1.3 s after it, `"ready": true` at 36.1 s.
 
 **The gateway reads its own node, and that costs you requests.** From 25 September to 17 October
 2026 it read `rpc.hyperliquid-testnet.xyz` while the keeper read `rpcs.chain.link`, because the two

@@ -2412,14 +2412,19 @@ class Wiring(unittest.TestCase):
 
     def test_main_starts_the_sweep(self):
         body = inspect.getsource(server.main)
-        self.assertIn("target=gateway.protector.run", body)
-        # ... and, before it, takes on the accounts its signer's keys trade.
-        self.assertIn("gateway.protector.take_on(addresses())", body)
-        self.assertLess(body.index("gateway.protector.take_on("), body.index("target=gateway.protector.run"))
+        start = inspect.getsource(server.take_on_at_start)
+        # The server is bound first; the accounts and the sweep come after it, in their own thread.
+        self.assertIn("target=take_on_at_start, args=(gateway, reader, signer, starting, every, hot_every)", body)
+        self.assertLess(body.index("BoundedServer("), body.index("target=take_on_at_start"))
+        self.assertNotIn("take_on(", body.replace("take_on_at_start", ""))
+        self.assertIn("target=gateway.protector.run", start)
+        # ... and, before the sweep, it takes on the accounts its signer's keys trade.
+        self.assertIn("gateway.protector.take_on(addresses())", start)
+        self.assertLess(start.index("gateway.protector.take_on("), start.index("target=gateway.protector.run"))
         self.assertIn("make_handler(gateway,", body)
         self.assertEqual((server.PROTECT_EVERY_S, server.PROTECT_HOT_EVERY_S), (30.0, 15.0))
         # Both periods to the sweep, the minute's weight to the log and to /v1/health.
-        self.assertIn("target=gateway.protector.run, args=(every, None, hot_every)", body)
+        self.assertIn("target=gateway.protector.run, args=(every, None, hot_every)", start)
         self.assertIn("target=log_weight, args=(gateway.protector,)", body)
         self.assertIn("live=lambda: live_summary(gateway.protector)", body)
         self.assertIn('os.environ.get("GATEWAY_PROTECT_HOT_EVERY", PROTECT_HOT_EVERY_S)', body)

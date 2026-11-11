@@ -14,7 +14,8 @@ POST /v1/faucet  one exam's dUSDC and its gas in HYPE for a tester, where the de
 GET  /v1/contacts?pool=0x…  the contacts a pool's owner left for its traders and co-investors, and
 POST /v1/contacts           the owner's signed record that replaces them, where the gateway has a
                             directory for them (gateway/contacts.py)
-GET  /v1/health  liveness and configuration summary (no secrets)
+GET  /v1/health  liveness and configuration summary (no secrets); `ready: false` while the gateway,
+                 just started, still reads the accounts its keys trade
 
 Before an order that may open or grow a position goes, the gateway puts a stop at the pool's
 rule line and a take at the target on Hyperliquid itself (gateway/protect.py), and a sweep every
@@ -76,6 +77,14 @@ WEIGHT_LOG_EVERY_S = 60.0
 # An account is read again this long after an order that may open went: long enough for Hyperliquid to
 # show the fill, short of the next sweep (ALGO, 21 Oct 2026).
 AFTER_ENTRY_S = 2.0
+# The gateway listens before it reads the accounts its signer's keys trade, and until it has read them an
+# order is answered `429 busy` (`gateway_starting`) with this Retry-After. On the host's throttled node that
+# reading took 22 to 42 seconds for demo2's 92 keys (10 Nov 2026), and the gateway answered nothing meanwhile,
+# not even /v1/health.
+STARTING_RETRY_AFTER_S = 5
+# When the start's reading fails as a whole (the signer's list of keys, say), it is tried again after 1 s, then
+# 2, 4 and so on, never more than this apart. A key whose own read fails is not this: the sweep tries it again.
+TAKE_ON_RETRY_MAX_S = 60.0
 
 
 def log_line(**fields) -> None:
@@ -380,7 +389,7 @@ class BoundedServer(ThreadingHTTPServer):
 
 def make_handler(gw: Gateway, allow_origin: str = "", request_timeout: float = REQUEST_TIMEOUT_S,
                  health: dict | None = None, faucet: Faucet | None = None, contacts: Contacts | None = None,
-                 live: Any = None):
+                 live: Any = None, starting: "Starting | None" = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "colosseum-pools-gateway"
         timeout = request_timeout  # applies to every read and write on the connection
@@ -390,12 +399,14 @@ def make_handler(gw: Gateway, allow_origin: str = "", request_timeout: float = R
                 self.send_header("Access-Control-Allow-Origin", allow_origin)
                 self.send_header("Vary", "Origin")
 
-        def _send(self, status: int, payload: dict) -> None:
+        def _send(self, status: int, payload: dict, headers: dict | None = None) -> None:
             data = json.dumps(payload, default=str).encode()
             try:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self._cors()
                 self.end_headers()
                 self.wfile.write(data)
@@ -418,7 +429,8 @@ def make_handler(gw: Gateway, allow_origin: str = "", request_timeout: float = R
                         now = live()
                     except Exception as exc:  # a count that fails must not take the health answer with it
                         log_line(event="health_live_failed", error=type(exc).__name__)
-                self._send(200, {"ok": True, "chain_id": CHAIN_ID, **(health or {}), **now})
+                ready = starting.summary() if starting is not None else {}
+                self._send(200, {"ok": True, "chain_id": CHAIN_ID, **(health or {}), **ready, **now})
                 return
             url = urlsplit(self.path)
             if url.path == "/v1/contacts":
@@ -470,6 +482,14 @@ def make_handler(gw: Gateway, allow_origin: str = "", request_timeout: float = R
             ok, body = self._body()
             if not ok:
                 return
+            if starting is not None and not starting.ready():
+                # Read and then refused, so that nothing of it is left on the connection. 429 and not a 5xx,
+                # like nginx's `gateway_restarting` while the gateway does not listen: the CDN replaces a 5xx's body.
+                status, payload = not_sent(429, {"status": "busy", "code": "gateway_starting",
+                                                 "detail": starting.detail()})
+                log_line(http=status, code="gateway_starting")
+                self._send(status, payload, {"Retry-After": str(STARTING_RETRY_AFTER_S)})
+                return
             status, payload = gw.handle_order(body)
             log_line(http=status, **{k: payload.get(k) for k in ("status", "code", "account", "trader", "key")})
             self._send(status, payload)
@@ -511,10 +531,12 @@ def revision(path: str = REVISION_FILE) -> str | None:
 
 def live_summary(protector: Protector) -> dict:
     """What `/v1/health` adds at each request: Hyperliquid's weight this process sent in the last minute,
-    by request type (gateway/weight.py), and the accounts the sweep watches, holding a position, and hot.
+    by request type (gateway/weight.py), the accounts the sweep watches, holding a position, and hot, and the
+    keys whose account the node has not let it read yet (`keys_unread`, tried again by every sweep).
     The ceiling of accounts a host takes is then read off the host, not worked out from the docs."""
     return {"weight_per_min": METER.per_minute(), "accounts_watched": len(protector.watching()),
-            "accounts_with_position": protector.accounts_with_position(), "accounts_hot": len(protector.hot())}
+            "accounts_with_position": protector.accounts_with_position(), "accounts_hot": len(protector.hot()),
+            "keys_unread": protector.unread_keys()}
 
 
 def log_weight(protector: Protector, every: float = WEIGHT_LOG_EVERY_S, stop: threading.Event | None = None) -> None:
@@ -525,6 +547,87 @@ def log_weight(protector: Protector, every: float = WEIGHT_LOG_EVERY_S, stop: th
             log_line(event="weight_per_min", **live_summary(protector))
         except Exception as exc:
             log_line(event="weight_log_failed", error=type(exc).__name__)
+
+
+class Starting:
+    """Whether the gateway has read, since it started, the accounts its signer's keys trade.
+
+    It listens first and reads them after (`take_on_at_start`): on the host's throttled node the reading took
+    22 to 42 seconds (10 Nov 2026), and while it came before the server, nothing answered at all -- a client could
+    not tell a gateway starting from one that was gone. Until the reading is done, /v1/health says so with
+    `ready: false` and how long the start has taken, and an order is refused with `gateway_starting` and
+    `sent: false`. Nothing else waits for it: the faucet and the contacts have nothing to do with the keys.
+    """
+
+    def __init__(self, clock=time.time):
+        self.clock = clock
+        self.since = clock()
+        self._done = threading.Event()
+        self._lock = threading.Lock()
+        self.failed_attempts = 0
+        self.last_error: str | None = None
+
+    def ready(self) -> bool:
+        return self._done.is_set()
+
+    def failed(self, exc: Exception) -> None:
+        with self._lock:
+            self.failed_attempts += 1
+            self.last_error = str(exc)[:200]
+
+    def done(self) -> None:
+        self._done.set()
+
+    def detail(self) -> str:
+        return (f"the gateway started {self.clock() - self.since:.0f} s ago and is still reading the accounts its "
+                f"keys trade; nothing was sent, send it again in {STARTING_RETRY_AFTER_S} seconds")
+
+    def summary(self) -> dict:
+        """What /v1/health adds: `ready`, and while it is false, what the start is doing and for how long."""
+        if self.ready():
+            return {"ready": True}
+        with self._lock:
+            out = {"ready": False, "starting_for_s": round(self.clock() - self.since, 1),
+                   "starting": "reading the accounts the signer's keys trade"}
+            if self.failed_attempts:
+                out["start_failed_attempts"] = self.failed_attempts
+                out["start_last_error"] = self.last_error
+        return out
+
+
+def take_on_at_start(gateway: Gateway, reader: Any, signer: Any, starting: Starting, every: float, hot_every: float,
+                     wait=time.sleep, retry_max_s: float = TAKE_ON_RETRY_MAX_S) -> None:
+    """After the server listens: the accounts the signer's keys trade, then the names of their markets, then the
+    sweep; the gateway is `ready` once the sweep has started.
+
+    A key whose read fails is kept by `take_on` and tried again by every sweep until the node answers. A reading
+    that fails as a whole is tried again here, 1 s after, then 2, 4 and so on up to `retry_max_s` apart, for as long
+    as it takes: a gateway that gave up would stay `ready: false` for good, and one that went on without its keys'
+    accounts would leave a position open over a restart unswept until its trader's next order."""
+    # Before the sweep starts: the accounts this signer's keys trade right now, so one with a position
+    # open is swept from the first pass and not from its trader's next order.
+    addresses = getattr(signer, "addresses", None)
+    delay = 1.0
+    while True:
+        try:
+            taken = gateway.protector.take_on(addresses()) if addresses else []
+            break
+        except Exception as exc:
+            starting.failed(exc)
+            log_line(event="protect_take_on_retry", error=str(exc)[:200], wait_s=delay)
+            wait(delay)
+            delay = min(delay * 2, retry_max_s)
+    log_line(event="protect_took_on", accounts=taken, keys_listed=addresses is not None)
+    # Every asset those accounts may trade, its name on HyperEVM against Hyperliquid's, before the
+    # first order: a mismatch is refused at the order anyway, and said here first.
+    try:
+        names = gateway.protector.check_names(set().union(*(reader.allowed_assets(a) for a in taken)) if taken else set())
+        log_line(event="market_names", checked={str(a): v for a, v in names.items()})
+    except Exception as exc:  # said, and the order checks the name itself; it must not hold the start
+        log_line(event="market_names_failed", error=str(exc)[:200])
+    threading.Thread(target=gateway.protector.run, args=(every, None, hot_every), name="protect-sweep", daemon=True).start()
+    starting.done()
+    log_line(event="ready", after_s=round(starting.clock() - starting.since, 1))
 
 
 def health_summary(mode: str, signer: Any, protect_every: float, commit: str | None = None,
@@ -616,22 +719,18 @@ def main() -> int:
     log_line(event="hold_over_weekend", pools=sorted(hold))
     gateway = Gateway(reader, signer, venue=hl.Venue(dexes=(hl.MAIN_DEX, *dexes)), leverage_caps=caps,
                       after_entry_s=AFTER_ENTRY_S, hold_over_weekend=hold)
-    # Before the sweep starts: the accounts this signer's keys trade right now, so one with a position
-    # open is swept from the first pass and not from its trader's next order.
-    addresses = getattr(signer, "addresses", None)
-    taken = gateway.protector.take_on(addresses()) if addresses else []
-    log_line(event="protect_took_on", accounts=taken, keys_listed=addresses is not None)
-    # Every asset those accounts may trade, its name on HyperEVM against Hyperliquid's, before the
-    # first order: a mismatch is refused at the order anyway, and said here first.
-    names = gateway.protector.check_names(set().union(*(reader.allowed_assets(a) for a in taken)) if taken else set())
-    log_line(event="market_names", checked={str(a): v for a, v in names.items()})
-    threading.Thread(target=gateway.protector.run, args=(every, None, hot_every), name="protect-sweep", daemon=True).start()
-    threading.Thread(target=log_weight, args=(gateway.protector,), name="weight-log", daemon=True).start()
+    # The server is bound first, and the accounts the keys trade are read after it, in their own thread
+    # (`take_on_at_start`): /v1/health answers from the first second, with `ready: false` until then.
+    starting = Starting()
     server = BoundedServer((host, int(port)), make_handler(gateway, allow_origin, health=health, faucet=faucet,
                                                                 contacts=contacts,
-                                                                live=lambda: live_summary(gateway.protector)))
+                                                                live=lambda: live_summary(gateway.protector),
+                                                                starting=starting))
+    threading.Thread(target=take_on_at_start, args=(gateway, reader, signer, starting, every, hot_every),
+                     name="take-on-at-start", daemon=True).start()
+    threading.Thread(target=log_weight, args=(gateway.protector,), name="weight-log", daemon=True).start()
     print(f"gateway listening on {host}:{port}, signer: {mode}, stop and take swept every {every:g} s, "
-          f"{hot_every:g} s where a position can stand without a stop", flush=True)
+          f"{hot_every:g} s where a position can stand without a stop, once it has read its keys' accounts", flush=True)
     server.serve_forever()
     return 0
 

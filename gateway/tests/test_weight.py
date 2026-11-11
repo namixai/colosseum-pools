@@ -508,7 +508,9 @@ class PeriodsMustBePositive(unittest.TestCase):
         import inspect
         body = inspect.getsource(server.main)
         self.assertIn("if not every > 0 or not hot_every > 0:", body)
-        self.assertLess(body.index("if not every > 0 or not hot_every > 0:"), body.index("target=gateway.protector.run"))
+        # The sweep starts in `take_on_at_start`, which main starts after the check.
+        self.assertLess(body.index("if not every > 0 or not hot_every > 0:"), body.index("target=take_on_at_start"))
+        self.assertIn("target=gateway.protector.run", inspect.getsource(server.take_on_at_start))
 
 
 class Health(unittest.TestCase):
@@ -545,7 +547,9 @@ class Health(unittest.TestCase):
         from gateway.protect import Protector
         p = Protector(object(), object(), lambda *a: (None, True, {}))
         said = server.live_summary(p)
-        self.assertEqual(set(said), {"weight_per_min", "accounts_watched", "accounts_with_position", "accounts_hot"})
+        self.assertEqual(set(said), {"weight_per_min", "accounts_watched", "accounts_with_position", "accounts_hot",
+                                     "keys_unread"})
+        self.assertEqual(said["keys_unread"], 0)
         self.assertEqual(set(said["weight_per_min"]), {"total", "by_type"})
 
     def test_the_periods_are_in_health(self):
