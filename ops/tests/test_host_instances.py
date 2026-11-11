@@ -79,6 +79,30 @@ class Instances(unittest.TestCase):
         with self.assertRaises(SystemExit):
             hi.deployment_env("v3 demo3")
 
+    def test_a_deployment_on_a_key_binder_reads_its_bindings_from_the_binder(self):
+        binder = {"PoolFactory": "0x" + "f1" * 20, "KeyBinder": "0x" + "b1" * 20}
+        with mock.patch.object(hi.deployments, "load", return_value=binder):
+            self.assertIn(f"GATEWAY_REGISTRY={'0x' + 'b1' * 20}\n", hi.deployment_env("keybinder-1"))
+        for bad in ({"PoolFactory": "0x" + "f1" * 20},
+                    {**binder, "KeyRegistry": "0x" + "f2" * 20},
+                    {**binder, "KeyBinder": ""}):
+            with self.subTest(sorted(bad)), mock.patch.object(hi.deployments, "load", return_value=bad):
+                with self.assertRaises(SystemExit):
+                    hi.deployment_env("keybinder-1")
+
+    def test_the_gateway_reads_a_binder_as_it_reads_a_registry(self):
+        # The two reads the gateway makes of GATEWAY_REGISTRY (gateway/chain.py) are the same calls on both
+        # contracts, with the same answer: a binder in its place is read without a change.
+        chain = (ROOT / "gateway" / "chain.py").read_text()
+        reads = sorted(set(re.findall(r'self\.registry, "(\w+\([\w,]*\))"', chain)))
+        self.assertEqual(reads, ["bindingOf(address)", "isBound(address,address,address)"])
+        for sol in ("KeyRegistry.sol", "KeyBinder.sol"):
+            src = (ROOT / "src" / sol).read_text()
+            self.assertIn("function bindingOf(address key) external view returns (Binding memory)", src, sol)
+            self.assertIn("function isBound(address key, address account, address trader) external view returns (bool)",
+                          src, sol)
+            self.assertRegex(src, r"struct Binding \{\s*State state;\s*address account;\s*address trader;\s*\}", sol)
+
     def test_the_command_line_says_each_instance_on_a_line(self):
         etc = etc_with(DEMO3)
         out = subprocess.run([sys.executable, "-m", "ops.host_instances", "list", str(etc)],

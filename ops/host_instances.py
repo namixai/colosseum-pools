@@ -264,8 +264,19 @@ def deployment_env(label: str) -> str:
     record = deployments.load(label)
     return (f"COLOSSEUM_DEPLOYMENT={label}\n"
             f"GATEWAY_FACTORY={record['PoolFactory']}\n"
-            f"GATEWAY_REGISTRY={record['KeyRegistry']}\n"
+            f"GATEWAY_REGISTRY={keys_contract(record)}\n"
             + gateway_limits(record) + keeper_nodes(record))
+
+
+def keys_contract(record: dict) -> str:
+    """Where the gateway asks which account a key is bound to: the deployment's KeyRegistry, or its KeyBinder on a
+    deployment after it (docs/KEY-BINDING.md). Both answer the gateway's two reads, `bindingOf` and `isBound`, the
+    same way (gateway/chain.py). A record with both, or neither, names no one contract and is refused."""
+    named = [record[k] for k in ("KeyRegistry", "KeyBinder") if record.get(k)]
+    if len(named) != 1:
+        raise SystemExit("the record must name a KeyRegistry or a KeyBinder, one of them: the gateway reads its "
+                         "keys' bindings from it")
+    return named[0]
 
 
 def main(argv: list[str]) -> int:
