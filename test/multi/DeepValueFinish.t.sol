@@ -167,6 +167,7 @@ contract DeepValueFinishTest is PoolHarness {
         seat = Pool(m.claim(address(e)));
         CoreSimulatorLib.nextBlock();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
     }
 

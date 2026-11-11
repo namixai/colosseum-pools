@@ -6,10 +6,10 @@ import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {Rules, Cancel, Breach, Units} from "./Types.sol";
 import {CoreOps} from "./lib/CoreOps.sol";
 import {AccountOps} from "./lib/AccountOps.sol";
-import {KeyRegistry} from "./KeyRegistry.sol";
+import {KeyBinder} from "./KeyBinder.sol";
 
 interface IFactoryView {
-    function registry() external view returns (KeyRegistry);
+    function binder() external view returns (KeyBinder);
 }
 
 /// @title RuledAccount
@@ -68,6 +68,9 @@ abstract contract RuledAccount is Initializable {
     /// account's agent a few blocks after `cutBlock` should call `recut`.
     address public cutKey;
     uint64 public cutBlock;
+    /// When this account asked the key binder for a key it is still waiting for; zero when it is
+    /// waiting for none. Every request goes through `_askKey`, and the answer through `onKeyBound`.
+    uint64 public keyAskedAt;
 
     event DaySnapshot(uint32 indexed day, int64 equity);
     event AgentSet(address indexed key);
@@ -90,6 +93,8 @@ abstract contract RuledAccount is Initializable {
     error NotStopped();
     error OutsideCheckpointWindow();
     error AlreadyCheckpointed();
+    error KeyAsked();
+    error NotBinder();
 
     function __RuledAccount_init(IFactoryView factory_, Rules memory rules_) internal onlyInitializing {
         factory = factory_;
@@ -168,10 +173,13 @@ abstract contract RuledAccount is Initializable {
     ///         address. Useful if the replacement sent by the stop did not take effect on
     ///         HyperCore (for example because someone funded the chosen address first).
     ///         `salt` is any value the caller picks; it only changes which keyless address
-    ///         is used.
+    ///         is used. The same for an account whose key was revoked and which waits for a
+    ///         fresh one: a replacement HyperCore dropped would leave the revoked key working
+    ///         (a review on #252). Its request stays.
     function recut(bytes32 salt) external {
-        if (!isStopped()) revert NotStopped();
-        _cutAgent(salt);
+        if (isStopped()) return _cutAgent(salt);
+        if (agentKey != address(0) || keyAskedAt == 0 || cutKey == address(0)) revert NotStopped();
+        emit AgentCut(address(0), _replaceAgent(salt));
     }
 
     // ── internals for the stop and the settlement ────────────────────────────────────
@@ -227,13 +235,47 @@ abstract contract RuledAccount is Initializable {
         emit AgentSet(key);
     }
 
-    /// @dev Retires the agent key for good and gives `trader_` a fresh one from the registry, approved
-    ///      under the same name, so that it replaces the old one on HyperCore.
-    function _freshKey(address trader_) internal {
-        KeyRegistry registry = factory.registry();
-        registry.retire(agentKey);
-        _setAgent(registry.assign(trader_));
+    /// @dev Asks the key binder for a key for `trader_`. The key comes with the publisher's word, by
+    ///      `onKeyBound`, and is approved there; until then the account keeps the agent it has.
+    function _askKey(address trader_, KeyBinder.Purpose purpose) internal {
+        factory.binder().request(trader_, purpose);
+        keyAskedAt = uint64(block.timestamp);
     }
+
+    /// @dev Withdraws a request still waiting, if there is one.
+    function _dropAsk() internal {
+        if (keyAskedAt == 0) return;
+        keyAskedAt = 0;
+        factory.binder().cancel();
+    }
+
+    /// @notice The key this account asked for, from the key binder alone. A renewal's, a spoiled
+    ///         key's or a revoked key's replaces the agent under the same name at once; the binder
+    ///         has retired the old one. A start's or a funded stage's starts what waited for it.
+    function onKeyBound(address key, KeyBinder.Purpose purpose) external {
+        if (msg.sender != address(factory.binder())) revert NotBinder();
+        keyAskedAt = 0;
+        if (purpose == KeyBinder.Purpose.Start || purpose == KeyBinder.Purpose.Funded) return _keyArrived(key);
+        if (purpose == KeyBinder.Purpose.Renew) rekeys = 0;
+        _setAgent(key);
+    }
+
+    /// @notice The guardian revoked this account's key: it is cut as a stop cuts it, and the
+    ///         account asks for a fresh one for its trader. The positions stay, with their stops.
+    function onKeyRevoked(address key, bytes32 salt) external {
+        if (msg.sender != address(factory.binder())) revert NotBinder();
+        if (agentKey != key) return;
+        address keyless = _replaceAgent(salt);
+        cutKey = key;
+        emit AgentCut(key, keyless);
+        _askKey(_trader(), KeyBinder.Purpose.Revoked);
+    }
+
+    /// The start or the funded stage that waited for `key`.
+    function _keyArrived(address key) internal virtual;
+
+    /// The trader the account's agent serves.
+    function _trader() internal view virtual returns (address);
 
     /// @dev A term that runs out while the account trades is renewed with a fresh key, never with the
     ///      same one: HyperCore ignores a second approval of a key it holds, and a key it has let go
@@ -245,8 +287,8 @@ abstract contract RuledAccount is Initializable {
     function _renewAgent(address trader_) internal {
         uint64 opens = agentApprovedAt + AGENT_TERM - RENEW_WINDOW;
         if (block.timestamp < opens) revert NotRenewable(opens);
-        rekeys = 0;
-        _freshKey(trader_);
+        if (keyAskedAt != 0) revert KeyAsked();
+        _askKey(trader_, KeyBinder.Purpose.Renew);
     }
 
     /// @dev A fresh key for `trader_` when the account's own has gained a HyperCore account, which
@@ -254,13 +296,14 @@ abstract contract RuledAccount is Initializable {
     ///      approved in spoils it. Within a day of the approval, twice at most for each key the
     ///      account opened or was renewed with: a key HyperCore already took keeps working after it
     ///      gains an account, and on anyone's word a stranger's 1 USDC would replace a working key and
-    ///      spend the registry's free keys one by one (deep audit, AUD-2). The caller checks that the
+    ///      have the platform sign keys one by one (deep audit, AUD-2). The caller checks that the
     ///      trader asks and that the account trades. A key that has no account stays.
     function _rekey(address trader_) internal {
         if (block.timestamp > uint256(agentApprovedAt) + REKEY_WINDOW || rekeys >= MAX_REKEYS) revert RekeyClosed();
         if (!CoreOps.exists(agentKey)) revert KeyWorks();
+        if (keyAskedAt != 0) revert KeyAsked();
         ++rekeys;
-        _freshKey(trader_);
+        _askKey(trader_, KeyBinder.Purpose.Rekey);
     }
 
     /// @dev Replaces the agent with a fresh keyless address and retires the old key for good.
@@ -270,15 +313,21 @@ abstract contract RuledAccount is Initializable {
     ///      past its term would otherwise be cut under a term HyperCore refuses.
     function _cutAgent(bytes32 salt) internal {
         address old = agentKey;
-        address keyless = AccountOps.keylessAddress(address(this), _keylessNonce++, salt);
+        address keyless = _replaceAgent(salt);
+        if (old != address(0)) {
+            cutKey = old;
+            factory.binder().retire(old);
+        }
+        // A key still on its way would land on a stopped account.
+        _dropAsk();
+        emit AgentCut(old, keyless);
+    }
+
+    function _replaceAgent(bytes32 salt) internal returns (address keyless) {
+        keyless = AccountOps.keylessAddress(address(this), _keylessNonce++, salt);
         AccountOps.setAgent(keyless, (block.timestamp + AGENT_TERM) * 1000);
         agentKey = address(0);
         cutBlock = uint64(block.number);
-        if (old != address(0)) {
-            cutKey = old;
-            factory.registry().retire(old);
-        }
-        emit AgentCut(old, keyless);
     }
 
     /// @dev Moves what the perp side can give to spot, the account's dex's whole value first, and

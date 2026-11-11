@@ -19,8 +19,7 @@ contract MultiPoolReader {
     /// @notice How many more exams of `line` the pool would sell right now, by every limit a sale
     ///         holds it to: the share in work, measured without the leavers' part of the pool as it
     ///         is now; its balance on HyperCore, which has to hold what passes still running will ask
-    ///         for, what it sent in the last minute and the leavers' part; the registry's free keys,
-    ///         one for every seat spoken for; its seats; and, for a line priced under the floor, the
+    ///         for, what it sent in the last minute and the leavers' part; its seats; and, for a line priced under the floor, the
     ///         quarter of the seats that free exams and such lines share (audit window 2, A2-1).
     function room(MultiPool m, uint256 line) external view returns (uint256 n) {
         Plan memory p = abi.decode(CodeStore.read(m.planData()), (Plan));
@@ -33,8 +32,6 @@ contract MultiPoolReader {
         uint256 leaving = m.reserve() == 0 ? 0 : (v * m.reserveShare()) / 1e18;
         n = _least(n, _byShare(m, v > leaving ? v - leaving : 0, p.inWorkBps, size));
         n = _least(n, _byBalance(m, leaving, size));
-        uint256 k = m.factory().registry().freeCount();
-        n = _least(n, k > held ? k - held : 0);
         if (uint256(p.menu[line].price) * Units.BPS < m.priceFloorBps() * size) {
             uint256 q = p.maxSeats / 4;
             uint256 f = m.freeRunning();

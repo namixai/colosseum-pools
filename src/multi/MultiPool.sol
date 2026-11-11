@@ -10,7 +10,6 @@ import {CoreOps} from "../lib/CoreOps.sol";
 import {CodeStore} from "../lib/CodeStore.sol";
 import {Pool} from "../Pool.sol";
 import {PoolFactory} from "../PoolFactory.sol";
-import {KeyRegistry} from "../KeyRegistry.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
 import {FreeExams} from "./FreeExams.sol";
 import {TermsBook} from "./TermsBook.sol";
@@ -158,8 +157,6 @@ contract MultiPool {
 
     address public immutable owner;
     PoolFactory public immutable factory;
-    /// The factory's registry of agent keys, which every funded account takes one from.
-    KeyRegistry internal immutable keyRegistry;
     IERC20 public immutable usdc;
     address public immutable examImpl;
     /// The shortest and the longest term a plan or an extension may name, and the shortest last
@@ -309,7 +306,6 @@ contract MultiPool {
     error WrongTerms();
     error TooManyFree();
     error Unpublished();
-    error NoKey();
     error NothingToSend();
 
     modifier onlyOwner() {
@@ -340,7 +336,6 @@ contract MultiPool {
         renewal = renewal_;
         owner = owner_;
         factory = factory_;
-        keyRegistry = factory_.registry();
         usdc = factory_.usdc();
         examImpl = examImpl_;
 
@@ -488,9 +483,8 @@ contract MultiPool {
         uint64 examEnds = uint64(block.timestamp) + saleLead;
         if (examEnds > lastExamEnds) lastExamEnds = examEnds;
         inWork = inWorkAfter;
-        // A key for every seat spoken for, the funded ones too: the registry's keys are retired one
-        // by one and published by hand, so a pass is not sold that no key could open (deep audit, N3).
-        if (_spareKeys() == 0) revert NoKey();
+        // No key is held for the seat: a funded account asks the key binder for its own when it
+        // opens, and nothing waits on a list anyone could empty (deep audit N3 is gone with it).
         held += 1;
         // The seat a pass on this line will take is made now, while the factory still says yes to
         // the funded rules: a pass is never left without one (deep audit, F9).
@@ -1047,12 +1041,6 @@ contract MultiPool {
         return (x + y - 1) / y;
     }
 
-    /// @dev Free keys in the registry beyond one for every seat spoken for.
-    function _spareKeys() internal view returns (uint256) {
-        uint256 k = keyRegistry.freeCount();
-        return k > held ? k - held : 0;
-    }
-
     function _recentOut() internal view returns (uint64) {
         return block.timestamp > lastOutAt + ARM_WAIT ? 0 : outFlight;
     }
@@ -1089,10 +1077,11 @@ contract MultiPool {
     /// not theirs to have back.
     function _open(address seat, SeatInfo storage si) internal {
         Pool p = Pool(seat);
-        if (_stageOf(seat) == Pool.Stage.Idle) {
+        Pool.Stage st = _stageOf(seat);
+        if (st == Pool.Stage.Idle) {
             if (!p.accountReady()) p.prepareAccount();
             p.openFundedFor(si.trader);
-        } else {
+        } else if (st != Pool.Stage.Funded) {
             p.openFundedStage();
         }
         if (_stageOf(seat) != Pool.Stage.Funded) return;
