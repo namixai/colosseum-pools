@@ -94,13 +94,14 @@ DEMO3_ENV = (
     'GATEWAY_LEVERAGE_CAPS={"3": "10", "4": "10", "0": "5", "750000": "8", "750003": "20"}\n'
     "GATEWAY_PERP_DEXES=xyz\n"
     "COLOSSEUM_PERP_DEXES=xyz\n")
-# The keeper's nodes, demo2's and demo3's alike (11 Nov 2026): Hyperliquid's, 50 blocks a scan call, and thirdweb's
-# for a window Hyperliquid's refuses, 1000.
+# The keeper's nodes, demo2's and demo3's alike (11 Nov 2026): Hyperliquid's, 50 blocks a scan call, and dRPC's public
+# node for a window Hyperliquid's refuses, 100 (it answers 101 at most). thirdweb's was the second until it answered the
+# host's address 429 to every call.
 KEEPER_ENV = (
     "COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm\n"
     "COLOSSEUM_LOG_WINDOW=50\n"
-    "COLOSSEUM_RPC_BACKUP_URL=https://998.rpc.thirdweb.com\n"
-    "COLOSSEUM_BACKUP_LOG_WINDOW=1000\n")
+    "COLOSSEUM_RPC_BACKUP_URL=https://hyperliquid-testnet.drpc.org\n"
+    "COLOSSEUM_BACKUP_LOG_WINDOW=100\n")
 
 
 class GatewayLimits(unittest.TestCase):
@@ -202,7 +203,7 @@ class KeeperNodes(unittest.TestCase):
         with mock.patch.object(hi.deployments, "load", return_value=self.record(nodes)):
             return hi.deployment_env("v3-demo3")
 
-    def test_demo2_and_demo3_name_hyperliquids_node_and_thirdwebs(self):
+    def test_demo2_and_demo3_name_hyperliquids_node_and_drpcs(self):
         for label in ("demo2", "v3-demo3"):
             with self.subTest(label):
                 self.assertTrue(hi.deployment_env(label).endswith(KEEPER_ENV))
