@@ -17,7 +17,8 @@ fail, and their prices pay for the ones that pass.
   10 000 locks 1 600. The plan sets the menu (up to eight sizes, each with its price), the rules and
   terms of both stages, how long a pass may wait before its stage starts, an optional trading
   group's owner (the partner) and its share, and the hash of the pool's terms written out in a
-  `TermsBook`. The factory checks every asset against its list and every leverage cap against the
+  `TermsBook`. No two lines share a price: a signed purchase names an amount, not a line. The
+  factory runs PaperExam's own checks on both stages at the largest size, and checks every asset against its list and every leverage cap against the
   asset's, that both stages end (a deadline and an idle limit), that the stage is one step, and
   that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler and the checker may not.
 - **Selling.** `buy(line)`. No seats and no share of the pool limit a sale. 0.5 % of the price goes
@@ -36,7 +37,9 @@ fail, and their prices pay for the ones that pass.
 - **The payout.** `claimPayout(stage)` once the stage has passed, by anyone: 8 % of the size, due 48
   hours later. `pay(max)`, by anyone, pays what is due in the order it came due while the pool's USDC
   covers the next; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from
-  the prices that come in. One stage, one payout: the stage has one step and its pass ends it.
+  the prices that come in. A payout the token refuses to send (say the trader's address was blocked)
+  is set aside for the trader (`PayoutHeld`), who takes it to any address with `claimHeld`, also
+  after the pool has finished; the queue moves on. One stage, one payout: the stage has one step and its pass ends it.
 - **A stop.** Until a payout is due, the factory's checker may stop it once, with a reason: 1,
   opposite positions with another account of the factory; 2, that and wallets linked. The call
   names the other account, the transactions of the trades (at least two) and, for reason 2, the
@@ -70,7 +73,8 @@ stops, lifts and payouts.
 - **The platform is the filler, the checker, and in its first pools the creator.** The filler picks
   the block inside the window; the checker stops payouts whose money stays with the creator. Neither
   is held by the contract, only by what shows: `late` on every fill, the reason and transactions on
-  every stop, the counts, and a public checking script. A creator is never the filler or the checker.
+  every stop, the counts, and a checking script to be published with the keeper (not in this
+  change). A creator is never the filler or the checker.
 - **The checker's evidence is not checked by the contract.** It checks that the other account is
   one of the factory's and that there are transactions; whether they show what the reason says is
   for anyone to read.
@@ -80,13 +84,13 @@ stops, lifts and payouts.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 36 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 78 mutations (`SM1`–`SM78` in `scripts/mutations.py`),
+`test/sim/SimPool.t.sol`, 39 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and 90 mutations (`SM1`–`SM90` in `scripts/mutations.py`),
 each caught by a named test:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 78)
+python3 scripts/mutations.py $(seq -f 'SM%g' 1 90)
 ```
 
 ## Running it

@@ -63,7 +63,7 @@ PLACED = "0x" + keccak(text="Placed(uint32,bool,uint64,uint256,uint256)").hex()
 FILLED = "0x" + keccak(text="Filled(uint32,bool,uint64,uint64,uint256,uint256,uint8)").hex()
 LAPSED = "0x" + keccak(text="Lapsed(uint32,bool,uint64)").hex()
 EXAM_STATUS = ("None", "Active", "Passed", "Breached", "Expired")
-PAYOUT_STATE = ("None", "Due", "Stopped", "Paid")
+PAYOUT_STATE = ("None", "Due", "Stopped", "Paid", "Held")
 EXAM_TERMS = "(uint64,uint16[],uint32,uint32,uint16,uint32,uint16,uint16)"
 PAYOUT = "(address,address,uint64,uint64,uint8,bool)"
 # A fill's gas, fixed: an estimate first would cost a block. PaperExam's fill, with sixteen assets

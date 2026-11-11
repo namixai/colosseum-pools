@@ -48,6 +48,8 @@ STOP = "stopPayout(uint256,uint8,address,bytes32[],bytes32[])"
 STOP_TYPES = ["uint256", "uint8", "address", "bytes32[]", "bytes32[]"]
 # A stop is sent no later than this before its payout is due: a block may take that long.
 MARGIN_S = 300
+# Fills older than this can pair with no payout still waiting: 48 hours of delay, the window, a margin.
+KEEP_S = 72 * 3600
 ADDRESS_BATCH = 100
 
 
@@ -75,8 +77,13 @@ def links(transfers: list[dict], trader_a: str, trader_b: str) -> list[str]:
     A transfer is {from, to, tx}. Empty when nothing links them, or when they are one wallet."""
     if trader_a == trader_b:
         return []
-    to_a = {t["from"]: t["tx"] for t in transfers if t["to"] == trader_a}
-    to_b = {t["from"]: t["tx"] for t in transfers if t["to"] == trader_b}
+    to_a: dict[str, str] = {}
+    to_b: dict[str, str] = {}
+    for t in transfers:  # in the chain's order: the first from each sender is kept (review of cp#264)
+        if t["to"] == trader_a:
+            to_a.setdefault(t["from"], t["tx"])
+        if t["to"] == trader_b:
+            to_b.setdefault(t["from"], t["tx"])
     out = []
     for sender in sorted(set(to_a) & set(to_b)):
         if sender in (trader_a, trader_b):
@@ -133,6 +140,9 @@ class Checker:
         self.fills_from = self.start_block
         self.fills: list[dict] = []
         self._times: dict[int, int] = {}
+        # USDC transfers to each trader read so far, and the block to read on from (review of cp#264).
+        self.transfers: dict[str, list[dict]] = {}
+        self.transfers_from: dict[str, int] = {}
 
     def time_of(self, block: int) -> int:
         if block not in self._times:
@@ -152,18 +162,27 @@ class Checker:
         self.fills_from = latest + 1
 
     def transfers_to(self, traders: list[str], latest: int) -> list[dict]:
-        out = []
-        # From the deployment: USDC sent to a trader before it is not read (docs/SIM-POOL.md).
-        lo = self.start_block
-        words = ["0x" + "00" * 12 + t[2:].lower() for t in traders]
-        while lo <= latest:
-            hi = min(lo + core.MAX_LOG_WINDOW - 1, latest)
-            for l in c.rpc("eth_getLogs", [{"address": self.usdc, "topics": [TRANSFER, None, words],
-                                            "fromBlock": hex(lo), "toBlock": hex(hi)}]):
-                out.append({"from": to_checksum_address("0x" + l["topics"][1][-40:]),
-                            "to": to_checksum_address("0x" + l["topics"][2][-40:]), "tx": l["transactionHash"]})
-            lo = hi + 1
-        return out
+        """USDC sent to each trader since the deployment (before it is not read: docs/SIM-POOL.md),
+        each trader's read once and then from where it stopped."""
+        for t in traders:
+            lo = self.transfers_from.setdefault(t, self.start_block)
+            got = self.transfers.setdefault(t, [])
+            word = "0x" + "00" * 12 + t[2:].lower()
+            while lo <= latest:
+                hi = min(lo + core.MAX_LOG_WINDOW - 1, latest)
+                for l in c.rpc("eth_getLogs", [{"address": self.usdc, "topics": [TRANSFER, None, word],
+                                                "fromBlock": hex(lo), "toBlock": hex(hi)}]):
+                    got.append({"from": to_checksum_address("0x" + l["topics"][1][-40:]),
+                                "to": to_checksum_address("0x" + l["topics"][2][-40:]), "tx": l["transactionHash"]})
+                lo = hi + 1
+            self.transfers_from[t] = lo
+        return [x for t in traders for x in self.transfers[t]]
+
+    def prune(self, now: int) -> None:
+        """Drops the fills and block times no payout still waiting can need (review of cp#264)."""
+        cutoff = now - KEEP_S
+        self.fills = [f for f in self.fills if f["t"] >= cutoff]
+        self._times = {b: t for b, t in self._times.items() if t >= cutoff}
 
     def check(self, pool: str, pid: int, now: int, latest: int) -> tuple | None:
         p = view(pool, "payout(uint256)", sk.PAYOUT, ["uint256"], [pid])
@@ -184,6 +203,7 @@ class Checker:
         now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
         self.keeper.scan(latest)
         self.read_fills(latest)
+        self.prune(now)
         stops = []
         for pool in self.keeper.pools:
             head, count = view(pool, "head()", "uint256"), view(pool, "payoutCount()", "uint256")

@@ -43,6 +43,11 @@ class ALink(unittest.TestCase):
     def test_one_paid_the_other(self):
         self.assertEqual(s.links([{"from": self.T1, "to": self.T2, "tx": "0xd"}], self.T1, self.T2), ["0xd"])
 
+    def test_the_first_transfer_from_each_sender_is_named(self):
+        t = [{"from": self.F, "to": self.T1, "tx": "0xa"}, {"from": self.F, "to": self.T1, "tx": "0xlater"},
+             {"from": self.F, "to": self.T2, "tx": "0xb"}]
+        self.assertEqual(s.links(t, self.T1, self.T2), ["0xa", "0xb"])
+
     def test_nothing_links_them_or_they_are_one_wallet(self):
         t = [{"from": self.F, "to": self.T1, "tx": "0xa"}, {"from": C, "to": self.T2, "tx": "0xb"}]
         self.assertEqual(s.links(t, self.T1, self.T2), [])
@@ -80,6 +85,37 @@ class AStop(unittest.TestCase):
         log = {"address": A, "topics": ["0x00", "0x" + "00" * 31 + "04"], "data": "0x" + data.hex(), "transactionHash": "0xf"}
         self.assertEqual(s.fill_of(log, 55), {"account": s.to_checksum_address(A), "asset": 4, "buy": False, "sz": 120,
                                               "t": 55, "tx": "0xf"})
+
+
+class TheService(unittest.TestCase):
+    def checker(self):
+        ch = s.Checker.__new__(s.Checker)
+        ch.start_block, ch.usdc = 10, "0x" + "dd" * 20
+        ch.transfers, ch.transfers_from, ch.fills, ch._times = {}, {}, [], {}
+        return ch
+
+    def test_transfers_are_read_once_and_then_from_where_they_stopped(self):
+        from unittest import mock
+        ch = self.checker()
+        t1 = s.to_checksum_address("0x" + "11" * 20)
+        with mock.patch.object(s.c, "rpc", return_value=[]) as rpc:
+            ch.transfers_to([t1], 59)
+            first = rpc.call_count
+            ch.transfers_to([t1], 59)
+            self.assertEqual(rpc.call_count, first, "nothing new, nothing read")
+            ch.transfers_to([t1], 60)
+        self.assertEqual(rpc.call_args[0][1][0]["fromBlock"], hex(60))
+        self.assertEqual(ch.transfers_from[t1], 61)
+
+    def test_old_fills_and_times_are_dropped(self):
+        ch = self.checker()
+        now = 1_000_000
+        ch.fills = [fill(A, t=now - s.KEEP_S - 1), fill(A, t=now - s.KEEP_S)]
+        ch._times = {1: now - s.KEEP_S - 1, 2: now}
+        ch.prune(now)
+        self.assertEqual([f["t"] for f in ch.fills], [now - s.KEEP_S])
+        self.assertEqual(ch._times, {2: now})
+        self.assertGreaterEqual(s.KEEP_S, 48 * 3600 + 600, "a waiting payout's pairs are kept")
 
 
 if __name__ == "__main__":
