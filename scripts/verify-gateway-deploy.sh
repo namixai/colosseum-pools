@@ -24,7 +24,7 @@ if printf '%s' "$health" | grep -q '"code": "gateway_restarting"'; then
   echo "FAIL the gateway is restarting and nginx answers for it; run this again in 30 seconds"
   exit 1
 fi
-if printf '%s' "$health" | grep -q '"ready": false'; then
+if printf '%s' "$health" | grep -Eq '"ready"[[:space:]]*:[[:space:]]*false'; then
   # The gateway listens, and still reads the accounts its keys trade (gateway/server.py, take_on_at_start).
   echo "FAIL the gateway has just started and still reads its keys' accounts; run this again in a few seconds"
   exit 1

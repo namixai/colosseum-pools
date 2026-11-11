@@ -264,13 +264,15 @@ class TheCheckAfterADeploy(unittest.TestCase):
         import sys
         import tempfile
         root = pathlib.Path(server.__file__).resolve().parents[1]
-        saved = pathlib.Path(tempfile.mkdtemp()) / "health.json"
-        saved.write_text(json.dumps({"ok": True, "chain_id": 998, "commit": "ab" * 20, "ready": False,
-                                     "starting_for_s": 3.2}) + "\n")
-        out = subprocess.run(["bash", str(root / "scripts" / "verify-gateway-deploy.sh"), saved.as_uri()],
-                             env={**os.environ, "PYTHON": sys.executable}, capture_output=True, text=True)
-        self.assertEqual(out.returncode, 1, out.stdout)
-        self.assertIn("FAIL the gateway has just started and still reads its keys' accounts", out.stdout)
+        said = {"ok": True, "chain_id": 998, "commit": "ab" * 20, "ready": False, "starting_for_s": 3.2}
+        # As the gateway writes it, and written tight: the check does not lean on the spacing.
+        for separators in ((", ", ": "), (",", ":")):
+            saved = pathlib.Path(tempfile.mkdtemp()) / "health.json"
+            saved.write_text(json.dumps(said, separators=separators) + "\n")
+            out = subprocess.run(["bash", str(root / "scripts" / "verify-gateway-deploy.sh"), saved.as_uri()],
+                                 env={**os.environ, "PYTHON": sys.executable}, capture_output=True, text=True)
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn("FAIL the gateway has just started and still reads its keys' accounts", out.stdout)
 
 
 class Wiring(unittest.TestCase):

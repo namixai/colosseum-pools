@@ -1748,7 +1748,7 @@ MUTATIONS = [
      "            return 0",
      ["test_a_key_the_node_would_not_read_is_counted_until_a_sweep_reads_it"]),
     ("G291", "scripts/verify-gateway-deploy.sh",
-     "if printf '%s' \"$health\" | grep -q '\"ready\": false'; then",
+     "if printf '%s' \"$health\" | grep -Eq '\"ready\"[[:space:]]*:[[:space:]]*false'; then",
      "if false; then",
      ["test_a_gateway_still_reading_its_keys_fails_the_check_after_a_deploy"]),
     ("G277", "gateway/assets.py",
