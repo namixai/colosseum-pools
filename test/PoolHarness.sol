@@ -10,7 +10,8 @@ import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {HLConstants} from "@hyper-evm-lib/src/common/HLConstants.sol";
 
 import {Rules, Terms, Cancel, Breach, Units} from "../src/Types.sol";
-import {KeyRegistry} from "../src/KeyRegistry.sol";
+import {KeyBinder} from "../src/KeyBinder.sol";
+import {BinderStand} from "./BinderStand.sol";
 import {PoolFactory} from "../src/PoolFactory.sol";
 import {Pool} from "../src/Pool.sol";
 import {ChallengeAccount} from "../src/ChallengeAccount.sol";
@@ -63,11 +64,11 @@ contract OracleFollowsMark {
     }
 }
 
-/// The stand every pools test runs on: the simulator, a factory, a registry, and the
+/// The stand every pools test runs on: the simulator, a factory, a key binder, and the
 /// helpers that drive them. It holds no tests of its own, so a suite that inherits it does
 /// not re-run somebody else's -- which is what happened the first time an audit regression
 /// test was given its own file, and turned one suite count into two different numbers.
-contract PoolHarness is Test {
+contract PoolHarness is BinderStand {
     address griefer = makeAddr("griefer");
 
     event RawAction(address indexed user, bytes data);
@@ -87,14 +88,12 @@ contract PoolHarness is Test {
 
     HyperCore hyperCore;
     MockUsdc usdc;
-    KeyRegistry registry;
     PoolFactory factory;
 
     address operator = makeAddr("operator");
     address investor = makeAddr("investor");
     address trader = makeAddr("trader");
     address stranger = makeAddr("stranger");
-    address[] keys;
 
     /// The plan with terms written for it, as a pool takes them (deep audit F13): a text in the
     /// book that begins `Plan 0x<hash of the plan, its terms fields zero>`, then `body`. Kept with
@@ -203,19 +202,17 @@ contract PoolHarness is Test {
         vm.etch(HLConstants.usdc(), address(impl).code);
         usdc = MockUsdc(HLConstants.usdc());
 
-        registry = new KeyRegistry(operator);
-        factory = new PoolFactory(registry, address(new Pool()), address(new ChallengeAccount()), operator, usdc);
-        // More than a pool's sixteen seats: a MultiPool sells only while a key is free for every seat
-        // it has spoken for (deep audit, N3).
-        for (uint256 i = 0; i < 20; ++i) {
-            keys.push(makeAddr(string.concat("enclave-key-", vm.toString(i))));
-        }
+        // No renewal delay here, so that a renewal binds as a start does; test/KeyBinder.t.sol and
+        // the renewal tests switch it on.
+        binder = new KeyBinder(operator, 1000, 0);
+        factory = new PoolFactory(binder, address(new Pool()), address(new ChallengeAccount()), operator, usdc);
         uint32[] memory listed = new uint32[](2);
         listed[0] = BTC;
         listed[1] = ETH;
         vm.startPrank(operator);
-        registry.setAccountSource(factory);
-        registry.publish(keys);
+        binder.setAccountSource(factory);
+        binder.setPublisher(publisher, keccak256("pcr0-2"), keccak256("attestation document"));
+        binder.setGuardian(guardian);
         factory.setPlatformAssets(listed, _names(listed), true);
         factory.setFundedAssets(listed, _names(listed), true);
         factory.setSharesCode(keccak256(type(PoolShares).creationCode));
@@ -273,7 +270,7 @@ contract PoolHarness is Test {
     function _started(Pool p) internal returns (ChallengeAccount ch) {
         ch = _buy(p);
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
     }
 
@@ -459,8 +456,8 @@ contract PoolHarness is Test {
         _trade(address(ch), BTC, false, 0.005e8); // flat again, profit realized
         ch.graduate(SALT);
         // Since audit A-02 the pass and the funding are two calls: graduate records that the
-        // trader passed whatever the key registry looks like, and this opens the stage.
-        p.openFundedStage();
+        // trader passed whatever the keys look like, and this opens the stage.
+        _openFunded(p);
     }
 
 

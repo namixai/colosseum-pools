@@ -7,7 +7,7 @@ import {Rules, Cancel, Breach} from "../../src/Types.sol";
 import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {Pool} from "../../src/Pool.sol";
 import {RuledAccount} from "../../src/RuledAccount.sol";
-import {KeyRegistry} from "../../src/KeyRegistry.sol";
+import {KeyBinder} from "../../src/KeyBinder.sol";
 import {PoolFactory} from "../../src/PoolFactory.sol";
 import {MultiPoolReader} from "../../src/multi/MultiPoolReader.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
@@ -200,6 +200,7 @@ contract MultiPoolTest is PoolHarness {
         assertEq(_spot(address(seat)), 25e8, "the seat holds its size once the old balance has gone");
         vm.warp(block.timestamp + 2 minutes);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
     }
 
@@ -269,6 +270,7 @@ contract MultiPoolTest is PoolHarness {
         assertEq(seat, m.seats()[2]);
         CoreSimulatorLib.nextBlock();
         m.open(seat);
+        _bindIfAsked(address(seat));
         assertEq(Pool(seat).fundedTrader(), bob);
     }
 
@@ -335,6 +337,7 @@ contract MultiPoolTest is PoolHarness {
         seat = Pool(m.claim(address(e)));
         CoreSimulatorLib.nextBlock();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
     }
 
@@ -789,14 +792,17 @@ contract MultiPoolTest is PoolHarness {
         // Same block: the seat has no account on HyperCore yet.
         vm.expectRevert(Pool.NotReady.selector);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         vm.expectRevert(MultiPool.BadSeat.selector);
         m.open(other);
+        _bindIfAsked(address(other));
 
         CoreSimulatorLib.nextBlock();
         assertEq(_spot(address(seat)), 25e8);
         assertEq(_spot(address(m)), 74e8, "25 sent, and 1 for the seat's account");
         vm.prank(stranger);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
         assertEq(seat.fundedTrader(), alice);
         assertEq(seat.fundedStart(), 25e6, "the size the exam was taken on");
@@ -808,6 +814,7 @@ contract MultiPoolTest is PoolHarness {
 
         vm.expectRevert(MultiPool.BadSeat.selector);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
     }
 
     function test_multi_rearm_sendsAgainWhatDidNotArrive() public {
@@ -962,10 +969,12 @@ contract MultiPoolTest is PoolHarness {
         vm.prank(bob);
         vm.expectRevert(MultiPool.NotTrader.selector);
         m.reopen(address(seat));
+        _bindIfAsked(address(seat));
 
         CoreSimulatorLib.nextBlock();
         vm.prank(alice);
         m.reopen(address(seat));
+        _bindIfAsked(address(seat));
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
         assertEq(seat.fundedTrader(), alice);
         assertEq(m.activeSince(address(seat)), block.timestamp, "a new stage, a new idle clock");
@@ -975,6 +984,7 @@ contract MultiPoolTest is PoolHarness {
         vm.prank(alice);
         vm.expectRevert(MultiPool.BadSeat.selector);
         m.reopen(address(seat));
+        _bindIfAsked(address(seat));
     }
 
     function test_multi_accountStays_aSeatNotTakenAgainIsFreed() public {
@@ -994,12 +1004,14 @@ contract MultiPoolTest is PoolHarness {
         uint256 snap = vm.snapshotState();
         vm.prank(alice);
         m.reopen(address(seat));
+        _bindIfAsked(address(seat));
         vm.revertToState(snap);
 
         vm.warp(waitUntil + 1);
         vm.prank(alice);
         vm.expectRevert(MultiPool.TooLate.selector);
         m.reopen(address(seat));
+        _bindIfAsked(address(seat));
         m.finish(address(seat));
         (MultiPool.SeatState ss,) = _seatState(m, address(seat));
         assertEq(uint8(ss), uint8(MultiPool.SeatState.Free));
@@ -1049,8 +1061,10 @@ contract MultiPoolTest is PoolHarness {
         vm.warp(restUntil);
         vm.expectRevert(MultiPool.TooSoon.selector);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         vm.warp(restUntil + 1);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         assertEq(seat.fundedTrader(), bob);
     }
 
@@ -1081,6 +1095,7 @@ contract MultiPoolTest is PoolHarness {
         m.sweep(seat);
         vm.warp(block.timestamp + 1 minutes + 1);
         m.open(seat);
+        _bindIfAsked(address(seat));
         assertEq(uint8(Pool(seat).stage()), uint8(Pool.Stage.Funded));
     }
 
@@ -1385,6 +1400,7 @@ contract MultiPoolTest is PoolHarness {
         vm.prank(alice);
         vm.expectRevert(MultiPool.Ended.selector);
         m.reopen(address(waited));
+        _bindIfAsked(address(waited));
         m.finish(address(waited));
         (ss,) = _seatState(m, address(waited));
         assertEq(uint8(ss), uint8(MultiPool.SeatState.Free), "five days of its window were left");
@@ -1422,6 +1438,7 @@ contract MultiPoolTest is PoolHarness {
         vm.warp(m.endsAt() + 1);
         vm.expectRevert(MultiPool.Ended.selector);
         m.open(seat);
+        _bindIfAsked(address(seat));
         m.release(address(stale));
         m.finish(seat);
         assertEq(m.inWork(), 0);
@@ -1449,6 +1466,7 @@ contract MultiPoolTest is PoolHarness {
         address seat = m.claim(address(e));
         CoreSimulatorLib.nextBlock();
         m.open(seat);
+        _bindIfAsked(address(seat));
         assertEq(uint8(Pool(seat).stage()), uint8(Pool.Stage.Funded));
     }
 
@@ -2010,6 +2028,7 @@ contract MultiPoolTest is PoolHarness {
         CoreSimulatorLib.nextBlock();
         vm.prank(alice);
         m.reopen(address(seat));
+        _bindIfAsked(address(seat));
         (,,,,,,, uint16 retakes) = m.seatInfo(address(seat));
         assertEq(retakes, 1);
         CoreSimulatorLib.nextBlock();
@@ -2093,6 +2112,7 @@ contract MultiPoolTest is PoolHarness {
         Pool seat = Pool(m.claim(address(e)));
         CoreSimulatorLib.nextBlock();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
         assertEq(seat.terms().fundedCapital, 25e6);
@@ -2454,17 +2474,6 @@ contract MultiPoolTest is PoolHarness {
         CoreSimulatorLib.nextBlock();
     }
 
-    /// No key for a stage on the factory: every free one spoiled and swept, and the seat's own too.
-    function _noKeys(Pool seat) internal {
-        for (uint256 i = 0; i < keys.length; ++i) {
-            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
-                CoreSimulatorLib.forceAccountActivation(keys[i]);
-            }
-        }
-        CoreSimulatorLib.forceAccountActivation(seat.reservedKey());
-        registry.purgeSpoiled(keys.length);
-    }
-
     /// CodeRabbit's CR5: `open` called the seat Funded while its pool still waited on the dex, and a
     /// stage that never opened gave no price back. The seat is Armed until its pool is Funded, the
     /// second step is `open` again, and the money on the dex is not sent a second time.
@@ -2496,10 +2505,14 @@ contract MultiPoolTest is PoolHarness {
         int64 unit = PrecompileLib.accountMarginSummary(DEX, address(seat)).accountValue + 1;
         CoreSimulatorLib.forcePerpBalance(address(seat), DEX, uint64(unit)); // somebody's unit
         uint256 valueBefore = m.value();
+        vm.prank(stranger);
+        m.open(address(seat)); // the capital shows: the key is asked for
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.PassedAwaitingKey));
+        address key = _newKey();
+        bytes memory sig = _sign(address(seat), key);
         vm.expectEmit(address(m));
         emit MultiPool.SeatOpened(address(seat), alice);
-        vm.prank(stranger);
-        m.open(address(seat));
+        binder.bind(address(seat), key, sig);
         assertEq(seat.startSurplus(), 1);
         assertEq(m.value(), valueBefore, "the unit is the pool's money as before, out of the stage's equity");
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
@@ -2518,10 +2531,12 @@ contract MultiPoolTest is PoolHarness {
         MultiPool m = _xyzSeats(AfterTarget.AccountCloses);
         Pool seat = _claimed(m, alice);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         _stop(m);
         vm.warp(m.endsAt() + 1);
         CoreSimulatorLib.nextBlock();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.expectRevert(Pool.TooEarly.selector);
@@ -2541,12 +2556,13 @@ contract MultiPoolTest is PoolHarness {
         Pool seat = _claimed(m, alice);
         uint256 inWork = m.inWork();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.setRevertOnFailure(false);
         CoreSimulatorLib.forceSpotBalance(address(seat), 0, 0);
         CoreSimulatorLib.nextBlock(); // the dex takes nothing
         CoreSimulatorLib.forceSpotBalance(address(seat), 0, 25e8);
         vm.warp(uint256(seat.passedAt()) + seat.AWAIT_KEY_WINDOW() + 1);
-        assertGt(registry.freeCount(), 0, "keys there are");
+        assertFalse(_asked(address(seat)), "no key is asked for while the dex shows nothing");
         seat.abandonFundedStage();
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Idle));
         vm.expectEmit(address(m));
@@ -2564,11 +2580,11 @@ contract MultiPoolTest is PoolHarness {
         MultiPool m = _xyzSeats(AfterTarget.AccountCloses);
         Pool seat = _claimed(m, alice);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
-        _noKeys(seat);
-        vm.expectRevert();
-        m.open(address(seat)); // landed, and no key to open it with
-        vm.warp(uint256(seat.passedAt()) + seat.AWAIT_KEY_WINDOW() + 1);
+        m.open(address(seat)); // landed: the key is asked for, and never comes
+        assertTrue(_asked(address(seat)));
+        vm.warp(uint256(seat.keyAskedAt()) + seat.AWAIT_KEY_WINDOW() + 1);
         seat.abandonFundedStage();
         CoreSimulatorLib.nextBlock(); // the capital back on the seat's spot
         vm.warp(block.timestamp + 7 days);
@@ -2586,8 +2602,10 @@ contract MultiPoolTest is PoolHarness {
         MultiPool m = _xyzSeats(AfterTarget.AccountStays);
         Pool seat = _claimed(m, alice);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
         CoreSimulatorLib.forcePerpBalance(address(seat), DEX, 27.5e6); // the target, flat
         (Cancel[] memory c, uint32[] memory a) = _none();
@@ -2600,12 +2618,13 @@ contract MultiPoolTest is PoolHarness {
         CoreSimulatorLib.nextBlock();
         vm.prank(alice);
         m.reopen(address(seat));
+        _bindIfAsked(address(seat));
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.PassedAwaitingKey));
         (ss,) = _seatState(m, address(seat));
         assertEq(uint8(ss), uint8(MultiPool.SeatState.Armed), "the retake waits for the dex as the first stage did");
         CoreSimulatorLib.nextBlock();
-        _noKeys(seat);
-        vm.warp(uint256(seat.passedAt()) + seat.AWAIT_KEY_WINDOW() + 1);
+        m.open(address(seat)); // landed: the key is asked for, and never comes
+        vm.warp(uint256(seat.keyAskedAt()) + seat.AWAIT_KEY_WINDOW() + 1);
         seat.abandonFundedStage();
         CoreSimulatorLib.nextBlock();
         vm.warp(block.timestamp + 7 days);

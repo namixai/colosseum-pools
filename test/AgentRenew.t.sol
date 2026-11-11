@@ -7,7 +7,7 @@ import {Cancel} from "../src/Types.sol";
 import {Pool} from "../src/Pool.sol";
 import {ChallengeAccount} from "../src/ChallengeAccount.sol";
 import {RuledAccount} from "../src/RuledAccount.sol";
-import {KeyRegistry} from "../src/KeyRegistry.sol";
+import {KeyBinder} from "../src/KeyBinder.sol";
 import {PoolHarness} from "./PoolHarness.sol";
 
 /// 18 October 2026: HyperCore forgot a live challenge's agent, approved through CoreWriter with no
@@ -28,6 +28,7 @@ contract AgentRenewTest is PoolHarness {
         vm.startPrank(investor);
         p.runByOwner(false);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         vm.stopPrank();
         CoreSimulatorLib.nextBlock();
     }
@@ -38,7 +39,7 @@ contract AgentRenewTest is PoolHarness {
         CoreSimulatorLib.nextBlock();
         vm.warp(T0);
         vm.recordLogs();
-        ch.activate();
+        _activate(ch);
         (keys_, names) = _approvals();
         CoreSimulatorLib.nextBlock();
     }
@@ -77,6 +78,7 @@ contract AgentRenewTest is PoolHarness {
         vm.recordLogs();
         vm.prank(stranger);
         ch.renewAgent();
+        _bindIfAsked(address(ch));
         (keys_, names) = _approvals();
         address fresh = ch.agentKey();
         assertTrue(fresh != first && fresh != address(0));
@@ -84,8 +86,8 @@ contract AgentRenewTest is PoolHarness {
         assertEq(keys_[0], fresh);
         assertEq(names[0], "pools valid_until 1819721600000");
         assertEq(ch.agentValidUntil(), 1_819_721_600_000);
-        assertTrue(registry.isBound(fresh, address(ch), trader), "the same trader");
-        assertEq(uint8(registry.bindingOf(first).state), uint8(KeyRegistry.State.Retired), "the old key for good");
+        assertTrue(binder.isBound(fresh, address(ch), trader), "the same trader");
+        assertEq(uint8(binder.bindingOf(first).state), uint8(KeyBinder.State.Retired), "the old key for good");
     }
 
     /// From the last fourteen days of the term on: refused a second before. After a renewal the
@@ -96,11 +98,14 @@ contract AgentRenewTest is PoolHarness {
         vm.warp(opens - 1);
         vm.expectRevert(abi.encodeWithSelector(RuledAccount.NotRenewable.selector, opens));
         ch.renewAgent();
+        _bindIfAsked(address(ch));
         vm.warp(opens);
         ch.renewAgent();
+        _bindIfAsked(address(ch));
         uint64 next = uint64(block.timestamp) + 179 days - 14 days;
         vm.expectRevert(abi.encodeWithSelector(RuledAccount.NotRenewable.selector, next));
         ch.renewAgent();
+        _bindIfAsked(address(ch));
     }
 
     /// Audit window 2, A5-2, turned round: a window that passed unrenewed, the keeper down, left the
@@ -111,12 +116,14 @@ contract AgentRenewTest is PoolHarness {
         address key = p.agentKey();
         vm.warp(uint256(p.agentApprovedAt()) + 179 days);
         p.renewAgent();
+        _bindIfAsked(address(p));
         address fresh = p.agentKey();
         assertTrue(fresh != key);
-        assertTrue(registry.isBound(fresh, address(p), trader));
-        assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
+        assertTrue(binder.isBound(fresh, address(p), trader));
+        assertEq(uint8(binder.bindingOf(key).state), uint8(KeyBinder.State.Retired));
         vm.warp(uint256(p.agentApprovedAt()) + 179 days + 30 days);
         p.renewAgent();
+        _bindIfAsked(address(p));
         assertTrue(p.agentKey() != fresh, "and a month past the next end too");
     }
 
@@ -130,11 +137,12 @@ contract AgentRenewTest is PoolHarness {
             vm.warp(uint256(ch.agentApprovedAt()) + 179 days - 14 days);
             vm.recordLogs();
             ch.renewAgent();
+            _bindIfAsked(address(ch));
             (address[] memory a,) = _approvals();
             assertEq(a.length, 1);
             for (uint256 j = 0; j < r; ++j) {
                 assertTrue(a[0] != seen[j], "a key never approved before");
-                assertEq(uint8(registry.bindingOf(seen[j]).state), uint8(KeyRegistry.State.Retired));
+                assertEq(uint8(binder.bindingOf(seen[j]).state), uint8(KeyBinder.State.Retired));
             }
             seen[r] = a[0];
         }
@@ -147,6 +155,7 @@ contract AgentRenewTest is PoolHarness {
         (ChallengeAccount ch,,) = _startedAtT0();
         vm.warp(uint256(ch.agentApprovedAt()) + 179 days - 14 days);
         ch.renewAgent();
+        _bindIfAsked(address(ch));
         address fresh = ch.agentKey();
         vm.warp(block.timestamp + 1 days);
         (Cancel[] memory c, uint32[] memory a) = _none();
@@ -157,7 +166,7 @@ contract AgentRenewTest is PoolHarness {
         assertTrue(keys_[0] != fresh && keys_[0] != address(0), "a keyless address");
         assertEq(names[0], _agentName(block.timestamp));
         assertEq(ch.agentKey(), address(0));
-        assertEq(uint8(registry.bindingOf(fresh).state), uint8(KeyRegistry.State.Retired));
+        assertEq(uint8(binder.bindingOf(fresh).state), uint8(KeyBinder.State.Retired));
         vm.recordLogs();
         ch.recut(bytes32(uint256(7)));
         (keys_, names) = _approvals();
@@ -170,8 +179,9 @@ contract AgentRenewTest is PoolHarness {
         ChallengeAccount ch = _buy(p);
         vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.BadStatus.selector, ChallengeAccount.Status.Created));
         ch.renewAgent();
+        _bindIfAsked(address(ch));
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.prank(trader);
@@ -179,6 +189,7 @@ contract AgentRenewTest is PoolHarness {
         vm.warp(uint256(ch.agentApprovedAt()) + 179 days - 14 days);
         vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.BadStatus.selector, ChallengeAccount.Status.Forfeited));
         ch.renewAgent();
+        _bindIfAsked(address(ch));
     }
 
     /// A funded stage renews for its funded trader, and only while it is funded.
@@ -186,20 +197,23 @@ contract AgentRenewTest is PoolHarness {
         Pool idle = _readyPool();
         vm.expectRevert(abi.encodeWithSelector(Pool.BadStage.selector, Pool.Stage.Idle));
         idle.renewAgent();
+        _bindIfAsked(address(idle));
         Pool p = _ownerFunded();
         address key = p.agentKey();
         vm.warp(uint256(p.agentApprovedAt()) + 179 days - 14 days);
         p.renewAgent();
+        _bindIfAsked(address(p));
         address fresh = p.agentKey();
         assertTrue(fresh != key);
-        assertTrue(registry.isBound(fresh, address(p), trader));
-        assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
+        assertTrue(binder.isBound(fresh, address(p), trader));
+        assertEq(uint8(binder.bindingOf(key).state), uint8(KeyBinder.State.Retired));
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.prank(investor);
         p.stopFunded(c, a, SALT);
         vm.warp(uint256(p.agentApprovedAt()) + 179 days - 14 days);
         vm.expectRevert(abi.encodeWithSelector(Pool.BadStage.selector, Pool.Stage.Closing));
         p.renewAgent();
+        _bindIfAsked(address(p));
     }
 
     /// Audit window 2, A5-1, turned round: a transfer that lands in the renewal's block spoils the
@@ -214,10 +228,12 @@ contract AgentRenewTest is PoolHarness {
             CoreSimulatorLib.nextBlock();
             vm.prank(trader);
             p.rekey();
+            _bindIfAsked(address(p));
         }
         assertEq(p.rekeys(), 2);
         vm.warp(uint256(p.agentApprovedAt()) + 179 days - 14 days);
         p.renewAgent();
+        _bindIfAsked(address(p));
         assertEq(p.rekeys(), 0, "two more for the renewal's key");
         for (uint256 i = 0; i < 2; ++i) {
             address spoiled = p.agentKey();
@@ -226,14 +242,16 @@ contract AgentRenewTest is PoolHarness {
             vm.warp(block.timestamp + 1 days - 1);
             vm.prank(trader);
             p.rekey();
+            _bindIfAsked(address(p));
             assertTrue(p.agentKey() != spoiled);
-            assertTrue(registry.isBound(p.agentKey(), address(p), trader));
+            assertTrue(binder.isBound(p.agentKey(), address(p), trader));
         }
         CoreSimulatorLib.forceSpotBalance(p.agentKey(), 0, 1e8);
         CoreSimulatorLib.nextBlock();
         vm.prank(trader);
         vm.expectRevert(RuledAccount.RekeyClosed.selector);
         p.rekey();
+        _bindIfAsked(address(p));
     }
 
     /// A day after a renewal, a spoiled fresh key is the stage's until the next window.
@@ -241,12 +259,14 @@ contract AgentRenewTest is PoolHarness {
         Pool p = _ownerFunded();
         vm.warp(uint256(p.agentApprovedAt()) + 179 days - 14 days);
         p.renewAgent();
+        _bindIfAsked(address(p));
         CoreSimulatorLib.forceSpotBalance(p.agentKey(), 0, 1e8);
         CoreSimulatorLib.nextBlock();
         vm.warp(uint256(p.agentApprovedAt()) + 1 days + 1);
         vm.prank(trader);
         vm.expectRevert(RuledAccount.RekeyClosed.selector);
         p.rekey();
+        _bindIfAsked(address(p));
     }
 
     /// A5-1's residue for a challenge: its key spoiled in the block of its approval had no way back.
@@ -255,31 +275,35 @@ contract AgentRenewTest is PoolHarness {
     function test_rekey_aChallengesKeySpoiledAtItsActivation_isReplacedByItsTraderAlone() public {
         ChallengeAccount ch = _buy(_readyPool());
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         address first = ch.agentKey();
         vm.prank(trader);
         vm.expectRevert(RuledAccount.KeyWorks.selector);
         ch.rekey();
+        _bindIfAsked(address(ch));
         CoreSimulatorLib.forceSpotBalance(first, 0, 1e8); // lands before the queued approval
         CoreSimulatorLib.nextBlock();
         vm.prank(stranger);
         vm.expectRevert(ChallengeAccount.NotTrader.selector);
         ch.rekey();
+        _bindIfAsked(address(ch));
         for (uint256 i = 0; i < 2; ++i) {
             address spoiled = ch.agentKey();
             CoreSimulatorLib.forceSpotBalance(spoiled, 0, 1e8);
             CoreSimulatorLib.nextBlock();
             vm.prank(trader);
             ch.rekey();
+            _bindIfAsked(address(ch));
             assertTrue(ch.agentKey() != spoiled);
-            assertTrue(registry.isBound(ch.agentKey(), address(ch), trader));
-            assertEq(uint8(registry.bindingOf(spoiled).state), uint8(KeyRegistry.State.Retired));
+            assertTrue(binder.isBound(ch.agentKey(), address(ch), trader));
+            assertEq(uint8(binder.bindingOf(spoiled).state), uint8(KeyBinder.State.Retired));
         }
         CoreSimulatorLib.forceSpotBalance(ch.agentKey(), 0, 1e8);
         CoreSimulatorLib.nextBlock();
         vm.prank(trader);
         vm.expectRevert(RuledAccount.RekeyClosed.selector);
         ch.rekey();
+        _bindIfAsked(address(ch));
     }
 
     /// A day after the approval, and once the challenge has stopped, no fresh key; a renewal's key
@@ -292,13 +316,16 @@ contract AgentRenewTest is PoolHarness {
         vm.prank(trader);
         vm.expectRevert(RuledAccount.RekeyClosed.selector);
         ch.rekey();
+        _bindIfAsked(address(ch));
         vm.warp(T0 + 179 days - 14 days);
         ch.renewAgent();
+        _bindIfAsked(address(ch));
         assertEq(ch.rekeys(), 0);
         CoreSimulatorLib.forceSpotBalance(ch.agentKey(), 0, 1e8);
         CoreSimulatorLib.nextBlock();
         vm.prank(trader);
         ch.rekey();
+        _bindIfAsked(address(ch));
         assertEq(ch.rekeys(), 1);
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.prank(trader);
@@ -306,24 +333,58 @@ contract AgentRenewTest is PoolHarness {
         vm.prank(trader);
         vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.BadStatus.selector, ChallengeAccount.Status.Forfeited));
         ch.rekey();
+        _bindIfAsked(address(ch));
     }
 
-    /// With no free key in the registry the renewal is refused whole: the old key stays, approved,
-    /// until a key is published.
-    function test_renew_noFreeKeyLeavesTheOldKey() public {
+    /// A renewal asks for its key and waits for it: the old key stays approved and bound until the
+    /// binding, a second renewal meanwhile is refused, and a renewal nobody answers leaves the old key
+    /// to its term.
+    function test_renew_waitsForItsKey_theOldKeyStaysUntilTheBinding() public {
         (ChallengeAccount ch,,) = _startedAtT0();
         address key = ch.agentKey();
-        for (uint256 i = 0; i < keys.length; ++i) {
-            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
-                CoreSimulatorLib.forceAccountActivation(keys[i]);
-            }
-        }
-        registry.purgeSpoiled(keys.length);
-        assertEq(registry.freeCount(), 0);
         vm.warp(uint256(ch.agentApprovedAt()) + 179 days - 14 days);
-        vm.expectRevert(KeyRegistry.NoFreeKey.selector);
         ch.renewAgent();
         assertEq(ch.agentKey(), key);
-        assertTrue(registry.isBound(key, address(ch), trader));
+        assertTrue(binder.isBound(key, address(ch), trader));
+        assertEq(ch.keyAskedAt(), block.timestamp);
+        assertEq(uint8(binder.requestOf(address(ch)).purpose), uint8(KeyBinder.Purpose.Renew));
+        vm.expectRevert(RuledAccount.KeyAsked.selector);
+        ch.renewAgent();
+        address fresh = _bind(address(ch));
+        assertEq(ch.agentKey(), fresh);
+        assertEq(ch.keyAskedAt(), 0);
+        assertEq(uint8(binder.bindingOf(key).state), uint8(KeyBinder.State.Retired));
+    }
+
+    /// With the renewal delay on, the fresh key is committed by its hash, shown a day later and
+    /// approved in the block it is shown in: nobody can spoil it in between, the old key works the
+    /// whole day, and the guardian can revoke the commitment by revoking the old key.
+    function test_renew_withTheDelay_commitThenRevealADayLater() public {
+        (ChallengeAccount ch,,) = _startedAtT0();
+        vm.prank(operator);
+        binder.setRenewDelay(1 days);
+        address key = ch.agentKey();
+        vm.warp(uint256(ch.agentApprovedAt()) + 179 days - 14 days);
+        ch.renewAgent();
+        address fresh = _newKey();
+        bytes memory sig = _sign(address(ch), fresh);
+        vm.expectRevert(KeyBinder.WrongStep.selector);
+        binder.bind(address(ch), fresh, sig);
+        binder.commit(address(ch), keccak256(abi.encode(fresh)), sig);
+        uint64 at = uint64(block.timestamp + 1 days);
+        assertEq(binder.requestOf(address(ch)).activatesAt, at);
+        vm.warp(at - 1);
+        vm.expectRevert(abi.encodeWithSelector(KeyBinder.TooEarly.selector, at));
+        binder.reveal(address(ch), fresh);
+        assertEq(ch.agentKey(), key, "the old key works the whole day");
+        vm.warp(at);
+        vm.expectRevert(KeyBinder.WrongKey.selector);
+        binder.reveal(address(ch), _newKey());
+        vm.recordLogs();
+        binder.reveal(address(ch), fresh);
+        (address[] memory keys_,) = _approvals();
+        assertEq(keys_.length, 1);
+        assertEq(keys_[0], fresh, "approved in the block it is shown in");
+        assertEq(ch.agentKey(), fresh);
     }
 }
