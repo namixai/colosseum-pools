@@ -1,0 +1,17 @@
+# Every 15 minutes, on the host, because the host's timer is its own: a scheduler that runs a check
+# "hourly" in someone else's cloud is no promise (measured in September 2026: one run in seven slots).
+# The four timers are minutes apart (00, 03, 07, 11 of each quarter hour): two watchdogs that hit one
+# public node from one address in the same second are what blinded a keeper once.
+[Unit]
+Description=colosseum-pools watchdog timer: free keys of the registry (demo3)
+
+[Timer]
+OnCalendar=*:03/15
+RandomizedDelaySec=30
+AccuracySec=15
+# A run missed because of a reboot is made up once, not queued.
+Persistent=true
+Unit=colosseum-watch-keys-demo3.service
+
+[Install]
+WantedBy=timers.target

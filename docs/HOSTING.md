@@ -228,6 +228,10 @@ after Chainlink's went down and both keepers missed a day's snapshot. Both units
 | `/var/lib/colosseum-keeper/keeper-<label>.json` | the keeper's progress; rebuilt from the chain if lost | `colosseum-keeper` |
 | `/etc/colosseum/shared-keeper.env` | the shared pool its keeper serves, its key directory, its node; no secret | root, 644 |
 | `/var/lib/colosseum-keeper/shared/secrets` | `shared-keeper.key` and `.addr`, the shared pool keeper's gas wallet | `colosseum-keeper`, 700 and 600 |
+| `/opt/colosseum-watch/releases/<sha>` | the watchdogs of one release, copied by `install.sh` from `ops/host/watchdogs` | root, read-only to the watchdogs |
+| `/opt/colosseum-watch/current` | link to the newest of them; the watchdogs' units run from it, never from a pools release | root |
+| `/var/lib/colosseum-watch` | one `<name>.alarm` file for each check that has a finding standing | `colosseum-watch`, 700 |
+| `/etc/colosseum/watch.env` | optional: the alert command and node overrides for the watchdogs; written by hand if at all | root, 644 |
 
 Each service can't read the other's `/var/lib` directory, by owner and again by its unit
 (`InaccessiblePaths`). The units are in `ops/host/` and run with `ProtectSystem=strict`,
@@ -302,8 +306,9 @@ uses its own configuration. That script:
 - builds the venv when the requirements changed;
 - installs the units, and the nginx site once there is a certificate;
 - writes `deployment.env`;
+- checks the release's watchdogs and puts them in place, before it switches ("The host's watchdogs");
 - switches `current`;
-- restarts the services that are enabled;
+- restarts the services that are enabled, then runs each watchdog once and prints what it said;
 - keeps the three newest releases.
 
 The deployment record the services use has to be committed: `install.sh` reads it from the
@@ -723,6 +728,73 @@ up for the first pool. A release does not touch the line; `install.sh` checks it
 anything switches, it refuses a release when `shared-keeper.env` does not name the pool on one line of its
 own, `COLOSSEUM_SHARED_DEPLOYMENT=<label>` with nothing around it (no spaces, quotes or comment), or when
 that pool's record is missing or has no `SharedPool`: the label it checks is then the one systemd passes.
+
+## The host's watchdogs
+
+A service that is "active" with its logs going says nothing about the work being done: on 25 September 2026 a
+keeper had followed no pool for days and fallen 175 thousand blocks behind with nobody told. So two checks
+look at the RESULT, from outside the keeper's and the gateway's own files, through public chain reads only.
+Each runs every quarter of an hour as a systemd timer, as its own unprivileged user `colosseum-watch`, which
+cannot see `/var/lib/colosseum-keeper` or `/var/lib/colosseum-gw`:
+
+| unit | what it looks at | when |
+|---|---|---|
+| `colosseum-watch-keys` | the free agent keys of the registry: their count against the threshold (16, strict: the alarm is at 15), and for each free key whether its address has gained an account on HyperCore, which spoils it | `*:00/15` |
+| `colosseum-watch-keeper` | for each live account of the factory, what the keeper is bound to do: stop a breach, close at the deadline, activate within 15 minutes of the purchase | `*:07/15` |
+| `colosseum-watch-keys-demo3`, `colosseum-watch-keeper-demo3` | the same two, for the instance demo3 | `*:03/15`, `*:11/15` |
+
+The files are `ops/host/watchdogs`: `keys_watch.py`, `keeper_watch.py`, their one retry ladder
+`watch_backoff.py`, the wrapper `watchdog-run.sh`, and a service and a timer for each unit.
+
+**They come with the release, and nothing is put on the host first.** `install.sh` checks that the release
+carries them, copies them to `/opt/colosseum-watch/releases/<sha>`, compares the copy with the release's own
+directory, installs the units, runs `daemon-reload`, points `/opt/colosseum-watch/current` at the new copy and
+restarts the timers, all before it switches `current` of the pools: a release that cannot carry its watchdogs
+does not switch. The units name `/opt/colosseum-watch/current`, which is never inside a pools release, so a
+rollback to a release from before the watchdogs leaves them running. An instance gets its pair when the release
+ships units named for it and `deployment-<name>.env` is on the host; the first deployment's pair needs
+`deployment.env`. What an earlier, hand-made install left in `/opt/colosseum-watch` (`watchdog-run.sh` and
+`watchdogs/`) is removed, and the user `colosseum-watch` is made if it is missing. After the services restart,
+`install.sh` starts each watchdog once and prints the last line it said: a node that cannot be read shows up in
+the deploy's output, as a warning that never fails the release.
+
+**What they read.** The registry (`GATEWAY_REGISTRY`) and the factory (`GATEWAY_FACTORY`) come from
+`/etc/colosseum/deployment.env`, or `deployment-demo3.env`, which `install.sh` writes from the deployment's
+record and the services read: a watchdog looks at the deployment the host serves, not at whatever the record on
+a branch says today, and it needs no address of its own. Neither has a default; with none named the check
+exits 3. The nodes: the keys check reads `998.rpc.thirdweb.com` and falls back to Hyperliquid's node
+(`POOLS_WATCH_KEYS_RPC`, `POOLS_WATCH_KEYS_RPC_FALLBACK` in `watch.env` move them); the keeper check reads
+Hyperliquid's node (`POOLS_WATCH_RPC`) and falls back to the keeper's backup node,
+`COLOSSEUM_RPC_BACKUP_URL` of the deployment's env file when the record names one (`POOLS_WATCH_RPC_FALLBACK`
+overrides it). No node is written into the keeper check as its fallback: a record that names none leaves it on
+its first node alone, and an exhausted day's allowance there ("More than 3000 archived blocks queried in one
+day", which a pause does not lift) is then exit 3. A node that is merely busy gets the ladder of 63 seconds, a
+node that is broken or out of allowance is left for the fallback at once, and the output says it read the fallback.
+
+**What a run says.** `watchdog-run.sh` sorts the check's exit code and does nothing else:
+
+| code | journal | flag `/var/lib/colosseum-watch/<name>.alarm` | the unit |
+|---|---|---|---|
+| 0, quiet | `quiet: ...`, and `RECOVERED` if a flag stood | removed | succeeds |
+| 1, a finding | `ALARM` and the finding | written, with the time | succeeds (`SuccessExitStatus=1`) |
+| 3, could not check | the reason, "the flag is untouched" | not touched either way | fails |
+| any other | `UNKNOWN CODE` | not touched | fails |
+
+Code 3 leaves the flag alone on purpose: "could not check" is neither "all is well" nor "all is wrong", and
+clearing a standing alarm out of ignorance or raising a false one is each worse than saying so. A check that
+crashes is 3 too, never a finding. There is no alert channel on the host: an alarm is the flag and the journal
+line, and the wrapper says so on every alarm. A channel is one line in `/etc/colosseum/watch.env`,
+`COLOSSEUM_ALERT_CMD='...'`, which the units read (it gets the finding on stdin, and a command that fails is
+logged as not having taken it).
+
+Reading them, on the host:
+
+    systemctl list-timers 'colosseum-watch-*'            # when each runs next
+    journalctl -u colosseum-watch-keys -n 20 --no-pager  # what the free-key check said
+    ls -l /var/lib/colosseum-watch                       # a file here is an alarm that stands
+
+To take them off: `systemctl disable --now colosseum-watch-*.timer`, then remove `/etc/systemd/system/colosseum-watch-*`
+and run `systemctl daemon-reload`. The state directory is left, because a flag in it may be a live alarm.
 
 ## Publishing the app
 

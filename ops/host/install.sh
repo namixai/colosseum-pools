@@ -9,7 +9,9 @@
 #      deployment-<name>.env for each further instance named by /etc/colosseum/deployment-<name>
 #      (ops/host_instances.py);
 #   4. `current` and `venv` point at the new ones, then the enabled services restart, the
-#      instances' too, and the shared pool's keeper when it is enabled.
+#      instances' too, and the shared pool's keeper when it is enabled;
+#   5. the watchdogs come with the release: their files, units and timers are put in place from it
+#      before the switch (ops/host/watchdogs/install-lib.sh), and each is run once after the restarts.
 #
 # It makes and moves no key. Testnet only.
 set -euo pipefail
@@ -140,6 +142,11 @@ while read -r name label port; do
   say "instance $name: deployment $label, gateway on 127.0.0.1:$port, /$name/v1/ on nginx"
 done <<< "$instances"
 
+# The watchdogs ride with the release. Their files are checked and put in place here, still before
+# the switch, from the deployment env files just written (docs/HOSTING.md, "The host's watchdogs").
+. "$rel/ops/host/watchdogs/install-lib.sh"
+watchdogs_install "$rel" "$sha" "$instances"
+
 # 4. Switch, restart what is enabled, keep the three newest releases.
 ln -sfn "venv-$req_id" "$base/venv.next" && mv -T "$base/venv.next" "$base/venv"
 ln -sfn "releases/$sha" "$base/current.next" && mv -T "$base/current.next" "$base/current"
@@ -157,6 +164,9 @@ for unit in "${units[@]}"; do
     say "$unit is not enabled"
   fi
 done
+# One run of each watchdog, started now so that a node that cannot be read, or a deployment that is
+# not named, shows in this output and not a quarter of an hour later. Never fatal: see install-lib.sh.
+watchdogs_smoke || true
 find "$base/releases" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended -regex '.*/[0-9a-f]{40}' \
   -printf '%T@ %f\n' | sort -rn | tail -n +4 | cut -d' ' -f2 | while read -r old; do
   [ "$old" = "$sha" ] || rm -rf "${base:?}/releases/$old"
