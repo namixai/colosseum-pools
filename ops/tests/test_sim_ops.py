@@ -65,6 +65,15 @@ class TheFirstPool(unittest.TestCase):
             d.asset_list(["HYPE"])
 
 
+class TheMeasurePool(unittest.TestCase):
+    def test_it_measures_with_the_widest_window_and_locks_little(self):
+        m = json.loads((ROOT / "deployments/plans/sim-measure-pool.json").read_text())
+        self.assertEqual(m["exam"]["fill_window"], int(constant("MAX_FILL_WINDOW")))
+        self.assertEqual(m["funded"]["fill_window"], int(constant("MAX_FILL_WINDOW")))
+        self.assertEqual(d.locked_of(m), 160 * 10**6)
+        self.assertEqual({k: v for k, v in m["exam_rules"].items()}, FIRST["exam_rules"], "the same rules as the first pool")
+
+
 GOOD = {"pool": "0x" + "11" * 20, "trader": "0x" + "22" * 20, "line": 1, "valid_after": 0,
         "valid_before": 2_000, "nonce": "0x" + "33" * 32, "v": 27, "r": "0x" + "44" * 32, "s": "0x" + "55" * 32}
 

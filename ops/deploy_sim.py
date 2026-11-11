@@ -12,6 +12,9 @@ recipient, and lists the assets with their leverage caps from ops/leverage.py (H
 the platform's decision of 11 November 2026). It writes deployments/testnet-<label>.json, with the
 same keeper nodes as demo3, so the host's keeper unit can run on it.
 
+`buy` approves a line's price and buys an exam from the trader's key, for --measure in
+ops/sim_keeper.py; it prints the exam.
+
 `pool` publishes a pool's terms in the TermsBook, approves the USDC for the two locked payouts and
 calls `create` with 1 HYPE, from the creator's key. The plan file gives the menu, both stages'
 rules and terms, the fund window, the book's ceiling, the partner and the terms' text.
@@ -169,6 +172,24 @@ def pool(args) -> int:
     return 0
 
 
+def buy(args) -> int:
+    record = deployments.load(args.deployment)
+    pool_ = to_checksum_address(args.pool)
+    print(f"deploy_sim buy: pool {pool_}, line {args.line}, from {args.trader}")
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    c.assert_testnet()
+    trader = c.account(args.trader)
+    price = c.call_view(pool_, "menu()", [], [], ["(uint64,uint64)[]"])[0][args.line][1]
+    c.transact(trader, record["usdc"], "approve(address,uint256)", ["address", "uint256"], [pool_, price])
+    rcpt = c.transact(trader, pool_, "buy(uint256)", ["uint256"], [args.line])
+    sold = "0x" + keccak(text="ExamSold(address,address,uint256,uint64,uint64,uint256,bool)").hex()
+    exam = next(l for l in rcpt["logs"] if l["topics"][0] == sold)["topics"][1]
+    print(f"deploy_sim: exam {to_checksum_address('0x' + exam[-40:])}, tx {rcpt['transactionHash']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -185,8 +206,14 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--plan", required=True)
     q.add_argument("--creator", default="creator")
     q.add_argument("--send", action="store_true")
+    b = sub.add_parser("buy")
+    b.add_argument("--deployment", required=True)
+    b.add_argument("--pool", required=True)
+    b.add_argument("--line", type=int, default=0)
+    b.add_argument("--trader", default="trader")
+    b.add_argument("--send", action="store_true")
     args = p.parse_args(argv)
-    return deploy(args) if args.cmd == "deploy" else pool(args)
+    return {"deploy": deploy, "pool": pool, "buy": buy}[args.cmd](args)
 
 
 if __name__ == "__main__":
