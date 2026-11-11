@@ -94,6 +94,17 @@ DEMO3_ENV = (
     'GATEWAY_LEVERAGE_CAPS={"3": "10", "4": "10", "0": "5", "750000": "8", "750003": "20"}\n'
     "GATEWAY_PERP_DEXES=xyz\n"
     "COLOSSEUM_PERP_DEXES=xyz\n")
+# demo2's gateway.env on the host, read on 11 Nov 2026 (13:44Z): BTC, ETH, SOL at the platform's sizes and caps, no
+# builder dex. Its record says the same, in the same order, so the rendered lines are the host's byte for byte; the
+# empty dex lines are what the gateway and the keeper already take as none.
+DEMO2_ENV = (
+    "COLOSSEUM_DEPLOYMENT=demo2\n"
+    "GATEWAY_FACTORY=0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222\n"
+    "GATEWAY_REGISTRY=0x53AF27F65Dd7473c890f633aC0025b261307779e\n"
+    'GATEWAY_SIZE_CAPS={"3": "0.005", "4": "0.15", "0": "4"}\n'
+    'GATEWAY_LEVERAGE_CAPS={"3": "10", "4": "10", "0": "5"}\n'
+    "GATEWAY_PERP_DEXES=\n"
+    "COLOSSEUM_PERP_DEXES=\n")
 # The keeper's nodes, demo2's and demo3's alike (11 Nov 2026): Hyperliquid's, 50 blocks a scan call, and dRPC's public
 # node for a window Hyperliquid's refuses, 100 (it answers 101 at most). thirdweb's was the second until it answered the
 # host's address 429 to every call.
@@ -118,12 +129,19 @@ class GatewayLimits(unittest.TestCase):
         # xyz read. xyz:GOLD comes with the record: 0.1 an order (about 400 USDC near 4,000) and 20x.
         self.assertEqual(hi.deployment_env("v3-demo3"), DEMO3_ENV + KEEPER_ENV)
 
-    def test_a_record_without_limits_says_its_addresses_alone(self):
-        # demo2's record has none: its gateway.env still says them, as it did.
-        text = hi.deployment_env("demo2")
-        self.assertEqual([l.split("=")[0] for l in text.splitlines()],
-                         ["COLOSSEUM_DEPLOYMENT", "GATEWAY_FACTORY", "GATEWAY_REGISTRY", "COLOSSEUM_RPC_URL",
-                          "COLOSSEUM_LOG_WINDOW", "COLOSSEUM_RPC_BACKUP_URL", "COLOSSEUM_BACKUP_LOG_WINDOW"])
+    def test_demo2s_record_says_what_its_host_has(self):
+        # On the host, by hand, until now (11 Nov 2026): BTC, ETH and SOL at these sizes and caps, no builder dex.
+        # The record takes them over unchanged, so the gateway sees no difference after the deploy.
+        self.assertEqual(hi.deployment_env("demo2"), DEMO2_ENV + KEEPER_ENV)
+
+    def test_demo2s_lines_are_what_the_gateway_reads(self):
+        from gateway.demo_signer import size_caps
+        from gateway.protect import leverage_caps
+        env = dict(l.split("=", 1) for l in hi.deployment_env("demo2").splitlines())
+        sizes, caps = size_caps(env["GATEWAY_SIZE_CAPS"]), leverage_caps(env["GATEWAY_LEVERAGE_CAPS"])
+        self.assertEqual(sorted(sizes), [0, 3, 4])
+        self.assertEqual(sorted(caps), sorted(sizes))
+        self.assertEqual((env["GATEWAY_PERP_DEXES"], env["COLOSSEUM_PERP_DEXES"]), ("", ""))
 
     def test_the_lines_are_what_the_gateway_reads(self):
         from gateway.demo_signer import size_caps
@@ -139,19 +157,21 @@ class GatewayLimits(unittest.TestCase):
         # pool's rules for it. A market the table withdraws (None) has no cap here either.
         from decimal import Decimal
         from ops.leverage import ASSET_LEVERAGE_X100
-        record = json.loads((ROOT / "deployments" / "testnet-v3-demo3.json").read_text())
-        for perp in record["gateway_limits"]["perps"]:
-            coin = perp["name"].split(":")[-1]
-            with self.subTest(perp["name"]):
-                self.assertIsNotNone(ASSET_LEVERAGE_X100.get(coin), "a market with no default has no gateway cap")
-                self.assertEqual(Decimal(perp["leverage"]) * 100, ASSET_LEVERAGE_X100[coin])
+        for file in ("testnet-demo2.json", "testnet-v3-demo3.json"):
+            record = json.loads((ROOT / "deployments" / file).read_text())
+            for perp in record["gateway_limits"]["perps"]:
+                coin = perp["name"].split(":")[-1]
+                with self.subTest(file=file, perp=perp["name"]):
+                    self.assertIsNotNone(ASSET_LEVERAGE_X100.get(coin), "a market with no default has no gateway cap")
+                    self.assertEqual(Decimal(perp["leverage"]) * 100, ASSET_LEVERAGE_X100[coin])
 
     def test_a_perp_the_record_lists_is_numbered_as_the_record_numbers_it(self):
-        record = json.loads((ROOT / "deployments" / "testnet-v3-demo3.json").read_text())
-        listed = record["platform_assets"]
-        for perp in record["gateway_limits"]["perps"]:
-            if perp["name"] in listed:
-                self.assertEqual(perp["asset"], listed[perp["name"]], perp["name"])
+        for file in ("testnet-demo2.json", "testnet-v3-demo3.json"):
+            record = json.loads((ROOT / "deployments" / file).read_text())
+            listed = record["platform_assets"]
+            for perp in record["gateway_limits"]["perps"]:
+                if perp["name"] in listed:
+                    self.assertEqual(perp["asset"], listed[perp["name"]], f"{file}: {perp['name']}")
 
     def test_limits_that_the_gateway_would_refuse_are_refused_here(self):
         btc = {"name": "BTC", "asset": 3, "size": "0.005", "leverage": "10"}
