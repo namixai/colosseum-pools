@@ -248,8 +248,10 @@ demo and used nowhere else.
    the users, directories and env files, the TLS key and its CSR, and prints the CSR.
    Running it again adds only what is missing.
 2. From the operator's machine: `ops/host/deploy.sh <commit> <user@host>`, which also builds the venv.
-3. The agent keys, on the host, as the gateway's user. Only the addresses leave the host,
-   for `ops/deploy_testnet.py --keys-file`:
+3. The agent keys, on the host, as the gateway's user, for a deployment before the key binder.
+   Only the addresses leave the host, for that deployment's `--keys-file`. A deployment with a key
+   binder makes no keys in advance: the keeper's relay writes each into this directory just
+   before it is bound (docs/KEY-BINDING.md).
 
        cd / && sudo -u colosseum-gw /opt/colosseum-pools/venv/bin/python \
            /opt/colosseum-pools/current/ops/make_demo_keys.py --out /var/lib/colosseum-gw/keys --count 20

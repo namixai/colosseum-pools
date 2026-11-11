@@ -60,6 +60,8 @@ class Provenance(unittest.TestCase):
 ZERO = "0x" + "00" * 20
 KEY_A = "0x00000000000000000000000000000000000000a1"
 KEY_B = "0x00000000000000000000000000000000000000b2"
+PUBLISHER = "0x00000000000000000000000000000000000000AB"
+HASH = "0x" + "aa" * 32
 
 
 class Linking(unittest.TestCase):
@@ -263,8 +265,6 @@ class Deployment(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = pathlib.Path(tmp.name)
-        self.keys_file = self.root / "keys.txt"
-        self.keys_file.write_text(KEY_A + "\n")
         self.record_path = self.root / "deployments" / "testnet-t.json"
         self.on_disk = []  # the record as it was on disk when each deployment was sent
         self.big_blocks = []
@@ -304,7 +304,8 @@ class Deployment(unittest.TestCase):
                 mock.patch.object(deploy.c, "rpc", return_value=hex(balance)), \
                 mock.patch.object(deploy.c, "deploy", side_effect=deploy_one), \
                 mock.patch.object(deploy.c, "transact", side_effect=record_tx), \
-                mock.patch.object(deploy.sys, "argv", ["deploy", "--label", "t", "--keys-file", str(self.keys_file)]):
+                mock.patch.object(deploy.sys, "argv", ["deploy", "--label", "t", "--publisher", PUBLISHER,
+                                                       "--pcr-hash", HASH, "--attestation-hash", HASH]):
             return deploy.main()
 
     def test_a_deployer_without_gas_is_refused_before_anything_is_sent(self):
@@ -329,16 +330,20 @@ class Deployment(unittest.TestCase):
         self.assertEqual(self.big_blocks, [True, False])
         self.assertIsNone(self.on_disk[0])
         self.assertEqual([sorted(r["tx"]) for r in self.on_disk[1:]],
-                         [["KeyRegistry"], ["AccountOps", "KeyRegistry"], ["AccountOps", "KeyRegistry", "PoolImpl"],
-                          ["AccountOps", "ChallengeAccountImpl", "KeyRegistry", "PoolImpl"]])
+                         [["KeyBinder"], ["AccountOps", "KeyBinder"], ["AccountOps", "KeyBinder", "PoolImpl"],
+                          ["AccountOps", "ChallengeAccountImpl", "KeyBinder", "PoolImpl"]])
         self.assertEqual([r["PoolImpl"] for r in self.on_disk[3:]], ["0x" + f"{0xE3:040x}"] * 2)
         # The accounts link to the library deployed before them.
         library = {"AccountOps": "0x" + f"{0xE2:040x}"}
         self.assertEqual((self.linked["Pool"], self.linked["ChallengeAccount"]), (library, library))
         self.assertIsNone(self.linked["PoolFactory"])
         record = self.record()
-        self.assertEqual((record["status"], record["block"], record["published_keys"]),
-                         ("complete", 0x10, [deploy.to_checksum_address(KEY_A)]))
+        self.assertEqual((record["status"], record["block"]), ("complete", 0x10))
+        self.assertNotIn("published_keys", record)
+        binder = "0x" + f"{0xE1:040x}"
+        self.assertEqual([(to, sig.split("(")[0]) for to, sig, _ in self.transactions][:2],
+                         [(binder, "setAccountSource"), (binder, "setPublisher")])
+        self.assertEqual(record["key_binder"]["publisher"]["address"], PUBLISHER)
         # The demo's platform fee: 0.7 test USDC to the operator, on the new factory.
         factory = "0x" + f"{0xE5:040x}"
         fee = [(to, values) for to, sig, values in self.transactions if sig == "setChallengeFee(uint256,address)"]
@@ -356,7 +361,7 @@ class Deployment(unittest.TestCase):
         record = self.record()
         self.assertEqual(record["status"], "incomplete")
         self.assertIn("underpriced", record["error"])
-        self.assertEqual(sorted(record["tx"]), ["AccountOps", "KeyRegistry", "PoolImpl"])
+        self.assertEqual(sorted(record["tx"]), ["AccountOps", "KeyBinder", "PoolImpl"])
         self.assertEqual(record["PoolImpl"], "0x" + f"{0xE3:040x}")
         self.assertNotIn("ChallengeAccountImpl", record)
         self.assertEqual(self.big_blocks, [True, False])
@@ -377,9 +382,9 @@ class Deployment(unittest.TestCase):
         self.assert_not_loadable()
 
     def test_a_late_failure_leaves_the_addresses_on_disk(self):
-        """The publish transaction fails after four deployments and two settings went through."""
+        """The last setting fails after four deployments and three settings went through."""
         def transact(acct, to, sig, types, values):
-            if sig.startswith("publish"):
+            if sig.startswith("setChallengeFee"):
                 raise RuntimeError("execution reverted")
             return {"transactionHash": f"0x{sig.split('(')[0]}"}
 
@@ -389,8 +394,8 @@ class Deployment(unittest.TestCase):
         self.assertEqual(record["status"], "incomplete")
         self.assertIn("execution reverted", record["error"])
         self.assertEqual(record["PoolFactory"], "0x" + f"{0xE5:040x}")
-        self.assertEqual(set(record["tx"]), {"KeyRegistry", "AccountOps", "PoolImpl", "ChallengeAccountImpl", "PoolFactory",
-                                             "setAccountSource", "setPlatformAssets", "setChallengeFee"})
+        self.assertEqual(set(record["tx"]), {"KeyBinder", "AccountOps", "PoolImpl", "ChallengeAccountImpl", "PoolFactory",
+                                             "setAccountSource", "setPublisher", "setPlatformAssets"})
         self.assert_not_loadable()
 
 

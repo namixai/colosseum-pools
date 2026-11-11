@@ -11,7 +11,10 @@ together -- which is what the weekly watch (.github/workflows/settled-accounts-w
 It also reads who operates each deployment's key registry, operator() and pendingOperator(), and exits 1 when
 either is not what the record says: the deployer and nobody pending, or, after a handover at the deploy
 (registry_operator), the deployer and the address given while it is pending, that address once accepted. The
-weekly watch goes red on that too; money left behind (2) is said first.
+weekly watch goes red on that too; money left behind (2) is said first. A deployment with a key binder
+(src/KeyBinder.sol) has no registry: for it the watch reads the binder's owner(), pendingOwner(), publisher(),
+guardian() and paused(), and the factory's operator() and pendingOperator(), and exits 1 the same way when any is
+not what the record's `key_binder` and `factory_operator` say, or when the binder is paused.
 
 Every account a factory creates, a pool or a challenge, is a clone made with CREATE, so its address follows from the
 factory's address and nonce. The accounts are found that way, not from the factory's logs: HyperEVM answers
@@ -186,8 +189,24 @@ def read(block: str, dex_names: list[str], seats: set[str], record: dict) -> dic
         registry = {"address": reg, "operator": address(call(reg, "operator()", block=block)),
                     "pending_operator": address(call(reg, "pendingOperator()", block=block)),
                     "record_says": handover or {"operator": record.get("deployer")}}
+    binder = None
+    if record.get("KeyBinder"):
+        # Who owns the binder that binds every new account's key, who signs for it and who can stop it, and who
+        # operates the factory: on chain, and as the record says (ops/binder_deploy.py).
+        kb = to_checksum_address(record["KeyBinder"])
+        binder = {"address": kb, "owner": address(call(kb, "owner()", block=block)),
+                  "pending_owner": address(call(kb, "pendingOwner()", block=block)),
+                  "publisher": address(call(kb, "publisher()", block=block)),
+                  "guardian": address(call(kb, "guardian()", block=block)),
+                  "paused": uint(call(kb, "paused()", block=block)) == 1,
+                  "max_binds_per_day": uint(call(kb, "maxBindsPerDay()", block=block)),
+                  "renew_delay": uint(call(kb, "renewDelay()", block=block)),
+                  "factory_operator": address(call(factory, "operator()", block=block)),
+                  "factory_pending_operator": address(call(factory, "pendingOperator()", block=block)),
+                  "record_says": {"deployer": record.get("deployer"), "key_binder": record.get("key_binder") or {},
+                                  "factory_operator": record.get("factory_operator")}}
     return {"label": record.get("label"), "factory": factory, "factory_nonce": nonce, "usdc": usdc, "registry": registry,
-            "pools": pools, "challenges": challenges}
+            "binder": binder, "pools": pools, "challenges": challenges}
 
 
 USDC_EVM_DECIMALS = 6
@@ -263,11 +282,57 @@ def registry_mismatches(result: dict) -> list[str]:
     return out
 
 
+def binder_handover(says: dict | None, deployer: str | None) -> dict:
+    """A binder's or a factory's handover as the record says it, in the registry's terms: the deployer and nobody
+    before one is sent ("the deployer", "named, not sent", or nothing said)."""
+    if not says or says.get("state") in ("the deployer", "named, not sent"):
+        return {"operator": (says or {}).get("from") or deployer}
+    return says
+
+
+def binder_mismatches(result: dict) -> list[str]:
+    """Each deployment whose key binder or factory, on chain, is not what its record says, and each paused binder."""
+    out = []
+    for deployment in result["deployments"]:
+        b = deployment.get("binder")
+        if not b:
+            continue
+        says = b["record_says"]
+        where = f"{deployment['label']} {b['address']}"
+        for what, held, pending, handover in (
+                ("key binder owner", b["owner"], b["pending_owner"], says["key_binder"].get("owner")),
+                ("factory operator", b["factory_operator"], b["factory_pending_operator"], says.get("factory_operator"))):
+            expected = expected_registry(binder_handover(handover, says.get("deployer")))
+            if expected is None:
+                out.append(f"{what} does not match the record: {where}: the record's {handover} is not a handover")
+            elif held.lower() != expected[0].lower() or pending.lower() != expected[1].lower():
+                out.append(f"{what} does not match the record: {where}: {held} and pending {pending} on chain, "
+                           f"{expected[0]} and {expected[1]} in the record")
+        publisher = (says["key_binder"].get("publisher") or {}).get("address") or ZERO
+        guardian = says["key_binder"].get("guardian") or ZERO
+        for what, held, expected in (("publisher", b["publisher"], publisher), ("guardian", b["guardian"], guardian)):
+            if held.lower() != expected.lower():
+                out.append(f"key binder {what} does not match the record: {where}: {held} on chain, {expected} in the record")
+        if b["paused"]:
+            out.append(f"key binder is paused: {where}: no key is bound until the owner lifts it")
+        # The fuse and the renewal's wait, as deployed or as the record was last told: a guardian's cut, to zero
+        # above all (no key bound at all), shows here until the record says it.
+        for what, held, field in (("daily limit", b.get("max_binds_per_day"), "max_binds_per_day"),
+                                  ("renewal delay", b.get("renew_delay"), "renew_delay")):
+            recorded = says["key_binder"].get(field)
+            if held is not None and recorded is not None and held != recorded:
+                out.append(f"key binder {what} does not match the record: {where}: {held} on chain, {recorded} in the record")
+        if b.get("max_binds_per_day") == 0:
+            out.append(f"key binder binds nothing: {where}: its daily limit is 0")
+    return out
+
+
 def exit_code(result: dict, red_above: Decimal | None, err=None) -> int:
-    """2 when a settled account holds what --red-above names (verdict); else 1 when a registry's operator is not the
-    one its record says, each named on stderr; else 0."""
+    """2 when a settled account holds what --red-above names (verdict); else 1 when a registry's operator, or a key
+    binder's owner, publisher or guardian or its factory's operator, is not the one its record says, or the binder
+    is paused, each named on stderr; else 0."""
     code = verdict(result, red_above, err)
-    mismatches = registry_mismatches(result)
+    mismatches = registry_mismatches(result) + binder_mismatches(result)
     for line in mismatches:
         print(line, file=err or sys.stderr)
     return code or (1 if mismatches else 0)

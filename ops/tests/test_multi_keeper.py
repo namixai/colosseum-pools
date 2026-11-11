@@ -402,6 +402,38 @@ class Dispatch(unittest.TestCase):
             self.assertEqual(logs.count("keys_short"), 1 if said else 0, (free, held))
             logs.clear()
 
+    def test_a_seat_that_asked_for_its_key_is_answered_by_the_relay_and_not_opened_again(self):
+        served = []
+        relay = mock.Mock()
+        relay.serve.side_effect = lambda wallet, seat, now, dry: served.append(seat)
+        for asked, calls, answered in ((NOW - 60, [], [SEAT]), (0, [(self.kp.pool, "open(address)")], [])):
+            self.sent, served[:] = [], []
+            with mock.patch.object(k.core, "key_asked_at", lambda a: asked), mock.patch.object(k.core, "RELAY", relay):
+                self.assertEqual(self.seat("Armed", k.AWAITING), calls, asked)
+            self.assertEqual(served, answered, asked)
+
+    def test_a_factory_with_a_key_binder_has_no_registry_and_no_keys_to_count(self):
+        def reads(addr, sig, *x):
+            if sig == "factory()":
+                return "0x" + "f0" * 20
+            raise RuntimeError("eth_call: execution reverted")
+
+        logs = []
+        with mock.patch.object(k, "view", reads), mock.patch.object(k, "log", lambda ev, **kw: logs.append(ev)):
+            self.assertIsNone(self.kp.registry())
+            self.kp.keys_pass()
+        self.assertEqual(logs, [])
+
+    def test_a_registry_read_that_fails_otherwise_is_not_taken_for_a_binder(self):
+        def reads(addr, sig, *x):
+            if sig == "factory()":
+                return "0x" + "f0" * 20
+            raise RuntimeError("eth_call: rate limited 6 times in a row")
+
+        with mock.patch.object(k, "view", reads):
+            with self.assertRaises(RuntimeError):
+                self.kp.registry()
+
     def test_a_closing_stage_goes_to_the_core_keeper(self):
         passes = []
         with mock.patch.object(k.core, "pool_pass", lambda w, a, *x: passes.append(a)):
