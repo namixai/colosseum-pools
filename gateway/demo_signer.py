@@ -207,7 +207,8 @@ class DemoSigner:
         self.caps = dict(caps or {})  # the platform's list and its size caps: none, nothing is signed
         self._directory = directory
         self._clock = clock
-        self._reloaded_at = clock()
+        # The first key it does not hold reads the directory at once; the next not sooner than RELOAD_EVERY_S on.
+        self._reloaded_at = clock() - self.RELOAD_EVERY_S
 
     @staticmethod
     def load_keys(directory: str) -> list[LocalAccount]:

@@ -269,16 +269,20 @@ class KeyFiles(unittest.TestCase):
                             clock=lambda: now[0])
         bound = Account.create(os.urandom(32))
         self.write(f"agent-{bound.address}.key", "0x" + bytes(bound.key).hex())
-        self.assertFalse(signer.has_key(bound.address), "not before RELOAD_EVERY_S has passed since the last read")
-        now[0] += DemoSigner.RELOAD_EVERY_S
-        self.assertTrue(signer.has_key(bound.address))
+        self.assertTrue(signer.has_key(bound.address), "the first key it does not hold reads the directory at once")
+        later = Account.create(os.urandom(32))
+        self.write(f"agent-{later.address}.key", "0x" + bytes(later.key).hex())
+        now[0] += DemoSigner.RELOAD_EVERY_S - 1
+        self.assertFalse(signer.has_key(later.address), "not before RELOAD_EVERY_S has passed since the last read")
+        now[0] += 1
+        self.assertTrue(signer.has_key(later.address))
         self.assertTrue(signer.has_key(self.key.address), "the keys it had stay")
-        self.assertEqual(len(signer), 2)
+        self.assertEqual(len(signer), 3)
         stranger = Account.create(os.urandom(32)).address
         os.chmod(self.dir, 0o750)  # a directory it may not read now leaves the keys it had
         now[0] += DemoSigner.RELOAD_EVERY_S
         self.assertFalse(signer.has_key(stranger))
-        self.assertEqual(len(signer), 2)
+        self.assertEqual(len(signer), 3)
         os.chmod(self.dir, 0o700)
 
     def test_a_signer_given_no_directory_never_reads_one(self):

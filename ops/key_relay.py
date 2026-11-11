@@ -113,12 +113,15 @@ class Relay:
         self.chain_id = chain_id
         self.view, self.send, self.info, self.log = view, send, info, log
         self._binders: dict[str, str] = {}
+        self._factories: dict[str, str] = {}  # an account's factory never changes: read once
         # The key made for a request, by (account, request id): a pass whose send failed tries the same key
         # again instead of making another, until the key turns out spoiled or taken.
         self._made: dict[tuple[str, int], str] = {}
 
     def binder_of(self, account: str) -> str:
-        factory = to_checksum_address(self.view(account, "factory()", "address"))
+        if account not in self._factories:
+            self._factories[account] = to_checksum_address(self.view(account, "factory()", "address"))
+        factory = self._factories[account]
         if factory not in self._binders:
             self._binders[factory] = to_checksum_address(self.view(factory, "binder()", "address"))
         return self._binders[factory]

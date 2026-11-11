@@ -188,6 +188,19 @@ class Relaying(unittest.TestCase):
     def keys(self):
         return sorted(f.name for f in self.dir.glob("agent-*.key"))
 
+    def test_the_factory_and_the_binder_are_read_once_an_account(self):
+        reads = []
+        real = self.binder.view
+
+        def counting(addr, sig, *rest):
+            reads.append(sig)
+            return real(addr, sig, *rest)
+
+        self.relay.view = counting
+        self.serve()
+        self.serve()
+        self.assertEqual((reads.count("factory()"), reads.count("binder()")), (1, 1))
+
     def test_no_request_nothing(self):
         self.serve()
         self.assertEqual((self.binder.sent, self.keys()), ([], []))
