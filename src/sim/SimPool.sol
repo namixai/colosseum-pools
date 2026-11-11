@@ -28,6 +28,10 @@ struct SimPlan {
     ExamTerms funded;
     /// How long a trader who passed the exam has to start the stage, in seconds.
     uint32 fundWindow;
+    /// Whether both stages fill at the book, never better than the oracle and at most `maxWorseBps`
+    /// worse than it (`PaperExam`); zero `maxWorseBps` without the book.
+    bool fromBook;
+    uint16 maxWorseBps;
     /// A trading group's owner, who gets `partnerBps` of what the creator withdraws above what
     /// the creator put in; zero for a pool without one, with `partnerBps` zero.
     address partner;
@@ -110,6 +114,8 @@ contract SimPool is Initializable {
     Rules internal _fundedRules;
     ExamTerms internal _funded;
     uint32 public fundWindow;
+    bool public fromBook;
+    uint16 public maxWorseBps;
 
     mapping(address => Account) public accountOf;
     Payout[] internal _payouts;
@@ -183,6 +189,8 @@ contract SimPool is Initializable {
         partnerBps = p.partnerBps;
         terms = p.terms;
         fundWindow = p.fundWindow;
+        fromBook = p.fromBook;
+        maxWorseBps = p.maxWorseBps;
         uint64 largest;
         for (uint256 i = 0; i < p.menu.length; ++i) {
             _menu.push(p.menu[i]);
@@ -421,7 +429,7 @@ contract SimPool is Initializable {
         a = Clones.clone(factory.examImpl());
         ExamTerms memory terms_ = t;
         terms_.capital = size;
-        PaperExam(a).initializeWithFiller(trader, r, terms_, factory.filler());
+        PaperExam(a).initializeWithFiller(trader, r, terms_, factory.filler(), fromBook, maxWorseBps);
         factory.noteAccount(a);
         live += 1;
     }

@@ -28,7 +28,7 @@ ERRORS = [
     # FreeExams
     "InviteSpent()", "InviteLapsed()", "NoFreeLeft()",
     # PaperExam
-    "BadTerms()", "BadRules()", "UnsupportedSizeDecimals(uint32,uint8)", "BadStatus(uint8)", "OwnOrder()", "NotFiller()",
+    "BadTerms()", "BadRules()", "UnsupportedSizeDecimals(uint32,uint8)", "BadStatus(uint8)", "OwnOrder()", "NotFiller()", "TooFarFromOracle(uint64,uint64)",
     "AssetNotAllowed(uint32)",
     "ZeroSize()", "OrderPending()", "NoOrder()", "TooEarly(uint256)", "OrderLapsed()", "NoPrice(uint32)",
     "OverLeverage()", "OutsideCheckpointWindow()", "AlreadyCheckpointed()", "NoBreach()", "NotOver()",

@@ -43,6 +43,8 @@ contract SimPoolFactory {
     uint256 public constant MAX_MENU = 8;
     uint32 public constant MIN_FUND_WINDOW = 1 hours;
     uint32 public constant MAX_FUND_WINDOW = 30 days;
+    /// The most a fill at the book may be worse than the oracle price, in bps of it: PaperExam's bound.
+    uint16 public constant MAX_WORSE_BPS = 500;
     /// The most leverage any stage may allow, times 100: 10x.
     uint32 public constant MAX_LEVERAGE_X100 = 1000;
 
@@ -193,6 +195,7 @@ contract SimPoolFactory {
         _checkTerms(p.funded);
         if (p.funded.targetsBps.length != 1) revert BadPlan();
         if (p.fundWindow < MIN_FUND_WINDOW || p.fundWindow > MAX_FUND_WINDOW) revert BadPlan();
+        if (p.fromBook ? p.maxWorseBps == 0 || p.maxWorseBps > MAX_WORSE_BPS : p.maxWorseBps != 0) revert BadPlan();
         if (address(termsBook) == address(0) || termsBook.textAt(p.terms) == address(0)) revert Unpublished();
         if (p.partner == address(0)) {
             if (p.partnerBps != 0) revert BadPlan();

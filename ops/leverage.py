@@ -8,14 +8,16 @@ is the lower of the two. A builder dex's market is found by its coin ("xyz:XYZ10
 from __future__ import annotations
 
 # GOLD: 20x, the leverage rule v1.3 (2 November 2026) for xyz:GOLD, under the 25x Hyperliquid lends on
-# it. A coin written here as None has no cap from the platform: a market withdrawn, or one whose listing
+# it. SILVER: 15x, the same rule's number for xyz:SILVER, under the 25x Hyperliquid lends on it; before it
+# was here a pool that named it took the account's cap. A coin written here as None has no cap from the platform: a market withdrawn, or one whose listing
 # waits for its number. `asset_caps` refuses it rather than give it the account's cap, which is what a
 # coin missing from the table gets. BRENTOIL: withdrawn by the leverage rule v1.3 (2 November 2026), its
 # book too thin to hold; a pool that names it is refused. app/lib/deployments.js holds the same table for
 # the site, and app/tests/deployments.test.mjs holds the two to each other.
 ASSET_LEVERAGE_X100 = {"BTC": 1000, "ETH": 1000, "SOL": 500, "HYPE": 1000,
                        "SP500": 1000, "XYZ100": 800, "CL": 300, "BRENTOIL": None,
-                       "GOLD": 2000}
+                       "GOLD": 2000,
+                       "SILVER": 1500}
 
 
 def coin(name: str) -> str:

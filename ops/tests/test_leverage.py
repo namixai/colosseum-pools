@@ -46,6 +46,15 @@ class AssetCaps(unittest.TestCase):
         self.assertEqual(lv.asset_caps(["xyz:GOLD"], 1000), [1000])
         self.assertEqual(lv.caps_text(["xyz:GOLD"], lv.asset_caps(["xyz:GOLD"], 2500)), "xyz:GOLD 20x")
 
+    def test_silver_is_15x_by_the_leverage_rule_v1_3(self):
+        # The leverage rule v1.3 (2 November 2026) for xyz:SILVER: 15x, under the 25x Hyperliquid lends on
+        # it (its meta's maxLeverage, mainnet and testnet alike, read on 11 November 2026). Before it was in
+        # the table it took the account's cap: 20x on a 20x account. At most the account's cap.
+        self.assertEqual(lv.ASSET_LEVERAGE_X100["SILVER"], 1500)
+        self.assertEqual(lv.asset_caps(["xyz:SILVER"], 2000), [1500])
+        self.assertEqual(lv.asset_caps(["xyz:SILVER"], 1000), [1000])
+        self.assertEqual(lv.caps_text(["xyz:SILVER"], lv.asset_caps(["xyz:SILVER"], 2500)), "xyz:SILVER 15x")
+
     def test_one_named_by_its_name_or_its_coin(self):
         self.assertEqual(lv.asset_caps(["xyz:CL", "BTC"], 1000, {"CL": 150, "BTC": 700}), [150, 700])
         self.assertEqual(lv.asset_caps(["xyz:CL"], 1000, {"xyz:CL": 120}), [120])

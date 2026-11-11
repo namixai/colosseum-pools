@@ -1,0 +1,69 @@
+{
+  "what": "Blocks from_block to to_block of HyperEVM testnet (chain 998), read from outside the pools host on 11 November 2026, for the two factories below. Two things, each enough alone. (1) Every log of both factories over the stretch, window by window with no topic filter: none is a ChallengeCreated. (2) Each factory's nonce, on two nodes, just before the stretch and at its end: unchanged. createChallenge makes the challenge account with a CREATE (Clones.clone), which raises the factory's nonce, so an unchanged nonce means no challenge, and no pool, was made in the stretch.",
+  "chain_id": 998,
+  "from_block": 69038325,
+  "to_block": 69354491,
+  "topic_challenge_created": "0x3a919f2dae35bbfa24fbba5570c74151c00deccd003b2770e859da50ad5c6d8d",
+  "read": {
+    "node": "https://hyperliquid-testnet.drpc.org",
+    "window": 100,
+    "calls": 3162,
+    "seconds": 1074,
+    "logs_sha256": "d9536207d93da148ee613e25599c25d1210873d71ad1db00ff1ca9bc1e78ba58"
+  },
+  "how": "(1) eth_getLogs with address = both factories and no topic, fromBlock/toBlock in windows of read.window blocks; each log kept as block, address, topic0, tx, log_index; logs_sha256 over the sorted list as JSON with sorted keys. (2) eth_getTransactionCount(factory, block) on each node.",
+  "factories": {
+    "demo2": {
+      "factory": "0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222",
+      "log_count": 0,
+      "challenge_created": [],
+      "logs": [],
+      "nonces": [
+        {
+          "node": "https://rpc.hyperliquid-testnet.xyz/evm",
+          "block_before": 69038324,
+          "nonce_before": 28,
+          "block_after": 69354491,
+          "nonce_after": 28
+        },
+        {
+          "node": "https://hyperliquid-testnet.drpc.org",
+          "block_before": 69038324,
+          "nonce_before": 28,
+          "block_after": 69354491,
+          "nonce_after": 28
+        }
+      ]
+    },
+    "v3-demo3": {
+      "factory": "0x070D0c7dd79D41e4329B2d231b308BA88089d81a",
+      "log_count": 1,
+      "challenge_created": [],
+      "logs": [
+        {
+          "block": 69317392,
+          "address": "0x070d0c7dd79d41e4329b2d231b308ba88089d81a",
+          "topic0": "0xb2fe4d0bd415f4fadc30aa02a647602be4164705080903b38a403eb84dca87a8",
+          "tx": "0xcee6d21d349306319c548c9b814e14656e3f015c4c57724889b3c75370dba99f",
+          "log_index": 4
+        }
+      ],
+      "nonces": [
+        {
+          "node": "https://rpc.hyperliquid-testnet.xyz/evm",
+          "block_before": 69038324,
+          "nonce_before": 3,
+          "block_after": 69354491,
+          "nonce_after": 3
+        },
+        {
+          "node": "https://hyperliquid-testnet.drpc.org",
+          "block_before": 69038324,
+          "nonce_before": 3,
+          "block_after": 69354491,
+          "nonce_after": 3
+        }
+      ]
+    }
+  }
+}

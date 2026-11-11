@@ -101,6 +101,8 @@ contract SimPoolTest is Test {
         p.fundedRules = _rules();
         p.funded = _terms();
         p.fundWindow = 7 days;
+        p.fromBook = true;
+        p.maxWorseBps = 50;
         p.terms = termsHash;
     }
 
@@ -215,7 +217,7 @@ contract SimPoolTest is Test {
     }
 
     function test_open_refusesAPlanOutsideThePlatformsBounds() public {
-        SimPlan[] memory bad = new SimPlan[](11);
+        SimPlan[] memory bad = new SimPlan[](14);
         for (uint256 i = 0; i < bad.length; ++i) bad[i] = _plan();
         bad[0].exam.fillWindow = 61; // past a minute
         bad[1].funded.stepDuration = 0; // a stage that never ends
@@ -231,6 +233,9 @@ contract SimPoolTest is Test {
         bad[10].examRules.maxLeverageX100 = 1001; // past 10x, whatever the asset's own cap
         bad[10].examRules.assetLeverageX100 = new uint32[](1);
         bad[10].examRules.assetLeverageX100[0] = 500;
+        bad[11].maxWorseBps = 0; // the book with no ceiling
+        bad[12].maxWorseBps = 501;
+        bad[13].fromBook = false; // a ceiling with no book
         for (uint256 i = 0; i < bad.length; ++i) {
             vm.prank(creator);
             vm.expectRevert(SimPoolFactory.BadPlan.selector);
@@ -264,6 +269,22 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         vm.expectRevert(SimPoolFactory.Unpublished.selector);
         factory.create{value: 1 ether}(p);
+    }
+
+    function test_open_eachAssetsCapIsTheListsAtMost() public {
+        factory.setAsset(BTC, 400); // under the plan's 5x
+        SimPlan memory p = _plan();
+        vm.prank(creator);
+        vm.expectRevert(SimPoolFactory.BadPlan.selector);
+        factory.create{value: 1 ether}(p);
+        factory.setAsset(BTC, 500);
+        _open(p);
+    }
+
+    function test_buy_theExamFillsAtTheBookUnderThePoolsCeiling() public {
+        PaperExam exam = _buy(_pool(), trader, 0);
+        assertTrue(exam.fromBook());
+        assertEq(exam.maxWorseBps(), 50);
     }
 
     function test_noteAccount_onlyAPoolOfTheFactory() public {

@@ -38,9 +38,20 @@ with a balance, `capital`, that is a number and not money.
   the trader too, `FALLBACK_BLOCKS` (60) after its window, so a stalled filler never keeps a trader
   in a position. Every fill says how many blocks after `placedBlock + fillDelay` it came (`late` in
   `Filled`). An exam started with `initialize` has no filler and works as before.
-  A fill costs `costPpm` millionths of its notional, rounded up. A fill under 10 USDC, the
-  exchange's smallest order, is still made, so dust can be closed, but it is not a trade: it
-  makes no trading day and does not end a stretch without one.
+- **A fill at the book.** Started with a filler and `fromBook`, an exam fills a buy at the best ask
+  and a sell at the best bid, from the chain's own best bid and offer (`PrecompileLib.bbo`), so a
+  fill pays up to half the spread as on the exchange (the pools team, 11 November 2026). Never
+  better for the trader than the oracle price: a buy no cheaper, a sell no dearer, so a thin book,
+  one the trader moves with orders of their own, or one that stands off the oracle gives nothing
+  under it. Nor more than `maxWorseBps` (1 to 500) worse than the oracle: past that the fill is
+  refused in that block (`TooFarFromOracle`) and the order waits for a later one in its window, so
+  a book that stands off the market, as testnet's did by 77 to 118 bp on 11 November 2026, does not
+  fill a percent worse than it. A book that does not answer, is empty on a side or is crossed
+  fills at the oracle. `Filled.source` says which: 0 the oracle, 1 the book, 2 the oracle because
+  the book would not do. The order that only makes a position smaller after `FALLBACK_BLOCKS`
+  takes the same rule. Equity, the day's snapshot and every rule stay on the oracle price: the
+  book is what a fill costs, the oracle what a position is worth, and a book is the thing a trader
+  can push.
 - **Equity** is the balance plus every position at the current oracle price. There is nothing else to
   read: no margin, no funding, no resting orders.
 - **The rules** are the four a real account has, with the same arithmetic as `RuledAccount`: a
@@ -98,8 +109,8 @@ fill at the mark, a flat cost, and the things listed next.
 
 ## What it does not model
 
-- **Depth.** A fill takes the mark at any size. For the sizes an exam is sold in that is close
-  to what a liquid market gives; it is not a statement about large orders.
+- **Depth.** A fill takes the mark, or the top of the book, at any size. For the sizes an exam is
+  sold in that is close to what a liquid market gives; it is not a statement about large orders.
 - **Funding.** A position held for days pays and receives nothing.
 - **Resting orders.** There is no limit order and no stop. A trader who wants out has to place
   the order that takes them out.
@@ -144,12 +155,12 @@ fill at the mark, a flat cost, and the things listed next.
 
 ## Tests
 
-`test/exam/PaperExam.t.sol`, 57 tests on the hyper-evm-lib simulator, and 104 mutations of the
-contract (`X1`–`X104` in `scripts/mutations.py`), each caught by a named test:
+`test/exam/PaperExam.t.sol`, 66 tests on the hyper-evm-lib simulator, and 123 mutations of the
+contract (`X1`–`X123` in `scripts/mutations.py`), each caught by a named test:
 
 ```
 forge test --match-path 'test/exam/*'
-python3 scripts/mutations.py $(seq -f 'X%g' 1 104)
+python3 scripts/mutations.py $(seq -f 'X%g' 1 123)
 ```
 
 ## Not done yet
