@@ -135,6 +135,15 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first
   possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only
   makes a position smaller is anyone's, the trader's too, sixty blocks after its window (S110).
+- **A simulated pool's checker.** A payout of a simulated pool waits 48 hours (S111). Until then the factory's
+  checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the
+  transactions that show the opposite positions, and for linked wallets the transactions that link them
+  (S112, S113). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the
+  creator is the platform that also runs the checker. What holds it is that it shows: every stop and every
+  lift carries the pool's counts of stops, lifts and payouts, the checking script is public, and the checker
+  lifts a stop that was wrong (S114). The filler and the checker are two keys, and neither opens a pool (S115).
+- **A simulated pool's creator** withdraws only what stays above three payouts of the largest size and above
+  every payout owed (S116), and stops nobody's payout.
 - **What none of us can do:** send a challenge account's money anywhere but to its trader's share and
   back to its pool (S48, S49); change the rules of an account that is running (S10); or upgrade a pool or
   a challenge, each a minimal clone of a fixed implementation with no upgrade path (S50, S51).
@@ -299,3 +308,9 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S108 | `src/exam/PaperExam.sol:295` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
 | S109 | `src/exam/PaperExam.sol:329` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from);` |
 | S110 | `src/exam/PaperExam.sol:88` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
+| S111 | `src/sim/SimPoolFactory.sol:36` | `uint32 public constant PAYOUT_DELAY = 48 hours;` |
+| S112 | `src/sim/SimPool.sol:338` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
+| S113 | `src/sim/SimPool.sol:124` | `event PayoutStopped(` |
+| S114 | `src/sim/SimPool.sol:359` | `function liftStop(uint256 id) external onlyChecker {` |
+| S115 | `src/sim/SimPoolFactory.sol:149` | `if (msg.sender == filler || msg.sender == checker) revert BadRole();` |
+| S116 | `src/sim/SimPool.sol:223` | `uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |

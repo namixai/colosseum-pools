@@ -16,7 +16,7 @@ from eth_utils import keccak
 # Where each group is declared, in the order the test reads them.
 SOURCES = ("src/multi/MultiPool.sol", "src/multi/FreeExams.sol", "src/exam/PaperExam.sol", "src/Pool.sol",
            "src/RuledAccount.sol", "src/KeyRegistry.sol", "src/KeyBinder.sol", "src/lib/CoreOps.sol", "src/multi/PoolShares.sol",
-           "src/multi/ShareTicket.sol", "src/lib/CodeStore.sol")
+           "src/multi/ShareTicket.sol", "src/lib/CodeStore.sol", "src/sim/SimPool.sol", "src/sim/SimPoolFactory.sol")
 
 ERRORS = [
     # MultiPool
@@ -48,6 +48,8 @@ ERRORS = [
     "NothingOwed()", "NotInWindow(uint64)", "NotLaunched()", "AlreadyLaunched()", "RaiseOver()",
     "RaiseShort(uint256,uint256)", "NotRefunding()", "CannotPay()", "NotShares()", "Initialized()", "NotStored()",
     "TooLong()",
+    # SimPool, SimPoolFactory
+    "NotFactory()", "NotChecker()", "Closing()", "NotAnExam()", "NotAStage()", "Done()", "BadPayout()", "NotDue()", "BadReason()", "BadPaired()", "TooMuch()", "BadShare()", "NotPool()", "BadRole()", "WrongFee()", "FeeNotSent()",
 ]
 OPENZEPPELIN = [
     "SafeERC20FailedOperation(address)", "FailedDeployment()", "InvalidInitialization()", "NotInitializing()",

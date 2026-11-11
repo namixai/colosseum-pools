@@ -252,6 +252,24 @@
           ]
         },
         {
+          "lead": "A simulated pool's checker.",
+          "text": "A payout of a simulated pool waits 48 hours (S111). Until then the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them (S112, S113). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is public, and the checker lifts a stop that was wrong (S114). The filler and the checker are two keys, and neither opens a pool (S115).",
+          "sources": [
+            "S111",
+            "S112",
+            "S113",
+            "S114",
+            "S115"
+          ]
+        },
+        {
+          "lead": "A simulated pool's creator",
+          "text": "withdraws only what stays above three payouts of the largest size and above every payout owed (S116), and stops nobody's payout.",
+          "sources": [
+            "S116"
+          ]
+        },
+        {
           "lead": "What none of us can do:",
           "text": "send a challenge account's money anywhere but to its trader's share and back to its pool (S48, S49); change the rules of an account that is running (S10); or upgrade a pool or a challenge, each a minimal clone of a fixed implementation with no upgrade path (S50, S51).",
           "sources": [
@@ -1149,6 +1167,48 @@
       "kind": "line",
       "text": "uint16 public constant FALLBACK_BLOCKS = 60;",
       "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L88"
+    },
+    {
+      "id": "S111",
+      "where": "src/sim/SimPoolFactory.sol:36",
+      "kind": "line",
+      "text": "uint32 public constant PAYOUT_DELAY = 48 hours;",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L36"
+    },
+    {
+      "id": "S112",
+      "where": "src/sim/SimPool.sol:338",
+      "kind": "line",
+      "text": "if (block.timestamp >= p.dueAt) revert NotDue();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L338"
+    },
+    {
+      "id": "S113",
+      "where": "src/sim/SimPool.sol:124",
+      "kind": "line",
+      "text": "event PayoutStopped(",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L124"
+    },
+    {
+      "id": "S114",
+      "where": "src/sim/SimPool.sol:359",
+      "kind": "line",
+      "text": "function liftStop(uint256 id) external onlyChecker {",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L359"
+    },
+    {
+      "id": "S115",
+      "where": "src/sim/SimPoolFactory.sol:149",
+      "kind": "line",
+      "text": "if (msg.sender == filler || msg.sender == checker) revert BadRole();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L149"
+    },
+    {
+      "id": "S116",
+      "where": "src/sim/SimPool.sol:223",
+      "kind": "line",
+      "text": "uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L223"
     }
   ]
 }
