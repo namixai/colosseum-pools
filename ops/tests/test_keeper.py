@@ -1900,6 +1900,10 @@ class ScanFloor(KeeperTest):
             "a block as a string": {**good, "block": "1000"},
             "a block as true": {**good, "read_from": True},
             "evidence outside the folder": {**good, "evidence": "/tmp/x.json"},
+            "evidence that climbs out": {**good, "evidence": "deployments/evidence/../../etc/passwd.json"},
+            "the folder itself": {**good, "evidence": "deployments/evidence/"},
+            "a file in a subfolder": {**good, "evidence": "deployments/evidence/a/x.json"},
+            "a file that is not json": {**good, "evidence": "deployments/evidence/x.txt"},
         }
         for what, floor in bad.items():
             with self.subTest(what), self.assertRaises(SystemExit):

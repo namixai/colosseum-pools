@@ -94,6 +94,7 @@ import bisect
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 from decimal import Decimal
@@ -1335,6 +1336,9 @@ class Keeper:
         log("weight_per_min", **METER.per_minute(), accounts_with_position=len(_with_position))
 
 
+EVIDENCE_FILE = re.compile(r"deployments/evidence/[A-Za-z0-9][A-Za-z0-9._-]*\.json")
+
+
 def scan_floor(record: dict) -> tuple[int, int] | None:
     """The record's `keeper_scan_floor` as (read_from, block): blocks read_from to block - 1 were read off the host and
     held no ChallengeCreated of the factory (its `evidence` file has the read). None without one; a floor that does
@@ -1347,8 +1351,10 @@ def scan_floor(record: dict) -> tuple[int, int] | None:
     read_from, block, evidence = floor["read_from"], floor["block"], floor["evidence"]
     if not all(isinstance(n, int) and not isinstance(n, bool) for n in (read_from, block)) or not 0 <= read_from < block:
         raise SystemExit(f"keeper_scan_floor: {read_from!r} to {block!r} is not a stretch of blocks")
-    if not isinstance(evidence, str) or not evidence.startswith("deployments/evidence/"):
-        raise SystemExit(f"keeper_scan_floor: evidence {evidence!r} is not a file under deployments/evidence/")
+    # A file directly in deployments/evidence/, by a plain name: no subdirectory, no "..", not the folder itself (review,
+    # 11 Nov 2026).
+    if not isinstance(evidence, str) or not EVIDENCE_FILE.fullmatch(evidence):
+        raise SystemExit(f"keeper_scan_floor: evidence {evidence!r} is not a .json file in deployments/evidence/")
     return read_from, block
 
 
