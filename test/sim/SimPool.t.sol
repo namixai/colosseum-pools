@@ -218,7 +218,7 @@ contract SimPoolTest is Test {
     }
 
     function test_open_refusesAPlanOutsideThePlatformsBounds() public {
-        SimPlan[] memory bad = new SimPlan[](16);
+        SimPlan[] memory bad = new SimPlan[](19);
         for (uint256 i = 0; i < bad.length; ++i) bad[i] = _plan();
         bad[0].exam.fillWindow = 61; // past a minute
         bad[1].funded.stepDuration = 0; // a stage that never ends
@@ -245,6 +245,9 @@ contract SimPoolTest is Test {
         bad[15].fundedRules.assets[1] = BTC;
         bad[15].fundedRules.assetLeverageX100 = new uint32[](1);
         bad[15].fundedRules.assetLeverageX100[0] = 500;
+        bad[16].menu[1].price = SMALL_PRICE; // two lines at one price: a signature could buy either
+        bad[17].funded.fillDelay = 0; // a stage PaperExam would refuse to start
+        bad[18].exam.costPpm = 100_001; // over PaperExam's ceiling
         for (uint256 i = 0; i < bad.length; ++i) {
             vm.prank(creator);
             vm.expectRevert(SimPoolFactory.BadPlan.selector);
@@ -405,6 +408,59 @@ contract SimPoolTest is Test {
         pool.buy(0);
         vm.stopPrank();
         assertEq(pool.live(), 1);
+    }
+
+    function test_aRefusedTransferIsHeldForItsTrader_andTheQueueMovesOn() public {
+        SimPool pool = _pool();
+        _withSales(pool, 40);
+        uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
+        usdc.block_(trader); // say the token blocks the trader's address after the pass
+        vm.warp(block.timestamp + 48 hours);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutHeld(a, trader, LARGE_PAYOUT);
+        assertEq(pool.pay(10), 2);
+        assertEq(uint8(pool.payout(a).state), uint8(SimPool.PayoutState.Held));
+        assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Paid), "the next one is paid");
+        assertEq(pool.owed(), 0);
+        assertEq(pool.held(), LARGE_PAYOUT);
+        assertEq(pool.paidCount(), 1);
+        uint256 bal = usdc.balanceOf(address(pool));
+        assertEq(pool.withdrawable(), bal - LARGE_PAYOUT - 3 * LARGE_PAYOUT, "held money is not the creator's");
+        address safe = makeAddr("safe");
+        vm.prank(trader);
+        pool.claimHeld(safe);
+        assertEq(usdc.balanceOf(safe), LARGE_PAYOUT, "to an address the trader names");
+        assertEq(pool.held(), 0);
+        vm.prank(trader);
+        vm.expectRevert(SimPool.TooMuch.selector);
+        pool.claimHeld(safe);
+    }
+
+    function test_aTransferAnsweredFalseIsHeldToo() public {
+        SimPool pool = _pool();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        usdc.saysFalseTo(trader);
+        vm.warp(block.timestamp + 48 hours);
+        pool.pay(10);
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Held));
+        assertEq(pool.heldOf(trader), LARGE_PAYOUT);
+    }
+
+    function test_finish_leavesWhatIsHeld_andTheTraderTakesItAfter() public {
+        SimPool pool = _pool();
+        pool.claimPayout(address(_passedStage(pool, trader, 1))); // the locked 1 600 covers it
+        usdc.block_(trader);
+        vm.warp(block.timestamp + 48 hours);
+        pool.pay(10);
+        vm.startPrank(creator);
+        pool.close();
+        pool.finish();
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(address(pool)), LARGE_PAYOUT, "the held payout stays");
+        vm.prank(trader);
+        pool.claimHeld(other);
+        assertEq(usdc.balanceOf(address(pool)), 0);
     }
 
     function test_noteAccount_onlyAPoolOfTheFactory() public {
@@ -823,6 +879,27 @@ contract Usdc3009 is ERC20 {
 
     function decimals() public pure override returns (uint8) {
         return 6;
+    }
+
+    mapping(address => bool) public blocked;
+    mapping(address => bool) public saysFalse;
+
+    function saysFalseTo(address who) external {
+        saysFalse[who] = true;
+    }
+
+    function transfer(address to, uint256 value) public override returns (bool) {
+        if (saysFalse[to]) return false; // a token that refuses by its answer, not by a revert
+        return super.transfer(to, value);
+    }
+
+    function block_(address who) external {
+        blocked[who] = true;
+    }
+
+    function _update(address from, address to, uint256 value) internal override {
+        require(!blocked[to], "Blacklistable: account is blacklisted");
+        super._update(from, to, value);
     }
 
     function receiveWithAuthorization(

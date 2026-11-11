@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Rules, Units} from "../Types.sol";
-import {ExamTerms} from "../exam/PaperExam.sol";
+import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
 import {SimPool, SimPlan, SimSize} from "./SimPool.sol";
 import {TermsBook} from "../multi/TermsBook.sol";
 
@@ -188,11 +188,18 @@ contract SimPoolFactory {
             SimSize calldata m = p.menu[i];
             if (m.size == 0 || m.price == 0) revert BadPlan();
             if (m.size > largest) largest = m.size;
+            // A signed purchase names an amount, not a line: no two lines at one price (review of cp#261).
+            for (uint256 j = 0; j < i; ++j) {
+                if (p.menu[j].price == m.price) revert BadPlan();
+            }
         }
         _checkRules(p.examRules);
         _checkRules(p.fundedRules);
         _checkTerms(p.exam);
         _checkTerms(p.funded);
+        // Everything PaperExam will refuse at an exam's start, refused at the pool's (review of cp#261).
+        _examCheck(p.examRules, p.exam, uint64(largest));
+        _examCheck(p.fundedRules, p.funded, uint64(largest));
         if (p.funded.targetsBps.length != 1) revert BadPlan();
         if (p.fundWindow < MIN_FUND_WINDOW || p.fundWindow > MAX_FUND_WINDOW) revert BadPlan();
         if (p.fromBook ? p.maxWorseBps == 0 || p.maxWorseBps > MAX_WORSE_BPS : p.maxWorseBps != 0) revert BadPlan();
@@ -215,6 +222,15 @@ contract SimPoolFactory {
             uint32 listed = assetCapX100[r.assets[i]];
             uint32 cap = own ? r.assetLeverageX100[i] : r.maxLeverageX100;
             if (listed == 0 || cap > listed) revert BadPlan();
+        }
+    }
+
+    function _examCheck(Rules calldata r, ExamTerms calldata t, uint64 capital) internal view {
+        ExamTerms memory m = t;
+        m.capital = capital;
+        try PaperExam(examImpl).check(r, m) {}
+        catch {
+            revert BadPlan();
         }
     }
 
