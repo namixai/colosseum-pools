@@ -285,6 +285,9 @@ contract PaperExam is Initializable {
     /// @notice Lets `agent_` place orders as well as the trader; zero takes that back.
     function setAgent(address agent_) external {
         if (msg.sender != trader) revert NotTrader();
+        // The filler as the trader's agent would be refused its own fills (`OwnOrder`), and the
+        // trader could block it and let an order lapse at will (review of cp#258).
+        if (filler != address(0) && agent_ == filler) revert BadTerms();
         agent = agent_;
         emit AgentSet(agent_);
     }

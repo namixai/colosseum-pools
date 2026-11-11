@@ -244,7 +244,7 @@
         },
         {
           "lead": "A paper exam's filler.",
-          "text": "An exam started with a filler takes its orders' fills, inside their window, from that one address (S108), so the trader picks no block. The filler does: whoever holds it chooses the block in the window, and where the pool's creator is the platform that also runs the filler, the platform chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only makes a position smaller is anyone's, the trader's too, sixty blocks after its window (S110). Such an exam may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse (S111); every fill says where its price came from (S109).",
+          "text": "An exam started with a filler takes its orders' fills, inside their window, from that one address, never the trader's agent (S108), so the trader picks no block. The filler does: whoever holds it chooses the block in the window, and where the pool's creator is the platform that also runs the filler, the platform chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only makes a position smaller is anyone's, the trader's too, sixty blocks after its window (S110). Such an exam may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse (S111); every fill says where its price came from (S109).",
           "sources": [
             "S108",
             "S109",
@@ -1132,17 +1132,17 @@
     },
     {
       "id": "S108",
-      "where": "src/exam/PaperExam.sol:327",
+      "where": "src/exam/PaperExam.sol:330",
       "kind": "line",
       "text": "if (filler != address(0) && msg.sender != filler) revert NotFiller();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L327"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L330"
     },
     {
       "id": "S109",
-      "where": "src/exam/PaperExam.sol:361",
+      "where": "src/exam/PaperExam.sol:364",
       "kind": "line",
       "text": "emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L361"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L364"
     },
     {
       "id": "S110",
@@ -1153,10 +1153,10 @@
     },
     {
       "id": "S111",
-      "where": "src/exam/PaperExam.sol:516",
+      "where": "src/exam/PaperExam.sol:519",
       "kind": "line",
       "text": "if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L516"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L519"
     }
   ]
 }
