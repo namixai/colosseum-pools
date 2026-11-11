@@ -89,8 +89,9 @@ renewal while the delay is on, `commit`, and `reveal` once the delay has passed.
 the digest itself and compares it with the binder's own `digest(...)`, and it signs nothing while the binder
 is paused or names another publisher. On testnet the publisher is a key in a file, which also makes the
 agent key and writes it into the gateway's key directory before the binding is sent; the gateway reads that
-directory again when it is asked for a key it does not hold. On mainnet a publisher in a file is refused: the
-publisher is the enclave. A keeper given no publisher answers nothing and logs each request it sees
+directory again when it is asked for a key it does not hold. On the pools host the keeper's directory is its
+own and a copier hands each key to the gateway (docs/HOSTING.md, "A test publisher"). On mainnet a publisher in a
+file is refused: the publisher is the enclave. A keeper given no publisher answers nothing and logs each request it sees
 (`key_asked`), and any request older than ten minutes (`key_request_old`). Accounts of the deployments
 before the binder are served as they were.
 

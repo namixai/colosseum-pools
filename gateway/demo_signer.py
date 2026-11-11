@@ -211,8 +211,9 @@ class DemoSigner:
         self._reloaded_at = clock() - self.RELOAD_EVERY_S
 
     @staticmethod
-    def load_keys(directory: str) -> list[LocalAccount]:
-        """Every `*.key` file in an owner-only directory, each owner-only too."""
+    def load_keys(directory: str, may_be_empty: bool = False) -> list[LocalAccount]:
+        """Every `*.key` file in an owner-only directory, each owner-only too. None at all is refused unless the
+        keys come later: on a deployment with a key binder each is written just before it is bound."""
         d = pathlib.Path(directory).expanduser()
         if d.stat().st_mode & 0o077:
             raise SystemExit(f"{d} is open to others; chmod 700 it")
@@ -221,7 +222,7 @@ class DemoSigner:
             if f.stat().st_mode & 0o077:
                 raise SystemExit(f"{f} is readable by others; chmod 600 it")
             keys.append(Account.from_key(f.read_text().strip()))
-        if not keys:
+        if not keys and not may_be_empty:
             raise SystemExit(f"no *.key files in {d}")
         return keys
 

@@ -261,6 +261,23 @@ class KeyFiles(unittest.TestCase):
         os.chmod(self.dir, 0o700)
         self.assertEqual(len(DemoSigner.load_keys(str(self.dir))), 1)
 
+    def test_a_deployment_whose_keys_come_later_starts_with_none_and_no_looser(self):
+        self.assertEqual(DemoSigner.load_keys(str(self.dir), may_be_empty=True), [])
+        os.chmod(self.dir, 0o750)
+        with self.assertRaises(SystemExit):
+            DemoSigner.load_keys(str(self.dir), may_be_empty=True)
+        os.chmod(self.dir, 0o700)
+        env = {"GATEWAY_SIGNER": "demo", "GATEWAY_KEYS_DIR": str(self.dir), "GATEWAY_SIZE_CAPS": '{"3": "0.005"}'}
+        with self.assertRaises(SystemExit):
+            signer_from_env(env)
+        for no in ("", "0", "yes", "true"):
+            with self.assertRaises(SystemExit):
+                signer_from_env({**env, "GATEWAY_KEYS_BOUND_LATER": no})
+        _, signer = signer_from_env({**env, "GATEWAY_KEYS_BOUND_LATER": "1"})
+        self.assertEqual(len(signer), 0)
+        self.write("agent-a.key", "0x" + bytes(self.key.key).hex() + "\n")
+        self.assertTrue(signer.has_key(self.key.address), "and reads each key as it comes")
+
     def test_a_key_bound_since_the_start_is_read_from_the_directory(self):
         # A deployment with a key binder writes each key just before it is bound (ops/key_relay.py).
         self.write("demo-agent-01.key", "0x" + bytes(self.key.key).hex())

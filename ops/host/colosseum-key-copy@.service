@@ -1,0 +1,44 @@
+# The agent keys that keeper %i's publisher made, copied into gateway %i's key directory (ops/host/key_copy.py),
+# testnet only, before the enclave. Started by colosseum-key-copy@%i.path each time the keeper's directory
+# changes, and once by ops/host/install.sh at each deploy of an instance whose record names a test publisher.
+#
+# It runs as root, since the two directories are two users' and neither is opened to a group, and it sees
+# them alone: the keeper's read-only, the gateway's read-write, everything else under either user's
+# /var/lib hidden, no network, and of root's powers only those that cross two owner-only directories and
+# hand a file to its owner.
+[Unit]
+Description=colosseum-pools: keeper %i's keys to gateway %i (HyperEVM testnet)
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/colosseum-pools/venv/bin/python -I /opt/colosseum-pools/current/ops/host/key_copy.py %i
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER
+SystemCallArchitectures=native
+UMask=0077
+TemporaryFileSystem=/var/lib/colosseum-keeper:ro /var/lib/colosseum-gw:ro
+BindReadOnlyPaths=/var/lib/colosseum-keeper/instances/%i/made-keys
+BindPaths=/var/lib/colosseum-gw/instances/%i/keys
+ProtectProc=invisible
+ProcSubset=pid

@@ -11,9 +11,12 @@
 #   4. `current` and `venv` point at the new ones, then the enabled services restart, the
 #      instances' too, and the shared pool's keeper when it is enabled;
 #   5. the watchdogs come with the release: their files, units and timers are put in place from it
-#      before the switch (ops/host/watchdogs/install-lib.sh), and each is run once after the restarts.
+#      before the switch (ops/host/watchdogs/install-lib.sh), and each is run once after the restarts;
+#   6. an instance whose record names a test publisher has its keeper's made keys copied to its gateway:
+#      colosseum-key-copy@<name>.path is enabled and the copier run once (ops/host/key_copy.py).
 #
-# It makes and moves no key. Testnet only.
+# It makes no key and reads none; the copier it starts moves an instance's agent keys from its keeper to
+# its gateway, and nothing else. Testnet only.
 set -euo pipefail
 
 sha="${1:?usage: install.sh <full commit sha>}"
@@ -55,6 +58,8 @@ install -m 0644 -o root -g root "$rel/ops/host/colosseum-keeper.service" /etc/sy
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-gateway@.service" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-keeper@.service" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-shared-keeper.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.path" /etc/systemd/system/
 systemctl daemon-reload
 
 # The further instances, read once: a file that names one badly stops the release here, before nginx
@@ -77,6 +82,32 @@ for label in $first_label $(awk '{print $2}' <<< "$instances"); do
   (cd "$rel" && "$venv/bin/python" -m ops.host_instances deployment-env "$label") > /dev/null \
     || fail "deployment $label: no complete testnet record in this release; nothing switched"
 done
+
+# A deployment whose record names a test publisher, a key in a file before the enclave (ops/key_relay.py), is
+# served as an instance: its keeper signs bindings with the publisher's wallet, kept beside its own, and makes
+# the agent keys into its made-keys directory, from where colosseum-key-copy@<name> hands them to the gateway.
+# All of it is checked here, or that keeper would start, die on a missing wallet and restart for ever.
+lower() { tr '[:upper:]' '[:lower:]'; }
+publishers=""
+if [ -n "$first_label" ]; then
+  first_publisher="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances publisher "$first_label")" \
+    || fail "deployment $first_label: could not read its publisher; nothing switched"
+  [ -z "$first_publisher" ] \
+    || fail "deployment $first_label names a test publisher: serve it as an instance (bootstrap.sh --instance); nothing switched"
+fi
+while read -r name label _; do
+  [ -n "$name" ] || continue
+  publisher="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances publisher "$label")" \
+    || fail "deployment $label: could not read its publisher; nothing switched"
+  [ -n "$publisher" ] || continue
+  own="/var/lib/colosseum-keeper/instances/$name"
+  [ -f "$own/secrets/publisher.key" ] && [ -d "$own/made-keys" ] \
+    || fail "instance $name: its record names the test publisher $publisher, so its keeper needs $own/secrets/publisher.key and $own/made-keys (docs/HOSTING.md, \"A test publisher\"); nothing switched"
+  had="$(tr -d '[:space:]' < "$own/secrets/publisher.addr" 2>/dev/null || true)"
+  [ "$(lower <<< "$had")" = "$(lower <<< "$publisher")" ] \
+    || fail "instance $name: $own/secrets/publisher.addr says ${had:-nothing}, its record's publisher is $publisher; nothing switched"
+  publishers+="$name "
+done <<< "$instances"
 
 # The shared pool's keeper, when its settings are on the host: a complete record with a SharedPool in this
 # release, or nothing switches -- the unit would start, die on the record and restart for ever. The label is
@@ -151,6 +182,13 @@ watchdogs_install "$rel" "$sha" "$instances"
 ln -sfn "venv-$req_id" "$base/venv.next" && mv -T "$base/venv.next" "$base/venv"
 ln -sfn "releases/$sha" "$base/current.next" && mv -T "$base/current.next" "$base/current"
 say "current -> $sha"
+# The test publishers' keys, watched before the keepers restart so that none they make waits; one copy now
+# for any made while nothing watched.
+for name in $publishers; do
+  systemctl enable --quiet --now "colosseum-key-copy@$name.path"
+  systemctl start "colosseum-key-copy@$name.service"
+  say "instance $name: its test publisher's keys go to its gateway (colosseum-key-copy@$name)"
+done
 units=(colosseum-gateway colosseum-keeper)
 while read -r name _; do
   [ -n "$name" ] && units+=("colosseum-gateway@$name" "colosseum-keeper@$name")

@@ -49,6 +49,12 @@ InaccessiblePaths=/var/lib/colosseum-gw -/var/lib/colosseum-keeper/secrets -/var
 # state stays where it was, /var/lib/colosseum-keeper/keeper-<label>.json.
 TemporaryFileSystem=/var/lib/colosseum-keeper/instances:ro
 BindReadOnlyPaths=/var/lib/colosseum-keeper/instances/%i
+# Where its publisher, when the deployment's record names a test one (COLOSSEUM_PUBLISHER_WALLET in
+# deployment-%i.env), makes the agent keys it binds (ops/key_relay.py): the one place under its own directory it
+# writes, when there is one. colosseum-key-copy@%i copies each key into the gateway's directory, which this
+# keeper cannot reach (ops/host/key_copy.py). Without a publisher the keeper does not read it.
+BindPaths=-/var/lib/colosseum-keeper/instances/%i/made-keys
+Environment=GATEWAY_KEYS_DIR=/var/lib/colosseum-keeper/instances/%i/made-keys
 # Other users' processes are hidden from /proc, and /proc shows processes alone. This does not hide
 # another instance of this service, which runs as the same user: on testnet that is accepted, and a
 # mainnet host runs one instance or gives each its own user (docs/HOSTING.md).

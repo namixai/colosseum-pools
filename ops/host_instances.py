@@ -16,6 +16,7 @@ colosseum-gateway@<name> and colosseum-keeper@<name>. Its gateway listens where
     python -m ops.host_instances deployment-env <label>          COLOSSEUM_DEPLOYMENT, GATEWAY_FACTORY, the limits,
                                                                  the keeper's nodes, ...
     python -m ops.host_instances first-label /etc/colosseum      the first deployment's label, as served
+    python -m ops.host_instances publisher <label>               its test publisher's address, or an empty line
 
 Testnet only, as the host is.
 """
@@ -265,7 +266,32 @@ def deployment_env(label: str) -> str:
     return (f"COLOSSEUM_DEPLOYMENT={label}\n"
             f"GATEWAY_FACTORY={record['PoolFactory']}\n"
             f"GATEWAY_REGISTRY={keys_contract(record)}\n"
-            + gateway_limits(record) + keeper_nodes(record))
+            + gateway_limits(record) + keeper_nodes(record) + binder_env(record))
+
+
+# The wallet name a test publisher's key has beside the keeper's own (COLOSSEUM_KEY_DIR of the instance's keeper),
+# which install.sh checks before it switches (ops/host/install.sh).
+PUBLISHER_WALLET = "publisher"
+
+
+def publisher(record: dict) -> str:
+    """The address of the deployment's test publisher, a key in a file before the enclave (ops/key_relay.py), as
+    its record says; "" when it has none, or its publisher is the enclave. The keeper of such a deployment signs
+    the binder's bindings itself, with that wallet."""
+    p = (record.get("key_binder") or {}).get("publisher") if record.get("KeyBinder") else None
+    if not p or not p.get("test_key"):
+        return ""
+    return p["address"]
+
+
+def binder_env(record: dict) -> str:
+    """What a deployment on a key binder adds: its gateway starts with no key and reads each as it is bound
+    (gateway/server.py), and with a test publisher its keeper answers the binder's requests with that wallet,
+    making each key into its own directory, from where colosseum-key-copy@<name> hands it to the gateway."""
+    if not record.get("KeyBinder"):
+        return ""
+    return "GATEWAY_KEYS_BOUND_LATER=1\n" + (
+        f"COLOSSEUM_PUBLISHER_WALLET={PUBLISHER_WALLET}\n" if publisher(record) else "")
 
 
 def keys_contract(record: dict) -> str:
@@ -289,6 +315,11 @@ def main(argv: list[str]) -> int:
         return 0
     if len(argv) == 2 and argv[0] == "nginx-upstreams":
         sys.stdout.write(nginx_upstreams(instances(pathlib.Path(argv[1]))))
+        return 0
+    if len(argv) == 2 and argv[0] == "publisher":
+        if not LABEL.fullmatch(argv[1]):
+            raise SystemExit(f"odd label {argv[1]!r}")
+        print(publisher(deployments.load(argv[1])))
         return 0
     if len(argv) == 2 and argv[0] == "first-label":
         print(first_label(pathlib.Path(argv[1])))
