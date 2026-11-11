@@ -22,7 +22,7 @@ capital, by their own call. One who does not gives the size back.
 The size of an exam counts as in work from the moment it is bought, although no money moves:
 nothing else is sold against it, so the account is there for the trader who passes.
 
-Three limits hold a sale back.
+Two limits hold a sale back.
 
 - **The share.** The sizes spoken for may not pass the plan's share of the pool's value: 80% of
   it by default, the rest being the pool's buffer. With a pool of 100 and two seats of 25 sold,
@@ -31,17 +31,18 @@ Three limits hold a sale back.
   the size of every exam still running, and the 1 USDC a seat's new account may cost, has to be
   on that balance. Value that sits elsewhere, in a funded seat or as prices paid on HyperEVM,
   does not sell a seat.
-- **The keys.** Every funded account takes an agent key from the factory's registry and retires
-  it for good when it ends, and the operator publishes keys by hand. A sale needs a free key for
-  every seat the pool has spoken for, the funded ones included, so a pass is never sold that no
-  key could open (deep audit N3). A key someone has spoiled with a transfer still counts until it
-  is purged; the keeper purges them.
 
-Both are counted in the contract's own storage. A balance read from HyperCore is the start of
+No key holds a sale back. A funded account asks the factory's key binder for its agent key when
+its seat opens and gives it up for good when it ends (docs/KEY-BINDING.md); nothing is published
+in advance, so nothing can run out or be spoiled before it is used. (The deployments before the
+binder took keys from a registry the operator filled by hand, and a sale there needed a free key
+for every seat spoken for, deep audit N3.)
+
+Both limits are counted in the contract's own storage. A balance read from HyperCore is the start of
 the block, so two calls in one block would read the same one; a count in storage they do not.
 What the pool has sent in the last minute is counted against its balance for that minute,
 whether or not it has left it yet. `MultiPoolReader.room(pool, line)` says how many more exams of a size the pool
-would sell now, by all four limits: the share, the money, the keys and the number of seats. The views
+would sell now, by all three limits: the share, the money and the number of seats. The views
 that only read are a contract of their own, `MultiPoolReader`, out of the pool, which is close to
 the size a contract may have; it reads only what the pool shows anyone, and the scripts read
 through it. Its `room()` counts the leavers' part on the balance as a sale does, and holds a line
@@ -118,20 +119,18 @@ counted from the pool's start.
 
 Every pass has its seat: a sale on a line whose seats are all spoken for makes another one at
 once, while the factory still takes the funded rules, so a delisting later refuses the next sale
-and never a claim (deep audit F9). A seat armed and never opened, say because no key was free,
+and never a claim (deep audit F9). A seat armed and never opened, say because no key was bound in time,
 gives its size back with `finish` once it has had the claim window (deep audit F18), and its
 trader gets back what the pool kept of the price, sent from the seat on HyperCore: a pass the pool
 could not turn into an account was not sold after all (deep audit N2). A pass nobody claims within
 the window is released and its price stays with the pool, as a failed exam's does: claiming needs
-no key, so a trader who passed can always claim and be paid back. More spoiled keys on top of the
-registry's list than one opening skips (sixteen) refuse every opening on the factory until somebody
-purges them with `purgeSpoiled`, which anyone may send; the keeper does as soon as an opening is
-refused for it. A funded
+no key, so a trader who passed can always claim and be paid back. A funded
 seat whose key gained a HyperCore account in the block it was bound, so that HyperCore never made
-it the agent, takes the next free key with `rekey()` on the seat; the trader keeps the stage (deep
-audit F10). Only the stage's trader may ask, in the stage's first day, twice at most: a key
-HyperCore took keeps working after it gains an account, so on anyone's word a stranger's 1 USDC
-would replace a working key and spend the registry's free keys one by one (the audit's AUD-2).
+it the agent, asks for a fresh key with `rekey()` on the seat, which the publisher signs; the
+trader keeps the stage (deep audit F10). Only the stage's trader may ask, within a day of the key's latest approval,
+twice at most between an opening or renewal and the next: a key HyperCore took keeps working after it gains an account, so on anyone's word a
+stranger's 1 USDC would replace a working key and have the platform sign keys one by one (the
+audit's AUD-2).
 
 A seat that was just freed may still be sending its money back, so it rests for a minute before
 an account is opened on it. The claim does not wait for that: it takes any free seat of the
@@ -149,9 +148,9 @@ A seat is a `Pool` the MultiPool owns and runs. For that, `Pool` gained one swit
 - `runByOwner(traderMayStop)`, once: the pool sells no challenge of its own from then on;
 - `openFundedFor(trader)`, by the owner of such a pool: a funded stage for a trader examined
   elsewhere, in full or not at all; only for an owner the factory knows as a MultiPool
-  (`setMultiPool`, by the operator, a step of `ops/deploy_multi.py`). Each stage takes a key from
-  the shared registry and retires it at its end, so a pool anyone could run this way would empty
-  the registry for one account and gas (audit K-3);
+  (`setMultiPool`, by the operator, a step of `ops/deploy_multi.py`). Each stage asks the key
+  binder for a key the platform then signs, so a pool anyone could run this way would have keys
+  signed for gas (audit K-3);
 - on such a pool the trader ends the stage themselves only where the owner said so.
 
 Everything after the opening is the funded stage every pool has: its rules, a breach anyone may
@@ -293,8 +292,9 @@ by anyone. Whether a trader passed is the exam's own record, not this contract's
 
 - **No stop on the exchange, for now.** A funded account of this pool is a real account on the
   exchange, and the rule is that its stop and its take are placed on the exchange itself, by
-  the gateway. The gateway places them with the account's agent key, and the keys of this
-  pool's registry are not on the gateway's host yet. Until they are, a funded account here has
+  the gateway. The gateway places them with the account's agent key, which reaches the gateway's
+  host only through the keeper's relay (`ops/key_relay.py`), and no deployment runs that yet.
+  Until one does, a funded account here has
   no stop on the exchange and no keeper calling a breach: its rules are kept only by whoever
   calls `breach`.
 
@@ -335,9 +335,10 @@ python3 scripts/mutations.py $(seq -f 'Y%g' 1 466)
 
 `ops/multi_keeper.py` makes every call the pool leaves to anyone, when the pool would take it, and
 holds no trader's key: it checkpoints, breaches and expires exams and releases those that are
-over; sweeps, rearms, opens and finishes seats (purging the registry's spoiled keys when they
-refuse an opening, and freeing a seat its account did not open in within the claim window);
-says `keys_short` on every pass while no exam can be sold for want of keys; hands a funded seat to the core keeper
+over; sweeps, rearms, opens and finishes seats (answering a seat's request for its key through the
+relay, `ops/key_relay.py`, and freeing a seat its account did not open in within the claim window;
+on a factory with a registry, before the binder, purging its spoiled keys when they refuse an
+opening, and saying `keys_short` on every pass while no exam can be sold for want of keys); hands a funded seat to the core keeper
 (`ops/keeper.py`: checkpoint, breach, recut, settleFunded) and then calls `endSeat` once the pool
 is over, `hitTarget` once a stage is flat past its target, and `closeIdle` once it has gone the
 plan's idle limit; and, on a pool owned by `PoolShares`, `renew` in the round's window when

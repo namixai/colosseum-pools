@@ -83,6 +83,19 @@ class TheRecordsInTheRepository(unittest.TestCase):
         self.assertEqual(deployments.records(network.MAINNET), [])
 
 
+class Resolve(unittest.TestCase):
+    def test_a_record_with_a_key_binder_gives_its_address_for_the_keys(self):
+        from unittest import mock
+        binder = {"PoolFactory": "0x" + "f1" * 20, "KeyBinder": "0x" + "b1" * 20}
+        registry = {"PoolFactory": "0x" + "f1" * 20, "KeyRegistry": "0x" + "a1" * 20}
+        for record, keys in ((binder, "0x" + "b1" * 20), (registry, "0x" + "a1" * 20)):
+            with mock.patch.object(deployments, "load", return_value=record):
+                self.assertEqual(deployments.resolve("x"), ("0x" + "f1" * 20, keys))
+        with mock.patch.object(deployments, "load", return_value={"PoolFactory": "0x" + "f1" * 20}), \
+                self.assertRaises(SystemExit):
+            deployments.resolve("x")
+
+
 class RegistryOperator(unittest.TestCase):
     def test_the_deployer_unless_handed_over_pending_until_accepted(self):
         deployer, given = "0x" + "d1" * 20, "0x" + "cc" * 20

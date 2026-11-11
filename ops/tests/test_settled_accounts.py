@@ -227,6 +227,79 @@ class WhatIsRead(unittest.TestCase):
         # A reading from before the registry was read has nothing to compare.
         self.assertEqual(settled.registry_mismatches(reading()), [])
 
+    def test_the_watch_reads_the_key_binder_and_the_factorys_operator_beside_what_the_record_says(self):
+        from unittest import mock
+        factory, binder = "0x" + "f1" * 20, "0x" + "b1" * 20
+        word = lambda v: "0x" + format(v, "064x")  # noqa: E731
+        addr = lambda a: "0x" + "0" * 24 + a[2:]  # noqa: E731
+        deployer, safe, pub, guard = ("0x" + x * 20 for x in ("d1", "5a", "ab", "cd"))
+        answers = {(binder, "owner()"): addr(deployer), (binder, "pendingOwner()"): addr(safe),
+                   (binder, "publisher()"): addr(pub), (binder, "guardian()"): addr(guard), (binder, "paused()"): word(1),
+                   (binder, "maxBindsPerDay()"): word(50), (binder, "renewDelay()"): word(86_400),
+                   (factory, "operator()"): addr(deployer), (factory, "pendingOperator()"): addr(safe)}
+
+        def call(to, signature, args=(), block="latest"):
+            if signature == "usdc()":
+                return addr("0x" + "ab" * 20)
+            return answers.get((to.lower(), signature), word(0))
+
+        kb = {"owner": {"from": deployer, "to": safe, "state": "pending"}, "publisher": {"address": pub}, "guardian": guard,
+              "max_binds_per_day": 50, "renew_delay": 86_400}
+        record = {"PoolFactory": factory, "KeyBinder": binder, "label": "x", "deployer": deployer, "key_binder": kb,
+                  "factory_operator": {"from": deployer, "to": safe, "state": "pending"}}
+        with mock.patch.object(settled, "call", side_effect=call), \
+                mock.patch.object(settled, "rpc", side_effect=lambda m, p: "0x1" if m == "eth_getTransactionCount" else "0x"):
+            got = settled.read("0x10", [""], set(), record)
+        c = settled.to_checksum_address
+        self.assertEqual({k: got["binder"][k] for k in ("owner", "pending_owner", "publisher", "guardian", "paused",
+                                                         "factory_operator", "factory_pending_operator",
+                                                         "max_binds_per_day", "renew_delay")},
+                         {"owner": c(deployer), "pending_owner": c(safe), "publisher": c(pub), "guardian": c(guard),
+                          "paused": True, "factory_operator": c(deployer), "factory_pending_operator": c(safe),
+                          "max_binds_per_day": 50, "renew_delay": 86_400})
+        self.assertIsNone(got["registry"])
+        self.assertEqual(settled.binder_mismatches({"deployments": [{**got, "label": "x"}]}),
+                         [f"key binder is paused: x {c(binder)}: no key is bound until the owner lifts it"])
+
+    def test_a_key_binder_that_is_not_the_records_goes_red_with_code_1(self):
+        import io
+        deployer, safe, pub, guard, other = ("0x" + x * 20 for x in ("d1", "5a", "ab", "cd", "ee"))
+        zero = settled.ZERO
+
+        def result(owner=deployer, pending=zero, publisher=pub, guardian=guard, paused=False, op=deployer, op_pending=zero,
+                   kb_owner=None, factory_operator=None, limit=50, delay=86_400):
+            return {"deployments": [{"label": "x", "challenges": [], "pools": [], "binder": {
+                "address": "0x" + "b1" * 20, "owner": owner, "pending_owner": pending, "publisher": publisher,
+                "guardian": guardian, "paused": paused, "factory_operator": op, "factory_pending_operator": op_pending,
+                "max_binds_per_day": limit, "renew_delay": delay,
+                "record_says": {"deployer": deployer, "factory_operator": factory_operator, "key_binder": {
+                    "owner": kb_owner or {"from": deployer, "to": None, "state": "the deployer"},
+                    "publisher": {"address": pub}, "guardian": guard, "max_binds_per_day": 50, "renew_delay": 86_400}}}}]}
+        pending = {"from": deployer, "to": safe, "state": "pending"}
+        accepted = {**pending, "state": "accepted"}
+        green = [result(), result(pending=safe, op_pending=safe, kb_owner=pending, factory_operator=pending),
+                 result(owner=safe, op=safe, kb_owner=accepted, factory_operator=accepted),
+                 result(kb_owner={"from": deployer, "to": safe, "state": "named, not sent"})]
+        for r in green:
+            self.assertEqual(settled.exit_code(r, None, io.StringIO()), 0, r)
+        for r, said in [(result(owner=other), "key binder owner"), (result(pending=other), "key binder owner"),
+                        (result(kb_owner=pending), "key binder owner"),
+                        (result(op=other), "factory operator"), (result(factory_operator=accepted), "factory operator"),
+                        (result(publisher=other), "key binder publisher"), (result(guardian=zero), "key binder guardian"),
+                        (result(paused=True), "key binder is paused"),
+                        (result(limit=40), "key binder daily limit does not match"),
+                        (result(delay=0), "key binder renewal delay does not match"),
+                        (result(kb_owner={**pending, "state": "sent"}), "is not a handover")]:
+            err = io.StringIO()
+            self.assertEqual(settled.exit_code(r, None, err), 1, said)
+            self.assertIn(said, err.getvalue())
+        self.assertEqual(settled.binder_mismatches(reading()), [], "a reading before binders has nothing to compare")
+        zero_limit = result(limit=0)
+        zero_limit["deployments"][0]["binder"]["record_says"]["key_binder"]["max_binds_per_day"] = 0
+        err = io.StringIO()
+        self.assertEqual(settled.exit_code(zero_limit, None, err), 1, "a limit of 0, even as recorded, binds nothing")
+        self.assertIn("key binder binds nothing", err.getvalue())
+
     def test_a_reading_without_a_shared_pool_still_makes_a_table(self):
         result = reading()
         result["shared_pool"] = None

@@ -233,6 +233,11 @@ class KeeperTest(unittest.TestCase):
         quiet = mock.patch.object(keeper, "log")
         quiet.start()
         self.addCleanup(quiet.stop)
+        # Each test its own relay and its own idea of which accounts predate the key binder.
+        for name, fresh in (("RELAY", None), ("_before_binder", set())):
+            patcher = mock.patch.object(keeper, name, fresh)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state = pathlib.Path(self.tmp.name) / "keeper.json"

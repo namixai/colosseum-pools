@@ -6,12 +6,18 @@ The demo doesn't use Usenami Signer. Its agent keys are ordinary testnet keys ma
 per key; the address comes from the key, never from a file name. `KeyRegistry` publishes
 the addresses as before. A key file can sign anything Hyperliquid lets an agent sign, so
 whoever holds the host holds these keys.
+
+On a deployment with a key binder (src/KeyBinder.sol) no key is made in advance: the keeper's
+relay writes one into the directory just before it is bound (ops/key_relay.py). So a key the
+signer does not hold sends it back to the directory, at most once every RELOAD_EVERY_S, before
+the order is refused; a directory that cannot be read then leaves the keys it had.
 """
 
 from __future__ import annotations
 
 import json
 import pathlib
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
 
@@ -191,15 +197,23 @@ class DemoSigner:
     # gateway does not know them, so the field is absent rather than wrong.
     max_order_notional_usdc = float(MAX_NOTIONAL)
 
+    RELOAD_EVERY_S = 5.0
+
     def __init__(self, keys: list[LocalAccount], mid: Callable[[int], Decimal] = market_mid,
-                 caps: Mapping[int, Decimal] | None = None):
+                 caps: Mapping[int, Decimal] | None = None, directory: str | None = None,
+                 clock: Callable[[], float] = time.monotonic):
         self._keys = {k.address.lower(): k for k in keys}
         self._mid = mid
         self.caps = dict(caps or {})  # the platform's list and its size caps: none, nothing is signed
+        self._directory = directory
+        self._clock = clock
+        # The first key it does not hold reads the directory at once; the next not sooner than RELOAD_EVERY_S on.
+        self._reloaded_at = clock() - self.RELOAD_EVERY_S
 
     @staticmethod
-    def load_keys(directory: str) -> list[LocalAccount]:
-        """Every `*.key` file in an owner-only directory, each owner-only too."""
+    def load_keys(directory: str, may_be_empty: bool = False) -> list[LocalAccount]:
+        """Every `*.key` file in an owner-only directory, each owner-only too. None at all is refused unless the
+        keys come later: on a deployment with a key binder each is written just before it is bound."""
         d = pathlib.Path(directory).expanduser()
         if d.stat().st_mode & 0o077:
             raise SystemExit(f"{d} is open to others; chmod 700 it")
@@ -208,7 +222,7 @@ class DemoSigner:
             if f.stat().st_mode & 0o077:
                 raise SystemExit(f"{f} is readable by others; chmod 600 it")
             keys.append(Account.from_key(f.read_text().strip()))
-        if not keys:
+        if not keys and not may_be_empty:
             raise SystemExit(f"no *.key files in {d}")
         return keys
 
@@ -216,7 +230,33 @@ class DemoSigner:
         return len(self._keys)
 
     def has_key(self, key: str) -> bool:
+        if key.lower() not in self._keys:
+            self._reload()
         return key.lower() in self._keys
+
+    def _reload(self) -> None:
+        """The directory read again, for a key bound since the last read; never sooner than RELOAD_EVERY_S after
+        it, so a stream of orders for keys nobody holds does not read the disk on each. Keys are only added."""
+        if self._directory is None or self._clock() - self._reloaded_at < self.RELOAD_EVERY_S:
+            return
+        self._reloaded_at = self._clock()
+        # One file at a time, under the start's rules: a directory open to others is not read at all, and a file that
+        # is open to others or is not a key is passed over, so it never keeps the next key out.
+        d = pathlib.Path(self._directory).expanduser()
+        try:
+            if d.stat().st_mode & 0o077:
+                return
+            files = sorted(d.glob("*.key"))
+        except OSError:
+            return
+        for f in files:
+            try:
+                if f.stat().st_mode & 0o077:
+                    continue
+                k = Account.from_key(f.read_text().strip())
+            except (OSError, ValueError):
+                continue
+            self._keys.setdefault(k.address.lower(), k)
 
     def addresses(self) -> list[str]:
         """The keys this signer holds, by address: what the gateway asks the registry about when it

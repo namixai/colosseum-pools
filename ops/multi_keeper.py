@@ -396,11 +396,18 @@ class MultiKeeper:
             log("block_time_unread", error=str(exc)[:200])
             return int(time.time())
 
-    def registry(self) -> str:
-        """The factory's registry of agent keys, read once."""
+    def registry(self) -> str | None:
+        """The factory's registry of agent keys, read once; None on a factory with a key binder, which keeps no
+        list of keys (src/KeyBinder.sol): its `registry()` reverts. Any other failure goes up."""
         if self._registry is None:
-            self._registry = to_checksum_address(view(view(self.pool, "factory()", "address"), "registry()", "address"))
-        return self._registry
+            factory = view(self.pool, "factory()", "address")
+            try:
+                self._registry = to_checksum_address(view(factory, "registry()", "address"))
+            except Exception as exc:
+                if "revert" not in str(exc).lower():
+                    raise
+                self._registry = ""
+        return self._registry or None
 
     def send(self, to: str, sig: str, types=(), args=(), gas: int | None = None) -> bool:
         """Sends the call if the contract would take it now. True if it went out (or would have)."""
@@ -553,6 +560,12 @@ class MultiKeeper:
                 except core.NotFullyChecked:
                     log("venue_incomplete", seat=seat)
             return
+        if state == "Armed" and stage == AWAITING and core.key_asked_at(seat):
+            # On a factory with a key binder the seat's stage has asked for its key: the relay answers, and
+            # the seat opens in the same transaction (the pool calls the MultiPool's `open`, or the binding
+            # does not happen). Another `open` would only be refused, `KeyAsked`.
+            core.relay().serve(self.wallet, seat, now, self.dry)
+            return
         spot = c.core_spot_balance(seat, c.USDC_TOKEN)["total"] if state in ("Free", "Armed") else 0
         size = self.plan["menu"][line][0] * 100  # perp units (1e6) to spot's (1e8)
         for call in seat_calls(state, stage, now, over, spot=spot, size=size, armed_at=armed_at,
@@ -561,17 +574,22 @@ class MultiKeeper:
                 continue
             # More spoiled keys on top of the registry's list than one assign skips refuse every
             # opening on the factory until somebody retires them, which anyone may (deep audit N2).
-            if self.last_refusal == "TooManySpoiledKeys()" and self.send(
+            if self.last_refusal == "TooManySpoiledKeys()" and self.registry() and self.send(
                     self.registry(), "purgeSpoiled(uint256)", ["uint256"], [PURGE_PER_CALL]):
                 self.send(self.pool, "open(address)", ["address"], [seat])
 
     def keys_pass(self) -> None:
         """Says so on every pass while the registry holds no key beyond one for every seat the pool
-        has spoken for: the pool sells nothing until the operator publishes more (deep audit N3)."""
-        free = view(self.registry(), "freeCount()", "uint256")
+        has spoken for: the pool sells nothing until the operator publishes more (deep audit N3). A factory with
+        a key binder holds no keys in advance and sells without them; a request that waits says so in the
+        relay (`key_asked`, `key_request_old`)."""
+        registry = self.registry()
+        if registry is None:
+            return
+        free = view(registry, "freeCount()", "uint256")
         held = view(self.pool, "held()", "uint256")
         if free <= held:
-            log("keys_short", registry=self.registry(), free=free, held=held,
+            log("keys_short", registry=registry, free=free, held=held,
                 why="no exam is sold until the operator publishes more keys; spoiled ones count until purged")
 
     # ── the round ────────────────────────────────────────────────────────────────────
@@ -718,6 +736,7 @@ def main() -> int:
     p.add_argument("--state", help="the state file (default ops/state/multi-<deployment>.json)")
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")
     p.add_argument("--from", dest="sender", help="address the calls are tried from in a dry run")
+    core.publisher_args(p)  # a seat's request for its key is answered by the same relay as the core keeper's
     args = p.parse_args()
 
     c.assert_testnet()
@@ -725,6 +744,7 @@ def main() -> int:
     if "MultiPool" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no MultiPool")
     wallet = None if args.dry_run else c.account(args.wallet)
+    core.use_publisher(args)
     sender = wallet.address if wallet else (args.sender or c.address_of(args.wallet))
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"multi-{args.deployment}.json"
     k = MultiKeeper(record["MultiPool"], wallet, sender, args.dry_run, state, int(record["block"]),
