@@ -49,6 +49,13 @@ class Copy(unittest.TestCase):
             n = kc.copy(str(self.src), str(self.dst), keeper_uid, gateway_uid, GID)
         return n, [json.loads(l) for l in out.getvalue().splitlines()]
 
+    def test_a_failed_write_leaves_no_temporary_key_behind(self):
+        key_file(self.src)
+        with mock.patch.object(kc.os, "fchown", side_effect=PermissionError("no")):
+            with self.assertRaises(PermissionError):
+                self.run_copy()
+        self.assertEqual(list(self.dst.iterdir()), [], "no .tmp holding a key under no name")
+
     def test_a_new_key_is_copied_whole_owner_only_and_named_by_its_address(self):
         name, key = key_file(self.src)
         n, said = self.run_copy()
@@ -177,6 +184,20 @@ class Units(unittest.TestCase):
         caps = next(l for l in d if l.startswith("CapabilityBoundingSet="))
         self.assertEqual(set(caps.split("=", 1)[1].split()),
                          {"CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_CHOWN", "CAP_FOWNER"})
+
+    def test_a_timer_copies_what_a_running_copy_could_not_see(self):
+        # A key made while a copy runs changes the directory after that run read it, and the path unit does not start
+        # a unit that is running: the timer copies it within the minute.
+        d = self.directives(HOST / "colosseum-key-copy@.timer")
+        self.assertIn("OnUnitInactiveSec=1min", d)
+        self.assertIn("OnActiveSec=1min", d)
+        self.assertIn("Unit=colosseum-key-copy@%i.service", d)
+        self.assertIn("WantedBy=timers.target", d)
+        install = (HOST / "install.sh").read_text()
+        self.assertIn('install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/systemd/system/',
+                      install)
+        self.assertIn('systemctl enable --quiet --now "colosseum-key-copy@$name.path" "colosseum-key-copy@$name.timer"\n',
+                      install)
 
     def test_the_path_unit_watches_the_keepers_directory_and_starts_the_copier(self):
         d = self.directives(HOST / "colosseum-key-copy@.path")

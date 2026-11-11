@@ -1,0 +1,15 @@
+# The copier of keeper %i's keys once a minute besides, testnet only: a key made while a copy started by
+# colosseum-key-copy@%i.path is already running changes the directory after that run has read it, and the path unit
+# does not start a unit that is still running, so without this the key would wait for the next one. A run with
+# nothing new copies nothing and says nothing. Enabled with the path unit by ops/host/install.sh.
+[Unit]
+Description=colosseum-pools: keeper %i's keys to gateway %i, each minute (HyperEVM testnet)
+
+[Timer]
+OnActiveSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=5s
+Unit=colosseum-key-copy@%i.service
+
+[Install]
+WantedBy=timers.target

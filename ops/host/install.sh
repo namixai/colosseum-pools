@@ -13,7 +13,7 @@
 #   5. the watchdogs come with the release: their files, units and timers are put in place from it
 #      before the switch (ops/host/watchdogs/install-lib.sh), and each is run once after the restarts;
 #   6. an instance whose record names a test publisher has its keeper's made keys copied to its gateway:
-#      colosseum-key-copy@<name>.path is enabled and the copier run once (ops/host/key_copy.py).
+#      colosseum-key-copy@<name>.path and .timer are enabled and the copier run once (ops/host/key_copy.py).
 #
 # It makes no key and reads none; the copier it starts moves an instance's agent keys from its keeper to
 # its gateway, and nothing else. Testnet only.
@@ -60,6 +60,7 @@ install -m 0644 -o root -g root "$rel/ops/host/colosseum-keeper@.service" /etc/s
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-shared-keeper.service" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.service" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.path" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/systemd/system/
 systemctl daemon-reload
 
 # The further instances, read once: a file that names one badly stops the release here, before nginx
@@ -103,7 +104,7 @@ while read -r name label _; do
   own="/var/lib/colosseum-keeper/instances/$name"
   [ -f "$own/secrets/publisher.key" ] && [ -d "$own/made-keys" ] \
     || fail "instance $name: its record names the test publisher $publisher, so its keeper needs $own/secrets/publisher.key and $own/made-keys (docs/HOSTING.md, \"A test publisher\"); nothing switched"
-  had="$(tr -d '[:space:]' < "$own/secrets/publisher.addr" 2>/dev/null || true)"
+  had="$(tr -d '[:space:]' 2>/dev/null < "$own/secrets/publisher.addr" || true)"
   [ "$(lower <<< "$had")" = "$(lower <<< "$publisher")" ] \
     || fail "instance $name: $own/secrets/publisher.addr says ${had:-nothing}, its record's publisher is $publisher; nothing switched"
   publishers+="$name "
@@ -185,7 +186,7 @@ say "current -> $sha"
 # The test publishers' keys, watched before the keepers restart so that none they make waits; one copy now
 # for any made while nothing watched.
 for name in $publishers; do
-  systemctl enable --quiet --now "colosseum-key-copy@$name.path"
+  systemctl enable --quiet --now "colosseum-key-copy@$name.path" "colosseum-key-copy@$name.timer"
   systemctl start "colosseum-key-copy@$name.service"
   say "instance $name: its test publisher's keys go to its gateway (colosseum-key-copy@$name)"
 done

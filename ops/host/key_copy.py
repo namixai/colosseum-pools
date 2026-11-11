@@ -111,20 +111,24 @@ def write_key(dir_fd: int, name: str, key: str, uid: int, gid: int) -> bool:
     except FileNotFoundError:
         pass
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dir_fd)
+    # From here the temporary file is removed however this ends: a key left under no name is still a key.
     try:
-        os.fchown(fd, uid, gid)
-        os.fchmod(fd, 0o600)
-        os.write(fd, (key + "\n").encode("ascii"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    try:
+        try:
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, 0o600)
+            os.write(fd, (key + "\n").encode("ascii"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.link(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd, follow_symlinks=False)
         return True
     except FileExistsError:
         return False
     finally:
-        os.unlink(tmp, dir_fd=dir_fd)
+        try:
+            os.unlink(tmp, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
         os.fsync(dir_fd)
 
 

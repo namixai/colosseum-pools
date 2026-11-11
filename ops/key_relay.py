@@ -87,12 +87,14 @@ class LocalPublisher:
         # a write cut short leaves a `.tmp` nobody loads, never a `.key` that is half a key.
         tmp = self.keys_dir / f".{KEY_PREFIX}{key.address}.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(key.key.hex() + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.link(tmp, path)  # refuses a name that is there, as O_EXCL did
-        tmp.unlink()
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(key.key.hex() + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.link(tmp, path)  # refuses a name that is there, as O_EXCL did
+        finally:
+            tmp.unlink(missing_ok=True)  # however it ends: a key left under no name is still a key
         return key.address
 
     def key_for(self, khash: bytes) -> str | None:
