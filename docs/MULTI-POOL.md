@@ -38,7 +38,7 @@ in advance, so nothing can run out or be spoiled before it is used. (The deploym
 binder took keys from a registry the operator filled by hand, and a sale there needed a free key
 for every seat spoken for, deep audit N3.)
 
-Both are counted in the contract's own storage. A balance read from HyperCore is the start of
+Both limits are counted in the contract's own storage. A balance read from HyperCore is the start of
 the block, so two calls in one block would read the same one; a count in storage they do not.
 What the pool has sent in the last minute is counted against its balance for that minute,
 whether or not it has left it yet. `MultiPoolReader.room(pool, line)` says how many more exams of a size the pool
@@ -127,8 +127,8 @@ the window is released and its price stays with the pool, as a failed exam's doe
 no key, so a trader who passed can always claim and be paid back. A funded
 seat whose key gained a HyperCore account in the block it was bound, so that HyperCore never made
 it the agent, asks for a fresh key with `rekey()` on the seat, which the publisher signs; the
-trader keeps the stage (deep audit F10). Only the stage's trader may ask, within a day of the key's latest approval
-(the stage's opening or its latest renewal), twice at most for each such key: a key HyperCore took keeps working after it gains an account, so on anyone's word a
+trader keeps the stage (deep audit F10). Only the stage's trader may ask, within a day of the key's latest approval,
+twice at most between an opening or renewal and the next: a key HyperCore took keeps working after it gains an account, so on anyone's word a
 stranger's 1 USDC would replace a working key and have the platform sign keys one by one (the
 audit's AUD-2).
 

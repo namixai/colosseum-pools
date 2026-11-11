@@ -190,8 +190,10 @@ spike/.venv/bin/python ops/make_demo_keys.py --out <new directory outside the re
 spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal --publisher 0x... \
     --pcr-hash <hash> --attestation-hash <hash>   # on testnet before the enclave: ops/binder_deploy.py, TEST_PUBLISHER_HASH
 
-# the app: copy the factory, registry and first block from that record into app/config.js,
-# and point its gateway at http://127.0.0.1:8787 for a gateway on this machine
+# the app: copy the factory and first block from that record into app/config.js, and point its
+# gateway at http://127.0.0.1:8787 for a gateway on this machine. The app still reads keys from a
+# registry (`registry` and keyOf, app/lib/chain.js), which a deployment on a key binder does not
+# have: until the app reads the binder, it serves the deployments before it
 python3 -m http.server 8790 --bind 127.0.0.1 --directory app
 
 # the gateway, signing with those keys and checking the caps first
