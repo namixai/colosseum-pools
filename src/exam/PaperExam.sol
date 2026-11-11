@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
+import {HLConstants} from "@hyper-evm-lib/src/common/HLConstants.sol";
 import {Rules, Breach, Units} from "../Types.sol";
 import {CoreOps} from "../lib/CoreOps.sol";
 
@@ -52,6 +53,15 @@ struct ExamTerms {
 ///      The filler picks the block inside the window, so every fill says how many blocks after the
 ///      first possible one it came (`late`), for anyone to count.
 ///
+///      Such an exam may also fill at the book (`fromBook`): a buy at the best ask, a sell at the best
+///      bid, from the chain's own best bid and offer, so a fill pays up to half the spread as on the
+///      exchange. Never better for the trader than the oracle price: a book the trader can move,
+///      a thin one, or one that stands off the oracle gives no fill under the oracle to buy or over
+///      it to sell. Nor more than `maxWorseBps` worse than the oracle: past that the fill waits for
+///      a later block of the window, so a book that stands off the market, as testnet's do, does not
+///      fill a percent worse than it. A book that does not answer, is empty on a side or crossed
+///      fills at the oracle. Equity, the day's snapshot and every rule stay on the oracle price.
+///
 ///      What this does not model: the depth of a book (a fill takes the mark at any size),
 ///      funding, and resting orders.
 contract PaperExam is Initializable {
@@ -86,6 +96,13 @@ contract PaperExam is Initializable {
     /// With a filler: blocks after an order's window from which anyone may fill it, if it only
     /// makes a position smaller. About a minute of HyperEVM's small blocks.
     uint16 public constant FALLBACK_BLOCKS = 60;
+    /// The most a fill at the book may be worse than the oracle price, in bps of it: 5 %.
+    uint16 public constant MAX_WORSE_BPS = 500;
+    /// Where a fill's price came from (`Filled.source`).
+    uint8 public constant SOURCE_ORACLE = 0;
+    uint8 public constant SOURCE_BOOK = 1;
+    /// An exam that fills at the book, whose book did not answer, was empty on a side or crossed: the oracle.
+    uint8 public constant SOURCE_ORACLE_FALLBACK = 2;
 
     /// The account that created this exam, and reads its result.
     address public pool;
@@ -124,14 +141,19 @@ contract PaperExam is Initializable {
     uint32 private _lastFillDayPlusOne;
     /// The one address that fills orders inside their window; zero for anyone but the trader.
     address public filler;
+    /// Whether a fill takes the book's price (see the contract's notes), and how much worse than the
+    /// oracle price, in bps of it, that price may be.
+    bool public fromBook;
+    uint16 public maxWorseBps;
 
     event Started(address indexed trader, address indexed pool, uint64 capital);
     event AgentSet(address indexed agent);
     event Placed(uint32 indexed asset, bool isBuy, uint64 sz, uint256 fillFrom, uint256 fillUntil);
     event Lapsed(uint32 indexed asset, bool isBuy, uint64 sz);
     /// `late`: blocks after the first block that could fill the order (`placedBlock + fillDelay`).
-    event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late);
-    event FillerSet(address indexed filler);
+    /// `source`: `SOURCE_ORACLE`, `SOURCE_BOOK` or `SOURCE_ORACLE_FALLBACK`.
+    event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late, uint8 source);
+    event FillerSet(address indexed filler, bool fromBook, uint16 maxWorseBps);
     event DaySnapshot(uint32 indexed day, int256 equity);
     event StepPassed(uint8 indexed step, int256 equity);
     event Passed(address indexed trader, int256 equity);
@@ -144,6 +166,7 @@ contract PaperExam is Initializable {
     error NotTrader();
     error OwnOrder();
     error NotFiller();
+    error TooFarFromOracle(uint64 px, uint64 oracle);
     error AssetNotAllowed(uint32 asset);
     error ZeroSize();
     error OrderPending();
@@ -177,14 +200,23 @@ contract PaperExam is Initializable {
     }
 
     /// @notice Starts the exam for `trader_`, with `filler_` the one address that fills orders inside
-    ///         their window. The filler may be neither the trader nor the pool.
-    function initializeWithFiller(address trader_, Rules calldata rules_, ExamTerms calldata terms_, address filler_)
-        external
-        initializer
-    {
+    ///         their window. The filler may be neither the trader nor the pool. With `fromBook_` a
+    ///         fill takes the book's price, at most `maxWorseBps_` (1 to 500) worse than the oracle's;
+    ///         without it, the oracle's, and `maxWorseBps_` is zero.
+    function initializeWithFiller(
+        address trader_,
+        Rules calldata rules_,
+        ExamTerms calldata terms_,
+        address filler_,
+        bool fromBook_,
+        uint16 maxWorseBps_
+    ) external initializer {
         if (filler_ == address(0) || filler_ == trader_ || filler_ == msg.sender) revert BadTerms();
+        if (fromBook_ ? maxWorseBps_ == 0 || maxWorseBps_ > MAX_WORSE_BPS : maxWorseBps_ != 0) revert BadTerms();
         filler = filler_;
-        emit FillerSet(filler_);
+        fromBook = fromBook_;
+        maxWorseBps = maxWorseBps_;
+        emit FillerSet(filler_, fromBook_, maxWorseBps_);
         _initialize(trader_, rules_, terms_);
     }
 
@@ -302,7 +334,7 @@ contract PaperExam is Initializable {
         if (_over()) revert TooLate();
         delete pending;
 
-        uint64 px = _mark(o.asset);
+        (uint64 px, uint8 source) = _fillPrice(o.asset, o.isBuy);
         uint256 ntl = uint256(o.sz) * px;
         uint256 cost = (ntl * _terms.costPpm + PPM - 1) / PPM;
         int256 afterFill = before + delta;
@@ -326,7 +358,7 @@ contract PaperExam is Initializable {
             }
             lastFillAt = uint64(block.timestamp);
         }
-        emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from);
+        emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);
     }
 
     /// @notice Takes the day's snapshot, in the first minutes of the UTC day. Anyone may.
@@ -464,6 +496,25 @@ contract PaperExam is Initializable {
     function _mark(uint32 asset) internal view returns (uint64 px) {
         px = PrecompileLib.oraclePx(CoreOps.pxIndex(asset));
         if (px == 0) revert NoPrice(asset);
+    }
+
+    /// @dev The price a fill takes: the oracle's, or, at the book, the trader's side of the best bid
+    ///      and offer, never better for the trader than the oracle's, and refused while it is more
+    ///      than `maxWorseBps` worse. A book that does not answer, is empty on a side or crossed
+    ///      leaves the oracle's.
+    function _fillPrice(uint32 asset, bool isBuy) internal view returns (uint64 px, uint8 source) {
+        uint64 oracle = _mark(asset);
+        if (!fromBook) return (oracle, SOURCE_ORACLE);
+        (bool ok, bytes memory r) =
+            HLConstants.BBO_PRECOMPILE_ADDRESS.staticcall(abi.encode(uint64(CoreOps.pxIndex(asset))));
+        if (!ok || r.length < 64) return (oracle, SOURCE_ORACLE_FALLBACK);
+        PrecompileLib.Bbo memory b = abi.decode(r, (PrecompileLib.Bbo));
+        // An empty ask with a bid is crossed: `b.ask < b.bid` holds it.
+        if (b.bid == 0 || b.ask < b.bid) return (oracle, SOURCE_ORACLE_FALLBACK);
+        px = isBuy ? (b.ask > oracle ? b.ask : oracle) : (b.bid < oracle ? b.bid : oracle);
+        uint256 worse = isBuy ? px - oracle : oracle - px;
+        if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);
+        source = SOURCE_BOOK;
     }
 
     /// @dev Whether a fill of `delta` only makes the position `before` smaller, on the same side.
