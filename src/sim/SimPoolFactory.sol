@@ -209,6 +209,8 @@ contract SimPoolFactory {
         if (r.maxLeverageX100 > MAX_LEVERAGE_X100) revert BadPlan();
         uint256 n = r.assets.length;
         bool own = r.assetLeverageX100.length != 0;
+        // One cap for each asset, or none: a shorter list would be read past its end (review of cp#261).
+        if (own && r.assetLeverageX100.length != n) revert BadPlan();
         for (uint256 i = 0; i < n; ++i) {
             uint32 listed = assetCapX100[r.assets[i]];
             uint32 cap = own ? r.assetLeverageX100[i] : r.maxLeverageX100;

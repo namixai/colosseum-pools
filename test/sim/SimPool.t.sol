@@ -218,7 +218,7 @@ contract SimPoolTest is Test {
     }
 
     function test_open_refusesAPlanOutsideThePlatformsBounds() public {
-        SimPlan[] memory bad = new SimPlan[](14);
+        SimPlan[] memory bad = new SimPlan[](16);
         for (uint256 i = 0; i < bad.length; ++i) bad[i] = _plan();
         bad[0].exam.fillWindow = 61; // past a minute
         bad[1].funded.stepDuration = 0; // a stage that never ends
@@ -237,6 +237,14 @@ contract SimPoolTest is Test {
         bad[11].maxWorseBps = 0; // the book with no ceiling
         bad[12].maxWorseBps = 501;
         bad[13].fromBook = false; // a ceiling with no book
+        bad[14].examRules.assetLeverageX100 = new uint32[](2); // two caps for one asset
+        bad[14].examRules.assetLeverageX100[0] = 500;
+        bad[14].examRules.assetLeverageX100[1] = 500;
+        bad[15].fundedRules.assets = new uint32[](2); // two assets, one cap
+        bad[15].fundedRules.assets[0] = BTC;
+        bad[15].fundedRules.assets[1] = BTC;
+        bad[15].fundedRules.assetLeverageX100 = new uint32[](1);
+        bad[15].fundedRules.assetLeverageX100[0] = 500;
         for (uint256 i = 0; i < bad.length; ++i) {
             vm.prank(creator);
             vm.expectRevert(SimPoolFactory.BadPlan.selector);
