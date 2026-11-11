@@ -91,6 +91,16 @@ class _Transient(Exception):
     """A failure worth retrying: network, timeout, node error, rate limit."""
 
 
+def _hex(raw, what: str) -> int:
+    """A hexadecimal number from the node, or Unreachable. An answer that is not one is a node that cannot be
+    read: it ends the read the way a refused request does, so that a finding already made is not lost to a
+    ValueError on its way up. Bugs of the tool itself are not turned into this; they stay exit 3 in main()."""
+    try:
+        return int(raw, 16)
+    except (TypeError, ValueError):
+        raise Unreachable(f"{what} is not a hexadecimal number: {raw!r}"[:240]) from None
+
+
 def _post(url: str, payload: dict, timeout: float = 25) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(),
@@ -166,7 +176,7 @@ class Chain:
         raw = self._rpc("eth_blockNumber", [])
         if not isinstance(raw, str) or not raw.startswith("0x"):
             raise Unreachable(f"the chain's head was not read: {raw!r}")
-        return int(raw, 16)
+        return _hex(raw, "the chain's head")
 
     def storage_at(self, addr: str, slot: int) -> str:
         raw = self._rpc("eth_getStorageAt", [addr, hex(slot), "latest"])
@@ -181,7 +191,7 @@ class Chain:
                          "latest"])
         if not isinstance(raw, str) or len(raw) != 66:
             raise Unreachable(f"the \"has an account\" precompile did not answer with a word: {raw!r}")
-        v = int(raw, 16)
+        v = _hex(raw, "the precompile's answer")
         if v not in (0, 1):
             # An answer that is not yes or no is not a "no". Counting it as zero would report
             # "none spoiled" on an answer nobody understands.
@@ -197,7 +207,7 @@ class Chain:
             # An empty answer (`0x`) means "no such method at this address", for instance an address
             # that is no registry at all. Counting it as zero would be an alarm that never ends.
             raise Unreachable(f"the registry's answer is not 32 bytes but {len(body) // 2}: {raw!r}")
-        return int(body, 16)
+        return _hex(body, "the registry's answer")
 
 
 def free_keys(chain: Chain, registry: str, free: int, slot: int) -> list[str]:
@@ -209,7 +219,7 @@ def free_keys(chain: Chain, registry: str, free: int, slot: int) -> list[str]:
     quietly reading someone else's memory and reporting "no spoiled keys" is the worst a watchdog
     can do.
     """
-    length = int(chain.storage_at(registry, slot), 16)
+    length = _hex(chain.storage_at(registry, slot), f"slot {slot}")
     if length != free:
         raise Unreachable(
             f"the storage layout did not hold: slot {slot} has length {length} but "
@@ -218,7 +228,7 @@ def free_keys(chain: Chain, registry: str, free: int, slot: int) -> list[str]:
     keys = []
     for i in range(length):
         word = chain.storage_at(registry, base + i)
-        if int(word, 16) >> 160:
+        if _hex(word, f"element {i} of slot {slot}") >> 160:
             raise Unreachable(f"element {i} of slot {slot} is not an address ({word}): wrong layout")
         key = "0x" + word[-40:]
         raw = chain._rpc("eth_call",
@@ -226,7 +236,7 @@ def free_keys(chain: Chain, registry: str, free: int, slot: int) -> list[str]:
                           "latest"])
         if not isinstance(raw, str) or len(raw) < 66:
             raise Unreachable(f"the binding of key {key} was not read: {raw!r}")
-        state = int(raw[2:66], 16)
+        state = _hex(raw[2:66], f"the binding of key {key}")
         if state != STATE_FREE:
             raise Unreachable(
                 f"key {key} from the free array is in state {state}, not Free: "

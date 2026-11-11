@@ -77,6 +77,16 @@ class Unreachable(Exception):
     """Could not check: node, network, factory address, an answer that did not parse."""
 
 
+def _hex(raw, what: str) -> int:
+    """A hexadecimal number from the node, or Unreachable. An answer that is not one is a node that cannot be
+    read: it ends the read the way a refused request does, so that a finding already made is not lost to a
+    ValueError on its way up. Bugs of the tool itself are not turned into this; they stay exit 3 in main()."""
+    try:
+        return int(raw, 16)
+    except (TypeError, ValueError):
+        raise Unreachable(f"{what} is not a hexadecimal number: {raw!r}"[:240]) from None
+
+
 # -- the chain ----------------------------------------------------------------------------------
 
 def _post(url: str, payload: dict, timeout: int = 20) -> dict:
@@ -163,14 +173,14 @@ class Chain:
         blk = self._rpc("eth_getBlockByNumber", ["latest", False])
         if not isinstance(blk, dict) or "timestamp" not in blk:
             raise Unreachable(f"the chain's head was not read: {blk!r}")
-        return int(blk["timestamp"], 16)
+        return _hex(blk["timestamp"], "the head's timestamp")
 
 
 def _word(raw: str, i: int) -> int:
     body = raw[2:]
     if len(body) < 64 * (i + 1):
         raise Unreachable(f"the answer has no word {i}: {raw[:80]}")
-    return int(body[64 * i:64 * (i + 1)], 16)
+    return _hex(body[64 * i:64 * (i + 1)], f"word {i} of the answer")
 
 
 def _addr(raw: str, i: int = 0) -> str:

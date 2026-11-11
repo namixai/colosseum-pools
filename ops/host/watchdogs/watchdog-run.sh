@@ -40,28 +40,30 @@ case "$RC" in
     log "quiet: $(printf '%s' "$OUT" | tail -1)"
     ;;
   1)
-    # The flag is written whole and moved into place: a reader never sees half a file. A write that fails (a full
-    # disk, a directory nobody can write to) leaves the flag that stood as it was, is said, and turns the unit
-    # red (exit 4) after the finding has been put in the journal and sent to the channel: an alarm that exists
-    # in the journal only is still an alarm, and must not look like a success.
+    # The flag is written whole, by ONE printf so that the status is the write's own (two in a group would report
+    # only the second), and moved into place: a reader never sees half a file. A write or a move that fails (a
+    # full disk, a directory nobody can write to) leaves the flag that stood as it was and no temporary file, is
+    # said, and turns the unit red (exit 4) after the finding has been put in the journal and sent to the channel:
+    # an alarm that exists in the journal only is still an alarm, and must not look like a success.
     FLAG_OK=1
     TMP="$(mktemp "$FLAG.XXXXXX" 2>/dev/null)" || FLAG_OK=0
     if [ "$FLAG_OK" = 1 ]; then
-      { printf 'at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf '%s\n' "$OUT"; } > "$TMP" \
+      printf 'at: %s\n%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$OUT" > "$TMP" \
         && mv -f "$TMP" "$FLAG" || { FLAG_OK=0; rm -f "$TMP"; }
     fi
+    if [ "$FLAG_OK" = 1 ]; then where="the flag and the journal"; else where="the journal"; fi
     log "ALARM: finding, flag $FLAG"
     printf '%s\n' "$OUT" | while IFS= read -r line; do log "  $line"; done
-    [ "$FLAG_OK" = 1 ] || log "ERROR: the flag $FLAG could not be written; the alarm stands in this journal and the alert channel only"
+    [ "$FLAG_OK" = 1 ] || log "ERROR: the flag $FLAG could not be written; a flag that stood is as it was"
     if [ -n "${COLOSSEUM_ALERT_CMD:-}" ]; then
       # "Sent" is not claimed from the channel's exit code alone: say what came of it.
       if printf '%s\n' "$OUT" | sh -c "$COLOSSEUM_ALERT_CMD" >/dev/null 2>&1; then
         log "the channel took the alarm (COLOSSEUM_ALERT_CMD)"
       else
-        log "WARNING: the channel did not take the alarm (COLOSSEUM_ALERT_CMD failed); the flag and the journal are in place"
+        log "WARNING: the channel did not take the alarm (COLOSSEUM_ALERT_CMD failed); it is in $where"
       fi
     else
-      log "no alert channel on the host (COLOSSEUM_ALERT_CMD is not set): the alarm is in the flag and the journal only"
+      log "no alert channel on the host (COLOSSEUM_ALERT_CMD is not set): the alarm is in $where only"
     fi
     [ "$FLAG_OK" = 1 ] || exit 4
     ;;

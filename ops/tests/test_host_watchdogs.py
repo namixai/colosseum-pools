@@ -126,8 +126,11 @@ class Node:
 class RegistryNode(Node):
     """KeyRegistry: `free` keys in the array at slot 5, each in state `state_of`, `spoiled` have a HyperCore account."""
 
-    def __init__(self, mod, free=17, spoiled=(), slot_length=None, element=None, state=1, exists_answer=None):
+    def __init__(self, mod, free=17, spoiled=(), slot_length=None, element=None, state=1, exists_answer=None,
+                 exists_raw=None, head_raw=None):
         super().__init__(mod)
+        self.exists_raw = exists_raw    # the precompile's answer, written as it is (a malformed one, say)
+        self.head_raw = head_raw
         self.free = free
         self.keys = [addr(0x9000 + i) for i in range(free)]
         self.spoiled = set(addr(0x9000 + i) for i in spoiled)
@@ -140,7 +143,7 @@ class RegistryNode(Node):
 
     def answer(self, method, params):
         if method == "eth_blockNumber":
-            return hex(123456)
+            return self.head_raw or hex(123456)
         if method == "eth_getStorageAt":
             slot = int(params[1], 16)
             if slot == 5:
@@ -153,6 +156,8 @@ class RegistryNode(Node):
             call = params[0]
             if call["to"] == self.mod.CORE_USER_EXISTS:
                 self.exists_calls += 1
+                if self.exists_raw is not None:
+                    return self.exists_raw
                 if self.exists_answer is not None:
                     return "0x" + word(self.exists_answer)
                 return "0x" + word(1 if "0x" + call["data"][-40:] in self.spoiled else 0)
@@ -171,6 +176,7 @@ class FactoryNode(Node):
         self.now = now
         self.pools: list[dict] = []
         self.accounts: dict[str, dict] = {}
+        self.malformed: dict[str, str] = {}   # address (lower case) -> the answer every call to it gets, as written
         self.sel = {}
 
     def add_pool(self, stage=0, challenge=None, **account):
@@ -191,6 +197,8 @@ class FactoryNode(Node):
         call = params[0]
         to, data = call["to"].lower(), call["data"]
         sel = data[:10]
+        if to in self.malformed:
+            return self.malformed[to]
         if to == FACTORY.lower() and sel == self.selector("pools()"):
             return "0x" + word(32) + word(len(self.pools)) + "".join(addr_word(p["address"]) for p in self.pools)
         for pool in self.pools:
@@ -282,6 +290,24 @@ class KeysWatch(unittest.TestCase):
         self.assertEqual((code, out.count("QUIET")), (3, 0))
         self.assertIn("COULD NOT CHECK", err)
 
+    def test_a_malformed_answer_is_an_unreadable_node_and_does_not_take_a_finding_with_it(self):
+        malformed = "0x" + "zz" * 32
+        # before any finding: could not check, and the reason is the answer, not a bug of the tool
+        code, out, err = self.run_with(RegistryNode(self.mod, head_raw="0xzz"))
+        self.assertEqual((code, out.count("QUIET")), (3, 0))
+        self.assertIn("the chain's head is not a hexadecimal number", err)
+        self.assertNotIn("unexpected", err)
+        # with the count already under the threshold: reported, the spoilage check marked incomplete
+        code, out, _ = self.run_with(RegistryNode(self.mod, free=15, exists_raw=malformed), "--threshold", "16")
+        self.assertEqual(code, 1)
+        self.assertIn("FINDING: 15 free agent keys, fewer than the threshold 16", out)
+        self.assertIn("INCOMPLETE: the spoilage check stopped after 0 of 15 keys", out)
+        self.assertIn("is not a hexadecimal number", out)
+        # with the count fine and nothing found, the same answer is exit 3
+        code, out, err = self.run_with(RegistryNode(self.mod, free=17, exists_raw=malformed), "--threshold", "16")
+        self.assertEqual((code, out.count("QUIET")), (3, 0))
+        self.assertIn("is not a hexadecimal number", err)
+
     def test_a_registry_that_is_not_named_is_could_not_check_there_is_no_default(self):
         with mock.patch.object(self.mod, "_post", RegistryNode(self.mod)), mock.patch.dict(os.environ, {}):
             os.environ.pop("GATEWAY_REGISTRY", None)
@@ -330,14 +356,16 @@ class KeysWatch(unittest.TestCase):
         self.assertEqual(self.run_with(node)[0], 3)
 
     def test_a_crash_of_the_tool_is_could_not_check_and_never_a_finding(self):
-        # Python exits 1 on an uncaught exception, and 1 is "a finding" to the wrapper.
+        # Python exits 1 on an uncaught exception, and 1 is "a finding" to the wrapper. A bug of the tool is not
+        # a node's answer: it stays "unexpected", where a malformed answer is an unreadable node (below).
         node = RegistryNode(self.mod)
-        real = node.answer
-        node.answer = lambda method, params: ("0x" + "zz" * 32) if (
-            method == "eth_call" and params[0]["data"].startswith(self.mod.SEL_FREE_COUNT)) else real(method, params)
+
+        def bug(method, params):
+            raise RuntimeError("a bug of the tool")
+        node.answer = bug
         code, _, err = self.run_with(node)
         self.assertEqual(code, 3)
-        self.assertIn("COULD NOT CHECK: unexpected ValueError", err)
+        self.assertIn("COULD NOT CHECK: unexpected RuntimeError", err)
 
 
 class KeeperWatch(unittest.TestCase):
@@ -415,6 +443,26 @@ class KeeperWatch(unittest.TestCase):
         self.assertEqual((code, out.count("QUIET")), (3, 0), "no finding, and a read failed: nothing can be said")
         self.assertIn("this is NOT a finding about the keeper", err)
 
+    def test_a_malformed_answer_after_a_finding_does_not_take_it_with_it_and_without_one_it_is_exit_3(self):
+        malformed = "0x" + "zz" * 32
+        node = self.chain()
+        node.add_pool(challenge=addr(0xC6), status=self.mod.ACTIVE, deadline=1_000_000 - 3600)
+        second = node.add_pool(stage=self.mod.IDLE)
+        node.malformed[second["address"].lower()] = malformed
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 1)
+        self.assertIn(f"FINDING: expire|{addr(0xC6)}", out)
+        self.assertIn(f"INCOMPLETE: the run stopped at pool {second['address']}", out)
+        self.assertIn("is not a hexadecimal number", out)
+        quiet = self.chain()
+        quiet.add_pool(stage=self.mod.IDLE)
+        second = quiet.add_pool(stage=self.mod.IDLE)
+        quiet.malformed[second["address"].lower()] = malformed
+        code, out, err = self.run_with(quiet)
+        self.assertEqual((code, out.count("QUIET")), (3, 0))
+        self.assertIn("is not a hexadecimal number", err)
+        self.assertNotIn("unexpected", err)
+
     def test_a_funded_pool_that_breaches_is_a_finding(self):
         node = self.chain()
         node.add_pool(stage=self.mod.FUNDED, pool_violation=2, pool_stopped=0)
@@ -481,10 +529,13 @@ class KeeperWatch(unittest.TestCase):
     def test_a_crash_of_the_tool_is_could_not_check_and_never_a_finding(self):
         node = self.chain()
         node.add_pool(stage=self.mod.IDLE)
-        node.answer = lambda method, params: {"timestamp": "not hex"}
+
+        def bug(method, params):
+            raise RuntimeError("a bug of the tool")
+        node.answer = bug
         code, _, err = self.run_with(node)
         self.assertEqual(code, 3)
-        self.assertIn("COULD NOT CHECK: unexpected ValueError", err)
+        self.assertIn("COULD NOT CHECK: unexpected RuntimeError", err)
 
     def test_the_fallback_node_is_the_one_the_deployments_record_names_and_none_is_written_in(self):
         backup = "https://record.example/evm"
@@ -571,7 +622,8 @@ class Wrapper(unittest.TestCase):
         self.assertIn("probe: ALARM: finding", out.stdout)
         self.assertIn("probe:   FINDING: z", out.stdout)
         self.assertIn("ERROR: the flag", out.stdout)
-        self.assertIn("could not be written; the alarm stands in this journal and the alert channel only", out.stdout)
+        self.assertIn("could not be written", out.stdout)
+        self.assertIn("the channel took the alarm", out.stdout)
         self.assertIn("FINDING: z", sink.read_text(), "the channel is still told")
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes where it is told not to")
@@ -583,6 +635,41 @@ class Wrapper(unittest.TestCase):
         self.assertEqual(out.returncode, 4)
         self.assertEqual(self.flag.read_text(), "the alarm that stood\n")
         self.assertEqual([p.name for p in self.state.iterdir()], ["probe.alarm"], "no temporary file left behind")
+
+    def fake_bin(self, **scripts) -> dict[str, str]:
+        """An environment whose PATH starts with a directory of `scripts`: commands that do as the test says."""
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        for name, body in scripts.items():
+            f = d / name
+            f.write_text("#!/bin/sh\n" + body + "\n")
+            f.chmod(0o755)
+        return {"PATH": f"{d}{os.pathsep}{os.environ['PATH']}"}
+
+    def test_a_write_that_fails_after_the_temporary_file_is_made_is_the_same_failure(self):
+        # a mktemp that hands back a directory: the write cannot open it
+        self.flag.write_text("the alarm that stood\n")
+        out = self.wrap(1, "FINDING: z", self.fake_bin(mktemp=f'echo "{self.state}"'))
+        self.assertEqual(out.returncode, 4)
+        self.assertEqual(self.flag.read_text(), "the alarm that stood\n")
+        self.assertIn("ERROR: the flag", out.stdout)
+        self.assertIn("the alarm is in the journal only", out.stdout)
+        self.assertNotIn("the flag and the journal", out.stdout, "it must not claim a flag it could not write")
+
+    def test_a_move_that_fails_leaves_the_flag_that_stood_and_no_temporary_file(self):
+        self.flag.write_text("the alarm that stood\n")
+        out = self.wrap(1, "FINDING: z", self.fake_bin(mv="exit 1"))
+        self.assertEqual(out.returncode, 4)
+        self.assertEqual(self.flag.read_text(), "the alarm that stood\n")
+        self.assertEqual([p.name for p in self.state.iterdir()], ["probe.alarm"], "no temporary file left behind")
+        self.assertIn("the alarm is in the journal only", out.stdout)
+
+    def test_the_flag_is_written_by_one_write_so_that_its_status_is_the_writes_own(self):
+        # Two printf's in a { } group report the status of the second: the first could fail and the flag still be
+        # moved into place, short. One printf has one status.
+        code = "\n".join(l for l in RUNNER.read_text().splitlines() if not l.lstrip().startswith("#"))
+        self.assertNotRegex(code, r"\{\s*printf[^\n]*;\s*printf")
+        self.assertIn("the alarm is in the flag and the journal only", self.wrap(1, "FINDING: y").stdout)
 
     def test_code_3_touches_the_flag_in_neither_direction(self):
         for was_up in (True, False):
