@@ -198,7 +198,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S4 | `src/Pool.sol:323` | `CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);` |
 | S5 | `src/Pool.sol:319` | `f.usdc().safeTransferFrom(msg.sender, address(this), price + fee);` |
 | S6 | `src/Pool.sol:343` | `safeTransfer(challengeTrader, back)` |
-| S7 | `gateway/server.py:212` | `The stop and the take go first: an order that may open a position is never` |
+| S7 | `gateway/server.py:213` | `The stop and the take go first: an order that may open a position is never` |
 | S8 | `gateway/protect.py:600` | `"grouping": "positionTpsl"` |
 | S9 | `src/PoolFactory.sol:281` | `pool.rules(), pool.terms()` |
 | S10 | `src/RuledAccount.sol:99` | `internal onlyInitializing` |

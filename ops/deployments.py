@@ -68,7 +68,8 @@ def resolve(label: str | None, factory: str | None = None, registry: str | None 
     if label:
         record = load(label)
         factory = factory or record["PoolFactory"]
-        registry = registry or record["KeyRegistry"]
+        # A deployment with a key binder answers the same reads (bindingOf, isBound, keyOf) at its address.
+        registry = registry or record.get("KeyRegistry") or record.get("KeyBinder")
     if not factory or not registry:
         raise SystemExit("pass --deployment <label>, or --factory and --registry")
     return factory, registry

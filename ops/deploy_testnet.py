@@ -5,7 +5,7 @@ v3's, whose source is not on this branch (docs/DEPLOYMENTS.md, What stays on tes
 testnet's perp numbers; mainnet's are listed in that document.
 
     spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal
-    spike/.venv/bin/python ops/deploy_testnet.py --label demo --keys-file <addresses.txt from ops/make_demo_keys.py>
+    spike/.venv/bin/python ops/deploy_testnet.py --label demo --publisher 0x... --pcr-hash 0x... --attestation-hash 0x...
 
 The implementations are larger than a small HyperEVM block allows (3M gas), so the deployer
 switches itself to big blocks (about one a minute, 30M gas) for the deployment and back
@@ -18,9 +18,11 @@ write replaces the whole file, so a failure half way still leaves the addresses 
 failure after the first transaction marks the record `incomplete`, which nothing downstream
 loads.
 
-Key addresses published with --keys-file are the demo's agent keys, made with
-ops/make_demo_keys.py and kept on the gateway host; a registry never forgets a key, so publish
-only keys that host will hold.
+The factory on this commit takes a key binder (src/KeyBinder.sol): no agent key is published, and
+each account that needs one asks for it and gets it on the publisher's signature (docs/KEY-BINDING.md).
+The binder's flags are ops/binder_deploy.py's; with --safe the binder and the factory are handed
+over to it last. The helpers below that check key addresses against the registries on record
+(`check_keys`, `registries_in_records`) stay for the deployments before the binder.
 """
 
 from __future__ import annotations
@@ -36,10 +38,12 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "spike"))
+sys.path.insert(0, str(ROOT))
 
 from eth_utils import to_checksum_address  # noqa: E402
 
 from hlspike import common as c  # noqa: E402
+from ops import binder_deploy as kb  # noqa: E402
 
 # The one network these deploys go to, and the first part of their records' names (docs/DEPLOYMENTS.md,
 # What stays on testnet). c.assert_testnet() checks the selected network and its RPC against it.
@@ -247,10 +251,11 @@ def big_blocks(acct, enable: bool) -> None:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--label", required=True)
-    p.add_argument("--keys-file", help="one agent key address per line")
     p.add_argument("--dry-run", action="store_true",
                    help="run every check and send nothing; says what a real run would do")
+    kb.add_args(p)
     args = p.parse_args()
+    binder = kb.settings(args, NETWORK)  # before anything is read: a bad address costs nothing
 
     # Testnet only: these are the contracts before v3, and mainnet's deployment is v3's, whose source is not on
     # this branch (docs/DEPLOYMENTS.md, What stays on testnet).
@@ -261,8 +266,6 @@ def main() -> int:
     commit = git_head()
     subprocess.run(["forge", "build"], cwd=ROOT, check=True, capture_output=True)
     assets = check_assets()
-
-    keys = check_keys(pathlib.Path(args.keys_file).read_text().splitlines()) if args.keys_file else []
 
     deployer = c.account("deployer")
     if not c.core_user_exists(deployer.address):
@@ -281,42 +284,29 @@ def main() -> int:
         print(f"  label            {args.label}  ({out_path.relative_to(ROOT)} is free)")
         print(f"  commit           {commit}")
         print(f"  deployer         {deployer.address}, {gas_wei / 1e18:.4f} HYPE, on HyperCore")
-        print(f"  would deploy     KeyRegistry, Pool, ChallengeAccount, PoolFactory (big blocks on, then off)")
+        print(f"  would deploy     KeyBinder, Pool, ChallengeAccount, PoolFactory (big blocks on, then off)")
         print(f"  would configure  setAccountSource, setPlatformAssets {assets}, "
               f"setChallengeFee {CHALLENGE_FEE}")
-        registries = registries_in_records()
-        print(f"  would publish    {len(keys)} agent keys" if keys else "  would publish    no keys")
-        print(f"  keys checked     against {len(registries)} registr(y/ies) named by "
-              f"{len(list((ROOT / 'deployments').glob(f'{NETWORK}-*.json')))} deployment record(s)"
-              + (f": {', '.join(sorted(registries))}" if registries else ""))
+        for line in kb.plan_lines(binder):
+            print(line)
         print("  would NOT touch  any existing deployment record or contract")
-        if not keys:
-            print()
-            print("  🔴 With no keys this registry cannot sell a single challenge. A sale takes")
-            print("     one key for the challenge and holds a second for the funded stage, so a")
-            print("     deployment meant to run anything needs keys published at the same time.")
-            print("     They cannot be the ones an existing registry already knows: a key bound")
-            print("     in two places would sign for two accounts.")
-        print("A real run needs the private halves of those keys already on the gateway host:")
-        print("publishing an address whose key file is not there hands a trader a key nobody can")
-        print("sign with, and the registry never forgets a key.")
         return 0
 
     record: dict = {"chain_id": c.CHAIN_ID, "network": NETWORK, "label": args.label, "commit": commit,
                     "status": "deploying", "deployer": deployer.address, "platform_assets": PLATFORM_ASSETS,
-                    "challenge_fee": CHALLENGE_FEE, "tx": {}}
+                    "challenge_fee": CHALLENGE_FEE, "key_binder": kb.record_of(deployer.address, binder), "tx": {}}
     big_blocks(deployer, True)
     try:
         try:
-            registry, _ = deploy_contract(deployer, out_path, record, "KeyRegistry", "KeyRegistry",
-                                          ["address"], [deployer.address])
+            key_binder, _ = deploy_contract(deployer, out_path, record, "KeyBinder", "KeyBinder",
+                                            *kb.constructor(deployer.address, binder))
             libs = {"AccountOps": deploy_contract(deployer, out_path, record, "AccountOps", "AccountOps", [], [])[0]}
             pool_impl, _ = deploy_contract(deployer, out_path, record, "PoolImpl", "Pool", [], [], libs)
             challenge_impl, _ = deploy_contract(deployer, out_path, record, "ChallengeAccountImpl",
                                                 "ChallengeAccount", [], [], libs)
             factory, rcpt = deploy_contract(deployer, out_path, record, "PoolFactory", "PoolFactory",
                                             ["address", "address", "address", "address", "address"],
-                                            [registry, pool_impl, challenge_impl, deployer.address, c.TESTNET_USDC_ERC20])
+                                            [key_binder, pool_impl, challenge_impl, deployer.address, c.TESTNET_USDC_ERC20])
         finally:
             big_blocks(deployer, False)
     except BaseException as exc:  # a deployment or the switch back to small blocks failed
@@ -326,20 +316,17 @@ def main() -> int:
     record.update({"block": int(rcpt["blockNumber"], 16), "status": "configuring"})
     save(out_path, record)
 
-    steps = [
-        ("setAccountSource", registry, "setAccountSource(address)", ["address"], [factory]),
+    steps = kb.binder_steps(key_binder, factory, binder) + [
         ("setPlatformAssets", factory, "setPlatformAssets(uint32[],string[],bool)", ["uint32[]", "string[]", "bool"],
          [assets, list(PLATFORM_ASSETS), True]),
         ("setChallengeFee", factory, "setChallengeFee(uint256,address)", ["uint256", "address"],
          [CHALLENGE_FEE, deployer.address]),
     ]
-    if keys:
-        steps.append(("publish", registry, "publish(address[])", ["address[]"], [keys]))
+    steps += kb.handover(key_binder, factory, binder)
     try:
         for name, to, sig, types, values in steps:
             record["tx"][name] = c.transact(deployer, to, sig, types, values)["transactionHash"]
-            if name == "publish":
-                record["published_keys"] = keys
+            kb.after_step(record, name, binder, deployer.address)
             save(out_path, record)
     except BaseException as exc:
         mark_incomplete(out_path, record, exc)

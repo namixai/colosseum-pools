@@ -425,10 +425,10 @@
     },
     {
       "id": "S7",
-      "where": "gateway/server.py:212",
+      "where": "gateway/server.py:213",
       "kind": "line",
       "text": "The stop and the take go first: an order that may open a position is never",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/gateway/server.py#L212"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/gateway/server.py#L213"
     },
     {
       "id": "S8",
