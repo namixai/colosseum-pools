@@ -100,11 +100,12 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
 - **The key binder, in main,** which no deployment runs yet. Its owner, meant to be a multisig, appoints
   the publisher with the hashes of the enclave's measurements and of its attestation document, which the
   event carries (S100) and neither of which may be zero (S101); appoints the guardian; sets a daily limit on
-  bindings (S102) and the delay of a renewal's key; and alone lifts a pause (S103). The publisher only
+  bindings and renewal commitments (S102) and the delay of a renewal's key; and alone lifts a pause (S103). The publisher only
   signs: a binding needs its signature over one account's open request (S97). The guardian can only stop:
   pause every binding (S107), lower the limit, and revoke a bound key, which its account cuts as a stop
   does and asks for a fresh one (S104). A renewal's key is committed by its hash and shown, and approved,
-  only after the delay (S105), so it can be revoked before it works. Whoever holds the publisher's key
+  only after the delay (S105): before it works the guardian can pause, or revoke the account's current key,
+  which voids the commitment. Whoever holds the publisher's key
   could bind keys of their own to accounts that are asking, up to the daily limit, until the guardian
   pauses; whoever holds the guardian's key could stop every binding and cut every key, and take nothing.
   Who holds each, and whether the publisher's key lives in an enclave, is the owner's decision and not
@@ -144,7 +145,8 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   profit (S48); everything else goes back to the pool (S49). A loss is the pool's.
 - **A funded stage** opens after a pass, when the key it asks for arrives (S72). If it has not opened within
   7 days, anyone may release the pool (S55), but only once its key was asked for and has not come for 7 days
-  (S71). Until the key is asked for, the pool waits for `openFundedStage`, which anyone may call. It ends by `breach`, by the owner
+  (S71), or, on a builder dex, once the capital sent there has not shown. Until the key is asked for, the pool
+  waits for `openFundedStage`, which anyone may call. It ends by `breach`, by the owner
   or the funded trader (S43), or, on a shared-pool seat, once its published term has run, by anyone (S56).
   `settleFunded` then closes the positions. The funded trader is paid a share of the profit only if the stage
   ended without a breach (S57); the capital stays in the pool, which goes back to idle (S58).
@@ -181,25 +183,25 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 
 | # | Where | What is there |
 |---|---|---|
-| S1 | `src/RuledAccount.sol:228` | `function _setAgent(address key) internal` |
+| S1 | `src/RuledAccount.sol:231` | `function _setAgent(address key) internal` |
 | S2 | https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint | `Destination must match the source address` |
 | S3 | `gateway/demo_signer.py:8` | `whoever holds the host holds these keys` |
-| S4 | `src/Pool.sol:322` | `CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);` |
-| S5 | `src/Pool.sol:318` | `f.usdc().safeTransferFrom(msg.sender, address(this), price + fee);` |
-| S6 | `src/Pool.sol:342` | `safeTransfer(challengeTrader, back)` |
+| S4 | `src/Pool.sol:323` | `CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);` |
+| S5 | `src/Pool.sol:319` | `f.usdc().safeTransferFrom(msg.sender, address(this), price + fee);` |
+| S6 | `src/Pool.sol:343` | `safeTransfer(challengeTrader, back)` |
 | S7 | `gateway/server.py:212` | `The stop and the take go first: an order that may open a position is never` |
 | S8 | `gateway/protect.py:600` | `"grouping": "positionTpsl"` |
 | S9 | `src/PoolFactory.sol:281` | `pool.rules(), pool.terms()` |
 | S10 | `src/RuledAccount.sol:99` | `internal onlyInitializing` |
 | S11 | `src/RuledAccount.sol:142` | `function violation(uint32[] memory extraAssets) public view returns (Breach)` |
 | S12 | `src/ChallengeAccount.sol:217` | `if (reason == Breach.None) revert NoBreach();` |
-| S13 | `src/RuledAccount.sol:311` | `function _cutAgent(bytes32 salt) internal` |
+| S13 | `src/RuledAccount.sol:314` | `function _cutAgent(bytes32 salt) internal` |
 | S14 | `src/ChallengeAccount.sol:74` | `event Stopped(Status indexed status, Breach indexed reason, int64 equity);` |
 | S15 | `app/data/evidence.json:62` | `breachReason DailyLoss` |
 | S16 | `src/shared/SharedPool.sol:271` | `if (seatsSealed) revert SeatsClosed();` |
 | S17 | `0x348F9814061B0d26c2aBbdd2FE19ca807ceDa8a4` | `seatsSealed() → true` |
 | S18 | `src/shared/SharedPool.sol:378` | `(msg.sender == platform ? seedShares : 0)` |
-| S19 | `src/Pool.sol:192` | `function withdrawOnCore(uint64 amount1e8) external onlyOwner inStage(Stage.Idle)` |
+| S19 | `src/Pool.sol:193` | `function withdrawOnCore(uint64 amount1e8) external onlyOwner inStage(Stage.Idle)` |
 | S20 | https://hyperliquid.gitbook.io/hyperliquid-docs/trading/liquidations | `Liquidations` |
 | S21 | https://hyperliquid.gitbook.io/hyperliquid-docs/trading/auto-deleveraging | `Auto-deleveraging` |
 | S22 | `gateway/server.py:69` | `PROTECT_EVERY_S = 30.0` |
@@ -222,8 +224,8 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S39 | `0x53AF27F65Dd7473c890f633aC0025b261307779e` | `operator() → 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4` |
 | S40 | `src/KeyRegistry.sol:103` | `function publish(address[] calldata keys) external onlyOperator` |
 | S41 | `src/KeyRegistry.sol:94` | `function acceptOperator() external` |
-| S42 | `src/Pool.sol:206` | `function withdrawEarned() external onlyOwner` |
-| S43 | `src/Pool.sol:492` | `if (msg.sender != owner && msg.sender != fundedTrader) revert NotAllowed();` |
+| S42 | `src/Pool.sol:207` | `function withdrawEarned() external onlyOwner` |
+| S43 | `src/Pool.sol:496` | `if (msg.sender != owner && msg.sender != fundedTrader) revert NotAllowed();` |
 | S44 | `deployments/testnet-shared-demo2c.json:19` | `"platform": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",` |
 | S45 | `deployments/testnet-shared-demo2c.json:13` | `"fee_bps": 0,` |
 | S46 | `src/ChallengeAccount.sol:208` | `Stops the challenge if a rule is broken right now. Anyone may call it.` |
@@ -237,8 +239,8 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S54 | `src/ChallengeAccount.sol:259` | `function graduate(bytes32 salt) external inStatus(Status.Active)` |
 | S55 | `src/Pool.sol:106` | `AWAIT_KEY_WINDOW = 7 days;` |
 | S56 | `src/shared/SharedPool.sol:354` | `function endFundedTerm(address seat` |
-| S57 | `src/Pool.sol:532` | `fundedPayoutOwed = fundedEndReason == Breach.None && result > fundedStart` |
-| S58 | `src/Pool.sol:624` | `stage = Stage.Idle;` |
+| S57 | `src/Pool.sol:536` | `fundedPayoutOwed = fundedEndReason == Breach.None && result > fundedStart` |
+| S58 | `src/Pool.sol:628` | `stage = Stage.Idle;` |
 | S59 | https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits | `aggregated weight limit of 1200 per minute` |
 | S60 | `src/Pool.sol:31` | `the USDC bridge credited nothing to a contract bridging to itself` |
 | S61 | `docs/AUDIT-FINDINGS.md:20` | `\| A-05 \| Medium \|` |
@@ -251,19 +253,19 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S68 | `gateway/protect.py:583` | `"tif": "Ioc"` |
 | S69 | `src/shared/SharedPool.sol:576` | `the pool's free money covers it, otherwise the same fraction of each.` |
 | S70 | `src/shared/SharedPool.sol:612` | `if (have6 == 0) return;` |
-| S71 | `src/Pool.sol:446` | `if (keyAskedAt == 0 \|\| block.timestamp <= uint256(keyAskedAt) + AWAIT_KEY_WINDOW) revert KeyAvailable();` |
-| S72 | `src/Pool.sol:379` | `_askKey(fundedTrader, KeyBinder.Purpose.Funded);` |
+| S71 | `src/Pool.sol:449` | `if (keyAskedAt == 0 \|\| block.timestamp <= uint256(keyAskedAt) + AWAIT_KEY_WINDOW) revert KeyAvailable();` |
+| S72 | `src/Pool.sol:380` | `_askKey(fundedTrader, KeyBinder.Purpose.Funded);` |
 | S73 | `deployments/testnet-demo2.json:9` | `"commit": "e4287926ad0bb13a0e401b45118215195ecb5589",` |
 | S74 | `deployments/testnet-shared-demo2c.json:14` | `"implementations_from": "e4287926ad0bb13a0e401b45118215195ecb5589",` |
 | S75 | `deployments/testnet-v3-demo3.json:23` | `"commit": "23772e2dbf9f4913dc265efa68768030ab7d4d2a",` |
-| S76 | `src/Pool.sol:200` | `function sendOnCore(address to, uint64 amount1e8) external onlyOwner inStage(Stage.Idle)` |
-| S77 | `src/Pool.sol:219` | `function runByOwner(bool traderMayStop_) external onlyOwner inStage(Stage.Idle)` |
-| S78 | `src/Pool.sol:291` | `if (ownerRun) revert SalesClosed();` |
-| S79 | `src/Pool.sol:237` | `if (!ownerRun \|\| !IPoolFactory(address(factory)).isMultiPool(owner)) revert NotOwnerRun();` |
-| S80 | `src/Pool.sol:493` | `if (msg.sender != owner && ownerRun && !traderMayStop) revert NotAllowed();` |
-| S81 | `src/RuledAccount.sol:211` | `AGENT_TERM = 179 days;` |
-| S82 | `src/RuledAccount.sol:213` | `RENEW_WINDOW = 14 days;` |
-| S83 | `src/Pool.sol:260` | `function renewAgent() external inStage(Stage.Funded)` |
+| S76 | `src/Pool.sol:201` | `function sendOnCore(address to, uint64 amount1e8) external onlyOwner inStage(Stage.Idle)` |
+| S77 | `src/Pool.sol:220` | `function runByOwner(bool traderMayStop_) external onlyOwner inStage(Stage.Idle)` |
+| S78 | `src/Pool.sol:292` | `if (ownerRun) revert SalesClosed();` |
+| S79 | `src/Pool.sol:238` | `if (!ownerRun \|\| !IPoolFactory(address(factory)).isMultiPool(owner)) revert NotOwnerRun();` |
+| S80 | `src/Pool.sol:497` | `if (msg.sender != owner && ownerRun && !traderMayStop) revert NotAllowed();` |
+| S81 | `src/RuledAccount.sol:214` | `AGENT_TERM = 179 days;` |
+| S82 | `src/RuledAccount.sol:216` | `RENEW_WINDOW = 14 days;` |
+| S83 | `src/Pool.sol:261` | `function renewAgent() external inStage(Stage.Funded)` |
 | S84 | `src/KeyRegistry.sol:120` | `function assign(address trader) external returns (address key)` |
 | S85 | `0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA` | `operator() → 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4` |
 | S86 | `0x8e2E527aed19a0969aEa49e16aE1Abbc7B84Cc85` | `operator() → 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4` |
@@ -272,8 +274,8 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S89 | `src/KeyRegistry.sol:51` | `event KeyPublished(address indexed key);` |
 | S90 | `src/KeyRegistry.sol:52` | `event KeyBound(address indexed key, address indexed account, address indexed trader);` |
 | S91 | `src/KeyRegistry.sol:48` | `event OperatorTransferStarted(address indexed from, address indexed to);` |
-| S92 | `src/Pool.sol:274` | `function rekey() external inStage(Stage.Funded)` |
-| S93 | `src/RuledAccount.sol:288` | `_askKey(trader_, KeyBinder.Purpose.Renew);` |
+| S92 | `src/Pool.sol:275` | `function rekey() external inStage(Stage.Funded)` |
+| S93 | `src/RuledAccount.sol:291` | `_askKey(trader_, KeyBinder.Purpose.Renew);` |
 | S94 | `src/ChallengeAccount.sol:245` | `_renewAgent(trader);` |
 | S95 | `gateway/protect.py:74` | `STOP_BUFFER_BPS = Decimal(6)` |
 | S96 | `src/KeyBinder.sol:240` | `function request(address trader, Purpose purpose) external returns (uint64 id)` |
@@ -286,5 +288,5 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S103 | `src/KeyBinder.sol:191` | `function unpause() external onlyOwner` |
 | S104 | `src/KeyBinder.sol:226` | `function revoke(address key, bytes32 salt) external onlyGuardianOrOwner` |
 | S105 | `src/KeyBinder.sol:297` | `if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);` |
-| S106 | `src/Pool.sol:333` | `emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);` |
+| S106 | `src/Pool.sol:334` | `emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);` |
 | S107 | `src/KeyBinder.sol:212` | `function pause() external onlyGuardianOrOwner` |

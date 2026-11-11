@@ -124,6 +124,7 @@ CONTRACT_ERRORS = (
     "SafeCastOverflowedUintDowncast(uint8,uint256)",
     "SafeERC20FailedOperation(address)",
     "SalesClosed()",
+    "SeatNotOpened()",
     "TargetNotMet(int64,int256)",
     "TooEarly()",
     "TooLate()",

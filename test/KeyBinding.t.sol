@@ -127,4 +127,29 @@ contract KeyBindingTest is PoolHarness {
         vm.expectRevert(PoolFactory.NotOperator.selector);
         factory.setChallengeFee(0, address(0));
     }
+
+    /// A revoked key's cut can be sent again: HyperCore may drop the replacement, and the revoked key
+    /// would keep working. The account's request for a fresh key stays; once one is bound, a live
+    /// account is not re-cut by anyone.
+    function test_recut_afterARevoke_cutsAgain_andTheRequestStays() public {
+        ChallengeAccount ch = _started(_readyPool());
+        address key = ch.agentKey();
+        vm.prank(guardian);
+        binder.revoke(key, SALT);
+        CoreSimulatorLib.nextBlock();
+        bytes32 again = keccak256("again");
+        vm.recordLogs();
+        vm.prank(stranger);
+        ch.recut(again);
+        (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
+        assertEq(kind.length, 1);
+        assertEq(kind[0], 9);
+        (address keyless,) = abi.decode(args[0], (address, string));
+        assertEq(keyless, _keylessCandidate(address(ch), 1, again, 0));
+        assertEq(uint8(binder.requestOf(address(ch)).purpose), uint8(KeyBinder.Purpose.Revoked), "the request stays");
+        assertEq(ch.cutKey(), key);
+        _bind(address(ch));
+        vm.expectRevert(RuledAccount.NotStopped.selector);
+        ch.recut(again);
+    }
 }

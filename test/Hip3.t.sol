@@ -737,6 +737,25 @@ contract Hip3Test is PoolHarness {
         assertEq(uint8(landed.status()), uint8(ChallengeAccount.Status.Active));
     }
 
+    /// A stage released while it waited for its key forgets the surplus that landed with its capital:
+    /// kept, it would be taken off the next stage's equity, and the next landing would read it back as
+    /// a gain (a review on #252).
+    function test_hip3_anAbandonedStageForgetsTheSurplusThatLanded() public {
+        Pool p = _xyzPool();
+        _owner(p);
+        vm.prank(investor);
+        p.openFundedFor(trader);
+        CoreSimulatorLib.nextBlock();
+        CoreSimulatorLib.forcePerpBalance(address(p), DEX, 300e6); // the 200 sent, and somebody's 100
+        vm.prank(investor);
+        p.openFundedStage(); // landed, with 100 over it: the key is asked for, and never comes
+        assertEq(p.startSurplus(), 100e6);
+        vm.warp(uint256(p.keyAskedAt()) + p.AWAIT_KEY_WINDOW() + 1);
+        p.abandonFundedStage();
+        assertEq(p.startSurplus(), 0);
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
+    }
+
     /// A review on #167: a funded stage waiting on a builder dex for its capital held its key live, so
     /// abandonFundedStage never let it go, and a dex its owner halted takes no transfer: the capital
     /// was locked for good. Past the window a dex that does not show the capital releases the pool

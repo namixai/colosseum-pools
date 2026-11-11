@@ -76,7 +76,8 @@ every binding and cut every key, and take nothing.
   the price and the platform's fee go back to the buyer. The pool holds the fee until the challenge
   starts.
 - A funded stage waits as `PassedAwaitingKey`; once its key was asked for and has not come for seven days,
-  anyone may release the pool, and capital sent to a builder dex comes back to spot.
+  or, on a builder dex, once the capital sent there has not shown, anyone may release the pool, and
+  capital sent to a builder dex comes back to spot.
 - A renewal that is not answered leaves the old key until its term ends.
 - A stop withdraws a request still waiting, so a key never lands on a stopped account.
 

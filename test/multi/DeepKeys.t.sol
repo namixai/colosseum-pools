@@ -264,6 +264,26 @@ contract DeepKeysTest is PoolHarness {
         assertEq(uint8(_seatState(m, address(seat))), uint8(MultiPool.SeatState.Funded));
     }
 
+    /// A seat's MultiPool that cannot mark it funded holds the binding back whole: a pool funded under
+    /// an Armed seat would open a second stage for the same claim, or hand back the price of a stage its
+    /// trader had (a review on #252). The same signature binds once the MultiPool can.
+    function test_aSeatIsNotBound_whenItsMultiPoolCannotOpenIt() public {
+        MultiPool m = _pool();
+        Pool seat = _armed(m);
+        m.open(address(seat));
+        address key = _newKey();
+        bytes memory sig = _sign(address(seat), key);
+        vm.mockCallRevert(address(m), abi.encodeWithSelector(MultiPool.open.selector, address(seat)), "");
+        vm.expectRevert(Pool.SeatNotOpened.selector);
+        binder.bind(address(seat), key, sig);
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.PassedAwaitingKey));
+        vm.clearMockedCalls();
+        _everyOwnerRecognized();
+        binder.bind(address(seat), key, sig);
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
+        assertEq(uint8(_seatState(m, address(seat))), uint8(MultiPool.SeatState.Funded));
+    }
+
     // ── K-3: a MultiPool the factory knows ───────────────────────────────────────────
 
     /// With the operator's word missing, a MultiPool sells and arms but opens nothing; with it,

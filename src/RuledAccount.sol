@@ -173,10 +173,13 @@ abstract contract RuledAccount is Initializable {
     ///         address. Useful if the replacement sent by the stop did not take effect on
     ///         HyperCore (for example because someone funded the chosen address first).
     ///         `salt` is any value the caller picks; it only changes which keyless address
-    ///         is used.
+    ///         is used. The same for an account whose key was revoked and which waits for a
+    ///         fresh one: a replacement HyperCore dropped would leave the revoked key working
+    ///         (a review on #252). Its request stays.
     function recut(bytes32 salt) external {
-        if (!isStopped()) revert NotStopped();
-        _cutAgent(salt);
+        if (isStopped()) return _cutAgent(salt);
+        if (agentKey != address(0) || keyAskedAt == 0 || cutKey == address(0)) revert NotStopped();
+        emit AgentCut(address(0), _replaceAgent(salt));
     }
 
     // ── internals for the stop and the settlement ────────────────────────────────────

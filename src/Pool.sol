@@ -133,6 +133,7 @@ contract Pool is RuledAccount {
     error WithdrawnThisBlock();
     error SalesClosed();
     error NotOwnerRun();
+    error SeatNotOpened();
 
     constructor() {
         _disableInitializers();
@@ -392,10 +393,12 @@ contract Pool is RuledAccount {
             CoreOps.toPerp(funded, dex);
         }
         if (ownerRun) {
-            // The MultiPool marks its seat funded in the same transaction. A failure there does not
-            // hold the key back: the MultiPool's `open`, which anyone may call, does it later.
+            // The MultiPool marks its seat funded in the same transaction, or the binding does not
+            // happen: a seat left Armed under a funded pool would open a second stage for the same
+            // claim, or hand its price back for a stage its trader had (a review on #252). A low-level
+            // call, so that an owner with no code is not a refusal; a call cut short by its gas is.
             (bool opened,) = owner.call(abi.encodeCall(ISeatOwner.open, (address(this))));
-            opened;
+            if (!opened) revert SeatNotOpened();
         }
     }
 
@@ -447,8 +450,9 @@ contract Pool is RuledAccount {
         }
         _dropAsk();
         // Capital sent to a builder dex for the stage, landed or not, comes back to spot, for the
-        // owner.
+        // owner, and what landed over it is no longer set aside from the next stage's equity.
         sentToDexAt = 0;
+        startSurplus = 0;
         _toSpotAll();
         emit FundedStageAbandoned(fundedTrader);
         fundedTrader = address(0);

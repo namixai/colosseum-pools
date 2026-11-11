@@ -183,7 +183,7 @@
         },
         {
           "lead": "The key binder, in main,",
-          "text": "which no deployment runs yet. Its owner, meant to be a multisig, appoints the publisher with the hashes of the enclave's measurements and of its attestation document, which the event carries (S100) and neither of which may be zero (S101); appoints the guardian; sets a daily limit on bindings (S102) and the delay of a renewal's key; and alone lifts a pause (S103). The publisher only signs: a binding needs its signature over one account's open request (S97). The guardian can only stop: pause every binding (S107), lower the limit, and revoke a bound key, which its account cuts as a stop does and asks for a fresh one (S104). A renewal's key is committed by its hash and shown, and approved, only after the delay (S105), so it can be revoked before it works. Whoever holds the publisher's key could bind keys of their own to accounts that are asking, up to the daily limit, until the guardian pauses; whoever holds the guardian's key could stop every binding and cut every key, and take nothing. Who holds each, and whether the publisher's key lives in an enclave, is the owner's decision and not in this code.",
+          "text": "which no deployment runs yet. Its owner, meant to be a multisig, appoints the publisher with the hashes of the enclave's measurements and of its attestation document, which the event carries (S100) and neither of which may be zero (S101); appoints the guardian; sets a daily limit on bindings and renewal commitments (S102) and the delay of a renewal's key; and alone lifts a pause (S103). The publisher only signs: a binding needs its signature over one account's open request (S97). The guardian can only stop: pause every binding (S107), lower the limit, and revoke a bound key, which its account cuts as a stop does and asks for a fresh one (S104). A renewal's key is committed by its hash and shown, and approved, only after the delay (S105): before it works the guardian can pause, or revoke the account's current key, which voids the commitment. Whoever holds the publisher's key could bind keys of their own to accounts that are asking, up to the daily limit, until the guardian pauses; whoever holds the guardian's key could stop every binding and cut every key, and take nothing. Who holds each, and whether the publisher's key lives in an enclave, is the owner's decision and not in this code.",
           "sources": [
             "S100",
             "S101",
@@ -280,7 +280,7 @@
         },
         {
           "lead": "A funded stage",
-          "text": "opens after a pass, when the key it asks for arrives (S72). If it has not opened within 7 days, anyone may release the pool (S55), but only once its key was asked for and has not come for 7 days (S71). Until the key is asked for, the pool waits for `openFundedStage`, which anyone may call. It ends by `breach`, by the owner or the funded trader (S43), or, on a shared-pool seat, once its published term has run, by anyone (S56). `settleFunded` then closes the positions. The funded trader is paid a share of the profit only if the stage ended without a breach (S57); the capital stays in the pool, which goes back to idle (S58).",
+          "text": "opens after a pass, when the key it asks for arrives (S72). If it has not opened within 7 days, anyone may release the pool (S55), but only once its key was asked for and has not come for 7 days (S71), or, on a builder dex, once the capital sent there has not shown. Until the key is asked for, the pool waits for `openFundedStage`, which anyone may call. It ends by `breach`, by the owner or the funded trader (S43), or, on a shared-pool seat, once its published term has run, by anyone (S56). `settleFunded` then closes the positions. The funded trader is paid a share of the profit only if the stage ended without a breach (S57); the capital stays in the pool, which goes back to idle (S58).",
           "sources": [
             "S72",
             "S55",
@@ -373,10 +373,10 @@
   "sources": [
     {
       "id": "S1",
-      "where": "src/RuledAccount.sol:228",
+      "where": "src/RuledAccount.sol:231",
       "kind": "line",
       "text": "function _setAgent(address key) internal",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L228"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L231"
     },
     {
       "id": "S2",
@@ -394,24 +394,24 @@
     },
     {
       "id": "S4",
-      "where": "src/Pool.sol:322",
+      "where": "src/Pool.sol:323",
       "kind": "line",
       "text": "CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L322"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L323"
     },
     {
       "id": "S5",
-      "where": "src/Pool.sol:318",
+      "where": "src/Pool.sol:319",
       "kind": "line",
       "text": "f.usdc().safeTransferFrom(msg.sender, address(this), price + fee);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L318"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L319"
     },
     {
       "id": "S6",
-      "where": "src/Pool.sol:342",
+      "where": "src/Pool.sol:343",
       "kind": "line",
       "text": "safeTransfer(challengeTrader, back)",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L342"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L343"
     },
     {
       "id": "S7",
@@ -457,10 +457,10 @@
     },
     {
       "id": "S13",
-      "where": "src/RuledAccount.sol:311",
+      "where": "src/RuledAccount.sol:314",
       "kind": "line",
       "text": "function _cutAgent(bytes32 salt) internal",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L311"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L314"
     },
     {
       "id": "S14",
@@ -499,10 +499,10 @@
     },
     {
       "id": "S19",
-      "where": "src/Pool.sol:192",
+      "where": "src/Pool.sol:193",
       "kind": "line",
       "text": "function withdrawOnCore(uint64 amount1e8) external onlyOwner inStage(Stage.Idle)",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L192"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L193"
     },
     {
       "id": "S20",
@@ -660,17 +660,17 @@
     },
     {
       "id": "S42",
-      "where": "src/Pool.sol:206",
+      "where": "src/Pool.sol:207",
       "kind": "line",
       "text": "function withdrawEarned() external onlyOwner",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L206"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L207"
     },
     {
       "id": "S43",
-      "where": "src/Pool.sol:492",
+      "where": "src/Pool.sol:496",
       "kind": "line",
       "text": "if (msg.sender != owner && msg.sender != fundedTrader) revert NotAllowed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L492"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L496"
     },
     {
       "id": "S44",
@@ -765,17 +765,17 @@
     },
     {
       "id": "S57",
-      "where": "src/Pool.sol:532",
+      "where": "src/Pool.sol:536",
       "kind": "line",
       "text": "fundedPayoutOwed = fundedEndReason == Breach.None && result > fundedStart",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L532"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L536"
     },
     {
       "id": "S58",
-      "where": "src/Pool.sol:624",
+      "where": "src/Pool.sol:628",
       "kind": "line",
       "text": "stage = Stage.Idle;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L624"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L628"
     },
     {
       "id": "S59",
@@ -863,17 +863,17 @@
     },
     {
       "id": "S71",
-      "where": "src/Pool.sol:446",
+      "where": "src/Pool.sol:449",
       "kind": "line",
       "text": "if (keyAskedAt == 0 || block.timestamp <= uint256(keyAskedAt) + AWAIT_KEY_WINDOW) revert KeyAvailable();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L446"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L449"
     },
     {
       "id": "S72",
-      "where": "src/Pool.sol:379",
+      "where": "src/Pool.sol:380",
       "kind": "line",
       "text": "_askKey(fundedTrader, KeyBinder.Purpose.Funded);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L379"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L380"
     },
     {
       "id": "S73",
@@ -898,59 +898,59 @@
     },
     {
       "id": "S76",
-      "where": "src/Pool.sol:200",
+      "where": "src/Pool.sol:201",
       "kind": "line",
       "text": "function sendOnCore(address to, uint64 amount1e8) external onlyOwner inStage(Stage.Idle)",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L200"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L201"
     },
     {
       "id": "S77",
-      "where": "src/Pool.sol:219",
+      "where": "src/Pool.sol:220",
       "kind": "line",
       "text": "function runByOwner(bool traderMayStop_) external onlyOwner inStage(Stage.Idle)",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L219"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L220"
     },
     {
       "id": "S78",
-      "where": "src/Pool.sol:291",
+      "where": "src/Pool.sol:292",
       "kind": "line",
       "text": "if (ownerRun) revert SalesClosed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L291"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L292"
     },
     {
       "id": "S79",
-      "where": "src/Pool.sol:237",
+      "where": "src/Pool.sol:238",
       "kind": "line",
       "text": "if (!ownerRun || !IPoolFactory(address(factory)).isMultiPool(owner)) revert NotOwnerRun();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L237"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L238"
     },
     {
       "id": "S80",
-      "where": "src/Pool.sol:493",
+      "where": "src/Pool.sol:497",
       "kind": "line",
       "text": "if (msg.sender != owner && ownerRun && !traderMayStop) revert NotAllowed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L493"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L497"
     },
     {
       "id": "S81",
-      "where": "src/RuledAccount.sol:211",
+      "where": "src/RuledAccount.sol:214",
       "kind": "line",
       "text": "AGENT_TERM = 179 days;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L211"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L214"
     },
     {
       "id": "S82",
-      "where": "src/RuledAccount.sol:213",
+      "where": "src/RuledAccount.sol:216",
       "kind": "line",
       "text": "RENEW_WINDOW = 14 days;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L213"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L216"
     },
     {
       "id": "S83",
-      "where": "src/Pool.sol:260",
+      "where": "src/Pool.sol:261",
       "kind": "line",
       "text": "function renewAgent() external inStage(Stage.Funded)",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L260"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L261"
     },
     {
       "id": "S84",
@@ -1010,17 +1010,17 @@
     },
     {
       "id": "S92",
-      "where": "src/Pool.sol:274",
+      "where": "src/Pool.sol:275",
       "kind": "line",
       "text": "function rekey() external inStage(Stage.Funded)",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L274"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L275"
     },
     {
       "id": "S93",
-      "where": "src/RuledAccount.sol:288",
+      "where": "src/RuledAccount.sol:291",
       "kind": "line",
       "text": "_askKey(trader_, KeyBinder.Purpose.Renew);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L288"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/RuledAccount.sol#L291"
     },
     {
       "id": "S94",
@@ -1108,10 +1108,10 @@
     },
     {
       "id": "S106",
-      "where": "src/Pool.sol:333",
+      "where": "src/Pool.sol:334",
       "kind": "line",
       "text": "emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L333"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/Pool.sol#L334"
     },
     {
       "id": "S107",
