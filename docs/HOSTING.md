@@ -381,6 +381,13 @@ only on the host, through SSM once the rule is gone.
 
 ### What the record sets
 
+The addresses come from every record: `GATEWAY_FACTORY`, the record's `PoolFactory`, and `GATEWAY_REGISTRY`,
+where the gateway asks which account a key is bound to: the record's `KeyRegistry`, or on a deployment on a
+key binder its `KeyBinder` (docs/KEY-BINDING.md), which answers the gateway's two reads, `bindingOf` and
+`isBound`, as the registry does. A record that names both, or neither, stops the release. The keys watchdog
+reads the registry's list of free keys, which a binder does not have: no watchdog unit ships for such an
+instance.
+
 A deployment whose record has `gateway_limits` (`deployments/testnet-v3-demo3.json` since 10 November 2026,
 `deployments/testnet-demo2.json` since 11 November 2026)
 takes its gateway's limits from the release instead of from a line by hand. `install.sh` writes

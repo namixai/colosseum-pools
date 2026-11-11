@@ -1599,6 +1599,20 @@ MUTATIONS = [
     # is refused in both tables (10 Nov 2026).
     # The gateway's limits ride with the release from the record, and the record's env file is read last
     # (10 Nov 2026).
+    # The gateway's bindings read from the deployment's KeyBinder when the record has one, not a KeyRegistry
+    # (ops/host_instances.py, keys_contract). Run by the keeper's runner, every ops test.
+    ('K515', 'ops/host_instances.py',
+     '    named = [record[k] for k in ("KeyRegistry", "KeyBinder") if record.get(k)]\n',
+     '    named = [record[k] for k in ("KeyRegistry",) if record.get(k)]\n',
+     ['test_a_deployment_on_a_key_binder_reads_its_bindings_from_the_binder']),
+    ('K516', 'ops/host_instances.py',
+     '    if len(named) != 1:\n',
+     '    if not named:\n',
+     ['test_a_deployment_on_a_key_binder_reads_its_bindings_from_the_binder']),
+    ('K517', 'ops/host_instances.py',
+     'if record.get(k)]\n',
+     'if k in record]\n',
+     ['test_a_deployment_on_a_key_binder_reads_its_bindings_from_the_binder']),
     ("K477", "ops/host_instances.py",
      '    if limits is None:\n        return ""',
      '    if True:\n        return ""',
