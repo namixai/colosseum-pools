@@ -12,7 +12,7 @@ import {CodeStore} from "../../src/lib/CodeStore.sol";
 import {PoolShares} from "../../src/multi/PoolShares.sol";
 import {ShareTicket} from "../../src/multi/ShareTicket.sol";
 import {PoolFactory} from "../../src/PoolFactory.sol";
-import {KeyRegistry} from "../../src/KeyRegistry.sol";
+import {KeyBinder} from "../../src/KeyBinder.sol";
 import {ChallengeAccount} from "../../src/ChallengeAccount.sol";
 import {PoolHarness} from "../PoolHarness.sol";
 
@@ -217,6 +217,7 @@ contract PoolSharesTest is PoolHarness {
         seat = Pool(m.claim(address(e)));
         CoreSimulatorLib.nextBlock();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
     }
 
@@ -403,7 +404,7 @@ contract PoolSharesTest is PoolHarness {
         listed[0] = BTC;
         listed[1] = ETH;
         vm.startPrank(creator);
-        KeyRegistry ownKeys = new KeyRegistry(creator);
+        KeyBinder ownKeys = new KeyBinder(creator, 1000, 0);
         PoolFactory own = new PoolFactory(ownKeys, address(new Pool()), address(new ChallengeAccount()), creator, usdc);
         ownKeys.setAccountSource(own);
         own.setPlatformAssets(listed, _names(listed), true);

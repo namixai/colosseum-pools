@@ -10,7 +10,7 @@ import {Rules, Terms, Cancel, Breach} from "../src/Types.sol";
 import {Pool} from "../src/Pool.sol";
 import {ChallengeAccount} from "../src/ChallengeAccount.sol";
 import {RuledAccount} from "../src/RuledAccount.sol";
-import {KeyRegistry} from "../src/KeyRegistry.sol";
+import {KeyBinder} from "../src/KeyBinder.sol";
 import {PoolFactory} from "../src/PoolFactory.sol";
 import {CoreOps} from "../src/lib/CoreOps.sol";
 import {PoolHarness} from "./PoolHarness.sol";
@@ -68,9 +68,9 @@ contract Hip3Test is PoolHarness {
     function _startedOnDex() internal returns (ChallengeAccount ch) {
         ch = _buy(_xyzPool());
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
     }
 
@@ -107,7 +107,7 @@ contract Hip3Test is PoolHarness {
         assertEq(ch.dex(), DEX);
         CoreSimulatorLib.nextBlock();
         vm.recordLogs();
-        ch.activate();
+        _activate(ch);
         (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
         bool sent;
         for (uint256 i = 0; i < kind.length; ++i) {
@@ -128,7 +128,7 @@ contract Hip3Test is PoolHarness {
         CoreSimulatorLib.nextBlock();
         assertEq(PrecompileLib.accountMarginSummary(DEX, address(ch)).accountValue, 100e6);
         vm.recordLogs();
-        ch.activate();
+        _activate(ch);
         (, kind,) = _actions(vm.getRecordedLogs());
         assertTrue(_has(kind, 9), "the trader's key is approved now");
         assertFalse(_has(kind, 13), "nothing sent twice");
@@ -147,13 +147,13 @@ contract Hip3Test is PoolHarness {
         ChallengeAccount ch = _buy(_xyzPool());
         CoreSimulatorLib.forcePerpBalance(address(ch), DEX, 100e6); // somebody's, before the start
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         assertEq(ch.accountEquity(), 100e6, "the dex already shows as much as the capital");
         vm.expectRevert(RuledAccount.NotOnDex.selector);
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
         vm.recordLogs();
-        ch.activate(); // 200 there: the start, on the capital
+        _activate(ch); // 200 there: the start, on the capital
         assertEq(_sentBack(vm.getRecordedLogs(), address(ch)), 0, "nothing sent for HyperCore to lose");
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Active));
         assertEq(ch.startSurplus(), 100e6);
@@ -190,7 +190,7 @@ contract Hip3Test is PoolHarness {
         assertEq(PrecompileLib.accountMarginSummary(DEX, address(p)).accountValue, 400e6, "twice the capital");
         vm.recordLogs();
         vm.prank(investor);
-        p.openFundedStage();
+        _openFunded(p);
         assertEq(_sentBack(vm.getRecordedLogs(), address(p)), 0, "nothing sent for HyperCore to lose");
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded), "the stage, on the capital");
         assertEq(p.startSurplus(), 200e6);
@@ -224,11 +224,11 @@ contract Hip3Test is PoolHarness {
         ChallengeAccount ch = _buy(_xyzPool());
         CoreSimulatorLib.forceSpotBalance(address(ch), 0, 200e8); // enough on spot for both
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         vm.warp(block.timestamp + ch.RESEND_WAIT() + 1);
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Active));
         assertEq(ch.startSurplus(), 100e6);
         vm.expectRevert(ChallengeAccount.TooEarly.selector);
@@ -245,7 +245,7 @@ contract Hip3Test is PoolHarness {
     function test_hip3_aDroppedTransferToTheDex_isNotALoss_andIsSentAgain() public {
         ChallengeAccount ch = _buy(_xyzPool());
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         // Dropped: the spot balance is not there when HyperCore runs the transfer, and is after.
         CoreSimulatorLib.setRevertOnFailure(false);
         CoreSimulatorLib.forceSpotBalance(address(ch), 0, 0);
@@ -254,7 +254,7 @@ contract Hip3Test is PoolHarness {
         assertEq(PrecompileLib.accountMarginSummary(DEX, address(ch)).accountValue, 0, "nothing on the dex");
 
         vm.expectRevert(RuledAccount.NotOnDex.selector);
-        ch.activate();
+        _activate(ch);
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.BadStatus.selector, ChallengeAccount.Status.Created));
         ch.breach(c, a, SALT);
@@ -265,7 +265,7 @@ contract Hip3Test is PoolHarness {
 
         vm.warp(block.timestamp + 1);
         vm.recordLogs();
-        ch.activate();
+        _activate(ch);
         (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
         assertEq(kind.length, 1, "the transfer again, and nothing else");
         assertEq(args[0], abi.encode(address(ch), address(0), HLConstants.SPOT_DEX, DEX, uint64(0), uint64(100e8)));
@@ -273,7 +273,7 @@ contract Hip3Test is PoolHarness {
         assertEq(ch.sentToDexAt(), block.timestamp, "its clock starts again");
 
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Active));
         assertEq(ch.accountEquity(), 100e6);
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.None));
@@ -285,18 +285,18 @@ contract Hip3Test is PoolHarness {
         Pool p = _xyzPool();
         ChallengeAccount there = _buy(p);
         CoreSimulatorLib.nextBlock();
-        there.activate();
+        _activate(there);
         CoreSimulatorLib.nextBlock();
         vm.warp(there.createdAt() + there.START_WINDOW() + 1);
         assertFalse(there.capitalArrived(), "spot is empty: the capital is on the dex");
         vm.expectRevert(ChallengeAccount.CapitalArrived.selector);
         there.abort();
-        there.activate();
+        _activate(there);
         assertEq(uint8(there.status()), uint8(ChallengeAccount.Status.Active), "late, and started");
 
         ChallengeAccount dropped = _buy(_xyzPool());
         CoreSimulatorLib.nextBlock();
-        dropped.activate();
+        _activate(dropped);
         CoreSimulatorLib.setRevertOnFailure(false);
         CoreSimulatorLib.forceSpotBalance(address(dropped), 0, 0);
         CoreSimulatorLib.nextBlock();
@@ -306,17 +306,22 @@ contract Hip3Test is PoolHarness {
         assertEq(uint8(dropped.status()), uint8(ChallengeAccount.Status.Aborted));
     }
 
-    /// A key spoiled between the two calls stops the start; the challenge is aborted at once and its
-    /// capital comes back from the dex at the settlement.
-    function test_hip3_aKeySpoiledBetweenTheCalls_abortsAndTheDexGivesTheCapitalBack() public {
+    /// A key asked for once the capital shows on the dex, and never given: a start window after the
+    /// request anyone aborts the challenge, and its capital comes back from the dex at the settlement.
+    function test_hip3_aKeyThatNeverComes_abortsAndTheDexGivesTheCapitalBack() public {
         ChallengeAccount ch = _buy(_xyzPool());
         CoreSimulatorLib.nextBlock();
         ch.activate();
         CoreSimulatorLib.nextBlock();
-        CoreSimulatorLib.forceAccountActivation(ch.agentKey());
-        vm.expectRevert(ChallengeAccount.KeySpoiled.selector);
         ch.activate();
+        assertTrue(_asked(address(ch)), "the capital is on the dex, and the key is asked for");
+        uint256 asked = ch.keyAskedAt();
+        vm.warp(asked + ch.START_WINDOW());
+        vm.expectRevert(ChallengeAccount.TooEarly.selector);
         ch.abort();
+        vm.warp(asked + ch.START_WINDOW() + 1);
+        ch.abort();
+        assertFalse(_asked(address(ch)), "the request goes with it");
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Aborted));
         (Cancel[] memory c, uint32[] memory a) = _none();
         vm.recordLogs();
@@ -341,6 +346,7 @@ contract Hip3Test is PoolHarness {
         vm.recordLogs();
         vm.prank(investor);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
         bool sent;
         for (uint256 i = 0; i < kind.length; ++i) {
@@ -354,11 +360,10 @@ contract Hip3Test is PoolHarness {
         assertFalse(_has(kind, 9), "no agent before the capital is there");
         assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey));
         assertEq(p.fundedStart(), 200e6);
-        address key = p.reservedKey();
-        assertTrue(key != address(0), "the key is taken, and waits");
+        assertFalse(_asked(address(p)), "the key is asked for once the capital is there");
         vm.prank(investor);
         vm.expectRevert(RuledAccount.NotOnDex.selector);
-        p.openFundedStage();
+        _openFunded(p);
 
         CoreSimulatorLib.nextBlock();
         vm.prank(stranger);
@@ -366,21 +371,21 @@ contract Hip3Test is PoolHarness {
         p.openFundedStage(); // the owner's stage is the owner's to open (self-audit v3, round 1, T3)
         vm.prank(investor);
         p.openFundedStage(); // a MultiPool's `open`
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey), "it asks for the key");
+        address key = _bind(address(p));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
         assertEq(p.agentKey(), key);
-        assertEq(p.reservedKey(), address(0));
         assertEq(p.fundedTrader(), trader);
         assertEq(p.dayStartEquity(), 200e6);
         assertEq(p.accountEquity(), 200e6);
         assertEq(uint8(p.violation(new uint32[](0))), uint8(Breach.None));
     }
 
-    /// After a pass on the dex, the first openFundedStage() sends the stage's capital with the key
-    /// the sale reserved waiting, and a later one opens the stage on it.
+    /// After a pass on the dex, the first openFundedStage() sends the stage's capital, and a later one
+    /// asks for the key, which opens the stage when it comes.
     function test_hip3_aPassOnTheDex_opensItsFundedStageOnceTheCapitalIsThere() public {
         ChallengeAccount ch = _startedOnDex();
         Pool p = Pool(address(ch.pool()));
-        address key = p.reservedKey();
         vm.mockCall(
             HLConstants.ACCOUNT_MARGIN_SUMMARY_PRECOMPILE_ADDRESS,
             abi.encode(DEX, address(ch)),
@@ -391,19 +396,22 @@ contract Hip3Test is PoolHarness {
 
         vm.recordLogs();
         vm.prank(stranger);
-        p.openFundedStage();
+        _openFunded(p);
         (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
         assertEq(kind.length, 1, "the transfer, and no agent yet");
         assertEq(args[0], abi.encode(address(p), address(0), HLConstants.SPOT_DEX, DEX, uint64(0), uint64(200e8)));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey));
-        assertEq(p.reservedKey(), key, "the sale's key waits");
+        assertFalse(_asked(address(p)), "no key before the capital is there");
         assertEq(p.fundedStart(), 200e6);
 
         CoreSimulatorLib.nextBlock();
         vm.recordLogs();
+        p.openFundedStage(); // the capital shows: the key is asked for
+        address key = _newKey();
+        bytes memory sig = _sign(address(p), key);
         vm.expectEmit(address(p));
         emit Pool.TraderFunded(trader, key, 200e6);
-        p.openFundedStage();
+        binder.bind(address(p), key, sig);
         (, kind,) = _actions(vm.getRecordedLogs());
         assertTrue(_has(kind, 9) && !_has(kind, 13), "the key now, nothing sent twice");
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
@@ -419,22 +427,23 @@ contract Hip3Test is PoolHarness {
         _owner(p);
         vm.prank(investor);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         CoreSimulatorLib.setRevertOnFailure(false);
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 0);
         CoreSimulatorLib.nextBlock();
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8);
         vm.startPrank(investor);
         vm.expectRevert(RuledAccount.NotOnDex.selector);
-        p.openFundedStage();
+        _openFunded(p);
         vm.warp(p.sentToDexAt() + p.RESEND_WAIT() + 1);
         vm.recordLogs();
-        p.openFundedStage();
+        _openFunded(p);
         (, uint24[] memory kind,) = _actions(vm.getRecordedLogs());
         assertEq(kind.length, 1);
         assertEq(kind[0], 13, "the transfer again");
         assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey));
         CoreSimulatorLib.nextBlock();
-        p.openFundedStage();
+        _openFunded(p);
         vm.stopPrank();
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
         assertEq(p.dayStartEquity(), 200e6);
@@ -449,19 +458,16 @@ contract Hip3Test is PoolHarness {
         uint256 calledAt = block.timestamp;
         vm.prank(investor);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         assertEq(p.passedAt(), calledAt, "the wait runs from the owner's call");
         CoreSimulatorLib.nextBlock();
-        for (uint256 i = 0; i < keys.length; ++i) {
-            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
-                CoreSimulatorLib.forceAccountActivation(keys[i]);
-            }
-        }
-        CoreSimulatorLib.forceAccountActivation(p.reservedKey());
-        registry.purgeSpoiled(keys.length);
+        vm.prank(investor);
+        p.openFundedStage(); // the capital is there: the key is asked for, and never comes
+        uint256 asked = p.keyAskedAt();
         vm.warp(calledAt + p.AWAIT_KEY_WINDOW());
         vm.expectRevert(Pool.TooEarly.selector);
         p.abandonFundedStage(); // the window runs from the owner's call
-        vm.warp(block.timestamp + 1);
+        vm.warp(asked + p.AWAIT_KEY_WINDOW() + 1);
         vm.recordLogs();
         p.abandonFundedStage();
         (, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
@@ -525,9 +531,9 @@ contract Hip3Test is PoolHarness {
         p.prepareAccount();
         ChallengeAccount ch = _buy(p);
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
         vm.mockCall(
             HLConstants.ACCOUNT_MARGIN_SUMMARY_PRECOMPILE_ADDRESS,
@@ -646,11 +652,11 @@ contract Hip3Test is PoolHarness {
     function test_round1_T1_aStrangersUnitsHoldNoStart() public {
         ChallengeAccount ch = _buy(_xyzPool());
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
         _strangersUnit(address(ch));
         CoreSimulatorLib.forcePerpBalance(address(ch), 1); // and one on its main perp
-        ch.activate();
+        _activate(ch);
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Active));
         assertEq(ch.startSurplus(), 2, "both units, out of the equity");
         assertEq(ch.dayStartEquity(), 100e6);
@@ -661,12 +667,13 @@ contract Hip3Test is PoolHarness {
         _owner(p);
         vm.prank(investor);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         for (uint256 i = 0; i < 3; ++i) {
             CoreSimulatorLib.nextBlock();
             _strangersUnit(address(p)); // and one more before each attempt
         }
         vm.prank(investor);
-        p.openFundedStage();
+        _openFunded(p);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
         assertEq(p.fundedStart(), 200e6);
         assertEq(p.startSurplus(), 3);
@@ -679,9 +686,9 @@ contract Hip3Test is PoolHarness {
         ChallengeAccount ch = _buy(_xyzPool());
         CoreSimulatorLib.forcePerpBalance(address(ch), DEX, 100e6); // somebody's, before the start
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         assertEq(ch.startSurplus(), 100e6);
         CoreSimulatorLib.nextBlock();
         // Six times the capital open: three times what the dex shows, past the rules' 5x on the capital.
@@ -700,7 +707,7 @@ contract Hip3Test is PoolHarness {
         ChallengeAccount ch = _buy(_xyzPool());
         CoreSimulatorLib.nextBlock();
         CoreSimulatorLib.setRevertOnFailure(false);
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.forceSpotBalance(address(ch), 0, 0); // every send to the dex fails
         for (uint256 i = 0; i < 3; ++i) {
             CoreSimulatorLib.nextBlock();
@@ -720,14 +727,33 @@ contract Hip3Test is PoolHarness {
         CoreSimulatorLib.setRevertOnFailure(true);
         ChallengeAccount landed = _buy(_xyzPool());
         CoreSimulatorLib.nextBlock();
-        landed.activate();
+        _activate(landed);
         CoreSimulatorLib.nextBlock();
         vm.warp(landed.createdAt() + landed.START_WINDOW() + 1);
         _strangersUnit(address(landed));
         vm.expectRevert(ChallengeAccount.CapitalArrived.selector);
         landed.abort();
-        landed.activate();
+        _activate(landed);
         assertEq(uint8(landed.status()), uint8(ChallengeAccount.Status.Active));
+    }
+
+    /// A stage released while it waited for its key forgets the surplus that landed with its capital:
+    /// kept, it would be taken off the next stage's equity, and the next landing would read it back as
+    /// a gain (a review on #252).
+    function test_hip3_anAbandonedStageForgetsTheSurplusThatLanded() public {
+        Pool p = _xyzPool();
+        _owner(p);
+        vm.prank(investor);
+        p.openFundedFor(trader);
+        CoreSimulatorLib.nextBlock();
+        CoreSimulatorLib.forcePerpBalance(address(p), DEX, 300e6); // the 200 sent, and somebody's 100
+        vm.prank(investor);
+        p.openFundedStage(); // landed, with 100 over it: the key is asked for, and never comes
+        assertEq(p.startSurplus(), 100e6);
+        vm.warp(uint256(p.keyAskedAt()) + p.AWAIT_KEY_WINDOW() + 1);
+        p.abandonFundedStage();
+        assertEq(p.startSurplus(), 0);
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
     }
 
     /// A review on #167: a funded stage waiting on a builder dex for its capital held its key live, so
@@ -740,14 +766,13 @@ contract Hip3Test is PoolHarness {
         _owner(p);
         vm.prank(investor);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         uint256 passed = p.passedAt();
-        address key = p.reservedKey();
         CoreSimulatorLib.setRevertOnFailure(false);
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 0);
         CoreSimulatorLib.nextBlock(); // the dex takes nothing
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8); // the capital is still on spot
-        assertFalse(CoreOps.exists(key), "the key is live the whole time");
-        assertGt(registry.freeCount(), 0, "and the registry has more");
+        assertFalse(_asked(address(p)), "no key is asked for before the capital shows");
         vm.warp(passed + p.AWAIT_KEY_WINDOW());
         vm.expectRevert(Pool.TooEarly.selector);
         p.abandonFundedStage();
@@ -755,7 +780,7 @@ contract Hip3Test is PoolHarness {
         vm.prank(investor);
         p.openFundedStage(); // sent again, in this block
         vm.expectRevert(Pool.KeyAvailable.selector);
-        p.abandonFundedStage(); // a send cannot be read in its own block: the key decides
+        p.abandonFundedStage(); // a send cannot be read in its own block: the key decides, and was never asked for
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 0);
         CoreSimulatorLib.nextBlock(); // refused again
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 1000e8);
@@ -763,21 +788,20 @@ contract Hip3Test is PoolHarness {
         p.abandonFundedStage();
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
         assertEq(p.sentToDexAt(), 0);
-        assertEq(p.reservedKey(), address(0));
-        assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
         assertEq(_spot(address(p)), 1000e8, "the owner's capital, on spot");
 
         Pool q = _xyzPool();
         _owner(q);
         vm.prank(investor);
         q.openFundedFor(trader);
+        _bindIfAsked(address(q));
         CoreSimulatorLib.setRevertOnFailure(true);
         CoreSimulatorLib.nextBlock(); // it lands
         vm.warp(uint256(q.passedAt()) + q.AWAIT_KEY_WINDOW() + 1);
         vm.expectRevert(Pool.KeyAvailable.selector);
-        q.abandonFundedStage(); // the dex shows it and the key is live: the stage opens instead
+        q.abandonFundedStage(); // the dex shows it and no key was asked for: the stage asks instead
         vm.prank(investor);
-        q.openFundedStage();
+        _openFunded(q);
         assertEq(uint8(q.stage()), uint8(Pool.Stage.Funded));
     }
 
@@ -819,9 +843,9 @@ contract Hip3Test is PoolHarness {
 
         ChallengeAccount next = _buy(p);
         CoreSimulatorLib.nextBlock();
-        next.activate();
+        _activate(next);
         CoreSimulatorLib.nextBlock();
-        next.activate();
+        _activate(next);
         CoreSimulatorLib.nextBlock();
         _passOnDex(next);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey));
@@ -837,7 +861,7 @@ contract Hip3Test is PoolHarness {
     function test_round1_noChallengeEndsInTheBlockItStarts() public {
         ChallengeAccount ch = _buy(_readyPool());
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         assertEq(ch.accountEquity(), 0, "the start's block: nothing on the perp side yet");
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.Drawdown));
         (Cancel[] memory c, uint32[] memory a) = _none();

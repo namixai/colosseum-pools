@@ -18,10 +18,15 @@ gives a pool owner's powers in each.
   still trade the money away, including against a counterparty it chooses.
 - **The trader never holds that key.** In this demo the gateway holds the agent keys and signs with them
   (S3). The trader's wallet signs requests to the gateway.
+- **A key is bound only to an account that asked for one.** In main an account asks the key binder for a
+  key when it needs one: at a challenge's start, a funded stage's opening, a renewal, a spoiled key's
+  replacement (S96). The binder binds a key only on the publisher's signature over that account's request,
+  its trader and the key (S97), never a key that has a HyperCore account (S98), and the account approves
+  it in the same transaction (S99). No list of keys waits on chain to be handed out.
 - **Capital stays on the pool's account.** A sale moves only the challenge's capital to the challenge's
-  new account on HyperCore (S4); the funded capital stays on the pool's own account. The price is paid
-  into the pool contract, and the platform's fee to its recipient, in the same transaction (S5). The
-  price comes back to the buyer only if the challenge never starts (S6).
+  new account on HyperCore (S4); the funded capital stays on the pool's own account. In main the price and
+  the platform's fee are both paid into the pool contract (S5); the fee goes to its recipient when the
+  challenge starts (S106), and both come back to the buyer if it never does (S6).
 - **A stop and a take go on the book before an opening order.** Before the gateway submits an order that
   may open or grow a position, it places a market stop and a take on Hyperliquid as one `positionTpsl`
   group (S7, S8). If they cannot be placed, the order is not sent. The stop fires 6 basis points of the
@@ -73,28 +78,38 @@ gives a pool owner's powers in each.
 ## 3. Operator powers
 
 None of the powers below waits for a delay or a vote: there is no timelock anywhere. Two of them are keys
-we hold, the key registry's operator and the gateway's host: whoever has either can trade accounts that are not
-theirs.
+we hold, the one that publishes agent keys (the key registry's operator on the deployments, the key binder's
+publisher in main) and the gateway's host: whoever has either can trade accounts that are not theirs.
 
 - **The factory's operator**, the deploy key on demo2 (S31, S32), can list or delist markets for new
   pools, while pools already created keep theirs (S33); change the challenge fee and its recipient for
   later purchases, with no cap (S34); set a builder and the most it may charge, which accounts approve
-  when they start (S35), and there is none on demo2 (S36); and hand the role to any address in one call
-  (S37), an open finding (S38).
-- **The key registry's operator** publishes the agent keys (S40), and each new challenge and funded stage
-  is given the next free one (S84). On demo2, on the first deployment and on the v3 deployment the operator
-  is the deploy key, the key that deployed them (S39, S85, S86): one hot key, not a multisig. Whoever holds
-  it decides which agent addresses the next accounts get. With addresses of their own published, they could
-  trade every account given a key after that, within its rules, as the gateway's host can (below). The
-  operator has no call that changes the key of an account that has one, but in v3 a running challenge or
-  funded stage takes a fresh key when its agent is renewed (S83, S94) or its spoiled key replaced (S92), and
-  that key is the next free one (S93): an account renewed after such addresses were published can be given
-  one of them. A published key cannot be withdrawn, by the operator or
-  anyone: only the account it is given to retires it (S87), and a key that gains a HyperCore account of its
-  own is skipped, and anyone may clear it (S88). Each key published, each key given and each handover of the
-  role is an event on chain (S89, S90, S91). The role moves in two steps, the new operator accepting (S41).
-  The owner's decision: before mainnet the operator becomes a cold key or a multisig; keeping it in the
-  signer's enclave is being considered. On testnet today it is neither.
+  when they start (S35), and there is none on demo2 (S36). In main the role moves in two steps, the new
+  operator accepting (S37); the deployed factories hand it to any address in one call (S38).
+- **The key registry's operator, on the deployments.** demo2, the first deployment and demo3 take their keys
+  from a key registry: its operator publishes the agent keys (S40), and each new challenge and funded stage
+  is given the next free one (S84). On all three the operator is the deploy key, the key that deployed them
+  (S39, S85, S86): one hot key, not a multisig. Whoever holds it decides which agent addresses the next
+  accounts get, and on demo3, whose code is the commit its record names (S75), a renewed (S83, S94) or re-keyed (S92)
+  account takes the next free one too. With addresses of their own published, they could trade every account given
+  a key after that, within its rules, as the gateway's host can (below). A published key cannot be
+  withdrawn, by the operator or anyone: only the account it is given to retires it (S87), and a key that
+  gains a HyperCore account of its own is skipped, and anyone may clear it (S88). Each key published, each
+  key given and each handover of the role is an event on chain (S89, S90, S91). The role moves in two steps,
+  the new operator accepting (S41).
+- **The key binder, in main,** which no deployment runs yet. Its owner, meant to be a multisig, appoints
+  the publisher with the hashes of the enclave's measurements and of its attestation document, which the
+  event carries (S100) and neither of which may be zero (S101); appoints the guardian; sets a daily limit on
+  bindings and renewal commitments (S102) and the delay of a renewal's key; and alone lifts a pause (S103). The publisher only
+  signs: a binding needs its signature over one account's open request (S97). The guardian can only stop:
+  pause every binding (S107), lower the limit, and revoke a bound key, which its account cuts as a stop
+  does and asks for a fresh one (S104). A renewal's key is committed by its hash and shown, and approved,
+  only after the delay (S105): before it works the guardian can pause, or revoke the account's current key,
+  which voids the commitment. Whoever holds the publisher's key
+  could bind keys of their own to accounts that are asking, up to the daily limit, until the guardian
+  pauses; whoever holds the guardian's key could stop every binding and cut every key, and take nothing.
+  Who holds each, and whether the publisher's key lives in an enclave, is the owner's decision and not
+  in this code.
 - **A pool's owner**, in every version, withdraws the pool's capital while it is idle (S19) and the
   challenge prices it has earned at any time (S42); the owner, or the funded trader, can end a funded stage
   without a breach (S43); and the owner cannot change the pool's rules or terms (S10). That is all a pool's
@@ -106,7 +121,7 @@ theirs.
   owner the factory knows as a MultiPool, a contract, can then fund a trader of its choosing on the pool's
   capital (S79), and that trader can end the stage only if the owner allowed it (S80). In v3 a funded stage's
   agent key is approved for 179 days (S81) and, in its last 14 days (S82), anyone may renew it with a fresh
-  key (S83).
+  key (S83); in main the renewal asks the key binder for that key (S93).
 - **The shared pool's operator and platform** (S44) started the pool, added its seats and sealed it;
   after the seal it can add nothing (S16). It holds the starting shares, which never leave (S18). This
   pool takes no fee on profit (S45).
@@ -122,14 +137,16 @@ theirs.
 
 - **A challenge** ends by `breach` when a rule is broken, by anyone (S12); by `expire` after its
   deadline, by anyone (S52); by `forfeit`, its trader alone (S53); or by `graduate`, by anyone, once the
-  target is met with nothing open and no rule broken, in time (S54). If its capital never arrived or its
-  key was spoiled, `abort` refunds the price; the platform's fee stays paid (S6).
+  target is met with nothing open and no rule broken, in time (S54). If its capital never arrived, or, in
+  main, its key was asked for and has not come within the hour, `abort` refunds the price and the
+  platform's fee (S6). On the deployed factories `abort` refunds the price, and the fee, paid at the sale,
+  stays paid.
 - **Then `settle`**, open to anyone, closes what is open. A trader who passed is paid their share of the
   profit (S48); everything else goes back to the pool (S49). A loss is the pool's.
-- **A funded stage** opens after a pass, with the key reserved at the sale. If it has not opened within 7
-  days, anyone may release the pool (S55), but only when no key is to be had: the reserved key already has an
-  account on HyperCore, so it cannot be used (S71), and the key registry counts no free key (S72). While a key
-  is to be had, the pool waits for `openFundedStage`, which anyone may call. It ends by `breach`, by the owner
+- **A funded stage** opens after a pass, when the key it asks for arrives (S72). If it has not opened within
+  7 days, anyone may release the pool (S55), but only once its key was asked for and has not come for 7 days
+  (S71), or, on a builder dex, once the capital sent there has not shown. Until the key is asked for, the pool
+  waits for `openFundedStage`, which anyone may call. It ends by `breach`, by the owner
   or the funded trader (S43), or, on a shared-pool seat, once its published term has run, by anyone (S56).
   `settleFunded` then closes the positions. The funded trader is paid a share of the profit only if the stage
   ended without a breach (S57); the capital stays in the pool, which goes back to idle (S58).
@@ -154,7 +171,7 @@ theirs.
 - An internal audit went through these contracts between 25 and 28 September 2026. Each finding and the
   test that pins it is in `docs/AUDIT-FINDINGS.md` (S62). Three are open: a pass can be bought by
   depositing, by design (S61); a pool whose order cap sits under Hyperliquid's minimum (S63); and the
-  factory's one-step operator handover (S38).
+  factory's one-step operator handover on the deployed factories (S38), which main hands on in two steps.
 - No external audit, and no third-party scan, of this code has been published.
 - The shared pool contracts are testnet code, outside the reviewed core (S64).
 - To report a problem, open an issue in this repository. There is no bug bounty.
@@ -166,25 +183,25 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 
 | # | Where | What is there |
 |---|---|---|
-| S1 | `src/RuledAccount.sol:223` | `function _setAgent(address key) internal` |
+| S1 | `src/RuledAccount.sol:231` | `function _setAgent(address key) internal` |
 | S2 | https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint | `Destination must match the source address` |
 | S3 | `gateway/demo_signer.py:8` | `whoever holds the host holds these keys` |
-| S4 | `src/Pool.sol:326` | `CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);` |
-| S5 | `src/Pool.sol:307` | `usdc.safeTransferFrom(msg.sender, address(this), price);` |
-| S6 | `src/Pool.sol:338` | `safeTransfer(challengeTrader, price)` |
+| S4 | `src/Pool.sol:323` | `CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);` |
+| S5 | `src/Pool.sol:319` | `f.usdc().safeTransferFrom(msg.sender, address(this), price + fee);` |
+| S6 | `src/Pool.sol:343` | `safeTransfer(challengeTrader, back)` |
 | S7 | `gateway/server.py:212` | `The stop and the take go first: an order that may open a position is never` |
 | S8 | `gateway/protect.py:600` | `"grouping": "positionTpsl"` |
-| S9 | `src/PoolFactory.sol:267` | `pool.rules(), pool.terms()` |
-| S10 | `src/RuledAccount.sol:94` | `internal onlyInitializing` |
-| S11 | `src/RuledAccount.sol:137` | `function violation(uint32[] memory extraAssets) public view returns (Breach)` |
-| S12 | `src/ChallengeAccount.sol:211` | `if (reason == Breach.None) revert NoBreach();` |
-| S13 | `src/RuledAccount.sol:271` | `function _cutAgent(bytes32 salt) internal` |
-| S14 | `src/ChallengeAccount.sol:73` | `event Stopped(Status indexed status, Breach indexed reason, int64 equity);` |
+| S9 | `src/PoolFactory.sol:281` | `pool.rules(), pool.terms()` |
+| S10 | `src/RuledAccount.sol:99` | `internal onlyInitializing` |
+| S11 | `src/RuledAccount.sol:142` | `function violation(uint32[] memory extraAssets) public view returns (Breach)` |
+| S12 | `src/ChallengeAccount.sol:217` | `if (reason == Breach.None) revert NoBreach();` |
+| S13 | `src/RuledAccount.sol:314` | `function _cutAgent(bytes32 salt) internal` |
+| S14 | `src/ChallengeAccount.sol:74` | `event Stopped(Status indexed status, Breach indexed reason, int64 equity);` |
 | S15 | `app/data/evidence.json:62` | `breachReason DailyLoss` |
 | S16 | `src/shared/SharedPool.sol:271` | `if (seatsSealed) revert SeatsClosed();` |
 | S17 | `0x348F9814061B0d26c2aBbdd2FE19ca807ceDa8a4` | `seatsSealed() → true` |
 | S18 | `src/shared/SharedPool.sol:378` | `(msg.sender == platform ? seedShares : 0)` |
-| S19 | `src/Pool.sol:186` | `function withdrawOnCore(uint64 amount1e8) external onlyOwner inStage(Stage.Idle)` |
+| S19 | `src/Pool.sol:193` | `function withdrawOnCore(uint64 amount1e8) external onlyOwner inStage(Stage.Idle)` |
 | S20 | https://hyperliquid.gitbook.io/hyperliquid-docs/trading/liquidations | `Liquidations` |
 | S21 | https://hyperliquid.gitbook.io/hyperliquid-docs/trading/auto-deleveraging | `Auto-deleveraging` |
 | S22 | `gateway/server.py:69` | `PROTECT_EVERY_S = 30.0` |
@@ -198,34 +215,34 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S30 | `src/shared/SharedPool.sol:84` | `MAX_QUEUE = 16;` |
 | S31 | `deployments/testnet-demo2.json:10` | `"deployer": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",` |
 | S32 | `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222` | `operator() → 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4` |
-| S33 | `src/PoolFactory.sol:112` | `Delisting doesn't touch` |
-| S34 | `src/PoolFactory.sol:149` | `function setChallengeFee(uint256 fee, address recipient) external onlyOperator` |
-| S35 | `src/ChallengeAccount.sol:161` | `CoreOps.approveBuilder(builder_, maxFee);` |
+| S33 | `src/PoolFactory.sol:126` | `Delisting doesn't touch` |
+| S34 | `src/PoolFactory.sol:163` | `function setChallengeFee(uint256 fee, address recipient) external onlyOperator` |
+| S35 | `src/ChallengeAccount.sol:160` | `CoreOps.approveBuilder(builder_, maxFee);` |
 | S36 | `0x5CbCAF8829eD955c4a8aDA2B28Bf75f8ba867222` | `builder() → (0x0000000000000000000000000000000000000000, 0)` |
-| S37 | `src/PoolFactory.sol:107` | `function setOperator(address operator_) external onlyOperator` |
+| S37 | `src/PoolFactory.sol:119` | `function acceptOperator() external` |
 | S38 | `docs/AUDIT-FINDINGS.md:35` | `\| A-20 \| Low \|` |
 | S39 | `0x53AF27F65Dd7473c890f633aC0025b261307779e` | `operator() → 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4` |
 | S40 | `src/KeyRegistry.sol:103` | `function publish(address[] calldata keys) external onlyOperator` |
 | S41 | `src/KeyRegistry.sol:94` | `function acceptOperator() external` |
-| S42 | `src/Pool.sol:200` | `function withdrawEarned() external onlyOwner` |
-| S43 | `src/Pool.sol:500` | `if (msg.sender != owner && msg.sender != fundedTrader) revert NotAllowed();` |
+| S42 | `src/Pool.sol:207` | `function withdrawEarned() external onlyOwner` |
+| S43 | `src/Pool.sol:496` | `if (msg.sender != owner && msg.sender != fundedTrader) revert NotAllowed();` |
 | S44 | `deployments/testnet-shared-demo2c.json:19` | `"platform": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",` |
 | S45 | `deployments/testnet-shared-demo2c.json:13` | `"fee_bps": 0,` |
-| S46 | `src/ChallengeAccount.sol:202` | `Stops the challenge if a rule is broken right now. Anyone may call it.` |
-| S47 | `src/ChallengeAccount.sol:142` | `Anyone may call it.` |
-| S48 | `src/ChallengeAccount.sol:353` | `CoreOps.sendUsdc(trader, pay);` |
-| S49 | `src/ChallengeAccount.sol:369` | `CoreOps.sendUsdc(address(pool), spot);` |
-| S50 | `src/PoolFactory.sol:232` | `pool = Clones.clone(poolImpl);` |
+| S46 | `src/ChallengeAccount.sol:208` | `Stops the challenge if a rule is broken right now. Anyone may call it.` |
+| S47 | `src/ChallengeAccount.sol:133` | `Anyone may call it.` |
+| S48 | `src/ChallengeAccount.sol:359` | `CoreOps.sendUsdc(trader, pay);` |
+| S49 | `src/ChallengeAccount.sol:375` | `CoreOps.sendUsdc(address(pool), spot);` |
+| S50 | `src/PoolFactory.sol:246` | `pool = Clones.clone(poolImpl);` |
 | S51 | `src/PoolFactory.sol:5` | `import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";` |
-| S52 | `src/ChallengeAccount.sol:221` | `if (block.timestamp <= deadline) revert TooEarly();` |
-| S53 | `src/ChallengeAccount.sol:230` | `if (msg.sender != trader) revert NotTrader();` |
-| S54 | `src/ChallengeAccount.sol:253` | `function graduate(bytes32 salt) external inStatus(Status.Active)` |
-| S55 | `src/Pool.sol:100` | `AWAIT_KEY_WINDOW = 7 days;` |
+| S52 | `src/ChallengeAccount.sol:227` | `if (block.timestamp <= deadline) revert TooEarly();` |
+| S53 | `src/ChallengeAccount.sol:236` | `if (msg.sender != trader) revert NotTrader();` |
+| S54 | `src/ChallengeAccount.sol:259` | `function graduate(bytes32 salt) external inStatus(Status.Active)` |
+| S55 | `src/Pool.sol:106` | `AWAIT_KEY_WINDOW = 7 days;` |
 | S56 | `src/shared/SharedPool.sol:354` | `function endFundedTerm(address seat` |
-| S57 | `src/Pool.sol:540` | `fundedPayoutOwed = fundedEndReason == Breach.None && result > fundedStart` |
-| S58 | `src/Pool.sol:632` | `stage = Stage.Idle;` |
+| S57 | `src/Pool.sol:536` | `fundedPayoutOwed = fundedEndReason == Breach.None && result > fundedStart` |
+| S58 | `src/Pool.sol:628` | `stage = Stage.Idle;` |
 | S59 | https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits | `aggregated weight limit of 1200 per minute` |
-| S60 | `src/Pool.sol:26` | `the USDC bridge credited nothing to a contract bridging to itself` |
+| S60 | `src/Pool.sol:31` | `the USDC bridge credited nothing to a contract bridging to itself` |
 | S61 | `docs/AUDIT-FINDINGS.md:20` | `\| A-05 \| Medium \|` |
 | S62 | `docs/AUDIT-FINDINGS.md:3` | `between 25 and 28 September 2026` |
 | S63 | `docs/AUDIT-FINDINGS.md:32` | `\| A-17 \| Low \|` |
@@ -236,19 +253,19 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S68 | `gateway/protect.py:583` | `"tif": "Ioc"` |
 | S69 | `src/shared/SharedPool.sol:576` | `the pool's free money covers it, otherwise the same fraction of each.` |
 | S70 | `src/shared/SharedPool.sol:612` | `if (have6 == 0) return;` |
-| S71 | `src/Pool.sol:433` | `if (reservedKey != address(0) && !CoreOps.exists(reservedKey)) revert KeyAvailable();` |
-| S72 | `src/Pool.sol:440` | `if (factory.registry().freeCount() != 0) revert KeyAvailable();` |
+| S71 | `src/Pool.sol:449` | `if (keyAskedAt == 0 \|\| block.timestamp <= uint256(keyAskedAt) + AWAIT_KEY_WINDOW) revert KeyAvailable();` |
+| S72 | `src/Pool.sol:380` | `_askKey(fundedTrader, KeyBinder.Purpose.Funded);` |
 | S73 | `deployments/testnet-demo2.json:9` | `"commit": "e4287926ad0bb13a0e401b45118215195ecb5589",` |
 | S74 | `deployments/testnet-shared-demo2c.json:14` | `"implementations_from": "e4287926ad0bb13a0e401b45118215195ecb5589",` |
 | S75 | `deployments/testnet-v3-demo3.json:23` | `"commit": "23772e2dbf9f4913dc265efa68768030ab7d4d2a",` |
-| S76 | `src/Pool.sol:194` | `function sendOnCore(address to, uint64 amount1e8) external onlyOwner inStage(Stage.Idle)` |
-| S77 | `src/Pool.sol:213` | `function runByOwner(bool traderMayStop_) external onlyOwner inStage(Stage.Idle)` |
-| S78 | `src/Pool.sol:286` | `if (ownerRun) revert SalesClosed();` |
-| S79 | `src/Pool.sol:231` | `if (!ownerRun \|\| !IPoolFactory(address(factory)).isMultiPool(owner)) revert NotOwnerRun();` |
-| S80 | `src/Pool.sol:501` | `if (msg.sender != owner && ownerRun && !traderMayStop) revert NotAllowed();` |
-| S81 | `src/RuledAccount.sol:206` | `AGENT_TERM = 179 days;` |
-| S82 | `src/RuledAccount.sol:208` | `RENEW_WINDOW = 14 days;` |
-| S83 | `src/Pool.sol:255` | `function renewAgent() external inStage(Stage.Funded)` |
+| S76 | `src/Pool.sol:201` | `function sendOnCore(address to, uint64 amount1e8) external onlyOwner inStage(Stage.Idle)` |
+| S77 | `src/Pool.sol:220` | `function runByOwner(bool traderMayStop_) external onlyOwner inStage(Stage.Idle)` |
+| S78 | `src/Pool.sol:292` | `if (ownerRun) revert SalesClosed();` |
+| S79 | `src/Pool.sol:238` | `if (!ownerRun \|\| !IPoolFactory(address(factory)).isMultiPool(owner)) revert NotOwnerRun();` |
+| S80 | `src/Pool.sol:497` | `if (msg.sender != owner && ownerRun && !traderMayStop) revert NotAllowed();` |
+| S81 | `src/RuledAccount.sol:214` | `AGENT_TERM = 179 days;` |
+| S82 | `src/RuledAccount.sol:216` | `RENEW_WINDOW = 14 days;` |
+| S83 | `src/Pool.sol:261` | `function renewAgent() external inStage(Stage.Funded)` |
 | S84 | `src/KeyRegistry.sol:120` | `function assign(address trader) external returns (address key)` |
 | S85 | `0x6b256B983b849934e0AA500cF2e3Ca176B0d35BA` | `operator() → 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4` |
 | S86 | `0x8e2E527aed19a0969aEa49e16aE1Abbc7B84Cc85` | `operator() → 0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4` |
@@ -257,7 +274,19 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S89 | `src/KeyRegistry.sol:51` | `event KeyPublished(address indexed key);` |
 | S90 | `src/KeyRegistry.sol:52` | `event KeyBound(address indexed key, address indexed account, address indexed trader);` |
 | S91 | `src/KeyRegistry.sol:48` | `event OperatorTransferStarted(address indexed from, address indexed to);` |
-| S92 | `src/Pool.sol:269` | `function rekey() external inStage(Stage.Funded)` |
-| S93 | `src/RuledAccount.sol:235` | `_setAgent(registry.assign(trader_));` |
-| S94 | `src/ChallengeAccount.sol:239` | `_renewAgent(trader);` |
+| S92 | `src/Pool.sol:275` | `function rekey() external inStage(Stage.Funded)` |
+| S93 | `src/RuledAccount.sol:291` | `_askKey(trader_, KeyBinder.Purpose.Renew);` |
+| S94 | `src/ChallengeAccount.sol:245` | `_renewAgent(trader);` |
 | S95 | `gateway/protect.py:74` | `STOP_BUFFER_BPS = Decimal(6)` |
+| S96 | `src/KeyBinder.sol:240` | `function request(address trader, Purpose purpose) external returns (uint64 id)` |
+| S97 | `src/KeyBinder.sol:303` | `if (ECDSA.recover(digest(account, r.id, r.trader, keyHash), signature) != publisher) revert BadSignature();` |
+| S98 | `src/KeyBinder.sol:320` | `if (CoreOps.exists(key)) revert KeyExistsOnCore(key);` |
+| S99 | `src/KeyBinder.sol:333` | `IBoundAccount(account).onKeyBound(key, purpose);` |
+| S100 | `src/KeyBinder.sol:94` | `event PublisherSet(address indexed publisher, bytes32 pcrHash, bytes32 attestationDocHash);` |
+| S101 | `src/KeyBinder.sol:170` | `if (pcrHash == bytes32(0) \|\| attestationDocHash == bytes32(0)) revert ZeroHash();` |
+| S102 | `src/KeyBinder.sol:312` | `if (bindsToday >= maxBindsPerDay) revert DailyLimit();` |
+| S103 | `src/KeyBinder.sol:191` | `function unpause() external onlyOwner` |
+| S104 | `src/KeyBinder.sol:226` | `function revoke(address key, bytes32 salt) external onlyGuardianOrOwner` |
+| S105 | `src/KeyBinder.sol:297` | `if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);` |
+| S106 | `src/Pool.sol:334` | `emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);` |
+| S107 | `src/KeyBinder.sol:212` | `function pause() external onlyGuardianOrOwner` |

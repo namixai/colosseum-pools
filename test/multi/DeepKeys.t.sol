@@ -5,7 +5,7 @@ import {CoreSimulatorLib} from "@hyper-evm-lib/test/simulation/CoreSimulatorLib.
 
 import {Cancel} from "../../src/Types.sol";
 import {Pool} from "../../src/Pool.sol";
-import {KeyRegistry} from "../../src/KeyRegistry.sol";
+import {KeyBinder} from "../../src/KeyBinder.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {MultiPool, Plan, Size, AfterTarget} from "../../src/multi/MultiPool.sol";
 import {PoolHarness} from "../PoolHarness.sol";
@@ -13,14 +13,14 @@ import {PoolHarness} from "../PoolHarness.sol";
 /// The deep audit's key findings (cloud N2, N3, 16 October 2026), turned round, and the MultiPool
 /// side of the audit's K-3.
 ///
-/// N3: a pool sold exams with no regard to the registry's keys, which every funded account retires
-/// for good; once they ran out, passes were sold that no key could open. Now a sale needs a free
-/// key for every seat the pool has spoken for, and `room()` says so.
+/// N3: a pool sold exams with no regard to the registry's free keys, which every funded account
+/// retired for good; once they ran out, passes were sold that no key could open. There is no list of
+/// free keys now: a funded account asks the key binder for its own key when it opens, so a sale holds
+/// no key and waits on none.
 ///
-/// N2: more spoiled keys on top of the list than one `assign` skips blocked every opening until
-/// someone purged them (the keeper now does), and a trader whose account could not open had paid
-/// for nothing. Now a seat freed before its account opened hands its trader back what the pool
-/// kept of the price.
+/// N2: a trader whose account could not open had paid for nothing. A seat whose key never comes is
+/// released by its pool after the wait, and the seat freed before its account opened hands its
+/// trader back what the pool kept of the price.
 ///
 /// The stand is the audit's (N2_MultiPoolAssignBlock), its helpers copied so that the MultiPool
 /// suite does not run twice; the price is below the seat's size, as it is in a real plan.
@@ -75,25 +75,6 @@ contract DeepKeysTest is PoolHarness {
         m.begin(TERMS);
     }
 
-    /// Spoils every free key but the first `keep` (the bottom of the list) and purges them, so
-    /// that `keep` free keys are left.
-    function _leaveKeys(uint256 keep) internal {
-        for (uint256 i = keep; i < keys.length; ++i) {
-            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
-                CoreSimulatorLib.forceAccountActivation(keys[i]);
-            }
-        }
-        registry.purgeSpoiled(keys.length);
-        assertEq(registry.freeCount(), keep);
-    }
-
-    /// Gives the top `count` free keys a HyperCore account: `assign` will find them spoiled.
-    function _spoilTop(uint256 count) internal {
-        for (uint256 i = 0; i < count; ++i) {
-            CoreSimulatorLib.forceAccountActivation(keys[keys.length - 1 - i]);
-        }
-    }
-
     function _buy(MultiPool m, address who, uint256 line) internal returns (PaperExam e) {
         deal(address(usdc), who, PRICE);
         vm.startPrank(who);
@@ -134,68 +115,61 @@ contract DeepKeysTest is PoolHarness {
         assertEq(_spot(address(seat)), 25e8);
     }
 
-    // ── N3: no sale without a key ───────────────────────────────────────────────────
+    // ── N3: a sale holds no key ──────────────────────────────────────────────────────
 
-    /// The cloud's N3, turned round: two free keys, two exams; the third is not sold, and `room()`
-    /// says there is none, though the share and the seats would allow it.
-    function test_deep_N3_noSaleWithoutAFreeKeyForEverySeatSpokenFor() public {
+    /// The cloud's N3 is gone with the list: what a sale may do is the share's, the balance's and
+    /// the seats', and no key is held for a seat.
+    function test_deep_N3_aSaleHoldsNoKey() public {
         MultiPool m = _pool();
-        _leaveKeys(2);
-        assertEq(_room(m, 0), 2, "as many as there are keys");
+        uint256 room = _room(m, 0);
+        assertGt(room, 2);
         _buy(m, alice, 0);
         _buy(m, bob, 0);
-        assertEq(_room(m, 0), 0, "no key left for a third");
-        deal(address(usdc), attacker, PRICE);
-        vm.startPrank(attacker);
-        usdc.approve(address(m), PRICE);
-        vm.expectRevert(MultiPool.NoKey.selector);
-        m.buy(0);
-        vm.stopPrank();
-        assertEq(usdc.balanceOf(attacker), PRICE, "and no price taken");
-
-        // A key published by the operator lets the next sale through.
-        address[] memory more = new address[](1);
-        more[0] = makeAddr("enclave-key-late");
-        vm.prank(operator);
-        registry.publish(more);
-        assertEq(_room(m, 0), 1);
         _buy(m, attacker, 0);
+        assertEq(_room(m, 0), room - 3, "three seats spoken for, and nothing else counted");
     }
 
-    /// A funded seat holds its key, and still counts: the registry keeps a key for every seat the
-    /// pool has spoken for, so a pass is never sold on a key a funded account will retire.
-    function test_deep_N3_aFundedSeatStillCounts() public {
+    /// A seat's account asks for its key when it opens, and the MultiPool marks the seat funded in
+    /// the transaction that binds the key.
+    function test_aSeatOpensWhenItsKeyComes_andIsFundedInThatTransaction() public {
         MultiPool m = _pool();
-        _leaveKeys(2);
         Pool seat = _armed(m);
         m.open(address(seat));
-        assertEq(registry.freeCount(), 1, "the funded account took one");
-        assertEq(_room(m, 0), 0, "one free key, one seat spoken for");
-        // And the sale says the same as the reader.
-        deal(address(usdc), attacker, PRICE);
-        vm.startPrank(attacker);
-        usdc.approve(address(m), PRICE);
-        vm.expectRevert(MultiPool.NoKey.selector);
-        m.buy(0);
-        vm.stopPrank();
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.PassedAwaitingKey));
+        assertEq(uint8(_seatState(m, address(seat))), uint8(MultiPool.SeatState.Armed));
+        assertTrue(_asked(address(seat)));
+        vm.expectRevert(abi.encodeWithSelector(Pool.NotAllowed.selector));
+        seat.openFundedStage(); // the owner's stage, its owner's call
+        address key = _newKey();
+        bytes memory sig = _sign(address(seat), key);
+        vm.expectEmit(address(m));
+        emit MultiPool.SeatOpened(address(seat), alice);
+        binder.bind(address(seat), key, sig);
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
+        assertEq(uint8(_seatState(m, address(seat))), uint8(MultiPool.SeatState.Funded));
+        assertEq(seat.agentKey(), key);
+        assertTrue(binder.isBound(key, address(seat), alice));
     }
 
     // ── N2: a pass whose account never opens is handed its price back ─────────────
 
-    /// The cloud's N2, turned round: seventeen spoiled keys on top block the opening. The trader
-    /// claimed; the seat cannot open within the claim window; whoever frees it then hands the
-    /// trader back the price the pool kept, and the pool its size.
+    /// The cloud's N2, turned round: the seat asks for its key and none comes. Its pool waits the
+    /// whole window, anyone then releases it, and whoever frees the seat hands the trader back the
+    /// price the pool kept, and the pool its size.
     function test_deep_N2_aSeatThatNeverOpensHandsItsTraderThePriceBack() public {
         MultiPool m = _pool();
         Pool seat = _armed(m);
-        _spoilTop(registry.MAX_SPOILED_SKIPS() + 1);
-        vm.expectRevert(KeyRegistry.TooManySpoiledKeys.selector);
         m.open(address(seat));
+        assertTrue(_asked(address(seat)), "asked, and never answered");
         vm.expectRevert(MultiPool.BadSeat.selector);
         m.finish(address(seat)); // the claim window is the account's to open in
+        vm.warp(block.timestamp + 7 days + 1);
+        vm.expectRevert(MultiPool.StillRunning.selector);
+        m.finish(address(seat)); // its pool still waits for the key
+        seat.abandonFundedStage();
+        assertFalse(_asked(address(seat)));
         uint256 before = m.value();
         uint64 aliceBefore = _spot(alice);
-        vm.warp(block.timestamp + 7 days + 1);
         vm.expectEmit(true, true, false, true, address(m));
         emit MultiPool.PriceReturned(address(seat), alice, uint64(PRICE) * 100);
         m.finish(address(seat));
@@ -215,6 +189,7 @@ contract DeepKeysTest is PoolHarness {
         MultiPool m = _pool();
         Pool seat = _armed(m);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
         vm.warp(block.timestamp + 31 days);
         (Cancel[] memory c, uint32[] memory a) = _none();
@@ -230,27 +205,27 @@ contract DeepKeysTest is PoolHarness {
     }
 
     /// A MultiPool's seat that trades renews its agent as any funded stage: in the last fourteen days
-    /// of the term, a fresh key for the same trader, the old one retired, one more key out of the
-    /// registry (the pools team, 19 October 2026).
+    /// of the term, a fresh key for the same trader, the old one retired (the pools team, 19 October
+    /// 2026).
     function test_renew_aSeatThatTradesGetsAFreshKeyForItsTrader() public {
         MultiPool m = _pool();
         Pool seat = _armed(m);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         address key = seat.agentKey();
-        uint256 free = registry.freeCount();
         vm.warp(uint256(seat.agentApprovedAt()) + seat.AGENT_TERM() - seat.RENEW_WINDOW());
         vm.recordLogs();
         vm.prank(attacker);
         seat.renewAgent();
+        _bindIfAsked(address(seat));
         (address[] memory from, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
         address fresh = seat.agentKey();
         assertTrue(fresh != key && fresh != address(0));
         assertEq(from[0], address(seat));
         assertEq(kind[0], 9);
         assertEq(args[0], abi.encode(fresh, _agentName(block.timestamp)), "the fresh key under pools, a new term");
-        assertTrue(registry.isBound(fresh, address(seat), alice), "the same trader");
-        assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
-        assertEq(registry.freeCount(), free - 1);
+        assertTrue(binder.isBound(fresh, address(seat), alice), "the same trader");
+        assertEq(uint8(binder.bindingOf(key).state), uint8(KeyBinder.State.Retired));
     }
 
     /// A seat sends on HyperCore to anyone only on its pool's word, and only while no trader holds it.
@@ -261,23 +236,52 @@ contract DeepKeysTest is PoolHarness {
         vm.expectRevert(Pool.NotOwner.selector);
         seat.sendOnCore(attacker, 1e8);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         vm.prank(address(m));
         vm.expectRevert(abi.encodeWithSelector(Pool.BadStage.selector, Pool.Stage.Funded));
         seat.sendOnCore(attacker, 1e8);
     }
 
-    /// The way out of the block, which anyone may take and the keeper takes: purge the spoiled
-    /// keys, and the seat opens on the live one underneath.
-    function test_deep_N2_control_aPurgeOpensTheSeat() public {
+    /// The guardian's pause holds every binding: the seat waits, asked, and opens once the owner
+    /// lifts the pause and the key comes.
+    function test_aPauseHoldsTheSeatsKey_untilTheOwnerLiftsIt() public {
         MultiPool m = _pool();
         Pool seat = _armed(m);
-        _spoilTop(registry.MAX_SPOILED_SKIPS() + 1);
-        vm.expectRevert(KeyRegistry.TooManySpoiledKeys.selector);
         m.open(address(seat));
-        vm.prank(attacker);
-        registry.purgeSpoiled(type(uint256).max);
-        m.open(address(seat));
+        vm.prank(guardian);
+        binder.pause();
+        address key = _newKey();
+        bytes memory sig = _sign(address(seat), key);
+        vm.expectRevert(KeyBinder.IsPaused.selector);
+        binder.bind(address(seat), key, sig);
+        vm.prank(guardian);
+        vm.expectRevert(KeyBinder.NotOwner.selector);
+        binder.unpause();
+        vm.prank(operator);
+        binder.unpause();
+        binder.bind(address(seat), key, sig);
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
+        assertEq(uint8(_seatState(m, address(seat))), uint8(MultiPool.SeatState.Funded));
+    }
+
+    /// A seat's MultiPool that cannot mark it funded holds the binding back whole: a pool funded under
+    /// an Armed seat would open a second stage for the same claim, or hand back the price of a stage its
+    /// trader had (a review on #252). The same signature binds once the MultiPool can.
+    function test_aSeatIsNotBound_whenItsMultiPoolCannotOpenIt() public {
+        MultiPool m = _pool();
+        Pool seat = _armed(m);
+        m.open(address(seat));
+        address key = _newKey();
+        bytes memory sig = _sign(address(seat), key);
+        vm.mockCallRevert(address(m), abi.encodeWithSelector(MultiPool.open.selector, address(seat)), "");
+        vm.expectRevert(Pool.SeatNotOpened.selector);
+        binder.bind(address(seat), key, sig);
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.PassedAwaitingKey));
+        vm.clearMockedCalls();
+        _everyOwnerRecognized();
+        binder.bind(address(seat), key, sig);
+        assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
+        assertEq(uint8(_seatState(m, address(seat))), uint8(MultiPool.SeatState.Funded));
     }
 
     // ── K-3: a MultiPool the factory knows ───────────────────────────────────────────
@@ -290,9 +294,11 @@ contract DeepKeysTest is PoolHarness {
         Pool seat = _armed(m);
         vm.expectRevert(Pool.NotOwnerRun.selector);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         vm.prank(operator);
         factory.setMultiPool(address(m), true);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
     }
 }

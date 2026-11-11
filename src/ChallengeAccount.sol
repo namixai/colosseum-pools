@@ -5,6 +5,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Rules, Terms, Cancel, Breach, Units} from "./Types.sol";
 import {CoreOps} from "./lib/CoreOps.sol";
 import {RuledAccount, IFactoryView} from "./RuledAccount.sol";
+import {KeyBinder} from "./KeyBinder.sol";
 
 interface IPoolHooks {
     function onChallengeStarted() external;
@@ -84,7 +85,6 @@ contract ChallengeAccount is RuledAccount {
     error TooLate();
     error NotFlat();
     error TargetNotMet(int64 equity, int256 target);
-    error KeySpoiled();
 
     constructor() {
         _disableInitializers();
@@ -100,8 +100,6 @@ contract ChallengeAccount is RuledAccount {
         _terms = terms_;
         status = Status.Created;
         createdAt = uint64(block.timestamp);
-        // The key is reserved now, so a trader who paid can always start.
-        agentKey = factory_.registry().assign(trader_);
     }
 
     function terms() external view returns (Terms memory) {
@@ -131,62 +129,70 @@ contract ChallengeAccount is RuledAccount {
             && CoreOps.spotUsdc(address(this)) >= _terms.capital * Units.SPOT_PER_PERP;
     }
 
-    /// @notice Whether the reserved key gained a HyperCore account before the start. HyperCore
-    ///         doesn't take such an address as an agent, so the challenge can't start, and
-    ///         anyone may abort it at once.
-    function keySpoiled() public view returns (bool) {
-        return status == Status.Created && CoreOps.exists(agentKey);
-    }
-
     /// @notice Starts the challenge once the capital has reached this account on HyperCore.
-    ///         Anyone may call it. On a builder dex it takes two calls: the first sends the
-    ///         capital to the dex, a later one starts the challenge once the dex shows it, so a
-    ///         transfer HyperCore dropped is never read as the trader's loss (audit window 2, V4-2).
+    ///         Anyone may call it. With the capital in place it asks the key binder for the
+    ///         trader's key, and the challenge starts when the key arrives (`_keyArrived`), in the
+    ///         block it is approved in, so nobody can spoil it on the way. On a builder dex it takes
+    ///         two calls before that: the first sends the capital to the dex, a later one asks for
+    ///         the key once the dex shows it, so a transfer HyperCore dropped is never read as the
+    ///         trader's loss (audit window 2, V4-2).
     function activate() external inStatus(Status.Created) {
+        if (keyAskedAt != 0) revert KeyAsked();
         uint64 capital = _terms.capital;
         if (sentToDexAt == 0) {
             if (!capitalArrived()) revert NotStartedOnCore();
-            if (CoreOps.exists(agentKey)) revert KeySpoiled();
             CoreOps.separateBalances(address(this));
             if (dex != 0) {
                 _sendToDex(capital);
                 return;
             }
             CoreOps.toPerp(capital, dex);
-        } else {
-            if (!_landed(int64(capital))) return;
-            if (CoreOps.exists(agentKey)) revert KeySpoiled();
+        } else if (!_landed(int64(capital))) {
+            return;
         }
+        _askKey(trader, KeyBinder.Purpose.Start);
+    }
+
+    function _keyArrived(address key) internal override {
+        if (status != Status.Created) revert BadStatus(status);
+        uint64 capital = _terms.capital;
         (address builder_, uint64 maxFee) = pool.builder();
         CoreOps.approveBuilder(builder_, maxFee);
-        _setAgent(agentKey);
+        _setAgent(key);
 
         startedAt = uint64(block.timestamp);
         deadline = startedAt + _terms.duration;
         _startDay(int64(capital));
         status = Status.Active;
         pool.onChallengeStarted();
-        emit Started(trader, agentKey, capital, deadline);
+        emit Started(trader, key, capital, deadline);
     }
 
-    /// @notice If the capital never arrived, anyone may call this after the start window; if
-    ///         the reserved key is spoiled, at any time. The trader's payment is refunded (the
-    ///         platform fee is not) and the reserved key retired. The capital, whenever it
-    ///         arrives, goes back to the pool through `settle`.
+    function _trader() internal view override returns (address) {
+        return trader;
+    }
+
+    /// @notice If the capital never arrived, anyone may call this after the start window; if the
+    ///         key was asked for and has not come, a start window after it was asked. The trader's
+    ///         payment, the price and the platform's fee, is refunded: the platform is paid only by a
+    ///         challenge that started. The capital, whenever it arrives, goes back to the pool
+    ///         through `settle`.
     function abort() external inStatus(Status.Created) {
-        if (!keySpoiled()) {
+        if (keyAskedAt != 0) {
+            // The capital was in place and the key did not come: the platform's fault, not the
+            // trader's. The window counts from the request, so a late `activate` is not cut short.
+            if (block.timestamp <= keyAskedAt + START_WINDOW) revert TooEarly();
+        } else {
             if (block.timestamp <= createdAt + START_WINDOW) revert TooEarly();
             // Capital sent to a builder dex has arrived once the dex shows it, and then `activate`
-            // starts the challenge: a unit from anybody else no longer holds the start, so the
-            // window is the one wait, and nobody can stretch it (self-audit v3, round 1, T1).
+            // asks for the key: a unit from anybody else no longer holds the start, so the window
+            // is the one wait, and nobody can stretch it (self-audit v3, round 1, T1).
             if (sentToDexAt != 0 ? accountEquity() >= int64(_terms.capital) : capitalArrived()) {
                 revert CapitalArrived();
             }
         }
         status = Status.Aborted;
-        address key = agentKey;
-        agentKey = address(0);
-        factory.registry().retire(key);
+        _dropAsk();
         pool.onChallengeAborted();
         emit Stopped(Status.Aborted, Breach.None, 0);
     }

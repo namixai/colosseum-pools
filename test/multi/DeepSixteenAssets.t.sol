@@ -116,6 +116,7 @@ contract DeepSixteenAssetsTest is PoolHarness {
         vm.startPrank(investor);
         p.runByOwner(false);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         vm.stopPrank();
         CoreSimulatorLib.nextBlock();
         _mockPosition(address(p), ODD, 100);
@@ -204,6 +205,7 @@ contract DeepSixteenAssetsTest is PoolHarness {
         seat = Pool(m.claim(address(e)));
         CoreSimulatorLib.nextBlock();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
     }
 

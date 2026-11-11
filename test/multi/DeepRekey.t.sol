@@ -7,7 +7,7 @@ import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {Rules, Cancel, Breach} from "../../src/Types.sol";
 import {Pool} from "../../src/Pool.sol";
 import {RuledAccount} from "../../src/RuledAccount.sol";
-import {KeyRegistry} from "../../src/KeyRegistry.sol";
+import {KeyBinder} from "../../src/KeyBinder.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {MultiPool, Plan, Size, AfterTarget} from "../../src/multi/MultiPool.sol";
 import {CodeStore} from "../../src/lib/CodeStore.sol";
@@ -118,7 +118,7 @@ contract DeepRekeyTest is PoolHarness {
     }
 
     /// Alice passes and claims; the seat is Armed and its money has landed. Returns the exam,
-    /// the seat, and the key the attacker predicts: the top of the registry's public free list.
+    /// the seat, and the key the binding will name.
     function _armed(MultiPool m) internal returns (PaperExam e, Pool seat, address nextKey) {
         e = _buy(m, alice, 2);
         _pass(e, alice);
@@ -126,28 +126,28 @@ contract DeepRekeyTest is PoolHarness {
         seat = Pool(m.claim(address(e)));
         CoreSimulatorLib.nextBlock();
         assertEq(_spot(address(seat)), 25e8, "the seat's money is there");
-        // No challenge was ever sold on this stand, so every published key is still free and
-        // `assign` takes the last one published (KeyRegistry.sol:126). KeyPublished events and
-        // `freeCount()` are public: the attacker knows the key before the block.
-        assertEq(registry.freeCount(), keys.length);
-        nextKey = keys[keys.length - 1];
-        assertEq(uint8(registry.bindingOf(nextKey).state), uint8(KeyRegistry.State.Free));
+        // Nothing names the key before the block that binds it: no list of free keys, no event
+        // ahead of it. What is left to a stranger is that block itself.
+        nextKey = _peekKey();
+        assertEq(uint8(binder.bindingOf(nextKey).state), uint8(KeyBinder.State.Unknown));
         assertFalse(PrecompileLib.coreUserExists(nextKey), "the key has no account yet");
     }
 
-    /// The attacker calls `open` (anyone may) and lands 1 USDC on the predicted key AFTER the
-    /// start-of-block read in KeyRegistry.assign and BEFORE the CoreWriter action executes.
+    /// The attacker calls `open` (anyone may), sees the key in the block that binds it, and lands
+    /// 1 USDC on it AFTER the start-of-block read in KeyBinder's binding and BEFORE the CoreWriter
+    /// action executes.
     function _openOnASpoiledKey(MultiPool m, Pool seat, address nextKey) internal returns (uint64 openedAt) {
         vm.prank(attacker);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         openedAt = uint64(block.timestamp);
-        // The seat is Funded on `nextKey`: the registry bound it, the pool set it as the agent.
+        // The seat is Funded on `nextKey`: the binder bound it, the pool set it as the agent.
         assertEq(seat.agentKey(), nextKey, "the predicted key was bound");
-        assertTrue(registry.isBound(nextKey, address(seat), alice));
+        assertTrue(binder.isBound(nextKey, address(seat), alice));
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
         // The spoiling transfer lands on HyperCore before the queued addApiWallet runs: the key
         // now has an account, and HyperCore does not take such an address as an agent
-        // (spike question 8, cited at KeyRegistry.sol:17-19 and Pool.sol:331-334).
+        // (spike question 8).
         CoreSimulatorLib.forceSpotBalance(nextKey, 0, 1e8);
         assertTrue(PrecompileLib.coreUserExists(nextKey), "the key has an account when the agent action runs");
         CoreSimulatorLib.nextBlock();
@@ -165,11 +165,12 @@ contract DeepRekeyTest is PoolHarness {
         _openOnASpoiledKey(m, seat, spoiled);
         vm.prank(alice);
         seat.rekey();
+        _bindIfAsked(address(seat));
         address fresh = seat.agentKey();
         assertTrue(fresh != spoiled, "a fresh key");
         assertFalse(PrecompileLib.coreUserExists(fresh), "one HyperCore will take as an agent");
-        assertTrue(registry.isBound(fresh, address(seat), alice), "bound to the seat, for alice");
-        assertEq(uint8(registry.bindingOf(spoiled).state), uint8(KeyRegistry.State.Retired));
+        assertTrue(binder.isBound(fresh, address(seat), alice), "bound to the seat, for alice");
+        assertEq(uint8(binder.bindingOf(spoiled).state), uint8(KeyBinder.State.Retired));
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded), "the stage goes on");
         assertEq(seat.fundedTrader(), alice);
         vm.prank(alice);
@@ -178,8 +179,8 @@ contract DeepRekeyTest is PoolHarness {
     }
 
     /// The audit's N-2 (16 October 2026), turned round: a key HyperCore took keeps working after it
-    /// gains an account, so a stranger's 1 USDC must not be enough to replace it, and the free list
-    /// must not drain. Only the stage's trader may ask for a fresh key, in the stage's first day,
+    /// gains an account, so a stranger's 1 USDC must not be enough to replace it, nor to have keys
+    /// signed one after another. Only the stage's trader may ask for a fresh key, in the stage's first day,
     /// twice at most. On ae0224cd a stranger spent every free key.
     function test_deep_AUD2_aStrangerCannotSpendTheKeys_andTheTraderOnlyTwiceInTheFirstDay() public {
         MultiPool m = _pool(_plan(AfterTarget.AccountCloses), 100e8);
@@ -187,25 +188,28 @@ contract DeepRekeyTest is PoolHarness {
         (, Pool seat, address k) = _armed(m);
         vm.prank(stranger);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
-        uint256 free0 = registry.freeCount();
         CoreSimulatorLib.forceSpotBalance(k, 0, 1e8); // the stranger's 1 USDC on a working key
         vm.prank(attacker);
         vm.expectRevert(Pool.NotAllowed.selector);
         seat.rekey();
+        _bindIfAsked(address(seat));
         assertEq(seat.agentKey(), k, "the trader's key stays");
-        assertEq(registry.freeCount(), free0, "no free key spent");
+        assertFalse(_asked(address(seat)), "no key asked for");
         // The trader may ask, twice; then no more.
         for (uint256 i = 0; i < 2; ++i) {
             CoreSimulatorLib.forceSpotBalance(seat.agentKey(), 0, 1e8);
             vm.prank(alice);
             seat.rekey();
+            _bindIfAsked(address(seat));
         }
         CoreSimulatorLib.forceSpotBalance(seat.agentKey(), 0, 1e8);
         vm.prank(alice);
         vm.expectRevert(RuledAccount.RekeyClosed.selector);
         seat.rekey();
-        assertEq(registry.freeCount(), free0 - 2);
+        _bindIfAsked(address(seat));
+        assertEq(binder.requestCount(address(seat)), 3, "the opening's key and two fresh ones");
     }
 
     /// After the stage's first day no fresh key is taken.
@@ -218,6 +222,7 @@ contract DeepRekeyTest is PoolHarness {
         vm.prank(alice);
         vm.expectRevert(RuledAccount.RekeyClosed.selector);
         seat.rekey();
+        _bindIfAsked(address(seat));
     }
 
     /// A seat whose key works keeps it.
@@ -226,9 +231,11 @@ contract DeepRekeyTest is PoolHarness {
         CoreSimulatorLib.forceAccountActivation(alice);
         (, Pool seat,) = _armed(m);
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
         vm.prank(alice);
         vm.expectRevert(RuledAccount.KeyWorks.selector);
         seat.rekey();
+        _bindIfAsked(address(seat));
     }
 }

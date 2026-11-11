@@ -6,7 +6,7 @@ import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {Rules, Terms, Units} from "./Types.sol";
 import {CoreOps} from "./lib/CoreOps.sol";
-import {KeyRegistry, IAccountSource} from "./KeyRegistry.sol";
+import {KeyBinder, IKeyAccounts} from "./KeyBinder.sol";
 import {IFactoryView} from "./RuledAccount.sol";
 import {Pool} from "./Pool.sol";
 import {ChallengeAccount, IPoolHooks} from "./ChallengeAccount.sol";
@@ -19,13 +19,15 @@ interface IExamSeller {
 /// @notice Creates pools and their challenges, and is the only word on which addresses are
 ///         ours. Keeps the platform's asset list (perp indices from the testnet meta) and the
 ///         builder fee every account approves.
-contract PoolFactory is IAccountSource, IFactoryView {
+contract PoolFactory is IKeyAccounts, IFactoryView {
     address public immutable poolImpl;
     address public immutable challengeImpl;
-    KeyRegistry public immutable registry;
+    KeyBinder public immutable binder;
     IERC20 public immutable usdc;
 
     address public operator;
+    /// Whom the operator handed the role to, until they accept it.
+    address public pendingOperator;
     address public builderAddress;
     uint64 public builderMaxFee;
     /// Paid by every challenge buyer to `feeRecipient`, on top of the pool's price, and never
@@ -41,8 +43,8 @@ contract PoolFactory is IAccountSource, IFactoryView {
     mapping(address => bool) public isPool;
     mapping(address => bool) public isChallenge;
     /// MultiPools the operator has recognized. Only a pool one of them owns may put a trader of its
-    /// own choosing on its capital, and so take a key from the registry with no challenge sold:
-    /// anyone else's pool run by its owner would take and retire a key for gas (audit K-3).
+    /// own choosing on its capital, and so ask for a key with no challenge sold:
+    /// anyone else's pool run by its owner would have keys signed for gas (audit K-3).
     mapping(address => bool) public isMultiPool;
     /// Exam implementations the operator approved; a shares contract binds no pool that sells
     /// another (the cloud audit, section 6).
@@ -67,6 +69,7 @@ contract PoolFactory is IAccountSource, IFactoryView {
     event FundedAssetSet(uint32 indexed asset, bool allowed);
     event BuilderSet(address indexed builder, uint64 maxFee);
     event OperatorSet(address indexed operator);
+    event OperatorTransferStarted(address indexed from, address indexed to);
     event ChallengeFeeSet(uint256 fee, address indexed recipient);
     event MultiPoolSet(address indexed pool, bool recognized);
     event ExamImplSet(address indexed impl, bool approved);
@@ -74,6 +77,7 @@ contract PoolFactory is IAccountSource, IFactoryView {
     event PoolSharesCreated(address indexed shares, address indexed creator, bytes32 code);
 
     error NotOperator();
+    error NotPendingOperator();
     error NotPool();
     error BadRules();
     error BadTerms();
@@ -88,8 +92,8 @@ contract PoolFactory is IAccountSource, IFactoryView {
     ///        (HLConstants.usdc()), or on testnet the demo's own (src/demo/DemoUsdc.sol), which the
     ///        chain's is not ours to mint. A deployment parameter, not a constant (the pools team, 19 October
     ///        2026); the deploy scripts name it and record it.
-    constructor(KeyRegistry registry_, address poolImpl_, address challengeImpl_, address operator_, IERC20 usdc_) {
-        registry = registry_;
+    constructor(KeyBinder binder_, address poolImpl_, address challengeImpl_, address operator_, IERC20 usdc_) {
+        binder = binder_;
         poolImpl = poolImpl_;
         challengeImpl = challengeImpl_;
         operator = operator_;
@@ -104,9 +108,19 @@ contract PoolFactory is IAccountSource, IFactoryView {
 
     // ── operator ─────────────────────────────────────────────────────────────────────
 
-    function setOperator(address operator_) external onlyOperator {
-        operator = operator_;
-        emit OperatorSet(operator_);
+    /// @notice Hands the role on in two steps: the address named accepts it itself, so a typo
+    ///         never takes the role to an address nobody holds. The role goes to the same owner as
+    ///         the key binder's, a multisig.
+    function transferOperator(address to) external onlyOperator {
+        pendingOperator = to;
+        emit OperatorTransferStarted(operator, to);
+    }
+
+    function acceptOperator() external {
+        if (msg.sender != pendingOperator) revert NotPendingOperator();
+        operator = msg.sender;
+        pendingOperator = address(0);
+        emit OperatorSet(msg.sender);
     }
 
     /// @notice Lists or delists perp assets pools may choose from. Delisting doesn't touch

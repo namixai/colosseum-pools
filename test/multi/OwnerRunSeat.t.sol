@@ -25,6 +25,7 @@ contract OwnerRunSeatTest is PoolHarness {
         p = _ownerRun(traderMayStop);
         vm.prank(investor);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         CoreSimulatorLib.nextBlock();
     }
 
@@ -99,12 +100,14 @@ contract OwnerRunSeatTest is PoolHarness {
         vm.prank(investor);
         vm.expectRevert(Pool.NotOwnerRun.selector);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
 
         vm.prank(investor);
         p.runByOwner(true);
         vm.prank(stranger);
         vm.expectRevert(Pool.NotOwner.selector);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
 
         // Money on the account is not enough: it has to have been prepared.
         vm.startPrank(investor);
@@ -113,6 +116,7 @@ contract OwnerRunSeatTest is PoolHarness {
         CoreSimulatorLib.forceSpotBalance(address(raw), 0, 1000e8);
         vm.expectRevert(Pool.NotReady.selector);
         raw.openFundedFor(trader);
+        _bindIfAsked(address(raw));
         vm.stopPrank();
     }
 
@@ -120,17 +124,17 @@ contract OwnerRunSeatTest is PoolHarness {
         Pool p = _ownerRun(false);
         // Exactly the funded capital of the terms, 200 USDC, and nothing over.
         CoreSimulatorLib.forceSpotBalance(address(p), 0, 200e8);
-        uint256 free = registry.freeCount();
 
         vm.prank(investor);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
         assertEq(p.fundedTrader(), trader);
         assertEq(p.fundedStart(), 200e6);
         assertEq(uint8(p.fundedEndReason()), uint8(Breach.None));
         assertEq(p.dayStartEquity(), 200e6);
-        assertEq(registry.freeCount(), free - 1, "one key taken");
-        assertEq(registry.keyOf(address(p)), p.agentKey());
+        assertEq(binder.requestCount(address(p)), 1, "one key asked for, and bound");
+        assertEq(binder.keyOf(address(p)), p.agentKey());
         assertTrue(p.agentKey() != address(0));
 
         CoreSimulatorLib.nextBlock();
@@ -144,6 +148,7 @@ contract OwnerRunSeatTest is PoolHarness {
         vm.prank(investor);
         vm.expectRevert(abi.encodeWithSelector(Pool.NotEnoughCapital.selector, uint64(200e8 - 1), uint64(200e8)));
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
     }
 
@@ -156,12 +161,14 @@ contract OwnerRunSeatTest is PoolHarness {
         p.withdrawOnCore(900e8);
         vm.expectRevert(Pool.WithdrawnThisBlock.selector);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
         vm.stopPrank();
 
         CoreSimulatorLib.nextBlock();
         vm.prank(investor);
         vm.expectRevert(abi.encodeWithSelector(Pool.NotEnoughCapital.selector, uint64(100e8), uint64(200e8)));
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
     }
 
     // ── after the opening it is a funded stage like any other ─
@@ -205,6 +212,7 @@ contract OwnerRunSeatTest is PoolHarness {
         CoreSimulatorLib.nextBlock();
         vm.prank(investor);
         p.openFundedFor(second);
+        _bindIfAsked(address(p));
         assertEq(p.fundedTrader(), second);
         assertTrue(p.agentKey() != firstKey, "a new stage, a new key");
     }
@@ -247,9 +255,8 @@ contract OwnerRunSeatTest is PoolHarness {
     }
 
     /// The audit's K-3, turned round: a stranger's own pool, run by its owner, took a key from the
-    /// shared registry at every stage it opened and retired it at the end, for one account
-    /// activation and gas, until the registry was empty. An owner the factory does not know as a
-    /// MultiPool now opens nothing, and the keys stay for the pools that sell exams.
+    /// shared registry at every stage it opened, for one account activation and gas. An owner the
+    /// factory does not know as a MultiPool opens nothing, and asks for no key.
     function test_deep_K3_aStrangersOwnPoolTakesNoKey() public {
         vm.clearMockedCalls();
         address attacker = makeAddr("k3 attacker");
@@ -259,11 +266,10 @@ contract OwnerRunSeatTest is PoolHarness {
         p.prepareAccount();
         vm.prank(attacker);
         p.runByOwner(true);
-        uint256 free0 = registry.freeCount();
         vm.prank(attacker);
         vm.expectRevert(Pool.NotOwnerRun.selector);
         p.openFundedFor(attacker);
-        assertEq(registry.freeCount(), free0, "no key taken");
+        assertFalse(_asked(address(p)), "no key asked for");
 
         // An owner the operator recognized funds its trader on the same factory.
         vm.prank(operator);
@@ -271,8 +277,8 @@ contract OwnerRunSeatTest is PoolHarness {
         Pool honest = _ownerRun(false);
         vm.prank(investor);
         honest.openFundedFor(trader);
+        _bindIfAsked(address(honest));
         assertEq(uint8(honest.stage()), uint8(Pool.Stage.Funded));
-        assertEq(registry.freeCount(), free0 - 1);
     }
 
     /// Only the operator recognizes, and may take the recognition back: from then on the pool's
@@ -298,5 +304,6 @@ contract OwnerRunSeatTest is PoolHarness {
         vm.prank(investor);
         vm.expectRevert(Pool.NotOwnerRun.selector);
         p.openFundedFor(trader);
+        _bindIfAsked(address(p));
     }
 }
