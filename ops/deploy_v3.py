@@ -157,6 +157,8 @@ def mainnet_plan(args, net: dict, deploys: list[str], hashes: dict, code: str, o
         print(f"  gas              {dep['gas_total']:,} over {dep['transactions']} transactions: {dep['hype']:.4f} HYPE, "
               f"${dep['usd']:.2f} at today's prices ({ten['hype']:.4f} HYPE at ten times); big blocks for "
               f"{', '.join(dep['need_big_block']) or 'none'}  (scripts/mainnet_gas.py, read {g['read_at_utc']})")
+        print("                   measured on demo3's receipts, a deployment with a key registry and published keys: "
+              "the key binder's deployment, its settings and the handover are not in that figure")
     except Exception as exc:
         print(f"  gas              not read: {exc}")
     print(f"  would write      {out_path.relative_to(ROOT)}, after every transaction; then its entry in "

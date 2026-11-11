@@ -97,7 +97,7 @@ def settings(args, network: str) -> BinderSettings:
         raise SystemExit("--publisher needs --pcr-hash and --attestation-hash: the key binder takes neither as zero "
                          f"(on testnet before the enclave, both {TEST_PUBLISHER_HASH}, the keccak of "
                          f"{TEST_PUBLISHER_NOTE!r})")
-    if network == "mainnet" and pcr == TEST_PUBLISHER_HASH:
+    if network == "mainnet" and TEST_PUBLISHER_HASH in (pcr, doc):
         raise SystemExit("a publisher that is a key in a file is for testnet; on mainnet it is the enclave")
     max_binds = args.max_binds_per_day
     if max_binds is None and network != "mainnet":

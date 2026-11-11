@@ -376,6 +376,7 @@ def main() -> int:
             raise SystemExit(f"--network {args.network} is a dry run only: this repository sends nothing there, "
                              "and opening that is a decision of its own")
         return network_plan(args, p)
+    binder = kb.settings(args, "testnet")  # before anything is read or sent: a bad address costs nothing
     c.assert_testnet()
     if args.big_blocks_off:
         big_blocks(c.account(args.signer), False)
@@ -384,7 +385,6 @@ def main() -> int:
     if not (args.label and args.plan):
         p.error("--label and --plan are needed to deploy")
     checked_owner(args.owner)
-    binder = kb.settings(args, "testnet")  # before anything is sent: a bad address costs no gas
     out_path = ROOT / "deployments" / f"testnet-{args.label}.json"
     if out_path.exists():
         raise SystemExit(f"{out_path} exists; pick another label")

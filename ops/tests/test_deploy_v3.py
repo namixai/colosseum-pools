@@ -166,6 +166,7 @@ class DeployV3(unittest.TestCase):
         self.assertIn("rpc https://rpc.hyperliquid.xyz/evm", out)
         self.assertIn("BTC 0, ETH 1, SOL 5", out)
         self.assertIn("27,000,000 over 16 transactions", out)
+        self.assertIn("measured on demo3's receipts, a deployment with a key registry", out)
         self.assertIn("KeyBinder(deployer, 200 a day, renewal delay 86400 s)", out)
         self.assertNotIn("publish ", out)
         self.assertIn("would write      deployments/mainnet-v3-v3.json", out)
@@ -242,11 +243,12 @@ class DeployV3(unittest.TestCase):
 
     def test_a_test_publisher_is_refused_on_mainnet(self):
         h = d.kb.TEST_PUBLISHER_HASH
-        with mock.patch.object(d.sys, "argv", ["deploy_v3", "--label", "v3", "--network", "mainnet", "--dry-run",
-                                               "--publisher", PUBLISHER, "--pcr-hash", h, "--attestation-hash", h]), \
-                self.assertRaises(SystemExit) as caught:
-            d.main()
-        self.assertIn("testnet", str(caught.exception))
+        for pcr, doc in ((h, h), (h, DOC), (PCR, h)):
+            with mock.patch.object(d.sys, "argv", ["deploy_v3", "--label", "v3", "--network", "mainnet", "--dry-run",
+                                                   "--publisher", PUBLISHER, "--pcr-hash", pcr, "--attestation-hash", doc]), \
+                    self.assertRaises(SystemExit, msg=(pcr, doc)) as caught:
+                d.main()
+            self.assertIn("testnet", str(caught.exception))
 
     def test_a_test_publisher_on_testnet_is_said_and_recorded_as_one(self):
         h = d.kb.TEST_PUBLISHER_HASH

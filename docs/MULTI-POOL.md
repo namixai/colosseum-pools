@@ -127,8 +127,8 @@ the window is released and its price stays with the pool, as a failed exam's doe
 no key, so a trader who passed can always claim and be paid back. A funded
 seat whose key gained a HyperCore account in the block it was bound, so that HyperCore never made
 it the agent, asks for a fresh key with `rekey()` on the seat, which the publisher signs; the
-trader keeps the stage (deep audit F10). Only the stage's trader may ask, in the stage's first day,
-twice at most: a key HyperCore took keeps working after it gains an account, so on anyone's word a
+trader keeps the stage (deep audit F10). Only the stage's trader may ask, within a day of the key's latest approval
+(the stage's opening or its latest renewal), twice at most for each such key: a key HyperCore took keeps working after it gains an account, so on anyone's word a
 stranger's 1 USDC would replace a working key and have the platform sign keys one by one (the
 audit's AUD-2).
 

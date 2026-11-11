@@ -199,6 +199,8 @@ def read(block: str, dex_names: list[str], seats: set[str], record: dict) -> dic
                   "publisher": address(call(kb, "publisher()", block=block)),
                   "guardian": address(call(kb, "guardian()", block=block)),
                   "paused": uint(call(kb, "paused()", block=block)) == 1,
+                  "max_binds_per_day": uint(call(kb, "maxBindsPerDay()", block=block)),
+                  "renew_delay": uint(call(kb, "renewDelay()", block=block)),
                   "factory_operator": address(call(factory, "operator()", block=block)),
                   "factory_pending_operator": address(call(factory, "pendingOperator()", block=block)),
                   "record_says": {"deployer": record.get("deployer"), "key_binder": record.get("key_binder") or {},
@@ -313,6 +315,15 @@ def binder_mismatches(result: dict) -> list[str]:
                 out.append(f"key binder {what} does not match the record: {where}: {held} on chain, {expected} in the record")
         if b["paused"]:
             out.append(f"key binder is paused: {where}: no key is bound until the owner lifts it")
+        # The fuse and the renewal's wait, as deployed or as the record was last told: a guardian's cut, to zero
+        # above all (no key bound at all), shows here until the record says it.
+        for what, held, field in (("daily limit", b.get("max_binds_per_day"), "max_binds_per_day"),
+                                  ("renewal delay", b.get("renew_delay"), "renew_delay")):
+            recorded = says["key_binder"].get(field)
+            if held is not None and recorded is not None and held != recorded:
+                out.append(f"key binder {what} does not match the record: {where}: {held} on chain, {recorded} in the record")
+        if b.get("max_binds_per_day") == 0:
+            out.append(f"key binder binds nothing: {where}: its daily limit is 0")
     return out
 
 

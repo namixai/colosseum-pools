@@ -190,7 +190,9 @@ class PlanOf(unittest.TestCase):
         handover = src.index("for name, to, sig, types, values in kb.handover(key_binder, factory, binder):")
         self.assertLess(src.index('record["tx"]["setMultiPool"] = c.transact('), handover)
         # The settings are checked before the first contract, beside the owner: a bad address costs no gas.
-        early = src.index('binder = kb.settings(args, "testnet")  # before anything is sent')
+        early = src.index('binder = kb.settings(args, "testnet")  # before anything is read or sent')
+        self.assertLess(early, src.index("c.assert_testnet()", src.index("return network_plan(args, p)")),
+                        "before the first read of the node")
         self.assertLess(early, src.index('deploy_contract(op, out_path, record, "KeyBinder"'))
         self.assertIn("kb.after_step(record, name, binder, op.address)", src[handover:])
         self.assertNotIn("publish(address[])", src, "a binder publishes no keys")
