@@ -215,7 +215,8 @@ def gateway_limits(record: dict) -> str:
 # node whose address carries a key has no place in it; and a line systemd reads must hold no space or quote.
 NODE_URL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?")
 # The widest eth_getLogs window the keeper takes from each node (ops/keeper.py, MAX_LOG_WINDOW and
-# MAX_BACKUP_LOG_WINDOW): Hyperliquid's node answers 50 blocks at most, thirdweb's 1000 (measured 11 Nov 2026).
+# MAX_BACKUP_LOG_WINDOW): Hyperliquid's node answers 50 blocks at most; of second nodes thirdweb's answered 1000 and
+# dRPC's public one answers 101 (measured 11 Nov 2026), and the record names the window its own node takes.
 KEEPER_MAX_LOG_WINDOW = {"primary": 50, "backup": 1000}
 KEEPER_NODE_ENV = {"primary": ("COLOSSEUM_RPC_URL", "COLOSSEUM_LOG_WINDOW"),
                    "backup": ("COLOSSEUM_RPC_BACKUP_URL", "COLOSSEUM_BACKUP_LOG_WINDOW")}

@@ -35,21 +35,33 @@ waits out the 63-second ladder `common.rpc` keeps for every other read: the next
 tries again. Measured 11 Nov 2026: Hyperliquid's testnet node has no blocks 69038325 to 69071492 (8 Nov, 02:49:51
 to 11:54:26 UTC) and answers `invalid block range` for any window in them, so the scan stood on 69038325 for three
 days; once the node's daily allowance of old blocks for the host was spent on that one window, each pass waited out
-those 63 seconds on it before it looked at a single account (97 s a pass, not 30). thirdweb's node has them and
-answers 1000 blocks a call. A 429 from the second node is waited out BACKUP_BUSY_PAUSE_S at a time, up to
-BACKUP_BUSY_WAIT_MAX_S a pass. The scan has caught up once it stands within one window of the head; it says so
-once, `scan_caught_up`.
+those 63 seconds on it before it looked at a single account (97 s a pass, not 30). Other nodes have them: the
+record's second node (dRPC's public one since 11 Nov 2026, 100 blocks a call; thirdweb's before it, which then
+answered the host's address 429 to every call). A 429 from the second node is waited out BACKUP_BUSY_PAUSE_S at a
+time, up to BACKUP_BUSY_WAIT_MAX_S a pass. The scan has caught up once it stands within one window of the head; it
+says so once, `scan_caught_up`.
+
+A stretch read off the host. The record's `keeper_scan_floor` says that blocks `read_from` up to `block` were read
+somewhere else, every log of the factory, and held no ChallengeCreated; its `evidence` is the file in this repository
+with that read, which anyone can repeat. A keeper whose place is inside the stretch starts at `block` instead
+(`scan_floor`), and one whose place is outside it is not moved: a place before `read_from` has blocks nobody read.
+The sweep of the factory's pool list still follows every pool, so the floor only spares the scan a catch-up the host
+cannot make: 300,000 old blocks, against a node that allows the host 3000 old blocks a day.
 
 For every pool it follows, one pass does what is due:
   challenge Created  → abort at once if the reserved key is spoiled; activate once the capital
                        is there, and on a builder dex once more when the dex shows it (the
-                       first call only sends it there); abort after the start window if not
+                       first call only sends it there); abort after the start window if not.
+                       On a factory with a key binder there is no reserved key: activate asks
+                       for one, the relay answers (ops/key_relay.py), and a start window after
+                       the request with no key bound, abort
   challenge Active   → checkpoint in the first minutes of a UTC day; breach if a rule is broken;
                        expire after the deadline; otherwise renew an agent whose term is ending
                        (factory v3) and say so if a position has no stop
   challenge stopped  → recut if the cut key still trades; settle one step, held back while the
                        book has nothing to close its position into (`settle_due`)
   pool Funded        → checkpoint; breach if a rule is broken; otherwise the same renewal and stop check
+  any open request   → answered by the relay; a renewal is not asked again while one waits
   pool Closing       → recut if the cut key still trades; settleFunded one step, held back the same way
 
 HyperCore ignores a replacement agent that already has an account (spike question 8, 17 Sep
@@ -86,6 +98,7 @@ import bisect
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 from decimal import Decimal
@@ -97,6 +110,7 @@ from gateway.weight import METER
 from gateway.assets import MAIN_DEX, dex_index_of, order_asset, parse_perp_dexs, weekend_flat_due
 from ops import deployments
 from ops.contract_errors import refusal
+from ops.key_relay import LocalPublisher, Relay
 from spike.hlspike import common as c
 
 ZERO = "0x0000000000000000000000000000000000000000"
@@ -110,11 +124,13 @@ CHALLENGE_CREATED = "0x" + keccak(text="ChallengeCreated(address,address,address
 TOO_EARLY = keccak(text="TooEarly()")[:4].hex()
 STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 MAX_LOG_WINDOW = 50  # blocks per eth_getLogs call that HyperEVM accepts
-# Blocks per eth_getLogs call on the second node: thirdweb answers 1000 and refuses 2000 (measured 11 Nov 2026).
+# Blocks per eth_getLogs call on the second node, at most: thirdweb answered 1000 and refused 2000, dRPC's public node
+# answers 101 and refuses more (both measured 11 Nov 2026). The record names the window its node takes.
 MAX_BACKUP_LOG_WINDOW = 1000
 # One scan call to either node: a timeout is a refusal, and the window goes to the other node or to the next pass.
 SCAN_TIMEOUT_S = 10.0
-# The second node's 429: thirdweb answered about five calls in a row, then 429 for a few seconds (11 Nov 2026).
+# The second node's 429: thirdweb answered about five calls in a row, then 429 for a few seconds (11 Nov 2026); dRPC
+# answered 40 windows in a row from a laptop without one (11 Nov 2026), from the host it is to be measured.
 # Waited out this long at a time and no longer than the most below in one pass; past it the scan stops till the next.
 BACKUP_BUSY_PAUSE_S = 2.0
 BACKUP_BUSY_WAIT_MAX_S = 10.0
@@ -512,6 +528,59 @@ def listed_agents(account: str) -> list[dict] | None:
         return None
 
 
+# The relay that answers the key binder's requests (ops/key_relay.py). None until the first account asks: then
+# one with no publisher, which only says so (`key_asked`). main() puts one with the publisher in its place.
+RELAY: Relay | None = None
+
+
+def relay() -> Relay:
+    global RELAY
+    if RELAY is None:
+        RELAY = Relay(None, c.CHAIN_ID, lambda *a, **k: view(*a, **k), lambda *a, **k: send(*a, **k),
+                      lambda body: info(body), lambda *a, **k: log(*a, **k))
+    return RELAY
+
+
+# Accounts whose keyAskedAt() reverted: deployed before the binder, and they stay so. Asked once a run.
+_before_binder: set[str] = set()
+
+
+def publisher_args(p) -> None:
+    """The key binder's publisher, on testnet a key in a file (ops/key_relay.py), and the gateway's key directory it
+    makes agent keys into. Without them the keeper answers no request and says so (`key_asked`). The MultiPool's
+    keeper takes the same two (ops/multi_keeper.py)."""
+    p.add_argument("--publisher-wallet", default=os.environ.get("COLOSSEUM_PUBLISHER_WALLET", ""),
+                   help="testnet only: the wallet that signs bindings for the key binder; none when empty")
+    p.add_argument("--keys-dir", default=os.environ.get("GATEWAY_KEYS_DIR", ""),
+                   help="the gateway's owner-only key directory, where the publisher writes the keys it signs")
+
+
+def use_publisher(args) -> None:
+    """The relay of this process, with the publisher the arguments name; none named, none set."""
+    global RELAY
+    if not args.publisher_wallet:
+        return
+    if not args.keys_dir:
+        raise SystemExit("--publisher-wallet needs --keys-dir: a key the chain binds must be one the gateway holds")
+    publisher = LocalPublisher(c.account(args.publisher_wallet), pathlib.Path(args.keys_dir), c.CHAIN_ID)
+    RELAY = Relay(publisher, c.CHAIN_ID, view, send, info, log)
+
+
+def key_asked_at(account: str) -> int | None:
+    """When `account` asked the key binder for a key it still waits for, zero when it waits for none; None on an
+    account deployed before the binder (demo2, demo3), whose read reverts: it takes its keys from a registry, and
+    the keeper serves it as before. Any other failure goes up, as for any read."""
+    if account.lower() in _before_binder:
+        return None
+    try:
+        return view(account, "keyAskedAt()", "uint64")
+    except Exception as exc:
+        if "revert" in str(exc).lower():
+            _before_binder.add(account.lower())
+            return None
+        raise
+
+
 def renew_if_due(wallet, account: str, now: int, dry: bool) -> None:
     """Renews the account's agent from the last RENEW_WINDOW of its term on: the term HyperCore shows
     for the key, the one the account asked for when HyperCore would not say; once the term the account
@@ -545,6 +614,16 @@ def renew_if_due(wallet, account: str, now: int, dry: bool) -> None:
     if ends - RENEW_WINDOW <= now and (term - RENEW_WINDOW <= now or now >= ends):
         log("renew_agent", account=account, key=key, asked_until=asked)
         send(wallet, account, "renewAgent()", dry=dry)
+
+
+def keyed_or_renew(wallet, account: str, now: int, dry: bool) -> None:
+    """For a trading account: an open request is answered (a renewal, a spoiled key's replacement, a key the
+    guardian revoked), and the renewal is not asked again while it waits -- the account would refuse it,
+    `KeyAsked`. With none open, the renewal and its alarms as before."""
+    if key_asked_at(account):
+        relay().serve(wallet, account, now, dry)
+    else:
+        renew_if_due(wallet, account, now, dry)
 
 
 def unprotected(account: str, book: tuple[dict, list] | None = None) -> list[dict]:
@@ -852,7 +931,17 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
     """One pass over a challenge. False when Hyperliquid refused a read this account needed."""
     status = view(ch, "status()", "uint8")
     if status == CREATED:
-        if view(ch, "keySpoiled()", "bool"):
+        asked = key_asked_at(ch)
+        if asked:
+            # The capital is in place and the challenge asked for its key. Past a start window from the
+            # request it is the platform's fault, and the contract takes abort(): the buyer gets the price
+            # and the fee back. Until then the relay answers the request.
+            if now > asked + START_WINDOW:
+                log("key_late", account=ch, asked_at=asked)
+                send(wallet, ch, "abort()", dry=dry)
+            else:
+                relay().serve(wallet, ch, now, dry)
+        elif asked is None and view(ch, "keySpoiled()", "bool"):
             log("key_spoiled", account=ch)
             send(wallet, ch, "abort()", dry=dry)
         elif view(ch, "capitalArrived()", "bool"):
@@ -890,7 +979,7 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
             # The stops first: a term read that fails raises, and must not take their check with it.
             if book is not None:
                 check_protection(ch, book, now)
-            renew_if_due(wallet, ch, now, dry)
+            keyed_or_renew(wallet, ch, now, dry)
         return book is not None
     else:
         recut_if_uncut(wallet, ch, latest, dry)
@@ -916,7 +1005,11 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
         # (NotAllowed, self-audit v3, round 1, T3). MultiPool, the ownerRun flag and the keeper of
         # its seats (ops/multi_keeper.py) come with the round-1 contract fixes; on contracts without
         # them owner_run reads False and the stage is opened here, as before.
-        if owner_run(pool):
+        # On a factory with a key binder the stage asks for its key once (`keyAskedAt`), and the relay
+        # answers; a pool its owner runs is answered too, its owner having asked.
+        if key_asked_at(pool):
+            relay().serve(wallet, pool, now, dry)
+        elif owner_run(pool):
             log("owner_runs_it", account=pool, call="openFundedStage()")
         else:
             send(wallet, pool, "openFundedStage()", dry=dry)
@@ -933,7 +1026,7 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
             else:
                 if book is not None:
                     check_protection(pool, book, now)
-                renew_if_due(wallet, pool, now, dry)
+                keyed_or_renew(wallet, pool, now, dry)
             checked = checked and book is not None
         else:
             recut_if_uncut(wallet, pool, latest, dry)
@@ -1002,7 +1095,8 @@ def ring(order: list[str], resume_at: str | None) -> list[str]:
 class Keeper:
     def __init__(self, factory: str, wallet, dry: bool, state_path: pathlib.Path, start_block: int,
                  window: int = MAX_LOG_WINDOW, max_windows: int = 50, sweep_every: int = SWEEP_EVERY,
-                 backup: str | None = None, backup_window: int = MAX_BACKUP_LOG_WINDOW, wait=time.sleep):
+                 backup: str | None = None, backup_window: int = MAX_BACKUP_LOG_WINDOW, wait=time.sleep,
+                 floor: tuple[int, int] | None = None):
         if not 1 <= window <= MAX_LOG_WINDOW:
             raise SystemExit(f"--log-window must be 1..{MAX_LOG_WINDOW}: HyperEVM refuses wider eth_getLogs ranges")
         if not 1 <= backup_window <= MAX_BACKUP_LOG_WINDOW:
@@ -1045,6 +1139,12 @@ class Keeper:
             self.live = {to_checksum_address(p) for p in state["live"]}
             at = state.get("resume_at")
             self.resume_at = to_checksum_address(at) if at else None
+        # A stretch read off the host (`keeper_scan_floor`): skipped only from a place inside it.
+        if floor is not None:
+            read_from, block = floor
+            if read_from <= self.next_block < block:
+                log("scan_floor", from_block=self.next_block, to_block=block, read_from=read_from)
+                self.next_block = block
 
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1318,6 +1418,28 @@ class Keeper:
         log("weight_per_min", **METER.per_minute(), accounts_with_position=len(_with_position))
 
 
+EVIDENCE_FILE = re.compile(r"deployments/evidence/[A-Za-z0-9][A-Za-z0-9._-]*\.json")
+
+
+def scan_floor(record: dict) -> tuple[int, int] | None:
+    """The record's `keeper_scan_floor` as (read_from, block): blocks read_from to block - 1 were read off the host and
+    held no ChallengeCreated of the factory (its `evidence` file has the read). None without one; a floor that does
+    not say a stretch is refused, since a keeper that skipped on a misread one would never see what it skipped."""
+    floor = record.get("keeper_scan_floor")
+    if floor is None:
+        return None
+    if not isinstance(floor, dict) or set(floor) != {"read_from", "block", "evidence"}:
+        raise SystemExit(f"keeper_scan_floor must be an object of read_from, block and evidence, not {floor!r}")
+    read_from, block, evidence = floor["read_from"], floor["block"], floor["evidence"]
+    if not all(isinstance(n, int) and not isinstance(n, bool) for n in (read_from, block)) or not 0 <= read_from < block:
+        raise SystemExit(f"keeper_scan_floor: {read_from!r} to {block!r} is not a stretch of blocks")
+    # A file directly in deployments/evidence/, by a plain name: no subdirectory, no "..", not the folder itself (review,
+    # 11 Nov 2026).
+    if not isinstance(evidence, str) or not EVIDENCE_FILE.fullmatch(evidence):
+        raise SystemExit(f"keeper_scan_floor: evidence {evidence!r} is not a .json file in deployments/evidence/")
+    return read_from, block
+
+
 def deployment_block(record: dict) -> int:
     if "block" in record:
         return int(record["block"])
@@ -1384,6 +1506,7 @@ def main() -> int:
                    help="the perp dexes read besides Hyperliquid's own (HIP-3), comma-separated, e.g. xyz")
     p.add_argument("--sweep-every", type=int, default=SWEEP_EVERY,
                    help="passes between reads of the factory's pool list (and on the first pass)")
+    publisher_args(p)
     args = p.parse_args()
 
     global PERP_DEXES
@@ -1393,9 +1516,10 @@ def main() -> int:
     record = deployments.load(args.deployment)
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"keeper-{args.deployment}.json"
     wallet = None if args.dry_run else c.account(args.wallet)
+    use_publisher(args)
     keeper = Keeper(record["PoolFactory"], wallet, args.dry_run, state, deployment_block(record),
                     window=args.log_window, max_windows=args.max_windows, sweep_every=args.sweep_every,
-                    backup=args.backup_rpc, backup_window=args.backup_log_window)
+                    backup=args.backup_rpc, backup_window=args.backup_log_window, floor=scan_floor(record))
     while True:
         try:
             keeper.one_pass()

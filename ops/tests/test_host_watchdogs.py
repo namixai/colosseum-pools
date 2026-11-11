@@ -49,7 +49,7 @@ def load(name: str, env: dict[str, str] | None = None):
     dont_write, sys.dont_write_bytecode = sys.dont_write_bytecode, True
     try:
         with mock.patch.dict(os.environ, wanted):
-            for var in ("POOLS_WATCH_RPC", "POOLS_WATCH_RPC_FALLBACK", "COLOSSEUM_RPC_BACKUP_URL",
+            for var in ("POOLS_WATCH_RPC", "POOLS_WATCH_RPC_FALLBACK", "COLOSSEUM_RPC_BACKUP_URL", "COLOSSEUM_RPC_URL",
                         "POOLS_WATCH_KEYS_RPC", "POOLS_WATCH_KEYS_RPC_FALLBACK"):
                 if var not in wanted:
                     os.environ.pop(var, None)
@@ -334,13 +334,45 @@ class KeysWatch(unittest.TestCase):
         self.assertIn(f"READ THE FALLBACK NODE {BACKUP}", out)
         self.assertNotIn("(retries:", out, "a broken node is not waited for")
 
-    def test_a_busy_node_is_waited_out_on_the_same_node_not_left(self):
+    def test_a_busy_node_is_waited_out_on_the_same_node_and_then_the_fallback_gets_one_try(self):
+        # The whole ladder on the first node, then one try on the fallback, which then reads the rest of the run.
+        # From the host, 11 Nov 2026: thirdweb's node answered 429 to every call, and the run was exit 3 every time.
         node = RegistryNode(self.mod)
         node.behaviour[PRIMARY] = "busy"
-        code, out, err = self.run_with(node)
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 0)
+        self.assertIn(f"READ THE FALLBACK NODE {BACKUP}", out)
+        self.assertIn("busy past the ladder", out)
+        asked = [u for u, _ in node.asked]
+        self.assertEqual(asked[:8], [PRIMARY] * 7 + [BACKUP], "seven tries on the first node, then the fallback")
+        self.assertEqual(set(asked[7:]), {BACKUP}, "the rest of the run reads the fallback")
+
+    def test_busy_on_both_nodes_is_could_not_check_after_one_try_on_the_fallback(self):
+        node = RegistryNode(self.mod)
+        node.behaviour[PRIMARY] = node.behaviour[BACKUP] = "busy"
+        code, _, err = self.run_with(node)
         self.assertEqual(code, 3)
         self.assertIn("7 failures in a row, 63 s of pauses", err)
-        self.assertEqual({u for u, _ in node.asked}, {PRIMARY}, "the fallback is for a broken node, not a busy one")
+        self.assertEqual([u for u, _ in node.asked], [PRIMARY] * 7 + [BACKUP])
+
+    def test_a_busy_node_with_no_fallback_is_could_not_check_after_the_ladder(self):
+        node = RegistryNode(self.mod)
+        node.behaviour[PRIMARY] = "busy"
+        code, _, err = self.run_with(node, "--rpc-fallback", "")
+        self.assertEqual(code, 3)
+        self.assertIn("7 failures in a row, 63 s of pauses", err)
+        self.assertEqual({u for u, _ in node.asked}, {PRIMARY})
+
+    def test_the_nodes_are_the_deployments_record_and_watch_env_names_one_only_where_it_names_none(self):
+        hl, backup = "https://record.example/evm", "https://record-backup.example/evm"
+        rec = load("keys_watch", {"COLOSSEUM_RPC_URL": hl, "COLOSSEUM_RPC_BACKUP_URL": backup,
+                                  "POOLS_WATCH_KEYS_RPC": "https://hand.example", "POOLS_WATCH_KEYS_RPC_FALLBACK": "https://hand2.example"})
+        self.assertEqual((rec.RPC_URL, rec.RPC_FALLBACK_URL), (hl, backup), "the record wins")
+        hand = load("keys_watch", {"POOLS_WATCH_KEYS_RPC": "https://hand.example", "POOLS_WATCH_KEYS_RPC_FALLBACK": "https://hand2.example"})
+        self.assertEqual((hand.RPC_URL, hand.RPC_FALLBACK_URL), ("https://hand.example", "https://hand2.example"))
+        bare = load("keys_watch")
+        self.assertEqual((bare.RPC_URL, bare.RPC_FALLBACK_URL), ("https://rpc.hyperliquid-testnet.xyz/evm", ""))
+        self.assertNotIn("thirdweb.com", (DOGS / "keys_watch.py").read_text())
 
     def test_a_broken_node_with_no_fallback_is_could_not_check(self):
         node = RegistryNode(self.mod)
@@ -497,13 +529,22 @@ class KeeperWatch(unittest.TestCase):
         self.assertIn(f"READ THE FALLBACK NODE {BACKUP}", out)
         self.assertEqual([u for u, _ in node.asked].count(PRIMARY), 1, "left the first node at the first refusal")
 
-    def test_a_busy_node_is_waited_out_and_the_fallback_is_not_used(self):
+    def test_a_busy_node_is_waited_out_and_then_the_fallback_gets_one_try(self):
         node = self.chain()
+        node.add_pool(stage=self.mod.IDLE)
         node.behaviour[PRIMARY] = "busy"
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 0)
+        self.assertIn(f"READ THE FALLBACK NODE {BACKUP}", out)
+        self.assertEqual([u for u, _ in node.asked][:8], [PRIMARY] * 7 + [BACKUP])
+
+    def test_busy_on_both_nodes_is_could_not_check_after_one_try_on_the_fallback(self):
+        node = self.chain()
+        node.behaviour[PRIMARY] = node.behaviour[BACKUP] = "busy"
         code, _, err = self.run_with(node)
         self.assertEqual(code, 3)
         self.assertIn("7 failures in a row, 63 s of pauses", err)
-        self.assertEqual({u for u, _ in node.asked}, {PRIMARY})
+        self.assertEqual([u for u, _ in node.asked], [PRIMARY] * 7 + [BACKUP])
 
     def test_an_exhausted_allowance_with_no_fallback_is_could_not_check(self):
         node = self.chain()
@@ -547,9 +588,10 @@ class KeeperWatch(unittest.TestCase):
         self.assertEqual(load("keeper_watch").RPC_FALLBACK_URL, "")
         self.assertNotIn("thirdweb", (DOGS / "keeper_watch.py").read_text())
 
-    def test_the_two_checks_do_not_share_a_first_node(self):
-        self.assertNotEqual(load("keys_watch").RPC_URL, load("keeper_watch").RPC_URL)
-        # and the variables that move them have names of their own, or one line in watch.env would move both
+    def test_the_variables_that_move_the_two_checks_by_hand_have_names_of_their_own(self):
+        # Both checks read Hyperliquid's node first since 11 Nov 2026 (the keys check took the record's node when
+        # thirdweb's refused the host every call), and the record's second node after it. A line in watch.env still
+        # moves one check and not the other.
         self.assertNotEqual("POOLS_WATCH_KEYS_RPC", "POOLS_WATCH_RPC")
         self.assertIn('"POOLS_WATCH_KEYS_RPC"', (DOGS / "keys_watch.py").read_text())
         self.assertIn('"POOLS_WATCH_RPC"', (DOGS / "keeper_watch.py").read_text())

@@ -381,7 +381,8 @@ only on the host, through SSM once the rule is gone.
 
 ### What the record sets
 
-A deployment whose record has `gateway_limits` (`deployments/testnet-v3-demo3.json` since 10 November 2026)
+A deployment whose record has `gateway_limits` (`deployments/testnet-v3-demo3.json` since 10 November 2026,
+`deployments/testnet-demo2.json` since 11 November 2026)
 takes its gateway's limits from the release instead of from a line by hand. `install.sh` writes
 `/etc/colosseum/deployment-<name>.env` (`deployment.env` for the first instance) from
 `python -m ops.host_instances deployment-env <label>` at every deploy, and that file now carries, besides the
@@ -393,14 +394,20 @@ order, leverage cap) and builder dexes.
 `gateway-<name>.env` / `keeper-<name>.env`, and systemd keeps the last value it reads: a line by hand for one
 of these variables is ignored once the record has `gateway_limits`. A perp is added, taken off or given
 another cap by a change to the record, its review and a deploy, not by an edit on the host. A deployment
-whose record has none, as demo2's today, renders the addresses alone, and its `gateway.env` still says its
-limits as below. `ops/tests/test_host_instances.py` holds the rendered lines to what the gateway reads and
+whose record has none renders the addresses alone, and its `gateway.env` still says its limits as below.
+demo2's record takes over the three lines its `gateway.env` had by hand (BTC, ETH and SOL, no builder dex;
+read on the host on 11 November 2026), in the same order, so the rendered lines are the same bytes and the
+gateway sees no change. The hand-kept lines are overridden from that deploy on, but they stay: a rollback to a
+release whose demo2 record has no `gateway_limits` renders no limits, and the gateway would then refuse to start
+without the lines in `gateway.env`. They go only when no rollback target lacks the record's limits (review,
+11 Nov 2026). `ops/tests/test_host_instances.py` holds the rendered lines to what the gateway reads and
 each leverage cap to the default `ops/leverage.py` gives the same market.
 
 **The keeper's nodes come from the record too** (`keeper_nodes`, demo2's and demo3's since 11 November 2026):
 the node the keeper reads everything from and its scan's window, `COLOSSEUM_RPC_URL` and `COLOSSEUM_LOG_WINDOW`
 (Hyperliquid's, 50 blocks), and the second node its scan takes a window to when the first refuses it,
-`COLOSSEUM_RPC_BACKUP_URL` and `COLOSSEUM_BACKUP_LOG_WINDOW` (thirdweb's, 1000 blocks). They are rendered into
+`COLOSSEUM_RPC_BACKUP_URL` and `COLOSSEUM_BACKUP_LOG_WINDOW` (dRPC's public node, 100 blocks, since 11 November
+2026; thirdweb's before it, until it answered the host's address HTTP 429 to every call). They are rendered into
 the same file, so keeper.env's `COLOSSEUM_RPC_URL` by hand is overridden. The record is public: a node whose
 address carries a key does not go in it, and `deployment-env` refuses an address with anything but https, a
 host and a path. A deploy of this needs nothing on the host by hand: `install.sh` renders the file and
@@ -465,8 +472,9 @@ hold-back in step 4 above sends no step and logs `settle_held`.
 order number, in the same file. The gateway refuses to start without it, and with the demo signer
 when it leaves out a perp `GATEWAY_SIZE_CAPS` lists. The caps are the platform's defaults, the ones
 `ops/leverage.py` gives a pool's rules (`ASSET_LEVERAGE_X100`): BTC 10x, ETH 10x, SOL 5x, HYPE 10x,
-SP500 10x, XYZ100 8x, CL 3x, and xyz:GOLD 20x, which is the leverage rule v1.3's number for it
-(2 November 2026). BRENTOIL has none: withdrawn by the leverage rule v1.3 (2 November 2026), a pool
+SP500 10x, XYZ100 8x and CL 3x, below the leverage rule v1.3; xyz:GOLD 20x and xyz:SILVER 15x, the rule's
+numbers for them (2 November 2026). xyz:SILVER is on no factory's list yet, so it has no line below (750026 on
+testnet, 110026 on mainnet, read on 11 November 2026). BRENTOIL has none: withdrawn by the leverage rule v1.3 (2 November 2026), a pool
 that names it is refused, and it has no line here. A perp left out here opens nothing on the gateway
 (`no_leverage_cap`). On testnet, for the list above:
 
@@ -773,14 +781,17 @@ the deploy's output, as a warning that never fails the release.
 `/etc/colosseum/deployment.env`, or `deployment-demo3.env`, which `install.sh` writes from the deployment's
 record and the services read: a watchdog looks at the deployment the host serves, not at whatever the record on
 a branch says today, and it needs no address of its own. Neither has a default; with none named the check
-exits 3. The nodes: the keys check reads `998.rpc.thirdweb.com` and falls back to Hyperliquid's node
-(`POOLS_WATCH_KEYS_RPC`, `POOLS_WATCH_KEYS_RPC_FALLBACK` in `watch.env` move them); the keeper check reads
+exits 3. The nodes: the keys check reads the keepers' nodes from the same file, `COLOSSEUM_RPC_URL`
+(Hyperliquid's) first and `COLOSSEUM_RPC_BACKUP_URL` after it; `POOLS_WATCH_KEYS_RPC` and
+`POOLS_WATCH_KEYS_RPC_FALLBACK` in `watch.env` name a node only where the record names none. Until 11 Nov 2026 it
+read `998.rpc.thirdweb.com` first, and from the host every call there met HTTP 429. The keeper check reads
 Hyperliquid's node (`POOLS_WATCH_RPC`) and falls back to the keeper's backup node,
 `COLOSSEUM_RPC_BACKUP_URL` of the deployment's env file when the record names one (`POOLS_WATCH_RPC_FALLBACK`
 overrides it). No node is written into the keeper check as its fallback: a record that names none leaves it on
 its first node alone, and an exhausted day's allowance there ("More than 3000 archived blocks queried in one
-day", which a pause does not lift) is then exit 3. A node that is merely busy gets the ladder of 63 seconds, a
-node that is broken or out of allowance is left for the fallback at once, and the output says it read the fallback.
+day", which a pause does not lift) is then exit 3. A node that is merely busy gets the ladder of 63 seconds and,
+still busy after it, the fallback gets one try and then the rest of the run; a node that is broken or out of
+allowance is left for the fallback at once. Either way the output says it read the fallback, and why.
 
 **What a run says.** `watchdog-run.sh` sorts the check's exit code and does nothing else:
 
@@ -934,6 +945,18 @@ What the code now does about a scan that cannot move (`ops/keeper.py`):
   Nov, 02:49:51 to 11:54:26 UTC), refuses any window in them with `invalid block range`, and the scan stood
   on 69038325 from then; thirdweb's has them, and the whole 280,643 blocks from there to the head held no
   `ChallengeCreated` of either factory.
+- **A stretch read off the host** (`keeper_scan_floor` in the record, demo2's and demo3's since 11 Nov 2026).
+  From the host's address Hyperliquid's node allows 3000 old blocks a day and thirdweb's answered 429 to every
+  call, so the keepers could not catch up 300,000 blocks. The stretch was read from a laptop instead:
+  every log of both factories on dRPC's node (one, `PlatformAssetSet` of xyz:GOLD on demo3's, block
+  69317392; no `ChallengeCreated`), and each factory's nonce at both ends on Hyperliquid's node and on
+  dRPC's, unchanged (demo2's 28, demo3's 3). A challenge account is made with a CREATE, which raises the
+  factory's nonce, so either check alone says no challenge was bought in the stretch.
+  `deployments/evidence/keeper-scan-69038325-69354491.json` holds both, and anyone can repeat them. The
+  record says `read_from` (69038325), `block` (69354492, one past the read) and the file; a keeper whose place
+  is inside the stretch starts at `block` and says `scan_floor`, and a keeper anywhere else is not moved, since
+  the blocks before `read_from` nobody read. `ops/tests/test_keeper.py` holds each floor to its file. A new
+  floor is a new read, a new file and a change to the record; never a number without its file.
 
 When the keepers' node is down for long:
 
@@ -958,8 +981,14 @@ When the keepers' node is down for long:
    same as Hyperliquid's node), served logs back to demo2's deployment block and through the blocks
    Hyperliquid's lacks, and took windows of up to 1000 blocks; wider ones it refuses with `-32005` ("Log
    response size exceeded"), the code a rate limit has elsewhere. About five calls in a row went through,
-   then HTTP 429 for a few seconds. How much its free use allows a day or a month is not known. It is the
-   keepers' second node in the records; from the host, it answered a read at the head on 10 Nov 2026.
+   then HTTP 429 for a few seconds. From the host it then answered HTTP 429 to every call (11 Nov 2026, from
+   14:56 UTC on), and it is no longer in the records.
+   `hyperliquid-testnet.drpc.org` (dRPC's public node, no key), tried from a laptop on 11 Nov 2026: chain 998,
+   `markPx` the same as Hyperliquid's node, every method the watchdogs use (the precompile at `0x…0810`
+   included), the blocks Hyperliquid's lacks, and the factory event of 69317392; windows of up to 101 blocks
+   (more: "ranges over 10000 blocks are not supported on free plan", code 35, whatever the range); 40 windows
+   in a row with no 429. It is the keepers' second node in the records, 100 blocks a window. How it answers
+   the host's address is to be measured from the host after the deploy.
 3. **Change the node where it is set.** For a deployment whose record has `keeper_nodes` (demo2 and
    demo3 since 11 Nov 2026), that is the record: change `primary` or `backup` there, have it reviewed and
    deployed, and `install.sh` renders the env file and restarts the keepers. A line in keeper.env changes
