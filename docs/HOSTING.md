@@ -864,8 +864,10 @@ When the keepers' node is down for long:
    - `systemctl status colosseum-keeper colosseum-keeper2`;
    - `journalctl -u colosseum-keeper -u colosseum-keeper2 --since "<UTC time> UTC"`. Look for
      `head_read_failed`, `pool_failed` and `scan_behind`;
-   - `grep COLOSSEUM_RPC_URL /etc/colosseum/keeper.env`;
-   - one `eth_blockNumber` to that URL with `curl`.
+   - the node each keeper reads: `grep COLOSSEUM_RPC /etc/colosseum/deployment.env
+     /etc/colosseum/deployment-demo3.env`, the record's (`keeper_nodes`), which systemd reads last; only
+     for a deployment whose record has none, `grep COLOSSEUM_RPC_URL /etc/colosseum/keeper.env`;
+   - one `eth_blockNumber` to that URL with `curl`, and to the second node's.
 
    From a laptop, the keepers' nonces against the last `DaySnapshot` show whether anything was
    sent. A failed send still uses a nonce; a send that never left does not.
@@ -881,8 +883,14 @@ When the keepers' node is down for long:
    response size exceeded"), the code a rate limit has elsewhere. About five calls in a row went through,
    then HTTP 429 for a few seconds. How much its free use allows a day or a month is not known. It is the
    keepers' second node in the records; from the host, it answered a read at the head on 10 Nov 2026.
-3. **Change `COLOSSEUM_RPC_URL` in `/etc/colosseum/keeper.env`,** keep a copy of the old file,
-   and restart both units.
+3. **Change the node where it is set.** For a deployment whose record has `keeper_nodes` (demo2 and
+   demo3 since 11 Nov 2026), that is the record: change `primary` or `backup` there, have it reviewed and
+   deployed, and `install.sh` renders the env file and restarts the keepers. A line in keeper.env changes
+   nothing for them, since the record's file is read after it. If the node is down and no deploy can wait,
+   the same line in the rendered `/etc/colosseum/deployment.env` or `deployment-<name>.env` can be edited
+   by hand, keeping a copy, and both units restarted; the next deploy writes the record's node back, so
+   the record has to follow. For a deployment whose record has none: `COLOSSEUM_RPC_URL` in
+   `/etc/colosseum/keeper.env`, a copy kept, both units restarted.
 4. **If the scan cannot read the blocks it stands on,** check the factory's pool list first:
    every pool not idle or with a challenge must be among those followed. Only then move
    `next_block` to the head in both state files, each with its owner and mode kept, keepers

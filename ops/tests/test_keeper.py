@@ -1688,20 +1688,46 @@ class SecondNode(KeeperTest):
         k.one_pass()
         self.assertEqual(sum(self.waited), keeper.BACKUP_BUSY_WAIT_MAX_S)
         self.assertLessEqual(keeper.BACKUP_BUSY_WAIT_MAX_S, 10.0)
-        self.assertEqual(k.next_block, 0)
-        self.assertIn("HTTP 429", self.logged("scan_stopped")[0]["backup_error"])
+        # Then the keeper's node reads on, five windows of 50.
+        self.assertIn("HTTP 429", self.logged("scan_off_backup")[0]["backup_error"])
+        self.assertEqual(k.next_block, 250)
 
-    def test_the_second_node_is_never_asked_past_its_own_head(self):
-        # A window past its head would come back empty and count as read.
+    def test_the_second_node_is_never_asked_past_its_own_head_and_a_lagging_one_holds_nothing_up(self):
+        # A window past its head would come back empty and count as read. Past it, the keeper's node reads on: a
+        # second node that lags must not hold up a first one that answers (review, 11 Nov 2026).
         self.chain.latest = 5000
         self.chain.backup_latest = 1500
-        self.pool_at(1700)
+        self.pool_at(1620)
         k = self.make()
         k.one_pass()
         self.assertEqual(self.chain.backup_queries, [(0, 999), (1000, 1500)])
+        self.assertEqual([(int(q["fromBlock"], 16), int(q["toBlock"], 16)) for q in self.chain.log_queries],
+                         [(1501, 1550), (1551, 1600), (1601, 1650)])
+        self.assertEqual(k.next_block, 1651)
+        self.assertIn(keeper.to_checksum_address(POOL_A), k.live)
+        self.assertIn("its head is 1500", self.logged("scan_off_backup")[0]["backup_error"])
+        self.assertEqual(self.logged("scan_stopped"), [])
+
+    def test_a_lagging_second_node_and_a_refusing_first_stop_the_scan(self):
+        self.chain.latest = 5000
+        self.chain.backup_latest = 1500
+        self.chain.hole = (1501, 5000)
+        k = self.make()
+        k.one_pass()
         self.assertEqual(k.next_block, 1501)
-        self.assertNotIn(keeper.to_checksum_address(POOL_A), k.live)
-        self.assertIn("its head is 1500", self.logged("scan_stopped")[0]["backup_error"])
+        said = self.logged("scan_stopped")
+        self.assertEqual(len(said), 1)
+        self.assertIn("invalid block range", said[0]["error"])
+        self.assertIn("its head is 1500", said[0]["backup_error"])
+
+    def test_a_window_refused_on_the_passs_last_call_still_goes_to_the_second_node(self):
+        # One call a pass, the place within a window of the head, and that window refused (review, 11 Nov 2026).
+        self.chain.latest = 30
+        self.chain.hole = (0, 100)
+        k = self.make(max_windows=1)
+        k.one_pass()
+        self.assertEqual(self.chain.backup_queries, [(0, 30)])
+        self.assertEqual(k.next_block, 31)
 
     def test_a_second_node_on_another_chain_is_dropped_for_good(self):
         self.chain.latest = 5000
@@ -1711,7 +1737,10 @@ class SecondNode(KeeperTest):
         self.assertIsNone(k.backup)
         self.assertEqual(self.chain.backup_queries, [])
         self.assertEqual(self.logged("backup_wrong_chain")[0]["chain_id"], 999)
-        self.assertEqual(k.next_block, 0)
+        self.assertEqual(k.next_block, 250, "the keeper's node reads on")
+        self.chain.backup_reads.clear()
+        k.one_pass()
+        self.assertEqual(self.chain.backup_reads, [], "never asked again")
 
     def test_the_chain_is_asked_once_and_the_head_once_a_pass(self):
         self.chain.latest = 9000

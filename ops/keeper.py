@@ -1153,53 +1153,64 @@ class Keeper:
         With a second node: a window the keeper's node refuses goes to it, in its own window, and so does every
         window after it in this pass (the keeper's node is tried again from the next pass on). A scan further behind
         the head than one pass of the keeper's node reads catches up on it from the start: old blocks are what the
-        keeper's node
-        refuses, and on Hyperliquid's they count against a daily allowance for the host's address, which the
-        gateways on that address read through too. The second node is never asked past its own head, which may lag
-        the first's: a window past it would come back empty and count as read."""
-        calls, waited, head, why = 0, 0.0, None, None
+        keeper's node refuses, and on Hyperliquid's they count against a daily allowance for the host's address,
+        which the gateways on that address read through too; if the second node fails there, the keeper's node takes
+        over for the rest of the pass. The second node is never asked past its own head, which may lag the first's: a
+        window past it would come back empty and count as read. Both refusing: `scan_stopped`, at once."""
+        # Per pass. `refused`: what the keeper's node said when it refused a window. `behind`: the pass catches up on
+        # the second node. `failed`: what the second node said when it failed (refused, busy past the cap, could not
+        # reach the place, on another chain), or that there is none. A refused window costs no call: it is then asked
+        # of the other node, even when it was the pass's last call.
+        calls, waited, head = 0, 0.0, None
+        refused, behind, failed = None, False, None if self.backup is not None else "no second node"
         while calls < self.max_windows and self.next_block <= latest:
             lo = self.next_block
-            if why is None and self.backup is not None and latest - lo + 1 > self.window * self.max_windows:
-                why = f"{latest - lo + 1} blocks behind the head, more than a pass of the keeper's node reads"
-                log("scan_on_backup", at_block=lo, why=why)
-            if why is None:
+            if not behind and refused is None and failed is None and latest - lo + 1 > self.window * self.max_windows:
+                behind = True
+                log("scan_on_backup", at_block=lo,
+                    why=f"{latest - lo + 1} blocks behind the head, more than a pass of the keeper's node reads")
+            if failed is not None or not (behind or refused is not None):
                 hi = min(lo + self.window - 1, latest)
-                calls += 1
                 try:
                     found = pools_with_challenges(self.factory, lo, hi)
                 except Exception as exc:
-                    if self.backup is None:
-                        log("scan_stopped", at_block=lo, error=str(exc)[:200])
+                    refused = str(exc)[:200]
+                    if failed is not None:
+                        log("scan_stopped", at_block=lo, error=refused,
+                            **({"backup_error": failed} if failed != "no second node" else {}))
                         return
-                    why = str(exc)[:200]
-                    log("scan_on_backup", at_block=lo, why=why)
+                    log("scan_on_backup", at_block=lo, why=refused)
                     continue
+                calls += 1
                 self.read(found, hi)
                 continue
             try:
                 if head is None:
                     head = self.backup_head()
                     if head is None:
-                        log("scan_stopped", at_block=lo, error=why, backup_error="the second node is on another chain")
-                        return
+                        raise LookupError("the second node is on another chain")
                 hi = min(lo + self.backup_window - 1, latest, head)
                 if hi < lo:
-                    log("scan_stopped", at_block=lo, error=why, backup_error=f"its head is {head}")
-                    return
+                    raise LookupError(f"its head is {head}")
                 calls += 1
                 found = pools_with_challenges(self.factory, lo, hi, self.backup)
             except c.NodeBusy as exc:
-                if waited + BACKUP_BUSY_PAUSE_S > BACKUP_BUSY_WAIT_MAX_S:
-                    log("scan_stopped", at_block=lo, error=why, backup_error=str(exc)[:200])
-                    return
-                self.wait(BACKUP_BUSY_PAUSE_S)
-                waited += BACKUP_BUSY_PAUSE_S
-                continue
+                if waited + BACKUP_BUSY_PAUSE_S <= BACKUP_BUSY_WAIT_MAX_S:
+                    self.wait(BACKUP_BUSY_PAUSE_S)
+                    waited += BACKUP_BUSY_PAUSE_S
+                    continue
+                failed = str(exc)[:200]
             except Exception as exc:
-                log("scan_stopped", at_block=lo, error=why, backup_error=str(exc)[:200])
+                failed = str(exc)[:200]
+            else:
+                self.read(found, hi)
+                continue
+            if refused is not None:
+                log("scan_stopped", at_block=lo, error=refused, backup_error=failed)
                 return
-            self.read(found, hi)
+            # On the second node only for being behind: the keeper's node takes over, since a second node that lags or
+            # fails must not hold up a first one that may read on (review, 11 Nov 2026).
+            log("scan_off_backup", at_block=lo, backup_error=failed)
 
     def read(self, found: set[str], hi: int) -> None:
         """A window that came back: its pools followed, and the place after it, on disk window by window. A refused

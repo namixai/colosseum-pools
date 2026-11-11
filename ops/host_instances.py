@@ -236,7 +236,7 @@ def keeper_nodes(record: dict) -> str:
     lines = []
     for role in ("primary", "backup"):
         node = nodes.get(role)
-        if node is None:
+        if node is None and role == "backup":
             continue
         if not isinstance(node, dict) or set(node) != {"url", "log_window"}:
             raise SystemExit(f"keeper_nodes: {role} must be an object of url and log_window, not {node!r}")

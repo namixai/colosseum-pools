@@ -213,15 +213,19 @@ class KeeperNodes(unittest.TestCase):
             self.assertNotIn("COLOSSEUM_RPC", hi.deployment_env("v3-demo3"))
 
     def test_a_primary_alone_says_no_second_node(self):
-        text = self.env({"primary": {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}})
-        self.assertIn("COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm\n", text)
-        self.assertNotIn("BACKUP", text)
+        hl = {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}
+        for nodes in ({"primary": hl}, {"primary": hl, "backup": None}):
+            text = self.env(nodes)
+            self.assertIn("COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm\n", text)
+            self.assertNotIn("BACKUP", text)
 
     def test_nodes_the_keeper_could_not_take_are_refused_before_anything_is_written(self):
         hl = {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}
         tw = {"url": "https://998.rpc.thirdweb.com", "log_window": 1000}
         bad = {
             "no primary": {"backup": tw},
+            "a primary of null": {"primary": None},
+            "a primary of null beside a backup": {"primary": None, "backup": tw},
             "a third node": {"primary": hl, "backup": tw, "spare": tw},
             "not an object": ["https://998.rpc.thirdweb.com"],
             "a key in the address": {"primary": hl, "backup": {**tw, "url": "https://node.example/evm?key=abc"}},
