@@ -84,7 +84,12 @@
   "platform_assets": {
     "BTC": 3,
     "ETH": 4,
-    "SOL": 0
+    "SOL": 0,
+    "xyz:GOLD": 750003,
+    "xyz:XYZ100": 750000
+  },
+  "platform_assets_without_tx": {
+    "xyz:XYZ100": "listed on chain, confirmed by reading isPlatformAsset(750000) = true at block 69318224 on 2026-11-11; the repository holds no hash of the transaction that listed it"
   },
   "precompiles": "0x0000000000000000000000000000000000000800",
   "published_keys": [
@@ -131,6 +136,7 @@
     "setFaucet": "0xc18d2c364d7a289a4f82904a70ecf09c0751b3f15f306fdfb1dd8ac7988c044a",
     "setFundedAssets": "0x69eadb04906a2daaf4d7f506b96d9fbb3153b2a7115a064be56d1b2c08c5483a",
     "setPlatformAssets": "0x6e3336deb5926bb0213a77a6f583805c62bc484831b86ad40f7a8f2d497274c8",
+    "setPlatformAssets:xyz:GOLD": "0xcee6d21d349306319c548c9b814e14656e3f015c4c57724889b3c75370dba99f",
     "setSharesCode": "0xd52e9f05564a73f7d1750b4f9b586332bd7a2d71e6381236e21bb04e69f8a561"
   },
   "usdc": "0xa73D107dC507851CE4dD4A426e163e2F3368300D"
