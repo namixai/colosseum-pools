@@ -707,7 +707,8 @@ class MultiKeeper:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--deployment", required=True, help="label of a record in deployments/ with a MultiPool")
+    p.add_argument("--deployment", required=True,
+                   help="label of a record in deployments/ with a MultiPool, or a SimPoolFactory (ops/sim_keeper.py)")
     p.add_argument("--wallet", default="keeper", help="any funded testnet key; the plan's noter for noteTrade")
     p.add_argument("--once", action="store_true")
     p.add_argument("--every", type=int, default=30, help="seconds between passes")
@@ -722,6 +723,10 @@ def main() -> int:
 
     c.assert_testnet()
     record = deployments.load(args.deployment)
+    if "MultiPool" not in record and "SimPoolFactory" in record:
+        # A simulated pool's record: its own keeper, so that the host's one unit serves either.
+        from ops import sim_keeper
+        return sim_keeper.main(sys.argv[1:])
     if "MultiPool" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no MultiPool")
     wallet = None if args.dry_run else c.account(args.wallet)

@@ -89,10 +89,29 @@ forge test --match-path 'test/sim/*'
 python3 scripts/mutations.py $(seq -f 'SM%g' 1 78)
 ```
 
+## Running it
+
+- **The keeper**, `ops/sim_keeper.py` (the host's `multi_keeper` unit hands it a record with a
+  `SimPoolFactory`). A fast loop reads `Placed` every block while anything is live, about 3 600
+  `eth_getLogs` an hour, and sends each order's `fill` from the filler's key for the block its window
+  opens; a fill waits for its receipt, so two orders in one block go one after the other. A slow pass
+  every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
+  `expire`, `release`, `claimPayout`, `pay`. `--measure EXAM --trader-wallet K` places orders on the
+  trader's own exam and writes how many blocks late each fill landed, p50 and p99: the number the
+  plan's fill window is set from.
+- **The relayer**, `ops/sim_relay.py`: a signed purchase in, `buyWithAuthorization` out, from a key
+  that pays the gas. It refuses before spending any: another factory's pool, no such line, a signature
+  ending within 30 seconds, a used nonce, a call the pool would refuse. `--serve PORT` listens on
+  127.0.0.1 for `POST /buy`.
+- **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, SimPool, a TermsBook and the
+  factory on testnet with Circle's USDC, names the filler, the checker and the recipient, lists BTC,
+  ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's
+  keeper nodes. `pool --plan` publishes the terms, approves the locked USDC and opens the pool with 1
+  HYPE. Without `--send` both print what they would do and read no key. The first pool's plan is
+  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, at the book
+  with a ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise.
+
 ## Not done yet
 
-- The keeper: a loop that fills each order in the next block it can, and measures how late; the
-  daily snapshots, `release`, `claimPayout` and `pay`.
-- The relayer for purchases by signature, a small script in `ops/`.
-- The deploy script, its record, and the host's unit (the unit starts on a record's `SimPoolFactory`).
+- The host unit's trigger on `SimPoolFactory` in `ops/host/install.sh`.
 - The checking script.
