@@ -313,8 +313,8 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
 | S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
 | S112 | `src/sim/SimPoolFactory.sol:36` | `uint32 public constant PAYOUT_DELAY = 48 hours;` |
-| S113 | `src/sim/SimPool.sol:346` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
-| S114 | `src/sim/SimPool.sol:130` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:367` | `function liftStop(uint256 id) external onlyChecker {` |
+| S113 | `src/sim/SimPool.sol:393` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
+| S114 | `src/sim/SimPool.sol:152` | `event PayoutStopped(` |
+| S115 | `src/sim/SimPool.sol:414` | `function liftStop(uint256 id) external onlyChecker {` |
 | S116 | `src/sim/SimPoolFactory.sol:151` | `if (msg.sender == filler || msg.sender == checker) revert BadRole();` |
-| S117 | `src/sim/SimPool.sol:231` | `uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |
+| S117 | `src/sim/SimPool.sol:254` | `uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |

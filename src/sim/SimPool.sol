@@ -9,6 +9,25 @@ import {Rules, Units} from "../Types.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
 import {SimPoolFactory} from "./SimPoolFactory.sol";
 
+/// @notice The part of USDC's EIP-3009 a pool takes a price through: Circle's FiatToken V2.2, on
+///         HyperEVM and its testnet. The token itself checks the signature, the time, the nonce,
+///         and that the caller is the payee.
+interface IReceiveWithAuthorization {
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
+
+    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool);
+}
+
 /// @notice One line of a simulated pool's menu.
 struct SimSize {
     /// What the exam and then the stage are taken on: a number, not money (1e6 = 1 USDC).
@@ -120,7 +139,10 @@ contract SimPool is Initializable {
     mapping(address => Account) public accountOf;
     Payout[] internal _payouts;
 
-    event ExamSold(address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee);
+    /// `bySignature`: the price came with the trader's signature (EIP-3009), sent by whoever paid the gas.
+    event ExamSold(
+        address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee, bool bySignature
+    );
     event Funded(address indexed stage, address indexed exam, address indexed trader);
     event Released(address indexed account);
     event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt);
@@ -165,6 +187,7 @@ contract SimPool is Initializable {
     error TooMuch();
     error BadShare();
     error NotOver();
+    error NoAuthorization();
 
     modifier onlyCreator() {
         if (msg.sender != creator) revert NotCreator();
@@ -237,16 +260,40 @@ contract SimPool is Initializable {
     /// @notice Buys an exam off line `line` of the menu. No seat and no share limits a sale: the
     ///         prices of exams that fail stay in the pool and pay for the ones that pass.
     function buy(uint256 line) external returns (address exam) {
-        if (line >= _menu.length) revert NoSuchLine();
-        if (closed) revert Closing();
-        SimSize memory m = _menu[line];
-        uint256 fee = uint256(m.price) * factory.FEE_BPS() / Units.BPS;
+        SimSize memory m = _line(line);
+        uint256 fee = _fee(m.price);
         usdc.safeTransferFrom(msg.sender, address(this), m.price - fee);
         if (fee != 0) usdc.safeTransferFrom(msg.sender, factory.feeRecipient(), fee);
+        exam = _sold(msg.sender, line, m, fee, false);
+    }
 
-        exam = _start(msg.sender, _examRules, _exam, m.size);
-        accountOf[exam] = Account({kind: Kind.Exam, line: uint8(line), done: false});
-        emit ExamSold(exam, msg.sender, line, m.size, m.price, fee);
+    /// @notice Buys an exam for `trader` with the trader's signature of a USDC transfer of the line's
+    ///         price to this pool (EIP-3009 `receiveWithAuthorization`), so the trader needs no gas:
+    ///         anyone may send it, a relayer of the platform's or a partner's. The signed amount is
+    ///         the line's price or the token refuses the signature; the token keeps the nonce, so a
+    ///         signature buys once; and only this pool, the payee, can use it. The price and the fee
+    ///         are those of `buy`. A token without EIP-3009 refuses with `NoAuthorization`.
+    function buyWithAuthorization(
+        address trader,
+        uint256 line,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external returns (address exam) {
+        SimSize memory m = _line(line);
+        try IReceiveWithAuthorization(address(usdc)).authorizationState(trader, nonce) returns (bool) {}
+        catch {
+            revert NoAuthorization();
+        }
+        IReceiveWithAuthorization(address(usdc)).receiveWithAuthorization(
+            trader, address(this), m.price, validAfter, validBefore, nonce, v, r, s
+        );
+        uint256 fee = _fee(m.price);
+        if (fee != 0) usdc.safeTransfer(factory.feeRecipient(), fee);
+        exam = _sold(trader, line, m, fee, true);
     }
 
     /// @notice Starts the stage an exam earned: its trader alone, within `fundWindow` of the pass.
@@ -424,6 +471,25 @@ contract SimPool is Initializable {
     }
 
     // ── internals ────────────────────────────────────────────────
+
+    function _line(uint256 line) internal view returns (SimSize memory) {
+        if (line >= _menu.length) revert NoSuchLine();
+        if (closed) revert Closing();
+        return _menu[line];
+    }
+
+    function _fee(uint64 price) internal view returns (uint256) {
+        return uint256(price) * factory.FEE_BPS() / Units.BPS;
+    }
+
+    function _sold(address trader, uint256 line, SimSize memory m, uint256 fee, bool bySignature)
+        internal
+        returns (address exam)
+    {
+        exam = _start(trader, _examRules, _exam, m.size);
+        accountOf[exam] = Account({kind: Kind.Exam, line: uint8(line), done: false});
+        emit ExamSold(exam, trader, line, m.size, m.price, fee, bySignature);
+    }
 
     function _start(address trader, Rules storage r, ExamTerms storage t, uint64 size) internal returns (address a) {
         a = Clones.clone(factory.examImpl());

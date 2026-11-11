@@ -12,6 +12,7 @@ import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {TermsBook} from "../../src/multi/TermsBook.sol";
 import {SimPool, SimPlan, SimSize} from "../../src/sim/SimPool.sol";
 import {SimPoolFactory} from "../../src/sim/SimPoolFactory.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MockUsdc, OracleFollowsMark} from "../PoolHarness.sol";
 
 /// The simulated pool on the hyper-evm-lib simulator, offline. BTC starts at 100 000.0, so on a size
@@ -26,7 +27,7 @@ contract SimPoolTest is Test {
     uint64 constant LARGE_PAYOUT = 800e6;
 
     HyperCore hyperCore;
-    MockUsdc usdc;
+    Usdc3009 usdc;
     TermsBook book;
     SimPoolFactory factory;
     bytes32 termsHash;
@@ -54,7 +55,7 @@ contract SimPoolTest is Test {
         vm.warp(20_000 days + 12 hours);
         vm.roll(1000);
 
-        usdc = new MockUsdc();
+        usdc = new Usdc3009();
         book = new TermsBook();
         termsHash = book.publish("The simulated pool's terms, every clause written out.");
         factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), address(this));
@@ -285,6 +286,117 @@ contract SimPoolTest is Test {
         PaperExam exam = _buy(_pool(), trader, 0);
         assertTrue(exam.fromBook());
         assertEq(exam.maxWorseBps(), 50);
+    }
+
+    // ── a purchase by signature (EIP-3009): the trader needs no gas ──
+
+    function _signed(uint256 pk, address to, uint256 value, uint256 validBefore, bytes32 nonce)
+        internal
+        view
+        returns (uint8 v, bytes32 r, bytes32 s)
+    {
+        address from = vm.addr(pk);
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                usdc.DOMAIN_SEPARATOR(),
+                keccak256(abi.encode(usdc.RECEIVE_WITH_AUTHORIZATION_TYPEHASH(), from, to, value, 0, validBefore, nonce))
+            )
+        );
+        (v, r, s) = vm.sign(pk, digest);
+    }
+
+    function test_buyWithAuthorization_aRelayerSendsIt_theTraderNeedsNoGas() public {
+        SimPool pool = _pool();
+        (address signer, uint256 pk) = makeAddrAndKey("signer");
+        deal(address(usdc), signer, LARGE_PRICE);
+        uint256 pot = usdc.balanceOf(address(pool));
+        bytes32 nonce = keccak256("one");
+        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, block.timestamp + 10 minutes, nonce);
+        vm.recordLogs();
+        vm.prank(stranger); // the relayer
+        address exam = pool.buyWithAuthorization(signer, 1, 0, block.timestamp + 10 minutes, nonce, v, r, s);
+        assertEq(PaperExam(exam).trader(), signer, "the exam is the signer's");
+        assertEq(signer.balance, 0, "who signed had no gas");
+        assertEq(usdc.balanceOf(signer), 0);
+        assertEq(usdc.balanceOf(platform), 425_000, "the same 0.5 %");
+        assertEq(usdc.balanceOf(address(pool)) - pot, LARGE_PRICE - 425_000);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool seen;
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].emitter == address(pool) && logs[i].topics[0] == SimPool.ExamSold.selector) {
+                (,,,, bool bySignature) = abi.decode(logs[i].data, (uint256, uint64, uint64, uint256, bool));
+                assertTrue(bySignature);
+                seen = true;
+            }
+        }
+        assertTrue(seen);
+        assertEq(pool.live(), 1);
+    }
+
+    function test_buyWithAuthorization_theSignedAmountIsTheLinesPrice() public {
+        SimPool pool = _pool();
+        (address signer, uint256 pk) = makeAddrAndKey("signer");
+        deal(address(usdc), signer, LARGE_PRICE);
+        bytes32 nonce = keccak256("one");
+        // Signed for the small line's price, sent for the large line.
+        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), SMALL_PRICE, block.timestamp + 1 hours, nonce);
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        pool.buyWithAuthorization(signer, 1, 0, block.timestamp + 1 hours, nonce, v, r, s);
+    }
+
+    function test_buyWithAuthorization_aSignatureBuysOnce_inItsTime_atItsPool() public {
+        SimPool pool = _pool();
+        (address signer, uint256 pk) = makeAddrAndKey("signer");
+        deal(address(usdc), signer, 2 * LARGE_PRICE);
+        bytes32 nonce = keccak256("one");
+        uint256 until = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, until, nonce);
+        // Another pool cannot use it: the token takes it only from its payee.
+        SimPool other_ = _pool();
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        other_.buyWithAuthorization(signer, 1, 0, until, nonce, v, r, s);
+        pool.buyWithAuthorization(signer, 1, 0, until, nonce, v, r, s);
+        vm.expectRevert(bytes("FiatTokenV2: authorization is used or canceled"));
+        pool.buyWithAuthorization(signer, 1, 0, until, nonce, v, r, s);
+        bytes32 later = keccak256("two");
+        (v, r, s) = _signed(pk, address(pool), LARGE_PRICE, until, later);
+        vm.warp(until);
+        vm.expectRevert(bytes("FiatTokenV2: authorization is expired"));
+        pool.buyWithAuthorization(signer, 1, 0, until, later, v, r, s);
+    }
+
+    function test_buyWithAuthorization_notOnceClosed_noSuchLine() public {
+        SimPool pool = _pool();
+        vm.expectRevert(SimPool.NoSuchLine.selector);
+        pool.buyWithAuthorization(trader, 2, 0, 0, bytes32(0), 0, 0, 0);
+        vm.prank(creator);
+        pool.close();
+        vm.expectRevert(SimPool.Closing.selector);
+        pool.buyWithAuthorization(trader, 0, 0, 0, bytes32(0), 0, 0, 0);
+    }
+
+    function test_buyWithAuthorization_aTokenWithoutItRefusesClearly_buyStillWorks() public {
+        MockUsdc plain = new MockUsdc();
+        SimPoolFactory f = new SimPoolFactory(IERC20(address(plain)), factory.examImpl(), factory.poolImpl(), address(this));
+        f.setFiller(filler);
+        f.setChecker(checker);
+        f.setFeeRecipient(platform);
+        f.setAsset(BTC, 1000);
+        f.setTermsBook(book);
+        deal(address(plain), creator, 10_000e6);
+        vm.startPrank(creator);
+        plain.approve(address(f), type(uint256).max);
+        SimPool pool = SimPool(f.create{value: 1 ether}(_plan()));
+        vm.stopPrank();
+        vm.expectRevert(SimPool.NoAuthorization.selector);
+        pool.buyWithAuthorization(trader, 0, 0, block.timestamp + 1 hours, keccak256("one"), 27, bytes32(0), bytes32(0));
+        deal(address(plain), trader, SMALL_PRICE);
+        vm.startPrank(trader);
+        plain.approve(address(pool), SMALL_PRICE);
+        pool.buy(0);
+        vm.stopPrank();
+        assertEq(pool.live(), 1);
     }
 
     function test_noteAccount_onlyAPoolOfTheFactory() public {
@@ -677,5 +789,58 @@ contract SimPoolTest is Test {
         vm.prank(checker);
         vm.expectRevert(SimPool.Done.selector);
         pool.liftStop(0);
+    }
+}
+
+/// USDC as Circle's FiatToken V2.2 takes a transfer by signature (EIP-3009), with its own words for
+/// a refusal: the parts of it a pool calls, and nothing else.
+contract Usdc3009 is ERC20 {
+    bytes32 public constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+    bytes32 public immutable DOMAIN_SEPARATOR;
+    mapping(address => mapping(bytes32 => bool)) public authorizationState;
+
+    constructor() ERC20("USDC", "USDC") {
+        DOMAIN_SEPARATOR = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("USDC"),
+                keccak256("2"),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        require(to == msg.sender, "FiatTokenV2: caller must be the payee");
+        require(block.timestamp > validAfter, "FiatTokenV2: authorization is not yet valid");
+        require(block.timestamp < validBefore, "FiatTokenV2: authorization is expired");
+        require(!authorizationState[from][nonce], "FiatTokenV2: authorization is used or canceled");
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                DOMAIN_SEPARATOR,
+                keccak256(abi.encode(RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce))
+            )
+        );
+        require(ecrecover(digest, v, r, s) == from, "FiatTokenV2: invalid signature");
+        authorizationState[from][nonce] = true;
+        _transfer(from, to, value);
     }
 }

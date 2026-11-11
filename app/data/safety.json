@@ -1185,24 +1185,24 @@
     },
     {
       "id": "S113",
-      "where": "src/sim/SimPool.sol:346",
+      "where": "src/sim/SimPool.sol:393",
       "kind": "line",
       "text": "if (block.timestamp >= p.dueAt) revert NotDue();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L346"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L393"
     },
     {
       "id": "S114",
-      "where": "src/sim/SimPool.sol:130",
+      "where": "src/sim/SimPool.sol:152",
       "kind": "line",
       "text": "event PayoutStopped(",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L130"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L152"
     },
     {
       "id": "S115",
-      "where": "src/sim/SimPool.sol:367",
+      "where": "src/sim/SimPool.sol:414",
       "kind": "line",
       "text": "function liftStop(uint256 id) external onlyChecker {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L367"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L414"
     },
     {
       "id": "S116",
@@ -1213,10 +1213,10 @@
     },
     {
       "id": "S117",
-      "where": "src/sim/SimPool.sol:231",
+      "where": "src/sim/SimPool.sol:254",
       "kind": "line",
       "text": "uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L231"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L254"
     }
   ]
 }

@@ -22,7 +22,15 @@ fail, and their prices pay for the ones that pass.
   that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler and the checker may not.
 - **Selling.** `buy(line)`. No seats and no share of the pool limit a sale. 0.5 % of the price goes
   to the platform, the rest to the pool. The buyer gets a paper exam whose orders only the factory's
-  filler fills inside their window (`PaperExam.initializeWithFiller`).
+  filler fills inside their window, at the book when the plan says so: never better for the trader
+  than the oracle price and at most the plan's `maxWorseBps` worse (`PaperExam.initializeWithFiller`).
+- **Selling by signature.** `buyWithAuthorization(trader, line, validAfter, validBefore, nonce, v,
+  r, s)`: the trader signs a USDC transfer of the line's price to the pool (EIP-3009, Circle's
+  FiatToken V2.2 on HyperEVM and its testnet) and needs no gas; anyone sends it, a relayer of the
+  platform's or a partner's, and pays the gas. The token checks the signature against the line's
+  price, the time and the nonce, and takes it only from the pool it names. Same price, same fee,
+  `ExamSold` with `bySignature`. A token without EIP-3009 refuses with `NoAuthorization`; `buy`
+  works on any.
 - **The stage.** `fund(exam)`: the trader, within the plan's window after the pass, starts a second
   paper exam on the same size. Nothing moves.
 - **The payout.** `claimPayout(stage)` once the stage has passed, by anyone: 8 % of the size, due 48
@@ -72,17 +80,19 @@ stops, lifts and payouts.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 29 tests on the hyper-evm-lib simulator, and 68 mutations
-(`SM1`–`SM68` in `scripts/mutations.py`), each caught by a named test:
+`test/sim/SimPool.t.sol`, 36 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and 78 mutations (`SM1`–`SM78` in `scripts/mutations.py`),
+each caught by a named test:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 68)
+python3 scripts/mutations.py $(seq -f 'SM%g' 1 78)
 ```
 
 ## Not done yet
 
 - The keeper: a loop that fills each order in the next block it can, and measures how late; the
   daily snapshots, `release`, `claimPayout` and `pay`.
-- The deploy script, its record, and the host's unit.
+- The relayer for purchases by signature, a small script in `ops/`.
+- The deploy script, its record, and the host's unit (the unit starts on a record's `SimPoolFactory`).
 - The checking script.
