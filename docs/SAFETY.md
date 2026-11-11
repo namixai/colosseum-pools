@@ -277,14 +277,14 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S94 | `src/ChallengeAccount.sol:245` | `_renewAgent(trader);` |
 | S95 | `gateway/protect.py:74` | `STOP_BUFFER_BPS = Decimal(6)` |
 | S96 | `src/KeyBinder.sol:240` | `function request(address trader, Purpose purpose) external returns (uint64 id)` |
-| S97 | `src/KeyBinder.sol:300` | `if (ECDSA.recover(digest(account, r.id, r.trader, keyHash), signature) != publisher) revert BadSignature();` |
-| S98 | `src/KeyBinder.sol:317` | `if (CoreOps.exists(key)) revert KeyExistsOnCore(key);` |
-| S99 | `src/KeyBinder.sol:330` | `IBoundAccount(account).onKeyBound(key, purpose);` |
+| S97 | `src/KeyBinder.sol:303` | `if (ECDSA.recover(digest(account, r.id, r.trader, keyHash), signature) != publisher) revert BadSignature();` |
+| S98 | `src/KeyBinder.sol:320` | `if (CoreOps.exists(key)) revert KeyExistsOnCore(key);` |
+| S99 | `src/KeyBinder.sol:333` | `IBoundAccount(account).onKeyBound(key, purpose);` |
 | S100 | `src/KeyBinder.sol:94` | `event PublisherSet(address indexed publisher, bytes32 pcrHash, bytes32 attestationDocHash);` |
 | S101 | `src/KeyBinder.sol:170` | `if (pcrHash == bytes32(0) \|\| attestationDocHash == bytes32(0)) revert ZeroHash();` |
-| S102 | `src/KeyBinder.sol:309` | `if (bindsToday >= maxBindsPerDay) revert DailyLimit();` |
+| S102 | `src/KeyBinder.sol:312` | `if (bindsToday >= maxBindsPerDay) revert DailyLimit();` |
 | S103 | `src/KeyBinder.sol:191` | `function unpause() external onlyOwner` |
 | S104 | `src/KeyBinder.sol:226` | `function revoke(address key, bytes32 salt) external onlyGuardianOrOwner` |
-| S105 | `src/KeyBinder.sol:294` | `if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);` |
+| S105 | `src/KeyBinder.sol:297` | `if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);` |
 | S106 | `src/Pool.sol:333` | `emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);` |
 | S107 | `src/KeyBinder.sol:212` | `function pause() external onlyGuardianOrOwner` |

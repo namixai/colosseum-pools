@@ -1045,24 +1045,24 @@
     },
     {
       "id": "S97",
-      "where": "src/KeyBinder.sol:300",
+      "where": "src/KeyBinder.sol:303",
       "kind": "line",
       "text": "if (ECDSA.recover(digest(account, r.id, r.trader, keyHash), signature) != publisher) revert BadSignature();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L300"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L303"
     },
     {
       "id": "S98",
-      "where": "src/KeyBinder.sol:317",
+      "where": "src/KeyBinder.sol:320",
       "kind": "line",
       "text": "if (CoreOps.exists(key)) revert KeyExistsOnCore(key);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L317"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L320"
     },
     {
       "id": "S99",
-      "where": "src/KeyBinder.sol:330",
+      "where": "src/KeyBinder.sol:333",
       "kind": "line",
       "text": "IBoundAccount(account).onKeyBound(key, purpose);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L330"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L333"
     },
     {
       "id": "S100",
@@ -1080,10 +1080,10 @@
     },
     {
       "id": "S102",
-      "where": "src/KeyBinder.sol:309",
+      "where": "src/KeyBinder.sol:312",
       "kind": "line",
       "text": "if (bindsToday >= maxBindsPerDay) revert DailyLimit();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L309"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L312"
     },
     {
       "id": "S103",
@@ -1101,10 +1101,10 @@
     },
     {
       "id": "S105",
-      "where": "src/KeyBinder.sol:294",
+      "where": "src/KeyBinder.sol:297",
       "kind": "line",
       "text": "if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L294"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L297"
     },
     {
       "id": "S106",

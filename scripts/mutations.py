@@ -11523,6 +11523,10 @@ MUTATIONS = [
      '        if (block.timestamp < opens) revert NotRenewable(opens);\n        if (keyAskedAt != 0) revert KeyAsked();',
      '        if (block.timestamp < opens) revert NotRenewable(opens);',
      ['test_renew_waitsForItsKey_theOldKeyStaysUntilTheBinding']),
+    ('M229', 'src/KeyBinder.sol',
+     '        if (trader == address(0)) revert ZeroAddress();\n',
+     '',
+     ['test_request_accountsOnly_oneAtATime_andCancelled']),
 ]
 
 RUNNERS = {

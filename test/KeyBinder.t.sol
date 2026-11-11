@@ -216,6 +216,8 @@ contract KeyBinderTest is Test {
         binder.request(trader, KeyBinder.Purpose.Start);
         vm.expectRevert(KeyBinder.BadPurpose.selector);
         account.ask(binder, trader, KeyBinder.Purpose.None);
+        vm.expectRevert(KeyBinder.ZeroAddress.selector);
+        account.ask(binder, address(0), KeyBinder.Purpose.Start);
         assertEq(account.ask(binder, trader, KeyBinder.Purpose.Start), 1);
         vm.expectRevert(abi.encodeWithSelector(KeyBinder.Asked.selector, address(account)));
         account.ask(binder, trader, KeyBinder.Purpose.Funded);

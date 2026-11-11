@@ -239,6 +239,9 @@ contract KeyBinder is EIP712 {
     /// @notice The calling account asks for a key for `trader`. One request at a time.
     function request(address trader, Purpose purpose) external returns (uint64 id) {
         if (!accounts.isAccount(msg.sender)) revert NotAnAccount(msg.sender);
+        // A key for nobody would be signed and bound, and serve no order: the accounts never ask for
+        // one, and the binder does not take the request.
+        if (trader == address(0)) revert ZeroAddress();
         if (purpose == Purpose.None) revert BadPurpose();
         if (_requests[msg.sender].purpose != Purpose.None) revert Asked(msg.sender);
         id = ++requestCount[msg.sender];
