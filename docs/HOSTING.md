@@ -463,8 +463,8 @@ hold-back in step 4 above sends no step and logs `settle_held`.
 order number, in the same file. The gateway refuses to start without it, and with the demo signer
 when it leaves out a perp `GATEWAY_SIZE_CAPS` lists. The caps are the platform's defaults, the ones
 `ops/leverage.py` gives a pool's rules (`ASSET_LEVERAGE_X100`): BTC 10x, ETH 10x, SOL 5x, HYPE 10x,
-SP500 10x, XYZ100 8x, CL 3x, xyz:GOLD 20x and xyz:SILVER 15x, which are the leverage rule v1.3's numbers
-for them (2 November 2026). xyz:SILVER is on no factory's list yet, so it has no line below (750026 on
+SP500 10x, XYZ100 8x and CL 3x, below the leverage rule v1.3; xyz:GOLD 20x and xyz:SILVER 15x, the rule's
+numbers for them (2 November 2026). xyz:SILVER is on no factory's list yet, so it has no line below (750026 on
 testnet, 110026 on mainnet, read on 11 November 2026). BRENTOIL has none: withdrawn by the leverage rule v1.3 (2 November 2026), a pool
 that names it is refused, and it has no line here. A perp left out here opens nothing on the gateway
 (`no_leverage_cap`). On testnet, for the list above:
