@@ -7,7 +7,12 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Rules, Terms, Cancel, Breach, Units} from "./Types.sol";
 import {CoreOps} from "./lib/CoreOps.sol";
 import {RuledAccount, IFactoryView} from "./RuledAccount.sol";
-import {KeyRegistry} from "./KeyRegistry.sol";
+import {KeyBinder} from "./KeyBinder.sol";
+
+/// The MultiPool that runs this pool: told the moment its seat's stage opens.
+interface ISeatOwner {
+    function open(address seat) external;
+}
 
 interface IPoolFactory is IFactoryView {
     function usdc() external view returns (IERC20);
@@ -53,9 +58,10 @@ contract Pool is RuledAccount {
     Stage public stage;
     address public challenge;
     address public challengeTrader;
-    /// The agent key this pool has already taken for the funded stage, held from the moment the
-    /// challenge is sold. Zero once it is in use or given back.
-    address public reservedKey;
+    /// The platform's fee for the current challenge and whom it goes to, held until the challenge
+    /// starts and refunded with the price if it never does (HyperEVM USDC units).
+    uint256 public heldFee;
+    address public heldFeeTo;
     /// Price paid for the current challenge, held until it starts (HyperEVM USDC units).
     uint256 public heldPrice;
     /// Prices of started challenges, withdrawable by the owner (HyperEVM USDC units).
@@ -220,8 +226,8 @@ contract Pool is RuledAccount {
 
     /// @notice Funds `trader_` on this pool's capital, at once and in full. Only the owner of a
     ///         pool it runs may call it, and only an owner the factory knows as a MultiPool: each
-    ///         stage takes a key from the shared registry and retires it, so a pool anyone could
-    ///         run this way would empty the registry for gas (audit K-3).
+    ///         stage asks the key binder for a key the platform then signs, so a pool anyone could
+    ///         run this way would have keys signed for gas (audit K-3).
     /// @dev    Unlike `openFundedStage`, this never funds less than the terms say: there is no
     ///         challenge whose activation fee could have eaten into the capital, so a short
     ///         balance is the owner's to top up first. The balance read is the start of the
@@ -236,16 +242,15 @@ contract Pool is RuledAccount {
         uint64 spot = CoreOps.spotUsdc(address(this));
         if (spot < needed) revert NotEnoughCapital(spot, needed);
 
-        address key = factory.registry().assign(trader_);
         fundedTrader = trader_;
         fundedEndReason = Breach.None;
-        if (dex != 0) {
-            // On a builder dex the stage opens once the capital shows there (audit window 2,
-            // V4-2): the pool waits as one whose trader passed, and `openFundedStage` opens it.
-            passedAt = uint64(block.timestamp);
-            stage = Stage.PassedAwaitingKey;
-        }
-        _fund(key, funded);
+        // The pool waits as one whose trader passed, and the stage opens when the trader's key
+        // arrives (`_keyArrived`). On a builder dex the capital goes first, and `openFundedStage`
+        // asks for the key once the dex shows it (audit window 2, V4-2).
+        passedAt = uint64(block.timestamp);
+        stage = Stage.PassedAwaitingKey;
+        if (dex != 0) return _toDex(funded);
+        _askKey(trader_, KeyBinder.Purpose.Funded);
     }
 
     /// @notice Renews the funded stage's agent from the last fourteen days of its term on, a pool's own
@@ -262,7 +267,7 @@ contract Pool is RuledAccount {
     ///         idle (deep audit, F10). Only the stage's trader, within a day of the key's approval,
     ///         twice at most for each key the stage opens or is renewed with: a key HyperCore already
     ///         took keeps working after it gains an account, so on anyone's word a stranger's 1 USDC
-    ///         would replace a working key, and the registry's free keys could be spent one by one
+    ///         would replace a working key, and the platform would sign keys for it one by one
     ///         (deep audit, AUD-2). The fresh key of a renewal can be spoiled the same way, so the
     ///         day runs from the latest approval, not from the stage's opening (audit window 2,
     ///         A5-1). A key that has no account stays.
@@ -303,26 +308,17 @@ contract Pool is RuledAccount {
         stage = Stage.Challenge;
         challengeTrader = msg.sender;
         IPoolFactory f = IPoolFactory(address(factory));
-        IERC20 usdc = f.usdc();
-        usdc.safeTransferFrom(msg.sender, address(this), price);
-        // The platform's fee: a challenge takes an agent key for good, and a pool's owner
-        // could otherwise sell challenges to itself for nothing. Not refunded on abort.
+        // The platform's fee: a challenge has a key signed for it, and a pool's owner could
+        // otherwise sell challenges to itself for nothing. Held here with the price, and paid to
+        // the recipient of the moment of the sale when the challenge starts: the platform is paid
+        // only by a challenge that started.
         uint256 fee = f.challengeFee();
-        if (fee != 0) {
-            address recipient = f.feeRecipient();
-            usdc.safeTransferFrom(msg.sender, recipient, fee);
-            emit ChallengeFeePaid(msg.sender, recipient, fee);
-        }
+        heldFee = fee;
+        heldFeeTo = f.feeRecipient();
+        f.usdc().safeTransferFrom(msg.sender, address(this), price + fee);
 
         ch = IPoolFactory(address(factory)).createChallenge(msg.sender);
         challenge = ch;
-        // The key for the funded stage is taken NOW, not when the trader passes. Free keys are
-        // public and anyone can spoil one for the price of an account on HyperCore, so a trader
-        // who did everything asked could otherwise reach the pass and find the registry empty --
-        // losing the funded stage, and their share of it, to a stranger. The challenge's own key
-        // is reserved at ChallengeAccount.initialize for exactly this reason; this is the other
-        // half of the same promise.
-        reservedKey = factory.registry().assign(msg.sender);
         CoreOps.sendUsdc(ch, _terms.capital * Units.SPOT_PER_PERP);
         emit ChallengeSold(ch, msg.sender, price);
     }
@@ -330,17 +326,25 @@ contract Pool is RuledAccount {
     function onChallengeStarted() external onlyChallenge {
         earned += heldPrice;
         heldPrice = 0;
+        uint256 fee = heldFee;
+        if (fee != 0) {
+            heldFee = 0;
+            IPoolFactory(address(factory)).usdc().safeTransfer(heldFeeTo, fee);
+            emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);
+        }
     }
 
+    /// The price and the platform's fee go back to the buyer, in one transfer.
     function onChallengeAborted() external onlyChallenge {
-        uint256 price = heldPrice;
+        uint256 back = heldPrice + heldFee;
         heldPrice = 0;
-        IPoolFactory(address(factory)).usdc().safeTransfer(challengeTrader, price);
-        emit ChallengeRefunded(challenge, challengeTrader, price);
+        heldFee = 0;
+        IPoolFactory(address(factory)).usdc().safeTransfer(challengeTrader, back);
+        emit ChallengeRefunded(challenge, challengeTrader, back);
     }
 
-    /// @notice The trader passed. Recorded here and now, whatever state the key registry is
-    ///         in: opening the funded stage is a separate call that anyone may make.
+    /// @notice The trader passed. Recorded here and now, whatever state the keys are in:
+    ///         opening the funded stage is a separate call that anyone may make.
     /// @dev    This split is the whole of audit A-02. While this function took a key, a stranger
     ///         who had drained the free list decided whether a trader who had already met the
     ///         target got their stage at all -- graduate reverted, the deadline passed, and the
@@ -356,50 +360,60 @@ contract Pool is RuledAccount {
         emit TraderPassed(trader);
     }
 
-    /// @notice Opens the funded stage for the trader who passed, as soon as a live key exists.
-    ///         Anyone may call it; the keeper does.
-    /// @dev    If there is no live key this reverts and the pool stays where it is, so the call
-    ///         can simply be made again later -- which is the point: a refusal here costs a
-    ///         retry, where before it cost the trader the stage.
-    ///         On a builder dex a first call sends the capital there and a later one opens the
-    ///         stage, once the dex shows it (audit window 2, V4-2).
+    /// @notice Asks the key binder for the key of the trader who passed, once the capital is where
+    ///         the stage needs it. Anyone may call it; the keeper does. The stage opens when the key
+    ///         arrives (`_keyArrived`), in the block it is approved in.
+    /// @dev    On a builder dex a first call sends the capital there and a later one asks for the
+    ///         key, once the dex shows it (audit window 2, V4-2).
     function openFundedStage() external inStage(Stage.PassedAwaitingKey) {
-        // A pool its owner runs waits here only for its owner's stage on a builder dex, and opens it
-        // by its owner's call: a MultiPool holds the seat as not yet opened until the pool is
-        // Funded, and a stage opened past it would leave it giving the price back for a stage the
-        // trader had (self-audit v3, round 1, T3).
+        // A pool its owner runs waits here only for its owner's stage, and asks by its owner's call:
+        // a MultiPool holds the seat as not yet opened until the pool is Funded (self-audit v3,
+        // round 1, T3).
         if (ownerRun && msg.sender != owner) revert NotAllowed();
-        bool sent = sentToDexAt != 0;
-        if (sent && !_landed(fundedStart)) return;
-        address key = reservedKey;
-        reservedKey = address(0);
-        // The reserved key has been public since the sale -- KeyBound names it -- so a stranger
-        // had the whole challenge term to give it an account, and HyperCore then takes such an
-        // address as an agent silently and does nothing (spike question 8). A funded stage on a
-        // dead key looks open and cannot trade, which is worse than any refusal.
-        if (key == address(0) || CoreOps.exists(key)) {
-            if (key != address(0)) factory.registry().retire(key);
-            key = factory.registry().assign(fundedTrader);
+        if (keyAskedAt != 0) revert KeyAsked();
+        if (sentToDexAt != 0) {
+            if (!_landed(fundedStart)) return;
+        } else if (dex != 0) {
+            return _toDex(_fundable());
         }
-        if (sent) return _open(key, sentToDex);
-        // Sending the challenge capital may have cost an activation fee, so fund what is
-        // there, up to the terms.
-        uint64 spot1e6 = CoreOps.spotUsdc(address(this)) / Units.SPOT_PER_PERP;
-        uint64 funded = spot1e6 < _terms.fundedCapital ? spot1e6 : _terms.fundedCapital;
-        _fund(key, funded);
+        _askKey(fundedTrader, KeyBinder.Purpose.Funded);
     }
 
-    /// The capital of a funded stage, from spot to the account's dex: on the main dex the stage
-    /// opens with it, on a builder dex it opens on a later block, and the key waits for it.
-    function _fund(address key, uint64 funded) internal {
-        fundedStart = accountEquity() + int64(funded);
+    /// The stage that waited for its key opens on it. On the main dex the capital moves to the perp
+    /// side now; on a builder dex it is there already. A MultiPool's seat is opened at once.
+    function _keyArrived(address key) internal override {
+        if (stage != Stage.PassedAwaitingKey) revert BadStage(stage);
         if (dex != 0) {
-            reservedKey = key;
-            _sendToDex(funded);
-            return;
+            _open(key, sentToDex);
+        } else {
+            uint64 funded = _fundable();
+            fundedStart = accountEquity() + int64(funded);
+            _open(key, funded);
+            CoreOps.toPerp(funded, dex);
         }
-        _open(key, funded);
-        CoreOps.toPerp(funded, dex);
+        if (ownerRun) {
+            // The MultiPool marks its seat funded in the same transaction. A failure there does not
+            // hold the key back: the MultiPool's `open`, which anyone may call, does it later.
+            (bool opened,) = owner.call(abi.encodeCall(ISeatOwner.open, (address(this))));
+            opened;
+        }
+    }
+
+    function _trader() internal view override returns (address) {
+        return fundedTrader;
+    }
+
+    /// What a funded stage starts with: what is there, up to the terms. Sending a challenge's capital
+    /// may have cost an activation fee; a pool its owner runs holds the whole of it (`openFundedFor`).
+    function _fundable() internal view returns (uint64) {
+        uint64 spot1e6 = CoreOps.spotUsdc(address(this)) / Units.SPOT_PER_PERP;
+        return spot1e6 < _terms.fundedCapital ? spot1e6 : _terms.fundedCapital;
+    }
+
+    /// A funded stage's capital, to a builder dex, where it shows on a later block.
+    function _toDex(uint64 funded) internal {
+        fundedStart = accountEquity() + int64(funded);
+        _sendToDex(funded);
     }
 
     function _open(address key, uint64 funded) internal {
@@ -413,42 +427,29 @@ contract Pool is RuledAccount {
 
     /// @notice Releases a pool that has been waiting for a key longer than the window. Anyone
     ///         may call it.
-    /// @dev    Without this the pool holds its capital for ever if no key is ever published,
+    /// @dev    Without this the pool holds its capital for ever if no key ever comes,
     ///         which is a worse hole than the one the wait closes. The trader keeps the pass and
     ///         the challenge share they earned; what the event records is that this pool never
     ///         funded them, which is a mark on the pool and not on the trader.
     function abandonFundedStage() external inStage(Stage.PassedAwaitingKey) {
         if (block.timestamp <= passedAt + AWAIT_KEY_WINDOW) revert TooEarly();
-        // On a builder dex the stage may wait for its capital and not for a key: the key is held
-        // live the whole time, and a dex its owner halted takes no transfer. Past the window, a
+        // On a builder dex the stage may wait for its capital and not for a key: the key is asked
+        // for only once the capital shows, and a dex its owner halted takes no transfer. Past the window, a
         // dex that does not show the capital, read in a later second than the last send, releases
-        // the pool; one that shows it opens the stage instead, so the key decides as below (a review
+        // the pool; one that shows it waits for the key instead, so the key decides as below (a review
         // on #167, self-audit v3, round 1; a challenge's abort reads the dex the same way).
         if (sentToDexAt == 0 || block.timestamp <= sentToDexAt || accountEquity() >= fundedStart) {
-            // The window is not enough on its own. A pool may only be released when there is no
-            // key to be had RIGHT NOW -- otherwise a week of nobody calling openFundedStage would
-            // drop a trader who passed while a usable key sat in the registry, which is the
-            // outcome the wait exists to prevent. Audit's condition on this function, and it was
-            // right.
-            if (reservedKey != address(0) && !CoreOps.exists(reservedKey)) revert KeyAvailable();
-            // freeCount() counts entries, and a spoiled key is still an entry until somebody
-            // sweeps it. Refusing on a non-zero count is deliberate: it does not decide from here
-            // whether those keys are alive, it makes someone say so on chain first. Anyone may
-            // call KeyRegistry.purgeSpoiled, which stops at the first key that is still good -- so
-            // a zero count after a sweep means there really is nothing, and a live key keeps the
-            // count up and this refusal standing.
-            if (factory.registry().freeCount() != 0) revert KeyAvailable();
+            // The capital is where the stage needs it. The pool is released only once the key was
+            // asked for and has not come for the whole window: a week of nobody asking would
+            // otherwise drop a trader who passed while a key was to be had, which is the outcome
+            // the wait exists to prevent. Audit's condition on this function, and it was right.
+            if (keyAskedAt == 0 || block.timestamp <= uint256(keyAskedAt) + AWAIT_KEY_WINDOW) revert KeyAvailable();
         }
-        address spare = reservedKey;
-        if (spare != address(0)) {
-            reservedKey = address(0);
-            factory.registry().retire(spare);
-        }
-        // Capital already sent to a builder dex for the stage comes back to spot, for the owner.
-        if (sentToDexAt != 0) {
-            sentToDexAt = 0;
-            _toSpotAll();
-        }
+        _dropAsk();
+        // Capital sent to a builder dex for the stage, landed or not, comes back to spot, for the
+        // owner.
+        sentToDexAt = 0;
+        _toSpotAll();
         emit FundedStageAbandoned(fundedTrader);
         fundedTrader = address(0);
         fundedEndReason = Breach.None;
@@ -459,16 +460,7 @@ contract Pool is RuledAccount {
     function onChallengeSettled() external onlyChallenge {
         challenge = address(0);
         challengeTrader = address(0);
-        if (stage == Stage.Challenge) {
-            stage = Stage.Idle;
-            // Nobody passed, so the reserved key was never used. Give it up: a pool may hold
-            // only one key, and the next challenge needs its own, bound to whoever buys that.
-            address spare = reservedKey;
-            if (spare != address(0)) {
-                reservedKey = address(0);
-                factory.registry().retire(spare);
-            }
-        }
+        if (stage == Stage.Challenge) stage = Stage.Idle;
     }
 
     // ── funded trader ────────────────────────────────────────────────────────────────

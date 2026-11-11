@@ -10,7 +10,8 @@ import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {HLConstants} from "@hyper-evm-lib/src/common/HLConstants.sol";
 
 import {Rules, Terms, Cancel, Units} from "../../src/Types.sol";
-import {KeyRegistry} from "../../src/KeyRegistry.sol";
+import {KeyBinder} from "../../src/KeyBinder.sol";
+import {BinderStand} from "../BinderStand.sol";
 import {PoolFactory} from "../../src/PoolFactory.sol";
 import {Pool} from "../../src/Pool.sol";
 import {ChallengeAccount} from "../../src/ChallengeAccount.sol";
@@ -30,7 +31,7 @@ contract SharedMockUsdc is ERC20 {
 /// sweeps and top-ups the contracts send go through the simulator's CoreWriter. Rule breaks are
 /// set through the precompile answers, as in PoolFlow.t.sol, because the simulator's account value
 /// is not Hyperliquid's once a position is open.
-contract SharedPoolTest is Test {
+contract SharedPoolTest is BinderStand {
     uint32 constant BTC = 3;
     uint64 constant BTC_MARK = 764000; // 76400.0
     bytes32 constant SALT = keccak256("shared-salt");
@@ -43,7 +44,6 @@ contract SharedPoolTest is Test {
 
     HyperCore hyperCore;
     SharedMockUsdc usdc;
-    KeyRegistry registry;
     PoolFactory factory;
     SharedPool sp;
 
@@ -53,7 +53,6 @@ contract SharedPoolTest is Test {
     address bob = makeAddr("bob");
     address trader = makeAddr("trader");
     address stranger = makeAddr("stranger");
-    address[] keys;
 
     function setUp() public {
         hyperCore = CoreSimulatorLib.init();
@@ -73,16 +72,13 @@ contract SharedPoolTest is Test {
         vm.etch(HLConstants.usdc(), address(impl).code);
         usdc = SharedMockUsdc(HLConstants.usdc());
 
-        registry = new KeyRegistry(operator);
-        factory = new PoolFactory(registry, address(new Pool()), address(new ChallengeAccount()), operator, usdc);
-        for (uint256 i = 0; i < 8; ++i) {
-            keys.push(makeAddr(string.concat("shared-key-", vm.toString(i))));
-        }
+        binder = new KeyBinder(operator, 1000, 0);
+        factory = new PoolFactory(binder, address(new Pool()), address(new ChallengeAccount()), operator, usdc);
         uint32[] memory listed = new uint32[](1);
         listed[0] = BTC;
         vm.startPrank(operator);
-        registry.setAccountSource(factory);
-        registry.publish(keys);
+        binder.setAccountSource(factory);
+        binder.setPublisher(publisher, keccak256("pcr0-2"), keccak256("attestation document"));
         string[] memory names = new string[](1);
         names[0] = "BTC";
         factory.setPlatformAssets(listed, names, true);
@@ -205,7 +201,7 @@ contract SharedPoolTest is Test {
         ch = ChallengeAccount(seat.buyChallenge());
         vm.stopPrank();
         CoreSimulatorLib.nextBlock();
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
     }
 
@@ -235,7 +231,7 @@ contract SharedPoolTest is Test {
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), false, 0.001e8);
         ch.graduate(SALT);
-        seat.openFundedStage(); // since audit A-02 the pass and the funding are two calls
+        _openFunded(seat); // since audit A-02 the pass and the funding are two calls
         CoreSimulatorLib.nextBlock();
     }
 
@@ -567,7 +563,7 @@ contract SharedPoolTest is Test {
         assertEq(_spot(address(ch)), 20e8);
         assertEq(sp.value(), 158e8, "the challenge's account cost 1");
 
-        ch.activate();
+        _activate(ch);
         CoreSimulatorLib.nextBlock();
         assertEq(_equity(address(ch)), int64(20e6), "the challenge capital is on perp");
         assertEq(sp.value(), 159e8, "the price counts once the challenge starts");
@@ -1216,7 +1212,7 @@ contract SharedPoolTest is Test {
         CoreSimulatorLib.setMarkPx(BTC, 810528); // +3% again
         _trade(address(second), false, 0.001e8);
         second.graduate(SALT);
-        seat.openFundedStage();
+        _openFunded(seat);
         CoreSimulatorLib.nextBlock();
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
 
@@ -1279,7 +1275,7 @@ contract SharedPoolTest is Test {
         _unitOnTheDex(address(ch));
         uint256 before = sp.value();
         uint256 earned = seat.earned();
-        ch.activate();
+        _activate(ch);
         assertEq(ch.startSurplus(), 1);
         // The start books the challenge's price as the seat's (`earned`); the unit is still counted.
         assertEq(sp.value(), before + (seat.earned() - earned) * 100, "the challenge's unit is still counted");
@@ -1296,7 +1292,7 @@ contract SharedPoolTest is Test {
         CoreSimulatorLib.nextBlock();
         _unitOnTheDex(address(seat));
         before = sp.value();
-        seat.openFundedStage();
+        _openFunded(seat);
         assertEq(uint8(seat.stage()), uint8(Pool.Stage.Funded));
         assertEq(seat.startSurplus(), 1);
         assertEq(sp.value(), before, "and so is the stage's");

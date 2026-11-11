@@ -201,6 +201,7 @@ contract DeepCheckpointTest is PoolHarness {
         Pool seat = Pool(m.claim(address(e)));
         CoreSimulatorLib.nextBlock();
         m.open(address(seat));
+        _bindIfAsked(address(seat));
         CoreSimulatorLib.nextBlock();
         uint256 day = block.timestamp / 1 days;
         vm.warp(day * 1 days + 23 hours + 59 minutes + 30 seconds);

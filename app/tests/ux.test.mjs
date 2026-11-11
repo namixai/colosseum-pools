@@ -150,14 +150,17 @@ test("the whole price, and every way a challenge ends, before Pay and start", ()
   assert.equal(rows[2].what, "The time limit runs out.");
   assert.equal(rows[3].what, "You walk away.");
   // The one refund the contracts make: ChallengeAccount.abort -> Pool.onChallengeAborted sends the price back.
+  // The page is the deployed factories', which take the fee at the sale. Main holds the fee until the
+  // start and refunds it with the price (below); the page says so with the first deployment of it.
   assert.match(rows[4].what, /within an hour/);
   assert.equal(rows[4].paid, "The price comes back to your wallet; the fee does not.");
   assert.match(text("../../src/ChallengeAccount.sol"), /uint64 public constant START_WINDOW = 1 hours;/);
   // The pass row's conditions, held to Pool.sol: funded up to the terms, paid only without a broken rule and in profit.
   const poolSol = text("../../src/Pool.sol");
-  assert.match(poolSol, /uint64 funded = spot1e6 < _terms\.fundedCapital \? spot1e6 : _terms\.fundedCapital;/);
+  assert.match(poolSol, /return spot1e6 < _terms\.fundedCapital \? spot1e6 : _terms\.fundedCapital;/);
   assert.match(poolSol, /fundedPayoutOwed = fundedEndReason == Breach\.None && result > fundedStart/);
-  assert.match(text("../../src/Pool.sol"), /safeTransfer\(challengeTrader, price\);\s*emit ChallengeRefunded/);
+  assert.match(text("../../src/Pool.sol"),
+    /uint256 back = heldPrice \+ heldFee;[\s\S]{0,200}safeTransfer\(challengeTrader, back\);\s*emit ChallengeRefunded/);
   const shares = outcomes({ ...DEMO_TERMS, traderShareChallengeBps: 1000 }, 0n);
   assert.match(shares[0].you, /^10% of the challenge's profit/);
   assert.equal(shares[1].paid, "The price is not refunded.");

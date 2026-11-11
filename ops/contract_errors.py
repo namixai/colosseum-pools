@@ -15,7 +15,7 @@ from eth_utils import keccak
 
 # Where each group is declared, in the order the test reads them.
 SOURCES = ("src/multi/MultiPool.sol", "src/multi/FreeExams.sol", "src/exam/PaperExam.sol", "src/Pool.sol",
-           "src/RuledAccount.sol", "src/KeyRegistry.sol", "src/lib/CoreOps.sol", "src/multi/PoolShares.sol",
+           "src/RuledAccount.sol", "src/KeyRegistry.sol", "src/KeyBinder.sol", "src/lib/CoreOps.sol", "src/multi/PoolShares.sol",
            "src/multi/ShareTicket.sol", "src/lib/CodeStore.sol")
 
 ERRORS = [
@@ -24,7 +24,7 @@ ERRORS = [
     "NotTrader()", "TooLate()", "StillTrading(uint256)", "NotEnoughFree(uint64,uint64,uint64)", "BadSeat()",
     "TooSoon()", "AlreadyArmed()", "NoTarget()", "NotFlat()", "RuleBroken(uint8)", "TargetNotMet(int256,int256)",
     "BufferNeeded()", "Ending()", "Ended()", "NotEnded()", "Locked()", "NotInvited()", "NotNoter()", "NotStarted()",
-    "Started()", "WrongTerms()", "TooManyFree()", "Unpublished()", "NoKey()", "NothingToSend()",
+    "Started()", "WrongTerms()", "TooManyFree()", "Unpublished()", "NothingToSend()",
     # FreeExams
     "InviteSpent()", "InviteLapsed()", "NoFreeLeft()",
     # PaperExam
@@ -32,13 +32,15 @@ ERRORS = [
     "ZeroSize()", "OrderPending()", "NoOrder()", "TooEarly(uint256)", "OrderLapsed()", "NoPrice(uint32)",
     "OverLeverage()", "OutsideCheckpointWindow()", "AlreadyCheckpointed()", "NoBreach()", "NotOver()",
     "NotEnoughDays(uint16,uint16)",
-    # Pool, RuledAccount, KeyRegistry
+    # Pool, RuledAccount, KeyRegistry, KeyBinder
     "NotChallenge()", "BadStage(uint8)", "NotReady()", "NotEnoughCapital(uint64,uint64)", "NotAllowed()", "TooEarly()",
     "KeyAvailable()", "WithdrawnThisBlock()", "SalesClosed()", "NotOwnerRun()", "TooManyAssets()", "NotRenewable(uint64)", "KeyWorks()", "RekeyClosed()", "TooManyCancels()",
     "NotOnDex()",
-    "NotStopped()", "NotOperator()", "NotPendingOperator()", "SourceAlreadySet()", "NotAnAccount(address)",
+    "NotStopped()", "KeyAsked()", "NotBinder()", "NotOperator()", "NotPendingOperator()", "SourceAlreadySet()", "NotAnAccount(address)",
     "KeyNotNew(address)", "KeyExistsOnCore(address)", "ZeroAddress()", "NoFreeKey()", "AccountHasKey(address,address)",
-    "NotBoundHere(address,address)", "TooManySpoiledKeys()",
+    "NotBoundHere(address,address)", "TooManySpoiledKeys()", "NotPendingOwner()", "NotGuardian()", "ZeroHash()",
+    "BadPurpose()", "Asked(address)", "NotAsked(address)", "WrongStep()", "IsPaused()", "DailyLimit()", "NotLower()",
+    "DelayTooLong()", "BadSignature()", "TooEarly(uint64)", "WrongKey()",
     # PoolShares, ShareTicket, CodeStore
     "NotCreator()", "NotBound()", "AlreadyBound()", "NotOwnedHere()", "NotThePlatforms()", "BadDeposit()", "TooMany()",
     "NotQuiet(uint8,address)", "NoValue()", "Decided(uint64)", "NotFree(uint256)", "NothingRequested()",
@@ -50,6 +52,7 @@ OPENZEPPELIN = [
     "SafeERC20FailedOperation(address)", "FailedDeployment()", "InvalidInitialization()", "NotInitializing()",
     "SafeCastOverflowedUintDowncast(uint8,uint256)", "SafeCastOverflowedIntToUint(int256)",
     "SafeCastOverflowedIntDowncast(uint8,int256)", "SafeCastOverflowedUintToInt(uint256)",
+    "ECDSAInvalidSignature()", "ECDSAInvalidSignatureLength(uint256)", "ECDSAInvalidSignatureS(bytes32)",
 ]
 # Solidity's own: require with a message, and a panic (an overflow, a division by zero).
 BUILTIN = ["Error(string)", "Panic(uint256)"]

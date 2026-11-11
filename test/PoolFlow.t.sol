@@ -8,7 +8,7 @@ import {CoreSimulatorLib} from "@hyper-evm-lib/test/simulation/CoreSimulatorLib.
 import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {HLConstants} from "@hyper-evm-lib/src/common/HLConstants.sol";
 import {Rules, Terms, Cancel, Breach, Units} from "../src/Types.sol";
-import {KeyRegistry} from "../src/KeyRegistry.sol";
+import {KeyBinder} from "../src/KeyBinder.sol";
 import {PoolFactory} from "../src/PoolFactory.sol";
 import {Pool} from "../src/Pool.sol";
 import {ChallengeAccount} from "../src/ChallengeAccount.sol";
@@ -130,15 +130,15 @@ contract PoolFlowTest is PoolHarness {
         assertEq(_spot(address(ch)), 100e8, "challenge capital in full");
         assertEq(_spot(address(p)), 200e8, "funded capital left after the account fee");
     }
-    function test_buyChallenge_reservesKey_andSendsCapital() public {
+    function test_buyChallenge_holdsThePrice_andSendsCapital_theKeyComesAtTheStart() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _buy(p);
 
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Challenge));
         assertEq(usdc.balanceOf(address(p)), 25e6, "price held by the pool");
         assertEq(p.heldPrice(), 25e6);
-        address key = ch.agentKey();
-        assertTrue(registry.isBound(key, address(ch), trader), "key reserved for this challenge and trader");
+        assertEq(ch.agentKey(), address(0), "no key before the start");
+        assertEq(binder.requestCount(address(ch)), 0, "and none asked for before the capital is there");
         assertTrue(factory.isChallenge(address(ch)));
 
         // A second buyer is refused while the pool is taken.
@@ -159,15 +159,16 @@ contract PoolFlowTest is PoolHarness {
         ChallengeAccount ch = _buy(p);
 
         vm.expectRevert(ChallengeAccount.NotStartedOnCore.selector);
-        ch.activate();
+        _activate(ch);
 
         CoreSimulatorLib.nextBlock();
-        address key = ch.agentKey();
+        address key = _peekKey();
         vm.recordLogs();
-        ch.activate();
+        _activate(ch);
         (address[] memory from, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
 
-        // Separate balances, capital to perp, then the reserved key as the agent named `pools`, for 179 days.
+        // Separate balances, capital to perp, then the key bound for the start as the agent named
+        // `pools`, for 179 days.
         assertEq(kind.length, 3);
         assertEq(from[0], address(ch));
         assertEq(kind[0], 16);
@@ -187,7 +188,7 @@ contract PoolFlowTest is PoolHarness {
         assertEq(uint8(ch.violation(new uint32[](0))), uint8(Breach.None));
 
         vm.expectRevert(abi.encodeWithSelector(ChallengeAccount.BadStatus.selector, ChallengeAccount.Status.Active));
-        ch.activate();
+        _activate(ch);
     }
     function test_noBreach_meansNoStop() public {
         ChallengeAccount ch = _started(_readyPool());
@@ -318,7 +319,7 @@ contract PoolFlowTest is PoolHarness {
         assertTrue(keyless != key && keyless != address(0));
         assertEq(name, _agentName(block.timestamp), "the key's name, pools, for a term from now");
         assertFalse(PrecompileLib.coreUserExists(keyless));
-        assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
+        assertEq(uint8(binder.bindingOf(key).state), uint8(KeyBinder.State.Retired));
         assertEq(ch.agentKey(), address(0));
         assertEq(ch.cutKey(), key, "the cut key stays on record for whoever checks it");
         assertEq(ch.cutBlock(), block.number);
@@ -412,28 +413,38 @@ contract PoolFlowTest is PoolHarness {
         assertEq(ch.cutKey(), key);
         assertEq(ch.cutBlock(), first + 7, "the latest replacement's block");
     }
-    /// A reserved key that gained a HyperCore account before the start can't become the
-    /// challenge's agent. The challenge refuses to start, and anyone can abort it at once:
-    /// the trader gets the price back and the capital goes back to the pool.
-    function test_aSpoiledKey_blocksTheStart_andAbortRefunds() public {
+    /// A start whose key never comes: the capital is in place and the key asked for, and nothing
+    /// arrives. A start window after the request anyone may abort: the trader gets the price back,
+    /// the capital goes back to the pool, and a key that turns up late has nothing to bind to.
+    function test_aStartWhoseKeyNeverComes_isAbortedAWindowAfterTheRequest() public {
         Pool p = _readyPool();
         uint64 poolSpot = _spot(address(p));
         ChallengeAccount ch = _buy(p);
         CoreSimulatorLib.nextBlock();
-        assertFalse(ch.keySpoiled());
-        CoreSimulatorLib.forceAccountActivation(ch.agentKey());
-        assertTrue(ch.keySpoiled());
         assertTrue(ch.capitalArrived());
-
-        vm.expectRevert(ChallengeAccount.KeySpoiled.selector);
         ch.activate();
+        assertTrue(_asked(address(ch)), "the capital is there, and the key is asked for");
+        assertEq(ch.agentKey(), address(0), "no key before it comes");
+        assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Created));
+        vm.expectRevert(RuledAccount.KeyAsked.selector);
+        ch.activate();
+        CoreSimulatorLib.nextBlock(); // the capital moves to the perp side
 
-        address key = ch.agentKey();
+        uint256 asked = ch.keyAskedAt();
+        vm.warp(asked + ch.START_WINDOW());
         vm.prank(stranger);
-        ch.abort(); // inside the start window, with the capital there
+        vm.expectRevert(ChallengeAccount.TooEarly.selector);
+        ch.abort();
+        vm.warp(asked + ch.START_WINDOW() + 1);
+        vm.prank(stranger);
+        ch.abort();
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Aborted));
         assertEq(usdc.balanceOf(trader), 25e6, "price refunded");
-        assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
+        assertFalse(_asked(address(ch)), "the request goes with the abort");
+        address late = _newKey();
+        bytes memory sig = _sign(address(ch), late);
+        vm.expectRevert(abi.encodeWithSelector(KeyBinder.NotAsked.selector, address(ch)));
+        binder.bind(address(ch), late, sig);
         _settleChallenge(ch);
         assertEq(_spot(address(p)), poolSpot - Units.NEW_ACCOUNT_FEE, "capital back; the account fee is spent");
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
@@ -469,7 +480,7 @@ contract PoolFlowTest is PoolHarness {
         vm.prank(stranger);
         vm.expectRevert(ChallengeAccount.CapitalArrived.selector);
         ch.abort();
-        ch.activate();
+        _activate(ch);
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Active));
     }
     /// Settlement may be called every block while HyperCore is still executing the last
@@ -556,7 +567,7 @@ contract PoolFlowTest is PoolHarness {
     function test_abort_refundsTheTrader() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _buy(p);
-        address key = ch.agentKey();
+        assertEq(ch.agentKey(), address(0), "a challenge holds no key before its start");
 
         vm.expectRevert(ChallengeAccount.TooEarly.selector);
         ch.abort();
@@ -565,14 +576,17 @@ contract PoolFlowTest is PoolHarness {
         ch.abort();
         assertEq(usdc.balanceOf(trader), 25e6, "refunded");
         assertEq(p.heldPrice(), 0);
-        assertEq(uint8(registry.bindingOf(key).state), uint8(KeyRegistry.State.Retired));
+        assertEq(binder.requestCount(address(ch)), 0, "and no key was ever asked for");
 
         // The capital lands after the abort and goes straight back.
         CoreSimulatorLib.nextBlock();
         _settleChallenge(ch);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
     }
-    function test_buyChallenge_paysThePlatformFee_whichAnAbortKeeps() public {
+    /// The platform is paid only by a challenge that starts: its fee is held in the pool with the
+    /// price, paid at the start to the recipient of the moment of the sale, and refunded with the
+    /// price by an abort.
+    function test_buyChallenge_holdsThePlatformFee_paidAtTheStart_refundedByAnAbort() public {
         address feeTo = makeAddr("fee-recipient");
         vm.prank(operator);
         factory.setChallengeFee(3e6, feeTo);
@@ -586,13 +600,32 @@ contract PoolFlowTest is PoolHarness {
         usdc.approve(address(p), 28e6);
         ChallengeAccount ch = ChallengeAccount(p.buyChallenge());
         vm.stopPrank();
-        assertEq(usdc.balanceOf(feeTo), 3e6);
-        assertEq(usdc.balanceOf(address(p)), 25e6);
+        assertEq(usdc.balanceOf(feeTo), 0, "held until the start");
+        assertEq(usdc.balanceOf(address(p)), 28e6);
+        assertEq(p.heldFee(), 3e6);
+        assertEq(p.heldFeeTo(), feeTo);
 
         vm.warp(block.timestamp + 1 hours + 1);
         ch.abort();
-        assertEq(usdc.balanceOf(trader), 25e6, "the price comes back");
-        assertEq(usdc.balanceOf(feeTo), 3e6, "the fee doesn't");
+        assertEq(usdc.balanceOf(trader), 28e6, "the price and the fee come back");
+        assertEq(usdc.balanceOf(feeTo), 0);
+        assertEq(usdc.balanceOf(address(p)), 0);
+        assertEq(p.heldFee(), 0);
+
+        Pool q = _readyPool();
+        vm.startPrank(trader);
+        usdc.approve(address(q), 28e6);
+        ChallengeAccount started = ChallengeAccount(q.buyChallenge());
+        vm.stopPrank();
+        vm.prank(operator);
+        factory.setChallengeFee(3e6, makeAddr("a later recipient"));
+        CoreSimulatorLib.nextBlock();
+        _activate(started);
+        assertEq(uint8(started.status()), uint8(ChallengeAccount.Status.Active));
+        assertEq(usdc.balanceOf(feeTo), 3e6, "the sale's recipient, paid at the start");
+        assertEq(usdc.balanceOf(makeAddr("a later recipient")), 0);
+        assertEq(q.heldFee(), 0);
+        assertEq(q.earned(), 25e6);
     }
     function test_setChallengeFee_operatorOnly_andNeedsARecipient() public {
         vm.prank(stranger);
@@ -606,32 +639,18 @@ contract PoolFlowTest is PoolHarness {
         vm.stopPrank();
         assertEq(factory.challengeFee(), 0);
     }
-    /// A stranger can spoil every published key by giving it a HyperCore account, one USDC
-    /// each. Before the sale reserved the funded key, that was enough to take the funded stage
-    /// away from a trader who had already met the target: graduate reached into an empty
-    /// registry and reverted, and after the deadline the trader could only expire -- no funded
-    /// stage, no share, and the challenge's profit left in the pool. Now the key is already in
-    /// hand when the trader passes, so nobody outside can reach it.
-    function test_graduate_recordsThePassWithTheRegistryDrained_andTheStageOpensLater() public {
+    /// Audit A-02, which a list of free keys made possible: a stranger who spoiled every free key took
+    /// the funded stage from a trader who had met the target. There is no list now. The pass is
+    /// recorded whatever the keys look like, the stage asks for its key, and nothing a stranger holds
+    /// stands between the trader and the key: only the publisher's word, for this request.
+    function test_graduate_recordsThePass_andTheStageOpensWhenItsKeyComes() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
-
-        uint256 spoiled;
-        for (uint256 i = 0; i < keys.length; ++i) {
-            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
-                CoreSimulatorLib.forceAccountActivation(keys[i]);
-                ++spoiled;
-            }
-        }
-        assertGt(spoiled, 0, "there was something left to spoil");
-        // And the key this sale put aside for the funded stage, which a stranger could reach
-        // too: KeyBound named it publicly the moment the challenge was sold.
-        CoreSimulatorLib.forceAccountActivation(p.reservedKey());
+        assertEq(binder.keyOf(address(p)), address(0), "the sale held no key for the pass");
 
         _trade(address(ch), BTC, true, 0.005e8);
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
-        // The pass goes through with the registry empty: it does not ask for a key any more.
         ch.graduate(SALT);
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Passed), "the pass is recorded");
         assertGt(ch.payoutOwed(), 0, "and the trader's share of the challenge is owed to them");
@@ -644,45 +663,35 @@ contract PoolFlowTest is PoolHarness {
         vm.expectRevert(abi.encodeWithSelector(Pool.BadStage.selector, Pool.Stage.PassedAwaitingKey));
         p.withdrawOnCore(1e8);
 
-        // Opening the stage is what needs a key, and it can simply be tried again. More spoiled keys
-        // than one `assign` skips need a purge first, which anyone may send (the keeper does).
-        vm.expectRevert(KeyRegistry.TooManySpoiledKeys.selector);
+        vm.prank(stranger);
         p.openFundedStage();
-        registry.purgeSpoiled(keys.length);
-        vm.expectRevert(KeyRegistry.NoFreeKey.selector);
-        p.openFundedStage();
-
-        // One key published by the operator and the trader gets what they earned. Nobody had to
-        // be quick about it, and no stranger could decide the outcome.
-        address[] memory more = new address[](1);
-        more[0] = makeAddr("enclave-key-late");
-        vm.prank(operator);
-        registry.publish(more);
+        assertTrue(_asked(address(p)), "the stage asks for its key");
+        assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey));
+        vm.expectRevert(RuledAccount.KeyAsked.selector);
         p.openFundedStage();
 
+        // A key the publisher did not sign for this request does not fit it.
+        address forged = _newKey();
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(0xBAD, binder.digest(address(p), 1, trader, keccak256(abi.encode(forged))));
+        vm.expectRevert(KeyBinder.BadSignature.selector);
+        binder.bind(address(p), forged, abi.encodePacked(r, s, v));
+
+        address key = _bind(address(p));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
-        assertEq(p.agentKey(), more[0], "funded on the key that was published");
-        assertTrue(registry.isBound(more[0], address(p), trader));
+        assertEq(p.agentKey(), key, "funded on the key the publisher signed");
+        assertTrue(binder.isBound(key, address(p), trader));
 
-        // What this does NOT claim: draining the registry still stops NEW sales. Say so here so
-        // nobody reads the test as proof the free list cannot be emptied.
-        Pool other = _readyPool();
-        deal(address(usdc), trader, 25e6);
-        vm.startPrank(trader);
-        usdc.approve(address(other), 25e6);
-        vm.expectRevert(KeyRegistry.NoFreeKey.selector);
-        other.buyChallenge();
-        vm.stopPrank();
+        // And with no list to drain, new sales go on.
+        _buy(_readyPool());
     }
-    /// The sale takes two keys, and one of them is only needed if the trader passes. When
-    /// nobody does, the pool gives it back -- otherwise the pool would still be holding it at
-    /// the next sale, and a pool may hold only one.
-    function test_aChallengeNobodyPassesGivesTheReservedKeyBack() public {
+    /// A sale takes one key, the challenge's own, at its start, and holds none for a pass. When
+    /// nobody passes, the challenge's key is retired at its end and the pool sells again.
+    function test_aSaleHoldsNoKeyForThePass() public {
         Pool p = _readyPool();
-        uint256 free0 = registry.freeCount();
         ChallengeAccount ch = _started(p);
-        assertEq(registry.freeCount(), free0 - 2, "the challenge's own key, and one held for the pass");
-        address reserved = p.reservedKey();
+        address key = ch.agentKey();
+        assertTrue(binder.isBound(key, address(ch), trader));
+        assertEq(binder.keyOf(address(p)), address(0), "the pool holds no key");
 
         uint32[] memory none = new uint32[](0);
         vm.prank(trader);
@@ -690,12 +699,8 @@ contract PoolFlowTest is PoolHarness {
         _settleChallenge(ch);
 
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle));
-        assertEq(p.reservedKey(), address(0), "the pool is not still holding it");
-        assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
-
-        // The proof that it was really given back: the pool can sell again.
+        assertEq(uint8(binder.bindingOf(key).state), uint8(KeyBinder.State.Retired));
         _buy(p);
-        assertTrue(p.reservedKey() != address(0) && p.reservedKey() != reserved);
     }
     /// Audit A-01. Every settlement step that sees ANY spot balance sends it to the pool and
     /// returns, and Settled is reached only when the balance is zero at the start of a block.
@@ -953,21 +958,13 @@ contract PoolFlowTest is PoolHarness {
         assertEq(_spot(address(p)), poolBefore + 5e8, "and the pool has it");
     }
     /// Holding a pool's capital for a trader who passed is right, and holding it for ever is
-    /// not: if no key is ever published the investor would never get their money back, which is
-    /// a worse hole than the one the wait closes. After the window anyone may release the pool.
-    /// The trader keeps the pass and the challenge share; the event records that THIS POOL never
-    /// funded them, which is a mark on the pool.
+    /// not: if no key ever comes the investor would never get their money back, which is a worse
+    /// hole than the one the wait closes. Once the key was asked for and has not come for the whole
+    /// window, anyone may release the pool. The trader keeps the pass and the challenge share; the
+    /// event records that THIS POOL never funded them, which is a mark on the pool.
     function test_abandonFundedStage_onlyAfterTheWindow_andThenAnyoneMay() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
-        for (uint256 i = 0; i < keys.length; ++i) {
-            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
-                CoreSimulatorLib.forceAccountActivation(keys[i]);
-            }
-        }
-        address reserved = p.reservedKey();
-        CoreSimulatorLib.forceAccountActivation(reserved);
-
         _trade(address(ch), BTC, true, 0.005e8);
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
@@ -979,74 +976,68 @@ contract PoolFlowTest is PoolHarness {
         p.abandonFundedStage();
 
         vm.warp(block.timestamp + p.AWAIT_KEY_WINDOW() + 1);
-
-        // The window alone is not enough, and this is the half the audit asked for. While the
-        // registry still lists keys, the pool is NOT released: a week of nobody calling
-        // openFundedStage must not cost a trader their stage when a key was there to be had.
-        assertGt(registry.freeCount(), 0, "spoiled keys are still listed until somebody sweeps");
+        // The window alone is not enough, and this is the half the audit asked for: nobody asked
+        // for the key, and a week of nobody calling openFundedStage must not cost a trader their
+        // stage when a key was there to be had.
         vm.prank(stranger);
         vm.expectRevert(Pool.KeyAvailable.selector);
         p.abandonFundedStage();
 
-        // Somebody says so on chain: purgeSpoiled stops at the first key that is still good, so
-        // reaching zero is proof and not an assumption.
-        registry.purgeSpoiled(keys.length);
-        assertEq(registry.freeCount(), 0, "nothing left that could have been used");
+        p.openFundedStage();
+        vm.warp(block.timestamp + p.AWAIT_KEY_WINDOW());
+        vm.prank(stranger);
+        vm.expectRevert(Pool.KeyAvailable.selector);
+        p.abandonFundedStage(); // asked, and the window since is not over
 
+        vm.warp(block.timestamp + 1);
         vm.prank(stranger); // anyone, not just the owner whose capital it is
         p.abandonFundedStage();
 
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Idle), "the pool is released");
         assertEq(p.fundedTrader(), address(0));
-        assertEq(p.reservedKey(), address(0), "and the key it was holding is given back");
-        assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
+        assertFalse(_asked(address(p)), "and its request withdrawn");
         assertGt(ch.payoutOwed(), 0, "the trader still earned the challenge share");
     }
-    /// When the stranger spoils only the reserved key, opening the stage takes a live one
-    /// instead. HyperCore accepts an address that already has an account as an agent by doing
-    /// NOTHING and saying nothing (spike question 8), so a stage opened on a spoiled key would
-    /// look funded and be unable to trade -- which is worse than any refusal.
-/// Audit A-02, the other side of the swap below. When the reserved key is still live the funded
-    /// stage opens on exactly that key and takes no second one. Nothing else says so: the swap test
-    /// only names the key that is NOT used when the reserved one is spoiled, and a pool that
-    /// quietly assigned a fresh key every time would pass it while leaving the reserved key bound
-    /// to itself for good -- a registry that empties one key per pool with nobody able to say
-    /// where they went.
-    function test_theFundedStageOpensOnTheKeyReservedAtTheSale() public {
+    /// The funded stage opens on the key bound for its request and on no other; the challenge's key
+    /// is not reused.
+    function test_theFundedStageOpensOnTheKeyBoundForIt() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
-        address reserved = p.reservedKey();
-        uint256 freeBefore = registry.freeCount();
-        assertTrue(reserved != address(0), "the sale reserved one");
-
+        address challengeKey = ch.agentKey();
         _trade(address(ch), BTC, true, 0.005e8);
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
         ch.graduate(SALT);
-        p.openFundedStage();
+        address next = _peekKey();
+        _openFunded(p);
 
-        assertEq(p.agentKey(), reserved, "the stage opened on the key reserved at the sale");
-        assertEq(p.reservedKey(), address(0), "and the pool is not still holding it");
-        assertEq(registry.freeCount(), freeBefore, "no second key was taken");
-        assertTrue(registry.isBound(reserved, address(p), trader));
+        assertEq(p.agentKey(), next, "the stage opened on the key bound for it");
+        assertTrue(next != challengeKey);
+        assertTrue(binder.isBound(next, address(p), trader));
+        assertEq(uint8(binder.bindingOf(challengeKey).state), uint8(KeyBinder.State.Retired));
     }
 
-        function test_aSpoiledReservedKeyIsSwappedForALiveOne() public {
+    /// A key that has a HyperCore account is never bound: HyperCore takes such an address as an
+    /// agent by doing NOTHING and saying nothing (spike question 8), so a stage opened on it would
+    /// look funded and be unable to trade. The binding is refused and the request stays open for a
+    /// key that works.
+    function test_aKeyWithAnAccountIsNeverBound() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
-        address reserved = p.reservedKey();
-        CoreSimulatorLib.forceAccountActivation(reserved);
-
         _trade(address(ch), BTC, true, 0.005e8);
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
         ch.graduate(SALT);
         p.openFundedStage();
-
+        address spoiled = _newKey();
+        CoreSimulatorLib.forceAccountActivation(spoiled);
+        bytes memory sig = _sign(address(p), spoiled);
+        vm.expectRevert(abi.encodeWithSelector(KeyBinder.KeyExistsOnCore.selector, spoiled));
+        binder.bind(address(p), spoiled, sig);
+        assertTrue(_asked(address(p)));
+        _bind(address(p));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
-        assertTrue(p.agentKey() != reserved, "not the spoiled one");
         assertFalse(CoreOps.exists(p.agentKey()), "the stage opened on a key with no account");
-        assertEq(uint8(registry.bindingOf(reserved).state), uint8(KeyRegistry.State.Retired));
     }
     /// Audit A-04. The trader's share is measured against spot, and the step used to wait only
     /// for `withdrawable` to read zero -- which it does both when the perp side is empty and when
@@ -1063,7 +1054,7 @@ contract PoolFlowTest is PoolHarness {
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
         ch.graduate(SALT);
-        p.openFundedStage();
+        _openFunded(p);
         assertGt(ch.payoutOwed(), 0, "a share is owed for the challenge");
 
         uint32[] memory none = new uint32[](0);
@@ -1122,9 +1113,9 @@ contract PoolFlowTest is PoolHarness {
         assertEq(_spot(trader) - traderBefore, owed, "the trader got the whole share, not part of it");
     }
     /// The audit's condition on abandonFundedStage, and the case it named: a week of silence
-    /// must not cost a trader their stage when the key was sitting right there. Nobody calls
-    /// openFundedStage, the window runs out, and the pool still refuses to let go -- because a
-    /// live key means the answer is to open the stage, not to give up on it.
+    /// must not cost a trader their stage when a key was there to be had. Nobody asks for the key,
+    /// the window runs out, and the pool still refuses to let go: the answer is to ask, and the
+    /// stage opens.
     function test_abandonFundedStage_isRefusedWhileAKeyIsThereToBeHad() public {
         Pool p = _readyPool();
         ChallengeAccount ch = _started(p);
@@ -1133,19 +1124,6 @@ contract PoolFlowTest is PoolHarness {
         _trade(address(ch), BTC, false, 0.005e8);
         ch.graduate(SALT);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.PassedAwaitingKey));
-        address reserved = p.reservedKey();
-        assertFalse(CoreOps.exists(reserved), "the reserved key is still good");
-
-        // Empty the free list so that the ONLY thing standing between this pool and release is
-        // the key it is already holding. Without that the count check alone would refuse and
-        // this test would not be about the reserved key at all.
-        for (uint256 i = 0; i < keys.length; ++i) {
-            if (registry.bindingOf(keys[i]).state == KeyRegistry.State.Free) {
-                CoreSimulatorLib.forceAccountActivation(keys[i]);
-            }
-        }
-        registry.purgeSpoiled(keys.length);
-        assertEq(registry.freeCount(), 0, "nothing free in the registry");
 
         vm.warp(block.timestamp + p.AWAIT_KEY_WINDOW() + 1);
         vm.prank(stranger);
@@ -1154,9 +1132,8 @@ contract PoolFlowTest is PoolHarness {
 
         // What should happen instead, and anyone can make it happen.
         vm.prank(stranger);
-        p.openFundedStage();
+        _openFunded(p);
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
-        assertEq(p.agentKey(), reserved, "on the key that was waiting the whole time");
     }
     /// Audit A-05, and it is a limit of the design rather than a bug to fix: the target is
     /// measured from the account's perp equity, and that rises for any USDC sent in. HyperCore
@@ -1189,7 +1166,7 @@ contract PoolFlowTest is PoolHarness {
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
         ch.graduate(SALT);
-        p.openFundedStage();
+        _openFunded(p);
         uint64 owed = ch.payoutOwed();
         assertGt(owed, 1e8, "the share is bigger than the crumb below");
 
@@ -1300,7 +1277,7 @@ contract PoolFlowTest is PoolHarness {
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
         ch.graduate(SALT);
-        p.openFundedStage();
+        _openFunded(p);
         uint64 owed = ch.payoutOwed();
 
         // The account loses almost everything after the pass -- an order left resting at the pass
@@ -1338,7 +1315,7 @@ contract PoolFlowTest is PoolHarness {
         CoreSimulatorLib.setMarkPx(BTC, 786920);
         _trade(address(ch), BTC, false, 0.005e8);
         ch.graduate(SALT);
-        p.openFundedStage();
+        _openFunded(p);
         uint32[] memory none = new uint32[](0);
 
         // Short, with money crossing: the clock starts.
@@ -1442,11 +1419,11 @@ contract PoolFlowTest is PoolHarness {
         (address[] memory from, uint24[] memory kind, bytes[] memory args) = _actions(vm.getRecordedLogs());
 
         assertEq(uint8(ch.status()), uint8(ChallengeAccount.Status.Passed));
-        assertEq(uint8(registry.bindingOf(oldKey).state), uint8(KeyRegistry.State.Retired));
+        assertEq(uint8(binder.bindingOf(oldKey).state), uint8(KeyBinder.State.Retired));
 
         address newKey = p.agentKey();
         assertTrue(newKey != address(0) && newKey != oldKey, "a new key, never the old one");
-        assertTrue(registry.isBound(newKey, address(p), trader));
+        assertTrue(binder.isBound(newKey, address(p), trader));
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Funded));
         assertEq(p.fundedTrader(), trader);
         assertEq(p.fundedStart(), int64(200e6));
@@ -1530,7 +1507,7 @@ contract PoolFlowTest is PoolHarness {
         assertEq(uint8(p.stage()), uint8(Pool.Stage.Closing));
         assertEq(uint8(p.fundedEndReason()), uint8(Breach.Drawdown));
         assertEq(p.fundedPayoutOwed(), 0, "no share after a breach");
-        assertEq(uint8(registry.bindingOf(fundedKey).state), uint8(KeyRegistry.State.Retired));
+        assertEq(uint8(binder.bindingOf(fundedKey).state), uint8(KeyBinder.State.Retired));
 
         for (uint256 i = 0; i < 6 && p.stage() != Pool.Stage.Idle; ++i) {
             CoreSimulatorLib.nextBlock();
