@@ -79,7 +79,7 @@ export const CONFIG = {
       registry: "0x8e2E527aed19a0969aEa49e16aE1Abbc7B84Cc85",
       deployBlock: 67915896,
       deployer: "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
-      platformAssets: [3, 4, 0],
+      platformAssets: [3, 4, 0, 750003, 750000],
       assetLeverage: true,
       usdc: "0xa73D107dC507851CE4dD4A426e163e2F3368300D",
       gateway: "https://pools-api.usenami.io/demo3",
