@@ -733,6 +733,11 @@ class Record(unittest.TestCase):
             self.assertEqual(rendered["GATEWAY_REGISTRY"], record["KeyRegistry"], label)
             self.assertEqual(rendered["GATEWAY_FACTORY"], record["PoolFactory"], label)
             self.assertEqual(rendered["COLOSSEUM_DEPLOYMENT"], label)
+            # The record names the keepers' nodes and the file carries the backup one under the name the keeper
+            # check reads its second node from: the wire between the two is this one variable.
+            self.assertIn("COLOSSEUM_RPC_BACKUP_URL", rendered, label)
+            wired = load("keeper_watch", {"COLOSSEUM_RPC_BACKUP_URL": rendered["COLOSSEUM_RPC_BACKUP_URL"]})
+            self.assertEqual(wired.RPC_FALLBACK_URL, rendered["COLOSSEUM_RPC_BACKUP_URL"], label)
         self.assertIn('"GATEWAY_REGISTRY"', (DOGS / "keys_watch.py").read_text())
         self.assertIn('"GATEWAY_FACTORY"', (DOGS / "keeper_watch.py").read_text())
 
