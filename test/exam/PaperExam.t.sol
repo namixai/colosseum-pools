@@ -1103,6 +1103,20 @@ contract PaperExamTest is Test {
         assertEq(e.positionOf(BTC), 100);
     }
 
+    function test_filler_isNeverTheTradersAgent() public {
+        PaperExam e = _fillerExam();
+        _place(e, BTC, true, 100);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.BadTerms.selector);
+        e.setAgent(filler);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        e.fill();
+        assertEq(e.positionOf(BTC), 100, "the filler still fills");
+        vm.prank(trader);
+        e.setAgent(makeAddr("agent")); // any other key
+    }
+
     function test_filler_aLapsedOrderCostsNothingAndIsReplaced() public {
         PaperExam e = _fillerExam();
         _place(e, BTC, true, 100);

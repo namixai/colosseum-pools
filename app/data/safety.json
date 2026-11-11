@@ -244,7 +244,7 @@
         },
         {
           "lead": "A paper exam's filler.",
-          "text": "An exam started with a filler takes its orders' fills, inside their window, from that one address (S108), so the trader picks no block. The filler does: whoever holds it chooses the block in the window, and where the pool's creator is the platform that also runs the filler, the platform chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only makes a position smaller is anyone's, the trader's too, sixty blocks after its window (S110). Such an exam may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse (S111); every fill says where its price came from (S109).",
+          "text": "An exam started with a filler takes its orders' fills, inside their window, from that one address, never the trader's agent (S108), so the trader picks no block. The filler does: whoever holds it chooses the block in the window, and where the pool's creator is the platform that also runs the filler, the platform chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only makes a position smaller is anyone's, the trader's too, sixty blocks after its window (S110). Such an exam may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse (S111); every fill says where its price came from (S109).",
           "sources": [
             "S108",
             "S109",
@@ -254,20 +254,20 @@
         },
         {
           "lead": "A simulated pool's checker.",
-          "text": "A payout of a simulated pool waits 48 hours (S111). Until then the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them (S112, S113). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is public, and the checker lifts a stop that was wrong (S114). The filler and the checker are two keys, and neither opens a pool (S115).",
+          "text": "A payout of a simulated pool waits 48 hours (S112). Until then the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is public, and the checker lifts a stop that was wrong (S115). The filler and the checker are two keys, and neither opens a pool (S116).",
           "sources": [
-            "S111",
             "S112",
             "S113",
             "S114",
-            "S115"
+            "S115",
+            "S116"
           ]
         },
         {
           "lead": "A simulated pool's creator",
-          "text": "withdraws only what stays above three payouts of the largest size and above every payout owed (S116), and stops nobody's payout.",
+          "text": "withdraws only what stays above three payouts of the largest size and above every payout owed (S117), and stops nobody's payout.",
           "sources": [
-            "S116"
+            "S117"
           ]
         },
         {
@@ -1150,77 +1150,73 @@
     },
     {
       "id": "S108",
-      "where": "src/exam/PaperExam.sol:327",
+      "where": "src/exam/PaperExam.sol:330",
       "kind": "line",
       "text": "if (filler != address(0) && msg.sender != filler) revert NotFiller();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L327"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L330"
     },
     {
       "id": "S109",
-      "where": "src/exam/PaperExam.sol:361",
+      "where": "src/exam/PaperExam.sol:364",
       "kind": "line",
       "text": "emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L361"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L364"
     },
     {
       "id": "S110",
       "where": "src/exam/PaperExam.sol:98",
       "kind": "line",
       "text": "uint16 public constant FALLBACK_BLOCKS = 60;",
-<<<<<<< HEAD
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L88"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L98"
     },
     {
       "id": "S111",
+      "where": "src/exam/PaperExam.sol:519",
+      "kind": "line",
+      "text": "if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L519"
+    },
+    {
+      "id": "S112",
       "where": "src/sim/SimPoolFactory.sol:36",
       "kind": "line",
       "text": "uint32 public constant PAYOUT_DELAY = 48 hours;",
       "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L36"
     },
     {
-      "id": "S112",
-      "where": "src/sim/SimPool.sol:338",
+      "id": "S113",
+      "where": "src/sim/SimPool.sol:346",
       "kind": "line",
       "text": "if (block.timestamp >= p.dueAt) revert NotDue();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L338"
-    },
-    {
-      "id": "S113",
-      "where": "src/sim/SimPool.sol:124",
-      "kind": "line",
-      "text": "event PayoutStopped(",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L124"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L346"
     },
     {
       "id": "S114",
-      "where": "src/sim/SimPool.sol:359",
+      "where": "src/sim/SimPool.sol:130",
       "kind": "line",
-      "text": "function liftStop(uint256 id) external onlyChecker {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L359"
+      "text": "event PayoutStopped(",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L130"
     },
     {
       "id": "S115",
-      "where": "src/sim/SimPoolFactory.sol:149",
+      "where": "src/sim/SimPool.sol:367",
       "kind": "line",
-      "text": "if (msg.sender == filler || msg.sender == checker) revert BadRole();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L149"
+      "text": "function liftStop(uint256 id) external onlyChecker {",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L367"
     },
     {
       "id": "S116",
-      "where": "src/sim/SimPool.sol:223",
+      "where": "src/sim/SimPoolFactory.sol:151",
       "kind": "line",
-      "text": "uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L223"
-=======
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L98"
+      "text": "if (msg.sender == filler || msg.sender == checker) revert BadRole();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L151"
     },
     {
-      "id": "S111",
-      "where": "src/exam/PaperExam.sol:516",
+      "id": "S117",
+      "where": "src/sim/SimPool.sol:231",
       "kind": "line",
-      "text": "if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L516"
->>>>>>> origin/upools1/paper-exam-filler-2026-11-11
+      "text": "uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L231"
     }
   ]
 }

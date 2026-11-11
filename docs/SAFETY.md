@@ -130,7 +130,7 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   apply after the fact through `breach`.
 - **The keepers** hold wallets for gas only. Every call they make is open to anyone (S46, S47).
 - **A paper exam's filler.** An exam started with a filler takes its orders' fills, inside their window, from
-  that one address (S108), so the trader picks no block. The filler does: whoever holds it chooses the block
+  that one address, never the trader's agent (S108), so the trader picks no block. The filler does: whoever holds it chooses the block
   in the window, and where the pool's creator is the platform that also runs the filler, the platform
   chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first
   possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only
@@ -308,13 +308,13 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S105 | `src/KeyBinder.sol:297` | `if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);` |
 | S106 | `src/Pool.sol:334` | `emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);` |
 | S107 | `src/KeyBinder.sol:212` | `function pause() external onlyGuardianOrOwner` |
-| S108 | `src/exam/PaperExam.sol:327` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
-| S109 | `src/exam/PaperExam.sol:361` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
+| S108 | `src/exam/PaperExam.sol:330` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
+| S109 | `src/exam/PaperExam.sol:364` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
 | S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
-| S111 | `src/exam/PaperExam.sol:516` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
+| S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
 | S112 | `src/sim/SimPoolFactory.sol:36` | `uint32 public constant PAYOUT_DELAY = 48 hours;` |
-| S113 | `src/sim/SimPool.sol:338` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
-| S114 | `src/sim/SimPool.sol:124` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:359` | `function liftStop(uint256 id) external onlyChecker {` |
-| S116 | `src/sim/SimPoolFactory.sol:149` | `if (msg.sender == filler || msg.sender == checker) revert BadRole();` |
-| S117 | `src/sim/SimPool.sol:223` | `uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |
+| S113 | `src/sim/SimPool.sol:346` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
+| S114 | `src/sim/SimPool.sol:130` | `event PayoutStopped(` |
+| S115 | `src/sim/SimPool.sol:367` | `function liftStop(uint256 id) external onlyChecker {` |
+| S116 | `src/sim/SimPoolFactory.sol:151` | `if (msg.sender == filler || msg.sender == checker) revert BadRole();` |
+| S117 | `src/sim/SimPool.sol:231` | `uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |

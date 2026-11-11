@@ -33,7 +33,8 @@ with a balance, `capital`, that is a number and not money.
 - **A filler.** An exam started with `initializeWithFiller` names the one address that fills inside
   the window (the pools team, 11 November 2026, for the simulated pool, where a pass is paid out of
   the other traders' prices). The trader then has nobody to send in their place: no third address
-  fills, so there is no block to pick and no fill to skip. An order the filler missed lapses at no
+  fills, and the filler is never the trader's agent, so there is no block to pick and no fill to
+  skip. An order the filler missed lapses at no
   cost. If the filler stops, an order that only makes a position smaller can be filled by anyone,
   the trader too, `FALLBACK_BLOCKS` (60) after its window, so a stalled filler never keeps a trader
   in a position. Every fill says how many blocks after `placedBlock + fillDelay` it came (`late` in
@@ -155,12 +156,12 @@ fill at the mark, a flat cost, and the things listed next.
 
 ## Tests
 
-`test/exam/PaperExam.t.sol`, 66 tests on the hyper-evm-lib simulator, and 123 mutations of the
-contract (`X1`–`X123` in `scripts/mutations.py`), each caught by a named test:
+`test/exam/PaperExam.t.sol`, 67 tests on the hyper-evm-lib simulator, and 124 mutations of the
+contract (`X1`–`X124` in `scripts/mutations.py`), each caught by a named test:
 
 ```
 forge test --match-path 'test/exam/*'
-python3 scripts/mutations.py $(seq -f 'X%g' 1 123)
+python3 scripts/mutations.py $(seq -f 'X%g' 1 124)
 ```
 
 ## Not done yet
