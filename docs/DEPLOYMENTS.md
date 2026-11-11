@@ -104,12 +104,16 @@ Some tools keep refusing any network but testnet, on purpose. Each says why wher
   from its meta, the gas at today's prices (deploy_v3, through `scripts/mainnet_gas.py`), and the record they would
   write. A mainnet run without `--dry-run` is refused: sending to mainnet is a decision of its own.
   `PLATFORM_ASSETS` in `ops/deploy_testnet.py` are testnet's perp numbers; mainnet's are in Mainnet records, above.
-- Either v3 deploy hands the key registry's operator role over when it is given `--operator`, the address the
-  owner gives. After the keys are published, `transferOperator` names that address, and only its owner can take the
-  role, with `acceptOperator`; until then the deployer stays operator. The record says so in `registry_operator`
-  (`from` the deployer, `to` that address, `state` pending), `ops/deployments.py` (`registry_operator`) reads it,
-  and the weekly watch (`scripts/settled_accounts.py`) reads `operator()` and `pendingOperator()` on chain beside
-  it. Without `--operator` nothing changes: the deployer operates the registry, and the record says nothing of it.
+- Either v3 deploy deploys a key binder (`src/KeyBinder.sol`, docs/KEY-BINDING.md) with the flags of
+  `ops/binder_deploy.py`: `--publisher` with `--pcr-hash` and `--attestation-hash`, `--guardian`,
+  `--max-binds-per-day` (testnet 50, no default on mainnet), `--renew-delay` (24 hours). Given `--safe`, its last
+  steps name that Safe as the binder's owner (`transferOwnership`) and the factory's operator (`transferOperator`);
+  the Safe accepts each itself (`acceptOwnership`, `acceptOperator`), and until then the deployer holds both. The
+  record says so in `key_binder` and `factory_operator` (`from` the deployer, `to` the Safe, `state` pending), and
+  the weekly watch (`scripts/settled_accounts.py`) reads the binder's `owner()`, `pendingOwner()`, `publisher()`,
+  `guardian()` and `paused()`, and the factory's `operator()` and `pendingOperator()`, beside it. No agent key is
+  published. The deployments before the binder handed their registry over with `--operator` and say so in
+  `registry_operator`, which `ops/deployments.py` and the watch still read.
 - `ops/deploy_shared.py` and `ops/shared_run.py` work with SharedPool, a testnet layer outside the reviewed core.
   The run pays in testnet USDC.
 - The agents in `agents/` are testnet tools.

@@ -11,7 +11,12 @@ from ops import deploy_v3 as d
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FAUCET = "0x00000000000000000000000000000000000000Fa"
-KEY = "0x00000000000000000000000000000000000000a1"
+SAFE = "0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB"
+PUBLISHER = "0x00000000000000000000000000000000000000AB"
+GUARDIAN = "0x00000000000000000000000000000000000000cD"
+PCR = "0x" + "aa" * 32
+DOC = "0x" + "bb" * 32
+BINDER_ARGS = ("--publisher", PUBLISHER, "--pcr-hash", PCR, "--attestation-hash", DOC, "--guardian", GUARDIAN)
 
 
 class DeployV3(unittest.TestCase):
@@ -24,11 +29,10 @@ class DeployV3(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = pathlib.Path(self.tmp.name)
         (self.root / "deployments").mkdir()
-        self.keys = self.root / "keys.txt"
-        self.keys.write_text(KEY + "\n")
         self.deployed: list[tuple[str, list]] = []
         self.linked: dict = {}
         self.sent: list[str] = []
+        self.calls: list[tuple[str, str, list]] = []
         self.deployer = mock.Mock(address="0x00000000000000000000000000000000000000De")
 
         def deploy(acct, contract, types, values, libraries=None):
@@ -39,6 +43,7 @@ class DeployV3(unittest.TestCase):
 
         def transact(acct, to, sig, types, values):
             self.sent.append(sig.split("(")[0])
+            self.calls.append((to, sig.split("(")[0], list(values)))
             return {"transactionHash": "0x02"}
 
         patches = [
@@ -48,8 +53,6 @@ class DeployV3(unittest.TestCase):
             mock.patch.object(d, "initcode_keccak", side_effect=lambda name: "0x" + "11" * 32),
             mock.patch.object(d, "shares_code", return_value=bytes.fromhex("22" * 32)),
             mock.patch.object(d, "check_assets", return_value=[3, 4, 0]),
-            mock.patch.object(d, "check_keys", side_effect=lambda lines: [d.to_checksum_address(KEY)]),
-            mock.patch.object(d, "registries_in_records", return_value={}),
             mock.patch.object(d, "big_blocks"),
             mock.patch.object(d.c, "assert_testnet"),
             mock.patch.object(d.c, "account", return_value=self.deployer),
@@ -79,18 +82,26 @@ class DeployV3(unittest.TestCase):
         return out.getvalue()
 
     def test_testnet_deploys_the_demo_token_first_and_the_factory_on_it(self):
-        self.run_main("--label", "demo3", "--keys-file", str(self.keys), "--faucet", FAUCET, "--faucet-daily", "500")
+        self.run_main("--label", "demo3", "--faucet", FAUCET, "--faucet-daily", "500", *BINDER_ARGS)
         self.assertEqual([name for name, _ in self.deployed],
-                         ["DemoUsdc", "KeyRegistry", "AccountOps", "Pool", "ChallengeAccount", "PoolFactory",
+                         ["DemoUsdc", "KeyBinder", "AccountOps", "Pool", "ChallengeAccount", "PoolFactory",
                           "PaperExam", "MultiPoolReader"])
+        binder = d.to_checksum_address("0x" + f"{2:040x}")
+        self.assertEqual(dict(self.deployed)["KeyBinder"], [self.deployer.address, 50, 86_400],
+                         "the deployer owns it while it is configured; testnet's fuse and the 24-hour delay")
         library = {"AccountOps": d.to_checksum_address("0x" + f"{3:040x}")}
         self.assertEqual((self.linked["Pool"], self.linked["ChallengeAccount"]), (library, library))
         token = d.to_checksum_address("0x" + f"{1:040x}")
         factory_args = dict(self.deployed)["PoolFactory"]
         self.assertEqual(factory_args[-1], token, "the factory on the demo's token")
         self.assertEqual(factory_args[3], self.deployer.address, "the deployer operates the factory")
-        self.assertEqual(self.sent, ["setAccountSource", "setPlatformAssets", "setFundedAssets", "setExamImpl",
-                                     "setSharesCode", "setChallengeFee", "setFaucet", "publish"])
+        self.assertEqual(factory_args[0], binder, "the factory on the binder")
+        self.assertEqual(self.sent, ["setAccountSource", "setPublisher", "setGuardian", "setPlatformAssets",
+                                     "setFundedAssets", "setExamImpl", "setSharesCode", "setChallengeFee", "setFaucet"])
+        calls = {fn: (to, args) for to, fn, args in self.calls}
+        self.assertEqual(calls["setAccountSource"], (binder, [factory_args and d.to_checksum_address("0x" + f"{6:040x}")]))
+        self.assertEqual(calls["setPublisher"], (binder, [PUBLISHER, bytes.fromhex("aa" * 32), bytes.fromhex("bb" * 32)]))
+        self.assertEqual(calls["setGuardian"], (binder, [d.to_checksum_address(GUARDIAN)]))
         record = json.loads((self.root / "deployments" / "testnet-v3-demo3.json").read_text())
         self.assertEqual(record["status"], "complete")
         self.assertEqual(record["usdc"], token)
@@ -99,16 +110,23 @@ class DeployV3(unittest.TestCase):
         self.assertEqual(set(record["initcode_keccak"]), {k for k, _ in d.CONTRACTS})
         self.assertEqual(record["chain_id"], 998)
         self.assertEqual(record["core_writer"], d.c.CORE_WRITER)
-        self.assertEqual(record["published_keys"], [d.to_checksum_address(KEY)])
-        journal = json.loads((self.root / "deployments" / "registries.json").read_text())
-        self.assertEqual([e["address"] for e in journal], [record["KeyRegistry"]], "A5-3: the registry is journaled")
+        self.assertNotIn("published_keys", record)
+        self.assertEqual(record["KeyBinder"], binder)
+        self.assertEqual(record["key_binder"]["publisher"], {"address": PUBLISHER, "pcr_hash": PCR,
+                                                             "attestation_doc_hash": DOC, "test_key": False})
+        self.assertEqual(record["key_binder"]["guardian"], d.to_checksum_address(GUARDIAN))
+        self.assertEqual(record["key_binder"]["owner"], {"from": self.deployer.address, "to": None, "state": "the deployer"})
+        self.assertFalse((self.root / "deployments" / "registries.json").exists(), "a binder holds no list of keys")
 
     def test_a_dry_run_checks_everything_and_sends_nothing(self):
-        out = self.run_main("--label", "demo3", "--keys-file", str(self.keys), "--dry-run")
+        out = self.run_main("--label", "demo3", "--dry-run", *BINDER_ARGS)
         self.assertEqual(self.deployed, [])
         self.assertEqual(self.sent, [])
         self.assertIn("nothing was sent", out)
         self.assertIn("DemoUsdc", out)
+        self.assertIn("KeyBinder(deployer, 50 a day, renewal delay 86400 s)", out)
+        self.assertIn(f"publisher        {PUBLISHER}", out)
+        self.assertIn("safe             the deployer keeps the key binder and the factory", out)
         self.assertFalse((self.root / "deployments" / "testnet-v3-demo3.json").exists())
 
     def test_mainnet_is_refused_without_a_dry_run_before_anything_is_read(self):
@@ -126,7 +144,8 @@ class DeployV3(unittest.TestCase):
         self.assertNotIn("DemoUsdc,", out)
         self.assertEqual(self.deployed, [])
         d.c.assert_testnet.assert_not_called()
-        self.assertEqual(d.plan("mainnet", d.NETWORKS["mainnet"]["usdc"])[0], "KeyRegistry")
+        self.assertEqual(d.plan("mainnet", d.NETWORKS["mainnet"]["usdc"])[0], "KeyBinder")
+        self.assertIn("a daily fuse the owner sets", out)
 
     def test_the_networks_are_network_pys(self):
         from spike.hlspike import network
@@ -139,7 +158,7 @@ class DeployV3(unittest.TestCase):
     def test_mainnet_plan_names_every_address_the_perps_the_gas_and_the_record_and_sends_nothing(self):
         deployer = "0x00000000000000000000000000000000000000De"
         out = self.run_main("--label", "v3", "--network", "mainnet", "--dry-run", "--deployer", deployer,
-                            "--keys-file", str(self.keys))
+                            "--max-binds-per-day", "200", "--safe", SAFE, *BINDER_ARGS)
         deploys = d.plan("mainnet", d.NETWORKS["mainnet"]["usdc"])
         for i, key in enumerate(deploys):
             self.assertIn(f"{key} at {d.created_by(d.to_checksum_address(deployer), 5 + i)}", out)
@@ -147,7 +166,9 @@ class DeployV3(unittest.TestCase):
         self.assertIn("rpc https://rpc.hyperliquid.xyz/evm", out)
         self.assertIn("BTC 0, ETH 1, SOL 5", out)
         self.assertIn("27,000,000 over 16 transactions", out)
-        self.assertIn("would publish    1 agent keys", out)
+        self.assertIn("measured on demo3's receipts, a deployment with a key registry", out)
+        self.assertIn("KeyBinder(deployer, 200 a day, renewal delay 86400 s)", out)
+        self.assertNotIn("publish ", out)
         self.assertIn("would write      deployments/mainnet-v3-v3.json", out)
         self.assertEqual((self.deployed, self.sent), ([], []))
         d.c.rpc.assert_not_called()
@@ -184,35 +205,67 @@ class DeployV3(unittest.TestCase):
         self.assertEqual(d.created_by("0x6ac7ea33f8831ea9dcc53393aaa88b25a785dbf0", 1),
                          d.to_checksum_address("0x343c43a37d37dff08ae8c4a11544c718abb4fcf8"))
 
-    def test_with_operator_the_registry_is_handed_over_last_and_the_record_says_pending(self):
-        op = "0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB"
-        self.run_main("--label", "demo3", "--keys-file", str(self.keys), "--operator", op)
-        self.assertEqual(self.sent, ["setAccountSource", "setPlatformAssets", "setFundedAssets", "setExamImpl",
-                                     "setSharesCode", "setChallengeFee", "publish", "transferOperator"])
+    def test_with_owner_the_binder_and_the_factory_are_handed_over_last_and_the_record_says_pending(self):
+        self.run_main("--label", "demo3", "--safe", SAFE, *BINDER_ARGS)
+        self.assertEqual(self.sent[-2:], ["transferOwnership", "transferOperator"])
+        binder, factory = d.to_checksum_address("0x" + f"{2:040x}"), d.to_checksum_address("0x" + f"{6:040x}")
+        self.assertEqual(self.calls[-2:], [(binder, "transferOwnership", [SAFE]), (factory, "transferOperator", [SAFE])])
         record = json.loads((self.root / "deployments" / "testnet-v3-demo3.json").read_text())
-        self.assertEqual(record["registry_operator"], {"from": self.deployer.address, "to": op, "state": "pending"})
+        pending = {"from": self.deployer.address, "to": SAFE, "state": "pending"}
+        self.assertEqual((record["key_binder"]["owner"], record["factory_operator"]), (pending, pending))
         self.assertIn("transferOperator", record["tx"])
+        self.assertIn("transferOwnership", record["tx"])
 
-    def test_without_operator_the_deployer_keeps_the_registry_and_the_record_says_nothing_of_it(self):
-        self.run_main("--label", "demo3", "--keys-file", str(self.keys))
+    def test_without_owner_the_deployer_keeps_both_and_the_record_says_so(self):
+        self.run_main("--label", "demo3")
         self.assertNotIn("transferOperator", self.sent)
+        self.assertNotIn("transferOwnership", self.sent)
+        self.assertEqual(self.sent[0], "setAccountSource")
+        self.assertNotIn("setPublisher", self.sent)
         record = json.loads((self.root / "deployments" / "testnet-v3-demo3.json").read_text())
-        self.assertNotIn("registry_operator", record)
+        self.assertNotIn("factory_operator", record)
+        self.assertIsNone(record["key_binder"]["publisher"])
 
-    def test_an_operator_not_in_checksummed_form_is_refused_before_anything(self):
-        with mock.patch.object(d.sys, "argv", ["deploy_v3", "--label", "demo3", "--operator", "0xabababababababababababababababababababab"]), \
-                self.assertRaises(SystemExit) as caught:
-            d.main()
-        self.assertIn("checksummed", str(caught.exception))
+    def test_bad_binder_settings_are_refused_before_anything(self):
+        for argv, said in ((["--safe", SAFE.lower()], "checksummed"), (["--safe", "0x12"], "not an address"),
+                           (["--guardian", "0x" + "00" * 20], "zero address"),
+                           (["--publisher", PUBLISHER], "--pcr-hash and --attestation-hash"),
+                           (["--publisher", PUBLISHER, "--pcr-hash", "0x" + "00" * 32, "--attestation-hash", DOC], "cannot be zero"),
+                           (["--publisher", PUBLISHER, "--pcr-hash", "0x12", "--attestation-hash", DOC], "64 hex digits"),
+                           (["--pcr-hash", PCR], "give --publisher"),
+                           (["--renew-delay", str(7 * 86_400 + 1)], "--renew-delay"),
+                           (["--max-binds-per-day", "0"], "at least 1")):
+            with mock.patch.object(d.sys, "argv", ["deploy_v3", "--label", "demo3", *argv]), \
+                    self.assertRaises(SystemExit, msg=argv) as caught:
+                d.main()
+            self.assertIn(said, str(caught.exception), argv)
         d.git_head.assert_not_called()
-        with mock.patch.object(d.sys, "argv", ["deploy_v3", "--label", "demo3", "--operator", "0x12"]), \
-                self.assertRaises(SystemExit) as caught:
-            d.main()
-        self.assertIn("not an address", str(caught.exception))
+
+    def test_a_test_publisher_is_refused_on_mainnet(self):
+        h = d.kb.TEST_PUBLISHER_HASH
+        for pcr, doc in ((h, h), (h, DOC), (PCR, h)):
+            with mock.patch.object(d.sys, "argv", ["deploy_v3", "--label", "v3", "--network", "mainnet", "--dry-run",
+                                                   "--publisher", PUBLISHER, "--pcr-hash", pcr, "--attestation-hash", doc]), \
+                    self.assertRaises(SystemExit, msg=(pcr, doc)) as caught:
+                d.main()
+            self.assertIn("testnet", str(caught.exception))
+
+    def test_a_test_publisher_on_testnet_is_said_and_recorded_as_one(self):
+        h = d.kb.TEST_PUBLISHER_HASH
+        out = self.run_main("--label", "demo3", "--dry-run", "--publisher", PUBLISHER, "--pcr-hash", h, "--attestation-hash", h)
+        self.assertIn("a key in a file, testnet only", out)
+        self.run_main("--label", "demo3", "--publisher", PUBLISHER, "--pcr-hash", h, "--attestation-hash", h)
+        record = json.loads((self.root / "deployments" / "testnet-v3-demo3.json").read_text())
+        self.assertTrue(record["key_binder"]["publisher"]["test_key"])
 
     def test_the_mainnet_plan_names_the_handover(self):
-        out = self.run_main("--label", "v3", "--network", "mainnet", "--dry-run", "--operator", "0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB")
-        self.assertIn("would hand over  the key registry's operator role to 0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB, the address the owner gives", out)
+        out = self.run_main("--label", "v3", "--network", "mainnet", "--dry-run", "--safe", SAFE)
+        self.assertIn(f"the key binder (transferOwnership) and the factory (transferOperator) to {SAFE}", out)
+
+    def test_a_mainnet_run_needs_its_fuse_named(self):
+        self.assertRaises(SystemExit, d.kb.constructor, SAFE, d.kb.settings(
+            mock.Mock(safe=None, publisher=None, pcr_hash=None, attestation_hash=None, guardian=None,
+                      max_binds_per_day=None, renew_delay=86_400), "mainnet"))
 
     def test_a_faucet_on_mainnet_is_refused(self):
         with mock.patch.object(d.sys, "argv", ["deploy_v3", "--label", "v3", "--network", "mainnet",
@@ -226,17 +279,22 @@ class DeployV3(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 d.main()
 
-    # The factory takes a KeyBinder now (src/KeyBinder.sol), and ops/deploy_v3.py still deploys a
-    # KeyRegistry for it. The deploy scripts move to the binder in a change of their own; until then
-    # this check fails, and says so, rather than being bent to pass.
-    @unittest.expectedFailure
     def test_the_factorys_constructor_is_the_one_the_contract_declares(self):
         text = (ROOT / "src/PoolFactory.sol").read_text()
         params = re.search(r"constructor\((.*?)\) \{", text, re.S).group(1)
         self.assertEqual([p.split()[0] for p in params.split(",")],
-                         ["KeyRegistry", "address", "address", "address", "IERC20"])
+                         ["KeyBinder", "address", "address", "address", "IERC20"])
         self.assertIn('"PoolFactory", "PoolFactory",\n                ["address", "address", "address", "address", "address"]',
                       (ROOT / "ops/deploy_v3.py").read_text())
+
+    def test_the_binders_constructor_is_the_one_the_contract_declares(self):
+        text = (ROOT / "src/KeyBinder.sol").read_text()
+        params = re.search(r"constructor\((.*?)\) EIP712", text, re.S).group(1)
+        self.assertEqual([p.split()[0] for p in params.split(",")], ["address", "uint32", "uint64"])
+        self.assertEqual(d.kb.constructor(SAFE, d.kb.settings(
+            mock.Mock(safe=None, publisher=None, pcr_hash=None, attestation_hash=None, guardian=None,
+                      max_binds_per_day=None, renew_delay=86_400), "testnet"))[0], ["address", "uint32", "uint64"])
+        self.assertIn(f"MAX_RENEW_DELAY = {d.kb.MAX_RENEW_DELAY // 86_400} days", text)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,11 @@ Status: working design, 16 September 2026, updated on 17 September after the liv
 `spike/README.md` has the HyperCore behaviour this design leans on and how each piece was
 checked.
 
+The agent keys described here are those of the deployments on the testnet, which take them from
+`KeyRegistry`, a list the operator publishes. Main replaces it with `KeyBinder`: an account that
+needs a key asks for one, and a key is bound to it only on the signature of a publisher the owner
+appoints, in the block the account approves it (docs/KEY-BINDING.md). No deployment runs it yet.
+
 ## Roles
 
 - **Investor.** Creates a pool, sets its rules and challenge terms, and puts in capital with a
@@ -21,8 +26,8 @@ checked.
 
 ## Contracts (HyperEVM testnet)
 
-- `KeyRegistry`: the operator publishes agent key addresses. A key moves `Free → Bound →
-  Retired` and never back. A bound key belongs to one account and one trader. A key is
+- `KeyRegistry` (on main, `KeyBinder`: docs/KEY-BINDING.md): the operator publishes agent key
+  addresses. A key moves `Free → Bound → Retired` and never back. A bound key belongs to one account and one trader. A key is
   approved on HyperCore for one account in its life, never for another (Hyperliquid warns that
   actions signed by a removed agent can be replayed once its nonces are pruned). How long
   HyperCore keeps a key approved, and how the key is approved again: the next section.

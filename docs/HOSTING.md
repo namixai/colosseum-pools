@@ -248,8 +248,10 @@ demo and used nowhere else.
    the users, directories and env files, the TLS key and its CSR, and prints the CSR.
    Running it again adds only what is missing.
 2. From the operator's machine: `ops/host/deploy.sh <commit> <user@host>`, which also builds the venv.
-3. The agent keys, on the host, as the gateway's user. Only the addresses leave the host,
-   for `ops/deploy_testnet.py --keys-file`:
+3. The agent keys, on the host, as the gateway's user, for a deployment before the key binder.
+   Only the addresses leave the host, for that deployment's `--keys-file`. A deployment with a key
+   binder makes no keys in advance: the keeper's relay writes each into this directory just
+   before it is bound (docs/KEY-BINDING.md).
 
        cd / && sudo -u colosseum-gw /opt/colosseum-pools/venv/bin/python \
            /opt/colosseum-pools/current/ops/make_demo_keys.py --out /var/lib/colosseum-gw/keys --count 20
@@ -378,6 +380,13 @@ keeper: its journal (`pass_done`, `pass_failed`), its progress file and its read
 only on the host, through SSM once the rule is gone.
 
 ### What the record sets
+
+The addresses come from every record: `GATEWAY_FACTORY`, the record's `PoolFactory`, and `GATEWAY_REGISTRY`,
+where the gateway asks which account a key is bound to: the record's `KeyRegistry`, or on a deployment on a
+key binder its `KeyBinder` (docs/KEY-BINDING.md), which answers the gateway's two reads, `bindingOf` and
+`isBound`, as the registry does. A record that names both, or neither, stops the release. The keys watchdog
+reads the registry's list of free keys, which a binder does not have: no watchdog unit ships for such an
+instance.
 
 A deployment whose record has `gateway_limits` (`deployments/testnet-v3-demo3.json` since 10 November 2026,
 `deployments/testnet-demo2.json` since 11 November 2026)
@@ -693,6 +702,41 @@ directory answers 404 `no_contacts_here`; `GATEWAY_CONTACTS_DIR` names one for a
 faucet never takes the contacts' directory. nginx sends `/v1/contacts` and `/<name>/v1/contacts` to the
 gateways: a read costs the node nothing and is limited by a network at 60 a minute; a write by a network
 at 2 a minute and by everyone together at 6, since each may cost the node a read.
+
+### A test publisher
+
+A deployment on a key binder (docs/KEY-BINDING.md) publishes no keys: each account asks for one, and the
+binder binds a key the publisher signs. Before the enclave, on testnet, the publisher is a key in a file and
+the instance's keeper answers the requests itself (`ops/key_relay.py`): it makes each agent key, signs the
+binding with the publisher's wallet and sends it. Its record says so (`key_binder.publisher.test_key`), and
+`deployment-<name>.env` then carries `COLOSSEUM_PUBLISHER_WALLET=publisher` for the keeper and
+`GATEWAY_KEYS_BOUND_LATER=1` for the gateway, which starts with no key and reads each one as it is bound.
+Such a deployment is served as an instance; `install.sh` refuses it as the first deployment.
+
+The keeper and the gateway stay two users, and neither directory is opened to the other or to a group.
+The keeper makes the keys into `/var/lib/colosseum-keeper/instances/<name>/made-keys`, its own;
+`colosseum-key-copy@<name>.path` sees each new one and starts `colosseum-key-copy@<name>.service`, which
+copies it into `/var/lib/colosseum-gw/instances/<name>/keys`, owned by `colosseum-gw`, mode 600
+(`ops/host/key_copy.py`). The copier runs as root, sees those two directories alone, has no network, and takes
+only a regular owner-only file of the keeper's user named `agent-<address>.key` that holds that address's key.
+It never replaces a file the gateway has and removes nothing; it logs addresses, never a key. The keeper keeps
+its copy for a renewal it reveals later.
+
+By hand, once, before the deploy whose record names the publisher (the deploy scripts take its address,
+`--publisher`):
+
+    # the instance, as any further one (it makes made-keys)
+    sudo bash /opt/colosseum-pools/current/ops/host/bootstrap.sh --instance <name> <label> <port>
+    # the publisher's wallet beside the keeper's, made as the keeper's user; its address is --publisher
+    sudo -u colosseum-keeper /opt/colosseum-pools/venv/bin/python /opt/colosseum-pools/current/ops/make_demo_keys.py \
+        --wallet publisher --dir /var/lib/colosseum-keeper/instances/<name>/secrets
+
+`install.sh` then checks, before it switches, that the instance has `secrets/publisher.key`, that
+`secrets/publisher.addr` is the record's publisher and that `made-keys` is there, and stops the release
+otherwise; after the switch it enables the path unit and runs the copier once, before the keepers restart. An
+instance set up before 11 November 2026 has no `made-keys`: `sudo install -d -m 0700 -o colosseum-keeper -g
+colosseum-keeper /var/lib/colosseum-keeper/instances/<name>/made-keys`. demo2 and demo3 are on a registry and
+change in nothing.
 
 ## The shared pool's keeper
 

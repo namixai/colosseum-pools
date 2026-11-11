@@ -184,22 +184,29 @@ point them at another one.
 # the demo's agent keys: owner-only files in a new directory, and their addresses
 spike/.venv/bin/python ops/make_demo_keys.py --out <new directory outside the repo> --count 20
 
-# deploy the contracts and publish those addresses; writes deployments/testnet-<label>.json
-spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal --keys-file <that directory>/addresses.txt
+# deploy the contracts, the key binder with a testnet publisher key; writes deployments/testnet-<label>.json.
+# No key is published: the keeper's relay (--publisher-wallet, --keys-dir <that directory>) writes each key
+# into the directory and binds it when an account asks (docs/KEY-BINDING.md)
+spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal --publisher 0x... \
+    --pcr-hash <hash> --attestation-hash <hash>   # on testnet before the enclave: ops/binder_deploy.py, TEST_PUBLISHER_HASH
 
-# the app: copy the factory, registry and first block from that record into app/config.js,
-# and point its gateway at http://127.0.0.1:8787 for a gateway on this machine
+# the app: copy the factory and first block from that record into app/config.js, and point its
+# gateway at http://127.0.0.1:8787 for a gateway on this machine. The app still reads keys from a
+# registry (`registry` and keyOf, app/lib/chain.js), which a deployment on a key binder does not
+# have: until the app reads the binder, it serves the deployments before it
 python3 -m http.server 8790 --bind 127.0.0.1 --directory app
 
-# the gateway, signing with those keys and checking the caps first
-GATEWAY_FACTORY=0x... GATEWAY_REGISTRY=0x... \
+# the gateway, signing with those keys and checking the caps first; GATEWAY_REGISTRY is the record's KeyBinder,
+# and the gateway starts with no key and reads each as it is bound (GATEWAY_KEYS_BOUND_LATER=1)
+GATEWAY_FACTORY=0x... GATEWAY_REGISTRY=0x... GATEWAY_KEYS_BOUND_LATER=1 \
 GATEWAY_SIGNER=demo GATEWAY_KEYS_DIR=<that directory> \
 GATEWAY_ALLOW_ORIGIN=http://127.0.0.1:8790 \
 spike/.venv/bin/python -m gateway.server
 
-# the keeper: list what is due, then send it
+# the keeper: list what is due, then send it; the publisher's wallet is the one whose address was --publisher,
+# and it makes each key into the gateway's directory before it binds it
 spike/.venv/bin/python -m ops.keeper --deployment rehearsal --once --dry-run
-spike/.venv/bin/python -m ops.keeper --deployment rehearsal --once
+spike/.venv/bin/python -m ops.keeper --deployment rehearsal --once --publisher-wallet <its name> --keys-dir <that directory>
 
 # a scripted trade through the gateway, signed by the trader's wallet
 spike/.venv/bin/python -m agents.bot rest --deployment rehearsal --account 0x...

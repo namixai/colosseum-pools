@@ -1,6 +1,8 @@
 """Deploy a pool of many traders on testnet (chain 998), with everything it stands on: a key
-registry, a factory on this commit's Pool, the paper exam's implementation, and one MultiPool on
-a plan read from a file.
+binder, a factory on this commit's Pool, the paper exam's implementation, and one MultiPool on
+a plan read from a file. The binder's flags (--safe, --publisher, --pcr-hash, --attestation-hash,
+--guardian, --max-binds-per-day, --renew-delay) are ops/binder_deploy.py's; with --safe the binder
+and the factory are handed over to it last, after setMultiPool.
 
 --network mainnet --dry-run prints the same deployment's plan for mainnet and sends nothing: the
 network's chain id, RPC, API and USDC from spike/hlspike/network.py, the plan and its terms, each
@@ -8,7 +10,7 @@ contract's address when --deployer names the address the owner will deploy from,
 numbers, and the record it would write. It holds no key. A mainnet run without --dry-run is refused.
 
     spike/.venv/bin/python ops/deploy_multi.py --label multi-1 --plan ops/plans/multi-testnet-run.json \\
-        --keys-file <addresses.txt from ops/make_demo_keys.py> [--owner 0x...] [--dry-run]
+        [--owner 0x...] [--safe 0x... --publisher 0x... --pcr-hash 0x... --attestation-hash 0x...] [--dry-run]
     spike/.venv/bin/python ops/deploy_multi.py --big-blocks-off [--signer multi-operator]
 
 The second form does one thing: it switches the signer back to small blocks. A run that died
@@ -17,11 +19,11 @@ then waits for a big block, about one a minute.
 
 Nothing of an existing deployment is used or changed. The seats of a MultiPool are pools its
 owner runs (`Pool.runByOwner`), which the pools deployed before 13 October 2026 cannot do, so
-this needs a factory of its own on a Pool built from this commit, and a registry of its own for
-the keys its funded accounts will take.
+this needs a factory of its own on a Pool built from this commit, and a key binder of its own,
+which binds a key to each funded account that asks for one.
 
 --dry-run makes every check a real run makes -- the label is free, the contracts build, the plan
-is one the contracts will take, the keys are new to every registry on record, the signer is on
+is one the contracts will take, the binder's settings are ones it takes, the signer is on
 HyperCore and holds gas -- and sends nothing.
 
 The plan file is read and checked here against the same bounds the contracts hold, so a mistake
@@ -65,13 +67,13 @@ from hlspike import common as c  # noqa: E402
 from ops import terms  # noqa: E402
 from ops.leverage import asset_caps, bad_caps  # noqa: E402
 from ops.terms import price_floor_bps  # noqa: E402  (plan_of's `terms` is its argument)
-from ops.plan_reads import checked_operator, created_by, operator_record, operator_step, perp_numbers, read_rpc  # noqa: E402
+from ops import binder_deploy as kb  # noqa: E402
+from ops.plan_reads import created_by, perp_numbers, read_rpc  # noqa: E402
 from ops.deploy_testnet import (  # noqa: E402
     CHALLENGE_FEE,
     PLATFORM_ASSETS,
     big_blocks,
     check_assets,
-    check_keys,
     deploy_contract,
     git_head,
     mark_incomplete,
@@ -285,7 +287,7 @@ def node_host() -> str:
 
 # What deploy_multi deploys, by record key, in order: the MultiPool comes after the factory is configured and
 # the terms are published.
-DEPLOYS = ("KeyRegistry", "AccountOps", "PoolImpl", "ChallengeAccountImpl", "PoolFactory", "PaperExamImpl", "TermsBook",
+DEPLOYS = ("KeyBinder", "AccountOps", "PoolImpl", "ChallengeAccountImpl", "PoolFactory", "PaperExamImpl", "TermsBook",
            "MultiPool", "MultiPoolReader")
 
 
@@ -295,6 +297,7 @@ def network_plan(args, p) -> int:
         p.error("--label, --plan and --owner (the address the owner gives) are needed for a plan")
     net = c.network.NETWORKS[args.network]
     owner = checked_owner(args.owner)
+    binder = kb.settings(args, net.name)
     out_path = ROOT / "deployments" / f"{net.name}-{args.label}.json"
     if out_path.exists():
         raise SystemExit(f"{out_path} exists; pick another label")
@@ -323,8 +326,8 @@ def network_plan(args, p) -> int:
             print(f"  deployer         {deployer}: nonce not read ({exc})")
             print(f"  would deploy     {', '.join(DEPLOYS)}  (addresses not read)")
         else:
-            print(f"  deployer         {deployer}, the address the owner gives (--deployer): nonce {nonce}; it operates "
-                  "the registry and the factory")
+            print(f"  deployer         {deployer}, the address the owner gives (--deployer): nonce {nonce}; it owns "
+                  "the key binder and operates the factory until the Safe accepts them")
             print("  would deploy     " + ", ".join(f"{k} at {created_by(deployer, nonce + i)}" for i, k in enumerate(DEPLOYS)))
             print("                   (each address holds only if the deployer sends nothing else first)")
     else:
@@ -336,13 +339,11 @@ def network_plan(args, p) -> int:
     except Exception as exc:  # a plan says what it could not read rather than stopping
         print(f"  perp numbers     not read: {exc}")
     print(f"  would configure  setAccountSource, setPlatformAssets, setFundedAssets {list(FUNDED_ASSETS)}, setExamImpl, "
-          f"setSharesCode 0x{shares_code().hex()[:16]}, setChallengeFee, publish, setMultiPool")
+          f"setSharesCode 0x{shares_code().hex()[:16]}, setChallengeFee, setMultiPool")
+    for line in kb.plan_lines(binder):
+        print(line)
     print("  gas              the factory set as ops/deploy_v3.py's plan reads it (scripts/mainnet_gas.py); TermsBook and "
           "MultiPool have no testnet receipt in deployments/ to measure")
-    operator = checked_operator(args.operator)
-    if operator:
-        print(f"  would hand over  the key registry's operator role to {operator}, the address the owner gives: "
-              "transferOperator, then that address accepts it itself (acceptOperator)")
     print(f"  would write      {out_path.relative_to(ROOT)}, after every transaction; then its entry in "
           "deployments/LIVE.json, role staged, by hand (docs/DEPLOYMENTS.md)")
     print("  would NOT send   anything, and moves no USDC")
@@ -353,7 +354,6 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--label")
     p.add_argument("--plan", help="the plan file, JSON")
-    p.add_argument("--keys-file", help="agent key addresses for this registry, one per line")
     p.add_argument("--signer", default=DEFAULT_SIGNER, help=f"the named key that deploys and operates ({DEFAULT_SIGNER})")
     p.add_argument("--big-blocks-off", action="store_true", help="only switch the signer back to small blocks")
     p.add_argument("--owner", help="the pool's owner; the signer if not given")
@@ -367,9 +367,8 @@ def main() -> int:
                    help="run every check and send nothing; says what a real run would do")
     p.add_argument("--network", choices=sorted(c.network.NETWORKS), default="testnet",
                    help="testnet deploys; mainnet prints the plan only, with --dry-run")
-    p.add_argument("--operator", help="the address the owner gives to operate the key registry: transferOperator after "
-                   "the keys are published, and that address accepts the role itself (acceptOperator)")
     p.add_argument("--deployer", help="mainnet plan: the address the owner will deploy from, to name each contract's address")
+    kb.add_args(p)
     args = p.parse_args()
 
     if args.network != "testnet":
@@ -377,15 +376,15 @@ def main() -> int:
             raise SystemExit(f"--network {args.network} is a dry run only: this repository sends nothing there, "
                              "and opening that is a decision of its own")
         return network_plan(args, p)
+    binder = kb.settings(args, "testnet")  # before anything is read or sent: a bad address costs nothing
     c.assert_testnet()
     if args.big_blocks_off:
         big_blocks(c.account(args.signer), False)
         print(f"{args.signer} is on small blocks again")
         return 0
-    if not (args.label and args.plan and args.keys_file):
-        p.error("--label, --plan and --keys-file are needed to deploy")
+    if not (args.label and args.plan):
+        p.error("--label and --plan are needed to deploy")
     checked_owner(args.owner)
-    operator = checked_operator(args.operator)  # before anything is sent: a bad address costs no gas
     out_path = ROOT / "deployments" / f"testnet-{args.label}.json"
     if out_path.exists():
         raise SystemExit(f"{out_path} exists; pick another label")
@@ -397,9 +396,6 @@ def main() -> int:
     terms_hash = terms.terms_hash(text)
     subprocess.run(["forge", "build"], cwd=ROOT, check=True, capture_output=True)
     assets = check_assets()
-    keys = check_keys(pathlib.Path(args.keys_file).read_text().splitlines())
-    if not keys:
-        raise SystemExit("no agent keys: every funded account takes one")
 
     op = c.account(args.signer)
     owner = args.owner or op.address
@@ -414,7 +410,8 @@ def main() -> int:
         print("deploy_multi --dry-run: nothing was sent.")
         print(f"  label            {args.label}  (deployments/testnet-{args.label}.json is free)")
         print(f"  commit           {commit}")
-        print(f"  signer           {op.address}, {gas_wei / 1e18:.4f} HYPE, on HyperCore; it operates the registry and the factory")
+        print(f"  signer           {op.address}, {gas_wei / 1e18:.4f} HYPE, on HyperCore; it owns the key binder and "
+              "operates the factory")
         print(f"  owner            {owner}  -- for good: the one address that takes money out")
         print(f"  node             {node_host()}  -- where the signed transactions go")
         print(f"  bounds           term {bounds[0] / DAY:g} to {bounds[1] / DAY:g} days, notice {bounds[2] / DAY:g} days, "
@@ -425,11 +422,12 @@ def main() -> int:
               f"{plan[7] / 100:g}% in work, {plan[8]} seats, term {raw['pool']['term_days']} days, "
               f"after the target: {raw['funded']['after_target']}")
         print(f"  terms            {len(text)} bytes, keccak 0x{terms_hash.hex()}, template {terms.TEMPLATE_VERSION}")
-        print("  would deploy     KeyRegistry, Pool, ChallengeAccount, PoolFactory, PaperExam  (big blocks on, then off)")
+        print("  would deploy     KeyBinder, Pool, ChallengeAccount, PoolFactory, PaperExam  (big blocks on, then off)")
         print(f"  would configure  setAccountSource, setPlatformAssets {assets}, setFundedAssets {list(FUNDED_ASSETS)}, setExamImpl, "
               f"setSharesCode 0x{shares_code().hex()}, "
-              f"setChallengeFee {CHALLENGE_FEE}, "
-              f"publish {len(keys)} keys")
+              f"setChallengeFee {CHALLENGE_FEE}")
+        for line in kb.plan_lines(binder):
+            print(line)
         print("  would deploy     TermsBook, publish the terms, then MultiPool(owner, factory, exam, plan, bounds)"
               "  (big blocks on, then off)")
         print("  would deploy     MultiPoolReader: the pool's views that only read")
@@ -446,17 +444,17 @@ def main() -> int:
                                  "renewal": bounds[3]},
                     "terms_keccak": "0x" + terms_hash.hex(), "terms_template": terms.TEMPLATE_VERSION,
                     "shares_code": "0x" + shares_code().hex(),
-                    "bounds_are_the_products": products, "tx": {}}
+                    "bounds_are_the_products": products, "key_binder": kb.record_of(op.address, binder), "tx": {}}
     big_blocks(op, True)
     try:
         try:
-            registry, _ = deploy_contract(op, out_path, record, "KeyRegistry", "KeyRegistry", ["address"], [op.address])
+            key_binder, _ = deploy_contract(op, out_path, record, "KeyBinder", "KeyBinder", *kb.constructor(op.address, binder))
             libs = {"AccountOps": deploy_contract(op, out_path, record, "AccountOps", "AccountOps", [], [])[0]}
             pool_impl, _ = deploy_contract(op, out_path, record, "PoolImpl", "Pool", [], [], libs)
             challenge_impl, _ = deploy_contract(op, out_path, record, "ChallengeAccountImpl", "ChallengeAccount", [], [], libs)
             factory, _ = deploy_contract(op, out_path, record, "PoolFactory", "PoolFactory",
                                          ["address", "address", "address", "address", "address"],
-                                         [registry, pool_impl, challenge_impl, op.address, c.TESTNET_USDC_ERC20])
+                                         [key_binder, pool_impl, challenge_impl, op.address, c.TESTNET_USDC_ERC20])
             exam_impl, _ = deploy_contract(op, out_path, record, "PaperExamImpl", "PaperExam", [], [])
         finally:
             big_blocks(op, False)
@@ -468,8 +466,7 @@ def main() -> int:
     save(out_path, record)
     # Before the pool, not after: its constructor asks the factory for a seat of every size, and
     # the factory refuses rules on assets it has not been told to list.
-    steps = [
-        ("setAccountSource", registry, "setAccountSource(address)", ["address"], [factory]),
+    steps = kb.binder_steps(key_binder, factory, binder) + [
         ("setPlatformAssets", factory, "setPlatformAssets(uint32[],string[],bool)", ["uint32[]", "string[]", "bool"],
          [assets, list(PLATFORM_ASSETS), True]),
         ("setFundedAssets", factory, "setFundedAssets(uint32[],string[],bool)", ["uint32[]", "string[]", "bool"],
@@ -481,17 +478,11 @@ def main() -> int:
         ("setSharesCode", factory, "setSharesCode(bytes32)", ["bytes32"], [shares_code()]),
         ("setChallengeFee", factory, "setChallengeFee(uint256,address)", ["uint256", "address"],
          [CHALLENGE_FEE, op.address]),
-        ("publish", registry, "publish(address[])", ["address[]"], [keys]),
     ]
-    if operator:
-        steps.append(operator_step(registry, operator))
     try:
         for name, to, sig, types, values in steps:
             record["tx"][name] = c.transact(op, to, sig, types, values)["transactionHash"]
-            if name == "publish":
-                record["published_keys"] = keys
-            if name == "transferOperator":
-                record["registry_operator"] = operator_record(op.address, operator)
+            kb.after_step(record, name, binder, op.address)
             save(out_path, record)
         big_blocks(op, True)
         try:
@@ -509,6 +500,12 @@ def main() -> int:
         # the pool sells exams and opens no account.
         record["tx"]["setMultiPool"] = c.transact(op, factory, "setMultiPool(address,bool)", ["address", "bool"],
                                                   [pool, True])["transactionHash"]
+        save(out_path, record)
+        # Last: the binder and the factory to the Safe, which accepts each itself.
+        for name, to, sig, types, values in kb.handover(key_binder, factory, binder):
+            record["tx"][name] = c.transact(op, to, sig, types, values)["transactionHash"]
+            kb.after_step(record, name, binder, op.address)
+            save(out_path, record)
     except BaseException as exc:
         mark_incomplete(out_path, record, exc)
         raise
