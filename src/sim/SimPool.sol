@@ -84,7 +84,10 @@ contract SimPool is Initializable {
         None,
         Due,
         Stopped,
-        Paid
+        Paid,
+        /// Due and sent, but the token refused it (say the trader's address was blocked): the money is
+        /// set aside for the trader, who takes it with `claimHeld`, and the queue moves on.
+        Held
     }
 
     struct Account {
@@ -126,6 +129,9 @@ contract SimPool is Initializable {
     uint256 public liftedCount;
     uint256 public paidCount;
     uint256 public paidTotal;
+    /// Payouts the token refused to send, set aside for their traders (`claimHeld`).
+    uint256 public held;
+    mapping(address trader => uint256) public heldOf;
 
     SimSize[] internal _menu;
     Rules internal _examRules;
@@ -161,6 +167,8 @@ contract SimPool is Initializable {
         uint256 liftedCount,
         uint256 paidCount
     );
+    event PayoutHeld(uint256 indexed id, address indexed trader, uint64 amount);
+    event HeldClaimed(address indexed trader, address indexed to, uint256 amount);
     event StopLifted(uint256 indexed id, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount);
     event AddedToPot(uint256 amount, uint256 principal);
     event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount);
@@ -251,7 +259,7 @@ contract SimPool is Initializable {
     ///         is open, above `FLOOR_PAYOUTS` payouts of the largest size.
     function withdrawable() public view returns (uint256) {
         uint256 bal = usdc.balanceOf(address(this));
-        uint256 keep = owed + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());
+        uint256 keep = owed + held + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());
         return bal > keep ? bal - keep : 0;
     }
 
@@ -349,13 +357,20 @@ contract SimPool is Initializable {
                     emit PayoutQueued(i, bal);
                     break;
                 }
-                p.state = PayoutState.Paid;
                 owed -= p.amount;
-                paidCount += 1;
-                paidTotal += p.amount;
                 n += 1;
-                usdc.safeTransfer(p.trader, p.amount);
-                emit PayoutPaid(i, p.trader, p.amount, paidCount, paidTotal);
+                if (_send(p.trader, p.amount)) {
+                    p.state = PayoutState.Paid;
+                    paidCount += 1;
+                    paidTotal += p.amount;
+                    emit PayoutPaid(i, p.trader, p.amount, paidCount, paidTotal);
+                } else {
+                    // One refused transfer does not hold up every payout after it (review of cp#261).
+                    p.state = PayoutState.Held;
+                    held += p.amount;
+                    heldOf[p.trader] += p.amount;
+                    emit PayoutHeld(i, p.trader, p.amount);
+                }
             }
             i += 1;
         }
@@ -375,6 +390,17 @@ contract SimPool is Initializable {
         a.done = true;
         live -= 1;
         emit Released(account);
+    }
+
+    /// @notice Sends a trader what was set aside for them when a payout's transfer was refused, to an
+    ///         address the trader names. Also after the pool has finished.
+    function claimHeld(address to) external {
+        uint256 amount = heldOf[msg.sender];
+        if (amount == 0) revert TooMuch();
+        heldOf[msg.sender] = 0;
+        held -= amount;
+        usdc.safeTransfer(to, amount);
+        emit HeldClaimed(msg.sender, to, amount);
     }
 
     // ── the checker ──────────────────────────────────────────────
@@ -425,8 +451,9 @@ contract SimPool is Initializable {
 
     // ── the creator ──────────────────────────────────────────────
 
-    /// @notice Puts more of the creator's money in, for more payouts at once than the locked two.
-    ///         It comes back first, without the partner's share.
+    /// @notice Puts more of the creator's money in, for more payouts at once than the locked two. It is
+    ///         principal: never shared with the partner. A withdrawal takes profit first; the
+    ///         principal comes back once what is above it has been taken, or at `finish`.
     function addToPot(uint256 amount) external onlyCreator {
         if (finished) revert Done();
         usdc.safeTransferFrom(msg.sender, address(this), amount);
@@ -465,7 +492,7 @@ contract SimPool is Initializable {
         if (!closed || finished) revert Done();
         if (live != 0 || owed != 0) revert NotOver();
         finished = true;
-        uint256 bal = usdc.balanceOf(address(this));
+        uint256 bal = usdc.balanceOf(address(this)) - held;
         if (bal != 0) _withdraw(bal);
         emit Finished(bal);
     }
@@ -501,7 +528,7 @@ contract SimPool is Initializable {
     }
 
     function _withdraw(uint256 amount) internal {
-        uint256 bal = usdc.balanceOf(address(this));
+        uint256 bal = usdc.balanceOf(address(this)) - held;
         uint256 profit = bal > principal ? bal - principal : 0;
         uint256 shared = amount < profit ? amount : profit;
         principal -= amount - shared;
@@ -511,6 +538,12 @@ contract SimPool is Initializable {
         if (toPartner != 0) usdc.safeTransfer(partner, toPartner);
         usdc.safeTransfer(creator, amount - fee - toPartner);
         emit Withdrawn(creator, amount, fee, toPartner);
+    }
+
+    /// A transfer that may be refused: true if the token took it.
+    function _send(address to, uint256 amount) internal returns (bool) {
+        (bool ok, bytes memory ret) = address(usdc).call(abi.encodeCall(IERC20.transfer, (to, amount)));
+        return ok && (ret.length == 0 || abi.decode(ret, (bool)));
     }
 
     function _payoutOf(uint64 size) internal view returns (uint64) {

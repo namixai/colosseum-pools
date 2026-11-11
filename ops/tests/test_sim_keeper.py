@@ -38,7 +38,9 @@ class TheEvents(unittest.TestCase):
         types = [l.split()[0] for l in fields.splitlines() if l.strip() and not l.strip().startswith("//")]
         self.assertEqual(types, ["address", "address", "uint64", "uint64", "PayoutState", "bool"])
         self.assertEqual(k.PAYOUT, "(address,address,uint64,uint64,uint8,bool)")
-        self.assertEqual(k.PAYOUT_STATE, ("None", "Due", "Stopped", "Paid"))
+        self.assertEqual(k.PAYOUT_STATE, ("None", "Due", "Stopped", "Paid", "Held"))
+        states = re.search(r"enum PayoutState \{(.*?)\}", pool, re.S).group(1)
+        self.assertEqual(tuple(w for w in re.findall(r"^\s*(\w+),?$", states, re.M)), k.PAYOUT_STATE)
 
 
 class WhatIsDue(unittest.TestCase):
