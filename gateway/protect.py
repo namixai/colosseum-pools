@@ -1162,6 +1162,12 @@ class Protector:
         with self._guard:
             return dict(self._watch)
 
+    def unread_keys(self) -> int:
+        """How many of the keys `take_on` was given it has not read yet: the node refused them, and every sweep
+        tries them again."""
+        with self._guard:
+            return len(self._pending)
+
     def _unwatch(self, account: str) -> None:
         with self._guard:
             self._watch.pop(account, None)

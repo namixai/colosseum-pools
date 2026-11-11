@@ -395,6 +395,15 @@ whose record has none, as demo2's today, renders the addresses alone, and its `g
 limits as below. `ops/tests/test_host_instances.py` holds the rendered lines to what the gateway reads and
 each leverage cap to the default `ops/leverage.py` gives the same market.
 
+**The keeper's nodes come from the record too** (`keeper_nodes`, demo2's and demo3's since 11 November 2026):
+the node the keeper reads everything from and its scan's window, `COLOSSEUM_RPC_URL` and `COLOSSEUM_LOG_WINDOW`
+(Hyperliquid's, 50 blocks), and the second node its scan takes a window to when the first refuses it,
+`COLOSSEUM_RPC_BACKUP_URL` and `COLOSSEUM_BACKUP_LOG_WINDOW` (thirdweb's, 1000 blocks). They are rendered into
+the same file, so keeper.env's `COLOSSEUM_RPC_URL` by hand is overridden. The record is public: a node whose
+address carries a key does not go in it, and `deployment-env` refuses an address with anything but https, a
+host and a path. A deploy of this needs nothing on the host by hand: `install.sh` renders the file and
+restarts the keepers.
+
 demo3's record says what its gateway had by hand on 10 November 2026, and xyz:GOLD besides:
 
     GATEWAY_SIZE_CAPS={"3": "0.005", "4": "0.15", "0": "4", "750000": "0.015", "750003": "0.1"}
@@ -912,6 +921,17 @@ What the code now does about a scan that cannot move (`ops/keeper.py`):
     the point at which `--sweep-every` wants lowering.
 - When the scan stands on one block for 10 passes in a row while the head is past it, the keeper
   logs `scan_behind` with how far behind it is, and again every 10 passes after.
+- A window the keeper's node refuses, by any error, a timeout or a status, goes once to the second node
+  (`keeper_nodes`, above) in that node's own window, and the rest of the pass reads the second node:
+  `scan_on_backup`. A scan further behind the head than one pass of the keeper's node reads (5 windows of
+  50) catches up on the second node, 1000 blocks a call. Neither node is tried twice for a window, and the
+  scan never waits out the 63-second ladder of every other read; a 429 from the second node is waited out 2
+  seconds at a time, 10 at most a pass. Both refusing: `scan_stopped`, and the next pass tries again.
+  Caught up means within one window of the head with every block before it read; the keeper says so once,
+  `scan_caught_up`. Measured 11 Nov 2026: Hyperliquid's testnet node has no blocks 69038325 to 69071492 (8
+  Nov, 02:49:51 to 11:54:26 UTC), refuses any window in them with `invalid block range`, and the scan stood
+  on 69038325 from then; thirdweb's has them, and the whole 280,643 blocks from there to the head held no
+  `ChallengeCreated` of either factory.
 
 When the keepers' node is down for long:
 
@@ -919,8 +939,10 @@ When the keepers' node is down for long:
    - `systemctl status colosseum-keeper colosseum-keeper2`;
    - `journalctl -u colosseum-keeper -u colosseum-keeper2 --since "<UTC time> UTC"`. Look for
      `head_read_failed`, `pool_failed` and `scan_behind`;
-   - `grep COLOSSEUM_RPC_URL /etc/colosseum/keeper.env`;
-   - one `eth_blockNumber` to that URL with `curl`.
+   - the node each keeper reads: `grep COLOSSEUM_RPC /etc/colosseum/deployment.env
+     /etc/colosseum/deployment-demo3.env`, the record's (`keeper_nodes`), which systemd reads last; only
+     for a deployment whose record has none, `grep COLOSSEUM_RPC_URL /etc/colosseum/keeper.env`;
+   - one `eth_blockNumber` to that URL with `curl`, and to the second node's.
 
    From a laptop, the keepers' nonces against the last `DaySnapshot` show whether anything was
    sent. A failed send still uses a nonce; a send that never left does not.
@@ -929,8 +951,21 @@ When the keepers' node is down for long:
    - `eth_call` to a precompile — the account's margin, `0x…080F`;
    - `eth_getLogs` on a 50-block range near the head;
    - `eth_blockNumber`.
-3. **Change `COLOSSEUM_RPC_URL` in `/etc/colosseum/keeper.env`,** keep a copy of the old file,
-   and restart both units.
+
+   `998.rpc.thirdweb.com`, tried from a laptop on 11 Nov 2026, answered all three (`markPx` `0x…0806` the
+   same as Hyperliquid's node), served logs back to demo2's deployment block and through the blocks
+   Hyperliquid's lacks, and took windows of up to 1000 blocks; wider ones it refuses with `-32005` ("Log
+   response size exceeded"), the code a rate limit has elsewhere. About five calls in a row went through,
+   then HTTP 429 for a few seconds. How much its free use allows a day or a month is not known. It is the
+   keepers' second node in the records; from the host, it answered a read at the head on 10 Nov 2026.
+3. **Change the node where it is set.** For a deployment whose record has `keeper_nodes` (demo2 and
+   demo3 since 11 Nov 2026), that is the record: change `primary` or `backup` there, have it reviewed and
+   deployed, and `install.sh` renders the env file and restarts the keepers. A line in keeper.env changes
+   nothing for them, since the record's file is read after it. If the node is down and no deploy can wait,
+   the same line in the rendered `/etc/colosseum/deployment.env` or `deployment-<name>.env` can be edited
+   by hand, keeping a copy, and both units restarted; the next deploy writes the record's node back, so
+   the record has to follow. For a deployment whose record has none: `COLOSSEUM_RPC_URL` in
+   `/etc/colosseum/keeper.env`, a copy kept, both units restarted.
 4. **If the scan cannot read the blocks it stands on,** check the factory's pool list first:
    every pool not idle or with a challenge must be among those followed. Only then move
    `next_block` to the head in both state files, each with its owner and mode kept, keepers
@@ -949,7 +984,21 @@ orders leaves the keeper's stops and snapshots waiting, and the other way round.
 testnet (the pools team, 20 October 2026). The keeper says so at its start (`node_shared_with_gateway`).
 On mainnet it does not start on the gateway's node: keeper.env names a node of its own first. Which
 provider answers the HyperCore precompiles and recent `eth_getLogs` for it is still to be chosen;
-drpc's did not read the precompiles.
+drpc's did not read the precompiles. What that node has to do (11 Nov 2026):
+
+1. serve HyperEVM's mainnet, 999, and testnet, 998;
+2. answer `eth_call` to the HyperCore precompiles `0x…0800` to `0x…080F`: the keeper reads every rule off
+   them;
+3. answer `eth_getLogs` over windows of 1000 blocks or more, back to the factory's deployment block, with
+   no blocks missing and no daily limit on old blocks below about 100,000 (the chain makes about 87,700 a
+   day: 1.015 a second, measured 8 to 11 Nov 2026);
+4. take 5 requests a second without a 429, under a key of the keeper's own, apart from the gateway's
+   (audit M-1);
+5. refuse a window that is too wide with a code or words of its own, not the `-32005` of a rate limit;
+6. answer a window within 5 seconds, old ranges included, without a 504.
+
+An address that carries a key cannot go in the record, which is public; a deployment on such a node leaves
+`keeper_nodes` out of its record, so that keeper.env's line holds.
 
 ## If the host is lost
 

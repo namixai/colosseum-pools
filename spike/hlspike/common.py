@@ -143,6 +143,26 @@ def rpc(method: str, params: Sequence[Any] = ()) -> Any:
     raise RuntimeError(f"{method}: rate limited {RPC_ATTEMPTS} times in a row")
 
 
+class NodeBusy(RuntimeError):
+    """A node's HTTP 429: it will answer again in a moment, unlike an error about the request itself."""
+
+
+def rpc_once(url: str, method: str, params: Sequence[Any] = (), timeout: float = 10.0) -> Any:
+    """One JSON-RPC call to `url`, tried once: no ladder. For a reader that has something else to try at once --
+    the keeper's scan, which takes a window the first node refused to the second (ops/keeper.py). HTTP 429 raises
+    NodeBusy; every other failure, an error in the answer, a timeout or a status, raises as it comes."""
+    resp = _session.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
+                         timeout=timeout)
+    if resp.status_code == 429:
+        raise NodeBusy(f"{method}: HTTP 429")
+    resp.raise_for_status()
+    body = resp.json()
+    error = body.get("error")
+    if error is not None:
+        raise RuntimeError(f"{method}: {error}")
+    return body["result"]
+
+
 def assert_network() -> None:
     """The RPC must be on the network COLOSSEUM_NETWORK names: COLOSSEUM_RPC_URL may point anywhere."""
     chain = int(rpc("eth_chainId"), 16)

@@ -48,7 +48,9 @@ class FakeChain:
     """Pools, challenges, logs and the info API, with every send recorded."""
 
     RPC_URL = "http://fake-node/evm"
+    BACKUP_URL = "http://fake-backup/evm"
     CHAIN_ID = 998
+    NodeBusy = keeper.c.NodeBusy
 
     def __init__(self):
         self.latest = 100
@@ -74,6 +76,16 @@ class FakeChain:
         # deployed before it, which reverts on the call.
         self.challenged: list[str] | None = None
         self.challenged_reads: list[tuple[int, int]] = []
+        # Blocks the keeper's node does not have (Hyperliquid's testnet node, 69038325-69071492, seen 11 Nov 2026):
+        # a window that touches them is refused with `invalid block range`.
+        self.hole: tuple[int, int] | None = None
+        # The second node: the same chain, every block, its own head and window, and a 429 now and then.
+        self.backup_latest: int | None = None   # None: the same head as the keeper's node
+        self.backup_chain = 998
+        self.backup_busy = 0                     # this many 429s before it answers
+        self.backup_refused = False
+        self.backup_queries: list[tuple[int, int]] = []
+        self.backup_reads: list[str] = []
 
     def add_pool(self, addr, stage=keeper.IDLE, challenge=ZERO, on_factory=True, **over):
         if on_factory and self.factory_list is not None:
@@ -89,6 +101,45 @@ class FakeChain:
                                          "cutKey": ZERO, "cutBlock": 0, **over}
 
     # spike.hlspike.common, as the keeper uses it
+    def rpc_once(self, url, method, params=(), timeout=10.0):
+        if url == self.RPC_URL:
+            return self.rpc(method, params)
+        if url == self.BACKUP_URL:
+            return self.backup_rpc(method, params)
+        raise AssertionError(f"a node the keeper was not given: {url}")
+
+    def backup_rpc(self, method, params=()):
+        self.backup_reads.append(method)
+        if self.backup_busy:
+            self.backup_busy -= 1
+            raise self.NodeBusy(f"{method}: HTTP 429")
+        if self.backup_refused:
+            raise RuntimeError(f"{method}: 502 Bad Gateway")
+        if method == "eth_chainId":
+            return hex(self.backup_chain)
+        if method == "eth_blockNumber":
+            return hex(self.latest if self.backup_latest is None else self.backup_latest)
+        if method == "eth_getLogs":
+            q = params[0]
+            lo, hi = int(q["fromBlock"], 16), int(q["toBlock"], 16)
+            if hi - lo + 1 > keeper.MAX_BACKUP_LOG_WINDOW:
+                raise RuntimeError("eth_getLogs: {'code': -32005, 'message': 'Log response size exceeded'}")
+            self.backup_queries.append((lo, hi))
+            return self.matching(q, lo, hi)
+        raise AssertionError(f"unexpected backup rpc {method}")
+
+    def matching(self, q, lo, hi):
+        out = []
+        for entry in self.logs:
+            if not lo <= int(entry["blockNumber"], 16) <= hi:
+                continue
+            if self.honour_address_filter and entry["address"].lower() != q["address"].lower():
+                continue
+            if entry["topics"][0] not in q["topics"]:
+                continue
+            out.append(entry)
+        return out
+
     def rpc(self, method, params=()):
         if method == "eth_blockNumber":
             if self.latest is None:
@@ -100,16 +151,9 @@ class FakeChain:
             if self.logs_refused:
                 raise RuntimeError("eth_getLogs: execution aborted (timeout = 5s)")
             lo, hi = int(q["fromBlock"], 16), int(q["toBlock"], 16)
-            out = []
-            for entry in self.logs:
-                if not lo <= int(entry["blockNumber"], 16) <= hi:
-                    continue
-                if self.honour_address_filter and entry["address"].lower() != q["address"].lower():
-                    continue
-                if entry["topics"][0] not in q["topics"]:
-                    continue
-                out.append(entry)
-            return out
+            if self.hole and lo <= self.hole[1] and hi >= self.hole[0]:
+                raise RuntimeError("eth_getLogs: {'code': -32602, 'message': 'invalid block range'}")
+            return self.matching(q, lo, hi)
         raise AssertionError(f"unexpected rpc {method}")
 
     def call_view(self, to, signature, types, args, out):
@@ -1552,3 +1596,282 @@ class SmallBlock(KeeperTest):
             keeper.stop(mock.Mock(), CHALLENGE_A, "breach", [], [], False)
         self.assertEqual([fn for fn, _ in self.chain.calls_to(CHALLENGE_A)], ["breach"])
         self.assertEqual(self.chain.gas_limits, [None], "the node's estimate and a quarter, as before")
+
+
+class SecondNode(KeeperTest):
+    """The scan's second node (11 Nov 2026). Hyperliquid's testnet node has no blocks 69038325-69071492 and refuses
+    any window in them, so the scan stood on 69038325 for three days; thirdweb's has them, 1000 blocks a call.
+    A refused window goes to the second node once, in its own window; a scan far behind catches up on it; nothing
+    in the scan waits out the 63-second ladder."""
+
+    def make(self, start=0, window=50, max_windows=5, backup=FakeChain.BACKUP_URL, backup_window=1000, **kw):
+        self.waited = []
+        return keeper.Keeper(FACTORY, object(), False, self.state, start, window=window, max_windows=max_windows,
+                             backup=backup, backup_window=backup_window, wait=self.waited.append, **kw)
+
+    def pool_at(self, block, pool=POOL_A):
+        # Off the factory's list, so that only the scan can find it: the sweep reads that list on the first pass.
+        self.chain.add_pool(pool, stage=keeper.CHALLENGE, challenge=CHALLENGE_A, on_factory=False)
+        self.chain.add_challenge(CHALLENGE_A, status=keeper.ACTIVE)
+        self.chain.logs.append(challenge_log(block, pool))
+
+    def test_a_window_the_node_refuses_is_read_from_the_second_node_in_its_own_window(self):
+        self.chain.latest = 240  # within a pass of the keeper's node: five windows of 50
+        self.chain.hole = (50, 99)
+        self.pool_at(60)  # inside the hole
+        k = self.make()
+        k.one_pass()
+        # 0-49 from the keeper's node; 50-99 refused there, so 50 onwards from the second, 1000 at a time.
+        self.assertEqual([(int(q["fromBlock"], 16), int(q["toBlock"], 16)) for q in self.chain.log_queries],
+                         [(0, 49), (50, 99)])
+        self.assertEqual(self.chain.backup_queries, [(50, 240)])
+        self.assertEqual(k.next_block, 241)
+        self.assertIn(keeper.to_checksum_address(POOL_A), k.live)
+        said = self.logged("scan_on_backup")
+        self.assertEqual(len(said), 1)
+        self.assertIn("invalid block range", said[0]["why"])
+        self.assertEqual(self.waited, [], "nothing waited")
+        self.assertEqual(self.logged("scan_stopped"), [])
+
+    def test_the_next_pass_asks_the_keepers_node_first_again(self):
+        self.chain.latest = 240
+        self.chain.hole = (50, 99)
+        k = self.make()
+        k.one_pass()
+        self.chain.latest = 300
+        self.chain.log_queries.clear()
+        self.chain.backup_queries.clear()
+        k.one_pass()
+        self.assertEqual([(int(q["fromBlock"], 16), int(q["toBlock"], 16)) for q in self.chain.log_queries],
+                         [(241, 290), (291, 300)])
+        self.assertEqual(self.chain.backup_queries, [])
+
+    def test_both_nodes_refusing_stop_the_scan_at_once_and_the_pass_goes_on(self):
+        self.pool_at(10)
+        k = self.make()
+        k.one_pass()  # follows the pool
+        self.chain.latest = 200  # within a pass of the keeper's node, so it is asked first
+        self.chain.hole = (0, 10**9)
+        self.chain.backup_refused = True
+        before = k.next_block
+        k.one_pass()
+        self.assertEqual(k.next_block, before)
+        said = self.logged("scan_stopped")
+        self.assertEqual(len(said), 1)
+        self.assertIn("invalid block range", said[0]["error"])
+        self.assertIn("502", said[0]["backup_error"])
+        self.assertEqual(self.waited, [], "a refusal is not waited out")
+        # The pass went on to the pool it follows.
+        self.assertIn("pass_done", [c.args[0] for c in keeper.log.call_args_list])
+
+    def test_without_a_second_node_a_refused_window_stops_the_scan_as_before(self):
+        self.chain.latest = 1000
+        self.chain.hole = (0, 10**9)
+        k = self.make(backup=None)
+        k.one_pass()
+        self.assertEqual(len(self.chain.log_queries), 1)
+        self.assertEqual(self.chain.backup_reads, [])
+        self.assertEqual(len(self.logged("scan_stopped")), 1)
+
+    def test_a_busy_second_node_is_waited_out_two_seconds_at_a_time(self):
+        self.chain.latest = 5000
+        self.chain.backup_busy = 2
+        k = self.make()
+        k.one_pass()
+        self.assertEqual(self.waited, [keeper.BACKUP_BUSY_PAUSE_S] * 2)
+        self.assertEqual(k.next_block, 5000, "five calls of 1000")
+
+    def test_a_second_node_that_stays_busy_is_waited_no_more_than_the_cap_in_a_pass(self):
+        self.chain.latest = 5000
+        self.chain.backup_busy = 100
+        k = self.make()
+        k.one_pass()
+        self.assertEqual(sum(self.waited), keeper.BACKUP_BUSY_WAIT_MAX_S)
+        self.assertLessEqual(keeper.BACKUP_BUSY_WAIT_MAX_S, 10.0)
+        # Then the keeper's node reads on, five windows of 50.
+        self.assertIn("HTTP 429", self.logged("scan_off_backup")[0]["backup_error"])
+        self.assertEqual(k.next_block, 250)
+
+    def test_the_second_node_is_never_asked_past_its_own_head_and_a_lagging_one_holds_nothing_up(self):
+        # A window past its head would come back empty and count as read. Past it, the keeper's node reads on: a
+        # second node that lags must not hold up a first one that answers (review, 11 Nov 2026).
+        self.chain.latest = 5000
+        self.chain.backup_latest = 1500
+        self.pool_at(1620)
+        k = self.make()
+        k.one_pass()
+        self.assertEqual(self.chain.backup_queries, [(0, 999), (1000, 1500)])
+        self.assertEqual([(int(q["fromBlock"], 16), int(q["toBlock"], 16)) for q in self.chain.log_queries],
+                         [(1501, 1550), (1551, 1600), (1601, 1650)])
+        self.assertEqual(k.next_block, 1651)
+        self.assertIn(keeper.to_checksum_address(POOL_A), k.live)
+        self.assertIn("its head is 1500", self.logged("scan_off_backup")[0]["backup_error"])
+        self.assertEqual(self.logged("scan_stopped"), [])
+
+    def test_a_lagging_second_node_and_a_refusing_first_stop_the_scan(self):
+        self.chain.latest = 5000
+        self.chain.backup_latest = 1500
+        self.chain.hole = (1501, 5000)
+        k = self.make()
+        k.one_pass()
+        self.assertEqual(k.next_block, 1501)
+        said = self.logged("scan_stopped")
+        self.assertEqual(len(said), 1)
+        self.assertIn("invalid block range", said[0]["error"])
+        self.assertIn("its head is 1500", said[0]["backup_error"])
+
+    def test_a_window_refused_on_the_passs_last_call_still_goes_to_the_second_node(self):
+        # One call a pass, the place within a window of the head, and that window refused (review, 11 Nov 2026).
+        self.chain.latest = 30
+        self.chain.hole = (0, 100)
+        k = self.make(max_windows=1)
+        k.one_pass()
+        self.assertEqual(self.chain.backup_queries, [(0, 30)])
+        self.assertEqual(k.next_block, 31)
+
+    def test_a_second_node_on_another_chain_is_dropped_for_good(self):
+        self.chain.latest = 5000
+        self.chain.backup_chain = 999
+        k = self.make()
+        k.one_pass()
+        self.assertIsNone(k.backup)
+        self.assertEqual(self.chain.backup_queries, [])
+        self.assertEqual(self.logged("backup_wrong_chain")[0]["chain_id"], 999)
+        self.assertEqual(k.next_block, 250, "the keeper's node reads on")
+        self.chain.backup_reads.clear()
+        k.one_pass()
+        self.assertEqual(self.chain.backup_reads, [], "never asked again")
+
+    def test_the_chain_is_asked_once_and_the_head_once_a_pass(self):
+        self.chain.latest = 9000
+        k = self.make()
+        k.one_pass()
+        k.one_pass()
+        self.assertEqual(self.chain.backup_reads.count("eth_chainId"), 1)
+        self.assertEqual(self.chain.backup_reads.count("eth_blockNumber"), 2)
+
+    def test_a_scan_far_behind_catches_up_on_the_second_node_and_says_so_once(self):
+        """The host's case, at a fiftieth of its size: the scan 5,600 blocks behind (280,254 on 11 Nov 2026), the
+        keeper's node refusing a stretch of it, the chain moving on 30 blocks a pass, five calls a pass as the
+        host's units allow. Caught up means: within one window of the head, every block before it read, and every
+        challenge in the gap found -- one inside the stretch the keeper's node lacks, one after it."""
+        self.chain.latest = 5600
+        self.chain.hole = (1000, 1663)
+        self.pool_at(1200)
+        self.pool_at(4000, POOL_B)
+        k = self.make()
+        passes = 0
+        while self.logged("scan_caught_up") == [] and passes < 50:
+            k.one_pass()
+            self.chain.latest += 30
+            passes += 1
+        self.assertEqual(passes, 2, "5,000 blocks on the second node, then the 631 left, which is more than a pass "
+                                    "of the keeper's node reads")
+        self.assertLessEqual(self.chain.latest - 30 - k.next_block + 1, k.window)
+        self.assertTrue({keeper.to_checksum_address(POOL_A), keeper.to_checksum_address(POOL_B)} <= k.live)
+        self.assertTrue(all(hi - lo + 1 <= 1000 for lo, hi in self.chain.backup_queries))
+        self.assertEqual(self.waited, [])
+        for _ in range(5):
+            k.one_pass()
+            self.chain.latest += 30
+        self.assertEqual(len(self.logged("scan_caught_up")), 1, "said once")
+
+    def test_a_scan_a_pass_behind_or_less_reads_the_keepers_node_and_its_stretch_without_blocks_on_the_second(self):
+        self.chain.latest = 1000
+        self.chain.hole = (1050, 1149)
+        self.pool_at(1100)
+        k = self.make(start=1000)  # level with the head, then the chain moves on 200 blocks
+        k.one_pass()
+        self.chain.latest = 1200
+        self.chain.log_queries.clear()
+        k.one_pass()
+        self.assertEqual([(int(q["fromBlock"], 16), int(q["toBlock"], 16)) for q in self.chain.log_queries],
+                         [(1001, 1050)])
+        self.assertEqual(self.chain.backup_queries, [(1001, 1200)])
+        self.assertIn(keeper.to_checksum_address(POOL_A), k.live)
+
+    def test_a_keeper_started_level_with_the_head_says_nothing(self):
+        self.chain.latest = 40
+        k = self.make()
+        k.one_pass()
+        self.assertEqual(self.logged("scan_caught_up"), [])
+
+    def test_the_scan_never_takes_the_ladder(self):
+        k = self.make()
+        self.chain.latest = 100
+        ladder = mock.Mock(side_effect=AssertionError("the 63-second ladder"))
+        with mock.patch.object(self.chain, "rpc", ladder):
+            with self.assertRaises(AssertionError):
+                keeper.c.rpc("eth_getLogs", [{}])
+        # pools_with_challenges goes through rpc_once, one try, with the scan's own timeout.
+        once = mock.Mock(return_value=[])
+        with mock.patch.object(self.chain, "rpc_once", once):
+            keeper.pools_with_challenges(FACTORY, 1, 50)
+            keeper.pools_with_challenges(FACTORY, 1, 50, FakeChain.BACKUP_URL)
+        self.assertEqual([c.args[0] for c in once.call_args_list], [FakeChain.RPC_URL, FakeChain.BACKUP_URL])
+        self.assertTrue(all(c.kwargs["timeout"] == keeper.SCAN_TIMEOUT_S for c in once.call_args_list))
+
+    def test_windows_out_of_bounds_are_refused_at_the_start(self):
+        for bad in (0, keeper.MAX_BACKUP_LOG_WINDOW + 1):
+            with self.assertRaises(SystemExit):
+                self.make(backup_window=bad)
+
+    def test_the_nodes_come_from_the_env_the_record_renders(self):
+        from ops import host_instances as hi
+        self.assertEqual(hi.KEEPER_MAX_LOG_WINDOW, {"primary": keeper.MAX_LOG_WINDOW,
+                                                    "backup": keeper.MAX_BACKUP_LOG_WINDOW})
+        env = dict(l.split("=", 1) for l in hi.deployment_env("v3-demo3").splitlines())
+        record = {"chain_id": 998, "PoolFactory": FACTORY, "block": 1}
+        made = {}
+
+        class Made:
+            def __init__(self, *args, **kw):
+                made.update(kw)
+
+            def one_pass(self):
+                pass
+
+        argv = ["keeper", "--deployment", "v3-demo3", "--once", "--dry-run", "--state", str(self.state)]
+        with mock.patch.object(keeper.deployments, "load", return_value=record), \
+                mock.patch.object(self.chain, "assert_network", create=True), \
+                mock.patch.object(keeper, "Keeper", Made), \
+                mock.patch.object(keeper, "check_node"), \
+                mock.patch.object(keeper, "PERP_DEXES", keeper.PERP_DEXES), \
+                mock.patch.dict(keeper.os.environ, {k: env[k] for k in ("COLOSSEUM_LOG_WINDOW", "COLOSSEUM_RPC_BACKUP_URL",
+                                                                        "COLOSSEUM_BACKUP_LOG_WINDOW")}), \
+                mock.patch.object(keeper.sys, "argv", argv):
+            self.assertEqual(keeper.main(), 0)
+        self.assertEqual((made["window"], made["backup"], made["backup_window"]),
+                         (50, "https://998.rpc.thirdweb.com", 1000))
+        # COLOSSEUM_RPC_URL is read by spike/hlspike/common.py at import, as RPC_URL.
+        self.assertEqual(env["COLOSSEUM_RPC_URL"], "https://rpc.hyperliquid-testnet.xyz/evm")
+        self.assertIn('RPC_URL = os.environ.get("COLOSSEUM_RPC_URL", NETWORK.rpc_url)',
+                      (ROOT / "spike/hlspike/common.py").read_text())
+
+
+class RpcOnce(unittest.TestCase):
+    """common.rpc_once: one POST, whatever comes back."""
+
+    def answer(self, status, body):
+        resp = mock.Mock(status_code=status)
+        resp.json.return_value = body
+        resp.raise_for_status.side_effect = None if status < 400 else RuntimeError(f"HTTP {status}")
+        return resp
+
+    def test_one_post_for_a_429_an_error_and_a_result(self):
+        from spike.hlspike import common
+        cases = [(self.answer(429, {}), common.NodeBusy),
+                 (self.answer(200, {"error": {"code": -32005, "message": "More than 3000 archived blocks"}}),
+                  RuntimeError),
+                 (self.answer(200, {"error": {"code": -32602, "message": "invalid block range"}}), RuntimeError),
+                 (self.answer(502, {}), RuntimeError)]
+        for resp, raised in cases:
+            with mock.patch.object(common._session, "post", return_value=resp) as post, \
+                    mock.patch.object(common.time, "sleep", side_effect=AssertionError("waited")):
+                with self.assertRaises(raised):
+                    common.rpc_once("https://node/evm", "eth_getLogs", [{}])
+            self.assertEqual(post.call_count, 1)
+        with mock.patch.object(common._session, "post", return_value=self.answer(200, {"result": "0x10"})) as post:
+            self.assertEqual(common.rpc_once("https://node/evm", "eth_blockNumber", timeout=3.0), "0x10")
+        self.assertEqual(post.call_args.kwargs["timeout"], 3.0)
+        self.assertTrue(issubclass(common.NodeBusy, RuntimeError), "a 429 is still a refusal to whoever does not wait")
