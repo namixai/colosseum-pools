@@ -28,8 +28,16 @@ with a balance, `capital`, that is a number and not money.
   `fillWindow` blocks, by anyone but the trader and their second key: whoever placed the order
   does not pick the block it fills in, and the keeper fills it as soon as it can (deep audit N6).
   What is left (the pools team, 18 October 2026): a third address of the trader's may still fill, and so
-  pick a block within the window; at the oracle price the choice is worth little, and no role of
-  "the keeper alone" is made for it. After that the order has lapsed and the next one replaces it.
+  pick a block within the window; at the oracle price the choice is worth little. After that the
+  order has lapsed and the next one replaces it.
+- **A filler.** An exam started with `initializeWithFiller` names the one address that fills inside
+  the window (the pools team, 11 November 2026, for the simulated pool, where a pass is paid out of
+  the other traders' prices). The trader then has nobody to send in their place: no third address
+  fills, so there is no block to pick and no fill to skip. An order the filler missed lapses at no
+  cost. If the filler stops, an order that only makes a position smaller can be filled by anyone,
+  the trader too, `FALLBACK_BLOCKS` (60) after its window, so a stalled filler never keeps a trader
+  in a position. Every fill says how many blocks after `placedBlock + fillDelay` it came (`late` in
+  `Filled`). An exam started with `initialize` has no filler and works as before.
   A fill costs `costPpm` millionths of its notional, rounded up. A fill under 10 USDC, the
   exchange's smallest order, is still made, so dust can be closed, but it is not a trade: it
   makes no trading day and does not end a stretch without one.
@@ -82,7 +90,8 @@ explicitly; it has no defaults of its own.
 Everything the result depends on is in the chain's history: each order and each fill is a
 transaction, each price is the one the chain's own price read returned in that block, and the
 arithmetic is the contract's. The events `Placed`, `Filled`, `DaySnapshot`, `StepPassed`,
-`Passed` and `Stopped` are enough to rebuild an exam without calling it.
+`Passed` and `Stopped` are enough to rebuild an exam without calling it; `Filled` also says how
+many blocks after the first possible one each fill came.
 
 Nothing is on our word about the result. What is a choice of ours, and public, is the model: a
 fill at the mark, a flat cost, and the things listed next.
@@ -111,6 +120,9 @@ fill at the mark, a flat cost, and the things listed next.
   Somebody who wants the trader to fail -- the pool's owner, say -- can fill at the worst block
   of up to `fillWindow` of them. A short window is the defence; a cancel by the trader would
   hand back the choice the delay takes away, so there is none.
+  With a filler that is one known address, and where the pool's creator is the platform that also
+  runs the filler, the platform picks the block for its own pool. Nothing in the contract stops
+  that; what holds it is that it shows: `late` on every fill, counted by anyone over a pool.
 - **A dip nobody caught.** The rules are judged against the marks of the moment someone asks.
   A price that crossed a line and came back before `breach()` was called is not a breach. A real
   account has a stop on the exchange for this; an exam has only whoever is watching.
@@ -132,12 +144,12 @@ fill at the mark, a flat cost, and the things listed next.
 
 ## Tests
 
-`test/exam/PaperExam.t.sol`, 44 tests on the hyper-evm-lib simulator, and 79 mutations of the
-contract (`X1`–`X79` in `scripts/mutations.py`), each caught by a named test:
+`test/exam/PaperExam.t.sol`, 57 tests on the hyper-evm-lib simulator, and 104 mutations of the
+contract (`X1`–`X104` in `scripts/mutations.py`), each caught by a named test:
 
 ```
 forge test --match-path 'test/exam/*'
-python3 scripts/mutations.py $(seq -f 'X%g' 1 79)
+python3 scripts/mutations.py $(seq -f 'X%g' 1 104)
 ```
 
 ## Not done yet

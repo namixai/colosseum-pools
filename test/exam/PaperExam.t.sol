@@ -1046,4 +1046,157 @@ contract PaperExamTest is Test {
         _trade(e, BTC, true, 100);
         assertEq(e.tradingDays(), 1);
     }
+
+    // ── a filler: the trader picks no block ──────────────────────
+
+    address filler = makeAddr("filler");
+
+    function _fillerExam() internal returns (PaperExam e) {
+        e = PaperExam(Clones.clone(address(impl)));
+        e.initializeWithFiller(trader, _rules(), _terms(), filler);
+    }
+
+    function _fillerTrade(PaperExam e, bool isBuy, uint64 sz) internal {
+        _place(e, BTC, isBuy, sz);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        e.fill();
+    }
+
+    function test_filler_isNamedAtTheStartAndIsNeitherTheTraderNorThePool() public {
+        PaperExam e = PaperExam(Clones.clone(address(impl)));
+        vm.expectEmit(address(e));
+        emit PaperExam.FillerSet(filler);
+        e.initializeWithFiller(trader, _rules(), _terms(), filler);
+        assertEq(e.filler(), filler);
+        assertEq(_exam().filler(), address(0), "an exam started the old way has none");
+        address[3] memory bad = [address(0), trader, address(this)];
+        for (uint256 i = 0; i < bad.length; ++i) {
+            PaperExam x = PaperExam(Clones.clone(address(impl)));
+            vm.expectRevert(PaperExam.BadTerms.selector);
+            x.initializeWithFiller(trader, _rules(), _terms(), bad[i]);
+        }
+    }
+
+    function test_filler_aloneFillsInsideTheWindow() public {
+        PaperExam e = _fillerExam();
+        address agent = makeAddr("agent");
+        vm.prank(trader);
+        e.setAgent(agent);
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY);
+        vm.prank(stranger);
+        vm.expectRevert(PaperExam.NotFiller.selector);
+        e.fill();
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OwnOrder.selector);
+        e.fill();
+        vm.prank(agent);
+        vm.expectRevert(PaperExam.OwnOrder.selector);
+        e.fill();
+        vm.roll(block.number + WINDOW - 1); // the window's last block
+        vm.prank(stranger);
+        vm.expectRevert(PaperExam.NotFiller.selector);
+        e.fill();
+        vm.prank(filler);
+        e.fill();
+        assertEq(e.positionOf(BTC), 100);
+    }
+
+    function test_filler_aLapsedOrderCostsNothingAndIsReplaced() public {
+        PaperExam e = _fillerExam();
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY + WINDOW); // past the window: nobody filled it
+        vm.prank(filler);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        assertEq(e.equity(), CAPITAL, "a lapse costs the trader nothing");
+        vm.expectEmit(address(e));
+        emit PaperExam.Lapsed(BTC, true, 100);
+        _place(e, BTC, true, 50);
+        (, , uint64 sz,) = e.pending();
+        assertEq(sz, 50);
+    }
+
+    function test_filler_aSmallerPositionIsAnyonesOnceTheFallbackHasPassed() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _place(e, BTC, false, 60);
+        uint256 from = block.number + DELAY;
+        vm.roll(from + WINDOW);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        vm.roll(from + WINDOW + e.FALLBACK_BLOCKS() - 1);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        vm.roll(from + WINDOW + e.FALLBACK_BLOCKS());
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, false, 60, MARK, 0, WINDOW + e.FALLBACK_BLOCKS());
+        vm.prank(trader);
+        e.fill();
+        assertEq(e.positionOf(BTC), 40);
+    }
+
+    function test_filler_aClosingOrderToFlatFallsBackToo() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, false, 100);
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+        vm.prank(stranger);
+        e.fill();
+        assertEq(e.positionOf(BTC), 0);
+    }
+
+    function test_filler_anOrderThatOpensOrGrowsOrFlipsNeverFallsBack() public {
+        PaperExam e = _fillerExam();
+        // From flat: it opens.
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        e.fill();
+        // The same side: it grows. Past the position: it flips.
+        bool[2] memory sides = [true, false];
+        uint64[2] memory sizes = [uint64(10), uint64(101)];
+        for (uint256 i = 0; i < 2; ++i) {
+            _place(e, BTC, sides[i], sizes[i]);
+            vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+            vm.prank(trader);
+            vm.expectRevert(PaperExam.OrderLapsed.selector);
+            e.fill();
+        }
+        assertEq(e.positionOf(BTC), 100);
+    }
+
+    function test_noFiller_nothingFallsBack_asBefore() public {
+        PaperExam e = _exam();
+        _trade(e, BTC, true, 100);
+        _place(e, BTC, false, 100);
+        vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+        vm.prank(stranger);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+    }
+
+    function test_filled_saysHowManyBlocksAfterTheFirstItCame() public {
+        PaperExam e = _fillerExam();
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY);
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, true, 100, MARK, 0, 0);
+        vm.prank(filler);
+        e.fill();
+        _place(e, BTC, false, 100);
+        vm.roll(block.number + DELAY + 2);
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, false, 100, MARK, 0, 2);
+        vm.prank(filler);
+        e.fill();
+    }
 }

@@ -243,6 +243,15 @@
           ]
         },
         {
+          "lead": "A paper exam's filler.",
+          "text": "An exam started with a filler takes its orders' fills, inside their window, from that one address (S108), so the trader picks no block. The filler does: whoever holds it chooses the block in the window, and where the pool's creator is the platform that also runs the filler, the platform chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only makes a position smaller is anyone's, the trader's too, sixty blocks after its window (S110).",
+          "sources": [
+            "S108",
+            "S109",
+            "S110"
+          ]
+        },
+        {
           "lead": "What none of us can do:",
           "text": "send a challenge account's money anywhere but to its trader's share and back to its pool (S48, S49); change the rules of an account that is running (S10); or upgrade a pool or a challenge, each a minimal clone of a fixed implementation with no upgrade path (S50, S51).",
           "sources": [
@@ -1119,6 +1128,27 @@
       "kind": "line",
       "text": "function pause() external onlyGuardianOrOwner",
       "href": "https://github.com/namixai/colosseum-pools/blob/main/src/KeyBinder.sol#L212"
+    },
+    {
+      "id": "S108",
+      "where": "src/exam/PaperExam.sol:295",
+      "kind": "line",
+      "text": "if (filler != address(0) && msg.sender != filler) revert NotFiller();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L295"
+    },
+    {
+      "id": "S109",
+      "where": "src/exam/PaperExam.sol:329",
+      "kind": "line",
+      "text": "emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from);",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L329"
+    },
+    {
+      "id": "S110",
+      "where": "src/exam/PaperExam.sol:88",
+      "kind": "line",
+      "text": "uint16 public constant FALLBACK_BLOCKS = 60;",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L88"
     }
   ]
 }

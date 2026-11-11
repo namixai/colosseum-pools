@@ -44,6 +44,14 @@ struct ExamTerms {
 ///      after `fillWindow` blocks. While nobody else fills, the trader still chooses whether to;
 ///      `costPpm` is what makes that choice worth less than it costs.
 ///
+///      An exam started with a filler (`initializeWithFiller`) leaves the trader no such choice:
+///      inside the window only the filler fills, so a second address of the trader's has nothing to
+///      fill and nothing to skip. An order nobody filled lapses at no cost. If the filler stops, an
+///      order that only makes a position smaller can be filled by anyone, the trader too,
+///      `FALLBACK_BLOCKS` after its window: a stalled filler never keeps a trader in a position.
+///      The filler picks the block inside the window, so every fill says how many blocks after the
+///      first possible one it came (`late`), for anyone to count.
+///
 ///      What this does not model: the depth of a book (a fill takes the mark at any size),
 ///      funding, and resting orders.
 contract PaperExam is Initializable {
@@ -75,6 +83,9 @@ contract PaperExam is Initializable {
     uint16 public constant MAX_FILL_BLOCKS = 600;
     /// How long after UTC midnight the day's snapshot may be taken.
     uint256 public constant CHECKPOINT_WINDOW = 15 minutes;
+    /// With a filler: blocks after an order's window from which anyone may fill it, if it only
+    /// makes a position smaller. About a minute of HyperEVM's small blocks.
+    uint16 public constant FALLBACK_BLOCKS = 60;
 
     /// The account that created this exam, and reads its result.
     address public pool;
@@ -111,12 +122,16 @@ contract PaperExam is Initializable {
     mapping(uint32 asset => bool) internal _allowedAsset;
     /// The UTC day of the latest fill, plus one; zero before the step's first fill.
     uint32 private _lastFillDayPlusOne;
+    /// The one address that fills orders inside their window; zero for anyone but the trader.
+    address public filler;
 
     event Started(address indexed trader, address indexed pool, uint64 capital);
     event AgentSet(address indexed agent);
     event Placed(uint32 indexed asset, bool isBuy, uint64 sz, uint256 fillFrom, uint256 fillUntil);
     event Lapsed(uint32 indexed asset, bool isBuy, uint64 sz);
-    event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost);
+    /// `late`: blocks after the first block that could fill the order (`placedBlock + fillDelay`).
+    event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late);
+    event FillerSet(address indexed filler);
     event DaySnapshot(uint32 indexed day, int256 equity);
     event StepPassed(uint8 indexed step, int256 equity);
     event Passed(address indexed trader, int256 equity);
@@ -128,6 +143,7 @@ contract PaperExam is Initializable {
     error BadStatus(Status status);
     error NotTrader();
     error OwnOrder();
+    error NotFiller();
     error AssetNotAllowed(uint32 asset);
     error ZeroSize();
     error OrderPending();
@@ -157,6 +173,22 @@ contract PaperExam is Initializable {
 
     /// @notice Starts the exam for `trader_`. The caller is recorded as the pool.
     function initialize(address trader_, Rules calldata rules_, ExamTerms calldata terms_) external initializer {
+        _initialize(trader_, rules_, terms_);
+    }
+
+    /// @notice Starts the exam for `trader_`, with `filler_` the one address that fills orders inside
+    ///         their window. The filler may be neither the trader nor the pool.
+    function initializeWithFiller(address trader_, Rules calldata rules_, ExamTerms calldata terms_, address filler_)
+        external
+        initializer
+    {
+        if (filler_ == address(0) || filler_ == trader_ || filler_ == msg.sender) revert BadTerms();
+        filler = filler_;
+        emit FillerSet(filler_);
+        _initialize(trader_, rules_, terms_);
+    }
+
+    function _initialize(address trader_, Rules calldata rules_, ExamTerms calldata terms_) internal {
         if (trader_ == address(0)) revert BadTerms();
         _checkTerms(terms_);
         _checkRules(rules_);
@@ -246,24 +278,33 @@ contract PaperExam is Initializable {
 
     /// @notice Fills the waiting order at this block's oracle price. Anyone but the trader and their
     ///         agent may call it, from the order's first block to the last of its window: whoever
-    ///         placed the order does not pick the block it fills in (deep audit, N6). An order that
+    ///         placed the order does not pick the block it fills in (deep audit, N6). With a filler,
+    ///         only the filler, inside the window; and anyone, the trader too, from `FALLBACK_BLOCKS`
+    ///         after the window, for an order that only makes a position smaller. An order that
     ///         would take the account over its leverage rule is refused; one that only reduces a
     ///         position never is.
     function fill() external inStatus(Status.Active) {
-        if (msg.sender == trader || msg.sender == agent) revert OwnOrder();
         Order memory o = pending;
         if (o.sz == 0) revert NoOrder();
         uint256 from = _fillFrom(o);
         if (block.number < from) revert TooEarly(from);
-        if (block.number >= from + _terms.fillWindow) revert OrderLapsed();
+        int256 delta = o.isBuy ? int256(uint256(o.sz)) : -int256(uint256(o.sz));
+        int256 before = positionOf[o.asset];
+        if (block.number < from + _terms.fillWindow) {
+            if (msg.sender == trader || msg.sender == agent) revert OwnOrder();
+            if (filler != address(0) && msg.sender != filler) revert NotFiller();
+        } else if (
+            filler == address(0) || block.number < from + _terms.fillWindow + FALLBACK_BLOCKS
+                || !_onlyReduces(before, delta)
+        ) {
+            revert OrderLapsed();
+        }
         if (_over()) revert TooLate();
         delete pending;
 
         uint64 px = _mark(o.asset);
         uint256 ntl = uint256(o.sz) * px;
         uint256 cost = (ntl * _terms.costPpm + PPM - 1) / PPM;
-        int256 delta = o.isBuy ? int256(uint256(o.sz)) : -int256(uint256(o.sz));
-        int256 before = positionOf[o.asset];
         int256 afterFill = before + delta;
         positionOf[o.asset] = afterFill;
         cash -= delta * int256(uint256(px)) + int256(cost);
@@ -285,7 +326,7 @@ contract PaperExam is Initializable {
             }
             lastFillAt = uint64(block.timestamp);
         }
-        emit Filled(o.asset, o.isBuy, o.sz, px, cost);
+        emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from);
     }
 
     /// @notice Takes the day's snapshot, in the first minutes of the UTC day. Anyone may.
@@ -423,6 +464,12 @@ contract PaperExam is Initializable {
     function _mark(uint32 asset) internal view returns (uint64 px) {
         px = PrecompileLib.oraclePx(CoreOps.pxIndex(asset));
         if (px == 0) revert NoPrice(asset);
+    }
+
+    /// @dev Whether a fill of `delta` only makes the position `before` smaller, on the same side.
+    function _onlyReduces(int256 before, int256 delta) internal pure returns (bool) {
+        // From flat nothing is smaller: `_abs(delta) <= 0` never holds for an order, whose size is not zero.
+        return (before > 0) != (delta > 0) && _abs(delta) <= _abs(before);
     }
 
     function _fillFrom(Order memory o) internal view returns (uint256) {
