@@ -33,13 +33,18 @@
   },
   "keeper_nodes": {
     "backup": {
-      "log_window": 1000,
-      "url": "https://998.rpc.thirdweb.com"
+      "log_window": 100,
+      "url": "https://hyperliquid-testnet.drpc.org"
     },
     "primary": {
       "log_window": 50,
       "url": "https://rpc.hyperliquid-testnet.xyz/evm"
     }
+  },
+  "keeper_scan_floor": {
+    "block": 69354492,
+    "evidence": "deployments/evidence/keeper-scan-69038325-69354491.json",
+    "read_from": 69038325
   },
   "label": "demo2",
   "platform_assets": {

@@ -28,11 +28,11 @@ export function dexOf(asset) {
  * Each asset's own leverage cap, times 100, by its coin: the platform's defaults (the CTO, 21 Oct 2026), the ones
  * ops/leverage.py gives a v3 pool's rules. A coin not named here takes the account's cap. A coin named with null has no
  * cap from the platform (a market withdrawn, or one whose listing waits for its number): poolRules refuses it rather
- * than give it the account's cap. GOLD: 20x, the leverage rule v1.3 (2 November 2026) for xyz:GOLD. BRENTOIL: withdrawn
- * by the same rule; a pool that names it is refused.
+ * than give it the account's cap. GOLD: 20x, the leverage rule v1.3 (2 November 2026) for xyz:GOLD. SILVER: 15x, the same
+ * rule's number for xyz:SILVER. BRENTOIL: withdrawn by the same rule; a pool that names it is refused.
  */
 export const ASSET_LEVERAGE_X100 = { BTC: 1000, ETH: 1000, SOL: 500, HYPE: 1000, SP500: 1000, XYZ100: 800, CL: 300, BRENTOIL: null,
-  GOLD: 2000 };
+  GOLD: 2000, SILVER: 1500 };
 
 /**
  * The rules createPool takes on `deployment`'s factory. Before v3, the four fields. On a v3 factory (`assetLeverage`
