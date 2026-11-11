@@ -379,7 +379,8 @@ only on the host, through SSM once the rule is gone.
 
 ### What the record sets
 
-A deployment whose record has `gateway_limits` (`deployments/testnet-v3-demo3.json` since 10 November 2026)
+A deployment whose record has `gateway_limits` (`deployments/testnet-v3-demo3.json` since 10 November 2026,
+`deployments/testnet-demo2.json` since 11 November 2026)
 takes its gateway's limits from the release instead of from a line by hand. `install.sh` writes
 `/etc/colosseum/deployment-<name>.env` (`deployment.env` for the first instance) from
 `python -m ops.host_instances deployment-env <label>` at every deploy, and that file now carries, besides the
@@ -391,8 +392,10 @@ order, leverage cap) and builder dexes.
 `gateway-<name>.env` / `keeper-<name>.env`, and systemd keeps the last value it reads: a line by hand for one
 of these variables is ignored once the record has `gateway_limits`. A perp is added, taken off or given
 another cap by a change to the record, its review and a deploy, not by an edit on the host. A deployment
-whose record has none, as demo2's today, renders the addresses alone, and its `gateway.env` still says its
-limits as below. `ops/tests/test_host_instances.py` holds the rendered lines to what the gateway reads and
+whose record has none renders the addresses alone, and its `gateway.env` still says its limits as below.
+demo2's record takes over the three lines its `gateway.env` had by hand (BTC, ETH and SOL, no builder dex;
+read on the host on 11 November 2026), in the same order, so the rendered lines are the same bytes and the
+gateway sees no change; the hand-kept lines are dead from that deploy on and can be taken out. `ops/tests/test_host_instances.py` holds the rendered lines to what the gateway reads and
 each leverage cap to the default `ops/leverage.py` gives the same market.
 
 **The keeper's nodes come from the record too** (`keeper_nodes`, demo2's and demo3's since 11 November 2026):
