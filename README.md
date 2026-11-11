@@ -196,15 +196,17 @@ spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal --publisher 0x...
 # have: until the app reads the binder, it serves the deployments before it
 python3 -m http.server 8790 --bind 127.0.0.1 --directory app
 
-# the gateway, signing with those keys and checking the caps first
-GATEWAY_FACTORY=0x... GATEWAY_REGISTRY=0x... \
+# the gateway, signing with those keys and checking the caps first; GATEWAY_REGISTRY is the record's KeyBinder,
+# and the gateway starts with no key and reads each as it is bound (GATEWAY_KEYS_BOUND_LATER=1)
+GATEWAY_FACTORY=0x... GATEWAY_REGISTRY=0x... GATEWAY_KEYS_BOUND_LATER=1 \
 GATEWAY_SIGNER=demo GATEWAY_KEYS_DIR=<that directory> \
 GATEWAY_ALLOW_ORIGIN=http://127.0.0.1:8790 \
 spike/.venv/bin/python -m gateway.server
 
-# the keeper: list what is due, then send it
+# the keeper: list what is due, then send it; the publisher's wallet is the one whose address was --publisher,
+# and it makes each key into the gateway's directory before it binds it
 spike/.venv/bin/python -m ops.keeper --deployment rehearsal --once --dry-run
-spike/.venv/bin/python -m ops.keeper --deployment rehearsal --once
+spike/.venv/bin/python -m ops.keeper --deployment rehearsal --once --publisher-wallet <its name> --keys-dir <that directory>
 
 # a scripted trade through the gateway, signed by the trader's wallet
 spike/.venv/bin/python -m agents.bot rest --deployment rehearsal --account 0x...

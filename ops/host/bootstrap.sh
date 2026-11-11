@@ -151,7 +151,10 @@ fi
 install -d -m 0700 -o colosseum-gw -g colosseum-gw /var/lib/colosseum-gw/instances \
   "/var/lib/colosseum-gw/instances/$instance" "/var/lib/colosseum-gw/instances/$instance/keys"
 install -d -m 0700 -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-keeper/instances \
-  "/var/lib/colosseum-keeper/instances/$instance" "/var/lib/colosseum-keeper/instances/$instance/secrets"
+  "/var/lib/colosseum-keeper/instances/$instance" "/var/lib/colosseum-keeper/instances/$instance/secrets" \
+  "/var/lib/colosseum-keeper/instances/$instance/made-keys"
+# made-keys: where the keeper's publisher, when the deployment's record names a test one, makes the agent keys
+# it binds; colosseum-key-copy@<name> copies each into the gateway's keys (ops/host/key_copy.py).
 
 if [ -f "/etc/colosseum/deployment-$instance" ]; then
   say "instance $instance names $(tr -d '[:space:]' < "/etc/colosseum/deployment-$instance"); left as it is"

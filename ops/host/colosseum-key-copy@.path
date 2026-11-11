@@ -1,0 +1,12 @@
+# Starts colosseum-key-copy@%i.service each time keeper %i makes a key (ops/key_relay.py writes it whole under
+# a temporary name, then links it to agent-<address>.key, which is a change of this directory). Enabled by
+# ops/host/install.sh for an instance whose record names a test publisher; testnet only.
+[Unit]
+Description=colosseum-pools: watch keeper %i's made keys (HyperEVM testnet)
+
+[Path]
+PathChanged=/var/lib/colosseum-keeper/instances/%i/made-keys
+Unit=colosseum-key-copy@%i.service
+
+[Install]
+WantedBy=paths.target

@@ -159,6 +159,13 @@ class Publishers(unittest.TestCase):
         from gateway.demo_signer import DemoSigner
         self.assertEqual([k.address for k in DemoSigner.load_keys(str(self.dir))], [address])
 
+    def test_a_key_that_cannot_take_its_name_leaves_no_temporary_file(self):
+        publisher = LocalPublisher(self.key, self.dir, CHAIN)
+        with mock.patch("os.link", side_effect=FileExistsError("taken")):
+            with self.assertRaises(FileExistsError):
+                publisher.fresh_key()
+        self.assertEqual(list(self.dir.iterdir()), [], "no .tmp holding a key under no name")
+
     def test_a_committed_key_whose_file_is_not_its_key_is_not_revealed(self):
         publisher = LocalPublisher(self.key, self.dir, CHAIN)
         address = publisher.fresh_key()

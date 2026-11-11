@@ -79,6 +79,30 @@ class Instances(unittest.TestCase):
         with self.assertRaises(SystemExit):
             hi.deployment_env("v3 demo3")
 
+    def test_a_deployment_on_a_key_binder_reads_its_bindings_from_the_binder(self):
+        binder = {"PoolFactory": "0x" + "f1" * 20, "KeyBinder": "0x" + "b1" * 20}
+        with mock.patch.object(hi.deployments, "load", return_value=binder):
+            self.assertIn(f"GATEWAY_REGISTRY={'0x' + 'b1' * 20}\n", hi.deployment_env("keybinder-1"))
+        for bad in ({"PoolFactory": "0x" + "f1" * 20},
+                    {**binder, "KeyRegistry": "0x" + "f2" * 20},
+                    {**binder, "KeyBinder": ""}):
+            with self.subTest(sorted(bad)), mock.patch.object(hi.deployments, "load", return_value=bad):
+                with self.assertRaises(SystemExit):
+                    hi.deployment_env("keybinder-1")
+
+    def test_the_gateway_reads_a_binder_as_it_reads_a_registry(self):
+        # The two reads the gateway makes of GATEWAY_REGISTRY (gateway/chain.py) are the same calls on both
+        # contracts, with the same answer: a binder in its place is read without a change.
+        chain = (ROOT / "gateway" / "chain.py").read_text()
+        reads = sorted(set(re.findall(r'self\.registry, "(\w+\([\w,]*\))"', chain)))
+        self.assertEqual(reads, ["bindingOf(address)", "isBound(address,address,address)"])
+        for sol in ("KeyRegistry.sol", "KeyBinder.sol"):
+            src = (ROOT / "src" / sol).read_text()
+            self.assertIn("function bindingOf(address key) external view returns (Binding memory)", src, sol)
+            self.assertIn("function isBound(address key, address account, address trader) external view returns (bool)",
+                          src, sol)
+            self.assertRegex(src, r"struct Binding \{\s*State state;\s*address account;\s*address trader;\s*\}", sol)
+
     def test_the_command_line_says_each_instance_on_a_line(self):
         etc = etc_with(DEMO3)
         out = subprocess.run([sys.executable, "-m", "ops.host_instances", "list", str(etc)],
@@ -425,7 +449,8 @@ class Units(unittest.TestCase):
             differ = sorted(set(first) ^ set(at))
             # Description, the two env files, InaccessiblePaths: each side; and the instance's own four below.
             # A gateway's has its own state directories besides (gateway/faucet.py, gateway/contacts.py).
-            self.assertEqual(len(differ), 14 if kind == "gateway" else 12, differ)
+            # A keeper's has, besides, where its test publisher makes keys, when the record names one.
+            self.assertEqual(len(differ), 14, differ)
             self.assertIn("ProtectProc=invisible", at)
             self.assertIn("ProcSubset=pid", at)
             # Every instance runs as one user, so each sees its own directory alone under instances/.
@@ -506,6 +531,93 @@ class Contacts(unittest.TestCase):
                           "        limit_req zone=pools_contacts_write_all burst=3 nodelay;", block)
             self.assertNotIn("X-Real-IP", block)
             self.assertNotIn("pools_all", block, "a page's reads do not spend the orders' shared budget")
+
+
+class TestPublisher(unittest.TestCase):
+    """A deployment on a key binder with a test publisher, a key in a file before the enclave (ops/key_relay.py):
+    what its record makes deployment-env say, and what install.sh, the keeper's unit and bootstrap.sh do with it."""
+
+    ADDR = "0x" + "a1" * 20
+
+    def record(self, publisher=None, binder=True) -> dict:
+        r = {"PoolFactory": "0x" + "f1" * 20}
+        if binder:
+            r["KeyBinder"] = "0x" + "b1" * 20
+        else:
+            r["KeyRegistry"] = "0x" + "f2" * 20
+        r["key_binder"] = {"publisher": publisher}
+        return r
+
+    def env(self, record: dict) -> str:
+        with mock.patch.object(hi.deployments, "load", return_value=record):
+            return hi.deployment_env("kb1")
+
+    def test_a_test_publisher_has_the_keeper_answer_and_the_gateway_start_empty(self):
+        r = self.record({"address": self.ADDR, "test_key": True})
+        self.assertEqual(hi.publisher(r), self.ADDR)
+        self.assertTrue(self.env(r).endswith("GATEWAY_KEYS_BOUND_LATER=1\nCOLOSSEUM_PUBLISHER_WALLET=publisher\n"))
+
+    def test_an_enclave_publisher_or_none_leaves_the_keeper_without_a_wallet(self):
+        for pub in ({"address": self.ADDR, "test_key": False}, None):
+            with self.subTest(pub=pub):
+                r = self.record(pub)
+                self.assertEqual(hi.publisher(r), "")
+                self.assertTrue(self.env(r).endswith("GATEWAY_KEYS_BOUND_LATER=1\n"))
+
+    def test_a_deployment_before_the_binder_says_neither(self):
+        r = self.record({"address": self.ADDR, "test_key": True}, binder=False)
+        self.assertEqual(hi.publisher(r), "")
+        text = self.env(r)
+        self.assertNotIn("GATEWAY_KEYS_BOUND_LATER", text)
+        self.assertNotIn("COLOSSEUM_PUBLISHER_WALLET", text)
+        for label in ("demo2", "v3-demo3"):
+            text = hi.deployment_env(label)
+            self.assertNotIn("GATEWAY_KEYS_BOUND_LATER", text, label)
+            self.assertNotIn("COLOSSEUM_PUBLISHER_WALLET", text, label)
+
+    def test_the_command_says_the_publisher_or_an_empty_line(self):
+        out = subprocess.run([sys.executable, "-m", "ops.host_instances", "publisher", "v3-demo3"],
+                             capture_output=True, text=True, cwd=ROOT, check=True)
+        self.assertEqual(out.stdout, "\n")
+        bad = subprocess.run([sys.executable, "-m", "ops.host_instances", "publisher", "v3 demo3"],
+                             capture_output=True, text=True, cwd=ROOT)
+        self.assertNotEqual(bad.returncode, 0)
+
+    def test_the_lines_are_what_the_keeper_and_the_gateway_read(self):
+        keeper = (ROOT / "ops" / "keeper.py").read_text()
+        self.assertIn('os.environ.get("COLOSSEUM_PUBLISHER_WALLET", "")', keeper)
+        self.assertIn('os.environ.get("GATEWAY_KEYS_DIR", "")', keeper)
+        self.assertIn('env.get("GATEWAY_KEYS_BOUND_LATER") == "1"', (ROOT / "gateway" / "server.py").read_text())
+
+    def test_install_checks_the_publishers_wallet_before_it_switches_and_watches_its_keys_after(self):
+        install = (HOST / "install.sh").read_text()
+        for unit in ("colosseum-key-copy@.service", "colosseum-key-copy@.path"):
+            self.assertIn(f'install -m 0644 -o root -g root "$rel/ops/host/{unit}" /etc/systemd/system/', install)
+        check = install.index('-m ops.host_instances publisher "$label"')
+        switch = install.index('ln -sfn "releases/$sha"')
+        enable = install.index('systemctl enable --quiet --now "colosseum-key-copy@$name.path"')
+        restart = install.index('for unit in "${units[@]}"; do')
+        self.assertLess(check, install.index("site=/etc/nginx/conf.d/pools-api.conf"), "before nginx or a unit")
+        self.assertLess(switch, enable)
+        self.assertLess(enable, restart, "watched before the keepers restart and make keys")
+        self.assertIn('systemctl start "colosseum-key-copy@$name.service"', install)
+        guard = install[check:install.index('publishers+="$name "')]
+        for need in ('"$own/secrets/publisher.key"', '"$own/made-keys"', '"$own/secrets/publisher.addr"',
+                     '[ "$(lower <<< "$had")" = "$(lower <<< "$publisher")" ]', "nothing switched"):
+            self.assertIn(need, guard)
+        first = install[install.index('-m ops.host_instances publisher "$first_label"'):check]
+        self.assertIn("serve it as an instance", first)
+        self.assertIn(f"secrets/{hi.PUBLISHER_WALLET}.key", install)
+
+    def test_the_keeper_makes_keys_where_the_copier_reads_them(self):
+        sys.path.insert(0, str(HOST))
+        import key_copy
+        d = Units.directives(HOST / "colosseum-keeper@.service")
+        self.assertIn(f"BindPaths=-{key_copy.made_keys('%i')}", d)
+        self.assertIn(f"Environment=GATEWAY_KEYS_DIR={key_copy.made_keys('%i')}", d)
+        boot = (HOST / "bootstrap.sh").read_text()
+        self.assertIn('"/var/lib/colosseum-keeper/instances/$instance/made-keys"', boot)
+        self.assertEqual(key_copy.made_keys("$instance"), "/var/lib/colosseum-keeper/instances/$instance/made-keys")
 
 
 class Bootstrap(unittest.TestCase):
