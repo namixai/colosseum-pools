@@ -184,24 +184,26 @@ class PlanOf(unittest.TestCase):
         self.assertIn("function setMultiPool(address pool, bool recognized) external onlyOperator",
                       (ROOT / "src/PoolFactory.sol").read_text())
 
-    def test_with_operator_the_multi_deploy_hands_the_registry_over_last(self):
-        # The registry's handover (--operator) goes after the keys are published, which only the operator can do,
-        # and the record says it is pending: the address the owner gave accepts the role itself.
+    def test_with_a_safe_the_multi_deploy_hands_the_binder_and_the_factory_over_last(self):
+        # After setMultiPool, which only the factory's operator can send; the record says pending until the Safe accepts.
         src = (ROOT / "ops" / "deploy_multi.py").read_text()
-        publish = src.index('("publish", registry, "publish(address[])", ["address[]"], [keys]),')
-        handover = src.index("steps.append(operator_step(registry, operator))")
-        self.assertLess(publish, handover)
-        # And the address is checked before the first contract, beside the owner: a bad one costs no gas.
-        early = src.index("operator = checked_operator(args.operator)  # before anything is sent")
-        self.assertLess(early, src.index('deploy_contract(op, out_path, record, "KeyRegistry"'))
-        loop = src[handover:src.index("big_blocks(op, True)", handover)]
-        self.assertIn('if name == "transferOperator":\n                record["registry_operator"] = operator_record(op.address, operator)', loop)
-        from ops import plan_reads
-        self.assertEqual(plan_reads.operator_step("0xR", "0xO"),
-                         ("transferOperator", "0xR", "transferOperator(address)", ["address"], ["0xO"]))
-        self.assertEqual(plan_reads.operator_record("0xD", "0xO"), {"from": "0xD", "to": "0xO", "state": "pending"})
-        self.assertIn("function transferOperator(address to) external onlyOperator",
-                      (ROOT / "src/KeyRegistry.sol").read_text())
+        handover = src.index("for name, to, sig, types, values in kb.handover(key_binder, factory, binder):")
+        self.assertLess(src.index('record["tx"]["setMultiPool"] = c.transact('), handover)
+        # The settings are checked before the first contract, beside the owner: a bad address costs no gas.
+        early = src.index('binder = kb.settings(args, "testnet")  # before anything is sent')
+        self.assertLess(early, src.index('deploy_contract(op, out_path, record, "KeyBinder"'))
+        self.assertIn("kb.after_step(record, name, binder, op.address)", src[handover:])
+        self.assertNotIn("publish(address[])", src, "a binder publishes no keys")
+        from ops import binder_deploy as kb
+        s = kb.BinderSettings("0xS", None, None, None, None, 50, 86_400)
+        self.assertEqual(kb.handover("0xB", "0xF", s),
+                         [("transferOwnership", "0xB", "transferOwnership(address)", ["address"], ["0xS"]),
+                          ("transferOperator", "0xF", "transferOperator(address)", ["address"], ["0xS"])])
+        self.assertEqual(kb.handover("0xB", "0xF", kb.BinderSettings(None, None, None, None, None, 50, 86_400)), [])
+        for name in ("transferOwnership(address to) external onlyOwner", "acceptOwnership() external"):
+            self.assertIn(f"function {name}", (ROOT / "src/KeyBinder.sol").read_text())
+        for name in ("transferOperator(address to) external onlyOperator", "acceptOperator() external"):
+            self.assertIn(f"function {name}", (ROOT / "src/PoolFactory.sol").read_text())
 
     def test_deep_N6_a_funded_account_trades_only_a_book_deep_enough(self):
         thin = copy.deepcopy(PLAN)
@@ -371,7 +373,7 @@ class MainnetPlan(unittest.TestCase):
         plan = self.product_plan()
         code, out, testnet_only, account = self.run_main(
             "--network", "mainnet", "--dry-run", "--label", "multi-main", "--plan", plan,
-            "--owner", self.OWNER, "--deployer", self.DEPLOYER, "--operator", "0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB")
+            "--owner", self.OWNER, "--deployer", self.DEPLOYER, "--safe", "0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB")
         self.assertEqual(code, 0)
         self.assertIn(f"chain id 999, rpc {network.MAINNET.rpc_url}", out)
         self.assertIn(network.MAINNET.usdc_erc20, out)
@@ -379,7 +381,9 @@ class MainnetPlan(unittest.TestCase):
             self.assertIn(f"{key} at {d.created_by(self.DEPLOYER, 7 + i)}", out)
         self.assertIn("BTC 0, ETH 1, SOL 5", out)
         self.assertIn("would write      deployments/mainnet-multi-main.json", out)
-        self.assertIn("operator role to 0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB, the address the owner gives", out)
+        self.assertIn("the key binder (transferOwnership) and the factory (transferOperator) to "
+                      "0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB", out)
+        self.assertIn("a daily fuse the owner sets", out)
         testnet_only.assert_not_called()
         account.assert_not_called()
 

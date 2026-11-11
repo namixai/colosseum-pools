@@ -184,8 +184,11 @@ point them at another one.
 # the demo's agent keys: owner-only files in a new directory, and their addresses
 spike/.venv/bin/python ops/make_demo_keys.py --out <new directory outside the repo> --count 20
 
-# deploy the contracts and publish those addresses; writes deployments/testnet-<label>.json
-spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal --keys-file <that directory>/addresses.txt
+# deploy the contracts, the key binder with a testnet publisher key; writes deployments/testnet-<label>.json.
+# No key is published: the keeper's relay (--publisher-wallet, --keys-dir <that directory>) writes each key
+# into the directory and binds it when an account asks (docs/KEY-BINDING.md)
+spike/.venv/bin/python ops/deploy_testnet.py --label rehearsal --publisher 0x... \
+    --pcr-hash <hash> --attestation-hash <hash>   # on testnet before the enclave: ops/binder_deploy.py, TEST_PUBLISHER_HASH
 
 # the app: copy the factory, registry and first block from that record into app/config.js,
 # and point its gateway at http://127.0.0.1:8787 for a gateway on this machine

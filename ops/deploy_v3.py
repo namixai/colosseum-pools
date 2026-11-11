@@ -1,22 +1,25 @@
-"""Deploy factory v3 in one command: its key registry, the account implementations, the factory, the
-paper exam, the reader, and on testnet the demo's own USDC. Then the factory's settings and the
-agent keys. The pools team, 19-21 October 2026.
+"""Deploy factory v3 in one command: its key binder, the account implementations, the factory, the
+paper exam, the reader, and on testnet the demo's own USDC. Then the factory's and the binder's
+settings, and the handover of both to their owner. The pools team, 19-21 October 2026; the key
+binder, 11 November 2026 (docs/KEY-BINDING.md).
 
-    spike/.venv/bin/python ops/deploy_v3.py --label demo3 --keys-file <addresses.txt> --faucet 0x... --dry-run
-    spike/.venv/bin/python ops/deploy_v3.py --label demo3 --keys-file <addresses.txt> --faucet 0x...
-    spike/.venv/bin/python ops/deploy_v3.py --label v3 --network mainnet --dry-run
+    spike/.venv/bin/python ops/deploy_v3.py --label demo4 --faucet 0x... --safe 0xSafe... \
+        --publisher 0x... --pcr-hash 0x... --attestation-hash 0x... --guardian 0x... --dry-run
+    spike/.venv/bin/python ops/deploy_v3.py --label v3 --network mainnet --dry-run --safe 0xSafe... ...
 
 What it deploys, in order (big blocks on, then off):
 - DemoUsdc (testnet only): the token prices and payouts are in. Its operator, the deployer, mints
   any amount; --faucet mints up to --faucet-daily a UTC day. The chain's testnet USDC is not ours
   to mint.
-- KeyRegistry, AccountOps (the library the accounts link to), Pool, ChallengeAccount.
-- PoolFactory(registry, Pool, ChallengeAccount, operator, token).
+- KeyBinder(deployer, --max-binds-per-day, --renew-delay), AccountOps (the library the accounts link
+  to), Pool, ChallengeAccount.
+- PoolFactory(binder, Pool, ChallengeAccount, operator, token).
 - PaperExam: the exam implementation every MultiPool sells.
 - MultiPoolReader.
 
 What it sets, in order:
-- setAccountSource: the registry takes accounts from this factory alone.
+- setAccountSource: the binder takes requests from this factory's accounts alone; setPublisher and
+  setGuardian when given (ops/binder_deploy.py says what each flag is).
 - setPlatformAssets and setFundedAssets: BTC, ETH and SOL for exams; BTC and ETH for a funded
   account (deep audit N6).
 - setExamImpl: the paper exam is the one a shares contract binds (cloud audit, section 6).
@@ -24,8 +27,9 @@ What it sets, in order:
   shares contracts from.
 - setChallengeFee: CHALLENGE_FEE to the operator.
 - setFaucet on the token: --faucet and --faucet-daily.
-- publish: the keys of --keys-file. Each is refused if any registry this project has deployed
-  knows it, by the deployment records and deployments/registries.json (audit window 2, A5-3).
+- With --safe, last: transferOwnership on the binder and transferOperator on the factory, to the
+  owner (a Safe), which accepts each from the Safe itself. No agent key is published: a key is bound
+  to an account that asks for one, on the publisher's signature.
 
 Writes deployments/<network>-v3-<label>.json after every transaction, a `status` field included,
 as ops/deploy_testnet.py does. The record holds every address and transaction, and the keccak of
@@ -59,17 +63,16 @@ from eth_utils import keccak, to_checksum_address  # noqa: E402
 
 from hlspike import common as c  # noqa: E402
 from ops.deploy_multi import FUNDED_ASSETS, shares_code  # noqa: E402
-from ops.plan_reads import checked_operator, created_by, operator_record, operator_step, perp_numbers, read_rpc  # noqa: E402
+from ops import binder_deploy as kb  # noqa: E402
+from ops.plan_reads import created_by, perp_numbers, read_rpc  # noqa: E402
 from ops.deploy_testnet import (  # noqa: E402
     CHALLENGE_FEE,
     PLATFORM_ASSETS,
     big_blocks,
     check_assets,
-    check_keys,
     deploy_contract,
     git_head,
     mark_incomplete,
-    registries_in_records,
     save,
 )
 
@@ -88,7 +91,7 @@ GAS = ROOT / "scripts" / "mainnet_gas.py"
 # What the demo's faucet may mint a UTC day unless told otherwise: a thousand dUSDC.
 FAUCET_DAILY = 1_000 * 10**6
 # The contracts, in the order they are deployed: (record key, contract).
-CONTRACTS = (("DemoUsdc", "DemoUsdc"), ("KeyRegistry", "KeyRegistry"), ("AccountOps", "AccountOps"), ("PoolImpl", "Pool"),
+CONTRACTS = (("DemoUsdc", "DemoUsdc"), ("KeyBinder", "KeyBinder"), ("AccountOps", "AccountOps"), ("PoolImpl", "Pool"),
              ("ChallengeAccountImpl", "ChallengeAccount"), ("PoolFactory", "PoolFactory"),
              ("PaperExamImpl", "PaperExam"), ("MultiPoolReader", "MultiPoolReader"))
 
@@ -114,7 +117,8 @@ def gas_estimate() -> dict:
     return gas.read(ROOT / "deployments" / "testnet-v3-demo3.json")
 
 
-def mainnet_plan(args, net: dict, deploys: list[str], hashes: dict, code: str, out_path: pathlib.Path) -> int:
+def mainnet_plan(args, net: dict, deploys: list[str], hashes: dict, code: str, out_path: pathlib.Path,
+                 binder: kb.BinderSettings) -> int:
     """The whole plan for mainnet, read from public endpoints, with nothing sent."""
     print("deploy_v3 --network mainnet --dry-run: read only; nothing was sent, and no key was used.")
     print(f"  network          mainnet, chain id {net['chain_id']}, rpc {net['rpc']}, api {net['api']}"
@@ -144,9 +148,9 @@ def mainnet_plan(args, net: dict, deploys: list[str], hashes: dict, code: str, o
     except Exception as exc:  # a plan says what it could not read rather than stopping
         print(f"  perp numbers     not read: {exc}")
     print(f"  would configure  setAccountSource, setPlatformAssets, setFundedAssets {list(FUNDED_ASSETS)}, "
-          f"setExamImpl, setSharesCode {code[:18]}, setChallengeFee, publish")
-    keys = len([k for k in pathlib.Path(args.keys_file).read_text().split() if k]) if args.keys_file else 0
-    print(f"  would publish    {keys} agent keys" if keys else "  would publish    no keys: pass --keys-file")
+          f"setExamImpl, setSharesCode {code[:18]}, setChallengeFee")
+    for line in kb.plan_lines(binder):
+        print(line)
     try:
         g = gas_estimate()
         dep, ten = g["deployment"], g["deployment_at_ten_times_the_price"]
@@ -155,10 +159,6 @@ def mainnet_plan(args, net: dict, deploys: list[str], hashes: dict, code: str, o
               f"{', '.join(dep['need_big_block']) or 'none'}  (scripts/mainnet_gas.py, read {g['read_at_utc']})")
     except Exception as exc:
         print(f"  gas              not read: {exc}")
-    operator = checked_operator(args.operator)
-    if operator:
-        print(f"  would hand over  the key registry's operator role to {operator}, the address the owner gives: "
-              "transferOperator, then that address accepts it itself (acceptOperator)")
     print(f"  would write      {out_path.relative_to(ROOT)}, after every transaction; then its entry in "
           "deployments/LIVE.json, role staged, by hand (docs/DEPLOYMENTS.md)")
     print("  would NOT send   anything: a mainnet run without --dry-run is refused")
@@ -174,17 +174,15 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--label", required=True)
     p.add_argument("--network", choices=sorted(NETWORKS), default="testnet")
-    p.add_argument("--keys-file", help="one agent key address per line")
     p.add_argument("--faucet", help="the address that mints the demo's USDC up to --faucet-daily a day (testnet)")
     p.add_argument("--faucet-daily", type=float, default=FAUCET_DAILY / 10**6, help="dUSDC a UTC day")
     p.add_argument("--dry-run", action="store_true", help="run every check and send nothing")
-    p.add_argument("--operator", help="the address the owner gives to operate the key registry: transferOperator after "
-                   "the keys are published, and that address accepts the role itself (acceptOperator)")
     p.add_argument("--deployer", help="mainnet plan: the address the owner will deploy from, to name each contract's address")
+    kb.add_args(p)
     args = p.parse_args()
 
     net = NETWORKS[args.network]
-    operator = checked_operator(args.operator)
+    binder = kb.settings(args, args.network)  # before anything is read: a bad address costs nothing
     if args.network == "mainnet" and not args.dry_run:
         raise SystemExit("--network mainnet is a dry run only: this repository sends nothing to mainnet "
                          "(spike/hlspike/common.py), and opening that is a decision of its own")
@@ -203,17 +201,15 @@ def main() -> int:
     code = "0x" + shares_code().hex()
 
     if args.network == "mainnet":
-        return mainnet_plan(args, net, deploys, hashes, code, out_path)
+        return mainnet_plan(args, net, deploys, hashes, code, out_path, binder)
 
     c.assert_testnet()
     assets = check_assets()
-    keys = check_keys(pathlib.Path(args.keys_file).read_text().splitlines()) if args.keys_file else []
     deployer = c.account("deployer")
     if not c.core_user_exists(deployer.address):
         raise SystemExit("the deployer has no HyperCore account yet; fund it first")
 
     if args.dry_run:
-        registries = registries_in_records()
         print("deploy_v3 --dry-run: nothing was sent.")
         print(f"  label            {args.label}  ({out_path.relative_to(ROOT)} is free)")
         print(f"  commit           {commit}")
@@ -224,11 +220,8 @@ def main() -> int:
         print(f"  would configure  setAccountSource, setPlatformAssets {assets}, setFundedAssets {list(FUNDED_ASSETS)}, "
               f"setExamImpl, setSharesCode {code[:18]}, setChallengeFee {CHALLENGE_FEE}"
               + (", setFaucet" if faucet else ""))
-        print(f"  would publish    {len(keys)} agent keys, checked against {len(registries)} registr(y/ies)"
-              if keys else "  would publish    no keys: the registry cannot sell a challenge without them")
-        if operator:
-            print(f"  would hand over  the key registry's operator role to {operator}, the address the owner gives "
-                  "(transferOperator; it accepts with acceptOperator)")
+        for line in kb.plan_lines(binder):
+            print(line)
         print(f"  would write      {out_path.relative_to(ROOT)}, after every transaction")
         print("  would NOT touch  any existing deployment record or contract")
         return 0
@@ -238,7 +231,7 @@ def main() -> int:
                     "core_writer": net["core_writer"], "precompiles": net["precompiles"],
                     "platform_assets": PLATFORM_ASSETS, "funded_assets": list(FUNDED_ASSETS),
                     "challenge_fee": CHALLENGE_FEE, "shares_code": code, "initcode_keccak": hashes,
-                    "codehash": {}, "tx": {}}
+                    "key_binder": kb.record_of(deployer.address, binder), "codehash": {}, "tx": {}}
     a: dict[str, str] = {}
     big_blocks(deployer, True)
     try:
@@ -248,8 +241,8 @@ def main() -> int:
                                                    ["address"], [deployer.address])
                 token = a["DemoUsdc"]
             record["usdc"] = token
-            a["KeyRegistry"], _ = deploy_contract(deployer, out_path, record, "KeyRegistry", "KeyRegistry",
-                                                  ["address"], [deployer.address])
+            a["KeyBinder"], _ = deploy_contract(deployer, out_path, record, "KeyBinder", "KeyBinder",
+                                                *kb.constructor(deployer.address, binder))
             a["AccountOps"], _ = deploy_contract(deployer, out_path, record, "AccountOps", "AccountOps", [], [])
             libs = {"AccountOps": a["AccountOps"]}
             a["PoolImpl"], _ = deploy_contract(deployer, out_path, record, "PoolImpl", "Pool", [], [], libs)
@@ -258,7 +251,7 @@ def main() -> int:
             a["PoolFactory"], rcpt = deploy_contract(
                 deployer, out_path, record, "PoolFactory", "PoolFactory",
                 ["address", "address", "address", "address", "address"],
-                [a["KeyRegistry"], a["PoolImpl"], a["ChallengeAccountImpl"], deployer.address, token])
+                [a["KeyBinder"], a["PoolImpl"], a["ChallengeAccountImpl"], deployer.address, token])
             a["PaperExamImpl"], _ = deploy_contract(deployer, out_path, record, "PaperExamImpl", "PaperExam", [], [])
             a["MultiPoolReader"], _ = deploy_contract(deployer, out_path, record, "MultiPoolReader",
                                                       "MultiPoolReader", [], [])
@@ -271,9 +264,8 @@ def main() -> int:
         mark_incomplete(out_path, record, exc)
         raise
 
-    factory, registry = a["PoolFactory"], a["KeyRegistry"]
-    steps = [
-        ("setAccountSource", registry, "setAccountSource(address)", ["address"], [factory]),
+    factory, key_binder = a["PoolFactory"], a["KeyBinder"]
+    steps = kb.binder_steps(key_binder, factory, binder) + [
         ("setPlatformAssets", factory, "setPlatformAssets(uint32[],string[],bool)", ["uint32[]", "string[]", "bool"],
          [assets, list(PLATFORM_ASSETS), True]),
         ("setFundedAssets", factory, "setFundedAssets(uint32[],string[],bool)", ["uint32[]", "string[]", "bool"],
@@ -285,17 +277,11 @@ def main() -> int:
     ]
     if faucet and "DemoUsdc" in a:
         steps.append(("setFaucet", a["DemoUsdc"], "setFaucet(address,uint256)", ["address", "uint256"], [faucet, daily]))
-    if keys:
-        steps.append(("publish", registry, "publish(address[])", ["address[]"], [keys]))
-    if operator:
-        steps.append(operator_step(registry, operator))
+    steps += kb.handover(key_binder, factory, binder)
     try:
         for name, to, sig, types, values in steps:
             record["tx"][name] = c.transact(deployer, to, sig, types, values)["transactionHash"]
-            if name == "publish":
-                record["published_keys"] = keys
-            if name == "transferOperator":
-                record["registry_operator"] = operator_record(deployer.address, operator)
+            kb.after_step(record, name, binder, deployer.address)
             if name == "setFaucet":
                 record["faucet"] = {"address": faucet, "daily": daily}
             save(out_path, record)

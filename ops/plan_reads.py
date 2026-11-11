@@ -49,30 +49,3 @@ def created_by(sender: str, nonce: int) -> str:
         encoded = bytes([0x80 + len(raw)]) + raw
     payload = b"\x94" + bytes.fromhex(sender.removeprefix("0x")) + encoded
     return to_checksum_address(keccak(bytes([0xC0 + len(payload)]) + payload)[12:])
-
-
-def checked_operator(address: str | None) -> str | None:
-    """--operator as given: the address the owner gives to operate the key registry, refused unless checksummed
-    and not zero. A typo in lower case is still an address, and the role would wait for it for good."""
-    if address is None:
-        return None
-    try:
-        good = to_checksum_address(address)
-    except ValueError:
-        raise SystemExit(f"--operator is not an address: {address!r}") from None
-    if address != good:
-        raise SystemExit(f"--operator has to be given in checksummed form, {good}, so that a typo cannot pass")
-    if int(good, 16) == 0:
-        raise SystemExit("--operator cannot be the zero address")
-    return good
-
-
-def operator_step(registry: str, operator: str) -> tuple:
-    """The registry's handover, the last step of a deployment: transferOperator names the address, and only its
-    owner can take the role, with acceptOperator (src/KeyRegistry.sol). Until then the deployer stays operator."""
-    return ("transferOperator", registry, "transferOperator(address)", ["address"], [operator])
-
-
-def operator_record(deployer: str, operator: str) -> dict:
-    """What the record says of the handover once transferOperator is sent."""
-    return {"from": deployer, "to": operator, "state": "pending"}
