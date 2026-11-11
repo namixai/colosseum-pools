@@ -35,10 +35,18 @@ waits out the 63-second ladder `common.rpc` keeps for every other read: the next
 tries again. Measured 11 Nov 2026: Hyperliquid's testnet node has no blocks 69038325 to 69071492 (8 Nov, 02:49:51
 to 11:54:26 UTC) and answers `invalid block range` for any window in them, so the scan stood on 69038325 for three
 days; once the node's daily allowance of old blocks for the host was spent on that one window, each pass waited out
-those 63 seconds on it before it looked at a single account (97 s a pass, not 30). thirdweb's node has them and
-answers 1000 blocks a call. A 429 from the second node is waited out BACKUP_BUSY_PAUSE_S at a time, up to
-BACKUP_BUSY_WAIT_MAX_S a pass. The scan has caught up once it stands within one window of the head; it says so
-once, `scan_caught_up`.
+those 63 seconds on it before it looked at a single account (97 s a pass, not 30). Other nodes have them: the
+record's second node (dRPC's public one since 11 Nov 2026, 100 blocks a call; thirdweb's before it, which then
+answered the host's address 429 to every call). A 429 from the second node is waited out BACKUP_BUSY_PAUSE_S at a
+time, up to BACKUP_BUSY_WAIT_MAX_S a pass. The scan has caught up once it stands within one window of the head; it
+says so once, `scan_caught_up`.
+
+A stretch read off the host. The record's `keeper_scan_floor` says that blocks `read_from` up to `block` were read
+somewhere else, every log of the factory, and held no ChallengeCreated; its `evidence` is the file in this repository
+with that read, which anyone can repeat. A keeper whose place is inside the stretch starts at `block` instead
+(`scan_floor`), and one whose place is outside it is not moved: a place before `read_from` has blocks nobody read.
+The sweep of the factory's pool list still follows every pool, so the floor only spares the scan a catch-up the host
+cannot make: 300,000 old blocks, against a node that allows the host 3000 old blocks a day.
 
 For every pool it follows, one pass does what is due:
   challenge Created  → abort at once if the reserved key is spoiled; activate once the capital
@@ -90,6 +98,7 @@ import bisect
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 from decimal import Decimal
@@ -115,11 +124,13 @@ CHALLENGE_CREATED = "0x" + keccak(text="ChallengeCreated(address,address,address
 TOO_EARLY = keccak(text="TooEarly()")[:4].hex()
 STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 MAX_LOG_WINDOW = 50  # blocks per eth_getLogs call that HyperEVM accepts
-# Blocks per eth_getLogs call on the second node: thirdweb answers 1000 and refuses 2000 (measured 11 Nov 2026).
+# Blocks per eth_getLogs call on the second node, at most: thirdweb answered 1000 and refused 2000, dRPC's public node
+# answers 101 and refuses more (both measured 11 Nov 2026). The record names the window its node takes.
 MAX_BACKUP_LOG_WINDOW = 1000
 # One scan call to either node: a timeout is a refusal, and the window goes to the other node or to the next pass.
 SCAN_TIMEOUT_S = 10.0
-# The second node's 429: thirdweb answered about five calls in a row, then 429 for a few seconds (11 Nov 2026).
+# The second node's 429: thirdweb answered about five calls in a row, then 429 for a few seconds (11 Nov 2026); dRPC
+# answered 40 windows in a row from a laptop without one (11 Nov 2026), from the host it is to be measured.
 # Waited out this long at a time and no longer than the most below in one pass; past it the scan stops till the next.
 BACKUP_BUSY_PAUSE_S = 2.0
 BACKUP_BUSY_WAIT_MAX_S = 10.0
@@ -1084,7 +1095,8 @@ def ring(order: list[str], resume_at: str | None) -> list[str]:
 class Keeper:
     def __init__(self, factory: str, wallet, dry: bool, state_path: pathlib.Path, start_block: int,
                  window: int = MAX_LOG_WINDOW, max_windows: int = 50, sweep_every: int = SWEEP_EVERY,
-                 backup: str | None = None, backup_window: int = MAX_BACKUP_LOG_WINDOW, wait=time.sleep):
+                 backup: str | None = None, backup_window: int = MAX_BACKUP_LOG_WINDOW, wait=time.sleep,
+                 floor: tuple[int, int] | None = None):
         if not 1 <= window <= MAX_LOG_WINDOW:
             raise SystemExit(f"--log-window must be 1..{MAX_LOG_WINDOW}: HyperEVM refuses wider eth_getLogs ranges")
         if not 1 <= backup_window <= MAX_BACKUP_LOG_WINDOW:
@@ -1127,6 +1139,12 @@ class Keeper:
             self.live = {to_checksum_address(p) for p in state["live"]}
             at = state.get("resume_at")
             self.resume_at = to_checksum_address(at) if at else None
+        # A stretch read off the host (`keeper_scan_floor`): skipped only from a place inside it.
+        if floor is not None:
+            read_from, block = floor
+            if read_from <= self.next_block < block:
+                log("scan_floor", from_block=self.next_block, to_block=block, read_from=read_from)
+                self.next_block = block
 
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1400,6 +1418,28 @@ class Keeper:
         log("weight_per_min", **METER.per_minute(), accounts_with_position=len(_with_position))
 
 
+EVIDENCE_FILE = re.compile(r"deployments/evidence/[A-Za-z0-9][A-Za-z0-9._-]*\.json")
+
+
+def scan_floor(record: dict) -> tuple[int, int] | None:
+    """The record's `keeper_scan_floor` as (read_from, block): blocks read_from to block - 1 were read off the host and
+    held no ChallengeCreated of the factory (its `evidence` file has the read). None without one; a floor that does
+    not say a stretch is refused, since a keeper that skipped on a misread one would never see what it skipped."""
+    floor = record.get("keeper_scan_floor")
+    if floor is None:
+        return None
+    if not isinstance(floor, dict) or set(floor) != {"read_from", "block", "evidence"}:
+        raise SystemExit(f"keeper_scan_floor must be an object of read_from, block and evidence, not {floor!r}")
+    read_from, block, evidence = floor["read_from"], floor["block"], floor["evidence"]
+    if not all(isinstance(n, int) and not isinstance(n, bool) for n in (read_from, block)) or not 0 <= read_from < block:
+        raise SystemExit(f"keeper_scan_floor: {read_from!r} to {block!r} is not a stretch of blocks")
+    # A file directly in deployments/evidence/, by a plain name: no subdirectory, no "..", not the folder itself (review,
+    # 11 Nov 2026).
+    if not isinstance(evidence, str) or not EVIDENCE_FILE.fullmatch(evidence):
+        raise SystemExit(f"keeper_scan_floor: evidence {evidence!r} is not a .json file in deployments/evidence/")
+    return read_from, block
+
+
 def deployment_block(record: dict) -> int:
     if "block" in record:
         return int(record["block"])
@@ -1479,7 +1519,7 @@ def main() -> int:
     use_publisher(args)
     keeper = Keeper(record["PoolFactory"], wallet, args.dry_run, state, deployment_block(record),
                     window=args.log_window, max_windows=args.max_windows, sweep_every=args.sweep_every,
-                    backup=args.backup_rpc, backup_window=args.backup_log_window)
+                    backup=args.backup_rpc, backup_window=args.backup_log_window, floor=scan_floor(record))
     while True:
         try:
             keeper.one_pass()

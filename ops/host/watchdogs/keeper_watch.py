@@ -61,7 +61,8 @@ RPC_URL = os.environ.get("POOLS_WATCH_RPC", "https://rpc.hyperliquid-testnet.xyz
 # archived blocks queried in one day" to every eth_getBlockByNumber and eth_getLogs, while
 # eth_blockNumber still passes. The allowance is per day and shared by everything on the host that
 # reads the node; a minute's pause does not lift it. A node that is broken or out of allowance is
-# left for the fallback until the run ends; a node that is merely busy gets a pause, as before.
+# left for the fallback until the run ends; a node that is merely busy gets the ladder, and if it
+# is still busy after it, the fallback gets one try (11 Nov 2026).
 RPC_FALLBACK_URL = os.environ.get("POOLS_WATCH_RPC_FALLBACK") or os.environ.get("COLOSSEUM_RPC_BACKUP_URL", "")
 USER_AGENT = "colosseum-pools-host-watch/1.0 (+https://github.com/namixai/colosseum-pools)"
 GRACE_S = 15 * 60
@@ -131,7 +132,8 @@ class Chain:
         made = 0
         attempt = 0
         # A while, not a for over range: a move to the fallback does NOT spend a try. There is one
-        # move, so the loop ends.
+        # move, so the loop ends. A move after the ladder (busy all the way) leaves `attempt` at the
+        # ladder's last, so the fallback gets exactly one try there (11 Nov 2026).
         while attempt < backoff.ATTEMPTS:
             made = attempt + 1
             try:
@@ -143,6 +145,10 @@ class Chain:
                 if not _rate_limited(last) and self._switch(last):
                     continue
                 if not self.ladder.again(attempt):
+                    # Busy past the ladder (or the run's budget): one try on the fallback, since `attempt`
+                    # stays where it is and the loop has one turn left; then the rest of the run reads it.
+                    if _rate_limited(last) and self._switch(f"busy past the ladder: {last}"):
+                        continue
                     break
                 attempt += 1
                 continue
@@ -153,6 +159,10 @@ class Chain:
                 if not _rate_limited(last) and self._switch(last):
                     continue
                 if not self.ladder.again(attempt):
+                    # Busy past the ladder (or the run's budget): one try on the fallback, since `attempt`
+                    # stays where it is and the loop has one turn left; then the rest of the run reads it.
+                    if _rate_limited(last) and self._switch(f"busy past the ladder: {last}"):
+                        continue
                     break
                 attempt += 1
                 continue
@@ -300,7 +310,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--rpc", default=RPC_URL)
     ap.add_argument("--rpc-fallback", default=RPC_FALLBACK_URL,
-                    help="the node to use if the first is broken or out of allowance; empty: no fallback")
+                    help="the node to use if the first is broken, out of allowance, or still busy after the "
+                         "ladder; empty: none")
     ap.add_argument("--factory", default="", help="the factory's address, instead of GATEWAY_FACTORY")
     a = ap.parse_args(argv)
 

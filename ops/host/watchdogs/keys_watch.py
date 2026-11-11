@@ -50,19 +50,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from eth_utils import keccak  # noqa: E402  (after the path line: the venv's, as the keeper's)
 import watch_backoff as backoff  # noqa: E402  (one retry ladder for both watchdogs)
 
-# Not the keeper's node and not the keeper watchdog's: this one watches the registry, so a budget
-# shared with the keeper must not blind it when it is needed, and with the two watchdogs on two
-# nodes the loss of one node does not take both. The name of the variable is this watchdog's own:
-# one file (/etc/colosseum/watch.env) feeds every watchdog unit, and a shared name would put them
-# back on one node. Every method it uses (eth_blockNumber, eth_getStorageAt, eth_call, and the
-# HyperCore precompile at 0x...0810) answers on both nodes.
-RPC_URL = os.environ.get("POOLS_WATCH_KEYS_RPC", "https://998.rpc.thirdweb.com")
-# The fallback is the gateway's node. A node that is BROKEN (HTTP 500, "upstreams exhausted")
-# is not helped by the ladder, which is for a node that is BUSY: rate limits (-32005, HTTP 429) are
-# still waited out on the same node, and a broken node is left for the fallback until the run ends.
-# On the fallback this watchdog shares its node with the keeper watchdog; that is a degraded mode,
-# and the output says so.
-RPC_FALLBACK_URL = os.environ.get("POOLS_WATCH_KEYS_RPC_FALLBACK", "https://rpc.hyperliquid-testnet.xyz/evm")
+# The nodes are the deployment record's (`keeper_nodes`), which install.sh renders into the deployment's
+# env file the unit reads: the keepers' node, COLOSSEUM_RPC_URL (Hyperliquid's), first, and their second
+# node, COLOSSEUM_RPC_BACKUP_URL, as the fallback. The record wins over watch.env, as it does for the
+# services: POOLS_WATCH_KEYS_RPC and POOLS_WATCH_KEYS_RPC_FALLBACK name a node only where the record names
+# none. Until 11 Nov 2026 this read thirdweb's public node first; from the host's address that node
+# answered HTTP 429 to every call, a single eth_blockNumber every 2 s included, and every run was exit 3.
+# No node with a key goes here or in the record: the record is public. Every method this uses
+# (eth_blockNumber, eth_getStorageAt, eth_call, and the HyperCore precompile at 0x...0810) answers on both.
+RPC_URL = (os.environ.get("COLOSSEUM_RPC_URL") or os.environ.get("POOLS_WATCH_KEYS_RPC")
+           or "https://rpc.hyperliquid-testnet.xyz/evm")
+# A node that is BROKEN (HTTP 500, "upstreams exhausted") is not helped by the ladder, which is for a
+# node that is BUSY, and is left for the fallback at once, until the run ends. A node that is busy
+# (-32005, HTTP 429) is waited out on the same node for the whole ladder; if it is still busy after
+# that, the fallback gets one try (11 Nov 2026), so a node that refuses this host all day is not the
+# end of the check. No fallback named: none.
+RPC_FALLBACK_URL = os.environ.get("COLOSSEUM_RPC_BACKUP_URL") or os.environ.get("POOLS_WATCH_KEYS_RPC_FALLBACK", "")
 # Some nodes refuse a bare urllib client; a User-Agent is required.
 USER_AGENT = "colosseum-pools-host-watch/1.0 (+https://github.com/namixai/colosseum-pools)"
 # keccak256("freeCount()")[:4]; recompute with: cast sig 'freeCount()'.
@@ -146,7 +149,8 @@ class Chain:
         attempt = 0
         # A while, not a for over range: a move to the fallback does NOT spend a try. Otherwise a
         # move on the seventh try (six "busy", then "broken") would leave the loop without ever asking
-        # the healthy fallback. There is one move, so the loop ends.
+        # the healthy fallback. There is one move, so the loop ends. A move after the ladder leaves
+        # `attempt` at the ladder's last, so the fallback gets exactly one try there.
         while attempt < backoff.ATTEMPTS:
             made = attempt + 1
             try:
@@ -157,6 +161,10 @@ class Chain:
                 if not _rate_limited(last) and self._switch(last):
                     continue
                 if not self.ladder.again(attempt):
+                    # Busy past the ladder (or the run's budget): one try on the fallback, since `attempt`
+                    # stays where it is and the loop has one turn left; then the rest of the run reads it.
+                    if _rate_limited(last) and self._switch(f"busy past the ladder: {last}"):
+                        continue
                     break
                 attempt += 1
                 continue
@@ -166,6 +174,10 @@ class Chain:
                 if not _rate_limited(last) and self._switch(last):
                     continue
                 if not self.ladder.again(attempt):
+                    # Busy past the ladder (or the run's budget): one try on the fallback, since `attempt`
+                    # stays where it is and the loop has one turn left; then the rest of the run reads it.
+                    if _rate_limited(last) and self._switch(f"busy past the ladder: {last}"):
+                        continue
                     break
                 attempt += 1
                 continue
@@ -260,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Watchdog for the free keys of a Colosseum key registry")
     ap.add_argument("--rpc", default=RPC_URL)
     ap.add_argument("--rpc-fallback", default=RPC_FALLBACK_URL,
-                    help="the node to use if the first is broken (not busy); empty: no fallback")
+                    help="the node to use if the first is broken, or still busy after the ladder; empty: none")
     ap.add_argument("--registry", default="", help="the registry's address, instead of GATEWAY_REGISTRY")
     ap.add_argument("--threshold", type=int, default=FREE_KEYS_FLOOR,
                     help=f"fewer free keys than this is a finding (default {FREE_KEYS_FLOOR})")

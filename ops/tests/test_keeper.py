@@ -1847,11 +1847,126 @@ class SecondNode(KeeperTest):
                 mock.patch.object(keeper.sys, "argv", argv):
             self.assertEqual(keeper.main(), 0)
         self.assertEqual((made["window"], made["backup"], made["backup_window"]),
-                         (50, "https://998.rpc.thirdweb.com", 1000))
+                         (50, "https://hyperliquid-testnet.drpc.org", 100))
         # COLOSSEUM_RPC_URL is read by spike/hlspike/common.py at import, as RPC_URL.
         self.assertEqual(env["COLOSSEUM_RPC_URL"], "https://rpc.hyperliquid-testnet.xyz/evm")
         self.assertIn('RPC_URL = os.environ.get("COLOSSEUM_RPC_URL", NETWORK.rpc_url)',
                       (ROOT / "spike/hlspike/common.py").read_text())
+
+
+class ScanFloor(KeeperTest):
+    """A stretch read off the host (`keeper_scan_floor`, 11 Nov 2026): blocks read_from to block - 1 were read elsewhere,
+    every log of the factory, and held no ChallengeCreated. The host's node allows the host 3000 old blocks a day and the
+    keepers stood 300,000 behind; a keeper inside the stretch starts at its end, any other is left where it is."""
+
+    FLOOR = (100, 1000)
+
+    def keeper_at(self, place, floor=FLOOR):
+        self.state.write_text(json.dumps({"factory": FACTORY, "next_block": place, "live": []}))
+        return keeper.Keeper(FACTORY, object(), False, self.state, 1, floor=floor)
+
+    def test_a_place_inside_the_stretch_starts_at_its_end_and_says_so(self):
+        for place in (100, 500, 999):
+            with self.subTest(place=place):
+                keeper.log.reset_mock()
+                self.assertEqual(self.keeper_at(place).next_block, 1000)
+                self.assertEqual(self.logged("scan_floor"), [{"from_block": place, "to_block": 1000, "read_from": 100}])
+
+    def test_a_place_before_the_stretch_is_not_moved_nobody_read_those_blocks(self):
+        self.assertEqual(self.keeper_at(99).next_block, 99)
+        self.assertEqual(self.logged("scan_floor"), [])
+
+    def test_a_place_at_or_past_the_end_is_not_moved(self):
+        for place in (1000, 5000):
+            with self.subTest(place=place):
+                self.assertEqual(self.keeper_at(place).next_block, place)
+        self.assertEqual(self.logged("scan_floor"), [])
+
+    def test_a_keeper_with_no_state_starts_at_the_deployment_as_before(self):
+        k = keeper.Keeper(FACTORY, object(), False, self.state, 1, floor=self.FLOOR)
+        self.assertEqual(k.next_block, 1, "blocks 1 to 99 nobody read off the host")
+        self.assertEqual(keeper.Keeper(FACTORY, object(), False, self.state, 100, floor=self.FLOOR).next_block, 1000)
+
+    def test_no_floor_moves_nothing(self):
+        self.state.write_text(json.dumps({"factory": FACTORY, "next_block": 500, "live": []}))
+        self.assertEqual(keeper.Keeper(FACTORY, object(), False, self.state, 1).next_block, 500)
+
+    def test_a_floor_that_does_not_say_a_stretch_is_refused(self):
+        good = {"read_from": 100, "block": 1000, "evidence": "deployments/evidence/x.json"}
+        self.assertEqual(keeper.scan_floor({"keeper_scan_floor": good}), (100, 1000))
+        self.assertIsNone(keeper.scan_floor({}))
+        bad = {
+            "not an object": [100, 1000],
+            "no evidence": {"read_from": 100, "block": 1000},
+            "a field of its own": {**good, "note": "x"},
+            "an end before the start": {**good, "block": 99},
+            "an empty stretch": {**good, "block": 100},
+            "a start below zero": {**good, "read_from": -1},
+            "a block as a string": {**good, "block": "1000"},
+            "a block as true": {**good, "read_from": True},
+            "evidence outside the folder": {**good, "evidence": "/tmp/x.json"},
+            "evidence that climbs out": {**good, "evidence": "deployments/evidence/../../etc/passwd.json"},
+            "the folder itself": {**good, "evidence": "deployments/evidence/"},
+            "a file in a subfolder": {**good, "evidence": "deployments/evidence/a/x.json"},
+            "a file that is not json": {**good, "evidence": "deployments/evidence/x.txt"},
+        }
+        for what, floor in bad.items():
+            with self.subTest(what), self.assertRaises(SystemExit):
+                keeper.scan_floor({"keeper_scan_floor": floor})
+
+    def test_the_floor_comes_from_the_record(self):
+        record = {"chain_id": 998, "PoolFactory": FACTORY, "block": 1,
+                  "keeper_scan_floor": {"read_from": 100, "block": 1000, "evidence": "deployments/evidence/x.json"}}
+        made = {}
+
+        class Made:
+            def __init__(self, *args, **kw):
+                made.update(kw)
+
+            def one_pass(self):
+                pass
+
+        argv = ["keeper", "--deployment", "demo2", "--once", "--dry-run", "--state", str(self.state)]
+        with mock.patch.object(keeper.deployments, "load", return_value=record), \
+                mock.patch.object(self.chain, "assert_network", create=True), \
+                mock.patch.object(keeper, "Keeper", Made), \
+                mock.patch.object(keeper, "check_node"), \
+                mock.patch.object(keeper, "PERP_DEXES", keeper.PERP_DEXES), \
+                mock.patch.object(keeper.sys, "argv", argv):
+            self.assertEqual(keeper.main(), 0)
+        self.assertEqual(made["floor"], (100, 1000))
+
+    def test_each_records_floor_stands_on_its_evidence(self):
+        # The file a floor names is in this repository and says what the floor says: the stretch; every log of the
+        # record's factory over it, none a ChallengeCreated, and the list hashing to what the read says; and the
+        # factory's nonce unchanged across it on two nodes. createChallenge makes the challenge account with a CREATE,
+        # so an unchanged nonce alone says no challenge was made there.
+        import hashlib
+        for label in ("demo2", "v3-demo3"):
+            record = keeper.deployments.load(label)
+            floor = record.get("keeper_scan_floor")
+            if floor is None:
+                continue
+            with self.subTest(label):
+                read_from, block = keeper.scan_floor(record)
+                ev = json.loads((ROOT / floor["evidence"]).read_text())
+                self.assertEqual((ev["chain_id"], ev["from_block"], ev["to_block"] + 1), (998, read_from, block))
+                self.assertEqual(ev["topic_challenge_created"], keeper.CHALLENGE_CREATED)
+                every = sorted((l for f in ev["factories"].values() for l in f["logs"]),
+                               key=lambda l: (l["block"], l["log_index"]))
+                self.assertEqual(hashlib.sha256(json.dumps(every, sort_keys=True).encode()).hexdigest(),
+                                 ev["read"]["logs_sha256"])
+                mine = [f for f in ev["factories"].values() if f["factory"].lower() == record["PoolFactory"].lower()]
+                self.assertEqual(len(mine), 1, "the record's factory was read")
+                mine = mine[0]
+                self.assertEqual(mine["challenge_created"], [])
+                self.assertEqual(len(mine["logs"]), mine["log_count"])
+                self.assertNotIn(keeper.CHALLENGE_CREATED, {l["topic0"] for l in mine["logs"]})
+                self.assertTrue(all(read_from <= l["block"] < block for l in mine["logs"]))
+                self.assertGreaterEqual(len({n["node"] for n in mine["nonces"]}), 2, "two nodes")
+                for n in mine["nonces"]:
+                    self.assertEqual((n["block_before"], n["block_after"]), (read_from - 1, block - 1))
+                    self.assertEqual(n["nonce_before"], n["nonce_after"], n["node"])
 
 
 class RpcOnce(unittest.TestCase):
