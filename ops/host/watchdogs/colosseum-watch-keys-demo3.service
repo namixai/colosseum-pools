@@ -1,0 +1,69 @@
+# Watchdog for the free keys of the registry, on the pools host. Installed by ops/host/install.sh
+# from the release that carries it (docs/HOSTING.md, "The host's watchdogs"). It reads the PUBLIC
+# chain only, so it has an unprivileged user of its own and cannot see the keeper's or the
+# gateway's directories at all.
+# The SECOND set: the instance demo3 (deployment v3-demo3), installed only when the host has that
+# instance. It differs from the first set in three things: the name the wrapper keeps its flag
+# under (`keys-demo3`, its own flag, not demo2's), the deployment's env file it reads
+# (deployment-demo3.env, with the instance's registry and factory), and the minute it runs at.
+# Without that file the unit fails to start rather than quietly watch demo2 a second time.
+[Unit]
+Description=colosseum-pools watchdog: free keys of the registry (demo3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=colosseum-watch
+Group=colosseum-watch
+# A directory of its own, NOT /opt/colosseum-pools/current: that link changes with every deploy, and
+# a rollback goes to a release that may not carry the watchdogs. install.sh puts the release's
+# files under /opt/colosseum-watch/releases and points `current` there.
+WorkingDirectory=/opt/colosseum-watch
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# Optional: the alert channel (COLOSSEUM_ALERT_CMD) and the node overrides. The deployment's own
+# file comes last, as the services read it: what the record says wins over a line by hand. It names the
+# registry to watch (GATEWAY_REGISTRY), written by install.sh from the deployment's record.
+EnvironmentFile=-/etc/colosseum/watch.env
+EnvironmentFile=/etc/colosseum/deployment-demo3.env
+# The threshold is written here as a NUMBER, not inherited from the script's default: it should
+# be visible on the host at what count the watchdog raises the alarm, without reading Python. The
+# comparison is strict: the alarm is at 15 free keys.
+ExecStart=/opt/colosseum-watch/current/watchdog-run.sh keys-demo3 \
+    /opt/colosseum-pools/venv/bin/python /opt/colosseum-watch/current/keys_watch.py \
+    --threshold 16
+# A finding (code 1) is a SUCCESSFUL check, not a broken unit: otherwise "failed" would mean both
+# "the watchdog broke" and "the watchdog found something", that is, nothing. A broken tool (code 3
+# and any unknown code) turns the unit red; a finding does not: it shows in the flag and in the
+# ALARM line of the journal.
+SuccessExitStatus=1
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/colosseum-watch
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+# The keys and the state of the keeper and the gateway are out of its reach: it has no business knowing them.
+InaccessiblePaths=/var/lib/colosseum-keeper /var/lib/colosseum-gw
+# More than the run's budget (watch_backoff.RUN_BUDGET_S) plus one request, so the journal shows an
+# honest exit 3 and not a killed process.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
