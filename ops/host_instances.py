@@ -13,7 +13,8 @@ colosseum-gateway@<name> and colosseum-keeper@<name>. Its gateway listens where
     python -m ops.host_instances list /etc/colosseum             one line per instance: name label port
     python -m ops.host_instances nginx /etc/colosseum            the nginx locations for them
     python -m ops.host_instances nginx-upstreams /etc/colosseum  and their upstreams
-    python -m ops.host_instances deployment-env <label>          COLOSSEUM_DEPLOYMENT, GATEWAY_FACTORY, the limits, ...
+    python -m ops.host_instances deployment-env <label>          COLOSSEUM_DEPLOYMENT, GATEWAY_FACTORY, the limits,
+                                                                 the keeper's nodes, ...
     python -m ops.host_instances first-label /etc/colosseum      the first deployment's label, as served
 
 Testnet only, as the host is.
@@ -210,17 +211,60 @@ def gateway_limits(record: dict) -> str:
             f"COLOSSEUM_PERP_DEXES={','.join(dexes)}\n")
 
 
+# A node the keeper reads, as the record names it: https, a host, a path, and nothing else. The record is public, so a
+# node whose address carries a key has no place in it; and a line systemd reads must hold no space or quote.
+NODE_URL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?")
+# The widest eth_getLogs window the keeper takes from each node (ops/keeper.py, MAX_LOG_WINDOW and
+# MAX_BACKUP_LOG_WINDOW): Hyperliquid's node answers 50 blocks at most, thirdweb's 1000 (measured 11 Nov 2026).
+KEEPER_MAX_LOG_WINDOW = {"primary": 50, "backup": 1000}
+KEEPER_NODE_ENV = {"primary": ("COLOSSEUM_RPC_URL", "COLOSSEUM_LOG_WINDOW"),
+                   "backup": ("COLOSSEUM_RPC_BACKUP_URL", "COLOSSEUM_BACKUP_LOG_WINDOW")}
+
+
+def keeper_nodes(record: dict) -> str:
+    """The keeper's nodes for its deployment, from `keeper_nodes` in the record, as the env lines the keeper reads:
+    the node it reads everything from and the window of its log scan (COLOSSEUM_RPC_URL, COLOSSEUM_LOG_WINDOW), and
+    the second node its scan takes a window to when the first refuses it, with that node's own window
+    (COLOSSEUM_RPC_BACKUP_URL, COLOSSEUM_BACKUP_LOG_WINDOW). A record without it gives none: keeper.env still says
+    the node, as before. With it, keeper.env's COLOSSEUM_RPC_URL is overridden, since systemd reads this file
+    after it."""
+    nodes = record.get("keeper_nodes")
+    if nodes is None:
+        return ""
+    if not isinstance(nodes, dict) or "primary" not in nodes or not set(nodes) <= set(KEEPER_NODE_ENV):
+        raise SystemExit(f"keeper_nodes must be an object with a primary and at most a backup, not {nodes!r}")
+    lines = []
+    for role in ("primary", "backup"):
+        node = nodes.get(role)
+        if node is None:
+            continue
+        if not isinstance(node, dict) or set(node) != {"url", "log_window"}:
+            raise SystemExit(f"keeper_nodes: {role} must be an object of url and log_window, not {node!r}")
+        url, window = node["url"], node["log_window"]
+        if not isinstance(url, str) or not NODE_URL.fullmatch(url):
+            raise SystemExit(f"keeper_nodes: {role} url {url!r} is not an https address with no key, space or quote")
+        most = KEEPER_MAX_LOG_WINDOW[role]
+        if not isinstance(window, int) or isinstance(window, bool) or not 1 <= window <= most:
+            raise SystemExit(f"keeper_nodes: {role} log_window {window!r} is not a whole number of blocks, 1 to {most}")
+        url_name, window_name = KEEPER_NODE_ENV[role]
+        lines += [f"{url_name}={url}\n", f"{window_name}={window}\n"]
+    if nodes.get("backup") and nodes["backup"]["url"].rstrip("/") == nodes["primary"]["url"].rstrip("/"):
+        raise SystemExit("keeper_nodes: the backup is the primary; a second try at the same node is no backup")
+    return "".join(lines)
+
+
 def deployment_env(label: str) -> str:
-    """What a gateway and a keeper read of their deployment, from its committed record: its addresses, and its
-    gateway's limits where the record has them (`gateway_limits`). systemd reads this file after the instance's
-    own gateway-<name>.env and keeper-<name>.env, so what the record says wins over a line by hand."""
+    """What a gateway and a keeper read of their deployment, from its committed record: its addresses, its
+    gateway's limits where the record has them (`gateway_limits`), and its keeper's nodes where it has those
+    (`keeper_nodes`). systemd reads this file after the instance's own gateway-<name>.env and keeper-<name>.env, so
+    what the record says wins over a line by hand."""
     if not LABEL.fullmatch(label):
         raise SystemExit(f"odd label {label!r}")
     record = deployments.load(label)
     return (f"COLOSSEUM_DEPLOYMENT={label}\n"
             f"GATEWAY_FACTORY={record['PoolFactory']}\n"
             f"GATEWAY_REGISTRY={record['KeyRegistry']}\n"
-            + gateway_limits(record))
+            + gateway_limits(record) + keeper_nodes(record))
 
 
 def main(argv: list[str]) -> int:

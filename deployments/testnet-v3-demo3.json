@@ -78,6 +78,16 @@
     "PoolFactory": "0x465c7dd2f9ccc05ee4fc2095634d23a36b2c21b42c6772bda485b03af08b7bba",
     "PoolImpl": "0x5cf8526e14087cf3de007228a5c5881166a44cc40f1693de871e76e9747d3d8c"
   },
+  "keeper_nodes": {
+    "backup": {
+      "log_window": 1000,
+      "url": "https://998.rpc.thirdweb.com"
+    },
+    "primary": {
+      "log_window": 50,
+      "url": "https://rpc.hyperliquid-testnet.xyz/evm"
+    }
+  },
   "label": "demo3",
   "network": "testnet",
   "operator": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",

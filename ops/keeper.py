@@ -27,6 +27,19 @@ reads only those, SWEEP_MAX addresses a call: a pool that has sold none is never
 however many there are (audit, K-1). A scan that has
 not moved for SCAN_STUCK_PASSES passes with the head ahead of it says so (`scan_behind`).
 
+A window the keeper's node refuses, whatever the refusal (an error, a timeout, a status), goes to a second node,
+once, in that node's own window (--backup-rpc and --backup-log-window, from the deployment record's
+`keeper_nodes`), and the rest of that pass reads the second node; a scan further behind the head than one pass of
+the keeper's node reads (--log-window times --max-windows) catches up on the second node from the start. The scan tries each node once a window and never
+waits out the 63-second ladder `common.rpc` keeps for every other read: the next pass comes in --every seconds and
+tries again. Measured 11 Nov 2026: Hyperliquid's testnet node has no blocks 69038325 to 69071492 (8 Nov, 02:49:51
+to 11:54:26 UTC) and answers `invalid block range` for any window in them, so the scan stood on 69038325 for three
+days; once the node's daily allowance of old blocks for the host was spent on that one window, each pass waited out
+those 63 seconds on it before it looked at a single account (97 s a pass, not 30). thirdweb's node has them and
+answers 1000 blocks a call. A 429 from the second node is waited out BACKUP_BUSY_PAUSE_S at a time, up to
+BACKUP_BUSY_WAIT_MAX_S a pass. The scan has caught up once it stands within one window of the head; it says so
+once, `scan_caught_up`.
+
 For every pool it follows, one pass does what is due:
   challenge Created  → abort at once if the reserved key is spoiled; activate once the capital
                        is there, and on a builder dex once more when the dex shows it (the
@@ -97,6 +110,14 @@ CHALLENGE_CREATED = "0x" + keccak(text="ChallengeCreated(address,address,address
 TOO_EARLY = keccak(text="TooEarly()")[:4].hex()
 STATE_DIR = pathlib.Path(__file__).resolve().parent / "state"
 MAX_LOG_WINDOW = 50  # blocks per eth_getLogs call that HyperEVM accepts
+# Blocks per eth_getLogs call on the second node: thirdweb answers 1000 and refuses 2000 (measured 11 Nov 2026).
+MAX_BACKUP_LOG_WINDOW = 1000
+# One scan call to either node: a timeout is a refusal, and the window goes to the other node or to the next pass.
+SCAN_TIMEOUT_S = 10.0
+# The second node's 429: thirdweb answered about five calls in a row, then 429 for a few seconds (11 Nov 2026).
+# Waited out this long at a time and no longer than the most below in one pass; past it the scan stops till the next.
+BACKUP_BUSY_PAUSE_S = 2.0
+BACKUP_BUSY_WAIT_MAX_S = 10.0
 RECUT_AFTER_BLOCKS = 10  # CoreWriter actions land a few seconds after their block
 DEFAULT_EVERY_S = 30
 # The factory's pool list, read once every this many passes (about ten minutes at the default
@@ -925,12 +946,13 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
     return not (stage == IDLE and challenge == ZERO)
 
 
-def pools_with_challenges(factory: str, lo: int, hi: int) -> set[str]:
-    """Pools named by the factory's ChallengeCreated events in blocks [lo, hi], one call."""
+def pools_with_challenges(factory: str, lo: int, hi: int, node: str | None = None) -> set[str]:
+    """Pools named by the factory's ChallengeCreated events in blocks [lo, hi], one call to `node` (the keeper's own
+    by default), tried once."""
     found: set[str] = set()
-    logs = c.rpc("eth_getLogs", [{
+    logs = c.rpc_once(node or c.RPC_URL, "eth_getLogs", [{
         "address": factory, "topics": [CHALLENGE_CREATED], "fromBlock": hex(lo), "toBlock": hex(hi),
-    }])
+    }], timeout=SCAN_TIMEOUT_S)
     for entry in logs:
         # Only the factory's own events count; an RPC that ignored the filter changes nothing.
         if entry["address"].lower() != factory.lower() or entry["topics"][0] != CHALLENGE_CREATED:
@@ -979,9 +1001,20 @@ def ring(order: list[str], resume_at: str | None) -> list[str]:
 
 class Keeper:
     def __init__(self, factory: str, wallet, dry: bool, state_path: pathlib.Path, start_block: int,
-                 window: int = MAX_LOG_WINDOW, max_windows: int = 50, sweep_every: int = SWEEP_EVERY):
+                 window: int = MAX_LOG_WINDOW, max_windows: int = 50, sweep_every: int = SWEEP_EVERY,
+                 backup: str | None = None, backup_window: int = MAX_BACKUP_LOG_WINDOW, wait=time.sleep):
         if not 1 <= window <= MAX_LOG_WINDOW:
             raise SystemExit(f"--log-window must be 1..{MAX_LOG_WINDOW}: HyperEVM refuses wider eth_getLogs ranges")
+        if not 1 <= backup_window <= MAX_BACKUP_LOG_WINDOW:
+            raise SystemExit(f"--backup-log-window must be 1..{MAX_BACKUP_LOG_WINDOW}")
+        # The second node of the scan, and its window; its chain is checked once, before the first window it is asked.
+        self.backup = backup or None
+        self.backup_window = backup_window
+        self.backup_chain_checked = False
+        self.wait = wait
+        # Whether the last pass left the scan more than a window behind the head: `scan_caught_up` is said once, as
+        # it comes level. In memory only: a keeper started level says nothing.
+        self.behind = False
         if max_windows < 1:
             raise SystemExit("--max-windows must be at least 1: a pass that reads no logs never finds a challenge")
         if sweep_every < 1:
@@ -1108,6 +1141,87 @@ class Keeper:
                     break
         self.sweep_at = i
 
+    def scan(self, latest: int) -> None:
+        """Up to `max_windows` eth_getLogs calls, from `next_block` towards `latest`, each node tried once a window.
+
+        Window by window, and the place moves after each window that came back. A refused read ends the scan for
+        this pass and keeps what it read: a pass that threw its whole scan away on the last window started again
+        from the same block every time, so after a gap -- a deployment older than the keeper, or any restart behind
+        the head -- it never caught up. Measured on the demo, 23 Sep 2026: 50 windows a pass against a node that
+        allows 100 calls a minute, every pass refused part way, `next_block` at the deployment block all along.
+
+        With a second node: a window the keeper's node refuses goes to it, in its own window, and so does every
+        window after it in this pass (the keeper's node is tried again from the next pass on). A scan further behind
+        the head than one pass of the keeper's node reads catches up on it from the start: old blocks are what the
+        keeper's node
+        refuses, and on Hyperliquid's they count against a daily allowance for the host's address, which the
+        gateways on that address read through too. The second node is never asked past its own head, which may lag
+        the first's: a window past it would come back empty and count as read."""
+        calls, waited, head, why = 0, 0.0, None, None
+        while calls < self.max_windows and self.next_block <= latest:
+            lo = self.next_block
+            if why is None and self.backup is not None and latest - lo + 1 > self.window * self.max_windows:
+                why = f"{latest - lo + 1} blocks behind the head, more than a pass of the keeper's node reads"
+                log("scan_on_backup", at_block=lo, why=why)
+            if why is None:
+                hi = min(lo + self.window - 1, latest)
+                calls += 1
+                try:
+                    found = pools_with_challenges(self.factory, lo, hi)
+                except Exception as exc:
+                    if self.backup is None:
+                        log("scan_stopped", at_block=lo, error=str(exc)[:200])
+                        return
+                    why = str(exc)[:200]
+                    log("scan_on_backup", at_block=lo, why=why)
+                    continue
+                self.read(found, hi)
+                continue
+            try:
+                if head is None:
+                    head = self.backup_head()
+                    if head is None:
+                        log("scan_stopped", at_block=lo, error=why, backup_error="the second node is on another chain")
+                        return
+                hi = min(lo + self.backup_window - 1, latest, head)
+                if hi < lo:
+                    log("scan_stopped", at_block=lo, error=why, backup_error=f"its head is {head}")
+                    return
+                calls += 1
+                found = pools_with_challenges(self.factory, lo, hi, self.backup)
+            except c.NodeBusy as exc:
+                if waited + BACKUP_BUSY_PAUSE_S > BACKUP_BUSY_WAIT_MAX_S:
+                    log("scan_stopped", at_block=lo, error=why, backup_error=str(exc)[:200])
+                    return
+                self.wait(BACKUP_BUSY_PAUSE_S)
+                waited += BACKUP_BUSY_PAUSE_S
+                continue
+            except Exception as exc:
+                log("scan_stopped", at_block=lo, error=why, backup_error=str(exc)[:200])
+                return
+            self.read(found, hi)
+
+    def read(self, found: set[str], hi: int) -> None:
+        """A window that came back: its pools followed, and the place after it, on disk window by window. A refused
+        read is handled in `scan`, but a process killed mid-scan -- a redeploy restarts this service -- would
+        otherwise start the next run at the block this pass began at, which is the rescan the loop exists to avoid.
+        It also keeps what was read from the venue reads after the scan, which can be refused too."""
+        self.live |= found
+        self.next_block = hi + 1
+        self.save()
+
+    def backup_head(self) -> int | None:
+        """The second node's head, and, the first time it is asked, its chain: a node on another chain would give
+        that chain's logs, and is dropped for good (None). A read it refuses is raised, as a window's would be."""
+        if not self.backup_chain_checked:
+            chain = int(c.rpc_once(self.backup, "eth_chainId", [], timeout=SCAN_TIMEOUT_S), 16)
+            if chain != c.CHAIN_ID:
+                log("backup_wrong_chain", rpc=self.backup.split("?")[0], chain_id=chain, expected=c.CHAIN_ID)
+                self.backup = None
+                return None
+            self.backup_chain_checked = True
+        return int(c.rpc_once(self.backup, "eth_blockNumber", [], timeout=SCAN_TIMEOUT_S), 16)
+
     def one_pass(self) -> None:
         try:
             latest = int(c.rpc("eth_blockNumber"), 16)
@@ -1124,26 +1238,8 @@ class Keeper:
             log("head_read_failed", error=str(exc)[:200])
             latest = None
         scan_from = self.next_block
-        end = None if latest is None else min(latest, self.next_block + self.window * self.max_windows - 1)
-        # Window by window, and the place moves after each window that came back. A refused read
-        # ends the scan for this pass and keeps what it read: a pass that threw its whole scan away
-        # on the last window started again from the same block every time, so after a gap -- a
-        # deployment older than the keeper, or any restart behind the head -- it never caught up.
-        # Measured on the demo, 23 Sep 2026: 50 windows a pass against a node that allows 100 calls
-        # a minute, every pass refused part way, `next_block` at the deployment block all along.
-        while end is not None and self.next_block <= end:
-            hi = min(self.next_block + self.window - 1, end)
-            try:
-                self.live |= pools_with_challenges(self.factory, self.next_block, hi)
-            except Exception as exc:
-                log("scan_stopped", at_block=self.next_block, error=str(exc)[:200])
-                break
-            self.next_block = hi + 1
-            # On disk window by window. A refused read is handled above, but a process killed
-            # mid-scan -- a redeploy restarts this service -- would otherwise start the next run
-            # at the block this pass began at, which is the rescan the loop exists to avoid. It
-            # also keeps what was read from the venue reads below, which can be refused too.
-            self.save()
+        if latest is not None:
+            self.scan(latest)
         # A scan that cannot move is not watching: a challenge bought after its block goes unseen
         # until the sweep below finds the pool. Counted only while there is a head to reach, and a
         # pass that could not read the head leaves the count alone: it says nothing about whether
@@ -1158,6 +1254,13 @@ class Keeper:
                     behind=latest - self.next_block + 1, passes=self.stuck_passes)
         else:
             self.stuck_passes = 0
+        # Caught up: within one window of the head, every block before it read. Said once, as the scan comes level
+        # after a pass that left it behind.
+        if latest is not None:
+            level = latest - self.next_block + 1 <= self.window
+            if level and self.behind:
+                log("scan_caught_up", next_block=self.next_block, latest=latest)
+            self.behind = not level
         if self.passes % self.sweep_every == 0:
             self.sweep()
             self.save()
@@ -1254,8 +1357,15 @@ def main() -> int:
     p.add_argument("--every", type=int, default=DEFAULT_EVERY_S, help="seconds between passes")
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")
     p.add_argument("--state", help="state file (default ops/state/keeper-<deployment>.json)")
-    p.add_argument("--log-window", type=int, default=MAX_LOG_WINDOW,
-                   help=f"blocks per eth_getLogs call, 1..{MAX_LOG_WINDOW}")
+    # The nodes come from the deployment record's `keeper_nodes`, rendered into deployment-*.env (ops/host_instances.py):
+    # COLOSSEUM_RPC_URL (common.py) and these.
+    p.add_argument("--log-window", type=int, default=os.environ.get("COLOSSEUM_LOG_WINDOW", str(MAX_LOG_WINDOW)),
+                   help=f"blocks per eth_getLogs call to the keeper's node, 1..{MAX_LOG_WINDOW}")
+    p.add_argument("--backup-rpc", default=os.environ.get("COLOSSEUM_RPC_BACKUP_URL", ""),
+                   help="the node a window goes to when the keeper's node refuses it; none when empty")
+    p.add_argument("--backup-log-window", type=int,
+                   default=os.environ.get("COLOSSEUM_BACKUP_LOG_WINDOW", str(MAX_BACKUP_LOG_WINDOW)),
+                   help=f"blocks per eth_getLogs call to the second node, 1..{MAX_BACKUP_LOG_WINDOW}")
     p.add_argument("--max-windows", type=int, default=50, help="eth_getLogs calls per pass, at most")
     # From keeper.env by default, like the gateway's GATEWAY_PERP_DEXES: a dex goes on and off with the
     # platform's list, and that is a setting and a restart, not a release (CTO, 21 Oct 2026).
@@ -1273,7 +1383,8 @@ def main() -> int:
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"keeper-{args.deployment}.json"
     wallet = None if args.dry_run else c.account(args.wallet)
     keeper = Keeper(record["PoolFactory"], wallet, args.dry_run, state, deployment_block(record),
-                    window=args.log_window, max_windows=args.max_windows, sweep_every=args.sweep_every)
+                    window=args.log_window, max_windows=args.max_windows, sweep_every=args.sweep_every,
+                    backup=args.backup_rpc, backup_window=args.backup_log_window)
     while True:
         try:
             keeper.one_pass()

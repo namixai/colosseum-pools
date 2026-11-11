@@ -94,6 +94,13 @@ DEMO3_ENV = (
     'GATEWAY_LEVERAGE_CAPS={"3": "10", "4": "10", "0": "5", "750000": "8", "750003": "20"}\n'
     "GATEWAY_PERP_DEXES=xyz\n"
     "COLOSSEUM_PERP_DEXES=xyz\n")
+# The keeper's nodes, demo2's and demo3's alike (11 Nov 2026): Hyperliquid's, 50 blocks a scan call, and thirdweb's
+# for a window Hyperliquid's refuses, 1000.
+KEEPER_ENV = (
+    "COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm\n"
+    "COLOSSEUM_LOG_WINDOW=50\n"
+    "COLOSSEUM_RPC_BACKUP_URL=https://998.rpc.thirdweb.com\n"
+    "COLOSSEUM_BACKUP_LOG_WINDOW=1000\n")
 
 
 class GatewayLimits(unittest.TestCase):
@@ -108,13 +115,14 @@ class GatewayLimits(unittest.TestCase):
     def test_demo3s_record_says_what_its_host_has_and_gold(self):
         # On the host, by hand, until now (10 Nov 2026): BTC, ETH, SOL and xyz:XYZ100 at these sizes and caps,
         # xyz read. xyz:GOLD comes with the record: 0.1 an order (about 400 USDC near 4,000) and 20x.
-        self.assertEqual(hi.deployment_env("v3-demo3"), DEMO3_ENV)
+        self.assertEqual(hi.deployment_env("v3-demo3"), DEMO3_ENV + KEEPER_ENV)
 
     def test_a_record_without_limits_says_its_addresses_alone(self):
         # demo2's record has none: its gateway.env still says them, as it did.
         text = hi.deployment_env("demo2")
         self.assertEqual([l.split("=")[0] for l in text.splitlines()],
-                         ["COLOSSEUM_DEPLOYMENT", "GATEWAY_FACTORY", "GATEWAY_REGISTRY"])
+                         ["COLOSSEUM_DEPLOYMENT", "GATEWAY_FACTORY", "GATEWAY_REGISTRY", "COLOSSEUM_RPC_URL",
+                          "COLOSSEUM_LOG_WINDOW", "COLOSSEUM_RPC_BACKUP_URL", "COLOSSEUM_BACKUP_LOG_WINDOW"])
 
     def test_the_lines_are_what_the_gateway_reads(self):
         from gateway.demo_signer import size_caps
@@ -180,6 +188,65 @@ class GatewayLimits(unittest.TestCase):
             record = "deployment-%i.env" if "@" in unit else "deployment.env"
             with self.subTest(unit):
                 self.assertEqual(envs, [f"EnvironmentFile=/etc/colosseum/{own}", f"EnvironmentFile=/etc/colosseum/{record}"])
+
+
+class KeeperNodes(unittest.TestCase):
+    """The keeper's nodes ride with the release, from the record (`keeper_nodes`), as the gateway's limits do: the
+    node it reads, its scan's window, and the second node a refused window goes to (11 Nov 2026). keeper.env's
+    COLOSSEUM_RPC_URL by hand is overridden: systemd reads deployment-*.env after it."""
+
+    def record(self, nodes):
+        return {"PoolFactory": "0x" + "f1" * 20, "KeyRegistry": "0x" + "f2" * 20, "keeper_nodes": nodes}
+
+    def env(self, nodes):
+        with mock.patch.object(hi.deployments, "load", return_value=self.record(nodes)):
+            return hi.deployment_env("v3-demo3")
+
+    def test_demo2_and_demo3_name_hyperliquids_node_and_thirdwebs(self):
+        for label in ("demo2", "v3-demo3"):
+            with self.subTest(label):
+                self.assertTrue(hi.deployment_env(label).endswith(KEEPER_ENV))
+
+    def test_a_record_without_them_leaves_keeper_env_as_it_is(self):
+        with mock.patch.object(hi.deployments, "load", return_value={"PoolFactory": "0x" + "f1" * 20,
+                                                                     "KeyRegistry": "0x" + "f2" * 20}):
+            self.assertNotIn("COLOSSEUM_RPC", hi.deployment_env("v3-demo3"))
+
+    def test_a_primary_alone_says_no_second_node(self):
+        text = self.env({"primary": {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}})
+        self.assertIn("COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm\n", text)
+        self.assertNotIn("BACKUP", text)
+
+    def test_nodes_the_keeper_could_not_take_are_refused_before_anything_is_written(self):
+        hl = {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}
+        tw = {"url": "https://998.rpc.thirdweb.com", "log_window": 1000}
+        bad = {
+            "no primary": {"backup": tw},
+            "a third node": {"primary": hl, "backup": tw, "spare": tw},
+            "not an object": ["https://998.rpc.thirdweb.com"],
+            "a key in the address": {"primary": hl, "backup": {**tw, "url": "https://node.example/evm?key=abc"}},
+            "a key after a hash": {"primary": {**hl, "url": "https://node.example/evm#key"}},
+            "a port that is no number": {"primary": {**hl, "url": "https://node.example:key/evm"}},
+            "plain http": {"primary": {**hl, "url": "http://rpc.hyperliquid-testnet.xyz/evm"}},
+            "a space": {"primary": {**hl, "url": "https://rpc.hyperliquid-testnet.xyz/evm x"}},
+            "a quote": {"primary": {**hl, "url": 'https://rpc.hyperliquid-testnet.xyz/"evm'}},
+            "a window over Hyperliquid's 50": {"primary": {**hl, "log_window": 51}},
+            "a second window over thirdweb's 1000": {"primary": hl, "backup": {**tw, "log_window": 1001}},
+            "a window of nothing": {"primary": {**hl, "log_window": 0}},
+            "a window as a string": {"primary": {**hl, "log_window": "50"}},
+            "a window as true": {"primary": {**hl, "log_window": True}},
+            "a field of its own": {"primary": {**hl, "timeout": 5}},
+            "the backup is the primary": {"primary": hl, "backup": {**tw, "url": hl["url"] + "/"}},
+        }
+        for what, nodes in bad.items():
+            with self.subTest(what), self.assertRaises(SystemExit):
+                self.env(nodes)
+
+    def test_the_lines_are_what_the_keeper_reads(self):
+        keeper_py = (ROOT / "ops" / "keeper.py").read_text()
+        for name in ("COLOSSEUM_LOG_WINDOW", "COLOSSEUM_RPC_BACKUP_URL", "COLOSSEUM_BACKUP_LOG_WINDOW"):
+            self.assertIn(f'os.environ.get("{name}"', keeper_py)
+        self.assertIn('os.environ.get("COLOSSEUM_RPC_URL"', (ROOT / "spike" / "hlspike" / "common.py").read_text())
 
 
 class Nginx(unittest.TestCase):
