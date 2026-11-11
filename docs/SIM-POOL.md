@@ -111,7 +111,15 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 78)
   `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, at the book
   with a ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise.
 
+- **The checker**, `ops/sim_check.py`: the open script behind every stop. For each payout still
+  waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
+  factory: the same asset, opposite sides, at most 10 minutes apart, sizes within 20 %. A match is
+  reason 1; with the two traders funded by one address, or one paying the other (USDC transfers since
+  the deployment), reason 2. It stops a payout at least 5 minutes before it is due, once, from the
+  factory's checker key, and lifts its own stop with `--lift POOL:ID`. Without `--wallet` it only
+  reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
+  accounts only, not the MultiPool's or the other deployments'.
+
 ## Not done yet
 
-- The host unit's trigger on `SimPoolFactory` in `ops/host/install.sh`.
-- The checking script.
+- The host unit's trigger on `SimPoolFactory` in `ops/host/install.sh`, once the unit is in main.
