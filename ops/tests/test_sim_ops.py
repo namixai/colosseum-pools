@@ -55,6 +55,11 @@ class TheFirstPool(unittest.TestCase):
         self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 950, 1, 10))
         self.assertEqual(plan[5:], (604800, True, 150, "0x" + "00" * 20, 0, h))
 
+    def test_dollars_round_to_usdc_units(self):
+        self.assertEqual(d.usdc_units(2.01), 2_010_000, "int(2.01 * 10**6) is 2 009 999")
+        self.assertEqual(d.usdc_units(45), 45_000_000)
+        self.assertEqual(d.locked_of({"menu": [{"size_usdc": 0.29, "price_usdc": 1}]}), 46_400)
+
     def test_its_ceiling_is_over_testnets_books_and_within_the_bound(self):
         self.assertGreater(FIRST["max_worse_bps"], 118)
         self.assertLessEqual(FIRST["max_worse_bps"], int(constant("MAX_WORSE_BPS")))

@@ -114,9 +114,10 @@ def serve(relay: Relay, port: int) -> None:
                 self.send_error(404)
                 return
             try:
-                body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 4096)))
+                length = max(0, int(self.headers.get("Content-Length", 0)))
+                body = json.loads(self.rfile.read(min(length, 4096)))
                 out, code = relay.relay(body), 200
-            except Refused as exc:
+            except (Refused, ValueError) as exc:  # the buyer's request, not the node (review of cp#263)
                 out, code = {"refused": str(exc)}, 400
             except Exception as exc:  # the node failed; the buyer may retry
                 out, code = {"error": str(exc)[:200]}, 502

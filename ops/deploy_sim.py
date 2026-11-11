@@ -59,6 +59,11 @@ def asset_list(names: list[str]) -> list[tuple[str, int, int]]:
     return out
 
 
+def usdc_units(amount) -> int:
+    """USDC (6 decimals) of an amount written in dollars, rounded."""
+    return int(round(amount * 10**6))
+
+
 def _rules(r: dict) -> tuple:
     return (r["daily_loss_bps"], r["max_drawdown_bps"], r["max_leverage_x100"],
             [PLATFORM_ASSETS[a] for a in r["assets"]], r.get("asset_leverage_x100", []))
@@ -71,7 +76,8 @@ def _terms(t: dict) -> tuple:
 
 def plan_of(raw: dict, terms_hash: bytes) -> tuple:
     """The SimPlan tuple of a plan file, the terms named by their hash."""
-    menu = [(int(m["size_usdc"] * 10**6), int(round(m["price_usdc"] * 10**6))) for m in raw["menu"]]
+    # round, not int: 0.29 * 100 is 28.999... (review of cp#263)
+    menu = [(usdc_units(m["size_usdc"]), usdc_units(m["price_usdc"])) for m in raw["menu"]]
     partner = raw.get("partner") or "0x" + "00" * 20
     return (menu, _rules(raw["exam_rules"]), _terms(raw["exam"]), _rules(raw["funded_rules"]), _terms(raw["funded"]),
             raw["fund_window_s"], raw["from_book"], raw["max_worse_bps"], to_checksum_address(partner),
@@ -80,7 +86,7 @@ def plan_of(raw: dict, terms_hash: bytes) -> tuple:
 
 def locked_of(raw: dict) -> int:
     """The USDC a pool locks at opening: LOCKED_PAYOUTS payouts of the largest size (6 decimals)."""
-    largest = max(int(m["size_usdc"] * 10**6) for m in raw["menu"])
+    largest = max(usdc_units(m["size_usdc"]) for m in raw["menu"])
     return largest * PAYOUT_BPS // 10_000 * LOCKED_PAYOUTS
 
 
@@ -166,8 +172,10 @@ def pool(args) -> int:
     c.transact(creator, record["usdc"], "approve(address,uint256)", ["address", "uint256"], [factory, locked])
     data = c.encode_call(f"create({PLAN_T})", [PLAN_T], [plan])
     rcpt = c.send_tx(creator, factory, data, value=CREATION_FEE)
-    created = [l for l in rcpt["logs"] if l["topics"][0] == "0x" + keccak(
-        text="PoolCreated(address,address,address,uint16,uint256)").hex()]
+    topic = "0x" + keccak(text="PoolCreated(address,address,address,uint16,uint256)").hex()
+    created = [l for l in rcpt["logs"] if l["topics"] and l["topics"][0] == topic]
+    if not created:
+        raise SystemExit(f"no PoolCreated in {rcpt['transactionHash']}: read the transaction before anything else")
     print(f"deploy_sim: pool {to_checksum_address('0x' + created[0]['topics'][1][-40:])}, tx {rcpt['transactionHash']}")
     return 0
 
@@ -185,7 +193,10 @@ def buy(args) -> int:
     c.transact(trader, record["usdc"], "approve(address,uint256)", ["address", "uint256"], [pool_, price])
     rcpt = c.transact(trader, pool_, "buy(uint256)", ["uint256"], [args.line])
     sold = "0x" + keccak(text="ExamSold(address,address,uint256,uint64,uint64,uint256,bool)").hex()
-    exam = next(l for l in rcpt["logs"] if l["topics"][0] == sold)["topics"][1]
+    found = [l for l in rcpt["logs"] if l["topics"] and l["topics"][0] == sold]
+    if not found:
+        raise SystemExit(f"no ExamSold in {rcpt['transactionHash']}: read the transaction before anything else")
+    exam = found[0]["topics"][1]
     print(f"deploy_sim: exam {to_checksum_address('0x' + exam[-40:])}, tx {rcpt['transactionHash']}")
     return 0
 
