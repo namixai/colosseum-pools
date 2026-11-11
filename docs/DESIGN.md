@@ -198,7 +198,7 @@ Rules (per pool, copied into each challenge):
   - A paper exam judges it at the oracle price and refuses a fill that would pass it.
   - Appended to the struct, so a reader of the first four fields reads them as before.
   - The deployments' defaults are in `ops/leverage.py`: BTC 10x, ETH 10x, SOL 5x, HYPE 10x, SP500
-    10x, XYZ100 8x, CL 3x, GOLD 20x, each at most the account's cap. BRENTOIL is withdrawn (the
+    10x, XYZ100 8x, CL 3x, GOLD 20x, SILVER 15x, each at most the account's cap. BRENTOIL is withdrawn (the
     leverage rule v1.3, 2 November 2026): it has no default, and a pool that names it is refused.
 
 Terms (per pool): challenge price (HyperEVM USDC), challenge capital, profit target, duration,

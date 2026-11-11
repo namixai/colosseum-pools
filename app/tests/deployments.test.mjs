@@ -164,7 +164,7 @@ test("createPool takes four fields before v3 and each asset's own cap after them
   assert.deepEqual(v3.assetLeverageX100, [500, 500, 500, 500, 500]);
   assert.deepEqual(poolRules({ assetLeverage: true }, { ...rules, maxLeverageX100: 1000 }, names).assetLeverageX100, [1000, 1000, 500, 1000, 1000]);
   assert.deepEqual(ASSET_LEVERAGE_X100, { BTC: 1000, ETH: 1000, SOL: 500, HYPE: 1000, SP500: 1000, XYZ100: 800, CL: 300, BRENTOIL: null,
-    GOLD: 2000 });
+    GOLD: 2000, SILVER: 1500 });
   // The leverage rule v1.2: HYPE 10x, the most Hyperliquid itself lends on it (its meta's maxLeverage, mainnet and testnet).
   assert.equal(defaultCapsText(["HYPE", "SOL"]), "HYPE 10×, SOL 5×");
   assert.equal(defaultCapsText(["BTC", "ETH", "xyz:XYZ100", "xyz:CL", "NEW"]), "BTC 10×, ETH 10×, xyz:XYZ100 8×, xyz:CL 3×");
@@ -210,6 +210,17 @@ test("xyz:GOLD is 20×, the leverage rule v1.3", () => {
   assert.deepEqual(poolRules({ assetLeverage: true }, rules, ["xyz:GOLD"]).assetLeverageX100, [2000]);
   assert.deepEqual(poolRules({ assetLeverage: true }, { ...rules, maxLeverageX100: 1000 }, ["xyz:GOLD"]).assetLeverageX100, [1000]);
   assert.equal(defaultCapsText(["xyz:GOLD"]), "xyz:GOLD 20×");
+});
+
+test("xyz:SILVER is 15×, the leverage rule v1.3", () => {
+  // The leverage rule v1.3 (2 November 2026) for xyz:SILVER, under the 25x Hyperliquid lends on it (its meta's
+  // maxLeverage, mainnet and testnet alike, read on 11 November 2026). Before it was in the table a pool that named
+  // it took the account's cap: 20x on a 20x account. Never over the account's own cap.
+  assert.equal(ASSET_LEVERAGE_X100.SILVER, 1500);
+  const rules = { dailyLossBps: 300, maxDrawdownBps: 600, maxLeverageX100: 2000, assets: [750026] };
+  assert.deepEqual(poolRules({ assetLeverage: true }, rules, ["xyz:SILVER"]).assetLeverageX100, [1500]);
+  assert.deepEqual(poolRules({ assetLeverage: true }, { ...rules, maxLeverageX100: 1000 }, ["xyz:SILVER"]).assetLeverageX100, [1000]);
+  assert.equal(defaultCapsText(["xyz:GOLD", "xyz:SILVER"]), "xyz:GOLD 20×, xyz:SILVER 15×");
 });
 
 test("the site's table of caps is ops/leverage.py's", () => {
