@@ -43,13 +43,17 @@ once, `scan_caught_up`.
 For every pool it follows, one pass does what is due:
   challenge Created  → abort at once if the reserved key is spoiled; activate once the capital
                        is there, and on a builder dex once more when the dex shows it (the
-                       first call only sends it there); abort after the start window if not
+                       first call only sends it there); abort after the start window if not.
+                       On a factory with a key binder there is no reserved key: activate asks
+                       for one, the relay answers (ops/key_relay.py), and a start window after
+                       the request with no key bound, abort
   challenge Active   → checkpoint in the first minutes of a UTC day; breach if a rule is broken;
                        expire after the deadline; otherwise renew an agent whose term is ending
                        (factory v3) and say so if a position has no stop
   challenge stopped  → recut if the cut key still trades; settle one step, held back while the
                        book has nothing to close its position into (`settle_due`)
   pool Funded        → checkpoint; breach if a rule is broken; otherwise the same renewal and stop check
+  any open request   → answered by the relay; a renewal is not asked again while one waits
   pool Closing       → recut if the cut key still trades; settleFunded one step, held back the same way
 
 HyperCore ignores a replacement agent that already has an account (spike question 8, 17 Sep
@@ -97,6 +101,7 @@ from gateway.weight import METER
 from gateway.assets import MAIN_DEX, dex_index_of, order_asset, parse_perp_dexs, weekend_flat_due
 from ops import deployments
 from ops.contract_errors import refusal
+from ops.key_relay import LocalPublisher, Relay
 from spike.hlspike import common as c
 
 ZERO = "0x0000000000000000000000000000000000000000"
@@ -512,6 +517,38 @@ def listed_agents(account: str) -> list[dict] | None:
         return None
 
 
+# The relay that answers the key binder's requests (ops/key_relay.py). None until the first account asks: then
+# one with no publisher, which only says so (`key_asked`). main() puts one with the publisher in its place.
+RELAY: Relay | None = None
+
+
+def relay() -> Relay:
+    global RELAY
+    if RELAY is None:
+        RELAY = Relay(None, c.CHAIN_ID, lambda *a, **k: view(*a, **k), lambda *a, **k: send(*a, **k),
+                      lambda body: info(body), lambda *a, **k: log(*a, **k))
+    return RELAY
+
+
+# Accounts whose keyAskedAt() reverted: deployed before the binder, and they stay so. Asked once a run.
+_before_binder: set[str] = set()
+
+
+def key_asked_at(account: str) -> int | None:
+    """When `account` asked the key binder for a key it still waits for, zero when it waits for none; None on an
+    account deployed before the binder (demo2, demo3), whose read reverts: it takes its keys from a registry, and
+    the keeper serves it as before. Any other failure goes up, as for any read."""
+    if account.lower() in _before_binder:
+        return None
+    try:
+        return view(account, "keyAskedAt()", "uint64")
+    except Exception as exc:
+        if "revert" in str(exc).lower():
+            _before_binder.add(account.lower())
+            return None
+        raise
+
+
 def renew_if_due(wallet, account: str, now: int, dry: bool) -> None:
     """Renews the account's agent from the last RENEW_WINDOW of its term on: the term HyperCore shows
     for the key, the one the account asked for when HyperCore would not say; once the term the account
@@ -545,6 +582,16 @@ def renew_if_due(wallet, account: str, now: int, dry: bool) -> None:
     if ends - RENEW_WINDOW <= now and (term - RENEW_WINDOW <= now or now >= ends):
         log("renew_agent", account=account, key=key, asked_until=asked)
         send(wallet, account, "renewAgent()", dry=dry)
+
+
+def keyed_or_renew(wallet, account: str, now: int, dry: bool) -> None:
+    """For a trading account: an open request is answered (a renewal, a spoiled key's replacement, a key the
+    guardian revoked), and the renewal is not asked again while it waits -- the account would refuse it,
+    `KeyAsked`. With none open, the renewal and its alarms as before."""
+    if key_asked_at(account):
+        relay().serve(wallet, account, now, dry)
+    else:
+        renew_if_due(wallet, account, now, dry)
 
 
 def unprotected(account: str, book: tuple[dict, list] | None = None) -> list[dict]:
@@ -852,7 +899,17 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
     """One pass over a challenge. False when Hyperliquid refused a read this account needed."""
     status = view(ch, "status()", "uint8")
     if status == CREATED:
-        if view(ch, "keySpoiled()", "bool"):
+        asked = key_asked_at(ch)
+        if asked:
+            # The capital is in place and the challenge asked for its key. Past a start window from the
+            # request it is the platform's fault, and the contract takes abort(): the buyer gets the price
+            # and the fee back. Until then the relay answers the request.
+            if now > asked + START_WINDOW:
+                log("key_late", account=ch, asked_at=asked)
+                send(wallet, ch, "abort()", dry=dry)
+            else:
+                relay().serve(wallet, ch, now, dry)
+        elif asked is None and view(ch, "keySpoiled()", "bool"):
             log("key_spoiled", account=ch)
             send(wallet, ch, "abort()", dry=dry)
         elif view(ch, "capitalArrived()", "bool"):
@@ -890,7 +947,7 @@ def challenge_pass(wallet, ch: str, names, now: int, latest: int, dry: bool) -> 
             # The stops first: a term read that fails raises, and must not take their check with it.
             if book is not None:
                 check_protection(ch, book, now)
-            renew_if_due(wallet, ch, now, dry)
+            keyed_or_renew(wallet, ch, now, dry)
         return book is not None
     else:
         recut_if_uncut(wallet, ch, latest, dry)
@@ -916,7 +973,11 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
         # (NotAllowed, self-audit v3, round 1, T3). MultiPool, the ownerRun flag and the keeper of
         # its seats (ops/multi_keeper.py) come with the round-1 contract fixes; on contracts without
         # them owner_run reads False and the stage is opened here, as before.
-        if owner_run(pool):
+        # On a factory with a key binder the stage asks for its key once (`keyAskedAt`), and the relay
+        # answers; a pool its owner runs is answered too, its owner having asked.
+        if key_asked_at(pool):
+            relay().serve(wallet, pool, now, dry)
+        elif owner_run(pool):
             log("owner_runs_it", account=pool, call="openFundedStage()")
         else:
             send(wallet, pool, "openFundedStage()", dry=dry)
@@ -933,7 +994,7 @@ def pool_pass(wallet, pool: str, names, now: int, latest: int, dry: bool) -> boo
             else:
                 if book is not None:
                     check_protection(pool, book, now)
-                renew_if_due(wallet, pool, now, dry)
+                keyed_or_renew(wallet, pool, now, dry)
             checked = checked and book is not None
         else:
             recut_if_uncut(wallet, pool, latest, dry)
@@ -1384,15 +1445,26 @@ def main() -> int:
                    help="the perp dexes read besides Hyperliquid's own (HIP-3), comma-separated, e.g. xyz")
     p.add_argument("--sweep-every", type=int, default=SWEEP_EVERY,
                    help="passes between reads of the factory's pool list (and on the first pass)")
+    # The key binder's publisher, on testnet a key in a file (ops/key_relay.py), and the gateway's key directory it
+    # makes agent keys into. Without them the keeper answers no request and says so (`key_asked`).
+    p.add_argument("--publisher-wallet", default=os.environ.get("COLOSSEUM_PUBLISHER_WALLET", ""),
+                   help="testnet only: the wallet that signs bindings for the key binder; none when empty")
+    p.add_argument("--keys-dir", default=os.environ.get("GATEWAY_KEYS_DIR", ""),
+                   help="the gateway's owner-only key directory, where the publisher writes the keys it signs")
     args = p.parse_args()
 
-    global PERP_DEXES
+    global PERP_DEXES, RELAY
     PERP_DEXES = tuple(dict.fromkeys(d.strip() for d in args.perp_dexes.split(",") if d.strip()))
     c.assert_network()
     check_node(c.RPC_URL, c.CHAIN_ID)
     record = deployments.load(args.deployment)
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"keeper-{args.deployment}.json"
     wallet = None if args.dry_run else c.account(args.wallet)
+    if args.publisher_wallet:
+        if not args.keys_dir:
+            raise SystemExit("--publisher-wallet needs --keys-dir: a key the chain binds must be one the gateway holds")
+        publisher = LocalPublisher(c.account(args.publisher_wallet), pathlib.Path(args.keys_dir), c.CHAIN_ID)
+        RELAY = Relay(publisher, c.CHAIN_ID, view, send, info, log)
     keeper = Keeper(record["PoolFactory"], wallet, args.dry_run, state, deployment_block(record),
                     window=args.log_window, max_windows=args.max_windows, sweep_every=args.sweep_every,
                     backup=args.backup_rpc, backup_window=args.backup_log_window)

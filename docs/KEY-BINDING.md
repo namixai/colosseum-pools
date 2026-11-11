@@ -81,6 +81,19 @@ every binding and cut every key, and take nothing.
 - A renewal that is not answered leaves the old key until its term ends.
 - A stop withdraws a request still waiting, so a key never lands on a stopped account.
 
+## Who carries the signature in
+
+The operator's keeper (`ops/keeper.py`, `ops/multi_keeper.py`) reads the open request of every account it
+serves and answers it through `ops/key_relay.py`: a fresh key, the publisher's signature, `bind`; for a
+renewal while the delay is on, `commit`, and `reveal` once the delay has passed. Before it signs it computes
+the digest itself and compares it with the binder's own `digest(...)`, and it signs nothing while the binder
+is paused or names another publisher. On testnet the publisher is a key in a file, which also makes the
+agent key and writes it into the gateway's key directory before the binding is sent; the gateway reads that
+directory again when it is asked for a key it does not hold. On mainnet a publisher in a file is refused: the
+publisher is the enclave. A keeper given no publisher answers nothing and logs each request it sees
+(`key_asked`), and any request older than ten minutes (`key_request_old`). Accounts of the deployments
+before the binder are served as they were.
+
 ## What the contract does not cover
 
 Who may sign an order with a bound key is decided where the key lives. For the guarantees above to mean

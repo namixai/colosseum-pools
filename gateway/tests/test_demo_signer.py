@@ -261,11 +261,39 @@ class KeyFiles(unittest.TestCase):
         os.chmod(self.dir, 0o700)
         self.assertEqual(len(DemoSigner.load_keys(str(self.dir))), 1)
 
+    def test_a_key_bound_since_the_start_is_read_from_the_directory(self):
+        # A deployment with a key binder writes each key just before it is bound (ops/key_relay.py).
+        self.write("demo-agent-01.key", "0x" + bytes(self.key.key).hex())
+        now = [100.0]
+        signer = DemoSigner(DemoSigner.load_keys(str(self.dir)), caps=TESTNET_CAPS, directory=str(self.dir),
+                            clock=lambda: now[0])
+        bound = Account.create(os.urandom(32))
+        self.write(f"agent-{bound.address}.key", "0x" + bytes(bound.key).hex())
+        self.assertFalse(signer.has_key(bound.address), "not before RELOAD_EVERY_S has passed since the last read")
+        now[0] += DemoSigner.RELOAD_EVERY_S
+        self.assertTrue(signer.has_key(bound.address))
+        self.assertTrue(signer.has_key(self.key.address), "the keys it had stay")
+        self.assertEqual(len(signer), 2)
+        stranger = Account.create(os.urandom(32)).address
+        os.chmod(self.dir, 0o750)  # a directory it may not read now leaves the keys it had
+        now[0] += DemoSigner.RELOAD_EVERY_S
+        self.assertFalse(signer.has_key(stranger))
+        self.assertEqual(len(signer), 2)
+        os.chmod(self.dir, 0o700)
+
+    def test_a_signer_given_no_directory_never_reads_one(self):
+        self.write("demo-agent-01.key", "0x" + bytes(self.key.key).hex())
+        now = [0.0]
+        signer = DemoSigner([], caps=TESTNET_CAPS, clock=lambda: now[0])
+        now[0] = 10.0**9
+        self.assertFalse(signer.has_key(self.key.address))
+
     def test_the_mode_is_chosen_explicitly(self):
         self.write("demo-agent-01.key", "0x" + bytes(self.key.key).hex())
         mode, signer = signer_from_env({"GATEWAY_SIGNER": "demo", "GATEWAY_KEYS_DIR": str(self.dir),
                                         "GATEWAY_SIZE_CAPS": '{"3": "0.005"}'})
         self.assertEqual((mode, type(signer), len(signer)), ("demo", DemoSigner, 1))
+        self.assertEqual(signer._directory, str(self.dir), "the directory is read again for a key bound later")
         tokens = self.write("tokens.json", json.dumps({self.key.address: "t"}))
         mode, signer = signer_from_env({"GATEWAY_SIGNER": "signer", "SIGNER_URL": "https://signer.invalid",
                                         "SIGNER_TOKENS_FILE": str(tokens)})

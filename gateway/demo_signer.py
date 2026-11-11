@@ -6,12 +6,18 @@ The demo doesn't use Usenami Signer. Its agent keys are ordinary testnet keys ma
 per key; the address comes from the key, never from a file name. `KeyRegistry` publishes
 the addresses as before. A key file can sign anything Hyperliquid lets an agent sign, so
 whoever holds the host holds these keys.
+
+On a deployment with a key binder (src/KeyBinder.sol) no key is made in advance: the keeper's
+relay writes one into the directory just before it is bound (ops/key_relay.py). So a key the
+signer does not hold sends it back to the directory, at most once every RELOAD_EVERY_S, before
+the order is refused; a directory that cannot be read then leaves the keys it had.
 """
 
 from __future__ import annotations
 
 import json
 import pathlib
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
 
@@ -191,11 +197,17 @@ class DemoSigner:
     # gateway does not know them, so the field is absent rather than wrong.
     max_order_notional_usdc = float(MAX_NOTIONAL)
 
+    RELOAD_EVERY_S = 5.0
+
     def __init__(self, keys: list[LocalAccount], mid: Callable[[int], Decimal] = market_mid,
-                 caps: Mapping[int, Decimal] | None = None):
+                 caps: Mapping[int, Decimal] | None = None, directory: str | None = None,
+                 clock: Callable[[], float] = time.monotonic):
         self._keys = {k.address.lower(): k for k in keys}
         self._mid = mid
         self.caps = dict(caps or {})  # the platform's list and its size caps: none, nothing is signed
+        self._directory = directory
+        self._clock = clock
+        self._reloaded_at = clock()
 
     @staticmethod
     def load_keys(directory: str) -> list[LocalAccount]:
@@ -216,7 +228,22 @@ class DemoSigner:
         return len(self._keys)
 
     def has_key(self, key: str) -> bool:
+        if key.lower() not in self._keys:
+            self._reload()
         return key.lower() in self._keys
+
+    def _reload(self) -> None:
+        """The directory read again, for a key bound since the last read; never sooner than RELOAD_EVERY_S after
+        it, so a stream of orders for keys nobody holds does not read the disk on each. Keys are only added."""
+        if self._directory is None or self._clock() - self._reloaded_at < self.RELOAD_EVERY_S:
+            return
+        self._reloaded_at = self._clock()
+        try:
+            keys = self.load_keys(self._directory)
+        except (OSError, SystemExit, ValueError):
+            return
+        for k in keys:
+            self._keys.setdefault(k.address.lower(), k)
 
     def addresses(self) -> list[str]:
         """The keys this signer holds, by address: what the gateway asks the registry about when it

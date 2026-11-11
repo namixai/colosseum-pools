@@ -118,7 +118,8 @@ def signer_from_env(env) -> tuple[str, DemoSigner | SignerClient]:
             # (bootstrap.sh writes gateway.env only once) would otherwise look up and sign nothing.
             raise SystemExit("refusing to start: GATEWAY_SIZE_CAPS is empty, so the demo signer would sign "
                              "nothing; set it to the platform's perps and caps (docs/HOSTING.md)")
-        return mode, DemoSigner(DemoSigner.load_keys(env["GATEWAY_KEYS_DIR"]), caps=caps)
+        return mode, DemoSigner(DemoSigner.load_keys(env["GATEWAY_KEYS_DIR"]), caps=caps,
+                                directory=env["GATEWAY_KEYS_DIR"])
     if mode == "signer":
         return mode, SignerClient(env["SIGNER_URL"], SignerClient.load_tokens(env["SIGNER_TOKENS_FILE"]))
     raise SystemExit("GATEWAY_SIGNER must be demo or signer")
