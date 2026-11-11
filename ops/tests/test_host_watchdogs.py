@@ -17,6 +17,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 import urllib.error
@@ -42,15 +43,21 @@ SHA = "a" * 40
 def load(name: str, env: dict[str, str] | None = None):
     """A fresh copy of one of the scripts. They read their node settings when imported, so a test that
     changes the environment has to import again."""
-    wanted = {k: v for k, v in (env or {}).items()}
-    with mock.patch.dict(os.environ, wanted):
-        for var in ("POOLS_WATCH_RPC", "POOLS_WATCH_RPC_FALLBACK", "COLOSSEUM_RPC_BACKUP_URL",
-                    "POOLS_WATCH_KEYS_RPC", "POOLS_WATCH_KEYS_RPC_FALLBACK"):
-            if var not in wanted:
-                os.environ.pop(var, None)
-        spec = importlib.util.spec_from_file_location(name, DOGS / f"{name}.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+    wanted = dict(env or {})
+    # The scripts import their ladder from their own directory: no __pycache__ may be left there, or the test of
+    # what the directory holds (and what install.sh would copy) reads it as a file of the release.
+    dont_write, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        with mock.patch.dict(os.environ, wanted):
+            for var in ("POOLS_WATCH_RPC", "POOLS_WATCH_RPC_FALLBACK", "COLOSSEUM_RPC_BACKUP_URL",
+                        "POOLS_WATCH_KEYS_RPC", "POOLS_WATCH_KEYS_RPC_FALLBACK"):
+                if var not in wanted:
+                    os.environ.pop(var, None)
+            spec = importlib.util.spec_from_file_location(name, DOGS / f"{name}.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = dont_write
     return mod
 
 
@@ -548,12 +555,12 @@ def exec_start(path: pathlib.Path) -> str:
 
 class Units(unittest.TestCase):
     def test_the_directory_holds_what_install_ships_and_nothing_else(self):
-        names = {p.name for p in DOGS.iterdir()}
+        names = {p.name for p in DOGS.iterdir() if p.is_file()}
         expected = set(RUNTIME) | {"install-lib.sh"} | {f"{u}{ext}" for u in SERVICES for ext in (".service", ".timer")}
         self.assertEqual(names, expected, "a file nobody installs, or one that is missing")
 
     def test_it_is_public_text_in_english_with_no_internal_path_in_it(self):
-        for path in DOGS.iterdir():
+        for path in (p for p in DOGS.iterdir() if p.is_file()):
             text = path.read_text()
             self.assertIsNone(re.search("[\u0400-\u04FF]", text), f"{path.name}: not English")
             for private in ("_hu" + "b/", "usenami-" + "platform"):  # written split: this file is public too
