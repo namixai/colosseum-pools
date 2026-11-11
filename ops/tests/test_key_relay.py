@@ -149,6 +149,31 @@ class Publishers(unittest.TestCase):
         from gateway.demo_signer import DemoSigner
         self.assertIn(address, [k.address for k in DemoSigner.load_keys(str(self.dir))])
 
+    def test_a_fresh_key_is_shown_only_whole(self):
+        publisher = LocalPublisher(self.key, self.dir, CHAIN)
+        address = publisher.fresh_key()
+        self.assertEqual(sorted(f.name for f in self.dir.iterdir()), [f"agent-{address}.key"], "no .tmp left")
+        # A write cut short leaves a .tmp, which the gateway never loads.
+        (self.dir / ".agent-0xdead.tmp").write_text("0x12")
+        os.chmod(self.dir / ".agent-0xdead.tmp", 0o600)
+        from gateway.demo_signer import DemoSigner
+        self.assertEqual([k.address for k in DemoSigner.load_keys(str(self.dir))], [address])
+
+    def test_a_committed_key_whose_file_is_not_its_key_is_not_revealed(self):
+        publisher = LocalPublisher(self.key, self.dir, CHAIN)
+        address = publisher.fresh_key()
+        path = self.dir / f"agent-{address}.key"
+        good = path.read_text()
+        path.write_text(bytes(Account.create(os.urandom(32)).key).hex())
+        self.assertIsNone(publisher.key_for(key_hash(address)), "another key under its name")
+        path.write_text("not a key")
+        self.assertIsNone(publisher.key_for(key_hash(address)), "no key at all")
+        path.write_text(good)
+        os.chmod(path, 0o644)
+        self.assertIsNone(publisher.key_for(key_hash(address)), "open to others")
+        os.chmod(path, 0o600)
+        self.assertEqual(publisher.key_for(key_hash(address)), address)
+
     def test_a_committed_key_is_found_by_its_hash(self):
         publisher = LocalPublisher(self.key, self.dir, CHAIN)
         address = publisher.fresh_key()
@@ -412,6 +437,27 @@ class TheRelayTheKeeperMakes(KeeperTest):
         relay = keeper.relay()
         self.assertIsNone(relay.publisher)
         self.assertIs(keeper.relay(), relay, "one a run")
+
+    def test_a_publisher_named_is_the_relays_and_needs_the_gateways_directory(self):
+        import argparse
+        p = argparse.ArgumentParser()
+        keeper.publisher_args(p)
+        with mock.patch.dict(keeper.os.environ, {}, clear=True):
+            keeper.use_publisher(p.parse_args([]))
+            self.assertIsNone(keeper.RELAY, "none named, none set")
+            with self.assertRaises(SystemExit):
+                keeper.use_publisher(p.parse_args(["--publisher-wallet", "kb-publisher"]))
+        os.chmod(self.tmp.name, 0o700)
+        key = Account.create(os.urandom(32))
+        with mock.patch.object(keeper.c, "account", lambda name: key, create=True):
+            keeper.use_publisher(p.parse_args(["--publisher-wallet", "kb-publisher", "--keys-dir", self.tmp.name]))
+        self.assertEqual(keeper.RELAY.publisher.address, key.address)
+
+    def test_the_multipools_keeper_takes_the_same_publisher(self):
+        src = (pathlib.Path(keeper.__file__).parent / "multi_keeper.py").read_text()
+        main = src[src.index("def main("):]
+        self.assertIn("core.publisher_args(p)", main)
+        self.assertIn("core.use_publisher(args)", main)
 
 
 if __name__ == "__main__":

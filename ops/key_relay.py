@@ -83,20 +83,33 @@ class LocalPublisher:
         address is returned; the private part never leaves the file."""
         key = Account.from_key("0x" + secrets.token_hex(32))
         path = self.keys_dir / f"{KEY_PREFIX}{key.address}.key"
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        # Written beside it under a name the gateway does not read, and shown under its own only once it is whole:
+        # a write cut short leaves a `.tmp` nobody loads, never a `.key` that is half a key.
+        tmp = self.keys_dir / f".{KEY_PREFIX}{key.address}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(key.key.hex() + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.link(tmp, path)  # refuses a name that is there, as O_EXCL did
+        tmp.unlink()
         return key.address
 
     def key_for(self, khash: bytes) -> str | None:
-        """The key this publisher made whose hash a renewal committed, if it is still in the directory."""
+        """The key this publisher made whose hash a renewal committed, if it is still in the directory, owner-only,
+        and holds the key its name says: the gateway knows a key by what is in the file, never by its name, and a
+        reveal of an address the gateway cannot sign for would bind a key nobody holds."""
         for f in sorted(self.keys_dir.glob(f"{KEY_PREFIX}*.key")):
             address = f.name[len(KEY_PREFIX):-len(".key")]
             try:
-                if key_hash(address) == khash:
-                    return to_checksum_address(address)
-            except ValueError:
+                if key_hash(address) != khash:
+                    continue
+                if f.stat().st_mode & 0o077:
+                    return None
+                held = Account.from_key(f.read_text().strip()).address
+            except (ValueError, OSError):
                 continue
+            return held if held.lower() == address.lower() else None
         return None
 
     def sign(self, digest: bytes) -> bytes:

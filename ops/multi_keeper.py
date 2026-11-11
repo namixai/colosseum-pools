@@ -736,6 +736,7 @@ def main() -> int:
     p.add_argument("--state", help="the state file (default ops/state/multi-<deployment>.json)")
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")
     p.add_argument("--from", dest="sender", help="address the calls are tried from in a dry run")
+    core.publisher_args(p)  # a seat's request for its key is answered by the same relay as the core keeper's
     args = p.parse_args()
 
     c.assert_testnet()
@@ -743,6 +744,7 @@ def main() -> int:
     if "MultiPool" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no MultiPool")
     wallet = None if args.dry_run else c.account(args.wallet)
+    core.use_publisher(args)
     sender = wallet.address if wallet else (args.sender or c.address_of(args.wallet))
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"multi-{args.deployment}.json"
     k = MultiKeeper(record["MultiPool"], wallet, sender, args.dry_run, state, int(record["block"]),

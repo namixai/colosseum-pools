@@ -239,11 +239,22 @@ class DemoSigner:
         if self._directory is None or self._clock() - self._reloaded_at < self.RELOAD_EVERY_S:
             return
         self._reloaded_at = self._clock()
+        # One file at a time, under the start's rules: a directory open to others is not read at all, and a file that
+        # is open to others or is not a key is passed over, so it never keeps the next key out.
+        d = pathlib.Path(self._directory).expanduser()
         try:
-            keys = self.load_keys(self._directory)
-        except (OSError, SystemExit, ValueError):
+            if d.stat().st_mode & 0o077:
+                return
+            files = sorted(d.glob("*.key"))
+        except OSError:
             return
-        for k in keys:
+        for f in files:
+            try:
+                if f.stat().st_mode & 0o077:
+                    continue
+                k = Account.from_key(f.read_text().strip())
+            except (OSError, ValueError):
+                continue
             self._keys.setdefault(k.address.lower(), k)
 
     def addresses(self) -> list[str]:

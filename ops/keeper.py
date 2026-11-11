@@ -534,6 +534,27 @@ def relay() -> Relay:
 _before_binder: set[str] = set()
 
 
+def publisher_args(p) -> None:
+    """The key binder's publisher, on testnet a key in a file (ops/key_relay.py), and the gateway's key directory it
+    makes agent keys into. Without them the keeper answers no request and says so (`key_asked`). The MultiPool's
+    keeper takes the same two (ops/multi_keeper.py)."""
+    p.add_argument("--publisher-wallet", default=os.environ.get("COLOSSEUM_PUBLISHER_WALLET", ""),
+                   help="testnet only: the wallet that signs bindings for the key binder; none when empty")
+    p.add_argument("--keys-dir", default=os.environ.get("GATEWAY_KEYS_DIR", ""),
+                   help="the gateway's owner-only key directory, where the publisher writes the keys it signs")
+
+
+def use_publisher(args) -> None:
+    """The relay of this process, with the publisher the arguments name; none named, none set."""
+    global RELAY
+    if not args.publisher_wallet:
+        return
+    if not args.keys_dir:
+        raise SystemExit("--publisher-wallet needs --keys-dir: a key the chain binds must be one the gateway holds")
+    publisher = LocalPublisher(c.account(args.publisher_wallet), pathlib.Path(args.keys_dir), c.CHAIN_ID)
+    RELAY = Relay(publisher, c.CHAIN_ID, view, send, info, log)
+
+
 def key_asked_at(account: str) -> int | None:
     """When `account` asked the key binder for a key it still waits for, zero when it waits for none; None on an
     account deployed before the binder (demo2, demo3), whose read reverts: it takes its keys from a registry, and
@@ -1445,26 +1466,17 @@ def main() -> int:
                    help="the perp dexes read besides Hyperliquid's own (HIP-3), comma-separated, e.g. xyz")
     p.add_argument("--sweep-every", type=int, default=SWEEP_EVERY,
                    help="passes between reads of the factory's pool list (and on the first pass)")
-    # The key binder's publisher, on testnet a key in a file (ops/key_relay.py), and the gateway's key directory it
-    # makes agent keys into. Without them the keeper answers no request and says so (`key_asked`).
-    p.add_argument("--publisher-wallet", default=os.environ.get("COLOSSEUM_PUBLISHER_WALLET", ""),
-                   help="testnet only: the wallet that signs bindings for the key binder; none when empty")
-    p.add_argument("--keys-dir", default=os.environ.get("GATEWAY_KEYS_DIR", ""),
-                   help="the gateway's owner-only key directory, where the publisher writes the keys it signs")
+    publisher_args(p)
     args = p.parse_args()
 
-    global PERP_DEXES, RELAY
+    global PERP_DEXES
     PERP_DEXES = tuple(dict.fromkeys(d.strip() for d in args.perp_dexes.split(",") if d.strip()))
     c.assert_network()
     check_node(c.RPC_URL, c.CHAIN_ID)
     record = deployments.load(args.deployment)
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"keeper-{args.deployment}.json"
     wallet = None if args.dry_run else c.account(args.wallet)
-    if args.publisher_wallet:
-        if not args.keys_dir:
-            raise SystemExit("--publisher-wallet needs --keys-dir: a key the chain binds must be one the gateway holds")
-        publisher = LocalPublisher(c.account(args.publisher_wallet), pathlib.Path(args.keys_dir), c.CHAIN_ID)
-        RELAY = Relay(publisher, c.CHAIN_ID, view, send, info, log)
+    use_publisher(args)
     keeper = Keeper(record["PoolFactory"], wallet, args.dry_run, state, deployment_block(record),
                     window=args.log_window, max_windows=args.max_windows, sweep_every=args.sweep_every,
                     backup=args.backup_rpc, backup_window=args.backup_log_window)

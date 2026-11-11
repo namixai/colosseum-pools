@@ -278,12 +278,25 @@ class KeyFiles(unittest.TestCase):
         self.assertTrue(signer.has_key(later.address))
         self.assertTrue(signer.has_key(self.key.address), "the keys it had stay")
         self.assertEqual(len(signer), 3)
-        stranger = Account.create(os.urandom(32)).address
-        os.chmod(self.dir, 0o750)  # a directory it may not read now leaves the keys it had
+        stranger = Account.create(os.urandom(32))
+        self.write(f"agent-{stranger.address}.key", "0x" + bytes(stranger.key).hex())
+        stranger = stranger.address
+        os.chmod(self.dir, 0o750)  # a directory open to others is not read: the keys it had stay, no new one comes
         now[0] += DemoSigner.RELOAD_EVERY_S
         self.assertFalse(signer.has_key(stranger))
         self.assertEqual(len(signer), 3)
         os.chmod(self.dir, 0o700)
+
+    def test_a_file_that_is_not_a_key_or_is_open_keeps_no_key_out(self):
+        self.write("demo-agent-01.key", "0x" + bytes(self.key.key).hex())
+        signer = DemoSigner(DemoSigner.load_keys(str(self.dir)), caps=TESTNET_CAPS, directory=str(self.dir))
+        self.write("agent-0-broken.key", "half a ke")  # sorts before every agent-0x… key
+        loose = Account.create(os.urandom(32))
+        self.write(f"agent-{loose.address}.key", "0x" + bytes(loose.key).hex(), 0o644)
+        bound = Account.create(os.urandom(32))
+        self.write(f"agent-{bound.address}.key", "0x" + bytes(bound.key).hex())
+        self.assertTrue(signer.has_key(bound.address))
+        self.assertFalse(signer.has_key(loose.address), "a key open to others is not taken")
 
     def test_a_signer_given_no_directory_never_reads_one(self):
         self.write("demo-agent-01.key", "0x" + bytes(self.key.key).hex())
