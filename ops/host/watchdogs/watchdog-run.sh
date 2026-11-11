@@ -7,6 +7,7 @@
 #
 #   0  the check ran, quiet     -> a line in the journal; the alarm flag is CLEARED (if there was one)
 #   1  the check ran, a finding -> ALARM in the journal + a flag file + the alert command, if there is one
+#                                   (a flag that cannot be written is exit 4: the unit fails)
 #   3  COULD NOT CHECK          -> a warning in the journal, the flag is NOT TOUCHED at all
 #   other  unknown code         -> loud, and a non-zero exit: nothing can be judged by such a code
 #
@@ -39,12 +40,19 @@ case "$RC" in
     log "quiet: $(printf '%s' "$OUT" | tail -1)"
     ;;
   1)
-    # The flag is written whole and moved into place: a reader never sees half a file.
-    TMP="$(mktemp "$FLAG.XXXXXX")"
-    { printf 'at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf '%s\n' "$OUT"; } > "$TMP"
-    mv -f "$TMP" "$FLAG"
+    # The flag is written whole and moved into place: a reader never sees half a file. A write that fails (a full
+    # disk, a directory nobody can write to) leaves the flag that stood as it was, is said, and turns the unit
+    # red (exit 4) after the finding has been put in the journal and sent to the channel: an alarm that exists
+    # in the journal only is still an alarm, and must not look like a success.
+    FLAG_OK=1
+    TMP="$(mktemp "$FLAG.XXXXXX" 2>/dev/null)" || FLAG_OK=0
+    if [ "$FLAG_OK" = 1 ]; then
+      { printf 'at: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf '%s\n' "$OUT"; } > "$TMP" \
+        && mv -f "$TMP" "$FLAG" || { FLAG_OK=0; rm -f "$TMP"; }
+    fi
     log "ALARM: finding, flag $FLAG"
     printf '%s\n' "$OUT" | while IFS= read -r line; do log "  $line"; done
+    [ "$FLAG_OK" = 1 ] || log "ERROR: the flag $FLAG could not be written; the alarm stands in this journal and the alert channel only"
     if [ -n "${COLOSSEUM_ALERT_CMD:-}" ]; then
       # "Sent" is not claimed from the channel's exit code alone: say what came of it.
       if printf '%s\n' "$OUT" | sh -c "$COLOSSEUM_ALERT_CMD" >/dev/null 2>&1; then
@@ -55,6 +63,7 @@ case "$RC" in
     else
       log "no alert channel on the host (COLOSSEUM_ALERT_CMD is not set): the alarm is in the flag and the journal only"
     fi
+    [ "$FLAG_OK" = 1 ] || exit 4
     ;;
   3)
     log "COULD NOT CHECK (code 3): $(printf '%s' "$OUT" | tail -1)"

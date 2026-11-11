@@ -139,7 +139,7 @@ watchdogs_install() {
   [ "$removed" = 0 ] || say "watchdogs: removed $removed file(s) an earlier hand-made install left in $watch_base"
 
   ls -1t "$watch_base/releases" | tail -n +$((watch_keep + 1)) | while read -r old; do
-    [ "$old" = "$sha" ] || rm -rf "${watch_base:?}/releases/$old"
+    if [ -n "$old" ] && [ "$old" != "$sha" ]; then rm -rf "${watch_base:?}/releases/${old:?}"; fi
   done
   return 0
 }

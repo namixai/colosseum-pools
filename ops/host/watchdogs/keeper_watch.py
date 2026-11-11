@@ -85,7 +85,7 @@ def _post(url: str, payload: dict, timeout: int = 20) -> dict:
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+        return json.load(r)
 
 
 def _rate_limited(err: str) -> bool:
@@ -195,68 +195,84 @@ def violation(ch: Chain, account: str) -> int:
 
 # -- the rules ----------------------------------------------------------------------------------
 
-def examine(ch: Chain, factory: str) -> tuple[list[dict], dict]:
-    """The findings and a summary of what was covered. Anything that cannot be read is Unreachable."""
+def examine_pool(ch: Chain, pool: str, now: int, findings: list[dict], seen: dict) -> None:
+    """One pool and its challenge account against the three rules. Findings are added to `findings` as they
+    are established, so that a read that fails further on does not take them with it."""
+    stage = _word(ch.call(pool, "stage()"), 0)
+    challenge = _addr(ch.call(pool, "challenge()"))
+
+    if challenge != "0x" + "0" * 40:
+        status = _word(ch.call(challenge, "status()"), 0)
+        if status == ACTIVE:
+            seen["live accounts"] += 1
+            deadline = _word(ch.call(challenge, "deadline()"), 0)
+            if deadline and now > deadline + GRACE_S:
+                findings.append({
+                    "id": f"expire|{challenge}",
+                    "rule": "the keeper did not close it on time",
+                    "text": (f"challenge {challenge} of pool {pool} is Active, its deadline "
+                             f"{deadline} passed {(now - deadline) // 60} minutes ago "
+                             f"(limit {GRACE_S // 60}). `expire` is due."),
+                })
+            b = violation(ch, challenge)
+            if b != 0 and not _word(ch.call(challenge, "isStopped()"), 0):
+                findings.append({
+                    "id": f"stop|{challenge}|{b}",
+                    "rule": "the keeper did not stop it",
+                    "text": (f"challenge {challenge} of pool {pool}: violation() = "
+                             f"{BREACH_NAMES.get(b, b)}, the account is NOT stopped. `breach` is due. "
+                             f"The chain records no time for a violation, so it is reported on every "
+                             f"run that sees it."),
+                })
+        elif status == CREATED:
+            seen["live accounts"] += 1
+            created = _word(ch.call(challenge, "createdAt()"), 0)
+            if created and now > created + GRACE_S:
+                arrived = bool(_word(ch.call(challenge, "capitalArrived()"), 0))
+                findings.append({
+                    "id": f"activate|{challenge}",
+                    "rule": "the keeper did not activate it",
+                    "text": (f"challenge {challenge} of pool {pool} was bought {(now - created) // 60} "
+                             f"minutes ago and is still Created; the capital "
+                             f"{'arrived: `activate` is due' if arrived else 'has NOT arrived: after the hour `abort` is due, not activation'}."),
+                })
+        else:
+            # A stopped account's violation() reads the empty account as a drawdown. Such an
+            # account is not touched at all: it would be an alarm on every run.
+            seen["closed accounts skipped"] += 1
+
+    if stage == FUNDED:
+        seen["live accounts"] += 1
+        b = violation(ch, pool)
+        if b != 0 and not _word(ch.call(pool, "isStopped()"), 0):
+            findings.append({
+                "id": f"stop|{pool}|{b}",
+                "rule": "the keeper did not stop it",
+                "text": (f"pool {pool} is in stage Funded: violation() = {BREACH_NAMES.get(b, b)}, "
+                         f"the account is NOT stopped. `breach` is due. The chain records no time "
+                         f"for a violation, so it is reported on every run that sees it."),
+            })
+
+
+def examine(ch: Chain, factory: str) -> tuple[list[dict], dict, str]:
+    """The findings, a summary of what was covered and, if the run stopped early, why.
+
+    A read that fails before any finding is Unreachable: nothing can be said. A read that fails AFTER a finding
+    does not take the finding with it: the finding is real, so it is reported, with the run marked incomplete and
+    the pools it did not reach counted. Otherwise a node that went away half-way, or a pool that cannot be read
+    on every run, would hide a breach the watchdog had already seen. The run stops at the first failed read: a
+    node that has failed once will fail the rest of the run's budget too."""
     now = ch.now()
     pools = read_pools(ch, factory)
     findings, seen = [], {"pools": len(pools), "live accounts": 0, "closed accounts skipped": 0}
-
-    for pool in pools:
-        stage = _word(ch.call(pool, "stage()"), 0)
-        challenge = _addr(ch.call(pool, "challenge()"))
-
-        if challenge != "0x" + "0" * 40:
-            status = _word(ch.call(challenge, "status()"), 0)
-            if status == ACTIVE:
-                seen["live accounts"] += 1
-                deadline = _word(ch.call(challenge, "deadline()"), 0)
-                if deadline and now > deadline + GRACE_S:
-                    findings.append({
-                        "id": f"expire|{challenge}",
-                        "rule": "the keeper did not close it on time",
-                        "text": (f"challenge {challenge} of pool {pool} is Active, its deadline "
-                                 f"{deadline} passed {(now - deadline) // 60} minutes ago "
-                                 f"(limit {GRACE_S // 60}). `expire` is due."),
-                    })
-                b = violation(ch, challenge)
-                if b != 0 and not _word(ch.call(challenge, "isStopped()"), 0):
-                    findings.append({
-                        "id": f"stop|{challenge}|{b}",
-                        "rule": "the keeper did not stop it",
-                        "text": (f"challenge {challenge} of pool {pool}: violation() = "
-                                 f"{BREACH_NAMES.get(b, b)}, the account is NOT stopped. `breach` is due. "
-                                 f"The chain records no time for a violation, so it is reported on every "
-                                 f"run that sees it."),
-                    })
-            elif status == CREATED:
-                seen["live accounts"] += 1
-                created = _word(ch.call(challenge, "createdAt()"), 0)
-                if created and now > created + GRACE_S:
-                    arrived = bool(_word(ch.call(challenge, "capitalArrived()"), 0))
-                    findings.append({
-                        "id": f"activate|{challenge}",
-                        "rule": "the keeper did not activate it",
-                        "text": (f"challenge {challenge} of pool {pool} was bought {(now - created) // 60} "
-                                 f"minutes ago and is still Created; the capital "
-                                 f"{'arrived: `activate` is due' if arrived else 'has NOT arrived: after the hour `abort` is due, not activation'}."),
-                    })
-            else:
-                # A stopped account's violation() reads the empty account as a drawdown. Such an
-                # account is not touched at all: it would be an alarm on every run.
-                seen["closed accounts skipped"] += 1
-
-        if stage == FUNDED:
-            seen["live accounts"] += 1
-            b = violation(ch, pool)
-            if b != 0 and not _word(ch.call(pool, "isStopped()"), 0):
-                findings.append({
-                    "id": f"stop|{pool}|{b}",
-                    "rule": "the keeper did not stop it",
-                    "text": (f"pool {pool} is in stage Funded: violation() = {BREACH_NAMES.get(b, b)}, "
-                             f"the account is NOT stopped. `breach` is due. The chain records no time "
-                             f"for a violation, so it is reported on every run that sees it."),
-                })
-    return findings, seen
+    for n, pool in enumerate(pools):
+        try:
+            examine_pool(ch, pool, now, findings, seen)
+        except Unreachable as e:
+            if not findings:
+                raise
+            return findings, seen, f"stopped at pool {pool}, {len(pools) - n} of {len(pools)} pools not fully read: {e}"
+    return findings, seen, ""
 
 
 def factory_address(explicit: str) -> str:
@@ -281,7 +297,7 @@ def main(argv=None) -> int:
     ch = Chain(a.rpc, a.rpc_fallback)
     try:
         factory = factory_address(a.factory)
-        findings, seen = examine(ch, factory)
+        findings, seen, incomplete = examine(ch, factory)
     except Unreachable as e:
         print(f"COULD NOT CHECK: {e} - this is NOT a finding about the keeper", file=sys.stderr)
         return 3
@@ -306,6 +322,8 @@ def main(argv=None) -> int:
     for f in findings:
         print(f"FINDING: {f['id']}")
         print(f"{f['rule']}: {f['text']}")
+    if incomplete:
+        print(f"INCOMPLETE: the run {incomplete}")
     return 1
 
 

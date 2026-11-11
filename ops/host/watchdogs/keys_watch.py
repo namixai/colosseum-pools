@@ -93,12 +93,12 @@ class _Transient(Exception):
 
 def _post(url: str, payload: dict, timeout: float = 25) -> dict:
     req = urllib.request.Request(
-        url, json.dumps(payload).encode(),
-        {"Content-Type": "application/json", "User-Agent": USER_AGENT},
+        url, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode())
+            return json.load(r)
     except (urllib.error.URLError, OSError, ValueError) as e:
         raise _Transient(f"{type(e).__name__}: {e}") from e
 
@@ -270,10 +270,21 @@ def main(argv: list[str] | None = None) -> int:
         free = chain.free_count(registry)
         spoiled: list[str] = []
         checked = 0
+        incomplete = ""
         if not a.no_spoilage:
-            keys = free_keys(chain, registry, free, a.slot)
-            checked = len(keys)
-            spoiled = [k for k in keys if chain.core_user_exists(k)]
+            try:
+                keys = free_keys(chain, registry, free, a.slot)
+                for k in keys:
+                    if chain.core_user_exists(k):
+                        spoiled.append(k)
+                    checked += 1
+            except Unreachable as e:
+                # A count already under the threshold, or a spoiled key already found, is a finding whatever the
+                # rest of the reading comes to: it is reported, with the check marked incomplete. With neither,
+                # nothing can be said, and this is exit 3.
+                if free >= a.threshold and not spoiled:
+                    raise
+                incomplete = str(e)
     except Unreachable as e:
         print(f"COULD NOT CHECK: {e} - a failure of the tool, NOT a statement about the registry",
               file=sys.stderr)
@@ -308,6 +319,8 @@ def main(argv: list[str] | None = None) -> int:
         found = True
         print(f"FINDING: {free} free agent keys, fewer than the threshold {a.threshold}")
     if found:
+        if incomplete:
+            print(f"INCOMPLETE: the spoilage check stopped after {checked} of {free} keys: {incomplete}")
         print("SEVERITY: critical")
         print("With no usable free key both a challenge pass and the sale of new ones stop, on the whole "
               f"factory. Refill: `publish([...])` on the registry {registry} by the operator; the spoiled "

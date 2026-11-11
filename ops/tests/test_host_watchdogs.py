@@ -100,10 +100,13 @@ class Node:
         self.model = model
         self.behaviour: dict[str, str] = {}
         self.asked: list[tuple[str, str]] = []
+        self.fail_when = lambda method, params: False   # a read that fails, whichever node is asked
 
     def __call__(self, url, payload, timeout=0):
         method = payload["method"]
         self.asked.append((url, method))
+        if self.fail_when(method, payload["params"]):
+            return {"error": {"code": -32000, "message": "execution reverted"}}
         how = self.behaviour.get(url)
         if how == "http500":
             err = urllib.error.HTTPError(url, 500, "Internal Server Error", None, None)
@@ -132,6 +135,7 @@ class RegistryNode(Node):
         self.element = element
         self.state = state
         self.exists_answer = exists_answer
+        self.exists_calls = 0
         self.base = int(keccak((5).to_bytes(32, "big")).hex(), 16)
 
     def answer(self, method, params):
@@ -148,6 +152,7 @@ class RegistryNode(Node):
         if method == "eth_call":
             call = params[0]
             if call["to"] == self.mod.CORE_USER_EXISTS:
+                self.exists_calls += 1
                 if self.exists_answer is not None:
                     return "0x" + word(self.exists_answer)
                 return "0x" + word(1 if "0x" + call["data"][-40:] in self.spoiled else 0)
@@ -252,6 +257,30 @@ class KeysWatch(unittest.TestCase):
             code, out, err = self.run_with(node)
             self.assertEqual((code, out.count("QUIET")), (3, 0), why)
             self.assertIn("COULD NOT CHECK", err, why)
+
+    def test_a_finding_already_made_survives_a_spoilage_read_that_fails_and_without_one_it_is_exit_3(self):
+        def precompile_dies_after(node, n):
+            node.fail_when = lambda method, params: (
+                method == "eth_call" and params[0]["to"] == self.mod.CORE_USER_EXISTS and node.exists_calls >= n)
+            return node
+
+        # the count is already under the threshold: reported, the spoilage check marked incomplete
+        low = precompile_dies_after(RegistryNode(self.mod, free=15), 0)
+        code, out, _ = self.run_with(low, "--threshold", "16")
+        self.assertEqual(code, 1)
+        self.assertIn("FINDING: 15 free agent keys, fewer than the threshold 16", out)
+        self.assertIn("INCOMPLETE: the spoilage check stopped after 0 of 15 keys", out)
+        # a spoiled key found before the read failed is kept
+        part = precompile_dies_after(RegistryNode(self.mod, free=17, spoiled=(1,)), 3)
+        code, out, _ = self.run_with(part, "--threshold", "16")
+        self.assertEqual(code, 1)
+        self.assertIn(f"spoiled: {addr(0x9001)}", out)
+        self.assertIn("INCOMPLETE: the spoilage check stopped after 3 of 17 keys", out)
+        # nothing found and the read failed: nothing can be said
+        none = precompile_dies_after(RegistryNode(self.mod, free=17), 3)
+        code, out, err = self.run_with(none, "--threshold", "16")
+        self.assertEqual((code, out.count("QUIET")), (3, 0))
+        self.assertIn("COULD NOT CHECK", err)
 
     def test_a_registry_that_is_not_named_is_could_not_check_there_is_no_default(self):
         with mock.patch.object(self.mod, "_post", RegistryNode(self.mod)), mock.patch.dict(os.environ, {}):
@@ -364,6 +393,27 @@ class KeeperWatch(unittest.TestCase):
         stopped = self.chain()
         stopped.add_pool(challenge=addr(0xC3), status=self.mod.ACTIVE, deadline=2_000_000, violation=1, stopped=1)
         self.assertEqual(self.run_with(stopped)[0], 0)
+
+    def test_a_finding_already_made_survives_a_later_read_that_fails_and_without_one_it_is_exit_3(self):
+        def broken_pool(node, pool):
+            node.fail_when = lambda method, params: (
+                method == "eth_call" and params[0]["to"].lower() == pool["address"].lower())
+
+        node = self.chain()
+        node.add_pool(challenge=addr(0xC5), status=self.mod.ACTIVE, deadline=1_000_000 - 3600)
+        second = node.add_pool(stage=self.mod.IDLE)
+        broken_pool(node, second)
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 1, "the breach already seen is not hidden by a pool that cannot be read")
+        self.assertIn(f"FINDING: expire|{addr(0xC5)}", out)
+        self.assertIn(f"INCOMPLETE: the run stopped at pool {second['address']}, 1 of 2 pools not fully read", out)
+        quiet = self.chain()
+        quiet.add_pool(stage=self.mod.IDLE)
+        second = quiet.add_pool(stage=self.mod.IDLE)
+        broken_pool(quiet, second)
+        code, out, err = self.run_with(quiet)
+        self.assertEqual((code, out.count("QUIET")), (3, 0), "no finding, and a read failed: nothing can be said")
+        self.assertIn("this is NOT a finding about the keeper", err)
 
     def test_a_funded_pool_that_breaches_is_a_finding(self):
         node = self.chain()
@@ -508,6 +558,31 @@ class Wrapper(unittest.TestCase):
         self.assertRegex(self.flag.read_text().splitlines()[0], r"^at: \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertIn("probe: ALARM: finding", out.stdout)
         self.assertIn("no alert channel on the host (COLOSSEUM_ALERT_CMD is not set)", out.stdout)
+
+    def test_a_flag_that_cannot_be_written_turns_the_unit_red_and_still_says_and_sends_the_finding(self):
+        # The state directory is a file here: mktemp cannot make anything under it.
+        broken = self.state / "not-a-directory"
+        broken.write_text("")
+        sink = self.state / "sink.txt"
+        out = subprocess.run(["bash", str(RUNNER), "probe", "bash", "-c", "echo 'FINDING: z'; exit 1"],
+                             capture_output=True, text=True,
+                             env={**os.environ, "COLOSSEUM_WATCH_DIR": str(broken), "COLOSSEUM_ALERT_CMD": f"cat > {sink}"})
+        self.assertEqual(out.returncode, 4, "a unit that cannot keep its alarm is broken, not successful")
+        self.assertIn("probe: ALARM: finding", out.stdout)
+        self.assertIn("probe:   FINDING: z", out.stdout)
+        self.assertIn("ERROR: the flag", out.stdout)
+        self.assertIn("could not be written; the alarm stands in this journal and the alert channel only", out.stdout)
+        self.assertIn("FINDING: z", sink.read_text(), "the channel is still told")
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes where it is told not to")
+    def test_a_flag_that_stood_is_left_as_it_was_when_the_new_one_cannot_be_written(self):
+        self.flag.write_text("the alarm that stood\n")
+        self.state.chmod(0o500)
+        self.addCleanup(self.state.chmod, 0o700)
+        out = self.wrap(1, "FINDING: z")
+        self.assertEqual(out.returncode, 4)
+        self.assertEqual(self.flag.read_text(), "the alarm that stood\n")
+        self.assertEqual([p.name for p in self.state.iterdir()], ["probe.alarm"], "no temporary file left behind")
 
     def test_code_3_touches_the_flag_in_neither_direction(self):
         for was_up in (True, False):

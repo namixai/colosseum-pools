@@ -782,7 +782,10 @@ node that is broken or out of allowance is left for the fallback at once, and th
 
 Code 3 leaves the flag alone on purpose: "could not check" is neither "all is well" nor "all is wrong", and
 clearing a standing alarm out of ignorance or raising a false one is each worse than saying so. A check that
-crashes is 3 too, never a finding. There is no alert channel on the host: an alarm is the flag and the journal
+crashes is 3 too, never a finding. A read that fails AFTER a finding does not take the finding with it: it is
+reported with an `INCOMPLETE` line (the pools or keys not reached) and the exit is 1; with no finding made, the
+same failure is 3. A flag that cannot be written (a full disk, say) leaves the one that stood as it was, and the
+wrapper exits 4 after it has put the finding in the journal and sent it to the channel, so the unit fails. There is no alert channel on the host: an alarm is the flag and the journal
 line, and the wrapper says so on every alarm. A channel is one line in `/etc/colosseum/watch.env`,
 `COLOSSEUM_ALERT_CMD='...'`, which the units read (it gets the finding on stdin, and a command that fails is
 logged as not having taken it).
