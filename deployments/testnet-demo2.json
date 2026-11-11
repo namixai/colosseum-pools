@@ -8,15 +8,43 @@
   "challenge_fee": 700000,
   "commit": "e4287926ad0bb13a0e401b45118215195ecb5589",
   "deployer": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
+  "gateway_limits": {
+    "perp_dexes": [],
+    "perps": [
+      {
+        "asset": 3,
+        "leverage": "10",
+        "name": "BTC",
+        "size": "0.005"
+      },
+      {
+        "asset": 4,
+        "leverage": "10",
+        "name": "ETH",
+        "size": "0.15"
+      },
+      {
+        "asset": 0,
+        "leverage": "5",
+        "name": "SOL",
+        "size": "4"
+      }
+    ]
+  },
   "keeper_nodes": {
     "backup": {
-      "log_window": 1000,
-      "url": "https://998.rpc.thirdweb.com"
+      "log_window": 100,
+      "url": "https://hyperliquid-testnet.drpc.org"
     },
     "primary": {
       "log_window": 50,
       "url": "https://rpc.hyperliquid-testnet.xyz/evm"
     }
+  },
+  "keeper_scan_floor": {
+    "block": 69354492,
+    "evidence": "deployments/evidence/keeper-scan-69038325-69354491.json",
+    "read_from": 69038325
   },
   "label": "demo2",
   "platform_assets": {
