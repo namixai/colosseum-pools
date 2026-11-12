@@ -144,7 +144,8 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the
   creator is the platform that also runs the checker. What holds it is that it shows: every stop and every
   lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`)
-  for anyone to run on the same blocks, and the checker
+  for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and
+  links on chain), and the checker
   lifts a stop that was wrong (S115). The filler and the checker are two keys, and neither opens a pool (S116).
 - **A simulated pool's creator** withdraws only what stays above three payouts of the largest size and above
   every payout owed and every payout set aside for a trader whose transfer was refused (S117), and stops
