@@ -26,7 +26,8 @@ test("each deployment in app/config.js is its record in deployments/, field for 
     assert.equal(r.label, d.label);
     assert.equal(r.chain_id, CONFIG.chainId);
     assert.equal(d.factory, r.PoolFactory, `${d.label} factory`);
-    assert.equal(d.registry, r.KeyRegistry, `${d.label} registry`);
+    assert.equal(d.registry, r.KeyRegistry ?? r.KeyBinder, `${d.label} registry`);
+    assert.equal(d.keyBinder, r.KeyBinder ? true : undefined, `${d.label} keyBinder`);
     assert.equal(d.deployBlock, r.block, `${d.label} deployBlock`);
     assert.equal(d.deployer, r.deployer, `${d.label} deployer`);
     const assets = Array.isArray(r.platform_assets) ? r.platform_assets.map((name) => index[name]) : Object.values(r.platform_assets);

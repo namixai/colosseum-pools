@@ -111,6 +111,36 @@ test("no settings for a network without exactly one live deployment, or with a r
   }
 });
 
+test("a record that names a KeyBinder gives the site its binder, marked; one with both or neither gives no settings", async () => {
+  const BINDER = "0x00000000000000000000000000000000000000A2";
+  const { KeyRegistry, ...noRegistry } = MAIN_RECORD;
+  const cases = [
+    [{ ...noRegistry, KeyBinder: BINDER }, null],
+    [{ ...MAIN_RECORD, KeyBinder: BINDER }, /v3-main: the record must name a KeyRegistry or a KeyBinder, one of them/],
+    [noRegistry, /v3-main: the record must name a KeyRegistry or a KeyBinder, one of them/],
+  ];
+  assert.ok(KeyRegistry);
+  for (const [record, why] of cases) {
+    const dir = example([MAIN], { "deployments/mainnet-v3-main.json": record });
+    try {
+      const answer = run("--network", "mainnet", "--root", dir, "--out", join(dir, "config.mjs"));
+      if (why) {
+        assert.notEqual(answer.status, 0);
+        assert.match(answer.stderr, why);
+        continue;
+      }
+      assert.equal(answer.status, 0, answer.stderr);
+      const { CONFIG } = await import(pathToFileURL(join(dir, "config.mjs")).href);
+      const [live] = CONFIG.deployments;
+      assert.equal(live.registry, BINDER);
+      assert.equal(live.keyBinder, true);
+      assert.deepEqual(Object.keys(live).slice(0, 5), ["label", "role", "factory", "registry", "keyBinder"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test("--gateway puts a gateway on this machine in, and nothing else changes", () => {
   const plain = run().stdout;
   const local = run("--gateway", "http://127.0.0.1:8787").stdout;

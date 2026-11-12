@@ -12387,6 +12387,36 @@ MUTATIONS = [
      '      watch_units="$watch_units colosseum-watch-keys-$name colosseum-watch-keeper-$name"\n',
      "      :\n",
      ["test_an_instance_gets_its_pair_when_its_env_file_is_here_and_the_release_ships_units_for_it"]),
+    # A deployment whose record names a KeyBinder: scripts/app_config.py marks it, deployments.js says which ABI,
+    # chain.js reads its keys with the binder's. "KB": the app's tests of it and of the settings it comes from.
+    ("KB1", "scripts/app_config.py",
+     "    if len(named) != 1:\n        raise SystemExit(f\"{record.get('label')}",
+     "    if not named:\n        raise SystemExit(f\"{record.get('label')}",
+     ['a record that names a KeyBinder gives the site its binder, marked; one with both or neither gives no settings']),
+    ("KB2", "scripts/app_config.py",
+     "**({\"keyBinder\": True} if named[0] == \"KeyBinder\" else {})",
+     "**{}",
+     ['a record that names a KeyBinder gives the site its binder, marked; one with both or neither gives no settings']),
+    ("KB3", "scripts/app_config.py",
+     "named = [k for k in (\"KeyRegistry\", \"KeyBinder\") if record.get(k)]",
+     "named = [k for k in (\"KeyRegistry\",) if record.get(k)]",
+     ['a record that names a KeyBinder gives the site its binder, marked; one with both or neither gives no settings']),
+    ("KB4", "app/lib/deployments.js",
+     "return deployment?.keyBinder ? \"binder\" : \"registry\";",
+     "return \"registry\";",
+     ['a deployment marked keyBinder is read as a binder, any other as a registry']),
+    ("KB5", "app/lib/chain.js",
+     "return contract(keysKind(deployment), deployment.registry, runner);",
+     "return contract(\"registry\", deployment.registry, runner);",
+     ['a deployment marked keyBinder is read as a binder, any other as a registry']),
+    ("KB6", "app/lib/chain.js",
+     "    \"function requestCount(address account) view returns (uint64)\",\n",
+     "    \"function requestCount(address account) view returns (uint64)\",\n    \"function freeCount() view returns (uint256)\",\n",
+     ["every line of the binder's ABI is the binder's own: its views and its events, types and topics alike", "the binder's ABI has no freeCount, and its KeyBound is not the registry's"]),
+    ("KB7", "app/lib/chain.js",
+     "\"event KeyBound(address indexed key, address indexed account, address indexed trader, uint8 purpose, uint64 id)\",",
+     "\"event KeyBound(address indexed key, address indexed account, address indexed trader)\",",
+     ["every line of the binder's ABI is the binder's own: its views and its events, types and topics alike", "the binder's ABI has no freeCount, and its KeyBound is not the registry's"]),
 ]
 
 RUNNERS = {
@@ -12466,6 +12496,9 @@ RUNNERS = {
     "WK": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_keeper_weight"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The reading of settled challenge accounts and its weekly watch: their own test file.
     "PX": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_settled_accounts"], r"^(?:FAIL|ERROR): (\w+) \("),
+    # A deployment on a KeyBinder in the app: its own test file and those of the settings it comes from.
+    "KB": (["node", "--test", "--test-reporter=tap", "app/tests/keybinder.test.mjs", "app/tests/config.test.mjs",
+            "app/tests/deployments.test.mjs", "app/tests/readonly.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     # The host's watchdogs: the two checks, the wrapper, the units and how install.sh puts them in place.
     "WD": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_host_watchdogs"], r"^(?:FAIL|ERROR): (\w+) \("),
 }

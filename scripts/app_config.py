@@ -48,7 +48,11 @@ DEPLOYMENTS_NOTE = """\
   // The deployments the site reads: the network's live entry in deployments/LIVE.json, then its archive ones. Every
   // field comes from the entry or its record, deployments/<network>-<label>.json, and app/tests/deployments.test.mjs
   // holds each one to them, so the site and the host cannot part silently.
-  //   factory, registry  the deployment's PoolFactory and KeyRegistry;
+  //   factory, registry  the deployment's PoolFactory, and where its keys are bound: its KeyRegistry, or its
+  //                      KeyBinder on a deployment after it (docs/KEY-BINDING.md);
+  //   keyBinder          true when `registry` is a KeyBinder: chain.js then reads it with the binder's ABI, which
+  //                      answers bindingOf, isBound and keyOf as the registry does and has no freeCount. Absent for a
+  //                      KeyRegistry.
   //   deployBlock        its first block: where the check-it-yourself page says its history starts; nothing scans
   //                      back towards it (app/lib/keys.js);
   //   deployer           the deploy key: the pools it owns are our benches, which the list names (app/lib/listing.js);
@@ -123,6 +127,17 @@ def is_v3(record: dict) -> bool:
     return "PaperExamImpl" in record
 
 
+def keys_of(record: dict) -> dict:
+    """Where the deployment's keys are bound, as a row's fields: its KeyRegistry, or its KeyBinder with `keyBinder`
+    true. The same rule as the host's (ops/host_instances.py, keys_contract): a record with both, or neither, names
+    no one contract and is refused, rather than a site that reads keys from the wrong one."""
+    named = [k for k in ("KeyRegistry", "KeyBinder") if record.get(k)]
+    if len(named) != 1:
+        raise SystemExit(f"{record.get('label')}: the record must name a KeyRegistry or a KeyBinder, one of them: the "
+                         "site reads its keys' bindings from it")
+    return {"registry": record[named[0]], **({"keyBinder": True} if named[0] == "KeyBinder" else {})}
+
+
 def site_entries(network, entries: list[dict], files: Files) -> list[dict]:
     mine = [e for e in entries if e["network"] == network.name]
     live = [e for e in mine if e["role"] == "live"]
@@ -137,7 +152,7 @@ def site_entries(network, entries: list[dict], files: Files) -> list[dict]:
             "label": entry["label"],
             "role": entry["role"],
             "factory": entry["factory"],
-            "registry": record["KeyRegistry"],
+            **keys_of(record),
             "deployBlock": record["block"],
             "deployer": entry["deployer"],
             "platformAssets": list(record["platform_assets"].values()),
@@ -177,7 +192,7 @@ def read_only_entries(network, entries: list[dict], files: Files) -> list[dict]:
             "record": entry["label"],
             "role": "read-only",
             "factory": entry["factory"],
-            "registry": record["KeyRegistry"],
+            **keys_of(record),
             "deployBlock": record["block"],
             "deployer": entry["deployer"],
             "platformAssets": list(record["platform_assets"].values()),
