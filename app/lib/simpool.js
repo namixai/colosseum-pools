@@ -1,0 +1,394 @@
+// A simulated pool (src/sim/SimPool.sol) and its factory (src/sim/SimPoolFactory.sol), as a page shows them: the
+// menu, the exams sold, the stages, every payout by its state and, for a payout that was paid, the five fields that
+// let anyone check it without trusting the page. No browser globals and no reads here, so node's test runner loads
+// it (app/tests/simpool.test.mjs): the page reads the getters and the events and hands them in; these functions put
+// them together and say where the events do not account for what the getters count.
+//
+// Why both. The getters are exact and cheap: how many payouts, each one's state, how many were paid and how much,
+// how many were stopped and lifted. Only the events carry what a reader checks a payout by: the transaction of each
+// payment, and the reason, the other account and the trades of each stop. Events are read in windows of blocks
+// (readLogs), and a reading that ran out of its budget is not the whole history: every total here says whether the
+// events it was summed from add up to the contract's own counters.
+//
+// What is left out on purpose: what the creator locked when the pool opened (PoolCreated.locked, noteLocked) and
+// what the creator has put in since (principal). A page of payouts shows what was paid, not the creator's money.
+
+/** The pool's getters and events a page reads, as the contract declares them (app/tests/simpool.test.mjs holds the
+ *  events to the source). An enum is a uint8 in the ABI. */
+export const SIM_POOL_ABI = [
+  "function factory() view returns (address)",
+  "function usdc() view returns (address)",
+  "function creator() view returns (address)",
+  "function partner() view returns (address)",
+  "function partnerBps() view returns (uint16)",
+  "function terms() view returns (bytes32)",
+  "function largestPayout() view returns (uint64)",
+  "function owed() view returns (uint256)",
+  "function live() view returns (uint256)",
+  "function closed() view returns (bool)",
+  "function finished() view returns (bool)",
+  "function head() view returns (uint256)",
+  "function stoppedCount() view returns (uint256)",
+  "function liftedCount() view returns (uint256)",
+  "function paidCount() view returns (uint256)",
+  "function paidTotal() view returns (uint256)",
+  "function held() view returns (uint256)",
+  "function heldOf(address trader) view returns (uint256)",
+  "function fundWindow() view returns (uint32)",
+  "function fromBook() view returns (bool)",
+  "function maxWorseBps() view returns (uint16)",
+  "function menu() view returns ((uint64 size, uint64 price)[])",
+  "function payout(uint256 id) view returns ((address account, address trader, uint64 amount, uint64 dueAt, uint8 state, bool wasStopped))",
+  "function payoutCount() view returns (uint256)",
+  "function accountOf(address account) view returns (uint8 kind, uint8 line, bool done)",
+  "event ExamSold(address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee, bool bySignature)",
+  "event Funded(address indexed stage, address indexed exam, address indexed trader)",
+  "event Released(address indexed account)",
+  "event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt)",
+  "event PayoutQueued(uint256 indexed id, uint256 balance)",
+  "event PayoutPaid(uint256 indexed id, address indexed trader, uint64 amount, uint256 paidCount, uint256 paidTotal)",
+  "event PayoutStopped(uint256 indexed id, address indexed trader, uint64 amount, uint8 reason, address paired, bytes32[] trades, bytes32[] links, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount)",
+  "event PayoutHeld(uint256 indexed id, address indexed trader, uint64 amount)",
+  "event HeldClaimed(address indexed trader, address indexed to, uint256 amount)",
+  "event StopLifted(uint256 indexed id, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount)",
+  "event Closed()",
+];
+
+export const SIM_FACTORY_ABI = [
+  "function pools() view returns (address[])",
+  "function poolOf(address account) view returns (address)",
+  "function checker() view returns (address)",
+  "function filler() view returns (address)",
+  "function feeRecipient() view returns (address)",
+  "function termsBook() view returns (address)",
+  "function usdc() view returns (address)",
+  "event PoolCreated(address indexed pool, address indexed creator, address indexed partner, uint16 partnerBps, uint256 locked)",
+  "event CheckerSet(address indexed checker)",
+];
+
+/** The factory's constants, the same for every pool (SimPoolFactory.sol); the test holds them to the source. */
+export const FEE_BPS = 50n;
+export const PAYOUT_BPS = 800n;
+export const PAYOUT_DELAY = 48 * 3600;
+const BPS = 10_000n;
+
+/** SimPool.PayoutState, by its number. */
+export const PAYOUT_STATE = ["None", "Due", "Stopped", "Paid", "Held"];
+
+/** What a page calls each state of a payout. "waiting" and "queued" are both Due on chain: before its time, and
+ *  past it but not yet sent (nobody has called `pay`, or the pool's USDC did not cover it: then `short` says so). */
+export const STATUS = Object.freeze({
+  waiting: "Waiting out the 48 hours",
+  queued: "Due, in the queue to be sent",
+  paid: "Paid",
+  stopped: "Stopped by the checker",
+  held: "Held: the token refused the transfer, the money is set aside for the trader",
+});
+
+/** Why the checker stopped a payout: SimPool.stopPayout's `reason`. */
+export const STOP_REASON = Object.freeze({
+  1: "Opposite positions with another account of this platform's pools",
+  2: "Opposite positions with another account, and the two wallets linked",
+});
+
+export function stopReasonText(reason) {
+  return STOP_REASON[Number(reason)] || `Unknown reason ${Number(reason)}`;
+}
+
+/** The line a page shows next to "Paid in total": what the sum is and what it is not. */
+export const TOTAL_INCLUDES = "The sum of every payment this pool's contract sent to a trader who passed both "
+  + "stages: 8% of the size the trader passed on, once per stage, in USDC, each with its own transaction below. "
+  + "Not in it: payouts stopped by the checker, payouts still waiting or queued, payouts the token refused (held for "
+  + "the trader), the platform's 0.5% of each exam's price, and anything the pool's creator withdrew.";
+
+/**
+ * One event as these functions read it: `{ name, args, block, tx, index }`. Takes an ethers v6 EventLog (eventName,
+ * args as a Result, blockNumber, transactionHash, index) or that shape already.
+ */
+export function normalizeEvent(e) {
+  const args = e.args && typeof e.args.toObject === "function" ? e.args.toObject() : { ...e.args };
+  return {
+    name: e.name ?? e.eventName ?? e.fragment?.name,
+    args,
+    block: Number(e.block ?? e.blockNumber),
+    tx: e.tx ?? e.transactionHash,
+    index: Number(e.index ?? e.logIndex ?? 0),
+  };
+}
+
+function ordered(events) {
+  return events.map(normalizeEvent).sort((a, b) => a.block - b.block || a.index - b.index);
+}
+
+function named(events, name) {
+  return events.filter((e) => e.name === name);
+}
+
+function at(e, times) {
+  return { tx: e.tx, block: e.block, time: times?.get?.(e.block) ?? null };
+}
+
+/** The blocks whose time a page needs to read to date every event: one `eth_getBlockByNumber` each. */
+export function blocksToDate(events) {
+  return [...new Set(events.map((e) => normalizeEvent(e).block))].sort((a, b) => a - b);
+}
+
+/** The payout a stage of `size` earns: 8% of it (SimPool._payoutOf). */
+export function payoutOf(size) {
+  return BigInt(size) * PAYOUT_BPS / BPS;
+}
+
+/** The menu, line by line: the size, the price, what passing both stages pays, and the platform's part of the price. */
+export function menuLines(menu) {
+  return [...menu].map((m, line) => {
+    const size = BigInt(m.size ?? m[0]);
+    const price = BigInt(m.price ?? m[1]);
+    return { line, size, price, payout: payoutOf(size), fee: price * FEE_BPS / BPS };
+  });
+}
+
+/** Every exam sold, oldest first: who bought it, off which line, at what price, whether by signature, the transaction,
+ *  and what became of it here: the stage it earned, or released. */
+export function soldExams(events, times) {
+  const all = ordered(events);
+  const released = new Set(named(all, "Released").map((e) => String(e.args.account).toLowerCase()));
+  const funded = new Map(named(all, "Funded").map((e) => [String(e.args.exam).toLowerCase(), e.args.stage]));
+  return named(all, "ExamSold").map((e) => {
+    const exam = e.args.exam;
+    return {
+      exam,
+      trader: e.args.trader,
+      line: Number(e.args.line),
+      size: BigInt(e.args.size),
+      price: BigInt(e.args.price),
+      fee: BigInt(e.args.fee),
+      bySignature: Boolean(e.args.bySignature),
+      stage: funded.get(String(exam).toLowerCase()) ?? null,
+      released: released.has(String(exam).toLowerCase()),
+      ...at(e, times),
+    };
+  });
+}
+
+/** Every stage started, oldest first, with the exam it came from, whether it was released and the payout it wrote. */
+export function stages(events, times) {
+  const all = ordered(events);
+  const released = new Set(named(all, "Released").map((e) => String(e.args.account).toLowerCase()));
+  const payoutBy = new Map(named(all, "PayoutDue").map((e) => [String(e.args.account).toLowerCase(), Number(e.args.id)]));
+  return named(all, "Funded").map((e) => ({
+    stage: e.args.stage,
+    exam: e.args.exam,
+    trader: e.args.trader,
+    released: released.has(String(e.args.stage).toLowerCase()),
+    payoutId: payoutBy.get(String(e.args.stage).toLowerCase()) ?? null,
+    ...at(e, times),
+  }));
+}
+
+/**
+ * Every payout, by id, from the getters (`payout(id)` for each id below `payoutCount()`) and the events that name it.
+ * `status` is one of STATUS's keys, from the getter's state and `now` (seconds, the chain's clock). The events add
+ * the transactions: `due` (the claim), `paid`, `stop` (with its reason, the other account and the trades and links
+ * the checker named), `lift`, `heldAt`, and `short`, the pool's balance when a payment found it short.
+ */
+export function payouts(structs, events, now, times) {
+  const all = ordered(events);
+  const byId = (name) => {
+    const m = new Map();
+    for (const e of named(all, name)) m.set(Number(e.args.id), e);
+    return m;
+  };
+  const due = byId("PayoutDue");
+  const paid = byId("PayoutPaid");
+  const stopped = byId("PayoutStopped");
+  const lifted = byId("StopLifted");
+  const queued = byId("PayoutQueued");
+  const heldEv = byId("PayoutHeld");
+  return [...structs].map((p, id) => {
+    const state = Number(p.state ?? p[4]);
+    const dueAt = Number(p.dueAt ?? p[3]);
+    let status;
+    if (state === 1) status = now < dueAt ? "waiting" : "queued";
+    else if (state === 2) status = "stopped";
+    else if (state === 3) status = "paid";
+    else if (state === 4) status = "held";
+    else status = "unknown";
+    const s = stopped.get(id);
+    const q = queued.get(id);
+    return {
+      id,
+      account: p.account ?? p[0],
+      trader: p.trader ?? p[1],
+      amount: BigInt(p.amount ?? p[2]),
+      dueAt,
+      status,
+      wasStopped: Boolean(p.wasStopped ?? p[5]),
+      due: due.has(id) ? at(due.get(id), times) : null,
+      paid: paid.has(id) ? at(paid.get(id), times) : null,
+      stop: s ? {
+        reason: Number(s.args.reason),
+        reasonText: stopReasonText(s.args.reason),
+        paired: s.args.paired,
+        trades: [...s.args.trades],
+        links: [...s.args.links],
+        ...at(s, times),
+      } : null,
+      lift: lifted.has(id) ? at(lifted.get(id), times) : null,
+      heldAt: heldEv.has(id) ? at(heldEv.get(id), times) : null,
+      short: q && status === "queued" ? { balance: BigInt(q.args.balance), ...at(q, times) } : null,
+    };
+  });
+}
+
+/**
+ * "Paid in total": the sum of the PayoutPaid events, each payment with its transaction, set against the contract's
+ * own `paidCount()` and `paidTotal()`. `complete` is false when the events read do not add up to them (a reading cut
+ * short): the page then shows the contract's total and says the list is partial, never a smaller sum as the total.
+ */
+export function paidTotal(events, reads, times) {
+  const list = named(ordered(events), "PayoutPaid").map((e) => ({
+    id: Number(e.args.id), trader: e.args.trader, amount: BigInt(e.args.amount), ...at(e, times),
+  }));
+  const sum = list.reduce((s, p) => s + p.amount, 0n);
+  const count = BigInt(reads.paidCount);
+  const total = BigInt(reads.paidTotal);
+  const complete = BigInt(list.length) === count && sum === total;
+  return { total, count, listed: sum, payments: list, complete, includes: TOTAL_INCLUDES };
+}
+
+/** The pool's counters of stops: every stop, every lift, the stops that stand, and the payouts paid. */
+export function stopCounters(reads) {
+  const stopped = BigInt(reads.stoppedCount);
+  const lifted = BigInt(reads.liftedCount);
+  return { stopped, lifted, standing: stopped - lifted, paid: BigInt(reads.paidCount) };
+}
+
+/**
+ * The five fields that make one paid payout checkable by anyone, the ones a public payout record needs before a
+ * stranger can match it to the chain without trusting whoever published it:
+ *   1. the payout's id, which is also a topic of the payment's own log, so the record and the transaction meet;
+ *   2. the chain and the full transaction hash, and the token;
+ *   3. the amount as the transfer carried it (one amount: nobody's share is taken out of a payout);
+ *   4. when it was asked for (the claim) and when it was paid;
+ *   5. the address it was paid from: the pool's contract, which also holds the pool's money.
+ * Null for a payout that is not paid, or whose payment event was not read.
+ */
+export function proofOf(payout, { pool, usdc, chainId }) {
+  if (payout.status !== "paid" || !payout.paid) return null;
+  return {
+    id: payout.id,
+    chainId,
+    tx: payout.paid.tx,
+    token: usdc,
+    amount: payout.amount,
+    requestedAt: payout.due?.time ?? null,
+    requestTx: payout.due?.tx ?? null,
+    paidAt: payout.paid.time,
+    from: pool,
+    to: payout.trader,
+  };
+}
+
+/**
+ * Where the events the getters count were not all read: a paid payout without its payment, a stop without its
+ * reasons, a lifted stop without its lift, a payout without its claim. Each gap names the payout and what is missing.
+ */
+export function gaps(list) {
+  const out = [];
+  for (const p of list) {
+    if (!p.due) out.push({ id: p.id, missing: "PayoutDue" });
+    if (p.status === "paid" && !p.paid) out.push({ id: p.id, missing: "PayoutPaid" });
+    if ((p.status === "stopped" || p.wasStopped) && !p.stop) out.push({ id: p.id, missing: "PayoutStopped" });
+    if (p.wasStopped && p.status !== "stopped" && !p.lift) out.push({ id: p.id, missing: "StopLifted" });
+    if (p.status === "held" && !p.heldAt) out.push({ id: p.id, missing: "PayoutHeld" });
+  }
+  return out;
+}
+
+/**
+ * The whole page of one simulated pool. `reads` are the pool's getters (menu, payoutCount's payouts as `payouts`,
+ * paidCount, paidTotal, stoppedCount, liftedCount, owed, held, live, closed, finished, partner, partnerBps, terms,
+ * fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
+ * clock. No field of it carries what the creator locked or put in.
+ */
+export function simPoolPage({ pool, usdc, chainId, reads, events, times, now }) {
+  const list = payouts(reads.payouts, events, now, times);
+  const byStatus = {};
+  for (const k of Object.keys(STATUS)) byStatus[k] = list.filter((p) => p.status === k);
+  return {
+    pool,
+    chainId,
+    token: usdc,
+    menu: menuLines(reads.menu),
+    exams: soldExams(events, times),
+    stages: stages(events, times),
+    payouts: list,
+    byStatus,
+    total: paidTotal(events, reads, times),
+    proofs: list.map((p) => proofOf(p, { pool, usdc, chainId })).filter(Boolean),
+    counters: stopCounters(reads),
+    owed: BigInt(reads.owed),
+    held: BigInt(reads.held),
+    live: BigInt(reads.live),
+    closed: Boolean(reads.closed),
+    finished: Boolean(reads.finished),
+    partner: reads.partner,
+    partnerBps: Number(reads.partnerBps),
+    terms: reads.terms,
+    fundWindow: Number(reads.fundWindow),
+    gaps: gaps(list),
+  };
+}
+
+/** The factory's pools, oldest first, each with its creator, its partner and that partner's share, and the
+ *  transaction that opened it. The amount locked at the opening is not carried. */
+export function factoryPools(events, times) {
+  return named(ordered(events), "PoolCreated").map((e) => ({
+    pool: e.args.pool,
+    creator: e.args.creator,
+    partner: e.args.partner,
+    partnerBps: Number(e.args.partnerBps),
+    ...at(e, times),
+  }));
+}
+
+/**
+ * Reads logs from `from` to `to` in windows of `window` blocks, at most `maxCalls` calls, through `getLogs(from, to)`.
+ * Returns the logs, the last block read, and whether the range was read to its end. A public node limits both the
+ * window and the calls (app/lib/keys.js on the 50-block window); a page that stops short says so with `readTo`.
+ */
+export async function readLogs({ getLogs, from, to, window = 50, maxCalls = 40 }) {
+  if (window < 1) throw new Error("readLogs: a window is at least one block");
+  const logs = [];
+  let next = from;
+  let calls = 0;
+  while (next <= to && calls < maxCalls) {
+    const end = Math.min(next + window - 1, to);
+    logs.push(...await getLogs(next, end));
+    calls += 1;
+    next = end + 1;
+  }
+  return { logs, readTo: next - 1, complete: next > to, calls };
+}
+
+/**
+ * The first block at or after `time` (seconds), by halving between `low` and `high` with `timeOf(block)`. A payout's
+ * claim is in the block whose time is its `dueAt` minus 48 hours, and its payment at or after `dueAt`: so a page can
+ * read the few blocks around them instead of the pool's whole history.
+ */
+export async function firstBlockAt(time, { low, high, timeOf }) {
+  let lo = low;
+  let hi = high;
+  if (await timeOf(hi) < time) return null;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (await timeOf(mid) < time) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** The time a payout's claim was written: its `dueAt` less the 48 hours (SimPool.claimPayout). */
+export function claimedAt(dueAt) {
+  return Number(dueAt) - PAYOUT_DELAY;
+}
