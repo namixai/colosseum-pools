@@ -5,6 +5,8 @@ Offline: a temporary /etc, no systemd, no nginx."""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -653,7 +655,8 @@ class MultiPoolKeeper(unittest.TestCase):
     def test_the_record_names_the_pool_for_the_watchdog_and_the_command(self):
         record = {"PoolFactory": "0x" + "f1" * 20, "KeyRegistry": "0x" + "f2" * 20, "MultiPool": self.POOL}
         with mock.patch.object(hi.deployments, "load", return_value=record):
-            self.assertTrue(hi.deployment_env("multi-1").endswith(f"COLOSSEUM_MULTI_POOL={self.POOL}\n"))
+            self.assertTrue(hi.deployment_env("multi-1").endswith(
+                f"COLOSSEUM_MULTI_POOL={self.POOL}\nCOLOSSEUM_MULTI_WALLET={hi.MULTI_WALLET}\n"))
         self.assertEqual(hi.multi_pool(record), self.POOL)
         for label in ("demo2", "v3-demo3"):
             self.assertNotIn("COLOSSEUM_MULTI_POOL", hi.deployment_env(label), label)
@@ -672,7 +675,10 @@ class MultiPoolKeeper(unittest.TestCase):
                          differ)
         start = next(l for l in multi if l.startswith("ExecStart="))
         self.assertIn("-m ops.multi_keeper --deployment ${COLOSSEUM_DEPLOYMENT}", start)
-        self.assertIn(f"--wallet {hi.MULTI_WALLET} ", start)
+        # The wallet is the deployment's (deployment-<name>.env): a MultiPool's own, or a simulated pool's filler.
+        self.assertIn("--wallet ${COLOSSEUM_MULTI_WALLET} ", start)
+        self.assertIn("EnvironmentFile=/etc/colosseum/deployment-%i.env", multi)
+        self.assertIn(f"COLOSSEUM_MULTI_WALLET={hi.MULTI_WALLET}\n", hi.multi_env({"MultiPool": self.POOL}))
         self.assertIn("--state /var/lib/colosseum-keeper/multi-${COLOSSEUM_DEPLOYMENT}.json", start)
         self.assertNotIn("--wallet keeper", start, "never the instance keeper's key: one key, two nonces")
 
@@ -698,7 +704,8 @@ class MultiPoolKeeper(unittest.TestCase):
         self.assertIn('[ -z "$pool" ] || watched+="$name "', install)
 
     def test_a_simulated_pools_record_starts_the_multi_keeper_without_a_watchdog_or_a_gateway(self):
-        rec = {"SimPoolFactory": "0x" + "ab" * 20, "keeper_nodes": {"primary": {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}}}
+        rec = {"SimPoolFactory": "0x" + "ab" * 20, "filler": "0x" + "f1" * 20, "checker": "0x" + "c1" * 20,
+               "keeper_nodes": {"primary": {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}}}
         self.assertEqual(hi.keeper_target(rec), "0x" + "ab" * 20)
         self.assertEqual(hi.multi_pool(rec), "")
         self.assertEqual(hi.multi_env(rec), "")
@@ -710,11 +717,112 @@ class MultiPoolKeeper(unittest.TestCase):
         self.assertNotIn("GATEWAY_", env)
         self.assertNotIn("COLOSSEUM_MULTI_POOL", env)
         self.assertIn("COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm", env)
+        self.assertTrue(env.endswith(f"COLOSSEUM_MULTI_WALLET={hi.FILLER_WALLET}\n"), env)
 
     def test_the_multipool_keeper_reads_the_records_node_window(self):
         src = (ROOT / "ops" / "multi_keeper.py").read_text()
         self.assertIn('default=os.environ.get("COLOSSEUM_LOG_WINDOW", str(MAX_LOG_WINDOW))', src)
         self.assertIn("COLOSSEUM_LOG_WINDOW", hi.KEEPER_NODE_ENV["primary"])
+
+
+class SimulatedPoolHost(unittest.TestCase):
+    """A simulated pool's instance (a SimPoolFactory, no PoolFactory): no gateway, no instance keeper, no nginx
+    route; its keeper sends with the factory's filler and the checker's wallet is kept beside it. demo2 and demo3
+    change in nothing."""
+
+    SIM = {"SimPoolFactory": "0x" + "ab" * 20, "filler": "0x" + "f1" * 20, "checker": "0x" + "c1" * 20,
+           "keeper_nodes": {"primary": {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}}}
+
+    def test_a_simulated_record_is_a_sim_factory_without_a_pool_factory(self):
+        self.assertTrue(hi.simulated(self.SIM))
+        self.assertFalse(hi.simulated({**self.SIM, "PoolFactory": "0x" + "01" * 20}), "an exchange's, with a sim beside")
+        self.assertFalse(hi.simulated({}))
+        for label in ("demo2", "v3-demo3"):
+            self.assertFalse(hi.simulated(hi.deployments.load(label)), label)
+            self.assertEqual(hi.sim_wallets(hi.deployments.load(label)), [], label)
+
+    def test_its_wallets_are_the_records_filler_and_checker_two_keys(self):
+        self.assertEqual(hi.sim_wallets(self.SIM), [("filler", "0x" + "f1" * 20), ("checker", "0x" + "c1" * 20)])
+        for bad in ({**self.SIM, "filler": ""}, {**self.SIM, "checker": "0x12"},
+                    {k: v for k, v in self.SIM.items() if k != "checker"}):
+            with self.assertRaises(SystemExit):
+                hi.sim_wallets(bad)
+        with self.assertRaisesRegex(SystemExit, "both the filler and the checker"):
+            hi.sim_wallets({**self.SIM, "checker": ("0x" + "f1" * 20).upper().replace("0X", "0x")})
+        with mock.patch.object(hi.deployments, "load", return_value={**self.SIM, "filler": ""}):
+            with self.assertRaises(SystemExit, msg="a record without its filler is not a complete record"):
+                hi.deployment_env("sim1")
+        out = subprocess.run([sys.executable, "-m", "ops.host_instances", "sim-wallets", "v3-demo3"],
+                             capture_output=True, text=True, cwd=ROOT, check=True)
+        self.assertEqual(out.stdout, "", "demo3 is no simulated pool")
+
+    def test_an_instance_without_a_gateway_file_is_listed_without_a_port_only_if_its_record_is_simulated(self):
+        etc = etc_with({**DEMO3, "deployment-sim1": "sim1\n"})
+        real = hi.deployments.load
+        with mock.patch.object(hi.deployments, "load", side_effect=lambda l: self.SIM if l == "sim1" else real(l)):
+            found = hi.instances(etc)
+            self.assertEqual(found, [hi.Instance("demo3", "v3-demo3", 8788), hi.Instance("sim1", "sim1", None)])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(hi.main(["list", str(etc)]), 0)
+            self.assertEqual(buf.getvalue(), "demo3 v3-demo3 8788\nsim1 sim1 -\n")
+            # nginx: demo3's routes exactly as before, nothing for sim1.
+            self.assertEqual(hi.nginx_locations(found), hi.nginx_locations(found[:1]))
+            self.assertEqual(hi.nginx_upstreams(found), hi.nginx_upstreams(found[:1]))
+            self.assertNotIn("sim1", hi.nginx_locations(found) + hi.nginx_upstreams(found))
+        # An exchange's instance without its gateway file is refused, as before: demo3's record is no simulated pool.
+        with self.assertRaises(SystemExit):
+            hi.instances(etc_with({"deployment-demo3": "v3-demo3\n"}))
+
+    def test_demo2_and_demo3_render_as_before(self):
+        self.assertEqual(hi.deployment_env("v3-demo3"), DEMO3_ENV + KEEPER_ENV)
+        for label in ("demo2", "v3-demo3"):
+            self.assertNotIn("COLOSSEUM_MULTI_WALLET", hi.deployment_env(label), label)
+        self.assertEqual(hi.instances(etc_with(DEMO3)), [hi.Instance("demo3", "v3-demo3", 8788)])
+
+    def test_install_refuses_a_simulated_record_with_a_gateway_and_checks_both_wallets_before_the_switch(self):
+        install = (HOST / "install.sh").read_text()
+        nginx = install.index("site=/etc/nginx/conf.d/pools-api.conf")
+        switch = install.index('ln -sfn "releases/$sha"')
+        check = install.index('-m ops.host_instances multi "$label"')
+        guard = install[check:install.index('multis+="$name "')]
+        # A simulated record with a gateway port is refused in the same pass that reads its wallets, one read each.
+        agree = guard.index('    [ "$port" = "-" ] \\\n      || fail "instance $name: its record ($label) is a simulated pool\'s')
+        self.assertIn("make the instance with bootstrap.sh --sim-instance", guard[agree:agree + 400])
+        self.assertLess(agree, guard.index('while read -r wallet address; do'))
+        self.assertEqual(install.count('-m ops.host_instances sim-wallets "$label"'), 1)
+        self.assertIn('while read -r name label port; do\n  [ -n "$name" ] || continue\n  multi=', install)
+        self.assertIn('-m ops.host_instances sim-wallets "$label"', guard)
+        self.assertIn('[ -f "$own/secrets/$wallet.key" ] && [ -f "$own/secrets/$wallet.addr" ]', guard)
+        self.assertIn('owned_alone "$own/secrets/$wallet.key" colosseum-keeper 600', guard)
+        self.assertIn('[ "$(lower <<< "$had")" = "$(lower <<< "$address")" ]', guard)
+        self.assertIn('done <<< "$wallets"', guard)
+        self.assertLess(check, nginx)
+        self.assertLess(nginx, switch)
+        self.assertIn("names a MultiPool or a SimPoolFactory: serve it as an instance", install)
+
+    def test_install_starts_no_gateway_or_instance_keeper_for_it_and_stops_any_an_earlier_release_left(self):
+        install = (HOST / "install.sh").read_text()
+        units = install[install.index("units=(colosseum-gateway colosseum-keeper)"):install.index("units+=(colosseum-shared-keeper)")]
+        self.assertIn('[ "$port" != "-" ] || continue  # a simulated pool\'s instance: no gateway, no instance keeper\n'
+                      '  units+=("colosseum-gateway@$name" "colosseum-keeper@$name")', units)
+        self.assertIn('if [ "$port" = "-" ]; then\n    for unit in "colosseum-gateway@$name" "colosseum-keeper@$name"; do', units)
+        self.assertIn('systemctl disable --quiet --now "$unit"', units)
+
+    def test_bootstrap_makes_a_simulated_instance_without_a_gateway(self):
+        boot = (HOST / "bootstrap.sh").read_text()
+        for args in (["--sim-instance", "sim1", "sim1", "8790"], ["--sim-instance", "Sim1", "sim1"],
+                     ["--sim-instance", "v1", "sim1"], ["--sim-instance", "sim1", "sim 1"]):
+            out = subprocess.run(["bash", str(HOST / "bootstrap.sh"), *args], capture_output=True, text=True)
+            self.assertEqual(out.returncode, 2, (args, out.stderr))
+            self.assertNotIn("bootstrap: python3.12", out.stdout, "nothing was installed or checked first")
+        tail = boot[boot.index('[ -n "$instance" ] || exit 0'):]
+        self.assertIn('if [ -z "$sim" ]; then\n  install -d -m 0700 -o colosseum-gw -g colosseum-gw', tail)
+        self.assertIn('if [ -z "$sim" ] && [ ! -f "/etc/colosseum/gateway-$instance.env" ]; then', tail)
+        # Its keeper's settings are written for it as for any instance: the multi keeper's unit reads them.
+        keeper = tail.index('if [ ! -f "/etc/colosseum/keeper-$instance.env" ]; then')
+        self.assertLess(keeper, tail.index('if [ -n "$sim" ]; then\n  say'))
+        self.assertLess(tail.index("exit 0\nfi\nsay \"instance $instance: put its agent keys"), len(tail))
 
 
 class Bootstrap(unittest.TestCase):

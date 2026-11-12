@@ -10,7 +10,12 @@ colosseum-gateway@<name> and colosseum-keeper@<name>. Its gateway listens where
 /etc/colosseum/gateway-<name>.env says (GATEWAY_BIND=127.0.0.1:<port>), and nginx sends
 /<name>/v1/order, /<name>/v1/health, /<name>/v1/faucet and /<name>/v1/contacts of pools-api.usenami.io there.
 
-    python -m ops.host_instances list /etc/colosseum             one line per instance: name label port
+A simulated pool's instance (a record with a SimPoolFactory and no PoolFactory, docs/SIM-POOL.md) has no exchange:
+no gateway, no instance keeper, no nginx route. `bootstrap.sh --sim-instance <name> <label>` makes it without a
+gateway-<name>.env, `list` prints "-" for its port, and only colosseum-multi-keeper@<name> runs, with the
+factory's filler as its wallet; the checker's wallet is kept beside it.
+
+    python -m ops.host_instances list /etc/colosseum             one line per instance: name label port ("-": none)
     python -m ops.host_instances nginx /etc/colosseum            the nginx locations for them
     python -m ops.host_instances nginx-upstreams /etc/colosseum  and their upstreams
     python -m ops.host_instances deployment-env <label>          COLOSSEUM_DEPLOYMENT, GATEWAY_FACTORY, the limits,
@@ -19,6 +24,7 @@ colosseum-gateway@<name> and colosseum-keeper@<name>. Its gateway listens where
     python -m ops.host_instances publisher <label>               its test publisher's address, or an empty line
     python -m ops.host_instances multi <label>                   what its multi keeper keeps (a MultiPool or a SimPoolFactory), or an empty line
     python -m ops.host_instances multi-pool <label>              its MultiPool, which has a watchdog, or an empty line
+    python -m ops.host_instances sim-wallets <label>             a simulated pool's wallets, "<name> <address>" a line
 
 Testnet only, as the host is.
 """
@@ -49,7 +55,7 @@ PORTS = range(8788, 8800)
 class Instance:
     name: str
     label: str
-    port: int
+    port: int | None  # its gateway's; None for a simulated pool's instance, which has no gateway
 
 
 def bind_port(env: pathlib.Path) -> int:
@@ -65,6 +71,17 @@ def bind_port(env: pathlib.Path) -> int:
                 raise SystemExit(f"{env}: GATEWAY_BIND must be 127.0.0.1:<{PORTS.start}..{PORTS.stop - 1}>, not {line}")
             return int(port)
     raise SystemExit(f"{env}: no GATEWAY_BIND")
+
+
+def gateway_port(etc: pathlib.Path, name: str, label: str) -> int | None:
+    """The port of an instance's gateway, from its gateway-<name>.env; None for an instance with no such file whose
+    record is a simulated pool's, which has no gateway. Any other instance without it is refused, as before: an
+    exchange's instance needs its gateway. The record is read only when the file is missing, and a simulated pool's
+    record WITH the file is refused by install.sh, which reads every record (`sim-wallets`)."""
+    env = etc / f"gateway-{name}.env"
+    if not env.exists() and simulated(deployments.load(label)):
+        return None
+    return bind_port(env)
 
 
 def first_label(etc: pathlib.Path) -> str:
@@ -90,8 +107,8 @@ def instances(etc: pathlib.Path) -> list[Instance]:
         label = f.read_text().strip()
         if not LABEL.fullmatch(label):
             raise SystemExit(f"{f}: odd label {label!r}")
-        out.append(Instance(name, label, bind_port(etc / f"gateway-{name}.env")))
-    ports = [i.port for i in out]
+        out.append(Instance(name, label, gateway_port(etc, name, label)))
+    ports = [i.port for i in out if i.port is not None]
     if len(set(ports)) != len(ports):
         raise SystemExit(f"two instances listen on one port: {sorted(ports)}")
     labels = [i.label for i in out]
@@ -110,14 +127,14 @@ def nginx_upstreams(found: list[Instance]) -> str:
     server 127.0.0.1:{i.port} max_fails=0;
     server {RESTARTING} backup;
 }}
-""" for i in found)
+""" for i in found if i.port is not None)
 
 
 def nginx_locations(found: list[Instance]) -> str:
     """The locations that send an instance's paths to its gateway, under the same limits as the first
     gateway's: the zones are shared, so all the instances together keep inside the node's budget."""
     blocks = []
-    for i in found:
+    for i in (i for i in found if i.port is not None):  # a simulated pool's instance has no gateway to route to
         blocks.append(f"""    location = /{i.name}/v1/order {{
         limit_req zone=pools_ip burst=10 nodelay;
         limit_req zone=pools_all burst=10 nodelay;
@@ -265,10 +282,11 @@ def deployment_env(label: str) -> str:
     if not LABEL.fullmatch(label):
         raise SystemExit(f"odd label {label!r}")
     record = deployments.load(label)
-    if "PoolFactory" not in record and record.get("SimPoolFactory"):
+    if simulated(record):
         # A simulated pool's deployment: no exchange, so no gateway lines; its keeper reads the record itself
-        # and its nodes from here (ops/sim_keeper.py).
-        return f"COLOSSEUM_DEPLOYMENT={label}\n" + keeper_nodes(record)
+        # and its nodes from here (ops/sim_keeper.py), and sends with the factory's filler.
+        sim_wallets(record)
+        return f"COLOSSEUM_DEPLOYMENT={label}\n" + keeper_nodes(record) + f"COLOSSEUM_MULTI_WALLET={FILLER_WALLET}\n"
     return (f"COLOSSEUM_DEPLOYMENT={label}\n"
             f"GATEWAY_FACTORY={record['PoolFactory']}\n"
             f"GATEWAY_REGISTRY={keys_contract(record)}\n"
@@ -297,6 +315,33 @@ def multi_pool(record: dict) -> str:
 
 
 MULTI_WALLET = "multi-keeper"
+# A simulated pool's two keys in its instance's secrets: the factory's filler, which colosseum-multi-keeper@<name>
+# sends with (ops/sim_keeper.py fills orders from it alone), and its checker, the one key that may stop a payout,
+# kept beside it for the checking script. Two keys: the factory refuses one key in both roles.
+FILLER_WALLET = "filler"
+CHECKER_WALLET = "checker"
+
+
+def simulated(record: dict) -> bool:
+    """A simulated pool's deployment: a SimPoolFactory and no PoolFactory, so no exchange, no gateway and no
+    instance keeper (docs/SIM-POOL.md)."""
+    return "PoolFactory" not in record and bool(record.get("SimPoolFactory"))
+
+
+def sim_wallets(record: dict) -> list[tuple[str, str]]:
+    """The wallets a simulated pool's instance needs, each with the address its record names (ops/deploy_sim.py
+    writes `filler` and `checker`); [] for any other deployment. A simulated record without both is refused: its
+    keeper would start with a key the factory does not know."""
+    if not simulated(record):
+        return []
+    named = [(FILLER_WALLET, record.get("filler") or ""), (CHECKER_WALLET, record.get("checker") or "")]
+    for wallet, address in named:
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
+            raise SystemExit(f"the record of a simulated pool names no {wallet} address: its instance keeps that "
+                             f"wallet and install.sh checks it against the record")
+    if named[0][1].lower() == named[1][1].lower():
+        raise SystemExit("the record names one address as both the filler and the checker; the factory refuses that")
+    return named
 
 
 def keeper_target(record: dict) -> str:
@@ -308,7 +353,7 @@ def keeper_target(record: dict) -> str:
 def multi_env(record: dict) -> str:
     """The MultiPool its watchdog reads (ops/host/watchdogs/multi_watch.py); its keeper reads the record itself."""
     pool = multi_pool(record)
-    return f"COLOSSEUM_MULTI_POOL={pool}\n" if pool else ""
+    return f"COLOSSEUM_MULTI_POOL={pool}\nCOLOSSEUM_MULTI_WALLET={MULTI_WALLET}\n" if pool else ""
 
 
 def binder_env(record: dict) -> str:
@@ -335,7 +380,7 @@ def keys_contract(record: dict) -> str:
 def main(argv: list[str]) -> int:
     if len(argv) == 2 and argv[0] == "list":
         for i in instances(pathlib.Path(argv[1])):
-            print(f"{i.name} {i.label} {i.port}")
+            print(f"{i.name} {i.label} {'-' if i.port is None else i.port}")
         return 0
     if len(argv) == 2 and argv[0] == "nginx":
         sys.stdout.write(nginx_locations(instances(pathlib.Path(argv[1]))))
@@ -352,6 +397,12 @@ def main(argv: list[str]) -> int:
         if not LABEL.fullmatch(argv[1]):
             raise SystemExit(f"odd label {argv[1]!r}")
         print(multi_pool(deployments.load(argv[1])))
+        return 0
+    if len(argv) == 2 and argv[0] == "sim-wallets":
+        if not LABEL.fullmatch(argv[1]):
+            raise SystemExit(f"odd label {argv[1]!r}")
+        for wallet, address in sim_wallets(deployments.load(argv[1])):
+            print(f"{wallet} {address}")
         return 0
     if len(argv) == 2 and argv[0] == "publisher":
         if not LABEL.fullmatch(argv[1]):

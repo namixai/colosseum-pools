@@ -1140,6 +1140,23 @@ watchdogs_install "{self.rel}" "{sha}" "{instances}"
     def units_installed(self) -> set[str]:
         return {p.name for p in self.host["units"].iterdir()}
 
+    def test_a_simulated_pools_instance_gets_no_gateway_or_keeper_watchdogs(self):
+        # demo3's pair ships with the release; listed without a port, as a simulated pool's instance, it is not put in.
+        (self.host["etc"] / "deployment-demo3.env").write_text("COLOSSEUM_DEPLOYMENT=v3-demo3\n")
+        out = self.run_install(instances="demo3 v3-demo3 -")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("instance demo3: a simulated pool's, no gateway or instance keeper to watch", out.stdout)
+        self.assertFalse({u for u in self.units_installed() if u.startswith("colosseum-watch-keys-demo3")})
+        # An instance that was gateway-backed and is now a simulated pool's: the pair an earlier release enabled stops.
+        for unit in ("colosseum-watch-keys-demo3.timer", "colosseum-watch-keeper-demo3.timer"):
+            self.assertIn("systemctl disable --quiet --now " + unit, self.calls())
+        self.log.write_text("")
+        out = self.run_install(instances="demo3 v3-demo3 8788")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("colosseum-watch-keys-demo3.timer", self.units_installed(), "with its gateway, as before")
+        self.assertFalse([c for c in self.calls() if c.startswith("systemctl disable")
+                          and ("watch-keys-demo3" in c or "watch-keeper-demo3" in c)], "a selected pair is kept")
+
     def test_a_multipool_watchdog_of_an_instance_no_longer_selected_is_stopped(self):
         (self.host["etc"] / "deployment-kb2.env").write_text("COLOSSEUM_DEPLOYMENT=kb2\n")
         out = self.run_install(instances="kb2 kb2 8790", extra='watch_multis=""')
