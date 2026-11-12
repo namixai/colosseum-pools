@@ -48,12 +48,6 @@ STOP = "stopPayout(uint256,uint8,address,bytes32[],bytes32[])"
 STOP_TYPES = ["uint256", "uint8", "address", "bytes32[]", "bytes32[]"]
 # A stop is sent no later than this before its payout is due: a block may take that long.
 MARGIN_S = 300
-# The longest stage of the factory's plans: a paid stage's fills reach back that far from its claim.
-STAGE_S = 30 * 86_400
-PAYOUT_DELAY_S = 72 * 3_600  # SimPoolFactory.PAYOUT_DELAY
-# Fills older than this can pair with no payout still waiting: a whole stage, then the payout's delay, and an hour
-# over the pairing window. It was 72 hours, which dropped the early fills of a stage still waiting for its payout.
-KEEP_S = STAGE_S + PAYOUT_DELAY_S + 3_600
 ADDRESS_BATCH = 100
 
 
@@ -149,6 +143,9 @@ class Checker:
         # USDC transfers to each trader read so far, and the block to read on from (review of cp#264).
         self.transfers: dict[str, list[dict]] = {}
         self.transfers_from: dict[str, int] = {}
+        # Stages that can no longer be paid or stopped, and each stage's start: what `keep_from` reads.
+        self.settled: set[str] = set()
+        self.started: dict[str, int] = {}
 
     def time_of(self, block: int) -> int:
         if block not in self._times:
@@ -192,9 +189,33 @@ class Checker:
             self.transfers_from[t] = lo
         return [x for t in traders for x in self.transfers[t]]
 
-    def prune(self, now: int) -> None:
-        """Drops the fills and block times no payout still waiting can need (review of cp#264)."""
-        cutoff = now - KEEP_S
+    def keep_from(self, now: int) -> int:
+        """The oldest time a fill can still matter from: the start of every stage that can still be paid and stopped
+        (running, passed and not yet claimed, or with its payout still stoppable), less the pairing window. A fixed
+        age would drop the early fills of a stage whose claim came late, say while the keeper was down (review of
+        #273): a stage's fills reach back its whole length before the pass, and the payout waits from the claim."""
+        stoppable = set()
+        for pool in self.keeper.pools:
+            head, count = view(pool, "head()", "uint256"), view(pool, "payoutCount()", "uint256")
+            for pid in range(head, count):
+                p = view(pool, "payout(uint256)", sk.PAYOUT, ["uint256"], [pid])
+                if stop_due(sk.PAYOUT_STATE[p[4]], p[5], p[3], now):
+                    stoppable.add(to_checksum_address(p[0]))
+        starts = []
+        for a, info in self.keeper.accounts.items():
+            if info["kind"] != "stage" or a in self.settled:
+                continue
+            if a not in stoppable and c.call_view(info["pool"], "accountOf(address)", ["address"], [a],
+                                                  ["uint8", "uint8", "bool"])[2]:
+                self.settled.add(a)  # released, or claimed with its payout past stopping: never again
+                continue
+            if a not in self.started:
+                self.started[a] = view(a, "stepStartedAt()", "uint64")
+            starts.append(self.started[a])
+        return (min(starts) if starts else now) - self.window_s
+
+    def prune(self, cutoff: int) -> None:
+        """Drops the fills and block times from before `cutoff` (review of cp#264)."""
         self.fills = [f for f in self.fills if f["t"] >= cutoff]
         self._times = {b: t for b, t in self._times.items() if t >= cutoff}
 
@@ -217,7 +238,7 @@ class Checker:
         now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
         self.keeper.scan(latest)
         self.read_fills(latest)
-        self.prune(now)
+        self.prune(self.keep_from(now))
         stops = []
         for pool in self.keeper.pools:
             head, count = view(pool, "head()", "uint256"), view(pool, "payoutCount()", "uint256")

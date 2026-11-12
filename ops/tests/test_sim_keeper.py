@@ -197,8 +197,10 @@ class ThePayoutsClock(unittest.TestCase):
     POOL = k.to_checksum_address("0x" + "55" * 20)
 
     def keeper(self) -> k.SimKeeper:
-        tmp = pathlib.Path(tempfile.mkdtemp()) / "s.json"
-        sk = k.SimKeeper("0x" + "33" * 20, None, "0x" + "44" * 20, False, tmp, 1)
+        import shutil
+        tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        sk = k.SimKeeper("0x" + "33" * 20, None, "0x" + "44" * 20, False, pathlib.Path(tmp_dir) / "s.json", 1)
         sk.accounts = {self.STAGE: {"pool": self.POOL, "kind": "stage"}}
         return sk
 

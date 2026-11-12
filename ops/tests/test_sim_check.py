@@ -94,6 +94,7 @@ class TheService(unittest.TestCase):
         ch.start_block, ch.usdc = 10, "0x" + "dd" * 20
         ch.transfers, ch.transfers_from, ch.fills, ch._times = {}, {}, [], {}
         ch.fills_from, ch.fills_read = 10, set()
+        ch.settled, ch.started, ch.window_s = set(), {}, 600
         return ch
 
     def test_an_account_found_later_has_its_fills_read_from_the_start(self):
@@ -130,30 +131,57 @@ class TheService(unittest.TestCase):
 
     def test_old_fills_and_times_are_dropped(self):
         ch = self.checker()
-        now = 1_000_000
-        ch.fills = [fill(A, t=now - s.KEEP_S - 1), fill(A, t=now - s.KEEP_S)]
-        ch._times = {1: now - s.KEEP_S - 1, 2: now}
-        ch.prune(now)
-        self.assertEqual([f["t"] for f in ch.fills], [now - s.KEEP_S])
-        self.assertEqual(ch._times, {2: now})
-        self.assertGreaterEqual(s.KEEP_S, 48 * 3600 + 600, "a waiting payout's pairs are kept")
+        cutoff = 1_000_000
+        ch.fills = [fill(A, t=cutoff - 1), fill(A, t=cutoff)]
+        ch._times = {1: cutoff - 1, 2: cutoff + 5}
+        ch.prune(cutoff)
+        self.assertEqual([f["t"] for f in ch.fills], [cutoff])
+        self.assertEqual(ch._times, {2: cutoff + 5})
 
-    def test_a_waiting_payouts_whole_stage_is_kept(self):
-        """A paid stage traded from its start, up to its plan's whole length before the claim, and its payout waits
-        PAYOUT_DELAY after that: every one of its fills, and the fills they pair with, must still be in memory."""
-        factory = (ROOT / "src/sim/SimPoolFactory.sol").read_text(encoding="utf-8")
-        hours = int(re.search(r"PAYOUT_DELAY = (\d+) hours;", factory).group(1))
-        self.assertEqual(s.PAYOUT_DELAY_S, hours * 3600)
-        for name in ("sim-first-pool", "sim-measure-pool"):
-            plan = json.loads((ROOT / f"deployments/plans/{name}.json").read_text(encoding="utf-8"))
-            self.assertLessEqual(plan["funded"]["step_duration_s"], s.STAGE_S, name)
-        self.assertGreaterEqual(s.KEEP_S, s.STAGE_S + s.PAYOUT_DELAY_S + 600, "the stage, the delay, the window")
+    def keep_case(self, payouts, done, starts):
+        """A checker over one pool whose payouts are `payouts` (account, due), with `done` the stages the pool holds
+        done and `starts` each stage's start."""
+        from unittest import mock
         ch = self.checker()
-        now = 10_000_000
-        early = now - s.STAGE_S - s.PAYOUT_DELAY_S + 60  # the stage's first fill, its payout due in a minute
-        ch.fills, ch._times = [fill(A, t=early)], {}
-        ch.prune(now)
-        self.assertEqual([f["t"] for f in ch.fills], [early])
+        ch.window_s, ch.settled, ch.started = 600, set(), {}
+        pool = s.to_checksum_address("0x" + "55" * 20)
+        ch.keeper = mock.Mock(pools=[pool], accounts={a: {"pool": pool, "kind": "stage"} for a in starts})
+
+        def view(to, sig, out="uint256", types=(), args=()):
+            if sig == "head()":
+                return 0
+            if sig == "payoutCount()":
+                return len(payouts)
+            if sig == "payout(uint256)":
+                acct, due = payouts[args[0]]
+                return (acct, "0x" + "77" * 20, 800, due, 1, False)
+            return starts[to]
+
+        accounts_of = lambda pool_, sig, types, args, out: (2, 1, args[0] in done)
+        return ch, mock.patch.object(s, "view", side_effect=view), mock.patch.object(s.c, "call_view", side_effect=accounts_of)
+
+    def test_a_stage_claimed_late_keeps_every_fill_of_its_stage(self):
+        """Passed on day 40, claimed on day 45 (the keeper was down): its payout is due on day 48, and its fills from
+        day 10 on must still pair. A fixed 72 hours, or a stage's length plus the delay, would have dropped them."""
+        day = 86_400
+        S1, S2 = (s.to_checksum_address("0x" + x * 20) for x in ("a1", "a2"))
+        ch, v, cv = self.keep_case({0: (S1, 48 * day)}, done={S1}, starts={S1: 10 * day, S2: 30 * day})
+        with v, cv:
+            self.assertEqual(ch.keep_from(45 * day), 10 * day - 600)
+        ch.fills = [fill(A, t=10 * day), fill(B, t=10 * day - 600), fill(C, t=10 * day - 601)]
+        ch.prune(10 * day - 600)
+        self.assertEqual([f["account"] for f in ch.fills], [A, B], "its fills, and the others' within the window")
+
+    def test_a_settled_stage_lets_its_fills_go(self):
+        day = 86_400
+        S1, S2 = (s.to_checksum_address("0x" + x * 20) for x in ("a1", "a2"))
+        ch, v, cv = self.keep_case({0: (S1, 48 * day)}, done={S1}, starts={S1: 10 * day, S2: 30 * day})
+        with v, cv:
+            self.assertEqual(ch.keep_from(48 * day), 30 * day - 600, "S1's payout can no longer be stopped")
+            self.assertEqual(ch.settled, {S1})
+        ch2, v2, cv2 = self.keep_case({}, done=set(), starts={})
+        with v2, cv2:
+            self.assertEqual(ch2.keep_from(5_000), 5_000 - 600, "nothing to pay: the window only")
 
 
 if __name__ == "__main__":

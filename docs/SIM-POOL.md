@@ -36,7 +36,8 @@ fail, and their prices pay for the ones that pass.
   paper exam on the same size. Nothing moves.
 - **The payout.** `claimPayout(stage)` once the stage has passed, by anyone, and by the keeper in its next
   slow pass (every 30 seconds): 8 % of the size, due 72 hours after the claim. The keeper sends `pay` in its
-  first pass after that, so a trader is paid up to 72 hours and about a minute after passing. `pay(max)`, by anyone, pays what is due in the order it came due while the pool's USDC
+  first pass after that, so a trader is paid 72 hours and about a minute after passing, or later, in order, if
+  the pool does not hold enough then. `pay(max)`, by anyone, pays what is due in the order it came due while the pool's USDC
   covers the next; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from
   the prices that come in. A payout the token refuses to send (say the trader's address was blocked)
   is set aside for the trader (`PayoutHeld`), who takes it to any address with `claimHeld`, also
