@@ -609,6 +609,30 @@ class TestPublisher(unittest.TestCase):
         self.assertIn("serve it as an instance", first)
         self.assertIn(f"secrets/{hi.PUBLISHER_WALLET}.key", install)
 
+    def test_install_checks_owners_and_modes_before_it_switches_and_never_dies_on_the_first_copy(self):
+        install = (HOST / "install.sh").read_text()
+        self.assertIn("""owned_alone() { [ "$(stat -c '%U %a' "$1" 2>/dev/null)" = "$2 $3" ]; }""", install)
+        guard = install[install.index('-m ops.host_instances publisher "$label"'):install.index('publishers+="$name "')]
+        for need in ('owned_alone "$own/secrets/publisher.key" colosseum-keeper 600',
+                     'owned_alone "$own/made-keys" colosseum-keeper 700',
+                     'owned_alone "$gw_keys" colosseum-gw 700', 'gw_keys="/var/lib/colosseum-gw/instances/$name/keys"',
+                     '[ -f "$own/secrets/publisher.addr" ]'):
+            self.assertIn(need, guard)
+        multi = install[install.index('-m ops.host_instances multi "$label"'):install.index('multis+="$name "')]
+        self.assertIn('owned_alone "$own/secrets/multi-keeper.key" colosseum-keeper 600', multi)
+        start = install.index('systemctl start "colosseum-key-copy@$name.service"')
+        self.assertTrue(install[start:start + 200].split("\n")[1].strip().startswith("|| say \"WARNING"),
+                        "after the switch a failed first copy is a warning, not a release stopped half-way")
+
+    def test_what_a_record_no_longer_selects_is_stopped(self):
+        install = (HOST / "install.sh").read_text()
+        rec = install[install.index("# An instance whose record no longer names a test publisher"):
+                      install.index('for unit in "${units[@]}"; do')]
+        self.assertIn('case " $publishers " in *" $name "*) ;; *)', rec)
+        self.assertIn('systemctl disable --quiet --now "colosseum-key-copy@$name.path" "colosseum-key-copy@$name.timer"', rec)
+        self.assertIn('case " $multis " in *" $name "*) ;; *)', rec)
+        self.assertIn('systemctl disable --quiet --now "colosseum-multi-keeper@$name"', rec)
+
     def test_the_keeper_makes_keys_where_the_copier_reads_them(self):
         sys.path.insert(0, str(HOST))
         import key_copy
@@ -618,6 +642,62 @@ class TestPublisher(unittest.TestCase):
         boot = (HOST / "bootstrap.sh").read_text()
         self.assertIn('"/var/lib/colosseum-keeper/instances/$instance/made-keys"', boot)
         self.assertEqual(key_copy.made_keys("$instance"), "/var/lib/colosseum-keeper/instances/$instance/made-keys")
+
+
+class MultiPoolKeeper(unittest.TestCase):
+    """A deployment whose record names a MultiPool: its keeper's unit, what install.sh checks and enables, and the
+    line its watchdog reads."""
+
+    POOL = "0x" + "c1" * 20
+
+    def test_the_record_names_the_pool_for_the_watchdog_and_the_command(self):
+        record = {"PoolFactory": "0x" + "f1" * 20, "KeyRegistry": "0x" + "f2" * 20, "MultiPool": self.POOL}
+        with mock.patch.object(hi.deployments, "load", return_value=record):
+            self.assertTrue(hi.deployment_env("multi-1").endswith(f"COLOSSEUM_MULTI_POOL={self.POOL}\n"))
+        self.assertEqual(hi.multi_pool(record), self.POOL)
+        for label in ("demo2", "v3-demo3"):
+            self.assertNotIn("COLOSSEUM_MULTI_POOL", hi.deployment_env(label), label)
+            self.assertEqual(hi.multi_pool(hi.deployments.load(label)), "", label)
+        out = subprocess.run([sys.executable, "-m", "ops.host_instances", "multi", "v3-demo3"],
+                             capture_output=True, text=True, cwd=ROOT, check=True)
+        self.assertEqual(out.stdout, "\n")
+        self.assertNotEqual(subprocess.run([sys.executable, "-m", "ops.host_instances", "multi", "v3 demo3"],
+                                           capture_output=True, cwd=ROOT).returncode, 0)
+
+    def test_its_unit_is_the_instance_keepers_with_its_own_program_wallet_and_state(self):
+        keeper = Units.directives(HOST / "colosseum-keeper@.service")
+        multi = Units.directives(HOST / "colosseum-multi-keeper@.service")
+        differ = sorted(set(keeper) ^ set(multi))
+        self.assertEqual([l.split("=", 1)[0] for l in differ], ["Description", "Description", "ExecStart", "ExecStart"],
+                         differ)
+        start = next(l for l in multi if l.startswith("ExecStart="))
+        self.assertIn("-m ops.multi_keeper --deployment ${COLOSSEUM_DEPLOYMENT}", start)
+        self.assertIn(f"--wallet {hi.MULTI_WALLET} ", start)
+        self.assertIn("--state /var/lib/colosseum-keeper/multi-${COLOSSEUM_DEPLOYMENT}.json", start)
+        self.assertNotIn("--wallet keeper", start, "never the instance keeper's key: one key, two nonces")
+
+    def test_install_checks_its_wallet_before_it_switches_and_enables_it_after(self):
+        install = (HOST / "install.sh").read_text()
+        self.assertIn('install -m 0644 -o root -g root "$rel/ops/host/colosseum-multi-keeper@.service" /etc/systemd/system/',
+                      install)
+        check = install.index('-m ops.host_instances multi "$label"')
+        guard = install[check:install.index('multis+="$name "')]
+        self.assertIn(f'[ -f "$own/secrets/{hi.MULTI_WALLET}.key" ] && [ -f "$own/secrets/{hi.MULTI_WALLET}.addr" ]', guard)
+        self.assertIn("nothing switched", guard)
+        first = install[install.index('-m ops.host_instances multi "$first_label"'):check]
+        self.assertIn("serve it as an instance", first)
+        self.assertLess(check, install.index("site=/etc/nginx/conf.d/pools-api.conf"))
+        enable = install.index('systemctl enable --quiet "colosseum-multi-keeper@$name"')
+        self.assertLess(install.index('ln -sfn "releases/$sha"'), enable)
+        self.assertLess(enable, install.index('for unit in "${units[@]}"; do'))
+        self.assertIn('for name in $multis; do units+=("colosseum-multi-keeper@$name"); done', install)
+        self.assertLess(install.index('multis+="$name "'), install.index('watch_multis="$multis"'))
+        self.assertLess(install.index('watch_multis="$multis"'), install.index('watchdogs_install "$rel"'))
+
+    def test_the_multipool_keeper_reads_the_records_node_window(self):
+        src = (ROOT / "ops" / "multi_keeper.py").read_text()
+        self.assertIn('default=os.environ.get("COLOSSEUM_LOG_WINDOW", str(MAX_LOG_WINDOW))', src)
+        self.assertIn("COLOSSEUM_LOG_WINDOW", hi.KEEPER_NODE_ENV["primary"])
 
 
 class Bootstrap(unittest.TestCase):

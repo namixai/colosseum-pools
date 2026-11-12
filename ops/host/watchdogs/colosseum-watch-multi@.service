@@ -1,0 +1,62 @@
+# Watchdog for what a MultiPool's keeper does (multi_watch.py), on the pools host: instance %i, installed by
+# ops/host/install.sh from the release that carries it for an instance whose record names a MultiPool (docs/HOSTING.md,
+# "The host's watchdogs"). It reads the PUBLIC chain only, so it has an unprivileged user of its own and cannot see
+# the keeper's or the gateway's directories at all. Its flag is multi-%i; the pool comes from deployment-%i.env
+# (COLOSSEUM_MULTI_POOL), and without that file the unit fails to start rather than watch nothing.
+[Unit]
+Description=colosseum-pools watchdog: what the MultiPool keeper of %i does
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=colosseum-watch
+Group=colosseum-watch
+# A directory of its own, NOT /opt/colosseum-pools/current: that link changes with every deploy, and
+# a rollback goes to a release that may not carry the watchdogs. install.sh puts the release's
+# files under /opt/colosseum-watch/releases and points `current` there.
+WorkingDirectory=/opt/colosseum-watch
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# Optional: the alert channel (COLOSSEUM_ALERT_CMD) and the node overrides. The deployment's own
+# file comes last, as the services read it: what the record says wins over a line by hand. It names the
+# MultiPool to watch (COLOSSEUM_MULTI_POOL) and the keeper's backup node (COLOSSEUM_RPC_BACKUP_URL, when the
+# record has one), written by install.sh from the deployment's record.
+EnvironmentFile=-/etc/colosseum/watch.env
+EnvironmentFile=/etc/colosseum/deployment-%i.env
+ExecStart=/opt/colosseum-watch/current/watchdog-run.sh multi-%i \
+    /opt/colosseum-pools/venv/bin/python /opt/colosseum-watch/current/multi_watch.py
+# A finding (code 1) is a SUCCESSFUL check, not a broken unit: otherwise "failed" would mean both
+# "the watchdog broke" and "the watchdog found something", that is, nothing. A broken tool (code 3
+# and any unknown code) turns the unit red; a finding does not: it shows in the flag and in the
+# ALARM line of the journal.
+SuccessExitStatus=1
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/colosseum-watch
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+# The keys and the state of the keeper and the gateway are out of its reach: it has no business knowing them.
+InaccessiblePaths=/var/lib/colosseum-keeper /var/lib/colosseum-gw
+# More than the run's budget (watch_backoff.RUN_BUDGET_S) plus one request, so the journal shows an
+# honest exit 3 and not a killed process.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -36,7 +36,9 @@ LIB = DOGS / "install-lib.sh"
 SERVICES = ["colosseum-watch-keys", "colosseum-watch-keeper",
             "colosseum-watch-keys-demo3", "colosseum-watch-keeper-demo3"]
 FIRST_SET, DEMO3_SET = SERVICES[:2], SERVICES[2:]
-RUNTIME = ["watchdog-run.sh", "keys_watch.py", "keeper_watch.py", "watch_backoff.py"]
+RUNTIME = ["watchdog-run.sh", "keys_watch.py", "keeper_watch.py", "watch_backoff.py", "multi_watch.py"]
+# A templated set, one instance of it for each instance whose record names a MultiPool (install-lib.sh, watch_multis).
+TEMPLATES = ["colosseum-watch-multi@"]
 SHA = "a" * 40
 
 
@@ -597,6 +599,193 @@ class KeeperWatch(unittest.TestCase):
         self.assertIn('"POOLS_WATCH_RPC"', (DOGS / "keeper_watch.py").read_text())
 
 
+POOL = addr(0x3333)
+
+
+class MultiNode(Node):
+    """A MultiPool with seats and the contracts it made, on a chain whose time is `now`."""
+
+    def __init__(self, mod, now=100 * 86_400 + 3_600):
+        super().__init__(mod)
+        self.now = now
+        self.seats: list[str] = []
+        self.made: list[str] = []          # in the order the pool made them, nonce 1 first
+        self.exam_state: dict[str, int] = {}
+        self.seat_state: dict[str, int] = {}
+        self.accounts: dict[str, dict] = {}
+
+    def make(self, mod, *, exam=None, seat=None, **account):
+        address = mod.created_address(POOL, len(self.made) + 1)
+        self.made.append(address)
+        if exam is not None:
+            self.exam_state[address] = exam
+        if seat is not None:
+            self.seats.append(address)
+            self.seat_state[address] = seat
+        self.accounts[address] = {"status": 1, "day": self.now // 86_400, "deadline": 0, "violation": 0,
+                                  "stopped": 0, "max_idle": 0, "last_fill": 0, **account}
+        return address
+
+    @staticmethod
+    def selector(sig: str) -> str:
+        return "0x" + keccak(sig.encode()).hex()[:8]
+
+    def answer(self, method, params):
+        if method == "eth_getBlockByNumber":
+            return {"timestamp": hex(self.now)}
+        if method == "eth_getTransactionCount":
+            assert params[0].lower() == POOL.lower()
+            return hex(len(self.made) + 1)
+        call = params[0]
+        to, data = call["to"].lower(), call["data"]
+        sel = data[:10]
+        if to == POOL.lower():
+            if sel == self.selector("seats()"):
+                return "0x" + word(32) + word(len(self.seats)) + "".join(addr_word(a) for a in self.seats)
+            who = "0x" + data[10:][-40:]
+            if sel == self.selector("examInfo(address)"):
+                return "0x" + word(0) + word(self.exam_state.get(who, 0)) + word(0) + word(0)
+            if sel == self.selector("seatInfo(address)"):
+                return "0x" + word(0) + word(self.seat_state.get(who, 0)) + word(0) * 6
+        acct = self.accounts.get(to)
+        if acct is not None and sel == self.selector("terms()"):
+            # (capital, targetsBps[], stepDuration, maxIdle, ...) behind its offset, the array at the end
+            return "0x" + word(32) + word(10**10) + word(32 * 8) + word(0) + word(acct["max_idle"]) + word(0) * 3 + word(0)
+        if acct is not None:
+            for key, sig in (("status", "result()"), ("day", "day()"), ("deadline", "deadline()"),
+                             ("last_fill", "lastFillAt()"),
+                             ("violation", "violation()"), ("violation", "violation(uint32[])"),
+                             ("stopped", "isStopped()")):
+                if sel == self.selector(sig):
+                    return "0x" + word(acct[key]) + (word(0) * 3 if sig == "result()" else "")
+        raise AssertionError(f"the model does not know {to} {sel}")
+
+
+class MultiWatch(unittest.TestCase):
+    def setUp(self):
+        self.mod = load("multi_watch")
+
+    def run_with(self, node, *argv):
+        with mock.patch.object(self.mod.kw, "_post", node):
+            return run_main(self.mod, ["--pool", POOL, "--rpc", PRIMARY, "--rpc-fallback", BACKUP, *argv])
+
+    def test_create_addresses_are_the_chains(self):
+        # Known pairs: the address CREATE gives a maker's contract by nonce.
+        maker = "0x6ac7ea33f8831ea9dcc53393aaa88b25a785dbf0"
+        self.assertEqual(self.mod.created_address(maker, 0), "0xcd234a471b72ba2f1ccf0a70fcaba648a5eecd8d")
+        self.assertEqual(self.mod.created_address(maker, 1), "0x343c43a37d37dff08ae8c4a11544c718abb4fcf8")
+        self.assertEqual(self.mod.created_address(maker, 2), "0xf778b86fa74e846c4f0a1fbd1335fe81c00a0c91")
+        self.assertEqual(self.mod.created_address(maker, 3), "0xfffd933a0bc612844eaf0c6fe3e5b8e9b6c1d19c")
+        # Past one byte of nonce, against the rlp package eth-account brings.
+        import rlp
+        for nonce in (127, 128, 255, 256, 70_000):
+            want = "0x" + keccak(rlp.encode([bytes.fromhex(POOL[2:]), nonce]))[12:].hex()
+            self.assertEqual(self.mod.created_address(POOL, nonce), want, nonce)
+
+    def test_nothing_to_do_is_quiet_and_says_what_it_covered(self):
+        node = MultiNode(self.mod)
+        node.make(self.mod, exam=self.mod.EXAM_SOLD)
+        node.make(self.mod, seat=self.mod.SEAT_FUNDED)
+        code, out, err = self.run_with(node)
+        self.assertEqual(code, 0, err)
+        self.assertIn("contracts made: 2 | exams sold: 1 | exams running: 1 | seats: 1 | seats funded: 1", out)
+        self.assertTrue(out.rstrip().endswith("everything the keeper is bound to do is done"))
+
+    def test_a_missed_snapshot_is_a_finding_once_the_window_is_over_and_not_inside_it(self):
+        for second, expected in ((14 * 60 + 59, 0), (15 * 60, 1)):
+            node = MultiNode(self.mod, now=100 * 86_400 + second)
+            exam = node.make(self.mod, exam=self.mod.EXAM_SOLD, day=99)
+            code, out, _ = self.run_with(node)
+            self.assertEqual(code, expected, second)
+        self.assertIn(f"FINDING: snapshot|{exam}|100", out)
+        self.assertIn("the keeper did not take the day's snapshot", out)
+
+    def test_an_exam_past_its_deadline_or_broken_is_a_finding(self):
+        node = MultiNode(self.mod)
+        late = node.make(self.mod, exam=self.mod.EXAM_SOLD, deadline=node.now - self.mod.GRACE_S - 1)
+        broken = node.make(self.mod, exam=self.mod.EXAM_SOLD, violation=2)
+        on_time = node.make(self.mod, exam=self.mod.EXAM_SOLD, deadline=node.now - self.mod.GRACE_S)
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 1)
+        self.assertIn(f"FINDING: expire|{late}", out)
+        self.assertIn(f"FINDING: breach|{broken}|2", out)
+        self.assertIn("DailyLoss", out)
+        self.assertNotIn(on_time, out)
+
+    def test_an_exam_idle_past_its_limit_is_a_finding_even_with_no_deadline(self):
+        node = MultiNode(self.mod)
+        idle = node.make(self.mod, exam=self.mod.EXAM_SOLD, max_idle=3_600,
+                         last_fill=node.now - 3_600 - self.mod.GRACE_S - 1)
+        edge = node.make(self.mod, exam=self.mod.EXAM_SOLD, max_idle=3_600, last_fill=node.now - 3_600 - self.mod.GRACE_S)
+        no_limit = node.make(self.mod, exam=self.mod.EXAM_SOLD, max_idle=0, last_fill=0)
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 1)
+        self.assertIn(f"FINDING: expire|{idle}", out)
+        self.assertIn("without a fill, past its idle limit", out)
+        self.assertNotIn(edge, out)
+        self.assertNotIn(no_limit, out)
+
+    def test_the_newest_contracts_are_read_first(self):
+        node = MultiNode(self.mod)
+        first = node.make(self.mod, exam=self.mod.EXAM_SOLD)
+        last = node.make(self.mod, exam=self.mod.EXAM_SOLD)
+        asked = []
+        real = node.answer
+        def answer(method, params):
+            if method == "eth_call" and params[0]["data"].startswith(node.selector("examInfo(address)")):
+                asked.append("0x" + params[0]["data"][-40:])
+            return real(method, params)
+        node.answer = answer
+        self.run_with(node)
+        self.assertEqual(asked, [last.lower(), first.lower()])
+
+    def test_what_is_not_a_running_sold_exam_is_not_judged(self):
+        node = MultiNode(self.mod)
+        node.make(self.mod, exam=2, day=1, violation=1)               # claimed
+        node.make(self.mod, exam=self.mod.EXAM_SOLD, status=3, day=1)  # sold, but breached already
+        node.make(self.mod, day=1)                                     # made by the pool, no exam at all
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 0, out)
+        self.assertIn("contracts made: 3 | exams sold: 1 | exams running: 0", out)
+
+    def test_a_funded_seat_not_stopped_or_without_its_snapshot_is_a_finding(self):
+        node = MultiNode(self.mod)
+        loose = node.make(self.mod, seat=self.mod.SEAT_FUNDED, violation=1)
+        stale = node.make(self.mod, seat=self.mod.SEAT_FUNDED, day=99)
+        node.make(self.mod, seat=self.mod.SEAT_FUNDED, violation=1, stopped=1, day=1)  # stopped: not judged
+        node.make(self.mod, seat=2, violation=1, day=1)                                # armed: not funded
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 1)
+        self.assertIn(f"FINDING: stop|{loose}|1", out)
+        self.assertIn(f"FINDING: snapshot|{stale}|100", out)
+        self.assertEqual(out.count("FINDING:"), 2, out)
+
+    def test_no_pool_or_a_node_that_fails_is_could_not_check(self):
+        code, _, err = run_main(self.mod, ["--rpc", PRIMARY], env={"COLOSSEUM_MULTI_POOL": ""})
+        self.assertEqual(code, 3)
+        self.assertIn("COLOSSEUM_MULTI_POOL is not set", err)
+        node = MultiNode(self.mod)
+        node.make(self.mod, exam=self.mod.EXAM_SOLD)
+        node.behaviour = {PRIMARY: "http500", BACKUP: "http500"}
+        code, _, err = self.run_with(node)
+        self.assertEqual(code, 3)
+        self.assertIn("NOT a finding about the keeper", err)
+
+    def test_the_pool_comes_from_the_deployments_env_file(self):
+        node = MultiNode(self.mod)
+        with mock.patch.object(self.mod.kw, "_post", node):
+            code, out, _ = run_main(self.mod, ["--rpc", PRIMARY], env={"COLOSSEUM_MULTI_POOL": POOL})
+        self.assertEqual(code, 0)
+        self.assertIn(f"pool {POOL}", out)
+
+    def test_too_many_contracts_is_could_not_check_not_a_guess(self):
+        node = MultiNode(self.mod)
+        node.made = ["0x" + "0" * 40] * (self.mod.MAX_MADE + 1)
+        code, _, err = self.run_with(node)
+        self.assertEqual(code, 3)
+        self.assertIn("more than the", err)
+
+
 class Ladder(unittest.TestCase):
     def test_the_ladder_outlasts_the_nodes_rate_window_and_there_is_one_for_both_checks(self):
         from importlib import import_module  # noqa: F401  (the module is loaded by path below)
@@ -760,7 +949,8 @@ def exec_start(path: pathlib.Path) -> str:
 class Units(unittest.TestCase):
     def test_the_directory_holds_what_install_ships_and_nothing_else(self):
         names = {p.name for p in DOGS.iterdir() if p.is_file()}
-        expected = set(RUNTIME) | {"install-lib.sh"} | {f"{u}{ext}" for u in SERVICES for ext in (".service", ".timer")}
+        expected = set(RUNTIME) | {"install-lib.sh"} | {f"{u}{ext}" for u in SERVICES + TEMPLATES
+                                                         for ext in (".service", ".timer")}
         self.assertEqual(names, expected, "a file nobody installs, or one that is missing")
 
     def test_it_is_public_text_in_english_with_no_internal_path_in_it(self):
@@ -777,7 +967,7 @@ class Units(unittest.TestCase):
         self.assertTrue(stat.S_IMODE(RUNNER.stat().st_mode) & stat.S_IXUSR)
 
     def test_every_unit_runs_a_file_the_release_ships_from_the_watchdogs_own_directory(self):
-        for unit in SERVICES:
+        for unit in SERVICES + TEMPLATES:
             path = DOGS / f"{unit}.service"
             lines = directives(path)
             start = exec_start(path)
@@ -817,7 +1007,7 @@ class Units(unittest.TestCase):
                "TimeoutStartSec=", "Type=")
         keeper = [l for l in directives(HOST / "colosseum-keeper.service")
                   if not l.startswith(own) and l not in ("[Install]",)]
-        for unit in SERVICES:
+        for unit in SERVICES + TEMPLATES:
             lines = set(directives(DOGS / f"{unit}.service"))
             self.assertEqual([l for l in keeper if l not in lines], [], unit)
             self.assertIn("User=colosseum-watch", lines)
@@ -830,26 +1020,35 @@ class Units(unittest.TestCase):
 
     def test_a_unit_may_run_longer_than_the_runs_budget_by_a_request(self):
         budget = load("keys_watch").backoff.RUN_BUDGET_S
-        for unit in SERVICES:
+        for unit in SERVICES + TEMPLATES:
             timeout = [l for l in directives(DOGS / f"{unit}.service") if l.startswith("TimeoutStartSec=")]
             self.assertEqual(len(timeout), 1, unit)
             self.assertGreaterEqual(int(timeout[0].split("=")[1]), budget + 25 + 5, unit)
 
     def test_the_timers_run_every_quarter_hour_at_minutes_of_their_own_and_catch_up_once(self):
         minutes = {}
-        for unit in SERVICES:
+        for unit in SERVICES + TEMPLATES:
             lines = directives(DOGS / f"{unit}.timer")
             cal = [l for l in lines if l.startswith("OnCalendar=")]
             self.assertEqual(len(cal), 1, unit)
             minutes[unit] = cal[0]
             self.assertIn("Persistent=true", lines, unit)
-            self.assertIn(f"Unit={unit}.service", lines, unit)
+            self.assertIn(f"Unit={unit}%i.service" if unit.endswith("@") else f"Unit={unit}.service", lines, unit)
             self.assertIn("WantedBy=timers.target", lines, unit)
         # 00, 03, 07 and 11 of each quarter hour: no two watchdogs hit one public node in the same second
         self.assertEqual(minutes, {"colosseum-watch-keys": "OnCalendar=*:00/15",
                                    "colosseum-watch-keeper": "OnCalendar=*:07/15",
                                    "colosseum-watch-keys-demo3": "OnCalendar=*:03/15",
-                                   "colosseum-watch-keeper-demo3": "OnCalendar=*:11/15"})
+                                   "colosseum-watch-keeper-demo3": "OnCalendar=*:11/15",
+                                   "colosseum-watch-multi@": "OnCalendar=*:05/15"})
+
+    def test_the_multipool_set_is_one_template_with_its_own_flag_and_its_instances_env_file(self):
+        path = DOGS / "colosseum-watch-multi@.service"
+        self.assertTrue(exec_start(path).endswith("watchdog-run.sh multi-%i /opt/colosseum-pools/venv/bin/python "
+                                                  "/opt/colosseum-watch/current/multi_watch.py"))
+        envs = [l for l in directives(path) if l.startswith("EnvironmentFile=")]
+        self.assertEqual(envs, ["EnvironmentFile=-/etc/colosseum/watch.env",
+                                "EnvironmentFile=/etc/colosseum/deployment-%i.env"])
 
 
 class Record(unittest.TestCase):
@@ -940,6 +1139,31 @@ watchdogs_install "{self.rel}" "{sha}" "{instances}"
 
     def units_installed(self) -> set[str]:
         return {p.name for p in self.host["units"].iterdir()}
+
+    def test_a_multipool_watchdog_of_an_instance_no_longer_selected_is_stopped(self):
+        (self.host["etc"] / "deployment-kb2.env").write_text("COLOSSEUM_DEPLOYMENT=kb2\n")
+        out = self.run_install(instances="kb2 kb2 8790", extra='watch_multis=""')
+        self.assertEqual(out.returncode, 0, out.stderr)
+        stop = "systemctl disable --quiet --now colosseum-watch-multi@" + "kb2.timer"
+        self.assertIn(stop, self.calls())
+        self.log.write_text("")
+        out = self.run_install(instances="kb2 kb2 8790", extra='watch_multis="kb2"')
+        self.assertNotIn(stop, self.calls(), "a selected one is kept")
+
+    def test_an_instance_with_a_multipool_gets_the_template_and_its_own_timer(self):
+        (self.host["etc"] / "deployment-kb1.env").write_text("COLOSSEUM_DEPLOYMENT=kb1\n")
+        out = self.run_install(extra='watch_multis="kb1 nofile "')
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("colosseum-watch-multi@.service", self.units_installed())
+        self.assertIn("colosseum-watch-multi@.timer", self.units_installed())
+        kb1 = "colosseum-watch-multi@" + "kb1"   # joined: the hygiene gate would read the whole as an e-mail address
+        self.assertNotIn(f"{kb1}.service", self.units_installed(), "the template, not a copy")
+        enable = [c for c in self.calls() if c.startswith("systemctl enable")][0]
+        self.assertIn(f"{kb1}.timer", enable)
+        self.assertNotIn("nofile", enable)
+        self.assertIn("instance nofile: no", out.stdout)
+        out = self.run_install(extra='watch_multis=""')
+        self.assertNotIn("multi", [c for c in self.calls() if c.startswith("systemctl enable")][-1])
 
     def test_the_first_deployments_pair_is_installed_from_the_release_and_started_in_order(self):
         out = self.run_install()

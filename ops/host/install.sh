@@ -13,7 +13,9 @@
 #   5. the watchdogs come with the release: their files, units and timers are put in place from it
 #      before the switch (ops/host/watchdogs/install-lib.sh), and each is run once after the restarts;
 #   6. an instance whose record names a test publisher has its keeper's made keys copied to its gateway:
-#      colosseum-key-copy@<name>.path and .timer are enabled and the copier run once (ops/host/key_copy.py).
+#      colosseum-key-copy@<name>.path and .timer are enabled and the copier run once (ops/host/key_copy.py);
+#   7. an instance whose record names a MultiPool has its keeper enabled, colosseum-multi-keeper@<name>
+#      (ops/multi_keeper.py), and the watchdog on it.
 #
 # It makes no key and reads none; the copier it starts moves an instance's agent keys from its keeper to
 # its gateway, and nothing else. Testnet only.
@@ -61,6 +63,7 @@ install -m 0644 -o root -g root "$rel/ops/host/colosseum-shared-keeper.service" 
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.service" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.path" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-multi-keeper@.service" /etc/systemd/system/
 systemctl daemon-reload
 
 # The further instances, read once: a file that names one badly stops the release here, before nginx
@@ -89,6 +92,9 @@ done
 # the agent keys into its made-keys directory, from where colosseum-key-copy@<name> hands them to the gateway.
 # All of it is checked here, or that keeper would start, die on a missing wallet and restart for ever.
 lower() { tr '[:upper:]' '[:lower:]'; }
+# owned_alone <path> <user> <mode>: the path is that user's with that mode exactly, as the keeper's loader and the
+# copier require (owner-only); checked here so that neither refuses it after the switch.
+owned_alone() { [ "$(stat -c '%U %a' "$1" 2>/dev/null)" = "$2 $3" ]; }
 publishers=""
 if [ -n "$first_label" ]; then
   first_publisher="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances publisher "$first_label")" \
@@ -102,12 +108,39 @@ while read -r name label _; do
     || fail "deployment $label: could not read its publisher; nothing switched"
   [ -n "$publisher" ] || continue
   own="/var/lib/colosseum-keeper/instances/$name"
-  [ -f "$own/secrets/publisher.key" ] && [ -d "$own/made-keys" ] \
-    || fail "instance $name: its record names the test publisher $publisher, so its keeper needs $own/secrets/publisher.key and $own/made-keys (docs/HOSTING.md, \"A test publisher\"); nothing switched"
+  gw_keys="/var/lib/colosseum-gw/instances/$name/keys"
+  [ -f "$own/secrets/publisher.key" ] && [ -f "$own/secrets/publisher.addr" ] && [ -d "$own/made-keys" ] \
+    || fail "instance $name: its record names the test publisher $publisher, so its keeper needs $own/secrets/publisher.key and .addr, and $own/made-keys (docs/HOSTING.md, \"A test publisher\"); nothing switched"
+  owned_alone "$own/secrets/publisher.key" colosseum-keeper 600 && owned_alone "$own/made-keys" colosseum-keeper 700 \
+    && owned_alone "$gw_keys" colosseum-gw 700 \
+    || fail "instance $name: $own/secrets/publisher.key must be colosseum-keeper's, mode 600, $own/made-keys colosseum-keeper's and $gw_keys colosseum-gw's, mode 700: the keeper and the copier refuse anything open to others; nothing switched"
   had="$(tr -d '[:space:]' 2>/dev/null < "$own/secrets/publisher.addr" || true)"
   [ "$(lower <<< "$had")" = "$(lower <<< "$publisher")" ] \
     || fail "instance $name: $own/secrets/publisher.addr says ${had:-nothing}, its record's publisher is $publisher; nothing switched"
   publishers+="$name "
+done <<< "$instances"
+
+# A deployment whose record names a MultiPool has its calls made by colosseum-multi-keeper@<name>
+# (ops/multi_keeper.py), with a wallet of its own beside the instance keeper's: one key in two processes would
+# race for its nonces. It is served as an instance, and its wallet is checked here, or that keeper would start,
+# die on the missing key and restart for ever.
+multis=""
+if [ -n "$first_label" ]; then
+  first_multi="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi "$first_label")" \
+    || fail "deployment $first_label: could not read its MultiPool; nothing switched"
+  [ -z "$first_multi" ] \
+    || fail "deployment $first_label names a MultiPool: serve it as an instance (bootstrap.sh --instance); nothing switched"
+fi
+while read -r name label _; do
+  [ -n "$name" ] || continue
+  multi="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi "$label")" \
+    || fail "deployment $label: could not read its MultiPool; nothing switched"
+  [ -n "$multi" ] || continue
+  own="/var/lib/colosseum-keeper/instances/$name"
+  [ -f "$own/secrets/multi-keeper.key" ] && [ -f "$own/secrets/multi-keeper.addr" ] \
+    && owned_alone "$own/secrets/multi-keeper.key" colosseum-keeper 600 \
+    || fail "instance $name: its record names the MultiPool $multi, so its keeper needs its own wallet, $own/secrets/multi-keeper.key (colosseum-keeper's, mode 600) and .addr (docs/HOSTING.md, \"A MultiPool's keeper\"); nothing switched"
+  multis+="$name "
 done <<< "$instances"
 
 # The shared pool's keeper, when its settings are on the host: a complete record with a SharedPool in this
@@ -177,6 +210,7 @@ done <<< "$instances"
 # The watchdogs ride with the release. Their files are checked and put in place here, still before
 # the switch, from the deployment env files just written (docs/HOSTING.md, "The host's watchdogs").
 . "$rel/ops/host/watchdogs/install-lib.sh"
+watch_multis="$multis"
 watchdogs_install "$rel" "$sha" "$instances"
 
 # 4. Switch, restart what is enabled, keep the three newest releases.
@@ -187,12 +221,37 @@ say "current -> $sha"
 # for any made while nothing watched.
 for name in $publishers; do
   systemctl enable --quiet --now "colosseum-key-copy@$name.path" "colosseum-key-copy@$name.timer"
-  systemctl start "colosseum-key-copy@$name.service"
+  systemctl start "colosseum-key-copy@$name.service" \
+    || say "WARNING instance $name: the first copy failed; the timer tries again each minute; read: journalctl -u colosseum-key-copy@$name"
   say "instance $name: its test publisher's keys go to its gateway (colosseum-key-copy@$name)"
+done
+# A MultiPool's keeper is enabled by its record (checked above), and restarts below with the rest.
+for name in $multis; do
+  systemctl enable --quiet "colosseum-multi-keeper@$name"
+  say "instance $name: its MultiPool's keeper is enabled (colosseum-multi-keeper@$name)"
 done
 units=(colosseum-gateway colosseum-keeper)
 while read -r name _; do
   [ -n "$name" ] && units+=("colosseum-gateway@$name" "colosseum-keeper@$name")
+done <<< "$instances"
+for name in $multis; do units+=("colosseum-multi-keeper@$name"); done
+# An instance whose record no longer names a test publisher, or a MultiPool, has what an earlier release enabled
+# for it stopped: a keeper left running would go on sending to the pool it loaded, a copier would watch for nothing.
+while read -r name _; do
+  [ -n "$name" ] || continue
+  case " $publishers " in *" $name "*) ;; *)
+    if systemctl is-enabled --quiet "colosseum-key-copy@$name.path" 2>/dev/null \
+        || systemctl is-enabled --quiet "colosseum-key-copy@$name.timer" 2>/dev/null; then
+      systemctl disable --quiet --now "colosseum-key-copy@$name.path" "colosseum-key-copy@$name.timer"
+      say "instance $name: no test publisher in its record now; its key copier is stopped"
+    fi ;;
+  esac
+  case " $multis " in *" $name "*) ;; *)
+    if systemctl is-enabled --quiet "colosseum-multi-keeper@$name" 2>/dev/null; then
+      systemctl disable --quiet --now "colosseum-multi-keeper@$name"
+      say "instance $name: no MultiPool in its record now; its keeper is stopped"
+    fi ;;
+  esac
 done <<< "$instances"
 units+=(colosseum-shared-keeper)
 for unit in "${units[@]}"; do
