@@ -583,25 +583,31 @@ contract SimPoolHandler is Test {
         }
     }
 
-    /// By the creator, or by the closer: the money goes the same way, and none of it to the closer.
+    /// By the creator, or by the closer: the money goes the same way, and none of it to the closer. A stranger's
+    /// finish must be refused; if it went through, it is recorded (I12) and its money counted as any finish's, read
+    /// before it, so that only I12 names it (review).
     function _finish(bool byCloser) internal {
         if (!pool.closed() || pool.finished()) return;
+        bool owing = pool.owed() != 0 || pool.live() != 0 || pool.reserved() != 0;
+        Before memory b = _before();
         vm.prank(stranger);
         try pool.finish() {
             ghostBadClose += 1;
-            ghostOut += usdc.balanceOf(address(pool)) - pool.held();
+            _finished(b, owing);
             return;
         } catch {}
-        bool owing = pool.owed() != 0 || pool.live() != 0 || pool.reserved() != 0;
-        Before memory b = _before();
         vm.prank(byCloser ? closer : creator);
         try pool.finish() {
-            if (owing) ghostEarlyFinish += 1;
-            // What finish withdraws: all the pool holds that is not set aside (nothing is owed or kept by now).
-            uint256 amount = b.bal - b.held - b.reserved;
-            ghostOut += amount == 0 ? 0 : amount - _checkShares(b, amount);
+            _finished(b, owing);
             calls[byCloser ? "finishByCloser" : "finish"] += 1;
         } catch {}
+    }
+
+    function _finished(Before memory b, bool owing) internal {
+        if (owing) ghostEarlyFinish += 1;
+        // What finish withdraws: all the pool holds that is not set aside (nothing is owed or kept by now).
+        uint256 amount = b.bal - b.held - b.reserved;
+        ghostOut += amount == 0 ? 0 : amount - _checkShares(b, amount);
     }
 
     // ── a withdrawal's shares, worked out apart from the pool ────
