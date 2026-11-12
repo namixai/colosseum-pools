@@ -97,9 +97,12 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
 ## Running it
 
 - **The keeper**, `ops/sim_keeper.py` (the host's `multi_keeper` unit hands it a record with a
-  `SimPoolFactory`). A fast loop reads `Placed` every block while anything is live, about 3 600
-  `eth_getLogs` an hour, and sends each order's `fill` from the filler's key for the block its window
-  opens; a fill waits for its receipt, so two orders in one block go one after the other. A slow pass
+  `SimPoolFactory`). A fast loop reads, every block once the factory has a pool, about 3 600
+  `eth_getLogs` an hour, the live accounts' `Placed` and the pools' new exams and stages with their
+  orders, so an order placed seconds after its purchase is seen. It sends each order's `fill` from the
+  filler's key for the block its window opens; a fill the exam refuses (the book past the ceiling, say)
+  is sent again for the next block, once a block, while the window lasts. A fill waits for its receipt,
+  so two orders in one block go one after the other. A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
   `expire`, `release`, `claimPayout`, `pay`. `--measure EXAM --trader-wallet K` places orders on the
   trader's own exam and writes how many blocks late each fill landed, p50 and p99: the number the
@@ -150,13 +153,15 @@ window means the keeper stalled, and that is found out before any window is set.
 
     fill_window = max_late + 1 + max(2, ceil((max_late + 1) / 2)),   within 1 to 60
 
-which leaves half again for a slower hour: a largest `late` of 3 gives 6 blocks, of 6 gives 11. A longer window
+which leaves half again for a slower hour: a largest `late` of 3 gives 6 blocks, of 6 gives 11. Above a
+largest `late` of 39 the formula passes 60 and the window stays 60, with less headroom; a filler that late is
+itself the finding, and it is looked into before a pool is opened on such a window. A longer window
 lets the filler choose among more blocks, which the terms promise it does not; a shorter one lapses orders when
 the node is slow.
 
-**The price ceiling.** At the book, a fill worse than `maxWorseBps` from the oracle reverts, and the order waits
-for a later block of its window: a ceiling under the book's distance from the oracle shows up in the measure as
-lateness, or as lapses. So the ceiling is set from the book, read beside the measure: every block's best bid and
+**The price ceiling.** At the book, a fill worse than `maxWorseBps` from the oracle reverts, and the keeper
+sends it again for the next block of the window: a ceiling under the book's distance from the oracle shows up in
+the measure as lateness, or as lapses. So the ceiling is set from the book, read beside the measure: every block's best bid and
 offer against the oracle, on the trader's side (the ask above it for a buy, the bid below it for a sell). The
 ceiling is the largest distance seen plus 30 bp, and at most `MAX_WORSE_BPS` (500). On 11 November 2026
 testnet's books stood 77 to 118 bp from the oracle, so the plans say 150. On mainnet, where BTC's and ETH's
