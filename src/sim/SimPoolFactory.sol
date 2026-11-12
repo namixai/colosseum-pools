@@ -33,7 +33,7 @@ contract SimPoolFactory {
     /// Payouts of the largest size a pool keeps while it is open: the creator withdraws above this.
     uint8 public constant FLOOR_PAYOUTS = 3;
     /// How long a payout waits, for the checker to stop it with a reason.
-    uint32 public constant PAYOUT_DELAY = 48 hours;
+    uint32 public constant PAYOUT_DELAY = 72 hours;
     /// How long a stopped payout's money stays set aside after the stop: the trader can object and the
     /// checker can lift the stop; after it the stop is final and the money is the pool's again.
     uint32 public constant STOP_RESERVE = 14 days;

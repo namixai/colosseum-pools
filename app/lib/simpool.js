@@ -94,7 +94,7 @@ export const SIM_FACTORY_ABI = [
 /** The factory's constants, the same for every pool (SimPoolFactory.sol); the test holds them to the source. */
 export const FEE_BPS = 50n;
 export const PAYOUT_BPS = 800n;
-export const PAYOUT_DELAY = 48 * 3600;
+export const PAYOUT_DELAY = 72 * 3600;
 /** How long a stop holds its money and can be lifted or objected to, on a pool with the stop reserve. */
 export const STOP_RESERVE = 14 * 24 * 3600;
 const BPS = 10_000n;
@@ -105,7 +105,7 @@ export const PAYOUT_STATE = ["None", "Due", "Stopped", "Paid", "Held", "Refused"
 /** What a page calls each state of a payout. "waiting" and "queued" are both Due on chain: before its time, and
  *  past it but not yet sent (nobody has called `pay`, or the pool's USDC did not cover it: then `short` says so). */
 export const STATUS = Object.freeze({
-  waiting: "Waiting out the 48 hours",
+  waiting: "Waiting out the 72 hours",
   queued: "Due, in the queue to be sent",
   paid: "Paid",
   stopped: "Stopped by the checker",
@@ -488,7 +488,7 @@ export async function readLogs({ getLogs, from, to, window = 50, maxCalls = 40 }
 
 /**
  * The first block at or after `time` (seconds), by halving between `low` and `high` with `timeOf(block)`. A payout's
- * claim is in the block whose time is its `dueAt` minus 48 hours, and its payment at or after `dueAt`: so a page can
+ * claim is in the block whose time is its `dueAt` minus 72 hours, and its payment at or after `dueAt`: so a page can
  * read the few blocks around them instead of the pool's whole history.
  */
 export async function firstBlockAt(time, { low, high, timeOf }) {
@@ -504,7 +504,7 @@ export async function firstBlockAt(time, { low, high, timeOf }) {
   return lo;
 }
 
-/** The time a payout's claim was written: its `dueAt` less the 48 hours (SimPool.claimPayout). */
+/** The time a payout's claim was written: its `dueAt` less the 72 hours (SimPool.claimPayout). */
 export function claimedAt(dueAt) {
   return Number(dueAt) - PAYOUT_DELAY;
 }

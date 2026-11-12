@@ -416,7 +416,7 @@ contract SimPoolTest is Test {
         uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));
         uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
         usdc.block_(trader); // say the token blocks the trader's address after the pass
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         vm.expectEmit(address(pool));
         emit SimPool.PayoutHeld(a, trader, LARGE_PAYOUT);
         assertEq(pool.pay(10), 2);
@@ -441,7 +441,7 @@ contract SimPoolTest is Test {
         SimPool pool = _pool();
         uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
         usdc.saysFalseTo(trader);
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         pool.pay(10);
         assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Held));
         assertEq(pool.heldOf(trader), LARGE_PAYOUT);
@@ -452,12 +452,12 @@ contract SimPoolTest is Test {
         pool.claimPayout(address(_passedStage(pool, trader, 1))); // A, 800
         pool.claimPayout(address(_passedStage(pool, other, 1))); // C, 800
         usdc.block_(trader);
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         pool.pay(10); // A's is held, C's is paid
         assertEq(pool.held(), LARGE_PAYOUT);
         assertLt(usdc.balanceOf(address(pool)) - pool.held(), 400e6, "what is free is under a small payout");
         uint256 b = pool.claimPayout(address(_passedStage(pool, stranger, 0))); // B, 400
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         pool.pay(10);
         assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Due), "B waits; A's money is not B's");
         vm.prank(trader);
@@ -489,7 +489,7 @@ contract SimPoolTest is Test {
         SimPool pool = _pool();
         pool.claimPayout(address(_passedStage(pool, trader, 1))); // the locked 1 600 covers it
         usdc.block_(trader);
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         pool.pay(10);
         vm.startPrank(creator);
         pool.close();
@@ -554,7 +554,7 @@ contract SimPoolTest is Test {
 
     // ── the stage and the payout ─────────────────────────────────
 
-    function test_aPassedStagePaysEightPercentOnceAfterFortyEightHours() public {
+    function test_aPassedStagePaysEightPercentOnceAfterSeventyTwoHours() public {
         SimPool pool = _pool();
         PaperExam stage = _passedStage(pool, trader, 1);
         vm.recordLogs();
@@ -562,10 +562,10 @@ contract SimPoolTest is Test {
         assertEq(pool.owed(), LARGE_PAYOUT);
         SimPool.Payout memory p = pool.payout(id);
         assertEq(p.amount, LARGE_PAYOUT);
-        assertEq(p.dueAt, block.timestamp + 48 hours);
+        assertEq(p.dueAt, block.timestamp + 72 hours);
         assertEq(p.trader, trader);
 
-        vm.warp(block.timestamp + 48 hours - 1);
+        vm.warp(block.timestamp + 72 hours - 1);
         assertEq(pool.pay(10), 0, "not before its time");
         vm.warp(block.timestamp + 1);
         uint256 before = usdc.balanceOf(trader);
@@ -664,7 +664,7 @@ contract SimPoolTest is Test {
         vm.prank(checker);
         pool.stopPayout(id, 1, paired, _trades(), new bytes32[](0));
         assertEq(pool.owed(), 0, "the money stays in the pool, owed to nobody");
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         assertEq(pool.pay(10), 0, "a stopped payout is not paid");
     }
 
@@ -707,7 +707,7 @@ contract SimPoolTest is Test {
     function test_stop_onlyBeforeItIsDue_andOnce() public {
         SimPool pool = _pool();
         (uint256 id, address paired) = _duePayout(pool);
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         vm.prank(checker);
         vm.expectRevert(SimPool.NotDue.selector);
         pool.stopPayout(id, 1, paired, _trades(), new bytes32[](0));
@@ -726,7 +726,7 @@ contract SimPoolTest is Test {
         (uint256 id, address paired) = _duePayout(pool);
         vm.prank(checker);
         pool.stopPayout(id, 1, paired, _trades(), new bytes32[](0));
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         assertEq(pool.pay(10), 0);
         vm.prank(stranger);
         vm.expectRevert(SimPool.NotChecker.selector);
@@ -813,7 +813,7 @@ contract SimPoolTest is Test {
         uint256 c = pool.claimPayout(address(_passedStage(pool, stranger, 1)));
         _stop(pool, a);
         // 1 600 + 3 x 84.575 in the pool, 800 of it kept for A's stop.
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         assertEq(pool.pay(10), 1, "B is paid; C waits, A's kept money is not C's");
         assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Paid));
         assertEq(uint8(pool.payout(c).state), uint8(SimPool.PayoutState.Due));
@@ -836,7 +836,7 @@ contract SimPoolTest is Test {
         for (uint256 i = 0; i < 4; ++i) id[i] = pool.claimPayout(address(_passedStage(pool, who[i], 1)));
         for (uint256 i = 1; i < 4; ++i) _stop(pool, id[i]);
         assertGt(pool.reserved(), usdc.balanceOf(address(pool)));
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         vm.expectEmit(address(pool));
         emit SimPool.PayoutQueued(id[0], 0);
         assertEq(pool.pay(10), 0, "nothing is free: the first payout waits, and pay does not revert");
@@ -906,7 +906,7 @@ contract SimPoolTest is Test {
         uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
         uint256 c = pool.claimPayout(address(_passedStage(pool, stranger, 1)));
         assertEq(pool.withdrawable(), 0);
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + 72 hours);
         vm.expectEmit(address(pool));
         emit SimPool.PayoutQueued(c, 1_600e6 + 3 * (LARGE_PRICE - 425_000) - 2 * LARGE_PAYOUT);
         assertEq(pool.pay(10), 2);
