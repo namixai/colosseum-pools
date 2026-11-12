@@ -1,0 +1,16 @@
+# Every 15 minutes, on the host, as the other watchdogs; at minute 05 of each quarter hour, apart from their 00,
+# 03, 07 and 11. A missed snapshot is judged only once the day's window (00:00-00:15 UTC) has closed: the run at
+# 00:05 says nothing of it, the run at 00:20 does.
+[Unit]
+Description=colosseum-pools watchdog timer: what the MultiPool keeper of %i does
+
+[Timer]
+OnCalendar=*:05/15
+RandomizedDelaySec=30
+AccuracySec=15
+# A run missed because of a reboot is made up once, not queued.
+Persistent=true
+Unit=colosseum-watch-multi@%i.service
+
+[Install]
+WantedBy=timers.target

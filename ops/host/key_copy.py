@@ -97,9 +97,20 @@ def held(dir_fd: int, name: str) -> str | None:
     except OSError:
         return ""
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""  # a directory or anything else that is not a file: left as it is, never read
         return os.read(fd, MAX_BYTES + 1).decode("ascii", "replace").strip()
+    except OSError:
+        return ""
     finally:
         os.close(fd)
+
+
+def write_all(fd: int, data: bytes) -> None:
+    """All of `data`, however few bytes one write takes: a key cut short must never get its name."""
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
 
 
 def write_key(dir_fd: int, name: str, key: str, uid: int, gid: int) -> bool:
@@ -116,7 +127,7 @@ def write_key(dir_fd: int, name: str, key: str, uid: int, gid: int) -> bool:
         try:
             os.fchown(fd, uid, gid)
             os.fchmod(fd, 0o600)
-            os.write(fd, (key + "\n").encode("ascii"))
+            write_all(fd, (key + "\n").encode("ascii"))
             os.fsync(fd)
         finally:
             os.close(fd)

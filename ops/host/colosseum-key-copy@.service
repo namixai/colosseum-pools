@@ -38,6 +38,8 @@ CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER
 SystemCallArchitectures=native
 UMask=0077
 TemporaryFileSystem=/var/lib/colosseum-keeper:ro /var/lib/colosseum-gw:ro
+# Nor the host's other secrets: the TLS key and the settings under /etc/colosseum are none of its business.
+InaccessiblePaths=/etc/colosseum
 BindReadOnlyPaths=/var/lib/colosseum-keeper/instances/%i/made-keys
 BindPaths=/var/lib/colosseum-gw/instances/%i/keys
 ProtectProc=invisible

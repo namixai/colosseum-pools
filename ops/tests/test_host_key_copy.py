@@ -89,6 +89,21 @@ class Copy(unittest.TestCase):
         self.assertEqual((self.dst / name).read_text(), "something else\n")
         self.assertEqual([s["event"] for s in said], ["key_differs"])
 
+    def test_a_directory_in_the_gateways_directory_is_left_as_it_is(self):
+        name, _ = key_file(self.src)
+        (self.dst / name).mkdir(mode=0o700)
+        n, said = self.run_copy()
+        self.assertEqual(n, 0)
+        self.assertTrue((self.dst / name).is_dir())
+        self.assertEqual([s["event"] for s in said], ["key_differs"])
+
+    def test_a_write_that_takes_a_few_bytes_at_a_time_still_writes_the_whole_key(self):
+        name, key = key_file(self.src)
+        real = os.write
+        with mock.patch.object(kc.os, "write", side_effect=lambda fd, data: real(fd, bytes(data[:7]))):
+            self.assertEqual(self.run_copy()[0], 1)
+        self.assertEqual((self.dst / name).read_text().strip(), key.strip())
+
     def test_a_link_in_the_gateways_directory_is_left_as_it_is(self):
         name, _ = key_file(self.src)
         elsewhere = pathlib.Path(self.tmp.name) / "elsewhere"
@@ -179,6 +194,7 @@ class Units(unittest.TestCase):
                           "BindPaths=/var/lib/colosseum-gw/instances/%i/keys"])
         self.assertIn("PrivateNetwork=true", d)
         self.assertIn("RestrictAddressFamilies=AF_UNIX", d)
+        self.assertIn("InaccessiblePaths=/etc/colosseum", d, "nor the host's TLS key and settings")
         self.assertIn("ProtectSystem=strict", d)
         self.assertIn("NoNewPrivileges=true", d)
         caps = next(l for l in d if l.startswith("CapabilityBoundingSet="))
