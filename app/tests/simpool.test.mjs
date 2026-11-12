@@ -129,8 +129,8 @@ test("every getter the library reads is the contract's own", () => {
 test("the platform's numbers are the factory's constants", () => {
   assert.match(FACTORY_SOL, new RegExp(`FEE_BPS = ${FEE_BPS};`));
   assert.match(FACTORY_SOL, new RegExp(`PAYOUT_BPS = ${PAYOUT_BPS};`));
-  assert.equal(PAYOUT_DELAY, 48 * 3600);
-  assert.match(FACTORY_SOL, /PAYOUT_DELAY = 48 hours;/);
+  assert.equal(PAYOUT_DELAY, 72 * 3600);
+  assert.match(FACTORY_SOL, /PAYOUT_DELAY = 72 hours;/);
 });
 
 test("the payout states are the contract's, in its order, and Refused next on a pool with the stop reserve", () => {
@@ -397,7 +397,7 @@ test("logs are read in windows, within a budget of calls, and a reading cut shor
   await assert.rejects(readLogs({ getLogs, from: 0, to: 1, window: 0 }), /at least one block/);
 });
 
-test("the first block at a time is found by halving, and the claim's time is the due time less 48 hours", async () => {
+test("the first block at a time is found by halving, and the claim's time is the due time less 72 hours", async () => {
   const timeOf = async (b) => 1_000 + b * 2;
   assert.equal(await firstBlockAt(1_101, { low: 0, high: 1_000, timeOf }), 51);
   assert.equal(await firstBlockAt(1_100, { low: 0, high: 1_000, timeOf }), 50);

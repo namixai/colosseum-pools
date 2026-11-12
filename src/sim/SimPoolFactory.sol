@@ -33,7 +33,7 @@ contract SimPoolFactory {
     /// Payouts of the largest size a pool keeps while it is open: the creator withdraws above this.
     uint8 public constant FLOOR_PAYOUTS = 3;
     /// How long a payout waits, for the checker to stop it with a reason.
-    uint32 public constant PAYOUT_DELAY = 48 hours;
+    uint32 public constant PAYOUT_DELAY = 72 hours;
     /// The bounds of a fill window, in blocks: about a minute of HyperEVM's small blocks at most.
     uint16 public constant MIN_FILL_WINDOW = 1;
     uint16 public constant MAX_FILL_WINDOW = 60;

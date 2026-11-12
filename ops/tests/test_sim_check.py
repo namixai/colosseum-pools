@@ -1,5 +1,6 @@
 """The checker of simulated pools: what it calls a pair, a link and a stop, and that it writes what
 the pool's stopPayout takes."""
+import json
 import pathlib
 import re
 import unittest
@@ -136,6 +137,23 @@ class TheService(unittest.TestCase):
         self.assertEqual([f["t"] for f in ch.fills], [now - s.KEEP_S])
         self.assertEqual(ch._times, {2: now})
         self.assertGreaterEqual(s.KEEP_S, 48 * 3600 + 600, "a waiting payout's pairs are kept")
+
+    def test_a_waiting_payouts_whole_stage_is_kept(self):
+        """A paid stage traded from its start, up to its plan's whole length before the claim, and its payout waits
+        PAYOUT_DELAY after that: every one of its fills, and the fills they pair with, must still be in memory."""
+        factory = (ROOT / "src/sim/SimPoolFactory.sol").read_text(encoding="utf-8")
+        hours = int(re.search(r"PAYOUT_DELAY = (\d+) hours;", factory).group(1))
+        self.assertEqual(s.PAYOUT_DELAY_S, hours * 3600)
+        for name in ("sim-first-pool", "sim-measure-pool"):
+            plan = json.loads((ROOT / f"deployments/plans/{name}.json").read_text(encoding="utf-8"))
+            self.assertLessEqual(plan["funded"]["step_duration_s"], s.STAGE_S, name)
+        self.assertGreaterEqual(s.KEEP_S, s.STAGE_S + s.PAYOUT_DELAY_S + 600, "the stage, the delay, the window")
+        ch = self.checker()
+        now = 10_000_000
+        early = now - s.STAGE_S - s.PAYOUT_DELAY_S + 60  # the stage's first fill, its payout due in a minute
+        ch.fills, ch._times = [fill(A, t=early)], {}
+        ch.prune(now)
+        self.assertEqual([f["t"] for f in ch.fills], [early])
 
 
 if __name__ == "__main__":

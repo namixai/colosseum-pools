@@ -254,7 +254,7 @@
         },
         {
           "lead": "A simulated pool's checker.",
-          "text": "A payout of a simulated pool waits 48 hours (S112). Until then the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`) for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and links on chain), and the checker lifts a stop that was wrong (S115). The filler and the checker are two keys, and neither opens a pool (S116).",
+          "text": "A payout of a simulated pool waits 72 hours (S112). Until then the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`) for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and links on chain), and the checker lifts a stop that was wrong (S115). The filler and the checker are two keys, and neither opens a pool (S116).",
           "sources": [
             "S112",
             "S113",
@@ -1180,7 +1180,7 @@
       "id": "S112",
       "where": "src/sim/SimPoolFactory.sol:36",
       "kind": "line",
-      "text": "uint32 public constant PAYOUT_DELAY = 48 hours;",
+      "text": "uint32 public constant PAYOUT_DELAY = 72 hours;",
       "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L36"
     },
     {

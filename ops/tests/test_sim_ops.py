@@ -87,6 +87,7 @@ class TheFirstPool(unittest.TestCase):
             self.assertEqual(plan["fund_window_s"], 7 * 86_400)
             self.assertIn("pays 0.045 % of its notional", plan["terms_text"])
             self.assertNotIn("without a fill", plan["terms_text"])
+            self.assertIn("up to 72 hours after the payout is claimed", plan["terms_text"])
 
     def test_dollars_round_to_usdc_units(self):
         self.assertEqual(d.usdc_units(2.01), 2_010_000, "int(2.01 * 10**6) is 2 009 999")

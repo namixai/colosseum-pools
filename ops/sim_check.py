@@ -3,7 +3,7 @@
     spike/.venv/bin/python -m ops.sim_check --deployment sim1 --once            # what it finds, sends nothing
     spike/.venv/bin/python -m ops.sim_check --deployment sim1 --wallet checker  # stops what it finds, a service
 
-A payout waits PAYOUT_DELAY (48 hours). For each one still waiting, this reads every fill of every
+A payout waits PAYOUT_DELAY (72 hours) from its claim. For each one still waiting, this reads every fill of every
 exam and stage of the factory's pools and asks one question: did the paid stage hold a position
 while another account of the platform held the opposite one, opened close in time and close in
 size? That is the pair: two accounts, a long and a short, one of them passes on the other's loss.
@@ -48,8 +48,12 @@ STOP = "stopPayout(uint256,uint8,address,bytes32[],bytes32[])"
 STOP_TYPES = ["uint256", "uint8", "address", "bytes32[]", "bytes32[]"]
 # A stop is sent no later than this before its payout is due: a block may take that long.
 MARGIN_S = 300
-# Fills older than this can pair with no payout still waiting: 48 hours of delay, the window, a margin.
-KEEP_S = 72 * 3600
+# The longest stage of the factory's plans: a paid stage's fills reach back that far from its claim.
+STAGE_S = 30 * 86_400
+PAYOUT_DELAY_S = 72 * 3_600  # SimPoolFactory.PAYOUT_DELAY
+# Fills older than this can pair with no payout still waiting: a whole stage, then the payout's delay, and an hour
+# over the pairing window. It was 72 hours, which dropped the early fills of a stage still waiting for its payout.
+KEEP_S = STAGE_S + PAYOUT_DELAY_S + 3_600
 ADDRESS_BATCH = 100
 
 

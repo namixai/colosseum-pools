@@ -190,6 +190,41 @@ class TheFastLoop(unittest.TestCase):
                          (77, sk.pools, sk.accounts, sk.done))
 
 
+class ThePayoutsClock(unittest.TestCase):
+    """The payout is due PAYOUT_DELAY after `claimPayout`, so "up to 72 hours" holds only if the claim goes out in the
+    pass that sees the stage passed, and `pay` in the first pass after the due time."""
+    STAGE = k.to_checksum_address("0x" + "11" * 20)
+    POOL = k.to_checksum_address("0x" + "55" * 20)
+
+    def keeper(self) -> k.SimKeeper:
+        tmp = pathlib.Path(tempfile.mkdtemp()) / "s.json"
+        sk = k.SimKeeper("0x" + "33" * 20, None, "0x" + "44" * 20, False, tmp, 1)
+        sk.accounts = {self.STAGE: {"pool": self.POOL, "kind": "stage"}}
+        return sk
+
+    def test_a_passed_stage_is_claimed_in_the_pass_that_sees_it(self):
+        sk = self.keeper()
+        answers = {"accountOf(address)": (2, 1, False), "result()": (2, "0x" + "77" * 20, 10_000, 990)}
+        with mock.patch.object(k.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
+                mock.patch.object(sk, "send", return_value=True) as send:
+            sk.account_pass(self.STAGE, 1_000)
+        send.assert_called_once_with(self.POOL, "claimPayout(address)", ["address"], [self.STAGE])
+
+    def test_pay_goes_out_in_the_first_pass_at_the_due_time(self):
+        sk = self.keeper()
+        due = 1_000 + 72 * 3600
+        payout = ("0x" + "11" * 20, "0x" + "77" * 20, 800, due, 1, False)
+
+        def view(to, sig, out="uint256", *a):
+            return {"head()": 0, "payoutCount()": 1}.get(sig, payout)
+
+        with mock.patch.object(k, "view", side_effect=view), mock.patch.object(sk, "send", return_value=True) as send:
+            sk.pool_pass(self.POOL, due - 1)
+            send.assert_not_called()
+            sk.pool_pass(self.POOL, due)
+        send.assert_called_once_with(self.POOL, "pay(uint256)", ["uint256"], [k.PAY_PER_CALL])
+
+
 class TheHostsOneUnit(unittest.TestCase):
     def test_multi_keeper_hands_a_simulated_record_to_this_keeper(self):
         from ops import multi_keeper

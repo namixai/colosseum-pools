@@ -34,8 +34,9 @@ fail, and their prices pay for the ones that pass.
   works on any.
 - **The stage.** `fund(exam)`: the trader, within the plan's window after the pass, starts a second
   paper exam on the same size. Nothing moves.
-- **The payout.** `claimPayout(stage)` once the stage has passed, by anyone: 8 % of the size, due 48
-  hours later. `pay(max)`, by anyone, pays what is due in the order it came due while the pool's USDC
+- **The payout.** `claimPayout(stage)` once the stage has passed, by anyone, and by the keeper in its next
+  slow pass (every 30 seconds): 8 % of the size, due 72 hours after the claim. The keeper sends `pay` in its
+  first pass after that, so a trader is paid up to 72 hours and about a minute after passing. `pay(max)`, by anyone, pays what is due in the order it came due while the pool's USDC
   covers the next; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from
   the prices that come in. A payout the token refuses to send (say the trader's address was blocked)
   is set aside for the trader (`PayoutHeld`), who takes it to any address with `claimHeld`, also
@@ -58,7 +59,7 @@ fail, and their prices pay for the ones that pass.
 Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE`); 0.5 % of each
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
-the pool is open (`FLOOR_PAYOUTS`); 48 hours before a payout is paid (`PAYOUT_DELAY`); a fill
+the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid (`PAYOUT_DELAY`); a fill
 window of 1 to 60 blocks; a partner's share of 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`).
 
 ## What anyone can check
