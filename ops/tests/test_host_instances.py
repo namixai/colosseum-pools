@@ -784,11 +784,14 @@ class SimulatedPoolHost(unittest.TestCase):
         install = (HOST / "install.sh").read_text()
         nginx = install.index("site=/etc/nginx/conf.d/pools-api.conf")
         switch = install.index('ln -sfn "releases/$sha"')
-        agree = install.index('if [ -n "$wallets" ] && [ "$port" != "-" ]; then')
-        self.assertLess(agree, nginx)
-        self.assertIn("make the instance with bootstrap.sh --sim-instance", install[agree:agree + 400])
         check = install.index('-m ops.host_instances multi "$label"')
         guard = install[check:install.index('multis+="$name "')]
+        # A simulated record with a gateway port is refused in the same pass that reads its wallets, one read each.
+        agree = guard.index('    [ "$port" = "-" ] \\\n      || fail "instance $name: its record ($label) is a simulated pool\'s')
+        self.assertIn("make the instance with bootstrap.sh --sim-instance", guard[agree:agree + 400])
+        self.assertLess(agree, guard.index('while read -r wallet address; do'))
+        self.assertEqual(install.count('-m ops.host_instances sim-wallets "$label"'), 1)
+        self.assertIn('while read -r name label port; do\n  [ -n "$name" ] || continue\n  multi=', install)
         self.assertIn('-m ops.host_instances sim-wallets "$label"', guard)
         self.assertIn('[ -f "$own/secrets/$wallet.key" ] && [ -f "$own/secrets/$wallet.addr" ]', guard)
         self.assertIn('owned_alone "$own/secrets/$wallet.key" colosseum-keeper 600', guard)

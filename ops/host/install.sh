@@ -88,17 +88,6 @@ for label in $first_label $(awk '{print $2}' <<< "$instances"); do
   (cd "$rel" && "$venv/bin/python" -m ops.host_instances deployment-env "$label") > /dev/null \
     || fail "deployment $label: no complete testnet record in this release; nothing switched"
 done
-# A simulated pool's instance has no gateway, and its record and the host agree on it: an instance listed with a
-# gateway port whose record is a simulated pool's was made as an exchange's, and nginx would route to a gateway
-# that has nothing to serve. (One listed without a port has a simulated record: ops/host_instances.py checks it.)
-while read -r name label port; do
-  [ -n "$name" ] || continue
-  wallets="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances sim-wallets "$label")" \
-    || fail "deployment $label: could not read a simulated pool's wallets from its record; nothing switched"
-  if [ -n "$wallets" ] && [ "$port" != "-" ]; then
-    fail "instance $name: its record ($label) is a simulated pool's, which has no gateway, but /etc/colosseum/gateway-$name.env is here: make the instance with bootstrap.sh --sim-instance (docs/HOSTING.md, \"A simulated pool's keeper\"); nothing switched"
-  fi
-done <<< "$instances"
 
 # A deployment whose record names a test publisher, a key in a file before the enclave (ops/key_relay.py), is
 # served as an instance: its keeper signs bindings with the publisher's wallet, kept beside its own, and makes
@@ -145,7 +134,7 @@ if [ -n "$first_label" ]; then
   [ -z "$first_multi" ] \
     || fail "deployment $first_label names a MultiPool or a SimPoolFactory: serve it as an instance (bootstrap.sh --instance or --sim-instance); nothing switched"
 fi
-while read -r name label _; do
+while read -r name label port; do
   [ -n "$name" ] || continue
   multi="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi "$label")" \
     || fail "deployment $label: could not read its MultiPool; nothing switched"
@@ -154,8 +143,14 @@ while read -r name label _; do
   wallets="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances sim-wallets "$label")" \
     || fail "deployment $label: could not read a simulated pool's wallets from its record; nothing switched"
   if [ -n "$wallets" ]; then
-    # A simulated pool's: the keeper sends with the factory's filler, and the checker's key is kept beside it. Each
-    # is the address the record names, or the keeper would fill nothing and say so only in its log.
+    # A simulated pool's instance has no gateway, and the host agrees: one listed with a gateway port was made as an
+    # exchange's, and nginx would route to a gateway with nothing to serve. (One listed without a port has a
+    # simulated record: ops/host_instances.py checks that; a simulated record always names a SimPoolFactory, so
+    # every one comes through here.)
+    [ "$port" = "-" ] \
+      || fail "instance $name: its record ($label) is a simulated pool's, which has no gateway, but /etc/colosseum/gateway-$name.env is here: make the instance with bootstrap.sh --sim-instance (docs/HOSTING.md, \"A simulated pool's keeper\"); nothing switched"
+    # The keeper sends with the factory's filler, and the checker's key is kept beside it. Each is the address the
+    # record names, or the keeper would fill nothing and say so only in its log.
     while read -r wallet address; do
       [ -f "$own/secrets/$wallet.key" ] && [ -f "$own/secrets/$wallet.addr" ] \
         && owned_alone "$own/secrets/$wallet.key" colosseum-keeper 600 \

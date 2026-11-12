@@ -33,26 +33,27 @@ say() { printf 'bootstrap: %s\n' "$*"; }
 instance=""
 sim=""
 if [ "${1:-}" = "--sim-instance" ]; then
-  instance="${2:?usage: bootstrap.sh --sim-instance <name> <label>}"
-  instance_label="${3:?usage: bootstrap.sh --sim-instance <name> <label>}"
   [ $# -eq 3 ] || { echo "bootstrap: usage: bootstrap.sh --sim-instance <name> <label> (no port: no gateway)" >&2; exit 2; }
-  [[ "$instance" =~ ^[a-z][a-z0-9]{0,15}$ ]] && [ "$instance" != v1 ] \
-    || { echo "bootstrap: an instance's name is a-z then up to 15 of a-z0-9, and not v1" >&2; exit 2; }
-  [[ "$instance_label" =~ ^[a-z0-9-]+$ ]] || { echo "bootstrap: odd label $instance_label" >&2; exit 2; }
+  instance="$2"
+  instance_label="$3"
   sim=1
 elif [ "${1:-}" = "--instance" ]; then
-  instance="${2:?usage: bootstrap.sh --instance <name> <label> <port>}"
-  instance_label="${3:?usage: bootstrap.sh --instance <name> <label> <port>}"
-  instance_port="${4:?usage: bootstrap.sh --instance <name> <label> <port>}"
-  # The same rules as ops/host_instances.py: a path segment and a unit's name, its own port.
-  [[ "$instance" =~ ^[a-z][a-z0-9]{0,15}$ ]] && [ "$instance" != v1 ] \
-    || { echo "bootstrap: an instance's name is a-z then up to 15 of a-z0-9, and not v1" >&2; exit 2; }
-  [[ "$instance_label" =~ ^[a-z0-9-]+$ ]] || { echo "bootstrap: odd label $instance_label" >&2; exit 2; }
+  [ $# -eq 4 ] || { echo "bootstrap: usage: bootstrap.sh --instance <name> <label> <port>" >&2; exit 2; }
+  instance="$2"
+  instance_label="$3"
+  instance_port="$4"
+  # Its own port: 8787 is the first gateway's.
   [[ "$instance_port" =~ ^[0-9]+$ ]] && [ "$instance_port" -ge 8788 ] && [ "$instance_port" -le 8799 ] \
     || { echo "bootstrap: an instance's port is 8788..8799 (8787 is the first gateway's)" >&2; exit 2; }
 elif [ $# -gt 0 ]; then
   echo "bootstrap: usage: bootstrap.sh [--instance <name> <label> <port> | --sim-instance <name> <label>]" >&2
   exit 2
+fi
+if [ -n "$instance" ]; then
+  # Either kind, the same rules as ops/host_instances.py: a path segment and a unit's name, and a label.
+  [[ "$instance" =~ ^[a-z][a-z0-9]{0,15}$ ]] && [ "$instance" != v1 ] \
+    || { echo "bootstrap: an instance's name is a-z then up to 15 of a-z0-9, and not v1" >&2; exit 2; }
+  [[ "$instance_label" =~ ^[a-z0-9-]+$ ]] || { echo "bootstrap: odd label $instance_label" >&2; exit 2; }
 fi
 
 # Amazon Linux 2023: its python3 is 3.9, and CI tests on 3.12.

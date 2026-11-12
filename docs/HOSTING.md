@@ -772,7 +772,7 @@ the day's snapshots, `breach`, `expire`, `release`, `claimPayout` and `pay`. Its
 (`keeper_nodes`), and `deployment-<name>.env` has no gateway line.
 
 It sends with the factory's **filler**, the one key whose fills the exams take; any other key would only log.
-The **checker**, the one key that may stop a payout, is kept beside it for the checking script. They are two
+The **checker**, the one key that may stop a payout, is kept beside it for `ops/sim_check.py`, which runs by hand with it until it has a unit of its own. They are two
 keys, as the factory requires, and each is the address the record names (`filler`, `checker`, written by
 `ops/deploy_sim.py`).
 
