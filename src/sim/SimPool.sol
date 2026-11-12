@@ -352,7 +352,8 @@ contract SimPool is Initializable {
             Payout storage p = _payouts[i];
             if (p.state == PayoutState.Due) {
                 if (block.timestamp < p.dueAt) break;
-                uint256 bal = usdc.balanceOf(address(this));
+                // What is held is its traders' already: never paid out to anyone else (CFO, 12 November).
+                uint256 bal = usdc.balanceOf(address(this)) - held;
                 if (bal < p.amount) {
                     emit PayoutQueued(i, bal);
                     break;
@@ -461,9 +462,9 @@ contract SimPool is Initializable {
         emit AddedToPot(amount, principal);
     }
 
-    /// @notice Withdraws `amount` of what `withdrawable` allows. The platform takes its 0.5 %; of
-    ///         the rest, what is above the creator's principal is profit, and the partner gets
-    ///         `partnerBps` of it.
+    /// @notice Withdraws `amount` of what `withdrawable` allows. The platform takes its 0.5 %. Profit
+    ///         is the pool's money above what it owes and holds and above what the creator put in; a
+    ///         withdrawal takes it first, and the partner gets `partnerBps` of it.
     function withdraw(uint256 amount) external onlyCreator {
         if (finished) revert Done();
         if (amount == 0 || amount > withdrawable()) revert TooMuch();
@@ -529,7 +530,10 @@ contract SimPool is Initializable {
 
     function _withdraw(uint256 amount) internal {
         uint256 bal = usdc.balanceOf(address(this)) - held;
-        uint256 profit = bal > principal ? bal - principal : 0;
+        // Profit is the pool's money above what it owes and above what the creator put in; the partner's
+        // share is of that alone (CFO, 12 November). At finish nothing is owed.
+        uint256 free = bal > owed ? bal - owed : 0;
+        uint256 profit = free > principal ? free - principal : 0;
         uint256 shared = amount < profit ? amount : profit;
         principal -= amount - shared;
         uint256 fee = amount * factory.FEE_BPS() / Units.BPS;
