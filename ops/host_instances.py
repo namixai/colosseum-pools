@@ -17,7 +17,8 @@ colosseum-gateway@<name> and colosseum-keeper@<name>. Its gateway listens where
                                                                  the keeper's nodes, ...
     python -m ops.host_instances first-label /etc/colosseum      the first deployment's label, as served
     python -m ops.host_instances publisher <label>               its test publisher's address, or an empty line
-    python -m ops.host_instances multi <label>                   its MultiPool, or an empty line
+    python -m ops.host_instances multi <label>                   what its multi keeper keeps (a MultiPool or a SimPoolFactory), or an empty line
+    python -m ops.host_instances multi-pool <label>              its MultiPool, which has a watchdog, or an empty line
 
 Testnet only, as the host is.
 """
@@ -264,6 +265,10 @@ def deployment_env(label: str) -> str:
     if not LABEL.fullmatch(label):
         raise SystemExit(f"odd label {label!r}")
     record = deployments.load(label)
+    if "PoolFactory" not in record and record.get("SimPoolFactory"):
+        # A simulated pool's deployment: no exchange, so no gateway lines; its keeper reads the record itself
+        # and its nodes from here (ops/sim_keeper.py).
+        return f"COLOSSEUM_DEPLOYMENT={label}\n" + keeper_nodes(record)
     return (f"COLOSSEUM_DEPLOYMENT={label}\n"
             f"GATEWAY_FACTORY={record['PoolFactory']}\n"
             f"GATEWAY_REGISTRY={keys_contract(record)}\n"
@@ -292,6 +297,12 @@ def multi_pool(record: dict) -> str:
 
 
 MULTI_WALLET = "multi-keeper"
+
+
+def keeper_target(record: dict) -> str:
+    """What colosseum-multi-keeper@<name> keeps: the deployment's MultiPool, or its SimPoolFactory, whose record
+    ops/multi_keeper.py hands to ops/sim_keeper.py; "" for neither. Only a MultiPool has a watchdog (multi_env)."""
+    return multi_pool(record) or record.get("SimPoolFactory") or ""
 
 
 def multi_env(record: dict) -> str:
@@ -333,6 +344,11 @@ def main(argv: list[str]) -> int:
         sys.stdout.write(nginx_upstreams(instances(pathlib.Path(argv[1]))))
         return 0
     if len(argv) == 2 and argv[0] == "multi":
+        if not LABEL.fullmatch(argv[1]):
+            raise SystemExit(f"odd label {argv[1]!r}")
+        print(keeper_target(deployments.load(argv[1])))
+        return 0
+    if len(argv) == 2 and argv[0] == "multi-pool":
         if not LABEL.fullmatch(argv[1]):
             raise SystemExit(f"odd label {argv[1]!r}")
         print(multi_pool(deployments.load(argv[1])))

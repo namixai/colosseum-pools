@@ -691,8 +691,25 @@ class MultiPoolKeeper(unittest.TestCase):
         self.assertLess(install.index('ln -sfn "releases/$sha"'), enable)
         self.assertLess(enable, install.index('for unit in "${units[@]}"; do'))
         self.assertIn('for name in $multis; do units+=("colosseum-multi-keeper@$name"); done', install)
-        self.assertLess(install.index('multis+="$name "'), install.index('watch_multis="$multis"'))
-        self.assertLess(install.index('watch_multis="$multis"'), install.index('watchdogs_install "$rel"'))
+        self.assertLess(install.index('multis+="$name "'), install.index('watch_multis="$watched"'))
+        self.assertLess(install.index('watch_multis="$watched"'), install.index('watchdogs_install "$rel"'))
+        # The watchdog only where the record names a MultiPool; a SimPoolFactory's keeper has none.
+        self.assertIn('pool="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi-pool "$label")"', install)
+        self.assertIn('[ -z "$pool" ] || watched+="$name "', install)
+
+    def test_a_simulated_pools_record_starts_the_multi_keeper_without_a_watchdog_or_a_gateway(self):
+        rec = {"SimPoolFactory": "0x" + "ab" * 20, "keeper_nodes": {"primary": {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}}}
+        self.assertEqual(hi.keeper_target(rec), "0x" + "ab" * 20)
+        self.assertEqual(hi.multi_pool(rec), "")
+        self.assertEqual(hi.multi_env(rec), "")
+        self.assertEqual(hi.keeper_target({"MultiPool": "0x" + "cd" * 20, "SimPoolFactory": "0x" + "ab" * 20}), "0x" + "cd" * 20)
+        self.assertEqual(hi.keeper_target({}), "")
+        with mock.patch.object(hi.deployments, "load", return_value=rec):
+            env = hi.deployment_env("sim1")
+        self.assertTrue(env.startswith("COLOSSEUM_DEPLOYMENT=sim1\n"))
+        self.assertNotIn("GATEWAY_", env)
+        self.assertNotIn("COLOSSEUM_MULTI_POOL", env)
+        self.assertIn("COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm", env)
 
     def test_the_multipool_keeper_reads_the_records_node_window(self):
         src = (ROOT / "ops" / "multi_keeper.py").read_text()
