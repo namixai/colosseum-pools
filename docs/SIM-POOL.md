@@ -107,14 +107,16 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
 ```
 
 `test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a
-handler buys, passes and fails exams and stages, claims, stops, lifts and pays payouts, has the token refuse a
+handler buys, passes and fails exams and stages, claims, stops, lifts and pays payouts, has the trader object to a
+stop and anyone make it final after its 14 days, has the token refuse a
 trader, claims what was held, withdraws and adds for the creator, closes and finishes (48 runs of 120 calls in CI,
 with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
 Nine invariants: every dollar in and out accounted for; what is held always there and equal to the refused
-payouts less the claims; `paidTotal` the sum of the payments, and `pay` sends exactly those; a withdrawal never
-below three payouts above what is owed and held, nor past `withdrawable`; one purchase, at most one payout;
-`owed` the due payouts; standing stops are stops less lifts; nothing due behind the head of the queue; `live` the
-accounts not done, and a finished pool keeping only what is held. Not an invariant, by design: that the pool
+payouts less the claims, `reserved` the stopped payouts, and `pay` spending neither; `paidTotal` the sum of the
+payments, and `pay` sends exactly those; a withdrawal never below three payouts above what is owed, held and
+reserved, nor past `withdrawable`; one purchase, at most one payout; `owed` the due payouts; stops less lifts are
+those standing and those made final; nothing due behind the head of the queue; `live` the accounts not done, a
+pool finished only with nothing owed, running or reserved, and keeping only what is held. Not an invariant, by design: that the pool
 covers every payout owed. Passes can come faster than prices, and a payout waits in order (`PayoutQueued`).
 
 ## Running it

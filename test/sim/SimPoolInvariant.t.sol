@@ -53,8 +53,10 @@ contract SimPoolHandler is Test {
     uint256 public ghostBelowFloor;
     /// A withdrawal of one unit more than `withdrawable` that went through.
     uint256 public ghostOverWithdraw;
-    /// `finish` went through with something still owed or running.
+    /// `finish` went through with something still owed, running, or kept for a stop.
     uint256 public ghostEarlyFinish;
+    /// A `pay` that paid or set aside more than was free of what is held and what stops keep.
+    uint256 public ghostSpentKept;
     /// In a wind-down, past every deadline and window: a passed stage that would not take its claim, or an
     /// account that would not be released. Recorded rather than reverted, so the fuzzer cannot pass over it.
     uint256 public ghostStuck;
@@ -190,11 +192,16 @@ contract SimPoolHandler is Test {
 
     function _pay(uint256 max) internal {
         uint256 before = usdc.balanceOf(address(pool));
+        uint256 kept = pool.held() + pool.reserved();
+        uint256 free = before > kept ? before - kept : 0;
         uint256 paidBefore = _sumIn(SimPool.PayoutState.Paid);
+        uint256 heldBefore = _sumIn(SimPool.PayoutState.Held);
         pool.pay(max);
         uint256 out = before - usdc.balanceOf(address(pool));
         uint256 paid = _sumIn(SimPool.PayoutState.Paid) - paidBefore;
         if (out != paid) ghostPayMismatch += 1;
+        // Paid and newly held alike were covered from what was free: never from what is held or kept for stops.
+        if (paid + _sumIn(SimPool.PayoutState.Held) - heldBefore > free) ghostSpentKept += 1;
         ghostOut += out;
         ghostPaidOut += paid;
         calls["pay"] += 1;
@@ -217,6 +224,13 @@ contract SimPoolHandler is Test {
         vm.warp(block.timestamp + secs);
         vm.roll(block.number + 1);
         calls["warp"] += 1;
+    }
+
+    /// Past a stop's 14 days at once, so that stops are made final and not only lifted.
+    function pastReserve() external {
+        vm.warp(block.timestamp + _reserve() + 1 hours);
+        vm.roll(block.number + 1);
+        calls["pastReserve"] += 1;
     }
 
     /// The token refuses every transfer to one of the traders from now on.
@@ -261,10 +275,38 @@ contract SimPoolHandler is Test {
         uint256 n = pool.payoutCount();
         if (n == 0 || pool.finished()) return;
         uint256 id = seed % n;
-        if (pool.payout(id).state != SimPool.PayoutState.Stopped) return;
+        SimPool.Payout memory p = pool.payout(id);
+        if (p.state != SimPool.PayoutState.Stopped || block.timestamp >= uint256(p.stoppedAt) + _reserve()) return;
         vm.prank(checker);
         pool.liftStop(id);
         calls["lift"] += 1;
+    }
+
+    // ── a stopped payout's trader, and anyone ────────────────────
+
+    function objectStop(uint256 seed) external {
+        uint256 n = pool.payoutCount();
+        if (n == 0) return;
+        uint256 id = seed % n;
+        SimPool.Payout memory p = pool.payout(id);
+        if (p.state != SimPool.PayoutState.Stopped || block.timestamp >= uint256(p.stoppedAt) + _reserve()) return;
+        vm.prank(p.trader);
+        pool.objectStop(id, keccak256(abi.encode("those were hedges", id)));
+        calls["objectStop"] += 1;
+    }
+
+    function finalizeStop(uint256 seed) external {
+        uint256 n = pool.payoutCount();
+        if (n == 0) return;
+        uint256 id = seed % n;
+        SimPool.Payout memory p = pool.payout(id);
+        if (p.state != SimPool.PayoutState.Stopped || block.timestamp < uint256(p.stoppedAt) + _reserve()) return;
+        pool.finalizeStop(id);
+        calls["finalizeStop"] += 1;
+    }
+
+    function _reserve() internal view returns (uint256) {
+        return pool.factory().STOP_RESERVE();
     }
 
     // ── the creator ──────────────────────────────────────────────
@@ -284,7 +326,7 @@ contract SimPoolHandler is Test {
         vm.prank(creator);
         pool.withdraw(amount);
         ghostOut += amount;
-        uint256 keep = pool.owed() + pool.held() + uint256(pool.largestPayout()) * 3;
+        uint256 keep = pool.owed() + pool.held() + pool.reserved() + uint256(pool.largestPayout()) * 3;
         if (usdc.balanceOf(address(pool)) < keep) ghostBelowFloor += 1;
         calls["withdraw"] += 1;
     }
@@ -334,6 +376,11 @@ contract SimPoolHandler is Test {
         vm.roll(block.number + 1);
         _endAll(_exams);
         _endAll(_stages);
+        // Every stop is older than its 14 days by now: each one becomes final, and its money free.
+        for (uint256 i = 0; i < pool.payoutCount(); ++i) {
+            if (pool.payout(i).state != SimPool.PayoutState.Stopped) continue;
+            try pool.finalizeStop(i) {} catch { ghostStuck += 1; }
+        }
         _pay(type(uint256).max);
         _finish();
         calls["windDown"] += 1;
@@ -353,7 +400,7 @@ contract SimPoolHandler is Test {
 
     function _finish() internal {
         if (!pool.closed() || pool.finished()) return;
-        bool owing = pool.owed() != 0 || pool.live() != 0;
+        bool owing = pool.owed() != 0 || pool.live() != 0 || pool.reserved() != 0;
         uint256 before = usdc.balanceOf(address(pool));
         vm.prank(creator);
         try pool.finish() {
@@ -489,7 +536,7 @@ contract SimPoolInvariantTest is Test {
 
         handler = new SimPoolHandler(pool, usdc, filler, checker, creator, usdc.balanceOf(address(pool)));
         targetContract(address(handler));
-        bytes4[] memory s = new bytes4[](29);
+        bytes4[] memory s = new bytes4[](34);
         s[0] = SimPoolHandler.buy.selector;
         s[1] = SimPoolHandler.buy.selector;
         s[2] = SimPoolHandler.passExam.selector;
@@ -520,6 +567,11 @@ contract SimPoolInvariantTest is Test {
         s[26] = SimPoolHandler.windDown.selector;
         s[27] = SimPoolHandler.earn.selector;
         s[28] = SimPoolHandler.earn.selector;
+        s[29] = SimPoolHandler.objectStop.selector;
+        s[30] = SimPoolHandler.finalizeStop.selector;
+        s[31] = SimPoolHandler.stop.selector;
+        s[32] = SimPoolHandler.pastReserve.selector;
+        s[33] = SimPoolHandler.finalizeStop.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: s}));
     }
 
@@ -563,7 +615,8 @@ contract SimPoolInvariantTest is Test {
         assertEq(usdc.balanceOf(address(pool)), handler.ghostIn() - handler.ghostOut());
     }
 
-    /// I2. What the token refused is set aside, and always there: the pool's USDC never falls below it.
+    /// I2. What the token refused is set aside, and always there: the pool's USDC never falls below it. What stops
+    ///     keep is every stopped payout's amount, and `pay` spends neither: only what is free of both.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
@@ -574,6 +627,11 @@ contract SimPoolInvariantTest is Test {
         uint256 byTrader;
         for (uint256 i = 0; i < handler.actorCount(); ++i) byTrader += pool.heldOf(handler.actor(i));
         assertEq(byTrader, pool.held(), "held: the traders' own amounts");
+        // What stops keep may exceed what the pool holds, when payouts came faster than prices (review of #269):
+        // so it is held to the stopped payouts, not to the balance.
+        (uint256 stoppedPayouts,) = _sum(SimPool.PayoutState.Stopped);
+        assertEq(pool.reserved(), stoppedPayouts, "reserved: the stopped payouts");
+        assertEq(handler.ghostSpentKept(), 0, "a pay spent what is held or kept for a stop");
     }
 
     /// I3. `paidTotal` is the sum of what was paid, and what left the pool in `pay` is exactly that.
@@ -588,8 +646,8 @@ contract SimPoolInvariantTest is Test {
         assertEq(handler.ghostPayMismatch(), 0, "a pay sent other than what it marked paid");
     }
 
-    /// I4. The creator never withdraws below three payouts of the largest size above what is owed and held,
-    ///     and not one unit past `withdrawable`.
+    /// I4. The creator never withdraws below three payouts of the largest size above what is owed, held and kept
+    ///     for stops, and not one unit past `withdrawable`.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
@@ -597,7 +655,7 @@ contract SimPoolInvariantTest is Test {
         assertEq(handler.ghostBelowFloor(), 0, "a withdrawal left less than three payouts");
         assertEq(handler.ghostOverWithdraw(), 0, "a withdrawal past withdrawable went through");
         if (!pool.finished()) {
-            uint256 keep = pool.owed() + pool.held() + uint256(pool.largestPayout()) * 3;
+            uint256 keep = pool.owed() + pool.held() + pool.reserved() + uint256(pool.largestPayout()) * 3;
             uint256 bal = usdc.balanceOf(address(pool));
             assertEq(pool.withdrawable(), bal > keep ? bal - keep : 0);
         }
@@ -631,13 +689,14 @@ contract SimPoolInvariantTest is Test {
         assertEq(pool.owed(), due);
     }
 
-    /// I7. The counts of stops on the page: those standing are stops less lifts.
+    /// I7. The counts of stops on the page: stops less lifts are those standing and those made final.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
     function invariant_standingStopsAreStopsLessLifts() public view {
         (, uint256 stopped) = _sum(SimPool.PayoutState.Stopped);
-        assertEq(pool.stoppedCount() - pool.liftedCount(), stopped);
+        (, uint256 refused) = _sum(SimPool.PayoutState.Refused);
+        assertEq(pool.stoppedCount() - pool.liftedCount(), stopped + refused);
     }
 
     /// I8. Nothing due is passed over: below the head of the queue no payout is still due.
@@ -667,7 +726,8 @@ contract SimPoolInvariantTest is Test {
             if (!done) running += 1;
         }
         assertEq(pool.live(), running);
-        assertEq(handler.ghostEarlyFinish(), 0, "finished with something owed or running");
+        assertEq(handler.ghostEarlyFinish(), 0, "finished with something owed, running or kept for a stop");
+        if (pool.finished()) assertEq(pool.reserved(), 0, "a finished pool keeps nothing for stops");
         assertEq(handler.ghostStuck(), 0, "past every deadline, an account that would not end or a stage not claimed");
         if (pool.finished()) assertEq(usdc.balanceOf(address(pool)), pool.held(), "a finished pool keeps only what is held");
     }
@@ -675,8 +735,8 @@ contract SimPoolInvariantTest is Test {
     /// Not an invariant: what each run reached, printed with `-vv`, so that a run that drove nothing does not pass
     /// unseen for one that did.
     function afterInvariant() external view {
-        string[19] memory names = ["earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
-            "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown"];
+        string[22] memory names = ["earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
+            "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown", "objectStop", "finalizeStop", "pastReserve"];
         string memory line = "reached:";
         for (uint256 i = 0; i < names.length; ++i) {
             line = string.concat(line, " ", names[i], "=", vm.toString(handler.calls(names[i])));
