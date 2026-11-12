@@ -102,7 +102,7 @@ test("the paid payout carries its proof: its id, its transaction, its amount, wh
   assert.equal(proof.token, CHAIN.usdc);
   assert.equal(proof.to.toLowerCase(), paid.args.trader);
   assert.equal(proof.requestTx, due.tx);
-  assert.ok(proof.paidAt - proof.requestedAt >= PAYOUT_DELAY, "paid no sooner than 48 hours after it was asked for");
+  assert.ok(proof.paidAt - proof.requestedAt >= PAYOUT_DELAY, "paid no sooner than the payout delay (72 hours) after it was asked for");
 });
 
 test("the stopped payout and the held one are apart from the paid, each with what it needs", () => {

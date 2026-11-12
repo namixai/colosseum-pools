@@ -1136,7 +1136,7 @@ contract SimPoolTest is Test {
     }
 
     /// Three traders buy, pass both stages and claim; the checker stops the second payout and its trader objects;
-    /// ten more exams are sold; the token refuses the third trader; after the 48 hours one payout is paid. The page drawn from these events
+    /// ten more exams are sold; the token refuses the third trader; after the payout delay one payout is paid. The page drawn from these events
     /// must show 800 USDC paid, with that payment's event, and the stop and the held payout apart.
     function test_page_recordedChain() public {
         vm.recordLogs();
@@ -1168,7 +1168,7 @@ contract SimPoolTest is Test {
         _pageCollect(pool);
         usdc.block_(who[2]);
         vm.roll(block.number + 1);
-        vm.warp(block.timestamp + 48 hours);
+        vm.warp(block.timestamp + factory.PAYOUT_DELAY());
         assertEq(pool.pay(10), 2, "the first paid, the third held, the stopped one passed over");
         _pageCollect(pool);
         assertEq(pool.paidCount(), 1);
