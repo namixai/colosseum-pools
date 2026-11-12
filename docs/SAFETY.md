@@ -143,8 +143,9 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   transactions that show the opposite positions, and for linked wallets the transactions that link them
   (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the
   creator is the platform that also runs the checker. What holds it is that it shows: every stop and every
-  lift carries the pool's counts of stops, lifts and payouts, the checking script is to be published with the
-  keeper (`ops/sim_check.py`, not in this change), and the checker
+  lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`)
+  for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and
+  links on chain), and the checker
   lifts a stop that was wrong (S115). A stopped payout's money stays set aside for 14 days after the stop
   (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no
   profit for a partner's share. Within those days the trader can object on chain, with the hash of the

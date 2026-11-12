@@ -83,8 +83,9 @@ text, and a stop that became final is `StopFinal`.
   the block inside the window; the checker stops payouts whose money, once the stop is final 14 days later,
   stays with the creator. Neither
   is held by the contract, only by what shows: `late` on every fill, the reason and transactions on
-  every stop, the counts, and a checking script to be published with the keeper (not in this
-  change). A creator is never the filler or the checker.
+  every stop, the counts, and the open checking script (`ops/sim_check.py`), which anyone can run on
+  the same blocks while a payout still waits; once stopped, the stop's own record carries its pair,
+  trades and links. A creator is never the filler or the checker.
 - **The checker's evidence is not checked by the contract.** It checks that the other account is
   one of the factory's and that there are transactions; whether they show what the reason says is
   for anyone to read.
