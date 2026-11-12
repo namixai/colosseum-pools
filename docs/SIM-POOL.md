@@ -147,6 +147,13 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
   record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route.
 
+- **The page's check**: `test_page_recordedChain` (test/sim/SimPool.t.sol) runs a pool on the simulator and
+  records every event of it a page reads, as the node gives them, into `app/tests/fixtures/sim-page-chain.json`,
+  and fails when the file is not what the contract emits (`SIM_PAGE_FIXTURE=write` rewrites it).
+  `app/tests/simpool-chain.test.mjs` decodes those logs by the app's ABI lines, draws the page with
+  `app/lib/simpool.js` and checks it the way a stranger would: the total paid is the sum of the payment events,
+  each with its transaction, and the contract's own `paidTotal`; the stopped and the held payouts are apart.
+
 ## Measuring the filler's window
 
 The fill window of a plan is fixed at creation, so it is measured first, on a pool of its own

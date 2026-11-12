@@ -260,7 +260,7 @@ export function payouts(structs, events, now, times) {
     const s = stopped.get(id);
     const q = queued.get(id);
     const o = objected.get(id);
-    return {
+    const out = {
       id,
       account: p.account ?? p[0],
       trader: p.trader ?? p[1],
@@ -287,7 +287,41 @@ export function payouts(structs, events, now, times) {
       heldAt: heldEv.has(id) ? at(heldEv.get(id), times) : null,
       short: q && status === "queued" ? { balance: BigInt(q.args.balance), ...at(q, times) } : null,
     };
+    out.stopNote = stopNote(out, now);
+    return out;
   });
+}
+
+/** A time on the chain's clock (seconds) as a page writes it: "2026-11-26 14:05 UTC". */
+export function utc(seconds) {
+  return `${new Date(Number(seconds) * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+/**
+ * Where a stopped or refused payout stands, in words, on a pool with the stop reserve: the 14 days in which the
+ * trader may object and the checker may lift the stop, then the refusal, final once anyone sends `finalizeStop`.
+ * `state` is "window" (the 14 days run), "due-final" (they are over, the stop not yet made final), "final", or
+ * "stopped" (a pool without the reserve: no window to speak of). Null for a payout never stopped or since lifted.
+ */
+export function stopNote(p, now) {
+  const objected = p.objection
+    ? ` The trader objected on ${p.objection.time === null ? `block ${p.objection.block}` : utc(p.objection.time)}; `
+      + "the objection is on chain."
+    : "";
+  if (p.status === "refused") {
+    return { state: "final", until: p.reserveEnds,
+      text: `Refused: the stop was not lifted within 14 days, and the refusal is final.${objected}` };
+  }
+  if (p.status !== "stopped") return null;
+  if (p.reserveEnds === null) return { state: "stopped", until: null, text: "Stopped by the checker." };
+  if (now < p.reserveEnds) {
+    return { state: "window", until: p.reserveEnds,
+      text: `Stopped. Until ${utc(p.reserveEnds)} the trader may object and the checker may lift the stop; the money `
+        + `stays in the pool, set aside.${objected}` };
+  }
+  return { state: "due-final", until: p.reserveEnds,
+    text: `Stopped, and the 14 days ended ${utc(p.reserveEnds)} without a lift: the refusal becomes final when anyone `
+      + `sends it (finalizeStop).${objected}` };
 }
 
 /**

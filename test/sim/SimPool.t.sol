@@ -1045,6 +1045,145 @@ contract SimPoolTest is Test {
         vm.expectRevert(SimPool.Done.selector);
         pool.liftStop(0);
     }
+
+    // ── the page's data, from this contract's own events (app/tests/simpool-chain.test.mjs) ──
+
+    /// The file the app's test reads: what a page of this pool is drawn from, recorded off this contract.
+    string constant PAGE_FIXTURE = "app/tests/fixtures/sim-page-chain.json";
+    string[] internal _pageEvents;
+    uint256 internal _pageFirstBlock;
+    mapping(uint256 block_ => uint256) internal _pageIndex;
+
+    /// The name of a pool event the page reads, by its topic; "" for the others (the creator's money, ...).
+    function _pageName(bytes32 topic) internal pure returns (string memory) {
+        if (topic == SimPool.ExamSold.selector) return "ExamSold";
+        if (topic == SimPool.Funded.selector) return "Funded";
+        if (topic == SimPool.Released.selector) return "Released";
+        if (topic == SimPool.PayoutDue.selector) return "PayoutDue";
+        if (topic == SimPool.PayoutQueued.selector) return "PayoutQueued";
+        if (topic == SimPool.PayoutPaid.selector) return "PayoutPaid";
+        if (topic == SimPool.PayoutStopped.selector) return "PayoutStopped";
+        if (topic == SimPool.PayoutHeld.selector) return "PayoutHeld";
+        if (topic == SimPool.StopLifted.selector) return "StopLifted";
+        if (topic == SimPool.StopObjected.selector) return "StopObjected";
+        if (topic == SimPool.StopFinal.selector) return "StopFinal";
+        return "";
+    }
+
+    /// The pool's events since the last call, each as the node would give it: its topics and data as they are, its
+    /// block and time, and its index in the block. No transaction hash exists in a test; the one written is made up
+    /// from the block and the index, and says so by being the keccak of them.
+    function _pageCollect(SimPool pool) internal {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        if (_pageFirstBlock == 0) _pageFirstBlock = block.number;
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].emitter != address(pool)) continue;
+            string memory name = _pageName(logs[i].topics[0]);
+            if (bytes(name).length == 0) continue;
+            uint256 index = _pageIndex[block.number]++;
+            string memory topics = "";
+            for (uint256 t = 0; t < logs[i].topics.length; ++t) {
+                topics = string.concat(topics, t == 0 ? "" : ",", '"', vm.toString(logs[i].topics[t]), '"');
+            }
+            _pageEvents.push(string.concat(
+                '{"name":"', name, '","block":', vm.toString(block.number), ',"time":', vm.toString(block.timestamp),
+                ',"index":', vm.toString(index), ',"tx":"', vm.toString(keccak256(abi.encode(block.number, index))),
+                '","topics":[', topics, '],"data":"', vm.toString(logs[i].data), '"}'
+            ));
+        }
+    }
+
+    function _pageReads(SimPool pool) internal view returns (string memory r) {
+        SimSize[] memory m = pool.menu();
+        string memory menu = "";
+        for (uint256 i = 0; i < m.length; ++i) {
+            menu = string.concat(menu, i == 0 ? "" : ",", '{"size":"', vm.toString(m[i].size), '","price":"',
+                vm.toString(m[i].price), '"}');
+        }
+        string memory list = "";
+        for (uint256 i = 0; i < pool.payoutCount(); ++i) {
+            SimPool.Payout memory p = pool.payout(i);
+            list = string.concat(list, i == 0 ? "" : ",", '{"account":"', vm.toString(p.account), '","trader":"',
+                vm.toString(p.trader), '","amount":"', vm.toString(p.amount), '","dueAt":"', vm.toString(p.dueAt),
+                '","state":', vm.toString(uint8(p.state)), ',"wasStopped":', p.wasStopped ? "true" : "false",
+                ',"stoppedAt":"', vm.toString(p.stoppedAt), '"}');
+        }
+        r = string.concat('{"menu":[', menu, '],"payouts":[', list, '],"paidCount":"', vm.toString(pool.paidCount()),
+            '","paidTotal":"', vm.toString(pool.paidTotal()), '","stoppedCount":"', vm.toString(pool.stoppedCount()),
+            '","liftedCount":"', vm.toString(pool.liftedCount()), '","owed":"', vm.toString(pool.owed()));
+        r = string.concat(r, '","held":"', vm.toString(pool.held()), '","reserved":"', vm.toString(pool.reserved()),
+            '","live":"', vm.toString(pool.live()), '","closed":', pool.closed() ? "true" : "false", ',"finished":',
+            pool.finished() ? "true" : "false", ',"partner":"', vm.toString(pool.partner()), '","partnerBps":',
+            vm.toString(pool.partnerBps()), ',"terms":"', vm.toString(pool.terms()), '","fundWindow":',
+            vm.toString(pool.fundWindow()), "}");
+    }
+
+    function _pageJson(SimPool pool) internal view returns (string memory j) {
+        string memory events = "";
+        for (uint256 i = 0; i < _pageEvents.length; ++i) events = string.concat(events, i == 0 ? "" : ",\n    ", _pageEvents[i]);
+        j = string.concat(
+            "{\n  \"about\": \"A simulated pool's page data, recorded off SimPool by test/sim/SimPool.t.sol ",
+            "(test_page_recordedChain); app/tests/simpool-chain.test.mjs draws the page from it. Regenerate: ",
+            "SIM_PAGE_FIXTURE=write forge test --match-test test_page_recordedChain\",\n",
+            "  \"pool\": \"", vm.toString(address(pool)), "\",\n  \"usdc\": \"", vm.toString(address(usdc)), "\",\n",
+            "  \"chainId\": ", vm.toString(block.chainid), ",\n  \"now\": ", vm.toString(block.timestamp), ",\n"
+        );
+        j = string.concat(j,
+            "  \"scan\": {\"from\": ", vm.toString(_pageFirstBlock), ", \"to\": ", vm.toString(block.number),
+            ", \"readTo\": ", vm.toString(block.number), ", \"complete\": true},\n",
+            "  \"reads\": ", _pageReads(pool), ",\n  \"events\": [\n    ", events, "\n  ]\n}\n"
+        );
+    }
+
+    /// Three traders buy, pass both stages and claim; the checker stops the second payout and its trader objects;
+    /// ten more exams are sold; the token refuses the third trader; after the 48 hours one payout is paid. The page drawn from these events
+    /// must show 800 USDC paid, with that payment's event, and the stop and the held payout apart.
+    function test_page_recordedChain() public {
+        vm.recordLogs();
+        SimPool pool = _pool();
+        _pageCollect(pool);
+        address[3] memory who = [trader, other, makeAddr("refused by the token")];
+        uint256[3] memory ids;
+        for (uint256 i = 0; i < 3; ++i) {
+            PaperExam exam = _buy(pool, who[i], 1);
+            _pageCollect(pool);
+            _pass(exam, who[i]);
+            vm.prank(who[i]);
+            PaperExam stage = PaperExam(pool.fund(address(exam)));
+            _pageCollect(pool);
+            _pass(stage, who[i]);
+            ids[i] = pool.claimPayout(address(stage));
+            _pageCollect(pool);
+            vm.roll(block.number + 1);
+        }
+        _stop(pool, ids[1]);
+        _pageCollect(pool);
+        vm.roll(block.number + 1);
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(other);
+        pool.objectStop(ids[1], keccak256("those were hedges on another exchange"));
+        _pageCollect(pool);
+        // A stopped payout's money is set aside for its 14 days: prices of further exams pay the third payout.
+        _withSales(pool, 10);
+        _pageCollect(pool);
+        usdc.block_(who[2]);
+        vm.roll(block.number + 1);
+        vm.warp(block.timestamp + 48 hours);
+        assertEq(pool.pay(10), 2, "the first paid, the third held, the stopped one passed over");
+        _pageCollect(pool);
+        assertEq(pool.paidCount(), 1);
+        assertEq(pool.paidTotal(), LARGE_PAYOUT);
+        assertEq(pool.held(), LARGE_PAYOUT);
+        assertEq(pool.reserved(), LARGE_PAYOUT);
+
+        string memory json = _pageJson(pool);
+        if (keccak256(bytes(vm.envOr("SIM_PAGE_FIXTURE", string("")))) == keccak256("write")) {
+            vm.writeFile(PAGE_FIXTURE, json);
+        } else {
+            assertEq(vm.readFile(PAGE_FIXTURE), json,
+                "the page's recorded chain is not this contract's: SIM_PAGE_FIXTURE=write forge test --match-test test_page_recordedChain");
+        }
+    }
 }
 
 /// USDC as Circle's FiatToken V2.2 takes a transfer by signature (EIP-3009), with its own words for

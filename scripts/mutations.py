@@ -13228,6 +13228,26 @@ MUTATIONS = [
      "  return { logs, from, to, readTo: next - 1,",
      "  return { logs, readTo: next - 1,",
      ['logs are read in windows, within a budget of calls, and a reading cut short says where it stopped']),
+    ("SP42", "app/lib/simpool.js",
+     "  if (now < p.reserveEnds) {\n",
+     "  if (now <= p.reserveEnds) {\n",
+     ['a stop on a pool with the reserve says where it stands: the 14 days, the objection, the final']),
+    ("SP43", "app/lib/simpool.js",
+     "  if (p.status === \"refused\") {\n    return { state: \"final\"",
+     "  if (false) {\n    return { state: \"final\"",
+     ['a stop on a pool with the reserve says where it stands: the 14 days, the objection, the final']),
+    ("SP44", "app/lib/simpool.js",
+     "  if (p.reserveEnds === null) return { state: \"stopped\"",
+     "  if (false) return { state: \"stopped\"",
+     ['a stop on a pool with the reserve says where it stands: the 14 days, the objection, the final']),
+    ("SP45", "app/lib/simpool.js",
+     "  const objected = p.objection\n    ?",
+     "  const objected = false\n    ?",
+     ['a stop on a pool with the reserve says where it stands: the 14 days, the objection, the final']),
+    ("SP46", "app/lib/simpool.js",
+     "    out.stopNote = stopNote(out, now);\n",
+     "",
+     ['a stop on a pool with the reserve says where it stands: the 14 days, the objection, the final', 'the stopped payout and the held one are apart from the paid, each with what it needs']),
     # A simulated pool's instance on the host: no gateway, no instance keeper, no nginx route; its keeper sends with
     # the filler, both wallets checked first. "SH": the host's instance and watchdog test modules.
     ("SH1", "ops/host_instances.py",
@@ -13383,8 +13403,9 @@ RUNNERS = {
     # A deployment on a KeyBinder in the app: its own test file and those of the settings it comes from.
     "KB": (["node", "--test", "--test-reporter=tap", "app/tests/keybinder.test.mjs", "app/tests/config.test.mjs",
             "app/tests/deployments.test.mjs", "app/tests/readonly.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
-    # A simulated pool's page data: its own test file.
-    "SP": (["node", "--test", "--test-reporter=tap", "app/tests/simpool.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
+    # A simulated pool's page data: its own test file, and the page drawn from the contract's recorded events.
+    "SP": (["node", "--test", "--test-reporter=tap", "app/tests/simpool.test.mjs", "app/tests/simpool-chain.test.mjs"],
+           r"^\s*not ok \d+ - (.+?)\s*$"),
     # A simulated pool's instance on the host: the instances' and the watchdogs' test modules.
     "SH": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_host_instances", "ops.tests.test_host_watchdogs"],
            r"^(?:FAIL|ERROR): (\w+) \("),

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE,
-  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve,
+  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve, stopNote, utc,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
   stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText,
 } from "../lib/simpool.js";
@@ -431,4 +431,32 @@ test("the page says how far the chain was read, and is whole only if the reading
     assert.throws(() => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: bad, reads: READS, events: EVENTS,
       now: 3_000 }), /needs the scan its events came from/);
   }
+});
+
+test("a stop on a pool with the reserve says where it stands: the 14 days, the objection, the final", () => {
+  const at = 1_800_000_000;
+  const until = at + STOP_RESERVE;
+  const stopped = { ...STRUCT(STAGE1, T1, 1n, 2_000n, 2, true), stoppedAt: BigInt(at) };
+  const objection = [ev("StopObjected", { id: 0n, trader: T1, text: H(0x0b) }, 700)];
+  const times = new Map([[700, at + 3_600]]);
+  const [w] = payouts([stopped], objection, at + 60, times);
+  assert.deepEqual([w.stopNote.state, w.stopNote.until], ["window", until]);
+  assert.equal(w.stopNote.text, `Stopped. Until ${utc(until)} the trader may object and the checker may lift the stop; `
+    + `the money stays in the pool, set aside. The trader objected on ${utc(at + 3_600)}; the objection is on chain.`);
+  assert.equal(utc(until), "2027-01-29 08:00 UTC");
+  const [d] = payouts([stopped], [], until, times);
+  assert.equal(d.stopNote.state, "due-final", "the 14 days are over at their last second");
+  assert.match(d.stopNote.text, /the refusal becomes final when anyone sends it \(finalizeStop\)\.$/);
+  const [f] = payouts([[STAGE1, T1, 1n, 2_000n, 5, true, BigInt(at)]], objection, until + 10, times);
+  assert.equal(f.stopNote.state, "final");
+  assert.match(f.stopNote.text, /^Refused: the stop was not lifted within 14 days, and the refusal is final\. The trader objected/);
+  const [old] = payouts([STRUCT(STAGE1, T1, 1n, 2_000n, 2, true)], [], 3_000);
+  assert.deepEqual(old.stopNote, { state: "stopped", until: null, text: "Stopped by the checker." }, "a pool without the reserve");
+  for (const state of [1, 3, 4]) {
+    assert.equal(payouts([{ ...STRUCT(STAGE1, T1, 1n, 2_000n, state, true), stoppedAt: BigInt(at) }], [], at)[0].stopNote,
+      null, `state ${state}: not stopped now, so no note`);
+  }
+  assert.equal(stopNote({ status: "paid" }, 0), null);
+  // An objection whose block was not dated still says when, by its block.
+  assert.match(payouts([stopped], objection, at + 60)[0].stopNote.text, /objected on block 700;/);
 });
