@@ -599,7 +599,7 @@ contract SimPool is Initializable {
         if (c.used) revert CodeUsed();
         if (partner == address(0) && bps != 0) revert BadShare();
         if (bps != 0 && (bps < factory.MIN_PARTNER_BPS() || bps > factory.MAX_PARTNER_BPS())) revert BadShare();
-        if (!c.listed) {
+        if (!c.listed && partner != address(0)) {
             if (_codes.length >= factory.MAX_CODES()) revert TooMuch();
             c.listed = true;
             _codes.push(code);

@@ -110,6 +110,8 @@ def codes_of(raw: dict, creator: str) -> list[tuple[str, bytes, str, int]]:
     the creator's own address: a code with no share, for sales the platform makes itself."""
     out, seen = [], set()
     for entry in raw.get("codes", []):
+        if not isinstance(entry, dict) or not {"code", "partner", "bps"} <= set(entry):
+            raise SystemExit(f"a code in the plan needs \"code\", \"partner\" and \"bps\": {entry!r}")
         text = entry["code"]
         partner = creator if entry["partner"] == "creator" else entry["partner"]
         partner, bps = to_checksum_address(partner), int(entry["bps"])

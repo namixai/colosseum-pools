@@ -1079,6 +1079,9 @@ contract SimPoolTest is Test {
         pool.buy(0, CODE);
         _share(pool, 5000);
         assertEq(pool.codes().length, 1, "set again, listed once");
+        vm.prank(creator);
+        pool.setCode(keccak256("NEVER-ON-SALE"), address(0), 0);
+        assertEq(pool.codes().length, 1, "a code set off sale before it was ever listed takes no place");
     }
 
     function test_setCode_atMostMaxCodes() public {
