@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {HyperCore} from "@hyper-evm-lib/test/simulation/HyperCore.sol";
@@ -1045,5 +1045,352 @@ contract PaperExamTest is Test {
         // Same UTC day as the first step's fills: it still counts for the second step.
         _trade(e, BTC, true, 100);
         assertEq(e.tradingDays(), 1);
+    }
+
+    // ── a filler: the trader picks no block ──────────────────────
+
+    address filler = makeAddr("filler");
+
+    function _fillerExam() internal returns (PaperExam e) {
+        e = PaperExam(Clones.clone(address(impl)));
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0);
+    }
+
+    function _fillerTrade(PaperExam e, bool isBuy, uint64 sz) internal {
+        _place(e, BTC, isBuy, sz);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        e.fill();
+    }
+
+    function test_filler_isNamedAtTheStartAndIsNeitherTheTraderNorThePool() public {
+        PaperExam e = PaperExam(Clones.clone(address(impl)));
+        vm.expectEmit(address(e));
+        emit PaperExam.FillerSet(filler, false, 0);
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0);
+        assertEq(e.filler(), filler);
+        assertEq(_exam().filler(), address(0), "an exam started the old way has none");
+        address[3] memory bad = [address(0), trader, address(this)];
+        for (uint256 i = 0; i < bad.length; ++i) {
+            PaperExam x = PaperExam(Clones.clone(address(impl)));
+            vm.expectRevert(PaperExam.BadTerms.selector);
+            x.initializeWithFiller(trader, _rules(), _terms(), bad[i], false, 0);
+        }
+    }
+
+    function test_filler_aloneFillsInsideTheWindow() public {
+        PaperExam e = _fillerExam();
+        address agent = makeAddr("agent");
+        vm.prank(trader);
+        e.setAgent(agent);
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY);
+        vm.prank(stranger);
+        vm.expectRevert(PaperExam.NotFiller.selector);
+        e.fill();
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OwnOrder.selector);
+        e.fill();
+        vm.prank(agent);
+        vm.expectRevert(PaperExam.OwnOrder.selector);
+        e.fill();
+        vm.roll(block.number + WINDOW - 1); // the window's last block
+        vm.prank(stranger);
+        vm.expectRevert(PaperExam.NotFiller.selector);
+        e.fill();
+        vm.prank(filler);
+        e.fill();
+        assertEq(e.positionOf(BTC), 100);
+    }
+
+    function test_filler_isNeverTheTradersAgent() public {
+        PaperExam e = _fillerExam();
+        _place(e, BTC, true, 100);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.BadTerms.selector);
+        e.setAgent(filler);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        e.fill();
+        assertEq(e.positionOf(BTC), 100, "the filler still fills");
+        vm.prank(trader);
+        e.setAgent(makeAddr("agent")); // any other key
+    }
+
+    function test_filler_aLapsedOrderCostsNothingAndIsReplaced() public {
+        PaperExam e = _fillerExam();
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY + WINDOW); // past the window: nobody filled it
+        vm.prank(filler);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        assertEq(e.equity(), CAPITAL, "a lapse costs the trader nothing");
+        vm.expectEmit(address(e));
+        emit PaperExam.Lapsed(BTC, true, 100);
+        _place(e, BTC, true, 50);
+        (, , uint64 sz,) = e.pending();
+        assertEq(sz, 50);
+    }
+
+    function test_filler_aSmallerPositionIsAnyonesOnceTheFallbackHasPassed() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _place(e, BTC, false, 60);
+        uint256 from = block.number + DELAY;
+        vm.roll(from + WINDOW);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        vm.roll(from + WINDOW + e.FALLBACK_BLOCKS() - 1);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        vm.roll(from + WINDOW + e.FALLBACK_BLOCKS());
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, false, 60, MARK, 0, WINDOW + e.FALLBACK_BLOCKS(), 0);
+        vm.prank(trader);
+        e.fill();
+        assertEq(e.positionOf(BTC), 40);
+    }
+
+    function test_filler_aClosingOrderToFlatFallsBackToo() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, false, 100);
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+        vm.prank(stranger);
+        e.fill();
+        assertEq(e.positionOf(BTC), 0);
+    }
+
+    function test_filler_anOrderThatOpensOrGrowsOrFlipsNeverFallsBack() public {
+        PaperExam e = _fillerExam();
+        // From flat: it opens.
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        e.fill();
+        // The same side: it grows. Past the position: it flips.
+        bool[2] memory sides = [true, false];
+        uint64[2] memory sizes = [uint64(10), uint64(101)];
+        for (uint256 i = 0; i < 2; ++i) {
+            _place(e, BTC, sides[i], sizes[i]);
+            vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+            vm.prank(trader);
+            vm.expectRevert(PaperExam.OrderLapsed.selector);
+            e.fill();
+        }
+        assertEq(e.positionOf(BTC), 100);
+    }
+
+    function test_noFiller_nothingFallsBack_asBefore() public {
+        PaperExam e = _exam();
+        _trade(e, BTC, true, 100);
+        _place(e, BTC, false, 100);
+        vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+        vm.prank(stranger);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+    }
+
+    function test_filled_saysHowManyBlocksAfterTheFirstItCame() public {
+        PaperExam e = _fillerExam();
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY);
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, true, 100, MARK, 0, 0, 0);
+        vm.prank(filler);
+        e.fill();
+        _place(e, BTC, false, 100);
+        vm.roll(block.number + DELAY + 2);
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, false, 100, MARK, 0, 2, 0);
+        vm.prank(filler);
+        e.fill();
+    }
+
+    // ── a fill at the book ───────────────────────────────────────
+
+    function _book(uint64 bid, uint64 ask) internal {
+        vm.etch(0x000000000000000000000000000000000000080e, type(BboStub).runtimeCode);
+        BboStub(0x000000000000000000000000000000000000080e).set(BTC, bid, ask);
+    }
+
+    function _bookExam(uint16 maxSpread) internal returns (PaperExam e) {
+        e = PaperExam(Clones.clone(address(impl)));
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, true, maxSpread);
+    }
+
+    function _bookFill(PaperExam e, bool isBuy, uint64 sz) internal returns (uint64 px, uint8 source) {
+        _place(e, BTC, isBuy, sz);
+        vm.roll(block.number + DELAY);
+        vm.recordLogs();
+        vm.prank(filler);
+        e.fill();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        (,, px,,, source) = abi.decode(logs[logs.length - 1].data, (bool, uint64, uint64, uint256, uint256, uint8));
+    }
+
+    function test_book_aBuyTakesTheAskASellTheBid() public {
+        _book(MARK - 50, MARK + 50); // 1 bp of spread around the oracle
+        PaperExam e = _bookExam(20);
+        (uint64 px, uint8 source) = _bookFill(e, true, 100);
+        assertEq(px, MARK + 50, "the ask");
+        assertEq(source, e.SOURCE_BOOK());
+        (px, source) = _bookFill(e, false, 100);
+        assertEq(px, MARK - 50, "the bid");
+        assertEq(source, e.SOURCE_BOOK());
+        assertEq(e.equity(), CAPITAL - 100 * 100, "half the spread each way: 0.01 USDC on 100");
+    }
+
+    function test_book_neverBetterForTheTraderThanTheOracle() public {
+        // A book that stands under the oracle, as testnet's do, or one the trader put there.
+        _book(MARK - 2000, MARK - 1990);
+        PaperExam e = _bookExam(20);
+        (uint64 px, uint8 source) = _bookFill(e, true, 100);
+        assertEq(px, MARK, "a buy no cheaper than the oracle");
+        assertEq(source, e.SOURCE_BOOK());
+        (px,) = _bookFill(e, false, 100);
+        assertEq(px, MARK - 2000, "a sell at the bid, under it: 20 bp, the most allowed");
+        // And over it: a sell no dearer than the oracle.
+        _book(MARK + 1990, MARK + 2000);
+        (px,) = _bookFill(e, true, 100);
+        assertEq(px, MARK + 2000);
+        (px,) = _bookFill(e, false, 100);
+        assertEq(px, MARK, "a sell no dearer than the oracle");
+    }
+
+    function test_book_tooFarFromTheOracleWaitsForALaterBlock() public {
+        PaperExam e = _bookExam(20);
+        _book(MARK + 1990, MARK + 2001); // the ask 20.01 bp over the oracle
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.TooFarFromOracle.selector, MARK + 2001, MARK));
+        e.fill();
+        (,, uint64 waiting,) = e.pending();
+        assertEq(waiting, 100, "the order still waits");
+        _book(MARK - 10, MARK + 10);
+        vm.roll(block.number + 1);
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, true, 100, MARK + 10, 0, 1, 1);
+        vm.prank(filler);
+        e.fill();
+        // A sell the same way, under the oracle.
+        _book(MARK - 2001, MARK - 1990);
+        _place(e, BTC, false, 100);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.TooFarFromOracle.selector, MARK - 2001, MARK));
+        e.fill();
+    }
+
+    function test_book_anEmptyOneSidedOrCrossedBookFillsAtTheOracle() public {
+        PaperExam e = _bookExam(20);
+        uint64[2][4] memory books = [
+            [uint64(0), uint64(0)], // nothing on either side: a sell would fill at zero
+            [uint64(0), MARK + 50], // no bid
+            [MARK - 50, uint64(0)], // no ask
+            [MARK + 50, MARK - 50] // crossed
+        ];
+        _bookFill(e, true, 200); // a position to sell from
+        for (uint256 i = 0; i < 4; ++i) {
+            _book(books[i][0], books[i][1]);
+            (uint64 px, uint8 source) = _bookFill(e, i % 2 == 1, 100);
+            assertEq(px, MARK);
+            assertEq(source, e.SOURCE_ORACLE_FALLBACK());
+        }
+    }
+
+    function test_book_aBookThatDoesNotAnswerFillsAtTheOracle() public {
+        vm.etch(0x000000000000000000000000000000000000080e, type(Refuses).runtimeCode);
+        PaperExam e = _bookExam(20);
+        (uint64 px, uint8 source) = _bookFill(e, true, 100);
+        assertEq(px, MARK);
+        assertEq(source, e.SOURCE_ORACLE_FALLBACK());
+        // An answer too short to be a bid and an ask.
+        vm.etch(0x000000000000000000000000000000000000080e, type(AnswersShort).runtimeCode);
+        (px, source) = _bookFill(e, false, 100);
+        assertEq(px, MARK);
+        assertEq(source, e.SOURCE_ORACLE_FALLBACK());
+    }
+
+    function test_book_aSmallerPositionAfterTheFallbackTakesTheSameRule() public {
+        PaperExam e = _bookExam(20);
+        _book(MARK - 10, MARK + 10);
+        _bookFill(e, true, 100);
+        _place(e, BTC, false, 100);
+        vm.roll(block.number + DELAY + WINDOW + e.FALLBACK_BLOCKS());
+        _book(MARK - 2001, MARK - 1990);
+        vm.prank(trader);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.TooFarFromOracle.selector, MARK - 2001, MARK));
+        e.fill();
+        _book(MARK - 30, MARK + 30);
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, false, 100, MARK - 30, 0, WINDOW + e.FALLBACK_BLOCKS(), 1);
+        vm.prank(trader);
+        e.fill();
+    }
+
+    function test_book_theOracleKeepsEquityAndTheRules() public {
+        _book(MARK - 50, MARK + 50);
+        PaperExam e = _bookExam(20);
+        _bookFill(e, true, 100);
+        _book(MARK - 5000, MARK - 4000); // the book falls, the oracle stays
+        assertEq(e.equity(), CAPITAL - 50 * 100, "valued at the oracle");
+    }
+
+    function test_book_theCeilingIsBoundedAndOnlyWithTheBook() public {
+        uint16[3] memory bad = [uint16(0), 501, 2000];
+        for (uint256 i = 0; i < 3; ++i) {
+            PaperExam x = PaperExam(Clones.clone(address(impl)));
+            vm.expectRevert(PaperExam.BadTerms.selector);
+            x.initializeWithFiller(trader, _rules(), _terms(), filler, true, bad[i]);
+        }
+        PaperExam y = PaperExam(Clones.clone(address(impl)));
+        vm.expectRevert(PaperExam.BadTerms.selector);
+        y.initializeWithFiller(trader, _rules(), _terms(), filler, false, 20);
+        PaperExam z = _bookExam(500);
+        assertTrue(z.fromBook());
+        assertEq(z.maxWorseBps(), 500);
+    }
+
+    function test_book_anOracleExamFillsAtTheOracleWhateverTheBook() public {
+        _book(MARK - 50, MARK + 50);
+        PaperExam e = _fillerExam();
+        (uint64 px, uint8 source) = _bookFill(e, true, 100);
+        assertEq(px, MARK);
+        assertEq(source, e.SOURCE_ORACLE());
+    }
+}
+
+/// The chain's best bid and offer, as the precompile answers: (bid, ask) for an asset.
+contract BboStub {
+    mapping(uint64 => uint64[2]) internal _b;
+
+    function set(uint64 asset, uint64 bid, uint64 ask) external {
+        _b[asset] = [bid, ask];
+    }
+
+    fallback(bytes calldata data) external returns (bytes memory) {
+        uint64 asset = abi.decode(data, (uint64));
+        return abi.encode(_b[asset][0], _b[asset][1]);
+    }
+}
+
+contract AnswersShort {
+    fallback(bytes calldata) external returns (bytes memory) {
+        return abi.encode(uint64(1));
+    }
+}
+
+contract Refuses {
+    fallback() external {
+        revert();
     }
 }

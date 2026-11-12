@@ -129,6 +129,15 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   anything Hyperliquid lets an agent sign for them (S3) until the account is stopped. The rules still
   apply after the fact through `breach`.
 - **The keepers** hold wallets for gas only. Every call they make is open to anyone (S46, S47).
+- **A paper exam's filler.** An exam started with a filler takes its orders' fills, inside their window, from
+  that one address, never the trader's agent (S108), so the trader picks no block. The filler does: whoever holds it chooses the block
+  in the window, and where the pool's creator is the platform that also runs the filler, the platform
+  chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first
+  possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only
+  makes a position smaller is anyone's, the trader's too, sixty blocks after its window (S110). Such an exam
+  may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader
+  than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse
+  (S111); every fill says where its price came from (S109).
 - **What none of us can do:** send a challenge account's money anywhere but to its trader's share and
   back to its pool (S48, S49); change the rules of an account that is running (S10); or upgrade a pool or
   a challenge, each a minimal clone of a fixed implementation with no upgrade path (S50, S51).
@@ -290,3 +299,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S105 | `src/KeyBinder.sol:297` | `if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);` |
 | S106 | `src/Pool.sol:334` | `emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);` |
 | S107 | `src/KeyBinder.sol:212` | `function pause() external onlyGuardianOrOwner` |
+| S108 | `src/exam/PaperExam.sol:330` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
+| S109 | `src/exam/PaperExam.sol:364` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
+| S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
+| S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
