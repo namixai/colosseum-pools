@@ -148,15 +148,19 @@ watchdogs_install() {
     systemctl restart $timers
     say "watchdogs:$timers enabled and restarted"
   fi
-  # A MultiPool watchdog an earlier release enabled for an instance that is no longer selected is stopped: its
-  # deployment's file no longer names a pool, and every run would say "could not check".
+  # A watchdog an earlier release enabled for an instance that is no longer selected for it is stopped: a MultiPool
+  # watchdog whose deployment no longer names a pool, or the keys and keeper pair of an instance that is now a
+  # simulated pool's, with no gateway or instance keeper. Every run of either would say "could not check".
+  local unit
   while read -r name rest; do
     [ -n "$name" ] || continue
-    case " $watch_units " in *" colosseum-watch-multi@$name "*) continue ;; esac
-    if systemctl is-enabled --quiet "colosseum-watch-multi@$name.timer" 2>/dev/null; then
-      systemctl disable --quiet --now "colosseum-watch-multi@$name.timer"
-      say "instance $name: no MultiPool now; its watchdog's timer is stopped"
-    fi
+    for unit in "colosseum-watch-keys-$name" "colosseum-watch-keeper-$name" "colosseum-watch-multi@$name"; do
+      case " $watch_units " in *" $unit "*) continue ;; esac
+      if systemctl is-enabled --quiet "$unit.timer" 2>/dev/null; then
+        systemctl disable --quiet --now "$unit.timer"
+        say "instance $name: $unit is not selected now; its timer is stopped"
+      fi
+    done
   done <<< "$instances"
 
   for old in $watch_legacy; do

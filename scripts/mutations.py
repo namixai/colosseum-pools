@@ -1653,11 +1653,11 @@ MUTATIONS = [
      '      :\n',
      ['test_what_a_record_no_longer_selects_is_stopped']),
     ('K559', 'ops/host/watchdogs/install-lib.sh',
-     '      systemctl disable --quiet --now "colosseum-watch-multi@$name.timer"\n',
-     '      :\n',
+     '        systemctl disable --quiet --now "$unit.timer"\n',
+     '        :\n',
      ['test_a_multipool_watchdog_of_an_instance_no_longer_selected_is_stopped']),
     ('K560', 'ops/host/watchdogs/install-lib.sh',
-     '    case " $watch_units " in *" colosseum-watch-multi@$name "*) continue ;; esac\n',
+     '      case " $watch_units " in *" $unit "*) continue ;; esac\n',
      '',
      ['test_a_multipool_watchdog_of_an_instance_no_longer_selected_is_stopped']),
     # A MultiPool's keeper on the host: its unit, what install.sh checks and enables, the env line its watchdog reads
@@ -13017,6 +13017,10 @@ MUTATIONS = [
      "        sim_wallets(record)\n",
      "",
      ['test_its_wallets_are_the_records_filler_and_checker_two_keys']),
+    ("SH16", "ops/host/watchdogs/install-lib.sh",
+     "    for unit in \"colosseum-watch-keys-$name\" \"colosseum-watch-keeper-$name\" \"colosseum-watch-multi@$name\"; do\n",
+     "    for unit in \"colosseum-watch-multi@$name\"; do\n",
+     ['test_a_simulated_pools_instance_gets_no_gateway_or_keeper_watchdogs']),
 ]
 
 RUNNERS = {
