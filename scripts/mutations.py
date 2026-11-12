@@ -13494,6 +13494,28 @@ MUTATIONS = [
      "  if (now < until) {\n    return { state: \"locked\"",
      "  if (now <= until) {\n    return { state: \"locked\"",
      ["the pool's term in the library's own words: locked, open, closed, closed early by the platform"]),
+    # The counts a points formula would be built from (activityCounts): stages apart from exams, an unread account
+    # said, a fill day not guessed, a stage's payout counted to its exam's code, what a sale brought.
+    ('SP63', "app/lib/simpool.js",
+     'x[stage ? "stagesPassed" : "examsPassed"] += 1;',
+     'x[stage ? "examsPassed" : "stagesPassed"] += 1;',
+     ['counts per trader and per code: breached and expired apart, an unread account said, a fill day not guessed']),
+    ('SP64', "app/lib/simpool.js",
+     '      both(account, (x) => { x.complete = false; });\n',
+     '',
+     ['counts per trader and per code: breached and expired apart, an unread account said, a fill day not guessed']),
+    ('SP65', "app/lib/simpool.js",
+     '          if (time === undefined || time === null) set.unknown = true;\n',
+     '          if (time === undefined || time === null) set.add(0);\n',
+     ['counts per trader and per code: breached and expired apart, an unread account said, a fill day not guessed']),
+    ('SP66', "app/lib/simpool.js",
+     '    const exam = examOfStage.get(a) ?? a;\n',
+     '    const exam = a;\n',
+     ['counts per trader and per code: breached and expired apart, an unread account said, a fill day not guessed', 'per code: its traders, purchases, what it brought, and what its traders passed and were paid']),
+    ('SP67', "app/lib/simpool.js",
+     '    const got = price - BigInt(e.args.fee);\n',
+     '    const got = price;\n',
+     ['counts per trader and per code: breached and expired apart, an unread account said, a fill day not guessed', 'per code: its traders, purchases, what it brought, and what its traders passed and were paid']),
     # A simulated pool's instance on the host: no gateway, no instance keeper, no nginx route; its keeper sends with
     # the filler, both wallets checked first. "SH": the host's instance and watchdog test modules.
     ("SH1", "ops/host_instances.py",

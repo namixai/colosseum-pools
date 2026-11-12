@@ -1322,6 +1322,9 @@ contract SimPoolTest is Test {
     /// The file the app's test reads: what a page of this pool is drawn from, recorded off this contract.
     string constant PAGE_FIXTURE = "app/tests/fixtures/sim-page-chain.json";
     string[] internal _pageEvents;
+    /// Each exam's and stage's own events the counts read (activityCounts), by account, in the order first seen.
+    address[] internal _examAccounts;
+    mapping(address account => string[]) internal _examEvents;
     uint256 internal _pageFirstBlock;
     mapping(uint256 block_ => uint256) internal _pageIndex;
 
@@ -1350,7 +1353,10 @@ contract SimPoolTest is Test {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         if (_pageFirstBlock == 0) _pageFirstBlock = block.number;
         for (uint256 i = 0; i < logs.length; ++i) {
-            if (logs[i].emitter != address(pool)) continue;
+            if (logs[i].emitter != address(pool)) {
+                _examCollect(pool, logs[i]);
+                continue;
+            }
             string memory name = _pageName(logs[i].topics[0]);
             if (bytes(name).length == 0) continue;
             uint256 index = _pageIndex[block.number]++;
@@ -1363,6 +1369,46 @@ contract SimPoolTest is Test {
                 ',"index":', vm.toString(index), ',"tx":"', vm.toString(keccak256(abi.encode(block.number, index))),
                 '","topics":[', topics, '],"data":"', vm.toString(logs[i].data), '"}'
             ));
+        }
+    }
+
+    /// The name of an exam's or a stage's event the counts read; "" for the others (orders placed, fills lapsed, ...).
+    function _examName(bytes32 topic) internal pure returns (string memory) {
+        if (topic == PaperExam.Started.selector) return "Started";
+        if (topic == PaperExam.Filled.selector) return "Filled";
+        if (topic == PaperExam.StepPassed.selector) return "StepPassed";
+        if (topic == PaperExam.Passed.selector) return "Passed";
+        if (topic == PaperExam.Stopped.selector) return "Stopped";
+        return "";
+    }
+
+    /// An exam's or a stage's own event, kept by its account, as the node would give it in a second pass over the logs
+    /// of the pool's accounts. An account is the pool's if its Started names the pool; the rest are left out.
+    function _examCollect(SimPool pool, Vm.Log memory log) internal {
+        string memory name = _examName(log.topics[0]);
+        if (bytes(name).length == 0) return;
+        if (_examEvents[log.emitter].length == 0) {
+            if (log.topics[0] != PaperExam.Started.selector || log.topics[2] != bytes32(uint256(uint160(address(pool))))) return;
+            _examAccounts.push(log.emitter);
+        }
+        uint256 index = _pageIndex[block.number]++;
+        string memory topics = "";
+        for (uint256 t = 0; t < log.topics.length; ++t) {
+            topics = string.concat(topics, t == 0 ? "" : ",", '"', vm.toString(log.topics[t]), '"');
+        }
+        _examEvents[log.emitter].push(string.concat(
+            '{"name":"', name, '","block":', vm.toString(block.number), ',"time":', vm.toString(block.timestamp),
+            ',"index":', vm.toString(index), ',"tx":"', vm.toString(keccak256(abi.encode(block.number, index))),
+            '","topics":[', topics, '],"data":"', vm.toString(log.data), '"}'
+        ));
+    }
+
+    function _examJson() internal view returns (string memory j) {
+        for (uint256 i = 0; i < _examAccounts.length; ++i) {
+            string[] storage list = _examEvents[_examAccounts[i]];
+            string memory events = "";
+            for (uint256 k = 0; k < list.length; ++k) events = string.concat(events, k == 0 ? "" : ",\n      ", list[k]);
+            j = string.concat(j, i == 0 ? "" : ",\n    ", '"', vm.toString(_examAccounts[i]), '": [\n      ', events, "\n    ]");
         }
     }
 
@@ -1416,8 +1462,9 @@ contract SimPoolTest is Test {
         j = string.concat(j,
             "  \"scan\": {\"from\": ", vm.toString(_pageFirstBlock), ", \"to\": ", vm.toString(block.number),
             ", \"readTo\": ", vm.toString(block.number), ", \"complete\": true},\n",
-            "  \"reads\": ", _pageReads(pool), ",\n  \"events\": [\n    ", events, "\n  ]\n}\n"
+            "  \"reads\": ", _pageReads(pool), ",\n  \"events\": [\n    ", events, "\n  ],\n"
         );
+        j = string.concat(j, "  \"examEvents\": {\n    ", _examJson(), "\n  }\n}\n");
     }
 
     /// Two trading groups' codes, 50 % and 40 %. Three traders buy with the first, pass both stages and claim; the

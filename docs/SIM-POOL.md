@@ -209,6 +209,13 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   of two groups' codes shows what its sales brought and what its owner was sent or, refused by the token, had set
   aside, worked out again from the events and the share; the chain ends with the platform's closer closing the
   pool long before its 180 days, and the page shows `lockedUntil` (the creation plus 180 days) and `closedEarly`.
+- **Counts for a points formula**: `activityCounts` (app/lib/simpool.js) gives, per trader and per code, what the
+  chain says each did, with no points and no weights: purchases, what they cost and brought, exams and stages
+  passed, breached or expired, steps passed, fills and the UTC days with a fill, and the payouts written, paid,
+  held, stopped, lifted, objected to and refused. Exams and stages keep their own events, so it reads them in a
+  second pass over the logs of each account the pool sold or started (`accountsToRead`); an account not read is
+  listed in `unread` and its trader's and code's counts are marked incomplete. The recorded chain carries those
+  logs too (`examEvents`), and `app/tests/simpool-chain.test.mjs` holds the counts to it.
 
 ## Measuring the filler's window
 

@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM,
-  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve, stopNote, utc, termNote,
+  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve, stopNote, utc, termNote, activityCounts, accountsToRead,
+  EXAM_END,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
   stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText, codeShares,
   codeHash, saleNonce, purchase, signedPurchase, RECEIVE_WITH_AUTHORIZATION_TYPES,
@@ -637,4 +638,47 @@ test("the pool's term in the library's own words: locked, open, closed, closed e
   assert.equal(early.state, "closed-early");
   assert.match(early.text, /^Closed early by the platform, before its term ended on 2025-04-02 12:00 UTC\. /);
   assert.match(early.text, /the codes' owners, and the rest to the creator\.$/);
+});
+
+test("counts per trader and per code: breached and expired apart, an unread account said, a fill day not guessed", () => {
+  const ev = (name, block, args) => ({ name, block, index: 0, tx: `0x${block}`, args });
+  const C1 = `0x${"c1".repeat(32)}`;
+  const [E1, E2, E3, S1, P1, X] = [A(0xe1), A(0xe2), A(0xe3), A(0x51), A(0xa1), A(0x99)];
+  const pool = [
+    ev("ExamSold", 1, { exam: E1, trader: T1, line: 1n, size: 10_000_000_000n, price: 85_000_000n, fee: 425_000n,
+      bySignature: false, code: C1, partner: P1 }),
+    ev("ExamSold", 2, { exam: E2, trader: T1, line: 0n, size: 5_000_000_000n, price: 45_000_000n, fee: 225_000n,
+      bySignature: true, code: C1, partner: P1 }),
+    ev("ExamSold", 3, { exam: E3, trader: X, line: 0n, size: 5_000_000_000n, price: 45_000_000n, fee: 225_000n,
+      bySignature: false, code: C1, partner: P1 }),
+    ev("Funded", 4, { stage: S1, exam: E1, trader: T1 }),
+    ev("PayoutDue", 6, { id: 0n, account: S1, trader: T1, amount: 800_000_000n, dueAt: 100n }),
+    ev("PayoutStopped", 7, { id: 0n, trader: T1, amount: 800_000_000n, reason: 1, paired: E3, trades: [], links: [] }),
+    ev("StopFinal", 9, { id: 0n, amount: 800_000_000n, reserved: 0n }),
+  ];
+  assert.deepEqual(accountsToRead(pool).map((a) => [a.account, a.kind]), [[E1, "exam"], [E2, "exam"], [E3, "exam"], [S1, "stage"]]);
+  const logs = new Map([
+    [E1.toLowerCase(), [ev("Filled", 1, {}), ev("Filled", 2, {}), ev("Passed", 3, { trader: T1, equity: 1n })]],
+    [E2.toLowerCase(), [ev("Stopped", 5, { status: 3n, reason: 2n, equity: -1n })]],
+    [S1.toLowerCase(), [ev("Filled", 5, {}), ev("StepPassed", 5, { step: 0n, equity: 1n }), ev("Stopped", 8, { status: 4n, reason: 0n, equity: 0n })]],
+  ]);
+  const day = 86_400;
+  const times = new Map([[1, 10 * day], [2, 10 * day + 5], [5, 11 * day]]);
+  const c = activityCounts(pool, logs, times);
+  const t = c.traders.find((x) => x.trader === T1.toLowerCase());
+  assert.deepEqual([t.purchases, t.spent, t.brought], [2, 130_000_000n, 130_000_000n - 650_000n]);
+  assert.deepEqual([t.examsPassed, t.examsBreached, t.examsExpired, t.stagesStarted, t.stagesPassed, t.stagesExpired,
+    t.stepsPassed, t.fills, t.fillDays], [1, 1, 0, 1, 0, 1, 1, 3, 2]);
+  assert.deepEqual([t.payouts.due, t.payouts.stopped, t.payouts.refused, t.payouts.refusedAmount, t.payouts.paid],
+    [1, 1, 1, 800_000_000n, 0]);
+  assert.equal(t.complete, true);
+  assert.deepEqual(c.unread, [E3.toLowerCase()], "the exam whose logs were not given");
+  const x = c.traders.find((k) => k.trader === X.toLowerCase());
+  assert.equal(x.complete, false, "its trader's counts from exam logs are too low, and say so");
+  const code = c.codes[0];
+  assert.deepEqual([code.traders, code.purchases, code.examsPassed, code.examsBreached, code.stagesExpired, code.complete],
+    [2, 3, 1, 1, 1, false]);
+  assert.deepEqual(EXAM_END, { 3: "breached", 4: "expired" });
+  // A fill whose block time was not read: the days are not guessed.
+  assert.equal(activityCounts(pool, logs, new Map([[1, 0]])).traders.find((k) => k.trader === T1.toLowerCase()).fillDays, null);
 });

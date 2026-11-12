@@ -661,3 +661,154 @@ export function signedPurchase({ pool, trader, menu, line, code, codes, salt, va
     }),
   };
 }
+
+// ── Counts per trader and per code, for a later points formula ─────────────────
+
+/** The events of an exam or a stage (each a PaperExam clone) that the counts read, in a second pass over the logs
+ *  of each account the pool sold or started (`accountsToRead`). */
+export const PAPER_EXAM_EVENTS_ABI = [
+  "event Started(address indexed trader, address indexed pool, uint64 capital)",
+  "event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late, uint8 source)",
+  "event StepPassed(uint8 indexed step, int256 equity)",
+  "event Passed(address indexed trader, int256 equity)",
+  "event Stopped(uint8 indexed status, uint8 indexed reason, int256 equity)",
+];
+
+/** PaperExam.Status, by its number, as `Stopped` names it. */
+export const EXAM_END = { 3: "breached", 4: "expired" };
+
+/** The accounts whose own logs the counts need, oldest first: every exam sold (ExamSold) and every stage started
+ *  (Funded), with its trader. One `eth_getLogs` per account, or one for all of them by address list. */
+export function accountsToRead(events) {
+  const all = ordered(events);
+  return [
+    ...named(all, "ExamSold").map((e) => ({ account: e.args.exam, kind: "exam", trader: e.args.trader, block: e.block })),
+    ...named(all, "Funded").map((e) => ({ account: e.args.stage, kind: "stage", trader: e.args.trader, block: e.block })),
+  ].sort((a, b) => a.block - b.block).map(({ account, kind, trader }) => ({ account, kind, trader }));
+}
+
+function payoutCounts() {
+  return { due: 0, dueAmount: 0n, paid: 0, paidAmount: 0n, held: 0, heldAmount: 0n, stopped: 0, stoppedAmount: 0n,
+    lifted: 0, objected: 0, refused: 0, refusedAmount: 0n };
+}
+
+function accountCounts() {
+  return { purchases: 0, spent: 0n, brought: 0n, examsPassed: 0, examsBreached: 0, examsExpired: 0, stagesStarted: 0,
+    stagesPassed: 0, stagesBreached: 0, stagesExpired: 0, stepsPassed: 0, fills: 0, payouts: payoutCounts() };
+}
+
+/**
+ * Counts, per trader and per code, of what the chain says each did: no points and no weights, only the numbers a
+ * points formula would be built from. From the pool's events: purchases (and what they cost and brought the pool,
+ * the price less the platform's part), stages started, and the payouts written, paid, held, stopped, lifted,
+ * objected to and refused. From each exam's and stage's own events (`examLogs`, keyed by the account's address in
+ * lower case, as `accountsToRead` lists them): exams and stages passed, breached or expired, steps passed, fills, and
+ * the UTC days with a fill (`fillDays`, from `times`; null where a fill's block time was not read).
+ *
+ * An account whose logs were not given is in `unread`, and its trader's and code's `complete` is false: their counts
+ * from exam logs are then too low, never guessed. A trader's `codes` are the codes it bought with.
+ */
+export function activityCounts(events, examLogs, times) {
+  const all = ordered(events);
+  const logsOf = (a) => (examLogs instanceof Map ? examLogs.get(a.toLowerCase()) : examLogs?.[a.toLowerCase()]);
+  const traders = new Map();
+  const codes = new Map();
+  const codeOfExam = new Map();
+  const examOfStage = new Map();
+  const traderOf = new Map();
+  const days = new Map();
+  const unread = [];
+  const one = (map, key, init) => {
+    const k = String(key).toLowerCase();
+    if (!map.has(k)) map.set(k, init(k));
+    return map.get(k);
+  };
+  const trader = (t) => one(traders, t, (k) => ({ trader: k, codes: [], complete: true, fillDays: 0, ...accountCounts() }));
+  const code = (c, partner) => one(codes, c, (k) => ({ code: k, partner: partner ? String(partner).toLowerCase() : null,
+    traders: 0, complete: true, ...accountCounts() }));
+  const both = (account, f) => {
+    const a = String(account).toLowerCase();
+    const exam = examOfStage.get(a) ?? a;
+    const t = traderOf.get(a);
+    if (t) f(trader(t));
+    const c = codeOfExam.get(exam);
+    if (c) f(code(c));
+  };
+
+  for (const e of named(all, "ExamSold")) {
+    const exam = String(e.args.exam).toLowerCase();
+    const price = BigInt(e.args.price);
+    const got = price - BigInt(e.args.fee);
+    traderOf.set(exam, String(e.args.trader).toLowerCase());
+    const t = trader(e.args.trader);
+    t.purchases += 1;
+    t.spent += price;
+    t.brought += got;
+    if (e.args.code) {
+      const key = String(e.args.code).toLowerCase();
+      codeOfExam.set(exam, key);
+      const c = code(key, e.args.partner);
+      if (!t.codes.includes(key)) {
+        t.codes.push(key);
+        c.traders += 1;
+      }
+      c.purchases += 1;
+      c.spent += price;
+      c.brought += got;
+    }
+  }
+  for (const e of named(all, "Funded")) {
+    const stage = String(e.args.stage).toLowerCase();
+    examOfStage.set(stage, String(e.args.exam).toLowerCase());
+    traderOf.set(stage, String(e.args.trader).toLowerCase());
+    both(stage, (x) => { x.stagesStarted += 1; });
+  }
+
+  const accountOfPayout = new Map();
+  for (const e of named(all, "PayoutDue")) {
+    accountOfPayout.set(Number(e.args.id), e.args.account);
+    both(e.args.account, (x) => { x.payouts.due += 1; x.payouts.dueAmount += BigInt(e.args.amount); });
+  }
+  const onPayout = (name, f) => {
+    for (const e of named(all, name)) {
+      const account = accountOfPayout.get(Number(e.args.id));
+      if (account) both(account, (x) => f(x.payouts, e));
+    }
+  };
+  onPayout("PayoutPaid", (p, e) => { p.paid += 1; p.paidAmount += BigInt(e.args.amount); });
+  onPayout("PayoutHeld", (p, e) => { p.held += 1; p.heldAmount += BigInt(e.args.amount); });
+  onPayout("PayoutStopped", (p, e) => { p.stopped += 1; p.stoppedAmount += BigInt(e.args.amount); });
+  onPayout("StopLifted", (p) => { p.lifted += 1; });
+  onPayout("StopObjected", (p) => { p.objected += 1; });
+  onPayout("StopFinal", (p, e) => { p.refused += 1; p.refusedAmount += BigInt(e.args.amount); });
+
+  // The second pass: each exam's and stage's own logs.
+  for (const { account, kind } of accountsToRead(events)) {
+    const logs = logsOf(String(account));
+    if (logs === undefined || logs === null) {
+      unread.push(String(account).toLowerCase());
+      both(account, (x) => { x.complete = false; });
+      continue;
+    }
+    const stage = kind === "stage";
+    const t = traderOf.get(String(account).toLowerCase());
+    for (const e of ordered(logs)) {
+      if (e.name === "Passed") both(account, (x) => { x[stage ? "stagesPassed" : "examsPassed"] += 1; });
+      else if (e.name === "StepPassed") both(account, (x) => { x.stepsPassed += 1; });
+      else if (e.name === "Stopped") {
+        const end = EXAM_END[Number(e.args.status)];
+        if (end) both(account, (x) => { x[`${stage ? "stages" : "exams"}${end === "breached" ? "Breached" : "Expired"}`] += 1; });
+      } else if (e.name === "Filled") {
+        both(account, (x) => { x.fills += 1; });
+        if (t) {
+          const time = times?.get?.(e.block);
+          const set = one(days, t, () => new Set());
+          if (time === undefined || time === null) set.unknown = true;
+          else set.add(Math.floor(Number(time) / 86_400));
+        }
+      }
+    }
+  }
+  for (const [t, set] of days) traders.get(t).fillDays = set.unknown ? null : set.size;
+  return { traders: [...traders.values()], codes: [...codes.values()], unread };
+}
