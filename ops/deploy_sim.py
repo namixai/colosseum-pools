@@ -111,8 +111,11 @@ def codes_of(raw: dict, creator: str) -> list[tuple[str, bytes, str, int]]:
         text = entry["code"]
         partner = creator if entry["partner"] == "creator" else entry["partner"]
         partner, bps = to_checksum_address(partner), int(entry["bps"])
-        if not text or text in seen:
-            raise SystemExit(f"code {text!r}: empty or twice in the plan")
+        if not text or text != text.strip():
+            raise SystemExit(f"code {text!r}: empty, or with spaces at its ends: a page trims what a buyer types, "
+                             "so nobody could buy with it")
+        if text in seen:
+            raise SystemExit(f"code {text!r}: twice in the plan")
         if partner == ZERO:
             raise SystemExit(f"code {text!r}: no partner address")
         if bps != 0 and not MIN_PARTNER_BPS <= bps <= MAX_PARTNER_BPS:
