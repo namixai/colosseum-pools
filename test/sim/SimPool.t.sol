@@ -293,6 +293,30 @@ contract SimPoolTest is Test {
         _open(p);
     }
 
+    /// The factory's own bounds, not only PaperExam's: against an exam that would take any rules, the factory
+    /// still refuses an asset off its list and leverage past 10x. PaperExam has the same two ceilings, so with
+    /// it behind the factory a missing check of the factory's would not show (mutants SM13, SM15).
+    function test_open_theFactoryHoldsItsOwnBounds_notOnlyTheExams() public {
+        SimPoolFactory lax =
+            new SimPoolFactory(IERC20(address(usdc)), address(new TakesAnyRules()), address(new SimPool()), address(this));
+        lax.setAsset(BTC, 1000);
+        lax.setTermsBook(book);
+        lax.check(_plan()); // the plan itself is within every bound
+
+        SimPlan memory offList = _plan(); // ETH is not listed, under a cap of its own of nothing
+        offList.examRules.assets[0] = ETH;
+        offList.examRules.assetLeverageX100 = new uint32[](1);
+        vm.expectRevert(SimPoolFactory.BadPlan.selector);
+        lax.check(offList);
+
+        SimPlan memory past = _plan(); // past 10x, under an asset cap within the list's
+        past.fundedRules.maxLeverageX100 = 1001;
+        past.fundedRules.assetLeverageX100 = new uint32[](1);
+        past.fundedRules.assetLeverageX100[0] = 500;
+        vm.expectRevert(SimPoolFactory.BadPlan.selector);
+        lax.check(past);
+    }
+
     function test_buy_theExamFillsAtTheBookUnderThePoolsCeiling() public {
         PaperExam exam = _buy(_pool(), trader, 0);
         assertTrue(exam.fromBook());
@@ -892,6 +916,11 @@ contract SimPoolTest is Test {
         vm.expectRevert(SimPool.Done.selector);
         pool.liftStop(0);
     }
+}
+
+/// An exam that takes any rules and terms: behind a factory, it leaves the factory's own bounds the only ones.
+contract TakesAnyRules {
+    function check(Rules calldata, ExamTerms calldata) external pure {}
 }
 
 /// USDC as Circle's FiatToken V2.2 takes a transfer by signature (EIP-3009), with its own words for

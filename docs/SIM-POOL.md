@@ -88,7 +88,7 @@ stops, lifts and payouts.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 41 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+`test/sim/SimPool.t.sol`, 42 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
 FiatToken V2.2's interface and words), and 92 mutations (`SM1`–`SM92` in `scripts/mutations.py`),
 each caught by a named test:
 
