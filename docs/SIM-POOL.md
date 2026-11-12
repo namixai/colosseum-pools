@@ -117,5 +117,9 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 90)
 
 ## Not done yet
 
-- The host unit's trigger on `SimPoolFactory` in `ops/host/install.sh`.
+- The host: `install.sh` enables `colosseum-multi-keeper@<name>` for a record with a `SimPoolFactory`
+  as for one with a `MultiPool` (`host_instances multi`), with no MultiPool watchdog, and
+  `deployment-env` renders such a record without gateway lines. What is left: an instance is still
+  bootstrapped with its own gateway and instance keeper, which a simulated pool does not use and whose
+  settings its record does not have; until bootstrap skips them, the keeper is run by hand.
 - The checking script.
