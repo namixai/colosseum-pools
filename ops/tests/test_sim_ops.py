@@ -53,10 +53,10 @@ class TheRecord(unittest.TestCase):
         net = networks.select()
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "testnet-x.json"
-            path.write_text(json.dumps({"chain_id": net.chain_id, "status": d.DONE, "SimPoolFactory": "0x" + "33" * 20}))
+            path.write_text(json.dumps({"chain_id": net.chain_id, "status": d.DONE, "SimPoolFactory": "0x" + "33" * 20}), encoding="utf-8")
             with mock.patch.object(deployments, "record_path", return_value=path):
                 self.assertEqual(deployments.load("x", net)["status"], "complete")
-        self.assertIn('record["status"] = DONE', (ROOT / "ops/deploy_sim.py").read_text())
+        self.assertIn('record["status"] = DONE', (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8"))
 
 
 class TheFirstPool(unittest.TestCase):
