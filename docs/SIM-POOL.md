@@ -120,12 +120,12 @@ text, and a stop that became final is `StopFinal`.
 ## Tests
 
 `test/sim/SimPool.t.sol`, 59 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 129 mutations (`SM1`–`SM129` in `scripts/mutations.py`),
+FiatToken V2.2's interface and words), and 130 mutations (`SM1`–`SM130` in `scripts/mutations.py`),
 each caught by a named test:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 129)
+python3 scripts/mutations.py $(seq -f 'SM%g' 1 130)
 ```
 
 `test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a

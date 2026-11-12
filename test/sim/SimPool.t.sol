@@ -449,6 +449,7 @@ contract SimPoolTest is Test {
         SimPoolFactory f = new SimPoolFactory(IERC20(address(plain)), factory.examImpl(), factory.poolImpl(), address(this));
         f.setFiller(filler);
         f.setChecker(checker);
+        f.setCloser(closer);
         f.setFeeRecipient(platform);
         f.setAsset(BTC, 1000);
         f.setTermsBook(book);
@@ -1207,6 +1208,22 @@ contract SimPoolTest is Test {
         factory.setCloser(stranger);
         vm.expectRevert(SimPoolFactory.BadRole.selector);
         factory.setCloser(address(0));
+
+        // A factory with no closer opens no pool: nobody could close one before its term.
+        SimPoolFactory none = new SimPoolFactory(IERC20(address(usdc)), factory.examImpl(), factory.poolImpl(), address(this));
+        none.setFiller(filler);
+        none.setChecker(checker);
+        none.setFeeRecipient(platform);
+        none.setAsset(BTC, 1000);
+        none.setTermsBook(book);
+        vm.startPrank(creator);
+        usdc.approve(address(none), type(uint256).max);
+        vm.expectRevert(SimPoolFactory.BadRole.selector);
+        none.create{value: 1 ether}(_plan());
+        vm.stopPrank();
+        none.setCloser(closer);
+        vm.prank(creator);
+        none.create{value: 1 ether}(_plan());
     }
 
     function test_close_theCreatorOnlyFromTheTerm_noOneElseButTheCloser() public {

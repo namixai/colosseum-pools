@@ -1216,10 +1216,10 @@
     },
     {
       "id": "S116",
-      "where": "src/sim/SimPoolFactory.sol:171",
+      "where": "src/sim/SimPoolFactory.sol:172",
       "kind": "line",
       "text": "if (msg.sender == filler || msg.sender == checker || msg.sender == closer) revert BadRole();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L171"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L172"
     },
     {
       "id": "S117",

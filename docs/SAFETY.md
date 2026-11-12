@@ -330,7 +330,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S113 | `src/sim/SimPool.sol:507` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
 | S114 | `src/sim/SimPool.sol:190` | `event PayoutStopped(` |
 | S115 | `src/sim/SimPool.sol:531` | `function liftStop(uint256 id) external onlyChecker {` |
-| S116 | `src/sim/SimPoolFactory.sol:171` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
+| S116 | `src/sim/SimPoolFactory.sol:172` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
 | S117 | `src/sim/SimPool.sol:313` | `uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |
 | S118 | `src/sim/SimPoolFactory.sol:40` | `uint32 public constant STOP_RESERVE = 14 days;` |
 | S119 | `src/sim/SimPool.sol:441` | `uint256 kept = held + reserved;` |

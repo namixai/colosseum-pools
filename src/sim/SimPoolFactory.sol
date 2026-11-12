@@ -167,7 +167,8 @@ contract SimPoolFactory {
     function create(SimPlan calldata plan) external payable returns (address pool) {
         if (msg.value != CREATION_FEE) revert WrongFee();
         address to = feeRecipient;
-        if (filler == address(0) || checker == address(0) || to == address(0)) revert BadRole();
+        // No pool without a closer: before its term, only the closer can close it (review of #279).
+        if (filler == address(0) || checker == address(0) || closer == address(0) || to == address(0)) revert BadRole();
         if (msg.sender == filler || msg.sender == checker || msg.sender == closer) revert BadRole();
         uint256 largest = _check(plan);
 
