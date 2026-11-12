@@ -42,6 +42,23 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(r.EXAM_SOLD, declared("src/sim/SimPool.sol", "ExamSold"))
 
 
+class TheRecord(unittest.TestCase):
+    def test_a_finished_deploy_writes_a_record_the_loader_takes(self):
+        """`deploy` used to end on "deployed", which `deployments.load` refuses: `pool`, `buy`, the keeper and the
+        checker would all have stopped at the record."""
+        import tempfile
+        from unittest import mock
+        from ops import deployments
+        from spike.hlspike import network as networks
+        net = networks.select()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "testnet-x.json"
+            path.write_text(json.dumps({"chain_id": net.chain_id, "status": d.DONE, "SimPoolFactory": "0x" + "33" * 20}), encoding="utf-8")
+            with mock.patch.object(deployments, "record_path", return_value=path):
+                self.assertEqual(deployments.load("x", net)["status"], "complete")
+        self.assertIn('record["status"] = DONE', (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8"))
+
+
 class TheFirstPool(unittest.TestCase):
     def test_it_is_alexs_menu_and_locks_1600(self):
         self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], [(5000, 45), (10000, 85)])
@@ -52,8 +69,24 @@ class TheFirstPool(unittest.TestCase):
         plan = d.plan_of(FIRST, h)
         self.assertEqual(plan[0], [(5_000 * 10**6, 45 * 10**6), (10_000 * 10**6, 85 * 10**6)])
         self.assertEqual(plan[1], (300, 600, 1000, [3, 4, 0], [1000, 1000, 500]))
-        self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 950, 1, 10))
+        self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 450, 1, 10))
+        self.assertEqual(plan[4], plan[2], "the stage has the exam's terms")
         self.assertEqual(plan[5:], (604800, True, 150, "0x" + "00" * 20, 0, h))
+
+    def test_the_cfos_numbers_of_12_november(self):
+        """Thirty days a stage, no idle rule that could bind, no minimum of days, 0.045 % a fill, seven days
+        to start the stage; the measuring pool fills at the same cost."""
+        measure = json.loads((ROOT / "deployments/plans/sim-measure-pool.json").read_text(encoding="utf-8"))
+        for plan in (FIRST, measure):
+            for stage in ("exam", "funded"):
+                t = plan[stage]
+                self.assertEqual(t["step_duration_s"], 30 * 86_400)
+                self.assertEqual(t["max_idle_s"], t["step_duration_s"], "never ends a stage before its deadline")
+                self.assertEqual(t["min_trading_days"], 0)
+                self.assertEqual(t["cost_ppm"], 450)
+            self.assertEqual(plan["fund_window_s"], 7 * 86_400)
+            self.assertIn("pays 0.045 % of its notional", plan["terms_text"])
+            self.assertNotIn("without a fill", plan["terms_text"])
 
     def test_dollars_round_to_usdc_units(self):
         self.assertEqual(d.usdc_units(2.01), 2_010_000, "int(2.01 * 10**6) is 2 009 999")

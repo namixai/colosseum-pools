@@ -109,15 +109,61 @@ class TheFastLoop(unittest.TestCase):
         logs = [placed_log(self.EXAM, 10, 14, 9), placed_log(self.OTHER, 3, 5, 2)]
         filled = []
         with mock.patch.object(k.c, "rpc", return_value=logs) as rpc, \
-                mock.patch.object(sk, "fill", side_effect=lambda e: filled.append(e)):
+                mock.patch.object(sk, "fill", side_effect=lambda e: filled.append(e) or {"transactionHash": "0x01"}):
             self.assertEqual(sk.fast_step(8), [], "the window opens at 10; the next block is 9")
-            self.assertEqual(rpc.call_args[0][1][0]["topics"], [k.PLACED])
+            self.assertEqual(rpc.call_args[0][1][0]["topics"], [[k.PLACED, k.EXAM_SOLD, k.FUNDED]])
             self.assertNotIn(k.to_checksum_address(self.OTHER), sk.orders, "its window ended at 5")
             rpc.return_value = []
             self.assertEqual(sk.fast_step(9), [k.to_checksum_address(self.EXAM)])
         self.assertEqual(filled, [k.to_checksum_address(self.EXAM)])
         self.assertEqual(sk.orders, {}, "sent once")
         self.assertEqual(sk.fast_block, 9)
+
+    def test_a_refused_fill_is_sent_again_next_block_inside_the_window_once_a_block(self):
+        sk = self.keeper()
+        exam = k.to_checksum_address(self.EXAM)
+        answers = [None, None, {"transactionHash": "0x01"}]
+        sent = []
+        with mock.patch.object(k.c, "rpc", return_value=[placed_log(self.EXAM, 10, 12, 9)]) as rpc, \
+                mock.patch.object(sk, "is_filler", return_value=True), \
+                mock.patch.object(sk, "fill", side_effect=lambda e: sent.append(e) or answers.pop(0)):
+            self.assertEqual(sk.fast_step(9), [exam], "refused: the book past the ceiling, say")
+            rpc.return_value = []
+            self.assertEqual(sk.fast_step(9), [], "not twice for one block")
+            self.assertEqual(sk.fast_step(10), [exam], "again for the next block")
+            self.assertEqual(sk.fast_step(11), [exam], "and filled")
+            self.assertEqual(sk.fast_step(12), [])
+        self.assertEqual(len(sent), 3)
+        self.assertEqual(sk.orders, {})
+
+    def test_a_refused_fill_stops_with_its_window(self):
+        sk = self.keeper()
+        with mock.patch.object(k.c, "rpc", return_value=[placed_log(self.EXAM, 10, 11, 9)]) as rpc, \
+                mock.patch.object(sk, "is_filler", return_value=True), \
+                mock.patch.object(sk, "fill", return_value=None) as fill:
+            sk.fast_step(9)
+            rpc.return_value = []
+            sk.fast_step(10)
+            self.assertEqual(sk.fast_step(11), [], "the window ended at 11")
+        self.assertEqual(fill.call_count, 2)
+        self.assertEqual(sk.orders, {})
+
+    def test_an_exam_bought_and_ordered_before_the_slow_pass_is_filled(self):
+        sk = self.keeper()
+        sk.done = set(sk.accounts)
+        pool = k.to_checksum_address("0x" + "55" * 20)
+        sk.pools = [pool]
+        new = "0x" + "66" * 20
+        sold = {"address": pool, "topics": [k.EXAM_SOLD, "0x" + "00" * 12 + "66" * 20], "data": "0x", "blockNumber": hex(8)}
+        reads = [[sold], [placed_log(new, 9, 13, 8)]]
+        filled = []
+        with mock.patch.object(k.c, "rpc", side_effect=lambda m, a: reads.pop(0) if reads else []) as rpc, \
+                mock.patch.object(sk, "fill", side_effect=lambda e: filled.append(e) or {"transactionHash": "0x01"}):
+            self.assertEqual(sk.fast_step(8), [k.to_checksum_address(new)], "its window opens at the next block")
+            self.assertEqual(rpc.call_args_list[0][0][1][0]["address"], [pool], "the pools are watched with nothing live")
+            self.assertEqual(rpc.call_args_list[1][0][1][0]["address"], [k.to_checksum_address(new)])
+        self.assertEqual(sk.accounts[k.to_checksum_address(new)], {"pool": pool, "kind": "exam"})
+        self.assertEqual(filled, [k.to_checksum_address(new)])
 
     def test_nothing_live_reads_nothing(self):
         sk = self.keeper()

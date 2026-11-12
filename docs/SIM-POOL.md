@@ -105,9 +105,12 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
 ## Running it
 
 - **The keeper**, `ops/sim_keeper.py` (the host's `multi_keeper` unit hands it a record with a
-  `SimPoolFactory`). A fast loop reads `Placed` every block while anything is live, about 3 600
-  `eth_getLogs` an hour, and sends each order's `fill` from the filler's key for the block its window
-  opens; a fill waits for its receipt, so two orders in one block go one after the other. A slow pass
+  `SimPoolFactory`). A fast loop reads, every block once the factory has a pool, about 3 600
+  `eth_getLogs` an hour, the live accounts' `Placed` and the pools' new exams and stages with their
+  orders, so an order placed seconds after its purchase is seen. It sends each order's `fill` from the
+  filler's key for the block its window opens; a fill the exam refuses (the book past the ceiling, say)
+  is sent again for the next block, once a block, while the window lasts. A fill waits for its receipt,
+  so two orders in one block go one after the other. A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
   `expire`, `release`, `claimPayout`, `pay`. `--measure EXAM --trader-wallet K` places orders on the
   trader's own exam and writes how many blocks late each fill landed, p50 and p99: the number the
@@ -121,8 +124,12 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
   ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's
   keeper nodes. `pool --plan` publishes the terms, approves the locked USDC and opens the pool with 1
   HYPE. Without `--send` both print what they would do and read no key. The first pool's plan is
-  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, at the book
-  with a ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise.
+  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
+  a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
+  (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
+  ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise. The factory needs an
+  idle limit; the plan sets it to the stage's thirty days, where it never ends a stage before its
+  deadline, so the terms name no idle rule.
 
 - **The checker**, `ops/sim_check.py`: the open script behind every stop. For each payout still
   waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
@@ -133,6 +140,45 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
   Without `--wallet` it only
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
+
+## Measuring the filler's window
+
+The fill window of a plan is fixed at creation, so it is measured first, on a pool of its own
+(`deployments/plans/sim-measure-pool.json`: one line of 1 000 for 9, the widest window, 60 blocks, so a late
+fill is measured and not lapsed), with the host's keeper running and filling from the filler's key.
+
+    spike/.venv/bin/python -m ops.deploy_sim buy --deployment <label> --pool <measuring pool> --line 0 --trader trader --send
+    spike/.venv/bin/python -m ops.sim_keeper --deployment <label> --measure <exam> --trader-wallet trader --orders 100
+
+`--measure` sends the trader's own transactions (testnet only, by hand; it has no dry run). It places the orders
+one at a time, alternating buy and sell, 12 size units of BTC each (0.00012 BTC, over the 10 USDC of a trade),
+and waits up to 120 seconds for each to be filled or to lapse.
+
+**What it counts.** Each fill's `late`, from its `Filled` event: the block it landed in minus the first block the
+order could fill in (the order's block plus `fillDelay`); 0 is the first possible block. And its `source`: the
+book, or the oracle when the book was empty, crossed or unreadable. Lapsed orders have no `late` and are not in
+the numbers: `ops/state/sim-measure.json` says `orders` and `filled`, and a row for each order. p50 and p99 are
+`sorted[int(p * n)]`; up to 100 orders p99 is the largest value.
+
+**The window.** An order fills in blocks `from` to `from + fillWindow - 1`, so a fill `late` L needs a window of
+at least L + 1. A measure counts only if every order filled (`filled` equals `orders`): a lapse on the widest
+window means the keeper stalled, and that is found out before any window is set. Then
+
+    fill_window = max_late + 1 + max(2, ceil((max_late + 1) / 2)),   within 1 to 60
+
+which leaves half again for a slower hour: a largest `late` of 3 gives 6 blocks, of 6 gives 11. Above a
+largest `late` of 39 the formula passes 60 and the window stays 60, with less headroom; a filler that late is
+itself the finding, and it is looked into before a pool is opened on such a window. A longer window
+lets the filler choose among more blocks, which the terms promise it does not; a shorter one lapses orders when
+the node is slow.
+
+**The price ceiling.** At the book, a fill worse than `maxWorseBps` from the oracle reverts, and the keeper
+sends it again for the next block of the window: a ceiling under the book's distance from the oracle shows up in
+the measure as lateness, or as lapses. So the ceiling is set from the book, read beside the measure: every block's best bid and
+offer against the oracle, on the trader's side (the ask above it for a buy, the bid below it for a sell). The
+ceiling is the largest distance seen plus 30 bp, and at most `MAX_WORSE_BPS` (500). On 11 November 2026
+testnet's books stood 77 to 118 bp from the oracle, so the plans say 150. On mainnet, where BTC's and ETH's
+spread is under 1 bp, it is measured there again, and so is the window.
 
 ## Not done yet
 
