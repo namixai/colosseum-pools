@@ -3,7 +3,7 @@ import { CONFIG } from "../config.js";
 import { ensureChain } from "./wallet.js";
 export { MAX_BATCH, readAll } from "./batch.js";
 import { PROVIDER_OPTIONS } from "./batch.js";
-import { DEPLOYMENTS, READ_ONLY_DEPLOYMENTS, liveDeployment, pickDeployment, rulesFields } from "./deployments.js";
+import { DEPLOYMENTS, READ_ONLY_DEPLOYMENTS, keysKind, liveDeployment, pickDeployment, rulesFields } from "./deployments.js";
 import { createGentle } from "./gentle.js";
 import { MULTICALL3 } from "./multicall.js";
 import { refusalName } from "./ui.js";
@@ -118,6 +118,21 @@ export const ABI = {
     "function freeCount() view returns (uint256)",
     "event KeyBound(address indexed key, address indexed account, address indexed trader)",
     "event KeyRetired(address indexed key, address indexed account)",
+  ],
+  // A deployment's KeyBinder, where its record names one instead of a KeyRegistry (src/KeyBinder.sol): the same three
+  // reads the pages make of a registry, no freeCount (nothing waits in a binder), and what it says of itself.
+  // app/tests/keybinder.test.mjs holds each line to the source.
+  binder: [
+    "function bindingOf(address key) view returns ((uint8 state, address account, address trader))",
+    "function keyOf(address account) view returns (address)",
+    "function isBound(address key, address account, address trader) view returns (bool)",
+    "function publisher() view returns (address)",
+    "function guardian() view returns (address)",
+    "function paused() view returns (bool)",
+    "function requestCount(address account) view returns (uint64)",
+    "event KeyBound(address indexed key, address indexed account, address indexed trader, uint8 purpose, uint64 id)",
+    "event KeyRetired(address indexed key, address indexed account)",
+    "event KeyRevoked(address indexed key, address indexed account, address indexed by)",
   ],
   erc20: [
     "function balanceOf(address) view returns (uint256)",
@@ -325,8 +340,9 @@ export function factory(runner, deployment = liveDeployment()) {
   return contract(factoryKind(deployment), deployment.factory, runner);
 }
 
+/** Where `deployment`'s keys are bound, read with its own ABI: a KeyRegistry's, or a KeyBinder's (keysKind). */
 export function registry(runner, deployment = liveDeployment()) {
-  return contract("registry", deployment.registry, runner);
+  return contract(keysKind(deployment), deployment.registry, runner);
 }
 
 export function usdc(runner) {

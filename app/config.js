@@ -18,7 +18,11 @@ export const CONFIG = {
   // The deployments the site reads: the network's live entry in deployments/LIVE.json, then its archive ones. Every
   // field comes from the entry or its record, deployments/<network>-<label>.json, and app/tests/deployments.test.mjs
   // holds each one to them, so the site and the host cannot part silently.
-  //   factory, registry  the deployment's PoolFactory and KeyRegistry;
+  //   factory, registry  the deployment's PoolFactory, and where its keys are bound: its KeyRegistry, or its
+  //                      KeyBinder on a deployment after it (docs/KEY-BINDING.md);
+  //   keyBinder          true when `registry` is a KeyBinder: chain.js then reads it with the binder's ABI, which
+  //                      answers bindingOf, isBound and keyOf as the registry does and has no freeCount. Absent for a
+  //                      KeyRegistry.
   //   deployBlock        its first block: where the check-it-yourself page says its history starts; nothing scans
   //                      back towards it (app/lib/keys.js);
   //   deployer           the deploy key: the pools it owns are our benches, which the list names (app/lib/listing.js);

@@ -4,6 +4,12 @@ import { CONFIG } from "../config.js";
 
 export const DEPLOYMENTS = CONFIG.deployments;
 
+/** Which ABI reads where a deployment's keys are bound (its `registry`): "binder" for a KeyBinder, which
+ *  scripts/app_config.py marks `keyBinder` from the record, else "registry" for a KeyRegistry. */
+export function keysKind(deployment) {
+  return deployment?.keyBinder ? "binder" : "registry";
+}
+
 /** The deployment the gateway and the keepers serve: where pools are bought, traded and opened. */
 export function liveDeployment(list = DEPLOYMENTS) {
   return list.find((d) => d.role === "live") ?? null;

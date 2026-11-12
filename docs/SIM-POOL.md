@@ -143,6 +143,10 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
 
+- **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
+  `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
+  record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route.
+
 ## Measuring the filler's window
 
 The fill window of a plan is fixed at creation, so it is measured first, on a pool of its own
@@ -184,8 +188,5 @@ spread is under 1 bp, it is measured there again, and so is the window.
 
 ## Not done yet
 
-- The host: `install.sh` enables `colosseum-multi-keeper@<name>` for a record with a `SimPoolFactory`
-  as for one with a `MultiPool` (`host_instances multi`), with no MultiPool watchdog, and
-  `deployment-env` renders such a record without gateway lines. What is left: an instance is still
-  bootstrapped with its own gateway and instance keeper, which a simulated pool does not use and whose
-  settings its record does not have; until bootstrap skips them, the keeper is run by hand.
+- The checker's unit on the host. The instance keeps the checker's wallet (docs/HOSTING.md, "A simulated
+  pool's keeper"), and `ops/sim_check.py --wallet checker` runs by hand with it until a unit runs it.

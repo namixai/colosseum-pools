@@ -24,7 +24,8 @@ test("the deployment the site only reads is its record in deployments/, field fo
     assert.equal(r.label, d.label);
     assert.equal(r.chain_id, CONFIG.chainId);
     assert.equal(d.factory, r.PoolFactory, `${d.label} factory`);
-    assert.equal(d.registry, r.KeyRegistry, `${d.label} registry`);
+    assert.equal(d.registry, r.KeyRegistry ?? r.KeyBinder, `${d.label} registry`);
+    assert.equal(d.keyBinder, r.KeyBinder ? true : undefined, `${d.label} keyBinder`);
     assert.equal(d.deployBlock, r.block, `${d.label} deployBlock`);
     assert.equal(d.deployer, r.deployer, `${d.label} deployer`);
     assert.equal(d.usdc, r.usdc, `${d.label} usdc`);
