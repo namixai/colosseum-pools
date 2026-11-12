@@ -125,6 +125,43 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
 
+## Measuring the filler's window
+
+The fill window of a plan is fixed at creation, so it is measured first, on a pool of its own
+(`deployments/plans/sim-measure-pool.json`: one line of 1 000 for 9, the widest window, 60 blocks, so a late
+fill is measured and not lapsed), with the host's keeper running and filling from the filler's key.
+
+    spike/.venv/bin/python -m ops.deploy_sim buy --deployment <label> --pool <measuring pool> --line 0 --trader trader --send
+    spike/.venv/bin/python -m ops.sim_keeper --deployment <label> --measure <exam> --trader-wallet trader --orders 100
+
+`--measure` sends the trader's own transactions (testnet only, by hand; it has no dry run). It places the orders
+one at a time, alternating buy and sell, 12 size units of BTC each (0.00012 BTC, over the 10 USDC of a trade),
+and waits up to 120 seconds for each to be filled or to lapse.
+
+**What it counts.** Each fill's `late`, from its `Filled` event: the block it landed in minus the first block the
+order could fill in (the order's block plus `fillDelay`); 0 is the first possible block. And its `source`: the
+book, or the oracle when the book was empty, crossed or unreadable. Lapsed orders have no `late` and are not in
+the numbers: `ops/state/sim-measure.json` says `orders` and `filled`, and a row for each order. p50 and p99 are
+`sorted[int(p * n)]`; up to 100 orders p99 is the largest value.
+
+**The window.** An order fills in blocks `from` to `from + fillWindow - 1`, so a fill `late` L needs a window of
+at least L + 1. A measure counts only if every order filled (`filled` equals `orders`): a lapse on the widest
+window means the keeper stalled, and that is found out before any window is set. Then
+
+    fill_window = max_late + 1 + max(2, ceil((max_late + 1) / 2)),   within 1 to 60
+
+which leaves half again for a slower hour: a largest `late` of 3 gives 6 blocks, of 6 gives 11. A longer window
+lets the filler choose among more blocks, which the terms promise it does not; a shorter one lapses orders when
+the node is slow.
+
+**The price ceiling.** At the book, a fill worse than `maxWorseBps` from the oracle reverts, and the order waits
+for a later block of its window: a ceiling under the book's distance from the oracle shows up in the measure as
+lateness, or as lapses. So the ceiling is set from the book, read beside the measure: every block's best bid and
+offer against the oracle, on the trader's side (the ask above it for a buy, the bid below it for a sell). The
+ceiling is the largest distance seen plus 30 bp, and at most `MAX_WORSE_BPS` (500). On 11 November 2026
+testnet's books stood 77 to 118 bp from the oracle, so the plans say 150. On mainnet, where BTC's and ETH's
+spread is under 1 bp, it is measured there again, and so is the window.
+
 ## Not done yet
 
 - The host: `install.sh` enables `colosseum-multi-keeper@<name>` for a record with a `SimPoolFactory`
