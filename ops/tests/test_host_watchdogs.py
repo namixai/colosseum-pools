@@ -623,7 +623,7 @@ class MultiNode(Node):
             self.seats.append(address)
             self.seat_state[address] = seat
         self.accounts[address] = {"status": 1, "day": self.now // 86_400, "deadline": 0, "violation": 0,
-                                  "stopped": 0, **account}
+                                  "stopped": 0, "max_idle": 0, "last_fill": 0, **account}
         return address
 
     @staticmethod
@@ -648,8 +648,12 @@ class MultiNode(Node):
             if sel == self.selector("seatInfo(address)"):
                 return "0x" + word(0) + word(self.seat_state.get(who, 0)) + word(0) * 6
         acct = self.accounts.get(to)
+        if acct is not None and sel == self.selector("terms()"):
+            # (capital, targetsBps[], stepDuration, maxIdle, ...) behind its offset, the array at the end
+            return "0x" + word(32) + word(10**10) + word(32 * 8) + word(0) + word(acct["max_idle"]) + word(0) * 3 + word(0)
         if acct is not None:
             for key, sig in (("status", "result()"), ("day", "day()"), ("deadline", "deadline()"),
+                             ("last_fill", "lastFillAt()"),
                              ("violation", "violation()"), ("violation", "violation(uint32[])"),
                              ("stopped", "isStopped()")):
                 if sel == self.selector(sig):
@@ -707,6 +711,33 @@ class MultiWatch(unittest.TestCase):
         self.assertIn(f"FINDING: breach|{broken}|2", out)
         self.assertIn("DailyLoss", out)
         self.assertNotIn(on_time, out)
+
+    def test_an_exam_idle_past_its_limit_is_a_finding_even_with_no_deadline(self):
+        node = MultiNode(self.mod)
+        idle = node.make(self.mod, exam=self.mod.EXAM_SOLD, max_idle=3_600,
+                         last_fill=node.now - 3_600 - self.mod.GRACE_S - 1)
+        edge = node.make(self.mod, exam=self.mod.EXAM_SOLD, max_idle=3_600, last_fill=node.now - 3_600 - self.mod.GRACE_S)
+        no_limit = node.make(self.mod, exam=self.mod.EXAM_SOLD, max_idle=0, last_fill=0)
+        code, out, _ = self.run_with(node)
+        self.assertEqual(code, 1)
+        self.assertIn(f"FINDING: expire|{idle}", out)
+        self.assertIn("without a fill, past its idle limit", out)
+        self.assertNotIn(edge, out)
+        self.assertNotIn(no_limit, out)
+
+    def test_the_newest_contracts_are_read_first(self):
+        node = MultiNode(self.mod)
+        first = node.make(self.mod, exam=self.mod.EXAM_SOLD)
+        last = node.make(self.mod, exam=self.mod.EXAM_SOLD)
+        asked = []
+        real = node.answer
+        def answer(method, params):
+            if method == "eth_call" and params[0]["data"].startswith(node.selector("examInfo(address)")):
+                asked.append("0x" + params[0]["data"][-40:])
+            return real(method, params)
+        node.answer = answer
+        self.run_with(node)
+        self.assertEqual(asked, [last.lower(), first.lower()])
 
     def test_what_is_not_a_running_sold_exam_is_not_judged(self):
         node = MultiNode(self.mod)
@@ -1108,6 +1139,16 @@ watchdogs_install "{self.rel}" "{sha}" "{instances}"
 
     def units_installed(self) -> set[str]:
         return {p.name for p in self.host["units"].iterdir()}
+
+    def test_a_multipool_watchdog_of_an_instance_no_longer_selected_is_stopped(self):
+        (self.host["etc"] / "deployment-kb2.env").write_text("COLOSSEUM_DEPLOYMENT=kb2\n")
+        out = self.run_install(instances="kb2 kb2 8790", extra='watch_multis=""')
+        self.assertEqual(out.returncode, 0, out.stderr)
+        stop = "systemctl disable --quiet --now colosseum-watch-multi@" + "kb2.timer"
+        self.assertIn(stop, self.calls())
+        self.log.write_text("")
+        out = self.run_install(instances="kb2 kb2 8790", extra='watch_multis="kb2"')
+        self.assertNotIn(stop, self.calls(), "a selected one is kept")
 
     def test_an_instance_with_a_multipool_gets_the_template_and_its_own_timer(self):
         (self.host["etc"] / "deployment-kb1.env").write_text("COLOSSEUM_DEPLOYMENT=kb1\n")

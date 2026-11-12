@@ -11,7 +11,8 @@ misses it leaves the snapshot to whoever it suits that day, the trader included.
      over: "the keeper did not take the day's snapshot". The window cannot be had back that day; the finding
      stands until the next window, and the flag clears at the first run that no longer sees it.
 
-  2. A paper exam `Active` past its deadline plus 15 minutes: "the keeper did not expire it".
+  2. A paper exam `Active` past its deadline plus 15 minutes, or past its idle limit (`terms().maxIdle` after
+     `lastFillAt()`) plus 15 minutes: "the keeper did not expire it".
 
   3. A paper exam `Active` whose `violation()` is not none: "the keeper did not breach it". The chain records
      no time for a violation, so it is reported on every run that sees it.
@@ -113,12 +114,24 @@ def examine_exam(ch: Chain, pool: str, exam: str, now: int, findings: list[dict]
                      f"over, so today's daily loss limit stands on an old snapshot."),
         })
     deadline = _word(ch.call(exam, "deadline()"), 0)
+    # terms() is a struct with an array in it: word 0 is its offset, then capital, the array's offset, stepDuration,
+    # maxIdle (src/exam/PaperExam.sol, ExamTerms).
+    max_idle = _word(ch.call(exam, "terms()"), 4)
+    last_fill = _word(ch.call(exam, "lastFillAt()"), 0) if max_idle else 0
     if deadline and now > deadline + GRACE_S:
         findings.append({
             "id": f"expire|{exam}",
             "rule": "the keeper did not expire it",
             "text": (f"paper exam {exam} of pool {pool} is Active, its deadline {deadline} passed "
                      f"{(now - deadline) // 60} minutes ago (limit {GRACE_S // 60}). `expire` is due."),
+        })
+    elif max_idle and now > last_fill + max_idle + GRACE_S:
+        findings.append({
+            "id": f"expire|{exam}",
+            "rule": "the keeper did not expire it",
+            "text": (f"paper exam {exam} of pool {pool} is Active and has gone {(now - last_fill) // 60} minutes "
+                     f"without a fill, past its idle limit of {max_idle // 60} (and {GRACE_S // 60} more). `expire` "
+                     f"is due."),
         })
     b = _word(ch.call(exam, "violation()"), 0)
     if b != 0:
@@ -163,7 +176,10 @@ def examine(ch: Chain, pool: str) -> tuple[list[dict], dict, str]:
     made = made_by(ch, pool)
     findings: list[dict] = []
     seen = {"contracts made": len(made), "exams sold": 0, "exams running": 0, "seats": len(seats), "seats funded": 0}
-    work = [("seat", s) for s in seats] + [("exam", e) for e in made if e.lower() not in {s.lower() for s in seats}]
+    seat_set = {s.lower() for s in seats}
+    # The newest contracts first: an exam sold lately is the one most likely running, and a run that stops at its
+    # budget then leaves out the old ones, released long ago, not the live ones.
+    work = [("seat", s) for s in seats] + [("exam", e) for e in reversed(made) if e.lower() not in seat_set]
     for n, (kind, account) in enumerate(work):
         try:
             (examine_seat if kind == "seat" else examine_exam)(ch, pool, account, now, findings, seen)

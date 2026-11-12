@@ -609,6 +609,30 @@ class TestPublisher(unittest.TestCase):
         self.assertIn("serve it as an instance", first)
         self.assertIn(f"secrets/{hi.PUBLISHER_WALLET}.key", install)
 
+    def test_install_checks_owners_and_modes_before_it_switches_and_never_dies_on_the_first_copy(self):
+        install = (HOST / "install.sh").read_text()
+        self.assertIn("""owned_alone() { [ "$(stat -c '%U %a' "$1" 2>/dev/null)" = "$2 $3" ]; }""", install)
+        guard = install[install.index('-m ops.host_instances publisher "$label"'):install.index('publishers+="$name "')]
+        for need in ('owned_alone "$own/secrets/publisher.key" colosseum-keeper 600',
+                     'owned_alone "$own/made-keys" colosseum-keeper 700',
+                     'owned_alone "$gw_keys" colosseum-gw 700', 'gw_keys="/var/lib/colosseum-gw/instances/$name/keys"',
+                     '[ -f "$own/secrets/publisher.addr" ]'):
+            self.assertIn(need, guard)
+        multi = install[install.index('-m ops.host_instances multi "$label"'):install.index('multis+="$name "')]
+        self.assertIn('owned_alone "$own/secrets/multi-keeper.key" colosseum-keeper 600', multi)
+        start = install.index('systemctl start "colosseum-key-copy@$name.service"')
+        self.assertTrue(install[start:start + 200].split("\n")[1].strip().startswith("|| say \"WARNING"),
+                        "after the switch a failed first copy is a warning, not a release stopped half-way")
+
+    def test_what_a_record_no_longer_selects_is_stopped(self):
+        install = (HOST / "install.sh").read_text()
+        rec = install[install.index("# An instance whose record no longer names a test publisher"):
+                      install.index('for unit in "${units[@]}"; do')]
+        self.assertIn('case " $publishers " in *" $name "*) ;; *)', rec)
+        self.assertIn('systemctl disable --quiet --now "colosseum-key-copy@$name.path" "colosseum-key-copy@$name.timer"', rec)
+        self.assertIn('case " $multis " in *" $name "*) ;; *)', rec)
+        self.assertIn('systemctl disable --quiet --now "colosseum-multi-keeper@$name"', rec)
+
     def test_the_keeper_makes_keys_where_the_copier_reads_them(self):
         sys.path.insert(0, str(HOST))
         import key_copy
@@ -658,7 +682,7 @@ class MultiPoolKeeper(unittest.TestCase):
                       install)
         check = install.index('-m ops.host_instances multi "$label"')
         guard = install[check:install.index('multis+="$name "')]
-        self.assertIn(f'"$own/secrets/{hi.MULTI_WALLET}.key"', guard)
+        self.assertIn(f'[ -f "$own/secrets/{hi.MULTI_WALLET}.key" ] && [ -f "$own/secrets/{hi.MULTI_WALLET}.addr" ]', guard)
         self.assertIn("nothing switched", guard)
         first = install[install.index('-m ops.host_instances multi "$first_label"'):check]
         self.assertIn("serve it as an instance", first)
