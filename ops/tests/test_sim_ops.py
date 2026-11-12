@@ -160,6 +160,9 @@ class TheCodes(unittest.TestCase):
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6001}],
                [{"code": "A", "partner": "0x" + "00" * 20, "bps": 0}],
                [{"code": "", "partner": "0x" + "11" * 20, "bps": 0}],
+               [{"code": " GROUP-ONE", "partner": "0x" + "11" * 20, "bps": 0}],
+               [{"code": "GROUP-ONE\n", "partner": "0x" + "11" * 20, "bps": 0}],
+               [{"code": "GROUP-ONE\u00a0", "partner": "0x" + "11" * 20, "bps": 0}],
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 0}, {"code": "A", "partner": "0x" + "22" * 20, "bps": 0}],
                [{"code": str(i), "partner": "0x" + "11" * 20, "bps": 0} for i in range(d.MAX_CODES + 1)]]
         for codes in bad:
