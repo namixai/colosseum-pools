@@ -52,8 +52,24 @@ class TheFirstPool(unittest.TestCase):
         plan = d.plan_of(FIRST, h)
         self.assertEqual(plan[0], [(5_000 * 10**6, 45 * 10**6), (10_000 * 10**6, 85 * 10**6)])
         self.assertEqual(plan[1], (300, 600, 1000, [3, 4, 0], [1000, 1000, 500]))
-        self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 950, 1, 10))
+        self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 450, 1, 10))
+        self.assertEqual(d.plan_of(FIRST, h)[4], plan[2], "the stage has the exam's terms")
         self.assertEqual(plan[5:], (604800, True, 150, "0x" + "00" * 20, 0, h))
+
+    def test_the_cfos_numbers_of_12_november(self):
+        """Thirty days a stage, no idle rule that could bind, no minimum of days, 0.045 % a fill, seven days
+        to start the stage; the measuring pool fills at the same cost."""
+        measure = json.loads((ROOT / "deployments/plans/sim-measure-pool.json").read_text())
+        for plan in (FIRST, measure):
+            for stage in ("exam", "funded"):
+                t = plan[stage]
+                self.assertEqual(t["step_duration_s"], 30 * 86_400)
+                self.assertEqual(t["max_idle_s"], t["step_duration_s"], "never ends a stage before its deadline")
+                self.assertEqual(t["min_trading_days"], 0)
+                self.assertEqual(t["cost_ppm"], 450)
+            self.assertEqual(plan["fund_window_s"], 7 * 86_400)
+            self.assertIn("pays 0.045 % of its notional", plan["terms_text"])
+            self.assertNotIn("without a fill", plan["terms_text"])
 
     def test_dollars_round_to_usdc_units(self):
         self.assertEqual(d.usdc_units(2.01), 2_010_000, "int(2.01 * 10**6) is 2 009 999")

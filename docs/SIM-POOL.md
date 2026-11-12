@@ -113,8 +113,12 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
   ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's
   keeper nodes. `pool --plan` publishes the terms, approves the locked USDC and opens the pool with 1
   HYPE. Without `--send` both print what they would do and read no key. The first pool's plan is
-  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, at the book
-  with a ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise.
+  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
+  a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
+  (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
+  ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise. The factory needs an
+  idle limit; the plan sets it to the stage's thirty days, where it never ends a stage before its
+  deadline, so the terms name no idle rule.
 
 - **The checker**, `ops/sim_check.py`: the open script behind every stop. For each payout still
   waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
