@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  SIM_POOL_ABI, SIM_FACTORY_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, PAYOUT_STATE, STATUS, TOTAL_INCLUDES,
+  SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE,
+  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
   stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt,
 } from "../lib/simpool.js";
@@ -130,9 +131,81 @@ test("the platform's numbers are the factory's constants", () => {
   assert.match(FACTORY_SOL, /PAYOUT_DELAY = 48 hours;/);
 });
 
-test("the payout states are the contract's, in its order", () => {
+test("the payout states are the contract's, in its order, and Refused next on a pool with the stop reserve", () => {
   const body = POOL_SOL.match(/enum PayoutState \{([\s\S]*?)\}/)[1].replace(/\/\/\/.*$/gm, "");
-  assert.deepEqual(body.split(",").map((s) => s.trim()).filter(Boolean), PAYOUT_STATE);
+  const declared = body.split(",").map((s) => s.trim()).filter(Boolean);
+  assert.deepEqual(PAYOUT_STATE.slice(0, declared.length), declared);
+  assert.ok(declared.length === 5 || declared.length === 6, declared.join());
+  assert.equal(PAYOUT_STATE[5], "Refused");
+});
+
+/** Whether the source has the stop reserve: before it is merged the test holds its lines absent, after it to the source. */
+const RESERVE = /uint256 public reserved;/.test(POOL_SOL);
+
+test("the stop reserve's lines are the contract's own once it has them, and absent from it before", () => {
+  const events = sourceEvents(POOL_SOL);
+  const struct = POOL_SOL.match(/struct Payout \{([\s\S]*?)\}/)[1].replace(/\/\/\/.*$/gm, "");
+  const fields = [...struct.matchAll(/^\s*(\w+)\s+(\w+);/gm)].map((m) => m[2]);
+  const line = SIM_POOL_STOP_RESERVE_ABI.find((l) => l.startsWith("function payout("));
+  const abiFields = [...line.matchAll(/(?:address|uint64|uint8|bool) (\w+)/g)].map((m) => m[1]);
+  const v1 = SIM_POOL_ABI.find((l) => l.startsWith("function payout("));
+  assert.deepEqual([...v1.matchAll(/(?:address|uint64|uint8|bool) (\w+)/g)].map((m) => m[1]), abiFields.slice(0, 6),
+    "the six fields lead both, so the first line decodes either pool's answer");
+  if (RESERVE) {
+    assert.deepEqual(fields, abiFields);
+    for (const l of SIM_POOL_STOP_RESERVE_ABI.filter((x) => x.startsWith("event "))) {
+      const m = l.match(/^event (\w+)\((.*)\)$/);
+      assert.equal(shape(m[2]), events.get(m[1]), m[1]);
+    }
+    assert.match(FACTORY_SOL, /STOP_RESERVE = 14 days;/);
+  } else {
+    assert.deepEqual(fields, abiFields.slice(0, 6));
+    assert.ok(!events.has("StopObjected") && !events.has("StopFinal"));
+  }
+  assert.equal(STOP_RESERVE, 14 * 24 * 3600);
+});
+
+test("a stopped payout on a pool with the stop reserve says until when, the objection, and the final", () => {
+  const stoppedAt = 1_500;
+  const structs = [
+    { ...STRUCT(STAGE1, T1, 1n, 2_000n, 2, true), stoppedAt: BigInt(stoppedAt) },
+    [STAGE2, T2, 2n, 2_100n, 5, true, 1_600n],
+    STRUCT(STAGE3, T3, 3n, 2_200n, 3, false),
+  ];
+  const events = [
+    ev("StopObjected", { id: 0n, trader: T1, text: H(0x0b) }, 500),
+    ev("StopFinal", { id: 1n, amount: 2n, reserved: 0n }, 600),
+  ];
+  const [a, b, c] = payouts(structs, events, 3_000, TIMES);
+  assert.equal(a.status, "stopped");
+  assert.equal(a.stoppedAt, stoppedAt);
+  assert.equal(a.reserveEnds, stoppedAt + STOP_RESERVE);
+  assert.deepEqual([a.objection.text, a.objection.tx], [H(0x0b), H(500 * 100)]);
+  assert.equal(b.status, "refused");
+  assert.equal(b.stoppedAt, 1_600, "read from the array as ethers hands it");
+  assert.equal(b.final.tx, H(600 * 100));
+  assert.ok(STATUS.refused);
+  assert.deepEqual([c.stoppedAt, c.reserveEnds, c.objection, c.final], [null, null, null, null],
+    "a pool without the reserve, or a payout never stopped");
+  assert.deepEqual(gaps(payouts([[STAGE2, T2, 2n, 2_100n, 5, true, 1_600n]], [], 3_000)),
+    [{ id: 0, missing: "PayoutDue" }, { id: 0, missing: "PayoutStopped" }, { id: 0, missing: "StopFinal" }]);
+});
+
+test("whether a pool has the stop reserve: a revert of reserved() says no, a node's failure is not taken for it", async () => {
+  const revert = (err) => err.code === "CALL_EXCEPTION";
+  assert.equal(await hasStopReserve(async () => 0n, revert), true);
+  assert.equal(await hasStopReserve(async () => { throw Object.assign(new Error("x"), { code: "CALL_EXCEPTION" }); }, revert), false);
+  await assert.rejects(hasStopReserve(async () => { throw Object.assign(new Error("rate"), { code: -32005 }); }, revert), /rate/);
+});
+
+test("a missing read is named, never taken for zero; an event without its block is refused", () => {
+  assert.throws(() => paidTotal(EVENTS, { paidCount: 2n }), /lack paidTotal/);
+  assert.throws(() => stopCounters({}), /lack stoppedCount, liftedCount, paidCount/);
+  const { owed, ...noOwed } = READS;
+  assert.equal(owed, 0n);
+  assert.throws(() => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, reads: noOwed, events: EVENTS, now: 3_000 }),
+    /lack owed/);
+  assert.throws(() => normalizeEvent({ eventName: "PayoutPaid", args: {}, transactionHash: H(1) }), /without its block/);
 });
 
 test("a menu line pays 8% of its size and gives the platform 0.5% of its price", () => {
@@ -276,6 +349,9 @@ test("the page of a pool has everything it shows and nothing of what the creator
   assert.equal(page.total.complete, true);
   assert.deepEqual(page.gaps, []);
   assert.equal(page.counters.standing, 1n);
+  assert.equal(page.reserved, null, "a pool without the stop reserve");
+  assert.equal(simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, reads: { ...READS, reserved: 400_000_000n },
+    events: EVENTS, times: TIMES, now: 3_000 }).reserved, 400_000_000n);
   const all = keys(page);
   for (const k of ["locked", "principal"]) assert.ok(!all.has(k), `${k} is on the page`);
   assert.ok(!SIM_POOL_ABI.some((l) => /principal|withdrawable|AddedToPot/.test(l)), "the library reads none of it");
@@ -323,6 +399,7 @@ test("the first block at a time is found by halving, and the claim's time is the
   assert.equal(await firstBlockAt(1_101, { low: 0, high: 1_000, timeOf }), 51);
   assert.equal(await firstBlockAt(1_100, { low: 0, high: 1_000, timeOf }), 50);
   assert.equal(await firstBlockAt(0, { low: 0, high: 1_000, timeOf }), 0);
+  assert.equal(await firstBlockAt(0, { low: 10, high: 5, timeOf }), null, "an empty range has no block");
   assert.equal(await firstBlockAt(1_000 + 2_001 * 2, { low: 0, high: 1_000, timeOf }), null, "not yet on chain");
   assert.equal(claimedAt(2_000n + BigInt(PAYOUT_DELAY)), 2_000);
 });

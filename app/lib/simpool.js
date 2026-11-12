@@ -54,6 +54,31 @@ export const SIM_POOL_ABI = [
   "event Closed()",
 ];
 
+/**
+ * What a pool with a stop reserve adds (the stop held for STOP_RESERVE, the trader's objection, the stop made final):
+ * the payout's `stoppedAt`, the `reserved` view and two events. A pool without it answers none of them, so a page
+ * reads these only once `reserved()` has answered (`hasStopReserve`). `payout(id)` in SIM_POOL_ABI decodes the
+ * answer of either pool: its six fields lead both, and the seventh, here, is read only where it is there.
+ */
+export const SIM_POOL_STOP_RESERVE_ABI = [
+  "function reserved() view returns (uint256)",
+  "function payout(uint256 id) view returns ((address account, address trader, uint64 amount, uint64 dueAt, uint8 state, bool wasStopped, uint64 stoppedAt))",
+  "event StopObjected(uint256 indexed id, address indexed trader, bytes32 text)",
+  "event StopFinal(uint256 indexed id, uint64 amount, uint256 reserved)",
+];
+
+/** Whether a pool has the stop reserve, from its answer to `reserved()`: a value, or a revert (a pool without it).
+ *  `read` is that call; a failure that is not a revert (the node, the rate) is thrown, never taken for "without". */
+export async function hasStopReserve(read, isRevert) {
+  try {
+    await read();
+    return true;
+  } catch (err) {
+    if (isRevert(err)) return false;
+    throw err;
+  }
+}
+
 export const SIM_FACTORY_ABI = [
   "function pools() view returns (address[])",
   "function poolOf(address account) view returns (address)",
@@ -70,10 +95,12 @@ export const SIM_FACTORY_ABI = [
 export const FEE_BPS = 50n;
 export const PAYOUT_BPS = 800n;
 export const PAYOUT_DELAY = 48 * 3600;
+/** How long a stop holds its money and can be lifted or objected to, on a pool with the stop reserve. */
+export const STOP_RESERVE = 14 * 24 * 3600;
 const BPS = 10_000n;
 
 /** SimPool.PayoutState, by its number. */
-export const PAYOUT_STATE = ["None", "Due", "Stopped", "Paid", "Held"];
+export const PAYOUT_STATE = ["None", "Due", "Stopped", "Paid", "Held", "Refused"];
 
 /** What a page calls each state of a payout. "waiting" and "queued" are both Due on chain: before its time, and
  *  past it but not yet sent (nobody has called `pay`, or the pool's USDC did not cover it: then `short` says so). */
@@ -83,6 +110,7 @@ export const STATUS = Object.freeze({
   paid: "Paid",
   stopped: "Stopped by the checker",
   held: "Held: the token refused the transfer, the money is set aside for the trader",
+  refused: "Refused: the stop stood 14 days without a lift and is final",
 });
 
 /** Why the checker stopped a payout: SimPool.stopPayout's `reason`. */
@@ -107,13 +135,23 @@ export const TOTAL_INCLUDES = "The sum of every payment this pool's contract sen
  */
 export function normalizeEvent(e) {
   const args = e.args && typeof e.args.toObject === "function" ? e.args.toObject() : { ...e.args };
+  const block = Number(e.block ?? e.blockNumber);
+  // An event without its block cannot be ordered or dated: a reading that lost it is said, not sorted as NaN.
+  if (!Number.isInteger(block)) throw new Error(`an event ${e.name ?? e.eventName ?? ""} without its block number`);
   return {
     name: e.name ?? e.eventName ?? e.fragment?.name,
     args,
-    block: Number(e.block ?? e.blockNumber),
+    block,
     tx: e.tx ?? e.transactionHash,
     index: Number(e.index ?? e.logIndex ?? 0),
   };
+}
+
+/** The getters a function needs, all there, or an error that names the missing ones: a total of zero on a page of
+ *  payouts would be a number nobody can check, where "could not read paidTotal" is the truth. */
+function need(reads, names) {
+  const missing = names.filter((n) => reads?.[n] === undefined || reads?.[n] === null);
+  if (missing.length) throw new Error(`the pool's reads lack ${missing.join(", ")}`);
 }
 
 function ordered(events) {
@@ -204,17 +242,24 @@ export function payouts(structs, events, now, times) {
   const lifted = byId("StopLifted");
   const queued = byId("PayoutQueued");
   const heldEv = byId("PayoutHeld");
+  const objected = byId("StopObjected");
+  const final = byId("StopFinal");
   return [...structs].map((p, id) => {
     const state = Number(p.state ?? p[4]);
     const dueAt = Number(p.dueAt ?? p[3]);
+    // Only a pool with the stop reserve has it (SIM_POOL_STOP_RESERVE_ABI); 0 there for a payout never stopped.
+    const rawStoppedAt = p.stoppedAt ?? p[6];
+    const stoppedAt = rawStoppedAt === undefined ? null : Number(rawStoppedAt);
     let status;
     if (state === 1) status = now < dueAt ? "waiting" : "queued";
     else if (state === 2) status = "stopped";
     else if (state === 3) status = "paid";
     else if (state === 4) status = "held";
+    else if (state === 5) status = "refused";
     else status = "unknown";
     const s = stopped.get(id);
     const q = queued.get(id);
+    const o = objected.get(id);
     return {
       id,
       account: p.account ?? p[0],
@@ -233,6 +278,11 @@ export function payouts(structs, events, now, times) {
         links: [...s.args.links],
         ...at(s, times),
       } : null,
+      // The stop reserve: until when a stop can still be lifted or objected to, the trader's objection, the final.
+      stoppedAt: stoppedAt || null,
+      reserveEnds: stoppedAt ? stoppedAt + STOP_RESERVE : null,
+      objection: o ? { text: o.args.text, ...at(o, times) } : null,
+      final: final.has(id) ? at(final.get(id), times) : null,
       lift: lifted.has(id) ? at(lifted.get(id), times) : null,
       heldAt: heldEv.has(id) ? at(heldEv.get(id), times) : null,
       short: q && status === "queued" ? { balance: BigInt(q.args.balance), ...at(q, times) } : null,
@@ -246,6 +296,7 @@ export function payouts(structs, events, now, times) {
  * short): the page then shows the contract's total and says the list is partial, never a smaller sum as the total.
  */
 export function paidTotal(events, reads, times) {
+  need(reads, ["paidCount", "paidTotal"]);
   const list = named(ordered(events), "PayoutPaid").map((e) => ({
     id: Number(e.args.id), trader: e.args.trader, amount: BigInt(e.args.amount), ...at(e, times),
   }));
@@ -258,6 +309,7 @@ export function paidTotal(events, reads, times) {
 
 /** The pool's counters of stops: every stop, every lift, the stops that stand, and the payouts paid. */
 export function stopCounters(reads) {
+  need(reads, ["stoppedCount", "liftedCount", "paidCount"]);
   const stopped = BigInt(reads.stoppedCount);
   const lifted = BigInt(reads.liftedCount);
   return { stopped, lifted, standing: stopped - lifted, paid: BigInt(reads.paidCount) };
@@ -299,8 +351,12 @@ export function gaps(list) {
     if (!p.due) out.push({ id: p.id, missing: "PayoutDue" });
     if (p.status === "paid" && !p.paid) out.push({ id: p.id, missing: "PayoutPaid" });
     if ((p.status === "stopped" || p.wasStopped) && !p.stop) out.push({ id: p.id, missing: "PayoutStopped" });
-    if (p.wasStopped && p.status !== "stopped" && !p.lift) out.push({ id: p.id, missing: "StopLifted" });
+    // Stopped once and no longer stopped: lifted, unless the stop was made final (refused).
+    if (p.wasStopped && p.status !== "stopped" && p.status !== "refused" && !p.lift) {
+      out.push({ id: p.id, missing: "StopLifted" });
+    }
     if (p.status === "held" && !p.heldAt) out.push({ id: p.id, missing: "PayoutHeld" });
+    if (p.status === "refused" && !p.final) out.push({ id: p.id, missing: "StopFinal" });
   }
   return out;
 }
@@ -312,6 +368,8 @@ export function gaps(list) {
  * clock. No field of it carries what the creator locked or put in.
  */
 export function simPoolPage({ pool, usdc, chainId, reads, events, times, now }) {
+  need(reads, ["menu", "payouts", "paidCount", "paidTotal", "stoppedCount", "liftedCount", "owed", "held", "live",
+    "closed", "finished", "partnerBps", "terms", "fundWindow"]);
   const list = payouts(reads.payouts, events, now, times);
   const byStatus = {};
   for (const k of Object.keys(STATUS)) byStatus[k] = list.filter((p) => p.status === k);
@@ -329,6 +387,8 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now }) 
     counters: stopCounters(reads),
     owed: BigInt(reads.owed),
     held: BigInt(reads.held),
+    // Stopped payouts' money held for the stop reserve; null for a pool without it.
+    reserved: reads.reserved === undefined || reads.reserved === null ? null : BigInt(reads.reserved),
     live: BigInt(reads.live),
     closed: Boolean(reads.closed),
     finished: Boolean(reads.finished),
@@ -379,6 +439,7 @@ export async function readLogs({ getLogs, from, to, window = 50, maxCalls = 40 }
 export async function firstBlockAt(time, { low, high, timeOf }) {
   let lo = low;
   let hi = high;
+  if (lo > hi) return null;
   if (await timeOf(hi) < time) return null;
   while (lo < hi) {
     const mid = Math.floor((lo + hi) / 2);
