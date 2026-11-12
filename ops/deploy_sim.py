@@ -38,6 +38,9 @@ from ops.leverage import ASSET_LEVERAGE_X100
 from spike.hlspike import common as c
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+# What a finished deployment's record says: the one status `deployments.load` takes, so that `pool`, `buy`, the
+# keeper and the checker can read the record `deploy` wrote.
+DONE = "complete"
 CREATION_FEE = 10**18  # SimPoolFactory.CREATION_FEE; the tests hold it against the source
 PAYOUT_BPS = 800
 LOCKED_PAYOUTS = 2
@@ -142,7 +145,7 @@ def deploy(args) -> int:
     except BaseException as exc:
         mark_incomplete(out, record, exc)
         raise
-    record["status"] = "deployed"
+    record["status"] = DONE
     save(out, record)
     print(f"deploy_sim: deployed, record {out.relative_to(ROOT)}")
     return 0
