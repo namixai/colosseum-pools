@@ -92,7 +92,27 @@ class TheService(unittest.TestCase):
         ch = s.Checker.__new__(s.Checker)
         ch.start_block, ch.usdc = 10, "0x" + "dd" * 20
         ch.transfers, ch.transfers_from, ch.fills, ch._times = {}, {}, [], {}
+        ch.fills_from, ch.fills_read = 10, set()
         return ch
+
+    def test_an_account_found_later_has_its_fills_read_from_the_start(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        ch = self.checker()
+        a, b = (s.to_checksum_address("0x" + x * 20) for x in ("aa", "bb"))
+        ch.keeper = SimpleNamespace(accounts={a: {}})
+        with mock.patch.object(s.c, "rpc", return_value=[]) as rpc:
+            ch.read_fills(59)
+            ch.keeper.accounts[b] = {}
+            rpc.reset_mock()
+            ch.read_fills(70)
+        reads = {}
+        for call in rpc.call_args_list:
+            reads.setdefault(tuple(call[0][1][0]["address"]), call[0][1][0]["fromBlock"])
+        self.assertEqual(reads[(a,)], hex(60), "the one read before, from where it stopped")
+        self.assertEqual(reads[(b,)], hex(10), "the one found later, from the deployment's block")
+        self.assertEqual(ch.fills_read, {a, b})
+        self.assertEqual(ch.fills_from, 71)
 
     def test_transfers_are_read_once_and_then_from_where_they_stopped(self):
         from unittest import mock

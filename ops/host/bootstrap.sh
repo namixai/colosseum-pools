@@ -19,24 +19,41 @@
 # (ops/host_instances.py). It makes the instance's own key directories and writes, when missing,
 # /etc/colosseum/deployment-<name> (the label), gateway-<name>.env and keeper-<name>.env. The
 # instance's keys are made or copied afterwards, as for the first; install.sh then routes it.
+#
+#   ops/host/bootstrap.sh --sim-instance <name> <label>
+#
+# adds a simulated pool's instance (docs/SIM-POOL.md): no exchange, so no gateway, no instance keeper and no
+# nginx route. Only colosseum-multi-keeper@<name> runs for it, with the factory's filler. It makes the keeper's
+# directories and writes, when missing, deployment-<name> and keeper-<name>.env; never gateway-<name>.env, whose
+# absence is how ops/host_instances.py and install.sh know the instance has no gateway.
 set -euo pipefail
 
 say() { printf 'bootstrap: %s\n' "$*"; }
 
 instance=""
-if [ "${1:-}" = "--instance" ]; then
-  instance="${2:?usage: bootstrap.sh --instance <name> <label> <port>}"
-  instance_label="${3:?usage: bootstrap.sh --instance <name> <label> <port>}"
-  instance_port="${4:?usage: bootstrap.sh --instance <name> <label> <port>}"
-  # The same rules as ops/host_instances.py: a path segment and a unit's name, its own port.
-  [[ "$instance" =~ ^[a-z][a-z0-9]{0,15}$ ]] && [ "$instance" != v1 ] \
-    || { echo "bootstrap: an instance's name is a-z then up to 15 of a-z0-9, and not v1" >&2; exit 2; }
-  [[ "$instance_label" =~ ^[a-z0-9-]+$ ]] || { echo "bootstrap: odd label $instance_label" >&2; exit 2; }
+sim=""
+if [ "${1:-}" = "--sim-instance" ]; then
+  [ $# -eq 3 ] || { echo "bootstrap: usage: bootstrap.sh --sim-instance <name> <label> (no port: no gateway)" >&2; exit 2; }
+  instance="$2"
+  instance_label="$3"
+  sim=1
+elif [ "${1:-}" = "--instance" ]; then
+  [ $# -eq 4 ] || { echo "bootstrap: usage: bootstrap.sh --instance <name> <label> <port>" >&2; exit 2; }
+  instance="$2"
+  instance_label="$3"
+  instance_port="$4"
+  # Its own port: 8787 is the first gateway's.
   [[ "$instance_port" =~ ^[0-9]+$ ]] && [ "$instance_port" -ge 8788 ] && [ "$instance_port" -le 8799 ] \
     || { echo "bootstrap: an instance's port is 8788..8799 (8787 is the first gateway's)" >&2; exit 2; }
 elif [ $# -gt 0 ]; then
-  echo "bootstrap: usage: bootstrap.sh [--instance <name> <label> <port>]" >&2
+  echo "bootstrap: usage: bootstrap.sh [--instance <name> <label> <port> | --sim-instance <name> <label>]" >&2
   exit 2
+fi
+if [ -n "$instance" ]; then
+  # Either kind, the same rules as ops/host_instances.py: a path segment and a unit's name, and a label.
+  [[ "$instance" =~ ^[a-z][a-z0-9]{0,15}$ ]] && [ "$instance" != v1 ] \
+    || { echo "bootstrap: an instance's name is a-z then up to 15 of a-z0-9, and not v1" >&2; exit 2; }
+  [[ "$instance_label" =~ ^[a-z0-9-]+$ ]] || { echo "bootstrap: odd label $instance_label" >&2; exit 2; }
 fi
 
 # Amazon Linux 2023: its python3 is 3.9, and CI tests on 3.12.
@@ -148,11 +165,13 @@ fi
 
 # A further instance. Its keys apart from the first's, each readable by its own user alone; the
 # units keep each instance out of the other's (colosseum-*@.service).
-install -d -m 0700 -o colosseum-gw -g colosseum-gw /var/lib/colosseum-gw/instances \
-  "/var/lib/colosseum-gw/instances/$instance" "/var/lib/colosseum-gw/instances/$instance/keys"
 install -d -m 0700 -o colosseum-keeper -g colosseum-keeper /var/lib/colosseum-keeper/instances \
-  "/var/lib/colosseum-keeper/instances/$instance" "/var/lib/colosseum-keeper/instances/$instance/secrets" \
-  "/var/lib/colosseum-keeper/instances/$instance/made-keys"
+  "/var/lib/colosseum-keeper/instances/$instance" "/var/lib/colosseum-keeper/instances/$instance/secrets"
+if [ -z "$sim" ]; then
+  install -d -m 0700 -o colosseum-gw -g colosseum-gw /var/lib/colosseum-gw/instances \
+    "/var/lib/colosseum-gw/instances/$instance" "/var/lib/colosseum-gw/instances/$instance/keys"
+  install -d -m 0700 -o colosseum-keeper -g colosseum-keeper "/var/lib/colosseum-keeper/instances/$instance/made-keys"
+fi
 # made-keys: where the keeper's publisher, when the deployment's record names a test one, makes the agent keys
 # it binds; colosseum-key-copy@<name> copies each into the gateway's keys (ops/host/key_copy.py).
 
@@ -165,8 +184,8 @@ fi
 
 # The first gateway's settings with this instance's keys and port, and the HIP-3 perp the CTO set for
 # demo3 (23 Oct 2026): xyz:XYZ100, order number 750000 on testnet, 0.015 an order, 8x. Written only
-# when missing, like the first's: an instance set up earlier is edited by hand.
-if [ ! -f "/etc/colosseum/gateway-$instance.env" ]; then
+# when missing, like the first's: an instance set up earlier is edited by hand. Never for a simulated pool's.
+if [ -z "$sim" ] && [ ! -f "/etc/colosseum/gateway-$instance.env" ]; then
   install -m 0644 -o root -g root /dev/stdin "/etc/colosseum/gateway-$instance.env" <<EOF
 GATEWAY_SIGNER=demo
 GATEWAY_KEYS_DIR=/var/lib/colosseum-gw/instances/$instance/keys
@@ -189,6 +208,12 @@ COLOSSEUM_RPC_URL=https://rpc.hyperliquid-testnet.xyz/evm
 COLOSSEUM_PERP_DEXES=xyz
 EOF
   say "wrote /etc/colosseum/keeper-$instance.env"
+fi
+if [ -n "$sim" ]; then
+  say "instance $instance: a simulated pool's, no gateway. Put the filler's and the checker's wallets, filler.key/.addr"
+  say "  and checker.key/.addr, in /var/lib/colosseum-keeper/instances/$instance/secrets (docs/HOSTING.md, \"A simulated"
+  say "  pool's keeper\") and deploy: install.sh checks them and enables colosseum-multi-keeper@$instance"
+  exit 0
 fi
 say "instance $instance: put its agent keys in /var/lib/colosseum-gw/instances/$instance/keys and its keeper key in"
 say "  /var/lib/colosseum-keeper/instances/$instance/secrets (docs/HOSTING.md), deploy, then enable"

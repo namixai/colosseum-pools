@@ -138,6 +138,8 @@ class Checker:
         self.keeper = sk.SimKeeper(self.factory, None, sender, True, state_path, int(record["block"]))
         self.start_block = int(record["block"])
         self.fills_from = self.start_block
+        # The accounts whose fills are read up to `fills_from`; one found later is read from the start (review of #271).
+        self.fills_read: set[str] = set()
         self.fills: list[dict] = []
         self._times: dict[int, int] = {}
         # USDC transfers to each trader read so far, and the block to read on from (review of cp#264).
@@ -150,8 +152,17 @@ class Checker:
         return self._times[block]
 
     def read_fills(self, latest: int) -> None:
+        """Every fill of the factory's accounts up to `latest`. The keeper's scan finds accounts a few windows at a
+        time, so an account it finds later has fills from before the cursor: it is read from the deployment's
+        block, once, and then with the others."""
         accounts = list(self.keeper.accounts)
-        lo = self.fills_from
+        new = [a for a in accounts if a not in self.fills_read]
+        self._read_fills([a for a in accounts if a in self.fills_read], self.fills_from, latest)
+        self._read_fills(new, self.start_block, latest)
+        self.fills_read.update(new)
+        self.fills_from = latest + 1
+
+    def _read_fills(self, accounts: list[str], lo: int, latest: int) -> None:
         while accounts and lo <= latest:
             hi = min(lo + core.MAX_LOG_WINDOW - 1, latest)
             for i in range(0, len(accounts), ADDRESS_BATCH):
@@ -159,7 +170,6 @@ class Checker:
                                                 "fromBlock": hex(lo), "toBlock": hex(hi)}]):
                     self.fills.append(fill_of(l, self.time_of(int(l["blockNumber"], 16))))
             lo = hi + 1
-        self.fills_from = latest + 1
 
     def transfers_to(self, traders: list[str], latest: int) -> list[dict]:
         """USDC sent to each trader since the deployment (before it is not read: docs/SIM-POOL.md),
