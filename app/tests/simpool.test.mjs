@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE,
+  SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM,
   PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
   stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText, codeShares,
@@ -582,3 +582,15 @@ test("a signed purchase: the trader signs the line's price to the pool under the
     validAfter: 10, validBefore: 10, keccak256 }), /end after it starts/);
 });
 
+
+test("the pool's term: the time before which its creator cannot close it, and whether the platform closed it sooner", () => {
+  assert.equal(MIN_TERM, 180 * 24 * 3600);
+  assert.match(FACTORY_SOL, /MIN_TERM = 180 days;/);
+  const read = (extra, now) => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, ...extra },
+    events: EVENTS, times: TIMES, now });
+  const locked = read({ lockedUntil: 5_000n, closedEarly: false }, 4_999);
+  assert.deepEqual([locked.lockedUntil, locked.creatorMayClose, locked.closedEarly], [5_000, false, false]);
+  assert.equal(read({ lockedUntil: 5_000n, closedEarly: false }, 5_000).creatorMayClose, true, "from its time on");
+  assert.equal(read({ lockedUntil: 5_000n, closedEarly: true }, 10).closedEarly, true);
+  assert.deepEqual([read({}, 10).lockedUntil, read({}, 10).creatorMayClose], [null, null], "not read: not guessed");
+});

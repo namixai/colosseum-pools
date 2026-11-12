@@ -1,7 +1,8 @@
 """Deploys the simulated pool's contracts on testnet, and opens a pool on them (docs/SIM-POOL.md).
 
-    spike/.venv/bin/python -m ops.deploy_sim deploy --label sim1 --filler 0x.. --checker 0x..           # the plan
-    spike/.venv/bin/python -m ops.deploy_sim deploy --label sim1 --filler 0x.. --checker 0x.. --send    # sends
+    spike/.venv/bin/python -m ops.deploy_sim deploy --label sim1 --filler 0x.. --checker 0x.. \\
+        --closer 0x..                                                                                  # the plan
+    ... deploy ... --send                                                                              # sends
     spike/.venv/bin/python -m ops.deploy_sim pool --deployment sim1 \\
         --plan deployments/plans/sim-first-pool.json --creator creator                                  # the plan
     ... pool ... --send                                                                                # sends
@@ -9,8 +10,9 @@
         --plan deployments/plans/sim-first-pool.json --creator creator [--send]                        # its codes
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
-and the SimPoolFactory on HyperEVM testnet, names the filler, the checker and the platform's
-recipient, and lists the assets with their leverage caps from ops/leverage.py (HYPE is left out:
+and the SimPoolFactory on HyperEVM testnet, names the filler, the checker, the closer (the platform's
+key that alone may close a pool before its 180 days; four keys, none of them the operator, who
+opens our pools) and the platform's recipient, and lists the assets with their leverage caps from ops/leverage.py (HYPE is left out:
 the platform's decision of 11 November 2026). It writes deployments/testnet-<label>.json, with the
 same keeper nodes as demo3, so the host's keeper unit can run on it.
 
@@ -167,11 +169,12 @@ def deploy(args) -> int:
     if out.exists():
         raise SystemExit(f"{out.relative_to(ROOT)} exists; pick another label")
     filler, checker = to_checksum_address(args.filler), to_checksum_address(args.checker)
-    if filler == checker:
-        raise SystemExit("the filler and the checker are two keys")
+    closer = to_checksum_address(args.closer)
+    if len({filler, checker, closer}) != 3:
+        raise SystemExit("the filler, the checker and the closer are three keys")
     print(f"deploy_sim deploy: label {args.label}, USDC {c.TESTNET_USDC_ERC20} (Circle's, EIP-3009)")
     print("  would deploy     PaperExam, SimPool, TermsBook, SimPoolFactory(usdc, exam, pool, operator)  (big blocks on, then off)")
-    print(f"  would configure  setFiller {filler}, setChecker {checker}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
+    print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
           f"setTermsBook, setAsset " + ", ".join(f"{n} ({i}) {cap / 100:g}x" for n, i, cap in assets))
     print(f"  would write      deployments/testnet-{args.label}.json")
     if not args.send:
@@ -180,12 +183,13 @@ def deploy(args) -> int:
     c.assert_testnet()
     op = c.account(args.operator)
     recipient = to_checksum_address(args.fee_recipient) if args.fee_recipient else op.address
-    if op.address in (filler, checker):
-        raise SystemExit("the operator is neither the filler nor the checker")
+    if op.address in (filler, checker, closer):
+        raise SystemExit("the operator is neither the filler, the checker nor the closer: it opens our pools, and a "
+                         "pool's creator is none of them")
     demo3 = deployments.load("v3-demo3")
     record: dict = {"chain_id": c.CHAIN_ID, "label": args.label, "commit": git_head(), "status": "deploying",
                     "deployer": op.address, "operator": op.address, "usdc": c.TESTNET_USDC_ERC20,
-                    "filler": filler, "checker": checker, "fee_recipient": recipient,
+                    "filler": filler, "checker": checker, "closer": closer, "fee_recipient": recipient,
                     "platform_assets": {n: i for n, i, _ in assets}, "asset_caps_x100": {n: cap for n, _, cap in assets},
                     "keeper_nodes": demo3["keeper_nodes"], "tx": {}}
     big_blocks(op, True)
@@ -204,6 +208,7 @@ def deploy(args) -> int:
         save(out, record)
         steps = [("setFiller", "setFiller(address)", ["address"], [filler]),
                  ("setChecker", "setChecker(address)", ["address"], [checker]),
+                 ("setCloser", "setCloser(address)", ["address"], [closer]),
                  ("setFeeRecipient", "setFeeRecipient(address)", ["address"], [recipient]),
                  ("setTermsBook", "setTermsBook(address)", ["address"], [book])]
         steps += [(f"setAsset_{n}", "setAsset(uint32,uint32)", ["uint32", "uint32"], [i, cap]) for n, i, cap in assets]
@@ -296,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--operator", default="deployer", help="the factory's operator and deployer key")
     d.add_argument("--filler", required=True)
     d.add_argument("--checker", required=True)
+    d.add_argument("--closer", required=True, help="the platform's key that alone may close a pool before its term")
     d.add_argument("--fee-recipient")
     d.add_argument("--assets", default="BTC,ETH,SOL")
     d.add_argument("--send", action="store_true")

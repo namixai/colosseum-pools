@@ -134,6 +134,11 @@ contract SimPool is Initializable {
     uint256 public live;
     bool public closed;
     bool public finished;
+    /// Before this time the creator neither closes the pool nor takes back what it put in: the
+    /// pool's creation plus the factory's `MIN_TERM`. Only the factory's closer closes it sooner.
+    uint64 public lockedUntil;
+    /// The factory's closer closed it before `lockedUntil`.
+    bool public closedEarly;
     /// The first payout not yet settled: payouts are paid in the order they came due.
     uint256 public head;
     uint256 public stoppedCount;
@@ -207,6 +212,8 @@ contract SimPool is Initializable {
     /// A partner's part of a withdrawal: sent, or set aside for the partner (`claimHeld`) if the token refused.
     event PartnerPaid(bytes32 indexed code, address indexed partner, uint256 amount, bool sent);
     event Closed();
+    /// The factory's closer closed the pool before its term; the money goes where it would anyway.
+    event ClosedEarly(address indexed closer);
     event Finished(uint256 amount);
 
     error NotFactory();
@@ -233,6 +240,7 @@ contract SimPool is Initializable {
     error ReserveRunning();
     error NoSuchCode();
     error CodeUsed();
+    error Locked();
 
     modifier onlyCreator() {
         if (msg.sender != creator) revert NotCreator();
@@ -255,6 +263,7 @@ contract SimPool is Initializable {
         creator = creator_;
         terms = p.terms;
         fundWindow = p.fundWindow;
+        lockedUntil = uint64(block.timestamp) + factory.MIN_TERM();
         fromBook = p.fromBook;
         maxWorseBps = p.maxWorseBps;
         uint64 largest;
@@ -297,10 +306,17 @@ contract SimPool is Initializable {
 
     /// @notice What the creator may withdraw now: the pool's USDC above what it owes, holds and keeps
     ///         for recent stops and, while it is open, above `FLOOR_PAYOUTS` payouts of the largest size.
+    ///         Before `lockedUntil`, only profit: what the creator put in stays until the term, or until
+    ///         `finish` if the factory's closer closed the pool sooner.
     function withdrawable() public view returns (uint256) {
         uint256 bal = usdc.balanceOf(address(this));
         uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());
-        return bal > keep ? bal - keep : 0;
+        uint256 w = bal > keep ? bal - keep : 0;
+        if (block.timestamp < lockedUntil) {
+            uint256 p = _profit();
+            if (w > p) w = p;
+        }
+        return w;
     }
 
     // ── traders ──────────────────────────────────────────────────
@@ -593,16 +609,31 @@ contract SimPool is Initializable {
         emit CodeSet(code, partner, bps);
     }
 
-    /// @notice Stops selling exams. What runs, runs to its end.
-    function close() external onlyCreator {
+    /// @notice Stops selling exams. What runs, runs to its end. The creator may from `lockedUntil` on;
+    ///         the factory's closer may at any time, and before the term that is the only way to close
+    ///         a pool (`closedEarly`). Who closes it changes nothing about where the money goes.
+    function close() external {
         if (closed) revert Closing();
+        bool early = block.timestamp < lockedUntil;
+        if (msg.sender == factory.closer()) {
+            if (early) {
+                closedEarly = true;
+                emit ClosedEarly(msg.sender);
+            }
+        } else if (msg.sender != creator) {
+            revert NotCreator();
+        } else if (early) {
+            revert Locked();
+        }
         closed = true;
         emit Closed();
     }
 
     /// @notice Once closed, with nothing running, nothing owed and no stop still able to be lifted:
     ///         sends the creator everything left, the principal first without the partners' shares.
-    function finish() external onlyCreator {
+    ///         The creator or the factory's closer may call it; the money goes to the creator either way.
+    function finish() external {
+        if (msg.sender != creator && msg.sender != factory.closer()) revert NotCreator();
         if (!closed || finished) revert Done();
         if (live != 0 || owed != 0 || reserved != 0) revert NotOver();
         finished = true;
@@ -649,12 +680,10 @@ contract SimPool is Initializable {
     }
 
     function _withdraw(uint256 amount) internal {
-        uint256 bal = usdc.balanceOf(address(this)) - held - reserved;
         // Profit is the pool's money above what it owes, holds and keeps for recent stops, and above what
         // the creator put in; the partners' shares are of that alone (CFO, 12 November). At finish nothing is
         // owed or kept.
-        uint256 free = bal > owed ? bal - owed : 0;
-        uint256 profit = free > principal ? free - principal : 0;
+        uint256 profit = _profit();
         uint256 shared = amount < profit ? amount : profit;
         principal -= amount - shared;
         uint256 fee = amount * factory.FEE_BPS() / Units.BPS;
@@ -662,6 +691,15 @@ contract SimPool is Initializable {
         uint256 toPartners = _payPartners(shared - shared * factory.FEE_BPS() / Units.BPS);
         usdc.safeTransfer(creator, amount - fee - toPartners);
         emit Withdrawn(creator, amount, fee, toPartners);
+    }
+
+    /// The pool's money above what it owes, holds and keeps for recent stops, and above the principal.
+    ///      Zero, not a revert, when stops keep more than the pool holds.
+    function _profit() internal view returns (uint256) {
+        uint256 bal = usdc.balanceOf(address(this));
+        uint256 kept = held + reserved + owed;
+        uint256 free = bal > kept ? bal - kept : 0;
+        return free > principal ? free - principal : 0;
     }
 
     /// Each code's partner gets its `bps` of `net` in the part the code brought of all the pool took.

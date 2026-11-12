@@ -19,7 +19,8 @@ fail, and their prices pay for the ones that pass.
   pool's terms written out in a `TermsBook`. No two lines share a price: a signed purchase names an amount, not a line. The
   factory runs PaperExam's own checks on both stages at the largest size, and checks every asset against its list and every leverage cap against the
   asset's, that both stages end (a deadline and an idle limit), that the stage is one step, and
-  that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler and the checker may not.
+  that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler, the checker and the
+  closer may not.
 - **Codes.** `setCode(code, partner, bps)`, by the creator: `code` is the keccak256 of a trading
   group's code, `partner` the address the group's owner gave, `bps` its share, 0 or 40 to 60 %, up
   to 32 codes a pool (`MAX_CODES`). A code is public by nature: its owner hands it to a whole
@@ -71,6 +72,14 @@ fail, and their prices pay for the ones that pass.
   `claimHeld` as for a refused payout (`PartnerPaid` says which). `addToPot` puts in more principal,
   never shared, which comes back once the profit above it has been taken, or at `finish`. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
   can still be lifted, sends what is left, the principal first.
+- **The term.** A pool runs at least 180 days from its opening (`MIN_TERM`, `lockedUntil`). Before
+  then the creator can neither `close` it (`Locked`), so it sells all that time, nor take back what
+  it put in: `withdraw` gives the profit only, never the principal, the locked payouts or what
+  `addToPot` added. Only the factory's closer, a platform key the operator names (`setCloser`), may
+  close a pool sooner (`closedEarly`, `ClosedEarly`). That changes nothing about where the money
+  goes: `finish`, by the creator or the closer, still waits until nothing runs, nothing is owed and
+  no stop can be lifted, leaves what is held for its traders and partners, sends each code's partner
+  its share and the creator the rest; the closer gets none of it. From `lockedUntil` on, the creator closes and finishes as before.
 
 ## The platform's numbers
 
@@ -78,7 +87,8 @@ Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid (`PAYOUT_DELAY`); 14 days a
-stopped payout's money stays set aside and the stop can be lifted (`STOP_RESERVE`); a fill
+stopped payout's money stays set aside and the stop can be lifted (`STOP_RESERVE`); 180 days a
+pool runs before its creator may close it or take back its principal (`MIN_TERM`); a fill
 window of 1 to 60 blocks; a code's share of 0 or 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`)
 and up to 32 codes a pool (`MAX_CODES`).
 
@@ -109,8 +119,8 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 54 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 116 mutations (`SM1`–`SM116` in `scripts/mutations.py`),
+`test/sim/SimPool.t.sol`, 58 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and 128 mutations (`SM1`–`SM128` in `scripts/mutations.py`),
 each caught by a named test:
 
 ```
@@ -154,7 +164,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   pool has not set, a signature ending within 30 seconds, a used nonce, a call the pool would refuse. `--serve PORT` listens on
   127.0.0.1 for `POST /buy`.
 - **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, SimPool, a TermsBook and the
-  factory on testnet with Circle's USDC, names the filler, the checker and the recipient, lists BTC,
+  factory on testnet with Circle's USDC, names the filler, the checker, the closer (four keys with
+  the operator, none the same) and the recipient, lists BTC,
   ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's
   keeper nodes. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
   HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
