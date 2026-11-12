@@ -118,6 +118,8 @@ test("a record that names a KeyBinder gives the site its binder, marked; one wit
     [{ ...noRegistry, KeyBinder: BINDER }, null],
     [{ ...MAIN_RECORD, KeyBinder: BINDER }, /v3-main: the record must name a KeyRegistry or a KeyBinder, one of them/],
     [noRegistry, /v3-main: the record must name a KeyRegistry or a KeyBinder, one of them/],
+    // Named by its entry, not by a field the record might lack.
+    [{ ...MAIN_RECORD, KeyBinder: BINDER, label: undefined }, /v3-main: the record must name a KeyRegistry or a KeyBinder/],
   ];
   assert.ok(KeyRegistry);
   for (const [record, why] of cases) {

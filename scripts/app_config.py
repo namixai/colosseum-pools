@@ -127,13 +127,13 @@ def is_v3(record: dict) -> bool:
     return "PaperExamImpl" in record
 
 
-def keys_of(record: dict) -> dict:
+def keys_of(record: dict, label: str) -> dict:
     """Where the deployment's keys are bound, as a row's fields: its KeyRegistry, or its KeyBinder with `keyBinder`
     true. The same rule as the host's (ops/host_instances.py, keys_contract): a record with both, or neither, names
     no one contract and is refused, rather than a site that reads keys from the wrong one."""
     named = [k for k in ("KeyRegistry", "KeyBinder") if record.get(k)]
     if len(named) != 1:
-        raise SystemExit(f"{record.get('label')}: the record must name a KeyRegistry or a KeyBinder, one of them: the "
+        raise SystemExit(f"{label}: the record must name a KeyRegistry or a KeyBinder, one of them: the "
                          "site reads its keys' bindings from it")
     return {"registry": record[named[0]], **({"keyBinder": True} if named[0] == "KeyBinder" else {})}
 
@@ -152,7 +152,7 @@ def site_entries(network, entries: list[dict], files: Files) -> list[dict]:
             "label": entry["label"],
             "role": entry["role"],
             "factory": entry["factory"],
-            **keys_of(record),
+            **keys_of(record, entry["label"]),
             "deployBlock": record["block"],
             "deployer": entry["deployer"],
             "platformAssets": list(record["platform_assets"].values()),
@@ -192,7 +192,7 @@ def read_only_entries(network, entries: list[dict], files: Files) -> list[dict]:
             "record": entry["label"],
             "role": "read-only",
             "factory": entry["factory"],
-            **keys_of(record),
+            **keys_of(record, entry["label"]),
             "deployBlock": record["block"],
             "deployer": entry["deployer"],
             "platformAssets": list(record["platform_assets"].values()),

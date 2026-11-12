@@ -12938,8 +12938,8 @@ MUTATIONS = [
     # A deployment whose record names a KeyBinder: scripts/app_config.py marks it, deployments.js says which ABI,
     # chain.js reads its keys with the binder's. "KB": the app's tests of it and of the settings it comes from.
     ("KB1", "scripts/app_config.py",
-     "    if len(named) != 1:\n        raise SystemExit(f\"{record.get('label')}",
-     "    if not named:\n        raise SystemExit(f\"{record.get('label')}",
+     "    if len(named) != 1:\n        raise SystemExit(f\"{label}",
+     "    if not named:\n        raise SystemExit(f\"{label}",
      ['a record that names a KeyBinder gives the site its binder, marked; one with both or neither gives no settings']),
     ("KB2", "scripts/app_config.py",
      "**({\"keyBinder\": True} if named[0] == \"KeyBinder\" else {})",
