@@ -20,6 +20,8 @@ export const SIM_POOL_ABI = [
   "function usdc() view returns (address)",
   "function creator() view returns (address)",
   "function codes() view returns (bytes32[])",
+  "function buy(uint256 line, bytes32 code) returns (address exam)",
+  "function buyWithAuthorization(address trader, uint256 line, bytes32 code, bytes32 salt, uint256 validAfter, uint256 validBefore, uint8 v, bytes32 r, bytes32 s) returns (address exam)",
   "function codeOf(bytes32 code) view returns (address partner, uint16 bps, bool used, bool listed, uint256 brought)",
   "function brought() view returns (uint256)",
   "function terms() view returns (bytes32)",
@@ -506,4 +508,88 @@ export async function firstBlockAt(time, { low, high, timeOf }) {
 /** The time a payout's claim was written: its `dueAt` less the 72 hours (SimPool.claimPayout). */
 export function claimedAt(dueAt) {
   return Number(dueAt) - PAYOUT_DELAY;
+}
+
+// ── buying with a code ───────────────────────────────────────────
+
+const WORD = /^0x[0-9a-fA-F]{64}$/;
+const ZERO_ADDRESS = /^0x0{40}$/i;
+
+function word(value, name) {
+  if (typeof value !== "string" || !WORD.test(value)) throw new Error(`${name} is not 32 bytes in 0x-hex: ${value}`);
+  return value.toLowerCase();
+}
+
+/** The UTF-8 bytes of `text`, as 0x-hex. */
+function utf8Hex(text) {
+  return `0x${Array.from(new TextEncoder().encode(text), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * What a pool keys a trading group's code by, and what a sale names: the keccak256 of the code's text, exactly as
+ * given (ops/deploy_sim.py, code_hash). `keccak256` is the page's own (ethers.keccak256), over 0x-hex bytes. Nothing
+ * is trimmed or folded here, so the hash is the one the creator set: a page that forgives a stray space trims first.
+ */
+export function codeHash(text, keccak256) {
+  if (typeof text !== "string" || text.length === 0) throw new Error("a code is a text, not empty");
+  return word(keccak256(utf8Hex(text)), "keccak256");
+}
+
+/** The nonce a trader signs to buy by signature: keccak256(abi.encode(code, salt)), two 32-byte words, so the code is
+ *  in the signature and whoever sends it cannot name another (SimPool.buyWithAuthorization, ops/sim_relay.py). */
+export function saleNonce(code, salt, keccak256) {
+  return word(keccak256(`0x${word(code, "code").slice(2)}${word(salt, "salt").slice(2)}`), "keccak256");
+}
+
+/** EIP-3009's message, as Circle's FiatToken signs it (the token's own name, version, chain and address are its domain). */
+export const RECEIVE_WITH_AUTHORIZATION_TYPES = Object.freeze({
+  ReceiveWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+});
+
+/**
+ * A purchase off line `line` with `code` (a code's keccak256), checked as the pool would check it before anything is
+ * signed or sent: the line is on the menu, and, when the page has read the pool's codes (`codes`, as simPoolPage
+ * takes them), the code is one of them with a partner, that is, on sale. Returns `buy`'s arguments and the price the
+ * trader approves.
+ */
+export function purchase({ menu, line, code, codes }) {
+  const n = Number(line);
+  if (!Number.isInteger(n) || n < 0 || n >= menu.length) throw new Error(`no line ${line} on this pool's menu`);
+  const key = word(code, "code");
+  if (codes) {
+    const set = codes.find((k) => String(k.code).toLowerCase() === key);
+    if (!set || ZERO_ADDRESS.test(String(set.partner))) throw new Error("this code is not on sale at this pool");
+  }
+  return { method: "buy", args: [BigInt(n), key], price: BigInt(menu[n].price) };
+}
+
+/**
+ * A purchase by the trader's signature, which a relayer sends (ops/sim_relay.py): what the trader signs, the EIP-3009
+ * transfer of the line's price to the pool with the nonce of the code and `salt` (any 32 bytes, new for each
+ * purchase); then, given the signature, `buyWithAuthorization`'s arguments and the relayer's JSON body.
+ */
+export function signedPurchase({ pool, trader, menu, line, code, codes, salt, validAfter = 0, validBefore, keccak256 }) {
+  const { price, args } = purchase({ menu, line, code, codes });
+  const key = args[1];
+  const s = word(salt, "salt");
+  if (!(Number(validBefore) > Number(validAfter))) throw new Error("the signature must end after it starts");
+  const nonce = saleNonce(key, s, keccak256);
+  const message = { from: trader, to: pool, value: price, validAfter: BigInt(validAfter), validBefore: BigInt(validBefore), nonce };
+  return {
+    nonce,
+    message,
+    types: RECEIVE_WITH_AUTHORIZATION_TYPES,
+    args: ({ v, r, s: sig }) => [trader, args[0], key, s, message.validAfter, message.validBefore, v, r, sig],
+    relayBody: ({ v, r, s: sig }) => ({
+      pool, trader, line: Number(args[0]), code: key, salt: s,
+      valid_after: Number(validAfter), valid_before: Number(validBefore), v, r, s: sig,
+    }),
+  };
 }

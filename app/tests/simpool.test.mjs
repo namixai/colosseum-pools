@@ -9,6 +9,7 @@ import {
   PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
   stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText, codeShares,
+  codeHash, saleNonce, purchase, signedPurchase, RECEIVE_WITH_AUTHORIZATION_TYPES,
 } from "../lib/simpool.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -449,3 +450,135 @@ test("each code's partner, share, part of what the pool took, and what it was se
     [[7500, 75n, 0n, true], [2500, 0n, 20n, true], [0, 0n, 0n, false]]);
   assert.deepEqual(codeShares([], []), []);
 });
+
+// ── buying with a code ───────────────────────────────────────────
+
+/** Keccak-256 over 0x-hex bytes, for the tests alone (the page has ethers.keccak256): the sponge of FIPS 202 with
+ *  Keccak's own padding, 1600-bit state in 64-bit lanes. Held to vectors from `cast keccak` below. */
+const RC = [0x1n, 0x8082n, 0x800000000000808an, 0x8000000080008000n, 0x808bn, 0x80000001n, 0x8000000080008081n,
+  0x8000000000008009n, 0x8an, 0x88n, 0x80008009n, 0x8000000an, 0x8000808bn, 0x800000000000008bn, 0x8000000000008089n,
+  0x8000000000008003n, 0x8000000000008002n, 0x8000000000000080n, 0x800an, 0x800000008000000an, 0x8000000080008081n,
+  0x8000000000008080n, 0x80000001n, 0x8000000080008008n];
+const ROT = [0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14];
+const M64 = (1n << 64n) - 1n;
+const rotl = (x, n) => (n === 0 ? x : ((x << BigInt(n)) | (x >> BigInt(64 - n))) & M64);
+function keccak256(hex) {
+  const bytes = Buffer.from(hex.slice(2), "hex");
+  const rate = 136;
+  const padded = Buffer.alloc(Math.ceil((bytes.length + 1) / rate) * rate);
+  bytes.copy(padded);
+  padded[bytes.length] ^= 0x01;
+  padded[padded.length - 1] ^= 0x80;
+  const a = new Array(25).fill(0n);
+  for (let off = 0; off < padded.length; off += rate) {
+    for (let i = 0; i < rate / 8; ++i) a[i] ^= padded.readBigUInt64LE(off + 8 * i);
+    for (let round = 0; round < 24; ++round) {
+      const c = [0, 1, 2, 3, 4].map((x) => a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20]);
+      for (let x = 0; x < 5; ++x) {
+        const d = c[(x + 4) % 5] ^ rotl(c[(x + 1) % 5], 1);
+        for (let y = 0; y < 25; y += 5) a[x + y] ^= d;
+      }
+      const b = new Array(25);
+      for (let x = 0; x < 5; ++x) {
+        for (let y = 0; y < 5; ++y) b[y + 5 * ((2 * x + 3 * y) % 5)] = rotl(a[x + 5 * y], ROT[x + 5 * y]);
+      }
+      for (let y = 0; y < 25; y += 5) {
+        for (let x = 0; x < 5; ++x) a[x + y] = b[x + y] ^ (~b[((x + 1) % 5) + y] & M64 & b[((x + 2) % 5) + y]);
+      }
+      a[0] ^= RC[round];
+    }
+  }
+  const out = Buffer.alloc(32);
+  for (let i = 0; i < 4; ++i) out.writeBigUInt64LE(a[i], 8 * i);
+  return `0x${out.toString("hex")}`;
+}
+
+// Vectors from Foundry's `cast keccak` (and `cast abi-encode "f(bytes32,bytes32)"` for the nonce).
+const GROUP_ONE = "0x224fae07b464aab1b3a7320c4a369ed467f616401af5107c645f2636bc520c46";
+const SALT7 = `0x${"7".padStart(64, "0")}`;
+const NONCE_GROUP_ONE_7 = "0x009fc5d0eb2aa96c517c432aa30979862ca89d6e5d55d72ae906e4913a7cbdec";
+
+test("the tests' keccak256 is Keccak-256: the empty input's hash", () => {
+  assert.equal(keccak256("0x"), "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
+});
+
+test("a code's hash is the keccak256 of its text exactly as given, as ops/deploy_sim.py keys it", () => {
+  assert.equal(codeHash("GROUP-ONE", keccak256), GROUP_ONE);
+  assert.equal(codeHash("Grüße, group ✓", keccak256),
+    "0x82cb0817338a7f131782c03bdad240a53050cb73f855d7bf3aa76434f29b3f03", "UTF-8, not one byte per character");
+  assert.equal(codeHash("GROUP-ONE ", keccak256),
+    "0x181a4653259b3939acd076117359d4827bbe743c5157da6850e87b64d2041f79", "nothing trimmed: a space is another code");
+  assert.throws(() => codeHash("", keccak256), /not empty/);
+  assert.match(readFileSync(join(ROOT, "ops", "deploy_sim.py"), "utf8"), /return keccak\(text=text\)/);
+});
+
+test("the signed nonce is keccak256(abi.encode(code, salt)), as the pool and the relayer take it", () => {
+  assert.equal(saleNonce(GROUP_ONE, SALT7, keccak256), NONCE_GROUP_ONE_7);
+  assert.equal(saleNonce(GROUP_ONE.toUpperCase().replace("0X", "0x"), SALT7, keccak256), NONCE_GROUP_ONE_7);
+  assert.throws(() => saleNonce("0x1234", SALT7, keccak256), /code is not 32 bytes/);
+  assert.throws(() => saleNonce(GROUP_ONE, "salt", keccak256), /salt is not 32 bytes/);
+  assert.match(POOL_SOL, /keccak256\(abi\.encode\(code, salt\)\)/);
+  assert.match(readFileSync(join(ROOT, "ops", "sim_relay.py"), "utf8"), /keccak\(encode\(\["bytes32", "bytes32"\], \[code, salt\]\)\)/);
+});
+
+/** A function's parameters in the source, as `type name` pairs. */
+function sourceParams(source, name) {
+  const m = source.match(new RegExp(`function ${name}\\(([\\s\\S]*?)\\)\\s*(?:external|public)`));
+  return m[1].split(",").map((p) => p.trim().split(/\s+/)).map((w) => `${w[0]} ${w[w.length - 1]}`);
+}
+
+test("the two ways to buy are the contract's own, parameter for parameter", () => {
+  for (const name of ["buy", "buyWithAuthorization"]) {
+    const line = SIM_POOL_ABI.find((l) => l.startsWith(`function ${name}(`));
+    const abi = line.match(/^function \w+\((.*?)\)/)[1].split(", ").map((p) => p.trim());
+    assert.deepEqual(abi, sourceParams(POOL_SOL, name), name);
+  }
+});
+
+const CODES = [
+  { code: GROUP_ONE, partner: A(0x99), bps: 5000, used: true, brought: 0n },
+  { code: H(0xc2), partner: A(0), bps: 0, used: false, brought: 0n },
+];
+
+test("a purchase is checked as the pool checks it: the line on the menu, the code on sale", () => {
+  const p = purchase({ menu: READS.menu, line: 1, code: GROUP_ONE, codes: CODES });
+  assert.deepEqual(p, { method: "buy", args: [1n, GROUP_ONE], price: BigInt(READS.menu[1].price) });
+  assert.deepEqual(purchase({ menu: READS.menu, line: 0, code: GROUP_ONE.toUpperCase().replace("0X", "0x") }).args,
+    [0n, GROUP_ONE], "the code as the pool keys it; without the pool's codes read, no check of them");
+  assert.throws(() => purchase({ menu: READS.menu, line: READS.menu.length, code: GROUP_ONE }), /no line/);
+  assert.throws(() => purchase({ menu: READS.menu, line: -1, code: GROUP_ONE }), /no line/);
+  assert.throws(() => purchase({ menu: READS.menu, line: 0, code: H(0xc3), codes: CODES }), /not on sale/);
+  assert.throws(() => purchase({ menu: READS.menu, line: 0, code: H(0xc2), codes: CODES }), /not on sale/,
+    "a code taken off sale (no partner)");
+});
+
+test("a signed purchase: the trader signs the line's price to the pool under the code's nonce, and a relayer sends it", () => {
+  const signed = signedPurchase({
+    pool: POOL, trader: T1, menu: READS.menu, line: 1, code: GROUP_ONE, codes: CODES, salt: SALT7,
+    validAfter: 0, validBefore: 1_800_000_000, keccak256,
+  });
+  assert.equal(signed.nonce, NONCE_GROUP_ONE_7);
+  assert.deepEqual(signed.message, {
+    from: T1, to: POOL, value: BigInt(READS.menu[1].price), validAfter: 0n, validBefore: 1_800_000_000n, nonce: NONCE_GROUP_ONE_7,
+  });
+  assert.equal(signed.types, RECEIVE_WITH_AUTHORIZATION_TYPES);
+  // The message's fields are the token's, in its order (Usdc3009 in test/sim/SimPool.t.sol stands for Circle's).
+  const typehash = readFileSync(join(ROOT, "test", "sim", "SimPool.t.sol"), "utf8")
+    .match(/"ReceiveWithAuthorization\((.*?)\)"/)[1];
+  assert.equal(RECEIVE_WITH_AUTHORIZATION_TYPES.ReceiveWithAuthorization.map((f) => `${f.type} ${f.name}`).join(","), typehash);
+  const sig = { v: 27, r: H(0xaa), s: H(0xbb) };
+  const args = signed.args(sig);
+  assert.deepEqual(sourceParams(POOL_SOL, "buyWithAuthorization").map((p) => p.split(" ")[1]),
+    ["trader", "line", "code", "salt", "validAfter", "validBefore", "v", "r", "s"]);
+  assert.deepEqual(args, [T1, 1n, GROUP_ONE, SALT7, 0n, 1_800_000_000n, 27, H(0xaa), H(0xbb)]);
+  const body = signed.relayBody(sig);
+  const relay = readFileSync(join(ROOT, "ops", "sim_relay.py"), "utf8");
+  const wanted = [...relay.matchAll(/raw\["(\w+)"\]/g)].map((m) => m[1]);
+  for (const k of ["code", "salt", "r", "s"]) wanted.push(k);
+  assert.deepEqual(Object.keys(body).sort(), [...new Set(wanted)].sort(), "what the relayer reads, and nothing else");
+  assert.deepEqual(body, { pool: POOL, trader: T1, line: 1, code: GROUP_ONE, salt: SALT7, valid_after: 0,
+    valid_before: 1_800_000_000, v: 27, r: H(0xaa), s: H(0xbb) });
+  assert.throws(() => signedPurchase({ pool: POOL, trader: T1, menu: READS.menu, line: 1, code: GROUP_ONE, salt: SALT7,
+    validAfter: 10, validBefore: 10, keccak256 }), /end after it starts/);
+});
+
