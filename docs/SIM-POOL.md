@@ -46,9 +46,10 @@ fail, and their prices pay for the ones that pass.
   transactions that link the wallets. A stopped payout's money stays in the pool. The checker lifts
   a stop that was wrong (`liftStop`), and the payout is paid as any other.
 - **The creator.** `withdraw(amount)`: only what stays above three payouts of the largest size and
-  above every payout owed. 0.5 % goes to the platform; of the rest, what is above the creator's
-  principal is profit, and the partner gets its share of it. `addToPot` puts in more principal,
-  which comes back first without the share. `setPartnerShare` moves the share within 40 to 60 %, for
+  above every payout owed. 0.5 % goes to the platform. The partner's share is of the pool's money
+  above what the creator put in, after what the pool owes and what it holds for traders: a
+  withdrawal takes that profit first, and the partner gets its share of it. `addToPot` puts in more
+  principal, never shared, which comes back once the profit above it has been taken, or at `finish`. `setPartnerShare` moves the share within 40 to 60 %, for
   later withdrawals. `close` stops sales; `finish`, once nothing runs and nothing is owed, sends
   what is left, the principal first.
 
@@ -84,13 +85,13 @@ stops, lifts and payouts.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 39 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 90 mutations (`SM1`–`SM90` in `scripts/mutations.py`),
+`test/sim/SimPool.t.sol`, 41 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and 92 mutations (`SM1`–`SM92` in `scripts/mutations.py`),
 each caught by a named test:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 90)
+python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
 ```
 
 ## Running it
@@ -115,10 +116,20 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 90)
   `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, at the book
   with a ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise.
 
+- **The checker**, `ops/sim_check.py`: the open script behind every stop. For each payout still
+  waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
+  factory: the same asset, opposite sides, at most 10 minutes apart, sizes within 20 %. A match is
+  reason 1; with the two traders funded by one address, or one paying the other (USDC transfers since
+  the deployment), reason 2. It stops a payout at least 5 minutes before it is due, once, from the
+  factory's checker key, and lifts its own stop with `--lift POOL:ID`. Without `--wallet` it only
+  reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
+  accounts only, not the MultiPool's or the other deployments'.
+
 - **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
   record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route.
 
 ## Not done yet
 
-- The checking script.
+- The checker's unit on the host. The instance keeps the checker's wallet (docs/HOSTING.md, "A simulated
+  pool's keeper"), and `ops/sim_check.py --wallet checker` runs by hand with it until a unit runs it.
