@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, PAYOUT_DELAY, STOP_RESERVE, simPoolPage } from "../lib/simpool.js";
+import { SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM, simPoolPage } from "../lib/simpool.js";
 
 const CHAIN = JSON.parse(readFileSync(new URL("./fixtures/sim-page-chain.json", import.meta.url), "utf8"));
 const LARGE_PAYOUT = 800_000_000n;
@@ -129,7 +129,8 @@ test("the exams and the stages are all there, and the page says how far the chai
   assert.equal(page.stages.filter((s) => s.payoutId !== null).length, 3);
   assert.equal(page.scanText, `Read from block ${CHAIN.scan.from} to block ${CHAIN.scan.to}: every event of this pool `
     + "in that range is listed.");
-  assert.ok(!JSON.stringify(Object.keys(page)).includes("locked"));
+  // No locked amount on the page; the term's date (lockedUntil) is not an amount.
+  assert.ok(!JSON.stringify(Object.keys(page).filter((k) => k !== "lockedUntil")).includes("locked"));
 });
 
 test("each code with what its sales brought and what its owner was sent or had set aside, as the events say", () => {
@@ -158,3 +159,12 @@ test("each code with what its sales brought and what its owner was sent or had s
   assert.equal(page.codes.reduce((t, c) => t + c.brought, 0n), BigInt(CHAIN.reads.codes.reduce((t, k) => t + BigInt(k.brought), 0n)));
 });
 
+
+test("the pool's term as the contract keeps it: 180 days from its creation, and the platform's early close", () => {
+  // The pool was created in the block of its first event (the codes set at once), so its term runs from that time.
+  assert.equal(page.lockedUntil, CHAIN.events[0].time + MIN_TERM, "lockedUntil: the creation plus 180 days");
+  assert.ok(CHAIN.now < page.lockedUntil, "the chain ends long before the term");
+  assert.equal(page.creatorMayClose, false, "before its term the creator may not close it");
+  assert.equal(page.closed, true);
+  assert.equal(page.closedEarly, true, "the platform's closer closed it early");
+});

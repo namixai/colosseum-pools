@@ -1386,7 +1386,9 @@ contract SimPoolTest is Test {
             '","liftedCount":"', vm.toString(pool.liftedCount()), '","owed":"', vm.toString(pool.owed()));
         r = string.concat(r, '","held":"', vm.toString(pool.held()), '","reserved":"', vm.toString(pool.reserved()),
             '","live":"', vm.toString(pool.live()), '","closed":', pool.closed() ? "true" : "false", ',"finished":',
-            pool.finished() ? "true" : "false", ',"codes":[', _pageCodes(pool), '],"terms":"', vm.toString(pool.terms()),
+            pool.finished() ? "true" : "false", ',"lockedUntil":"', vm.toString(pool.lockedUntil()), '","closedEarly":',
+            pool.closedEarly() ? "true" : "false");
+        r = string.concat(r, ',"codes":[', _pageCodes(pool), '],"terms":"', vm.toString(pool.terms()),
             '","fundWindow":', vm.toString(pool.fundWindow()), "}");
     }
 
@@ -1421,9 +1423,11 @@ contract SimPoolTest is Test {
     /// Two trading groups' codes, 50 % and 40 %. Three traders buy with the first, pass both stages and claim; the
     /// checker stops the second payout and its trader objects; ten more exams are sold with the first code and thirty
     /// with the second; the token refuses the third trader and the second group's owner; after the payout delay one
-    /// payout is paid, and the creator withdraws 400, sharing its profit with both codes' owners. The page drawn from
+    /// payout is paid, and the creator withdraws 400, sharing its profit with both codes' owners; then, long before the
+    /// pool's 180 days, the platform's closer closes it. The page drawn from
     /// these events must show 800 USDC paid, with that payment's event, the stop and the held payout apart, and each
-    /// code with what it brought and what its owner was sent or had set aside.
+    /// code with what it brought and what its owner was sent or had set aside, and the pool's term with the platform's
+    /// early close.
     function test_page_recordedChain() public {
         vm.recordLogs();
         SimPool pool = _pool();
@@ -1483,6 +1487,13 @@ contract SimPoolTest is Test {
         assertGt(pool.heldOf(owner2), 0, "the second's was set aside: the token refuses it");
         assertEq(pool.held(), LARGE_PAYOUT + pool.heldOf(owner2));
         assertEq(pool.reserved(), LARGE_PAYOUT);
+        // Long before its 180 days, the platform's closer closes the pool: it sells no more exams.
+        vm.roll(block.number + 1);
+        vm.prank(closer);
+        pool.close();
+        _pageCollect(pool);
+        assertTrue(pool.closedEarly());
+        assertLt(block.timestamp, pool.lockedUntil());
 
         string memory json = _pageJson(pool);
         if (keccak256(bytes(vm.envOr("SIM_PAGE_FIXTURE", string("")))) == keccak256("write")) {
