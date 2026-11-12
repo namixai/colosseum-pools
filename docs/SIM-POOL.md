@@ -204,7 +204,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `app/lib/simpool.js` and checks it the way a stranger would: the total paid is the sum of the payment events,
   each with its transaction, and the contract's own `paidTotal`; the stopped and the held payouts are apart; and each
   of two groups' codes shows what its sales brought and what its owner was sent or, refused by the token, had set
-  aside, worked out again from the events and the share.
+  aside, worked out again from the events and the share; the chain ends with the platform's closer closing the
+  pool long before its 180 days, and the page shows `lockedUntil` (the creation plus 180 days) and `closedEarly`.
 
 ## Measuring the filler's window
 
