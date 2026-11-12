@@ -116,17 +116,45 @@ test("the stopped payout and the held one are apart from the paid, each with wha
   assert.equal(stopped.reserveEnds, stopped.stoppedAt + STOP_RESERVE);
   const [held] = page.byStatus.held;
   assert.ok(held.heldAt);
-  assert.equal(page.held, LARGE_PAYOUT);
+  const setAside = LOGS.filter((e) => e.name === "PartnerPaid" && !e.args.sent).reduce((t, e) => t + e.args.amount, 0n);
+  assert.equal(page.held, LARGE_PAYOUT + setAside, "the refused payout and the refused owner's part");
   assert.equal(page.reserved, LARGE_PAYOUT, "the stopped payout's money, set aside for its 14 days");
   assert.equal(page.counters.stopped, 1n);
   assert.deepEqual(page.gaps, []);
 });
 
 test("the exams and the stages are all there, and the page says how far the chain was read", () => {
-  assert.equal(page.exams.length, 13);
+  assert.equal(page.exams.length, 43);
   assert.equal(page.stages.length, 3);
   assert.equal(page.stages.filter((s) => s.payoutId !== null).length, 3);
   assert.equal(page.scanText, `Read from block ${CHAIN.scan.from} to block ${CHAIN.scan.to}: every event of this pool `
     + "in that range is listed.");
   assert.ok(!JSON.stringify(Object.keys(page)).includes("locked"));
 });
+
+test("each code with what its sales brought and what its owner was sent or had set aside, as the events say", () => {
+  const sold = LOGS.filter((e) => e.name === "ExamSold");
+  const parts = LOGS.filter((e) => e.name === "PartnerPaid");
+  assert.equal(page.codes.length, 2);
+  // Foundry's keccak256("GROUP-ONE"), the code the page computes from the text (simpool.test.mjs holds codeHash to it).
+  assert.equal(page.codes[0].code, "0x224fae07b464aab1b3a7320c4a369ed467f616401af5107c645f2636bc520c46");
+  const all = sold.reduce((t, e) => t + e.args.price - e.args.fee, 0n);
+  for (const c of page.codes) {
+    const mine = sold.filter((e) => e.args.code === c.code);
+    assert.ok(mine.length > 0, "every code here sold");
+    assert.equal(c.brought, mine.reduce((t, e) => t + e.args.price - e.args.fee, 0n), "brought: its sales' prices less the fee");
+    for (const e of mine) assert.equal(e.args.partner, c.partner.toLowerCase(), "each sale names the code's owner");
+    const got = parts.filter((e) => e.args.code === c.code);
+    assert.equal(c.paid, got.filter((e) => e.args.sent).reduce((t, e) => t + e.args.amount, 0n));
+    assert.equal(c.setAside, got.filter((e) => !e.args.sent).reduce((t, e) => t + e.args.amount, 0n));
+    assert.equal(c.partOfAll, Number(c.brought * 10_000n / all));
+    // The withdrawal of 400 took profit only, so its owner's part is the code's share of 400 less the platform's
+    // 0.5 %, in the part the code brought (docs/SIM-POOL.md): worked out here, apart from the pool.
+    const net = 400_000_000n - 400_000_000n * 50n / 10_000n;
+    assert.equal(c.paid + c.setAside, net * c.brought * BigInt(c.bps) / (all * 10_000n));
+  }
+  assert.deepEqual(page.codes.map((c) => [c.bps, c.paid > 0n, c.setAside > 0n]), [[5000, true, false], [4000, false, true]],
+    "the first owner was sent its part, the second's was set aside: the token refuses it");
+  assert.equal(page.codes.reduce((t, c) => t + c.brought, 0n), BigInt(CHAIN.reads.codes.reduce((t, k) => t + BigInt(k.brought), 0n)));
+});
+

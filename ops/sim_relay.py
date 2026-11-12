@@ -6,10 +6,12 @@ exam's price to the pool (EIP-3009 ReceiveWithAuthorization) and needs no gas; t
     spike/.venv/bin/python -m ops.sim_relay --deployment sim1 --signed buy.json --wallet relayer
     spike/.venv/bin/python -m ops.sim_relay --deployment sim1 --serve 8790 --wallet relayer   # POST /buy
 
-A signed purchase is JSON: {"pool", "trader", "line", "valid_after", "valid_before", "nonce", "v",
-"r", "s"}. Before it spends gas the relayer checks that the pool is one of the deployment's factory's,
-the line is on its menu, the signature is not past its time and its nonce is unused, and that the
-pool would take the call (eth_estimateGas). The token itself checks the signature, the amount (the
+A signed purchase is JSON: {"pool", "trader", "line", "code", "salt", "valid_after", "valid_before",
+"v", "r", "s"}. `code` is the keccak256 of a trading group's code and `salt` any 32 bytes: the trader
+signs the nonce keccak256(abi.encode(code, salt)), so the code is in the signature and a relayer
+cannot name another. Before it spends gas the relayer checks that the pool is one of the deployment's
+factory's, the line is on its menu, the code is set on the pool, the signature is not past its time
+and its nonce is unused, and that the pool would take the call (eth_estimateGas). The token itself checks the signature, the amount (the
 line's price) and that only that pool, its payee, can use it. The server listens on 127.0.0.1 only.
 Testnet only.
 """
@@ -22,6 +24,7 @@ import pathlib
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from eth_abi import encode
 from eth_utils import keccak, to_checksum_address
 
 from ops import deployments
@@ -30,9 +33,9 @@ from ops.contract_errors import refusal
 from spike.hlspike import common as c
 
 log = core.log
-SIG = "buyWithAuthorization(address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)"
-TYPES = ["address", "uint256", "uint256", "uint256", "bytes32", "uint8", "bytes32", "bytes32"]
-EXAM_SOLD = "0x" + keccak(text="ExamSold(address,address,uint256,uint64,uint64,uint256,bool)").hex()
+SIG = "buyWithAuthorization(address,uint256,bytes32,bytes32,uint256,uint256,uint8,bytes32,bytes32)"
+TYPES = ["address", "uint256", "bytes32", "bytes32", "uint256", "uint256", "uint8", "bytes32", "bytes32"]
+EXAM_SOLD = "0x" + keccak(text="ExamSold(address,address,uint256,uint64,uint64,uint256,bool,bytes32,address)").hex()
 # A signature that ends sooner than this is not worth the gas: it may lapse before the block.
 MIN_LEFT_S = 30
 
@@ -47,7 +50,7 @@ def parsed(raw: dict) -> dict:
         out = {"pool": to_checksum_address(raw["pool"]), "trader": to_checksum_address(raw["trader"]),
                "line": int(raw["line"]), "valid_after": int(raw["valid_after"]),
                "valid_before": int(raw["valid_before"]), "v": int(raw["v"])}
-        for k in ("nonce", "r", "s"):
+        for k in ("code", "salt", "r", "s"):
             word = bytes.fromhex(str(raw[k]).removeprefix("0x"))
             if len(word) != 32:
                 raise ValueError(f"{k} is not 32 bytes")
@@ -56,16 +59,24 @@ def parsed(raw: dict) -> dict:
         raise Refused(f"malformed: {exc}") from exc
     if out["v"] not in (27, 28):
         raise Refused("malformed: v is 27 or 28")
+    out["nonce"] = nonce_of(out["code"], out["salt"])
     return out
 
 
-def check(p: dict, now: int, pools: list[str], menu_len: int, used: bool) -> None:
-    """Refuses a purchase not worth sending: another factory's pool, no such line, past its time, a
-    used nonce."""
+def nonce_of(code: bytes, salt: bytes) -> bytes:
+    """The nonce the trader signs, as SimPool.buyWithAuthorization takes it: keccak256(abi.encode(code, salt))."""
+    return keccak(encode(["bytes32", "bytes32"], [code, salt]))
+
+
+def check(p: dict, now: int, pools: list[str], menu_len: int, used: bool, code_set: bool = True) -> None:
+    """Refuses a purchase not worth sending: another factory's pool, no such line, a code the pool has not
+    set, past its time, a used nonce."""
     if p["pool"] not in pools:
         raise Refused("not a pool of this deployment's factory")
     if not 0 <= p["line"] < menu_len:
         raise Refused("no such line on the pool's menu")
+    if not code_set:
+        raise Refused("no such code on the pool")
     if p["valid_before"] < now + MIN_LEFT_S:
         raise Refused("the signature ends too soon")
     if used:
@@ -73,7 +84,7 @@ def check(p: dict, now: int, pools: list[str], menu_len: int, used: bool) -> Non
 
 
 def args_of(p: dict) -> list:
-    return [p["trader"], p["line"], p["valid_after"], p["valid_before"], p["nonce"], p["v"], p["r"], p["s"]]
+    return [p["trader"], p["line"], p["code"], p["salt"], p["valid_after"], p["valid_before"], p["v"], p["r"], p["s"]]
 
 
 class Relay:
@@ -87,11 +98,14 @@ class Relay:
     def relay(self, raw: dict) -> dict:
         p = parsed(raw)
         pools = [to_checksum_address(a) for a in core.view(self.factory, "pools()", "address[]")]
-        menu_len = len(core.view(p["pool"], "menu()", "(uint64,uint64)[]")) if p["pool"] in pools else 0
+        known = p["pool"] in pools
+        menu_len = len(core.view(p["pool"], "menu()", "(uint64,uint64)[]")) if known else 0
+        code_set = known and int(c.call_view(p["pool"], "codeOf(bytes32)", ["bytes32"], [p["code"]],
+                                             ["address", "uint16", "bool", "bool", "uint256"])[0], 16) != 0
         used = bool(core.view(self.usdc, "authorizationState(address,bytes32)", "bool", ["address", "bytes32"],
                               [p["trader"], p["nonce"]]))
         now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
-        check(p, now, pools, menu_len, used)
+        check(p, now, pools, menu_len, used, code_set)
         data = c.encode_call(SIG, TYPES, args_of(p))
         try:
             c.rpc("eth_estimateGas", [{"from": self.sender, "to": p["pool"], "data": "0x" + data.hex()}])

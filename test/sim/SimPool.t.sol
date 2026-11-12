@@ -37,6 +37,8 @@ contract SimPoolTest is Test {
     address platform = makeAddr("platform");
     address creator = makeAddr("creator");
     address partner = makeAddr("partner");
+    /// The keccak256 of a trading group's code; `_open` sets it with no share.
+    bytes32 constant CODE = keccak256("GROUP-ONE");
     address trader = makeAddr("trader");
     address other = makeAddr("other");
     address stranger = makeAddr("stranger");
@@ -108,8 +110,15 @@ contract SimPoolTest is Test {
     }
 
     function _open(SimPlan memory p) internal returns (SimPool pool) {
-        vm.prank(creator);
+        vm.startPrank(creator);
         pool = SimPool(factory.create{value: 1 ether}(p));
+        pool.setCode(CODE, partner, 0);
+        vm.stopPrank();
+    }
+
+    function _share(SimPool pool, uint16 bps) internal {
+        vm.prank(creator);
+        pool.setCode(CODE, partner, bps);
     }
 
     function _pool() internal returns (SimPool) {
@@ -121,7 +130,7 @@ contract SimPoolTest is Test {
         deal(address(usdc), who, usdc.balanceOf(who) + m[line].price);
         vm.startPrank(who);
         usdc.approve(address(pool), m[line].price);
-        address exam = pool.buy(line);
+        address exam = pool.buy(line, CODE);
         vm.stopPrank();
         return PaperExam(exam);
     }
@@ -218,36 +227,34 @@ contract SimPoolTest is Test {
     }
 
     function test_open_refusesAPlanOutsideThePlatformsBounds() public {
-        SimPlan[] memory bad = new SimPlan[](19);
+        SimPlan[] memory bad = new SimPlan[](17);
         for (uint256 i = 0; i < bad.length; ++i) bad[i] = _plan();
         bad[0].exam.fillWindow = 61; // past a minute
         bad[1].funded.stepDuration = 0; // a stage that never ends
         bad[2].exam.maxIdle = 0;
         bad[3].examRules.assets[0] = ETH; // not listed
         bad[4].fundedRules.maxLeverageX100 = 1001;
-        bad[5].partner = partner; // a partner with no share
-        bad[6].partnerBps = 5000; // a share with no partner
-        bad[7].fundWindow = 30 minutes;
-        bad[8].menu[1].price = 0;
-        bad[9].examRules.assets[0] = ETH; // not listed, under a cap of its own of nothing
-        bad[9].examRules.assetLeverageX100 = new uint32[](1);
-        bad[10].examRules.maxLeverageX100 = 1001; // past 10x, whatever the asset's own cap
-        bad[10].examRules.assetLeverageX100 = new uint32[](1);
-        bad[10].examRules.assetLeverageX100[0] = 500;
-        bad[11].maxWorseBps = 0; // the book with no ceiling
-        bad[12].maxWorseBps = 501;
-        bad[13].fromBook = false; // a ceiling with no book
-        bad[14].examRules.assetLeverageX100 = new uint32[](2); // two caps for one asset
-        bad[14].examRules.assetLeverageX100[0] = 500;
-        bad[14].examRules.assetLeverageX100[1] = 500;
-        bad[15].fundedRules.assets = new uint32[](2); // two assets, one cap
-        bad[15].fundedRules.assets[0] = BTC;
-        bad[15].fundedRules.assets[1] = BTC;
-        bad[15].fundedRules.assetLeverageX100 = new uint32[](1);
-        bad[15].fundedRules.assetLeverageX100[0] = 500;
-        bad[16].menu[1].price = SMALL_PRICE; // two lines at one price: a signature could buy either
-        bad[17].funded.fillDelay = 0; // a stage PaperExam would refuse to start
-        bad[18].exam.costPpm = 100_001; // over PaperExam's ceiling
+        bad[5].fundWindow = 30 minutes;
+        bad[6].menu[1].price = 0;
+        bad[7].examRules.assets[0] = ETH; // not listed, under a cap of its own of nothing
+        bad[7].examRules.assetLeverageX100 = new uint32[](1);
+        bad[8].examRules.maxLeverageX100 = 1001; // past 10x, whatever the asset's own cap
+        bad[8].examRules.assetLeverageX100 = new uint32[](1);
+        bad[8].examRules.assetLeverageX100[0] = 500;
+        bad[9].maxWorseBps = 0; // the book with no ceiling
+        bad[10].maxWorseBps = 501;
+        bad[11].fromBook = false; // a ceiling with no book
+        bad[12].examRules.assetLeverageX100 = new uint32[](2); // two caps for one asset
+        bad[12].examRules.assetLeverageX100[0] = 500;
+        bad[12].examRules.assetLeverageX100[1] = 500;
+        bad[13].fundedRules.assets = new uint32[](2); // two assets, one cap
+        bad[13].fundedRules.assets[0] = BTC;
+        bad[13].fundedRules.assets[1] = BTC;
+        bad[13].fundedRules.assetLeverageX100 = new uint32[](1);
+        bad[13].fundedRules.assetLeverageX100[0] = 500;
+        bad[14].menu[1].price = SMALL_PRICE; // two lines at one price: a signature could buy either
+        bad[15].funded.fillDelay = 0; // a stage PaperExam would refuse to start
+        bad[16].exam.costPpm = 100_001; // over PaperExam's ceiling
         for (uint256 i = 0; i < bad.length; ++i) {
             vm.prank(creator);
             vm.expectRevert(SimPoolFactory.BadPlan.selector);
@@ -263,16 +270,18 @@ contract SimPoolTest is Test {
         factory.create{value: 1 ether}(two);
     }
 
-    function test_open_aPartnersShareIsFortyToSixtyPercent() public {
-        uint16[4] memory shares = [uint16(3999), 4000, 6000, 6001];
-        for (uint256 i = 0; i < 4; ++i) {
-            SimPlan memory p = _plan();
-            p.partner = partner;
-            p.partnerBps = shares[i];
+    function test_setCode_aShareIsZeroOrFortyToSixtyPercent() public {
+        SimPool pool = _pool();
+        uint16[5] memory shares = [uint16(0), 3999, 4000, 6000, 6001];
+        for (uint256 i = 0; i < 5; ++i) {
             vm.prank(creator);
-            if (i == 0 || i == 3) vm.expectRevert(SimPoolFactory.BadPlan.selector);
-            factory.create{value: 1 ether}(p);
+            if (i == 1 || i == 4) vm.expectRevert(SimPool.BadShare.selector);
+            pool.setCode(keccak256(abi.encode(i)), partner, shares[i]);
         }
+        vm.prank(creator);
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setCode(keccak256("nobody's"), address(0), 5000); // a share with no partner
+        assertEq(pool.codes().length, 4, "CODE and the three that took");
     }
 
     function test_open_needsItsTermsWrittenOut() public {
@@ -291,6 +300,30 @@ contract SimPoolTest is Test {
         factory.create{value: 1 ether}(p);
         factory.setAsset(BTC, 500);
         _open(p);
+    }
+
+    /// The factory's own bounds, not only PaperExam's: against an exam that would take any rules, the factory
+    /// still refuses an asset off its list and leverage past 10x. PaperExam has the same two ceilings, so with
+    /// it behind the factory a missing check of the factory's would not show (mutants SM13, SM15).
+    function test_open_theFactoryHoldsItsOwnBounds_notOnlyTheExams() public {
+        SimPoolFactory lax =
+            new SimPoolFactory(IERC20(address(usdc)), address(new TakesAnyRules()), address(new SimPool()), address(this));
+        lax.setAsset(BTC, 1000);
+        lax.setTermsBook(book);
+        lax.check(_plan()); // the plan itself is within every bound
+
+        SimPlan memory offList = _plan(); // ETH is not listed, under a cap of its own of nothing
+        offList.examRules.assets[0] = ETH;
+        offList.examRules.assetLeverageX100 = new uint32[](1);
+        vm.expectRevert(SimPoolFactory.BadPlan.selector);
+        lax.check(offList);
+
+        SimPlan memory past = _plan(); // past 10x, under an asset cap within the list's
+        past.fundedRules.maxLeverageX100 = 1001;
+        past.fundedRules.assetLeverageX100 = new uint32[](1);
+        past.fundedRules.assetLeverageX100[0] = 500;
+        vm.expectRevert(SimPoolFactory.BadPlan.selector);
+        lax.check(past);
     }
 
     function test_buy_theExamFillsAtTheBookUnderThePoolsCeiling() public {
@@ -322,11 +355,12 @@ contract SimPoolTest is Test {
         (address signer, uint256 pk) = makeAddrAndKey("signer");
         deal(address(usdc), signer, LARGE_PRICE);
         uint256 pot = usdc.balanceOf(address(pool));
-        bytes32 nonce = keccak256("one");
-        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, block.timestamp + 10 minutes, nonce);
+        bytes32 salt = keccak256("one");
+        (uint8 v, bytes32 r, bytes32 s) =
+            _signed(pk, address(pool), LARGE_PRICE, block.timestamp + 10 minutes, keccak256(abi.encode(CODE, salt)));
         vm.recordLogs();
         vm.prank(stranger); // the relayer
-        address exam = pool.buyWithAuthorization(signer, 1, 0, block.timestamp + 10 minutes, nonce, v, r, s);
+        address exam = pool.buyWithAuthorization(signer, 1, CODE, salt, 0, block.timestamp + 10 minutes, v, r, s);
         assertEq(PaperExam(exam).trader(), signer, "the exam is the signer's");
         assertEq(signer.balance, 0, "who signed had no gas");
         assertEq(usdc.balanceOf(signer), 0);
@@ -336,8 +370,11 @@ contract SimPoolTest is Test {
         bool seen;
         for (uint256 i = 0; i < logs.length; ++i) {
             if (logs[i].emitter == address(pool) && logs[i].topics[0] == SimPool.ExamSold.selector) {
-                (,,,, bool bySignature) = abi.decode(logs[i].data, (uint256, uint64, uint64, uint256, bool));
+                (,,,, bool bySignature, bytes32 code) =
+                    abi.decode(logs[i].data, (uint256, uint64, uint64, uint256, bool, bytes32));
                 assertTrue(bySignature);
+                assertEq(code, CODE);
+                assertEq(logs[i].topics[3], bytes32(uint256(uint160(partner))), "the code's partner");
                 seen = true;
             }
         }
@@ -349,42 +386,60 @@ contract SimPoolTest is Test {
         SimPool pool = _pool();
         (address signer, uint256 pk) = makeAddrAndKey("signer");
         deal(address(usdc), signer, LARGE_PRICE);
-        bytes32 nonce = keccak256("one");
+        bytes32 salt = keccak256("one");
         // Signed for the small line's price, sent for the large line.
-        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), SMALL_PRICE, block.timestamp + 1 hours, nonce);
+        (uint8 v, bytes32 r, bytes32 s) =
+            _signed(pk, address(pool), SMALL_PRICE, block.timestamp + 1 hours, keccak256(abi.encode(CODE, salt)));
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
-        pool.buyWithAuthorization(signer, 1, 0, block.timestamp + 1 hours, nonce, v, r, s);
+        pool.buyWithAuthorization(signer, 1, CODE, salt, 0, block.timestamp + 1 hours, v, r, s);
     }
 
     function test_buyWithAuthorization_aSignatureBuysOnce_inItsTime_atItsPool() public {
         SimPool pool = _pool();
         (address signer, uint256 pk) = makeAddrAndKey("signer");
         deal(address(usdc), signer, 2 * LARGE_PRICE);
-        bytes32 nonce = keccak256("one");
+        bytes32 salt = keccak256("one");
         uint256 until = block.timestamp + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, until, nonce);
+        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, salt)));
         // Another pool cannot use it: the token takes it only from its payee.
         SimPool other_ = _pool();
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
-        other_.buyWithAuthorization(signer, 1, 0, until, nonce, v, r, s);
-        pool.buyWithAuthorization(signer, 1, 0, until, nonce, v, r, s);
+        other_.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
+        pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
         vm.expectRevert(bytes("FiatTokenV2: authorization is used or canceled"));
-        pool.buyWithAuthorization(signer, 1, 0, until, nonce, v, r, s);
+        pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
         bytes32 later = keccak256("two");
-        (v, r, s) = _signed(pk, address(pool), LARGE_PRICE, until, later);
+        (v, r, s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, later)));
         vm.warp(until);
         vm.expectRevert(bytes("FiatTokenV2: authorization is expired"));
-        pool.buyWithAuthorization(signer, 1, 0, until, later, v, r, s);
+        pool.buyWithAuthorization(signer, 1, CODE, later, 0, until, v, r, s);
+    }
+
+    function test_buyWithAuthorization_whoSendsItCannotNameAnotherCode() public {
+        SimPool pool = _pool();
+        bytes32 theirs = keccak256("GROUP-TWO");
+        vm.prank(creator);
+        pool.setCode(theirs, makeAddr("other owner"), 5000);
+        (address signer, uint256 pk) = makeAddrAndKey("signer");
+        deal(address(usdc), signer, LARGE_PRICE);
+        bytes32 salt = keccak256("one");
+        uint256 until = block.timestamp + 1 hours;
+        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, salt)));
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        pool.buyWithAuthorization(signer, 1, theirs, salt, 0, until, v, r, s);
+        pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
+        (,,,, uint256 got) = pool.codeOf(CODE);
+        assertEq(got, LARGE_PRICE - 425_000, "the signed code brought it");
     }
 
     function test_buyWithAuthorization_notOnceClosed_noSuchLine() public {
         SimPool pool = _pool();
         vm.expectRevert(SimPool.NoSuchLine.selector);
-        pool.buyWithAuthorization(trader, 2, 0, 0, bytes32(0), 0, 0, 0);
+        pool.buyWithAuthorization(trader, 2, CODE, 0, 0, 0, 0, 0, 0);
         vm.prank(creator);
         pool.close();
         vm.expectRevert(SimPool.Closing.selector);
-        pool.buyWithAuthorization(trader, 0, 0, 0, bytes32(0), 0, 0, 0);
+        pool.buyWithAuthorization(trader, 0, CODE, 0, 0, 0, 0, 0, 0);
     }
 
     function test_buyWithAuthorization_aTokenWithoutItRefusesClearly_buyStillWorks() public {
@@ -399,13 +454,14 @@ contract SimPoolTest is Test {
         vm.startPrank(creator);
         plain.approve(address(f), type(uint256).max);
         SimPool pool = SimPool(f.create{value: 1 ether}(_plan()));
+        pool.setCode(CODE, partner, 0);
         vm.stopPrank();
         vm.expectRevert(SimPool.NoAuthorization.selector);
-        pool.buyWithAuthorization(trader, 0, 0, block.timestamp + 1 hours, keccak256("one"), 27, bytes32(0), bytes32(0));
+        pool.buyWithAuthorization(trader, 0, CODE, keccak256("one"), 0, block.timestamp + 1 hours, 27, bytes32(0), bytes32(0));
         deal(address(plain), trader, SMALL_PRICE);
         vm.startPrank(trader);
         plain.approve(address(pool), SMALL_PRICE);
-        pool.buy(0);
+        pool.buy(0, CODE);
         vm.stopPrank();
         assertEq(pool.live(), 1);
     }
@@ -467,10 +523,8 @@ contract SimPoolTest is Test {
 
     function test_withdraw_aPartnersShareIsOfWhatIsAboveTheDebtAndThePrincipal() public {
         // The CFO's case: 1 600 locked and 3 400 added, 6 000 in the pool, 800 owed, a 50 % share.
-        SimPlan memory p = _plan();
-        p.partner = partner;
-        p.partnerBps = 5000;
-        SimPool pool = _open(p);
+        SimPool pool = _pool();
+        _share(pool, 5000);
         vm.startPrank(creator);
         usdc.approve(address(pool), 3_400e6);
         pool.addToPot(3_400e6);
@@ -548,7 +602,7 @@ contract SimPoolTest is Test {
         vm.startPrank(trader);
         usdc.approve(address(pool), 100e6);
         vm.expectRevert(SimPool.Closing.selector);
-        pool.buy(0);
+        pool.buy(0, CODE);
         vm.stopPrank();
     }
 
@@ -787,10 +841,8 @@ contract SimPoolTest is Test {
     function test_stopReserve_isNotProfitForAPartnersShare() public {
         // The CFO's case of 12 November with a stop in place of the debt: 1 600 locked and 3 400 added,
         // 6 000 in the pool, 800 kept for a stop, a 50 % share.
-        SimPlan memory p = _plan();
-        p.partner = partner;
-        p.partnerBps = 5000;
-        SimPool pool = _open(p);
+        SimPool pool = _pool();
+        _share(pool, 5000);
         vm.startPrank(creator);
         usdc.approve(address(pool), 3_400e6);
         pool.addToPot(3_400e6);
@@ -925,6 +977,16 @@ contract SimPoolTest is Test {
 
     // ── the creator ──────────────────────────────────────────────
 
+    function _buyWith(SimPool pool, address who, uint256 line, bytes32 code) internal returns (PaperExam) {
+        SimSize[] memory m = pool.menu();
+        deal(address(usdc), who, usdc.balanceOf(who) + m[line].price);
+        vm.startPrank(who);
+        usdc.approve(address(pool), m[line].price);
+        address exam = pool.buy(line, code);
+        vm.stopPrank();
+        return PaperExam(exam);
+    }
+
     function _withSales(SimPool pool, uint256 n) internal {
         for (uint256 i = 0; i < n; ++i) _buy(pool, makeAddr(string(abi.encode("buyer", i))), 1);
     }
@@ -958,10 +1020,8 @@ contract SimPoolTest is Test {
     }
 
     function test_withdraw_aPartnerGetsItsShareOfTheProfit() public {
-        SimPlan memory p = _plan();
-        p.partner = partner;
-        p.partnerBps = 5000;
-        SimPool pool = _open(p);
+        SimPool pool = _pool();
+        _share(pool, 5000);
         _withSales(pool, 30);
         uint256 before = usdc.balanceOf(creator);
         vm.expectEmit(address(pool));
@@ -973,36 +1033,110 @@ contract SimPoolTest is Test {
         assertEq(pool.principal(), 1_600e6, "all of it was profit: the principal stays");
     }
 
-    function test_setPartnerShare_withinFortyToSixty_forFutureWithdrawals() public {
-        SimPlan memory p = _plan();
-        p.partner = partner;
-        p.partnerBps = 4000;
-        SimPool pool = _open(p);
-        vm.startPrank(creator);
-        vm.expectRevert(SimPool.BadShare.selector);
-        pool.setPartnerShare(3999);
-        vm.expectRevert(SimPool.BadShare.selector);
-        pool.setPartnerShare(6001);
-        vm.expectEmit(address(pool));
-        emit SimPool.PartnerShareSet(partner, 6000);
-        pool.setPartnerShare(6000);
-        vm.stopPrank();
-        assertEq(pool.partnerBps(), 6000);
+    function test_setCode_onlyTheCreator_changeableUntilASaleNamesIt() public {
+        SimPool pool = _pool();
         vm.prank(stranger);
         vm.expectRevert(SimPool.NotCreator.selector);
-        pool.setPartnerShare(5000);
+        pool.setCode(CODE, stranger, 5000);
+        vm.expectEmit(address(pool));
+        emit SimPool.CodeSet(CODE, partner, 6000);
+        _share(pool, 6000); // before any sale: changed
+        (address who, uint16 bps,,,) = pool.codeOf(CODE);
+        assertEq(who, partner);
+        assertEq(bps, 6000);
+        _buy(pool, trader, 0);
+        vm.startPrank(creator);
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setCode(CODE, creator, 6000); // the partner's address stays
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setCode(CODE, partner, 4000); // and so does its share
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setCode(CODE, address(0), 0); // and it stays on sale
+        vm.stopPrank();
+        assertEq(pool.codes().length, 1);
+    }
 
-        SimPool alone = _pool();
+    function test_buy_needsACodeTheCreatorSet() public {
+        SimPool pool = _pool();
+        bytes32 unset = keccak256("NOT-A-CODE");
+        deal(address(usdc), trader, SMALL_PRICE);
+        vm.startPrank(trader);
+        usdc.approve(address(pool), SMALL_PRICE);
+        vm.expectRevert(SimPool.NoSuchCode.selector);
+        pool.buy(0, unset);
+        vm.stopPrank();
+        // Taken off sale before any sale named it: refused the same way, and still listed once.
         vm.prank(creator);
-        vm.expectRevert(SimPool.BadShare.selector);
-        alone.setPartnerShare(5000);
+        pool.setCode(CODE, address(0), 0);
+        vm.prank(trader);
+        vm.expectRevert(SimPool.NoSuchCode.selector);
+        pool.buy(0, CODE);
+        _share(pool, 5000);
+        assertEq(pool.codes().length, 1, "set again, listed once");
+    }
+
+    function test_setCode_atMostMaxCodes() public {
+        SimPool pool = _pool();
+        vm.startPrank(creator);
+        for (uint256 i = 1; i < factory.MAX_CODES(); ++i) pool.setCode(keccak256(abi.encode(i)), partner, 0);
+        vm.expectRevert(SimPool.TooMuch.selector);
+        pool.setCode(keccak256("one too many"), partner, 0);
+        pool.setCode(CODE, makeAddr("next"), 0); // one already listed can still change
+        vm.stopPrank();
+        assertEq(pool.codes().length, factory.MAX_CODES());
+    }
+
+    function test_withdraw_eachCodeGetsItsShareInThePartItBrought() public {
+        // Code A, 50 %, brings two large sales; code B, 40 %, one; code C, no share, one.
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        address ownerB = makeAddr("owner B");
+        bytes32 codeB = keccak256("GROUP-TWO");
+        bytes32 codeC = keccak256("PLATFORM");
+        vm.startPrank(creator);
+        pool.setCode(codeB, ownerB, 4000);
+        pool.setCode(codeC, creator, 0);
+        vm.stopPrank();
+        _buy(pool, trader, 1);
+        _buy(pool, other, 1);
+        _buyWith(pool, stranger, 1, codeB);
+        _buyWith(pool, makeAddr("fourth"), 1, codeC);
+        uint256 before = usdc.balanceOf(creator);
+        assertEq(pool.brought(), 4 * (LARGE_PRICE - 425_000), "each sale brought 84.575");
+        deal(address(usdc), address(pool), 6_000e6); // 4 400 above the 1 600 locked; 2 400 kept while open
+        vm.expectEmit(address(pool));
+        emit SimPool.PartnerPaid(CODE, partner, 895_500_000, true);
+        vm.expectEmit(address(pool));
+        emit SimPool.PartnerPaid(codeB, ownerB, 358_200_000, true);
+        vm.prank(creator);
+        pool.withdraw(3_600e6);
+        // 3 600 less the platform's 18 is 3 582: A brought half of it all, B a quarter, C a quarter.
+        assertEq(usdc.balanceOf(partner), 895_500_000, "50 % of A's half");
+        assertEq(usdc.balanceOf(ownerB), 358_200_000, "40 % of B's quarter");
+        assertEq(usdc.balanceOf(creator) - before, 3_582e6 - 895_500_000 - 358_200_000, "C's quarter stays the creator's");
+        assertEq(pool.principal(), 1_600e6, "all of it was profit");
+    }
+
+    function test_withdraw_aPartnerTheTokenRefusesHasItsPartSetAside() public {
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        _withSales(pool, 30);
+        usdc.block_(partner);
+        vm.prank(creator);
+        pool.withdraw(1_000e6);
+        assertEq(usdc.balanceOf(partner), 0);
+        assertEq(pool.heldOf(partner), 497_500_000, "set aside for the partner");
+        assertEq(pool.held(), 497_500_000);
+        assertEq(pool.withdrawable(), usdc.balanceOf(address(pool)) - 497_500_000 - 3 * LARGE_PAYOUT,
+            "and kept out of what the creator may take");
+        vm.prank(partner);
+        pool.claimHeld(makeAddr("partner's other address"));
+        assertEq(usdc.balanceOf(makeAddr("partner's other address")), 497_500_000);
     }
 
     function test_addToPot_comesBackFirstWithoutTheShare() public {
-        SimPlan memory p = _plan();
-        p.partner = partner;
-        p.partnerBps = 5000;
-        SimPool pool = _open(p);
+        SimPool pool = _pool();
+        _share(pool, 5000);
         vm.startPrank(creator);
         usdc.approve(address(pool), 4_000e6);
         pool.addToPot(4_000e6);
@@ -1017,10 +1151,8 @@ contract SimPoolTest is Test {
     }
 
     function test_finish_onceClosedAndNothingRunsOrIsOwed_principalFirst() public {
-        SimPlan memory p = _plan();
-        p.partner = partner;
-        p.partnerBps = 5000;
-        SimPool pool = _open(p);
+        SimPool pool = _pool();
+        _share(pool, 5000);
         PaperExam exam = _buy(pool, trader, 1);
         vm.startPrank(creator);
         vm.expectRevert(SimPool.Done.selector);
@@ -1067,6 +1199,8 @@ contract SimPoolTest is Test {
         if (topic == SimPool.StopLifted.selector) return "StopLifted";
         if (topic == SimPool.StopObjected.selector) return "StopObjected";
         if (topic == SimPool.StopFinal.selector) return "StopFinal";
+        if (topic == SimPool.CodeSet.selector) return "CodeSet";
+        if (topic == SimPool.PartnerPaid.selector) return "PartnerPaid";
         return "";
     }
 
@@ -1113,9 +1247,19 @@ contract SimPoolTest is Test {
             '","liftedCount":"', vm.toString(pool.liftedCount()), '","owed":"', vm.toString(pool.owed()));
         r = string.concat(r, '","held":"', vm.toString(pool.held()), '","reserved":"', vm.toString(pool.reserved()),
             '","live":"', vm.toString(pool.live()), '","closed":', pool.closed() ? "true" : "false", ',"finished":',
-            pool.finished() ? "true" : "false", ',"partner":"', vm.toString(pool.partner()), '","partnerBps":',
-            vm.toString(pool.partnerBps()), ',"terms":"', vm.toString(pool.terms()), '","fundWindow":',
-            vm.toString(pool.fundWindow()), "}");
+            pool.finished() ? "true" : "false", ',"codes":[', _pageCodes(pool), '],"terms":"', vm.toString(pool.terms()),
+            '","fundWindow":', vm.toString(pool.fundWindow()), "}");
+    }
+
+    /// Each code as the page reads it: its key, and codeOf's partner, share, whether a sale fixed it, what it brought.
+    function _pageCodes(SimPool pool) internal view returns (string memory list) {
+        bytes32[] memory keys = pool.codes();
+        for (uint256 i = 0; i < keys.length; ++i) {
+            (address p, uint16 bps, bool used,, uint256 got) = pool.codeOf(keys[i]);
+            list = string.concat(list, i == 0 ? "" : ",", '{"code":"', vm.toString(keys[i]), '","partner":"',
+                vm.toString(p), '","bps":', vm.toString(bps), ',"used":', used ? "true" : "false", ',"brought":"',
+                vm.toString(got), '"}');
+        }
     }
 
     function _pageJson(SimPool pool) internal view returns (string memory j) {
@@ -1135,12 +1279,20 @@ contract SimPoolTest is Test {
         );
     }
 
-    /// Three traders buy, pass both stages and claim; the checker stops the second payout and its trader objects;
-    /// ten more exams are sold; the token refuses the third trader; after the payout delay one payout is paid. The page drawn from these events
-    /// must show 800 USDC paid, with that payment's event, and the stop and the held payout apart.
+    /// Two trading groups' codes, 50 % and 40 %. Three traders buy with the first, pass both stages and claim; the
+    /// checker stops the second payout and its trader objects; ten more exams are sold with the first code and thirty
+    /// with the second; the token refuses the third trader and the second group's owner; after the payout delay one
+    /// payout is paid, and the creator withdraws 400, sharing its profit with both codes' owners. The page drawn from
+    /// these events must show 800 USDC paid, with that payment's event, the stop and the held payout apart, and each
+    /// code with what it brought and what its owner was sent or had set aside.
     function test_page_recordedChain() public {
         vm.recordLogs();
         SimPool pool = _pool();
+        _share(pool, 5000);
+        address owner2 = makeAddr("the second group's owner");
+        bytes32 two = keccak256("GROUP-TWO");
+        vm.prank(creator);
+        pool.setCode(two, owner2, 4000);
         _pageCollect(pool);
         address[3] memory who = [trader, other, makeAddr("refused by the token")];
         uint256[3] memory ids;
@@ -1166,14 +1318,31 @@ contract SimPoolTest is Test {
         // A stopped payout's money is set aside for its 14 days: prices of further exams pay the third payout.
         _withSales(pool, 10);
         _pageCollect(pool);
+        vm.roll(block.number + 1);
+        for (uint256 i = 0; i < 30; ++i) {
+            address b = makeAddr(string(abi.encode("the second group's buyer", i)));
+            deal(address(usdc), b, LARGE_PRICE);
+            vm.startPrank(b);
+            usdc.approve(address(pool), LARGE_PRICE);
+            pool.buy(1, two);
+            vm.stopPrank();
+        }
+        _pageCollect(pool);
         usdc.block_(who[2]);
+        usdc.block_(owner2);
         vm.roll(block.number + 1);
         vm.warp(block.timestamp + factory.PAYOUT_DELAY());
         assertEq(pool.pay(10), 2, "the first paid, the third held, the stopped one passed over");
         _pageCollect(pool);
+        vm.roll(block.number + 1);
+        vm.prank(creator);
+        pool.withdraw(400e6);
+        _pageCollect(pool);
         assertEq(pool.paidCount(), 1);
         assertEq(pool.paidTotal(), LARGE_PAYOUT);
-        assertEq(pool.held(), LARGE_PAYOUT);
+        assertGt(usdc.balanceOf(partner), 0, "the first group's owner was sent its part");
+        assertGt(pool.heldOf(owner2), 0, "the second's was set aside: the token refuses it");
+        assertEq(pool.held(), LARGE_PAYOUT + pool.heldOf(owner2));
         assertEq(pool.reserved(), LARGE_PAYOUT);
 
         string memory json = _pageJson(pool);
@@ -1184,6 +1353,11 @@ contract SimPoolTest is Test {
                 "the page's recorded chain is not this contract's: SIM_PAGE_FIXTURE=write forge test --match-test test_page_recordedChain");
         }
     }
+}
+
+/// An exam that takes any rules and terms: behind a factory, it leaves the factory's own bounds the only ones.
+contract TakesAnyRules {
+    function check(Rules calldata, ExamTerms calldata) external pure {}
 }
 
 /// USDC as Circle's FiatToken V2.2 takes a transfer by signature (EIP-3009), with its own words for

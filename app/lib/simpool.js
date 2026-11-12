@@ -19,8 +19,11 @@ export const SIM_POOL_ABI = [
   "function factory() view returns (address)",
   "function usdc() view returns (address)",
   "function creator() view returns (address)",
-  "function partner() view returns (address)",
-  "function partnerBps() view returns (uint16)",
+  "function codes() view returns (bytes32[])",
+  "function buy(uint256 line, bytes32 code) returns (address exam)",
+  "function buyWithAuthorization(address trader, uint256 line, bytes32 code, bytes32 salt, uint256 validAfter, uint256 validBefore, uint8 v, bytes32 r, bytes32 s) returns (address exam)",
+  "function codeOf(bytes32 code) view returns (address partner, uint16 bps, bool used, bool listed, uint256 brought)",
+  "function brought() view returns (uint256)",
   "function terms() view returns (bytes32)",
   "function largestPayout() view returns (uint64)",
   "function owed() view returns (uint256)",
@@ -33,7 +36,7 @@ export const SIM_POOL_ABI = [
   "function paidCount() view returns (uint256)",
   "function paidTotal() view returns (uint256)",
   "function held() view returns (uint256)",
-  "function heldOf(address trader) view returns (uint256)",
+  "function heldOf(address holder) view returns (uint256)",
   "function fundWindow() view returns (uint32)",
   "function fromBook() view returns (bool)",
   "function maxWorseBps() view returns (uint16)",
@@ -41,7 +44,9 @@ export const SIM_POOL_ABI = [
   "function payout(uint256 id) view returns ((address account, address trader, uint64 amount, uint64 dueAt, uint8 state, bool wasStopped))",
   "function payoutCount() view returns (uint256)",
   "function accountOf(address account) view returns (uint8 kind, uint8 line, bool done)",
-  "event ExamSold(address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee, bool bySignature)",
+  "event ExamSold(address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee, bool bySignature, bytes32 code, address indexed partner)",
+  "event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps)",
+  "event PartnerPaid(bytes32 indexed code, address indexed partner, uint256 amount, bool sent)",
   "event Funded(address indexed stage, address indexed exam, address indexed trader)",
   "event Released(address indexed account)",
   "event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt)",
@@ -87,7 +92,7 @@ export const SIM_FACTORY_ABI = [
   "function feeRecipient() view returns (address)",
   "function termsBook() view returns (address)",
   "function usdc() view returns (address)",
-  "event PoolCreated(address indexed pool, address indexed creator, address indexed partner, uint16 partnerBps, uint256 locked)",
+  "event PoolCreated(address indexed pool, address indexed creator, uint256 locked)",
   "event CheckerSet(address indexed checker)",
 ];
 
@@ -185,8 +190,8 @@ export function menuLines(menu) {
   });
 }
 
-/** Every exam sold, oldest first: who bought it, off which line, at what price, whether by signature, the transaction,
- *  and what became of it here: the stage it earned, or released. */
+/** Every exam sold, oldest first: who bought it, off which line, at what price, whether by signature, with which code
+ *  and so for which partner, the transaction, and what became of it here: the stage it earned, or released. */
 export function soldExams(events, times) {
   const all = ordered(events);
   const released = new Set(named(all, "Released").map((e) => String(e.args.account).toLowerCase()));
@@ -201,6 +206,8 @@ export function soldExams(events, times) {
       price: BigInt(e.args.price),
       fee: BigInt(e.args.fee),
       bySignature: Boolean(e.args.bySignature),
+      code: e.args.code ?? null,
+      partner: e.args.partner ?? null,
       stage: funded.get(String(exam).toLowerCase()) ?? null,
       released: released.has(String(exam).toLowerCase()),
       ...at(e, times),
@@ -397,8 +404,8 @@ export function gaps(list) {
 
 /**
  * The whole page of one simulated pool. `reads` are the pool's getters (menu, payoutCount's payouts as `payouts`,
- * paidCount, paidTotal, stoppedCount, liftedCount, owed, held, live, closed, finished, partner, partnerBps, terms,
- * fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
+ * paidCount, paidTotal, stoppedCount, liftedCount, owed, held, live, closed, finished, codes (each code's codeOf
+ * with its key: { code, partner, bps, used, brought }), terms, fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
  * clock. No field of it carries what the creator locked or put in.
  */
 export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, scan }) {
@@ -408,7 +415,7 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     throw new Error("simPoolPage needs the scan its events came from: { from, to, readTo, complete } (readLogs)");
   }
   need(reads, ["menu", "payouts", "paidCount", "paidTotal", "stoppedCount", "liftedCount", "owed", "held", "live",
-    "closed", "finished", "partnerBps", "terms", "fundWindow"]);
+    "closed", "finished", "codes", "terms", "fundWindow"]);
   const list = payouts(reads.payouts, events, now, times);
   const total = paidTotal(events, reads, times);
   const missing = gaps(list);
@@ -433,8 +440,7 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     live: BigInt(reads.live),
     closed: Boolean(reads.closed),
     finished: Boolean(reads.finished),
-    partner: reads.partner,
-    partnerBps: Number(reads.partnerBps),
+    codes: codeShares(reads.codes, events),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),
     gaps: missing,
@@ -455,16 +461,45 @@ export function scanText(scan) {
     + "what happened after. The total paid is the contract's own.";
 }
 
-/** The factory's pools, oldest first, each with its creator, its partner and that partner's share, and the
- *  transaction that opened it. The amount locked at the opening is not carried. */
+/** The factory's pools, oldest first, each with its creator and the transaction that opened it. The amount locked
+ *  at the opening is not carried, and a pool's partners are its codes (codeShares). */
 export function factoryPools(events, times) {
   return named(ordered(events), "PoolCreated").map((e) => ({
     pool: e.args.pool,
     creator: e.args.creator,
-    partner: e.args.partner,
-    partnerBps: Number(e.args.partnerBps),
     ...at(e, times),
   }));
+}
+
+/**
+ * Each code of a pool: its partner, its share (bps of the profit a withdrawal shares), whether a sale has fixed it,
+ * what its sales brought and that part of all the pool took (bps), and what its partner was sent (`paid`) or had set
+ * aside because the token refused (`setAside`), from the PartnerPaid events read. `codes` are the codeOf reads.
+ */
+export function codeShares(codes, events) {
+  const all = codes.reduce((t, k) => t + BigInt(k.brought), 0n);
+  const paid = new Map();
+  for (const e of named(ordered(events), "PartnerPaid")) {
+    const key = String(e.args.code).toLowerCase();
+    const was = paid.get(key) ?? { paid: 0n, setAside: 0n };
+    if (e.args.sent) was.paid += BigInt(e.args.amount);
+    else was.setAside += BigInt(e.args.amount);
+    paid.set(key, was);
+  }
+  return codes.map((k) => {
+    const brought = BigInt(k.brought);
+    const got = paid.get(String(k.code).toLowerCase()) ?? { paid: 0n, setAside: 0n };
+    return {
+      code: k.code,
+      partner: k.partner,
+      bps: Number(k.bps),
+      used: Boolean(k.used),
+      brought,
+      partOfAll: all === 0n ? 0 : Number(brought * BPS / all),
+      paid: got.paid,
+      setAside: got.setAside,
+    };
+  });
 }
 
 /**
@@ -507,4 +542,88 @@ export async function firstBlockAt(time, { low, high, timeOf }) {
 /** The time a payout's claim was written: its `dueAt` less the 72 hours (SimPool.claimPayout). */
 export function claimedAt(dueAt) {
   return Number(dueAt) - PAYOUT_DELAY;
+}
+
+// ── buying with a code ───────────────────────────────────────────
+
+const WORD = /^0x[0-9a-fA-F]{64}$/;
+const ZERO_ADDRESS = /^0x0{40}$/i;
+
+function word(value, name) {
+  if (typeof value !== "string" || !WORD.test(value)) throw new Error(`${name} is not 32 bytes in 0x-hex: ${value}`);
+  return value.toLowerCase();
+}
+
+/** The UTF-8 bytes of `text`, as 0x-hex. */
+function utf8Hex(text) {
+  return `0x${Array.from(new TextEncoder().encode(text), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * What a pool keys a trading group's code by, and what a sale names: the keccak256 of the code's text, exactly as
+ * given (ops/deploy_sim.py, code_hash). `keccak256` is the page's own (ethers.keccak256), over 0x-hex bytes. Nothing
+ * is trimmed or folded here, so the hash is the one the creator set: a page that forgives a stray space trims first.
+ */
+export function codeHash(text, keccak256) {
+  if (typeof text !== "string" || text.length === 0) throw new Error("a code is a text, not empty");
+  return word(keccak256(utf8Hex(text)), "keccak256");
+}
+
+/** The nonce a trader signs to buy by signature: keccak256(abi.encode(code, salt)), two 32-byte words, so the code is
+ *  in the signature and whoever sends it cannot name another (SimPool.buyWithAuthorization, ops/sim_relay.py). */
+export function saleNonce(code, salt, keccak256) {
+  return word(keccak256(`0x${word(code, "code").slice(2)}${word(salt, "salt").slice(2)}`), "keccak256");
+}
+
+/** EIP-3009's message, as Circle's FiatToken signs it (the token's own name, version, chain and address are its domain). */
+export const RECEIVE_WITH_AUTHORIZATION_TYPES = Object.freeze({
+  ReceiveWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+});
+
+/**
+ * A purchase off line `line` with `code` (a code's keccak256), checked as the pool would check it before anything is
+ * signed or sent: the line is on the menu, and, when the page has read the pool's codes (`codes`, as simPoolPage
+ * takes them), the code is one of them with a partner, that is, on sale. Returns `buy`'s arguments and the price the
+ * trader approves.
+ */
+export function purchase({ menu, line, code, codes }) {
+  const n = Number(line);
+  if (!Number.isInteger(n) || n < 0 || n >= menu.length) throw new Error(`no line ${line} on this pool's menu`);
+  const key = word(code, "code");
+  if (codes) {
+    const set = codes.find((k) => String(k.code).toLowerCase() === key);
+    if (!set || ZERO_ADDRESS.test(String(set.partner))) throw new Error("this code is not on sale at this pool");
+  }
+  return { method: "buy", args: [BigInt(n), key], price: BigInt(menu[n].price) };
+}
+
+/**
+ * A purchase by the trader's signature, which a relayer sends (ops/sim_relay.py): what the trader signs, the EIP-3009
+ * transfer of the line's price to the pool with the nonce of the code and `salt` (any 32 bytes, new for each
+ * purchase); then, given the signature, `buyWithAuthorization`'s arguments and the relayer's JSON body.
+ */
+export function signedPurchase({ pool, trader, menu, line, code, codes, salt, validAfter = 0, validBefore, keccak256 }) {
+  const { price, args } = purchase({ menu, line, code, codes });
+  const key = args[1];
+  const s = word(salt, "salt");
+  if (!(Number(validBefore) > Number(validAfter))) throw new Error("the signature must end after it starts");
+  const nonce = saleNonce(key, s, keccak256);
+  const message = { from: trader, to: pool, value: price, validAfter: BigInt(validAfter), validBefore: BigInt(validBefore), nonce };
+  return {
+    nonce,
+    message,
+    types: RECEIVE_WITH_AUTHORIZATION_TYPES,
+    args: ({ v, r, s: sig }) => [trader, args[0], key, s, message.validAfter, message.validBefore, v, r, sig],
+    relayBody: ({ v, r, s: sig }) => ({
+      pool, trader, line: Number(args[0]), code: key, salt: s,
+      valid_after: Number(validAfter), valid_before: Number(validBefore), v, r, s: sig,
+    }),
+  };
 }

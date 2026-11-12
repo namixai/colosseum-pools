@@ -15,21 +15,30 @@ fail, and their prices pay for the ones that pass.
 - **Opening.** `SimPoolFactory.create(plan)` with 1 HYPE sent along, which goes to the platform, and
   the USDC for two payouts of the largest size on the menu, taken from the creator. A menu of
   10 000 locks 1 600. The plan sets the menu (up to eight sizes, each with its price), the rules and
-  terms of both stages, how long a pass may wait before its stage starts, an optional trading
-  group's owner (the partner) and its share, and the hash of the pool's terms written out in a
-  `TermsBook`. No two lines share a price: a signed purchase names an amount, not a line. The
+  terms of both stages, how long a pass may wait before its stage starts, and the hash of the
+  pool's terms written out in a `TermsBook`. No two lines share a price: a signed purchase names an amount, not a line. The
   factory runs PaperExam's own checks on both stages at the largest size, and checks every asset against its list and every leverage cap against the
   asset's, that both stages end (a deadline and an idle limit), that the stage is one step, and
   that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler and the checker may not.
-- **Selling.** `buy(line)`. No seats and no share of the pool limit a sale. 0.5 % of the price goes
-  to the platform, the rest to the pool. The buyer gets a paper exam whose orders only the factory's
+- **Codes.** `setCode(code, partner, bps)`, by the creator: `code` is the keccak256 of a trading
+  group's code, `partner` the address the group's owner gave, `bps` its share, 0 or 40 to 60 %, up
+  to 32 codes a pool (`MAX_CODES`). A code is public by nature: its owner hands it to a whole
+  channel, so nothing hides it, and whoever buys with it is the owner's buyer. A code can be changed,
+  or taken off sale with a zero partner, until a sale names it; from then on its partner and share
+  are fixed (`CodeUsed`), so an owner who has brought traders does not depend on the creator.
+- **Selling.** `buy(line, code)`, with a code the creator set, or `NoSuchCode`. No seats and no
+  share of the pool limit a sale. 0.5 % of the price goes to the platform, the rest to the pool,
+  and that rest counts as what the code brought (`codeOf(code).brought`, and `brought` for all
+  codes). `ExamSold` names the code and its partner. The buyer gets a paper exam whose orders only the factory's
   filler fills inside their window, at the book when the plan says so: never better for the trader
   than the oracle price and at most the plan's `maxWorseBps` worse (`PaperExam.initializeWithFiller`).
-- **Selling by signature.** `buyWithAuthorization(trader, line, validAfter, validBefore, nonce, v,
-  r, s)`: the trader signs a USDC transfer of the line's price to the pool (EIP-3009, Circle's
-  FiatToken V2.2 on HyperEVM and its testnet) and needs no gas; anyone sends it, a relayer of the
-  platform's or a partner's, and pays the gas. The token checks the signature against the line's
-  price, the time and the nonce, and takes it only from the pool it names. Same price, same fee,
+- **Selling by signature.** `buyWithAuthorization(trader, line, code, salt, validAfter,
+  validBefore, v, r, s)`: the trader signs a USDC transfer of the line's price to the pool (EIP-3009,
+  Circle's FiatToken V2.2 on HyperEVM and its testnet) and needs no gas; anyone sends it, a relayer
+  of the platform's or a partner's, and pays the gas. The signed nonce is
+  keccak256(abi.encode(code, salt)), so the code is in the trader's signature and whoever sends it
+  cannot name another. The token checks the signature against the line's price, the time and the
+  nonce, and takes it only from the pool it names. Same price, same fee,
   `ExamSold` with `bySignature`. A token without EIP-3009 refuses with `NoAuthorization`; `buy`
   works on any.
 - **The stage.** `fund(exam)`: the trader, within the plan's window after the pass, starts a second
@@ -47,18 +56,20 @@ fail, and their prices pay for the ones that pass.
   names the other account, the transactions of the trades (at least two) and, for reason 2, the
   transactions that link the wallets. A stopped payout's money stays in the pool, set aside for 14
   days after the stop (`STOP_RESERVE`, `reserved`) as a held payout's is: the creator does not
-  withdraw it, it is no profit for the partner's share, and `pay` pays no other payout out of it.
+  withdraw it, it is no profit for the partners' shares, and `pay` pays no other payout out of it.
   Within those days the trader may object on chain (`objectStop`, the keccak256 of the objection's
   text, `StopObjected`), and the checker lifts a stop that was wrong (`liftStop`): the payout is due
   again, out of the money the stop kept, and paid as any other. After them the stop can no longer be
   lifted; anyone makes it final (`finalizeStop`, `StopFinal`), and its money is the pool's again.
 - **The creator.** `withdraw(amount)`: only what stays above three payouts of the largest size and
-  above every payout owed, held or kept for a recent stop. 0.5 % goes to the platform. The partner's
-  share is of the pool's money above what the creator put in, after what the pool owes, holds for
-  traders and keeps for recent stops: a
-  withdrawal takes that profit first, and the partner gets its share of it. `addToPot` puts in more
-  principal, never shared, which comes back once the profit above it has been taken, or at `finish`. `setPartnerShare` moves the share within 40 to 60 %, for
-  later withdrawals. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
+  above every payout owed, held or kept for a recent stop. 0.5 % goes to the platform. Profit is the
+  pool's money above what the creator put in, after what the pool owes, holds and keeps for recent
+  stops; a withdrawal takes it first. Of the profit a withdrawal takes, less the platform's part,
+  each code's partner is sent its `bps` in the part its code brought of all the pool took:
+  profit × (the code's `brought` / `brought`) × `bps`. A code with no share leaves its part to the
+  creator. A partner whose address the token refuses has its part set aside, `heldOf` and
+  `claimHeld` as for a refused payout (`PartnerPaid` says which). `addToPot` puts in more principal,
+  never shared, which comes back once the profit above it has been taken, or at `finish`. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
   can still be lifted, sends what is left, the principal first.
 
 ## The platform's numbers
@@ -68,7 +79,8 @@ exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`P
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid (`PAYOUT_DELAY`); 14 days a
 stopped payout's money stays set aside and the stop can be lifted (`STOP_RESERVE`); a fill
-window of 1 to 60 blocks; a partner's share of 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`).
+window of 1 to 60 blocks; a code's share of 0 or 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`)
+and up to 32 codes a pool (`MAX_CODES`).
 
 ## What anyone can check
 
@@ -97,14 +109,32 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 48 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 107 mutations (`SM1`–`SM107` in `scripts/mutations.py`),
+`test/sim/SimPool.t.sol`, 54 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and 116 mutations (`SM1`–`SM116` in `scripts/mutations.py`),
 each caught by a named test:
 
 ```
 forge test --match-path 'test/sim/*'
 python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
 ```
+
+`test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a
+handler buys with codes, directly and by signature, sets codes for three groups (40 %, 60 % and no share) and
+tries to set them again after a sale, passes and fails exams and stages, claims, stops, lifts and pays payouts, has
+the trader object to a stop and anyone make it final after its 14 days, has the token refuse a trader or a group's
+owner, claims what was held, withdraws and adds for the creator, closes and finishes (48 runs of 120 calls in CI,
+with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
+Eleven invariants: every dollar in and out accounted for; what is held always there and equal to the refused
+payouts and partners' parts less the claims, `reserved` the stopped payouts, and `pay` spending neither; `paidTotal` the sum of the
+payments, and `pay` sends exactly those; a withdrawal never below three payouts above what is owed, held and
+reserved, nor past `withdrawable`; one purchase, at most one payout; `owed` the due payouts; stops less lifts are
+those standing and those made final; nothing due behind the head of the queue; `live` the accounts not done, a
+pool finished only with nothing owed, running or reserved, and keeping only what is held; `brought` each code's
+sales and all of them together, and a code a sale has named keeping its partner and share; and each withdrawal's
+shares, worked out apart from the pool: the platform's 0.5 %, each partner's part of the profit less that 0.5 % by
+its code's share and what its code brought (sent, or set aside if the token refuses), the creator the rest, and the
+partners together never above 60 % of it. Not an invariant, by design: that the pool
+covers every payout owed. Passes can come faster than prices, and a payout waits in order (`PayoutQueued`).
 
 ## Running it
 
@@ -120,14 +150,16 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
   trader's own exam and writes how many blocks late each fill landed, p50 and p99: the number the
   plan's fill window is set from.
 - **The relayer**, `ops/sim_relay.py`: a signed purchase in, `buyWithAuthorization` out, from a key
-  that pays the gas. It refuses before spending any: another factory's pool, no such line, a signature
-  ending within 30 seconds, a used nonce, a call the pool would refuse. `--serve PORT` listens on
+  that pays the gas. It refuses before spending any: another factory's pool, no such line, a code the
+  pool has not set, a signature ending within 30 seconds, a used nonce, a call the pool would refuse. `--serve PORT` listens on
   127.0.0.1 for `POST /buy`.
 - **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, SimPool, a TermsBook and the
   factory on testnet with Circle's USDC, names the filler, the checker and the recipient, lists BTC,
   ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's
-  keeper nodes. `pool --plan` publishes the terms, approves the locked USDC and opens the pool with 1
-  HYPE. Without `--send` both print what they would do and read no key. The first pool's plan is
+  keeper nodes. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
+  HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
+  is on chain as listed and refusing, before anything is sent, one a sale has fixed otherwise.
+  `buy --code` buys with a code's text. Without `--send` they print what they would do and read no key. The first pool's plan is
   `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
@@ -154,7 +186,9 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
   and fails when the file is not what the contract emits (`SIM_PAGE_FIXTURE=write` rewrites it).
   `app/tests/simpool-chain.test.mjs` decodes those logs by the app's ABI lines, draws the page with
   `app/lib/simpool.js` and checks it the way a stranger would: the total paid is the sum of the payment events,
-  each with its transaction, and the contract's own `paidTotal`; the stopped and the held payouts are apart.
+  each with its transaction, and the contract's own `paidTotal`; the stopped and the held payouts are apart; and each
+  of two groups' codes shows what its sales brought and what its owner was sent or, refused by the token, had set
+  aside, worked out again from the events and the share.
 
 ## Measuring the filler's window
 
