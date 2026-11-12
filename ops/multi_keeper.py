@@ -732,7 +732,10 @@ def main() -> int:
     p.add_argument("--every", type=int, default=30, help="seconds between passes")
     p.add_argument("--note-every", type=int, default=3_600,
                    help="seconds between reads of a funded seat's fills (always read before closeIdle)")
-    p.add_argument("--log-window", type=int, default=MAX_LOG_WINDOW)
+    # The node is the record's (`keeper_nodes`, rendered into deployment-*.env by ops/host_instances.py):
+    # COLOSSEUM_RPC_URL (common.py), and the width of a log read there, as the core keeper takes it.
+    p.add_argument("--log-window", type=int, default=os.environ.get("COLOSSEUM_LOG_WINDOW", str(MAX_LOG_WINDOW)),
+                   help=f"blocks per eth_getLogs call to the node, 1..{MAX_LOG_WINDOW}")
     p.add_argument("--max-windows", type=int, default=20, help="log windows a pass reads at most")
     p.add_argument("--state", help="the state file (default ops/state/multi-<deployment>.json)")
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")

@@ -1,0 +1,71 @@
+# The keeper of instance %i's MultiPool, testnet only (ops/multi_keeper.py): the calls a pool of many traders
+# leaves to anyone, made when the pool takes them -- each running paper exam's snapshot of the day in the first
+# fifteen minutes of a UTC day, its breach, its expiry, the fill of the order it has waiting, a seat's arming,
+# opening and end. Without it the snapshot that the daily loss limit is measured from is taken by whoever it suits,
+# or by nobody.
+#
+# It sends with a key of its own, multi-keeper in the instance's secrets: the instance's core keeper
+# (colosseum-keeper@%i) sends with keeper, and one key in two processes would race for its nonces. ops/host/install.sh
+# installs it and enables it for an instance whose record names a MultiPool, once that key is there
+# (docs/HOSTING.md, "A MultiPool's keeper"); for any other instance it is never started.
+[Unit]
+Description=colosseum-pools MultiPool keeper %i (HyperEVM testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=colosseum-keeper
+Group=colosseum-keeper
+WorkingDirectory=/opt/colosseum-pools/current
+# The record's file last, as the gateway's: it wins over a line by hand in keeper-%i.env.
+EnvironmentFile=/etc/colosseum/keeper-%i.env
+EnvironmentFile=/etc/colosseum/deployment-%i.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.multi_keeper --deployment ${COLOSSEUM_DEPLOYMENT} \
+    --wallet multi-keeper --state /var/lib/colosseum-keeper/multi-${COLOSSEUM_DEPLOYMENT}.json --every 30 --max-windows 5
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/colosseum-keeper
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+# Not the gateway's, not the first keeper's key and not the shared pool keeper's: this instance sends with
+# its own alone.
+InaccessiblePaths=/var/lib/colosseum-gw -/var/lib/colosseum-keeper/secrets -/var/lib/colosseum-keeper/shared
+# Nor another instance's: all the instances' keepers run as colosseum-keeper, so under instances/
+# this one sees an empty, read-only directory with its own directory alone bound back into it. Its
+# state is /var/lib/colosseum-keeper/multi-<label>.json.
+TemporaryFileSystem=/var/lib/colosseum-keeper/instances:ro
+BindReadOnlyPaths=/var/lib/colosseum-keeper/instances/%i
+# Where its publisher, when the deployment's record names a test one (COLOSSEUM_PUBLISHER_WALLET in
+# deployment-%i.env), makes the agent keys it binds (ops/key_relay.py): the one place under its own directory it
+# writes, when there is one. colosseum-key-copy@%i copies each key into the gateway's directory, which this
+# keeper cannot reach (ops/host/key_copy.py). Without a publisher the keeper does not read it.
+BindPaths=-/var/lib/colosseum-keeper/instances/%i/made-keys
+Environment=GATEWAY_KEYS_DIR=/var/lib/colosseum-keeper/instances/%i/made-keys
+# Other users' processes are hidden from /proc, and /proc shows processes alone. This does not hide
+# another instance of this service, which runs as the same user: on testnet that is accepted, and a
+# mainnet host runs one instance or gives each its own user (docs/HOSTING.md).
+ProtectProc=invisible
+ProcSubset=pid
+
+[Install]
+WantedBy=multi-user.target
