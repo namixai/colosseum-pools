@@ -93,13 +93,13 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 47 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 106 mutations (`SM1`–`SM106` in `scripts/mutations.py`),
+`test/sim/SimPool.t.sol`, 48 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and 107 mutations (`SM1`–`SM107` in `scripts/mutations.py`),
 each caught by a named test:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 106)
+python3 scripts/mutations.py $(seq -f 'SM%g' 1 107)
 ```
 
 ## Running it

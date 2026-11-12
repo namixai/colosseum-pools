@@ -1189,10 +1189,10 @@
     },
     {
       "id": "S113",
-      "where": "src/sim/SimPool.sol:443",
+      "where": "src/sim/SimPool.sol:446",
       "kind": "line",
       "text": "if (block.timestamp >= p.dueAt) revert NotDue();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L443"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L446"
     },
     {
       "id": "S114",
@@ -1203,10 +1203,10 @@
     },
     {
       "id": "S115",
-      "where": "src/sim/SimPool.sol:467",
+      "where": "src/sim/SimPool.sol:470",
       "kind": "line",
       "text": "function liftStop(uint256 id) external onlyChecker {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L467"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L470"
     },
     {
       "id": "S116",
@@ -1231,17 +1231,17 @@
     },
     {
       "id": "S119",
-      "where": "src/sim/SimPool.sol:378",
+      "where": "src/sim/SimPool.sol:380",
       "kind": "line",
-      "text": "uint256 bal = usdc.balanceOf(address(this)) - held - reserved;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L378"
+      "text": "uint256 kept = held + reserved;",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L380"
     },
     {
       "id": "S120",
-      "where": "src/sim/SimPool.sol:472",
+      "where": "src/sim/SimPool.sol:475",
       "kind": "line",
       "text": "if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L472"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L475"
     }
   ]
 }

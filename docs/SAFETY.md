@@ -320,11 +320,11 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
 | S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
 | S112 | `src/sim/SimPoolFactory.sol:36` | `uint32 public constant PAYOUT_DELAY = 48 hours;` |
-| S113 | `src/sim/SimPool.sol:443` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
+| S113 | `src/sim/SimPool.sol:446` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
 | S114 | `src/sim/SimPool.sol:165` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:467` | `function liftStop(uint256 id) external onlyChecker {` |
+| S115 | `src/sim/SimPool.sol:470` | `function liftStop(uint256 id) external onlyChecker {` |
 | S116 | `src/sim/SimPoolFactory.sol:154` | `if (msg.sender == filler \|\| msg.sender == checker) revert BadRole();` |
 | S117 | `src/sim/SimPool.sol:275` | `uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |
 | S118 | `src/sim/SimPoolFactory.sol:39` | `uint32 public constant STOP_RESERVE = 14 days;` |
-| S119 | `src/sim/SimPool.sol:378` | `uint256 bal = usdc.balanceOf(address(this)) - held - reserved;` |
-| S120 | `src/sim/SimPool.sol:472` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();` |
+| S119 | `src/sim/SimPool.sol:380` | `uint256 kept = held + reserved;` |
+| S120 | `src/sim/SimPool.sol:475` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();` |

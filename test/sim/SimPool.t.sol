@@ -828,6 +828,21 @@ contract SimPoolTest is Test {
         assertEq(uint8(pool.payout(c).state), uint8(SimPool.PayoutState.Due));
     }
 
+    function test_stopReserve_stopsBeyondThePoolsMoney_payStillRuns() public {
+        // Four payouts of 800 on 1 600 locked and four prices: three stops keep 2 400, more than the pool holds.
+        SimPool pool = _pool();
+        uint256[4] memory id;
+        address[4] memory who = [trader, other, stranger, makeAddr("fourth")];
+        for (uint256 i = 0; i < 4; ++i) id[i] = pool.claimPayout(address(_passedStage(pool, who[i], 1)));
+        for (uint256 i = 1; i < 4; ++i) _stop(pool, id[i]);
+        assertGt(pool.reserved(), usdc.balanceOf(address(pool)));
+        vm.warp(block.timestamp + 48 hours);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutQueued(id[0], 0);
+        assertEq(pool.pay(10), 0, "nothing is free: the first payout waits, and pay does not revert");
+        assertEq(pool.withdrawable(), 0);
+    }
+
     function test_stopReserve_liftOnlyWithinFourteenDaysOfTheStop() public {
         SimPool pool = _pool();
         uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));

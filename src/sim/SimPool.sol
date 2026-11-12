@@ -374,8 +374,11 @@ contract SimPool is Initializable {
             if (p.state == PayoutState.Due) {
                 if (block.timestamp < p.dueAt) break;
                 // What is held is its traders' already, and what a recent stop keeps may be its trader's
-                // again: neither is paid out to anyone else (CFO, 12 November).
-                uint256 bal = usdc.balanceOf(address(this)) - held - reserved;
+                // again: neither is paid out to anyone else (CFO, 12 November). Stops can keep more than the
+                // pool holds, when payouts came faster than prices: then nothing is free (review of #269).
+                uint256 bal = usdc.balanceOf(address(this));
+                uint256 kept = held + reserved;
+                bal = bal > kept ? bal - kept : 0;
                 if (bal < p.amount) {
                     emit PayoutQueued(i, bal);
                     break;
