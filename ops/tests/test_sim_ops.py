@@ -53,13 +53,13 @@ class TheFirstPool(unittest.TestCase):
         self.assertEqual(plan[0], [(5_000 * 10**6, 45 * 10**6), (10_000 * 10**6, 85 * 10**6)])
         self.assertEqual(plan[1], (300, 600, 1000, [3, 4, 0], [1000, 1000, 500]))
         self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 450, 1, 10))
-        self.assertEqual(d.plan_of(FIRST, h)[4], plan[2], "the stage has the exam's terms")
+        self.assertEqual(plan[4], plan[2], "the stage has the exam's terms")
         self.assertEqual(plan[5:], (604800, True, 150, "0x" + "00" * 20, 0, h))
 
     def test_the_cfos_numbers_of_12_november(self):
         """Thirty days a stage, no idle rule that could bind, no minimum of days, 0.045 % a fill, seven days
         to start the stage; the measuring pool fills at the same cost."""
-        measure = json.loads((ROOT / "deployments/plans/sim-measure-pool.json").read_text())
+        measure = json.loads((ROOT / "deployments/plans/sim-measure-pool.json").read_text(encoding="utf-8"))
         for plan in (FIRST, measure):
             for stage in ("exam", "funded"):
                 t = plan[stage]
