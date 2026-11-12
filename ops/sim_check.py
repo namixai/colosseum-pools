@@ -238,7 +238,10 @@ class Checker:
         now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
         self.keeper.scan(latest)
         self.read_fills(latest)
-        self.prune(self.keep_from(now))
+        # Nothing is dropped while the scan is behind: an account it has not found yet may be a stage whose
+        # pairs are among the fills already read, and those are not read again (review of #273).
+        if self.keeper.next_block > latest:
+            self.prune(self.keep_from(now))
         stops = []
         for pool in self.keeper.pools:
             head, count = view(pool, "head()", "uint256"), view(pool, "payoutCount()", "uint256")

@@ -183,6 +183,57 @@ class TheService(unittest.TestCase):
         with v2, cv2:
             self.assertEqual(ch2.keep_from(5_000), 5_000 - 600, "nothing to pay: the window only")
 
+    def test_a_stage_found_after_its_pair_still_has_it(self):
+        """The scan finds a few windows of accounts a pass. Pass one finds the other side's account B (and C, an old
+        one) but not the stage S; pass two finds S. B's fill is read once, in pass one: it must still be there when S
+        is found, so nothing is dropped until the scan has caught up. Once it has, C's old fill goes (review of #273)."""
+        from types import SimpleNamespace
+        from unittest import mock
+        day = 86_400
+        ch = self.checker()
+        ch.dry, ch.tolerance = True, 0.2
+        pool, S, Bx, Cx, T1, T2 = (s.to_checksum_address("0x" + x * 20) for x in ("55", "a1", "b1", "c1", "71", "72"))
+        times = {20: 1 * day, 30: 10 * day, 31: 10 * day + 100}
+        chain = [(Cx, 20, True), (S, 30, True), (Bx, 31, False)]  # account, block, is a buy
+        found = [({Bx: "exam", Cx: "exam"}, 51), ({S: "stage"}, 101)]
+
+        def scan(latest):
+            accounts, nxt = found.pop(0)
+            ch.keeper.accounts.update({a: {"pool": pool, "kind": k} for a, k in accounts.items()})
+            ch.keeper.next_block = nxt
+
+        ch.keeper = SimpleNamespace(pools=[pool], accounts={}, next_block=10, scan=scan)
+
+        def rpc(method, params=()):
+            if method == "eth_blockNumber":
+                return hex(100)
+            if method == "eth_getBlockByNumber":
+                return {"timestamp": hex(45 * day if params[0] == "latest" else times[int(params[0], 16)])}
+            q = params[0]
+            if q["topics"][0] != s.sk.FILLED:
+                return []
+            return [{"address": a, "blockNumber": hex(b), "transactionHash": "0x%064x" % b,
+                     "topics": [s.sk.FILLED, "0x%064x" % 3],
+                     "data": "0x" + encode(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"],
+                                           [buy, 100, 0, 0, 0, 0]).hex()}
+                    for a, b, buy in chain
+                    if a in q["address"] and int(q["fromBlock"], 16) <= b <= int(q["toBlock"], 16)]
+
+        def view(to, sig, out="uint256", types=(), args=()):
+            return {"head()": 0, "payoutCount()": 1, "stepStartedAt()": 10 * day,
+                    "payout(uint256)": (S, T1, 800, 48 * day, 1, False)}[sig]
+
+        def call_view(to, sig, types, args, out):
+            return (2, T2, 0, 0) if sig == "result()" else (2, 1, True)
+
+        with mock.patch.object(s.c, "rpc", side_effect=rpc), mock.patch.object(s, "view", side_effect=view), \
+                mock.patch.object(s.c, "call_view", side_effect=call_view), mock.patch.object(s, "log"):
+            self.assertEqual(ch.one_pass(), [], "S not found yet: nothing to check")
+            self.assertEqual(sorted(f["account"] for f in ch.fills), sorted([Bx, Cx]), "nothing dropped while behind")
+            stops = ch.one_pass()
+        self.assertEqual([(x["id"], x["paired"], x["reason"]) for x in stops], [(0, Bx, 1)], "the pair is found")
+        self.assertEqual(sorted(f["account"] for f in ch.fills), sorted([S, Bx]), "C's old fill is dropped once caught up")
+
 
 if __name__ == "__main__":
     unittest.main()
