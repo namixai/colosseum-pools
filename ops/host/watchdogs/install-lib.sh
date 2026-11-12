@@ -59,9 +59,12 @@ watchdogs_pick() {
   else
     say "no $etc_dir/deployment.env: the first deployment's watchdogs are not installed"
   fi
-  while read -r name rest; do
+  local port
+  while read -r name _ port; do
     [ -n "$name" ] || continue
-    if [ ! -f "$src/colosseum-watch-keys-$name.service" ]; then
+    if [ "$port" = "-" ]; then
+      say "instance $name: a simulated pool's, no gateway or instance keeper to watch"
+    elif [ ! -f "$src/colosseum-watch-keys-$name.service" ]; then
       say "instance $name: the release ships no watchdogs for it"
     elif [ ! -f "$etc_dir/deployment-$name.env" ]; then
       say "instance $name: no $etc_dir/deployment-$name.env, so its watchdogs are not installed"

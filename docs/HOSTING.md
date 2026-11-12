@@ -760,6 +760,43 @@ By hand, once, before the deploy whose record names the MultiPool:
     sudo -u colosseum-keeper /opt/colosseum-pools/venv/bin/python /opt/colosseum-pools/current/ops/make_demo_keys.py \
         --wallet multi-keeper --dir /var/lib/colosseum-keeper/instances/<name>/secrets   # fund this address with HYPE
 
+`colosseum-multi-keeper@<name>` sends with the wallet the deployment's file names, `COLOSSEUM_MULTI_WALLET`:
+`multi-keeper` for a MultiPool, the filler for a simulated pool (below).
+
+### A simulated pool's keeper
+
+A simulated pool (docs/SIM-POOL.md) trades nothing on an exchange: its record names a `SimPoolFactory` and no
+`PoolFactory`. So its instance has **no gateway, no instance keeper and no route on nginx**. Its one unit is
+`colosseum-multi-keeper@<name>`, which hands the record to `ops/sim_keeper.py`: the fills of the exams' orders,
+the day's snapshots, `breach`, `expire`, `release`, `claimPayout` and `pay`. Its node is the record's
+(`keeper_nodes`), and `deployment-<name>.env` has no gateway line.
+
+It sends with the factory's **filler**, the one key whose fills the exams take; any other key would only log.
+The **checker**, the one key that may stop a payout, is kept beside it for the checking script. They are two
+keys, as the factory requires, and each is the address the record names (`filler`, `checker`, written by
+`ops/deploy_sim.py`).
+
+The instance is made without a gateway, and the missing `gateway-<name>.env` is how the host knows it:
+
+    sudo bash /opt/colosseum-pools/current/ops/host/bootstrap.sh --sim-instance <name> <label>
+    # the two wallets, made as the keeper's user; their addresses are deploy_sim.py's --filler and --checker
+    for w in filler checker; do
+      sudo -u colosseum-keeper /opt/colosseum-pools/venv/bin/python /opt/colosseum-pools/current/ops/make_demo_keys.py \
+          --wallet $w --dir /var/lib/colosseum-keeper/instances/<name>/secrets
+    done                                                                     # fund the filler with HYPE
+
+Before it switches, `install.sh` stops the release if any of these does not hold:
+
+- both wallets are there, each `.key` the keeper user's with mode 600;
+- each `.addr` is the record's address;
+- the instance has no `gateway-<name>.env`. An instance made with `--instance` for such a record would have
+  nginx route to a gateway with nothing to serve.
+
+`install.sh` also refuses such a record as the first deployment. After the switch it enables the keeper, starts
+no gateway and no instance keeper for the instance, and stops any that an earlier release left enabled. The
+watchdogs of a gateway and an instance keeper are not put in for it. demo2 and demo3 have gateways and change in
+nothing.
+
 ## The shared pool's keeper
 
 `colosseum-shared-keeper.service` runs `ops/shared_keeper.py` for the shared pools that

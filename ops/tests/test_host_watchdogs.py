@@ -1140,6 +1140,17 @@ watchdogs_install "{self.rel}" "{sha}" "{instances}"
     def units_installed(self) -> set[str]:
         return {p.name for p in self.host["units"].iterdir()}
 
+    def test_a_simulated_pools_instance_gets_no_gateway_or_keeper_watchdogs(self):
+        # demo3's pair ships with the release; listed without a port, as a simulated pool's instance, it is not put in.
+        (self.host["etc"] / "deployment-demo3.env").write_text("COLOSSEUM_DEPLOYMENT=v3-demo3\n")
+        out = self.run_install(instances="demo3 v3-demo3 -")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("instance demo3: a simulated pool's, no gateway or instance keeper to watch", out.stdout)
+        self.assertFalse({u for u in self.units_installed() if u.startswith("colosseum-watch-keys-demo3")})
+        out = self.run_install(instances="demo3 v3-demo3 8788")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("colosseum-watch-keys-demo3.timer", self.units_installed(), "with its gateway, as before")
+
     def test_a_multipool_watchdog_of_an_instance_no_longer_selected_is_stopped(self):
         (self.host["etc"] / "deployment-kb2.env").write_text("COLOSSEUM_DEPLOYMENT=kb2\n")
         out = self.run_install(instances="kb2 kb2 8790", extra='watch_multis=""')

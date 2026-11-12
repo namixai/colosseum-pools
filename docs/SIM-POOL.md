@@ -115,11 +115,10 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 90)
   `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, at the book
   with a ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise.
 
+- **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
+  `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
+  record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route.
+
 ## Not done yet
 
-- The host: `install.sh` enables `colosseum-multi-keeper@<name>` for a record with a `SimPoolFactory`
-  as for one with a `MultiPool` (`host_instances multi`), with no MultiPool watchdog, and
-  `deployment-env` renders such a record without gateway lines. What is left: an instance is still
-  bootstrapped with its own gateway and instance keeper, which a simulated pool does not use and whose
-  settings its record does not have; until bootstrap skips them, the keeper is run by hand.
 - The checking script.

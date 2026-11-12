@@ -15,7 +15,9 @@
 #   6. an instance whose record names a test publisher has its keeper's made keys copied to its gateway:
 #      colosseum-key-copy@<name>.path and .timer are enabled and the copier run once (ops/host/key_copy.py);
 #   7. an instance whose record names a MultiPool has its keeper enabled, colosseum-multi-keeper@<name>
-#      (ops/multi_keeper.py), and the watchdog on it.
+#      (ops/multi_keeper.py), and the watchdog on it;
+#   8. a simulated pool's instance (a SimPoolFactory, no PoolFactory) has no gateway, no instance keeper and no
+#      nginx route: only colosseum-multi-keeper@<name>, with the factory's filler, both its wallets checked first.
 #
 # It makes no key and reads none; the copier it starts moves an instance's agent keys from its keeper to
 # its gateway, and nothing else. Testnet only.
@@ -86,6 +88,17 @@ for label in $first_label $(awk '{print $2}' <<< "$instances"); do
   (cd "$rel" && "$venv/bin/python" -m ops.host_instances deployment-env "$label") > /dev/null \
     || fail "deployment $label: no complete testnet record in this release; nothing switched"
 done
+# A simulated pool's instance has no gateway, and its record and the host agree on it: an instance listed with a
+# gateway port whose record is a simulated pool's was made as an exchange's, and nginx would route to a gateway
+# that has nothing to serve. (One listed without a port has a simulated record: ops/host_instances.py checks it.)
+while read -r name label port; do
+  [ -n "$name" ] || continue
+  wallets="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances sim-wallets "$label")" \
+    || fail "deployment $label: could not read a simulated pool's wallets from its record; nothing switched"
+  if [ -n "$wallets" ] && [ "$port" != "-" ]; then
+    fail "instance $name: its record ($label) is a simulated pool's, which has no gateway, but /etc/colosseum/gateway-$name.env is here: make the instance with bootstrap.sh --sim-instance (docs/HOSTING.md, \"A simulated pool's keeper\"); nothing switched"
+  fi
+done <<< "$instances"
 
 # A deployment whose record names a test publisher, a key in a file before the enclave (ops/key_relay.py), is
 # served as an instance: its keeper signs bindings with the publisher's wallet, kept beside its own, and makes
@@ -130,7 +143,7 @@ if [ -n "$first_label" ]; then
   first_multi="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi "$first_label")" \
     || fail "deployment $first_label: could not read its MultiPool; nothing switched"
   [ -z "$first_multi" ] \
-    || fail "deployment $first_label names a MultiPool: serve it as an instance (bootstrap.sh --instance); nothing switched"
+    || fail "deployment $first_label names a MultiPool or a SimPoolFactory: serve it as an instance (bootstrap.sh --instance or --sim-instance); nothing switched"
 fi
 while read -r name label _; do
   [ -n "$name" ] || continue
@@ -138,9 +151,24 @@ while read -r name label _; do
     || fail "deployment $label: could not read its MultiPool; nothing switched"
   [ -n "$multi" ] || continue
   own="/var/lib/colosseum-keeper/instances/$name"
-  [ -f "$own/secrets/multi-keeper.key" ] && [ -f "$own/secrets/multi-keeper.addr" ] \
-    && owned_alone "$own/secrets/multi-keeper.key" colosseum-keeper 600 \
-    || fail "instance $name: its record names $multi (a MultiPool or a SimPoolFactory), so its keeper needs its own wallet, $own/secrets/multi-keeper.key (colosseum-keeper's, mode 600) and .addr (docs/HOSTING.md, \"A MultiPool's keeper\"); nothing switched"
+  wallets="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances sim-wallets "$label")" \
+    || fail "deployment $label: could not read a simulated pool's wallets from its record; nothing switched"
+  if [ -n "$wallets" ]; then
+    # A simulated pool's: the keeper sends with the factory's filler, and the checker's key is kept beside it. Each
+    # is the address the record names, or the keeper would fill nothing and say so only in its log.
+    while read -r wallet address; do
+      [ -f "$own/secrets/$wallet.key" ] && [ -f "$own/secrets/$wallet.addr" ] \
+        && owned_alone "$own/secrets/$wallet.key" colosseum-keeper 600 \
+        || fail "instance $name: its record names the SimPoolFactory $multi, so the instance needs the $wallet's wallet, $own/secrets/$wallet.key (colosseum-keeper's, mode 600) and .addr (docs/HOSTING.md, \"A simulated pool's keeper\"); nothing switched"
+      had="$(tr -d '[:space:]' 2>/dev/null < "$own/secrets/$wallet.addr" || true)"
+      [ "$(lower <<< "$had")" = "$(lower <<< "$address")" ] \
+        || fail "instance $name: $own/secrets/$wallet.addr says ${had:-nothing}, its record's $wallet is $address; nothing switched"
+    done <<< "$wallets"
+  else
+    [ -f "$own/secrets/multi-keeper.key" ] && [ -f "$own/secrets/multi-keeper.addr" ] \
+      && owned_alone "$own/secrets/multi-keeper.key" colosseum-keeper 600 \
+      || fail "instance $name: its record names the MultiPool $multi, so its keeper needs its own wallet, $own/secrets/multi-keeper.key (colosseum-keeper's, mode 600) and .addr (docs/HOSTING.md, \"A MultiPool's keeper\"); nothing switched"
+  fi
   multis+="$name "
   # A SimPoolFactory's keeper (ops/sim_keeper.py) runs in the same unit; only a MultiPool has a watchdog.
   pool="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi-pool "$label")" \
@@ -209,7 +237,11 @@ fi
 while read -r name label port; do
   [ -n "$name" ] || continue
   deployment_env "$label" "/etc/colosseum/deployment-$name.env"
-  say "instance $name: deployment $label, gateway on 127.0.0.1:$port, /$name/v1/ on nginx"
+  if [ "$port" = "-" ]; then
+    say "instance $name: deployment $label, a simulated pool: no gateway, nothing on nginx"
+  else
+    say "instance $name: deployment $label, gateway on 127.0.0.1:$port, /$name/v1/ on nginx"
+  fi
 done <<< "$instances"
 
 # The watchdogs ride with the release. Their files are checked and put in place here, still before
@@ -233,17 +265,27 @@ done
 # A MultiPool's keeper is enabled by its record (checked above), and restarts below with the rest.
 for name in $multis; do
   systemctl enable --quiet "colosseum-multi-keeper@$name"
-  say "instance $name: its MultiPool's keeper is enabled (colosseum-multi-keeper@$name)"
+  say "instance $name: its pool's keeper is enabled (colosseum-multi-keeper@$name)"
 done
 units=(colosseum-gateway colosseum-keeper)
-while read -r name _; do
-  [ -n "$name" ] && units+=("colosseum-gateway@$name" "colosseum-keeper@$name")
+while read -r name _ port; do
+  [ -n "$name" ] || continue
+  [ "$port" != "-" ] || continue  # a simulated pool's instance: no gateway, no instance keeper
+  units+=("colosseum-gateway@$name" "colosseum-keeper@$name")
 done <<< "$instances"
 for name in $multis; do units+=("colosseum-multi-keeper@$name"); done
 # An instance whose record no longer names a test publisher, or a MultiPool, has what an earlier release enabled
 # for it stopped: a keeper left running would go on sending to the pool it loaded, a copier would watch for nothing.
-while read -r name _; do
+while read -r name _ port; do
   [ -n "$name" ] || continue
+  if [ "$port" = "-" ]; then
+    for unit in "colosseum-gateway@$name" "colosseum-keeper@$name"; do
+      if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+        systemctl disable --quiet --now "$unit"
+        say "instance $name: a simulated pool has no $unit; stopped"
+      fi
+    done
+  fi
   case " $publishers " in *" $name "*) ;; *)
     if systemctl is-enabled --quiet "colosseum-key-copy@$name.path" 2>/dev/null \
         || systemctl is-enabled --quiet "colosseum-key-copy@$name.timer" 2>/dev/null; then

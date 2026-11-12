@@ -22,7 +22,7 @@ EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.multi_keeper --deployment ${COLOSSEUM_DEPLOYMENT} \
-    --wallet multi-keeper --state /var/lib/colosseum-keeper/multi-${COLOSSEUM_DEPLOYMENT}.json --every 30 --max-windows 5
+    --wallet ${COLOSSEUM_MULTI_WALLET} --state /var/lib/colosseum-keeper/multi-${COLOSSEUM_DEPLOYMENT}.json --every 30 --max-windows 5
 Restart=always
 RestartSec=10
 
