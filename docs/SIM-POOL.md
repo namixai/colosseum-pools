@@ -109,7 +109,7 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 54 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+`test/sim/SimPool.t.sol`, 55 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
 FiatToken V2.2's interface and words), and 117 mutations (`SM1`–`SM116` and `SM129` in `scripts/mutations.py`),
 each caught by a named test:
 

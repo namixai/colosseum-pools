@@ -1120,6 +1120,37 @@ contract SimPoolTest is Test {
         assertEq(pool.principal(), 1_600e6, "all of it was profit");
     }
 
+    function test_withdraw_withEveryCodeSharing_staysWithinAMillionAndAHalfGas() public {
+        // MAX_CODES codes, each with a share and a sale: the most transfers one withdrawal makes.
+        SimPool pool = _pool();
+        uint256 n = factory.MAX_CODES();
+        vm.startPrank(creator);
+        pool.setCode(CODE, partner, 4000);
+        for (uint256 i = 1; i < n; ++i) {
+            pool.setCode(keccak256(abi.encode("group", i)), makeAddr(string(abi.encode("owner", i))), 4000);
+        }
+        vm.stopPrank();
+        _buy(pool, trader, 1);
+        for (uint256 i = 1; i < n; ++i) {
+            _buyWith(pool, makeAddr(string(abi.encode("buyer", i))), 1, keccak256(abi.encode("group", i)));
+        }
+        deal(address(usdc), address(pool), 6_000e6);
+        uint256 w = pool.withdrawable();
+        vm.recordLogs();
+        vm.prank(creator);
+        uint256 before = gasleft();
+        pool.withdraw(w);
+        uint256 used = before - gasleft();
+        uint256 paid;
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].topics[0] == SimPool.PartnerPaid.selector) paid += 1;
+        }
+        assertEq(paid, n, "every code's partner is paid in the one withdrawal");
+        emit log_named_uint("withdraw gas, 32 codes sharing", used);
+        assertLt(used, 1_500_000, "a bounded loop: about one transfer a code");
+    }
+
     function test_withdraw_aPartnerTheTokenRefusesHasItsPartSetAside() public {
         SimPool pool = _pool();
         _share(pool, 5000);
