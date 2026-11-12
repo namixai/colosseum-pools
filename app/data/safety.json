@@ -265,7 +265,7 @@
         },
         {
           "lead": "A simulated pool's creator",
-          "text": "withdraws only what stays above three payouts of the largest size and above every payout owed and every payout set aside for a trader whose transfer was refused (S117), and stops nobody's payout.",
+          "text": "withdraws only what stays above three payouts of the largest size and above every payout owed and every payout set aside for a trader whose transfer was refused (S117), and stops nobody's payout. A partner's share is of the pool's money above what the creator put in, after what the pool owes and holds; never of the principal.",
           "sources": [
             "S117"
           ]
@@ -1185,10 +1185,10 @@
     },
     {
       "id": "S113",
-      "where": "src/sim/SimPool.sol:419",
+      "where": "src/sim/SimPool.sol:420",
       "kind": "line",
       "text": "if (block.timestamp >= p.dueAt) revert NotDue();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L419"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L420"
     },
     {
       "id": "S114",
@@ -1199,10 +1199,10 @@
     },
     {
       "id": "S115",
-      "where": "src/sim/SimPool.sol:440",
+      "where": "src/sim/SimPool.sol:441",
       "kind": "line",
       "text": "function liftStop(uint256 id) external onlyChecker {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L440"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L441"
     },
     {
       "id": "S116",

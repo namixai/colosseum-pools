@@ -447,6 +447,44 @@ contract SimPoolTest is Test {
         assertEq(pool.heldOf(trader), LARGE_PAYOUT);
     }
 
+    function test_pay_neverSpendsWhatIsHeldForAnotherTrader() public {
+        SimPool pool = _pool();
+        pool.claimPayout(address(_passedStage(pool, trader, 1))); // A, 800
+        pool.claimPayout(address(_passedStage(pool, other, 1))); // C, 800
+        usdc.block_(trader);
+        vm.warp(block.timestamp + 48 hours);
+        pool.pay(10); // A's is held, C's is paid
+        assertEq(pool.held(), LARGE_PAYOUT);
+        assertLt(usdc.balanceOf(address(pool)) - pool.held(), 400e6, "what is free is under a small payout");
+        uint256 b = pool.claimPayout(address(_passedStage(pool, stranger, 0))); // B, 400
+        vm.warp(block.timestamp + 48 hours);
+        pool.pay(10);
+        assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Due), "B waits; A's money is not B's");
+        vm.prank(trader);
+        pool.claimHeld(makeAddr("safe"));
+        assertEq(usdc.balanceOf(makeAddr("safe")), LARGE_PAYOUT, "A takes all of it");
+    }
+
+    function test_withdraw_aPartnersShareIsOfWhatIsAboveTheDebtAndThePrincipal() public {
+        // The CFO's case: 1 600 locked and 3 400 added, 6 000 in the pool, 800 owed, a 50 % share.
+        SimPlan memory p = _plan();
+        p.partner = partner;
+        p.partnerBps = 5000;
+        SimPool pool = _open(p);
+        vm.startPrank(creator);
+        usdc.approve(address(pool), 3_400e6);
+        pool.addToPot(3_400e6);
+        vm.stopPrank();
+        pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        deal(address(usdc), address(pool), 6_000e6);
+        assertEq(pool.owed(), LARGE_PAYOUT);
+        assertEq(pool.withdrawable(), 2_800e6);
+        vm.prank(creator);
+        pool.withdraw(2_800e6);
+        assertEq(usdc.balanceOf(partner), 99_500_000, "half of 200 after the platform's part, not of 1 000");
+        assertEq(pool.principal(), 2_400e6, "the rest came back as principal");
+    }
+
     function test_finish_leavesWhatIsHeld_andTheTraderTakesItAfter() public {
         SimPool pool = _pool();
         pool.claimPayout(address(_passedStage(pool, trader, 1))); // the locked 1 600 covers it
