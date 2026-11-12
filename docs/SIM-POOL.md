@@ -80,7 +80,8 @@ text, and a stop that became final is `StopFinal`.
 ## Weak points we know of
 
 - **The platform is the filler, the checker, and in its first pools the creator.** The filler picks
-  the block inside the window; the checker stops payouts whose money stays with the creator. Neither
+  the block inside the window; the checker stops payouts whose money, once the stop is final 14 days later,
+  stays with the creator. Neither
   is held by the contract, only by what shows: `late` on every fill, the reason and transactions on
   every stop, the counts, and a checking script to be published with the keeper (not in this
   change). A creator is never the filler or the checker.
