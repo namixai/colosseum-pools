@@ -42,6 +42,23 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(r.EXAM_SOLD, declared("src/sim/SimPool.sol", "ExamSold"))
 
 
+class TheRecord(unittest.TestCase):
+    def test_a_finished_deploy_writes_a_record_the_loader_takes(self):
+        """`deploy` used to end on "deployed", which `deployments.load` refuses: `pool`, `buy`, the keeper and the
+        checker would all have stopped at the record."""
+        import tempfile
+        from unittest import mock
+        from ops import deployments
+        from spike.hlspike import network as networks
+        net = networks.select()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "testnet-x.json"
+            path.write_text(json.dumps({"chain_id": net.chain_id, "status": d.DONE, "SimPoolFactory": "0x" + "33" * 20}), encoding="utf-8")
+            with mock.patch.object(deployments, "record_path", return_value=path):
+                self.assertEqual(deployments.load("x", net)["status"], "complete")
+        self.assertIn('record["status"] = DONE', (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8"))
+
+
 class TheFirstPool(unittest.TestCase):
     def test_it_is_alexs_menu_and_locks_1600(self):
         self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], [(5000, 45), (10000, 85)])

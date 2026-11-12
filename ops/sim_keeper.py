@@ -150,6 +150,7 @@ class SimKeeper:
         self.accounts: dict[str, dict] = {}  # exam or stage -> {"pool", "kind"}
         self.done: set[str] = set()
         self.orders: dict[str, tuple[int, int]] = {}  # exam -> the window of its waiting order
+        self.tried: dict[str, int] = {}  # exam -> the block its last fill was sent for
         self.filler: str | None = None
         if state_path.exists():
             state = json.loads(state_path.read_text())
@@ -290,28 +291,52 @@ class SimKeeper:
     # ── the fast loop ────────────────────────────────────────────────────────────────
 
     def fast_step(self, latest: int) -> list[str]:
-        """Reads the `Placed` events since the last look and sends the fills that are due for the next
-        block. The exams it sent a fill for."""
-        live = self.live()
-        if not live:
+        """Reads the `Placed` events since the last look, and the pools' new exams and stages with them, and
+        sends the fills that are due for the next block. The exams it sent a fill for.
+
+        A new account is read here, not only in the slow pass: an order placed within seconds of the purchase
+        would otherwise fall before the account was known and lapse (review of #270). A fill the exam refuses
+        (the book past the ceiling, say) is sent again for the next block while the window lasts, as the terms
+        say an order waits for a later block of its window; once a block."""
+        watched = self.live() + self.pools
+        if not watched:
             self.fast_block = latest
             return []
         lo = max(self.fast_block + 1, latest - MAX_LOG_WINDOW + 1)
         if lo <= latest:
-            for l in c.rpc("eth_getLogs", [{"address": live, "topics": [PLACED],
+            new: list[str] = []
+            for l in c.rpc("eth_getLogs", [{"address": watched, "topics": [[PLACED, EXAM_SOLD, FUNDED]],
                                             "fromBlock": hex(lo), "toBlock": hex(latest)}]):
-                exam, start, until = placed_of(l)
-                self.orders[exam] = (start, until)
+                if l["topics"][0] == PLACED:
+                    self._order(l)
+                    continue
+                a = to_checksum_address("0x" + l["topics"][1][-40:])
+                if a not in self.accounts:
+                    kind = "exam" if l["topics"][0] == EXAM_SOLD else "stage"
+                    self.accounts[a] = {"pool": to_checksum_address(l["address"]), "kind": kind}
+                    new.append(a)
+            if new:  # their orders in the same blocks, which the read above could not name
+                for l in c.rpc("eth_getLogs", [{"address": new, "topics": [PLACED],
+                                                "fromBlock": hex(lo), "toBlock": hex(latest)}]):
+                    self._order(l)
             self.fast_block = latest
         sent = []
         for exam, (start, until) in list(self.orders.items()):
             if latest + 1 > until:
                 del self.orders[exam]  # lapsed; the next Placed replaces it
-            elif fill_now(start, until, latest):
-                del self.orders[exam]
-                self.fill(exam)
+                self.tried.pop(exam, None)
+            elif fill_now(start, until, latest) and self.tried.get(exam) != latest:
+                self.tried[exam] = latest
                 sent.append(exam)
+                if self.fill(exam) is not None or self.dry or not self.is_filler():
+                    del self.orders[exam]
+                    self.tried.pop(exam, None)
         return sent
+
+    def _order(self, log_entry: dict) -> None:
+        exam, start, until = placed_of(log_entry)
+        self.orders[exam] = (start, until)
+        self.tried.pop(exam, None)
 
 
 # ── the measure ──────────────────────────────────────────────────────────────────────
