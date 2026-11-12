@@ -63,7 +63,7 @@ struct SimPlan {
 /// @notice A pool where both stages are paper exams and nobody's capital is traded. A trader buys
 ///         an exam off the menu; whoever passes it starts the stage on the same size; whoever passes
 ///         the stage is paid 8 % of the size, once, out of the pool's USDC: the prices traders paid,
-///         and what its creator locked at the start. A payout waits 48 hours, in which the factory's
+///         and what its creator locked at the start. A payout waits 72 hours, in which the factory's
 ///         checker alone may stop it, with a reason, the other account, and the transactions that
 ///         show it; with no stop it goes to the trader, sent by anyone.
 /// @dev The money is this contract's USDC on HyperEVM; nothing goes to HyperCore. What it owes

@@ -138,7 +138,7 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader
   than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse
   (S111); every fill says where its price came from (S109).
-- **A simulated pool's checker.** A payout of a simulated pool waits 48 hours (S112). Until then the factory's
+- **A simulated pool's checker.** A payout of a simulated pool waits 72 hours (S112). Until then the factory's
   checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the
   transactions that show the opposite positions, and for linked wallets the transactions that link them
   (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the
@@ -320,7 +320,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S109 | `src/exam/PaperExam.sol:364` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
 | S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
 | S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
-| S112 | `src/sim/SimPoolFactory.sol:36` | `uint32 public constant PAYOUT_DELAY = 48 hours;` |
+| S112 | `src/sim/SimPoolFactory.sol:36` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
 | S113 | `src/sim/SimPool.sol:446` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
 | S114 | `src/sim/SimPool.sol:165` | `event PayoutStopped(` |
 | S115 | `src/sim/SimPool.sol:470` | `function liftStop(uint256 id) external onlyChecker {` |

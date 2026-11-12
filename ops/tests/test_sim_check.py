@@ -1,5 +1,6 @@
 """The checker of simulated pools: what it calls a pair, a link and a stop, and that it writes what
 the pool's stopPayout takes."""
+import json
 import pathlib
 import re
 import unittest
@@ -93,6 +94,7 @@ class TheService(unittest.TestCase):
         ch.start_block, ch.usdc = 10, "0x" + "dd" * 20
         ch.transfers, ch.transfers_from, ch.fills, ch._times = {}, {}, [], {}
         ch.fills_from, ch.fills_read = 10, set()
+        ch.settled, ch.started, ch.window_s = set(), {}, 600
         return ch
 
     def test_an_account_found_later_has_its_fills_read_from_the_start(self):
@@ -129,13 +131,108 @@ class TheService(unittest.TestCase):
 
     def test_old_fills_and_times_are_dropped(self):
         ch = self.checker()
-        now = 1_000_000
-        ch.fills = [fill(A, t=now - s.KEEP_S - 1), fill(A, t=now - s.KEEP_S)]
-        ch._times = {1: now - s.KEEP_S - 1, 2: now}
-        ch.prune(now)
-        self.assertEqual([f["t"] for f in ch.fills], [now - s.KEEP_S])
-        self.assertEqual(ch._times, {2: now})
-        self.assertGreaterEqual(s.KEEP_S, 48 * 3600 + 600, "a waiting payout's pairs are kept")
+        cutoff = 1_000_000
+        ch.fills = [fill(A, t=cutoff - 1), fill(A, t=cutoff)]
+        ch._times = {1: cutoff - 1, 2: cutoff + 5}
+        ch.prune(cutoff)
+        self.assertEqual([f["t"] for f in ch.fills], [cutoff])
+        self.assertEqual(ch._times, {2: cutoff + 5})
+
+    def keep_case(self, payouts, done, starts):
+        """A checker over one pool whose payouts are `payouts` (account, due), with `done` the stages the pool holds
+        done and `starts` each stage's start."""
+        from unittest import mock
+        ch = self.checker()
+        ch.window_s, ch.settled, ch.started = 600, set(), {}
+        pool = s.to_checksum_address("0x" + "55" * 20)
+        ch.keeper = mock.Mock(pools=[pool], accounts={a: {"pool": pool, "kind": "stage"} for a in starts})
+
+        def view(to, sig, out="uint256", types=(), args=()):
+            if sig == "head()":
+                return 0
+            if sig == "payoutCount()":
+                return len(payouts)
+            if sig == "payout(uint256)":
+                acct, due = payouts[args[0]]
+                return (acct, "0x" + "77" * 20, 800, due, 1, False)
+            return starts[to]
+
+        accounts_of = lambda pool_, sig, types, args, out: (2, 1, args[0] in done)
+        return ch, mock.patch.object(s, "view", side_effect=view), mock.patch.object(s.c, "call_view", side_effect=accounts_of)
+
+    def test_a_stage_claimed_late_keeps_every_fill_of_its_stage(self):
+        """Passed on day 40, claimed on day 45 (the keeper was down): its payout is due on day 48, and its fills from
+        day 10 on must still pair. A fixed 72 hours, or a stage's length plus the delay, would have dropped them."""
+        day = 86_400
+        S1, S2 = (s.to_checksum_address("0x" + x * 20) for x in ("a1", "a2"))
+        ch, v, cv = self.keep_case({0: (S1, 48 * day)}, done={S1}, starts={S1: 10 * day, S2: 30 * day})
+        with v, cv:
+            self.assertEqual(ch.keep_from(45 * day), 10 * day - 600)
+        ch.fills = [fill(A, t=10 * day), fill(B, t=10 * day - 600), fill(C, t=10 * day - 601)]
+        ch.prune(10 * day - 600)
+        self.assertEqual([f["account"] for f in ch.fills], [A, B], "its fills, and the others' within the window")
+
+    def test_a_settled_stage_lets_its_fills_go(self):
+        day = 86_400
+        S1, S2 = (s.to_checksum_address("0x" + x * 20) for x in ("a1", "a2"))
+        ch, v, cv = self.keep_case({0: (S1, 48 * day)}, done={S1}, starts={S1: 10 * day, S2: 30 * day})
+        with v, cv:
+            self.assertEqual(ch.keep_from(48 * day), 30 * day - 600, "S1's payout can no longer be stopped")
+            self.assertEqual(ch.settled, {S1})
+        ch2, v2, cv2 = self.keep_case({}, done=set(), starts={})
+        with v2, cv2:
+            self.assertEqual(ch2.keep_from(5_000), 5_000 - 600, "nothing to pay: the window only")
+
+    def test_a_stage_found_after_its_pair_still_has_it(self):
+        """The scan finds a few windows of accounts a pass. Pass one finds the other side's account B (and C, an old
+        one) but not the stage S; pass two finds S. B's fill is read once, in pass one: it must still be there when S
+        is found, so nothing is dropped until the scan has caught up. Once it has, C's old fill goes (review of #273)."""
+        from types import SimpleNamespace
+        from unittest import mock
+        day = 86_400
+        ch = self.checker()
+        ch.dry, ch.tolerance = True, 0.2
+        pool, S, Bx, Cx, T1, T2 = (s.to_checksum_address("0x" + x * 20) for x in ("55", "a1", "b1", "c1", "71", "72"))
+        times = {20: 1 * day, 30: 10 * day, 31: 10 * day + 100}
+        chain = [(Cx, 20, True), (S, 30, True), (Bx, 31, False)]  # account, block, is a buy
+        found = [({Bx: "exam", Cx: "exam"}, 51), ({S: "stage"}, 101)]
+
+        def scan(latest):
+            accounts, nxt = found.pop(0)
+            ch.keeper.accounts.update({a: {"pool": pool, "kind": k} for a, k in accounts.items()})
+            ch.keeper.next_block = nxt
+
+        ch.keeper = SimpleNamespace(pools=[pool], accounts={}, next_block=10, scan=scan)
+
+        def rpc(method, params=()):
+            if method == "eth_blockNumber":
+                return hex(100)
+            if method == "eth_getBlockByNumber":
+                return {"timestamp": hex(45 * day if params[0] == "latest" else times[int(params[0], 16)])}
+            q = params[0]
+            if q["topics"][0] != s.sk.FILLED:
+                return []
+            return [{"address": a, "blockNumber": hex(b), "transactionHash": "0x%064x" % b,
+                     "topics": [s.sk.FILLED, "0x%064x" % 3],
+                     "data": "0x" + encode(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"],
+                                           [buy, 100, 0, 0, 0, 0]).hex()}
+                    for a, b, buy in chain
+                    if a in q["address"] and int(q["fromBlock"], 16) <= b <= int(q["toBlock"], 16)]
+
+        def view(to, sig, out="uint256", types=(), args=()):
+            return {"head()": 0, "payoutCount()": 1, "stepStartedAt()": 10 * day,
+                    "payout(uint256)": (S, T1, 800, 48 * day, 1, False)}[sig]
+
+        def call_view(to, sig, types, args, out):
+            return (2, T2, 0, 0) if sig == "result()" else (2, 1, True)
+
+        with mock.patch.object(s.c, "rpc", side_effect=rpc), mock.patch.object(s, "view", side_effect=view), \
+                mock.patch.object(s.c, "call_view", side_effect=call_view), mock.patch.object(s, "log"):
+            self.assertEqual(ch.one_pass(), [], "S not found yet: nothing to check")
+            self.assertEqual(sorted(f["account"] for f in ch.fills), sorted([Bx, Cx]), "nothing dropped while behind")
+            stops = ch.one_pass()
+        self.assertEqual([(x["id"], x["paired"], x["reason"]) for x in stops], [(0, Bx, 1)], "the pair is found")
+        self.assertEqual(sorted(f["account"] for f in ch.fills), sorted([S, Bx]), "C's old fill is dropped once caught up")
 
 
 if __name__ == "__main__":
