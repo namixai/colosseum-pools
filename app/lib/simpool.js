@@ -30,6 +30,8 @@ export const SIM_POOL_ABI = [
   "function live() view returns (uint256)",
   "function closed() view returns (bool)",
   "function finished() view returns (bool)",
+  "function lockedUntil() view returns (uint64)",
+  "function closedEarly() view returns (bool)",
   "function head() view returns (uint256)",
   "function stoppedCount() view returns (uint256)",
   "function liftedCount() view returns (uint256)",
@@ -57,6 +59,7 @@ export const SIM_POOL_ABI = [
   "event HeldClaimed(address indexed trader, address indexed to, uint256 amount)",
   "event StopLifted(uint256 indexed id, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount)",
   "event Closed()",
+  "event ClosedEarly(address indexed closer)",
 ];
 
 /**
@@ -102,6 +105,8 @@ export const PAYOUT_BPS = 800n;
 export const PAYOUT_DELAY = 72 * 3600;
 /** How long a stop holds its money and can be lifted or objected to, on a pool with the stop reserve. */
 export const STOP_RESERVE = 14 * 24 * 3600;
+/** How long a pool runs at least: before it the creator neither closes it nor takes back what it put in. */
+export const MIN_TERM = 180 * 24 * 3600;
 const BPS = 10_000n;
 
 /** SimPool.PayoutState, by its number. */
@@ -440,6 +445,11 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     live: BigInt(reads.live),
     closed: Boolean(reads.closed),
     finished: Boolean(reads.finished),
+    // The time before which the creator can neither close the pool nor take back what it put in (null if not read),
+    // and whether the platform's closer closed it sooner.
+    lockedUntil: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : Number(reads.lockedUntil),
+    closedEarly: Boolean(reads.closedEarly),
+    creatorMayClose: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : now >= Number(reads.lockedUntil),
     codes: codeShares(reads.codes, events),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),

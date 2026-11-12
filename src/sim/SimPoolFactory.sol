@@ -14,11 +14,12 @@ import {TermsBook} from "../multi/TermsBook.sol";
 ///         pass is paid out of the prices other traders paid. Anyone opens one for 1 HYPE and the
 ///         money for two payouts of its largest size. The platform's numbers are constants here,
 ///         the same for every pool: what a pool pays the platform, what it pays a trader, what it
-///         keeps, how long a payout waits.
-/// @dev The operator lists the assets and their leverage caps, and names the three roles the
+///         keeps, how long a payout waits, how long a pool runs at least.
+/// @dev The operator lists the assets and their leverage caps, and names the four roles the
 ///      pools read from here: the filler of every exam's orders, the checker who may stop a
-///      payout with a reason, and the recipient of the platform's part. A pool's creator is
-///      neither the filler nor the checker.
+///      payout with a reason, the closer who alone may close a pool before `MIN_TERM`, and the
+///      recipient of the platform's part. A pool's creator is neither the filler, the checker
+///      nor the closer.
 contract SimPoolFactory {
     using SafeERC20 for IERC20;
 
@@ -37,6 +38,9 @@ contract SimPoolFactory {
     /// How long a stopped payout's money stays set aside after the stop: the trader can object and the
     /// checker can lift the stop; after it the stop is final and the money is the pool's again.
     uint32 public constant STOP_RESERVE = 14 days;
+    /// How long a pool runs at least: before it, its creator neither stops its sales nor takes back
+    /// what it put in; only the factory's closer may close it, and the money goes where it would anyway.
+    uint32 public constant MIN_TERM = 180 days;
     /// The bounds of a fill window, in blocks: about a minute of HyperEVM's small blocks at most.
     uint16 public constant MIN_FILL_WINDOW = 1;
     uint16 public constant MAX_FILL_WINDOW = 60;
@@ -60,6 +64,8 @@ contract SimPoolFactory {
     address public operator;
     address public filler;
     address public checker;
+    /// The platform's key that alone may close a pool before `MIN_TERM` (`SimPool.close`).
+    address public closer;
     address public feeRecipient;
     /// Where every pool's terms are written out: a pool names the hash of a text kept there.
     TermsBook public termsBook;
@@ -72,6 +78,7 @@ contract SimPoolFactory {
     event OperatorSet(address indexed operator);
     event FillerSet(address indexed filler);
     event CheckerSet(address indexed checker);
+    event CloserSet(address indexed closer);
     event FeeRecipientSet(address indexed recipient);
     event TermsBookSet(address indexed book);
     event AssetSet(uint32 indexed asset, uint32 capX100);
@@ -123,6 +130,14 @@ contract SimPoolFactory {
         emit CheckerSet(checker_);
     }
 
+    /// @notice The key that may close any pool of the factory before its term. Closing early changes
+    ///         nothing about where a pool's money goes; the closer gets none of it.
+    function setCloser(address closer_) external onlyOperator {
+        if (closer_ == address(0)) revert BadRole();
+        closer = closer_;
+        emit CloserSet(closer_);
+    }
+
     function setFeeRecipient(address recipient) external onlyOperator {
         if (recipient == address(0)) revert BadRole();
         feeRecipient = recipient;
@@ -152,8 +167,9 @@ contract SimPoolFactory {
     function create(SimPlan calldata plan) external payable returns (address pool) {
         if (msg.value != CREATION_FEE) revert WrongFee();
         address to = feeRecipient;
-        if (filler == address(0) || checker == address(0) || to == address(0)) revert BadRole();
-        if (msg.sender == filler || msg.sender == checker) revert BadRole();
+        // No pool without a closer: before its term, only the closer can close it (review of #279).
+        if (filler == address(0) || checker == address(0) || closer == address(0) || to == address(0)) revert BadRole();
+        if (msg.sender == filler || msg.sender == checker || msg.sender == closer) revert BadRole();
         uint256 largest = _check(plan);
 
         pool = Clones.clone(poolImpl);

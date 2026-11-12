@@ -37,6 +37,7 @@ contract SimPoolTest is Test {
     address platform = makeAddr("platform");
     address creator = makeAddr("creator");
     address partner = makeAddr("partner");
+    address closer = makeAddr("closer");
     /// The keccak256 of a trading group's code; `_open` sets it with no share.
     bytes32 constant CODE = keccak256("GROUP-ONE");
     address trader = makeAddr("trader");
@@ -63,6 +64,7 @@ contract SimPoolTest is Test {
         factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), address(this));
         factory.setFiller(filler);
         factory.setChecker(checker);
+        factory.setCloser(closer);
         factory.setFeeRecipient(platform);
         factory.setAsset(BTC, 1000);
         factory.setTermsBook(book);
@@ -436,7 +438,7 @@ contract SimPoolTest is Test {
         SimPool pool = _pool();
         vm.expectRevert(SimPool.NoSuchLine.selector);
         pool.buyWithAuthorization(trader, 2, CODE, 0, 0, 0, 0, 0, 0);
-        vm.prank(creator);
+        vm.prank(closer);
         pool.close();
         vm.expectRevert(SimPool.Closing.selector);
         pool.buyWithAuthorization(trader, 0, CODE, 0, 0, 0, 0, 0, 0);
@@ -447,6 +449,7 @@ contract SimPoolTest is Test {
         SimPoolFactory f = new SimPoolFactory(IERC20(address(plain)), factory.examImpl(), factory.poolImpl(), address(this));
         f.setFiller(filler);
         f.setChecker(checker);
+        f.setCloser(closer);
         f.setFeeRecipient(platform);
         f.setAsset(BTC, 1000);
         f.setTermsBook(book);
@@ -532,6 +535,8 @@ contract SimPoolTest is Test {
         pool.claimPayout(address(_passedStage(pool, trader, 1)));
         deal(address(usdc), address(pool), 6_000e6);
         assertEq(pool.owed(), LARGE_PAYOUT);
+        assertEq(pool.withdrawable(), 200e6, "before the term, the profit only");
+        vm.warp(pool.lockedUntil());
         assertEq(pool.withdrawable(), 2_800e6);
         vm.prank(creator);
         pool.withdraw(2_800e6);
@@ -545,10 +550,10 @@ contract SimPoolTest is Test {
         usdc.block_(trader);
         vm.warp(block.timestamp + 72 hours);
         pool.pay(10);
-        vm.startPrank(creator);
+        vm.prank(closer);
         pool.close();
+        vm.prank(creator);
         pool.finish();
-        vm.stopPrank();
         assertEq(usdc.balanceOf(address(pool)), LARGE_PAYOUT, "the held payout stays");
         vm.prank(trader);
         pool.claimHeld(other);
@@ -596,7 +601,7 @@ contract SimPoolTest is Test {
 
     function test_buy_notOnceClosed() public {
         SimPool pool = _pool();
-        vm.prank(creator);
+        vm.prank(closer);
         pool.close();
         deal(address(usdc), trader, 100e6);
         vm.startPrank(trader);
@@ -851,6 +856,8 @@ contract SimPoolTest is Test {
         _stop(pool, id);
         deal(address(usdc), address(pool), 6_000e6);
         assertEq(pool.owed(), 0);
+        assertEq(pool.withdrawable(), 200e6, "before the term, the profit only");
+        vm.warp(pool.lockedUntil());
         assertEq(pool.withdrawable(), 2_800e6);
         vm.prank(creator);
         pool.withdraw(2_800e6);
@@ -937,11 +944,11 @@ contract SimPoolTest is Test {
         SimPool pool = _pool();
         uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
         _stop(pool, id);
-        vm.startPrank(creator);
+        vm.prank(closer);
         pool.close();
+        vm.prank(creator);
         vm.expectRevert(SimPool.NotOver.selector);
         pool.finish();
-        vm.stopPrank();
         vm.warp(block.timestamp + 14 days);
         pool.finalizeStop(id);
         vm.prank(creator);
@@ -1073,6 +1080,9 @@ contract SimPoolTest is Test {
         pool.buy(0, CODE);
         _share(pool, 5000);
         assertEq(pool.codes().length, 1, "set again, listed once");
+        vm.prank(creator);
+        pool.setCode(keccak256("NEVER-ON-SALE"), address(0), 0);
+        assertEq(pool.codes().length, 1, "a code set off sale before it was ever listed takes no place");
     }
 
     function test_setCode_atMostMaxCodes() public {
@@ -1117,6 +1127,37 @@ contract SimPoolTest is Test {
         assertEq(pool.principal(), 1_600e6, "all of it was profit");
     }
 
+    function test_withdraw_withEveryCodeSharing_staysWithinAMillionAndAHalfGas() public {
+        // MAX_CODES codes, each with a share and a sale: the most transfers one withdrawal makes.
+        SimPool pool = _pool();
+        uint256 n = factory.MAX_CODES();
+        vm.startPrank(creator);
+        pool.setCode(CODE, partner, 4000);
+        for (uint256 i = 1; i < n; ++i) {
+            pool.setCode(keccak256(abi.encode("group", i)), makeAddr(string(abi.encode("owner", i))), 4000);
+        }
+        vm.stopPrank();
+        _buy(pool, trader, 1);
+        for (uint256 i = 1; i < n; ++i) {
+            _buyWith(pool, makeAddr(string(abi.encode("buyer", i))), 1, keccak256(abi.encode("group", i)));
+        }
+        deal(address(usdc), address(pool), 6_000e6);
+        uint256 w = pool.withdrawable();
+        vm.recordLogs();
+        vm.prank(creator);
+        uint256 before = gasleft();
+        pool.withdraw(w);
+        uint256 used = before - gasleft();
+        uint256 paid;
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].topics[0] == SimPool.PartnerPaid.selector) paid += 1;
+        }
+        assertEq(paid, n, "every code's partner is paid in the one withdrawal");
+        emit log_named_uint("withdraw gas, 32 codes sharing", used);
+        assertLt(used, 1_500_000, "a bounded loop: about one transfer a code");
+    }
+
     function test_withdraw_aPartnerTheTokenRefusesHasItsPartSetAside() public {
         SimPool pool = _pool();
         _share(pool, 5000);
@@ -1142,12 +1183,108 @@ contract SimPoolTest is Test {
         pool.addToPot(4_000e6);
         vm.stopPrank();
         assertEq(pool.principal(), 5_600e6);
+        assertEq(pool.withdrawable(), 0, "before the term only profit leaves, and there is none");
+        vm.warp(pool.lockedUntil());
         // 5 600 in, 2 400 kept: 3 200 may leave, and all of it is the creator's own money.
         assertEq(pool.withdrawable(), 3_200e6);
         vm.prank(creator);
         pool.withdraw(3_200e6);
         assertEq(usdc.balanceOf(partner), 0, "no profit, no share");
         assertEq(pool.principal(), 2_400e6);
+    }
+
+    // ── the term: 180 days before the creator closes or takes back what it put in ──
+
+    function test_open_thePoolIsLockedForTheFactorysTerm_andTheCloserOpensNone() public {
+        SimPool pool = _pool();
+        assertEq(pool.lockedUntil(), block.timestamp + 180 days);
+        assertEq(factory.MIN_TERM(), 180 days);
+        vm.deal(closer, 1 ether);
+        vm.prank(closer);
+        vm.expectRevert(SimPoolFactory.BadRole.selector);
+        factory.create{value: 1 ether}(_plan());
+        vm.prank(stranger);
+        vm.expectRevert(SimPoolFactory.NotOperator.selector);
+        factory.setCloser(stranger);
+        vm.expectRevert(SimPoolFactory.BadRole.selector);
+        factory.setCloser(address(0));
+
+        // A factory with no closer opens no pool: nobody could close one before its term.
+        SimPoolFactory none = new SimPoolFactory(IERC20(address(usdc)), factory.examImpl(), factory.poolImpl(), address(this));
+        none.setFiller(filler);
+        none.setChecker(checker);
+        none.setFeeRecipient(platform);
+        none.setAsset(BTC, 1000);
+        none.setTermsBook(book);
+        vm.startPrank(creator);
+        usdc.approve(address(none), type(uint256).max);
+        vm.expectRevert(SimPoolFactory.BadRole.selector);
+        none.create{value: 1 ether}(_plan());
+        vm.stopPrank();
+        none.setCloser(closer);
+        vm.prank(creator);
+        none.create{value: 1 ether}(_plan());
+    }
+
+    function test_close_theCreatorOnlyFromTheTerm_noOneElseButTheCloser() public {
+        SimPool pool = _pool();
+        vm.warp(pool.lockedUntil() - 1);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.Locked.selector);
+        pool.close();
+        vm.prank(stranger);
+        vm.expectRevert(SimPool.NotCreator.selector);
+        pool.close();
+        vm.prank(stranger);
+        vm.expectRevert(SimPool.NotCreator.selector);
+        pool.finish();
+        vm.warp(pool.lockedUntil());
+        vm.prank(creator);
+        pool.close();
+        assertTrue(pool.closed());
+        assertFalse(pool.closedEarly(), "closed at its term");
+    }
+
+    function test_close_earlyByTheCloser_theMoneyGoesWhereItWouldAnyway() public {
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        PaperExam exam = _buy(pool, trader, 1);
+        vm.expectEmit(address(pool));
+        emit SimPool.ClosedEarly(closer);
+        vm.prank(closer);
+        pool.close();
+        assertTrue(pool.closedEarly());
+        _fail(exam, trader);
+        pool.release(address(exam));
+        uint256 bal = usdc.balanceOf(address(pool));
+        uint256 profit = bal - 1_600e6;
+        uint256 toPartner = (profit - profit * 50 / 10_000) * 5000 / 10_000;
+        uint256 before = usdc.balanceOf(creator);
+        vm.prank(closer); // the closer may finish it too
+        pool.finish();
+        assertEq(usdc.balanceOf(closer), 0, "the closer gets none of it");
+        assertEq(usdc.balanceOf(partner), toPartner, "the code's partner its share");
+        assertEq(usdc.balanceOf(creator) - before, bal - bal * 50 / 10_000 - toPartner, "the creator the rest");
+    }
+
+    function test_withdraw_beforeTheTermTheProfitOnly_neverWhatTheCreatorPutIn() public {
+        SimPool pool = _pool();
+        vm.startPrank(creator);
+        usdc.approve(address(pool), 4_000e6);
+        pool.addToPot(4_000e6);
+        vm.stopPrank();
+        _withSales(pool, 10); // 845.75 of profit; 5 600 put in, 2 400 kept while open
+        uint256 profit = 10 * (LARGE_PRICE - 425_000);
+        assertEq(pool.withdrawable(), profit, "the profit, not the 3 200 of principal above the floor");
+        vm.prank(creator);
+        vm.expectRevert(SimPool.TooMuch.selector);
+        pool.withdraw(profit + 1);
+        vm.prank(creator);
+        pool.withdraw(profit);
+        assertEq(pool.principal(), 5_600e6, "every unit put in stays");
+        assertEq(pool.withdrawable(), 0);
+        vm.warp(pool.lockedUntil());
+        assertEq(pool.withdrawable(), 3_200e6, "from the term on, as before");
     }
 
     function test_finish_onceClosedAndNothingRunsOrIsOwed_principalFirst() public {
@@ -1157,10 +1294,12 @@ contract SimPoolTest is Test {
         vm.startPrank(creator);
         vm.expectRevert(SimPool.Done.selector);
         pool.finish();
+        vm.stopPrank();
+        vm.prank(closer);
         pool.close();
+        vm.prank(creator);
         vm.expectRevert(SimPool.NotOver.selector);
         pool.finish();
-        vm.stopPrank();
         _fail(exam, trader);
         pool.release(address(exam));
 

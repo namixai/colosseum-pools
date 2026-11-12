@@ -150,14 +150,17 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no
   profit for a partner's share. Within those days the trader can object on chain, with the hash of the
   objection's text, and the checker can lift the stop; after them the stop is final, and the money is the
-  pool's again (S120). The filler and the checker are two keys, and neither opens a pool (S116).
+  pool's again (S120). The filler and the checker are two keys, and neither they nor the closer open a pool (S116).
 - **A simulated pool's creator** withdraws only what stays above three payouts of the largest size and above
   every payout owed and every payout set aside for a trader whose transfer was refused (S117), and stops
   nobody's payout. Every sale names a trading group's code (S123), and a partner's share is of the pool's
   money above what the creator put in, after what the pool owes, holds and keeps for a recent stop, in the
   part of all the pool took that its code brought; never of the principal. Once a sale names a code, the
   creator cannot change its partner's address or share (S121). A sale by signature carries its code in the
-  trader's signature, so whoever sends it cannot give the sale to another code (S122).
+  trader's signature, so whoever sends it cannot give the sale to another code (S122). For 180 days from its opening
+  (S124) the creator can neither close the pool (S125) nor take back what it put in: a withdrawal before
+  then takes profit only (S126). Only the platform's closer may close a pool sooner, and the money still goes
+  to the traders, the partners and the creator as at any finish.
 - **What none of us can do:** send a challenge account's money anywhere but to its trader's share and
   back to its pool (S48, S49); change the rules of an account that is running (S10); or upgrade a pool or
   a challenge, each a minimal clone of a fixed implementation with no upgrade path (S50, S51).
@@ -323,15 +326,18 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S109 | `src/exam/PaperExam.sol:364` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
 | S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
 | S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
-| S112 | `src/sim/SimPoolFactory.sol:36` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
-| S113 | `src/sim/SimPool.sol:491` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
-| S114 | `src/sim/SimPool.sol:185` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:515` | `function liftStop(uint256 id) external onlyChecker {` |
-| S116 | `src/sim/SimPoolFactory.sol:156` | `if (msg.sender == filler \|\| msg.sender == checker) revert BadRole();` |
-| S117 | `src/sim/SimPool.sol:302` | `uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |
-| S118 | `src/sim/SimPoolFactory.sol:39` | `uint32 public constant STOP_RESERVE = 14 days;` |
-| S119 | `src/sim/SimPool.sol:425` | `uint256 kept = held + reserved;` |
-| S120 | `src/sim/SimPool.sol:520` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();` |
-| S121 | `src/sim/SimPool.sol:583` | `if (c.used) revert CodeUsed();` |
-| S122 | `src/sim/SimPool.sol:339` | `_receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);` |
-| S123 | `src/sim/SimPool.sol:632` | `if (partner == address(0)) revert NoSuchCode();` |
+| S112 | `src/sim/SimPoolFactory.sol:37` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
+| S113 | `src/sim/SimPool.sol:507` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
+| S114 | `src/sim/SimPool.sol:190` | `event PayoutStopped(` |
+| S115 | `src/sim/SimPool.sol:531` | `function liftStop(uint256 id) external onlyChecker {` |
+| S116 | `src/sim/SimPoolFactory.sol:172` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
+| S117 | `src/sim/SimPool.sol:313` | `uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |
+| S118 | `src/sim/SimPoolFactory.sol:40` | `uint32 public constant STOP_RESERVE = 14 days;` |
+| S119 | `src/sim/SimPool.sol:441` | `uint256 kept = held + reserved;` |
+| S120 | `src/sim/SimPool.sol:536` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();` |
+| S121 | `src/sim/SimPool.sol:599` | `if (c.used) revert CodeUsed();` |
+| S122 | `src/sim/SimPool.sol:355` | `_receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);` |
+| S123 | `src/sim/SimPool.sol:663` | `if (partner == address(0)) revert NoSuchCode();` |
+| S124 | `src/sim/SimPoolFactory.sol:43` | `uint32 public constant MIN_TERM = 180 days;` |
+| S125 | `src/sim/SimPool.sol:626` | `revert Locked();` |
+| S126 | `src/sim/SimPool.sol:317` | `if (w > p) w = p;` |

@@ -30,6 +30,19 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(int(constant("MIN_PARTNER_BPS")), d.MIN_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_PARTNER_BPS")), d.MAX_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_CODES")), d.MAX_CODES)
+        self.assertEqual(constant("MIN_TERM"), "180 days")
+
+    def test_deploy_names_the_closer_a_fourth_key(self):
+        """The closer alone closes a pool before its term; the operator opens our pools, and a pool's creator is
+        never the closer, so the four keys are distinct, checked before anything is sent."""
+        src = (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8")
+        self.assertIn('("setCloser", "setCloser(address)", ["address"], [closer])', src)
+        self.assertIn("function setCloser(address closer_) external onlyOperator", FACTORY)
+        a, b = "0x" + "11" * 20, "0x" + "22" * 20
+        for keys in ((a, b, a), (a, b, b), (a, a, b)):
+            with self.assertRaises(SystemExit) as caught:
+                d.main(["deploy", "--label", "never-written", "--filler", keys[0], "--checker", keys[1], "--closer", keys[2]])
+            self.assertIn("three keys", str(caught.exception))
 
     def test_the_plan_tuple_is_simplans_layout(self):
         body = re.search(r"struct SimPlan \{(.*?)\n\}", POOL, re.S).group(1)
@@ -101,6 +114,8 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("Every exam is bought with a trading group's code", text)
             self.assertIn("once a sale names a code, neither changes", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
+            self.assertIn("The pool runs at least 180 days from its opening", text)
+            self.assertIn("only the platform can close it sooner, with the money going where it would anyway", text)
 
     def test_the_cfos_numbers_of_12_november(self):
         """Thirty days a stage, no idle rule that could bind, no minimum of days, 0.045 % a fill, seven days
@@ -161,6 +176,8 @@ class TheCodes(unittest.TestCase):
                [{"code": "A", "partner": "0x" + "00" * 20, "bps": 0}],
                [{"code": "", "partner": "0x" + "11" * 20, "bps": 0}],
                [{"code": " GROUP-ONE", "partner": "0x" + "11" * 20, "bps": 0}],
+               [{"code": "GROUP-ONE", "partner": "0x" + "11" * 20}],
+               ["GROUP-ONE"],
                [{"code": "GROUP-ONE\n", "partner": "0x" + "11" * 20, "bps": 0}],
                [{"code": "GROUP-ONE\u00a0", "partner": "0x" + "11" * 20, "bps": 0}],
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 0}, {"code": "A", "partner": "0x" + "22" * 20, "bps": 0}],
