@@ -43,22 +43,29 @@ fail, and their prices pay for the ones that pass.
 - **A stop.** Until a payout is due, the factory's checker may stop it once, with a reason: 1,
   opposite positions with another account of the factory; 2, that and wallets linked. The call
   names the other account, the transactions of the trades (at least two) and, for reason 2, the
-  transactions that link the wallets. A stopped payout's money stays in the pool. The checker lifts
-  a stop that was wrong (`liftStop`), and the payout is paid as any other.
+  transactions that link the wallets. A stopped payout's money stays in the pool, set aside for 14
+  days after the stop (`STOP_RESERVE`, `reserved`) as a held payout's is: the creator does not
+  withdraw it, it is no profit for the partner's share, and `pay` pays no other payout out of it.
+  Within those days the trader may object on chain (`objectStop`, the keccak256 of the objection's
+  text, `StopObjected`), and the checker lifts a stop that was wrong (`liftStop`): the payout is due
+  again, out of the money the stop kept, and paid as any other. After them the stop can no longer be
+  lifted; anyone makes it final (`finalizeStop`, `StopFinal`), and its money is the pool's again.
 - **The creator.** `withdraw(amount)`: only what stays above three payouts of the largest size and
-  above every payout owed. 0.5 % goes to the platform. The partner's share is of the pool's money
-  above what the creator put in, after what the pool owes and what it holds for traders: a
+  above every payout owed, held or kept for a recent stop. 0.5 % goes to the platform. The partner's
+  share is of the pool's money above what the creator put in, after what the pool owes, holds for
+  traders and keeps for recent stops: a
   withdrawal takes that profit first, and the partner gets its share of it. `addToPot` puts in more
   principal, never shared, which comes back once the profit above it has been taken, or at `finish`. `setPartnerShare` moves the share within 40 to 60 %, for
-  later withdrawals. `close` stops sales; `finish`, once nothing runs and nothing is owed, sends
-  what is left, the principal first.
+  later withdrawals. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
+  can still be lifted, sends what is left, the principal first.
 
 ## The platform's numbers
 
 Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE`); 0.5 % of each
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
-the pool is open (`FLOOR_PAYOUTS`); 48 hours before a payout is paid (`PAYOUT_DELAY`); a fill
+the pool is open (`FLOOR_PAYOUTS`); 48 hours before a payout is paid (`PAYOUT_DELAY`); 14 days a
+stopped payout's money stays set aside and the stop can be lifted (`STOP_RESERVE`); a fill
 window of 1 to 60 blocks; a partner's share of 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`).
 
 ## What anyone can check
@@ -67,7 +74,8 @@ Every exam and stage is a paper exam: each order, fill and price is in the chain
 each fill says how many blocks after the first possible one it came. The page of a pool reads
 `PayoutPaid` (the transaction of each payout is its proof), `PayoutStopped` with its reason,
 account and transactions, and `StopLifted`; each of the last two carries the pool's counts of
-stops, lifts and payouts.
+stops, lifts and payouts. A trader's objection to a stop is `StopObjected`, with the hash of its
+text, and a stop that became final is `StopFinal`.
 
 ## Weak points we know of
 
@@ -85,13 +93,13 @@ stops, lifts and payouts.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 41 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 92 mutations (`SM1`–`SM92` in `scripts/mutations.py`),
+`test/sim/SimPool.t.sol`, 47 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and 106 mutations (`SM1`–`SM106` in `scripts/mutations.py`),
 each caught by a named test:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
+python3 scripts/mutations.py $(seq -f 'SM%g' 1 106)
 ```
 
 ## Running it
@@ -121,7 +129,8 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
   factory: the same asset, opposite sides, at most 10 minutes apart, sizes within 20 %. A match is
   reason 1; with the two traders funded by one address, or one paying the other (USDC transfers since
   the deployment), reason 2. It stops a payout at least 5 minutes before it is due, once, from the
-  factory's checker key, and lifts its own stop with `--lift POOL:ID`. Without `--wallet` it only
+  factory's checker key, and lifts its own stop with `--lift POOL:ID`, within 14 days of the stop.
+  Without `--wallet` it only
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
 

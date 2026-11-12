@@ -744,6 +744,144 @@ contract SimPoolTest is Test {
         pool.liftStop(id);
     }
 
+    // ── a stopped payout's 14 days (CFO, 12 November) ───────────
+
+    /// A stop of payout `id` of `pool`, the other account in another pool of the factory, so nothing of
+    /// this pool runs because of it.
+    function _stop(SimPool pool, uint256 id) internal {
+        address there = address(_buy(_pool(), makeAddr("elsewhere"), 1));
+        vm.prank(checker);
+        pool.stopPayout(id, 1, there, _trades(), new bytes32[](0));
+    }
+
+    function test_stopReserve_theCreatorDoesNotWithdrawIt_untilTheStopIsFinal() public {
+        SimPool pool = _pool();
+        _withSales(pool, 30);
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        _stop(pool, id);
+        uint256 bal = usdc.balanceOf(address(pool));
+        assertEq(pool.owed(), 0);
+        assertEq(pool.reserved(), LARGE_PAYOUT);
+        assertEq(pool.withdrawable(), bal - 3 * LARGE_PAYOUT - LARGE_PAYOUT, "a stop's money is kept for 14 days");
+        vm.warp(block.timestamp + 14 days - 1);
+        vm.expectRevert(SimPool.ReserveRunning.selector);
+        pool.finalizeStop(id);
+        vm.warp(block.timestamp + 1);
+        vm.prank(checker);
+        vm.expectRevert(SimPool.ReserveOver.selector);
+        pool.liftStop(id);
+        vm.expectEmit(address(pool));
+        emit SimPool.StopFinal(id, LARGE_PAYOUT, 0);
+        vm.prank(stranger);
+        pool.finalizeStop(id);
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Refused));
+        assertEq(pool.reserved(), 0);
+        assertEq(pool.withdrawable(), bal - 3 * LARGE_PAYOUT, "then it is the pool's again");
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.finalizeStop(id);
+        vm.prank(checker);
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.liftStop(id);
+    }
+
+    function test_stopReserve_isNotProfitForAPartnersShare() public {
+        // The CFO's case of 12 November with a stop in place of the debt: 1 600 locked and 3 400 added,
+        // 6 000 in the pool, 800 kept for a stop, a 50 % share.
+        SimPlan memory p = _plan();
+        p.partner = partner;
+        p.partnerBps = 5000;
+        SimPool pool = _open(p);
+        vm.startPrank(creator);
+        usdc.approve(address(pool), 3_400e6);
+        pool.addToPot(3_400e6);
+        vm.stopPrank();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        _stop(pool, id);
+        deal(address(usdc), address(pool), 6_000e6);
+        assertEq(pool.owed(), 0);
+        assertEq(pool.withdrawable(), 2_800e6);
+        vm.prank(creator);
+        pool.withdraw(2_800e6);
+        assertEq(usdc.balanceOf(partner), 99_500_000, "half of 200 after the platform's part, not of 1 000");
+        assertEq(pool.principal(), 2_400e6);
+    }
+
+    function test_stopReserve_payNeverSpendsIt_soALiftedStopFindsItsMoney() public {
+        SimPool pool = _pool();
+        uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
+        uint256 c = pool.claimPayout(address(_passedStage(pool, stranger, 1)));
+        _stop(pool, a);
+        // 1 600 + 3 x 84.575 in the pool, 800 of it kept for A's stop.
+        vm.warp(block.timestamp + 48 hours);
+        assertEq(pool.pay(10), 1, "B is paid; C waits, A's kept money is not C's");
+        assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Paid));
+        assertEq(uint8(pool.payout(c).state), uint8(SimPool.PayoutState.Due));
+        vm.warp(block.timestamp + 10 days);
+        vm.prank(checker);
+        pool.liftStop(a);
+        assertEq(pool.reserved(), 0);
+        uint256 before = usdc.balanceOf(trader);
+        pool.pay(10);
+        assertEq(uint8(pool.payout(a).state), uint8(SimPool.PayoutState.Paid), "lifted: paid as any other");
+        assertEq(usdc.balanceOf(trader) - before, LARGE_PAYOUT);
+        assertEq(uint8(pool.payout(c).state), uint8(SimPool.PayoutState.Due));
+    }
+
+    function test_stopReserve_liftOnlyWithinFourteenDaysOfTheStop() public {
+        SimPool pool = _pool();
+        uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
+        _stop(pool, a);
+        _stop(pool, b);
+        assertEq(pool.payout(a).stoppedAt, block.timestamp);
+        vm.warp(block.timestamp + 14 days - 1);
+        vm.startPrank(checker);
+        pool.liftStop(a);
+        vm.warp(block.timestamp + 1);
+        vm.expectRevert(SimPool.ReserveOver.selector);
+        pool.liftStop(b);
+        vm.stopPrank();
+    }
+
+    function test_stopReserve_theTraderObjectsOnChain_withinTheFourteenDays() public {
+        SimPool pool = _pool();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        bytes32 text = keccak256("The other account is not mine.");
+        vm.prank(trader);
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.objectStop(id, text);
+        _stop(pool, id);
+        vm.prank(stranger);
+        vm.expectRevert(SimPool.NotTrader.selector);
+        pool.objectStop(id, text);
+        vm.expectEmit(address(pool));
+        emit SimPool.StopObjected(id, trader, text);
+        vm.prank(trader);
+        pool.objectStop(id, text);
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Stopped), "an objection changes nothing");
+        vm.warp(block.timestamp + 14 days);
+        vm.prank(trader);
+        vm.expectRevert(SimPool.ReserveOver.selector);
+        pool.objectStop(id, text);
+    }
+
+    function test_stopReserve_finishWaitsForTheStopToBeFinal() public {
+        SimPool pool = _pool();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        _stop(pool, id);
+        vm.startPrank(creator);
+        pool.close();
+        vm.expectRevert(SimPool.NotOver.selector);
+        pool.finish();
+        vm.stopPrank();
+        vm.warp(block.timestamp + 14 days);
+        pool.finalizeStop(id);
+        vm.prank(creator);
+        pool.finish();
+        assertEq(usdc.balanceOf(address(pool)), 0);
+    }
+
     // ── a queue, when payouts come faster than prices ────────────
 
     function test_payoutsAreQueuedInOrder_andTheCreatorWithdrawsNothingMeanwhile() public {

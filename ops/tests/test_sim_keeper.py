@@ -36,9 +36,9 @@ class TheEvents(unittest.TestCase):
         pool = (ROOT / "src/sim/SimPool.sol").read_text()
         fields = re.search(r"struct Payout \{(.*?)\}", pool, re.S).group(1)
         types = [l.split()[0] for l in fields.splitlines() if l.strip() and not l.strip().startswith("//")]
-        self.assertEqual(types, ["address", "address", "uint64", "uint64", "PayoutState", "bool"])
-        self.assertEqual(k.PAYOUT, "(address,address,uint64,uint64,uint8,bool)")
-        self.assertEqual(k.PAYOUT_STATE, ("None", "Due", "Stopped", "Paid", "Held"))
+        self.assertEqual(types, ["address", "address", "uint64", "uint64", "PayoutState", "bool", "uint64"])
+        self.assertEqual(k.PAYOUT, "(address,address,uint64,uint64,uint8,bool,uint64)")
+        self.assertEqual(k.PAYOUT_STATE, ("None", "Due", "Stopped", "Paid", "Held", "Refused"))
         states = re.search(r"enum PayoutState \{(.*?)\}", pool, re.S).group(1)
         self.assertEqual(tuple(w for w in re.findall(r"^\s*(\w+),?$", states, re.M)), k.PAYOUT_STATE)
 

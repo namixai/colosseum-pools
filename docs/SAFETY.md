@@ -145,11 +145,15 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   creator is the platform that also runs the checker. What holds it is that it shows: every stop and every
   lift carries the pool's counts of stops, lifts and payouts, the checking script is to be published with the
   keeper (`ops/sim_check.py`, not in this change), and the checker
-  lifts a stop that was wrong (S115). The filler and the checker are two keys, and neither opens a pool (S116).
+  lifts a stop that was wrong (S115). A stopped payout's money stays set aside for 14 days after the stop
+  (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no
+  profit for a partner's share. Within those days the trader can object on chain, with the hash of the
+  objection's text, and the checker can lift the stop; after them the stop is final, and the money is the
+  pool's again (S120). The filler and the checker are two keys, and neither opens a pool (S116).
 - **A simulated pool's creator** withdraws only what stays above three payouts of the largest size and above
   every payout owed and every payout set aside for a trader whose transfer was refused (S117), and stops
   nobody's payout. A partner's share is of the pool's money above what the creator put in, after what the
-  pool owes and holds; never of the principal.
+  pool owes, holds and keeps for a recent stop; never of the principal.
 - **What none of us can do:** send a challenge account's money anywhere but to its trader's share and
   back to its pool (S48, S49); change the rules of an account that is running (S10); or upgrade a pool or
   a challenge, each a minimal clone of a fixed implementation with no upgrade path (S50, S51).
@@ -316,8 +320,11 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
 | S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
 | S112 | `src/sim/SimPoolFactory.sol:36` | `uint32 public constant PAYOUT_DELAY = 48 hours;` |
-| S113 | `src/sim/SimPool.sol:420` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
-| S114 | `src/sim/SimPool.sol:158` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:441` | `function liftStop(uint256 id) external onlyChecker {` |
-| S116 | `src/sim/SimPoolFactory.sol:151` | `if (msg.sender == filler \|\| msg.sender == checker) revert BadRole();` |
-| S117 | `src/sim/SimPool.sol:262` | `uint256 keep = owed + held + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |
+| S113 | `src/sim/SimPool.sol:443` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
+| S114 | `src/sim/SimPool.sol:165` | `event PayoutStopped(` |
+| S115 | `src/sim/SimPool.sol:467` | `function liftStop(uint256 id) external onlyChecker {` |
+| S116 | `src/sim/SimPoolFactory.sol:154` | `if (msg.sender == filler \|\| msg.sender == checker) revert BadRole();` |
+| S117 | `src/sim/SimPool.sol:275` | `uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());` |
+| S118 | `src/sim/SimPoolFactory.sol:39` | `uint32 public constant STOP_RESERVE = 14 days;` |
+| S119 | `src/sim/SimPool.sol:378` | `uint256 bal = usdc.balanceOf(address(this)) - held - reserved;` |
+| S120 | `src/sim/SimPool.sol:472` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();` |

@@ -34,6 +34,9 @@ contract SimPoolFactory {
     uint8 public constant FLOOR_PAYOUTS = 3;
     /// How long a payout waits, for the checker to stop it with a reason.
     uint32 public constant PAYOUT_DELAY = 48 hours;
+    /// How long a stopped payout's money stays set aside after the stop: the trader can object and the
+    /// checker can lift the stop; after it the stop is final and the money is the pool's again.
+    uint32 public constant STOP_RESERVE = 14 days;
     /// The bounds of a fill window, in blocks: about a minute of HyperEVM's small blocks at most.
     uint16 public constant MIN_FILL_WINDOW = 1;
     uint16 public constant MAX_FILL_WINDOW = 60;

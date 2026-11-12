@@ -254,18 +254,22 @@
         },
         {
           "lead": "A simulated pool's checker.",
-          "text": "A payout of a simulated pool waits 48 hours (S112). Until then the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is to be published with the keeper (`ops/sim_check.py`, not in this change), and the checker lifts a stop that was wrong (S115). The filler and the checker are two keys, and neither opens a pool (S116).",
+          "text": "A payout of a simulated pool waits 48 hours (S112). Until then the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is to be published with the keeper (`ops/sim_check.py`, not in this change), and the checker lifts a stop that was wrong (S115). A stopped payout's money stays set aside for 14 days after the stop (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no profit for a partner's share. Within those days the trader can object on chain, with the hash of the objection's text, and the checker can lift the stop; after them the stop is final, and the money is the pool's again (S120). The filler and the checker are two keys, and neither opens a pool (S116).",
           "sources": [
             "S112",
             "S113",
             "S114",
             "S115",
+            "S118",
+            "S117",
+            "S119",
+            "S120",
             "S116"
           ]
         },
         {
           "lead": "A simulated pool's creator",
-          "text": "withdraws only what stays above three payouts of the largest size and above every payout owed and every payout set aside for a trader whose transfer was refused (S117), and stops nobody's payout. A partner's share is of the pool's money above what the creator put in, after what the pool owes and holds; never of the principal.",
+          "text": "withdraws only what stays above three payouts of the largest size and above every payout owed and every payout set aside for a trader whose transfer was refused (S117), and stops nobody's payout. A partner's share is of the pool's money above what the creator put in, after what the pool owes, holds and keeps for a recent stop; never of the principal.",
           "sources": [
             "S117"
           ]
@@ -1185,38 +1189,59 @@
     },
     {
       "id": "S113",
-      "where": "src/sim/SimPool.sol:420",
+      "where": "src/sim/SimPool.sol:443",
       "kind": "line",
       "text": "if (block.timestamp >= p.dueAt) revert NotDue();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L420"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L443"
     },
     {
       "id": "S114",
-      "where": "src/sim/SimPool.sol:158",
+      "where": "src/sim/SimPool.sol:165",
       "kind": "line",
       "text": "event PayoutStopped(",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L158"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L165"
     },
     {
       "id": "S115",
-      "where": "src/sim/SimPool.sol:441",
+      "where": "src/sim/SimPool.sol:467",
       "kind": "line",
       "text": "function liftStop(uint256 id) external onlyChecker {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L441"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L467"
     },
     {
       "id": "S116",
-      "where": "src/sim/SimPoolFactory.sol:151",
+      "where": "src/sim/SimPoolFactory.sol:154",
       "kind": "line",
       "text": "if (msg.sender == filler || msg.sender == checker) revert BadRole();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L151"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L154"
     },
     {
       "id": "S117",
-      "where": "src/sim/SimPool.sol:262",
+      "where": "src/sim/SimPool.sol:275",
       "kind": "line",
-      "text": "uint256 keep = owed + held + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L262"
+      "text": "uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L275"
+    },
+    {
+      "id": "S118",
+      "where": "src/sim/SimPoolFactory.sol:39",
+      "kind": "line",
+      "text": "uint32 public constant STOP_RESERVE = 14 days;",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L39"
+    },
+    {
+      "id": "S119",
+      "where": "src/sim/SimPool.sol:378",
+      "kind": "line",
+      "text": "uint256 bal = usdc.balanceOf(address(this)) - held - reserved;",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L378"
+    },
+    {
+      "id": "S120",
+      "where": "src/sim/SimPool.sol:472",
+      "kind": "line",
+      "text": "if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L472"
     }
   ]
 }

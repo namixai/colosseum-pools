@@ -49,7 +49,7 @@ ERRORS = [
     "RaiseShort(uint256,uint256)", "NotRefunding()", "CannotPay()", "NotShares()", "Initialized()", "NotStored()",
     "TooLong()",
     # SimPool, SimPoolFactory
-    "NotFactory()", "NotChecker()", "Closing()", "NotAnExam()", "NotAStage()", "Done()", "BadPayout()", "NotDue()", "BadReason()", "BadPaired()", "TooMuch()", "BadShare()", "NoAuthorization()", "NotPool()", "BadRole()", "WrongFee()", "FeeNotSent()",
+    "NotFactory()", "NotChecker()", "Closing()", "NotAnExam()", "NotAStage()", "Done()", "BadPayout()", "NotDue()", "BadReason()", "BadPaired()", "TooMuch()", "BadShare()", "NoAuthorization()", "ReserveOver()", "ReserveRunning()", "NotPool()", "BadRole()", "WrongFee()", "FeeNotSent()",
 ]
 OPENZEPPELIN = [
     "SafeERC20FailedOperation(address)", "FailedDeployment()", "InvalidInitialization()", "NotInitializing()",

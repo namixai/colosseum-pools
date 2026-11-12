@@ -87,7 +87,9 @@ contract SimPool is Initializable {
         Paid,
         /// Due and sent, but the token refused it (say the trader's address was blocked): the money is
         /// set aside for the trader, who takes it with `claimHeld`, and the queue moves on.
-        Held
+        Held,
+        /// Stopped, and not lifted within `STOP_RESERVE` of the stop: the refusal is final.
+        Refused
     }
 
     struct Account {
@@ -105,6 +107,8 @@ contract SimPool is Initializable {
         PayoutState state;
         /// Stopped once already: a payout is stopped at most once.
         bool wasStopped;
+        /// When it was stopped; zero if never.
+        uint64 stoppedAt;
     }
 
     SimPoolFactory public factory;
@@ -132,6 +136,9 @@ contract SimPool is Initializable {
     /// Payouts the token refused to send, set aside for their traders (`claimHeld`).
     uint256 public held;
     mapping(address trader => uint256) public heldOf;
+    /// Payouts stopped within `STOP_RESERVE` and not yet lifted or made final: the money stays set
+    /// aside, as `held` is, so a lifted stop finds it (CFO, 12 November).
+    uint256 public reserved;
 
     SimSize[] internal _menu;
     Rules internal _examRules;
@@ -170,6 +177,10 @@ contract SimPool is Initializable {
     event PayoutHeld(uint256 indexed id, address indexed trader, uint64 amount);
     event HeldClaimed(address indexed trader, address indexed to, uint256 amount);
     event StopLifted(uint256 indexed id, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount);
+    /// The trader objects to the stop of payout `id`; `text` is the keccak256 of the objection's text.
+    event StopObjected(uint256 indexed id, address indexed trader, bytes32 text);
+    /// The stop of payout `id` was not lifted within `STOP_RESERVE`: final, and its money free.
+    event StopFinal(uint256 indexed id, uint64 amount, uint256 reserved);
     event AddedToPot(uint256 amount, uint256 principal);
     event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount);
     event PartnerShareSet(address indexed partner, uint16 bps);
@@ -196,6 +207,8 @@ contract SimPool is Initializable {
     error BadShare();
     error NotOver();
     error NoAuthorization();
+    error ReserveOver();
+    error ReserveRunning();
 
     modifier onlyCreator() {
         if (msg.sender != creator) revert NotCreator();
@@ -255,11 +268,11 @@ contract SimPool is Initializable {
         return _payouts.length;
     }
 
-    /// @notice What the creator may withdraw now: the pool's USDC above what it owes and, while it
-    ///         is open, above `FLOOR_PAYOUTS` payouts of the largest size.
+    /// @notice What the creator may withdraw now: the pool's USDC above what it owes, holds and keeps
+    ///         for recent stops and, while it is open, above `FLOOR_PAYOUTS` payouts of the largest size.
     function withdrawable() public view returns (uint256) {
         uint256 bal = usdc.balanceOf(address(this));
-        uint256 keep = owed + held + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());
+        uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());
         return bal > keep ? bal - keep : 0;
     }
 
@@ -337,7 +350,15 @@ contract SimPool is Initializable {
         uint64 dueAt = uint64(block.timestamp) + factory.PAYOUT_DELAY();
         id = _payouts.length;
         _payouts.push(
-            Payout({account: stage, trader: trader, amount: amount, dueAt: dueAt, state: PayoutState.Due, wasStopped: false})
+            Payout({
+                account: stage,
+                trader: trader,
+                amount: amount,
+                dueAt: dueAt,
+                state: PayoutState.Due,
+                wasStopped: false,
+                stoppedAt: 0
+            })
         );
         owed += amount;
         emit PayoutDue(id, stage, trader, amount, dueAt);
@@ -352,8 +373,9 @@ contract SimPool is Initializable {
             Payout storage p = _payouts[i];
             if (p.state == PayoutState.Due) {
                 if (block.timestamp < p.dueAt) break;
-                // What is held is its traders' already: never paid out to anyone else (CFO, 12 November).
-                uint256 bal = usdc.balanceOf(address(this)) - held;
+                // What is held is its traders' already, and what a recent stop keeps may be its trader's
+                // again: neither is paid out to anyone else (CFO, 12 November).
+                uint256 bal = usdc.balanceOf(address(this)) - held - reserved;
                 if (bal < p.amount) {
                     emit PayoutQueued(i, bal);
                     break;
@@ -409,7 +431,8 @@ contract SimPool is Initializable {
     /// @notice Stops payout `id` before it is due, once, with a reason the chain keeps: `reason` 1,
     ///         opposite positions with `paired`, shown by `trades`; 2, that and the wallets linked,
     ///         shown by `links`. `paired` is an exam or a stage of any pool of the factory. The
-    ///         money stays in the pool.
+    ///         money stays in the pool, set aside for `STOP_RESERVE`: the trader can object
+    ///         (`objectStop`) and the checker can lift the stop; after it the stop is final.
     function stopPayout(uint256 id, uint8 reason, address paired, bytes32[] calldata trades, bytes32[] calldata links)
         external
         onlyChecker
@@ -431,23 +454,54 @@ contract SimPool is Initializable {
         }
         p.state = PayoutState.Stopped;
         p.wasStopped = true;
+        p.stoppedAt = uint64(block.timestamp);
         owed -= p.amount;
+        reserved += p.amount;
         stoppedCount += 1;
         emit PayoutStopped(id, p.trader, p.amount, reason, paired, trades, links, stoppedCount, liftedCount, paidCount);
     }
 
-    /// @notice Lifts the checker's own stop of payout `id`, a stop that was wrong: the payout is due
-    ///         again, and paid as any other once its time has come. Not after the pool has finished.
+    /// @notice Lifts the checker's own stop of payout `id`, a stop that was wrong, within `STOP_RESERVE`
+    ///         of it: the payout is due again, out of the money the stop kept, and paid as any other
+    ///         once its time has come. After that the stop is final.
     function liftStop(uint256 id) external onlyChecker {
         if (finished) revert Done();
         if (id >= _payouts.length) revert BadPayout();
         Payout storage p = _payouts[id];
         if (p.state != PayoutState.Stopped) revert BadPayout();
+        if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();
         p.state = PayoutState.Due;
+        reserved -= p.amount;
         owed += p.amount;
         liftedCount += 1;
         if (id < head) head = id;
         emit StopLifted(id, stoppedCount, liftedCount, paidCount);
+    }
+
+    // ── a stopped payout's trader, and anyone ────────────────────
+
+    /// @notice The trader of stopped payout `id` objects to the stop, within `STOP_RESERVE` of it:
+    ///         the chain keeps the keccak256 of the objection's text, so the dispute is seen as the
+    ///         stop is. Nothing else changes; lifting the stop is the checker's.
+    function objectStop(uint256 id, bytes32 text) external {
+        if (id >= _payouts.length) revert BadPayout();
+        Payout storage p = _payouts[id];
+        if (p.state != PayoutState.Stopped) revert BadPayout();
+        if (msg.sender != p.trader) revert NotTrader();
+        if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();
+        emit StopObjected(id, msg.sender, text);
+    }
+
+    /// @notice Makes the stop of payout `id` final once `STOP_RESERVE` has passed without a lift: the
+    ///         money it kept is the pool's again. Anyone may.
+    function finalizeStop(uint256 id) external {
+        if (id >= _payouts.length) revert BadPayout();
+        Payout storage p = _payouts[id];
+        if (p.state != PayoutState.Stopped) revert BadPayout();
+        if (block.timestamp < uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveRunning();
+        p.state = PayoutState.Refused;
+        reserved -= p.amount;
+        emit StopFinal(id, p.amount, reserved);
     }
 
     // ── the creator ──────────────────────────────────────────────
@@ -463,7 +517,8 @@ contract SimPool is Initializable {
     }
 
     /// @notice Withdraws `amount` of what `withdrawable` allows. The platform takes its 0.5 %. Profit
-    ///         is the pool's money above what it owes and holds and above what the creator put in; a
+    ///         is the pool's money above what it owes, holds and keeps for recent stops, and above what
+    ///         the creator put in; a
     ///         withdrawal takes it first, and the partner gets `partnerBps` of it.
     function withdraw(uint256 amount) external onlyCreator {
         if (finished) revert Done();
@@ -487,11 +542,11 @@ contract SimPool is Initializable {
         emit Closed();
     }
 
-    /// @notice Once closed, with nothing running and nothing owed: sends the creator everything left,
-    ///         the principal first without the partner's share.
+    /// @notice Once closed, with nothing running, nothing owed and no stop still able to be lifted:
+    ///         sends the creator everything left, the principal first without the partner's share.
     function finish() external onlyCreator {
         if (!closed || finished) revert Done();
-        if (live != 0 || owed != 0) revert NotOver();
+        if (live != 0 || owed != 0 || reserved != 0) revert NotOver();
         finished = true;
         uint256 bal = usdc.balanceOf(address(this)) - held;
         if (bal != 0) _withdraw(bal);
@@ -529,9 +584,10 @@ contract SimPool is Initializable {
     }
 
     function _withdraw(uint256 amount) internal {
-        uint256 bal = usdc.balanceOf(address(this)) - held;
-        // Profit is the pool's money above what it owes and above what the creator put in; the partner's
-        // share is of that alone (CFO, 12 November). At finish nothing is owed.
+        uint256 bal = usdc.balanceOf(address(this)) - held - reserved;
+        // Profit is the pool's money above what it owes, holds and keeps for recent stops, and above what
+        // the creator put in; the partner's share is of that alone (CFO, 12 November). At finish nothing is
+        // owed or kept.
         uint256 free = bal > owed ? bal - owed : 0;
         uint256 profit = free > principal ? free - principal : 0;
         uint256 shared = amount < profit ? amount : profit;
