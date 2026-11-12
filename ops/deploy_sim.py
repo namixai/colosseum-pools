@@ -8,6 +8,8 @@
     ... pool ... --send                                                                                # sends
     spike/.venv/bin/python -m ops.deploy_sim codes --pool 0x.. \\
         --plan deployments/plans/sim-first-pool.json --creator creator [--send]                        # its codes
+    spike/.venv/bin/python -m ops.deploy_sim close --pool 0x.. --key closer [--send]                   # stop sales
+    spike/.venv/bin/python -m ops.deploy_sim finish --pool 0x.. --key creator [--exam 0x..] [--send]   # pay out
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
 and the SimPoolFactory on HyperEVM testnet, names the filler, the checker, the closer (the platform's
@@ -24,6 +26,11 @@ group's code, the address its owner gave and its share, 0 or 4 000 to 6 000 bps.
 code, so a pool sells nothing until one is set. A code a sale has named is fixed: one that matches is
 skipped, one that does not is refused before anything is sent.
 
+`close` closes a pool and `finish` pays out a closed one, from the named key. Without --send each only
+reads the pool and says what it would send, from which key, or why the pool would refuse: before its
+180 days only the factory's closer closes it; `finish` (the creator or the closer) waits until nothing
+runs, nothing is owed and no stop can be lifted, and with --exam it says until when that exam runs.
+
 `pool` publishes a pool's terms in the TermsBook, approves the USDC for the two locked payouts and
 calls `create` with 1 HYPE, from the creator's key, then sets the plan's codes as `codes` does. The
 plan file gives the menu, both stages' rules and terms, the fund window, the book's ceiling, the codes
@@ -39,6 +46,7 @@ import argparse
 import json
 import pathlib
 import sys
+from datetime import datetime, timezone
 
 from eth_utils import keccak, to_checksum_address
 
@@ -261,6 +269,129 @@ def pool(args) -> int:
     return 0
 
 
+# ── closing a pool ───────────────────────────────────────────────────────────────
+
+STATUS = ["None", "Active", "Passed", "Breached", "Expired"]  # PaperExam.Status
+TERMS_OUT = TERMS_T  # PaperExam.terms(): its stepDuration is the third field
+
+
+def utc(t: int) -> str:
+    return datetime.fromtimestamp(int(t), timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def pool_state(pool_: str) -> dict:
+    """What `close` and `finish` decide on, read from the pool and its factory."""
+    v = lambda sig, out: c.call_view(pool_, sig, [], [], [out])[0]
+    factory = v("factory()", "address")
+    return {"creator": to_checksum_address(v("creator()", "address")),
+            "closer": to_checksum_address(c.call_view(factory, "closer()", [], [], ["address"])[0]),
+            "closed": bool(v("closed()", "bool")), "finished": bool(v("finished()", "bool")),
+            "locked_until": int(v("lockedUntil()", "uint64")), "live": int(v("live()", "uint256")),
+            "owed": int(v("owed()", "uint256")), "reserved": int(v("reserved()", "uint256")),
+            "fund_window": int(v("fundWindow()", "uint32"))}
+
+
+def close_check(st: dict, now: int, sender: str) -> str:
+    """As whom `sender` closes the pool now, as the contract decides it, or why the pool would refuse."""
+    if st["finished"] or st["closed"]:
+        raise SystemExit("Closing: the pool is closed already")
+    early = now < st["locked_until"]
+    if sender == st["closer"]:
+        return "the factory's closer, before the term (closedEarly)" if early else "the factory's closer"
+    if sender != st["creator"]:
+        raise SystemExit(f"NotCreator: {sender} is neither the pool's creator nor the factory's closer")
+    if early:
+        raise SystemExit(f"Locked: the creator closes from {utc(st['locked_until'])} on; before then only the closer")
+    return "the creator"
+
+
+def exam_text(exam: str, x: dict, now: int, fund_window: int) -> str:
+    """Until when one exam or stage keeps the pool from finishing. `x`: its status, stepStartedAt, stepDuration,
+    passedAt, and whether the pool holds it done."""
+    if x["done"]:
+        return f"{exam} is done here; another exam or stage still runs"
+    status = STATUS[x["status"]]
+    if status == "Active":
+        until = x["started"] + x["duration"]
+        if now < until:
+            return f"{exam} runs until {utc(until)} at the latest, sooner if it breaks a rule"
+        return f"{exam} is past its deadline ({utc(until)}): the keeper expires and releases it at its next pass"
+    if status == "Passed":
+        until = x["passed_at"] + fund_window
+        if now <= until:
+            return f"{exam} passed; its stage can be started until {utc(until)}, then it is released"
+        return f"{exam} passed and was not funded by {utc(until)}: the keeper releases it at its next pass"
+    return f"{exam} has ended ({status}): the keeper releases it at its next pass"
+
+
+def finish_check(st: dict, now: int, sender: str, exam_line: str | None = None) -> str:
+    """As whom `sender` finishes the pool now, or why the pool would refuse, each reason named."""
+    if st["finished"]:
+        raise SystemExit("Done: the pool is finished already")
+    if sender not in (st["creator"], st["closer"]):
+        raise SystemExit(f"NotCreator: {sender} is neither the pool's creator nor the factory's closer")
+    if not st["closed"]:
+        when = "" if now >= st["locked_until"] else f"; before {utc(st['locked_until'])} only the closer closes it"
+        raise SystemExit(f"Done: the pool is not closed yet: `close` first{when}")
+    reasons = []
+    if st["live"]:
+        reasons.append(f"{st['live']} exam(s) or stage(s) still run" + (f": {exam_line}" if exam_line else
+                                                                        " (--exam ADDRESS says until when)"))
+    if st["owed"]:
+        reasons.append(f"{st['owed'] / 1e6:g} USDC of payouts still owed")
+    if st["reserved"]:
+        reasons.append(f"{st['reserved'] / 1e6:g} USDC kept for stops that can still be lifted")
+    if reasons:
+        raise SystemExit("NotOver: " + "; ".join(reasons))
+    return "the creator" if sender == st["creator"] else "the factory's closer"
+
+
+def read_exam(pool_: str, exam: str) -> dict:
+    status, _, _, passed_at = c.call_view(exam, "result()", [], [], ["uint8", "address", "uint64", "uint64"])
+    terms = c.call_view(exam, "terms()", [], [], [TERMS_OUT])[0]
+    done = c.call_view(pool_, "accountOf(address)", ["address"], [exam], ["uint8", "uint8", "bool"])[2]
+    return {"status": int(status), "started": int(c.call_view(exam, "stepStartedAt()", [], [], ["uint64"])[0]),
+            "duration": int(terms[2]), "passed_at": int(passed_at), "done": bool(done)}
+
+
+def chain_now() -> int:
+    return int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
+
+
+def close(args) -> int:
+    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    role = close_check(pool_state(pool_), chain_now(), sender)
+    print(f"deploy_sim close: pool {pool_}, close() from {args.key} ({sender}) as {role}")
+    print("  the money goes where it would at any finish; the closer gets none of it")
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    c.assert_testnet()
+    rcpt = c.transact(c.account(args.key), pool_, "close()")
+    print(f"deploy_sim: closed, tx {rcpt['transactionHash']}")
+    return 0
+
+
+def finish(args) -> int:
+    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    st, now = pool_state(pool_), chain_now()
+    line = None
+    if args.exam:
+        exam = to_checksum_address(args.exam)
+        line = exam_text(exam, read_exam(pool_, exam), now, st["fund_window"])
+    role = finish_check(st, now, sender, line)
+    print(f"deploy_sim finish: pool {pool_}, finish() from {args.key} ({sender}) as {role}")
+    print(f"  pays out to the pool's creator {st['creator']} what is left, each code's partner its share; "
+          "what is held stays for its traders and partners")
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    c.assert_testnet()
+    rcpt = c.transact(c.account(args.key), pool_, "finish()")
+    print(f"deploy_sim: finished, tx {rcpt['transactionHash']}")
+    return 0
+
+
 def codes(args) -> int:
     pool_ = to_checksum_address(args.pool)
     codes_ = codes_of(json.loads(pathlib.Path(args.plan).read_text()), c.address_of(args.creator))
@@ -324,8 +455,15 @@ def main(argv: list[str] | None = None) -> int:
     k.add_argument("--plan", required=True)
     k.add_argument("--creator", default="creator")
     k.add_argument("--send", action="store_true")
+    for name in ("close", "finish"):
+        z = sub.add_parser(name)
+        z.add_argument("--pool", required=True)
+        z.add_argument("--key", required=True, help="the key it is sent from: the closer, or the pool's creator")
+        if name == "finish":
+            z.add_argument("--exam", help="an exam or stage of the pool: says until when it keeps the pool from finishing")
+        z.add_argument("--send", action="store_true")
     args = p.parse_args(argv)
-    return {"deploy": deploy, "pool": pool, "buy": buy, "codes": codes}[args.cmd](args)
+    return {"deploy": deploy, "pool": pool, "buy": buy, "codes": codes, "close": close, "finish": finish}[args.cmd](args)
 
 
 if __name__ == "__main__":
