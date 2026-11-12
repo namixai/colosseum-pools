@@ -74,8 +74,9 @@ stops, lifts and payouts.
 - **The platform is the filler, the checker, and in its first pools the creator.** The filler picks
   the block inside the window; the checker stops payouts whose money stays with the creator. Neither
   is held by the contract, only by what shows: `late` on every fill, the reason and transactions on
-  every stop, the counts, and a checking script to be published with the keeper (not in this
-  change). A creator is never the filler or the checker.
+  every stop, the counts, and the open checking script (`ops/sim_check.py`), which anyone can run on
+  the same blocks while a payout still waits; once stopped, the stop's own record carries its pair,
+  trades and links. A creator is never the filler or the checker.
 - **The checker's evidence is not checked by the contract.** It checks that the other account is
   one of the factory's and that there are transactions; whether they show what the reason says is
   for anyone to read.
@@ -116,8 +117,12 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
   ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's
   keeper nodes. `pool --plan` publishes the terms, approves the locked USDC and opens the pool with 1
   HYPE. Without `--send` both print what they would do and read no key. The first pool's plan is
-  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, at the book
-  with a ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise.
+  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
+  a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
+  (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
+  ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise. The factory needs an
+  idle limit; the plan sets it to the stage's thirty days, where it never ends a stage before its
+  deadline, so the terms name no idle rule.
 
 - **The checker**, `ops/sim_check.py`: the open script behind every stop. For each payout still
   waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
@@ -127,6 +132,10 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
   factory's checker key, and lifts its own stop with `--lift POOL:ID`. Without `--wallet` it only
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
+
+- **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
+  `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
+  record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route.
 
 ## Measuring the filler's window
 
@@ -169,8 +178,5 @@ spread is under 1 bp, it is measured there again, and so is the window.
 
 ## Not done yet
 
-- The host: `install.sh` enables `colosseum-multi-keeper@<name>` for a record with a `SimPoolFactory`
-  as for one with a `MultiPool` (`host_instances multi`), with no MultiPool watchdog, and
-  `deployment-env` renders such a record without gateway lines. What is left: an instance is still
-  bootstrapped with its own gateway and instance keeper, which a simulated pool does not use and whose
-  settings its record does not have; until bootstrap skips them, the keeper is run by hand.
+- The checker's unit on the host. The instance keeps the checker's wallet (docs/HOSTING.md, "A simulated
+  pool's keeper"), and `ops/sim_check.py --wallet checker` runs by hand with it until a unit runs it.
