@@ -51,10 +51,6 @@ struct SimPlan {
     /// worse than it (`PaperExam`); zero `maxWorseBps` without the book.
     bool fromBook;
     uint16 maxWorseBps;
-    /// A trading group's owner, who gets `partnerBps` of what the creator withdraws above what
-    /// the creator put in; zero for a pool without one, with `partnerBps` zero.
-    address partner;
-    uint16 partnerBps;
     /// The keccak256 of the pool's terms, every clause written out, as a `TermsBook` keeps them.
     bytes32 terms;
 }
@@ -99,6 +95,19 @@ contract SimPool is Initializable {
         bool done;
     }
 
+    /// A trading group's code: every sale names one. Its partner, the group's owner, gets `bps` of the
+    /// pool's profit in the part the code brought of every price the pool took (`withdraw`, `finish`).
+    struct Code {
+        address partner;
+        uint16 bps;
+        /// A sale named it: its partner and share are fixed from then on.
+        bool used;
+        /// In `codes()`: set once at least.
+        bool listed;
+        /// What the code's sales brought the pool: each price less the platform's part.
+        uint256 brought;
+    }
+
     struct Payout {
         address account;
         address trader;
@@ -114,8 +123,6 @@ contract SimPool is Initializable {
     SimPoolFactory public factory;
     IERC20 public usdc;
     address public creator;
-    address public partner;
-    uint16 public partnerBps;
     bytes32 public terms;
     /// The largest payout of the menu: what `LOCKED_PAYOUTS` and `FLOOR_PAYOUTS` count in.
     uint64 public largestPayout;
@@ -133,12 +140,16 @@ contract SimPool is Initializable {
     uint256 public liftedCount;
     uint256 public paidCount;
     uint256 public paidTotal;
-    /// Payouts the token refused to send, set aside for their traders (`claimHeld`).
+    /// Payouts, and partners' parts, the token refused to send, set aside for whom they were for (`claimHeld`).
     uint256 public held;
-    mapping(address trader => uint256) public heldOf;
+    mapping(address holder => uint256) public heldOf;
     /// Payouts stopped within `STOP_RESERVE` and not yet lifted or made final: the money stays set
     /// aside, as `held` is, so a lifted stop finds it (CFO, 12 November).
     uint256 public reserved;
+    /// Every code, by the keccak256 of its text, and what all of them brought together.
+    mapping(bytes32 code => Code) public codeOf;
+    bytes32[] internal _codes;
+    uint256 public brought;
 
     SimSize[] internal _menu;
     Rules internal _examRules;
@@ -153,8 +164,17 @@ contract SimPool is Initializable {
     Payout[] internal _payouts;
 
     /// `bySignature`: the price came with the trader's signature (EIP-3009), sent by whoever paid the gas.
+    /// `code` is the keccak256 of the sale's code, and `partner` its partner.
     event ExamSold(
-        address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee, bool bySignature
+        address indexed exam,
+        address indexed trader,
+        uint256 line,
+        uint64 size,
+        uint64 price,
+        uint256 fee,
+        bool bySignature,
+        bytes32 code,
+        address indexed partner
     );
     event Funded(address indexed stage, address indexed exam, address indexed trader);
     event Released(address indexed account);
@@ -183,7 +203,9 @@ contract SimPool is Initializable {
     event StopFinal(uint256 indexed id, uint64 amount, uint256 reserved);
     event AddedToPot(uint256 amount, uint256 principal);
     event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount);
-    event PartnerShareSet(address indexed partner, uint16 bps);
+    event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps);
+    /// A partner's part of a withdrawal: sent, or set aside for the partner (`claimHeld`) if the token refused.
+    event PartnerPaid(bytes32 indexed code, address indexed partner, uint256 amount, bool sent);
     event Closed();
     event Finished(uint256 amount);
 
@@ -209,6 +231,8 @@ contract SimPool is Initializable {
     error NoAuthorization();
     error ReserveOver();
     error ReserveRunning();
+    error NoSuchCode();
+    error CodeUsed();
 
     modifier onlyCreator() {
         if (msg.sender != creator) revert NotCreator();
@@ -229,8 +253,6 @@ contract SimPool is Initializable {
         factory = SimPoolFactory(msg.sender);
         usdc = factory.usdc();
         creator = creator_;
-        partner = p.partner;
-        partnerBps = p.partnerBps;
         terms = p.terms;
         fundWindow = p.fundWindow;
         fromBook = p.fromBook;
@@ -264,6 +286,11 @@ contract SimPool is Initializable {
         return _payouts[id];
     }
 
+    /// @notice Every code of the pool, as `codeOf` keys them, in the order they were set.
+    function codes() external view returns (bytes32[] memory) {
+        return _codes;
+    }
+
     function payoutCount() external view returns (uint256) {
         return _payouts.length;
     }
@@ -278,14 +305,15 @@ contract SimPool is Initializable {
 
     // ── traders ──────────────────────────────────────────────────
 
-    /// @notice Buys an exam off line `line` of the menu. No seat and no share limits a sale: the
-    ///         prices of exams that fail stay in the pool and pay for the ones that pass.
-    function buy(uint256 line) external returns (address exam) {
+    /// @notice Buys an exam off line `line` of the menu with `code`, the keccak256 of a trading group's
+    ///         code that the creator set (`setCode`). No seat and no share limits a sale: the prices of
+    ///         exams that fail stay in the pool and pay for the ones that pass.
+    function buy(uint256 line, bytes32 code) external returns (address exam) {
         SimSize memory m = _line(line);
         uint256 fee = _fee(m.price);
         usdc.safeTransferFrom(msg.sender, address(this), m.price - fee);
         if (fee != 0) usdc.safeTransferFrom(msg.sender, factory.feeRecipient(), fee);
-        exam = _sold(msg.sender, line, m, fee, false);
+        exam = _sold(msg.sender, line, m, fee, false, code);
     }
 
     /// @notice Buys an exam for `trader` with the trader's signature of a USDC transfer of the line's
@@ -293,28 +321,45 @@ contract SimPool is Initializable {
     ///         anyone may send it, a relayer of the platform's or a partner's. The signed amount is
     ///         the line's price or the token refuses the signature; the token keeps the nonce, so a
     ///         signature buys once; and only this pool, the payee, can use it. The price and the fee
-    ///         are those of `buy`. A token without EIP-3009 refuses with `NoAuthorization`.
+    ///         are those of `buy`. A token without EIP-3009 refuses with `NoAuthorization`. The code is
+    ///         in the signature: the signed nonce is keccak256(abi.encode(code, salt)), so whoever
+    ///         sends it cannot name another code.
     function buyWithAuthorization(
         address trader,
         uint256 line,
+        bytes32 code,
+        bytes32 salt,
         uint256 validAfter,
         uint256 validBefore,
-        bytes32 nonce,
         uint8 v,
         bytes32 r,
         bytes32 s
     ) external returns (address exam) {
         SimSize memory m = _line(line);
+        _receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);
+        uint256 fee = _fee(m.price);
+        if (fee != 0) usdc.safeTransfer(factory.feeRecipient(), fee);
+        exam = _sold(trader, line, m, fee, true, code);
+    }
+
+    /// Takes `price` from `trader` by the trader's EIP-3009 signature over `nonce`.
+    function _receive(
+        address trader,
+        uint64 price,
+        bytes32 nonce,
+        uint256 validAfter,
+        uint256 validBefore,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) internal {
         try IReceiveWithAuthorization(address(usdc)).authorizationState(trader, nonce) returns (bool) {}
         catch {
             revert NoAuthorization();
         }
         IReceiveWithAuthorization(address(usdc)).receiveWithAuthorization(
-            trader, address(this), m.price, validAfter, validBefore, nonce, v, r, s
+            trader, address(this), price, validAfter, validBefore, nonce, v, r, s
         );
-        uint256 fee = _fee(m.price);
-        if (fee != 0) usdc.safeTransfer(factory.feeRecipient(), fee);
-        exam = _sold(trader, line, m, fee, true);
     }
 
     /// @notice Starts the stage an exam earned: its trader alone, within `fundWindow` of the pass.
@@ -418,8 +463,8 @@ contract SimPool is Initializable {
         emit Released(account);
     }
 
-    /// @notice Sends a trader what was set aside for them when a payout's transfer was refused, to an
-    ///         address the trader names. Also after the pool has finished.
+    /// @notice Sends a trader, or a partner, what was set aside for them when a transfer was refused, to
+    ///         an address they name. Also after the pool has finished.
     function claimHeld(address to) external {
         uint256 amount = heldOf[msg.sender];
         if (amount == 0) revert TooMuch();
@@ -510,7 +555,7 @@ contract SimPool is Initializable {
     // ── the creator ──────────────────────────────────────────────
 
     /// @notice Puts more of the creator's money in, for more payouts at once than the locked two. It is
-    ///         principal: never shared with the partner. A withdrawal takes profit first; the
+    ///         principal: never shared with the partners. A withdrawal takes profit first; the
     ///         principal comes back once what is above it has been taken, or at `finish`.
     function addToPot(uint256 amount) external onlyCreator {
         if (finished) revert Done();
@@ -522,20 +567,30 @@ contract SimPool is Initializable {
     /// @notice Withdraws `amount` of what `withdrawable` allows. The platform takes its 0.5 %. Profit
     ///         is the pool's money above what it owes, holds and keeps for recent stops, and above what
     ///         the creator put in; a
-    ///         withdrawal takes it first, and the partner gets `partnerBps` of it.
+    ///         withdrawal takes it first, and each code's partner gets its share of it (`_payPartners`).
     function withdraw(uint256 amount) external onlyCreator {
         if (finished) revert Done();
         if (amount == 0 || amount > withdrawable()) revert TooMuch();
         _withdraw(amount);
     }
 
-    /// @notice Sets the partner's share of future withdrawals, within the platform's bounds. A pool
-    ///         opened without a partner keeps none.
-    function setPartnerShare(uint16 bps) external onlyCreator {
-        if (partner == address(0)) revert BadShare();
-        if (bps < factory.MIN_PARTNER_BPS() || bps > factory.MAX_PARTNER_BPS()) revert BadShare();
-        partnerBps = bps;
-        emit PartnerShareSet(partner, bps);
+    /// @notice Sets a trading group's code: `code` is the keccak256 of its text, `partner` the group's
+    ///         owner and `bps` its share, zero or within the platform's bounds. A code can be changed
+    ///         until a sale names it, never after: the partner does not depend on the creator once
+    ///         it has brought traders. A zero `partner` takes an unused code off sale.
+    function setCode(bytes32 code, address partner, uint16 bps) external onlyCreator {
+        Code storage c = codeOf[code];
+        if (c.used) revert CodeUsed();
+        if (partner == address(0) && bps != 0) revert BadShare();
+        if (bps != 0 && (bps < factory.MIN_PARTNER_BPS() || bps > factory.MAX_PARTNER_BPS())) revert BadShare();
+        if (!c.listed) {
+            if (_codes.length >= factory.MAX_CODES()) revert TooMuch();
+            c.listed = true;
+            _codes.push(code);
+        }
+        c.partner = partner;
+        c.bps = bps;
+        emit CodeSet(code, partner, bps);
     }
 
     /// @notice Stops selling exams. What runs, runs to its end.
@@ -546,7 +601,7 @@ contract SimPool is Initializable {
     }
 
     /// @notice Once closed, with nothing running, nothing owed and no stop still able to be lifted:
-    ///         sends the creator everything left, the principal first without the partner's share.
+    ///         sends the creator everything left, the principal first without the partners' shares.
     function finish() external onlyCreator {
         if (!closed || finished) revert Done();
         if (live != 0 || owed != 0 || reserved != 0) revert NotOver();
@@ -568,13 +623,20 @@ contract SimPool is Initializable {
         return uint256(price) * factory.FEE_BPS() / Units.BPS;
     }
 
-    function _sold(address trader, uint256 line, SimSize memory m, uint256 fee, bool bySignature)
+    function _sold(address trader, uint256 line, SimSize memory m, uint256 fee, bool bySignature, bytes32 code)
         internal
         returns (address exam)
     {
+        Code storage c = codeOf[code];
+        address partner = c.partner;
+        if (partner == address(0)) revert NoSuchCode();
+        c.used = true;
+        uint256 got = m.price - fee;
+        c.brought += got;
+        brought += got;
         exam = _start(trader, _examRules, _exam, m.size);
         accountOf[exam] = Account({kind: Kind.Exam, line: uint8(line), done: false});
-        emit ExamSold(exam, trader, line, m.size, m.price, fee, bySignature);
+        emit ExamSold(exam, trader, line, m.size, m.price, fee, bySignature, code, partner);
     }
 
     function _start(address trader, Rules storage r, ExamTerms storage t, uint64 size) internal returns (address a) {
@@ -589,18 +651,38 @@ contract SimPool is Initializable {
     function _withdraw(uint256 amount) internal {
         uint256 bal = usdc.balanceOf(address(this)) - held - reserved;
         // Profit is the pool's money above what it owes, holds and keeps for recent stops, and above what
-        // the creator put in; the partner's share is of that alone (CFO, 12 November). At finish nothing is
+        // the creator put in; the partners' shares are of that alone (CFO, 12 November). At finish nothing is
         // owed or kept.
         uint256 free = bal > owed ? bal - owed : 0;
         uint256 profit = free > principal ? free - principal : 0;
         uint256 shared = amount < profit ? amount : profit;
         principal -= amount - shared;
         uint256 fee = amount * factory.FEE_BPS() / Units.BPS;
-        uint256 toPartner = partner == address(0) ? 0 : (shared - shared * factory.FEE_BPS() / Units.BPS) * partnerBps / Units.BPS;
         if (fee != 0) usdc.safeTransfer(factory.feeRecipient(), fee);
-        if (toPartner != 0) usdc.safeTransfer(partner, toPartner);
-        usdc.safeTransfer(creator, amount - fee - toPartner);
-        emit Withdrawn(creator, amount, fee, toPartner);
+        uint256 toPartners = _payPartners(shared - shared * factory.FEE_BPS() / Units.BPS);
+        usdc.safeTransfer(creator, amount - fee - toPartners);
+        emit Withdrawn(creator, amount, fee, toPartners);
+    }
+
+    /// Each code's partner gets its `bps` of `net` in the part the code brought of all the pool took.
+    /// A part the token refuses is set aside for the partner, as a refused payout is for its trader.
+    function _payPartners(uint256 net) internal returns (uint256 total) {
+        uint256 all = brought;
+        if (net == 0 || all == 0) return 0;
+        for (uint256 i = 0; i < _codes.length; ++i) {
+            bytes32 k = _codes[i];
+            Code storage c = codeOf[k];
+            if (c.bps == 0 || c.brought == 0) continue;
+            uint256 part = net * c.brought * c.bps / (all * Units.BPS);
+            if (part == 0) continue;
+            total += part;
+            bool sent = _send(c.partner, part);
+            if (!sent) {
+                held += part;
+                heldOf[c.partner] += part;
+            }
+            emit PartnerPaid(k, c.partner, part, sent);
+        }
     }
 
     /// A transfer that may be refused: true if the token took it.

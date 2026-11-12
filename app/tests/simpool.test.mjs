@@ -8,7 +8,7 @@ import {
   SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE,
   PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
-  stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText,
+  stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText, codeShares,
 } from "../lib/simpool.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -37,7 +37,7 @@ const ev = (name, args, block, index = 0) => ({ name, args, block, tx: H(block *
  *  queue for want of money, and a release. Given out of order, as the windows of a reading may bring them. */
 const EVENTS = [
   ev("PayoutPaid", { id: 0n, trader: T1, amount: 800_000_000n, paidCount: 1n, paidTotal: 800_000_000n }, 400),
-  ev("ExamSold", { exam: EXAM1, trader: T1, line: 1n, size: 10_000_000_000n, price: 100_000_000n, fee: 500_000n, bySignature: false }, 100),
+  ev("ExamSold", { exam: EXAM1, trader: T1, line: 1n, size: 10_000_000_000n, price: 100_000_000n, fee: 500_000n, bySignature: false, code: H(0xc1), partner: A(0x99) }, 100),
   ev("ExamSold", { exam: EXAM3, trader: T3, line: 0n, size: 5_000_000_000n, price: 60_000_000n, fee: 300_000n, bySignature: false }, 101, 1),
   ev("ExamSold", { exam: EXAM2, trader: T2, line: 0n, size: 5_000_000_000n, price: 60_000_000n, fee: 300_000n, bySignature: true }, 101),
   ev("Funded", { stage: STAGE1, exam: EXAM1, trader: T1 }, 200),
@@ -82,8 +82,7 @@ const READS = {
   live: 0n,
   closed: false,
   finished: false,
-  partner: A(0x99),
-  partnerBps: 5000,
+  codes: [{ code: H(0xc1), partner: A(0x99), bps: 5000, used: true, brought: 159_200_000n }],
   terms: H(0x7e),
   fundWindow: 86_400,
 };
@@ -227,6 +226,8 @@ test("exams sold come oldest first, with the stage each earned and whether it wa
   assert.equal(exams[1].released, false);
   assert.equal(exams[1].bySignature, true);
   assert.equal(exams[0].price, 100_000_000n);
+  assert.equal(exams[0].code, H(0xc1));
+  assert.equal(exams[0].partner, A(0x99), "the sale's code names its partner");
   assert.equal(exams[0].tx, H(100 * 100));
   assert.equal(exams[0].time, 1_100);
 });
@@ -361,9 +362,9 @@ test("the page of a pool has everything it shows and nothing of what the creator
 
 test("the factory's pools come without what each locked", () => {
   const list = factoryPools([
-    ev("PoolCreated", { pool: POOL, creator: T1, partner: A(0x99), partnerBps: 5000n, locked: 1_600_000_000n }, 7),
+    ev("PoolCreated", { pool: POOL, creator: T1, locked: 1_600_000_000n }, 7),
   ], TIMES);
-  assert.deepEqual(list, [{ pool: POOL, creator: T1, partner: A(0x99), partnerBps: 5000, tx: H(700), block: 7, time: null }]);
+  assert.deepEqual(list, [{ pool: POOL, creator: T1, tx: H(700), block: 7, time: null }]);
   assert.ok(!keys(list).has("locked"));
 });
 
@@ -431,4 +432,20 @@ test("the page says how far the chain was read, and is whole only if the reading
     assert.throws(() => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: bad, reads: READS, events: EVENTS,
       now: 3_000 }), /needs the scan its events came from/);
   }
+});
+
+test("each code's partner, share, part of what the pool took, and what it was sent or had set aside", () => {
+  const codes = [
+    { code: H(0xc1), partner: A(0x91), bps: 5000, used: true, brought: 300n },
+    { code: H(0xc2), partner: A(0x92), bps: 4000, used: true, brought: 100n },
+    { code: H(0xc3), partner: A(0x93), bps: 0, used: false, brought: 0n },
+  ];
+  const list = codeShares(codes, [
+    ev("PartnerPaid", { code: H(0xc1), partner: A(0x91), amount: 70n, sent: true }, 200),
+    ev("PartnerPaid", { code: H(0xc2), partner: A(0x92), amount: 20n, sent: false }, 200, 1),
+    ev("PartnerPaid", { code: H(0xc1), partner: A(0x91), amount: 5n, sent: true }, 300),
+  ]);
+  assert.deepEqual(list.map((k) => [k.partOfAll, k.paid, k.setAside, k.used]),
+    [[7500, 75n, 0n, true], [2500, 0n, 20n, true], [0, 0n, 0n, false]]);
+  assert.deepEqual(codeShares([], []), []);
 });

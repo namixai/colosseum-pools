@@ -19,8 +19,9 @@ export const SIM_POOL_ABI = [
   "function factory() view returns (address)",
   "function usdc() view returns (address)",
   "function creator() view returns (address)",
-  "function partner() view returns (address)",
-  "function partnerBps() view returns (uint16)",
+  "function codes() view returns (bytes32[])",
+  "function codeOf(bytes32 code) view returns (address partner, uint16 bps, bool used, bool listed, uint256 brought)",
+  "function brought() view returns (uint256)",
   "function terms() view returns (bytes32)",
   "function largestPayout() view returns (uint64)",
   "function owed() view returns (uint256)",
@@ -33,7 +34,7 @@ export const SIM_POOL_ABI = [
   "function paidCount() view returns (uint256)",
   "function paidTotal() view returns (uint256)",
   "function held() view returns (uint256)",
-  "function heldOf(address trader) view returns (uint256)",
+  "function heldOf(address holder) view returns (uint256)",
   "function fundWindow() view returns (uint32)",
   "function fromBook() view returns (bool)",
   "function maxWorseBps() view returns (uint16)",
@@ -41,7 +42,9 @@ export const SIM_POOL_ABI = [
   "function payout(uint256 id) view returns ((address account, address trader, uint64 amount, uint64 dueAt, uint8 state, bool wasStopped))",
   "function payoutCount() view returns (uint256)",
   "function accountOf(address account) view returns (uint8 kind, uint8 line, bool done)",
-  "event ExamSold(address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee, bool bySignature)",
+  "event ExamSold(address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee, bool bySignature, bytes32 code, address indexed partner)",
+  "event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps)",
+  "event PartnerPaid(bytes32 indexed code, address indexed partner, uint256 amount, bool sent)",
   "event Funded(address indexed stage, address indexed exam, address indexed trader)",
   "event Released(address indexed account)",
   "event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt)",
@@ -87,7 +90,7 @@ export const SIM_FACTORY_ABI = [
   "function feeRecipient() view returns (address)",
   "function termsBook() view returns (address)",
   "function usdc() view returns (address)",
-  "event PoolCreated(address indexed pool, address indexed creator, address indexed partner, uint16 partnerBps, uint256 locked)",
+  "event PoolCreated(address indexed pool, address indexed creator, uint256 locked)",
   "event CheckerSet(address indexed checker)",
 ];
 
@@ -185,8 +188,8 @@ export function menuLines(menu) {
   });
 }
 
-/** Every exam sold, oldest first: who bought it, off which line, at what price, whether by signature, the transaction,
- *  and what became of it here: the stage it earned, or released. */
+/** Every exam sold, oldest first: who bought it, off which line, at what price, whether by signature, with which code
+ *  and so for which partner, the transaction, and what became of it here: the stage it earned, or released. */
 export function soldExams(events, times) {
   const all = ordered(events);
   const released = new Set(named(all, "Released").map((e) => String(e.args.account).toLowerCase()));
@@ -201,6 +204,8 @@ export function soldExams(events, times) {
       price: BigInt(e.args.price),
       fee: BigInt(e.args.fee),
       bySignature: Boolean(e.args.bySignature),
+      code: e.args.code ?? null,
+      partner: e.args.partner ?? null,
       stage: funded.get(String(exam).toLowerCase()) ?? null,
       released: released.has(String(exam).toLowerCase()),
       ...at(e, times),
@@ -363,8 +368,8 @@ export function gaps(list) {
 
 /**
  * The whole page of one simulated pool. `reads` are the pool's getters (menu, payoutCount's payouts as `payouts`,
- * paidCount, paidTotal, stoppedCount, liftedCount, owed, held, live, closed, finished, partner, partnerBps, terms,
- * fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
+ * paidCount, paidTotal, stoppedCount, liftedCount, owed, held, live, closed, finished, codes (each code's codeOf
+ * with its key: { code, partner, bps, used, brought }), terms, fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
  * clock. No field of it carries what the creator locked or put in.
  */
 export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, scan }) {
@@ -374,7 +379,7 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     throw new Error("simPoolPage needs the scan its events came from: { from, to, readTo, complete } (readLogs)");
   }
   need(reads, ["menu", "payouts", "paidCount", "paidTotal", "stoppedCount", "liftedCount", "owed", "held", "live",
-    "closed", "finished", "partnerBps", "terms", "fundWindow"]);
+    "closed", "finished", "codes", "terms", "fundWindow"]);
   const list = payouts(reads.payouts, events, now, times);
   const total = paidTotal(events, reads, times);
   const missing = gaps(list);
@@ -399,8 +404,7 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     live: BigInt(reads.live),
     closed: Boolean(reads.closed),
     finished: Boolean(reads.finished),
-    partner: reads.partner,
-    partnerBps: Number(reads.partnerBps),
+    codes: codeShares(reads.codes, events),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),
     gaps: missing,
@@ -421,16 +425,45 @@ export function scanText(scan) {
     + "what happened after. The total paid is the contract's own.";
 }
 
-/** The factory's pools, oldest first, each with its creator, its partner and that partner's share, and the
- *  transaction that opened it. The amount locked at the opening is not carried. */
+/** The factory's pools, oldest first, each with its creator and the transaction that opened it. The amount locked
+ *  at the opening is not carried, and a pool's partners are its codes (codeShares). */
 export function factoryPools(events, times) {
   return named(ordered(events), "PoolCreated").map((e) => ({
     pool: e.args.pool,
     creator: e.args.creator,
-    partner: e.args.partner,
-    partnerBps: Number(e.args.partnerBps),
     ...at(e, times),
   }));
+}
+
+/**
+ * Each code of a pool: its partner, its share (bps of the profit a withdrawal shares), whether a sale has fixed it,
+ * what its sales brought and that part of all the pool took (bps), and what its partner was sent (`paid`) or had set
+ * aside because the token refused (`setAside`), from the PartnerPaid events read. `codes` are the codeOf reads.
+ */
+export function codeShares(codes, events) {
+  const all = codes.reduce((t, k) => t + BigInt(k.brought), 0n);
+  const paid = new Map();
+  for (const e of named(ordered(events), "PartnerPaid")) {
+    const key = String(e.args.code).toLowerCase();
+    const was = paid.get(key) ?? { paid: 0n, setAside: 0n };
+    if (e.args.sent) was.paid += BigInt(e.args.amount);
+    else was.setAside += BigInt(e.args.amount);
+    paid.set(key, was);
+  }
+  return codes.map((k) => {
+    const brought = BigInt(k.brought);
+    const got = paid.get(String(k.code).toLowerCase()) ?? { paid: 0n, setAside: 0n };
+    return {
+      code: k.code,
+      partner: k.partner,
+      bps: Number(k.bps),
+      used: Boolean(k.used),
+      brought,
+      partOfAll: all === 0n ? 0 : Number(brought * BPS / all),
+      paid: got.paid,
+      setAside: got.setAside,
+    };
+  });
 }
 
 /**

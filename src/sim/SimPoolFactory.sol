@@ -40,9 +40,11 @@ contract SimPoolFactory {
     /// The bounds of a fill window, in blocks: about a minute of HyperEVM's small blocks at most.
     uint16 public constant MIN_FILL_WINDOW = 1;
     uint16 public constant MAX_FILL_WINDOW = 60;
-    /// The share of a withdrawal's profit a trading group's owner may get (bps), when a pool has one.
+    /// The share of a withdrawal's profit a trading group's code may give its owner (bps), when it gives one.
     uint16 public constant MIN_PARTNER_BPS = 4000;
     uint16 public constant MAX_PARTNER_BPS = 6000;
+    /// How many codes one pool may have: a withdrawal pays every code's partner in one loop.
+    uint8 public constant MAX_CODES = 32;
     uint256 public constant MAX_MENU = 8;
     uint32 public constant MIN_FUND_WINDOW = 1 hours;
     uint32 public constant MAX_FUND_WINDOW = 30 days;
@@ -73,7 +75,7 @@ contract SimPoolFactory {
     event FeeRecipientSet(address indexed recipient);
     event TermsBookSet(address indexed book);
     event AssetSet(uint32 indexed asset, uint32 capX100);
-    event PoolCreated(address indexed pool, address indexed creator, address indexed partner, uint16 partnerBps, uint256 locked);
+    event PoolCreated(address indexed pool, address indexed creator, uint256 locked);
 
     error NotOperator();
     error NotPool();
@@ -161,7 +163,7 @@ contract SimPoolFactory {
         SimPool(pool).initialize(msg.sender, plan);
         usdc.safeTransferFrom(msg.sender, pool, locked);
         SimPool(pool).noteLocked(locked);
-        emit PoolCreated(pool, msg.sender, plan.partner, plan.partnerBps, locked);
+        emit PoolCreated(pool, msg.sender, locked);
 
         (bool ok,) = to.call{value: msg.value}("");
         if (!ok) revert FeeNotSent();
@@ -207,11 +209,6 @@ contract SimPoolFactory {
         if (p.fundWindow < MIN_FUND_WINDOW || p.fundWindow > MAX_FUND_WINDOW) revert BadPlan();
         if (p.fromBook ? p.maxWorseBps == 0 || p.maxWorseBps > MAX_WORSE_BPS : p.maxWorseBps != 0) revert BadPlan();
         if (address(termsBook) == address(0) || termsBook.textAt(p.terms) == address(0)) revert Unpublished();
-        if (p.partner == address(0)) {
-            if (p.partnerBps != 0) revert BadPlan();
-        } else if (p.partnerBps < MIN_PARTNER_BPS || p.partnerBps > MAX_PARTNER_BPS) {
-            revert BadPlan();
-        }
     }
 
     /// Every asset listed, and each one's cap, its own or the account's, within the list's.

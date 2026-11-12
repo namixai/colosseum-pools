@@ -57,7 +57,7 @@ log = core.log
 view = core.view
 
 # The events as the contracts declare them; the tests hold each against the Solidity source.
-EXAM_SOLD = "0x" + keccak(text="ExamSold(address,address,uint256,uint64,uint64,uint256,bool)").hex()
+EXAM_SOLD = "0x" + keccak(text="ExamSold(address,address,uint256,uint64,uint64,uint256,bool,bytes32,address)").hex()
 FUNDED = "0x" + keccak(text="Funded(address,address,address)").hex()
 PLACED = "0x" + keccak(text="Placed(uint32,bool,uint64,uint256,uint256)").hex()
 FILLED = "0x" + keccak(text="Filled(uint32,bool,uint64,uint64,uint256,uint256,uint8)").hex()
