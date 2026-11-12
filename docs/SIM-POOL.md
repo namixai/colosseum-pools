@@ -132,18 +132,23 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 130)
 handler buys with codes, directly and by signature, sets codes for three groups (40 %, 60 % and no share) and
 tries to set them again after a sale, passes and fails exams and stages, claims, stops, lifts and pays payouts, has
 the trader object to a stop and anyone make it final after its 14 days, has the token refuse a trader or a group's
-owner, claims what was held, withdraws and adds for the creator, closes and finishes (48 runs of 120 calls in CI,
+owner, claims what was held, withdraws and adds for the creator, closes (the creator from the term on, refused
+before it; the closer early) and finishes (by the creator or the closer), jumps past the 180 days now and then
+(48 runs of 120 calls in CI,
 with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
-Eleven invariants: every dollar in and out accounted for; what is held always there and equal to the refused
+Thirteen invariants: every dollar in and out accounted for; what is held always there and equal to the refused
 payouts and partners' parts less the claims, `reserved` the stopped payouts, and `pay` spending neither; `paidTotal` the sum of the
 payments, and `pay` sends exactly those; a withdrawal never below three payouts above what is owed, held and
-reserved, nor past `withdrawable`; one purchase, at most one payout; `owed` the due payouts; stops less lifts are
+reserved, nor past `withdrawable`, and before the term not past the profit; one purchase, at most one payout; `owed` the due payouts; stops less lifts are
 those standing and those made final; nothing due behind the head of the queue; `live` the accounts not done, a
 pool finished only with nothing owed, running or reserved, and keeping only what is held; `brought` each code's
 sales and all of them together, and a code a sale has named keeping its partner and share; and each withdrawal's
 shares, worked out apart from the pool: the platform's 0.5 %, each partner's part of the profit less that 0.5 % by
 its code's share and what its code brought (sent, or set aside if the token refuses), the creator the rest, and the
-partners together never above 60 % of it. Not an invariant, by design: that the pool
+partners together never above 60 % of it; before the term, until the pool is finished, `principal` all the creator
+put in (no path gives any of it back), only the closer closing it (`closedEarly`), and no stranger closing or
+finishing it; and, closed early or not, finished by the creator or the closer, the closer getting none of the
+money and the platform only its 0.5 % of each price and each withdrawal. Not an invariant, by design: that the pool
 covers every payout owed. Passes can come faster than prices, and a payout waits in order (`PayoutQueued`).
 
 ## Running it

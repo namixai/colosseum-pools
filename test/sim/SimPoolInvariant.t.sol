@@ -17,8 +17,9 @@ import {Usdc3009} from "./SimPool.t.sol";
 
 /// Drives one simulated pool at random: purchases, exams and stages passed and failed, stages started,
 /// payouts claimed, stopped, lifted and paid, a token that refuses a trader, what it set aside claimed,
-/// the creator's withdrawals and money put in, closing and finishing. It counts every dollar that goes
-/// into the pool and out of it, so that the invariants can hold the pool to its own books.
+/// the creator's withdrawals and money put in, closing (by the creator from the pool's term on, or by the
+/// platform's closer at any time) and finishing. It counts every dollar that goes into the pool and out of
+/// it, so that the invariants can hold the pool to its own books.
 contract SimPoolHandler is Test {
     uint32 constant BTC = 3;
     uint64 constant BASE_MARK = 1_000_000;
@@ -28,6 +29,10 @@ contract SimPoolHandler is Test {
     address public immutable filler;
     address public immutable checker;
     address public immutable creator;
+    /// The factory's closer: the only one who may close the pool before its term.
+    address public immutable closer;
+    /// Neither creator, checker nor closer: whatever only they may do, it may not.
+    address public immutable stranger = makeAddr("stranger");
     /// Where a trader the token refuses takes what was set aside for them: never refused itself.
     address public immutable rescue = makeAddr("rescue");
 
@@ -83,15 +88,36 @@ contract SimPoolHandler is Test {
     uint256 public ghostToPartners;
     uint256 internal _salt;
 
+    /// What the creator put in: the locked two payouts and every `addToPot`. Before the term, until the pool is
+    /// finished, the pool's `principal` is exactly this: no path gives the creator any of it back.
+    uint256 public ghostPut;
+    /// What the platform's recipient got: 0.5 % of each price and of each withdrawal, and nothing else.
+    uint256 public ghostPlatform;
+    /// When the pool was closed, and whether by the closer.
+    uint256 public ghostClosedAt;
+    bool public ghostClosedByCloser;
+    /// A `close` before the term that went through from the creator, or a `close` or `finish` from a stranger.
+    uint256 public ghostBadClose;
+
     mapping(string => uint256) public calls;
 
-    constructor(SimPool pool_, Usdc3009 usdc_, address filler_, address checker_, address creator_, uint256 locked) {
+    constructor(
+        SimPool pool_,
+        Usdc3009 usdc_,
+        address filler_,
+        address checker_,
+        address creator_,
+        address closer_,
+        uint256 locked
+    ) {
         pool = pool_;
         usdc = usdc_;
         filler = filler_;
         checker = checker_;
         creator = creator_;
+        closer = closer_;
         ghostIn = locked;
+        ghostPut = locked;
         for (uint256 i = 0; i < 5; ++i) {
             (address a, uint256 key) = makeAddrAndKey(string(abi.encode("trader", i)));
             _actors.push(a);
@@ -236,6 +262,7 @@ contract SimPoolHandler is Test {
 
     function _sold(address e, bytes32 code, uint64 price) internal {
         uint256 got = price - uint256(price) * 50 / 10_000;
+        ghostPlatform += uint256(price) * 50 / 10_000;
         _exams.push(e);
         purchases += 1;
         ghostIn += got;
@@ -462,19 +489,52 @@ contract SimPoolHandler is Test {
         pool.addToPot(amount);
         vm.stopPrank();
         ghostIn += amount;
+        ghostPut += amount;
         calls["addToPot"] += 1;
     }
 
-    /// Rarely: a closed pool sells nothing more, so a close early in a run would leave little to drive.
+    /// Rarely: a closed pool sells nothing more, so a close early in a run would leave little to drive. Before the
+    /// term the creator is refused and only the closer closes it; from the term on, either may.
     function close(uint256 seed) external {
         if (pool.closed() || !_rare(seed, 24)) return;
-        vm.prank(creator);
-        pool.close();
-        calls["close"] += 1;
+        _close(seed >> 128);
     }
 
-    function finish() external {
-        _finish();
+    /// Before the term: the creator and a stranger are refused (a pass is recorded, not reverted), and the closer
+    /// closes the pool early. From the term on: the creator closes it, or now and then the closer.
+    function _close(uint256 seed) internal {
+        vm.prank(stranger);
+        try pool.close() {
+            ghostBadClose += 1;
+        } catch {}
+        bool early = block.timestamp < pool.lockedUntil();
+        if (early) {
+            vm.prank(creator);
+            try pool.close() {
+                ghostBadClose += 1;
+                ghostClosedAt = block.timestamp;
+                calls["close"] += 1;
+                return;
+            } catch {}
+        }
+        bool byCloser = early || seed % 4 == 0;
+        vm.prank(byCloser ? closer : creator);
+        pool.close();
+        ghostClosedAt = block.timestamp;
+        ghostClosedByCloser = byCloser;
+        calls[early ? "closeEarly" : "close"] += 1;
+    }
+
+    /// Past the pool's term at once: from here on the creator may close it and take back what it put in.
+    function pastTerm(uint256 seed) external {
+        if (block.timestamp >= pool.lockedUntil() || !_rare(seed, 4)) return;
+        vm.warp(uint256(pool.lockedUntil()) + bound(seed >> 8, 0, 3 days));
+        vm.roll(block.number + 1);
+        calls["pastTerm"] += 1;
+    }
+
+    function finish(bool byCloser) external {
+        _finish(byCloser);
     }
 
     /// Rarely, the whole end of a pool in one call: closed, every passed stage claimed, every exam and stage run
@@ -483,9 +543,12 @@ contract SimPoolHandler is Test {
     function windDown(uint256 seed) external {
         if (pool.finished() || !_rare(seed, 16)) return;
         if (!pool.closed()) {
-            vm.prank(creator);
-            pool.close();
-            calls["close"] += 1;
+            // Before the term: half the time the closer closes it early, half the time it runs out its term first.
+            if (block.timestamp < pool.lockedUntil() && (seed >> 64) % 2 == 0) {
+                vm.warp(pool.lockedUntil());
+                vm.roll(block.number + 1);
+            }
+            _close(seed >> 128);
         }
         for (uint256 i = 0; i < _stages.length; ++i) {
             (PaperExam.Status st,,,) = PaperExam(_stages[i]).result();
@@ -504,7 +567,7 @@ contract SimPoolHandler is Test {
             try pool.finalizeStop(i) {} catch { ghostStuck += 1; }
         }
         _pay(type(uint256).max);
-        _finish();
+        _finish((seed >> 192) % 2 == 0);
         calls["windDown"] += 1;
     }
 
@@ -520,17 +583,24 @@ contract SimPoolHandler is Test {
         }
     }
 
-    function _finish() internal {
+    /// By the creator, or by the closer: the money goes the same way, and none of it to the closer.
+    function _finish(bool byCloser) internal {
         if (!pool.closed() || pool.finished()) return;
+        vm.prank(stranger);
+        try pool.finish() {
+            ghostBadClose += 1;
+            ghostOut += usdc.balanceOf(address(pool)) - pool.held();
+            return;
+        } catch {}
         bool owing = pool.owed() != 0 || pool.live() != 0 || pool.reserved() != 0;
         Before memory b = _before();
-        vm.prank(creator);
+        vm.prank(byCloser ? closer : creator);
         try pool.finish() {
             if (owing) ghostEarlyFinish += 1;
             // What finish withdraws: all the pool holds that is not set aside (nothing is owed or kept by now).
             uint256 amount = b.bal - b.held - b.reserved;
             ghostOut += amount == 0 ? 0 : amount - _checkShares(b, amount);
-            calls["finish"] += 1;
+            calls[byCloser ? "finishByCloser" : "finish"] += 1;
         } catch {}
     }
 
@@ -588,6 +658,7 @@ contract SimPoolHandler is Test {
             if (!right) ghostShareMismatch += 1;
         }
         if (toPartners > net * 6000 / 10_000) ghostShareMismatch += 1;
+        ghostPlatform += fee;
         ghostToPartners += toPartners;
         if (usdc.balanceOf(creator) - b.creator != amount - fee - toPartners) ghostShareMismatch += 1;
         if (usdc.balanceOf(pool.factory().feeRecipient()) - b.platform != fee) ghostShareMismatch += 1;
@@ -707,6 +778,7 @@ contract SimPoolInvariantTest is Test {
     address checker = makeAddr("checker");
     address platform = makeAddr("platform");
     address creator = makeAddr("creator");
+    address closer = makeAddr("closer");
 
     function setUp() public {
         hyperCore = CoreSimulatorLib.init();
@@ -726,6 +798,7 @@ contract SimPoolInvariantTest is Test {
         factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), address(this));
         factory.setFiller(filler);
         factory.setChecker(checker);
+        factory.setCloser(closer);
         factory.setFeeRecipient(platform);
         factory.setAsset(BTC, 1000);
         factory.setTermsBook(book);
@@ -749,7 +822,7 @@ contract SimPoolInvariantTest is Test {
         vm.prank(creator);
         pool = SimPool(factory.create{value: 1 ether}(p));
 
-        handler = new SimPoolHandler(pool, usdc, filler, checker, creator, usdc.balanceOf(address(pool)));
+        handler = new SimPoolHandler(pool, usdc, filler, checker, creator, closer, usdc.balanceOf(address(pool)));
         // Three codes to start: a partner with 40 %, one with 60 %, and a code that gives its partner nothing.
         uint16[3] memory shares = [uint16(4000), 6000, 0];
         for (uint256 i = 0; i < 3; ++i) {
@@ -758,7 +831,7 @@ contract SimPoolInvariantTest is Test {
             pool.setCode(code, owner, shares[i]);
         }
         targetContract(address(handler));
-        bytes4[] memory s = new bytes4[](40);
+        bytes4[] memory s = new bytes4[](41);
         s[0] = SimPoolHandler.buy.selector;
         s[1] = SimPoolHandler.buy.selector;
         s[2] = SimPoolHandler.passExam.selector;
@@ -800,6 +873,7 @@ contract SimPoolInvariantTest is Test {
         s[37] = SimPoolHandler.sales.selector;
         s[38] = SimPoolHandler.sales.selector;
         s[39] = SimPoolHandler.refuse.selector;
+        s[40] = SimPoolHandler.pastTerm.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: s}));
     }
 
@@ -879,7 +953,7 @@ contract SimPoolInvariantTest is Test {
     }
 
     /// I4. The creator never withdraws below three payouts of the largest size above what is owed, held and kept
-    ///     for stops, and not one unit past `withdrawable`.
+    ///     for stops, and not one unit past `withdrawable`; before the pool's term, not past its profit either.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
@@ -889,7 +963,14 @@ contract SimPoolInvariantTest is Test {
         if (!pool.finished()) {
             uint256 keep = pool.owed() + pool.held() + pool.reserved() + uint256(pool.largestPayout()) * 3;
             uint256 bal = usdc.balanceOf(address(pool));
-            assertEq(pool.withdrawable(), bal > keep ? bal - keep : 0);
+            uint256 w = bal > keep ? bal - keep : 0;
+            if (block.timestamp < pool.lockedUntil()) {
+                uint256 kept = pool.owed() + pool.held() + pool.reserved();
+                uint256 free = bal > kept ? bal - kept : 0;
+                uint256 profit = free > pool.principal() ? free - pool.principal() : 0;
+                if (w > profit) w = profit;
+            }
+            assertEq(pool.withdrawable(), w);
         }
     }
 
@@ -998,11 +1079,46 @@ contract SimPoolInvariantTest is Test {
         assertEq(handler.ghostShareMismatch(), 0, "a withdrawal's shares were not the codes'");
     }
 
+    /// I12. The term: before it, until the pool is finished, the creator has none of what it put in back, by any
+    ///      path (withdrawals, money put in and taken out again, closing, finishing): `principal` is all it put in.
+    ///      Before the term only the closer closes the pool, and that is `closedEarly`; a stranger neither closes
+    ///      nor finishes it.
+    /// forge-config: default.invariant.runs = 48
+    /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_beforeTheTermWhatTheCreatorPutInStays() public view {
+        if (block.timestamp < pool.lockedUntil() && !pool.finished()) {
+            assertEq(pool.principal(), handler.ghostPut(), "before the term, the creator took back some of what it put in");
+        }
+        assertLe(pool.principal(), handler.ghostPut(), "principal above what the creator put in");
+        assertEq(handler.ghostBadClose(), 0, "a close before the term by the creator, or a close or finish by a stranger");
+        if (pool.closed()) {
+            bool early = handler.ghostClosedAt() < pool.lockedUntil();
+            assertEq(pool.closedEarly(), early, "closedEarly: closed before the term");
+            if (early) assertTrue(handler.ghostClosedByCloser(), "closed before the term by other than the closer");
+        } else {
+            assertFalse(pool.closedEarly(), "closedEarly on an open pool");
+        }
+    }
+
+    /// I13. Closed early or not, finished by the creator or the closer, the money goes the same way: traders their
+    ///      payouts and what was held for them, the codes' partners their shares, the creator the rest (I11). The
+    ///      closer gets none of it, and the platform only its 0.5 % of each price and each withdrawal.
+    /// forge-config: default.invariant.runs = 48
+    /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_theCloserGetsNothing_thePlatformItsHalfPercent() public view {
+        assertEq(usdc.balanceOf(closer), 0, "the closer got money");
+        assertEq(usdc.balanceOf(platform), handler.ghostPlatform(), "the platform got other than 0.5 % of prices and withdrawals");
+        assertEq(handler.ghostShareMismatch(), 0, "a withdrawal's or finish's shares were not the codes'");
+    }
+
     /// Not an invariant: what each run reached, printed with `-vv`, so that a run that drove nothing does not pass
     /// unseen for one that did.
     function afterInvariant() external view {
-        string[25] memory names = ["earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
-            "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown", "objectStop", "finalizeStop", "pastReserve", "buySigned", "setCode", "sales"];
+        string[28] memory names = ["earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
+            "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown", "objectStop", "finalizeStop", "pastReserve", "buySigned", "setCode", "sales",
+            "closeEarly", "pastTerm", "finishByCloser"];
         string memory line = "reached:";
         for (uint256 i = 0; i < names.length; ++i) {
             line = string.concat(line, " ", names[i], "=", vm.toString(handler.calls(names[i])));
