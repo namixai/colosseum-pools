@@ -175,7 +175,10 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   keeper nodes. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
   HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
   is on chain as listed and refusing, before anything is sent, one a sale has fixed otherwise.
-  `buy --code` buys with a code's text. Without `--send` they print what they would do and read no key. The first pool's plan is
+  `buy --code` buys with a code's text. `close --key` and `finish --key` read the pool first and say as
+  whom it would take the call or why it would refuse (`Locked` before the term unless the key is the
+  closer; for `finish`, each thing still running, owed or reserved, and with `--exam` until when that
+  exam runs). Without `--send` they print what they would do and read no key. The first pool's plan is
   `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a

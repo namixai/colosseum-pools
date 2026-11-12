@@ -197,6 +197,87 @@ class TheCodes(unittest.TestCase):
             d.to_set(codes, chain.__getitem__)
 
 
+class TheClosing(unittest.TestCase):
+    """`close` and `finish` say, before anything is sent, as whom the pool would take the call or why it would
+    refuse; the contract decides the same (test/sim/SimPool.t.sol)."""
+    CREATOR, CLOSER, OTHER = ("0x" + x * 20 for x in ("Aa", "Cc", "Ee"))
+    DAY = 86_400
+
+    def state(self, **kw):
+        st = {"creator": d.to_checksum_address(self.CREATOR), "closer": d.to_checksum_address(self.CLOSER),
+              "closed": False, "finished": False, "locked_until": 180 * self.DAY, "live": 0, "owed": 0, "reserved": 0,
+              "fund_window": 7 * self.DAY}
+        st.update(kw)
+        return st
+
+    def test_before_the_term_only_the_closer_closes(self):
+        creator, closer, other = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER, self.OTHER))
+        before, at = 180 * self.DAY - 1, 180 * self.DAY
+        self.assertIn("before the term", d.close_check(self.state(), before, closer))
+        with self.assertRaises(SystemExit) as caught:
+            d.close_check(self.state(), before, creator)
+        self.assertIn("Locked", str(caught.exception))
+        self.assertEqual(d.close_check(self.state(), at, creator), "the creator", "from the term on")
+        self.assertEqual(d.close_check(self.state(), at, closer), "the factory's closer")
+        for st, who in ((self.state(), other), (self.state(closed=True), closer)):
+            with self.assertRaises(SystemExit):
+                d.close_check(st, at, who)
+
+    def test_finish_names_what_keeps_the_pool_from_finishing(self):
+        creator, closer, other = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER, self.OTHER))
+        with self.assertRaises(SystemExit) as caught:
+            d.finish_check(self.state(), 10, creator)
+        self.assertIn("not closed yet", str(caught.exception))
+        self.assertIn("only the closer closes it", str(caught.exception))
+        closed = self.state(closed=True)
+        self.assertEqual(d.finish_check(closed, 10, creator), "the creator")
+        self.assertEqual(d.finish_check(closed, 10, closer), "the factory's closer")
+        with self.assertRaises(SystemExit):
+            d.finish_check(closed, 10, other)
+        with self.assertRaises(SystemExit) as caught:
+            d.finish_check(self.state(closed=True, live=1, owed=800_000_000, reserved=400_000_000), 10, creator,
+                           "0xEXAM runs until 2026-12-12 10:00 UTC at the latest")
+        said = str(caught.exception)
+        for part in ("NotOver", "1 exam(s) or stage(s) still run: 0xEXAM runs until", "800 USDC of payouts still owed",
+                     "400 USDC kept for stops"):
+            self.assertIn(part, said)
+        with self.assertRaises(SystemExit) as caught:
+            d.finish_check(self.state(closed=True, live=1), 10, creator)
+        self.assertIn("--exam ADDRESS says until when", str(caught.exception))
+        with self.assertRaises(SystemExit):
+            d.finish_check(self.state(closed=True, finished=True), 10, creator)
+
+    def test_until_when_an_exam_runs(self):
+        x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False}
+        self.assertIn("runs until " + d.utc(1_000 + 30 * self.DAY), d.exam_text("E", x, 2_000, 7 * self.DAY))
+        self.assertIn("past its deadline", d.exam_text("E", x, 1_000 + 30 * self.DAY, 7 * self.DAY))
+        passed = {**x, "status": 2, "passed_at": 5_000}
+        self.assertIn("can be started until " + d.utc(5_000 + 7 * self.DAY), d.exam_text("E", passed, 6_000, 7 * self.DAY))
+        self.assertIn("was not funded", d.exam_text("E", passed, 5_001 + 7 * self.DAY, 7 * self.DAY))
+        self.assertIn("has ended (Breached)", d.exam_text("E", {**x, "status": 3}, 2_000, 7 * self.DAY))
+        self.assertIn("is done here", d.exam_text("E", {**x, "done": True}, 2_000, 7 * self.DAY))
+
+    def test_the_status_list_is_paper_exams(self):
+        body = re.search(r"enum Status \{(.*?)\}", (ROOT / "src/exam/PaperExam.sol").read_text(encoding="utf-8"), re.S).group(1)
+        self.assertEqual([w.strip() for w in body.split(",") if w.strip()], d.STATUS)
+
+    def test_they_send_only_with_send(self):
+        from unittest import mock
+        st = self.state(closed=True)
+        with mock.patch.object(d, "pool_state", return_value=self.state()), mock.patch.object(d, "chain_now", return_value=10), \
+                mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(self.CLOSER)), \
+                mock.patch.object(d.c, "transact") as sent, mock.patch.object(d.c, "account") as key:
+            self.assertEqual(d.main(["close", "--pool", self.OTHER, "--key", "closer"]), 0)
+            sent.assert_not_called()
+            key.assert_not_called()
+        with mock.patch.object(d, "pool_state", return_value=st), mock.patch.object(d, "chain_now", return_value=10), \
+                mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(self.CREATOR)), \
+                mock.patch.object(d.c, "assert_testnet"), mock.patch.object(d.c, "account"), \
+                mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+            self.assertEqual(d.main(["finish", "--pool", self.OTHER, "--key", "deployer", "--send"]), 0)
+            self.assertEqual(sent.call_args[0][2], "finish()")
+
+
 GOOD = {"pool": "0x" + "11" * 20, "trader": "0x" + "22" * 20, "line": 1, "code": "0x" + "66" * 32, "salt": "0x" + "33" * 32,
         "valid_after": 0, "valid_before": 2_000, "v": 27, "r": "0x" + "44" * 32, "s": "0x" + "55" * 32}
 
