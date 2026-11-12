@@ -125,6 +125,7 @@ done <<< "$instances"
 # race for its nonces. It is served as an instance, and its wallet is checked here, or that keeper would start,
 # die on the missing key and restart for ever.
 multis=""
+watched=""
 if [ -n "$first_label" ]; then
   first_multi="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi "$first_label")" \
     || fail "deployment $first_label: could not read its MultiPool; nothing switched"
@@ -139,8 +140,12 @@ while read -r name label _; do
   own="/var/lib/colosseum-keeper/instances/$name"
   [ -f "$own/secrets/multi-keeper.key" ] && [ -f "$own/secrets/multi-keeper.addr" ] \
     && owned_alone "$own/secrets/multi-keeper.key" colosseum-keeper 600 \
-    || fail "instance $name: its record names the MultiPool $multi, so its keeper needs its own wallet, $own/secrets/multi-keeper.key (colosseum-keeper's, mode 600) and .addr (docs/HOSTING.md, \"A MultiPool's keeper\"); nothing switched"
+    || fail "instance $name: its record names $multi (a MultiPool or a SimPoolFactory), so its keeper needs its own wallet, $own/secrets/multi-keeper.key (colosseum-keeper's, mode 600) and .addr (docs/HOSTING.md, \"A MultiPool's keeper\"); nothing switched"
   multis+="$name "
+  # A SimPoolFactory's keeper (ops/sim_keeper.py) runs in the same unit; only a MultiPool has a watchdog.
+  pool="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi-pool "$label")" \
+    || fail "deployment $label: could not read its MultiPool; nothing switched"
+  [ -z "$pool" ] || watched+="$name "
 done <<< "$instances"
 
 # The shared pool's keeper, when its settings are on the host: a complete record with a SharedPool in this
@@ -210,7 +215,7 @@ done <<< "$instances"
 # The watchdogs ride with the release. Their files are checked and put in place here, still before
 # the switch, from the deployment env files just written (docs/HOSTING.md, "The host's watchdogs").
 . "$rel/ops/host/watchdogs/install-lib.sh"
-watch_multis="$multis"
+watch_multis="$watched"
 watchdogs_install "$rel" "$sha" "$instances"
 
 # 4. Switch, restart what is enabled, keep the three newest releases.
