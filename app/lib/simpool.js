@@ -367,10 +367,17 @@ export function gaps(list) {
  * fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
  * clock. No field of it carries what the creator locked or put in.
  */
-export function simPoolPage({ pool, usdc, chainId, reads, events, times, now }) {
+export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, scan }) {
+  // The reading the events came from (readLogs): without it the page could not say how far the chain was read, and
+  // lists cut short by the node's budget would look whole.
+  if (!scan || ![scan.from, scan.to, scan.readTo].every(Number.isInteger) || typeof scan.complete !== "boolean") {
+    throw new Error("simPoolPage needs the scan its events came from: { from, to, readTo, complete } (readLogs)");
+  }
   need(reads, ["menu", "payouts", "paidCount", "paidTotal", "stoppedCount", "liftedCount", "owed", "held", "live",
     "closed", "finished", "partnerBps", "terms", "fundWindow"]);
   const list = payouts(reads.payouts, events, now, times);
+  const total = paidTotal(events, reads, times);
+  const missing = gaps(list);
   const byStatus = {};
   for (const k of Object.keys(STATUS)) byStatus[k] = list.filter((p) => p.status === k);
   return {
@@ -382,7 +389,7 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now }) 
     stages: stages(events, times),
     payouts: list,
     byStatus,
-    total: paidTotal(events, reads, times),
+    total,
     proofs: list.map((p) => proofOf(p, { pool, usdc, chainId })).filter(Boolean),
     counters: stopCounters(reads),
     owed: BigInt(reads.owed),
@@ -396,8 +403,22 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now }) 
     partnerBps: Number(reads.partnerBps),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),
-    gaps: gaps(list),
+    gaps: missing,
+    scan: { from: scan.from, to: scan.to, readTo: scan.readTo, complete: scan.complete },
+    scanText: scanText(scan),
+    // Everything on the page is whole only if the chain was read to the end, the payments add up to the contract's
+    // counters, and no payout lacks an event. Otherwise the page says which, and shows the contract's own total.
+    complete: scan.complete && total.complete && missing.length === 0,
   };
+}
+
+/** The line a page shows over its lists: how far the chain was read, and whether the lists are whole. */
+export function scanText(scan) {
+  if (scan.complete) {
+    return `Read from block ${scan.from} to block ${scan.to}: every event of this pool in that range is listed.`;
+  }
+  return `Read from block ${scan.from} to block ${scan.readTo} of ${scan.to}: the lists below stop there and may miss `
+    + "what happened after. The total paid is the contract's own.";
 }
 
 /** The factory's pools, oldest first, each with its creator, its partner and that partner's share, and the
@@ -428,7 +449,7 @@ export async function readLogs({ getLogs, from, to, window = 50, maxCalls = 40 }
     calls += 1;
     next = end + 1;
   }
-  return { logs, readTo: next - 1, complete: next > to, calls };
+  return { logs, from, to, readTo: next - 1, complete: next > to, calls };
 }
 
 /**

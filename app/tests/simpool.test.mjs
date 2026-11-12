@@ -8,7 +8,7 @@ import {
   SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE,
   PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
-  stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt,
+  stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText,
 } from "../lib/simpool.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -66,6 +66,8 @@ const PAYOUTS = [
   STRUCT(STAGE2, T2, 400_000_000n, 2_100n, 2, true),
   STRUCT(STAGE3, T3, 400_000_000n, 2_200n, 3, true),
 ];
+/** The reading the events came from: blocks 100 to 500, read to the end. */
+const SCAN = { from: 100, to: 500, readTo: 500, complete: true };
 const TIMES = new Map(EVENTS.map((e) => [e.block, 1_000 + e.block]));
 
 const READS = {
@@ -203,7 +205,7 @@ test("a missing read is named, never taken for zero; an event without its block 
   assert.throws(() => stopCounters({}), /lack stoppedCount, liftedCount, paidCount/);
   const { owed, ...noOwed } = READS;
   assert.equal(owed, 0n);
-  assert.throws(() => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, reads: noOwed, events: EVENTS, now: 3_000 }),
+  assert.throws(() => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: noOwed, events: EVENTS, now: 3_000 }),
     /lack owed/);
   assert.throws(() => normalizeEvent({ eventName: "PayoutPaid", args: {}, transactionHash: H(1) }), /without its block/);
 });
@@ -338,7 +340,7 @@ function keys(value, out = new Set()) {
 }
 
 test("the page of a pool has everything it shows and nothing of what the creator locked or put in", () => {
-  const page = simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, reads: { ...READS, principal: 5n, locked: 7n },
+  const page = simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, principal: 5n, locked: 7n },
     events: [...EVENTS, ev("AddedToPot", { amount: 7n, principal: 7n }, 1)], times: TIMES, now: 3_000 });
   assert.equal(page.menu.length, 2);
   assert.equal(page.exams.length, 3);
@@ -350,7 +352,7 @@ test("the page of a pool has everything it shows and nothing of what the creator
   assert.deepEqual(page.gaps, []);
   assert.equal(page.counters.standing, 1n);
   assert.equal(page.reserved, null, "a pool without the stop reserve");
-  assert.equal(simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, reads: { ...READS, reserved: 400_000_000n },
+  assert.equal(simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, reserved: 400_000_000n },
     events: EVENTS, times: TIMES, now: 3_000 }).reserved, 400_000_000n);
   const all = keys(page);
   for (const k of ["locked", "principal"]) assert.ok(!all.has(k), `${k} is on the page`);
@@ -385,7 +387,8 @@ test("logs are read in windows, within a budget of calls, and a reading cut shor
   };
   const whole = await readLogs({ getLogs, from: 100, to: 260, window: 50 });
   assert.deepEqual(asked, [[100, 149], [150, 199], [200, 249], [250, 260]]);
-  assert.deepEqual(whole, { logs: asked.map(([from, to]) => ({ from, to })), readTo: 260, complete: true, calls: 4 });
+  assert.deepEqual(whole, { logs: asked.map(([from, to]) => ({ from, to })), from: 100, to: 260, readTo: 260, complete: true,
+    calls: 4 });
   asked.length = 0;
   const cut = await readLogs({ getLogs, from: 100, to: 260, window: 50, maxCalls: 2 });
   assert.deepEqual([cut.readTo, cut.complete, cut.calls], [199, false, 2]);
@@ -402,4 +405,30 @@ test("the first block at a time is found by halving, and the claim's time is the
   assert.equal(await firstBlockAt(0, { low: 10, high: 5, timeOf }), null, "an empty range has no block");
   assert.equal(await firstBlockAt(1_000 + 2_001 * 2, { low: 0, high: 1_000, timeOf }), null, "not yet on chain");
   assert.equal(claimedAt(2_000n + BigInt(PAYOUT_DELAY)), 2_000);
+});
+
+test("the page says how far the chain was read, and is whole only if the reading was", async () => {
+  const page = simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: READS, events: EVENTS, times: TIMES,
+    now: 3_000 });
+  assert.deepEqual(page.scan, SCAN);
+  assert.equal(page.complete, true);
+  assert.equal(page.scanText, "Read from block 100 to block 500: every event of this pool in that range is listed.");
+  // The same events from a reading the node's budget cut short: the payments still add up, the lists may not.
+  const cut = await readLogs({ getLogs: async () => [], from: 100, to: 500, window: 50, maxCalls: 2 });
+  const partial = simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: cut, reads: READS, events: EVENTS,
+    times: TIMES, now: 3_000 });
+  assert.equal(partial.total.complete, true);
+  assert.equal(partial.complete, false);
+  assert.deepEqual(partial.scan, { from: 100, to: 500, readTo: 199, complete: false });
+  assert.match(partial.scanText, /to block 199 of 500: the lists below stop there/);
+  assert.equal(scanText(cut), partial.scanText);
+  // Payments that do not add up, or a payout missing its events, also make the page not whole.
+  assert.equal(simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, paidCount: 3n },
+    events: EVENTS, times: TIMES, now: 3_000 }).complete, false);
+  assert.equal(simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: READS,
+    events: EVENTS.filter((e) => e.name !== "PayoutDue"), times: TIMES, now: 3_000 }).complete, false);
+  for (const bad of [undefined, { ...SCAN, readTo: undefined }, { ...SCAN, complete: "yes" }]) {
+    assert.throws(() => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: bad, reads: READS, events: EVENTS,
+      now: 3_000 }), /needs the scan its events came from/);
+  }
 });
