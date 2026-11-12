@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM,
-  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve, stopNote, utc,
+  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve, stopNote, utc, termNote,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
   stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText, codeShares,
   codeHash, saleNonce, purchase, signedPurchase, RECEIVE_WITH_AUTHORIZATION_TYPES,
@@ -621,4 +621,20 @@ test("the pool's term: the time before which its creator cannot close it, and wh
   assert.equal(read({ lockedUntil: 5_000n, closedEarly: false }, 5_000).creatorMayClose, true, "from its time on");
   assert.equal(read({ lockedUntil: 5_000n, closedEarly: true }, 10).closedEarly, true);
   assert.deepEqual([read({}, 10).lockedUntil, read({}, 10).creatorMayClose], [null, null], "not read: not guessed");
+});
+
+test("the pool's term in the library's own words: locked, open, closed, closed early by the platform", () => {
+  const until = 1_743_595_200; // 2025-04-02 12:00 UTC
+  assert.equal(termNote({}, 0), null, "a pool without a term: no words");
+  assert.deepEqual(termNote({ lockedUntil: BigInt(until) }, until - 1), { state: "locked", until,
+    text: "Runs at least until 2025-04-02 12:00 UTC: before then its creator can neither close it nor take back what "
+      + "it put in." });
+  assert.deepEqual(termNote({ lockedUntil: until }, until), { state: "open", until,
+    text: "Its term ended on 2025-04-02 12:00 UTC: its creator may close it now." });
+  assert.deepEqual(termNote({ lockedUntil: until, closed: true }, until + 1), { state: "closed", until,
+    text: "Closed after its term ended on 2025-04-02 12:00 UTC." });
+  const early = termNote({ lockedUntil: until, closed: true, closedEarly: true }, 10);
+  assert.equal(early.state, "closed-early");
+  assert.match(early.text, /^Closed early by the platform, before its term ended on 2025-04-02 12:00 UTC\. /);
+  assert.match(early.text, /the codes' owners, and the rest to the creator\.$/);
 });

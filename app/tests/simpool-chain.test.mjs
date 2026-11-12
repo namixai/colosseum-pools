@@ -167,4 +167,6 @@ test("the pool's term as the contract keeps it: 180 days from its creation, and 
   assert.equal(page.creatorMayClose, false, "before its term the creator may not close it");
   assert.equal(page.closed, true);
   assert.equal(page.closedEarly, true, "the platform's closer closed it early");
+  assert.equal(page.termNote.state, "closed-early");
+  assert.match(page.termNote.text, /^Closed early by the platform, before its term ended on /, "the library's words");
 });

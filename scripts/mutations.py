@@ -13445,6 +13445,15 @@ MUTATIONS = [
      "    out.stopNote = stopNote(out, now);\n",
      "",
      ['a stop on a pool with the reserve says where it stands: the 14 days, the objection, the final', 'the stopped payout and the held one are apart from the paid, each with what it needs']),
+    # The pool's term in the library's words: an early close by the platform said as such, and the term's last second.
+    ("SP61", "app/lib/simpool.js",
+     "  if (reads.closedEarly) {\n",
+     "  if (false) {\n",
+     ["the pool's term in the library's own words: locked, open, closed, closed early by the platform", "the pool's term as the contract keeps it: 180 days from its creation, and the platform's early close"]),
+    ("SP62", "app/lib/simpool.js",
+     "  if (now < until) {\n    return { state: \"locked\"",
+     "  if (now <= until) {\n    return { state: \"locked\"",
+     ["the pool's term in the library's own words: locked, open, closed, closed early by the platform"]),
     # A simulated pool's instance on the host: no gateway, no instance keeper, no nginx route; its keeper sends with
     # the filler, both wallets checked first. "SH": the host's instance and watchdog test modules.
     ("SH1", "ops/host_instances.py",

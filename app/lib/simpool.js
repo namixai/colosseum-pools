@@ -450,6 +450,7 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     lockedUntil: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : Number(reads.lockedUntil),
     closedEarly: Boolean(reads.closedEarly),
     creatorMayClose: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : now >= Number(reads.lockedUntil),
+    termNote: termNote(reads, now),
     codes: codeShares(reads.codes, events),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),
@@ -460,6 +461,29 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     // counters, and no payout lacks an event. Otherwise the page says which, and shows the contract's own total.
     complete: scan.complete && total.complete && missing.length === 0,
   };
+}
+
+/**
+ * The pool's term in words, for the page to show as it is: the page keeps no words of its own about closing.
+ * `state` is "locked" (before the term: its creator can neither close it nor take back what it put in), "open" (the
+ * term is over, the pool still sells), "closed" (closed at or after its term) or "closed-early" (the platform's closer
+ * closed it before its term). Null for a pool without a term (`lockedUntil` not read).
+ */
+export function termNote(reads, now) {
+  if (reads.lockedUntil === undefined || reads.lockedUntil === null) return null;
+  const until = Number(reads.lockedUntil);
+  if (reads.closedEarly) {
+    return { state: "closed-early", until,
+      text: `Closed early by the platform, before its term ended on ${utc(until)}. The money goes where it would `
+        + "anyway: to the traders, to the codes' owners, and the rest to the creator." };
+  }
+  if (reads.closed) return { state: "closed", until, text: `Closed after its term ended on ${utc(until)}.` };
+  if (now < until) {
+    return { state: "locked", until,
+      text: `Runs at least until ${utc(until)}: before then its creator can neither close it nor take back what it `
+        + "put in." };
+  }
+  return { state: "open", until, text: `Its term ended on ${utc(until)}: its creator may close it now.` };
 }
 
 /** The line a page shows over its lists: how far the chain was read, and whether the lists are whole. */
