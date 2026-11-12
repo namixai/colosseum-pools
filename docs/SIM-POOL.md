@@ -97,6 +97,16 @@ forge test --match-path 'test/sim/*'
 python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
 ```
 
+`test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a
+handler buys, passes and fails exams and stages, claims, stops, lifts and pays payouts, has the token refuse a
+trader, claims what was held, withdraws and adds for the creator, closes and finishes (48 runs of 120 calls in CI).
+Nine invariants: every dollar in and out accounted for; what is held always there and equal to the refused
+payouts less the claims; `paidTotal` the sum of the payments, and `pay` sends exactly those; a withdrawal never
+below three payouts above what is owed and held, nor past `withdrawable`; one purchase, at most one payout;
+`owed` the due payouts; standing stops are stops less lifts; nothing due behind the head of the queue; `live` the
+accounts not done, and a finished pool keeping only what is held. Not an invariant, by design: that the pool
+covers every payout owed. Passes can come faster than prices, and a payout waits in order (`PayoutQueued`).
+
 ## Running it
 
 - **The keeper**, `ops/sim_keeper.py` (the host's `multi_keeper` unit hands it a record with a
