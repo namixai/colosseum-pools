@@ -55,8 +55,11 @@ contract SimPoolHandler is Test {
     uint256 public ghostOverWithdraw;
     /// `finish` went through with something still owed or running.
     uint256 public ghostEarlyFinish;
+    /// In a wind-down, past every deadline and window: a passed stage that would not take its claim, or an
+    /// account that would not be released. Recorded rather than reverted, so the fuzzer cannot pass over it.
+    uint256 public ghostStuck;
 
-    mapping(bytes32 => uint256) public calls;
+    mapping(string => uint256) public calls;
 
     constructor(SimPool pool_, Usdc3009 usdc_, address filler_, address checker_, address creator_, uint256 locked) {
         pool = pool_;
@@ -243,7 +246,7 @@ contract SimPoolHandler is Test {
         SimPool.Payout memory p = pool.payout(id);
         if (p.state != SimPool.PayoutState.Due || p.wasStopped || block.timestamp >= p.dueAt) return;
         address paired = _exams[pairSeed % _exams.length];
-        if (paired == p.account) paired = _exams[(pairSeed + 1) % _exams.length];
+        if (paired == p.account) paired = _exams[(pairSeed % _exams.length + 1) % _exams.length];
         bytes32[] memory trades = new bytes32[](2);
         trades[0] = keccak256(abi.encode("fill", id, 0));
         trades[1] = keccak256(abi.encode("fill", id, 1));
@@ -273,6 +276,8 @@ contract SimPoolHandler is Test {
         try pool.withdraw(w + 1) {
             ghostOverWithdraw += 1;
             ghostOut += w + 1;
+            // Nothing after it: a later withdrawal could revert for the money gone and undo this record (review).
+            return;
         } catch {}
         if (w == 0) return;
         amount = bound(amount, 1, w);
@@ -321,7 +326,9 @@ contract SimPoolHandler is Test {
         for (uint256 i = 0; i < _stages.length; ++i) {
             (PaperExam.Status st,,,) = PaperExam(_stages[i]).result();
             (,, bool done) = pool.accountOf(_stages[i]);
-            if (st == PaperExam.Status.Passed && !done) pool.claimPayout(_stages[i]);
+            if (st == PaperExam.Status.Passed && !done) {
+                try pool.claimPayout(_stages[i]) {} catch { ghostStuck += 1; }
+            }
         }
         vm.warp(block.timestamp + 31 days);
         vm.roll(block.number + 1);
@@ -336,8 +343,11 @@ contract SimPoolHandler is Test {
         for (uint256 i = 0; i < list.length; ++i) {
             (,, bool done) = pool.accountOf(list[i]);
             if (done) continue;
+            // An exam or stage still running is past its deadline here, so `expire` ends it; one already ended
+            // refuses, and that refusal means nothing.
             try PaperExam(list[i]).expire() {} catch {}
-            pool.release(list[i]);
+            // Every account not done is over by now: a refusal is a finding, kept for the invariant.
+            try pool.release(list[i]) {} catch { ghostStuck += 1; }
         }
     }
 
@@ -396,7 +406,7 @@ contract SimPoolHandler is Test {
     function _pick(address[] storage list, uint256 seed, PaperExam.Status status) internal view returns (address) {
         uint256 n = list.length;
         for (uint256 k = 0; k < n; ++k) {
-            address a = list[(seed + k) % n];
+            address a = list[(seed % n + k) % n];
             (PaperExam.Status s,,,) = PaperExam(a).result();
             (,, bool done) = pool.accountOf(a);
             if (s == status && !done) return a;
@@ -548,6 +558,7 @@ contract SimPoolInvariantTest is Test {
     /// I1. Every dollar in and out is accounted for: the pool's USDC is what came in less what went out.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_moneyIsAccountedFor() public view {
         assertEq(usdc.balanceOf(address(pool)), handler.ghostIn() - handler.ghostOut());
     }
@@ -555,6 +566,7 @@ contract SimPoolInvariantTest is Test {
     /// I2. What the token refused is set aside, and always there: the pool's USDC never falls below it.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_whatIsHeldIsThere() public view {
         assertGe(usdc.balanceOf(address(pool)), pool.held());
         (uint256 heldPayouts,) = _sum(SimPool.PayoutState.Held);
@@ -567,6 +579,7 @@ contract SimPoolInvariantTest is Test {
     /// I3. `paidTotal` is the sum of what was paid, and what left the pool in `pay` is exactly that.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_paidTotalIsTheSumOfPayments() public view {
         (uint256 paid, uint256 count) = _sum(SimPool.PayoutState.Paid);
         assertEq(pool.paidTotal(), paid);
@@ -579,6 +592,7 @@ contract SimPoolInvariantTest is Test {
     ///     and not one unit past `withdrawable`.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_creatorKeepsThreePayouts() public view {
         assertEq(handler.ghostBelowFloor(), 0, "a withdrawal left less than three payouts");
         assertEq(handler.ghostOverWithdraw(), 0, "a withdrawal past withdrawable went through");
@@ -593,6 +607,7 @@ contract SimPoolInvariantTest is Test {
     ///     funded at most once, and no stage paid twice.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_onePurchaseAtMostOnePayout() public view {
         uint256 n = pool.payoutCount();
         assertLe(handler.stageCount(), handler.examCount());
@@ -610,6 +625,7 @@ contract SimPoolInvariantTest is Test {
     /// I6. `owed` is every payout due and neither paid, held nor stopped.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_owedIsTheDuePayouts() public view {
         (uint256 due,) = _sum(SimPool.PayoutState.Due);
         assertEq(pool.owed(), due);
@@ -618,6 +634,7 @@ contract SimPoolInvariantTest is Test {
     /// I7. The counts of stops on the page: those standing are stops less lifts.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_standingStopsAreStopsLessLifts() public view {
         (, uint256 stopped) = _sum(SimPool.PayoutState.Stopped);
         assertEq(pool.stoppedCount() - pool.liftedCount(), stopped);
@@ -626,6 +643,7 @@ contract SimPoolInvariantTest is Test {
     /// I8. Nothing due is passed over: below the head of the queue no payout is still due.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_noDuePayoutBehindTheHead() public view {
         uint256 head = pool.head();
         assertLe(head, pool.payoutCount());
@@ -637,6 +655,7 @@ contract SimPoolInvariantTest is Test {
     /// I9. `live` counts the exams and stages not done, and a finished pool holds only what is set aside.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
     function invariant_liveAndFinished() public view {
         uint256 running;
         for (uint256 i = 0; i < handler.examCount(); ++i) {
@@ -649,6 +668,7 @@ contract SimPoolInvariantTest is Test {
         }
         assertEq(pool.live(), running);
         assertEq(handler.ghostEarlyFinish(), 0, "finished with something owed or running");
+        assertEq(handler.ghostStuck(), 0, "past every deadline, an account that would not end or a stage not claimed");
         if (pool.finished()) assertEq(usdc.balanceOf(address(pool)), pool.held(), "a finished pool keeps only what is held");
     }
 
@@ -659,7 +679,7 @@ contract SimPoolInvariantTest is Test {
             "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown"];
         string memory line = "reached:";
         for (uint256 i = 0; i < names.length; ++i) {
-            line = string.concat(line, " ", names[i], "=", vm.toString(handler.calls(bytes32(bytes(names[i])))));
+            line = string.concat(line, " ", names[i], "=", vm.toString(handler.calls(names[i])));
         }
         line = string.concat(line, " payouts=", vm.toString(pool.payoutCount()), " paid=", vm.toString(pool.paidCount()));
         console2.log(line);

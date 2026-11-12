@@ -99,7 +99,8 @@ python3 scripts/mutations.py $(seq -f 'SM%g' 1 92)
 
 `test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a
 handler buys, passes and fails exams and stages, claims, stops, lifts and pays payouts, has the token refuse a
-trader, claims what was held, withdraws and adds for the creator, closes and finishes (48 runs of 120 calls in CI).
+trader, claims what was held, withdraws and adds for the creator, closes and finishes (48 runs of 120 calls in CI,
+with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
 Nine invariants: every dollar in and out accounted for; what is held always there and equal to the refused
 payouts less the claims; `paidTotal` the sum of the payments, and `pay` sends exactly those; a withdrawal never
 below three payouts above what is owed and held, nor past `withdrawable`; one purchase, at most one payout;
