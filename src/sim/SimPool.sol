@@ -139,6 +139,12 @@ contract SimPool is Initializable {
     uint64 public lockedUntil;
     /// The factory's closer closed it before `lockedUntil`.
     bool public closedEarly;
+    /// When it was closed: `finish` waits `WITHDRAW_DELAY` from then.
+    uint64 public closedAt;
+    /// The creator's standing request to withdraw: how much, and from when it can be carried out
+    /// (`withdraw`), for `WITHDRAW_WINDOW` from then. Zero `requested`: none.
+    uint256 public requested;
+    uint64 public readyAt;
     /// The first payout not yet settled: payouts are paid in the order they came due.
     uint256 public head;
     uint256 public stoppedCount;
@@ -208,6 +214,10 @@ contract SimPool is Initializable {
     event StopFinal(uint256 indexed id, uint64 amount, uint256 reserved);
     event AddedToPot(uint256 amount, uint256 principal);
     event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount);
+    /// The creator asks to withdraw `amount`, which can be carried out from `readyAt` until `lapsesAt`.
+    event WithdrawRequested(uint256 amount, uint64 readyAt, uint64 lapsesAt);
+    /// A request to withdraw `amount` cancelled by `by`: the creator, or the factory's closer.
+    event WithdrawCancelled(address indexed by, uint256 amount);
     event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps);
     /// A partner's part of a withdrawal: sent, or set aside for the partner (`claimHeld`) if the token refused.
     event PartnerPaid(bytes32 indexed code, address indexed partner, uint256 amount, bool sent);
@@ -241,6 +251,9 @@ contract SimPool is Initializable {
     error NoSuchCode();
     error CodeUsed();
     error Locked();
+    error NoRequest();
+    error NotReady();
+    error RequestLapsed();
 
     modifier onlyCreator() {
         if (msg.sender != creator) revert NotCreator();
@@ -580,14 +593,47 @@ contract SimPool is Initializable {
         emit AddedToPot(amount, principal);
     }
 
-    /// @notice Withdraws `amount` of what `withdrawable` allows. The platform takes its 0.5 %. Profit
-    ///         is the pool's money above what it owes, holds and keeps for recent stops, and above what
-    ///         the creator put in; a
-    ///         withdrawal takes it first, and each code's partner gets its share of it (`_payPartners`).
-    function withdraw(uint256 amount) external onlyCreator {
+    /// @notice Asks to withdraw `amount`, at most what `withdrawable` allows now. Nothing moves: the
+    ///         creator carries it out with `withdraw` from `WITHDRAW_DELAY` on, within `WITHDRAW_WINDOW`.
+    ///         One request a pool: a new one replaces the standing one and starts the wait again.
+    function requestWithdraw(uint256 amount) external onlyCreator {
         if (finished) revert Done();
         if (amount == 0 || amount > withdrawable()) revert TooMuch();
+        uint64 ready = uint64(block.timestamp) + factory.WITHDRAW_DELAY();
+        requested = amount;
+        readyAt = ready;
+        emit WithdrawRequested(amount, ready, ready + factory.WITHDRAW_WINDOW());
+    }
+
+    /// @notice Carries out the standing request, once ready and before it lapses: the less of what was
+    ///         asked and what `withdrawable` allows now: never more than was asked, and payouts that came
+    ///         due meanwhile come first. The platform takes its 0.5 %. Profit is
+    ///         the pool's money above what it owes, holds and keeps for recent stops, and above what the
+    ///         creator put in; a withdrawal takes it first, and each code's partner gets its share of
+    ///         it (`_payPartners`). There is no other way for the creator to withdraw before `finish`.
+    function withdraw() external onlyCreator {
+        if (finished) revert Done();
+        uint256 r = requested;
+        if (r == 0) revert NoRequest();
+        if (block.timestamp < readyAt) revert NotReady();
+        if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();
+        uint256 w = withdrawable();
+        uint256 amount = r < w ? r : w;
+        if (amount == 0) revert TooMuch();
+        requested = 0;
+        readyAt = 0;
         _withdraw(amount);
+    }
+
+    /// @notice Cancels the standing request: the creator, or the factory's closer, who only cancels and
+    ///         changes neither the amount nor where the money goes.
+    function cancelWithdraw() external {
+        if (msg.sender != creator && msg.sender != factory.closer()) revert NotCreator();
+        uint256 r = requested;
+        if (r == 0) revert NoRequest();
+        requested = 0;
+        readyAt = 0;
+        emit WithdrawCancelled(msg.sender, r);
     }
 
     /// @notice Sets a trading group's code: `code` is the keccak256 of its text, `partner` the group's
@@ -626,17 +672,22 @@ contract SimPool is Initializable {
             revert Locked();
         }
         closed = true;
+        closedAt = uint64(block.timestamp);
         emit Closed();
     }
 
-    /// @notice Once closed, with nothing running, nothing owed and no stop still able to be lifted:
-    ///         sends the creator everything left, the principal first without the partners' shares.
-    ///         The creator or the factory's closer may call it; the money goes to the creator either way.
+    /// @notice Once closed for `WITHDRAW_DELAY`, with nothing running, nothing owed and no stop still able
+    ///         to be lifted: sends the creator everything left, the principal first without the partners'
+    ///         shares. The creator or the factory's closer may call it; the money goes to the creator
+    ///         either way. The wait keeps closing and finishing from being a withdrawal in one block.
     function finish() external {
         if (msg.sender != creator && msg.sender != factory.closer()) revert NotCreator();
         if (!closed || finished) revert Done();
         if (live != 0 || owed != 0 || reserved != 0) revert NotOver();
+        if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();
         finished = true;
+        requested = 0;
+        readyAt = 0;
         uint256 bal = usdc.balanceOf(address(this)) - held;
         if (bal != 0) _withdraw(bal);
         emit Finished(bal);

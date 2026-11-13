@@ -10,6 +10,9 @@
         --plan deployments/plans/sim-first-pool.json --creator creator [--send]                        # its codes
     spike/.venv/bin/python -m ops.deploy_sim close --pool 0x.. --key closer [--send]                   # stop sales
     spike/.venv/bin/python -m ops.deploy_sim finish --pool 0x.. --key creator [--exam 0x..] [--send]   # pay out
+    spike/.venv/bin/python -m ops.deploy_sim request --pool 0x.. --key creator --amount 100 [--send]   # ask
+    spike/.venv/bin/python -m ops.deploy_sim withdraw --pool 0x.. --key creator [--send]               # a week on
+    spike/.venv/bin/python -m ops.deploy_sim cancel --pool 0x.. --key closer [--send]                  # cancel it
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
 and the SimPoolFactory on HyperEVM testnet, names the filler, the checker, the closer (the platform's
@@ -29,7 +32,14 @@ skipped, one that does not is refused before anything is sent.
 `close` closes a pool and `finish` pays out a closed one, from the named key. Without --send each only
 reads the pool and says what it would send, from which key, or why the pool would refuse: before its
 180 days only the factory's closer closes it; `finish` (the creator or the closer) waits until nothing
-runs, nothing is owed and no stop can be lifted, and with --exam it says until when that exam runs.
+runs, nothing is owed and no stop can be lifted, and a week after the close; with --exam it says until
+when that exam runs.
+
+`request`, `withdraw` and `cancel` are the creator's withdrawal, which waits a week. `request` asks for
+--amount USDC, at most what the pool lets go now; `withdraw` carries out the standing request from a week
+after it, for three days, and pays the less of what was asked and what the pool lets go then; `cancel`
+cancels it, from the creator's key or the closer's. Like `close` and `finish`, without --send each reads
+the pool and says what it would send, from which key, or why the pool would refuse.
 
 `pool` publishes a pool's terms in the TermsBook, approves the USDC for the two locked payouts and
 calls `create` with 1 HYPE, from the creator's key, then sets the plan's codes as `codes` does. The
@@ -180,6 +190,10 @@ def deploy(args) -> int:
         raise SystemExit(f"{out.relative_to(ROOT)} exists; pick another label")
     filler, checker = to_checksum_address(args.filler), to_checksum_address(args.checker)
     closer = to_checksum_address(args.closer)
+    # Before anything is deployed: a zero key would pass the checks below and fail only at setCloser, four
+    # contracts later (review of #282).
+    if any(int(a, 16) == 0 for a in (filler, checker, closer)):
+        raise SystemExit("the filler, the checker and the closer are real keys, none of them 0x0")
     if len({filler, checker, closer}) != 3:
         raise SystemExit("the filler, the checker and the closer are three keys")
     print(f"deploy_sim deploy: label {args.label}, USDC {c.TESTNET_USDC_ERC20} (Circle's, EIP-3009)")
@@ -288,7 +302,15 @@ def pool_state(pool_: str) -> dict:
             "closed": bool(v("closed()", "bool")), "finished": bool(v("finished()", "bool")),
             "locked_until": int(v("lockedUntil()", "uint64")), "live": int(v("live()", "uint256")),
             "owed": int(v("owed()", "uint256")), "reserved": int(v("reserved()", "uint256")),
-            "fund_window": int(v("fundWindow()", "uint32"))}
+            "fund_window": int(v("fundWindow()", "uint32")), "closed_at": int(v("closedAt()", "uint64")),
+            "requested": int(v("requested()", "uint256")), "ready_at": int(v("readyAt()", "uint64")),
+            "withdrawable": int(v("withdrawable()", "uint256")),
+            "delay": int(c.call_view(factory, "WITHDRAW_DELAY()", [], [], ["uint32"])[0]),
+            "window": int(c.call_view(factory, "WITHDRAW_WINDOW()", [], [], ["uint32"])[0])}
+
+
+def usdc(units: int) -> str:
+    return f"{units / 1e6:,.6f}".rstrip("0").rstrip(".") + " USDC"
 
 
 def close_check(st: dict, now: int, sender: str) -> str:
@@ -349,8 +371,70 @@ def finish_check(st: dict, now: int, sender: str, exam_line: str | None = None) 
         reasons.append(f"{st['owed'] / 1e6:g} USDC of payouts still owed")
     if st["reserved"]:
         reasons.append(f"{st['reserved'] / 1e6:g} USDC kept for stops that can still be lifted")
+    ready = st["closed_at"] + st["delay"]
     if reasons:
-        raise SystemExit("NotOver: " + "; ".join(reasons))
+        later = f"; and not before {utc(ready)}, a week after the close" if now < ready else ""
+        raise SystemExit("NotOver: " + "; ".join(reasons) + later)
+    if now < ready:
+        raise SystemExit(f"NotReady: finish from {utc(ready)} on, a week after the close ({utc(st['closed_at'])})")
+    return "the creator" if sender == st["creator"] else "the factory's closer"
+
+
+def amount_units(text: str) -> int:
+    """USDC as the creator types it ("250", "84.575") in the token's units, refused if not a positive amount
+    of at most six decimals."""
+    from decimal import Decimal, InvalidOperation
+    try:
+        x = Decimal(text.strip())
+    except InvalidOperation:
+        raise SystemExit(f"--amount {text!r} is not an amount of USDC")
+    units = x * 10**6
+    if not x.is_finite() or units != units.to_integral_value() or units <= 0:
+        raise SystemExit(f"--amount {text!r}: a positive amount of USDC, at most six decimals")
+    return int(units)
+
+
+def request_check(st: dict, now: int, sender: str, amount: int) -> str:
+    """What `requestWithdraw(amount)` from `sender` would do now, or why the pool would refuse."""
+    if st["finished"]:
+        raise SystemExit("Done: the pool is finished: nothing more to withdraw")
+    if sender != st["creator"]:
+        raise SystemExit(f"NotCreator: {sender} is not the pool's creator; only the creator asks to withdraw")
+    if amount > st["withdrawable"]:
+        raise SystemExit(f"TooMuch: the pool lets go at most {usdc(st['withdrawable'])} now")
+    ready = now + st["delay"]
+    text = f"asks for {usdc(amount)}, to be carried out from {utc(ready)} until {utc(ready + st['window'])}"
+    if st["requested"]:
+        text += f"; it replaces the standing request for {usdc(st['requested'])}"
+    return text
+
+
+def withdraw_check(st: dict, now: int, sender: str) -> int:
+    """What the standing request pays if `sender` carries it out now, or why the pool would refuse."""
+    if st["finished"]:
+        raise SystemExit("Done: the pool is finished: nothing more to withdraw")
+    if sender != st["creator"]:
+        raise SystemExit(f"NotCreator: {sender} is not the pool's creator")
+    if not st["requested"]:
+        raise SystemExit("NoRequest: no request stands: `request` first, and a week later `withdraw`")
+    if now < st["ready_at"]:
+        raise SystemExit(f"NotReady: the request for {usdc(st['requested'])} can be carried out from {utc(st['ready_at'])}")
+    lapses = st["ready_at"] + st["window"]
+    if now >= lapses:
+        raise SystemExit(f"RequestLapsed: the request lapsed at {utc(lapses)}: `request` again, and wait the week again")
+    amount = min(st["requested"], st["withdrawable"])
+    if not amount:
+        raise SystemExit("TooMuch: the pool lets nothing go now (payouts owed came first); the request stands until "
+                         + utc(lapses))
+    return amount
+
+
+def cancel_check(st: dict, sender: str) -> str:
+    """As whom `sender` cancels the standing request, or why the pool would refuse."""
+    if sender not in (st["creator"], st["closer"]):
+        raise SystemExit(f"NotCreator: {sender} is neither the pool's creator nor the factory's closer")
+    if not st["requested"]:
+        raise SystemExit("NoRequest: no request stands")
     return "the creator" if sender == st["creator"] else "the factory's closer"
 
 
@@ -399,6 +483,44 @@ def finish(args) -> int:
     rcpt = c.transact(c.account(args.key), pool_, "finish()")
     print(f"deploy_sim: finished, tx {rcpt['transactionHash']}")
     return 0
+
+
+def send_or_say(args, pool_: str, sig: str, types: list | None = None, values: list | None = None) -> int:
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    c.assert_testnet()
+    rcpt = c.transact(c.account(args.key), pool_, sig, types or [], values or [])
+    print(f"deploy_sim: sent, tx {rcpt['transactionHash']}")
+    return 0
+
+
+def request(args) -> int:
+    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    amount = amount_units(args.amount)
+    text = request_check(pool_state(pool_), chain_now(), sender, amount)
+    print(f"deploy_sim request: pool {pool_}, requestWithdraw({amount}) from {args.key} ({sender}): {text}")
+    print("  nothing moves now; the closer may cancel it meanwhile")
+    return send_or_say(args, pool_, "requestWithdraw(uint256)", ["uint256"], [amount])
+
+
+def withdraw(args) -> int:
+    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    st = pool_state(pool_)
+    amount = withdraw_check(st, chain_now(), sender)
+    print(f"deploy_sim withdraw: pool {pool_}, withdraw() from {args.key} ({sender}): pays {usdc(amount)}, the less "
+          f"of the {usdc(st['requested'])} asked and the {usdc(st['withdrawable'])} the pool lets go now")
+    print("  0.5 % to the platform, each code's partner its share of the profit in it, the rest to the creator")
+    return send_or_say(args, pool_, "withdraw()")
+
+
+def cancel(args) -> int:
+    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    st = pool_state(pool_)
+    role = cancel_check(st, sender)
+    print(f"deploy_sim cancel: pool {pool_}, cancelWithdraw() from {args.key} ({sender}) as {role}: "
+          f"the request for {usdc(st['requested'])} is cancelled; nothing moves")
+    return send_or_say(args, pool_, "cancelWithdraw()")
 
 
 def codes(args) -> int:
@@ -471,8 +593,16 @@ def main(argv: list[str] | None = None) -> int:
         if name == "finish":
             z.add_argument("--exam", help="an exam or stage of the pool: says until when it keeps the pool from finishing")
         z.add_argument("--send", action="store_true")
+    for name in ("request", "withdraw", "cancel"):
+        z = sub.add_parser(name)
+        z.add_argument("--pool", required=True)
+        z.add_argument("--key", required=True, help="the key it is sent from: the pool's creator, or for cancel the closer")
+        if name == "request":
+            z.add_argument("--amount", required=True, help='USDC, as "250" or "84.575"')
+        z.add_argument("--send", action="store_true")
     args = p.parse_args(argv)
-    return {"deploy": deploy, "pool": pool, "buy": buy, "codes": codes, "close": close, "finish": finish}[args.cmd](args)
+    return {"deploy": deploy, "pool": pool, "buy": buy, "codes": codes, "close": close, "finish": finish,
+            "request": request, "withdraw": withdraw, "cancel": cancel}[args.cmd](args)
 
 
 if __name__ == "__main__":
