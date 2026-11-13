@@ -79,6 +79,9 @@ class WhatIsDue(unittest.TestCase):
         self.assertEqual(k.pay_reach([("Paid", 0, True), ("Held", 0, True), ("Due", due, False)], due), 2,
                          "a settled head: past the settled ones")
         self.assertEqual(k.pay_reach([("Due", due, False)], due), 0)
+        # At most PAY_PER_CALL paid in one call, so that it fits a small block (review of #286).
+        many = [("Due", due, True)] * (k.PAY_PER_CALL + 5)
+        self.assertEqual(k.pay_reach(many, due), k.PAY_PER_CALL)
 
     def test_the_payout_times_are_the_factorys(self):
         src = (ROOT / "src/sim/SimPoolFactory.sol").read_text()

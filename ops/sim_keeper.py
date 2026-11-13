@@ -74,10 +74,13 @@ PAYOUT_HARD = 7 * 86_400
 # A fill's gas, fixed: an estimate first would cost a block. PaperExam's fill, with sixteen assets
 # open, is under it (forge test --gas-report).
 FILL_GAS = 400_000
-PAY_PER_CALL = 16
+PAY_PER_CALL = 10
 # How far past the head the keeper reads payouts to find one to pay: behind a head that waits for its approval,
 # later approved payouts are paid out of order, and `pay` must be told to look that far (review of #286).
-SCAN_PAYOUTS = 256
+# One call fits a small block (2 000 000 gas, ops/keeper.py): at most PAY_PER_CALL payouts paid, about 60 000 gas
+# each (a transfer, measured at about 35 000 in the 32-partner withdrawal test, and four counters), and at most
+# SCAN_PAYOUTS looked at, about 5 000 each: 600 000 + 480 000 (review of #286). What is left goes in the next pass.
+SCAN_PAYOUTS = 96
 
 
 # ── what is due, from what was read ──────────────────────────────────────────────────
@@ -115,8 +118,14 @@ def pay_reach(rows: list[tuple[str, int, bool]], now: int) -> int:
     the last payable one, or, with none, past the settled ones at the head; zero for nothing to do. `pay` counts
     every payout it looks at, settled ones too (review of #286), so the keeper names how far to go. A payout
     waiting for its approval keeps the head, and the keeper does not call `pay` for it before its 7 days."""
-    last = max((k + 1 for k, (state, due_at, approved) in enumerate(rows) if payable(state, due_at, approved, now)),
-               default=0)
+    last = 0
+    paid = 0
+    for k, (state, due_at, approved) in enumerate(rows):
+        if payable(state, due_at, approved, now):
+            last = k + 1
+            paid += 1
+            if paid == PAY_PER_CALL:
+                break  # a call within a small block's gas; the rest in the next pass
     if last:
         return last
     settled = 0
