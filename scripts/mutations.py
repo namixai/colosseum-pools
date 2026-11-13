@@ -13875,7 +13875,7 @@ def failing_tests(output: str, pattern: str) -> set[str]:
     # A failed invariant prints its counterexample after the "[FAIL: …]" line and its name on a line of its own,
     # " invariant_x() (runs: 1, calls: 1, reverts: 1)"; a passed one says "[PASS] invariant_x() (runs: …" on one.
     if "FAIL" in pattern:
-        red |= set(re.findall(r"^ (invariant_\w+)\(\) \(runs: \d+", output, re.M))
+        red |= set(re.findall(r"^\s+(invariant_\w+)\(\)\s*\(runs:\s*\d+", output, re.M))
     return red
 
 
@@ -13963,7 +13963,7 @@ def check() -> int:
         # being true instead -- a page's wording, a document's claim -- and those are checked by
         # the run, not by a file listing.
         for name in expected:
-            if re.fullmatch(r"test_\w+", name) and name not in known:
+            if re.fullmatch(r"(test|invariant)_\w+", name) and name not in known:
                 print(f"{mid}: names {name}, which no test file defines")
                 problems += 1
     for mid, times in sorted(seen.items()):

@@ -146,7 +146,7 @@ contract PaperExamHandler is Test {
     function _checkPrice(uint32 asset, bool isBuy) internal {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; ++i) {
-            if (logs[i].topics[0] != PaperExam.Filled.selector) continue;
+            if (logs[i].topics.length == 0 || logs[i].topics[0] != PaperExam.Filled.selector) continue;
             (, , uint64 px,,, uint8 source) = abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint256, uint8));
             uint256 oracle = asset == BTC ? BTC_MARK : ETH_MARK;
             uint256 worst = oracle * MAX_WORSE / 10_000;

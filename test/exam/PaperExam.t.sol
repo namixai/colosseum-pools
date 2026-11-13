@@ -1236,7 +1236,7 @@ contract PaperExamTest is Test {
     function _lastFilled() internal returns (bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late, uint8 source) {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = logs.length; i > 0; --i) {
-            if (logs[i - 1].topics[0] != PaperExam.Filled.selector) continue;
+            if (logs[i - 1].topics.length == 0 || logs[i - 1].topics[0] != PaperExam.Filled.selector) continue;
             return abi.decode(logs[i - 1].data, (bool, uint64, uint64, uint256, uint256, uint8));
         }
         revert("no Filled");
