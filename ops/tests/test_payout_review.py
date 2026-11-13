@@ -451,6 +451,22 @@ class WhatThePoolWouldTake(unittest.TestCase):
         got = r.review(ch.d, POOL, 0)
         self.assertEqual((got["stoppable"], got["tx"]["kind"]), (True, "stop"), "the pool stops an approved payout until it is paid")
 
+    def test_a_payout_that_is_not_waiting_is_offered_neither_an_approval_nor_a_stop(self):
+        """`--id` can name a payout already paid or stopped: the pool reverts an approval of it as it does a stop."""
+        for state in ("Paid", "Stopped", "Held", "Refused"):
+            ch, _, s1 = honest_world()
+            ch.d["payouts"][0]["state"] = state
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["tx"]["kind"], got["tx"]["call"], got["tx"]["data"], got["stoppable"]), ("none", None, None, False), state)
+            self.assertEqual(got["tx"]["note"], f"the payout is {state.lower()}, not waiting: nothing to approve and nothing to stop")
+            self.assertIn(f"to sign (none): the payout is {state.lower()}", r.summary(got))
+            self.pair(ch, s1)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["tx"]["kind"], got["tx"]["data"]), ("none", None), f"{state}, with a pair: no stop either")
+        ch, _, _ = honest_world()
+        ch.d["payouts"][0].update(state="Due", wasStopped=True)  # a stop lifted: waiting again, and approvable
+        self.assertEqual(r.review(ch.d, POOL, 0)["tx"]["kind"], "approve")
+
     def test_a_pool_that_names_no_approver_is_offered_no_approval(self):
         ch, _, _ = honest_world()
         ch.d["books"][POOL]["approver"] = r.ZERO_ADDRESS
