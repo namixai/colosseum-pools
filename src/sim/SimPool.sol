@@ -8,6 +8,8 @@ import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.s
 import {Rules, Units} from "../Types.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
 import {SimPoolFactory} from "./SimPoolFactory.sol";
+import {SimPoolStops} from "./SimPoolStops.sol";
+import {SimPoolSetup} from "./SimPoolSetup.sol";
 
 /// @notice The part of USDC's EIP-3009 a pool takes a price through: Circle's FiatToken V2.2, on
 ///         HyperEVM and its testnet. The token itself checks the signature, the time, the nonce,
@@ -55,6 +57,10 @@ struct SimPlan {
     bytes32 terms;
 }
 
+// How many payouts a pool settles in any `PAYOUT_DAY` at most, and so how many times of settlement it keeps:
+// the factory publishes it as `PAYOUTS_PER_DAY`.
+uint256 constant PAYOUTS_A_DAY = 2;
+
 /// @title SimPool
 /// @notice A pool where both stages are paper exams and nobody's capital is traded. A trader buys
 ///         an exam off the menu; whoever passes it starts the stage on the same size; whoever passes
@@ -62,7 +68,8 @@ struct SimPlan {
 ///         and what its creator locked at the start. A payout waits 72 hours and the approval of the
 ///         approver the creator names, or 7 days without it; until it is paid the factory's checker
 ///         alone may stop it, with a reason and the transactions that show it; with no stop it goes to
-///         the trader, sent by anyone.
+///         the trader, sent by anyone. A pool settles at most `PAYOUTS_PER_DAY` payouts in any 24 hours:
+///         one more waits in its place for the next day, however it came due.
 /// @dev The money is this contract's USDC on HyperEVM; nothing goes to HyperCore. What it owes
 ///      (`owed`) is every payout neither paid nor stopped. The creator withdraws only what stays
 ///      above `FLOOR_PAYOUTS` payouts of the largest size and above what it owes, so a payout that
@@ -161,6 +168,10 @@ contract SimPool is Initializable {
     uint256 public liftedCount;
     uint256 public paidCount;
     uint256 public paidTotal;
+    /// When `pay` settled its last `PAYOUTS_A_DAY` payouts (paid, or set aside when the token refused), the
+    /// oldest first; zero for none yet. `pay` settles one more only once the oldest is `PAYOUT_DAY` old, so no
+    /// 24 hours see more than `PAYOUTS_A_DAY` (CFO, 13 November).
+    uint64[PAYOUTS_A_DAY] internal _settledAt;
     /// Payouts, and partners' parts, the token refused to send, set aside for whom they were for (`claimHeld`).
     uint256 public held;
     mapping(address holder => uint256) public heldOf;
@@ -201,6 +212,9 @@ contract SimPool is Initializable {
     event Released(address indexed account);
     event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt);
     event PayoutQueued(uint256 indexed id, uint256 balance);
+    /// Payout `id` may be paid and the pool may hold its money, but the pool has settled `PAYOUTS_PER_DAY`
+    /// payouts in the last 24 hours: it waits in its place, and `pay` settles it from `nextAt` on.
+    event PayoutWaitsLimit(uint256 indexed id, uint64 nextAt);
     event PayoutPaid(uint256 indexed id, address indexed trader, uint64 amount, uint256 paidCount, uint256 paidTotal);
     /// `reason` 1: opposite positions with `paired`; 2: that, and the wallets linked by `links`; 3: the
     /// result is disputed (a flaw of the exam, the oracle or the filler), shown by `trades`, with no
@@ -293,16 +307,7 @@ contract SimPool is Initializable {
         lockedUntil = uint64(block.timestamp) + factory.MIN_TERM();
         fromBook = p.fromBook;
         maxWorseBps = p.maxWorseBps;
-        uint64 largest;
-        for (uint256 i = 0; i < p.menu.length; ++i) {
-            _menu.push(p.menu[i]);
-            if (p.menu[i].size > largest) largest = p.menu[i].size;
-        }
-        largestPayout = _payoutOf(largest);
-        _copyRules(_examRules, p.examRules);
-        _copyRules(_fundedRules, p.fundedRules);
-        _exam = p.exam;
-        _funded = p.funded;
+        largestPayout = _payoutOf(SimPoolSetup.copy(p, _menu, _examRules, _exam, _fundedRules, _funded));
     }
 
     /// @notice The factory's note of what the creator locked at the start.
@@ -334,6 +339,22 @@ contract SimPool is Initializable {
 
     function payoutCount() external view returns (uint256) {
         return _payouts.length;
+    }
+
+    /// @notice How many payouts `pay` may settle now under the daily limit: `PAYOUTS_PER_DAY` less those it
+    ///         settled in the last `PAYOUT_DAY`.
+    function payRoom() external view returns (uint256 room) {
+        uint256 day = factory.PAYOUT_DAY();
+        for (uint256 k = 0; k < PAYOUTS_A_DAY; ++k) {
+            if (block.timestamp >= uint256(_settledAt[k]) + day) room += 1;
+        }
+    }
+
+    /// @notice From when `pay` may settle one more payout under the daily limit: the oldest of its last
+    ///         `PAYOUTS_PER_DAY` settlements plus `PAYOUT_DAY`; zero while it has settled fewer.
+    function nextPayAt() external view returns (uint64) {
+        uint64 oldest = _settledAt[0];
+        return oldest == 0 ? 0 : oldest + factory.PAYOUT_DAY();
     }
 
     /// @notice What the creator may withdraw now: the pool's USDC above what it owes, holds and keeps
@@ -469,7 +490,10 @@ contract SimPool is Initializable {
     ///         while the pool's USDC covers the next. A payout is due `PAYOUT_DELAY` after its claim once
     ///         the approver approved it, and `PAYOUT_HARD` after its claim if not. One not yet due for want
     ///         of approval keeps its place: `pay` moves on to later ones, but pays one only if the money
-    ///         also covers every such payout before it. Anyone may.
+    ///         also covers every such payout before it. At most `PAYOUTS_PER_DAY` payouts are settled in any
+    ///         `PAYOUT_DAY`, whether they came due by approval or by `PAYOUT_HARD`, paid or set aside for a
+    ///         trader the token refused: one more waits in its place (`PayoutWaitsLimit`), and every payout
+    ///         after it, until the oldest of the last settlements is a day old. Anyone may.
     function pay(uint256 max) external returns (uint256 n) {
         uint256 len = _payouts.length;
         uint256 i = head;
@@ -479,6 +503,9 @@ contract SimPool is Initializable {
         uint256 waiting = len;
         // Read once: the factory's constants, not a call for each payout (review of #286).
         uint256 hardAfter = uint256(factory.PAYOUT_HARD()) - factory.PAYOUT_DELAY();
+        // The last settlements, oldest first, and the day they are counted in.
+        uint64[PAYOUTS_A_DAY] memory last = _settledAt;
+        uint256 day = factory.PAYOUT_DAY();
         // Every payout looked at counts toward `max`, settled ones too: payouts paid out of order behind a head that
         // waits for its approval cannot make a call run long (review of #286).
         while (i < len && seen < max) {
@@ -492,6 +519,13 @@ contract SimPool is Initializable {
                     i += 1;
                     continue;
                 }
+                // The daily limit: the pool has settled `PAYOUTS_A_DAY` payouts since a day ago. This one keeps
+                // its place, and so does every payout after it (CFO, 13 November).
+                uint256 freeAt = uint256(last[0]) + day;
+                if (block.timestamp < freeAt) {
+                    emit PayoutWaitsLimit(i, uint64(freeAt));
+                    break;
+                }
                 // What is held is its traders' already, and what a recent stop keeps may be its trader's
                 // again: neither is paid out to anyone else (CFO, 12 November). Stops can keep more than the
                 // pool holds, when payouts came faster than prices: then nothing is free (review of #269).
@@ -504,6 +538,12 @@ contract SimPool is Initializable {
                 }
                 owed -= p.amount;
                 n += 1;
+                // Counted before the token is called, sent or refused alike: the money leaves the queue.
+                for (uint256 k = 0; k + 1 < PAYOUTS_A_DAY; ++k) {
+                    last[k] = last[k + 1];
+                }
+                last[PAYOUTS_A_DAY - 1] = uint64(block.timestamp);
+                _settledAt = last;
                 if (_send(p.trader, p.amount)) {
                     p.state = PayoutState.Paid;
                     paidCount += 1;
@@ -562,48 +602,23 @@ contract SimPool is Initializable {
         external
         onlyChecker
     {
-        if (id >= _payouts.length) revert BadPayout();
-        Payout storage p = _payouts[id];
-        if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();
-        if (reason == 3) {
-            if (paired != address(0) || trades.length == 0 || links.length != 1) revert BadReason();
-        } else {
-            if (reason == 1) {
-                if (links.length != 0) revert BadReason();
-            } else if (reason == 2) {
-                if (links.length == 0) revert BadReason();
-            } else {
-                revert BadReason();
-            }
-            if (trades.length < 2) revert BadReason();
-            if (paired == p.account || factory.poolOf(paired) == address(0) || factory.poolOf(paired) == paired) {
-                revert BadPaired();
-            }
-        }
-        p.state = PayoutState.Stopped;
-        p.wasStopped = true;
-        p.stoppedAt = uint64(block.timestamp);
-        owed -= p.amount;
-        reserved += p.amount;
+        uint64 amount = SimPoolStops.stop(
+            _payouts, factory, id, reason, paired, trades, links, [stoppedCount + 1, liftedCount, paidCount]
+        );
+        owed -= amount;
+        reserved += amount;
         stoppedCount += 1;
-        emit PayoutStopped(id, p.trader, p.amount, reason, paired, trades, links, stoppedCount, liftedCount, paidCount);
     }
 
     /// @notice Lifts the checker's own stop of payout `id`, a stop that was wrong, within `STOP_RESERVE`
     ///         of it: the payout is due again, out of the money the stop kept, and paid as any other
     ///         once its time has come. After that the stop is final.
     function liftStop(uint256 id) external onlyChecker {
-        if (finished) revert Done();
-        if (id >= _payouts.length) revert BadPayout();
-        Payout storage p = _payouts[id];
-        if (p.state != PayoutState.Stopped) revert BadPayout();
-        if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();
-        p.state = PayoutState.Due;
-        reserved -= p.amount;
-        owed += p.amount;
+        uint64 amount = SimPoolStops.lift(_payouts, factory, id, finished, [stoppedCount, liftedCount + 1, paidCount]);
+        reserved -= amount;
+        owed += amount;
         liftedCount += 1;
         if (id < head) head = id;
-        emit StopLifted(id, stoppedCount, liftedCount, paidCount);
     }
 
     // ── the approver ─────────────────────────────────────────────
@@ -629,24 +644,14 @@ contract SimPool is Initializable {
     ///         the chain keeps the keccak256 of the objection's text, so the dispute is seen as the
     ///         stop is. Nothing else changes; lifting the stop is the checker's.
     function objectStop(uint256 id, bytes32 text) external {
-        if (id >= _payouts.length) revert BadPayout();
-        Payout storage p = _payouts[id];
-        if (p.state != PayoutState.Stopped) revert BadPayout();
-        if (msg.sender != p.trader) revert NotTrader();
-        if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();
-        emit StopObjected(id, msg.sender, text);
+        SimPoolStops.object(_payouts, factory, id, text);
     }
 
     /// @notice Makes the stop of payout `id` final once `STOP_RESERVE` has passed without a lift: the
     ///         money it kept is the pool's again. Anyone may.
     function finalizeStop(uint256 id) external {
-        if (id >= _payouts.length) revert BadPayout();
-        Payout storage p = _payouts[id];
-        if (p.state != PayoutState.Stopped) revert BadPayout();
-        if (block.timestamp < uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveRunning();
-        p.state = PayoutState.Refused;
-        reserved -= p.amount;
-        emit StopFinal(id, p.amount, reserved);
+        uint64 amount = SimPoolStops.finalize(_payouts, factory, id, reserved);
+        reserved -= amount;
     }
 
     // ── the creator ──────────────────────────────────────────────
@@ -863,13 +868,5 @@ contract SimPool is Initializable {
 
     function _payoutOf(uint64 size) internal view returns (uint64) {
         return uint64(uint256(size) * factory.PAYOUT_BPS() / Units.BPS);
-    }
-
-    function _copyRules(Rules storage to, Rules calldata r) internal {
-        to.dailyLossBps = r.dailyLossBps;
-        to.maxDrawdownBps = r.maxDrawdownBps;
-        to.maxLeverageX100 = r.maxLeverageX100;
-        to.assets = r.assets;
-        to.assetLeverageX100 = r.assetLeverageX100;
     }
 }

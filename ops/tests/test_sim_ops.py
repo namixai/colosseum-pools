@@ -102,6 +102,26 @@ class TheRecord(unittest.TestCase):
         self.assertIn('record["status"] = DONE', (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8"))
 
 
+class TheLibraries(unittest.TestCase):
+    """SimPool links to two libraries since its code outgrew a block's limit; `deploy` puts both first and names them,
+    and the pool's built code asks for exactly these two."""
+
+    def test_deploy_links_the_pool_to_both_libraries(self):
+        src = (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8")
+        stops = src.index('deploy_contract(op, out, record, "SimPoolStops", "SimPoolStops", [], [])')
+        setup = src.index('deploy_contract(op, out, record, "SimPoolSetup", "SimPoolSetup", [], [])')
+        pool = src.index('{"SimPoolStops": stops, "SimPoolSetup": setup})')
+        self.assertLess(max(stops, setup), pool, "the libraries before the pool that links to them")
+
+    def test_the_pools_code_links_to_these_two_and_no_other(self):
+        art = ROOT / "out/SimPool.sol/SimPool.json"
+        if not art.exists():
+            self.skipTest("no forge build here")
+        refs = json.loads(art.read_text())["bytecode"].get("linkReferences") or {}
+        names = sorted(name for libs in refs.values() for name in libs)
+        self.assertEqual(names, ["SimPoolSetup", "SimPoolStops"])
+
+
 class TheFirstPool(unittest.TestCase):
     def test_it_is_alexs_menu_and_locks_1600(self):
         self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], [(5000, 45), (10000, 85)])
@@ -144,10 +164,18 @@ class TheFirstPool(unittest.TestCase):
             # `pay` is a call of its own, walks in the order of the claims, and passes a payout waiting for its
             # approval only with the money for it kept (review of #286).
             self.assertIn("a payout that may be paid is paid by a call anyone may make, which the keeper makes pass "
-                          "after pass, at most ten payouts a call, so one of many payable at once may wait some passes.",
-                          text)
-            self.assertNotIn("in its next pass", text, "the eleventh payable payout waits for a later pass")
-            self.assertEqual(keeper.PAY_PER_CALL, 10, "the ten of the terms")
+                          "after pass. Each pool pays at most two payouts a day; any more are paid in order on the "
+                          "following days. The two are counted over any 24 hours and count every payout, approved or "
+                          "not: a payout whose 72 hours or 7 days have passed still waits for a following day once the "
+                          "day's two are paid.", text)
+            # The 7 days are when a payout may be paid without approval, not a promise of payment by then: it can
+            # also wait for money, or be stopped (review of #293).
+            self.assertNotIn("is paid no later than 7 days", text)
+            self.assertNotIn("in its next pass", text, "a payout past the day's two waits for a later day")
+            self.assertNotIn("ten payouts a call", text)
+            self.assertEqual(keeper.PAY_PER_CALL, 2, "the two of the terms")
+            self.assertEqual(constant("PAYOUT_DAY"), "24 hours", "the day of the terms")
+            self.assertEqual(constant("PAYOUTS_PER_DAY"), "uint8(PAYOUTS_A_DAY)")
             self.assertIn("Payouts are paid in the order they were claimed, out of the money the pool holds: one still "
                           "waiting for its approval keeps its place, and a later one is paid past it only if the money "
                           "also covers every payout so passed over; one the pool cannot cover waits, and every payout "

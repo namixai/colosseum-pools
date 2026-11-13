@@ -95,7 +95,12 @@ class AStop(unittest.TestCase):
         pool = (ROOT / "src/sim/SimPool.sol").read_text()
         i = pool.index("function stopPayout(")
         body = pool[pool.index("{", i):pool.index("\n    }\n", i)]
-        self.assertIn("if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();", body)
+        # The pool's checks of a stop run in its library (SimPoolStops, DELEGATECALL), for the size of its code.
+        self.assertIn("SimPoolStops.stop(", body)
+        stops = (ROOT / "src/sim/SimPoolStops.sol").read_text()
+        i = stops.index("function stop(")
+        body += stops[stops.index("{", stops.index(") external returns", i)):stops.index("\n    }\n", i)]
+        self.assertIn("if (p.state != SimPool.PayoutState.Due || p.wasStopped) revert SimPool.BadPayout();", body)
         for word in ("dueAt", "block.timestamp <", "block.timestamp >", "approved"):
             self.assertNotIn(word, body, "waiting and never stopped is all the pool asks: until it is paid")
         fields = re.findall(r"^\s*(\w+) (\w+);", re.search(r"struct Payout \{(.*?)\n    \}", pool, re.S).group(1), re.M)

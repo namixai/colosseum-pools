@@ -683,7 +683,10 @@ class AgainstTheContracts(unittest.TestCase):
     def test_a_stop_is_taken_until_the_payout_is_paid_by_the_pools_source(self):
         head, body = self.function(self.POOL_SRC, "stopPayout")
         self.assertIn("onlyChecker", head)
-        self.assertIn("if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();", body)
+        # The pool's checks of a stop run in its library (SimPoolStops, DELEGATECALL), for the size of its code.
+        self.assertIn("SimPoolStops.stop(", body)
+        body += self.function((ROOT / "src/sim/SimPoolStops.sol").read_text(), "stop")[1]
+        self.assertIn("if (p.state != SimPool.PayoutState.Due || p.wasStopped) revert SimPool.BadPayout();", body)
         # No time and no approval in the pool's rule: waiting and never stopped is all it asks, so the review
         # offers a stop on a pool with approvals until the payout is paid (`in_time`).
         for word in ("dueAt", "block.timestamp <", "block.timestamp >", "TooLate", "approved", "PAYOUT_"):
