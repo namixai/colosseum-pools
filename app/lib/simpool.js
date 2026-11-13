@@ -317,7 +317,7 @@ export function utc(seconds) {
  */
 export function stopNote(p, now) {
   const objected = p.objection
-    ? ` The trader objected on ${p.objection.time === null ? `block ${p.objection.block}` : utc(p.objection.time)}; `
+    ? ` The trader objected on ${p.objection.time == null ? `block ${p.objection.block}` : utc(p.objection.time)}; `
       + "the objection is on chain."
     : "";
   if (p.status === "refused") {
@@ -325,7 +325,8 @@ export function stopNote(p, now) {
       text: `Refused: the stop was not lifted within 14 days, and the refusal is final.${objected}` };
   }
   if (p.status !== "stopped") return null;
-  if (p.reserveEnds === null) return { state: "stopped", until: null, text: "Stopped by the checker." };
+  // `== null`: a payout put together without the field (undefined) is a pool without the reserve too (review of #272).
+  if (p.reserveEnds == null) return { state: "stopped", until: null, text: "Stopped by the checker." };
   if (now < p.reserveEnds) {
     return { state: "window", until: p.reserveEnds,
       text: `Stopped. Until ${utc(p.reserveEnds)} the trader may object and the checker may lift the stop; the money `
