@@ -407,6 +407,28 @@ class TheClosing(unittest.TestCase):
             self.assertEqual(d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--ids", "3,4", "--send"]), 0)
             self.assertEqual(sent.call_args[0][2:], ("approvePayouts(uint256[])", ["uint256[]"], [[3, 4]]))
 
+    def test_an_approval_and_a_new_approver_from_a_signer_elsewhere_say_the_signer_not_none(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+        ledger = d.to_checksum_address(self.CLOSER)
+        safe = d.to_checksum_address(self.CREATOR)
+        waiting = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 1, False, 0, False)
+        answers = {"payoutCount()": [5], "payout(uint256)": [waiting], "factory()": ["0x" + "99" * 20],
+                   "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "approver()": [ledger],
+                   "creator()": [safe]}
+        for argv, who in ((["approve", "--pool", self.OTHER, "--signer", ledger, "--ids", "3"], ledger),
+                          (["approver", "--pool", self.OTHER, "--signer", safe, "--address", self.CLOSER], safe)):
+            out = io.StringIO()
+            with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
+                    mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "transact") as sent, \
+                    redirect_stdout(out):
+                self.assertEqual(d.main(argv), 0)
+            sent.assert_not_called()
+            key.assert_not_called()
+            self.assertIn(f"from the signer ({who})", out.getvalue())
+            self.assertNotIn("None", out.getvalue())
+
     def test_the_approver_is_named_by_the_creator(self):
         from unittest import mock
         creator = d.to_checksum_address(self.CREATOR)
@@ -455,6 +477,9 @@ class TheClosing(unittest.TestCase):
             key.assert_not_called()
             key_address.assert_not_called()
             said = out.getvalue()
+            # No key was named: the line says the signer and its address, not "from None" (review of #291).
+            self.assertIn(f"from the signer ({safe})", said)
+            self.assertNotIn("None", said)
             batch = json.loads(said[said.index("{"):])
             self.assertEqual(len(batch["transactions"]), 1)
             tx = batch["transactions"][0]

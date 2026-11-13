@@ -492,7 +492,7 @@ def approver_cmd(args) -> int:
     if sender != creator:
         raise SystemExit(f"NotCreator: {sender} is not the pool's creator ({creator})")
     who = to_checksum_address(args.address)
-    print(f"deploy_sim approver: pool {pool_}, setApprover({who}) from {args.key} ({sender})"
+    print(f"deploy_sim approver: pool {pool_}, setApprover({who}) from {args.key or 'the signer'} ({sender})"
           + ("; no approver: every payout goes out 7 days after its claim" if int(who, 16) == 0 else ""))
     return send_or_say(args, pool_, "setApprover(address)", ["address"], [who])
 
@@ -507,7 +507,7 @@ def approve(args) -> int:
         int(c.call_view(factory, "PAYOUT_DELAY()", [], [], ["uint32"])[0])
     approver = to_checksum_address(c.call_view(pool_, "approver()", [], [], ["address"])[0])
     lines = approve_check(approver, sender, payouts, ids, hard)
-    print(f"deploy_sim approve: pool {pool_}, approvePayouts({ids}) from {args.key} ({sender})")
+    print(f"deploy_sim approve: pool {pool_}, approvePayouts({ids}) from {args.key or 'the signer'} ({sender})")
     for line in lines:
         print("  " + line)
     print("  approving sets neither the amount nor the trader; the checker can still stop each until it is paid")
@@ -600,7 +600,7 @@ def request(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     amount = amount_units(args.amount)
     text = request_check(pool_state(pool_), chain_now(), sender, amount)
-    print(f"deploy_sim request: pool {pool_}, requestWithdraw({amount}) from {args.key} ({sender}): {text}")
+    print(f"deploy_sim request: pool {pool_}, requestWithdraw({amount}) from {args.key or 'the signer'} ({sender}): {text}")
     print("  nothing moves now; the closer may cancel it meanwhile")
     return send_or_say(args, pool_, "requestWithdraw(uint256)", ["uint256"], [amount])
 
@@ -609,7 +609,7 @@ def withdraw(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     st = pool_state(pool_)
     amount = withdraw_check(st, chain_now(), sender)
-    print(f"deploy_sim withdraw: pool {pool_}, withdraw() from {args.key} ({sender}): pays {usdc(amount)}, the less "
+    print(f"deploy_sim withdraw: pool {pool_}, withdraw() from {args.key or 'the signer'} ({sender}): pays {usdc(amount)}, the less "
           f"of the {usdc(st['requested'])} asked and the {usdc(st['withdrawable'])} the pool lets go now")
     print("  0.5 % to the platform, each code's partner its share of the profit in it, the rest to the creator")
     return send_or_say(args, pool_, "withdraw()")
@@ -619,7 +619,7 @@ def cancel(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     st = pool_state(pool_)
     role = cancel_check(st, sender)
-    print(f"deploy_sim cancel: pool {pool_}, cancelWithdraw() from {args.key} ({sender}) as {role}: "
+    print(f"deploy_sim cancel: pool {pool_}, cancelWithdraw() from {args.key or 'the signer'} ({sender}) as {role}: "
           f"the request for {usdc(st['requested'])} is cancelled; nothing moves")
     return send_or_say(args, pool_, "cancelWithdraw()")
 
