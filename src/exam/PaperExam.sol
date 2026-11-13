@@ -221,6 +221,7 @@ contract PaperExam is Initializable {
     error NotEnoughDays(uint16 traded, uint16 needed);
     error NoPosition();
     error NoTrigger();
+    error ZeroPrice();
     error NotTriggered(uint64 oracle, uint64 triggerPx);
 
     modifier inStatus(Status s) {
@@ -398,7 +399,7 @@ contract PaperExam is Initializable {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if (_over()) revert TooLate();
         if (positionOf[asset] == 0) revert NoPosition();
-        if (px == 0) revert ZeroSize();
+        if (px == 0) revert ZeroPrice();
         uint64 armedAt = uint64(block.number) + _terms.fillDelay;
         Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
         (t.px, t.sz, t.armedAt, t.seenAt) = (px, sz, armedAt, 0);
@@ -416,8 +417,8 @@ contract PaperExam is Initializable {
     ///         anyone may carry it out while it still holds, so a filler that stops keeps no position open. Anyone.
     function seeTrigger(uint32 asset, bool isTake) external inStatus(Status.Active) {
         Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
-        uint64 oracle = _triggered(asset, isTake, t);
         if (t.seenAt != 0) return;
+        uint64 oracle = _triggered(asset, isTake, t);
         t.seenAt = uint64(block.number);
         emit TriggerSeen(asset, isTake, oracle, block.number);
     }

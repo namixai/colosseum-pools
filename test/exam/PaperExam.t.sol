@@ -1222,7 +1222,7 @@ contract PaperExamTest is Test {
         vm.expectRevert(PaperExam.NotTrader.selector);
         e.setTrigger(BTC, false, 950_000, 0);
         vm.prank(trader);
-        vm.expectRevert(PaperExam.ZeroSize.selector);
+        vm.expectRevert(PaperExam.ZeroPrice.selector);
         e.setTrigger(BTC, false, 0, 0);
         vm.expectEmit(address(e));
         emit PaperExam.TriggerSet(BTC, false, 950_000, 0, block.number + DELAY);
