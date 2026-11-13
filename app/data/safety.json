@@ -269,7 +269,7 @@
         },
         {
           "lead": "A simulated pool's creator",
-          "text": "withdraws only by a request a week old (S127, S128), carried out within three days of being ready (S130), and gets the less of what it asked and what may leave when it is carried out (S131): never more than it asked, and only what the pool can spare then, so payouts that came due meanwhile come first. A pool is finished a week after its close at the earliest (S129), so closing and finishing are never one block. What may leave is only what stays above three payouts of the largest size and above every payout owed and every payout set aside for a trader whose transfer was refused (S117), and it stops nobody's payout. Every sale names a trading group's code (S123), and a partner's share is of the pool's money above what the creator put in, after what the pool owes, holds and keeps for a recent stop, in the part of all the pool took that its code brought; never of the principal. Once a sale names a code, the creator cannot change its partner's address or share (S121). A sale by signature carries its code in the trader's signature, so whoever sends it cannot give the sale to another code (S122). For 180 days from its opening (S124) the creator can neither close the pool (S125) nor take back what it put in: a withdrawal before then takes profit only (S126). Only the platform's closer may close a pool sooner, and the money still goes to the traders, the partners and the creator as at any finish.",
+          "text": "withdraws only by a request a week old (S127, S128), carried out within three days of being ready (S130), and gets the less of what it asked and what may leave when it is carried out (S131): never more than it asked, and only what the pool can spare then, so payouts that came due meanwhile come first. A pool is finished a week after its close at the earliest (S129), so closing and finishing are never one block. What may leave is only what stays above three payouts of the largest size and above every payout owed and every payout set aside for a trader whose transfer was refused (S117), and it stops nobody's payout. Every sale names a trading group's code (S123), and a partner's share is of the pool's money above what the creator put in, after what the pool owes, holds and keeps for a recent stop, in the part of all the pool took that its code brought; never of the principal. Once a sale names a code, the creator cannot change its partner's address or lower its share; it can only raise the share, within the bounds (S121). A sale by signature carries its code in the trader's signature, so whoever sends it cannot give the sale to another code (S122). For 180 days from its opening (S124) the creator can neither close the pool (S125) nor take back what it put in: a withdrawal before then takes profit only (S126). Only the platform's closer may close a pool sooner, and the money still goes to the traders, the partners and the creator as at any finish.",
           "sources": [
             "S127",
             "S128",
@@ -1256,10 +1256,10 @@
     },
     {
       "id": "S121",
-      "where": "src/sim/SimPool.sol:645",
+      "where": "src/sim/SimPool.sol:648",
       "kind": "line",
-      "text": "if (c.used) revert CodeUsed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L645"
+      "text": "if (c.used && (partner != c.partner || bps <= c.bps)) revert CodeUsed();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L648"
     },
     {
       "id": "S122",
@@ -1270,10 +1270,10 @@
     },
     {
       "id": "S123",
-      "where": "src/sim/SimPool.sol:714",
+      "where": "src/sim/SimPool.sol:717",
       "kind": "line",
       "text": "if (partner == address(0)) revert NoSuchCode();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L714"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L717"
     },
     {
       "id": "S124",
@@ -1284,10 +1284,10 @@
     },
     {
       "id": "S125",
-      "where": "src/sim/SimPool.sol:672",
+      "where": "src/sim/SimPool.sol:675",
       "kind": "line",
       "text": "revert Locked();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L672"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L675"
     },
     {
       "id": "S126",
@@ -1312,10 +1312,10 @@
     },
     {
       "id": "S129",
-      "where": "src/sim/SimPool.sol:687",
+      "where": "src/sim/SimPool.sol:690",
       "kind": "line",
       "text": "if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L687"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L690"
     },
     {
       "id": "S130",

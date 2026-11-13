@@ -121,7 +121,8 @@ class TheFirstPool(unittest.TestCase):
         for name in ("sim-first-pool", "sim-measure-pool"):
             text = json.loads((ROOT / f"deployments/plans/{name}.json").read_text(encoding="utf-8"))["terms_text"]
             self.assertIn("Every exam is bought with a trading group's code", text)
-            self.assertIn("once a sale names a code, neither changes", text)
+            self.assertIn("once a trader has used a code, its owner never changes and its share can be raised, never "
+                          "lowered", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
             self.assertIn("The pool runs at least 180 days from its opening", text)
             self.assertIn("only the platform can close it sooner, with the money going where it would anyway", text)
@@ -205,8 +206,14 @@ class TheCodes(unittest.TestCase):
         chain = {b"a" * 32: (p1, 5000, True), b"b" * 32: (p1, 4000, False), b"c" * 32: (d.ZERO, 0, False)}
         self.assertEqual([t for t, *_ in d.to_set(codes, chain.__getitem__)], ["B", "C"], "A is there already")
         chain[b"a" * 32] = (p1, 6000, True)
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit) as caught:
             d.to_set(codes, chain.__getitem__)
+        self.assertIn("its share can only rise, for the same partner", str(caught.exception))
+        chain[b"a" * 32] = (p1, 4000, True)
+        self.assertEqual([t for t, *_ in d.to_set(codes, chain.__getitem__)], ["A", "B", "C"], "A raised from 40 to 50 %")
+        chain[b"a" * 32] = (p2, 4000, True)
+        with self.assertRaises(SystemExit):
+            d.to_set(codes, chain.__getitem__)  # another partner, even with a higher share
 
 
 class TheClosing(unittest.TestCase):
