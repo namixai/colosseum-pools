@@ -70,6 +70,8 @@ TRIGGER_TOPICS = [TRIGGER_SET, TRIGGER_CLEARED, TRIGGER_FILLED]
 EXAM_STATUS = ("None", "Active", "Passed", "Breached", "Expired")
 PAYOUT_STATE = ("None", "Due", "Stopped", "Paid", "Held", "Refused")
 EXAM_TERMS = "(uint64,uint16[],uint32,uint32,uint16,uint32,uint16,uint16)"
+RULES = "(uint16,uint16,uint32,uint32[],uint32[])"
+TRIGGER = "(uint64,uint64,uint64,uint64)"
 PAYOUT = "(address,address,uint64,uint64,uint8,bool,uint64,bool)"
 # SimPoolFactory's PAYOUT_DELAY and PAYOUT_HARD: a payout is due 72 hours after its claim once approved,
 # and 7 days after it whether approved or not (the test holds them to the source).
@@ -301,6 +303,10 @@ class SimKeeper:
             max_idle = view(a, "terms()", EXAM_TERMS)[3]
             over = (deadline and now > deadline) or (max_idle and now > last_fill + max_idle)
             snapshot_due = core.in_checkpoint_window(now) and view(a, "day()", "uint32") < now // 86_400
+            try:
+                self.refresh_triggers(a)
+            except Exception as exc:
+                log("triggers_unread", account=a, error=str(exc)[:200])
         fund_window = view(info["pool"], "fundWindow()", "uint32") if info["kind"] == "exam" else 0
         for call in account_calls(info["kind"], status, now, passed_at=passed_at, fund_window=fund_window,
                                   broken=bool(broken), over=bool(over), snapshot_due=bool(snapshot_due)):
@@ -430,6 +436,19 @@ class SimKeeper:
             except Exception as exc:  # the next block's price may not hold it; tried again next block
                 log("trigger_fill_failed", exam=exam, asset=asset, take=is_take, error=refusal(exc))
         return sent
+
+    def refresh_triggers(self, exam: str) -> None:
+        """The exam's stops and takes as the contract holds them, read in every slow pass: a keeper started again
+        knows the ones set while it was down, which the fast loop's window of logs no longer reaches (review of
+        #297)."""
+        for asset in view(exam, "rules()", RULES)[3]:
+            for is_take, getter in ((False, "stopOf(uint32)"), (True, "takeOf(uint32)")):
+                px, _, armed_at, _ = view(exam, getter, TRIGGER, ["uint32"], [asset])
+                key = (exam, int(asset), is_take)
+                if px:
+                    self.triggers[key] = int(armed_at)
+                else:
+                    self.triggers.pop(key, None)
 
     def account_done(self, exam: str) -> bool:
         return exam in self.done

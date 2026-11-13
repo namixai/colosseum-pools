@@ -1192,10 +1192,10 @@
     },
     {
       "id": "S111",
-      "where": "src/exam/PaperExam.sol:666",
+      "where": "src/exam/PaperExam.sol:678",
       "kind": "line",
       "text": "if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L666"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L678"
     },
     {
       "id": "S112",

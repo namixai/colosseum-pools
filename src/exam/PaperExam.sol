@@ -440,6 +440,16 @@ contract PaperExam is Initializable {
         uint64 sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;
         _clear(asset, isTake);
         (uint64 px, uint256 cost, uint8 source) = _apply(asset, before < 0, sz, before);
+        // An order waiting on this asset was made for the position the trigger has just closed: it would open the
+        // other side with no stop, and the trader could not take it back inside its window (review of #297).
+        Order memory o = pending;
+        if (positionOf[asset] == 0 && o.sz != 0 && o.asset == asset) {
+            delete pending;
+            emit Lapsed(o.asset, o.isBuy, o.sz);
+        }
+        // A trade like any fill for whoever reads `Filled` (the checker's pairs, the days with a fill), with no lateness
+        // of a window; `TriggerFilled` right after it says it was a stop or a take (review of #297).
+        emit Filled(asset, before < 0, sz, px, cost, 0, source);
         emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source);
     }
 
@@ -523,6 +533,8 @@ contract PaperExam is Initializable {
         cash -= delta * int256(uint256(px)) + int256(cost);
 
         if (_abs(afterFill) > _abs(before)) {
+            // A position never outgrows a size an order or a trigger can name, so a trigger closes all of it.
+            if (_abs(afterFill) > type(uint64).max) revert OverLeverage();
             (int256 eq, uint256 open) = _book();
             if (eq <= 0 || open * 100 > uint256(eq) * _rules.maxLeverageX100 || _overAssetCap(eq)) {
                 revert OverLeverage();

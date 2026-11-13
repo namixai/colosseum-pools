@@ -436,6 +436,45 @@ class TheTriggers(unittest.TestCase):
             self.assertEqual(sk.trigger_step(5), [self.EXAM])
         send.assert_not_called()
 
+    def test_a_keeper_started_again_reads_the_triggers_from_the_exam(self):
+        sk = self.keeper()  # nothing from the logs: it was down when they were set
+        state = {("stopOf(uint32)", 3): (950_000, 0, 12, 0), ("takeOf(uint32)", 3): (0, 0, 0, 0),
+                 ("stopOf(uint32)", 4): (0, 0, 0, 0), ("takeOf(uint32)", 4): (2_600_000, 10, 15, 0)}
+
+        def view(to, sig, out="uint256", types=(), args=()):
+            self.assertEqual(to, self.EXAM)
+            if sig == "rules()":
+                return (300, 600, 1000, [3, 4], [])
+            return state[(sig, args[0])]
+
+        with mock.patch.object(k, "view", side_effect=view):
+            sk.refresh_triggers(self.EXAM)
+        self.assertEqual(sk.triggers, {(self.EXAM, 3, False): 12, (self.EXAM, 4, True): 15})
+        state[("stopOf(uint32)", 3)] = (0, 0, 0, 0)  # carried out by someone else meanwhile
+        with mock.patch.object(k, "view", side_effect=view):
+            sk.refresh_triggers(self.EXAM)
+        self.assertEqual(sk.triggers, {(self.EXAM, 4, True): 15})
+
+    def test_a_running_exams_triggers_are_read_in_the_slow_pass(self):
+        sk = self.keeper()
+        answers = {"accountOf(address)": (1, 0, False), "result()": (1, "0x" + "77" * 20, 10_000, 0)}
+        reads = {"violation()": 0, "deadline()": 0, "lastFillAt()": 0, "day()": 10**9, "fundWindow()": 604_800}
+
+        def view(to, sig, out="uint256", *a):
+            return (0, [], 0, 0, 0, 0, 1, 1) if sig == "terms()" else reads[sig]
+
+        with mock.patch.object(k.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
+                mock.patch.object(k, "view", side_effect=view), mock.patch.object(sk, "refresh_triggers") as refresh, \
+                mock.patch.object(sk, "send", return_value=True):
+            sk.account_pass(self.EXAM, 1_000)
+        refresh.assert_called_once_with(self.EXAM)
+
+    def test_the_getters_read_are_the_contracts(self):
+        src = (ROOT / "src/exam/PaperExam.sol").read_text()
+        self.assertIn("mapping(uint32 asset => Trigger) public stopOf;", src)
+        self.assertIn("mapping(uint32 asset => Trigger) public takeOf;", src)
+        self.assertIn("struct Trigger {\n        uint64 px;\n        uint64 sz;\n        uint64 armedAt;\n        uint64 seenAt;\n    }", src)
+
     def test_an_exam_that_is_done_drops_its_triggers(self):
         sk = self.keeper()
         sk._trigger(trigger_log(self.EXAM, k.TRIGGER_SET, 3, True, armed_at=1))
