@@ -120,7 +120,7 @@ class ACleanPayout(unittest.TestCase):
         got = r.review(ch.d, POOL, 0)
         due = ch.d["now"] + 3_600
         self.assertEqual((got["claimedAt"], got["hardAt"]), (due - 48 * 3600, due - 48 * 3600 + 8 * 86_400))
-        self.assertIn(f"paid unapproved at {got['hardAt']}", r.summary(got))
+        self.assertIn(f"paid unapproved from {got['hardAt']}", r.summary(got))
 
     def test_a_ceiling_not_read_offers_nothing_and_says_no_time(self):
         for times in ({"delay": 72 * 3600, "hard": None}, {"delay": None, "hard": 7 * 86_400}):

@@ -62,7 +62,7 @@ PAYOUT_DELAY = 72 * 3600
 PAYOUT_HARD = 7 * 24 * 3600
 PAYOUT_BEFORE_APPROVALS = chk.PAYOUT_BEFORE_APPROVALS
 ZERO_ADDRESS = "0x" + "00" * 20
-NO_APPROVER = ("the pool names no approver: the payout goes out unapproved at its ceiling, unless it is stopped; "
+NO_APPROVER = ("the pool names no approver: the payout goes out unapproved from its ceiling on, unless it is stopped; "
                "there is nobody to sign an approval")
 APPROVED = "approved already: it is paid from its due time, unless it is stopped; nothing more to sign"
 
@@ -369,8 +369,10 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
 def summary(r: dict) -> str:
     """The review in a few lines of text."""
     # Three answers here too (review of #283): a ceiling, no approval at all, or not read, which says no time.
+    # "From", never "at": a payout is paid by a call, in the order of the claims and ten a call at most, so its time
+    # is the earliest it can be paid, as the pool's terms say.
     when = (", approved: paid from then" if r["approvals"] is True and r["approved"] else
-            f", paid unapproved at {r['hardAt']}" if r["approvals"] is True else
+            f", paid unapproved from {r['hardAt']}" if r["approvals"] is True else
             ", paid by itself then" if r["approvals"] is False else ", not read when it is paid")
     lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}" + when,
              f"  stage {r['stage']} ({r['fills']['stage']} fills), exam {r['exam']} ({r['fills']['exam']} fills)"]
