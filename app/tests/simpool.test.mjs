@@ -693,6 +693,12 @@ test("counts per trader and per code: breached and expired apart, an unread acco
   assert.deepEqual(EXAM_END, { 3: "breached", 4: "expired" });
   // A fill whose block time was not read: the days are not guessed.
   assert.equal(activityCounts(pool, logs, new Map([[1, 0]])).traders.find((k) => k.trader === T1.toLowerCase()).fillDays, null);
+  // The zero hash is a code like any other: the pool lets a creator set it with a partner, and a sale can name no code
+  // without one (SimPool._sold reverts NoSuchCode), so it is counted, not taken for "no code" (review of #281).
+  const ZERO_CODE = `0x${"0".repeat(64)}`;
+  const zero = activityCounts([ev("ExamSold", 9, { exam: A(0xe9), trader: T1, line: 0n, size: 1n, price: 10n, fee: 0n,
+    bySignature: false, code: ZERO_CODE, partner: P1 })], {}, new Map());
+  assert.deepEqual(zero.codes.map((k) => [k.code, k.partner, k.purchases]), [[ZERO_CODE, P1.toLowerCase(), 1]]);
 });
 
 test("a withdrawal waits a week from its request, then three days to carry it out; finish a week after the close", () => {

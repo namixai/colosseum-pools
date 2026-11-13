@@ -835,13 +835,13 @@ export function activityCounts(events, examLogs, times) {
         both(account, (x) => { x.fills += 1; });
         if (t) {
           const time = times?.get?.(e.block);
-          const set = one(days, t, () => new Set());
-          if (time === undefined || time === null) set.unknown = true;
-          else set.add(Math.floor(Number(time) / 86_400));
+          const entry = one(days, t, () => ({ days: new Set(), unknown: false }));
+          if (time === undefined || time === null) entry.unknown = true;
+          else entry.days.add(Math.floor(Number(time) / 86_400));
         }
       }
     }
   }
-  for (const [t, set] of days) traders.get(t).fillDays = set.unknown ? null : set.size;
+  for (const [t, entry] of days) traders.get(t).fillDays = entry.unknown ? null : entry.days.size;
   return { traders: [...traders.values()], codes: [...codes.values()], unread };
 }
