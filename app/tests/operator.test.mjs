@@ -85,6 +85,8 @@ test("the creator's calls are the Safe's, a cancel is the closer's or the creato
   assert.equal(closeCall({ pool: POOL, by: "closer", lockedUntil: 100, now: 50, keccak256 }).signer, "closer");
   assert.equal(closeCall({ pool: POOL, by: "creator", lockedUntil: 100, now: 100, keccak256 }).data, "0x43d726d6");
   assert.throws(() => closeCall({ pool: POOL, by: "creator", lockedUntil: 100, now: 99, keccak256 }), /end of the term/);
+  assert.throws(() => closeCall({ pool: POOL, by: "creator", now: 100, keccak256 }), /term and the time are needed/);
+  assert.throws(() => closeCall({ pool: POOL, by: "creator", lockedUntil: 100, keccak256 }), /term and the time are needed/);
 });
 
 // ── the payouts waiting ────────────────────────────────────────────
@@ -128,6 +130,14 @@ test("each payout waiting has its claim, its 72 hours and its ceiling, and the m
   assert.equal(PAYOUT_HARD, 7 * D);
 });
 
+test("a hole in the list of payouts is skipped, and a payout's own id is kept", () => {
+  const structs = [];
+  structs[2] = { ...payout(2, { claimedAt: NOW - D }) };
+  structs[5] = { ...payout(5, { claimedAt: NOW - D }), id: 9n };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256 });
+  assert.deepEqual(rows.map((r) => r.id), [2, 9]);
+});
+
 test("a pool without the field says approved by its events", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
   const rows = awaitingApproval({ pool: POOL, structs, events: [{ name: "PayoutApproved", args: { id: 1n } }], now: NOW, keccak256 });
@@ -150,6 +160,7 @@ test("a review is shown only where it is of this very payout and names the call 
     [{ trader: OTHER }, /another trader/],
     [{ amount: "1" }, /another amount/],
     [{ readAt: { block: 1, time: NOW - 2 * D } }, /before the claim/],
+    [{ readAt: { block: 1 } }, /before the claim/],
     [{ call: { kind: "approve", data: "0xd6532c4d00" } }, /call data is not its call/],
     [{ call: { kind: "stop", args: [0, 1, OTHER, [A], []] } }, /would refuse: a pair needs both trades/],
     [{ call: {} }, /no call/],
@@ -226,6 +237,7 @@ test("the pool's state: what is free of what it owes, holds and keeps for stops,
   const closed = poolState({ ...reads, closed: true, closedEarly: true, closedAt: BigInt(NOW) }, NOW);
   assert.deepEqual([closed.term.state, closed.finishFrom], ["closed-early", NOW + WITHDRAW_DELAY]);
   assert.equal(poolState({}, NOW).term, null, "a pool without the term says nothing of it");
+  assert.equal(poolState(undefined, NOW).balance, 0n, "nothing read: zeros, not a throw");
 });
 
 test("the ABI names the calls and events the functions build and read", () => {

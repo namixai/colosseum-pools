@@ -170,7 +170,11 @@ export function cancelWithdrawCall({ pool, by = "closer", keccak256 }) {
 
 /** Closes the pool: the closer at any time (before the term that is an early close), the creator from the term on. */
 export function closeCall({ pool, by, lockedUntil, now, keccak256 }) {
-  if (by === "creator" && Number(now) < Number(lockedUntil)) throw new Error("the creator closes only from the end of the term");
+  if (by === "creator") {
+    // Not read is not "the term is over": a missing time would compare as NaN, and NaN is never less.
+    if (now == null || lockedUntil == null) throw new Error("the term and the time are needed before the creator closes");
+    if (Number(now) < Number(lockedUntil)) throw new Error("the creator closes only from the end of the term");
+  }
   if (by !== "creator" && by !== "closer") throw new Error("only the creator or the closer closes a pool");
   return call(pool, "close()", [], by, keccak256);
 }
@@ -190,7 +194,10 @@ function eventsNamed(events, name) {
 export function awaitingApproval({ pool, structs, events = [], now, reviews = {}, keccak256 }) {
   const approvedEv = new Set(eventsNamed(events, "PayoutApproved").map((e) => Number(e.args.id)));
   const out = [];
-  [...structs].forEach((p, id) => {
+  [...structs].forEach((p, index) => {
+    // A hole in the list (a payout not read) is skipped, not taken for a payout; its id is its own where given.
+    if (!p) return;
+    const id = p.id !== undefined ? Number(p.id) : index;
     if (Number(p.state ?? p[4]) !== 1) return;
     const dueAt = Number(p.dueAt ?? p[3]);
     const claimedAt = dueAt - PAYOUT_DELAY;
@@ -231,7 +238,9 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   if (Number(doc.id) !== Number(payout.id)) return no("a review of another payout");
   if (String(doc.trader).toLowerCase() !== String(payout.trader).toLowerCase()) return no("a review naming another trader");
   if (BigInt(doc.amount) !== BigInt(payout.amount)) return no("a review of another amount");
-  if (!doc.readAt || Number(doc.readAt.time) < Number(payout.claimedAt)) return no("a review read before the claim");
+  if (!doc.readAt || doc.readAt.time == null || !(Number(doc.readAt.time) >= Number(payout.claimedAt))) {
+    return no("a review read before the claim");
+  }
   const action = doc.action ?? "approve";
   const c = doc.call ?? {};
   if (action === "hold") {
@@ -286,7 +295,7 @@ export function withdrawRequest({ pool, requested, readyAt, now, keccak256 }) {
  * kept for recent stops; what is free of those; what the creator put in and may take now; how many exams and stages
  * are live; the 180-day term in the library's own words (termNote); when `finish` can come, if closed.
  */
-export function poolState(reads, now) {
+export function poolState(reads = {}, now) {
   const big = (k) => BigInt(reads[k] ?? 0);
   const balance = big("balance");
   const owed = big("owed");
