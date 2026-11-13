@@ -51,6 +51,7 @@ from spike.hlspike import common as c
 PAYOUT_DUE = "0x" + keccak(text="PayoutDue(uint256,address,address,uint64,uint64)").hex()
 TRANSFER = chk.TRANSFER
 PAYOUT_BPS = 800
+FLOOR_PAYOUTS = 3  # SimPoolFactory.FLOOR_PAYOUTS
 BPS = 10_000
 # The pool's call that lets payouts through once their 72 hours are over, from its approver. Not on main yet: the
 # name and the arguments are the design's (approval with a ceiling, 13 November), and a test holds them to the
@@ -201,7 +202,7 @@ def running(pool: str, chain: dict) -> dict:
     for f in chain["funded"]:
         if f["pool"] == pool:
             lines[f["stage"]] = lines.get(f["exam"], 0)
-    exams = stages = worst = 0
+    exams = stages = worst = stages_worst = 0
     funded_exams = {f["exam"] for f in chain["funded"]}
     stage_accounts = {f["stage"] for f in chain["funded"]}
     # An account not read may be running: its payout is not in `worst`, so the total is not complete (review of #283).
@@ -212,13 +213,23 @@ def running(pool: str, chain: dict) -> dict:
             continue
         if a in stage_accounts:
             stages += 1
+            stages_worst += payout_of(size)
         else:
             exams += 1
         worst += payout_of(size)
     book = chain["books"][pool]
     free = book["balance"] - book["owed"] - book["held"] - book["reserved"]
-    return {"exams": exams, "stages": stages, "worst": worst, "free": free, "enough": free >= worst and not unread,
-            "unread": unread}
+    # What the pool itself keeps above that (SimPool.withdrawable): the larger of FLOOR_PAYOUTS of the largest
+    # payout and `staged`, the payouts of its running stages. `worst` here is stricter: it counts the running exams
+    # too, each as if it passed. Where the pool answers `staged`, the stages counted here are held to it.
+    staged = book.get("staged")
+    largest = book.get("largestPayout")
+    out = {"exams": exams, "stages": stages, "worst": worst, "free": free, "enough": free >= worst and not unread,
+           "unread": unread, "staged": staged,
+           "floor": max(largest * FLOOR_PAYOUTS, staged) if staged is not None and largest is not None else None,
+           "stagesWorst": stages_worst}
+    out["stagedMatches"] = None if staged is None else staged == stages_worst
+    return out
 
 
 def stop_call(pool: str, pid: int, reason: int, paired: str, trades: list[str], links: list[str]) -> dict:
@@ -387,6 +398,14 @@ def logs(address, topics: list, lo: int, hi: int) -> list[dict]:
     return out
 
 
+def optional_view(pool: str, sig: str) -> int | None:
+    """A uint256 getter a newer pool has and an older one does not: None where it reverts."""
+    try:
+        return int(core.view(pool, sig, "uint256"))
+    except Exception:
+        return None
+
+
 def has_approvals(pool: str) -> bool:
     """Whether the pool takes approvals: it answers `approver()`. A pool without it reverts, and pays at 72 hours by
     itself."""
@@ -413,7 +432,8 @@ def read_chain(record: dict) -> dict:
         x["state"], x["wasStopped"] = sk.PAYOUT_STATE[p[4]], bool(p[5])
     books = {pool: {"balance": c.call_view(usdc, "balanceOf(address)", ["address"], [pool], ["uint256"])[0],
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
-                    "approvals": has_approvals(pool)}
+                    "approvals": has_approvals(pool), "largestPayout": core.view(pool, "largestPayout()", "uint64"),
+                    "staged": optional_view(pool, "staged()")}
              for pool in pools}
     pool_of = {s["exam"]: s["pool"] for s in sales} | {f["stage"]: f["pool"] for f in funded}
     accounts = list(pool_of)

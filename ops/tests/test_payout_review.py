@@ -383,6 +383,21 @@ class WhatThePoolWouldTake(unittest.TestCase):
         a, b = ch.send(funder, t1), ch.send(funder, t9)
         self.assertEqual(r.review(ch.d, POOL, 0)["stop"]["links"], [a, b], "a sender of the two alone still links them")
 
+    def test_the_pools_own_floor_and_staged_beside_the_stricter_total(self):
+        ch, _, _ = honest_world()
+        ch.d["books"][POOL].update(staged=0, largestPayout=800 * 10**6)
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual((got["staged"], got["floor"], got["stagesWorst"], got["stagedMatches"]),
+                         (0, 3 * 800 * 10**6, 0, True), "no stage running: the floor is three of the largest")
+        self.assertEqual(got["worst"], 8 * 800 * 10**6, "the eight running exams, each as if it passed")
+        ch.d["books"][POOL]["staged"] = 800 * 10**6
+        self.assertFalse(r.review(ch.d, POOL, 0)["running"]["stagedMatches"], "the pool keeps a stage this count does not see")
+        ch.stage(addr(0x110), addr(0x210), addr(0x310), status="Active", done=False)  # one of the eight starts its stage
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual((got["stages"], got["stagesWorst"], got["stagedMatches"]), (1, 800 * 10**6, True))
+        del ch.d["books"][POOL]["staged"]
+        self.assertIsNone(r.review(ch.d, POOL, 0)["running"]["floor"], "an older pool without staged: not guessed")
+
     def test_an_account_not_read_makes_the_pool_total_incomplete(self):
         ch, _, _ = honest_world()
         ch.d["unread"] = [addr(0x210)]
@@ -428,7 +443,8 @@ class ReadingTheChain(unittest.TestCase):
                 return fill_logs
             return pool_logs
 
-        views = {("pools()",): [POOL], ("owed()",): 800, ("held()",): 0, ("reserved()",): 0,
+        views = {("pools()",): [POOL], ("owed()",): 800, ("held()",): 0, ("reserved()",): 0, ("largestPayout()",): 800,
+                 ("staged()",): 1_600,
                  ("payout(uint256)",): (s1, t1, 800, 5_000, 1, False, 0)}
 
         def view(a, sig, out, types=(), args=()):
@@ -449,7 +465,8 @@ class ReadingTheChain(unittest.TestCase):
                                            "dueAt": 5_000, "block": 30, "state": "Due", "wasStopped": False}])
         self.assertEqual(got["fills"], [{"account": s1, "asset": 3, "buy": True, "sz": 100, "t": 2_500, "tx": tx(4), "late": 4}])
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
-        self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "approvals": True}})
+        self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "approvals": True,
+                                               "largestPayout": 800, "staged": 1_600}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         review = r.review(got, POOL, 7)
         self.assertEqual((review["exam"], review["size"], review["verdict"]), (e1, SIZE, "clean"))
