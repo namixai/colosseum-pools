@@ -20,7 +20,8 @@ Two loops in one process:
                    stages (`ExamSold`, `Funded`, read in windows of --log-window blocks); for each
                    live one, `checkpoint` in the first minutes of a UTC day, `breach` when a rule is
                    broken now, `expire` past its time, `release` once it can do nothing more,
-                   `claimPayout` for a passed stage; for each pool, `pay` while a payout is due.
+                   `claimPayout` for a passed stage; for each pool, `pay` while a payout is due: approved
+                   and past its 72 hours, or past its 7 days unapproved.
 
 The day's snapshot is what the daily loss is measured from: without it the base stays yesterday's,
 and a trader who leaves it after a good day loosens their own limit. The keeper takes it.
@@ -65,7 +66,11 @@ LAPSED = "0x" + keccak(text="Lapsed(uint32,bool,uint64)").hex()
 EXAM_STATUS = ("None", "Active", "Passed", "Breached", "Expired")
 PAYOUT_STATE = ("None", "Due", "Stopped", "Paid", "Held", "Refused")
 EXAM_TERMS = "(uint64,uint16[],uint32,uint32,uint16,uint32,uint16,uint16)"
-PAYOUT = "(address,address,uint64,uint64,uint8,bool,uint64)"
+PAYOUT = "(address,address,uint64,uint64,uint8,bool,uint64,bool)"
+# SimPoolFactory's PAYOUT_DELAY and PAYOUT_HARD: a payout is due 72 hours after its claim once approved,
+# and 7 days after it whether approved or not (the test holds them to the source).
+PAYOUT_DELAY = 72 * 3600
+PAYOUT_HARD = 7 * 86_400
 # A fill's gas, fixed: an estimate first would cost a block. PaperExam's fill, with sixteen assets
 # open, is under it (forge test --gas-report).
 FILL_GAS = 400_000
@@ -94,12 +99,23 @@ def account_calls(kind: str, status: str, now: int, *, passed_at: int = 0, fund_
     return []
 
 
-def pay_due(head: int, count: int, state: str, due_at: int, now: int) -> bool:
-    """Whether `pay` would pay something: the first unsettled payout is due and its time has come, or
-    it is settled and later ones may be (pay walks past it)."""
-    if head >= count:
+def payable(state: str, due_at: int, approved: bool, now: int) -> bool:
+    """Whether `pay` pays this payout now: waiting, and past its 72 hours once approved or past its 7
+    days from its claim whether approved or not."""
+    if state != "Due" or now < due_at:
         return False
-    return state != "Due" or due_at <= now
+    return approved or now >= due_at - PAYOUT_DELAY + PAYOUT_HARD
+
+
+def pay_due(rows: list[tuple[str, int, bool]], now: int) -> bool:
+    """Whether `pay` would pay something, from the payouts it would look at, the head first: one of
+    them is payable, or the head is settled and `pay` would move past it. A payout waiting for its
+    approval keeps the head, and the keeper does not call `pay` for it before its 7 days."""
+    if not rows:
+        return False
+    if rows[0][0] != "Due":
+        return True
+    return any(payable(state, due_at, approved, now) for state, due_at, approved in rows)
 
 
 def fill_now(fill_from: int, fill_until: int, latest: int) -> bool:
@@ -267,8 +283,11 @@ class SimKeeper:
         count = view(pool, "payoutCount()", "uint256")
         if head >= count:
             return
-        p = view(pool, "payout(uint256)", PAYOUT, ["uint256"], [head])
-        if pay_due(head, count, PAYOUT_STATE[p[4]], p[3], now):
+        rows = []
+        for pid in range(head, min(count, head + PAY_PER_CALL)):
+            p = view(pool, "payout(uint256)", PAYOUT, ["uint256"], [pid])
+            rows.append((PAYOUT_STATE[p[4]], p[3], bool(p[7])))
+        if pay_due(rows, now):
             self.send(pool, "pay(uint256)", ["uint256"], [PAY_PER_CALL])
 
     def slow_pass(self) -> None:

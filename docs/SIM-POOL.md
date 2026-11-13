@@ -45,17 +45,26 @@ fail, and their prices pay for the ones that pass.
 - **The stage.** `fund(exam)`: the trader, within the plan's window after the pass, starts a second
   paper exam on the same size. Nothing moves.
 - **The payout.** `claimPayout(stage)` once the stage has passed, by anyone, and by the keeper in its next
-  slow pass (every 30 seconds): 8 % of the size, due 72 hours after the claim. The keeper sends `pay` in its
-  first pass after that, so a trader is paid 72 hours and about a minute after passing, or later, in order, if
-  the pool does not hold enough then. `pay(max)`, by anyone, pays what is due in the order it came due while the pool's USDC
-  covers the next; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from
+  slow pass (every 30 seconds): 8 % of the size. It is due 72 hours after the claim once the pool's
+  approver has approved it (`approvePayouts`, `PayoutApproved`), and 7 days after the claim whether
+  approved or not (`PAYOUT_HARD`, `payoutHardAt`): the trader's money never waits on the approver
+  longer. The creator names the approver (`setApprover`, `ApproverSet`; zero for none, and every
+  payout then waits the 7 days); approving sets neither the amount nor the trader. The keeper sends
+  `pay` in its first pass after a payout is due, so an approved payout is paid 72 hours and about a
+  minute after the claim, or later, in order, if the pool does not hold enough then. `pay(max)`, by
+  anyone, looks at up to `max` waiting payouts in the order they came due and pays each that is due
+  while the pool's USDC covers it; one still waiting for its approval keeps its place: `pay` moves
+  on to later ones, but pays one only if the money covers every such payout before it too, and the
+  queue's head stays at the first unpaid; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from
   the prices that come in. A payout the token refuses to send (say the trader's address was blocked)
   is set aside for the trader (`PayoutHeld`), who takes it to any address with `claimHeld`, also
   after the pool has finished; the queue moves on. One stage, one payout: the stage has one step and its pass ends it.
-- **A stop.** Until a payout is due, the factory's checker may stop it once, with a reason: 1,
-  opposite positions with another account of the factory; 2, that and wallets linked. The call
+- **A stop.** Until a payout is paid, approved or not, the factory's checker may stop it once, with
+  a reason: 1, opposite positions with another account of the factory; 2, that and wallets linked;
+  3, the result is disputed (a flaw of the exam, the oracle or the filler). For 1 and 2 the call
   names the other account, the transactions of the trades (at least two) and, for reason 2, the
-  transactions that link the wallets. A stopped payout's money stays in the pool, set aside for 14
+  transactions that link the wallets; for 3 it names no account, at least one transaction that shows
+  the flaw, and one hash, the keccak256 of the published text of the dispute. A stopped payout's money stays in the pool, set aside for 14
   days after the stop (`STOP_RESERVE`, `reserved`) as a held payout's is: the creator does not
   withdraw it, it is no profit for the partners' shares, and `pay` pays no other payout out of it.
   Within those days the trader may object on chain (`objectStop`, the keccak256 of the objection's
@@ -98,7 +107,8 @@ fail, and their prices pay for the ones that pass.
 Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE`); 0.5 % of each
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
-the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid (`PAYOUT_DELAY`); 14 days a
+the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid with the approver's approval (`PAYOUT_DELAY`), 7 days
+without it (`PAYOUT_HARD`); 14 days a
 stopped payout's money stays set aside and the stop can be lifted (`STOP_RESERVE`); 180 days a
 pool runs before its creator may close it or take back its principal (`MIN_TERM`); 7 days from a
 request to withdraw to its money, and from a close to `finish` (`WITHDRAW_DELAY`), and 3 days to

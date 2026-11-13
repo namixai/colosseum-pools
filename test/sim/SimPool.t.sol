@@ -38,6 +38,7 @@ contract SimPoolTest is Test {
     address creator = makeAddr("creator");
     address partner = makeAddr("partner");
     address closer = makeAddr("closer");
+    address approver = makeAddr("approver");
     /// The keccak256 of a trading group's code; `_open` sets it with no share.
     bytes32 constant CODE = keccak256("GROUP-ONE");
     address trader = makeAddr("trader");
@@ -115,7 +116,21 @@ contract SimPoolTest is Test {
         vm.startPrank(creator);
         pool = SimPool(factory.create{value: 1 ether}(p));
         pool.setCode(CODE, partner, 0);
+        pool.setApprover(approver);
         vm.stopPrank();
+    }
+
+    /// Claims a passed stage's payout and has the approver approve it: paid from its 72 hours.
+    function _claim(SimPool pool, address stage) internal returns (uint256 id) {
+        id = pool.claimPayout(stage);
+        _approve(pool, id);
+    }
+
+    function _approve(SimPool pool, uint256 id) internal {
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = id;
+        vm.prank(approver);
+        pool.approvePayouts(ids);
     }
 
     function _share(SimPool pool, uint16 bps) internal {
@@ -472,8 +487,8 @@ contract SimPoolTest is Test {
     function test_aRefusedTransferIsHeldForItsTrader_andTheQueueMovesOn() public {
         SimPool pool = _pool();
         _withSales(pool, 40);
-        uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));
-        uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
+        uint256 a = _claim(pool, address(_passedStage(pool, trader, 1)));
+        uint256 b = _claim(pool, address(_passedStage(pool, other, 1)));
         usdc.block_(trader); // say the token blocks the trader's address after the pass
         vm.warp(block.timestamp + 72 hours);
         vm.expectEmit(address(pool));
@@ -498,7 +513,7 @@ contract SimPoolTest is Test {
 
     function test_aTransferAnsweredFalseIsHeldToo() public {
         SimPool pool = _pool();
-        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256 id = _claim(pool, address(_passedStage(pool, trader, 1)));
         usdc.saysFalseTo(trader);
         vm.warp(block.timestamp + 72 hours);
         pool.pay(10);
@@ -508,14 +523,14 @@ contract SimPoolTest is Test {
 
     function test_pay_neverSpendsWhatIsHeldForAnotherTrader() public {
         SimPool pool = _pool();
-        pool.claimPayout(address(_passedStage(pool, trader, 1))); // A, 800
-        pool.claimPayout(address(_passedStage(pool, other, 1))); // C, 800
+        _claim(pool, address(_passedStage(pool, trader, 1))); // A, 800
+        _claim(pool, address(_passedStage(pool, other, 1))); // C, 800
         usdc.block_(trader);
         vm.warp(block.timestamp + 72 hours);
         pool.pay(10); // A's is held, C's is paid
         assertEq(pool.held(), LARGE_PAYOUT);
         assertLt(usdc.balanceOf(address(pool)) - pool.held(), 400e6, "what is free is under a small payout");
-        uint256 b = pool.claimPayout(address(_passedStage(pool, stranger, 0))); // B, 400
+        uint256 b = _claim(pool, address(_passedStage(pool, stranger, 0))); // B, 400
         vm.warp(block.timestamp + 72 hours);
         pool.pay(10);
         assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Due), "B waits; A's money is not B's");
@@ -532,7 +547,7 @@ contract SimPoolTest is Test {
         usdc.approve(address(pool), 3_400e6);
         pool.addToPot(3_400e6);
         vm.stopPrank();
-        pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        _claim(pool, address(_passedStage(pool, trader, 1)));
         deal(address(usdc), address(pool), 6_000e6);
         assertEq(pool.owed(), LARGE_PAYOUT);
         assertEq(pool.withdrawable(), 200e6, "before the term, the profit only");
@@ -547,7 +562,7 @@ contract SimPoolTest is Test {
 
     function test_finish_leavesWhatIsHeld_andTheTraderTakesItAfter() public {
         SimPool pool = _pool();
-        pool.claimPayout(address(_passedStage(pool, trader, 1))); // the locked 1 600 covers it
+        _claim(pool, address(_passedStage(pool, trader, 1))); // the locked 1 600 covers it
         usdc.block_(trader);
         vm.warp(block.timestamp + 72 hours);
         pool.pay(10);
@@ -620,6 +635,7 @@ contract SimPoolTest is Test {
         PaperExam stage = _passedStage(pool, trader, 1);
         vm.recordLogs();
         uint256 id = pool.claimPayout(address(stage));
+        _approve(pool, id);
         assertEq(pool.owed(), LARGE_PAYOUT);
         SimPool.Payout memory p = pool.payout(id);
         assertEq(p.amount, LARGE_PAYOUT);
@@ -645,7 +661,7 @@ contract SimPoolTest is Test {
 
     function test_aSmallStagePaysEightPercentOfItsOwnSize() public {
         SimPool pool = _pool();
-        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 0)));
+        uint256 id = _claim(pool, address(_passedStage(pool, trader, 0)));
         assertEq(pool.payout(id).amount, 400e6);
     }
 
@@ -707,7 +723,7 @@ contract SimPoolTest is Test {
     // ── stopping a payout ────────────────────────────────────────
 
     function _duePayout(SimPool pool) internal returns (uint256 id, address paired) {
-        id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        id = _claim(pool, address(_passedStage(pool, trader, 1)));
         paired = address(_buy(pool, other, 1));
     }
 
@@ -765,21 +781,33 @@ contract SimPoolTest is Test {
         pool.stopPayout(id, 1, there, _trades(), new bytes32[](0));
     }
 
-    function test_stop_onlyBeforeItIsDue_andOnce() public {
+    function test_stop_untilItIsPaid_approvedOrNot_andOnce() public {
         SimPool pool = _pool();
-        (uint256 id, address paired) = _duePayout(pool);
+        deal(address(usdc), address(pool), 10_000e6);
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        address paired = address(_buy(pool, other, 1));
         vm.warp(block.timestamp + 72 hours);
+        assertFalse(pool.payout(id).approved);
         vm.prank(checker);
-        vm.expectRevert(SimPool.NotDue.selector);
-        pool.stopPayout(id, 1, paired, _trades(), new bytes32[](0));
+        pool.stopPayout(id, 1, paired, _trades(), new bytes32[](0)); // past its 72 hours, not approved, not paid
 
         (uint256 id2, address paired2) = _duePayout(pool);
-        vm.startPrank(checker);
-        pool.stopPayout(id2, 1, paired2, _trades(), new bytes32[](0));
+        assertTrue(pool.payout(id2).approved);
+        vm.warp(block.timestamp + 72 hours);
+        vm.prank(checker);
+        pool.stopPayout(id2, 1, paired2, _trades(), new bytes32[](0)); // approved, not yet paid
+        vm.prank(checker);
         pool.liftStop(id2);
+        vm.prank(checker);
         vm.expectRevert(SimPool.BadPayout.selector);
-        pool.stopPayout(id2, 1, paired2, _trades(), new bytes32[](0));
-        vm.stopPrank();
+        pool.stopPayout(id2, 1, paired2, _trades(), new bytes32[](0)); // once
+        assertEq(pool.pay(10), 1);
+        (uint256 id3, address paired3) = _duePayout(pool);
+        vm.warp(block.timestamp + 72 hours);
+        pool.pay(10);
+        vm.prank(checker);
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.stopPayout(id3, 1, paired3, _trades(), new bytes32[](0)); // paid: too late
     }
 
     function test_liftStop_thePayoutIsDueAgainAndPaidAsAnyOther() public {
@@ -818,7 +846,7 @@ contract SimPoolTest is Test {
     function test_stopReserve_theCreatorDoesNotWithdrawIt_untilTheStopIsFinal() public {
         SimPool pool = _pool();
         _withSales(pool, 30);
-        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256 id = _claim(pool, address(_passedStage(pool, trader, 1)));
         _stop(pool, id);
         uint256 bal = usdc.balanceOf(address(pool));
         assertEq(pool.owed(), 0);
@@ -854,7 +882,7 @@ contract SimPoolTest is Test {
         usdc.approve(address(pool), 3_400e6);
         pool.addToPot(3_400e6);
         vm.stopPrank();
-        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256 id = _claim(pool, address(_passedStage(pool, trader, 1)));
         _stop(pool, id);
         deal(address(usdc), address(pool), 6_000e6);
         assertEq(pool.owed(), 0);
@@ -870,9 +898,9 @@ contract SimPoolTest is Test {
 
     function test_stopReserve_payNeverSpendsIt_soALiftedStopFindsItsMoney() public {
         SimPool pool = _pool();
-        uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));
-        uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
-        uint256 c = pool.claimPayout(address(_passedStage(pool, stranger, 1)));
+        uint256 a = _claim(pool, address(_passedStage(pool, trader, 1)));
+        uint256 b = _claim(pool, address(_passedStage(pool, other, 1)));
+        uint256 c = _claim(pool, address(_passedStage(pool, stranger, 1)));
         _stop(pool, a);
         // 1 600 + 3 x 84.575 in the pool, 800 of it kept for A's stop.
         vm.warp(block.timestamp + 72 hours);
@@ -895,7 +923,7 @@ contract SimPoolTest is Test {
         SimPool pool = _pool();
         uint256[4] memory id;
         address[4] memory who = [trader, other, stranger, makeAddr("fourth")];
-        for (uint256 i = 0; i < 4; ++i) id[i] = pool.claimPayout(address(_passedStage(pool, who[i], 1)));
+        for (uint256 i = 0; i < 4; ++i) id[i] = _claim(pool, address(_passedStage(pool, who[i], 1)));
         for (uint256 i = 1; i < 4; ++i) _stop(pool, id[i]);
         assertGt(pool.reserved(), usdc.balanceOf(address(pool)));
         vm.warp(block.timestamp + 72 hours);
@@ -907,8 +935,8 @@ contract SimPoolTest is Test {
 
     function test_stopReserve_liftOnlyWithinFourteenDaysOfTheStop() public {
         SimPool pool = _pool();
-        uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));
-        uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
+        uint256 a = _claim(pool, address(_passedStage(pool, trader, 1)));
+        uint256 b = _claim(pool, address(_passedStage(pool, other, 1)));
         _stop(pool, a);
         _stop(pool, b);
         assertEq(pool.payout(a).stoppedAt, block.timestamp);
@@ -923,7 +951,7 @@ contract SimPoolTest is Test {
 
     function test_stopReserve_theTraderObjectsOnChain_withinTheFourteenDays() public {
         SimPool pool = _pool();
-        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256 id = _claim(pool, address(_passedStage(pool, trader, 1)));
         bytes32 text = keccak256("The other account is not mine.");
         vm.prank(trader);
         vm.expectRevert(SimPool.BadPayout.selector);
@@ -945,7 +973,7 @@ contract SimPoolTest is Test {
 
     function test_stopReserve_finishWaitsForTheStopToBeFinal() public {
         SimPool pool = _pool();
-        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256 id = _claim(pool, address(_passedStage(pool, trader, 1)));
         _stop(pool, id);
         vm.prank(closer);
         pool.close();
@@ -964,9 +992,9 @@ contract SimPoolTest is Test {
     function test_payoutsAreQueuedInOrder_andTheCreatorWithdrawsNothingMeanwhile() public {
         SimPool pool = _pool();
         // Three passes on 1 600 locked and three prices: the third payout waits.
-        uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1)));
-        uint256 b = pool.claimPayout(address(_passedStage(pool, other, 1)));
-        uint256 c = pool.claimPayout(address(_passedStage(pool, stranger, 1)));
+        uint256 a = _claim(pool, address(_passedStage(pool, trader, 1)));
+        uint256 b = _claim(pool, address(_passedStage(pool, other, 1)));
+        uint256 c = _claim(pool, address(_passedStage(pool, stranger, 1)));
         assertEq(pool.withdrawable(), 0);
         vm.warp(block.timestamp + 72 hours);
         vm.expectEmit(address(pool));
@@ -1013,7 +1041,7 @@ contract SimPoolTest is Test {
         _withSales(pool, 30); // 30 x 84.575 = 2 537.25 in, 4 137.25 held
         uint256 bal = usdc.balanceOf(address(pool));
         assertEq(pool.withdrawable(), bal - 3 * LARGE_PAYOUT);
-        pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        _claim(pool, address(_passedStage(pool, trader, 1)));
         bal = usdc.balanceOf(address(pool));
         assertEq(pool.withdrawable(), bal - 3 * LARGE_PAYOUT - LARGE_PAYOUT, "and above what is owed");
         uint256 w = pool.withdrawable();
@@ -1369,8 +1397,8 @@ contract SimPoolTest is Test {
         pool.withdraw();
         // Within the week: more sales come in, and two stages pass and are claimed.
         _withSales(pool, 10);
-        pool.claimPayout(address(_passedStage(pool, trader, 1)));
-        pool.claimPayout(address(_passedStage(pool, other, 1)));
+        _claim(pool, address(_passedStage(pool, trader, 1)));
+        _claim(pool, address(_passedStage(pool, other, 1)));
         vm.warp(ready);
         uint256 now_ = pool.withdrawable();
         assertLt(now_, w0, "the payouts that came due come first");
@@ -1468,8 +1496,8 @@ contract SimPoolTest is Test {
         uint256 w = pool.withdrawable();
         _ask(pool, w);
         // Payouts claimed within the week take all of it.
-        pool.claimPayout(address(_passedStage(pool, trader, 1)));
-        pool.claimPayout(address(_passedStage(pool, other, 1)));
+        _claim(pool, address(_passedStage(pool, trader, 1)));
+        _claim(pool, address(_passedStage(pool, other, 1)));
         assertEq(pool.withdrawable(), 0);
         vm.prank(creator);
         vm.expectRevert(SimPool.TooMuch.selector);
@@ -1500,6 +1528,137 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         vm.expectRevert(SimPool.Done.selector);
         pool.withdraw();
+    }
+
+    // ── a payout goes out with the approver's approval, or 7 days after its claim ──
+
+    function test_approve_theApproverTheCreatorNames_onceAWaitingPayout() public {
+        SimPool pool = _pool();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = id;
+        address[3] memory notApprover = [creator, checker, stranger];
+        for (uint256 i = 0; i < 3; ++i) {
+            vm.prank(notApprover[i]);
+            vm.expectRevert(SimPool.NotApprover.selector);
+            pool.approvePayouts(ids);
+        }
+        vm.prank(stranger);
+        vm.expectRevert(SimPool.NotCreator.selector);
+        pool.setApprover(stranger);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutApproved(id, approver);
+        vm.prank(approver);
+        pool.approvePayouts(ids);
+        assertTrue(pool.payout(id).approved);
+        vm.prank(approver);
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.approvePayouts(ids); // once
+        ids[0] = id + 1;
+        vm.prank(approver);
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.approvePayouts(ids); // no such payout
+        uint256 id2 = pool.claimPayout(address(_passedStage(pool, other, 1)));
+        _stop(pool, id2);
+        ids[0] = id2;
+        vm.prank(approver);
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.approvePayouts(ids); // stopped
+        vm.expectEmit(address(pool));
+        emit SimPool.ApproverSet(stranger);
+        vm.prank(creator);
+        pool.setApprover(stranger);
+        assertEq(pool.approver(), stranger);
+    }
+
+    function test_pay_anUnapprovedPayoutGoesOutSevenDaysAfterItsClaim() public {
+        SimPool pool = _pool();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        assertEq(pool.payoutHardAt(id), block.timestamp + 7 days);
+        assertEq(factory.PAYOUT_HARD(), 7 days);
+        vm.warp(block.timestamp + 72 hours);
+        assertEq(pool.pay(10), 0, "72 hours, no approval: it waits");
+        vm.warp(pool.payoutHardAt(id) - 1);
+        assertEq(pool.pay(10), 0);
+        vm.warp(pool.payoutHardAt(id));
+        uint256 before = usdc.balanceOf(trader);
+        assertEq(pool.pay(10), 1, "7 days: it goes, approved or not");
+        assertEq(usdc.balanceOf(trader) - before, LARGE_PAYOUT);
+    }
+
+    function test_pay_withNoApprover_everyPayoutWaitsSevenDays() public {
+        SimPool pool = _pool();
+        vm.prank(creator);
+        pool.setApprover(address(0));
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = id;
+        vm.prank(address(0));
+        vm.expectRevert(SimPool.NotApprover.selector);
+        pool.approvePayouts(ids);
+        vm.warp(block.timestamp + 72 hours);
+        assertEq(pool.pay(10), 0);
+        vm.warp(pool.payoutHardAt(id));
+        assertEq(pool.pay(10), 1);
+    }
+
+    function test_pay_passesAnUnapprovedOne_butKeepsItsMoneyForIt() public {
+        SimPool pool = _pool();
+        uint256 a = pool.claimPayout(address(_passedStage(pool, trader, 1))); // not approved
+        uint256 b = _claim(pool, address(_passedStage(pool, other, 1)));
+        vm.warp(block.timestamp + 72 hours);
+        deal(address(usdc), address(pool), 1_000e6); // enough for one payout, not for both
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutQueued(b, 1_000e6);
+        assertEq(pool.pay(10), 0, "b would take a's money: it waits");
+        deal(address(usdc), address(pool), 1_600e6);
+        assertEq(pool.pay(10), 1, "both covered: b is paid, a waits for its approval");
+        assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Paid));
+        assertEq(uint8(pool.payout(a).state), uint8(SimPool.PayoutState.Due));
+        assertEq(pool.head(), a, "the head stays at the first unpaid");
+        vm.warp(pool.payoutHardAt(a));
+        assertEq(pool.pay(10), 1);
+        assertEq(pool.head(), 2);
+    }
+
+    function test_pay_looksAtMostAtMaxWaitingPayouts() public {
+        SimPool pool = _pool();
+        deal(address(usdc), address(pool), 10_000e6);
+        for (uint256 i = 0; i < 3; ++i) pool.claimPayout(address(_passedStage(pool, makeAddr(string(abi.encode("t", i))), 1)));
+        uint256 last = _claim(pool, address(_passedStage(pool, trader, 1)));
+        vm.warp(block.timestamp + 72 hours);
+        assertEq(pool.pay(3), 0, "three looked at, none approved");
+        assertEq(pool.pay(4), 1, "the fourth is");
+        assertEq(uint8(pool.payout(last).state), uint8(SimPool.PayoutState.Paid));
+        assertEq(pool.head(), 0);
+    }
+
+    function test_stop_reasonThree_theResultDisputed_noPairOneTextHash() public {
+        SimPool pool = _pool();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        bytes32[] memory one = new bytes32[](1);
+        one[0] = keccak256("fill 0x.. at block 123: the oracle stood 4 % off");
+        bytes32[] memory text = new bytes32[](1);
+        text[0] = keccak256("the published dispute");
+        vm.startPrank(checker);
+        vm.expectRevert(SimPool.BadReason.selector);
+        pool.stopPayout(id, 3, other, one, text); // no pair named
+        vm.expectRevert(SimPool.BadReason.selector);
+        pool.stopPayout(id, 3, address(0), new bytes32[](0), text); // a transaction at least
+        vm.expectRevert(SimPool.BadReason.selector);
+        pool.stopPayout(id, 3, address(0), one, new bytes32[](0)); // the text's hash
+        bytes32[] memory two = new bytes32[](2);
+        vm.expectRevert(SimPool.BadReason.selector);
+        pool.stopPayout(id, 3, address(0), one, two); // one hash, not two
+        vm.expectRevert(SimPool.BadPaired.selector);
+        pool.stopPayout(id, 1, address(0), _trades(), new bytes32[](0)); // reasons 1 and 2 still need a pair
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutStopped(id, trader, LARGE_PAYOUT, 3, address(0), one, text, 1, 0, 0);
+        pool.stopPayout(id, 3, address(0), one, text);
+        vm.stopPrank();
+        assertEq(pool.reserved(), LARGE_PAYOUT, "kept 14 days, as any stop");
+        vm.prank(trader);
+        pool.objectStop(id, keccak256("the exam was right"));
     }
 
     function test_finish_fromTheTerm_closeAndFinishAreNeverOneBlock() public {

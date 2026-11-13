@@ -326,6 +326,60 @@ class TheClosing(unittest.TestCase):
                 if argv[0] == "request":
                     self.assertEqual(sent.call_args[0][4], [250_000_000])
 
+    def test_approve_only_the_approver_only_waiting_payouts(self):
+        approver, other = (d.to_checksum_address(a) for a in (self.CLOSER, self.OTHER))
+        hard = 7 * self.DAY - 3 * self.DAY
+        waiting = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 1, False, 0, False)
+        lines = d.approve_check(approver, approver, {3: waiting}, [3], hard)
+        self.assertIn("payout 3: 800 USDC to 0x7777", lines[0])
+        self.assertIn("goes out from " + d.utc(1_000) + " approved; " + d.utc(1_000 + hard) + " without", lines[0])
+        for args, word in (((approver, other, {3: waiting}, [3], hard), "NotApprover"),
+                           (("0x" + "00" * 20, approver, {3: waiting}, [3], hard), "the pool has no approver"),
+                           ((approver, approver, {}, [3], hard), "payout 3 does not exist"),
+                           ((approver, approver, {3: waiting[:4] + (2,) + waiting[5:]}, [3], hard), "payout 3 is Stopped"),
+                           ((approver, approver, {3: waiting[:7] + (True,)}, [3], hard), "approved already")):
+            with self.assertRaises(SystemExit) as caught:
+                d.approve_check(*args)
+            self.assertIn(word, str(caught.exception))
+        self.assertEqual(d.ids_of("3, 4,7"), [3, 4, 7])
+        for bad in ("", "3,3", "a", "-1"):
+            with self.assertRaises(SystemExit):
+                d.ids_of(bad)
+
+    def test_approve_sends_only_with_send(self):
+        from unittest import mock
+        approver = d.to_checksum_address(self.CLOSER)
+        waiting = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 1, False, 0, False)
+        answers = {"payoutCount()": [5], "payout(uint256)": [waiting], "factory()": ["0x" + "99" * 20],
+                   "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "approver()": [approver]}
+        with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
+                mock.patch.object(d.c, "address_of", return_value=approver), mock.patch.object(d.c, "assert_testnet"), \
+                mock.patch.object(d.c, "account") as key, \
+                mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+            self.assertEqual(d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--ids", "3,4"]), 0)
+            sent.assert_not_called()
+            key.assert_not_called()
+            self.assertEqual(d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--ids", "3,4", "--send"]), 0)
+            self.assertEqual(sent.call_args[0][2:], ("approvePayouts(uint256[])", ["uint256[]"], [[3, 4]]))
+
+    def test_the_approver_is_named_by_the_creator(self):
+        from unittest import mock
+        creator = d.to_checksum_address(self.CREATOR)
+        with mock.patch.object(d.c, "call_view", return_value=[creator]), \
+                mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(self.OTHER)):
+            with self.assertRaises(SystemExit) as caught:
+                d.main(["approver", "--pool", self.OTHER, "--key", "x", "--address", self.CLOSER])
+            self.assertIn("NotCreator", str(caught.exception))
+        with mock.patch.object(d.c, "call_view", return_value=[creator]), \
+                mock.patch.object(d.c, "address_of", return_value=creator), mock.patch.object(d.c, "assert_testnet"), \
+                mock.patch.object(d.c, "account"), \
+                mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+            self.assertEqual(d.main(["approver", "--pool", self.OTHER, "--key", "creator", "--address", self.CLOSER]), 0)
+            sent.assert_not_called()
+            self.assertEqual(d.main(["approver", "--pool", self.OTHER, "--key", "creator", "--address", self.CLOSER,
+                                     "--send"]), 0)
+            self.assertEqual(sent.call_args[0][2], "setApprover(address)")
+
     def test_until_when_an_exam_runs(self):
         x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False}
         self.assertIn("runs until " + d.utc(1_000 + 30 * self.DAY), d.exam_text("E", x, 2_000, 7 * self.DAY))

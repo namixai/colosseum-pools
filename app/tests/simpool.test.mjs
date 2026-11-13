@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM,
-  WITHDRAW_DELAY, WITHDRAW_WINDOW,
+  WITHDRAW_DELAY, WITHDRAW_WINDOW, PAYOUT_HARD, SIM_POOL_APPROVAL_ABI,
   PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
   stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText, codeShares,
@@ -155,7 +155,8 @@ test("the stop reserve's lines are the contract's own once it has them, and abse
   assert.deepEqual([...v1.matchAll(/(?:address|uint64|uint8|bool) (\w+)/g)].map((m) => m[1]), abiFields.slice(0, 6),
     "the six fields lead both, so the first line decodes either pool's answer");
   if (RESERVE) {
-    assert.deepEqual(fields, abiFields);
+    // The seven lead the struct; a pool with payout approval has an eighth (SIM_POOL_APPROVAL_ABI).
+    assert.deepEqual(fields.slice(0, abiFields.length), abiFields);
     for (const l of SIM_POOL_STOP_RESERVE_ABI.filter((x) => x.startsWith("event "))) {
       const m = l.match(/^event (\w+)\((.*)\)$/);
       assert.equal(shape(m[2]), events.get(m[1]), m[1]);
@@ -616,4 +617,29 @@ test("a withdrawal waits a week from its request, then three days to carry it ou
   for (const e of ["WithdrawRequested", "WithdrawCancelled"]) {
     assert.ok(SIM_POOL_ABI.some((x) => x.startsWith(`event ${e}(`)), e);
   }
+});
+
+
+test("a payout waits for the approver after its 72 hours, and goes out by itself 7 days after its claim", () => {
+  assert.equal(PAYOUT_HARD, 7 * 24 * 3600);
+  assert.match(FACTORY_SOL, /PAYOUT_HARD = 7 days;/);
+  const claim = 1_000;
+  const dueAt = claim + PAYOUT_DELAY;
+  const row = (approved, now) => payouts([{ account: POOL, trader: T1, amount: 800_000_000n, dueAt: BigInt(dueAt), state: 1,
+    wasStopped: false, stoppedAt: 0n, approved }], [], now, TIMES)[0];
+  assert.equal(row(false, dueAt - 1).status, "waiting");
+  assert.equal(row(false, dueAt).status, "approval");
+  assert.equal(row(false, claim + PAYOUT_HARD - 1).status, "approval");
+  assert.equal(row(false, claim + PAYOUT_HARD).status, "queued");
+  assert.equal(row(true, dueAt).status, "queued");
+  assert.equal(row(false, dueAt).hardAt, claim + PAYOUT_HARD);
+  assert.equal(row(undefined, dueAt).status, "queued", "a pool without approval: nothing waits on it");
+  assert.equal(row(undefined, dueAt).approved, null);
+  assert.match(stopReasonText(3), /disputed/);
+  const struct = POOL_SOL.match(/struct Payout \{([\s\S]*?)\}/)[1].replace(/\/\/\/.*$/gm, "");
+  const line = SIM_POOL_APPROVAL_ABI.find((l) => l.startsWith("function payout("));
+  assert.deepEqual([...struct.matchAll(/^\s*(\w+)\s+(\w+);/gm)].map((m) => m[2]),
+    [...line.matchAll(/(?:address|uint64|uint8|bool) (\w+)/g)].map((m) => m[1]), "the approval line decodes the whole payout");
+  for (const e of ["PayoutApproved", "ApproverSet"]) assert.ok(SIM_POOL_APPROVAL_ABI.some((x) => x.startsWith(`event ${e}(`)), e);
+  assert.match(POOL_SOL, /function approvePayouts\(uint256\[\] calldata ids\)/);
 });
