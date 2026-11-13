@@ -1201,6 +1201,207 @@ contract PaperExamTest is Test {
         assertEq(e.drawdownKind(), 1, "the same kind");
     }
 
+    // ── stops and takes ──────────────────────────────────────────
+
+    function _setTrigger(PaperExam e, bool isTake, uint64 px, uint64 sz) internal {
+        vm.prank(trader);
+        e.setTrigger(BTC, isTake, px, sz);
+    }
+
+    function _armed(PaperExam e, bool isTake) internal view returns (uint64 armedAt) {
+        (,, armedAt,) = isTake ? e.takeOf(BTC) : e.stopOf(BTC);
+    }
+
+    function test_trigger_onlyTheTraderSetsIt_onAnOpenPosition_actingAfterTheDelay() public {
+        PaperExam e = _fillerExam();
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.NoPosition.selector);
+        e.setTrigger(BTC, false, 950_000, 0);
+        _fillerTrade(e, true, 100);
+        vm.prank(stranger);
+        vm.expectRevert(PaperExam.NotTrader.selector);
+        e.setTrigger(BTC, false, 950_000, 0);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.ZeroSize.selector);
+        e.setTrigger(BTC, false, 0, 0);
+        vm.expectEmit(address(e));
+        emit PaperExam.TriggerSet(BTC, false, 950_000, 0, block.number + DELAY);
+        _setTrigger(e, false, 950_000, 0);
+        assertEq(_armed(e, false), block.number + DELAY);
+    }
+
+    function test_stop_onALong_closesItWhenTheOracleIsAtOrUnderIt_atThatBlocksPrice() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, false, 950_000, 0);
+        _setTrigger(e, true, 1_100_000, 0);
+        _mark(940_000);
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.TooEarly.selector, block.number + DELAY));
+        e.fillTrigger(BTC, false);
+        vm.roll(block.number + DELAY);
+        _mark(951_000);
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.NotTriggered.selector, uint64(951_000), uint64(950_000)));
+        e.fillTrigger(BTC, false);
+        _mark(940_000); // past it: a stop is a market order once triggered, at this block's price
+        vm.expectEmit(address(e));
+        emit PaperExam.TriggerFilled(BTC, false, 100, 940_000, 0, 950_000, 0);
+        vm.prank(filler);
+        e.fillTrigger(BTC, false);
+        assertEq(e.positionOf(BTC), 0);
+        assertEq(e.cash(), 94e6, "100 units sold at 940 000");
+        (uint64 takePx,,,) = e.takeOf(BTC);
+        assertEq(takePx, 0, "the position is closed: its take goes with it");
+    }
+
+    function test_take_onALong_closesItsSizeOnly_andTheStopStays() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, true, 1_050_000, 40);
+        _setTrigger(e, false, 950_000, 0);
+        vm.roll(block.number + DELAY);
+        _mark(1_049_999);
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.NotTriggered.selector, uint64(1_049_999), uint64(1_050_000)));
+        e.fillTrigger(BTC, true);
+        _mark(1_050_000); // at it is enough
+        vm.prank(filler);
+        e.fillTrigger(BTC, true);
+        assertEq(e.positionOf(BTC), 60);
+        (uint64 stopPx,,,) = e.stopOf(BTC);
+        assertEq(stopPx, 950_000, "a smaller position keeps its stop");
+        (uint64 takePx,,,) = e.takeOf(BTC);
+        assertEq(takePx, 0, "a take is used once");
+    }
+
+    function test_stopAndTake_onAShort_triggerTheOtherWay() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, false, 100);
+        _setTrigger(e, false, 1_050_000, 0);
+        _setTrigger(e, true, 950_000, 0);
+        vm.roll(block.number + DELAY);
+        _mark(1_000_000);
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.NotTriggered.selector, uint64(1_000_000), uint64(1_050_000)));
+        e.fillTrigger(BTC, false);
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.NotTriggered.selector, uint64(1_000_000), uint64(950_000)));
+        e.fillTrigger(BTC, true);
+        _mark(1_060_000);
+        vm.prank(filler);
+        e.fillTrigger(BTC, false);
+        assertEq(e.positionOf(BTC), 0, "the short bought back");
+        assertEq(e.cash(), 100e6 + 100 * 1_000_000 - 100 * 1_060_000);
+    }
+
+    function test_stop_setPastThePrice_waitsTheDelayAsAnOrderDoes() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, false, 1_200_000, 0); // already past: it would close at once
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.TooEarly.selector, block.number + DELAY));
+        e.fillTrigger(BTC, false);
+        vm.roll(block.number + DELAY - 1);
+        vm.prank(filler);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.TooEarly.selector, block.number + 1));
+        e.fillTrigger(BTC, false);
+        vm.roll(block.number + 1);
+        vm.prank(filler);
+        e.fillTrigger(BTC, false);
+        assertEq(e.positionOf(BTC), 0);
+    }
+
+    function test_trigger_goesWithAPositionAnOrderClosesOrTurnsRound() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, false, 950_000, 0);
+        _setTrigger(e, true, 1_100_000, 0);
+        _fillerTrade(e, false, 40); // smaller: both stay
+        (uint64 stopPx,,,) = e.stopOf(BTC);
+        assertEq(stopPx, 950_000);
+        _fillerTrade(e, false, 160); // from 60 long to 100 short: both go
+        (stopPx,,,) = e.stopOf(BTC);
+        (uint64 takePx,,,) = e.takeOf(BTC);
+        assertEq(stopPx + takePx, 0);
+        assertEq(e.positionOf(BTC), -100);
+    }
+
+    function test_trigger_aStalledFillerLeavesItToAnyone_aMinuteAfterItWasSeen() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, false, 950_000, 0);
+        vm.roll(block.number + DELAY);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.NotTriggered.selector, uint64(MARK), uint64(950_000)));
+        e.seeTrigger(BTC, false);
+        _mark(940_000);
+        vm.prank(stranger);
+        vm.expectRevert(PaperExam.NotFiller.selector);
+        e.fillTrigger(BTC, false);
+        vm.expectEmit(address(e));
+        emit PaperExam.TriggerSeen(BTC, false, 940_000, block.number);
+        vm.prank(stranger);
+        e.seeTrigger(BTC, false);
+        uint256 seen = block.number;
+        // Seen again later, by the filler say: the clock does not start again, or a stalled filler could hold it.
+        vm.roll(seen + 30);
+        vm.prank(filler);
+        e.seeTrigger(BTC, false);
+        (,,, uint64 seenAt) = e.stopOf(BTC);
+        assertEq(seenAt, seen);
+        vm.roll(seen + e.FALLBACK_BLOCKS() - 1);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.NotFiller.selector);
+        e.fillTrigger(BTC, false);
+        vm.roll(seen + e.FALLBACK_BLOCKS());
+        _mark(960_000); // back over it: the fallback still needs the trigger to hold
+        vm.prank(trader);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.NotTriggered.selector, uint64(960_000), uint64(950_000)));
+        e.fillTrigger(BTC, false);
+        _mark(945_000);
+        vm.prank(trader);
+        e.fillTrigger(BTC, false);
+        assertEq(e.positionOf(BTC), 0);
+    }
+
+    function test_trigger_withoutAFiller_anyoneButTheTrader() public {
+        PaperExam e = _exam();
+        _trade(e, BTC, true, 100);
+        _setTrigger(e, false, 950_000, 0);
+        vm.roll(block.number + DELAY);
+        _mark(940_000);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OwnOrder.selector);
+        e.fillTrigger(BTC, false);
+        vm.prank(stranger);
+        e.fillTrigger(BTC, false);
+        assertEq(e.positionOf(BTC), 0);
+    }
+
+    function test_trigger_theTraderClearsIt_andAFillOfItIsATrade() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, true, 1_050_000, 0);
+        vm.prank(trader);
+        e.clearTrigger(BTC, true);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.NoTrigger.selector);
+        e.clearTrigger(BTC, true);
+        vm.roll(block.number + DELAY);
+        _mark(1_060_000);
+        vm.prank(filler);
+        vm.expectRevert(PaperExam.NoTrigger.selector);
+        e.fillTrigger(BTC, true);
+        // Set again and carried out the next UTC day: that day is a trading day.
+        _setTrigger(e, true, 1_050_000, 0);
+        uint16 days_ = e.tradingDays();
+        _nextMidnight();
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        e.fillTrigger(BTC, true);
+        assertEq(e.tradingDays(), days_ + 1);
+    }
+
     function test_filler_isNamedAtTheStartAndIsNeitherTheTraderNorThePool() public {
         PaperExam e = PaperExam(Clones.clone(address(impl)));
         vm.expectEmit(address(e));
