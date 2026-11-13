@@ -802,7 +802,7 @@ contract SimPool is Initializable {
         a = Clones.clone(factory.examImpl());
         ExamTerms memory terms_ = t;
         terms_.capital = size;
-        PaperExam(a).initializeWithFiller(trader, r, terms_, factory.filler(), fromBook, maxWorseBps);
+        PaperExam(a).initializeWithFiller(trader, r, terms_, factory.filler(), fromBook, maxWorseBps, 0);
         factory.noteAccount(a);
         live += 1;
     }

@@ -56,9 +56,21 @@ with a balance, `capital`, that is a number and not money.
 - **Equity** is the balance plus every position at the current oracle price. There is nothing else to
   read: no margin, no funding, no resting orders.
 - **The rules** are the four a real account has, with the same arithmetic as `RuledAccount`: a
-  static drawdown from the starting balance, a daily loss from the snapshot taken in the first
+  drawdown line, a daily loss from the snapshot taken in the first
   15 minutes of the UTC day (`checkpoint()`, anyone), leverage as notional over equity, and a
-  list of assets. Until a step's first snapshot its daily loss counts from the step's starting
+  list of assets.
+- **The drawdown line** is drawn one of two ways, named by the pool when the exam starts
+  (`drawdownKind`). `FROM_START` (0): the step's starting balance less `maxDrawdownBps` of it, fixed
+  for the step; `initialize` always starts this kind. `TRAILING_TO_START` (1): the highest daily
+  snapshot of the step (`peakSnapshot`) less that same amount, `maxDrawdownBps` of the starting
+  balance, and never above the starting balance. The step's starting balance is its first snapshot, so
+  until a higher one is taken the line is the same as `FROM_START`. Only a snapshot raises it, and a
+  snapshot is taken only in the day's first 15 minutes and only while no rule is broken: equity that
+  rises and falls back within a day does not move the line, a day whose snapshot nobody takes does not
+  move it, and it never comes down. Once a snapshot is `maxDrawdownBps` of the starting balance above
+  it, the line is the starting balance and stays there. `drawdownLine()` is the lowest equity that keeps
+  the rule now. The line is kept exact: equity breaks it when equity times 10 000 is below the line
+  times 10 000. A new step starts its line again from its own starting balance. Until a step's first snapshot its daily loss counts from the step's starting
   balance. No snapshot is taken while a rule is broken: a day's base is never the equity that
   broke a rule, and `breach()` ends the exam instead. `breach()` ends the exam when a rule is broken at that moment; anyone may call
   it.
@@ -92,11 +104,14 @@ sells anything it can ask `check()` whether an exam would start on its rules and
 | `fillDelay` | uint16, blocks | 1 to 600 | blocks between an order and its first fill |
 | `fillWindow` | uint16, blocks | 1 to 600 | blocks an order can be filled for |
 | `dailyLossBps` | uint16 | 1 to 9 999 | the day's limit, from the day's snapshot |
-| `maxDrawdownBps` | uint16 | 1 to 9 999 | the limit from the starting balance |
+| `maxDrawdownBps` | uint16 | 1 to 9 999 | the drawdown limit, as a share of the starting balance |
+| `drawdownKind` | uint8 | 0 or 1 | how the drawdown line is drawn: from the start, or trailing the daily snapshots to the start |
 | `maxLeverageX100` | uint32 | 100 to 1 000: 1x to 10x | notional over equity, times 100 |
 | `assets` | uint32[] | 1 to 16, none twice, size decimals at most 6 | what may be traded |
 
-The last four are the `Rules` struct every pool already has. The contract takes every value
+The four from `dailyLossBps` are the `Rules` struct every pool already has. `drawdownKind` is in
+neither struct: the pool passes it to `initializeWithFiller`, so the single-trader pool's `Rules` and
+every copy of `ExamTerms` stay as they are. The contract takes every value
 explicitly; it has no defaults of its own.
 
 ## What anyone can check
