@@ -304,7 +304,7 @@ export function payouts(structs, events, now, times) {
     const s = stopped.get(id);
     const q = queued.get(id);
     const o = objected.get(id);
-    return {
+    const out = {
       id,
       account: p.account ?? p[0],
       trader: p.trader ?? p[1],
@@ -333,7 +333,42 @@ export function payouts(structs, events, now, times) {
       heldAt: heldEv.has(id) ? at(heldEv.get(id), times) : null,
       short: q && status === "queued" ? { balance: BigInt(q.args.balance), ...at(q, times) } : null,
     };
+    out.stopNote = stopNote(out, now);
+    return out;
   });
+}
+
+/** A time on the chain's clock (seconds) as a page writes it: "2026-11-26 14:05 UTC". */
+export function utc(seconds) {
+  return `${new Date(Number(seconds) * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+/**
+ * Where a stopped or refused payout stands, in words, on a pool with the stop reserve: the 14 days in which the
+ * trader may object and the checker may lift the stop, then the refusal, final once anyone sends `finalizeStop`.
+ * `state` is "window" (the 14 days run), "due-final" (they are over, the stop not yet made final), "final", or
+ * "stopped" (a pool without the reserve: no window to speak of). Null for a payout never stopped or since lifted.
+ */
+export function stopNote(p, now) {
+  const objected = p.objection
+    ? ` The trader objected on ${p.objection.time == null ? `block ${p.objection.block}` : utc(p.objection.time)}; `
+      + "the objection is on chain."
+    : "";
+  if (p.status === "refused") {
+    return { state: "final", until: p.reserveEnds,
+      text: `Refused: the stop was not lifted within 14 days, and the refusal is final.${objected}` };
+  }
+  if (p.status !== "stopped") return null;
+  // `== null`: a payout put together without the field (undefined) is a pool without the reserve too (review of #272).
+  if (p.reserveEnds == null) return { state: "stopped", until: null, text: "Stopped by the checker." };
+  if (now < p.reserveEnds) {
+    return { state: "window", until: p.reserveEnds,
+      text: `Stopped. Until ${utc(p.reserveEnds)} the trader may object and the checker may lift the stop; the money `
+        + `stays in the pool, set aside.${objected}` };
+  }
+  return { state: "due-final", until: p.reserveEnds,
+    text: `Stopped, and the 14 days ended ${utc(p.reserveEnds)} without a lift: the refusal becomes final when anyone `
+      + `sends it (finalizeStop).${objected}` };
 }
 
 /**
@@ -470,6 +505,7 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     lockedUntil: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : Number(reads.lockedUntil),
     closedEarly: Boolean(reads.closedEarly),
     creatorMayClose: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : now >= Number(reads.lockedUntil),
+    termNote: termNote(reads, now),
     withdrawal: withdrawalOf(reads, now),
     // The payouts of the stages still running, each by its size, which stay in the pool while they run; null if not read.
     staged: reads.staged === undefined || reads.staged === null ? null : BigInt(reads.staged),
@@ -483,6 +519,29 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     // counters, and no payout lacks an event. Otherwise the page says which, and shows the contract's own total.
     complete: scan.complete && total.complete && missing.length === 0,
   };
+}
+
+/**
+ * The pool's term in words, for the page to show as it is: the page keeps no words of its own about closing.
+ * `state` is "locked" (before the term: its creator can neither close it nor take back what it put in), "open" (the
+ * term is over, the pool still sells), "closed" (closed at or after its term) or "closed-early" (the platform's closer
+ * closed it before its term). Null for a pool without a term (`lockedUntil` not read).
+ */
+export function termNote(reads, now) {
+  if (reads.lockedUntil === undefined || reads.lockedUntil === null) return null;
+  const until = Number(reads.lockedUntil);
+  if (reads.closedEarly) {
+    return { state: "closed-early", until,
+      text: `Closed early by the platform, before its term ended on ${utc(until)}. The money goes where it would `
+        + "anyway: to the traders, to the codes' owners, and the rest to the creator." };
+  }
+  if (reads.closed) return { state: "closed", until, text: `Closed after its term ended on ${utc(until)}.` };
+  if (now < until) {
+    return { state: "locked", until,
+      text: `Runs at least until ${utc(until)}: before then its creator can neither close it nor take back what it `
+        + "put in." };
+  }
+  return { state: "open", until, text: `Its term ended on ${utc(until)}: its creator may close it now.` };
 }
 
 /** The line a page shows over its lists: how far the chain was read, and whether the lists are whole. */
@@ -661,4 +720,155 @@ export function signedPurchase({ pool, trader, menu, line, code, codes, salt, va
       valid_after: BigInt(validAfter).toString(), valid_before: BigInt(validBefore).toString(), v, r, s: sig,
     }),
   };
+}
+
+// ── Counts per trader and per code, for a later points formula ─────────────────
+
+/** The events of an exam or a stage (each a PaperExam clone) that the counts read, in a second pass over the logs
+ *  of each account the pool sold or started (`accountsToRead`). */
+export const PAPER_EXAM_EVENTS_ABI = [
+  "event Started(address indexed trader, address indexed pool, uint64 capital)",
+  "event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late, uint8 source)",
+  "event StepPassed(uint8 indexed step, int256 equity)",
+  "event Passed(address indexed trader, int256 equity)",
+  "event Stopped(uint8 indexed status, uint8 indexed reason, int256 equity)",
+];
+
+/** PaperExam.Status, by its number, as `Stopped` names it. */
+export const EXAM_END = { 3: "breached", 4: "expired" };
+
+/** The accounts whose own logs the counts need, oldest first: every exam sold (ExamSold) and every stage started
+ *  (Funded), with its trader. One `eth_getLogs` per account, or one for all of them by address list. */
+export function accountsToRead(events) {
+  const all = ordered(events);
+  return [
+    ...named(all, "ExamSold").map((e) => ({ account: e.args.exam, kind: "exam", trader: e.args.trader, block: e.block })),
+    ...named(all, "Funded").map((e) => ({ account: e.args.stage, kind: "stage", trader: e.args.trader, block: e.block })),
+  ].sort((a, b) => a.block - b.block).map(({ account, kind, trader }) => ({ account, kind, trader }));
+}
+
+function payoutCounts() {
+  return { due: 0, dueAmount: 0n, paid: 0, paidAmount: 0n, held: 0, heldAmount: 0n, stopped: 0, stoppedAmount: 0n,
+    lifted: 0, objected: 0, refused: 0, refusedAmount: 0n };
+}
+
+function accountCounts() {
+  return { purchases: 0, spent: 0n, brought: 0n, examsPassed: 0, examsBreached: 0, examsExpired: 0, stagesStarted: 0,
+    stagesPassed: 0, stagesBreached: 0, stagesExpired: 0, stepsPassed: 0, fills: 0, payouts: payoutCounts() };
+}
+
+/**
+ * Counts, per trader and per code, of what the chain says each did: no points and no weights, only the numbers a
+ * points formula would be built from. From the pool's events: purchases (and what they cost and brought the pool,
+ * the price less the platform's part), stages started, and the payouts written, paid, held, stopped, lifted,
+ * objected to and refused. From each exam's and stage's own events (`examLogs`, keyed by the account's address in
+ * lower case, as `accountsToRead` lists them): exams and stages passed, breached or expired, steps passed, fills, and
+ * the UTC days with a fill (`fillDays`, from `times`; null where a fill's block time was not read).
+ *
+ * An account whose logs were not given is in `unread`, and its trader's and code's `complete` is false: their counts
+ * from exam logs are then too low, never guessed. A trader's `codes` are the codes it bought with.
+ */
+export function activityCounts(events, examLogs, times) {
+  const all = ordered(events);
+  const logsOf = (a) => (examLogs instanceof Map ? examLogs.get(a.toLowerCase()) : examLogs?.[a.toLowerCase()]);
+  const traders = new Map();
+  const codes = new Map();
+  const codeOfExam = new Map();
+  const examOfStage = new Map();
+  const traderOf = new Map();
+  const days = new Map();
+  const unread = [];
+  const one = (map, key, init) => {
+    const k = String(key).toLowerCase();
+    if (!map.has(k)) map.set(k, init(k));
+    return map.get(k);
+  };
+  const trader = (t) => one(traders, t, (k) => ({ trader: k, codes: [], complete: true, fillDays: 0, ...accountCounts() }));
+  const code = (c, partner) => one(codes, c, (k) => ({ code: k, partner: partner ? String(partner).toLowerCase() : null,
+    traders: 0, complete: true, ...accountCounts() }));
+  const both = (account, f) => {
+    const a = String(account).toLowerCase();
+    const exam = examOfStage.get(a) ?? a;
+    const t = traderOf.get(a);
+    if (t) f(trader(t));
+    const c = codeOfExam.get(exam);
+    if (c) f(code(c));
+  };
+
+  for (const e of named(all, "ExamSold")) {
+    const exam = String(e.args.exam).toLowerCase();
+    const price = BigInt(e.args.price);
+    const got = price - BigInt(e.args.fee);
+    traderOf.set(exam, String(e.args.trader).toLowerCase());
+    const t = trader(e.args.trader);
+    t.purchases += 1;
+    t.spent += price;
+    t.brought += got;
+    if (e.args.code) {
+      const key = String(e.args.code).toLowerCase();
+      codeOfExam.set(exam, key);
+      const c = code(key, e.args.partner);
+      if (!t.codes.includes(key)) {
+        t.codes.push(key);
+        c.traders += 1;
+      }
+      c.purchases += 1;
+      c.spent += price;
+      c.brought += got;
+    }
+  }
+  for (const e of named(all, "Funded")) {
+    const stage = String(e.args.stage).toLowerCase();
+    examOfStage.set(stage, String(e.args.exam).toLowerCase());
+    traderOf.set(stage, String(e.args.trader).toLowerCase());
+    both(stage, (x) => { x.stagesStarted += 1; });
+  }
+
+  const accountOfPayout = new Map();
+  for (const e of named(all, "PayoutDue")) {
+    accountOfPayout.set(Number(e.args.id), e.args.account);
+    both(e.args.account, (x) => { x.payouts.due += 1; x.payouts.dueAmount += BigInt(e.args.amount); });
+  }
+  const onPayout = (name, f) => {
+    for (const e of named(all, name)) {
+      const account = accountOfPayout.get(Number(e.args.id));
+      if (account) both(account, (x) => f(x.payouts, e));
+    }
+  };
+  onPayout("PayoutPaid", (p, e) => { p.paid += 1; p.paidAmount += BigInt(e.args.amount); });
+  onPayout("PayoutHeld", (p, e) => { p.held += 1; p.heldAmount += BigInt(e.args.amount); });
+  onPayout("PayoutStopped", (p, e) => { p.stopped += 1; p.stoppedAmount += BigInt(e.args.amount); });
+  onPayout("StopLifted", (p) => { p.lifted += 1; });
+  onPayout("StopObjected", (p) => { p.objected += 1; });
+  onPayout("StopFinal", (p, e) => { p.refused += 1; p.refusedAmount += BigInt(e.args.amount); });
+
+  // The second pass: each exam's and stage's own logs.
+  for (const { account, kind } of accountsToRead(events)) {
+    const logs = logsOf(String(account));
+    if (logs === undefined || logs === null) {
+      unread.push(String(account).toLowerCase());
+      both(account, (x) => { x.complete = false; });
+      continue;
+    }
+    const stage = kind === "stage";
+    const t = traderOf.get(String(account).toLowerCase());
+    for (const e of ordered(logs)) {
+      if (e.name === "Passed") both(account, (x) => { x[stage ? "stagesPassed" : "examsPassed"] += 1; });
+      else if (e.name === "StepPassed") both(account, (x) => { x.stepsPassed += 1; });
+      else if (e.name === "Stopped") {
+        const end = EXAM_END[Number(e.args.status)];
+        if (end) both(account, (x) => { x[`${stage ? "stages" : "exams"}${end === "breached" ? "Breached" : "Expired"}`] += 1; });
+      } else if (e.name === "Filled") {
+        both(account, (x) => { x.fills += 1; });
+        if (t) {
+          const time = times?.get?.(e.block);
+          const entry = one(days, t, () => ({ days: new Set(), unknown: false }));
+          if (time === undefined || time === null) entry.unknown = true;
+          else entry.days.add(Math.floor(Number(time) / 86_400));
+        }
+      }
+    }
+  }
+  for (const [t, entry] of days) traders.get(t).fillDays = entry.unknown ? null : entry.days.size;
+  return { traders: [...traders.values()], codes: [...codes.values()], unread };
 }

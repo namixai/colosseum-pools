@@ -7,7 +7,8 @@ import { dirname, join } from "node:path";
 import {
   SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM,
   WITHDRAW_DELAY, WITHDRAW_WINDOW, PAYOUT_HARD, SIM_POOL_APPROVAL_ABI,
-  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve,
+  PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve, stopNote, utc, termNote, activityCounts, accountsToRead,
+  EXAM_END,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
   stopCounters, proofOf, gaps, simPoolPage, factoryPools, readLogs, firstBlockAt, claimedAt, scanText, codeShares,
   codeHash, saleNonce, purchase, signedPurchase, RECEIVE_WITH_AUTHORIZATION_TYPES,
@@ -437,6 +438,38 @@ test("the page says how far the chain was read, and is whole only if the reading
   }
 });
 
+test("a stop on a pool with the reserve says where it stands: the 14 days, the objection, the final", () => {
+  const at = 1_800_000_000;
+  const until = at + STOP_RESERVE;
+  const stopped = { ...STRUCT(STAGE1, T1, 1n, 2_000n, 2, true), stoppedAt: BigInt(at) };
+  const objection = [ev("StopObjected", { id: 0n, trader: T1, text: H(0x0b) }, 700)];
+  const times = new Map([[700, at + 3_600]]);
+  const [w] = payouts([stopped], objection, at + 60, times);
+  assert.deepEqual([w.stopNote.state, w.stopNote.until], ["window", until]);
+  assert.equal(w.stopNote.text, `Stopped. Until ${utc(until)} the trader may object and the checker may lift the stop; `
+    + `the money stays in the pool, set aside. The trader objected on ${utc(at + 3_600)}; the objection is on chain.`);
+  assert.equal(utc(until), "2027-01-29 08:00 UTC");
+  const [d] = payouts([stopped], [], until, times);
+  assert.equal(d.stopNote.state, "due-final", "the 14 days are over at their last second");
+  assert.match(d.stopNote.text, /the refusal becomes final when anyone sends it \(finalizeStop\)\.$/);
+  const [f] = payouts([[STAGE1, T1, 1n, 2_000n, 5, true, BigInt(at)]], objection, until + 10, times);
+  assert.equal(f.stopNote.state, "final");
+  assert.match(f.stopNote.text, /^Refused: the stop was not lifted within 14 days, and the refusal is final\. The trader objected/);
+  const [old] = payouts([STRUCT(STAGE1, T1, 1n, 2_000n, 2, true)], [], 3_000);
+  assert.deepEqual(old.stopNote, { state: "stopped", until: null, text: "Stopped by the checker." }, "a pool without the reserve");
+  for (const state of [1, 3, 4]) {
+    assert.equal(payouts([{ ...STRUCT(STAGE1, T1, 1n, 2_000n, state, true), stoppedAt: BigInt(at) }], [], at)[0].stopNote,
+      null, `state ${state}: not stopped now, so no note`);
+  }
+  assert.equal(stopNote({ status: "paid" }, 0), null);
+  // An objection whose block was not dated still says when, by its block.
+  assert.match(payouts([stopped], objection, at + 60)[0].stopNote.text, /objected on block 700;/);
+  // A payout handed in without the fields at all, not null but missing, says the same and never reaches utc(undefined),
+  // which throws (review of #272).
+  assert.deepEqual(stopNote({ status: "stopped" }, at), { state: "stopped", until: null, text: "Stopped by the checker." });
+  assert.match(stopNote({ status: "stopped", reserveEnds: until, objection: { block: 700 } }, at).text, /objected on block 700;/);
+});
+
 test("each code's partner, share, part of what the pool took, and what it was sent or had set aside", () => {
   const codes = [
     { code: H(0xc1), partner: A(0x91), bps: 5000, used: true, brought: 300n },
@@ -602,6 +635,71 @@ test("the pool's term: the time before which its creator cannot close it, and wh
   assert.equal(read({ lockedUntil: 5_000n, closedEarly: false }, 5_000).creatorMayClose, true, "from its time on");
   assert.equal(read({ lockedUntil: 5_000n, closedEarly: true }, 10).closedEarly, true);
   assert.deepEqual([read({}, 10).lockedUntil, read({}, 10).creatorMayClose], [null, null], "not read: not guessed");
+});
+
+test("the pool's term in the library's own words: locked, open, closed, closed early by the platform", () => {
+  const until = 1_743_595_200; // 2025-04-02 12:00 UTC
+  assert.equal(termNote({}, 0), null, "a pool without a term: no words");
+  assert.deepEqual(termNote({ lockedUntil: BigInt(until) }, until - 1), { state: "locked", until,
+    text: "Runs at least until 2025-04-02 12:00 UTC: before then its creator can neither close it nor take back what "
+      + "it put in." });
+  assert.deepEqual(termNote({ lockedUntil: until }, until), { state: "open", until,
+    text: "Its term ended on 2025-04-02 12:00 UTC: its creator may close it now." });
+  assert.deepEqual(termNote({ lockedUntil: until, closed: true }, until + 1), { state: "closed", until,
+    text: "Closed after its term ended on 2025-04-02 12:00 UTC." });
+  const early = termNote({ lockedUntil: until, closed: true, closedEarly: true }, 10);
+  assert.equal(early.state, "closed-early");
+  assert.match(early.text, /^Closed early by the platform, before its term ended on 2025-04-02 12:00 UTC\. /);
+  assert.match(early.text, /the codes' owners, and the rest to the creator\.$/);
+});
+
+test("counts per trader and per code: breached and expired apart, an unread account said, a fill day not guessed", () => {
+  const ev = (name, block, args) => ({ name, block, index: 0, tx: `0x${block}`, args });
+  const C1 = `0x${"c1".repeat(32)}`;
+  const [E1, E2, E3, S1, P1, X] = [A(0xe1), A(0xe2), A(0xe3), A(0x51), A(0xa1), A(0x99)];
+  const pool = [
+    ev("ExamSold", 1, { exam: E1, trader: T1, line: 1n, size: 10_000_000_000n, price: 85_000_000n, fee: 425_000n,
+      bySignature: false, code: C1, partner: P1 }),
+    ev("ExamSold", 2, { exam: E2, trader: T1, line: 0n, size: 5_000_000_000n, price: 45_000_000n, fee: 225_000n,
+      bySignature: true, code: C1, partner: P1 }),
+    ev("ExamSold", 3, { exam: E3, trader: X, line: 0n, size: 5_000_000_000n, price: 45_000_000n, fee: 225_000n,
+      bySignature: false, code: C1, partner: P1 }),
+    ev("Funded", 4, { stage: S1, exam: E1, trader: T1 }),
+    ev("PayoutDue", 6, { id: 0n, account: S1, trader: T1, amount: 800_000_000n, dueAt: 100n }),
+    ev("PayoutStopped", 7, { id: 0n, trader: T1, amount: 800_000_000n, reason: 1, paired: E3, trades: [], links: [] }),
+    ev("StopFinal", 9, { id: 0n, amount: 800_000_000n, reserved: 0n }),
+  ];
+  assert.deepEqual(accountsToRead(pool).map((a) => [a.account, a.kind]), [[E1, "exam"], [E2, "exam"], [E3, "exam"], [S1, "stage"]]);
+  const logs = new Map([
+    [E1.toLowerCase(), [ev("Filled", 1, {}), ev("Filled", 2, {}), ev("Passed", 3, { trader: T1, equity: 1n })]],
+    [E2.toLowerCase(), [ev("Stopped", 5, { status: 3n, reason: 2n, equity: -1n })]],
+    [S1.toLowerCase(), [ev("Filled", 5, {}), ev("StepPassed", 5, { step: 0n, equity: 1n }), ev("Stopped", 8, { status: 4n, reason: 0n, equity: 0n })]],
+  ]);
+  const day = 86_400;
+  const times = new Map([[1, 10 * day], [2, 10 * day + 5], [5, 11 * day]]);
+  const c = activityCounts(pool, logs, times);
+  const t = c.traders.find((x) => x.trader === T1.toLowerCase());
+  assert.deepEqual([t.purchases, t.spent, t.brought], [2, 130_000_000n, 130_000_000n - 650_000n]);
+  assert.deepEqual([t.examsPassed, t.examsBreached, t.examsExpired, t.stagesStarted, t.stagesPassed, t.stagesExpired,
+    t.stepsPassed, t.fills, t.fillDays], [1, 1, 0, 1, 0, 1, 1, 3, 2]);
+  assert.deepEqual([t.payouts.due, t.payouts.stopped, t.payouts.refused, t.payouts.refusedAmount, t.payouts.paid],
+    [1, 1, 1, 800_000_000n, 0]);
+  assert.equal(t.complete, true);
+  assert.deepEqual(c.unread, [E3.toLowerCase()], "the exam whose logs were not given");
+  const x = c.traders.find((k) => k.trader === X.toLowerCase());
+  assert.equal(x.complete, false, "its trader's counts from exam logs are too low, and say so");
+  const code = c.codes[0];
+  assert.deepEqual([code.traders, code.purchases, code.examsPassed, code.examsBreached, code.stagesExpired, code.complete],
+    [2, 3, 1, 1, 1, false]);
+  assert.deepEqual(EXAM_END, { 3: "breached", 4: "expired" });
+  // A fill whose block time was not read: the days are not guessed.
+  assert.equal(activityCounts(pool, logs, new Map([[1, 0]])).traders.find((k) => k.trader === T1.toLowerCase()).fillDays, null);
+  // The zero hash is a code like any other: the pool lets a creator set it with a partner, and a sale can name no code
+  // without one (SimPool._sold reverts NoSuchCode), so it is counted, not taken for "no code" (review of #281).
+  const ZERO_CODE = `0x${"0".repeat(64)}`;
+  const zero = activityCounts([ev("ExamSold", 9, { exam: A(0xe9), trader: T1, line: 0n, size: 1n, price: 10n, fee: 0n,
+    bySignature: false, code: ZERO_CODE, partner: P1 })], {}, new Map());
+  assert.deepEqual(zero.codes.map((k) => [k.code, k.partner, k.purchases]), [[ZERO_CODE, P1.toLowerCase(), 1]]);
 });
 
 test("a withdrawal waits a week from its request, then three days to carry it out; finish a week after the close", () => {
