@@ -1,6 +1,16 @@
 # Design: the simulated pool
 
-`src/sim/SimPool.sol` and `src/sim/SimPoolFactory.sol`. Not deployed yet; no external audit.
+`src/sim/SimPool.sol` and `src/sim/SimPoolFactory.sol`, with two libraries the pool calls,
+`src/sim/SimPoolStops.sol` and `src/sim/SimPoolSetup.sol`. Not deployed yet; no external audit.
+
+**Why two libraries.** A contract's code may be at most 24 576 bytes (EIP-170, in force on HyperEVM's
+Cancun rules), and tests run without that limit. With its daily payout limit the pool came to 24 790. The
+checks and events of the four stop functions (`stopPayout`, `liftStop`, `objectStop`, `finalizeStop`)
+and the copy of the plan at creation (`initialize`) now run in libraries with external functions, which
+the pool calls by DELEGATECALL: in its own storage, with its own caller, emitting its own events. The pool
+keeps its interface, its counters and its money (`owed`, `reserved`, `stoppedCount`, `liftedCount`,
+`head`, the principal); what the code does is what it did. `SimPool` 21 700 bytes, `SimPoolStops` 3 414,
+`SimPoolSetup` 1 962. `scripts/size-check.py` holds every contract and library of `src/` to the limit.
 
 ## Why
 
@@ -234,7 +244,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   that pays the gas. It refuses before spending any: another factory's pool, no such line, a code the
   pool has not set, a signature ending within 30 seconds, a used nonce, a call the pool would refuse. `--serve PORT` listens on
   127.0.0.1 for `POST /buy`.
-- **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, SimPool, a TermsBook and the
+- **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, the pool's two libraries (`SimPoolStops`,
+  `SimPoolSetup`), SimPool linked to them (the record names all three), a TermsBook and the
   factory on testnet with Circle's USDC, names the filler, the checker, the closer (four keys with
   the operator, none the same) and the recipient, lists BTC,
   ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's

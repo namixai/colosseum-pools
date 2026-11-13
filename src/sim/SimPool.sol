@@ -8,6 +8,8 @@ import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.s
 import {Rules, Units} from "../Types.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
 import {SimPoolFactory} from "./SimPoolFactory.sol";
+import {SimPoolStops} from "./SimPoolStops.sol";
+import {SimPoolSetup} from "./SimPoolSetup.sol";
 
 /// @notice The part of USDC's EIP-3009 a pool takes a price through: Circle's FiatToken V2.2, on
 ///         HyperEVM and its testnet. The token itself checks the signature, the time, the nonce,
@@ -293,16 +295,7 @@ contract SimPool is Initializable {
         lockedUntil = uint64(block.timestamp) + factory.MIN_TERM();
         fromBook = p.fromBook;
         maxWorseBps = p.maxWorseBps;
-        uint64 largest;
-        for (uint256 i = 0; i < p.menu.length; ++i) {
-            _menu.push(p.menu[i]);
-            if (p.menu[i].size > largest) largest = p.menu[i].size;
-        }
-        largestPayout = _payoutOf(largest);
-        _copyRules(_examRules, p.examRules);
-        _copyRules(_fundedRules, p.fundedRules);
-        _exam = p.exam;
-        _funded = p.funded;
+        largestPayout = _payoutOf(SimPoolSetup.copy(p, _menu, _examRules, _exam, _fundedRules, _funded));
     }
 
     /// @notice The factory's note of what the creator locked at the start.
@@ -562,48 +555,23 @@ contract SimPool is Initializable {
         external
         onlyChecker
     {
-        if (id >= _payouts.length) revert BadPayout();
-        Payout storage p = _payouts[id];
-        if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();
-        if (reason == 3) {
-            if (paired != address(0) || trades.length == 0 || links.length != 1) revert BadReason();
-        } else {
-            if (reason == 1) {
-                if (links.length != 0) revert BadReason();
-            } else if (reason == 2) {
-                if (links.length == 0) revert BadReason();
-            } else {
-                revert BadReason();
-            }
-            if (trades.length < 2) revert BadReason();
-            if (paired == p.account || factory.poolOf(paired) == address(0) || factory.poolOf(paired) == paired) {
-                revert BadPaired();
-            }
-        }
-        p.state = PayoutState.Stopped;
-        p.wasStopped = true;
-        p.stoppedAt = uint64(block.timestamp);
-        owed -= p.amount;
-        reserved += p.amount;
+        uint64 amount = SimPoolStops.stop(
+            _payouts, factory, id, reason, paired, trades, links, [stoppedCount + 1, liftedCount, paidCount]
+        );
+        owed -= amount;
+        reserved += amount;
         stoppedCount += 1;
-        emit PayoutStopped(id, p.trader, p.amount, reason, paired, trades, links, stoppedCount, liftedCount, paidCount);
     }
 
     /// @notice Lifts the checker's own stop of payout `id`, a stop that was wrong, within `STOP_RESERVE`
     ///         of it: the payout is due again, out of the money the stop kept, and paid as any other
     ///         once its time has come. After that the stop is final.
     function liftStop(uint256 id) external onlyChecker {
-        if (finished) revert Done();
-        if (id >= _payouts.length) revert BadPayout();
-        Payout storage p = _payouts[id];
-        if (p.state != PayoutState.Stopped) revert BadPayout();
-        if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();
-        p.state = PayoutState.Due;
-        reserved -= p.amount;
-        owed += p.amount;
+        uint64 amount = SimPoolStops.lift(_payouts, factory, id, finished, [stoppedCount, liftedCount + 1, paidCount]);
+        reserved -= amount;
+        owed += amount;
         liftedCount += 1;
         if (id < head) head = id;
-        emit StopLifted(id, stoppedCount, liftedCount, paidCount);
     }
 
     // ── the approver ─────────────────────────────────────────────
@@ -629,24 +597,14 @@ contract SimPool is Initializable {
     ///         the chain keeps the keccak256 of the objection's text, so the dispute is seen as the
     ///         stop is. Nothing else changes; lifting the stop is the checker's.
     function objectStop(uint256 id, bytes32 text) external {
-        if (id >= _payouts.length) revert BadPayout();
-        Payout storage p = _payouts[id];
-        if (p.state != PayoutState.Stopped) revert BadPayout();
-        if (msg.sender != p.trader) revert NotTrader();
-        if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();
-        emit StopObjected(id, msg.sender, text);
+        SimPoolStops.object(_payouts, factory, id, text);
     }
 
     /// @notice Makes the stop of payout `id` final once `STOP_RESERVE` has passed without a lift: the
     ///         money it kept is the pool's again. Anyone may.
     function finalizeStop(uint256 id) external {
-        if (id >= _payouts.length) revert BadPayout();
-        Payout storage p = _payouts[id];
-        if (p.state != PayoutState.Stopped) revert BadPayout();
-        if (block.timestamp < uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveRunning();
-        p.state = PayoutState.Refused;
-        reserved -= p.amount;
-        emit StopFinal(id, p.amount, reserved);
+        uint64 amount = SimPoolStops.finalize(_payouts, factory, id, reserved);
+        reserved -= amount;
     }
 
     // ── the creator ──────────────────────────────────────────────
@@ -863,13 +821,5 @@ contract SimPool is Initializable {
 
     function _payoutOf(uint64 size) internal view returns (uint64) {
         return uint64(uint256(size) * factory.PAYOUT_BPS() / Units.BPS);
-    }
-
-    function _copyRules(Rules storage to, Rules calldata r) internal {
-        to.dailyLossBps = r.dailyLossBps;
-        to.maxDrawdownBps = r.maxDrawdownBps;
-        to.maxLeverageX100 = r.maxLeverageX100;
-        to.assets = r.assets;
-        to.assetLeverageX100 = r.assetLeverageX100;
     }
 }
