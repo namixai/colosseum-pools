@@ -576,8 +576,15 @@ test("a signed purchase: the trader signs the line's price to the pool under the
   const wanted = [...relay.matchAll(/raw\["(\w+)"\]/g)].map((m) => m[1]);
   for (const k of ["code", "salt", "r", "s"]) wanted.push(k);
   assert.deepEqual(Object.keys(body).sort(), [...new Set(wanted)].sort(), "what the relayer reads, and nothing else");
-  assert.deepEqual(body, { pool: POOL, trader: T1, line: 1, code: GROUP_ONE, salt: SALT7, valid_after: 0,
-    valid_before: 1_800_000_000, v: 27, r: H(0xaa), s: H(0xbb) });
+  assert.deepEqual(body, { pool: POOL, trader: T1, line: 1, code: GROUP_ONE, salt: SALT7, valid_after: "0",
+    valid_before: "1800000000", v: 27, r: H(0xaa), s: H(0xbb) });
+  // Past 2^53, and the open-ended maximum: the body carries exactly what the trader signed (review of #279).
+  for (const big of [9007199254740993n, 2n ** 256n - 1n]) {
+    const open = signedPurchase({ pool: POOL, trader: T1, menu: READS.menu, line: 1, code: GROUP_ONE, salt: SALT7,
+      validBefore: big, keccak256 });
+    assert.equal(open.message.validBefore, big);
+    assert.equal(BigInt(open.relayBody(sig).valid_before), big);
+  }
   assert.throws(() => signedPurchase({ pool: POOL, trader: T1, menu: READS.menu, line: 1, code: GROUP_ONE, salt: SALT7,
     validAfter: 10, validBefore: 10, keccak256 }), /end after it starts/);
 });

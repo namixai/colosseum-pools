@@ -247,6 +247,17 @@ class TheClosing(unittest.TestCase):
         with self.assertRaises(SystemExit):
             d.finish_check(self.state(closed=True, finished=True), 10, creator)
 
+    def test_until_when_an_exam_of_several_steps_runs_and_a_passed_stage(self):
+        x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False, "kind": 1,
+             "step": 0, "steps": 2}
+        said = d.exam_text("E", x, 2_000, 7 * self.DAY)
+        self.assertIn("step 1 of 2: this step runs until " + d.utc(1_000 + 30 * self.DAY), said)
+        self.assertIn("1 more step(s) of up to 30 day(s) each follow, so until " + d.utc(1_000 + 60 * self.DAY), said)
+        self.assertIn("runs until " + d.utc(1_000 + 30 * self.DAY) + " at the latest",
+                      d.exam_text("E", {**x, "step": 1}, 2_000, 7 * self.DAY), "the last step: its own deadline")
+        stage = {**x, "status": 2, "kind": 2, "passed_at": 5_000, "steps": 1}
+        self.assertIn("passed its stage: the keeper claims its payout", d.exam_text("E", stage, 6_000, 7 * self.DAY))
+
     def test_until_when_an_exam_runs(self):
         x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False}
         self.assertIn("runs until " + d.utc(1_000 + 30 * self.DAY), d.exam_text("E", x, 2_000, 7 * self.DAY))
