@@ -1198,6 +1198,50 @@ contract PaperExamTest is Test {
         e.fill();
     }
 
+    /// A price that spikes for one block of the window and comes back: filled at the first block (late 0), the order
+    /// gains nothing from it; the only way to take the spike is the filler choosing its block, and the fill then says
+    /// it came a block late (CTO, 13 November).
+    function test_filler_aOneBlockSpike_noGainAtTheFirstBlock_aLateFillShowsIt() public {
+        PaperExam e = _fillerExam();
+        _place(e, BTC, true, 100);
+        vm.roll(block.number + DELAY);
+        vm.recordLogs();
+        vm.prank(filler);
+        e.fill();
+        (, , uint64 px,, uint256 late,) = _lastFilled();
+        assertEq(late, 0, "the first block");
+        assertEq(px, MARK);
+        _mark(MARK * 9 / 10); // the spike, one block
+        vm.roll(block.number + 1);
+        _mark(MARK); // and back
+        vm.roll(block.number + 1);
+        _fillerTrade(e, false, 100);
+        assertEq(e.equity(), CAPITAL, "nothing gained from a spike the fill did not take");
+
+        PaperExam f = _fillerExam();
+        _place(f, BTC, true, 100);
+        vm.roll(block.number + DELAY + 1); // the window's second block
+        _mark(MARK * 9 / 10);
+        vm.recordLogs();
+        vm.prank(filler);
+        f.fill();
+        (, , px,, late,) = _lastFilled();
+        assertEq(px, MARK * 9 / 10, "the spike's price");
+        assertEq(late, 1, "and the fill says it came a block late, for anyone to count");
+        _mark(MARK);
+        _fillerTrade(f, false, 100);
+        assertEq(f.equity(), CAPITAL + 10e6, "the spike's 10 % went to the trader, through the filler's choice alone");
+    }
+
+    function _lastFilled() internal returns (bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late, uint8 source) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = logs.length; i > 0; --i) {
+            if (logs[i - 1].topics.length == 0 || logs[i - 1].topics[0] != PaperExam.Filled.selector) continue;
+            return abi.decode(logs[i - 1].data, (bool, uint64, uint64, uint256, uint256, uint8));
+        }
+        revert("no Filled");
+    }
+
     function test_filled_saysHowManyBlocksAfterTheFirstItCame() public {
         PaperExam e = _fillerExam();
         _place(e, BTC, true, 100);
