@@ -11,12 +11,14 @@
 //
 // The review of a payout (ops/payout_review.py, schema "payout-review/2") is read from a file the page is given. It
 // is advice, never the call: the page builds every call itself, and shows a review only where it is of this very
-// payout (`reviewFor`). The names of the approval are the design of 13 November (approval with a ceiling), and of the
-// withdrawal the creator's request a week old (WithdrawRequested); a pool without them answers none of their reads.
+// payout (`reviewFor`). The names of the approval and of the withdrawal are the contract's (a test holds each line
+// of OPERATOR_ABI to src/sim/SimPool.sol); a pool from before them answers none of their reads.
 
-import { termNote, withdrawalOf, WITHDRAW_DELAY, WITHDRAW_WINDOW } from "./simpool.js";
+import { termNote, withdrawalOf, PAYOUT_DELAY, PAYOUT_HARD, WITHDRAW_DELAY, WITHDRAW_WINDOW } from "./simpool.js";
 
-export { WITHDRAW_DELAY, WITHDRAW_WINDOW };
+// The 72 hours and the ceiling (7 days from the claim, past which a payout is paid unapproved unless it was stopped)
+// are the pool page's own constants, held to the factory's source there: one number in the app, not two.
+export { PAYOUT_DELAY, PAYOUT_HARD, WITHDRAW_DELAY, WITHDRAW_WINDOW };
 
 /** What the page reads and sends beyond SIM_POOL_ABI (app/lib/simpool.js), as the contracts declare them. */
 export const OPERATOR_ABI = [
@@ -33,14 +35,11 @@ export const OPERATOR_ABI = [
   "function cancelWithdraw()",
   "function close()",
   "event ApproverSet(address indexed approver)",
-  "event PayoutApproved(uint256 indexed id)",
+  "event PayoutApproved(uint256 indexed id, address indexed approver)",
   "event WithdrawRequested(uint256 amount, uint64 readyAt, uint64 lapsesAt)",
   "event WithdrawCancelled(address indexed by, uint256 amount)",
 ];
 
-export const PAYOUT_DELAY = 72 * 3600;
-/** Past this from its claim a payout is paid unapproved, unless it was stopped. */
-export const PAYOUT_HARD = 7 * 24 * 3600;
 export const REVIEW_SCHEMA = "payout-review/2";
 /** What the operator confirms, word for word, to approve a payout whose result did not count up (`approveAnywayCall`). */
 export const HOLD_WARNING = "The result did not count up. Approving pays it at 72 hours, before anyone has written the "
@@ -188,10 +187,14 @@ function eventsNamed(events, name) {
 /**
  * The payouts waiting (Due), each with its three times (the claim, 72 hours after it, the ceiling), whether it is
  * approved, and when it will be paid as things stand. `structs` are `payout(id)` in order of id; `approved` is read
- * from the struct where the pool has it, else from the PayoutApproved events. `reviews` maps an id to its review
- * document, shown only where it is of this payout. The most urgent first: the earliest of their payment times.
+ * from the struct (its eighth field), else from the PayoutApproved events. `approver` is the pool's `approver()`:
+ * the zero address means nobody approves, and every payout goes out at its ceiling. `approvable` says whether the
+ * pool would take an approval of this payout now: not one approved already, and not where nobody approves. `reviews`
+ * maps an id to its review document, shown only where it is of this payout. The most urgent first: the earliest of
+ * their payment times.
  */
-export function awaitingApproval({ pool, structs, events = [], now, reviews = {}, keccak256, approvals = true }) {
+export function awaitingApproval({ pool, structs, events = [], now, reviews = {}, keccak256, approvals = true, approver }) {
+  const nobody = approver != null && ZERO.test(String(approver));
   const approvedEv = new Set(eventsNamed(events, "PayoutApproved").map((e) => Number(e.args.id)));
   const out = [];
   [...structs].forEach((p, index) => {
@@ -204,16 +207,18 @@ export function awaitingApproval({ pool, structs, events = [], now, reviews = {}
     // A pool without approvals (it does not answer `approver()`) pays each payout at its 72 hours by itself: no
     // ceiling, nothing to approve (review of #283).
     const hardAt = approvals ? claimedAt + PAYOUT_HARD : null;
-    const approved = p.approved === undefined ? approvedEv.has(id) : Boolean(p.approved);
+    const rawApproved = p.approved ?? p[7];
+    const approved = rawApproved === undefined ? approvedEv.has(id) : Boolean(rawApproved);
     const payAt = approved || !approvals ? dueAt : hardAt;
     let status;
     if (!approvals) status = now >= dueAt ? "payable" : "in-72-hours";
     else if (now >= hardAt) status = "past-ceiling";
     else if (approved) status = now >= dueAt ? "approved-payable" : "approved";
-    else status = now >= dueAt ? "awaiting-approval" : "in-72-hours";
+    else if (now < dueAt) status = "in-72-hours";
+    else status = nobody ? "no-approver" : "awaiting-approval";
     const row = {
       id, account: p.account ?? p[0], trader: p.trader ?? p[1], amount: BigInt(p.amount ?? p[2]),
-      claimedAt, dueAt, hardAt, approved, payAt, status, approvable: approvals,
+      claimedAt, dueAt, hardAt, approved, payAt, status, approvable: Boolean(approvals) && !approved && !nobody,
     };
     const doc = reviews[id] ?? reviews[String(id)];
     const got = doc === undefined ? { review: null, problem: "no review" } : reviewFor(doc, row, { pool, keccak256 });
@@ -222,8 +227,9 @@ export function awaitingApproval({ pool, structs, events = [], now, reviews = {}
     // A payout whose result did not count up is offered no approval: only a second, deliberate step with the
     // warning (approveAnywayCall). Any other payout is offered its one-signature approval.
     const hold = got.review?.action === "hold";
-    row.approve = hold || !approvals ? null : approveCall({ pool, ids: [id], keccak256 });
-    row.approveAnyway = hold ? { warning: HOLD_WARNING } : null;
+    // No call the pool would revert: none for a payout approved already, nor where nobody approves.
+    row.approve = hold || !row.approvable ? null : approveCall({ pool, ids: [id], keccak256 });
+    row.approveAnyway = hold && row.approvable ? { warning: HOLD_WARNING } : null;
     out.push(row);
   });
   return out.sort((a, b) => a.payAt - b.payAt || a.id - b.id);
@@ -254,7 +260,9 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   }
   let built;
   try {
-    if (c.kind === "none") built = null;  // a pool without approvals, or a stop the pool would refuse: nothing to sign
+    // Nothing to sign: a pool without approvals or without an approver, a payout approved already, a stop the pool
+    // would refuse, or something not read.
+    if (c.kind === "none") built = null;
     else if (c.kind === "approve") built = approveCall({ pool, ids: [payout.id], keccak256 });
     else if (c.kind === "stop") {
       const [, reason, paired, trades, links] = c.args;

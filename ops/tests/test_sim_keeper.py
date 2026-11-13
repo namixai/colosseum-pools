@@ -36,8 +36,8 @@ class TheEvents(unittest.TestCase):
         pool = (ROOT / "src/sim/SimPool.sol").read_text()
         fields = re.search(r"struct Payout \{(.*?)\}", pool, re.S).group(1)
         types = [l.split()[0] for l in fields.splitlines() if l.strip() and not l.strip().startswith("//")]
-        self.assertEqual(types, ["address", "address", "uint64", "uint64", "PayoutState", "bool", "uint64"])
-        self.assertEqual(k.PAYOUT, "(address,address,uint64,uint64,uint8,bool,uint64)")
+        self.assertEqual(types, ["address", "address", "uint64", "uint64", "PayoutState", "bool", "uint64", "bool"])
+        self.assertEqual(k.PAYOUT, "(address,address,uint64,uint64,uint8,bool,uint64,bool)")
         self.assertEqual(k.PAYOUT_STATE, ("None", "Due", "Stopped", "Paid", "Held", "Refused"))
         states = re.search(r"enum PayoutState \{(.*?)\}", pool, re.S).group(1)
         self.assertEqual(tuple(w for w in re.findall(r"^\s*(\w+),?$", states, re.M)), k.PAYOUT_STATE)
@@ -62,11 +62,32 @@ class WhatIsDue(unittest.TestCase):
         self.assertEqual(k.account_calls("exam", "Passed", 60, passed_at=10, fund_window=50), [])
         self.assertEqual(k.account_calls("exam", "Passed", 61, passed_at=10, fund_window=50), ["release"])
 
-    def test_pay_is_due_once_the_first_unsettled_payouts_time_has_come(self):
-        self.assertFalse(k.pay_due(3, 3, "Due", 0, 100), "nothing unsettled")
-        self.assertFalse(k.pay_due(0, 1, "Due", 101, 100))
-        self.assertTrue(k.pay_due(0, 1, "Due", 100, 100))
-        self.assertTrue(k.pay_due(0, 2, "Stopped", 999, 100), "pay walks past a settled one")
+    def test_pay_is_due_for_an_approved_payout_past_its_72_hours_or_any_past_its_7_days(self):
+        due, hard = 1_000, 1_000 - k.PAYOUT_DELAY + k.PAYOUT_HARD
+        self.assertFalse(k.pay_due([], 2_000), "nothing unsettled")
+        self.assertFalse(k.pay_due([("Due", due, True)], due - 1))
+        self.assertTrue(k.pay_due([("Due", due, True)], due))
+        self.assertFalse(k.pay_due([("Due", due, False)], due), "not approved: it waits")
+        self.assertFalse(k.pay_due([("Due", due, False)], hard - 1))
+        self.assertTrue(k.pay_due([("Due", due, False)], hard), "7 days: it goes")
+        self.assertTrue(k.pay_due([("Due", due, False), ("Due", due + 5, True)], due + 5), "pay walks past one waiting")
+        self.assertTrue(k.pay_due([("Stopped", 999, False)], 100), "pay walks past a settled head")
+        self.assertFalse(k.pay_due([("Due", due, False), ("Stopped", 0, False)], due), "a settled one behind changes nothing")
+        # How far pay is told to look: to the last payable one, past settled ones paid out of order (review of #286).
+        rows = [("Due", due, False)] + [("Paid", due, True)] * 20 + [("Due", due + 5, True)]
+        self.assertEqual(k.pay_reach(rows, due + 5), 22, "past twenty payouts paid out of order")
+        self.assertEqual(k.pay_reach([("Paid", 0, True), ("Held", 0, True), ("Due", due, False)], due), 2,
+                         "a settled head: past the settled ones")
+        self.assertEqual(k.pay_reach([("Due", due, False)], due), 0)
+        # At most PAY_PER_CALL paid in one call, so that it fits a small block (review of #286).
+        many = [("Due", due, True)] * (k.PAY_PER_CALL + 5)
+        self.assertEqual(k.pay_reach(many, due), k.PAY_PER_CALL)
+
+    def test_the_payout_times_are_the_factorys(self):
+        src = (ROOT / "src/sim/SimPoolFactory.sol").read_text()
+        self.assertIn("PAYOUT_DELAY = 72 hours;", src)
+        self.assertIn("PAYOUT_HARD = 7 days;", src)
+        self.assertEqual((k.PAYOUT_DELAY, k.PAYOUT_HARD), (72 * 3600, 7 * 86_400))
 
     def test_a_fill_goes_out_for_the_next_block_inside_the_window(self):
         self.assertFalse(k.fill_now(10, 14, 8), "the next block is 9, before the window")
@@ -213,18 +234,138 @@ class ThePayoutsClock(unittest.TestCase):
         send.assert_called_once_with(self.POOL, "claimPayout(address)", ["address"], [self.STAGE])
 
     def test_pay_goes_out_in_the_first_pass_at_the_due_time(self):
-        sk = self.keeper()
+        """Approved: at its 72 hours. Not approved: at its 7 days from the claim, and not before."""
         due = 1_000 + 72 * 3600
-        payout = ("0x" + "11" * 20, "0x" + "77" * 20, 800, due, 1, False)
+        for approved, at in ((True, due), (False, 1_000 + 7 * 86_400)):
+            sk = self.keeper()
+            payout = ("0x" + "11" * 20, "0x" + "77" * 20, 800, due, 1, False, 0, approved)
 
-        def view(to, sig, out="uint256", *a):
-            return {"head()": 0, "payoutCount()": 1}.get(sig, payout)
+            def view(to, sig, out="uint256", *a):
+                return {"head()": 0, "payoutCount()": 1}.get(sig, payout)
 
-        with mock.patch.object(k, "view", side_effect=view), mock.patch.object(sk, "send", return_value=True) as send:
-            sk.pool_pass(self.POOL, due - 1)
-            send.assert_not_called()
-            sk.pool_pass(self.POOL, due)
-        send.assert_called_once_with(self.POOL, "pay(uint256)", ["uint256"], [k.PAY_PER_CALL])
+            with mock.patch.object(k, "view", side_effect=view), mock.patch.object(sk, "send", return_value=True) as send:
+                sk.pool_pass(self.POOL, at - 1)
+                send.assert_not_called()
+                sk.pool_pass(self.POOL, at)
+            send.assert_called_once_with(self.POOL, "pay(uint256)", ["uint256"], [1])
+
+
+class TheLongQueue(unittest.TestCase):
+    """More payouts wait for their approval in front of an approved one than the keeper used to read (review of
+    #286). The pool here is a model of `SimPool.pay` with money for everything: the head, `max` counting every
+    payout looked at, a payout waiting for its approval passed over and keeping the head."""
+    POOL = k.to_checksum_address("0x" + "55" * 20)
+    CLAIMED = 1_000
+    DUE = CLAIMED + k.PAYOUT_DELAY
+    HARD = CLAIMED + k.PAYOUT_HARD
+
+    def setUp(self):
+        import shutil
+        tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        self.sk = k.SimKeeper("0x" + "33" * 20, None, "0x" + "44" * 20, False, pathlib.Path(tmp_dir) / "s.json", 1)
+        self.head = 0
+        self.payouts: list[list] = []  # [state, due_at, approved]
+        self.now = self.DUE
+        self.calls: list[tuple[int, int]] = []  # (max, paid) of each `pay`
+        self.reads = 0
+
+    def queue(self, waiting: int, approved_after: int = 1) -> None:
+        self.payouts = [["Due", self.DUE, False] for _ in range(waiting)]
+        self.payouts += [["Due", self.DUE, True] for _ in range(approved_after)]
+
+    def view(self, to, sig, out="uint256", types=(), args=()):
+        if sig == "head()":
+            return self.head
+        if sig == "payoutCount()":
+            return len(self.payouts)
+        self.reads += 1
+        state, due_at, approved = self.payouts[args[0]]
+        return ("0x" + "11" * 20, "0x" + "77" * 20, 800, due_at, k.PAYOUT_STATE.index(state), False, 0, approved)
+
+    def pay(self, to, sig, types, args) -> bool:
+        """SimPool.pay, with the pool holding enough for every payout."""
+        self.assertEqual(sig, "pay(uint256)")
+        i, seen, paid, waiting = self.head, 0, 0, None
+        while i < len(self.payouts) and seen < args[0]:
+            p = self.payouts[i]
+            seen += 1
+            if p[0] == "Due":
+                if self.now < p[1]:
+                    break
+                if not p[2] and self.now < p[1] - k.PAYOUT_DELAY + k.PAYOUT_HARD:
+                    waiting = i if waiting is None else waiting
+                    i += 1
+                    continue
+                p[0] = "Paid"
+                paid += 1
+            i += 1
+        self.head = waiting if waiting is not None and waiting < i else i
+        self.calls.append((args[0], paid))
+        return True
+
+    def passes(self, n: int = 1) -> list:
+        logged = []
+        with mock.patch.object(k, "view", side_effect=self.view), mock.patch.object(self.sk, "send", side_effect=self.pay), \
+                mock.patch.object(k, "log", side_effect=lambda what, **kw: logged.append((what, kw))):
+            for _ in range(n):
+                self.sk.pool_pass(self.POOL, self.now)
+        return logged
+
+    def test_the_keepers_numbers_are_the_ones_the_gas_was_measured_with(self):
+        src = (ROOT / "test/sim/SimPool.t.sol").read_text()
+        self.assertIn(f"uint256 constant KEEPER_PAYS = {k.PAY_PER_CALL};", src)
+        self.assertIn(f"uint256 constant KEEPER_SCAN = {k.SCAN_PAYOUTS};", src)
+        self.assertIn("function test_pay_theKeepersFullBatch_fitsASmallBlock()", src)
+        self.assertIn('assertLt(worst, 1_600_000, "pay(192) with ten payments");', src)
+
+    def test_an_approved_payout_behind_96_waiting_is_paid_in_the_first_pass(self):
+        self.queue(96)
+        self.assertEqual(self.passes(), [])
+        self.assertEqual(self.calls, [(97, 1)], "pay is told to look past the 96")
+        self.assertEqual(self.payouts[96][0], "Paid")
+        self.assertEqual(self.head, 0, "the head still waits for its approval")
+
+    def test_reading_stops_at_the_tenth_payable_payout(self):
+        self.queue(3, approved_after=40)
+        self.passes()
+        self.assertEqual(self.reads, 3 + k.PAY_PER_CALL)
+        self.assertEqual(self.calls, [(3 + k.PAY_PER_CALL, k.PAY_PER_CALL)])
+
+    def test_one_behind_more_than_a_call_can_look_past_is_named_and_is_paid_once_the_ones_in_front_are_approved(self):
+        self.queue(k.SCAN_PAYOUTS)
+        far = k.SCAN_PAYOUTS
+        logged = self.passes()
+        self.assertEqual(self.calls, [], "no call: nothing in reach may be paid")
+        self.assertEqual(logged, [("pay_out_of_reach", {"pool": self.POOL, "head": 0, "looked": k.SCAN_PAYOUTS, "beyond": 1})])
+        # The approver approves the first of the queue: it is paid, the head moves, the far one is in reach.
+        self.payouts[0][2] = True
+        self.assertEqual(self.passes(), [])
+        self.assertEqual((self.calls, self.head), ([(1, 1)], 1))
+        self.passes()
+        self.assertEqual(self.calls[-1], (k.SCAN_PAYOUTS, 1))
+        self.assertEqual(self.payouts[far][0], "Paid")
+
+    def test_with_no_approval_at_all_it_is_paid_within_the_7_days_of_the_ones_in_front_ten_a_pass(self):
+        self.queue(k.SCAN_PAYOUTS)
+        far = k.SCAN_PAYOUTS
+        self.now = self.HARD - 1
+        self.assertEqual([what for what, _ in self.passes()], ["pay_out_of_reach"])
+        self.now = self.HARD
+        needed = -(-(far + 1) // k.PAY_PER_CALL)
+        self.passes(needed - 1)
+        self.assertEqual(self.payouts[far][0], "Due")
+        self.passes()
+        self.assertEqual(self.payouts[far][0], "Paid", "in the pass its turn comes, twenty for 193 payouts")
+        self.assertEqual(len(self.calls), needed)
+        self.assertTrue(all(looked <= k.SCAN_PAYOUTS and paid <= k.PAY_PER_CALL for looked, paid in self.calls),
+                        "every call within what was measured to fit a small block")
+
+    def test_a_queue_whose_72_hours_are_not_over_is_not_out_of_reach(self):
+        self.queue(k.SCAN_PAYOUTS + 5)
+        self.now = self.DUE - 1
+        self.assertEqual(self.passes(), [])
+        self.assertEqual(self.reads, 1, "nothing behind a payout not yet due is read")
 
 
 class TheHostsOneUnit(unittest.TestCase):

@@ -153,8 +153,34 @@ test("a pool without approvals pays at 72 hours by itself: no ceiling, nothing t
 
 test("a pool without the field says approved by its events", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
-  const rows = awaitingApproval({ pool: POOL, structs, events: [{ name: "PayoutApproved", args: { id: 1n } }], now: NOW, keccak256 });
+  const rows = awaitingApproval({ pool: POOL, structs, events: [{ name: "PayoutApproved", args: { id: 1n, approver: OTHER } }],
+    now: NOW, keccak256 });
   assert.deepEqual(rows.map((r) => [r.id, r.approved]), [[1, true], [0, false]]);
+});
+
+test("a payout read by position says approved by its eighth field", () => {
+  const due = BigInt(NOW - 4 * D + PAYOUT_DELAY);
+  const structs = [[S1, T1, 800_000_000n, due, 1, false, 0n, true], [S1, T1, 800_000_000n, due, 1, false, 0n, false]];
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256 });
+  assert.deepEqual(rows.map((r) => [r.id, r.approved, r.status]), [[0, true, "approved-payable"], [1, false, "awaiting-approval"]]);
+});
+
+test("only a payout the pool would take an approval of is approvable: not one approved, not where nobody approves", () => {
+  const structs = [
+    payout(0, { claimedAt: NOW - 4 * D, approved: false }),   // past its 72 hours, waiting for the approver
+    payout(1, { claimedAt: NOW - 4 * D, approved: true }),    // approved already: a second approval reverts
+    payout(2, { claimedAt: NOW - 1 * D, approved: false }),   // in its 72 hours: can be approved ahead
+  ];
+  const named = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, approver: OTHER });
+  assert.deepEqual(named.map((r) => [r.id, r.status, r.approvable]),
+    [[1, "approved-payable", false], [0, "awaiting-approval", true], [2, "in-72-hours", true]]);
+  const nobody = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, approver: ZERO });
+  assert.deepEqual(nobody.map((r) => [r.id, r.status, r.approvable, r.payAt]),
+    [[1, "approved-payable", false, NOW - D], [0, "no-approver", false, NOW + 3 * D], [2, "in-72-hours", false, NOW + 6 * D]]);
+  assert.equal(awaitingApproval({ pool: POOL, structs, now: NOW, keccak256 })[2].approvable, true, "no approver handed in: as named");
+  assert.deepEqual(named.map((r) => r.approve?.method ?? null), [null, "approvePayouts", "approvePayouts"],
+    "no Approve button on a payout approved already");
+  assert.deepEqual(nobody.map((r) => r.approve), [null, null, null], "nor where nobody approves");
 });
 
 test("a review is shown only where it is of this very payout and names the call the page would build", () => {
@@ -255,8 +281,28 @@ test("the pool's state: what is free of what it owes, holds and keeps for stops,
 
 test("the ABI names the calls and events the functions build and read", () => {
   for (const s of ["function approvePayouts(uint256[] ids)", "function requestWithdraw(uint256 amount)",
-    "function cancelWithdraw()", "function withdraw()", "function close()", "event PayoutApproved(uint256 indexed id)",
+    "function cancelWithdraw()", "function withdraw()", "function close()",
+    "event PayoutApproved(uint256 indexed id, address indexed approver)",
     "event WithdrawRequested(uint256 amount, uint64 readyAt, uint64 lapsesAt)"]) {
     assert.ok(OPERATOR_ABI.includes(s), s);
+  }
+});
+
+test("every line of the ABI is the pool's own, by its source", () => {
+  // The contract's text with its whitespace folded and the data locations dropped, as an ABI line writes a call.
+  const src = readFileSync(new URL("../../src/sim/SimPool.sol", import.meta.url), "utf8")
+    .replace(/\s+/g, " ").replace(/ (calldata|memory)(?= )/g, "");
+  for (const line of OPERATOR_ABI) {
+    if (line.startsWith("event ")) {
+      assert.ok(src.includes(`${line};`), line);
+      continue;
+    }
+    const m = /^function (\w+)\(([^)]*)\)(?: view returns \((\w+)\))?$/.exec(line);
+    assert.ok(m, `an ABI line this test can read: ${line}`);
+    const [, name, params, returns] = m;
+    // A function of the pool by its name and parameters, or the getter of a public variable of that type.
+    const declared = src.includes(`function ${name}(${params})`)
+      || (params === "" && returns !== undefined && src.includes(` ${returns} public ${name};`));
+    assert.ok(declared, line);
   }
 });
