@@ -773,6 +773,16 @@ class ReadingTheChain(unittest.TestCase):
         self.assertNotIn("profile", review["kinds"], "a profile is said, not counted against the trader")
 
 
+class MissingParts(unittest.TestCase):
+    def test_parts_given_as_none_are_parts_not_read(self):
+        ch, _, s1 = honest_world()
+        ch.d.update(ended=None, oracle=None, venue=None, costPpm=None, unread=None)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual(got["verdict"], "clean")
+        self.assertEqual(r.exam_event_of({"topics": [], "data": "0x", "blockNumber": "0x1", "transactionHash": "0x"}, 0), None,
+                         "an anonymous log is none of PaperExam's")
+
+
 class AgainstTheContracts(unittest.TestCase):
     def test_the_events_and_the_payout_share_are_the_contracts(self):
         pool = (ROOT / "src/sim/SimPool.sol").read_text()

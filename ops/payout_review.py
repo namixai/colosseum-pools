@@ -195,7 +195,7 @@ def opposing_sum(account: str, chain: dict, who: dict[str, str], p: "Params") ->
     `p.mirror_ratio` of it. Found when that holds for `p.mirror_share` of this account's time, an hour at least,
     with at least two accounts in it. Each account's part is its average size against this one while it counted.
     Never a stop on its own: a sum is no pair the pool's rule names."""
-    ended = chain.get("ended", {})
+    ended = chain.get("ended") or {}
     mine = [f for f in chain["fills"] if f["account"] == account]
     if not mine:
         return None
@@ -264,7 +264,7 @@ def mirrors_of(account: str, chain: dict, who: dict[str, str], p: "Params") -> l
             others.setdefault(f["account"], []).append(f)
     out = []
     for other, fills in sorted(others.items()):
-        m = mirror(mine, fills, chain["now"], p.mirror_ratio, chain.get("ended", {}).get(other))
+        m = mirror(mine, fills, chain["now"], p.mirror_ratio, (chain.get("ended") or {}).get(other))
         if m["share"] >= p.mirror_share and m["mirrored"] >= p.mirror_min_s:
             out.append({"account": other, "trader": who.get(other), "share": round(m["share"], 4),
                         "mirrored": m["mirrored"], "exposed": m["exposed"], "assets": m["assets"],
@@ -296,15 +296,15 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
     (one price far from both neighbours, which agree, is an outlier) and, given a file of the venue's prices,
     to the venue's price of that minute. A pass in very few fills or days on the largest size of the menu is
     said as a profile, not as a suspicion."""
-    ev = chain.get("exam_events", {}).get(account)
+    ev = (chain.get("exam_events") or {}).get(account)
     out = {"read": ev is not None, "capital": None, "fills": 0, "days": 0, "passed": False,
            "checked": {"results": 0, "snapshots": 0, "unchecked": 0, "fills": 0}, "flags": [], "moves": [],
            "profile": None}
     if ev is None:
         return out
-    oracle = chain.get("oracle", {})
-    venue = chain.get("venue", {})
-    cost_ppm = chain.get("costPpm", {}).get(account)
+    oracle = chain.get("oracle") or {}
+    venue = chain.get("venue") or {}
+    cost_ppm = (chain.get("costPpm") or {}).get(account)
     flags = out["flags"]
     capital = cash = 0
     pos: dict[int, int] = {}
@@ -572,7 +572,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     out["stop"] = stop
 
     # The result counted again, for the stage and for the exam it came from.
-    sizes = chain["books"].get(pool, {}).get("sizes") or [x["size"] for x in chain["sales"] if x["pool"] == pool]
+    sizes = (chain["books"].get(pool) or {}).get("sizes") or [x["size"] for x in chain["sales"] if x["pool"] == pool]
     largest = max(sizes, default=None)
     out["recount"] = {part: recount(account, chain, p, out["size"], largest) if account else None
                       for part, account in (("stage", stage), ("exam", exam))}
@@ -616,8 +616,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
         rc = out["recount"][part]
         if rc and rc["flags"]:
             found.append(("recount", f"recount on the {part}: " + ", ".join(sorted({f['what'] for f in rc['flags']}))))
-    unread = [a for a in (stage, exam) if a and (a in chain.get("unread", [])
-                                                 or ("exam_events" in chain and a not in chain["exam_events"]))]
+    read = chain.get("exam_events")
+    unread = [a for a in (stage, exam) if a and (a in (chain.get("unread") or []) or (read is not None and a not in read))]
     if unread:
         found.append(("unread", "not read: " + ", ".join(unread)))
     out["verdict"] = "suspicious" if found else "clean"
@@ -773,6 +773,8 @@ HIP3_BASE = 100_000  # CoreOps.HIP3_BASE: an asset's index among the oracle's pr
 
 def exam_event_of(l: dict, t: int) -> dict | None:
     """One PaperExam log as the recount reads it, or None for one it does not."""
+    if not l.get("topics"):
+        return None  # an anonymous log is none of PaperExam's (review of #287)
     topic, data = l["topics"][0], bytes.fromhex(l["data"][2:])
     e = {"block": int(l["blockNumber"], 16), "index": int(l.get("logIndex", "0x0"), 16), "t": t, "tx": l["transactionHash"]}
     if topic == STARTED:
