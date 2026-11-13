@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, PAPER_EXAM_EVENTS_ABI, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM, simPoolPage,
+  SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, SIM_POOL_APPROVAL_ABI, PAPER_EXAM_EVENTS_ABI, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM, simPoolPage,
   activityCounts, accountsToRead,
 } from "../lib/simpool.js";
 
@@ -18,7 +18,7 @@ const CHAIN = JSON.parse(readFileSync(new URL("./fixtures/sim-page-chain.json", 
 const LARGE_PAYOUT = 800_000_000n;
 
 /** The event lines of the library's ABI, by name: each parameter's type, name and whether it is a topic. */
-const EVENTS = new Map([...SIM_POOL_ABI, ...SIM_POOL_STOP_RESERVE_ABI, ...PAPER_EXAM_EVENTS_ABI].filter((l) => l.startsWith("event ")).map((l) => {
+const EVENTS = new Map([...SIM_POOL_ABI, ...SIM_POOL_STOP_RESERVE_ABI, ...SIM_POOL_APPROVAL_ABI, ...PAPER_EXAM_EVENTS_ABI].filter((l) => l.startsWith("event ")).map((l) => {
   const [, name, body] = l.match(/^event (\w+)\((.*)\)$/);
   const params = body ? body.split(", ").map((p) => {
     const words = p.split(" ");
