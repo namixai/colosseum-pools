@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import {
   OPERATOR_ABI, PAYOUT_DELAY, PAYOUT_HARD, WITHDRAW_DELAY, WITHDRAW_WINDOW, REVIEW_SCHEMA, SIGNERS,
   encodeCall, approveCall, stopCall, requestWithdrawCall, withdrawCall, cancelWithdrawCall, closeCall,
-  awaitingApproval, reviewFor, withdrawRequest, poolState,
+  awaitingApproval, reviewFor, withdrawRequest, poolState, approveAnywayCall, HOLD_WARNING, approveSelectedCall,
 } from "../lib/operator.js";
 import { keccak256 } from "./keccak.mjs";
 
@@ -148,6 +148,7 @@ test("a pool without approvals pays at 72 hours by itself: no ceiling, nothing t
   const r0 = rows.find((r) => r.id === 0);
   assert.equal(r0.reviewProblem, null);
   assert.equal(r0.review.call, null, "nothing to sign");
+  assert.equal(r0.approve, null, "no Approve button on a pool without approvals");
 });
 
 test("a pool without the field says approved by its events", () => {
@@ -177,6 +178,9 @@ test("only a payout the pool would take an approval of is approvable: not one ap
   assert.deepEqual(nobody.map((r) => [r.id, r.status, r.approvable, r.payAt]),
     [[1, "approved-payable", false, NOW - D], [0, "no-approver", false, NOW + 3 * D], [2, "in-72-hours", false, NOW + 6 * D]]);
   assert.equal(awaitingApproval({ pool: POOL, structs, now: NOW, keccak256 })[2].approvable, true, "no approver handed in: as named");
+  assert.deepEqual(named.map((r) => r.approve?.method ?? null), [null, "approvePayouts", "approvePayouts"],
+    "no Approve button on a payout approved already");
+  assert.deepEqual(nobody.map((r) => r.approve), [null, null, null], "nor where nobody approves");
 });
 
 test("a review is shown only where it is of this very payout and names the call the page would build", () => {
@@ -189,7 +193,7 @@ test("a review is shown only where it is of this very payout and names the call 
   assert.equal(rows.find((r) => r.id === 1).reviewProblem, "no review");
   const row = rows.find((r) => r.id === 0);
   const cases = [
-    [{ schema: "payout-review/0" }, /not a payout-review\/1/],
+    [{ schema: "payout-review/2" }, /not a payout-review\/3/],
     [{ pool: OTHER }, /another pool/],
     [{ id: 1 }, /another payout/],
     [{ trader: OTHER }, /another trader/],
@@ -199,16 +203,84 @@ test("a review is shown only where it is of this very payout and names the call 
     [{ call: { kind: "approve", data: "0xd6532c4d00" } }, /call data is not its call/],
     [{ call: { kind: "stop", args: [0, 1, OTHER, [A], []] } }, /would refuse: a pair needs both trades/],
     [{ call: {} }, /no call/],
+    [{ action: "stop" }, /action \(stop\) is not its call \(approve\)/],
+    [{ action: "hold" }, /holds a payout yet names a call/],
   ];
   for (const [over, msg] of cases) {
     const got = reviewFor({ ...reviewDoc(0), ...over }, row, { pool: POOL, keccak256 });
     assert.equal(got.review, null);
     assert.match(got.problem, msg);
   }
-  const stop = reviewFor({ ...reviewDoc(0), verdict: "suspicious",
+  const stop = reviewFor({ ...reviewDoc(0), verdict: "suspicious", action: "stop",
     call: { kind: "stop", args: [0, 1, OTHER, [A, B], []], data: null } }, row, { pool: POOL, keccak256 });
   assert.equal(stop.review.call.method, "stopPayout");
   assert.equal(stop.review.call.signer, "checker");
+});
+
+test("a payout whose result did not count up is offered no approval, only a deliberate second step", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
+  const held = { ...reviewDoc(0), verdict: "suspicious", action: "hold", call: null,
+    reasons: [{ kind: "recount", text: "recount on the stage: result" }],
+    stopDraft: { kind: "stop-draft", reason: 3, paired: ZERO, trades: [A], links: ["<keccak256 of the published analysis>"], data: null } };
+  const decide = { ...reviewDoc(1), verdict: "suspicious", action: "decide", reasons: [{ kind: "late", text: "fills later" }] };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: { 0: held, 1: decide }, keccak256 });
+  const r0 = rows.find((r) => r.id === 0);
+  assert.equal(r0.reviewProblem, null);
+  assert.deepEqual([r0.review.action, r0.review.call, r0.approve], ["hold", null, null], "no Approve button");
+  assert.equal(r0.review.stopDraft.reason, 3);
+  assert.deepEqual(r0.approveAnyway, { warning: HOLD_WARNING });
+  assert.throws(() => approveAnywayCall({ pool: POOL, row: r0, confirm: "yes", keccak256 }), /warning confirmed/);
+  assert.equal(approveAnywayCall({ pool: POOL, row: r0, confirm: HOLD_WARNING, keccak256 }).method, "approvePayouts");
+  const r1 = rows.find((r) => r.id === 1);
+  assert.equal(r1.review.action, "decide");
+  assert.equal(r1.approve.method, "approvePayouts", "suspicious but counted up: the approval is there, the choice the signer's");
+  assert.equal(r1.approveAnyway, null);
+  assert.throws(() => approveAnywayCall({ pool: POOL, row: r1, confirm: HOLD_WARNING, keccak256 }), /not held/);
+});
+
+test("a red pool is approved one payout at a time, never in a batch", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
+  const green = { 0: reviewDoc(0), 1: reviewDoc(1) };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: green, keccak256 });
+  assert.deepEqual(approveSelectedCall({ pool: POOL, rows, keccak256 }).args, [[0n, 1n]]);
+  const red = { 0: { ...reviewDoc(0), batchApproval: false }, 1: { ...reviewDoc(1), batchApproval: false } };
+  const redRows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: red, keccak256 });
+  assert.throws(() => approveSelectedCall({ pool: POOL, rows: redRows, keccak256 }), /approve each payout on its own/);
+  assert.equal(redRows[0].approve.method, "approvePayouts", "one at a time is still offered");
+  const held = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256,
+    reviews: { 0: reviewDoc(0), 1: { ...reviewDoc(1), action: "hold", call: null } } });
+  assert.throws(() => approveSelectedCall({ pool: POOL, rows: held, keccak256 }), /offered no approval/);
+});
+
+test("a review with an amount missing or unreadable rejects that document, not the whole list", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D }), payout(2, { claimedAt: NOW - D })];
+  const { amount: _gone, ...noAmount } = reviewDoc(1);
+  const reviews = { 0: reviewDoc(0), 1: noAmount, 2: { ...reviewDoc(2), amount: "invalid" } };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews, keccak256 });
+  assert.deepEqual(rows.map((r) => [r.id, r.reviewProblem, r.review === null]),
+    [[0, null, false], [1, "a review with no readable amount", true], [2, "a review with no readable amount", true]]);
+  assert.equal(reviewFor({ ...reviewDoc(0), amount: "1.5" }, rows[0], { pool: POOL, keccak256 }).problem, "a review with no readable amount");
+});
+
+test("a red pool restricts every selection from it, also of payouts whose own review was not loaded", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D }), payout(2, { claimedAt: NOW - D })];
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: { ...reviewDoc(0), batchApproval: false } } });
+  assert.deepEqual(rows.map((r) => r.poolRed), [true, true, true]);
+  const rest = rows.filter((r) => r.id !== 0);
+  assert.throws(() => approveSelectedCall({ pool: POOL, rows: rest, keccak256 }), /approve each payout on its own/);
+  assert.equal(rest[0].approve.method, "approvePayouts", "one at a time is still offered, as the row's own approval");
+  const green = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: reviewDoc(0) } });
+  assert.deepEqual([green.map((r) => r.poolRed), approveSelectedCall({ pool: POOL, rows: green, keccak256 }).args],
+    [[false, false, false], [[0n, 1n, 2n]]]);
+});
+
+test("a withdrawal request half read is unread, never lapsed and never none", () => {
+  const readyAt = NOW + WITHDRAW_DELAY;
+  for (const reads of [{ requested: 5_000_000n }, { requested: 5_000_000n, readyAt: null }, { readyAt }, {}]) {
+    assert.deepEqual(withdrawRequest({ pool: POOL, ...reads, now: NOW, keccak256 }),
+      { status: "unread", amount: null, requestedAt: null, readyAt: null, lapsesAt: null, calls: {} }, JSON.stringify(reads, (_, v) => typeof v === "bigint" ? String(v) : v));
+  }
+  assert.equal(withdrawRequest({ pool: POOL, requested: 0n, readyAt: 0, now: NOW, keccak256 }), null, "read, and none");
 });
 
 test("the review the script writes is read as it is written", () => {
@@ -216,7 +288,7 @@ test("the review the script writes is read as it is written", () => {
   const src = readFileSync(new URL("../../ops/payout_review.py", import.meta.url), "utf8");
   assert.match(src, new RegExp(`SCHEMA = "${REVIEW_SCHEMA}"`));
   for (const key of ["schema", "pool", "id", "trader", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "reasons",
-    "evidence", "call", "readAt"]) {
+    "evidence", "call", "stopDraft", "readAt", "mirrors", "recount", "passRates", "timing"]) {
     assert.match(src, new RegExp(`"${key}":`), key);
   }
 });

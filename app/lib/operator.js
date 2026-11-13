@@ -9,7 +9,7 @@
 // signatures, in the Safe's own app, which takes the call's `to` and `data` from here. A stop, the cancelling of a
 // request and an early close are the platform's keys (the factory's checker and closer).
 //
-// The review of a payout (ops/payout_review.py, schema "payout-review/1") is read from a file the page is given. It
+// The review of a payout (ops/payout_review.py, schema "payout-review/3") is read from a file the page is given. It
 // is advice, never the call: the page builds every call itself, and shows a review only where it is of this very
 // payout (`reviewFor`). The names of the approval and of the withdrawal are the contract's (a test holds each line
 // of OPERATOR_ABI to src/sim/SimPool.sol); a pool from before them answers none of their reads.
@@ -40,7 +40,10 @@ export const OPERATOR_ABI = [
   "event WithdrawCancelled(address indexed by, uint256 amount)",
 ];
 
-export const REVIEW_SCHEMA = "payout-review/1";
+export const REVIEW_SCHEMA = "payout-review/3";
+/** What the operator confirms, word for word, to approve a payout whose result did not count up (`approveAnywayCall`). */
+export const HOLD_WARNING = "The result did not count up. Approving pays it at 72 hours, before anyone has written the "
+  + "analysis; without approval it waits for its ceiling, and a stop of reason 3 can still be signed.";
 
 /** Who signs each call, as the page says it beside the button. */
 export const SIGNERS = Object.freeze({
@@ -221,8 +224,18 @@ export function awaitingApproval({ pool, structs, events = [], now, reviews = {}
     const got = doc === undefined ? { review: null, problem: "no review" } : reviewFor(doc, row, { pool, keccak256 });
     row.review = got.review;
     row.reviewProblem = got.problem;
+    // A payout whose result did not count up is offered no approval: only a second, deliberate step with the
+    // warning (approveAnywayCall). Any other payout is offered its one-signature approval.
+    const hold = got.review?.action === "hold";
+    // No call the pool would revert: none for a payout approved already, nor where nobody approves.
+    row.approve = hold || !row.approvable ? null : approveCall({ pool, ids: [id], keccak256 });
+    row.approveAnyway = hold && row.approvable ? { warning: HOLD_WARNING } : null;
     out.push(row);
   });
+  // A red pool is red for every payout of it, whether or not that payout's own review was loaded: one validated
+  // review that says so restricts every selection from the pool (review of #290).
+  const poolRed = out.some((r) => r.review?.batchApproval === false);
+  for (const r of out) r.poolRed = poolRed;
   return out.sort((a, b) => a.payAt - b.payAt || a.id - b.id);
 }
 
@@ -237,11 +250,25 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   if (String(doc.pool).toLowerCase() !== String(pool).toLowerCase()) return no("a review of another pool");
   if (Number(doc.id) !== Number(payout.id)) return no("a review of another payout");
   if (String(doc.trader).toLowerCase() !== String(payout.trader).toLowerCase()) return no("a review naming another trader");
-  if (BigInt(doc.amount) !== BigInt(payout.amount)) return no("a review of another amount");
+  // A document is data from a file: an amount missing or not a whole number rejects this document, not the list.
+  let amount;
+  try {
+    amount = BigInt(doc.amount);
+  } catch {
+    return no("a review with no readable amount");
+  }
+  if (amount !== BigInt(payout.amount)) return no("a review of another amount");
   if (!doc.readAt || doc.readAt.time == null || !(Number(doc.readAt.time) >= Number(payout.claimedAt))) {
     return no("a review read before the claim");
   }
+  const action = doc.action ?? "approve";
   const c = doc.call ?? {};
+  if (action === "hold") {
+    // Nothing to sign: the result did not count up. The draft of a stop is shown, never built into a call.
+    if (doc.call) return no("a review that holds a payout yet names a call");
+    return { review: { verdict: doc.verdict, action, reasons: doc.reasons, evidence: doc.evidence, call: null,
+      stopDraft: doc.stopDraft ?? null, readAt: doc.readAt }, problem: null };
+  }
   let built;
   try {
     // Nothing to sign: a pool without approvals or without an approver, a payout approved already, a stop the pool
@@ -256,17 +283,43 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
     return no(`a review whose call the pool would refuse: ${err.message}`);
   }
   if (built && c.data && String(c.data).toLowerCase() !== built.data.toLowerCase()) return no("a review whose call data is not its call");
-  return { review: { verdict: doc.verdict, reasons: doc.reasons, evidence: doc.evidence, call: built,
-    readAt: doc.readAt }, problem: null };
+  if ((action === "stop") !== (c.kind === "stop")) return no(`a review whose action (${action}) is not its call (${c.kind})`);
+  return { review: { verdict: doc.verdict, action, reasons: doc.reasons, evidence: doc.evidence, call: built,
+    stopDraft: doc.stopDraft ?? null, batchApproval: doc.batchApproval !== false, readAt: doc.readAt }, problem: null };
+}
+
+/**
+ * "Approve selected": one signature over several payouts, refused when any of them is of a pool whose pass rate is
+ * red (the CFO, 13 November): then each payout is approved on its own, after its own look.
+ */
+export function approveSelectedCall({ pool, rows, keccak256 }) {
+  const list = [...rows];
+  if (list.some((r) => r.poolRed || r.review?.batchApproval === false)) throw new Error("the pool is red: approve each payout on its own");
+  if (list.some((r) => !r.approve)) throw new Error("a payout selected is offered no approval");
+  return approveCall({ pool, ids: list.map((r) => r.id), keccak256 });
+}
+
+/**
+ * The approval of a payout whose review holds it (the result did not count up), only with the operator's
+ * confirmation of HOLD_WARNING word for word: the page shows the warning and a second button, and passes its text.
+ */
+export function approveAnywayCall({ pool, row, confirm, keccak256 }) {
+  if (!row.approveAnyway) throw new Error("this payout is not held: its approval is row.approve");
+  if (confirm !== HOLD_WARNING) throw new Error("approving a held payout needs the warning confirmed as it is written");
+  return approveCall({ pool, ids: [row.id], keccak256 });
 }
 
 /**
  * The creator's standing request to withdraw, if any: how much, when it was made, from when it can be carried out
- * and until when, and the calls a page offers for it now.
+ * and until when, and the calls a page offers for it now. `null`: no request. `status: "unread"`: `requested` or
+ * `readyAt` was not read, so nothing is said of the request and no call is offered.
  */
 export function withdrawRequest({ pool, requested, readyAt, now, keccak256 }) {
   // The pool page's reading of the request (simpool.js), with the calls the operator's page offers for it.
-  const w = withdrawalOf({ requested: requested ?? 0n, readyAt: readyAt ?? 0n }, now);
+  const w = withdrawalOf({ requested, readyAt }, now);
+  // A read that is missing is not "no request" and not "lapsed" (simpool.js refuses an incomplete pair): the request
+  // is said to be unread, with no call, until both are read (review of #290).
+  if (w === null) return { status: "unread", amount: null, requestedAt: null, readyAt: null, lapsesAt: null, calls: {} };
   if (w.state === "none") return null;
   const calls = {};
   if (w.state !== "lapsed") calls.cancel = cancelWithdrawCall({ pool, by: "closer", keccak256 });

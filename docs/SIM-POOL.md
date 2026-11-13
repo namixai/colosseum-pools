@@ -276,14 +276,85 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
     under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
   - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
-    whether the money free of what is owed, held back and kept for stops covers them.
+    whether the money free of what is owed, held back and kept for stops covers them;
+  - mirrored accounts: positions held against positions, not fills against fills. Each account's net
+    position per asset is a step in time. A moment counts when another account of the factory holds
+    the opposite position on the same asset, at least half as large. An account mirrored for 60 % of
+    the time the stage (or the exam) held anything, and an hour at least, is named, with the share
+    and the fills that opened each mirrored stretch. A pair built in pieces, an hour apart, or at 60 %
+    of the size is caught this way; two traders in the same trend, or in different assets, are not.
+    An account's positions stop counting when it ends;
+  - the opposite side spread over many accounts: the same measure against the sum of the positions of
+    several accounts, each too small to be a mirror alone. A sum over everyone would catch a busy market,
+    where some account is always on the other side by chance. So only accounts given to it count: each
+    spent 60 % of its own time with a position against this one, an hour at least. A trader in the market
+    is mostly elsewhere in time. Found when at least two of them hold opposite positions adding up to half
+    the stage's, at the same time, for 60 % of its time. The finding lists each account's part and the
+    senders of USDC that funded several of them. It is never a stop on its own. It cannot tell apart
+    accounts that each happened to trade once, against this one and nowhere else: a market of one-trade
+    accounts would look the same;
+  - the result counted again from the account's own events, as PaperExam counts it:
+    - each step's cash from its capital and its fills, which `StepPassed` and `Passed` must carry
+      exactly (a step passes only flat);
+    - each day's snapshot from that cash and the oracle prices of its block;
+    - each fill against the oracle price of its block: at it, for a fill at the oracle; never better
+      for the trader, at the book;
+    - each fill's cost against the terms;
+    - the oracle price of a fill's block against the blocks on each side, where one price far from
+      both, which agree, is an outlier;
+    - given `--venue-prices`, the oracle against the venue's price of that minute. That file is
+      Hyperliquid's own candles (info API, `candleSnapshot`, interval 1m), read from disk and never
+      fetched by the script.
+
+    The oracle prices are read from the chain at their blocks. Where the node keeps no state that far
+    back, `--prices` stands in. A pass in three fills or two days at most on the largest size is said
+    as a profile, not counted as a reason.
+
+    A second profile is the pass that needs no view of the market: a position at a small leverage held to
+    the target, its stop just over the day's loss line, and after a stop nothing until the next UTC day,
+    when the line is counted from the smaller equity. From the fills, a step at a time: four round trips
+    (flat to flat) at most, each opened at three times the account at most; every one but the last closed
+    with 80 % or more of the day's allowed loss gone (the account's own `rules()`, against the snapshot in
+    force), and none opened again that day; the last one is the pass. One round trip alone is the same
+    game won at once. Round trips under 5 % of the account are not counted either way. The rules allow
+    such a pass and an honest trader may trade so: it is a grey line of the card (`recount.<part>.flip`),
+    in no reason, and changes neither the verdict nor what is offered. A stop is seen only once it is
+    taken: the same player who split one position over several round trips, or re-entered the same day
+    at a size under the line, is not marked.
+
+  - how often the pool's exams pass, against the CFO's thresholds (13 November, the first pool's; to be looked
+    at again after its first 100 exams; `--thresholds` to change). Three counts:
+    - passes among the pool's last 100 exams ended: yellow from 24, red from 28;
+    - payouts recorded among its last 100 exams sold: yellow from 6, red from 8;
+    - payouts over the net income from prices over 30 days: yellow from 0.5, red from 0.75.
+
+    Fewer than 100 are counted per hundred. Shares count from 30 exams ended; before that, the pool is red
+    only if the payouts recorded since it opened exceed its net income from prices. The same counts are
+    split by code, by asset, and by the hour and weekday of the pass, with the passes in very few fills
+    counted. Beside them stands how many of the passes in that window of the last 100 exams ended have the shape
+    of a coin flip (`coinFlipPasses`, and how many of those with a stop at the day's line): a number for
+    whoever sets the pool's rules, with no threshold yet and no part in the level. A rule of the exam that is wrong still counts up on chain; it shows only as more passing.
+    Yellow or red marks every payout of the pool while it holds. The approval stays, since the trader is
+    not to blame. Red means no approving in a batch: the operator's page refuses "Approve selected"
+    (`approveSelectedCall`), and each payout is approved on its own;
+  - the timing of the fills, judged against chance:
+    - the filler's choice: how often a fill landed in the best block of its window for the trader, against
+      how often best blocks occur in the window;
+    - the lead on the feed: how often the oracle moved the trader's way in the block right after the fill,
+      against a coin.
+
+    Each is flagged over 8 fills at least, when chance gives as much with probability under 1 %. The oracle
+    of every block of each order's window is read for it.
 
   Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
   72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. Both spans are
   read from the factory (`PAYOUT_DELAY()`, `PAYOUT_HARD()`), not assumed; where one was not read on a
   pool with approvals, the review offers no call and says no time. The call to
-  sign is written out as text with its calldata: `stopPayout` (reason 1 or 2) when there is a pair,
-  since the pool takes no such stop without two fills, or `approvePayouts` otherwise.
+  sign is written out as text with its calldata:
+  - `stopPayout`, reason 1 or 2, when there is a pair or a mirror with two opposite fills, since the
+    pool takes no such stop without two fills;
+  - `approvePayouts` otherwise.
+
   Each call is offered only if the pool would take it. A payout that is not waiting (paid, stopped, held or refused, as
   `--id` may name one) is offered neither an approval nor a stop, only its state in words. The approval goes only to a pool that answers
   `approver()`. A pool without it pays at 72 hours by itself, and the review says so, with no call and no
@@ -293,9 +364,20 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   until it is paid on a pool with approvals, until 5 minutes before `dueAt` on one without. Links of
   reason 2 leave out the senders the review does not count. An exam or stage of the pool that was not
   read makes the pool's running total incomplete: `enough` is false, and the account is named. The names, the
-  selector, the fields of a payout and the pool's rule for a stop are held to `src/sim` by tests. A stop of reason 3, a result disputed without a pair,
-  needs a written analysis the script does not make. It cannot see a pair on another factory or another venue,
-  accounts under wallets nothing links, or USDC that arrived before the deployment's block.
+  selector, the fields of a payout and the pool's rule for a stop are held to `src/sim` by tests.
+
+  A result that does not count up comes with a draft of a stop of reason 3, a result disputed. The
+  draft names the fills and leaves out the hash of the analysis, which a person writes. Such a payout
+  is offered nothing to approve: its `action` is `hold` and its call is empty. The operator's page
+  shows no Approve button for it, only "Approve anyway" behind a warning the operator confirms
+  (`approveAnywayCall`). Something else suspicious, with the result counting up, is `decide`: the
+  approval is offered, and the choice is the signer's. The review cannot see:
+  - a pair on another factory or another venue;
+  - accounts under wallets nothing links;
+  - USDC that arrived before the deployment's block;
+  - a flaw in the exam's own rules, until enough exams have passed to show it in the pass rate;
+  - a filler or a trader with an edge too small or too rare to stand out from chance over the fills there
+    are.
 
 - **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
@@ -333,10 +415,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     own app;
   - `stopPayout`, `cancelWithdraw`, and an early `close`: the platform's checker and closer.
 
-  A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/1`, one file per payout.
+  A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/3`, one file per payout.
   The page shows a review only where it is of this very payout and names the call the page itself would build
-  (`reviewFor`). It never signs what a review hands it. The approval and the request to withdraw are designs not on
-  main yet; the names are theirs.
+  (`reviewFor`). It never signs what a review hands it.
 
 ## Measuring the filler's window
 
