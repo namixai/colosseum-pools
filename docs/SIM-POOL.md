@@ -49,18 +49,30 @@ fail, and their prices pay for the ones that pass.
 - **The stage.** `fund(exam)`: the trader, within the plan's window after the pass, starts a second
   paper exam on the same size. Nothing moves.
 - **The payout.** `claimPayout(stage)` once the stage has passed, by anyone, and by the keeper in its next
-  slow pass (every 30 seconds): 8 % of the size, due 72 hours after the claim. The keeper sends `pay` in its
-  first pass after that, so a trader is paid 72 hours and about a minute after passing, or later, in order, if
-  the pool does not hold enough then. `pay(max)`, by anyone, pays what is due in the order it came due while the pool's USDC
-  covers the next; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from
+  slow pass (every 30 seconds): 8 % of the size. It is due 72 hours after the claim once the pool's
+  approver has approved it (`approvePayouts`, `PayoutApproved`), and 7 days after the claim whether
+  approved or not (`PAYOUT_HARD`, `payoutHardAt`): the trader's money never waits on the approver
+  longer. The creator names the approver (`setApprover`, `ApproverSet`; zero for none, and every
+  payout then waits the 7 days); approving sets neither the amount nor the trader. The keeper sends
+  `pay` in its first pass after a payout is due, so an approved payout is paid 72 hours and about a
+  minute after the claim, or later: the 72 hours and the 7 days are the earliest a payout may be paid,
+  and it is paid by a `pay` call, in the order of the claims, when the pool holds enough. `pay(max)`, by
+  anyone, looks at up to `max` payouts from the head, settled ones included, in the order they were claimed and pays each that is due
+  while the pool's USDC covers it; one still waiting for its approval keeps its place: `pay` moves
+  on to later ones, but pays one only if the money covers every such payout before it too, and the
+  queue's head stays at the first unpaid; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from
   the prices that come in. A payout the token refuses to send (say the trader's address was blocked)
   is set aside for the trader (`PayoutHeld`), who takes it to any address with `claimHeld`, also
   after the pool has finished; the queue moves on. One stage, one payout: the stage has one step and its pass ends it.
-- **A stop.** Until a payout is due, the factory's checker may stop it once, with a reason: 1,
-  opposite positions with another account of the factory; 2, that and wallets linked. The call
+- **A stop.** Until a payout is paid, approved or not, the factory's checker may stop it once, with
+  a reason: 1, opposite positions with another account of the factory; 2, that and wallets linked;
+  3, the result is disputed (a flaw of the exam, the oracle or the filler). For 1 and 2 the call
   names the other account, the transactions of the trades (at least two) and, for reason 2, the
-  transactions that link the wallets. A stopped payout's money stays in the pool, set aside for 14
-  days after the stop (`STOP_RESERVE`, `reserved`) as a held payout's is: the creator does not
+  transactions that link the wallets; for 3 it names no account, at least one transaction that shows
+  the flaw, and one hash, the keccak256 of the published text of the dispute. A stopped payout's money stays in the pool, set aside from the
+  stop (`STOP_RESERVE`, `reserved`) until the checker lifts the stop within 14 days, or until anyone
+  makes it final after them (`finalizeStop`, which may come later than the 14 days, never sooner), as
+  a held payout's is: the creator does not
   withdraw it, it is no profit for the partners' shares, and `pay` pays no other payout out of it.
   Within those days the trader may object on chain (`objectStop`, the keccak256 of the objection's
   text, `StopObjected`), and the checker lifts a stop that was wrong (`liftStop`): the payout is due
@@ -76,21 +88,33 @@ fail, and their prices pay for the ones that pass.
   first. Money that came in during the week counts toward what the pool can spare, within the
   amount asked; what is above the request waits for another one. The
   creator or the factory's closer may cancel it (`cancelWithdraw`, `WithdrawCancelled` with who);
-  the closer only cancels: it changes neither the amount nor where the money goes. There is no
-  other way for the creator to take money out before `finish`. `withdrawable` is only what stays
-  above three payouts of the largest size and above every payout owed, held or kept for a recent
-  stop. 0.5 % goes to the platform. Profit is the
+  the closer only cancels: it changes neither the amount nor where the money goes (for the
+  creator's terms: the platform may cancel a withdrawal request; it never moves the money). There
+  is no other way for the creator to take money out before `finish`. `withdrawable` is only what
+  stays above every payout owed, held or kept for a recent stop and, while the pool is open, above
+  the greater of three payouts of the largest size and the payouts of every stage still running,
+  each by its own size (`staged`: up in `fund`, down when the stage's payout is claimed or the
+  stage is released). A funded trader's payout stays in the pool for as long as the stage runs; the
+  creator takes profit only above it (CFO, 13 November). `staged` changes what may leave, not what
+  profit is: the codes' shares are of the profit a withdrawal takes, as before. 0.5 % goes to the platform. Profit is the
   pool's money above what the creator put in, after what the pool owes, holds and keeps for recent
   stops; a withdrawal takes it first. Of the profit a withdrawal takes, less the platform's part,
   each code's partner is sent its `bps` in the part its code brought of all the pool took:
   profit × (the code's `brought` / `brought`) × `bps`. A code with no share leaves its part to the
   creator. A partner whose address the token refuses has its part set aside, `heldOf` and
   `claimHeld` as for a refused payout (`PartnerPaid` says which). `addToPot` puts in more principal,
-  never shared, which comes back once the profit above it has been taken, or at `finish`. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
+  never shared, which comes back once the profit above it has been taken, or at `finish`. It is the
+  only way to put the creator's money in: USDC sent straight to the pool's address is not principal.
+  It covers payouts as any money of the pool does, and what of it is profit when a withdrawal is
+  carried out (`_profit`: above what the pool owes, holds and keeps, and above the principal) is
+  shared with the codes' owners as any profit taken; below that it shares nothing. A share paid to a code's owner is
+  never taken back: if later payouts take the pool's money below what the creator put in, the
+  creator bears it, and shares start again only once the principal is whole. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
   can still be lifted, and a week after the close (`closedAt` + `WITHDRAW_DELAY`, `NotReady` before),
   sends what is left, the principal first, and ends a standing request. The week keeps `close` and
   `finish` from being a withdrawal of everything in one block.
-- **The term.** A pool runs at least 180 days from its opening (`MIN_TERM`, `lockedUntil`). Before
+- **The term.** A pool runs at least 6 months, 184 days, from its opening (`MIN_TERM`, `lockedUntil`;
+  184 days is the longest half-year, so the six months hold whatever the day it opens). Before
   then the creator can neither `close` it (`Locked`), so it sells all that time, nor take back what
   it put in: `withdraw` gives the profit only, never the principal, the locked payouts or what
   `addToPot` added. Only the factory's closer, a platform key the operator names (`setCloser`), may
@@ -104,8 +128,9 @@ fail, and their prices pay for the ones that pass.
 Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE`); 0.5 % of each
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
-the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid (`PAYOUT_DELAY`); 14 days a
-stopped payout's money stays set aside and the stop can be lifted (`STOP_RESERVE`); 180 days a
+the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid with the approver's approval (`PAYOUT_DELAY`), 7 days
+without it (`PAYOUT_HARD`); 14 days in
+which a stopped payout's money stays set aside and the stop can be lifted, and after which it can be made final (`STOP_RESERVE`); 184 days a
 pool runs before its creator may close it or take back its principal (`MIN_TERM`); 7 days from a
 request to withdraw to its money, and from a close to `finish` (`WITHDRAW_DELAY`), and 3 days to
 carry out a ready request (`WITHDRAW_WINDOW`); a fill
@@ -139,10 +164,10 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 71 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and every `SM` mutation of `scripts/mutations.py` (SM1 to
-SM149 and SM180 to SM182 on this branch: the delay, the window, the less of the two, finish's week and a
-used code's raise among them), each
+`test/sim/SimPool.t.sol`, 82 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and every `SM` mutation of `scripts/mutations.py` (on this branch
+SM1 to SM166, SM170 to SM177 and SM180 to SM182: the delay, the window, the less of the two, finish's week, payout
+approval and its 7 days, the running stages' payouts, the 184 days and a used code's raise among them), each
 caught by a named test. The second command lists them from the file, so a new one is never left out:
 
 ```
@@ -157,7 +182,7 @@ the trader object to a stop and anyone make it final after its 14 days, has the 
 owner, claims what was held, asks to withdraw, withdraws (at once now and then, which must be refused, otherwise
 from the week on to past its window), cancels a request (the creator or the closer; a stranger refused) and adds
 for the creator, closes (the creator from the term on, refused
-before it; the closer early) and finishes (by the creator or the closer), jumps past the 180 days now and then
+before it; the closer early) and finishes (by the creator or the closer), jumps past the 184 days now and then
 (48 runs of 120 calls in CI,
 with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
 Fourteen invariants: every dollar in and out accounted for; what is held always there and equal to the refused
@@ -188,7 +213,18 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   is sent again for the next block, once a block, while the window lasts. A fill waits for its receipt,
   so two orders in one block go one after the other. A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
-  `expire`, `release`, `claimPayout`, `pay`. `--measure EXAM --trader-wallet K` places orders on the
+  `expire`, `release`, `claimPayout`, `pay`. One `pay` is told to pay at most ten payouts and to look
+  at most 192 from the head (`PAY_PER_CALL`, `SCAN_PAYOUTS`), so that it fits a small block of 2 000 000
+  gas: measured from cold storage, ten payouts paid past 86 waiting for approval, `pay(96)`, take
+  999 510 gas with the transaction's own, each further payout looked at 5 390, and `pay(192)` takes
+  1 517 035 (`test_pay_theKeepersFullBatch_fitsASmallBlock`: ten traders with no USDC, none, five or all
+  refused by the token). What is left is paid in the next passes, ten a pass. `pay` counts from the
+  head, so an approved payout more than 191 places behind a head that waits for its approval is out of
+  the keeper's reach. 192 is the keeper's limit, kept to what was measured, not a small block's: a
+  longer look may still fit one, by the queue and the token. The keeper logs `pay_out_of_reach`, and
+  the payout is paid once the head moves, when the approver approves the ones in front or their 7 days
+  come, which is before its own; anyone may also send `pay` with a larger `max`, in a big block if a
+  small one does not hold it. `--measure EXAM --trader-wallet K` places orders on the
   trader's own exam and writes how many blocks late each fill landed, p50 and p99: the number the
   plan's fill window is set from.
 - **The relayer**, `ops/sim_relay.py`: a signed purchase in, `buyWithAuthorization` out, from a key
@@ -240,6 +276,13 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   of two groups' codes shows what its sales brought and what its owner was sent or, refused by the token, had set
   aside, worked out again from the events and the share; the chain ends with the platform's closer closing the
   pool long before its 180 days, and the page shows `lockedUntil` (the creation plus 180 days) and `closedEarly`.
+- **Counts for a points formula**: `activityCounts` (app/lib/simpool.js) gives, per trader and per code, what the
+  chain says each did, with no points and no weights: purchases, what they cost and brought, exams and stages
+  passed, breached or expired, steps passed, fills and the UTC days with a fill, and the payouts written, paid,
+  held, stopped, lifted, objected to and refused. Exams and stages keep their own events, so it reads them in a
+  second pass over the logs of each account the pool sold or started (`accountsToRead`); an account not read is
+  listed in `unread` and its trader's and code's counts are marked incomplete. The recorded chain carries those
+  logs too (`examEvents`), and `app/tests/simpool-chain.test.mjs` holds the counts to it.
 
 ## Measuring the filler's window
 

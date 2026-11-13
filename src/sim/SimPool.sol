@@ -59,14 +59,15 @@ struct SimPlan {
 /// @notice A pool where both stages are paper exams and nobody's capital is traded. A trader buys
 ///         an exam off the menu; whoever passes it starts the stage on the same size; whoever passes
 ///         the stage is paid 8 % of the size, once, out of the pool's USDC: the prices traders paid,
-///         and what its creator locked at the start. A payout waits 72 hours, in which the factory's
-///         checker alone may stop it, with a reason, the other account, and the transactions that
-///         show it; with no stop it goes to the trader, sent by anyone.
+///         and what its creator locked at the start. A payout waits 72 hours and the approval of the
+///         approver the creator names, or 7 days without it; until it is paid the factory's checker
+///         alone may stop it, with a reason and the transactions that show it; with no stop it goes to
+///         the trader, sent by anyone.
 /// @dev The money is this contract's USDC on HyperEVM; nothing goes to HyperCore. What it owes
 ///      (`owed`) is every payout neither paid nor stopped. The creator withdraws only what stays
 ///      above `FLOOR_PAYOUTS` payouts of the largest size and above what it owes, so a payout that
 ///      comes due finds its money, unless payouts came faster than prices: then payouts are paid in
-///      the order they came due, as money comes in.
+///      the order they were claimed, as money comes in.
 contract SimPool is Initializable {
     using SafeERC20 for IERC20;
 
@@ -118,11 +119,16 @@ contract SimPool is Initializable {
         bool wasStopped;
         /// When it was stopped; zero if never.
         uint64 stoppedAt;
+        /// The pool's approver approved it: `pay` pays it from `dueAt`, not only from `PAYOUT_HARD`.
+        bool approved;
     }
 
     SimPoolFactory public factory;
     IERC20 public usdc;
     address public creator;
+    /// Who approves payouts (`approvePayouts`), named by the creator; zero: none, and payouts go out at
+    /// `PAYOUT_HARD` from their claim.
+    address public approver;
     bytes32 public terms;
     /// The largest payout of the menu: what `LOCKED_PAYOUTS` and `FLOOR_PAYOUTS` count in.
     uint64 public largestPayout;
@@ -130,6 +136,10 @@ contract SimPool is Initializable {
     uint256 public principal;
     /// Every payout neither paid nor stopped.
     uint256 public owed;
+    /// The payouts of the stages still running, each by its own size: what they would pay if they all passed.
+    /// While the pool is open the creator withdraws only above the greater of this and `FLOOR_PAYOUTS` of the
+    /// largest size (CFO, 13 November).
+    uint256 public staged;
     /// Exams and stages still running or still able to pay.
     uint256 public live;
     bool public closed;
@@ -145,7 +155,7 @@ contract SimPool is Initializable {
     /// (`withdraw`), for `WITHDRAW_WINDOW` from then. Zero `requested`: none.
     uint256 public requested;
     uint64 public readyAt;
-    /// The first payout not yet settled: payouts are paid in the order they came due.
+    /// The first payout not yet settled: payouts are paid in the order they were claimed (`pay`).
     uint256 public head;
     uint256 public stoppedCount;
     uint256 public liftedCount;
@@ -192,7 +202,9 @@ contract SimPool is Initializable {
     event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt);
     event PayoutQueued(uint256 indexed id, uint256 balance);
     event PayoutPaid(uint256 indexed id, address indexed trader, uint64 amount, uint256 paidCount, uint256 paidTotal);
-    /// `reason` 1: opposite positions with `paired`; 2: that, and the wallets linked by `links`.
+    /// `reason` 1: opposite positions with `paired`; 2: that, and the wallets linked by `links`; 3: the
+    /// result is disputed (a flaw of the exam, the oracle or the filler), shown by `trades`, with no
+    /// `paired` and `links` the keccak256 of the published text of the dispute.
     event PayoutStopped(
         uint256 indexed id,
         address indexed trader,
@@ -206,6 +218,8 @@ contract SimPool is Initializable {
         uint256 paidCount
     );
     event PayoutHeld(uint256 indexed id, address indexed trader, uint64 amount);
+    event PayoutApproved(uint256 indexed id, address indexed approver);
+    event ApproverSet(address indexed approver);
     event HeldClaimed(address indexed trader, address indexed to, uint256 amount);
     event StopLifted(uint256 indexed id, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount);
     /// The trader objects to the stop of payout `id`; `text` is the keccak256 of the objection's text.
@@ -239,7 +253,6 @@ contract SimPool is Initializable {
     error TooLate();
     error StillRunning();
     error BadPayout();
-    error NotDue();
     error BadReason();
     error BadPaired();
     error TooMuch();
@@ -254,6 +267,7 @@ contract SimPool is Initializable {
     error NoRequest();
     error NotReady();
     error RequestLapsed();
+    error NotApprover();
 
     modifier onlyCreator() {
         if (msg.sender != creator) revert NotCreator();
@@ -313,17 +327,26 @@ contract SimPool is Initializable {
         return _codes;
     }
 
+    /// @notice From when payout `id` goes out whether approved or not: its claim plus `PAYOUT_HARD`.
+    function payoutHardAt(uint256 id) public view returns (uint64) {
+        return _hardAt(_payouts[id]);
+    }
+
     function payoutCount() external view returns (uint256) {
         return _payouts.length;
     }
 
     /// @notice What the creator may withdraw now: the pool's USDC above what it owes, holds and keeps
-    ///         for recent stops and, while it is open, above `FLOOR_PAYOUTS` payouts of the largest size.
+    ///         for recent stops and, while it is open, above the greater of `FLOOR_PAYOUTS` payouts of the
+    ///         largest size and the payouts of every stage still running, each by its size (`staged`): a
+    ///         funded trader's payout stays in the pool for as long as the stage runs.
     ///         Before `lockedUntil`, only profit: what the creator put in stays until the term, or until
     ///         `finish` if the factory's closer closed the pool sooner.
     function withdrawable() public view returns (uint256) {
         uint256 bal = usdc.balanceOf(address(this));
-        uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());
+        uint256 floor = uint256(largestPayout) * factory.FLOOR_PAYOUTS();
+        if (staged > floor) floor = staged;
+        uint256 keep = owed + held + reserved + (finished ? 0 : floor);
         uint256 w = bal > keep ? bal - keep : 0;
         if (block.timestamp < lockedUntil) {
             uint256 p = _profit();
@@ -403,6 +426,7 @@ contract SimPool is Initializable {
         if (block.timestamp > uint256(passedAt) + fundWindow) revert TooLate();
         a.done = true;
         live -= 1;
+        staged += _payoutOf(_menu[a.line].size);
         stage = _start(trader, _fundedRules, _funded, _menu[a.line].size);
         accountOf[stage] = Account({kind: Kind.Stage, line: a.line, done: false});
         emit Funded(stage, exam, trader);
@@ -421,6 +445,7 @@ contract SimPool is Initializable {
         a.done = true;
         live -= 1;
         uint64 amount = _payoutOf(_menu[a.line].size);
+        staged -= amount;
         uint64 dueAt = uint64(block.timestamp) + factory.PAYOUT_DELAY();
         id = _payouts.length;
         _payouts.push(
@@ -431,29 +456,49 @@ contract SimPool is Initializable {
                 dueAt: dueAt,
                 state: PayoutState.Due,
                 wasStopped: false,
-                stoppedAt: 0
+                stoppedAt: 0,
+                approved: false
             })
         );
         owed += amount;
         emit PayoutDue(id, stage, trader, amount, dueAt);
     }
 
-    /// @notice Pays the payouts that are due, in the order they came due, up to `max` of them,
-    ///         while the pool's USDC covers the next. Anyone may.
+    /// @notice Pays the payouts that are due, in the order of their claims, looking at up to `max` of them from the
+    ///         head, settled ones included,
+    ///         while the pool's USDC covers the next. A payout is due `PAYOUT_DELAY` after its claim once
+    ///         the approver approved it, and `PAYOUT_HARD` after its claim if not. One not yet due for want
+    ///         of approval keeps its place: `pay` moves on to later ones, but pays one only if the money
+    ///         also covers every such payout before it. Anyone may.
     function pay(uint256 max) external returns (uint256 n) {
         uint256 len = _payouts.length;
         uint256 i = head;
-        while (i < len && n < max) {
+        uint256 seen;
+        // What the payouts passed over for want of approval will need, and the first of them: the head.
+        uint256 ahead;
+        uint256 waiting = len;
+        // Read once: the factory's constants, not a call for each payout (review of #286).
+        uint256 hardAfter = uint256(factory.PAYOUT_HARD()) - factory.PAYOUT_DELAY();
+        // Every payout looked at counts toward `max`, settled ones too: payouts paid out of order behind a head that
+        // waits for its approval cannot make a call run long (review of #286).
+        while (i < len && seen < max) {
             Payout storage p = _payouts[i];
+            seen += 1;
             if (p.state == PayoutState.Due) {
                 if (block.timestamp < p.dueAt) break;
+                if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {
+                    ahead += p.amount;
+                    if (waiting == len) waiting = i;
+                    i += 1;
+                    continue;
+                }
                 // What is held is its traders' already, and what a recent stop keeps may be its trader's
                 // again: neither is paid out to anyone else (CFO, 12 November). Stops can keep more than the
                 // pool holds, when payouts came faster than prices: then nothing is free (review of #269).
                 uint256 bal = usdc.balanceOf(address(this));
                 uint256 kept = held + reserved;
                 bal = bal > kept ? bal - kept : 0;
-                if (bal < p.amount) {
+                if (bal < ahead + p.amount) {
                     emit PayoutQueued(i, bal);
                     break;
                 }
@@ -474,7 +519,7 @@ contract SimPool is Initializable {
             }
             i += 1;
         }
-        head = i;
+        head = waiting < i ? waiting : i;
     }
 
     /// @notice Ends an exam or a stage that can do nothing more here: one that broke a rule or ran
@@ -489,6 +534,7 @@ contract SimPool is Initializable {
         if (!over) revert StillRunning();
         a.done = true;
         live -= 1;
+        if (a.kind == Kind.Stage) staged -= _payoutOf(_menu[a.line].size);
         emit Released(account);
     }
 
@@ -505,11 +551,13 @@ contract SimPool is Initializable {
 
     // ── the checker ──────────────────────────────────────────────
 
-    /// @notice Stops payout `id` before it is due, once, with a reason the chain keeps: `reason` 1,
-    ///         opposite positions with `paired`, shown by `trades`; 2, that and the wallets linked,
-    ///         shown by `links`. `paired` is an exam or a stage of any pool of the factory. The
-    ///         money stays in the pool, set aside for `STOP_RESERVE`: the trader can object
-    ///         (`objectStop`) and the checker can lift the stop; after it the stop is final.
+    /// @notice Stops payout `id` before it is paid, approved or not, once, with a reason the chain keeps:
+    ///         `reason` 1, opposite positions with `paired`, shown by `trades`; 2, that and the wallets
+    ///         linked, shown by `links`; `paired` is an exam or a stage of any pool of the factory. 3, the
+    ///         result is disputed: no `paired`, `trades` (one at least) show the flaw, and `links` is one
+    ///         hash, of the published text of the dispute. The money stays in the pool, set aside for
+    ///         `STOP_RESERVE`: the trader can object (`objectStop`) and the checker can lift the stop;
+    ///         after it the stop is final.
     function stopPayout(uint256 id, uint8 reason, address paired, bytes32[] calldata trades, bytes32[] calldata links)
         external
         onlyChecker
@@ -517,17 +565,20 @@ contract SimPool is Initializable {
         if (id >= _payouts.length) revert BadPayout();
         Payout storage p = _payouts[id];
         if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();
-        if (block.timestamp >= p.dueAt) revert NotDue();
-        if (reason == 1) {
-            if (links.length != 0) revert BadReason();
-        } else if (reason == 2) {
-            if (links.length == 0) revert BadReason();
+        if (reason == 3) {
+            if (paired != address(0) || trades.length == 0 || links.length != 1) revert BadReason();
         } else {
-            revert BadReason();
-        }
-        if (trades.length < 2) revert BadReason();
-        if (paired == p.account || factory.poolOf(paired) == address(0) || factory.poolOf(paired) == paired) {
-            revert BadPaired();
+            if (reason == 1) {
+                if (links.length != 0) revert BadReason();
+            } else if (reason == 2) {
+                if (links.length == 0) revert BadReason();
+            } else {
+                revert BadReason();
+            }
+            if (trades.length < 2) revert BadReason();
+            if (paired == p.account || factory.poolOf(paired) == address(0) || factory.poolOf(paired) == paired) {
+                revert BadPaired();
+            }
         }
         p.state = PayoutState.Stopped;
         p.wasStopped = true;
@@ -553,6 +604,23 @@ contract SimPool is Initializable {
         liftedCount += 1;
         if (id < head) head = id;
         emit StopLifted(id, stoppedCount, liftedCount, paidCount);
+    }
+
+    // ── the approver ─────────────────────────────────────────────
+
+    /// @notice Approves payouts `ids`, each waiting and not yet approved: each is paid from its `dueAt`
+    ///         instead of from `PAYOUT_HARD`. Approving sets neither the amount nor whom it goes to, and
+    ///         a payout approved can still be stopped until it is paid.
+    function approvePayouts(uint256[] calldata ids) external {
+        if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();
+        for (uint256 k = 0; k < ids.length; ++k) {
+            uint256 id = ids[k];
+            if (id >= _payouts.length) revert BadPayout();
+            Payout storage p = _payouts[id];
+            if (p.state != PayoutState.Due || p.approved) revert BadPayout();
+            p.approved = true;
+            emit PayoutApproved(id, msg.sender);
+        }
     }
 
     // ── a stopped payout's trader, and anyone ────────────────────
@@ -634,6 +702,12 @@ contract SimPool is Initializable {
         requested = 0;
         readyAt = 0;
         emit WithdrawCancelled(msg.sender, r);
+    }
+
+    /// @notice Names who approves payouts; zero for none, and every payout then goes out at `PAYOUT_HARD`.
+    function setApprover(address approver_) external onlyCreator {
+        approver = approver_;
+        emit ApproverSet(approver_);
     }
 
     /// @notice Sets a trading group's code: `code` is the keccak256 of its text, `partner` the group's
@@ -781,6 +855,10 @@ contract SimPool is Initializable {
     function _send(address to, uint256 amount) internal returns (bool) {
         (bool ok, bytes memory ret) = address(usdc).call(abi.encodeCall(IERC20.transfer, (to, amount)));
         return ok && (ret.length == 0 || abi.decode(ret, (bool)));
+    }
+
+    function _hardAt(Payout storage p) internal view returns (uint64) {
+        return p.dueAt - factory.PAYOUT_DELAY() + factory.PAYOUT_HARD();
     }
 
     function _payoutOf(uint64 size) internal view returns (uint64) {

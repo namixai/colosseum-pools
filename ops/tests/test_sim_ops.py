@@ -8,6 +8,7 @@ import unittest
 from eth_utils import keccak
 
 from ops import deploy_sim as d
+from ops import sim_keeper as keeper
 from ops import sim_relay as r
 from ops.tests.test_sim_keeper import declared
 
@@ -30,7 +31,7 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(int(constant("MIN_PARTNER_BPS")), d.MIN_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_PARTNER_BPS")), d.MAX_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_CODES")), d.MAX_CODES)
-        self.assertEqual(constant("MIN_TERM"), "180 days")
+        self.assertEqual(constant("MIN_TERM"), "184 days")
 
     def test_deploy_names_the_closer_a_fourth_key(self):
         """The closer alone closes a pool before its term; the operator opens our pools, and a pool's creator is
@@ -121,10 +122,42 @@ class TheFirstPool(unittest.TestCase):
         for name in ("sim-first-pool", "sim-measure-pool"):
             text = json.loads((ROOT / f"deployments/plans/{name}.json").read_text(encoding="utf-8"))["terms_text"]
             self.assertIn("Every exam is bought with a trading group's code", text)
+            self.assertIn("no sooner than 72 hours after the payout is claimed, and then once the pool's approver has "
+                          "approved it, or 7 days after it is claimed without approval", text)
+            self.assertIn("The pool's creator may change its approver at any time; whoever approves, no payout waits for "
+                          "approval longer than 7 days after it is claimed", text)
+            self.assertIn("Until it is paid, the platform's checker may stop it", text)
             self.assertIn("once a trader has used a code, its owner never changes and its share can be raised, never "
                           "lowered", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
-            self.assertIn("The pool runs at least 180 days from its opening", text)
+            self.assertIn("The pool runs at least 6 months (184 days) from its opening", text)
+            self.assertIn("the platform may cancel a withdrawal request; it never moves the money", text)
+            self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator takes "
+                          "profit only above it", text)
+            self.assertIn("A share paid to a code's owner is never taken back", text)
+            # What `_profit` and `_withdraw` do, not more: only the profit a withdrawal takes is shared (review of #286).
+            self.assertIn("USDC sent to the pool other than by the creator's addToPot is not counted as put in by the "
+                          "creator: it covers payouts as any money of the pool does, and what of it is profit when the "
+                          "creator takes money out (above the payouts owed, held and kept, and above what the creator "
+                          "put in) is shared with the codes' owners as any profit taken.", text)
+            self.assertNotIn("counts as profit and is shared", text)
+            # `pay` is a call of its own, walks in the order of the claims, and passes a payout waiting for its
+            # approval only with the money for it kept (review of #286).
+            self.assertIn("a payout that may be paid is paid by a call anyone may make, which the keeper makes pass "
+                          "after pass, at most ten payouts a call, so one of many payable at once may wait some passes.",
+                          text)
+            self.assertNotIn("in its next pass", text, "the eleventh payable payout waits for a later pass")
+            self.assertEqual(keeper.PAY_PER_CALL, 10, "the ten of the terms")
+            self.assertIn("Payouts are paid in the order they were claimed, out of the money the pool holds: one still "
+                          "waiting for its approval keeps its place, and a later one is paid past it only if the money "
+                          "also covers every payout so passed over; one the pool cannot cover waits, and every payout "
+                          "after it, until money comes in.", text)
+            self.assertNotIn("came due", text)
+            self.assertNotIn("if the pool does not hold enough then", text)
+            self.assertIn("A stopped payout stays in the pool for at least 14 days while the trader can object, unless the "
+                          "checker lifts the stop within them and it is paid as any payout; after them anyone may make "
+                          "the stop final, and only from then is the money the pool's",
+                          text)
             self.assertIn("only the platform can close it sooner, with the money going where it would anyway", text)
             self.assertIn("The creator withdraws by a request: the money leaves no sooner than 7 days after it, within "
                           "3 days after that, only what the pool can spare then, and never more than was asked; the "
@@ -225,7 +258,7 @@ class TheClosing(unittest.TestCase):
 
     def state(self, **kw):
         st = {"creator": d.to_checksum_address(self.CREATOR), "closer": d.to_checksum_address(self.CLOSER),
-              "closed": False, "finished": False, "locked_until": 180 * self.DAY, "live": 0, "owed": 0, "reserved": 0,
+              "closed": False, "finished": False, "locked_until": 184 * self.DAY, "live": 0, "owed": 0, "reserved": 0,
               "fund_window": 7 * self.DAY, "closed_at": 0, "requested": 0, "ready_at": 0, "withdrawable": 0,
               "delay": 7 * self.DAY, "window": 3 * self.DAY}
         st.update(kw)
@@ -233,7 +266,7 @@ class TheClosing(unittest.TestCase):
 
     def test_before_the_term_only_the_closer_closes(self):
         creator, closer, other = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER, self.OTHER))
-        before, at = 180 * self.DAY - 1, 180 * self.DAY
+        before, at = 184 * self.DAY - 1, 184 * self.DAY
         self.assertIn("before the term", d.close_check(self.state(), before, closer))
         with self.assertRaises(SystemExit) as caught:
             d.close_check(self.state(), before, creator)
@@ -344,6 +377,60 @@ class TheClosing(unittest.TestCase):
                 self.assertEqual(sent.call_args[0][2], sig)
                 if argv[0] == "request":
                     self.assertEqual(sent.call_args[0][4], [250_000_000])
+
+    def test_approve_only_the_approver_only_waiting_payouts(self):
+        approver, other = (d.to_checksum_address(a) for a in (self.CLOSER, self.OTHER))
+        hard = 7 * self.DAY - 3 * self.DAY
+        waiting = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 1, False, 0, False)
+        lines = d.approve_check(approver, approver, {3: waiting}, [3], hard)
+        self.assertIn("payout 3: 800 USDC to 0x7777", lines[0])
+        self.assertIn("goes out from " + d.utc(1_000) + " approved; " + d.utc(1_000 + hard) + " without", lines[0])
+        for args, word in (((approver, other, {3: waiting}, [3], hard), "NotApprover"),
+                           (("0x" + "00" * 20, approver, {3: waiting}, [3], hard), "the pool has no approver"),
+                           ((approver, approver, {}, [3], hard), "payout 3 does not exist"),
+                           ((approver, approver, {3: waiting[:4] + (2,) + waiting[5:]}, [3], hard), "payout 3 is Stopped"),
+                           ((approver, approver, {3: waiting[:7] + (True,)}, [3], hard), "approved already")):
+            with self.assertRaises(SystemExit) as caught:
+                d.approve_check(*args)
+            self.assertIn(word, str(caught.exception))
+        self.assertEqual(d.ids_of("3, 4,7"), [3, 4, 7])
+        for bad in ("", "3,3", "a", "-1"):
+            with self.assertRaises(SystemExit):
+                d.ids_of(bad)
+
+    def test_approve_sends_only_with_send(self):
+        from unittest import mock
+        approver = d.to_checksum_address(self.CLOSER)
+        waiting = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 1, False, 0, False)
+        answers = {"payoutCount()": [5], "payout(uint256)": [waiting], "factory()": ["0x" + "99" * 20],
+                   "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "approver()": [approver]}
+        with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
+                mock.patch.object(d.c, "address_of", return_value=approver), mock.patch.object(d.c, "assert_testnet"), \
+                mock.patch.object(d.c, "account") as key, \
+                mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+            self.assertEqual(d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--ids", "3,4"]), 0)
+            sent.assert_not_called()
+            key.assert_not_called()
+            self.assertEqual(d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--ids", "3,4", "--send"]), 0)
+            self.assertEqual(sent.call_args[0][2:], ("approvePayouts(uint256[])", ["uint256[]"], [[3, 4]]))
+
+    def test_the_approver_is_named_by_the_creator(self):
+        from unittest import mock
+        creator = d.to_checksum_address(self.CREATOR)
+        with mock.patch.object(d.c, "call_view", return_value=[creator]), \
+                mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(self.OTHER)):
+            with self.assertRaises(SystemExit) as caught:
+                d.main(["approver", "--pool", self.OTHER, "--key", "x", "--address", self.CLOSER])
+            self.assertIn("NotCreator", str(caught.exception))
+        with mock.patch.object(d.c, "call_view", return_value=[creator]), \
+                mock.patch.object(d.c, "address_of", return_value=creator), mock.patch.object(d.c, "assert_testnet"), \
+                mock.patch.object(d.c, "account"), \
+                mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+            self.assertEqual(d.main(["approver", "--pool", self.OTHER, "--key", "creator", "--address", self.CLOSER]), 0)
+            sent.assert_not_called()
+            self.assertEqual(d.main(["approver", "--pool", self.OTHER, "--key", "creator", "--address", self.CLOSER,
+                                     "--send"]), 0)
+            self.assertEqual(sent.call_args[0][2], "setApprover(address)")
 
     def test_until_when_an_exam_of_several_steps_runs_and_a_passed_stage(self):
         x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False, "kind": 1,
