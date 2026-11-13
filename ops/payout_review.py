@@ -3,6 +3,7 @@
     spike/.venv/bin/python -m ops.payout_review --deployment sim1                  # every payout still waiting
     spike/.venv/bin/python -m ops.payout_review --deployment sim1 --pool P --id 3  # one of them
     spike/.venv/bin/python -m ops.payout_review --deployment sim1 --json           # the same, as JSON
+    spike/.venv/bin/python -m ops.payout_review --deployment sim1 --out reviews/   # one JSON file a payout
 
 It reads the chain and nothing else, sends nothing and holds no key. For each payout claimed
 (`PayoutDue`) and still waiting it says:
@@ -37,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import pathlib
 import sys
 
 from eth_abi import decode as abi_decode
@@ -281,6 +283,48 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     return out
 
 
+SCHEMA = "payout-review/1"
+
+
+def card(r: dict, chain: dict) -> dict:
+    """The review as one JSON document a page reads (`app/lib/operator.js`, `reviewFor`). The schema is
+    fixed: fields are added under a new SCHEMA, never renamed. Amounts are strings of USDC units (6
+    decimals), since a JSON number loses digits past 2**53; times are seconds on the chain's clock."""
+    kinds = []
+    if r["stop"]:
+        kinds.append("pair")
+    if any(not l["wide"] for l in r["links"]):
+        kinds.append("link")
+    if r["late"]["outlier"]:
+        kinds.append("late")
+    if r["code"] and r["code"]["flag"]:
+        kinds.append("code")
+    if any(x.startswith("not read") for x in r["reasons"]):
+        kinds.append("unread")
+    tx = r["tx"]
+    g = r["running"]
+    return {
+        "schema": SCHEMA,
+        "pool": r["pool"], "id": r["id"], "trader": r["trader"], "stage": r["stage"], "exam": r["exam"],
+        "amount": str(r["amount"]),
+        "claimedAt": r["claimedAt"], "dueAt": r["dueAt"], "hardAt": r["hardAt"],
+        "verdict": r["verdict"],
+        "reasons": [{"kind": k, "text": t} for k, t in zip(kinds, r["reasons"])],
+        "evidence": {
+            "pairs": r["pairs"]["stage"] + r["pairs"]["exam"],
+            "stop": r["stop"],
+            "links": r["links"],
+            "late": r["late"],
+            "code": r["code"],
+            "running": {"exams": g["exams"], "stages": g["stages"], "worst": str(g["worst"]), "free": str(g["free"]),
+                        "enough": g["enough"]},
+        },
+        "call": {"kind": tx["kind"], "to": tx["to"], "method": tx["call"].split("(")[0] if tx["call"] else None,
+                 "signature": tx["call"], "args": tx["args"], "data": tx["data"], "note": tx.get("note")},
+        "readAt": {"block": chain["latest"], "time": chain["now"]},
+    }
+
+
 def summary(r: dict) -> str:
     """The review in a few lines of text."""
     lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}, paid unapproved at {r['hardAt']}",
@@ -404,7 +448,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--size-tolerance", type=float, default=0.2)
     ap.add_argument("--wide", type=int, default=5, help="a sender that funded more buyers than this is not a link")
     ap.add_argument("--code-run", type=int, default=10, help="sales in a row from new wallets that make a code suspicious")
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--json", action="store_true", help=f"one {SCHEMA} document a payout, as a list")
+    ap.add_argument("--out", help=f"a directory to write each payout's {SCHEMA} document to, as <pool>-<id>.json")
     args = ap.parse_args(argv)
     c.assert_testnet()
     record = deployments.load(args.deployment)
@@ -417,8 +462,14 @@ def main(argv: list[str] | None = None) -> int:
             if (pool is None or x["pool"] == pool) and (args.id is None or x["id"] == args.id)
             and (args.id is not None or x["state"] == "Due")]
     reviews = [review(chain, x["pool"], x["id"], p) for x in todo]
+    cards = [card(r, chain) for r in reviews]
+    if args.out:
+        out = pathlib.Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        for k in cards:
+            (out / f"{k['pool']}-{k['id']}.json").write_text(json.dumps(k, indent=2) + "\n")
     if args.json:
-        print(json.dumps(reviews, indent=2))
+        print(json.dumps(cards, indent=2))
     else:
         print("\n\n".join(summary(r) for r in reviews) or "no payout waiting")
     return 0

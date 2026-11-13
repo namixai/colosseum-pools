@@ -238,6 +238,26 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   listed in `unread` and its trader's and code's counts are marked incomplete. The recorded chain carries those
   logs too (`examEvents`), and `app/tests/simpool-chain.test.mjs` holds the counts to it.
 
+- **The operator's page**, `app/lib/operator.js`: reads handed in and calls built, with no reads and no keys of its
+  own. It gives:
+  - the payouts waiting (`awaitingApproval`): each with its claim, its 72 hours, its 7-day ceiling, whether it is
+    approved and when it will be paid as things stand, the most urgent first;
+  - the creator's standing request to withdraw (`withdrawRequest`): its amount, when it can be carried out and
+    when it lapses;
+  - the pool's state (`poolState`): the money free of what is owed, held back and kept for stops, what the creator
+    may take now, the live exams and stages, and the term in `termNote`'s words.
+
+  Each call is built with its calldata, checked as the pool would check it, and names who signs it:
+  - `approvePayouts`: the approver, a Ledger key, with one signature;
+  - `requestWithdraw`, `withdraw`, and `close` after the term: the creator's Safe, with two signatures in the Safe's
+    own app;
+  - `stopPayout`, `cancelWithdraw`, and an early `close`: the platform's checker and closer.
+
+  A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/1`, one file per payout.
+  The page shows a review only where it is of this very payout and names the call the page itself would build
+  (`reviewFor`). It never signs what a review hands it. The approval and the request to withdraw are designs not on
+  main yet; the names are theirs.
+
 ## Measuring the filler's window
 
 The fill window of a plan is fixed at creation, so it is measured first, on a pool of its own

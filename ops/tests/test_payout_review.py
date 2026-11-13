@@ -1,5 +1,6 @@
 """The review of a simulated pool's payout, on a chain made up here: a clean payout, a pair inside the
 factory, a pair whose two traders were funded from one wallet, and a code bought up from new wallets."""
+import json
 import pathlib
 import re
 import unittest
@@ -329,6 +330,52 @@ class TheSummary(unittest.TestCase):
         self.assertIn("verdict: clean", text)
         self.assertIn("to sign (approve): " + POOL + " approvePayouts(uint256[]) 0x", text)
         self.assertNotRegex(text, r"[\u0400-\u04ff]")
+
+
+class TheDocument(unittest.TestCase):
+    """The JSON a page reads: its fields fixed by the schema's name."""
+
+    KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict",
+            "reasons", "evidence", "call", "readAt"}
+
+    def test_a_clean_payout_carries_its_approval(self):
+        ch, t1, s1 = honest_world()
+        k = r.card(r.review(ch.d, POOL, 0), ch.d)
+        self.assertEqual(set(k), self.KEYS)
+        self.assertEqual((k["schema"], k["pool"], k["id"], k["trader"], k["stage"]), ("payout-review/1", POOL, 0, t1, s1))
+        self.assertEqual(k["amount"], str(800 * 10**6), "a string: a JSON number loses digits past 2**53")
+        self.assertEqual((k["verdict"], k["reasons"]), ("clean", []))
+        self.assertEqual((k["call"]["kind"], k["call"]["method"], k["call"]["args"]), ("approve", "approvePayouts", [[0]]))
+        self.assertEqual(k["evidence"]["running"]["worst"], str(8 * 800 * 10**6))
+        self.assertEqual(k["readAt"], {"block": 900, "time": ch.d["now"]})
+        json.dumps(k)
+
+    def test_each_reason_is_named_by_its_kind(self):
+        ch, t1, s1 = honest_world()
+        t9, e9 = addr(0x199), addr(0x299)
+        ch.sale(t9, e9)
+        funder = addr(0xF1)
+        ch.send(funder, t1)
+        ch.send(funder, t9)
+        ch.fill(s1, buy=True, t=60_000)
+        ch.fill(e9, buy=False, t=60_100)
+        ch.d["unread"].append(s1)
+        k = r.card(r.review(ch.d, POOL, 0), ch.d)
+        self.assertEqual([x["kind"] for x in k["reasons"]], ["pair", "link", "unread"])
+        self.assertEqual((k["call"]["kind"], k["call"]["method"]), ("stop", "stopPayout"))
+        self.assertEqual(k["evidence"]["stop"]["reason"], 2)
+
+    def test_out_writes_one_file_a_payout(self):
+        import tempfile
+        ch, _, _ = honest_world()
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(r.c, "assert_testnet"), \
+                mock.patch.object(r.deployments, "load", return_value={"SimPoolFactory": addr(0xFA)}), \
+                mock.patch.object(r, "read_chain", return_value=ch.d), \
+                mock.patch("builtins.print"):
+            self.assertEqual(r.main(["--deployment", "x", "--out", d]), 0)
+            got = json.loads((pathlib.Path(d) / f"{POOL}-0.json").read_text())
+        self.assertEqual((got["schema"], got["id"]), ("payout-review/1", 0))
 
 
 class ReadingTheChain(unittest.TestCase):
