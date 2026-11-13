@@ -759,11 +759,14 @@ contract SimPool is Initializable {
 
     /// @notice Sets a trading group's code: `code` is the keccak256 of its text, `partner` the group's
     ///         owner and `bps` its share, zero or within the platform's bounds. A code can be changed
-    ///         until a sale names it, never after: the partner does not depend on the creator once
-    ///         it has brought traders. A zero `partner` takes an unused code off sale.
+    ///         until a sale names it. After that only its share can be raised, for the same partner and
+    ///         within the platform's bounds (an owner's steps of 40, 50 and 60 %, CFO, 13 November); its
+    ///         partner never changes and its share never falls: the partner does not depend on the
+    ///         creator once it has brought traders. A raise counts from the next withdrawal on. A zero
+    ///         `partner` takes an unused code off sale.
     function setCode(bytes32 code, address partner, uint16 bps) external onlyCreator {
         Code storage c = codeOf[code];
-        if (c.used) revert CodeUsed();
+        if (c.used && (partner != c.partner || bps <= c.bps)) revert CodeUsed();
         if (partner == address(0) && bps != 0) revert BadShare();
         if (bps != 0 && (bps < factory.MIN_PARTNER_BPS() || bps > factory.MAX_PARTNER_BPS())) revert BadShare();
         if (!c.listed && partner != address(0)) {

@@ -1269,6 +1269,73 @@ contract SimPoolTest is Test {
         assertEq(pool.codes().length, 1);
     }
 
+    function test_setCode_aUsedCodesShareOnlyRises_forTheSamePartner_withinTheBound() public {
+        SimPool pool = _pool();
+        _share(pool, 4000);
+        _buy(pool, trader, 0);
+        vm.expectEmit(address(pool));
+        emit SimPool.CodeSet(CODE, partner, 5000);
+        _share(pool, 5000); // the owner's next step: raised
+        (address who, uint16 bps, bool used,,) = pool.codeOf(CODE);
+        assertEq(who, partner);
+        assertEq(bps, 5000);
+        assertTrue(used);
+        vm.startPrank(creator);
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setCode(CODE, partner, 5000); // not higher
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setCode(CODE, partner, 4500); // lower
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setCode(CODE, creator, 6000); // another partner, even with a higher share
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setCode(CODE, partner, 6001); // past the platform's bound
+        pool.setCode(CODE, partner, 6000);
+        vm.stopPrank();
+        (, bps,,,) = pool.codeOf(CODE);
+        assertEq(bps, 6000);
+
+        // A used code with no share: raised only into the bounds.
+        bytes32 none = keccak256("NO-SHARE");
+        vm.prank(creator);
+        pool.setCode(none, makeAddr("group"), 0);
+        _buyWith(pool, other, 0, none);
+        vm.startPrank(creator);
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setCode(none, makeAddr("group"), 3000);
+        pool.setCode(none, makeAddr("group"), 4000);
+        vm.stopPrank();
+    }
+
+    function test_withdraw_aRaiseCountsFromTheNextWithdrawal_andNoOtherCodesPart() public {
+        // Codes A (40 %) and B (50 %), one large sale each: each brought half of all.
+        SimPool pool = _pool();
+        _share(pool, 4000);
+        address ownerB = makeAddr("owner B");
+        bytes32 codeB = keccak256("GROUP-TWO");
+        vm.prank(creator);
+        pool.setCode(codeB, ownerB, 5000);
+        _buy(pool, trader, 1);
+        _buyWith(pool, other, 1, codeB);
+        deal(address(usdc), address(pool), 6_000e6);
+        _ask(pool, 1_000e6);
+        vm.prank(creator);
+        pool.withdraw();
+        uint256 net = 1_000e6 - 5e6;
+        assertEq(usdc.balanceOf(partner), net / 2 * 4000 / 10_000, "A: 40 % of half");
+        assertEq(usdc.balanceOf(ownerB), net / 2 * 5000 / 10_000, "B: 50 % of half");
+        _share(pool, 6000); // A raised
+        assertEq(usdc.balanceOf(partner), net / 2 * 4000 / 10_000, "what was paid is not recomputed");
+        uint256 a0 = usdc.balanceOf(partner);
+        uint256 b0 = usdc.balanceOf(ownerB);
+        deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) + 1_000e6);
+        _ask(pool, 1_000e6);
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(usdc.balanceOf(partner) - a0, net / 2 * 6000 / 10_000, "A: 60 % from the raise on");
+        assertEq(usdc.balanceOf(ownerB) - b0, net / 2 * 5000 / 10_000, "B: the same 50 %, A's raise takes none of it");
+        assertLe(usdc.balanceOf(partner) - a0 + usdc.balanceOf(ownerB) - b0, net * 6000 / 10_000, "all partners: 60 % at most");
+    }
+
     function test_buy_needsACodeTheCreatorSet() public {
         SimPool pool = _pool();
         bytes32 unset = keccak256("NOT-A-CODE");
