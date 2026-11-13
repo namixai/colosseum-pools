@@ -102,6 +102,26 @@ class TheRecord(unittest.TestCase):
         self.assertIn('record["status"] = DONE', (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8"))
 
 
+class TheLibraries(unittest.TestCase):
+    """SimPool links to two libraries since its code outgrew a block's limit; `deploy` puts both first and names them,
+    and the pool's built code asks for exactly these two."""
+
+    def test_deploy_links_the_pool_to_both_libraries(self):
+        src = (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8")
+        stops = src.index('deploy_contract(op, out, record, "SimPoolStops", "SimPoolStops", [], [])')
+        setup = src.index('deploy_contract(op, out, record, "SimPoolSetup", "SimPoolSetup", [], [])')
+        pool = src.index('{"SimPoolStops": stops, "SimPoolSetup": setup})')
+        self.assertLess(max(stops, setup), pool, "the libraries before the pool that links to them")
+
+    def test_the_pools_code_links_to_these_two_and_no_other(self):
+        art = ROOT / "out/SimPool.sol/SimPool.json"
+        if not art.exists():
+            self.skipTest("no forge build here")
+        refs = json.loads(art.read_text())["bytecode"].get("linkReferences") or {}
+        names = sorted(name for libs in refs.values() for name in libs)
+        self.assertEqual(names, ["SimPoolSetup", "SimPoolStops"])
+
+
 class TheFirstPool(unittest.TestCase):
     def test_it_is_alexs_menu_and_locks_1600(self):
         self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], [(5000, 45), (10000, 85)])

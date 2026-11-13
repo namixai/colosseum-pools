@@ -1206,24 +1206,24 @@
     },
     {
       "id": "S113",
-      "where": "src/sim/SimPool.sol:567",
+      "where": "src/sim/SimPoolStops.sol:29",
       "kind": "line",
-      "text": "if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L567"
+      "text": "if (p.state != SimPool.PayoutState.Due || p.wasStopped) revert SimPool.BadPayout();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolStops.sol#L29"
     },
     {
       "id": "S114",
-      "where": "src/sim/SimPool.sol:208",
+      "where": "src/sim/SimPool.sol:210",
       "kind": "line",
       "text": "event PayoutStopped(",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L208"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L210"
     },
     {
       "id": "S115",
-      "where": "src/sim/SimPool.sol:595",
+      "where": "src/sim/SimPool.sol:569",
       "kind": "line",
       "text": "function liftStop(uint256 id) external onlyChecker {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L595"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L569"
     },
     {
       "id": "S116",
@@ -1234,10 +1234,10 @@
     },
     {
       "id": "S117",
-      "where": "src/sim/SimPool.sol:349",
+      "where": "src/sim/SimPool.sol:342",
       "kind": "line",
       "text": "uint256 keep = owed + held + reserved + (finished ? 0 : floor);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L349"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L342"
     },
     {
       "id": "S118",
@@ -1248,38 +1248,38 @@
     },
     {
       "id": "S119",
-      "where": "src/sim/SimPool.sol:499",
+      "where": "src/sim/SimPool.sol:492",
       "kind": "line",
       "text": "uint256 kept = held + reserved;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L499"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L492"
     },
     {
       "id": "S120",
-      "where": "src/sim/SimPool.sol:600",
+      "where": "src/sim/SimPoolStops.sol:61",
       "kind": "line",
-      "text": "if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L600"
+      "text": "if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert SimPool.ReserveOver();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolStops.sol#L61"
     },
     {
       "id": "S121",
-      "where": "src/sim/SimPool.sol:722",
+      "where": "src/sim/SimPool.sol:680",
       "kind": "line",
       "text": "if (c.used && (partner != c.partner || bps <= c.bps)) revert CodeUsed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L722"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L680"
     },
     {
       "id": "S122",
-      "where": "src/sim/SimPool.sol:391",
+      "where": "src/sim/SimPool.sol:384",
       "kind": "line",
       "text": "_receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L391"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L384"
     },
     {
       "id": "S123",
-      "where": "src/sim/SimPool.sol:791",
+      "where": "src/sim/SimPool.sol:749",
       "kind": "line",
       "text": "if (partner == address(0)) revert NoSuchCode();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L791"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L749"
     },
     {
       "id": "S124",
@@ -1290,17 +1290,17 @@
     },
     {
       "id": "S125",
-      "where": "src/sim/SimPool.sol:749",
+      "where": "src/sim/SimPool.sol:707",
       "kind": "line",
       "text": "revert Locked();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L749"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L707"
     },
     {
       "id": "S126",
-      "where": "src/sim/SimPool.sol:353",
+      "where": "src/sim/SimPool.sol:346",
       "kind": "line",
       "text": "if (w > p) w = p;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L353"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L346"
     },
     {
       "id": "S127",
@@ -1311,38 +1311,38 @@
     },
     {
       "id": "S128",
-      "where": "src/sim/SimPool.sol:686",
+      "where": "src/sim/SimPool.sol:644",
       "kind": "line",
       "text": "if (block.timestamp < readyAt) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L686"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L644"
     },
     {
       "id": "S129",
-      "where": "src/sim/SimPool.sol:764",
+      "where": "src/sim/SimPool.sol:722",
       "kind": "line",
       "text": "if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L764"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L722"
     },
     {
       "id": "S130",
-      "where": "src/sim/SimPool.sol:687",
+      "where": "src/sim/SimPool.sol:645",
       "kind": "line",
       "text": "if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L687"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L645"
     },
     {
       "id": "S131",
-      "where": "src/sim/SimPool.sol:689",
+      "where": "src/sim/SimPool.sol:647",
       "kind": "line",
       "text": "uint256 amount = r < w ? r : w;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L689"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L647"
     },
     {
       "id": "S132",
-      "where": "src/sim/SimPool.sol:348",
+      "where": "src/sim/SimPool.sol:341",
       "kind": "line",
       "text": "if (staged > floor) floor = staged;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L348"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L341"
     },
     {
       "id": "S133",
@@ -1353,31 +1353,31 @@
     },
     {
       "id": "S134",
-      "where": "src/sim/SimPool.sol:489",
+      "where": "src/sim/SimPool.sol:482",
       "kind": "line",
       "text": "if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L489"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L482"
     },
     {
       "id": "S135",
-      "where": "src/sim/SimPool.sol:501",
+      "where": "src/sim/SimPool.sol:494",
       "kind": "line",
       "text": "if (bal < ahead + p.amount) {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L501"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L494"
     },
     {
       "id": "S136",
-      "where": "src/sim/SimPool.sol:615",
+      "where": "src/sim/SimPool.sol:583",
       "kind": "line",
       "text": "if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L615"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L583"
     },
     {
       "id": "S137",
-      "where": "src/sim/SimPool.sol:569",
+      "where": "src/sim/SimPoolStops.sol:31",
       "kind": "line",
-      "text": "if (paired != address(0) || trades.length == 0 || links.length != 1) revert BadReason();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L569"
+      "text": "if (paired != address(0) || trades.length == 0 || links.length != 1) revert SimPool.BadReason();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolStops.sol#L31"
     }
   ]
 }
