@@ -127,7 +127,8 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("The pool's creator may change its approver at any time; whoever approves, no payout waits for "
                           "approval longer than 7 days after it is claimed", text)
             self.assertIn("Until it is paid, the platform's checker may stop it", text)
-            self.assertIn("once a sale names a code, neither changes", text)
+            self.assertIn("once a trader has used a code, its owner never changes and its share can be raised, never "
+                          "lowered", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
             self.assertIn("The pool runs at least 6 months (184 days) from its opening", text)
             self.assertIn("the platform may cancel a withdrawal request; it never moves the money", text)
@@ -255,8 +256,14 @@ class TheCodes(unittest.TestCase):
         chain = {b"a" * 32: (p1, 5000, True), b"b" * 32: (p1, 4000, False), b"c" * 32: (d.ZERO, 0, False)}
         self.assertEqual([t for t, *_ in d.to_set(codes, chain.__getitem__)], ["B", "C"], "A is there already")
         chain[b"a" * 32] = (p1, 6000, True)
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit) as caught:
             d.to_set(codes, chain.__getitem__)
+        self.assertIn("its share can only rise, for the same partner", str(caught.exception))
+        chain[b"a" * 32] = (p1, 4000, True)
+        self.assertEqual([t for t, *_ in d.to_set(codes, chain.__getitem__)], ["A", "B", "C"], "A raised from 40 to 50 %")
+        chain[b"a" * 32] = (p2, 4000, True)
+        with self.assertRaises(SystemExit):
+            d.to_set(codes, chain.__getitem__)  # another partner, even with a higher share
 
 
 class TheClosing(unittest.TestCase):
