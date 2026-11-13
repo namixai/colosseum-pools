@@ -21,6 +21,12 @@ rules is no reason either: that stage ends at once and never pays.
 Everything it reads is on chain, and so is everything it writes: the reason, the other account,
 the hashes. Anyone can run this script on the same blocks and get the same pairs. It stops a payout
 only while it waits and only once; it lifts its own stop with --lift ID when a stop was wrong.
+
+Until when it stops is the pool's own rule. A pool with payout approval takes a stop until the payout
+is paid, approved or not: an unapproved one waits up to 7 days from its claim, and a pair found on the
+fourth day still stops it. A pool from before approvals pays at 72 hours by itself, and a stop is sent
+no later than 5 minutes before that. Either way only for a pair (reasons 1 and 2): a result disputed
+without a pair (reason 3) needs a written analysis and is never sent from here.
 `--wallet` is the factory's checker; without it, or with --dry-run, nothing is sent. Testnet only.
 """
 
@@ -46,8 +52,11 @@ view = core.view
 TRANSFER = "0x" + keccak(text="Transfer(address,address,uint256)").hex()
 STOP = "stopPayout(uint256,uint8,address,bytes32[],bytes32[])"
 STOP_TYPES = ["uint256", "uint8", "address", "bytes32[]", "bytes32[]"]
-# A stop is sent no later than this before its payout is due: a block may take that long.
+# On a pool from before approvals a stop is sent no later than this before its payout is due: a block may
+# take that long.
 MARGIN_S = 300
+# `payout(id)` of a pool from before approvals: the same fields without the eighth, `approved`.
+PAYOUT_BEFORE_APPROVALS = "(address,address,uint64,uint64,uint8,bool,uint64)"
 ADDRESS_BATCH = 100
 
 
@@ -109,9 +118,24 @@ def finding(pair_list: list[tuple[dict, dict]], link_txs: list[str]) -> tuple[in
     return (2 if link_txs else 1), paired, trades, link_txs
 
 
-def stop_due(state: str, was_stopped: bool, due_at: int, now: int) -> bool:
-    """Whether a payout can still be stopped: waiting, never stopped, and far enough from its time."""
-    return state == "Due" and not was_stopped and now + MARGIN_S < due_at
+def stop_due(state: str, was_stopped: bool, due_at: int, now: int, until_paid: bool = False) -> bool:
+    """Whether a payout can still be stopped: waiting, never stopped, and in time by its pool's rule. A pool with
+    payout approval takes a stop until the payout is paid (`until_paid`: SimPool.stopPayout asks no time); one
+    from before approvals pays at `due_at` by itself, so the stop goes MARGIN_S before it."""
+    return state == "Due" and not was_stopped and (until_paid or now + MARGIN_S < due_at)
+
+
+def takes_approvals(pool: str) -> bool | None:
+    """Whether the pool has payout approval: it answers `approver()`. False where the call reverts (a pool from
+    before approvals has no such getter); None where it was not read (the node, the rate), never taken for "no"."""
+    try:
+        c.call_view(pool, "approver()", [], [], ["address"])
+        return True
+    except Exception as exc:
+        if "revert" in str(exc).lower():
+            return False
+        log("not_read", address=pool, call="approver()", error=str(exc)[:120])
+        return None
 
 
 def fill_of(log_entry: dict, t: int) -> dict:
@@ -146,6 +170,23 @@ class Checker:
         # Stages that can no longer be paid or stopped, and each stage's start: what `keep_from` reads.
         self.settled: set[str] = set()
         self.started: dict[str, int] = {}
+        # Each pool's kind, read once: with payout approval (a stop until the payout is paid) or from before it.
+        self.approvals: dict[str, bool] = {}
+
+    def until_paid(self, pool: str) -> bool:
+        """Whether this pool takes a stop until the payout is paid. Not read, it counts as yes for this pass and is
+        asked again in the next: a stop the pool refuses is a logged revert, a stop not sent is a payout gone."""
+        if pool not in self.approvals:
+            got = takes_approvals(pool)
+            if got is None:
+                return True
+            self.approvals[pool] = got
+        return self.approvals[pool]
+
+    def payout(self, pool: str, pid: int) -> tuple:
+        """`payout(id)` as this pool holds it: a pool from before approvals answers a word shorter."""
+        kind = sk.PAYOUT if self.until_paid(pool) else PAYOUT_BEFORE_APPROVALS
+        return view(pool, "payout(uint256)", kind, ["uint256"], [pid])
 
     def time_of(self, block: int) -> int:
         if block not in self._times:
@@ -198,8 +239,8 @@ class Checker:
         for pool in self.keeper.pools:
             head, count = view(pool, "head()", "uint256"), view(pool, "payoutCount()", "uint256")
             for pid in range(head, count):
-                p = view(pool, "payout(uint256)", sk.PAYOUT, ["uint256"], [pid])
-                if stop_due(sk.PAYOUT_STATE[p[4]], p[5], p[3], now):
+                p = self.payout(pool, pid)
+                if stop_due(sk.PAYOUT_STATE[p[4]], p[5], p[3], now, self.until_paid(pool)):
                     stoppable.add(to_checksum_address(p[0]))
         starts = []
         for a, info in self.keeper.accounts.items():
@@ -220,9 +261,9 @@ class Checker:
         self._times = {b: t for b, t in self._times.items() if t >= cutoff}
 
     def check(self, pool: str, pid: int, now: int, latest: int) -> tuple | None:
-        p = view(pool, "payout(uint256)", sk.PAYOUT, ["uint256"], [pid])
+        p = self.payout(pool, pid)
         account, trader = to_checksum_address(p[0]), to_checksum_address(p[1])
-        if not stop_due(sk.PAYOUT_STATE[p[4]], p[5], p[3], now):
+        if not stop_due(sk.PAYOUT_STATE[p[4]], p[5], p[3], now, self.until_paid(pool)):
             return None
         mine = [f for f in self.fills if f["account"] == account]
         found = pairs(mine, self.fills, self.window_s, self.tolerance)
@@ -230,7 +271,9 @@ class Checker:
             return None
         paired = finding(found, [])[1]
         other_trader = to_checksum_address(c.call_view(paired, "result()", [], [], ["uint8", "address", "uint64", "uint64"])[1])
-        link_txs = links(self.transfers_to([trader, other_trader], latest), trader, other_trader)
+        # The factory's pools pay every trader: a pool is no link between two it paid (review of #283).
+        link_txs = links([t for t in self.transfers_to([trader, other_trader], latest) if t["from"] not in self.keeper.pools],
+                         trader, other_trader)
         return finding(found, link_txs)
 
     def one_pass(self) -> list[dict]:
