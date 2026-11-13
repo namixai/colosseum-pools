@@ -1053,7 +1053,7 @@ contract PaperExamTest is Test {
 
     function _fillerExam() internal returns (PaperExam e) {
         e = PaperExam(Clones.clone(address(impl)));
-        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0);
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 0);
     }
 
     function _fillerTrade(PaperExam e, bool isBuy, uint64 sz) internal {
@@ -1063,18 +1063,156 @@ contract PaperExamTest is Test {
         e.fill();
     }
 
+    // ── the drawdown line trailing to the start ──────────────────
+
+    /// The rules of `_rules` with the day's loss out of the way, so that only the drawdown line can be broken.
+    function _ddOnly() internal pure returns (Rules memory r) {
+        r = _rules();
+        r.dailyLossBps = 9999;
+    }
+
+    function _trailing(Rules memory r, ExamTerms memory t) internal returns (PaperExam e) {
+        e = PaperExam(Clones.clone(address(impl)));
+        e.initializeWithFiller(trader, r, t, filler, false, 0, 1);
+    }
+
+    function _fromStart(Rules memory r) internal returns (PaperExam e) {
+        e = PaperExam(Clones.clone(address(impl)));
+        e.initializeWithFiller(trader, r, _terms(), filler, false, 0, 0);
+    }
+
+    /// The next UTC day's snapshot, at `px`.
+    function _snapshotAt(PaperExam e, uint64 px) internal {
+        _nextMidnight();
+        _mark(px);
+        e.checkpoint();
+    }
+
+    function test_drawdownKind_isNamedAtTheStart_zeroOrOne() public {
+        assertEq(_exam().drawdownKind(), 0, "initialize: from the start");
+        assertEq(_fillerExam().drawdownKind(), 0);
+        PaperExam e = _trailing(_rules(), _terms());
+        assertEq(e.drawdownKind(), e.TRAILING_TO_START());
+        assertEq(e.peakSnapshot(), CAPITAL, "the starting balance is the first snapshot");
+        assertEq(e.drawdownLine(), 90e6, "until a higher snapshot, the line is the start's");
+        PaperExam x = PaperExam(Clones.clone(address(impl)));
+        vm.expectRevert(PaperExam.BadTerms.selector);
+        x.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 2);
+    }
+
+    function test_trailingLine_risesWithTheDaysSnapshots_andStopsAtTheStart() public {
+        PaperExam e = _trailing(_ddOnly(), _terms());
+        _fillerTrade(e, true, 100); // 1x long: equity is 100 times the mark's change
+        _mark(1_040_000);
+        assertEq(e.drawdownLine(), 90e6, "no snapshot yet: the rise moves nothing");
+        _snapshotAt(e, 1_040_000);
+        assertEq(e.peakSnapshot(), 104e6);
+        assertEq(e.drawdownLine(), 94e6);
+        _snapshotAt(e, 1_070_000);
+        assertEq(e.drawdownLine(), 97e6);
+        _snapshotAt(e, 1_120_000);
+        assertEq(e.peakSnapshot(), 112e6, "102 is above the start: the start");
+        assertEq(e.drawdownLine(), 100e6, "102 is above the start: the start");
+        _snapshotAt(e, 1_150_000);
+        assertEq(e.peakSnapshot(), 115e6, "and it stays there");
+        assertEq(e.drawdownLine(), 100e6, "and it stays there");
+        // On the line holds; a unit under it breaks.
+        _mark(1_000_000);
+        assertEq(e.equity(), 100e6);
+        assertEq(uint8(e.violation()), uint8(Breach.None));
+        _mark(999_999);
+        assertEq(uint8(e.violation()), uint8(Breach.Drawdown));
+        vm.prank(stranger);
+        e.breach();
+        assertEq(uint8(e.endReason()), uint8(Breach.Drawdown));
+    }
+
+    function test_trailingLine_breaksWhereTheLineFromTheStartWouldNot() public {
+        PaperExam e = _trailing(_ddOnly(), _terms());
+        PaperExam f = _fromStart(_ddOnly());
+        _fillerTrade(e, true, 100);
+        _fillerTrade(f, true, 100);
+        _nextMidnight();
+        _mark(1_040_000);
+        e.checkpoint();
+        f.checkpoint();
+        assertEq(f.peakSnapshot(), 104e6, "recorded for both");
+        assertEq(f.drawdownLine(), 90e6, "but the line from the start does not move");
+        _mark(939_000); // 93.9
+        assertEq(uint8(e.violation()), uint8(Breach.Drawdown), "under 94");
+        assertEq(uint8(f.violation()), uint8(Breach.None), "over 90");
+    }
+
+    function test_trailingLine_aRiseWithinTheDayMovesNothing() public {
+        PaperExam e = _trailing(_ddOnly(), _terms());
+        _fillerTrade(e, true, 100);
+        _mark(1_080_000); // 108 at noon, and back before midnight
+        assertEq(e.drawdownLine(), 90e6);
+        _snapshotAt(e, 1_010_000);
+        assertEq(e.peakSnapshot(), 101e6);
+        assertEq(e.drawdownLine(), 91e6);
+    }
+
+    function test_trailingLine_aDayWhoseSnapshotNobodyTakesMovesNothing() public {
+        PaperExam e = _trailing(_ddOnly(), _terms());
+        _fillerTrade(e, true, 100);
+        _nextMidnight();
+        _mark(1_060_000); // 106 in the window, and nobody takes the snapshot
+        _snapshotAt(e, 1_020_000);
+        assertEq(e.peakSnapshot(), 102e6, "the 106 never counted");
+        assertEq(e.drawdownLine(), 92e6, "the 106 never counted");
+    }
+
+    function test_trailingLine_neverComesDown() public {
+        PaperExam e = _trailing(_ddOnly(), _terms());
+        _fillerTrade(e, true, 100);
+        _snapshotAt(e, 1_070_000);
+        _snapshotAt(e, 1_040_000);
+        assertEq(e.dayStartEquity(), 104e6, "the day's base is the day's snapshot");
+        assertEq(e.peakSnapshot(), 107e6, "the line is the highest one's");
+        assertEq(e.drawdownLine(), 97e6, "the line is the highest one's");
+    }
+
+    function test_trailingLine_noSnapshotWhileItIsBroken() public {
+        PaperExam e = _trailing(_ddOnly(), _terms());
+        _fillerTrade(e, true, 100);
+        _snapshotAt(e, 1_040_000);
+        _mark(939_000);
+        _nextMidnight();
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.RuleBroken.selector, Breach.Drawdown));
+        e.checkpoint();
+        assertEq(e.peakSnapshot(), 104e6);
+        e.breach();
+        assertEq(_status(e), uint8(PaperExam.Status.Breached));
+    }
+
+    function test_trailingLine_aNewStepStartsAgainFromItsBalance() public {
+        ExamTerms memory t = _terms();
+        t.targetsBps = _targets(1000, 1000);
+        PaperExam e = _trailing(_ddOnly(), t);
+        _fillerTrade(e, true, 100);
+        _snapshotAt(e, 1_120_000);
+        assertEq(e.drawdownLine(), 100e6);
+        _fillerTrade(e, false, 100);
+        _graduate(e);
+        assertEq(e.step(), 1);
+        assertEq(e.peakSnapshot(), CAPITAL, "the new step's own start");
+        assertEq(e.drawdownLine(), 90e6, "the new step's own start");
+        assertEq(e.drawdownKind(), 1, "the same kind");
+    }
+
     function test_filler_isNamedAtTheStartAndIsNeitherTheTraderNorThePool() public {
         PaperExam e = PaperExam(Clones.clone(address(impl)));
         vm.expectEmit(address(e));
         emit PaperExam.FillerSet(filler, false, 0);
-        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0);
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 0);
         assertEq(e.filler(), filler);
         assertEq(_exam().filler(), address(0), "an exam started the old way has none");
         address[3] memory bad = [address(0), trader, address(this)];
         for (uint256 i = 0; i < bad.length; ++i) {
             PaperExam x = PaperExam(Clones.clone(address(impl)));
             vm.expectRevert(PaperExam.BadTerms.selector);
-            x.initializeWithFiller(trader, _rules(), _terms(), bad[i], false, 0);
+            x.initializeWithFiller(trader, _rules(), _terms(), bad[i], false, 0, 0);
         }
     }
 
@@ -1267,7 +1405,7 @@ contract PaperExamTest is Test {
 
     function _bookExam(uint16 maxSpread) internal returns (PaperExam e) {
         e = PaperExam(Clones.clone(address(impl)));
-        e.initializeWithFiller(trader, _rules(), _terms(), filler, true, maxSpread);
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, true, maxSpread, 0);
     }
 
     function _bookFill(PaperExam e, bool isBuy, uint64 sz) internal returns (uint64 px, uint8 source) {
@@ -1394,11 +1532,11 @@ contract PaperExamTest is Test {
         for (uint256 i = 0; i < 3; ++i) {
             PaperExam x = PaperExam(Clones.clone(address(impl)));
             vm.expectRevert(PaperExam.BadTerms.selector);
-            x.initializeWithFiller(trader, _rules(), _terms(), filler, true, bad[i]);
+            x.initializeWithFiller(trader, _rules(), _terms(), filler, true, bad[i], 0);
         }
         PaperExam y = PaperExam(Clones.clone(address(impl)));
         vm.expectRevert(PaperExam.BadTerms.selector);
-        y.initializeWithFiller(trader, _rules(), _terms(), filler, false, 20);
+        y.initializeWithFiller(trader, _rules(), _terms(), filler, false, 20, 0);
         PaperExam z = _bookExam(500);
         assertTrue(z.fromBook());
         assertEq(z.maxWorseBps(), 500);

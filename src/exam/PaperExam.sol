@@ -96,6 +96,9 @@ contract PaperExam is Initializable {
     /// With a filler: blocks after an order's window from which anyone may fill it, if it only
     /// makes a position smaller. About a minute of HyperEVM's small blocks.
     uint16 public constant FALLBACK_BLOCKS = 60;
+    /// The drawdown line kinds (`drawdownKind`).
+    uint8 public constant FROM_START = 0;
+    uint8 public constant TRAILING_TO_START = 1;
     /// The most a fill at the book may be worse than the oracle price, in bps of it: 5 %.
     uint16 public constant MAX_WORSE_BPS = 500;
     /// Where a fill's price came from (`Filled.source`).
@@ -130,8 +133,14 @@ contract PaperExam is Initializable {
     /// UTC day of the latest daily snapshot, and equity at that snapshot.
     uint32 public day;
     int256 public dayStartEquity;
+    /// The highest daily snapshot of the step, the step's starting balance first. Only `checkpoint` raises it.
+    int256 public peakSnapshot;
     /// UTC days of this step that saw a fill.
     uint16 public tradingDays;
+    /// How the drawdown line is drawn: `FROM_START`, the starting balance less `maxDrawdownBps` of it; or
+    /// `TRAILING_TO_START`, the highest daily snapshot of the step less that same amount, never above the
+    /// starting balance. Set when the exam starts; the pool names it. Next to `tradingDays`, in its slot.
+    uint8 public drawdownKind;
     Order public pending;
 
     Rules internal _rules;
@@ -202,17 +211,21 @@ contract PaperExam is Initializable {
     /// @notice Starts the exam for `trader_`, with `filler_` the one address that fills orders inside
     ///         their window. The filler may be neither the trader nor the pool. With `fromBook_` a
     ///         fill takes the book's price, at most `maxWorseBps_` (1 to 500) worse than the oracle's;
-    ///         without it, the oracle's, and `maxWorseBps_` is zero.
+    ///         without it, the oracle's, and `maxWorseBps_` is zero. `drawdownKind_` is how the
+    ///         drawdown line is drawn: `FROM_START` or `TRAILING_TO_START`.
     function initializeWithFiller(
         address trader_,
         Rules calldata rules_,
         ExamTerms calldata terms_,
         address filler_,
         bool fromBook_,
-        uint16 maxWorseBps_
+        uint16 maxWorseBps_,
+        uint8 drawdownKind_
     ) external initializer {
         if (filler_ == address(0) || filler_ == trader_ || filler_ == msg.sender) revert BadTerms();
         if (fromBook_ ? maxWorseBps_ == 0 || maxWorseBps_ > MAX_WORSE_BPS : maxWorseBps_ != 0) revert BadTerms();
+        if (drawdownKind_ > TRAILING_TO_START) revert BadTerms();
+        drawdownKind = drawdownKind_;
         filler = filler_;
         fromBook = fromBook_;
         maxWorseBps = maxWorseBps_;
@@ -272,6 +285,12 @@ contract PaperExam is Initializable {
     /// @notice Every position at the mark of this block, sides added together (1e6 = 1 USDC).
     function notional() external view returns (uint256 ntl) {
         (, ntl) = _book();
+    }
+
+    /// @notice The lowest equity that keeps the drawdown rule now (`drawdownKind`, `peakSnapshot`).
+    function drawdownLine() external view returns (int256) {
+        int256 bps = int256(uint256(Units.BPS));
+        return (_drawdownLineBps() + bps - 1) / bps;
     }
 
     /// @notice Which rule the exam breaks right now, if any.
@@ -376,6 +395,7 @@ contract PaperExam is Initializable {
         if (reason != Breach.None) revert RuleBroken(reason);
         day = today;
         dayStartEquity = eq;
+        if (eq > peakSnapshot) peakSnapshot = eq;
         emit DaySnapshot(today, eq);
     }
 
@@ -436,6 +456,7 @@ contract PaperExam is Initializable {
         _lastFillDayPlusOne = 0;
         day = _today();
         dayStartEquity = cash;
+        peakSnapshot = cash;
         emit DaySnapshot(day, dayStartEquity);
     }
 
@@ -465,14 +486,24 @@ contract PaperExam is Initializable {
     ///      the drawdown line, so the leverage line only ever sees a positive one.
     function _judge(int256 eq, uint256 ntl) internal view returns (Breach) {
         int256 bps = int256(uint256(Units.BPS));
-        int256 base = int256(uint256(_terms.capital));
-        if (eq * bps < base * (bps - int256(uint256(_rules.maxDrawdownBps)))) return Breach.Drawdown;
+        if (eq * bps < _drawdownLineBps()) return Breach.Drawdown;
         if (dayStartEquity > 0) {
             if (eq * bps < dayStartEquity * (bps - int256(uint256(_rules.dailyLossBps)))) return Breach.DailyLoss;
         }
         if (ntl * 100 > uint256(eq) * _rules.maxLeverageX100) return Breach.Leverage;
         if (_overAssetCap(eq)) return Breach.Leverage;
         return Breach.None;
+    }
+
+    /// @dev The drawdown line times `Units.BPS`, kept exact: the starting balance less `maxDrawdownBps` of it; for
+    ///      `TRAILING_TO_START` the highest daily snapshot less that same amount, never above the starting balance.
+    function _drawdownLineBps() internal view returns (int256) {
+        int256 bps = int256(uint256(Units.BPS));
+        int256 base = int256(uint256(_terms.capital));
+        int256 dd = int256(uint256(_rules.maxDrawdownBps));
+        if (drawdownKind == FROM_START) return base * (bps - dd);
+        int256 trailing = peakSnapshot * bps - base * dd;
+        return trailing < base * bps ? trailing : base * bps;
     }
 
     /// @dev Whether a position's notional over equity is past its asset's own cap

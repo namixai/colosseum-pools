@@ -21,8 +21,10 @@ import {BookStub} from "./PaperExamInvariant.t.sol";
 /// - A fill at the book: a buy at the ask, a sell at the bid, never better for the trader than the oracle, and
 ///   refused in that block when more than `maxWorseBps` worse than it; a book empty on a side or crossed fills at
 ///   the oracle. An order that would take the account over its leverage is refused; one that only reduces never is.
-/// - The rules, judged at the moment asked: equity below the start by `maxDrawdownBps`; below the day's snapshot by
-///   `dailyLossBps`; notional over equity above `maxLeverageX100`.
+/// - The rules, judged at the moment asked: equity below the drawdown line; below the day's snapshot by
+///   `dailyLossBps`; notional over equity above `maxLeverageX100`. The drawdown line, from the start: the starting
+///   balance less `maxDrawdownBps` of it. Trailing to the start: the highest daily snapshot of the step less
+///   `maxDrawdownBps` of the starting balance, and never above the starting balance.
 /// - The day's snapshot in the first 15 minutes of the UTC day, once a day. A trading day is a UTC day with a fill
 ///   of at least 10 USDC of notional.
 /// - A pass: no rule broken, nothing open, equity at the target, the step's trading days, before the limits. Past
@@ -43,9 +45,12 @@ contract RulesModel {
     uint32 public constant maxIdle = 10 days;
     uint16 public constant minDays = 2;
 
+    /// 0 from the start, 1 trailing the daily snapshots to the start.
+    uint8 public immutable kind;
     int256 public cash;
     int256 public pos;
     int256 public dayStart;
+    int256 public highestSnapshot;
     uint256 public day;
     uint16 public tradingDays;
     uint256 public lastTradeDay; // day + 1; 0 for none
@@ -53,7 +58,10 @@ contract RulesModel {
     uint256 public lastTrade;
     uint8 public status = 1; // 1 active, 2 passed, 3 breached, 4 expired
 
-    constructor(uint256 start) {
+    constructor(uint256 start, uint8 kind_) {
+        kind = kind_;
+        // The step's starting balance is its first snapshot.
+        highestSnapshot = capital;
         cash = capital;
         // NOT IN THE TEXT (found by this test, 13 November): until the first snapshot, the day's loss counts from the
         // step's starting balance. docs/PAPER-EXAM.md says it now.
@@ -71,10 +79,18 @@ contract RulesModel {
         return maxIdle != 0 && now_ > lastTrade + maxIdle;
     }
 
+    /// The drawdown line times BPS, as the text draws it.
+    function lineBps() public view returns (int256) {
+        int256 limit = capital * int256(uint256(dd));
+        if (kind == 0) return capital * BPS - limit;
+        int256 trailing = highestSnapshot * BPS - limit;
+        return trailing > capital * BPS ? capital * BPS : trailing;
+    }
+
     /// The first rule broken now, in the text's order: 1 drawdown, 2 the day's loss, 3 leverage; 0 none.
     function broken(int256 oracle) public view returns (uint8) {
         int256 eq = equity(oracle);
-        if (eq * BPS < capital * (BPS - int256(uint256(dd)))) return 1;
+        if (eq * BPS < lineBps()) return 1;
         if (dayStart > 0 && eq * BPS < dayStart * (BPS - int256(uint256(daily)))) return 2;
         int256 ntl = (pos < 0 ? -pos : pos) * oracle;
         if (ntl * 100 > eq * int256(uint256(lev))) return 3;
@@ -127,6 +143,7 @@ contract RulesModel {
         if (broken(oracle) != 0) return false;
         day = now_ / 1 days;
         dayStart = equity(oracle);
+        if (dayStart > highestSnapshot) highestSnapshot = dayStart;
         return true;
     }
 
@@ -189,6 +206,7 @@ contract DifferentialHandler is Test {
     function _compare(string memory what) internal {
         if (uint8(exam.status()) != model.status()) _differ(string.concat(what, ": status"));
         if (exam.equity() != model.equity(oracle)) _differ(string.concat(what, ": equity"));
+        if (exam.drawdownLine() != (model.lineBps() + 9_999) / 10_000) _differ(string.concat(what, ": drawdown line"));
     }
 
     function move(uint256 seed) external {
@@ -308,6 +326,12 @@ contract DifferentialHandler is Test {
 
 contract PaperExamDifferentialTest is Test {
     uint32 constant BTC = 3;
+
+    /// The drawdown line of the exam under test: from the start here, trailing to the start in the suite below.
+    function _kind() internal pure virtual returns (uint8) {
+        return 0;
+    }
+
     PaperExam exam;
     RulesModel model;
     DifferentialHandler handler;
@@ -333,9 +357,9 @@ contract PaperExamDifferentialTest is Test {
         ExamTerms memory t = ExamTerms({capital: 100e6, targetsBps: targets, stepDuration: 30 days, maxIdle: 10 days,
             minTradingDays: 2, costPpm: 450, fillDelay: 1, fillWindow: 10});
         exam = PaperExam(Clones.clone(address(new PaperExam())));
-        model = new RulesModel(block.timestamp);
+        model = new RulesModel(block.timestamp, _kind());
         handler = new DifferentialHandler(exam, model);
-        exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, 150);
+        exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, 150, _kind());
         targetContract(address(handler));
         bytes4[] memory sel = new bytes4[](15);
         (sel[0], sel[1], sel[2]) = (DifferentialHandler.move.selector, DifferentialHandler.move.selector, DifferentialHandler.move.selector);
@@ -355,10 +379,31 @@ contract PaperExamDifferentialTest is Test {
         assertEq(handler.mismatches(), 0, handler.firstMismatch());
     }
 
-    function afterInvariant() external {
+    function afterInvariant() external virtual {
         emit log(string.concat("reached: place=", vm.toString(handler.calls("place")), " fill=",
             vm.toString(handler.calls("fill")), " checkpoint=", vm.toString(handler.calls("checkpoint")), " breach=",
             vm.toString(handler.calls("breach")), " graduate=", vm.toString(handler.calls("graduate")), " expire=",
             vm.toString(handler.calls("expire"))));
+    }
+}
+
+/// D1 again, on an exam whose drawdown line trails its daily snapshots up to its starting balance.
+contract PaperExamDifferentialTrailingTest is PaperExamDifferentialTest {
+    function _kind() internal pure override returns (uint8) {
+        return 1;
+    }
+
+    /// D1 on the trailing line.
+    /// forge-config: default.invariant.runs = 64
+    /// forge-config: default.invariant.depth = 150
+    function invariant_theTrailingExamIsItsRulesAsWritten() public view {
+        assertEq(handler.mismatches(), 0, handler.firstMismatch());
+    }
+
+    /// Not an invariant: how high the snapshots took the line, printed with `-vv`.
+    function afterInvariant() external override {
+        emit log(string.concat("reached: checkpoint=", vm.toString(handler.calls("checkpoint")), " highest snapshot=",
+            vm.toString(model.highestSnapshot()), " line=", vm.toString(exam.drawdownLine()), " breach=",
+            vm.toString(handler.calls("breach"))));
     }
 }
