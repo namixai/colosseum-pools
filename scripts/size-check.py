@@ -27,13 +27,16 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNTIME_LIMIT = 24_576
 INIT_LIMIT = 49_152
-DECLARED = re.compile(r"^(?:contract|library)\s+(\w+)", re.M)
+# A declaration may be indented; `abstract contract` and `interface` are never deployed and do not match.
+DECLARED = re.compile(r"^[ \t]*(?:contract|library)\s+(\w+)", re.M)
+COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 
 
 def declared(src: pathlib.Path) -> list[str]:
     names: list[str] = []
     for path in sorted(src.rglob("*.sol")):
-        names += DECLARED.findall(path.read_text(encoding="utf-8"))
+        # A contract in a comment is not compiled, and forge's table has no line for it (review of #298).
+        names += DECLARED.findall(COMMENT.sub("", path.read_text(encoding="utf-8-sig")))
     return sorted(set(names))
 
 
@@ -43,9 +46,9 @@ def forge_sizes() -> dict:
     run = subprocess.run(["forge", "build", "--sizes", "--json"], cwd=ROOT, capture_output=True, text=True)
     try:
         return json.loads(run.stdout)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
         sys.stderr.write(run.stderr[-2000:])
-        raise SystemExit("size-check: forge gave no table of sizes")
+        raise RuntimeError("forge gave no table of sizes") from exc
 
 
 def main(argv: list[str]) -> int:
@@ -63,7 +66,7 @@ def main(argv: list[str]) -> int:
     try:
         sizes = json.loads(sizes_file.read_text()) if sizes_file else forge_sizes()
         names = declared(src or ROOT / "src")
-    except (OSError, json.JSONDecodeError) as exc:
+    except Exception as exc:  # whatever stops it, the gate did not run: 2, never 1 (review of #298)
         print(f"size-check: could not run: {exc}")
         return 2
     if not names:
