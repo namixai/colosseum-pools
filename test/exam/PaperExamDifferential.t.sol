@@ -25,6 +25,10 @@ import {BookStub} from "./PaperExamInvariant.t.sol";
 ///   `dailyLossBps`; notional over equity above `maxLeverageX100`. The drawdown line, from the start: the starting
 ///   balance less `maxDrawdownBps` of it. Trailing to the start: the highest daily snapshot of the step less
 ///   `maxDrawdownBps` of the starting balance, and never above the starting balance.
+/// - A stop and a take for the position: set by the trader on an open position, acting `fillDelay` blocks later;
+///   once the oracle is at the price or past it (against the position for a stop, for it for a take) the filler
+///   closes the set size, or all of it, at the price of a fill in that block and with its cost. A position
+///   closed or turned round loses both; one carried out is gone.
 /// - The day's snapshot in the first 15 minutes of the UTC day, once a day. A trading day is a UTC day with a fill
 ///   of at least 10 USDC of notional.
 /// - A pass: no rule broken, nothing open, equity at the target, the step's trading days, before the limits. Past
@@ -44,6 +48,16 @@ contract RulesModel {
     uint32 public constant duration = 30 days;
     uint32 public constant maxIdle = 10 days;
     uint16 public constant minDays = 2;
+    uint256 public constant delay = 1;
+
+    struct Trigger {
+        int256 px;
+        int256 sz;
+        uint256 armedAt;
+    }
+
+    Trigger public stop_;
+    Trigger public take_;
 
     /// 0 from the start, 1 trailing the daily snapshots to the start.
     uint8 public immutable kind;
@@ -115,6 +129,10 @@ contract RulesModel {
         int256 newCash = cash - (isBuy ? sz : -sz) * px - (sz * px * int256(uint256(costPpm)) + 1_000_000 - 1) / 1_000_000;
         if (_grows(after_) && _overLev(newCash, after_, oracle)) return false;
         cash = newCash;
+        if (pos != 0 && (after_ == 0 || (after_ > 0) != (pos > 0))) {
+            delete stop_;
+            delete take_;
+        }
         pos = after_;
         if (sz * px >= 10e6) {
             uint256 d = now_ / 1 days;
@@ -134,6 +152,30 @@ contract RulesModel {
     function _overLev(int256 newCash, int256 after_, int256 oracle) internal pure returns (bool) {
         int256 eq = newCash + after_ * oracle;
         return eq <= 0 || (after_ < 0 ? -after_ : after_) * oracle * 100 > eq * int256(uint256(lev));
+    }
+
+    function setTrigger(bool isTake, int256 px, int256 sz, uint256 blockNo, uint256 now_) external returns (bool) {
+        if (status != 1 || over(now_) || pos == 0 || px == 0) return false;
+        Trigger memory t = Trigger(px, sz, blockNo + delay);
+        if (isTake) take_ = t;
+        else stop_ = t;
+        return true;
+    }
+
+    function fillTrigger(bool isTake, int256 oracle, int256 bid, int256 ask, uint256 blockNo, uint256 now_)
+        external
+        returns (bool)
+    {
+        Trigger memory t = isTake ? take_ : stop_;
+        if (status != 1 || over(now_) || t.px == 0 || blockNo < t.armedAt || pos == 0) return false;
+        bool hit = isTake == (pos > 0) ? oracle >= t.px : oracle <= t.px;
+        if (!hit) return false;
+        int256 open = pos < 0 ? -pos : pos;
+        int256 sz = t.sz == 0 || t.sz > open ? open : t.sz;
+        if (!this.fill(pos < 0, sz, oracle, bid, ask, now_)) return false;
+        if (isTake) delete take_;
+        else delete stop_;
+        return true;
     }
 
     function checkpoint(int256 oracle, uint256 now_) external returns (bool) {
@@ -252,6 +294,34 @@ contract DifferentialHandler is Test {
         _compare("fill");
     }
 
+    function setTrigger(bool isTake, uint256 pxSeed, uint256 szSeed) external {
+        int256 px = oracle * (9_000 + int256(pxSeed % 2_001)) / 10_000;
+        uint256 sz = szSeed % 4 == 0 ? 0 : bound(szSeed, 1, 1_500);
+        vm.roll(block.number + 1);
+        bool expect = model.setTrigger(isTake, px, int256(sz), block.number, block.timestamp);
+        bool got;
+        vm.prank(trader);
+        try exam.setTrigger(BTC, isTake, uint64(uint256(px)), uint64(sz)) {
+            got = true;
+            calls["setTrigger"] += 1;
+        } catch {}
+        if (got != expect) _differ(got ? "setTrigger: the exam took it, the text refuses" : "setTrigger: the exam refused, the text takes it");
+    }
+
+    function fillTrigger(bool isTake, uint256 bookSeed) external {
+        vm.roll(block.number + 1);
+        _drawBook(bookSeed);
+        bool expect = model.fillTrigger(isTake, oracle, bid, ask, block.number, block.timestamp);
+        bool got;
+        vm.prank(filler);
+        try exam.fillTrigger(BTC, isTake) {
+            got = true;
+            calls["fillTrigger"] += 1;
+        } catch {}
+        if (got != expect) _differ(got ? "fillTrigger: the exam filled, the text refuses" : "fillTrigger: the exam refused, the text fills");
+        _compare("fillTrigger");
+    }
+
     function checkpoint(uint256 secs) external {
         vm.warp((block.timestamp / 1 days + 1) * 1 days + bound(secs, 0, 20 minutes));
         vm.roll(block.number + 1);
@@ -361,13 +431,15 @@ contract PaperExamDifferentialTest is Test {
         handler = new DifferentialHandler(exam, model);
         exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, 150, _kind());
         targetContract(address(handler));
-        bytes4[] memory sel = new bytes4[](15);
+        bytes4[] memory sel = new bytes4[](19);
         (sel[0], sel[1], sel[2]) = (DifferentialHandler.move.selector, DifferentialHandler.move.selector, DifferentialHandler.move.selector);
         (sel[3], sel[4], sel[5]) = (DifferentialHandler.place.selector, DifferentialHandler.place.selector, DifferentialHandler.place.selector);
         (sel[6], sel[7], sel[8], sel[9]) = (DifferentialHandler.fill.selector, DifferentialHandler.fill.selector,
             DifferentialHandler.fill.selector, DifferentialHandler.fill.selector);
         (sel[10], sel[11], sel[12]) = (DifferentialHandler.checkpoint.selector, DifferentialHandler.breach.selector, DifferentialHandler.graduate.selector);
         (sel[13], sel[14]) = (DifferentialHandler.expire.selector, DifferentialHandler.warp.selector);
+        (sel[15], sel[16]) = (DifferentialHandler.setTrigger.selector, DifferentialHandler.setTrigger.selector);
+        (sel[17], sel[18]) = (DifferentialHandler.fillTrigger.selector, DifferentialHandler.fillTrigger.selector);
         targetSelector(FuzzSelector({addr: address(handler), selectors: sel}));
     }
 
@@ -383,7 +455,8 @@ contract PaperExamDifferentialTest is Test {
         emit log(string.concat("reached: place=", vm.toString(handler.calls("place")), " fill=",
             vm.toString(handler.calls("fill")), " checkpoint=", vm.toString(handler.calls("checkpoint")), " breach=",
             vm.toString(handler.calls("breach")), " graduate=", vm.toString(handler.calls("graduate")), " expire=",
-            vm.toString(handler.calls("expire"))));
+            vm.toString(handler.calls("expire")), " setTrigger=", vm.toString(handler.calls("setTrigger")),
+            " fillTrigger=", vm.toString(handler.calls("fillTrigger"))));
     }
 }
 

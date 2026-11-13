@@ -88,6 +88,28 @@ contract PaperExamHandler is Test {
         }
     }
 
+    /// A stop or a take at the oracle price, which with the oracle still has triggered by the time it acts, and its fill
+    /// a few blocks on: it closes at a fill's price, held to the same two bounds.
+    function trigger(uint256 assetSeed, bool isTake, uint256 sz, uint256 bookSeed) external {
+        uint32 asset = assetSeed % 2 == 0 ? BTC : ETH;
+        int256 pos = exam.positionOf(asset);
+        if (pos == 0) return;
+        vm.prank(trader);
+        try exam.setTrigger(asset, isTake, uint64(asset == BTC ? BTC_MARK : ETH_MARK), uint64(sz % 3 == 0 ? 0 : bound(sz, 1, 4_800))) {
+            calls["setTrigger"] += 1;
+        } catch {
+            return;
+        }
+        vm.roll(block.number + DELAY + (bookSeed % 3));
+        if (randomBook) _drawBook(bookSeed);
+        vm.recordLogs();
+        vm.prank(filler);
+        try exam.fillTrigger(asset, isTake) {
+            _checkPrice(asset, pos < 0);
+            calls["fillTrigger"] += 1;
+        } catch {}
+    }
+
     function checkpoint(uint256 secs) external {
         vm.warp((block.timestamp / 1 days + 1) * 1 days + bound(secs, 0, 14 minutes));
         vm.roll(block.number + 1);
@@ -146,8 +168,16 @@ contract PaperExamHandler is Test {
     function _checkPrice(uint32 asset, bool isBuy) internal {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; ++i) {
-            if (logs[i].topics.length == 0 || logs[i].topics[0] != PaperExam.Filled.selector) continue;
-            (, , uint64 px,,, uint8 source) = abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint256, uint8));
+            if (logs[i].topics.length == 0) continue;
+            uint64 px;
+            uint8 source;
+            if (logs[i].topics[0] == PaperExam.Filled.selector) {
+                (, , px,,, source) = abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint256, uint8));
+            } else if (logs[i].topics[0] == PaperExam.TriggerFilled.selector) {
+                (, , px,,, source) = abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint64, uint8));
+            } else {
+                continue;
+            }
             uint256 oracle = asset == BTC ? BTC_MARK : ETH_MARK;
             uint256 worst = oracle * MAX_WORSE / 10_000;
             if (isBuy ? px < oracle : px > oracle) ghostBadPrice += 1;
@@ -198,7 +228,7 @@ contract PaperExamStillOracleInvariantTest is Test {
         handler = new PaperExamHandler(exam, randomBook);
         exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, MAX_WORSE, 0);
         targetContract(address(handler));
-        bytes4[] memory sel = new bytes4[](11);
+        bytes4[] memory sel = new bytes4[](13);
         sel[0] = PaperExamHandler.place.selector;
         sel[1] = PaperExamHandler.place.selector;
         sel[2] = PaperExamHandler.place.selector;
@@ -210,6 +240,8 @@ contract PaperExamStillOracleInvariantTest is Test {
         sel[8] = PaperExamHandler.graduate.selector;
         sel[9] = PaperExamHandler.breachOrExpire.selector;
         sel[10] = PaperExamHandler.warp.selector;
+        sel[11] = PaperExamHandler.trigger.selector;
+        sel[12] = PaperExamHandler.trigger.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: sel}));
     }
 
@@ -243,7 +275,7 @@ contract PaperExamStillOracleInvariantTest is Test {
             vm.toString(handler.calls("fill")), " fallbackFill=", vm.toString(handler.calls("fallbackFill")),
             " checkpoint=", vm.toString(handler.calls("checkpoint")), " graduate=", vm.toString(handler.calls("graduate")),
             " breach=", vm.toString(handler.calls("breach")), " expire=", vm.toString(handler.calls("expire")),
-            " fillsChecked=", vm.toString(handler.fills()));
+            " fillTrigger=", vm.toString(handler.calls("fillTrigger")), " fillsChecked=", vm.toString(handler.fills()));
         emit log(line);
     }
 }
