@@ -164,9 +164,9 @@ test("each code with what its sales brought and what its owner was sent or had s
 });
 
 
-test("the pool's term as the contract keeps it: 180 days from its creation, and the platform's early close", () => {
+test("the pool's term as the contract keeps it: 6 months, 184 days, from its creation, and the platform's early close", () => {
   // The pool was created in the block of its first event (the codes set at once), so its term runs from that time.
-  assert.equal(page.lockedUntil, CHAIN.events[0].time + MIN_TERM, "lockedUntil: the creation plus 180 days");
+  assert.equal(page.lockedUntil, CHAIN.events[0].time + MIN_TERM, "lockedUntil: the creation plus 184 days");
   assert.ok(CHAIN.now < page.lockedUntil, "the chain ends long before the term");
   assert.equal(page.creatorMayClose, false, "before its term the creator may not close it");
   assert.equal(page.closed, true);
@@ -181,6 +181,18 @@ test("the pool's term as the contract keeps it: 180 days from its creation, and 
 const EXAM_LOGS = new Map(Object.entries(CHAIN.examEvents).map(([a, logs]) => [a.toLowerCase(), logs.map(decode)]));
 const ALL_TIMES = new Map([...TIMES, ...Object.values(CHAIN.examEvents).flat().map((e) => [e.block, e.time])]);
 const counts = activityCounts(LOGS, EXAM_LOGS, ALL_TIMES);
+
+test("each fill keeps the block it was emitted in: a pass's two fills are two blocks", () => {
+  // The recording collects the logs after each fill, before the next block (review of #281): a fill recorded at a
+  // later block would date its trading day, and its order against the others, wrongly.
+  const passed = Object.values(CHAIN.examEvents).filter((evs) => evs.some((e) => e.name === "Passed"));
+  assert.ok(passed.length >= 6, "three exams and three stages passed");
+  for (const evs of passed) {
+    const fills = evs.filter((e) => e.name === "Filled").map((e) => e.block);
+    assert.equal(fills.length, 2);
+    assert.ok(fills[0] < fills[1], `fills at ${fills.join(" and ")}`);
+  }
+});
 
 test("the second pass reads exactly the pool's exams and stages, and every one of them was read", () => {
   const accounts = accountsToRead(LOGS);
