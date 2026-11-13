@@ -696,6 +696,36 @@ class WhatThePoolWouldTake(unittest.TestCase):
         self.assertEqual(got["action"], "none", "nothing to sign: it pays by itself")
         self.assertIn("paid by itself then", r.summary(got))
 
+    def test_whether_the_pool_takes_approvals_has_three_answers(self):
+        F, P_ = addr(0xFA), POOL
+        def node(answers):
+            def call_view(to, sig, types, args, out):
+                got = answers[(to, sig)]
+                if isinstance(got, Exception):
+                    raise got
+                return got
+            return call_view
+        revert, down = Exception("execution reverted"), Exception("429 Too Many Requests")
+        cases = [({(F, "PAYOUT_HARD()"): (1,), (P_, "approver()"): (addr(1),)}, True),
+                 ({(F, "PAYOUT_HARD()"): revert}, False),
+                 ({(F, "PAYOUT_HARD()"): down}, None),
+                 ({(F, "PAYOUT_HARD()"): (1,), (P_, "approver()"): down}, None),
+                 ({(F, "PAYOUT_HARD()"): (1,), (P_, "approver()"): revert}, None)]
+        for answers, want in cases:
+            with mock.patch.object(r.c, "call_view", side_effect=node(answers)):
+                self.assertIs(r.has_approvals(F, P_), want, answers)
+
+    def test_not_read_whether_the_pool_takes_approvals_offers_nothing_and_says_no_time(self):
+        ch, _, s1 = honest_world()
+        self.pair(ch, s1)
+        ch.d["books"][POOL]["approvals"] = None
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["tx"]["kind"], got["tx"]["data"], got["hardAt"], got["stoppable"]), ("none", None, None, None))
+        self.assertEqual(got["action"], "none", "nothing is offered while it is not read")
+        self.assertIn("not read whether the pool takes approvals", got["tx"]["note"])
+        self.assertIn("not read: whether the pool takes approvals", got["reasons"])
+        self.assertNotIn(r.NO_APPROVAL, got["tx"]["note"], "no word that it pays by itself")
+
     def test_no_stop_for_a_payout_the_pool_would_refuse_to_stop(self):
         for state, was, now, why in [("Paid", False, None, "it is paid"), ("Stopped", True, None, "it is stopped"),
                                      ("Due", True, None, "stopped once already"), ("Due", False, "late", "time to stop is over")]:
@@ -816,7 +846,7 @@ class ReadingTheChain(unittest.TestCase):
             return {"balanceOf(address)": (9_000,), "result()": (2, t1, 0, 0), "accountOf(address)": (2, 0, True),
                     "menu()": ([(SIZE // 2, 50), (SIZE, 100)],),
                     "terms()": ((capital, [800], 0, 0, 0, 1_000, 1, 10),),
-                    "approver()": (addr(0xAB),)}[sig]
+                    "approver()": (addr(0xAB),), "PAYOUT_HARD()": (7 * 86_400,)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
                 mock.patch.object(r.c, "call_view", side_effect=call_view):
