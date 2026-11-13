@@ -13,6 +13,8 @@
     spike/.venv/bin/python -m ops.deploy_sim request --pool 0x.. --key creator --amount 100 [--send]   # ask
     spike/.venv/bin/python -m ops.deploy_sim withdraw --pool 0x.. --key creator [--send]               # a week on
     spike/.venv/bin/python -m ops.deploy_sim cancel --pool 0x.. --key closer [--send]                  # cancel it
+    spike/.venv/bin/python -m ops.deploy_sim approver --pool 0x.. --key creator --address 0x.. [--send] # name it
+    spike/.venv/bin/python -m ops.deploy_sim approve --pool 0x.. --key approver --ids 3,4 [--send]     # payouts
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
 and the SimPoolFactory on HyperEVM testnet, names the filler, the checker, the closer (the platform's
@@ -38,7 +40,12 @@ when that exam runs.
 `request`, `withdraw` and `cancel` are the creator's withdrawal, which waits a week. `request` asks for
 --amount USDC, at most what the pool lets go now; `withdraw` carries out the standing request from a week
 after it, for three days, and pays the less of what was asked and what the pool lets go then; `cancel`
-cancels it, from the creator's key or the closer's. Like `close` and `finish`, without --send each reads
+cancels it, from the creator's key or the closer's.
+
+`approver` names the pool's approver of payouts (from the creator's key; zero for none) and `approve`
+approves waiting payouts from it: an approved payout goes out 72 hours after its claim, one not
+approved 7 days after. Without --send `approve` reads each payout and says whose it is, how much,
+from when it goes out with the approval and from when without, or why the pool would refuse it. Like `close` and `finish`, without --send each reads
 the pool and says what it would send, from which key, or why the pool would refuse.
 
 `pool` publishes a pool's terms in the TermsBook, approves the USDC for the two locked payouts and
@@ -429,6 +436,71 @@ def withdraw_check(st: dict, now: int, sender: str) -> int:
     return amount
 
 
+PAYOUT_STATE = ["None", "Due", "Stopped", "Paid", "Held", "Refused"]  # SimPool.PayoutState
+PAYOUT_T = "(address,address,uint64,uint64,uint8,bool,uint64,bool)"  # SimPool.payout(id)
+
+
+def ids_of(text: str) -> list[int]:
+    """Payout ids as typed: "3,4,7", each once."""
+    try:
+        ids = [int(x) for x in text.split(",") if x.strip()]
+    except ValueError:
+        raise SystemExit(f"--ids {text!r}: payout numbers, separated by commas")
+    if not ids or len(set(ids)) != len(ids) or min(ids) < 0:
+        raise SystemExit(f"--ids {text!r}: at least one payout number, each once")
+    return ids
+
+
+def approve_check(approver: str, sender: str, payouts: dict, ids: list[int], hard: int) -> list[str]:
+    """What approving `ids` from `sender` would do, a line a payout, or why the pool would refuse. `payouts`:
+    id → the pool's payout(id) as read (absent: no such payout); `hard`: PAYOUT_HARD less PAYOUT_DELAY."""
+    if int(approver, 16) == 0:
+        raise SystemExit("NotApprover: the pool has no approver: its creator names one with `approver`")
+    if sender != approver:
+        raise SystemExit(f"NotApprover: {sender} is not the pool's approver ({approver})")
+    lines = []
+    for i in ids:
+        p = payouts.get(i)
+        if p is None:
+            raise SystemExit(f"BadPayout: payout {i} does not exist")
+        state = PAYOUT_STATE[p[4]]
+        if state != "Due":
+            raise SystemExit(f"BadPayout: payout {i} is {state}, not waiting")
+        if p[7]:
+            raise SystemExit(f"BadPayout: payout {i} is approved already")
+        lines.append(f"payout {i}: {usdc(p[2])} to {to_checksum_address(p[1])}, goes out from {utc(p[3])} approved; "
+                     f"{utc(p[3] + hard)} without")
+    return lines
+
+
+def approver_cmd(args) -> int:
+    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    creator = to_checksum_address(c.call_view(pool_, "creator()", [], [], ["address"])[0])
+    if sender != creator:
+        raise SystemExit(f"NotCreator: {sender} is not the pool's creator ({creator})")
+    who = to_checksum_address(args.address)
+    print(f"deploy_sim approver: pool {pool_}, setApprover({who}) from {args.key} ({sender})"
+          + ("; no approver: every payout goes out 7 days after its claim" if int(who, 16) == 0 else ""))
+    return send_or_say(args, pool_, "setApprover(address)", ["address"], [who])
+
+
+def approve(args) -> int:
+    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    ids = ids_of(args.ids)
+    count = int(c.call_view(pool_, "payoutCount()", [], [], ["uint256"])[0])
+    payouts = {i: c.call_view(pool_, "payout(uint256)", ["uint256"], [i], [PAYOUT_T])[0] for i in ids if i < count}
+    factory = c.call_view(pool_, "factory()", [], [], ["address"])[0]
+    hard = int(c.call_view(factory, "PAYOUT_HARD()", [], [], ["uint32"])[0]) - \
+        int(c.call_view(factory, "PAYOUT_DELAY()", [], [], ["uint32"])[0])
+    approver = to_checksum_address(c.call_view(pool_, "approver()", [], [], ["address"])[0])
+    lines = approve_check(approver, sender, payouts, ids, hard)
+    print(f"deploy_sim approve: pool {pool_}, approvePayouts({ids}) from {args.key} ({sender})")
+    for line in lines:
+        print("  " + line)
+    print("  approving sets neither the amount nor the trader; the checker can still stop each until it is paid")
+    return send_or_say(args, pool_, "approvePayouts(uint256[])", ["uint256[]"], [ids])
+
+
 def cancel_check(st: dict, sender: str) -> str:
     """As whom `sender` cancels the standing request, or why the pool would refuse."""
     if sender not in (st["creator"], st["closer"]):
@@ -593,6 +665,16 @@ def main(argv: list[str] | None = None) -> int:
         if name == "finish":
             z.add_argument("--exam", help="an exam or stage of the pool: says until when it keeps the pool from finishing")
         z.add_argument("--send", action="store_true")
+    z = sub.add_parser("approver")
+    z.add_argument("--pool", required=True)
+    z.add_argument("--key", required=True, help="the pool's creator")
+    z.add_argument("--address", required=True, help="the approver of payouts; 0x000…0 for none")
+    z.add_argument("--send", action="store_true")
+    z = sub.add_parser("approve")
+    z.add_argument("--pool", required=True)
+    z.add_argument("--key", required=True, help="the pool's approver")
+    z.add_argument("--ids", required=True, help="payout numbers, as 3,4,7")
+    z.add_argument("--send", action="store_true")
     for name in ("request", "withdraw", "cancel"):
         z = sub.add_parser(name)
         z.add_argument("--pool", required=True)
@@ -602,7 +684,8 @@ def main(argv: list[str] | None = None) -> int:
         z.add_argument("--send", action="store_true")
     args = p.parse_args(argv)
     return {"deploy": deploy, "pool": pool, "buy": buy, "codes": codes, "close": close, "finish": finish,
-            "request": request, "withdraw": withdraw, "cancel": cancel}[args.cmd](args)
+            "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
+            "approve": approve}[args.cmd](args)
 
 
 if __name__ == "__main__":
