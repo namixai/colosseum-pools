@@ -64,9 +64,10 @@ fail, and their prices pay for the ones that pass.
   3, the result is disputed (a flaw of the exam, the oracle or the filler). For 1 and 2 the call
   names the other account, the transactions of the trades (at least two) and, for reason 2, the
   transactions that link the wallets; for 3 it names no account, at least one transaction that shows
-  the flaw, and one hash, the keccak256 of the published text of the dispute. A stopped payout's money stays in the pool, set aside for at
-  least 14 days after the stop (`STOP_RESERVE`, `reserved`; until `finalizeStop` or a lift, so it may
-  be longer, never shorter) as a held payout's is: the creator does not
+  the flaw, and one hash, the keccak256 of the published text of the dispute. A stopped payout's money stays in the pool, set aside from the
+  stop (`STOP_RESERVE`, `reserved`) until the checker lifts the stop within 14 days, or until anyone
+  makes it final after them (`finalizeStop`, which may come later than the 14 days, never sooner), as
+  a held payout's is: the creator does not
   withdraw it, it is no profit for the partners' shares, and `pay` pays no other payout out of it.
   Within those days the trader may object on chain (`objectStop`, the keccak256 of the objection's
   text, `StopObjected`), and the checker lifts a stop that was wrong (`liftStop`): the payout is due
@@ -121,8 +122,8 @@ Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid with the approver's approval (`PAYOUT_DELAY`), 7 days
-without it (`PAYOUT_HARD`); 14 days a
-stopped payout's money stays set aside at least and the stop can be lifted (`STOP_RESERVE`); 184 days a
+without it (`PAYOUT_HARD`); 14 days in
+which a stopped payout's money stays set aside and the stop can be lifted, and after which it can be made final (`STOP_RESERVE`); 184 days a
 pool runs before its creator may close it or take back its principal (`MIN_TERM`); 7 days from a
 request to withdraw to its money, and from a close to `finish` (`WITHDRAW_DELAY`), and 3 days to
 carry out a ready request (`WITHDRAW_WINDOW`); a fill

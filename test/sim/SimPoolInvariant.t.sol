@@ -1190,7 +1190,7 @@ contract SimPoolInvariantTest is Test {
             (, uint8 line, bool done) = pool.accountOf(handler.stage(i));
             if (!done) {
                 running += 1;
-                staged += uint256(menu[line].size) * 800 / 10_000;
+                staged += uint256(menu[line].size) * pool.factory().PAYOUT_BPS() / 10_000;
             }
         }
         assertEq(pool.live(), running);
