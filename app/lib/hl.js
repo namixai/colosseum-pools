@@ -72,6 +72,12 @@ export const spot = (user) => info({ type: "spotClearinghouseState", user });
 export const openOrders = (user) => info({ type: "openOrders", user });
 export const fills = (user) => info({ type: "userFills", user });
 export const mids = () => info({ type: "allMids" });
+/** A perp's candles from `startTime` to `endTime` (ms), by its name ("BTC") and an interval ("1m", "15m", "1h", "1d"):
+ *  open data, no key. `candleRows` (app/lib/exam.js) reads the answer. */
+export const candles = (coin, interval, startTime, endTime) =>
+  info({ type: "candleSnapshot", req: { coin, interval, startTime, endTime } });
+/** A perp's book, both sides from the best: open data, no key. `bookSides` (app/lib/exam.js) reads the answer. */
+export const book = (coin) => info({ type: "l2Book", coin });
 /** An account's deposits, withdrawals and transfers since `startTime` (ms), as Hyperliquid's own ledger has them. */
 export const ledger = (user, startTime) => info({ type: "userNonFundingLedgerUpdates", user, startTime });
 

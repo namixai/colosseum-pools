@@ -193,5 +193,8 @@ python3 scripts/mutations.py $(seq -f 'X%g' 1 129)
   it is being built to are in [POOL-PARAMETERS.md](POOL-PARAMETERS.md).
 - A keeper of exams of their own, outside a MultiPool: `ops/multi_keeper.py` fills a MultiPool's
   exams' orders as soon as they can be filled, takes the day's snapshot and calls `breach`.
-- The trader's client sending orders as transactions.
+- The trader's screen. Its library is there, `app/lib/exam.js`: the account as the contract counts it
+  with its lines, its target and its time, the calls behind the buttons (`place`, `graduate`, `setAgent`),
+  an order worked out before it is sent, the contract's refusals in plain words, and Hyperliquid's open
+  candles and book for the chart. The page itself is not built: until it is, orders are sent by scripts.
 - A run on the testnet, and the audit's reading.
