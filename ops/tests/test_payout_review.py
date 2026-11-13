@@ -374,10 +374,11 @@ class TheOppositeSideSpread(unittest.TestCase):
 
 
 class PassRates(unittest.TestCase):
-    """How often the pool's exams pass, against the model (16 in 100 exams, 2.7 in 100 payouts, alarm x1.5, at least
-    30 sales, 99 % sure): a rule of the exam that is wrong counts up on chain and shows only as too many passing."""
+    """The pool's passes against the CFO's thresholds (13 November): passes among the last 100 exams ended (yellow
+    24, red 28), payouts among the last 100 sold (yellow 6, red 8), payouts over net income over 30 days (yellow
+    0.5, red 0.75); shares from 30 exams ended, before that red only if payouts exceed the net income."""
 
-    def world(self, n, passed, payouts=0, code=None, base=0x2000, fills=5, t0=1_900_000):
+    def world(self, n, passed, payouts=0, code=None, base=0x2000, fills=5, t0=1_900_000, ended=True):
         ch, t1, s1 = honest_world()
         ch.d["exam_events"] = {addr(0x201): [], s1: []}
         for i in range(n):
@@ -386,8 +387,11 @@ class PassRates(unittest.TestCase):
             evs = [{"name": "Started", "block": 1, "index": 0, "t": t0 + i, "tx": tx(1), "capital": 1}]
             evs += [{"name": "Filled", "block": 2, "index": 0, "t": t0 + i + k * 86_400, "tx": tx(2), "asset": 3, "buy": True,
                      "sz": 1, "px": 1, "cost": 0, "late": 0, "source": 0} for k in range(fills)]
+            end = {"block": 3, "index": 0, "t": t0 + i + 10 * 3_600, "tx": tx(3), "equity": 1}
             if i < passed:
-                evs.append({"name": "Passed", "block": 3, "index": 0, "t": t0 + i + 10 * 3_600, "tx": tx(3), "equity": 1})
+                evs.append({**end, "name": "Passed"})
+            elif ended:
+                evs.append({**end, "name": "Stopped", "status": 3})
             if i < payouts:
                 st = addr(base + 0x2000 + i)
                 ch.stage(tr, ex, st, status="Passed", done=True)
@@ -396,74 +400,61 @@ class PassRates(unittest.TestCase):
             ch.d["exam_events"][ex] = evs
         return ch
 
-    def test_the_exact_bounds(self):
+    def test_the_exact_tail(self):
         self.assertAlmostEqual(r.binom_tail(0, 10, 0.3), 1.0)
         self.assertAlmostEqual(r.binom_tail(10, 10, 0.5), 0.5 ** 10)
         self.assertAlmostEqual(r.binom_tail(1, 10, 0.1), 1 - 0.9 ** 10)
-        self.assertAlmostEqual(r.lower_bound(10, 10, 0.99), 0.01 ** 0.1, places=6, msg="ten of ten: 0.01 ** (1/10)")
-        self.assertEqual(r.lower_bound(0, 50, 0.99), 0.0)
 
-    def test_too_few_sales_say_so_and_raise_nothing(self):
+    def test_before_thirty_exams_end_it_is_red_only_if_payouts_exceed_the_net_income(self):
         got = r.review(self.world(10, 9).d, POOL, 0)
-        pr = got["passRates"]["pool"]
-        self.assertEqual((pr["examPass"]["state"], pr["examPass"]["hits"], pr["examPass"]["sold"]), ("few", 9, 11),
-                         "trader 1's exam, whose events were read, and the ten")
+        pr = got["passRates"]
+        self.assertEqual((pr["finished"], pr["early"]["payouts"], pr["early"]["net"], pr["level"]),
+                         (10, 800 * 10**6, 19 * 100 * 10**6, "few"), "trader 1's 800 against 19 sales of 100")
         self.assertNotIn("pass-rate", got["kinds"])
-
-    def test_a_pool_that_passes_far_more_than_the_model_marks_every_payout_but_keeps_the_approval(self):
-        got = r.review(self.world(100, 45).d, POOL, 0)
-        line = got["passRates"]["pool"]["examPass"]
-        self.assertEqual((line["hits"], line["sold"], line["state"]), (45, 101, "over"))
-        self.assertGreater(line["lower"], 0.24)
-        self.assertEqual(got["kinds"][0], "pass-rate", "said first")
-        self.assertIn("the pool passes more often than the model", got["reasons"][0])
-        self.assertEqual(got["action"], "decide")
-        self.assertEqual(got["tx"]["kind"], "approve", "the trader is not to blame: the approval stays")
-
-    def test_a_share_over_the_alarm_on_few_sales_is_not_yet_sure(self):
-        line = r.review(self.world(34, 10).d, POOL, 0)["passRates"]["pool"]["examPass"]
-        self.assertEqual((line["hits"], line["sold"]), (10, 35))
-        self.assertGreater(line["rate"], line["limit"], "29 % against an alarm at 24 %")
-        self.assertLess(line["lower"], line["limit"])
-        self.assertEqual(line["state"], "ok", "the least it can be, 99 % sure, is under the alarm")
-
-    def test_a_share_near_the_model_is_no_alarm(self):
-        got = r.review(self.world(100, 20).d, POOL, 0)
-        self.assertEqual(got["passRates"]["pool"]["examPass"]["state"], "ok")
-        self.assertNotIn("pass-rate", got["kinds"])
-
-    def test_payouts_reached_and_the_slices(self):
-        ch = self.world(60, 10, payouts=10)
-        got = r.review(ch.d, POOL, 0)["passRates"]
-        self.assertEqual(got["pool"]["payout"]["hits"], 11, "trader 1's and the ten")
-        self.assertEqual(got["pool"]["payout"]["state"], "over", "11 of 61 against 2.7 in 100")
-        self.assertEqual(got["pool"]["stages"], 11, "trader 1's stage and the ten")
-        self.assertEqual(list(got["byAsset"]), ["3"])
-        self.assertEqual(sum(got["byHour"].values()), 10)
-        self.assertEqual(set(got["byHour"]), {"9"}, "1 900 000 s plus ten hours is 09:46 UTC")
-        self.assertEqual(sum(got["byWeekday"].values()), 10)
-        self.assertEqual(got["fewFillPasses"], 0)
-        few = r.review(self.world(40, 10, fills=2).d, POOL, 0)["passRates"]
-        self.assertEqual(few["fewFillPasses"], 10, "passed in two fills")
-
-    def test_by_code_one_group_far_over_is_named(self):
-        ch = self.world(40, 30, code="0x" + "44" * 32)
-        more = self.world(40, 4, base=0x5000)  # another pool's world: only its sales are borrowed
-        for s_ in more.d["sales"][9:]:
-            ch.d["sales"].append(s_)
-            ch.d["exam_events"][s_["exam"]] = more.d["exam_events"][s_["exam"]]
+        ch = self.world(10, 9)
+        ch.d["payouts"][0]["amount"] = 2_000 * 10**6
         got = r.review(ch.d, POOL, 0)
-        self.assertEqual(got["passRates"]["byCode"]["0x" + "44" * 32]["examPass"]["state"], "over")
-        self.assertTrue(any(x.startswith("code 0x44444444") for x in got["passRates"]["over"]))
+        self.assertEqual((got["passRates"]["level"], got["passRates"]["batch"]), ("red", False))
+        self.assertIn("above net income", got["reasons"][0])
 
-    def test_thresholds_from_a_file_and_the_window(self):
-        ch = self.world(100, 45)
-        got = r.review(ch.d, POOL, 0, thresholds={"alarm": 3.0})
-        self.assertEqual(got["passRates"]["pool"]["examPass"]["state"], "ok", "45 % is under 3 x 16 %")
-        self.assertEqual(got["passRates"]["thresholds"]["model"]["examPass"], 0.16, "the model's other shares kept")
-        old = self.world(100, 45, t0=100)
-        old.d["now"] = 10_000_000
-        self.assertEqual(r.review(old.d, POOL, 0)["passRates"]["poolWindow"]["sold"], 0, "sold long before the window")
+    def test_passes_among_the_last_hundred_ended(self):
+        for passed, level in ((28, "red"), (24, "yellow"), (20, "ok")):
+            pr = r.review(self.world(100, passed).d, POOL, 0)["passRates"]
+            self.assertEqual((pr["passes"]["hits"], pr["passes"]["of"], pr["passes"]["level"]), (passed, 100, level))
+        got = r.review(self.world(100, 28).d, POOL, 0)
+        self.assertEqual(got["kinds"][0], "pass-rate", "said first, on every payout of the pool")
+        self.assertEqual((got["action"], got["tx"]["kind"]), ("decide", "approve"), "the trader is not to blame")
+        self.assertFalse(r.card(got, self.world(100, 28).d)["batchApproval"], "red: one by one")
+
+    def test_fewer_than_a_hundred_are_counted_per_hundred(self):
+        pr = r.review(self.world(50, 12).d, POOL, 0)["passRates"]
+        self.assertEqual((pr["passes"]["of"], pr["passes"]["perHundred"], pr["passes"]["level"]), (50, 24.0, "yellow"))
+
+    def test_payouts_among_the_last_hundred_sold(self):
+        for paid, level in ((8, "red"), (6, "yellow"), (5, "ok")):
+            pr = r.review(self.world(100, 10, payouts=paid).d, POOL, 0)["passRates"]
+            self.assertEqual((pr["payouts"]["hits"], pr["payouts"]["level"]), (paid, level))
+
+    def test_payouts_over_net_income_over_thirty_days(self):
+        ch = self.world(40, 5)
+        ch.d["payouts"][0]["amount"] = 3_100 * 10**6  # against 40 sales of 100 in the window
+        pr = r.review(ch.d, POOL, 0)["passRates"]
+        self.assertEqual((pr["payoutsToIncome"]["ratio"], pr["payoutsToIncome"]["level"]), (0.775, "red"))
+        ch.d["payouts"][0]["amount"] = 2_000 * 10**6
+        self.assertEqual(r.review(ch.d, POOL, 0)["passRates"]["payoutsToIncome"]["level"], "yellow")
+
+    def test_thresholds_from_a_file(self):
+        th = {"passes": {"window": 100, "yellow": 40, "red": 50}}
+        self.assertEqual(r.review(self.world(100, 28).d, POOL, 0, thresholds=th)["passRates"]["passes"]["level"], "ok")
+
+    def test_the_slices(self):
+        ch = self.world(40, 10, code="0x" + "44" * 32)
+        pr = r.review(ch.d, POOL, 0)["passRates"]
+        self.assertEqual(pr["byCode"]["0x" + "44" * 32], {"sold": 40, "passed": 10, "payouts": 0})
+        self.assertEqual(list(pr["byAsset"]), ["3"])
+        self.assertEqual(set(pr["byHour"]), {"9"}, "1 900 000 s plus ten hours is 09:46 UTC")
+        self.assertEqual(sum(pr["byWeekday"].values()), 10)
+        self.assertEqual(r.review(self.world(40, 10, fills=2).d, POOL, 0)["passRates"]["fewFillPasses"], 10)
 
     def test_without_the_accounts_events_there_is_nothing_to_judge(self):
         ch, _, _ = honest_world()
@@ -812,7 +803,7 @@ class TheDocument(unittest.TestCase):
     """The JSON a page reads: its fields fixed by the schema's name."""
 
     KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action",
-            "reasons", "evidence", "call", "stopDraft", "readAt"}
+            "reasons", "evidence", "call", "stopDraft", "batchApproval", "dailyCap", "readAt"}
 
     def test_a_clean_payout_carries_its_approval(self):
         ch, t1, s1 = honest_world()
@@ -873,7 +864,7 @@ class ReadingTheChain(unittest.TestCase):
         num = lambda n: "0x" + f"{n:064x}"
         pool_logs = [
             log(POOL, [sk.EXAM_SOLD, word(e1), word(t1), word(partner)],
-                encode(["uint256", "uint64", "uint64", "uint256", "bool", "bytes32"], [2, SIZE, 100, 0, False, code]), 11, tx(1)),
+                encode(["uint256", "uint64", "uint64", "uint256", "bool", "bytes32"], [2, SIZE, 1_000, 0, False, code]), 11, tx(1)),
             log(POOL, [sk.FUNDED, word(s1), word(e1), word(t1)], b"", 20, tx(2)),
             log(POOL, [r.PAYOUT_DUE, "0x" + "00" * 31 + "07", word(s1), word(t1)],
                 encode(["uint64", "uint64"], [800, 5_000]), 30, tx(3)),
@@ -925,7 +916,7 @@ class ReadingTheChain(unittest.TestCase):
             got = r.read_chain({"SimPoolFactory": factory, "usdc": USDC, "block": 10}, prices={"9:9": 1})
         self.assertEqual((got["now"], got["latest"], got["pools"]), (1_000, 40, [POOL]))
         self.assertEqual(got["sales"], [{"pool": POOL, "exam": e1, "trader": t1, "partner": partner, "line": 2,
-                                         "size": SIZE, "price": 100, "code": "0x" + code.hex(), "block": 11, "tx": tx(1)}])
+                                         "size": SIZE, "price": 1_000, "fee": 0, "code": "0x" + code.hex(), "block": 11, "tx": tx(1)}])
         self.assertEqual(got["funded"], [{"pool": POOL, "stage": s1, "exam": e1, "trader": t1, "block": 20}])
         self.assertEqual(got["payouts"], [{"pool": POOL, "id": 7, "account": s1, "trader": t1, "amount": 800,
                                            "dueAt": 5_000, "block": 30, "state": "Due", "wasStopped": False}])

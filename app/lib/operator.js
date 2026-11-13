@@ -262,7 +262,18 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   if (c.data && String(c.data).toLowerCase() !== built.data.toLowerCase()) return no("a review whose call data is not its call");
   if ((action === "stop") !== (c.kind === "stop")) return no(`a review whose action (${action}) is not its call (${c.kind})`);
   return { review: { verdict: doc.verdict, action, reasons: doc.reasons, evidence: doc.evidence, call: built,
-    stopDraft: doc.stopDraft ?? null, readAt: doc.readAt }, problem: null };
+    stopDraft: doc.stopDraft ?? null, batchApproval: doc.batchApproval !== false, readAt: doc.readAt }, problem: null };
+}
+
+/**
+ * "Approve selected": one signature over several payouts, refused when any of them is of a pool whose pass rate is
+ * red (the CFO, 13 November): then each payout is approved on its own, after its own look.
+ */
+export function approveSelectedCall({ pool, rows, keccak256 }) {
+  const list = [...rows];
+  if (list.some((r) => r.review?.batchApproval === false)) throw new Error("the pool is red: approve each payout on its own");
+  if (list.some((r) => !r.approve)) throw new Error("a payout selected is offered no approval");
+  return approveCall({ pool, ids: list.map((r) => r.id), keccak256 });
 }
 
 /**

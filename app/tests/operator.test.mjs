@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import {
   OPERATOR_ABI, PAYOUT_DELAY, PAYOUT_HARD, WITHDRAW_DELAY, WITHDRAW_WINDOW, REVIEW_SCHEMA, SIGNERS,
   encodeCall, approveCall, stopCall, requestWithdrawCall, withdrawCall, cancelWithdrawCall, closeCall,
-  awaitingApproval, reviewFor, withdrawRequest, poolState, approveAnywayCall, HOLD_WARNING,
+  awaitingApproval, reviewFor, withdrawRequest, poolState, approveAnywayCall, HOLD_WARNING, approveSelectedCall,
 } from "../lib/operator.js";
 import { keccak256 } from "./keccak.mjs";
 
@@ -197,6 +197,20 @@ test("a payout whose result did not count up is offered no approval, only a deli
   assert.equal(r1.approve.method, "approvePayouts", "suspicious but counted up: the approval is there, the choice the signer's");
   assert.equal(r1.approveAnyway, null);
   assert.throws(() => approveAnywayCall({ pool: POOL, row: r1, confirm: HOLD_WARNING, keccak256 }), /not held/);
+});
+
+test("a red pool is approved one payout at a time, never in a batch", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
+  const green = { 0: reviewDoc(0), 1: reviewDoc(1) };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: green, keccak256 });
+  assert.deepEqual(approveSelectedCall({ pool: POOL, rows, keccak256 }).args, [[0n, 1n]]);
+  const red = { 0: { ...reviewDoc(0), batchApproval: false }, 1: { ...reviewDoc(1), batchApproval: false } };
+  const redRows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: red, keccak256 });
+  assert.throws(() => approveSelectedCall({ pool: POOL, rows: redRows, keccak256 }), /approve each payout on its own/);
+  assert.equal(redRows[0].approve.method, "approvePayouts", "one at a time is still offered");
+  const held = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256,
+    reviews: { 0: reviewDoc(0), 1: { ...reviewDoc(1), action: "hold", call: null } } });
+  assert.throws(() => approveSelectedCall({ pool: POOL, rows: held, keccak256 }), /offered no approval/);
 });
 
 test("the review the script writes is read as it is written", () => {

@@ -266,15 +266,19 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     back, `--prices` stands in. A pass in three fills or two days at most on the largest size is said
     as a profile, not counted as a reason.
 
-  - how often the pool's exams pass, against the model. For the pool and the factory, over all time and over
-    the last 30 days of sales, it counts exams sold and passed, stages started, and payouts reached. It also
-    splits them by code, by asset, by the hour and weekday of the pass, and counts passes in very few fills.
-    A rule of the exam that is wrong still counts up on chain; it shows only as more passing than the
-    model said. Under 30 sales a share is "few", not judged. Over that, it is "over" only when its exact
-    (Clopper-Pearson) lower bound, 99 % sure, is above the model times the alarm. The shares (16 in 100
-    exams, 2.7 in 100 payouts) and the alarm (x1.5) are a draft until the CFO's file (`--thresholds`). A
-    pool over the alarm marks every payout of the pool while it holds. The trader is not to blame, so the
-    approval stays and the choice is the signer's;
+  - how often the pool's exams pass, against the CFO's thresholds (13 November, the first pool's; to be looked
+    at again after its first 100 exams; `--thresholds` to change). Three counts:
+    - passes among the pool's last 100 exams ended: yellow from 24, red from 28;
+    - payouts recorded among its last 100 exams sold: yellow from 6, red from 8;
+    - payouts over the net income from prices over 30 days: yellow from 0.5, red from 0.75.
+
+    Fewer than 100 are counted per hundred. Shares count from 30 exams ended; before that, the pool is red
+    only if the payouts recorded since it opened exceed its net income from prices. The same counts are
+    split by code, by asset, and by the hour and weekday of the pass, with the passes in very few fills
+    counted. A rule of the exam that is wrong still counts up on chain; it shows only as more passing.
+    Yellow or red marks every payout of the pool while it holds. The approval stays, since the trader is
+    not to blame. Red means no approving in a batch: the operator's page refuses "Approve selected"
+    (`approveSelectedCall`), and each payout is approved on its own;
   - the timing of the fills, judged against chance:
     - the filler's choice: how often a fill landed in the best block of its window for the trader, against
       how often best blocks occur in the window;

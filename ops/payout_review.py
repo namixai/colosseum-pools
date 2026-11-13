@@ -389,11 +389,16 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
 
 # ── how often the pool's exams pass, against the model ──────────────────────────────
 
-# A draft until the CFO sets them (--thresholds): the model's shares (an exam passed by 16 in 100 buyers, a
-# payout reached by 2.7 in 100), the alarm's multiple of them, the fewest sales a share is judged on, how sure the
-# judgment must be, and the window of recent sales.
-DEFAULT_THRESHOLDS = {"model": {"examPass": 0.16, "payout": 0.027}, "alarm": 1.5, "minSales": 30,
-                      "confidence": 0.99, "windowDays": 30, "draft": True}
+# The CFO's thresholds for the first pool (13 November; to be looked at again after its first 100 exams), from a
+# file with --thresholds. Passes among the pool's last 100 finished exams, payouts recorded among its last 100
+# exams sold, and payouts over the net income from prices over 30 days; each yellow or red from its line. Shares
+# count from 30 finished exams on; before that the pool is red if the payouts recorded since it opened are more
+# than its net income from prices since then.
+DEFAULT_THRESHOLDS = {"passes": {"window": 100, "yellow": 24, "red": 28},
+                      "payouts": {"window": 100, "yellow": 6, "red": 8},
+                      "payoutsToIncome": {"days": 30, "yellow": 0.5, "red": 0.75},
+                      "minFinished": 30}
+LEVELS = ("few", "ok", "yellow", "red")
 
 
 def binom_tail(k: int, n: int, q: float) -> float:
@@ -410,95 +415,72 @@ def binom_tail(k: int, n: int, q: float) -> float:
                         for i in range(k, n + 1)))
 
 
-def lower_bound(k: int, n: int, confidence: float) -> float:
-    """The exact (Clopper-Pearson) one-sided lower bound of a share seen as k in n: the smallest true share under
-    which k or more would come up with probability 1 - confidence. Zero for k = 0."""
-    if k <= 0 or n <= 0:
-        return 0.0
-    alpha = 1.0 - confidence
-    lo, hi = 0.0, k / n
-    for _ in range(60):
-        mid = (lo + hi) / 2
-        if binom_tail(k, n, mid) < alpha:
-            lo = mid
-        else:
-            hi = mid
-    return lo
-
-
-def rate_line(sold: int, hits: int, model: float, th: dict) -> dict:
-    """One share against the model. Under `minSales` it is "few": a share of a handful says nothing. Over it, the
-    share is "over" only when its exact lower bound is above the model times the alarm: when even the least it can
-    be, as sure as `confidence`, is past the alarm."""
-    line = {"sold": sold, "hits": hits, "rate": round(hits / sold, 4) if sold else None, "model": model,
-            "limit": round(model * th["alarm"], 4)}
-    if sold < th["minSales"]:
-        return {**line, "state": "few"}
-    lb = lower_bound(hits, sold, th["confidence"])
-    return {**line, "lower": round(lb, 4), "state": "over" if lb > model * th["alarm"] else "ok"}
+def per_hundred(hits: int, n: int, spec: dict) -> dict:
+    """`hits` among the last `n` (at most the window), as a level: counted per hundred where fewer than a hundred."""
+    per = hits * 100 / n if n else 0.0
+    level = "red" if per >= spec["red"] else "yellow" if per >= spec["yellow"] else "ok"
+    return {"hits": hits, "of": n, "perHundred": round(per, 1), "yellow": spec["yellow"], "red": spec["red"], "level": level}
 
 
 def pass_rates(chain: dict, pool: str, p: "Params", th: dict | None = None) -> dict | None:
-    """How many of the exams sold passed, started their stage and reached a payout: for the pool and the factory,
-    over all time and over the last `windowDays` of sales; and for the pool by the code each was bought under, by
-    the asset it traded, by the hour and weekday of the pass, and the passes in very few fills or days. None when
-    the accounts' events were not read. A rule of the exam that is wrong still counts up on chain; it shows as more
-    passing than the model said."""
+    """The pool's passes against the CFO's thresholds, and the same counts split by the code each exam was bought
+    under, by the asset it traded, by the hour and weekday of the pass, and the passes in very few fills. None
+    when the accounts' events were not read. A rule of the exam that is wrong still counts up on chain; it shows
+    as more passing than the model said."""
     th = {**DEFAULT_THRESHOLDS, **(th or {})}
-    th["model"] = {**DEFAULT_THRESHOLDS["model"], **(th.get("model") or {})}
     ev = chain.get("exam_events")
     if ev is None:
         return None
     stage_of = {f["exam"]: f["stage"] for f in chain["funded"]}
     paid_stages = {x["account"] for x in chain["payouts"]}
-    since = chain["now"] - th["windowDays"] * 86_400
     rows = []
     for s_ in chain["sales"]:
-        evs = ev.get(s_["exam"])
-        if evs is None:
+        if s_["pool"] != pool:
             continue
+        # Every sale of the pool counts for income and payouts; passes need the exam's own events.
+        evs = ev.get(s_["exam"]) or []
         started = next((e["t"] for e in evs if e["name"] == "Started"), None)
-        passed = next((e for e in evs if e["name"] == "Passed"), None)
+        end = next((e for e in evs if e["name"] in ("Passed", "Stopped")), None)
         fills = [e for e in evs if e["name"] == "Filled"]
-        stage = stage_of.get(s_["exam"])
-        rows.append({"pool": s_["pool"], "code": s_["code"], "t": started, "passed": passed is not None,
-                     "passedAt": passed["t"] if passed else None, "stage": stage is not None,
-                     "payout": stage in paid_stages, "assets": sorted({e["asset"] for e in fills}),
-                     "few": passed is not None and (len(fills) <= p.few_fills
-                                                    or len({e["t"] // 86_400 for e in fills}) <= p.few_days)})
-
-    def scope(rs: list[dict]) -> dict:
-        return {"sold": len(rs), "stages": sum(r["stage"] for r in rs),
-                "examPass": rate_line(len(rs), sum(r["passed"] for r in rs), th["model"]["examPass"], th),
-                "payout": rate_line(len(rs), sum(r["payout"] for r in rs), th["model"]["payout"], th)}
-
-    mine = [r for r in rows if r["pool"] == pool]
-    recent = lambda rs: [r for r in rs if r["t"] is not None and r["t"] >= since]
-    out = {"thresholds": th, "pool": scope(mine), "poolWindow": scope(recent(mine)), "factory": scope(rows),
-           "factoryWindow": scope(recent(rows)), "byCode": {}, "byAsset": {}, "byHour": {}, "byWeekday": {},
-           "fewFillPasses": sum(r["few"] for r in mine)}
-    for code in sorted({r["code"] for r in mine}):
-        out["byCode"][code] = scope([r for r in mine if r["code"] == code])
-    for asset in sorted({a for r in mine for a in r["assets"]}):
-        out["byAsset"][str(asset)] = scope([r for r in mine if asset in r["assets"]])
-    for r in mine:
-        if r["passedAt"] is not None:
-            h, wd = str(r["passedAt"] // 3_600 % 24), str((r["passedAt"] // 86_400 + 3) % 7)  # 1970-01-01 was a Thursday
+        passed = end is not None and end["name"] == "Passed"
+        rows.append({"code": s_["code"], "block": s_["block"], "t": started, "endedAt": end["t"] if end else None,
+                     "passed": passed, "payout": stage_of.get(s_["exam"]) in paid_stages,
+                     "net": s_["price"] - s_.get("fee", 0), "assets": sorted({e["asset"] for e in fills}),
+                     "few": passed and (len(fills) <= p.few_fills or len({e["t"] // 86_400 for e in fills}) <= p.few_days)})
+    finished = sorted((r for r in rows if r["endedAt"] is not None), key=lambda r: r["endedAt"])
+    sold = sorted(rows, key=lambda r: r["block"])
+    pays = [x for x in chain["payouts"] if x["pool"] == pool]
+    since = chain["now"] - th["payoutsToIncome"]["days"] * 86_400
+    out = {"thresholds": th, "finished": len(finished), "sold": len(rows)}
+    if len(finished) < th["minFinished"]:
+        paid, net = sum(x["amount"] for x in pays), sum(r["net"] for r in rows)
+        out["early"] = {"payouts": paid, "net": net, "level": "red" if paid > net else "few"}
+        out["level"] = out["early"]["level"]
+    else:
+        last = finished[-th["passes"]["window"]:]
+        out["passes"] = per_hundred(sum(r["passed"] for r in last), len(last), th["passes"])
+        lastsold = sold[-th["payouts"]["window"]:]
+        out["payouts"] = per_hundred(sum(r["payout"] for r in lastsold), len(lastsold), th["payouts"])
+        paid = sum(x["amount"] for x in pays if x["dueAt"] - PAYOUT_DELAY >= since)
+        net = sum(r["net"] for r in rows if r["t"] is not None and r["t"] >= since)
+        ratio = paid / net if net else (float("inf") if paid else 0.0)
+        spec = th["payoutsToIncome"]
+        out["payoutsToIncome"] = {"payouts": paid, "net": net, "ratio": None if ratio == float("inf") else round(ratio, 4),
+                                  "yellow": spec["yellow"], "red": spec["red"],
+                                  "level": "red" if ratio >= spec["red"] else "yellow" if ratio >= spec["yellow"] else "ok"}
+        out["level"] = max((out[k]["level"] for k in ("passes", "payouts", "payoutsToIncome")), key=LEVELS.index)
+    count = lambda rs: {"sold": len(rs), "passed": sum(r["passed"] for r in rs), "payouts": sum(r["payout"] for r in rs)}
+    out["byCode"] = {c_: count([r for r in rows if r["code"] == c_]) for c_ in sorted({r["code"] for r in rows})}
+    out["byAsset"] = {str(a): count([r for r in rows if a in r["assets"]]) for a in sorted({a for r in rows for a in r["assets"]})}
+    out["byHour"], out["byWeekday"] = {}, {}
+    for r in finished:
+        if r["passed"]:
+            h, wd = str(r["endedAt"] // 3_600 % 24), str((r["endedAt"] // 86_400 + 3) % 7)  # 1970-01-01 was a Thursday
             out["byHour"][h] = out["byHour"].get(h, 0) + 1
             out["byWeekday"][wd] = out["byWeekday"].get(wd, 0) + 1
-    over = []
-    for name in ("pool", "poolWindow", "factory", "factoryWindow"):
-        for what in ("examPass", "payout"):
-            line = out[name][what]
-            if line["state"] == "over":
-                over.append(f"{name} {what} {line['hits']} of {line['sold']} (model {line['model']}, alarm {line['limit']})")
-    for key, by in (("code", "byCode"), ("asset", "byAsset")):
-        for k, sc in out[by].items():
-            for what in ("examPass", "payout"):
-                line = sc[what]
-                if line["state"] == "over":
-                    over.append(f"{key} {k[:10]} {what} {line['hits']} of {line['sold']} (model {line['model']}, alarm {line['limit']})")
-    out["over"] = over
+    out["fewFillPasses"] = sum(r["few"] for r in rows)
+    # Red: no approving in a batch; each payout is approved on its own (the CFO, 13 November).
+    out["batch"] = out["level"] != "red"
     return out
 
 
@@ -770,9 +752,15 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     found: list[tuple[str, str]] = []  # (kind, text), in the order a page lists them
     # The pool's passes against the model first: on every payout of the pool while it holds. The trader is not
     # to blame, so the approval stays; the choice is the signer's.
-    out["passRates"] = pass_rates(chain, pool, p, thresholds)
-    if out["passRates"] and out["passRates"]["over"]:
-        found.append(("pass-rate", "the pool passes more often than the model: " + "; ".join(out["passRates"]["over"])))
+    out["passRates"] = pr = pass_rates(chain, pool, p, thresholds)
+    if pr and pr["level"] in ("yellow", "red"):
+        said = [f"{k} {pr[k]['hits']} of {pr[k]['of']} ({pr[k]['level']})" for k in ("passes", "payouts") if k in pr
+                and pr[k]["level"] != "ok"]
+        if "payoutsToIncome" in pr and pr["payoutsToIncome"]["level"] != "ok":
+            said.append(f"payouts {pr['payoutsToIncome']['ratio']} of net income ({pr['payoutsToIncome']['level']})")
+        if "early" in pr:
+            said.append(f"payouts {pr['early']['payouts']} above net income {pr['early']['net']} before 30 exams ended")
+        found.append(("pass-rate", f"the pool passes more often than the model ({pr['level']}): " + "; ".join(said)))
     if stop and stop["by"] == "pair":
         found.append(("pair", f"pair on the {stop['on']} with {stop['paired']}"
                       + (" and linked wallets" if stop["reason"] == 2 else "")))
@@ -876,6 +864,9 @@ def card(r: dict, chain: dict) -> dict:
                                      "method": tx["call"].split("(")[0] if tx["call"] else None, "signature": tx["call"],
                                      "args": tx["args"], "data": tx["data"], "note": tx.get("note")},
         "stopDraft": r["stopDraft"],
+        "batchApproval": bool(r["passRates"]["batch"]) if r["passRates"] else True,
+        # The contract's daily cap on payouts (2 a pool, the CFO's): when it lands, the day a payout may move to.
+        "dailyCap": None,
         "readAt": {"block": chain["latest"], "time": chain["now"]},
     }
 
@@ -908,10 +899,13 @@ def summary(r: dict) -> str:
                      + (" (wide sender, not counted)" if l["wide"] else "") + ": " + ", ".join(l["txs"]))
     pr = r["passRates"]
     if pr:
-        e_, w_ = pr["pool"]["examPass"], pr["poolWindow"]["examPass"]
-        lines.append(f"  passes in the pool: {e_['hits']} of {e_['sold']} ({e_['state']}), last {pr['thresholds']['windowDays']} "
-                     f"days {w_['hits']} of {w_['sold']} ({w_['state']}); payouts {pr['pool']['payout']['hits']}; model "
-                     f"{e_['model']}, alarm {e_['limit']}" + (" [draft thresholds]" if pr["thresholds"].get("draft") else ""))
+        if "early" in pr:
+            lines.append(f"  pool: {pr['finished']} exams ended, under 30; payouts {pr['early']['payouts']} against net income "
+                         f"{pr['early']['net']}: {pr['level']}")
+        else:
+            lines.append(f"  pool ({pr['level']}): passes {pr['passes']['hits']} of the last {pr['passes']['of']} ended, payouts "
+                         f"{pr['payouts']['hits']} of the last {pr['payouts']['of']} sold, payouts / net income "
+                         f"{pr['payoutsToIncome']['ratio']}" + ("" if pr["batch"] else "; red: approve one by one"))
     tm = r["timing"]
     lines.append(f"  timing: best block {tm['filler']['atBest']} of {tm['filler']['fills']} (chance {tm['filler']['byChance']}), "
                  f"oracle the trader's way next block {tm['lead']['ahead']} of {tm['lead']['fills']}")
@@ -939,10 +933,10 @@ def summary(r: dict) -> str:
 # ── reading the chain ────────────────────────────────────────────────────────────────
 
 def sale_of(l: dict) -> dict:
-    line, size, price, _, _, code = abi_decode(["uint256", "uint64", "uint64", "uint256", "bool", "bytes32"],
+    line, size, price, fee, _, code = abi_decode(["uint256", "uint64", "uint64", "uint256", "bool", "bytes32"],
                                                bytes.fromhex(l["data"][2:]))
     return {"pool": to_checksum_address(l["address"]), "exam": _addr(l["topics"][1]), "trader": _addr(l["topics"][2]),
-            "partner": _addr(l["topics"][3]), "line": int(line), "size": int(size), "price": int(price),
+            "partner": _addr(l["topics"][3]), "line": int(line), "size": int(size), "price": int(price), "fee": int(fee),
             "code": "0x" + code.hex(), "block": int(l["blockNumber"], 16), "tx": l["transactionHash"]}
 
 
@@ -1135,8 +1129,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--prices", help='a JSON file of oracle prices the node cannot give, {"asset:block": px}')
     ap.add_argument("--venue-prices", help="a JSON file of the venue's prices, {asset: {minute: px}}: Hyperliquid's "
                     "candleSnapshot (info API, interval 1m), each minute's close; read from the file, never fetched")
-    ap.add_argument("--thresholds", help="a JSON file of the pass-rate thresholds, the CFO's: {model: {examPass, payout}, "
-                    "alarm, minSales, confidence, windowDays}; without it, a draft of the model's shares")
+    ap.add_argument("--thresholds", help="a JSON file of the pass-rate thresholds: {passes: {window, yellow, red}, payouts: "
+                    "{...}, payoutsToIncome: {days, yellow, red}, minFinished}; without it, the CFO's of 13 November")
     ap.add_argument("--json", action="store_true", help=f"one {SCHEMA} document a payout, as a list")
     ap.add_argument("--out", help=f"a directory to write each payout's {SCHEMA} document to, as <pool>-<id>.json")
     args = ap.parse_args(argv)
@@ -1152,8 +1146,6 @@ def main(argv: list[str] | None = None) -> int:
             if (pool is None or x["pool"] == pool) and (args.id is None or x["id"] == args.id)
             and (args.id is not None or x["state"] == "Due")]
     th = load(args.thresholds)
-    if th is not None:
-        th["draft"] = False
     reviews = [review(chain, x["pool"], x["id"], p, th) for x in todo]
     cards = [card(r, chain) for r in reviews]
     if args.out:
