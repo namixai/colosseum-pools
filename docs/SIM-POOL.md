@@ -240,6 +240,15 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     and the fills that opened each mirrored stretch. A pair built in pieces, an hour apart, or at 60 %
     of the size is caught this way; two traders in the same trend, or in different assets, are not.
     An account's positions stop counting when it ends;
+  - the opposite side spread over many accounts: the same measure against the sum of the positions of
+    several accounts, each too small to be a mirror alone. A sum over everyone would catch a busy market,
+    where some account is always on the other side by chance. So only accounts given to it count: each
+    spent 60 % of its own time with a position against this one, an hour at least. A trader in the market
+    is mostly elsewhere in time. Found when at least two of them hold opposite positions adding up to half
+    the stage's, at the same time, for 60 % of its time. The finding lists each account's part and the
+    senders of USDC that funded several of them. It is never a stop on its own. It cannot tell apart
+    accounts that each happened to trade once, against this one and nowhere else: a market of one-trade
+    accounts would look the same;
   - the result counted again from the account's own events, as PaperExam counts it:
     - each step's cash from its capital and its fills, which `StepPassed` and `Passed` must carry
       exactly (a step passes only flat);

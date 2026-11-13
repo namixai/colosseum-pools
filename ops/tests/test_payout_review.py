@@ -286,6 +286,93 @@ class MirroredAccounts(unittest.TestCase):
         self.assertEqual((still["exposed"], still["mirrored"]), (1_000, 1_000), "a position still open runs to now")
 
 
+class TheOppositeSideSpread(unittest.TestCase):
+    """The losing side spread over many small accounts: trader 1's stage long 100 of asset 7 for ten hours, and
+    accounts of the factory's other pool short against it, each too small to be a mirror on its own."""
+
+    T0, H = 100_000, 3_600
+
+    def world(self):
+        ch, t1, s1 = honest_world()
+        ch.d["fills"] = [f for f in ch.d["fills"] if f["account"] != s1]
+        ch.fill(s1, buy=True, sz=100, t=self.T0, asset=7)
+        ch.fill(s1, buy=False, sz=100, t=self.T0 + 10 * self.H, asset=7)
+        return ch
+
+    def small(self, ch, n, sz, start=60, end=None, base=0x600):
+        out = []
+        for i in range(n):
+            t, e = addr(base + i), addr(base + 0x100 + i)
+            ch.sale(t, e, pool=OTHER_POOL)
+            ch.fill(e, buy=False, sz=sz, t=self.T0 + start + i, asset=7)
+            ch.fill(e, buy=True, sz=sz, t=self.T0 + (end or 10 * self.H + 700) + i, asset=7)
+            out.append((t, e))
+        return out
+
+    def test_five_accounts_of_twenty_percent_are_found_and_no_stop_is_made(self):
+        ch = self.world()
+        five = self.small(ch, 5, 20)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual(got["mirrors"]["stage"], [], "each is a fifth of the stage: no mirror on its own")
+        o = got["opposingSum"]["stage"]
+        self.assertEqual(sorted(a["account"] for a in o["accounts"]), sorted(e for _, e in five))
+        self.assertTrue(all(abs(a["part"] - 0.2) < 0.01 for a in o["accounts"]), o["accounts"])
+        self.assertGreater(o["share"], 0.95)
+        self.assertEqual(o["sharedSenders"], [])
+        self.assertEqual(got["kinds"], ["mirror-sum"])
+        self.assertEqual((got["stop"], got["action"]), (None, "decide"), "a sum is no pair: suspicious, never a stop")
+
+    def test_a_sender_funding_several_of_them_is_named(self):
+        ch = self.world()
+        five = self.small(ch, 5, 20)
+        funder = addr(0xF7)
+        for t, _ in five[:3]:
+            ch.send(funder, t)
+        ch.send(addr(0xF8), five[4][0])  # a sender of one of them alone links nothing
+        o = r.review(ch.d, POOL, 0)["opposingSum"]["stage"]
+        self.assertEqual(o["sharedSenders"], [funder])
+        self.assertIn("1 sender(s) funding several of them", r.review(ch.d, POOL, 0)["reasons"][0])
+
+    def test_a_busy_market_where_someone_is_always_short_is_not(self):
+        # Twenty accounts trading asset 7 for five days, each an hour long or short every three hours: at any
+        # moment several are short against the stage, but each is mostly elsewhere in time, so none is given to it.
+        ch = self.world()
+        for i in range(20):
+            t, e = addr(0x700 + i), addr(0x800 + i)
+            ch.sale(t, e, pool=OTHER_POOL)
+            for k in range(40):
+                at = self.T0 - 2 * 86_400 + k * 3 * self.H + i * 600
+                buy = (i + k) % 2 == 0
+                ch.fill(e, buy=buy, sz=30, t=at, asset=7)
+                ch.fill(e, buy=not buy, sz=30, t=at + self.H, asset=7)
+        got = r.review(ch.d, POOL, 0)
+        self.assertIsNone(got["opposingSum"]["stage"])
+        self.assertEqual(got["verdict"], "clean")
+
+    def test_one_account_given_to_it_is_no_spread_side(self):
+        ch = self.world()
+        self.small(ch, 1, 40)
+        self.assertIsNone(r.review(ch.d, POOL, 0)["opposingSum"]["stage"], "one account is a mirror's question, not a sum's")
+
+    def test_accounts_given_to_it_but_too_small_together_are_not(self):
+        ch = self.world()
+        self.small(ch, 4, 10)
+        self.assertIsNone(r.review(ch.d, POOL, 0)["opposingSum"]["stage"], "40 against 100: under half")
+
+    def test_two_accounts_in_turn_are_each_its_own_question_not_a_spread_side(self):
+        ch = self.world()
+        self.small(ch, 1, 100, start=60, end=5 * self.H - 30, base=0x900)
+        self.small(ch, 1, 100, start=5 * self.H + 30, end=10 * self.H + 700, base=0xA00)
+        got = r.review(ch.d, POOL, 0)
+        self.assertIsNone(got["opposingSum"]["stage"], "never two against it at once")
+
+    def test_an_account_that_ended_is_closed_at_its_end(self):
+        fills = [{"account": "B", "asset": 1, "buy": False, "sz": 5, "t": 10, "tx": "b1"}]
+        self.assertEqual(r.flat_at(fills, None), fills)
+        self.assertEqual(r.flat_at(fills, 20)[-1], {"account": "B", "asset": 1, "buy": True, "sz": 5, "t": 20, "tx": None})
+        self.assertEqual(r.flat_at(fills, 5), [])
+
+
 class Recount(unittest.TestCase):
     """The stage's result counted again from its own events and the oracle's prices: trader 1's stage buys 100 of
     asset 3 at 1 000 in block 12, holds it over a day's snapshot in block 20, sells at 1 010 in block 30 and passes."""

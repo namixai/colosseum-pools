@@ -170,6 +170,90 @@ def mirror(mine: list[dict], theirs: list[dict], until: int, ratio: float, their
     return out
 
 
+def flat_at(fills: list[dict], end: int | None) -> list[dict]:
+    """An account's fills, with what it held when it ended closed at that time: an exam that ended holds nothing."""
+    if end is None:
+        return fills
+    pos: dict[int, int] = {}
+    for f in fills:
+        if f["t"] <= end:
+            pos[f["asset"]] = pos.get(f["asset"], 0) + (f["sz"] if f["buy"] else -f["sz"])
+    kept = [f for f in fills if f["t"] <= end]
+    return kept + [{"account": fills[0]["account"] if fills else None, "asset": a, "buy": q < 0, "sz": abs(q), "t": end,
+                    "tx": None} for a, q in sorted(pos.items()) if q]
+
+
+def opposing_sum(account: str, chain: dict, who: dict[str, str], p: "Params") -> dict | None:
+    """The opposite side spread over many small accounts: positions of every other account of the factory, summed,
+    against this one's.
+
+    A sum over everyone would catch a busy market, where some account is always on the other side by chance. So
+    only accounts given to it count: an account that spent at least `p.sum_dedication` of its own time with a
+    position against this one (any size), an hour at least. A trader in the market trades at other hours and
+    other assets too, and is mostly not against this account; an account kept for the losing side is little else.
+    A moment counts when those accounts' positions opposite this one's, on the same asset, add up to at least
+    `p.mirror_ratio` of it. Found when that holds for `p.mirror_share` of this account's time, an hour at least,
+    with at least two accounts in it. Each account's part is its average size against this one while it counted.
+    Never a stop on its own: a sum is no pair the pool's rule names."""
+    ended = chain.get("ended", {})
+    mine = [f for f in chain["fills"] if f["account"] == account]
+    if not mine:
+        return None
+    others: dict[str, list[dict]] = {}
+    for f in chain["fills"]:
+        if f["account"] != account:
+            others.setdefault(f["account"], []).append(f)
+    given = []
+    for other, fills in sorted(others.items()):
+        theirs = flat_at(fills, ended.get(other))
+        m = mirror(theirs, mine, chain["now"], 0.0, ended.get(account))
+        if m["share"] >= p.sum_dedication and m["mirrored"] >= p.mirror_min_s:
+            given.append((other, theirs))
+    if len(given) < 2:
+        return None
+    events = [(f["t"], 0, account, f) for f in mine]
+    for other, theirs in given:
+        events += [(f["t"], 1, other, f) for f in theirs]
+    events.sort(key=lambda x: (x[0], x[1]))
+    pos: dict[str, dict[int, int]] = {}
+    parts: dict[str, float] = {}
+    exposed = mirrored = 0
+    i = 0
+    while i < len(events):
+        t = events[i][0]
+        while i < len(events) and events[i][0] == t:
+            _, _, acc, f = events[i]
+            book = pos.setdefault(acc, {})
+            book[f["asset"]] = book.get(f["asset"], 0) + (f["sz"] if f["buy"] else -f["sz"])
+            i += 1
+        stop = events[i][0] if i < len(events) else max(chain["now"], t)
+        span = stop - t
+        mine_now = {a: q for a, q in pos.get(account, {}).items() if q}
+        if span <= 0 or not mine_now:
+            continue
+        exposed += span
+        for a, x in mine_now.items():
+            against = {o: abs(pos[o].get(a, 0)) for o, _ in given if o in pos and pos[o].get(a, 0) * x < 0}
+            if sum(against.values()) >= p.mirror_ratio * abs(x) and len(against) >= 2:
+                mirrored += span
+                for o, q in against.items():
+                    parts[o] = parts.get(o, 0.0) + span * q / abs(x)
+                break
+    share = mirrored / exposed if exposed else 0.0
+    if share < p.mirror_share or mirrored < p.mirror_min_s:
+        return None
+    accounts = [{"account": o, "trader": who.get(o), "part": round(parts[o] / mirrored, 4)}
+                for o in sorted(parts, key=lambda o: (-parts[o], o))]
+    traders = {who.get(o) for o in parts}
+    senders: dict[str, set] = {}
+    for t_ in chain["transfers"]:
+        if t_["to"] in traders and t_["from"] not in chain["pools"]:
+            senders.setdefault(t_["from"], set()).add(t_["to"])
+    shared = sorted(s_ for s_, got in senders.items() if len(got) >= 2)
+    return {"share": round(share, 4), "mirrored": mirrored, "exposed": exposed, "accounts": accounts,
+            "sharedSenders": shared}
+
+
 def mirrors_of(account: str, chain: dict, who: dict[str, str], p: "Params") -> list[dict]:
     """Every other account of the factory whose positions mirrored this one's for at least `p.mirror_share`
     of its time and `p.mirror_min_s` in all, the most mirrored first."""
@@ -308,7 +392,7 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
 class Params:
     def __init__(self, window_s: int = 600, tolerance: float = 0.2, wide: int = 5, code_run: int = 10,
                  idle_share: float = 0.5, min_fills: int = 5, mirror_ratio: float = 0.5, mirror_share: float = 0.6,
-                 mirror_min_s: int = 3_600, outlier_bps: int = 100, venue_bps: int = 100, few_fills: int = 3,
+                 mirror_min_s: int = 3_600, sum_dedication: float = 0.6, outlier_bps: int = 100, venue_bps: int = 100, few_fills: int = 3,
                  few_days: int = 2):
         self.window_s = window_s
         self.tolerance = tolerance
@@ -321,6 +405,8 @@ class Params:
         self.mirror_ratio = mirror_ratio
         self.mirror_share = mirror_share
         self.mirror_min_s = mirror_min_s
+        # The opposite side over many accounts: only accounts that spent 60 % of their own time against this one.
+        self.sum_dedication = sum_dedication
         # The recount: an oracle price 1 % off both neighbours that agree within 1 % is an outlier, as is one 1 %
         # off the venue's; a pass in 3 fills or 2 days at most on the largest size is said as a profile.
         self.outlier_bps = outlier_bps
@@ -471,6 +557,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     # positions with `paired`", or 2 with the wallets linked.
     mirrors = {"stage": mirrors_of(stage, chain, who, p), "exam": mirrors_of(exam, chain, who, p) if exam else []}
     out["mirrors"] = mirrors
+    out["opposingSum"] = {part: opposing_sum(account, chain, who, p) if account else None
+                          for part, account in (("stage", stage), ("exam", exam))}
     for part in ("stage", "exam"):
         if stop:
             break
@@ -511,6 +599,12 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
             linked_too = stop and stop["by"] == "mirror" and m["account"] == stop["paired"] and stop["reason"] == 2
             found.append(("mirror", f"mirrored positions on the {part} with {m['account']} for "
                           f"{round(m['share'] * 100)} % of its time" + (" and linked wallets" if linked_too else "")))
+    for part in ("stage", "exam"):
+        o = out["opposingSum"][part]
+        if o:
+            found.append(("mirror-sum", f"the opposite side of the {part} spread over {len(o['accounts'])} accounts for "
+                          f"{round(o['share'] * 100)} % of its time"
+                          + (f", {len(o['sharedSenders'])} sender(s) funding several of them" if o["sharedSenders"] else "")))
     counted = [l for l in links if not l["wide"]]
     if counted:
         found.append(("link", "wallet linked to " + ", ".join(sorted({l["trader"] for l in counted}))))
@@ -560,8 +654,9 @@ SCHEMA = "payout-review/2"
 
 def card(r: dict, chain: dict) -> dict:
     """The review as one JSON document a page reads (`app/lib/operator.js`, `reviewFor`). The schema is
-    fixed: fields are added under a new SCHEMA, never renamed. /2 added `evidence.mirrors`,
-    `evidence.recount` and `stopDraft`, and the reason kinds `mirror` and `recount`. Amounts are strings of USDC units (6
+    fixed: fields are added under a new SCHEMA, never renamed. /2 added `action`, `evidence.mirrors`,
+    `evidence.opposingSum`, `evidence.recount` and `stopDraft`, and the reason kinds `mirror`, `mirror-sum`
+    and `recount`. Amounts are strings of USDC units (6
     decimals), since a JSON number loses digits past 2**53; times are seconds on the chain's clock."""
     tx = r["tx"] or {}
     g = r["running"]
@@ -576,6 +671,7 @@ def card(r: dict, chain: dict) -> dict:
             "pairs": r["pairs"]["stage"] + r["pairs"]["exam"],
             "stop": r["stop"],
             "mirrors": r["mirrors"],
+            "opposingSum": r["opposingSum"],
             "recount": r["recount"],
             "links": r["links"],
             "late": r["late"],
@@ -602,6 +698,10 @@ def summary(r: dict) -> str:
         for m in r["mirrors"][part]:
             lines.append(f"  mirrored on the {part}: {m['account']} (trader {m['trader']}) for {round(m['share'] * 100)} % "
                          f"of {m['exposed']} s, assets {m['assets']}")
+        o = r["opposingSum"][part]
+        if o:
+            lines.append(f"  opposite side of the {part} over {len(o['accounts'])} accounts for {round(o['share'] * 100)} %: "
+                         + ", ".join(f"{a['account']} {round(a['part'] * 100)} %" for a in o["accounts"]))
         rc = r["recount"][part]
         if rc and rc["read"]:
             c_ = rc["checked"]
