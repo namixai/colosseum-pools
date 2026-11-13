@@ -578,16 +578,23 @@ test("a signed purchase: the trader signs the line's price to the pool under the
   const wanted = [...relay.matchAll(/raw\["(\w+)"\]/g)].map((m) => m[1]);
   for (const k of ["code", "salt", "r", "s"]) wanted.push(k);
   assert.deepEqual(Object.keys(body).sort(), [...new Set(wanted)].sort(), "what the relayer reads, and nothing else");
-  assert.deepEqual(body, { pool: POOL, trader: T1, line: 1, code: GROUP_ONE, salt: SALT7, valid_after: 0,
-    valid_before: 1_800_000_000, v: 27, r: H(0xaa), s: H(0xbb) });
+  assert.deepEqual(body, { pool: POOL, trader: T1, line: 1, code: GROUP_ONE, salt: SALT7, valid_after: "0",
+    valid_before: "1800000000", v: 27, r: H(0xaa), s: H(0xbb) });
+  // Past 2^53, and the open-ended maximum: the body carries exactly what the trader signed (review of #279).
+  for (const big of [9007199254740993n, 2n ** 256n - 1n]) {
+    const open = signedPurchase({ pool: POOL, trader: T1, menu: READS.menu, line: 1, code: GROUP_ONE, salt: SALT7,
+      validBefore: big, keccak256 });
+    assert.equal(open.message.validBefore, big);
+    assert.equal(BigInt(open.relayBody(sig).valid_before), big);
+  }
   assert.throws(() => signedPurchase({ pool: POOL, trader: T1, menu: READS.menu, line: 1, code: GROUP_ONE, salt: SALT7,
     validAfter: 10, validBefore: 10, keccak256 }), /end after it starts/);
 });
 
 
 test("the pool's term: the time before which its creator cannot close it, and whether the platform closed it sooner", () => {
-  assert.equal(MIN_TERM, 180 * 24 * 3600);
-  assert.match(FACTORY_SOL, /MIN_TERM = 180 days;/);
+  assert.equal(MIN_TERM, 184 * 24 * 3600);
+  assert.match(FACTORY_SOL, /MIN_TERM = 184 days;/);
   const read = (extra, now) => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, ...extra },
     events: EVENTS, times: TIMES, now });
   const locked = read({ lockedUntil: 5_000n, closedEarly: false }, 4_999);
@@ -613,6 +620,12 @@ test("a withdrawal waits a week from its request, then three days to carry it ou
   assert.equal(read({ requested: 0n, readyAt: 0n }, 5).state, "none");
   assert.equal(read({ requested: 0n, readyAt: 0n, closed: true, closedAt: 100n }, 5).finishFrom, 100 + WITHDRAW_DELAY);
   assert.equal(read({}, 5), null, "not read: not guessed");
+  assert.equal(read({ requested: 500_000_000n }, 5), null, "readyAt not read: not taken for lapsed");
+  const page = (extra) => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, ...extra },
+    events: EVENTS, times: TIMES, now: 5 });
+  assert.equal(page({ staged: 1_200_000_000n }).staged, 1_200_000_000n, "the running stages' payouts");
+  assert.equal(page({}).staged, null, "not read: not guessed");
+  assert.ok(SIM_POOL_ABI.includes("function staged() view returns (uint256)"));
   for (const name of ["requestWithdraw", "withdraw", "cancelWithdraw"]) assert.match(POOL_SOL, new RegExp(`function ${name}\\(`));
   for (const e of ["WithdrawRequested", "WithdrawCancelled"]) {
     assert.ok(SIM_POOL_ABI.some((x) => x.startsWith(`event ${e}(`)), e);

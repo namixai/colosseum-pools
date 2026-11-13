@@ -254,16 +254,16 @@
         },
         {
           "lead": "A simulated pool's checker.",
-          "text": "A payout of a simulated pool waits 72 hours (S112) and the approval of the approver its creator names (S135), or 7 days from its claim without it (S132, S133): no payout leaves sooner, and none waits on the approver longer. A payout waiting for its approval keeps its money: a later one is paid only if the pool also covers it (S134). Until a payout is paid, approved or not, the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them; or, for a result disputed, the transactions that show the flaw and the hash of the published dispute (S113, S114, S136). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`) for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and links on chain), and the checker lifts a stop that was wrong (S115). A stopped payout's money stays set aside for 14 days after the stop (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no profit for a partner's share. Within those days the trader can object on chain, with the hash of the objection's text, and the checker can lift the stop; after them the stop is final, and the money is the pool's again (S120). The filler and the checker are two keys, and neither they nor the closer open a pool (S116).",
+          "text": "A payout of a simulated pool waits 72 hours (S112) and the approval of the approver its creator names (S136), or 7 days from its claim without it (S133, S134): no payout leaves sooner, and none waits on the approver longer. A payout waiting for its approval keeps its money: a later one is paid only if the pool also covers it (S135). Until a payout is paid, approved or not, the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them; or, for a result disputed, the transactions that show the flaw and the hash of the published dispute (S113, S114, S137). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`) for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and links on chain), and the checker lifts a stop that was wrong (S115). A stopped payout's money stays set aside for 14 days after the stop (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no profit for a partner's share. Within those days the trader can object on chain, with the hash of the objection's text, and the checker can lift the stop; after them the stop is final, and the money is the pool's again (S120). The filler and the checker are two keys, and neither they nor the closer open a pool (S116).",
           "sources": [
             "S112",
-            "S135",
-            "S132",
+            "S136",
             "S133",
             "S134",
+            "S135",
             "S113",
             "S114",
-            "S136",
+            "S137",
             "S115",
             "S118",
             "S117",
@@ -274,13 +274,14 @@
         },
         {
           "lead": "A simulated pool's creator",
-          "text": "withdraws only by a request a week old (S127, S128), carried out within three days of being ready (S130), and gets the less of what it asked and what may leave when it is carried out (S131): money that came in after the request stays, and payouts that came due meanwhile come first. A pool is finished a week after its close at the earliest (S129), so closing and finishing are never one block. What may leave is only what stays above three payouts of the largest size and above every payout owed and every payout set aside for a trader whose transfer was refused (S117), and it stops nobody's payout. Every sale names a trading group's code (S123), and a partner's share is of the pool's money above what the creator put in, after what the pool owes, holds and keeps for a recent stop, in the part of all the pool took that its code brought; never of the principal. Once a sale names a code, the creator cannot change its partner's address or share (S121). A sale by signature carries its code in the trader's signature, so whoever sends it cannot give the sale to another code (S122). For 180 days from its opening (S124) the creator can neither close the pool (S125) nor take back what it put in: a withdrawal before then takes profit only (S126). Only the platform's closer may close a pool sooner, and the money still goes to the traders, the partners and the creator as at any finish.",
+          "text": "withdraws only by a request a week old (S127, S128), carried out within three days of being ready (S130), and gets the less of what it asked and what may leave when it is carried out (S131): never more than it asked, and only what the pool can spare then, so payouts that came due meanwhile come first. A pool is finished a week after its close at the earliest (S129), so closing and finishing are never one block. What may leave is only what stays above the greater of three payouts of the largest size and the payouts of every stage still running, each by its size (S132), and above every payout owed and every payout set aside for a trader whose transfer was refused (S117), and it stops nobody's payout. Every sale names a trading group's code (S123), and a partner's share is of the pool's money above what the creator put in, after what the pool owes, holds and keeps for a recent stop, in the part of all the pool took that its code brought; never of the principal. Once a sale names a code, the creator cannot change its partner's address or share (S121). A sale by signature carries its code in the trader's signature, so whoever sends it cannot give the sale to another code (S122). For 6 months, 184 days, from its opening (S124) the creator can neither close the pool (S125) nor take back what it put in: a withdrawal before then takes profit only (S126). Only the platform's closer may close a pool sooner, and the money still goes to the traders, the partners and the creator as at any finish.",
           "sources": [
             "S127",
             "S128",
             "S130",
             "S131",
             "S129",
+            "S132",
             "S117",
             "S123",
             "S121",
@@ -1205,38 +1206,38 @@
     },
     {
       "id": "S113",
-      "where": "src/sim/SimPool.sol:551",
+      "where": "src/sim/SimPool.sol:562",
       "kind": "line",
       "text": "if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L551"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L562"
     },
     {
       "id": "S114",
-      "where": "src/sim/SimPool.sol:204",
+      "where": "src/sim/SimPool.sol:208",
       "kind": "line",
       "text": "event PayoutStopped(",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L204"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L208"
     },
     {
       "id": "S115",
-      "where": "src/sim/SimPool.sol:579",
+      "where": "src/sim/SimPool.sol:590",
       "kind": "line",
       "text": "function liftStop(uint256 id) external onlyChecker {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L579"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L590"
     },
     {
       "id": "S116",
-      "where": "src/sim/SimPoolFactory.sol:184",
+      "where": "src/sim/SimPoolFactory.sol:185",
       "kind": "line",
       "text": "if (msg.sender == filler || msg.sender == checker || msg.sender == closer) revert BadRole();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L184"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L185"
     },
     {
       "id": "S117",
-      "where": "src/sim/SimPool.sol:341",
+      "where": "src/sim/SimPool.sol:349",
       "kind": "line",
-      "text": "uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L341"
+      "text": "uint256 keep = owed + held + reserved + (finished ? 0 : floor);",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L349"
     },
     {
       "id": "S118",
@@ -1247,129 +1248,136 @@
     },
     {
       "id": "S119",
-      "where": "src/sim/SimPool.sol:484",
+      "where": "src/sim/SimPool.sol:494",
       "kind": "line",
       "text": "uint256 kept = held + reserved;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L484"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L494"
     },
     {
       "id": "S120",
-      "where": "src/sim/SimPool.sol:584",
+      "where": "src/sim/SimPool.sol:595",
       "kind": "line",
       "text": "if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L584"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L595"
     },
     {
       "id": "S121",
-      "where": "src/sim/SimPool.sol:703",
+      "where": "src/sim/SimPool.sol:714",
       "kind": "line",
       "text": "if (c.used) revert CodeUsed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L703"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L714"
     },
     {
       "id": "S122",
-      "where": "src/sim/SimPool.sol:383",
+      "where": "src/sim/SimPool.sol:391",
       "kind": "line",
       "text": "_receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L383"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L391"
     },
     {
       "id": "S123",
-      "where": "src/sim/SimPool.sol:772",
+      "where": "src/sim/SimPool.sol:783",
       "kind": "line",
       "text": "if (partner == address(0)) revert NoSuchCode();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L772"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L783"
     },
     {
       "id": "S124",
-      "where": "src/sim/SimPoolFactory.sol:48",
+      "where": "src/sim/SimPoolFactory.sol:49",
       "kind": "line",
-      "text": "uint32 public constant MIN_TERM = 180 days;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L48"
+      "text": "uint32 public constant MIN_TERM = 184 days;",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L49"
     },
     {
       "id": "S125",
-      "where": "src/sim/SimPool.sol:730",
+      "where": "src/sim/SimPool.sol:741",
       "kind": "line",
       "text": "revert Locked();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L730"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L741"
     },
     {
       "id": "S126",
-      "where": "src/sim/SimPool.sol:345",
+      "where": "src/sim/SimPool.sol:353",
       "kind": "line",
       "text": "if (w > p) w = p;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L345"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L353"
     },
     {
       "id": "S127",
-      "where": "src/sim/SimPoolFactory.sol:52",
+      "where": "src/sim/SimPoolFactory.sol:53",
       "kind": "line",
       "text": "uint32 public constant WITHDRAW_DELAY = 7 days;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L52"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L53"
     },
     {
       "id": "S128",
-      "where": "src/sim/SimPool.sol:670",
+      "where": "src/sim/SimPool.sol:681",
       "kind": "line",
       "text": "if (block.timestamp < readyAt) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L670"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L681"
     },
     {
       "id": "S129",
-      "where": "src/sim/SimPool.sol:745",
+      "where": "src/sim/SimPool.sol:756",
       "kind": "line",
       "text": "if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L745"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L756"
     },
     {
       "id": "S130",
-      "where": "src/sim/SimPool.sol:671",
+      "where": "src/sim/SimPool.sol:682",
       "kind": "line",
       "text": "if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L671"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L682"
     },
     {
       "id": "S131",
-      "where": "src/sim/SimPool.sol:673",
+      "where": "src/sim/SimPool.sol:684",
       "kind": "line",
       "text": "uint256 amount = r < w ? r : w;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L673"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L684"
     },
     {
       "id": "S132",
+      "where": "src/sim/SimPool.sol:348",
+      "kind": "line",
+      "text": "if (staged > floor) floor = staged;",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L348"
+    },
+    {
+      "id": "S133",
       "where": "src/sim/SimPoolFactory.sol:42",
       "kind": "line",
       "text": "uint32 public constant PAYOUT_HARD = 7 days;",
       "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L42"
     },
     {
-      "id": "S133",
-      "where": "src/sim/SimPool.sol:474",
+      "id": "S134",
+      "where": "src/sim/SimPool.sol:484",
       "kind": "line",
       "text": "if (!p.approved && block.timestamp < _hardAt(p)) {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L474"
-    },
-    {
-      "id": "S134",
-      "where": "src/sim/SimPool.sol:486",
-      "kind": "line",
-      "text": "if (bal < ahead + p.amount) {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L486"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L484"
     },
     {
       "id": "S135",
-      "where": "src/sim/SimPool.sol:599",
+      "where": "src/sim/SimPool.sol:496",
       "kind": "line",
-      "text": "if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L599"
+      "text": "if (bal < ahead + p.amount) {",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L496"
     },
     {
       "id": "S136",
-      "where": "src/sim/SimPool.sol:553",
+      "where": "src/sim/SimPool.sol:610",
+      "kind": "line",
+      "text": "if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L610"
+    },
+    {
+      "id": "S137",
+      "where": "src/sim/SimPool.sol:564",
       "kind": "line",
       "text": "if (paired != address(0) || trades.length == 0 || links.length != 1) revert BadReason();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L553"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L564"
     }
   ]
 }

@@ -136,6 +136,10 @@ contract SimPool is Initializable {
     uint256 public principal;
     /// Every payout neither paid nor stopped.
     uint256 public owed;
+    /// The payouts of the stages still running, each by its own size: what they would pay if they all passed.
+    /// While the pool is open the creator withdraws only above the greater of this and `FLOOR_PAYOUTS` of the
+    /// largest size (CFO, 13 November).
+    uint256 public staged;
     /// Exams and stages still running or still able to pay.
     uint256 public live;
     bool public closed;
@@ -333,12 +337,16 @@ contract SimPool is Initializable {
     }
 
     /// @notice What the creator may withdraw now: the pool's USDC above what it owes, holds and keeps
-    ///         for recent stops and, while it is open, above `FLOOR_PAYOUTS` payouts of the largest size.
+    ///         for recent stops and, while it is open, above the greater of `FLOOR_PAYOUTS` payouts of the
+    ///         largest size and the payouts of every stage still running, each by its size (`staged`): a
+    ///         funded trader's payout stays in the pool for as long as the stage runs.
     ///         Before `lockedUntil`, only profit: what the creator put in stays until the term, or until
     ///         `finish` if the factory's closer closed the pool sooner.
     function withdrawable() public view returns (uint256) {
         uint256 bal = usdc.balanceOf(address(this));
-        uint256 keep = owed + held + reserved + (finished ? 0 : uint256(largestPayout) * factory.FLOOR_PAYOUTS());
+        uint256 floor = uint256(largestPayout) * factory.FLOOR_PAYOUTS();
+        if (staged > floor) floor = staged;
+        uint256 keep = owed + held + reserved + (finished ? 0 : floor);
         uint256 w = bal > keep ? bal - keep : 0;
         if (block.timestamp < lockedUntil) {
             uint256 p = _profit();
@@ -418,6 +426,7 @@ contract SimPool is Initializable {
         if (block.timestamp > uint256(passedAt) + fundWindow) revert TooLate();
         a.done = true;
         live -= 1;
+        staged += _payoutOf(_menu[a.line].size);
         stage = _start(trader, _fundedRules, _funded, _menu[a.line].size);
         accountOf[stage] = Account({kind: Kind.Stage, line: a.line, done: false});
         emit Funded(stage, exam, trader);
@@ -436,6 +445,7 @@ contract SimPool is Initializable {
         a.done = true;
         live -= 1;
         uint64 amount = _payoutOf(_menu[a.line].size);
+        staged -= amount;
         uint64 dueAt = uint64(block.timestamp) + factory.PAYOUT_DELAY();
         id = _payouts.length;
         _payouts.push(
@@ -519,6 +529,7 @@ contract SimPool is Initializable {
         if (!over) revert StillRunning();
         a.done = true;
         live -= 1;
+        if (a.kind == Kind.Stage) staged -= _payoutOf(_menu[a.line].size);
         emit Released(account);
     }
 
@@ -658,8 +669,8 @@ contract SimPool is Initializable {
     }
 
     /// @notice Carries out the standing request, once ready and before it lapses: the less of what was
-    ///         asked and what `withdrawable` allows now, so money that came in after the request stays,
-    ///         and payouts that came due meanwhile come first. The platform takes its 0.5 %. Profit is
+    ///         asked and what `withdrawable` allows now: never more than was asked, and payouts that came
+    ///         due meanwhile come first. The platform takes its 0.5 %. Profit is
     ///         the pool's money above what it owes, holds and keeps for recent stops, and above what the
     ///         creator put in; a withdrawal takes it first, and each code's partner gets its share of
     ///         it (`_payPartners`). There is no other way for the creator to withdraw before `finish`.

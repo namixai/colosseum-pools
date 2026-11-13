@@ -30,7 +30,7 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(int(constant("MIN_PARTNER_BPS")), d.MIN_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_PARTNER_BPS")), d.MAX_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_CODES")), d.MAX_CODES)
-        self.assertEqual(constant("MIN_TERM"), "180 days")
+        self.assertEqual(constant("MIN_TERM"), "184 days")
 
     def test_deploy_names_the_closer_a_fourth_key(self):
         """The closer alone closes a pool before its term; the operator opens our pools, and a pool's creator is
@@ -43,6 +43,15 @@ class TheNumbers(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 d.main(["deploy", "--label", "never-written", "--filler", keys[0], "--checker", keys[1], "--closer", keys[2]])
             self.assertIn("three keys", str(caught.exception))
+        # A zero key is refused before anything is deployed, even with --send (review of #282).
+        from unittest import mock
+        zero = "0x" + "00" * 20
+        for keys in ((a, b, zero), (zero, a, b), (a, zero, b)):
+            with mock.patch.object(d, "deploy_contract") as deployed, self.assertRaises(SystemExit) as caught:
+                d.main(["deploy", "--label", "never-written", "--filler", keys[0], "--checker", keys[1], "--closer", keys[2],
+                        "--send"])
+            self.assertIn("none of them 0x0", str(caught.exception))
+            deployed.assert_not_called()
 
     def test_the_plan_tuple_is_simplans_layout(self):
         body = re.search(r"struct SimPlan \{(.*?)\n\}", POOL, re.S).group(1)
@@ -114,8 +123,17 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("Every exam is bought with a trading group's code", text)
             self.assertIn("once a sale names a code, neither changes", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
-            self.assertIn("The pool runs at least 180 days from its opening", text)
+            self.assertIn("The pool runs at least 6 months (184 days) from its opening", text)
+            self.assertIn("the platform may cancel a withdrawal request; it never moves the money", text)
+            self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator takes "
+                          "profit only above it", text)
+            self.assertIn("A share paid to a code's owner is never taken back", text)
+            self.assertIn("USDC sent to the pool other than by the creator's addToPot counts as profit", text)
+            self.assertIn("A stopped payout stays in the pool for at least 14 days while the trader can object", text)
             self.assertIn("only the platform can close it sooner, with the money going where it would anyway", text)
+            self.assertIn("The creator withdraws by a request: the money leaves no sooner than 7 days after it, within "
+                          "3 days after that, only what the pool can spare then, and never more than was asked; the "
+                          "platform may cancel a withdrawal request; it never moves the money", text)
 
     def test_the_cfos_numbers_of_12_november(self):
         """Thirty days a stage, no idle rule that could bind, no minimum of days, 0.045 % a fill, seven days
@@ -206,7 +224,7 @@ class TheClosing(unittest.TestCase):
 
     def state(self, **kw):
         st = {"creator": d.to_checksum_address(self.CREATOR), "closer": d.to_checksum_address(self.CLOSER),
-              "closed": False, "finished": False, "locked_until": 180 * self.DAY, "live": 0, "owed": 0, "reserved": 0,
+              "closed": False, "finished": False, "locked_until": 184 * self.DAY, "live": 0, "owed": 0, "reserved": 0,
               "fund_window": 7 * self.DAY, "closed_at": 0, "requested": 0, "ready_at": 0, "withdrawable": 0,
               "delay": 7 * self.DAY, "window": 3 * self.DAY}
         st.update(kw)
@@ -214,7 +232,7 @@ class TheClosing(unittest.TestCase):
 
     def test_before_the_term_only_the_closer_closes(self):
         creator, closer, other = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER, self.OTHER))
-        before, at = 180 * self.DAY - 1, 180 * self.DAY
+        before, at = 184 * self.DAY - 1, 184 * self.DAY
         self.assertIn("before the term", d.close_check(self.state(), before, closer))
         with self.assertRaises(SystemExit) as caught:
             d.close_check(self.state(), before, creator)
@@ -380,6 +398,17 @@ class TheClosing(unittest.TestCase):
                                      "--send"]), 0)
             self.assertEqual(sent.call_args[0][2], "setApprover(address)")
 
+    def test_until_when_an_exam_of_several_steps_runs_and_a_passed_stage(self):
+        x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False, "kind": 1,
+             "step": 0, "steps": 2}
+        said = d.exam_text("E", x, 2_000, 7 * self.DAY)
+        self.assertIn("step 1 of 2: this step runs until " + d.utc(1_000 + 30 * self.DAY), said)
+        self.assertIn("1 more step(s) of up to 30 day(s) each follow, so until " + d.utc(1_000 + 60 * self.DAY), said)
+        self.assertIn("runs until " + d.utc(1_000 + 30 * self.DAY) + " at the latest",
+                      d.exam_text("E", {**x, "step": 1}, 2_000, 7 * self.DAY), "the last step: its own deadline")
+        stage = {**x, "status": 2, "kind": 2, "passed_at": 5_000, "steps": 1}
+        self.assertIn("passed its stage: the keeper claims its payout", d.exam_text("E", stage, 6_000, 7 * self.DAY))
+
     def test_until_when_an_exam_runs(self):
         x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False}
         self.assertIn("runs until " + d.utc(1_000 + 30 * self.DAY), d.exam_text("E", x, 2_000, 7 * self.DAY))
@@ -408,7 +437,6 @@ class TheClosing(unittest.TestCase):
                 mock.patch.object(d.c, "assert_testnet"), mock.patch.object(d.c, "account"), \
                 mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
             self.assertEqual(d.main(["finish", "--pool", self.OTHER, "--key", "deployer", "--send"]), 0)
-            self.assertEqual(sent.call_args[0][2], "finish()")
             self.assertEqual(sent.call_args[0][2], "finish()")
 
 

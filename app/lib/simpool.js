@@ -33,6 +33,7 @@ export const SIM_POOL_ABI = [
   "function lockedUntil() view returns (uint64)",
   "function closedEarly() view returns (bool)",
   "function closedAt() view returns (uint64)",
+  "function staged() view returns (uint256)",
   "function requested() view returns (uint256)",
   "function readyAt() view returns (uint64)",
   "function head() view returns (uint256)",
@@ -126,8 +127,9 @@ export const PAYOUT_DELAY = 72 * 3600;
 export const PAYOUT_HARD = 7 * 24 * 3600;
 /** How long a stop holds its money and can be lifted or objected to, on a pool with the stop reserve. */
 export const STOP_RESERVE = 14 * 24 * 3600;
-/** How long a pool runs at least: before it the creator neither closes it nor takes back what it put in. */
-export const MIN_TERM = 180 * 24 * 3600;
+/** How long a pool runs at least, "at least 6 months (184 days)": before it the creator neither closes it nor takes
+ *  back what it put in. 184 days is the longest half-year, so the six months hold whatever the day it opens. */
+export const MIN_TERM = 184 * 24 * 3600;
 /** How long a creator's request to withdraw waits, and `finish` after the close; how long a ready request stays good. */
 export const WITHDRAW_DELAY = 7 * 24 * 3600;
 export const WITHDRAW_WINDOW = 3 * 24 * 3600;
@@ -411,7 +413,11 @@ export function gaps(list) {
  * `requested()`. `finishFrom`: from when a closed pool may finish, a week after its close.
  */
 export function withdrawalOf(reads, now) {
-  if (reads.requested === undefined || reads.requested === null) return null;
+  // Both read, or neither shown: a missing readyAt would make every comparison false and the request "lapsed"
+  // (review of #282).
+  if (reads.requested === undefined || reads.requested === null || reads.readyAt === undefined || reads.readyAt === null) {
+    return null;
+  }
   const finishFrom = reads.closed && reads.closedAt ? Number(reads.closedAt) + WITHDRAW_DELAY : null;
   const amount = BigInt(reads.requested);
   if (amount === 0n) return { amount: 0n, readyAt: null, lapsesAt: null, state: "none", finishFrom };
@@ -465,6 +471,8 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     closedEarly: Boolean(reads.closedEarly),
     creatorMayClose: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : now >= Number(reads.lockedUntil),
     withdrawal: withdrawalOf(reads, now),
+    // The payouts of the stages still running, each by its size, which stay in the pool while they run; null if not read.
+    staged: reads.staged === undefined || reads.staged === null ? null : BigInt(reads.staged),
     codes: codeShares(reads.codes, events),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),
@@ -638,7 +646,7 @@ export function signedPurchase({ pool, trader, menu, line, code, codes, salt, va
   const { price, args } = purchase({ menu, line, code, codes });
   const key = args[1];
   const s = word(salt, "salt");
-  if (!(Number(validBefore) > Number(validAfter))) throw new Error("the signature must end after it starts");
+  if (!(BigInt(validBefore) > BigInt(validAfter))) throw new Error("the signature must end after it starts");
   const nonce = saleNonce(key, s, keccak256);
   const message = { from: trader, to: pool, value: price, validAfter: BigInt(validAfter), validBefore: BigInt(validBefore), nonce };
   return {
@@ -648,7 +656,9 @@ export function signedPurchase({ pool, trader, menu, line, code, codes, salt, va
     args: ({ v, r, s: sig }) => [trader, args[0], key, s, message.validAfter, message.validBefore, v, r, sig],
     relayBody: ({ v, r, s: sig }) => ({
       pool, trader, line: Number(args[0]), code: key, salt: s,
-      valid_after: Number(validAfter), valid_before: Number(validBefore), v, r, s: sig,
+      // Decimal strings, not numbers: a JSON number past 2^53 would reach the relayer rounded, and the signed
+      // fields would no longer be the trader's (review of #279). The relayer reads them with int().
+      valid_after: BigInt(validAfter).toString(), valid_before: BigInt(validBefore).toString(), v, r, s: sig,
     }),
   };
 }

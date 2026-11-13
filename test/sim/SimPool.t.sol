@@ -25,6 +25,7 @@ contract SimPoolTest is Test {
     uint64 constant SMALL_PRICE = 45e6;
     uint64 constant LARGE_PRICE = 85e6;
     uint64 constant LARGE_PAYOUT = 800e6;
+    uint64 constant SMALL_PAYOUT = 400e6;
 
     HyperCore hyperCore;
     Usdc3009 usdc;
@@ -1236,12 +1237,12 @@ contract SimPoolTest is Test {
         assertEq(pool.principal(), 2_400e6);
     }
 
-    // ── the term: 180 days before the creator closes or takes back what it put in ──
+    // ── the term: 6 months (184 days) before the creator closes or takes back what it put in ──
 
     function test_open_thePoolIsLockedForTheFactorysTerm_andTheCloserOpensNone() public {
         SimPool pool = _pool();
-        assertEq(pool.lockedUntil(), block.timestamp + 180 days);
-        assertEq(factory.MIN_TERM(), 180 days);
+        assertEq(pool.lockedUntil(), block.timestamp + 184 days);
+        assertEq(factory.MIN_TERM(), 184 days, "the longest half-year: at least 6 months whatever the day it opens");
         vm.deal(closer, 1 ether);
         vm.prank(closer);
         vm.expectRevert(SimPoolFactory.BadRole.selector);
@@ -1416,7 +1417,36 @@ contract SimPoolTest is Test {
         pool.withdraw();
     }
 
-    function test_withdraw_moneyThatCameInAfterTheRequestStays() public {
+    function test_withdraw_theCfosExample_aWeekOfSalesAndPayouts_thenTheLessOfTheTwo() public {
+        // The example of the letter to the CFO, 13 November: code A (50 %) and code B (the creator's, no share).
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        bytes32 codeB = keccak256("PLATFORM");
+        vm.prank(creator);
+        pool.setCode(codeB, creator, 0);
+        for (uint256 i = 0; i < 40; ++i) _buyWith(pool, makeAddr(string(abi.encode("a", i))), 1, CODE);
+        for (uint256 i = 0; i < 20; ++i) _buyWith(pool, makeAddr(string(abi.encode("b", i))), 1, codeB);
+        deal(address(usdc), address(pool), 5_074_500_000); // 1 600 + 60 x 84.575, less two payouts paid
+        assertEq(pool.withdrawable(), 2_674_500_000, "day 0: 5 074.50 less the floor of 2 400");
+        vm.prank(creator);
+        pool.requestWithdraw(2_000e6);
+        for (uint256 i = 0; i < 6; ++i) _buyWith(pool, makeAddr(string(abi.encode("a2", i))), 1, CODE);
+        for (uint256 i = 0; i < 4; ++i) _buyWith(pool, makeAddr(string(abi.encode("b2", i))), 1, codeB);
+        deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) - 1_600e6); // two more payouts paid
+        assertEq(usdc.balanceOf(address(pool)), 4_320_250_000);
+        vm.warp(block.timestamp + 7 days);
+        assertEq(pool.withdrawable(), 1_920_250_000, "day 7");
+        uint256 fees = usdc.balanceOf(platform);
+        uint256 before = usdc.balanceOf(creator);
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(usdc.balanceOf(platform) - fees, 9_601_250, "0.5 % of 1 920.25");
+        assertEq(usdc.balanceOf(partner), 627_784_589, "A: 50 % of 1 910.64875 x 46/70");
+        assertEq(usdc.balanceOf(creator) - before, 1_282_864_161, "the creator the rest, B's part with it");
+        assertEq(usdc.balanceOf(address(pool)), 2_400e6, "the floor of three payouts stays");
+    }
+
+    function test_withdraw_neverMoreThanWasAsked_whateverCameInSince() public {
         SimPool pool = _pool();
         _withSales(pool, 30);
         _ask(pool, 500e6);
@@ -1424,7 +1454,7 @@ contract SimPoolTest is Test {
         uint256 bal = usdc.balanceOf(address(pool));
         vm.prank(creator);
         pool.withdraw();
-        assertEq(bal - usdc.balanceOf(address(pool)), 500e6, "what was asked, not what came in since");
+        assertEq(bal - usdc.balanceOf(address(pool)), 500e6, "what was asked, not more for what came in since");
     }
 
     function test_withdraw_aRequestLapsesThreeDaysAfterItIsReady_aNewOneWaitsAgain() public {
@@ -1659,6 +1689,68 @@ contract SimPoolTest is Test {
         assertEq(pool.reserved(), LARGE_PAYOUT, "kept 14 days, as any stop");
         vm.prank(trader);
         pool.objectStop(id, keccak256("the exam was right"));
+    }
+
+    // ── a running stage's payout stays in the pool (CFO, 13 November) ──
+
+    /// A stage funded and still running: its payout is in `staged` until it ends.
+    function _runningStage(SimPool pool, address who, uint256 line) internal returns (PaperExam stage) {
+        PaperExam exam = _buy(pool, who, line);
+        _pass(exam, who);
+        vm.prank(who);
+        stage = PaperExam(pool.fund(address(exam)));
+    }
+
+    function test_staged_eachRunningStagesPayoutBySize_untilItIsClaimedOrReleased() public {
+        SimPool pool = _pool();
+        PaperExam large = _runningStage(pool, trader, 1);
+        assertEq(pool.staged(), LARGE_PAYOUT);
+        PaperExam small = _runningStage(pool, other, 0);
+        assertEq(pool.staged(), LARGE_PAYOUT + SMALL_PAYOUT, "each by its own size");
+        _pass(large, trader);
+        pool.claimPayout(address(large));
+        assertEq(pool.staged(), SMALL_PAYOUT, "claimed: owed now, no longer staged");
+        assertEq(pool.owed(), LARGE_PAYOUT);
+        _fail(small, other);
+        pool.release(address(small));
+        assertEq(pool.staged(), 0, "failed and released: free again");
+        PaperExam exam = _buy(pool, stranger, 1);
+        _fail(exam, stranger);
+        pool.release(address(exam));
+        assertEq(pool.staged(), 0, "an exam is not a stage");
+    }
+
+    function test_withdrawable_theGreaterOfThreePayoutsAndTheRunningStages_theCfosCases() public {
+        // The CFO's day 7, 13 November: 4 320.25 in the pool, nothing owed; k large stages running.
+        uint256[3] memory ks = [uint256(1), 3, 5];
+        uint256[3] memory free = [uint256(1_920_250_000), 1_920_250_000, 320_250_000];
+        for (uint256 j = 0; j < 3; ++j) {
+            SimPool pool = _pool();
+            for (uint256 i = 0; i < ks[j]; ++i) _runningStage(pool, makeAddr(string(abi.encode("k", j, i))), 1);
+            deal(address(usdc), address(pool), 4_320_250_000);
+            assertEq(pool.staged(), ks[j] * LARGE_PAYOUT);
+            assertEq(pool.withdrawable(), free[j], "the greater of 2 400 and the stages' payouts stays");
+        }
+        // By size: four large and two small stages keep 4 000, not six large payouts.
+        SimPool mixed = _pool();
+        for (uint256 i = 0; i < 4; ++i) _runningStage(mixed, makeAddr(string(abi.encode("L", i))), 1);
+        for (uint256 i = 0; i < 2; ++i) _runningStage(mixed, makeAddr(string(abi.encode("S", i))), 0);
+        deal(address(usdc), address(mixed), 4_320_250_000);
+        assertEq(mixed.staged(), 4 * LARGE_PAYOUT + 2 * SMALL_PAYOUT);
+        assertEq(mixed.withdrawable(), 4_320_250_000 - 4_000e6);
+    }
+
+    function test_withdraw_aRequestCarriedOutAfterStagesStarted_paysOnlyAboveThem() public {
+        SimPool pool = _pool();
+        deal(address(usdc), address(pool), 6_000e6);
+        uint256 w = pool.withdrawable();
+        _ask(pool, w); // the week passes
+        for (uint256 i = 0; i < 5; ++i) _runningStage(pool, makeAddr(string(abi.encode("w", i))), 1);
+        uint256 bal = usdc.balanceOf(address(pool));
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(usdc.balanceOf(address(pool)), 5 * LARGE_PAYOUT, "the five stages' payouts stay");
+        assertLt(bal - usdc.balanceOf(address(pool)), w, "less than asked: stages started in the week");
     }
 
     function test_finish_fromTheTerm_closeAndFinishAreNeverOneBlock() public {

@@ -18,7 +18,7 @@
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
 and the SimPoolFactory on HyperEVM testnet, names the filler, the checker, the closer (the platform's
-key that alone may close a pool before its 180 days; four keys, none of them the operator, who
+key that alone may close a pool before its 6 months, 184 days; four keys, none of them the operator, who
 opens our pools) and the platform's recipient, and lists the assets with their leverage caps from ops/leverage.py (HYPE is left out:
 the platform's decision of 11 November 2026). It writes deployments/testnet-<label>.json, with the
 same keeper nodes as demo3, so the host's keeper unit can run on it.
@@ -33,7 +33,7 @@ skipped, one that does not is refused before anything is sent.
 
 `close` closes a pool and `finish` pays out a closed one, from the named key. Without --send each only
 reads the pool and says what it would send, from which key, or why the pool would refuse: before its
-180 days only the factory's closer closes it; `finish` (the creator or the closer) waits until nothing
+184 days only the factory's closer closes it; `finish` (the creator or the closer) waits until nothing
 runs, nothing is owed and no stop can be lifted, and a week after the close; with --exam it says until
 when that exam runs.
 
@@ -197,6 +197,10 @@ def deploy(args) -> int:
         raise SystemExit(f"{out.relative_to(ROOT)} exists; pick another label")
     filler, checker = to_checksum_address(args.filler), to_checksum_address(args.checker)
     closer = to_checksum_address(args.closer)
+    # Before anything is deployed: a zero key would pass the checks below and fail only at setCloser, four
+    # contracts later (review of #282).
+    if any(int(a, 16) == 0 for a in (filler, checker, closer)):
+        raise SystemExit("the filler, the checker and the closer are real keys, none of them 0x0")
     if len({filler, checker, closer}) != 3:
         raise SystemExit("the filler, the checker and the closer are three keys")
     print(f"deploy_sim deploy: label {args.label}, USDC {c.TESTNET_USDC_ERC20} (Circle's, EIP-3009)")
@@ -338,9 +342,17 @@ def exam_text(exam: str, x: dict, now: int, fund_window: int) -> str:
     status = STATUS[x["status"]]
     if status == "Active":
         until = x["started"] + x["duration"]
+        # Each later step has a deadline of its own, a step's duration from its start (review of #279).
+        later = max(x.get("steps", 1) - x.get("step", 0) - 1, 0)
         if now < until:
+            if later:
+                return (f"{exam} is on step {x['step'] + 1} of {x['steps']}: this step runs until {utc(until)} at the "
+                        f"latest and, if it passes, {later} more step(s) of up to {x['duration'] // 86_400} day(s) each "
+                        f"follow, so until {utc(until + later * x['duration'])} at the latest; sooner if it breaks a rule")
             return f"{exam} runs until {utc(until)} at the latest, sooner if it breaks a rule"
         return f"{exam} is past its deadline ({utc(until)}): the keeper expires and releases it at its next pass"
+    if status == "Passed" and x.get("kind") == 2:  # Kind.Stage: its payout is claimed, it is not funded (review of #279)
+        return f"{exam} passed its stage: the keeper claims its payout (claimPayout) at its next pass, and that ends it"
     if status == "Passed":
         until = x["passed_at"] + fund_window
         if now <= until:
@@ -501,9 +513,10 @@ def cancel_check(st: dict, sender: str) -> str:
 def read_exam(pool_: str, exam: str) -> dict:
     status, _, _, passed_at = c.call_view(exam, "result()", [], [], ["uint8", "address", "uint64", "uint64"])
     terms = c.call_view(exam, "terms()", [], [], [TERMS_OUT])[0]
-    done = c.call_view(pool_, "accountOf(address)", ["address"], [exam], ["uint8", "uint8", "bool"])[2]
+    kind, _, done = c.call_view(pool_, "accountOf(address)", ["address"], [exam], ["uint8", "uint8", "bool"])
     return {"status": int(status), "started": int(c.call_view(exam, "stepStartedAt()", [], [], ["uint64"])[0]),
-            "duration": int(terms[2]), "passed_at": int(passed_at), "done": bool(done)}
+            "duration": int(terms[2]), "passed_at": int(passed_at), "done": bool(done), "kind": int(kind),
+            "step": int(c.call_view(exam, "step()", [], [], ["uint8"])[0]), "steps": len(terms[1])}
 
 
 def chain_now() -> int:

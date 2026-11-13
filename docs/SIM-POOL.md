@@ -64,8 +64,9 @@ fail, and their prices pay for the ones that pass.
   3, the result is disputed (a flaw of the exam, the oracle or the filler). For 1 and 2 the call
   names the other account, the transactions of the trades (at least two) and, for reason 2, the
   transactions that link the wallets; for 3 it names no account, at least one transaction that shows
-  the flaw, and one hash, the keccak256 of the published text of the dispute. A stopped payout's money stays in the pool, set aside for 14
-  days after the stop (`STOP_RESERVE`, `reserved`) as a held payout's is: the creator does not
+  the flaw, and one hash, the keccak256 of the published text of the dispute. A stopped payout's money stays in the pool, set aside for at
+  least 14 days after the stop (`STOP_RESERVE`, `reserved`; until `finalizeStop` or a lift, so it may
+  be longer, never shorter) as a held payout's is: the creator does not
   withdraw it, it is no profit for the partners' shares, and `pay` pays no other payout out of it.
   Within those days the trader may object on chain (`objectStop`, the keccak256 of the objection's
   text, `StopObjected`), and the checker lifts a stop that was wrong (`liftStop`): the payout is due
@@ -76,24 +77,36 @@ fail, and their prices pay for the ones that pass.
   it lapses); one request stands at a time, and a new one replaces it and starts the week again.
   `withdraw()` carries it out from `WITHDRAW_DELAY` (7 days) on, for `WITHDRAW_WINDOW` (3 days),
   then it lapses (`RequestLapsed`): a request cannot be left standing to make the week nothing. It
-  pays the less of what was asked and what `withdrawable` allows when it is carried out, so money
-  that came in after the request stays, and payouts that came due in the week come first. The
+  pays the less of what was asked and what `withdrawable` allows when it is carried out: never more
+  than was asked, and only what the pool can spare then, so payouts that came due in the week come
+  first. Money that came in during the week counts toward what the pool can spare, within the
+  amount asked; what is above the request waits for another one. The
   creator or the factory's closer may cancel it (`cancelWithdraw`, `WithdrawCancelled` with who);
-  the closer only cancels: it changes neither the amount nor where the money goes. There is no
-  other way for the creator to take money out before `finish`. `withdrawable` is only what stays
-  above three payouts of the largest size and above every payout owed, held or kept for a recent
-  stop. 0.5 % goes to the platform. Profit is the
+  the closer only cancels: it changes neither the amount nor where the money goes (for the
+  creator's terms: the platform may cancel a withdrawal request; it never moves the money). There
+  is no other way for the creator to take money out before `finish`. `withdrawable` is only what
+  stays above every payout owed, held or kept for a recent stop and, while the pool is open, above
+  the greater of three payouts of the largest size and the payouts of every stage still running,
+  each by its own size (`staged`: up in `fund`, down when the stage's payout is claimed or the
+  stage is released). A funded trader's payout stays in the pool for as long as the stage runs; the
+  creator takes profit only above it (CFO, 13 November). `staged` changes what may leave, not what
+  profit is: the codes' shares are of the profit a withdrawal takes, as before. 0.5 % goes to the platform. Profit is the
   pool's money above what the creator put in, after what the pool owes, holds and keeps for recent
   stops; a withdrawal takes it first. Of the profit a withdrawal takes, less the platform's part,
   each code's partner is sent its `bps` in the part its code brought of all the pool took:
   profit × (the code's `brought` / `brought`) × `bps`. A code with no share leaves its part to the
   creator. A partner whose address the token refuses has its part set aside, `heldOf` and
   `claimHeld` as for a refused payout (`PartnerPaid` says which). `addToPot` puts in more principal,
-  never shared, which comes back once the profit above it has been taken, or at `finish`. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
+  never shared, which comes back once the profit above it has been taken, or at `finish`. It is the
+  only way to put the creator's money in: USDC sent straight to the pool's address is not principal,
+  so it counts as profit and is shared with the codes' owners. A share paid to a code's owner is
+  never taken back: if later payouts take the pool's money below what the creator put in, the
+  creator bears it, and shares start again only once the principal is whole. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
   can still be lifted, and a week after the close (`closedAt` + `WITHDRAW_DELAY`, `NotReady` before),
   sends what is left, the principal first, and ends a standing request. The week keeps `close` and
   `finish` from being a withdrawal of everything in one block.
-- **The term.** A pool runs at least 180 days from its opening (`MIN_TERM`, `lockedUntil`). Before
+- **The term.** A pool runs at least 6 months, 184 days, from its opening (`MIN_TERM`, `lockedUntil`;
+  184 days is the longest half-year, so the six months hold whatever the day it opens). Before
   then the creator can neither `close` it (`Locked`), so it sells all that time, nor take back what
   it put in: `withdraw` gives the profit only, never the principal, the locked payouts or what
   `addToPot` added. Only the factory's closer, a platform key the operator names (`setCloser`), may
@@ -109,7 +122,7 @@ exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`P
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid with the approver's approval (`PAYOUT_DELAY`), 7 days
 without it (`PAYOUT_HARD`); 14 days a
-stopped payout's money stays set aside and the stop can be lifted (`STOP_RESERVE`); 180 days a
+stopped payout's money stays set aside at least and the stop can be lifted (`STOP_RESERVE`); 184 days a
 pool runs before its creator may close it or take back its principal (`MIN_TERM`); 7 days from a
 request to withdraw to its money, and from a close to `finish` (`WITHDRAW_DELAY`), and 3 days to
 carry out a ready request (`WITHDRAW_WINDOW`); a fill
@@ -143,13 +156,15 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 59 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 130 mutations (`SM1`–`SM130` in `scripts/mutations.py`),
-each caught by a named test:
+`test/sim/SimPool.t.sol`, 78 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and every `SM` mutation of `scripts/mutations.py` (on this branch
+SM1 to SM166 and SM170 to SM177: the delay, the window, the less of the two, finish's week, payout approval and its 7
+days, the running stages' payouts and the 184 days among them), each
+caught by a named test. The second command lists them from the file, so a new one is never left out:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 130)
+python3 scripts/mutations.py $(grep -oE "[\"']SM[0-9]+[\"']" scripts/mutations.py | tr -d "\"'")
 ```
 
 `test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a
@@ -159,7 +174,7 @@ the trader object to a stop and anyone make it final after its 14 days, has the 
 owner, claims what was held, asks to withdraw, withdraws (at once now and then, which must be refused, otherwise
 from the week on to past its window), cancels a request (the creator or the closer; a stranger refused) and adds
 for the creator, closes (the creator from the term on, refused
-before it; the closer early) and finishes (by the creator or the closer), jumps past the 180 days now and then
+before it; the closer early) and finishes (by the creator or the closer), jumps past the 184 days now and then
 (48 runs of 120 calls in CI,
 with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
 Fourteen invariants: every dollar in and out accounted for; what is held always there and equal to the refused
