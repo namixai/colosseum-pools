@@ -13,6 +13,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 A, B, C = "0x" + "aa" * 20, "0x" + "bb" * 20, "0x" + "cc" * 20
 
 
+class Before(dict):
+    """Every pool as one from before approvals, unless a test names its kind."""
+
+    def __contains__(self, pool):
+        return True
+
+    def __missing__(self, pool):
+        return False
+
+
 def fill(account, asset=3, buy=True, sz=100, t=1_000, tx="0x01"):
     return {"account": account, "asset": asset, "buy": buy, "sz": sz, "t": t, "tx": tx}
 
@@ -74,6 +84,35 @@ class AStop(unittest.TestCase):
         self.assertFalse(s.stop_due("Stopped", False, 10_000, 0))
         self.assertFalse(s.stop_due("Paid", False, 10_000, 0))
 
+    def test_a_pool_with_approvals_takes_a_stop_until_the_payout_is_paid(self):
+        late = 10_000 + 3 * 86_400
+        self.assertTrue(s.stop_due("Due", False, 10_000, late, True), "past its 72 hours and not paid: unapproved, or not paid yet")
+        self.assertFalse(s.stop_due("Due", False, 10_000, late), "a pool from before approvals paid it at its 72 hours")
+        self.assertFalse(s.stop_due("Due", True, 10_000, 0, True), "a payout is stopped once, there too")
+        self.assertFalse(s.stop_due("Paid", False, 10_000, 0, True))
+
+    def test_the_pools_own_stop_asks_no_time_and_no_approval(self):
+        pool = (ROOT / "src/sim/SimPool.sol").read_text()
+        i = pool.index("function stopPayout(")
+        body = pool[pool.index("{", i):pool.index("\n    }\n", i)]
+        self.assertIn("if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();", body)
+        for word in ("dueAt", "block.timestamp <", "block.timestamp >", "approved"):
+            self.assertNotIn(word, body, "waiting and never stopped is all the pool asks: until it is paid")
+        fields = re.findall(r"^\s*(\w+) (\w+);", re.search(r"struct Payout \{(.*?)\n    \}", pool, re.S).group(1), re.M)
+        types = ["uint8" if kind == "PayoutState" else kind for kind, _ in fields]
+        self.assertEqual((s.sk.PAYOUT, s.PAYOUT_BEFORE_APPROVALS), ("(" + ",".join(types) + ")", "(" + ",".join(types[:7]) + ")"))
+        self.assertEqual(fields[7], ("bool", "approved"))
+
+    def test_whether_a_pool_takes_approvals_has_three_answers(self):
+        from unittest import mock
+        P = "0x" + "55" * 20
+        with mock.patch.object(s.c, "call_view", return_value=("0x" + "00" * 20,)):
+            self.assertIs(s.takes_approvals(P), True, "the zero address is an answer: the pool has approvals")
+        with mock.patch.object(s.c, "call_view", side_effect=Exception("execution reverted")):
+            self.assertIs(s.takes_approvals(P), False)
+        with mock.patch.object(s.c, "call_view", side_effect=Exception("429 Too Many Requests")), mock.patch.object(s, "log"):
+            self.assertIs(s.takes_approvals(P), None)
+
     def test_it_calls_the_pools_stop_as_declared(self):
         pool = (ROOT / "src/sim/SimPool.sol").read_text()
         m = re.search(r"function stopPayout\(([^)]*)\)", pool)
@@ -95,6 +134,7 @@ class TheService(unittest.TestCase):
         ch.transfers, ch.transfers_from, ch.fills, ch._times = {}, {}, [], {}
         ch.fills_from, ch.fills_read = 10, set()
         ch.settled, ch.started, ch.window_s = set(), {}, 600
+        ch.approvals = Before()
         return ch
 
     def test_an_account_found_later_has_its_fills_read_from_the_start(self):
@@ -182,6 +222,54 @@ class TheService(unittest.TestCase):
         ch2, v2, cv2 = self.keep_case({}, done=set(), starts={})
         with v2, cv2:
             self.assertEqual(ch2.keep_from(5_000), 5_000 - 600, "nothing to pay: the window only")
+
+    def test_on_a_pool_with_approvals_a_payout_past_its_72_hours_keeps_its_stages_fills(self):
+        day = 86_400
+        S1, S2 = (s.to_checksum_address("0x" + x * 20) for x in ("a1", "a2"))
+        ch, v, cv = self.keep_case({0: (S1, 48 * day)}, done={S1}, starts={S1: 10 * day, S2: 30 * day})
+        ch.approvals = {s.to_checksum_address("0x" + "55" * 20): True}
+        with v, cv:
+            self.assertEqual(ch.keep_from(50 * day), 10 * day - 600, "not paid on day 50: a pair can still stop it")
+            self.assertEqual(ch.settled, set())
+
+    def test_a_pair_stops_a_payout_past_its_72_hours_only_on_a_pool_with_approvals(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        ch = self.checker()
+        pool, S, Bx, T1, T2 = (s.to_checksum_address("0x" + x * 20) for x in ("55", "a1", "b1", "71", "72"))
+        ch.keeper = SimpleNamespace(pools=[pool], accounts={})
+        ch.tolerance = 0.2
+        ch.fills = [fill(S, buy=True, t=1_000, tx="0x0a"), fill(Bx, buy=False, t=1_100, tx="0x0b")]
+        ch.transfers_to = lambda traders, latest: []
+        due, asked = 10_000, []
+
+        def view(to, sig, out="uint256", types=(), args=()):
+            asked.append(out)
+            return (S, T1, 800, due, 1, False, 0, True)  # approved, and not paid yet
+
+        with mock.patch.object(s, "view", side_effect=view), mock.patch.object(s.c, "call_view", return_value=(1, T2, 0, 0)):
+            ch.approvals = {pool: True}
+            self.assertEqual(s.Checker.check(ch, pool, 0, due + 86_400, 0), (1, Bx, ["0x0a", "0x0b"], []),
+                             "a day past its 72 hours, approved: stopped while it is not paid")
+            self.assertEqual(asked[-1], s.sk.PAYOUT)
+            ch.approvals = {pool: False}
+            self.assertIsNone(s.Checker.check(ch, pool, 0, due + 86_400, 0), "a pool from before approvals paid it by itself")
+            self.assertIsNone(s.Checker.check(ch, pool, 0, due - s.MARGIN_S, 0), "and takes no stop in its last 5 minutes")
+            self.assertIsNotNone(s.Checker.check(ch, pool, 0, due - s.MARGIN_S - 1, 0))
+            self.assertEqual(asked[-1], s.PAYOUT_BEFORE_APPROVALS, "read as a pool from before approvals holds it")
+
+    def test_a_pools_kind_is_read_once_and_one_not_read_is_stopped_as_with_approvals(self):
+        from unittest import mock
+        ch = self.checker()
+        ch.approvals = {}
+        P = "0x" + "55" * 20
+        with mock.patch.object(s.c, "call_view", side_effect=Exception("429 Too Many Requests")), mock.patch.object(s, "log"):
+            self.assertTrue(ch.until_paid(P), "a stop the pool refuses is a logged revert; a stop not sent is a payout gone")
+            self.assertEqual(ch.approvals, {}, "and it is asked again in the next pass")
+        with mock.patch.object(s.c, "call_view", side_effect=Exception("execution reverted")):
+            self.assertFalse(ch.until_paid(P))
+        with mock.patch.object(s.c, "call_view", side_effect=AssertionError("asked twice")):
+            self.assertFalse(ch.until_paid(P))
 
     def test_a_stage_found_after_its_pair_still_has_it(self):
         """The scan finds a few windows of accounts a pass. Pass one finds the other side's account B (and C, an old
