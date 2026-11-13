@@ -266,8 +266,10 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   if (action === "hold") {
     // Nothing to sign: the result did not count up. The draft of a stop is shown, never built into a call.
     if (doc.call) return no("a review that holds a payout yet names a call");
+    // The pool's colour is the pool's, whatever this payout's action: a red pool's one review may be a hold, and
+    // the batch restriction must come from it as from any other (review of #290).
     return { review: { verdict: doc.verdict, action, reasons: doc.reasons, evidence: doc.evidence, call: null,
-      stopDraft: doc.stopDraft ?? null, readAt: doc.readAt }, problem: null };
+      stopDraft: doc.stopDraft ?? null, batchApproval: doc.batchApproval !== false, readAt: doc.readAt }, problem: null };
   }
   let built;
   try {
