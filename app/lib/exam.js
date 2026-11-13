@@ -92,10 +92,18 @@ function call(exam, signature, args, signer, keccak256) {
     signer, signs: SIGNS[signer] };
 }
 
+/** An asset's number, or an error: a missing one (null, undefined, an empty string) is no asset, where `Number` would
+ *  make it asset 0; an explicit 0 is an asset (review of #294). */
+function assetId(asset) {
+  const missing = asset === null || asset === undefined || (typeof asset === "string" && asset.trim() === "");
+  const a = missing ? NaN : Number(asset);
+  if (!Number.isInteger(a) || a < 0 || a > 0xffffffff) throw new Error(`${asset} is not an asset`);
+  return a;
+}
+
 /** `place(asset, isBuy, sz)`: an order at the market, `size` in the asset's size units (see `sizeUnits`). */
 export function placeCall({ exam, asset, isBuy, size, by = "trader", keccak256 }) {
-  const a = Number(asset);
-  if (!Number.isInteger(a) || a < 0 || a > 0xffffffff) throw new Error(`${asset} is not an asset`);
+  const a = assetId(asset);
   const sz = BigInt(size);
   if (sz <= 0n) throw new Error("an order needs a size above zero");
   if (sz >= 1n << 64n) throw new Error("the size does not fit an order");
@@ -123,8 +131,7 @@ export function setAgentCall({ exam, agent, filler, keccak256 }) {
 
 /** The index the chain's precompiles take for an asset (CoreOps.pxIndex). */
 export function pxIndex(asset) {
-  const a = Number(asset);
-  if (!Number.isInteger(a) || a < 0 || a > 0xffffffff) throw new Error(`${asset} is not an asset`);
+  const a = assetId(asset);
   return a >= HIP3_BASE ? a - HIP3_BASE : a;
 }
 
@@ -162,14 +169,23 @@ function decimalUnits(text, decimals, what) {
 
 /** A size typed as a number ("0.015") in the asset's size units, exactly; more decimals than the asset has are refused. */
 export function sizeUnits(text, szDecimals) {
-  const v = decimalUnits(text, Number(szDecimals), "the size");
+  const v = decimalUnits(text, szDecimalsOf(szDecimals), "the size");
   if (v <= 0n) throw new Error("the size must be above zero");
   return v;
 }
 
 /** A price as Hyperliquid writes it ("69422.0") in the contract's price units: `6 - szDecimals` decimals. */
 export function pxUnits(text, szDecimals) {
-  return decimalUnits(text, 6 - Number(szDecimals), "the price");
+  return decimalUnits(text, 6 - szDecimalsOf(szDecimals), "the price");
+}
+
+/** An asset's size decimals, or an error where they were not read (null, undefined, empty): `Number(null)` is 0,
+ *  which would give a size or a price at the wrong scale (review of #294). */
+function szDecimalsOf(szDecimals) {
+  if (szDecimals === null || szDecimals === undefined || (typeof szDecimals === "string" && szDecimals.trim() === "")) {
+    throw new Error("the asset's size decimals were not read");
+  }
+  return Number(szDecimals);
 }
 
 /** A whole number of units as a decimal string with `decimals` decimals, trailing zeros dropped. */
@@ -182,8 +198,8 @@ export function unitsText(units, decimals) {
   return `${v < 0n ? "-" : ""}${whole}${frac ? `.${frac}` : ""}`;
 }
 
-export const sizeText = (units, szDecimals) => unitsText(units, Number(szDecimals));
-export const pxText = (px, szDecimals) => unitsText(px, 6 - Number(szDecimals));
+export const sizeText = (units, szDecimals) => unitsText(units, szDecimalsOf(szDecimals));
+export const pxText = (px, szDecimals) => unitsText(px, 6 - szDecimalsOf(szDecimals));
 export const usdText = (units) => unitsText(units, 6);
 
 // ── the account, as the contract counts it ─────────────────────────
@@ -216,7 +232,10 @@ function termsOf(reads) {
 function positionsOf(reads) {
   const out = new Map();
   for (const p of reads.positions ?? []) {
-    out.set(Number(p.asset), { size: big(p.size), mark: p.mark === undefined || p.mark === null ? null : BigInt(p.mark) });
+    // A mark of zero is no price: the contract's `_mark` reverts (NoPrice) rather than count a position at nothing,
+    // which would leave a short's proceeds in equity (review of #294).
+    const mark = p.mark === undefined || p.mark === null ? null : BigInt(p.mark);
+    out.set(Number(p.asset), { size: big(p.size), mark: mark === null || mark <= 0n ? null : mark });
   }
   return out;
 }
@@ -385,7 +404,7 @@ export function fillPrice({ isBuy, oracle, bid, ask, fromBook, maxWorseBps }) {
 export function orderPreview(reads, { asset, isBuy, size, oracle, bid, ask, now, block }) {
   const rules = rulesOf(reads);
   const terms = termsOf(reads);
-  const a = Number(asset);
+  const a = asset === null || asset === undefined || asset === "" ? NaN : Number(asset);  // a missing asset is none
   const no = (name) => ({ refusal: name, text: refusalText(name), note: ESTIMATE_NOTE });
   if ((STATUS[Number(reads.status ?? 0)] ?? "none") !== "active") return no("BadStatus");
   if (over(reads, terms, Number(now))) return no("TooLate");
@@ -408,11 +427,14 @@ export function orderPreview(reads, { asset, isBuy, size, oracle, bid, ask, now,
   const { equity, notional: open } = book(cash, positions);
   const reduces = (before > 0n) !== (delta > 0n) && abs(delta) <= abs(before);
 
+  // `fill` takes the price first (TooFarFromOracle ends it there), and reads the book only for an order that makes the
+  // exposure larger: a reduction is filled whatever another asset's price is, or the book's (review of #294).
   let atFill = waits ? "TooFarFromOracle" : null;
-  if (equity === null) atFill = atFill ?? "NoPrice";
-  else if (abs(after) > abs(before)
-    && (equity <= 0n || open * 100n > equity * rules.maxLeverageX100 || overAssetCap(equity, positions, rules))) {
-    atFill = "OverLeverage";
+  if (abs(after) > abs(before)) {
+    if (equity === null) atFill = atFill ?? "NoPrice";
+    else if (equity <= 0n || open * 100n > equity * rules.maxLeverageX100 || overAssetCap(equity, positions, rules)) {
+      atFill = atFill ?? "OverLeverage";
+    }
   }
   const capital = terms.capital;
   const breach = equity === null ? null : judge({ equity, notional: open, positions, rules, capital, dayStartEquity: big(reads.dayStartEquity) });
