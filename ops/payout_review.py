@@ -492,7 +492,11 @@ def pass_rates(chain: dict, pool: str, p: "Params", th: dict | None = None) -> d
     """The pool's passes against the CFO's thresholds, and the same counts split by the code each exam was bought
     under, by the asset it traded, by the hour and weekday of the pass, and the passes in very few fills. None
     when the accounts' events were not read. A rule of the exam that is wrong still counts up on chain; it shows
-    as more passing than the model said."""
+    as more passing than the model said.
+
+    `coinFlipPasses` is how many of the passes in the same window as the share of passes (the last 100 exams
+    ended) have the shape of a coin flip (`coin_flip`): a number said beside the others, with no threshold of its
+    own yet and no part in the level."""
     th = {**DEFAULT_THRESHOLDS, **(th or {})}
     ev = chain.get("exam_events")
     if ev is None:
@@ -509,7 +513,7 @@ def pass_rates(chain: dict, pool: str, p: "Params", th: dict | None = None) -> d
         end = next((e for e in evs if e["name"] in ("Passed", "Stopped")), None)
         fills = [e for e in evs if e["name"] == "Filled"]
         passed = end is not None and end["name"] == "Passed"
-        rows.append({"code": s_["code"], "block": s_["block"], "t": started, "endedAt": end["t"] if end else None,
+        rows.append({"exam": s_["exam"], "code": s_["code"], "block": s_["block"], "t": started, "endedAt": end["t"] if end else None,
                      "passed": passed, "payout": stage_of.get(s_["exam"]) in paid_stages,
                      "net": s_["price"] - s_.get("fee", 0), "assets": sorted({e["asset"] for e in fills}),
                      "few": passed and (len(fills) <= p.few_fills or len({e["t"] // 86_400 for e in fills}) <= p.few_days)})
@@ -545,6 +549,10 @@ def pass_rates(chain: dict, pool: str, p: "Params", th: dict | None = None) -> d
             out["byHour"][h] = out["byHour"].get(h, 0) + 1
             out["byWeekday"][wd] = out["byWeekday"].get(wd, 0) + 1
     out["fewFillPasses"] = sum(r["few"] for r in rows)
+    window = [r for r in finished[-th["passes"]["window"]:] if r["passed"]]
+    flips = [recount(r["exam"], chain, p)["flip"] for r in window]
+    out["coinFlipPasses"] = {"hits": sum(f is not None for f in flips), "withStops": sum(bool(f and f["stops"]) for f in flips),
+                             "passes": len(window), "share": round(sum(f is not None for f in flips) / len(window), 3) if window else None}
     # Red: no approving in a batch; each payout is approved on its own (the CFO, 13 November).
     out["batch"] = out["level"] != "red"
     return out
@@ -1067,6 +1075,10 @@ def summary(r: dict) -> str:
             lines.append(f"  pool ({pr['level']}): passes {pr['passes']['hits']} of the last {pr['passes']['of']} ended, payouts "
                          f"{pr['payouts']['hits']} of the last {pr['payouts']['of']} sold, payouts / net income "
                          f"{pr['payoutsToIncome']['ratio']}" + ("" if pr["batch"] else "; red: approve one by one"))
+        cf = pr["coinFlipPasses"]
+        if cf["passes"]:
+            lines.append(f"  pool, for reference: {cf['hits']} of the last {cf['passes']} passes in the shape of a coin flip, "
+                         f"{cf['withStops']} of them with a stop at the day's line")
     tm = r["timing"]
     lines.append(f"  timing: best block {tm['filler']['atBest']} of {tm['filler']['fills']} (chance {tm['filler']['byChance']}), "
                  f"oracle the trader's way next block {tm['lead']['ahead']} of {tm['lead']['fills']}")
@@ -1151,6 +1163,19 @@ def exam_event_of(l: dict, t: int) -> dict | None:
     if topic == STOPPED:
         return {**e, "name": "Stopped", "status": int(l["topics"][1], 16), "equity": abi_decode(["int256"], data)[0]}
     return None
+
+
+def passed_accounts(exam_events: dict[str, list[dict]]) -> list[str]:
+    """The exams and stages that passed, by their own events."""
+    return [a for a, evs in exam_events.items() if any(e["name"] == "Passed" for e in evs)]
+
+
+def read_daily(account: str, into: dict[str, int]) -> None:
+    """The day's allowed loss of an exam or a stage, in bps: the first of its `rules()`. Left out where not read."""
+    try:
+        into[account] = int(c.call_view(account, "rules()", [], [], [EXAM_RULES])[0][0])
+    except Exception as exc:
+        core.log("rules_unread", account=account, error=str(exc)[:200])
 
 
 def oracle_at(asset: int, block: int) -> int | None:
@@ -1326,10 +1351,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                 cost_ppm[a], fill_window[a] = int(terms[5]), int(terms[7])
             except Exception as exc:
                 core.log("terms_unread", account=a, error=str(exc)[:200])
-            try:
-                daily_bps[a] = int(c.call_view(a, "rules()", [], [], [EXAM_RULES])[0][0])
-            except Exception as exc:
-                core.log("rules_unread", account=a, error=str(exc)[:200])
+            read_daily(a, daily_bps)
             assets ={e["asset"] for e in exam_events[a] if e["name"] == "Filled"}
             wanted = set()
             for e in exam_events[a]:
@@ -1347,6 +1369,10 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                     got = oracle_at(asset, block)
                     if got is not None:
                         oracle[key] = got
+    # The day's allowed loss of every exam that passed too: the pool's count of passes in the shape of a coin flip.
+    for a in passed_accounts(exam_events):
+        if a not in daily_bps:
+            read_daily(a, daily_bps)
     transfers = []
     for t in sorted({s["trader"] for s in sales}):
         word = "0x" + "00" * 12 + t[2:].lower()

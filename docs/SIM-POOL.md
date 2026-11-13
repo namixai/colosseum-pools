@@ -324,7 +324,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     Fewer than 100 are counted per hundred. Shares count from 30 exams ended; before that, the pool is red
     only if the payouts recorded since it opened exceed its net income from prices. The same counts are
     split by code, by asset, and by the hour and weekday of the pass, with the passes in very few fills
-    counted. A rule of the exam that is wrong still counts up on chain; it shows only as more passing.
+    counted. Beside them stands how many of the passes in that window of the last 100 exams ended have the shape
+    of a coin flip (`coinFlipPasses`, and how many of those with a stop at the day's line): a number for
+    whoever sets the pool's rules, with no threshold yet and no part in the level. A rule of the exam that is wrong still counts up on chain; it shows only as more passing.
     Yellow or red marks every payout of the pool while it holds. The approval stays, since the trader is
     not to blame. Red means no approving in a batch: the operator's page refuses "Approve selected"
     (`approveSelectedCall`), and each payout is approved on its own;

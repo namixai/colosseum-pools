@@ -707,29 +707,34 @@ class ACoinFlip(unittest.TestCase):
     DAY = 86_400
     PX = 1_000_000
 
-    def world(self, trips, daily=300):
+    @classmethod
+    def events(cls, trips, from_day=0):
         """Each of `trips` is (UTC day, leverage, result in bps of the capital[, second of the day]): a buy and a
-        sell of asset 3, ten minutes apart, with a snapshot at each new day's start."""
-        ch, _, s1 = honest_world()
+        sell of asset 3, ten minutes apart, with a snapshot at each new day's start, and the pass after the last.
+        `from_day` moves the whole account that many days on."""
         n = [0]
 
         def e(name, t, **kw):
             n[0] += 1
-            return {"name": name, "block": n[0], "index": 0, "t": t, "tx": tx(7_000 + n[0]), **kw}
+            return {"name": name, "block": n[0], "index": 0, "t": t + from_day * cls.DAY, "tx": tx(7_000 + n[0]), **kw}
 
-        events, cash, day, t = [e("Started", 0, capital=self.C)], self.C, 0, 0
+        events, cash, day, t = [e("Started", 0, capital=cls.C)], cls.C, 0, 0
         for d, lev, bps, *at in trips:
-            t = d * self.DAY + (at[0] if at else 3_600)
+            t = d * cls.DAY + (at[0] if at else 3_600)
             if d != day:
-                events.append(e("DaySnapshot", d * self.DAY + 60, day=d, equity=cash))
+                events.append(e("DaySnapshot", d * cls.DAY + 60, day=d, equity=cash))
                 day = d
-            sz = int(cash * lev) // self.PX
-            out = self.PX + (self.C * bps // 10_000) // sz
-            events += [e("Filled", t, asset=3, buy=True, sz=sz, px=self.PX, cost=0, late=0, source=1),
+            sz = int(cash * lev) // cls.PX
+            out = cls.PX + (cls.C * bps // 10_000) // sz
+            events += [e("Filled", t, asset=3, buy=True, sz=sz, px=cls.PX, cost=0, late=0, source=1),
                        e("Filled", t + 600, asset=3, buy=False, sz=sz, px=out, cost=0, late=0, source=1)]
-            cash += sz * (out - self.PX)
-        events.append(e("Passed", t + 700, equity=cash))
-        ch.d["exam_events"] = {s1: events, addr(0x201): [e("Started", 0, capital=self.C), e("Passed", 0, equity=self.C)]}
+            cash += sz * (out - cls.PX)
+        return events + [e("Passed", t + 700, equity=cash)]
+
+    def world(self, trips, daily=300):
+        ch, _, s1 = honest_world()
+        ch.d["exam_events"] = {s1: self.events(trips), addr(0x201): [{"name": "Started", "block": 0, "index": 0, "t": 0, "tx": tx(1), "capital": self.C},
+                                                                     {"name": "Passed", "block": 0, "index": 0, "t": 0, "tx": tx(2), "equity": self.C}]}
         if daily is not None:
             ch.d["dailyLossBps"] = {s1: daily}
         return ch
@@ -798,6 +803,46 @@ class ACoinFlip(unittest.TestCase):
         ch.d["exam_events"][s1] = ev[:-1] + [first_end] + second
         rc = r.review(ch.d, POOL, 0)["recount"]["stage"]
         self.assertEqual((rc["flags"], rc["flip"]["trips"], rc["flip"]["stops"]), ([], 4, 2))
+
+    def test_the_pool_counts_its_passes_in_this_shape_over_the_window_of_its_share_of_passes(self):
+        ch = PassRates.world(PassRates(), 40, 10)
+        exams = [addr(0x2000 + 0x1000 + i) for i in range(40)]
+        for ex in exams[:3]:
+            ch.d["exam_events"][ex] = self.events(self.PLAYER)
+        ch.d["exam_events"][exams[3]] = self.events([(0, 1.5, 1_100)])
+        ch.d["exam_events"][exams[39]] = self.events(self.PLAYER)[:-1]  # the same fills on an exam that did not pass
+        ch.d["dailyLossBps"] = {ex: 300 for ex in exams}
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual(got["passRates"]["coinFlipPasses"], {"hits": 4, "withStops": 3, "passes": 10, "share": 0.4})
+        plain = r.review(PassRates.world(PassRates(), 40, 10).d, POOL, 0)
+        self.assertEqual((got["passRates"]["level"], got["kinds"], got["action"]),
+                         (plain["passRates"]["level"], plain["kinds"], plain["action"]),
+                         "a number said beside the others: the level, the reasons and what is offered as without it")
+        self.assertIn("  pool, for reference: 4 of the last 10 passes in the shape of a coin flip, 3 of them with a stop at the "
+                      "day's line", r.summary(got))
+        self.assertEqual(r.card(got, ch.d)["evidence"]["passRates"]["coinFlipPasses"]["hits"], 4)
+        # Only the window of the share of passes counts, the last 100 exams ended: of 130 that passed, four in this
+        # shape ended first and are outside it, one ended last and is in it.
+        ch = PassRates.world(PassRates(), 130, 130)
+        exams = [addr(0x2000 + 0x1000 + i) for i in range(130)]
+        for ex in exams[:4]:
+            ch.d["exam_events"][ex] = self.events(self.PLAYER)
+        ch.d["exam_events"][exams[5]] = self.events(self.PLAYER, from_day=30)
+        ch.d["dailyLossBps"] = {ex: 300 for ex in exams}
+        cf = r.review(ch.d, POOL, 0)["passRates"]["coinFlipPasses"]
+        self.assertEqual((cf["hits"], cf["passes"]), (1, 100))
+        self.assertEqual(r.review(PassRates.world(PassRates(), 40, 0).d, POOL, 0)["passRates"]["coinFlipPasses"],
+                         {"hits": 0, "withStops": 0, "passes": 0, "share": None})
+
+    def test_the_days_limit_is_read_of_every_account_that_passed(self):
+        evs = self.events(self.PLAYER)
+        self.assertEqual(r.passed_accounts({addr(1): evs, addr(2): evs[:-1], addr(3): []}), [addr(1)])
+        got = {}
+        with mock.patch.object(r.c, "call_view", return_value=((300, 600, 1_000, [3], [1_000]),)):
+            r.read_daily(addr(1), got)
+        with mock.patch.object(r.c, "call_view", side_effect=Exception("429 Too Many Requests")), mock.patch.object(r.core, "log"):
+            r.read_daily(addr(2), got)
+        self.assertEqual(got, {addr(1): 300}, "one not read is left out, and its losses are held to no line")
 
     def test_an_account_that_did_not_pass_has_none(self):
         ch = self.world(self.PLAYER)
