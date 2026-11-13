@@ -592,8 +592,8 @@ test("a signed purchase: the trader signs the line's price to the pool under the
 
 
 test("the pool's term: the time before which its creator cannot close it, and whether the platform closed it sooner", () => {
-  assert.equal(MIN_TERM, 180 * 24 * 3600);
-  assert.match(FACTORY_SOL, /MIN_TERM = 180 days;/);
+  assert.equal(MIN_TERM, 184 * 24 * 3600);
+  assert.match(FACTORY_SOL, /MIN_TERM = 184 days;/);
   const read = (extra, now) => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, ...extra },
     events: EVENTS, times: TIMES, now });
   const locked = read({ lockedUntil: 5_000n, closedEarly: false }, 4_999);
@@ -620,6 +620,11 @@ test("a withdrawal waits a week from its request, then three days to carry it ou
   assert.equal(read({ requested: 0n, readyAt: 0n, closed: true, closedAt: 100n }, 5).finishFrom, 100 + WITHDRAW_DELAY);
   assert.equal(read({}, 5), null, "not read: not guessed");
   assert.equal(read({ requested: 500_000_000n }, 5), null, "readyAt not read: not taken for lapsed");
+  const page = (extra) => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, ...extra },
+    events: EVENTS, times: TIMES, now: 5 });
+  assert.equal(page({ staged: 1_200_000_000n }).staged, 1_200_000_000n, "the running stages' payouts");
+  assert.equal(page({}).staged, null, "not read: not guessed");
+  assert.ok(SIM_POOL_ABI.includes("function staged() view returns (uint256)"));
   for (const name of ["requestWithdraw", "withdraw", "cancelWithdraw"]) assert.match(POOL_SOL, new RegExp(`function ${name}\\(`));
   for (const e of ["WithdrawRequested", "WithdrawCancelled"]) {
     assert.ok(SIM_POOL_ABI.some((x) => x.startsWith(`event ${e}(`)), e);

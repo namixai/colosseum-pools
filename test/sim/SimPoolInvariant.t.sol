@@ -524,7 +524,9 @@ contract SimPoolHandler is Test {
             if (!good || amount == 0 || block.timestamp < ghostRequestedAt + _delay()) ghostInstant += 1;
             if (out != amount - _checkShares(b, amount)) ghostWithdrawMismatch += 1;
             if (pool.requested() != 0 || pool.readyAt() != 0) ghostWithdrawMismatch += 1;
-            uint256 keep = pool.owed() + pool.held() + pool.reserved() + uint256(pool.largestPayout()) * 3;
+            uint256 floor = uint256(pool.largestPayout()) * 3;
+            if (pool.staged() > floor) floor = pool.staged();
+            uint256 keep = pool.owed() + pool.held() + pool.reserved() + floor;
             if (usdc.balanceOf(address(pool)) < keep) ghostBelowFloor += 1;
             calls["withdraw"] += 1;
         } catch {
@@ -1055,7 +1057,9 @@ contract SimPoolInvariantTest is Test {
         assertEq(handler.ghostBelowFloor(), 0, "a withdrawal left less than three payouts");
         assertEq(handler.ghostOverWithdraw(), 0, "a request past withdrawable went through");
         if (!pool.finished()) {
-            uint256 keep = pool.owed() + pool.held() + pool.reserved() + uint256(pool.largestPayout()) * 3;
+            uint256 floor = uint256(pool.largestPayout()) * 3;
+            if (pool.staged() > floor) floor = pool.staged();
+            uint256 keep = pool.owed() + pool.held() + pool.reserved() + floor;
             uint256 bal = usdc.balanceOf(address(pool));
             uint256 w = bal > keep ? bal - keep : 0;
             if (block.timestamp < pool.lockedUntil()) {
@@ -1118,7 +1122,8 @@ contract SimPoolInvariantTest is Test {
         }
     }
 
-    /// I9. `live` counts the exams and stages not done, and a finished pool holds only what is set aside.
+    /// I9. `live` counts the exams and stages not done, `staged` the payouts of the stages not done, each by its size,
+    ///     and a finished pool holds only what is set aside.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
@@ -1128,11 +1133,18 @@ contract SimPoolInvariantTest is Test {
             (,, bool done) = pool.accountOf(handler.exam(i));
             if (!done) running += 1;
         }
+        uint256 staged;
+        SimSize[] memory menu = pool.menu();
         for (uint256 i = 0; i < handler.stageCount(); ++i) {
-            (,, bool done) = pool.accountOf(handler.stage(i));
-            if (!done) running += 1;
+            (, uint8 line, bool done) = pool.accountOf(handler.stage(i));
+            if (!done) {
+                running += 1;
+                staged += uint256(menu[line].size) * 800 / 10_000;
+            }
         }
         assertEq(pool.live(), running);
+        // The payouts of the stages still running, each by its size: what withdrawals stay above (CFO, 13 November).
+        assertEq(pool.staged(), staged, "staged is not the running stages' payouts");
         assertEq(handler.ghostEarlyFinish(), 0, "finished with something owed, running or kept for a stop");
         assertEq(handler.ghostFinishRefused(), 0, "a finish by the creator or the closer refused with nothing owed, running or kept");
         if (pool.finished()) assertEq(pool.reserved(), 0, "a finished pool keeps nothing for stops");

@@ -16,7 +16,7 @@
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
 and the SimPoolFactory on HyperEVM testnet, names the filler, the checker, the closer (the platform's
-key that alone may close a pool before its 180 days; four keys, none of them the operator, who
+key that alone may close a pool before its 6 months, 184 days; four keys, none of them the operator, who
 opens our pools) and the platform's recipient, and lists the assets with their leverage caps from ops/leverage.py (HYPE is left out:
 the platform's decision of 11 November 2026). It writes deployments/testnet-<label>.json, with the
 same keeper nodes as demo3, so the host's keeper unit can run on it.
@@ -31,7 +31,7 @@ skipped, one that does not is refused before anything is sent.
 
 `close` closes a pool and `finish` pays out a closed one, from the named key. Without --send each only
 reads the pool and says what it would send, from which key, or why the pool would refuse: before its
-180 days only the factory's closer closes it; `finish` (the creator or the closer) waits until nothing
+184 days only the factory's closer closes it; `finish` (the creator or the closer) waits until nothing
 runs, nothing is owed and no stop can be lifted, and a week after the close; with --exam it says until
 when that exam runs.
 

@@ -33,6 +33,7 @@ export const SIM_POOL_ABI = [
   "function lockedUntil() view returns (uint64)",
   "function closedEarly() view returns (bool)",
   "function closedAt() view returns (uint64)",
+  "function staged() view returns (uint256)",
   "function requested() view returns (uint256)",
   "function readyAt() view returns (uint64)",
   "function head() view returns (uint256)",
@@ -111,8 +112,9 @@ export const PAYOUT_BPS = 800n;
 export const PAYOUT_DELAY = 72 * 3600;
 /** How long a stop holds its money and can be lifted or objected to, on a pool with the stop reserve. */
 export const STOP_RESERVE = 14 * 24 * 3600;
-/** How long a pool runs at least: before it the creator neither closes it nor takes back what it put in. */
-export const MIN_TERM = 180 * 24 * 3600;
+/** How long a pool runs at least, "at least 6 months (184 days)": before it the creator neither closes it nor takes
+ *  back what it put in. 184 days is the longest half-year, so the six months hold whatever the day it opens. */
+export const MIN_TERM = 184 * 24 * 3600;
 /** How long a creator's request to withdraw waits, and `finish` after the close; how long a ready request stays good. */
 export const WITHDRAW_DELAY = 7 * 24 * 3600;
 export const WITHDRAW_WINDOW = 3 * 24 * 3600;
@@ -446,6 +448,8 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     closedEarly: Boolean(reads.closedEarly),
     creatorMayClose: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : now >= Number(reads.lockedUntil),
     withdrawal: withdrawalOf(reads, now),
+    // The payouts of the stages still running, each by its size, which stay in the pool while they run; null if not read.
+    staged: reads.staged === undefined || reads.staged === null ? null : BigInt(reads.staged),
     codes: codeShares(reads.codes, events),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),

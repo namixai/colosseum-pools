@@ -30,7 +30,7 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(int(constant("MIN_PARTNER_BPS")), d.MIN_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_PARTNER_BPS")), d.MAX_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_CODES")), d.MAX_CODES)
-        self.assertEqual(constant("MIN_TERM"), "180 days")
+        self.assertEqual(constant("MIN_TERM"), "184 days")
 
     def test_deploy_names_the_closer_a_fourth_key(self):
         """The closer alone closes a pool before its term; the operator opens our pools, and a pool's creator is
@@ -114,7 +114,13 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("Every exam is bought with a trading group's code", text)
             self.assertIn("once a sale names a code, neither changes", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
-            self.assertIn("The pool runs at least 180 days from its opening", text)
+            self.assertIn("The pool runs at least 6 months (184 days) from its opening", text)
+            self.assertIn("the platform may cancel a withdrawal request; it never moves the money", text)
+            self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator takes "
+                          "profit only above it", text)
+            self.assertIn("A share paid to a code's owner is never taken back", text)
+            self.assertIn("USDC sent to the pool other than by the creator's addToPot counts as profit", text)
+            self.assertIn("A stopped payout stays in the pool for at least 14 days while the trader can object", text)
             self.assertIn("only the platform can close it sooner, with the money going where it would anyway", text)
 
     def test_the_cfos_numbers_of_12_november(self):
@@ -206,7 +212,7 @@ class TheClosing(unittest.TestCase):
 
     def state(self, **kw):
         st = {"creator": d.to_checksum_address(self.CREATOR), "closer": d.to_checksum_address(self.CLOSER),
-              "closed": False, "finished": False, "locked_until": 180 * self.DAY, "live": 0, "owed": 0, "reserved": 0,
+              "closed": False, "finished": False, "locked_until": 184 * self.DAY, "live": 0, "owed": 0, "reserved": 0,
               "fund_window": 7 * self.DAY, "closed_at": 0, "requested": 0, "ready_at": 0, "withdrawable": 0,
               "delay": 7 * self.DAY, "window": 3 * self.DAY}
         st.update(kw)
@@ -214,7 +220,7 @@ class TheClosing(unittest.TestCase):
 
     def test_before_the_term_only_the_closer_closes(self):
         creator, closer, other = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER, self.OTHER))
-        before, at = 180 * self.DAY - 1, 180 * self.DAY
+        before, at = 184 * self.DAY - 1, 184 * self.DAY
         self.assertIn("before the term", d.close_check(self.state(), before, closer))
         with self.assertRaises(SystemExit) as caught:
             d.close_check(self.state(), before, creator)
