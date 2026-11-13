@@ -7470,6 +7470,29 @@ MUTATIONS = [
      "        if (filler != address(0) && agent_ == filler) revert BadTerms();\n",
      "",
      ["test_filler_isNeverTheTradersAgent"]),
+    # The paper exam at random with the oracle still (CTO, 13 November): no pass, no fill past the ceiling. A fill better
+    # than the oracle cannot be planted without breaking the ceiling's arithmetic first (it underflows and reverts).
+    ('X125', 'src/exam/PaperExam.sol',
+     '        if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);',
+     '        if (false) revert TooFarFromOracle(px, oracle);',
+     ['invariant_everyFillWithinTheOracleAndTheCeiling']),
+    ('X126', 'src/exam/PaperExam.sol',
+     '        cash -= delta * int256(uint256(px)) + int256(cost);',
+     '        cash -= delta * int256(uint256(px)) - int256(cost);',
+     ['invariant_noPassWithoutTheOracleMoving']),
+    ('X127', 'src/exam/PaperExam.sol',
+     '        if (eq < target) revert TargetNotMet(eq, target);\n',
+     '',
+     ['invariant_noPassWithoutTheOracleMoving']),
+    # The contract against the rules written again from their text (D1).
+    ('X128', 'src/exam/PaperExam.sol',
+     '        uint256 cost = (ntl * _terms.costPpm + PPM - 1) / PPM;',
+     '        uint256 cost = ntl * _terms.costPpm / PPM;',
+     ['invariant_theExamIsItsRulesAsWritten']),
+    ('X129', 'src/exam/PaperExam.sol',
+     '        dayStartEquity = cash;\n',
+     '        dayStartEquity = 0;\n',
+     ['invariant_theExamIsItsRulesAsWritten']),
     ("SM69", "src/sim/SimPoolFactory.sol",
      "if (p.fromBook ? p.maxWorseBps == 0 || p.maxWorseBps > MAX_WORSE_BPS : p.maxWorseBps != 0) revert BadPlan();",
      "if (p.fromBook ? p.maxWorseBps > MAX_WORSE_BPS : p.maxWorseBps != 0) revert BadPlan();",
@@ -14633,7 +14656,12 @@ def run_suite(cmd: list[str]) -> subprocess.CompletedProcess:
 def failing_tests(output: str, pattern: str) -> set[str]:
     # Forge: a failure message can contain brackets of its own ("[1.08e8]"), so the pattern
     # takes the last "]" on the line; the test name follows it.
-    return set(re.findall(pattern, output, re.M))
+    red = set(re.findall(pattern, output, re.M))
+    # A failed invariant prints its counterexample after the "[FAIL: …]" line and its name on a line of its own,
+    # " invariant_x() (runs: 1, calls: 1, reverts: 1)"; a passed one says "[PASS] invariant_x() (runs: …" on one.
+    if "FAIL" in pattern:
+        red |= set(re.findall(r"^\s+(invariant_\w+)\(\)\s*\(runs:\s*\d+", output, re.M))
+    return red
 
 
 def red_tests(cmd: list[str], pattern: str) -> set[str] | None:
@@ -14677,6 +14705,7 @@ def _test_names() -> set[str]:
             live = "\n".join(l for l in f.read_text().split("\n")
                               if not l.lstrip().startswith(("//", "#")))
             names |= set(re.findall(r"function (test_\w+)", live))
+            names |= set(re.findall(r"function (invariant_\w+)", live))
             names |= set(re.findall(r"def (test_\w+)", live))
     return names
 
@@ -14719,7 +14748,7 @@ def check() -> int:
         # being true instead -- a page's wording, a document's claim -- and those are checked by
         # the run, not by a file listing.
         for name in expected:
-            if re.fullmatch(r"test_\w+", name) and name not in known:
+            if re.fullmatch(r"(test|invariant)_\w+", name) and name not in known:
                 print(f"{mid}: names {name}, which no test file defines")
                 problems += 1
     for mid, times in sorted(seen.items()):
