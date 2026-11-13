@@ -232,6 +232,10 @@ export function awaitingApproval({ pool, structs, events = [], now, reviews = {}
     row.approveAnyway = hold && row.approvable ? { warning: HOLD_WARNING } : null;
     out.push(row);
   });
+  // A red pool is red for every payout of it, whether or not that payout's own review was loaded: one validated
+  // review that says so restricts every selection from the pool (review of #290).
+  const poolRed = out.some((r) => r.review?.batchApproval === false);
+  for (const r of out) r.poolRed = poolRed;
   return out.sort((a, b) => a.payAt - b.payAt || a.id - b.id);
 }
 
@@ -246,7 +250,14 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   if (String(doc.pool).toLowerCase() !== String(pool).toLowerCase()) return no("a review of another pool");
   if (Number(doc.id) !== Number(payout.id)) return no("a review of another payout");
   if (String(doc.trader).toLowerCase() !== String(payout.trader).toLowerCase()) return no("a review naming another trader");
-  if (BigInt(doc.amount) !== BigInt(payout.amount)) return no("a review of another amount");
+  // A document is data from a file: an amount missing or not a whole number rejects this document, not the list.
+  let amount;
+  try {
+    amount = BigInt(doc.amount);
+  } catch {
+    return no("a review with no readable amount");
+  }
+  if (amount !== BigInt(payout.amount)) return no("a review of another amount");
   if (!doc.readAt || doc.readAt.time == null || !(Number(doc.readAt.time) >= Number(payout.claimedAt))) {
     return no("a review read before the claim");
   }
@@ -283,7 +294,7 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
  */
 export function approveSelectedCall({ pool, rows, keccak256 }) {
   const list = [...rows];
-  if (list.some((r) => r.review?.batchApproval === false)) throw new Error("the pool is red: approve each payout on its own");
+  if (list.some((r) => r.poolRed || r.review?.batchApproval === false)) throw new Error("the pool is red: approve each payout on its own");
   if (list.some((r) => !r.approve)) throw new Error("a payout selected is offered no approval");
   return approveCall({ pool, ids: list.map((r) => r.id), keccak256 });
 }
@@ -300,11 +311,15 @@ export function approveAnywayCall({ pool, row, confirm, keccak256 }) {
 
 /**
  * The creator's standing request to withdraw, if any: how much, when it was made, from when it can be carried out
- * and until when, and the calls a page offers for it now.
+ * and until when, and the calls a page offers for it now. `null`: no request. `status: "unread"`: `requested` or
+ * `readyAt` was not read, so nothing is said of the request and no call is offered.
  */
 export function withdrawRequest({ pool, requested, readyAt, now, keccak256 }) {
   // The pool page's reading of the request (simpool.js), with the calls the operator's page offers for it.
-  const w = withdrawalOf({ requested: requested ?? 0n, readyAt: readyAt ?? 0n }, now);
+  const w = withdrawalOf({ requested, readyAt }, now);
+  // A read that is missing is not "no request" and not "lapsed" (simpool.js refuses an incomplete pair): the request
+  // is said to be unread, with no call, until both are read (review of #290).
+  if (w === null) return { status: "unread", amount: null, requestedAt: null, readyAt: null, lapsesAt: null, calls: {} };
   if (w.state === "none") return null;
   const calls = {};
   if (w.state !== "lapsed") calls.cancel = cancelWithdrawCall({ pool, by: "closer", keccak256 });

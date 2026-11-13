@@ -252,6 +252,37 @@ test("a red pool is approved one payout at a time, never in a batch", () => {
   assert.throws(() => approveSelectedCall({ pool: POOL, rows: held, keccak256 }), /offered no approval/);
 });
 
+test("a review with an amount missing or unreadable rejects that document, not the whole list", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D }), payout(2, { claimedAt: NOW - D })];
+  const { amount: _gone, ...noAmount } = reviewDoc(1);
+  const reviews = { 0: reviewDoc(0), 1: noAmount, 2: { ...reviewDoc(2), amount: "invalid" } };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews, keccak256 });
+  assert.deepEqual(rows.map((r) => [r.id, r.reviewProblem, r.review === null]),
+    [[0, null, false], [1, "a review with no readable amount", true], [2, "a review with no readable amount", true]]);
+  assert.equal(reviewFor({ ...reviewDoc(0), amount: "1.5" }, rows[0], { pool: POOL, keccak256 }).problem, "a review with no readable amount");
+});
+
+test("a red pool restricts every selection from it, also of payouts whose own review was not loaded", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D }), payout(2, { claimedAt: NOW - D })];
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: { ...reviewDoc(0), batchApproval: false } } });
+  assert.deepEqual(rows.map((r) => r.poolRed), [true, true, true]);
+  const rest = rows.filter((r) => r.id !== 0);
+  assert.throws(() => approveSelectedCall({ pool: POOL, rows: rest, keccak256 }), /approve each payout on its own/);
+  assert.equal(rest[0].approve.method, "approvePayouts", "one at a time is still offered, as the row's own approval");
+  const green = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: reviewDoc(0) } });
+  assert.deepEqual([green.map((r) => r.poolRed), approveSelectedCall({ pool: POOL, rows: green, keccak256 }).args],
+    [[false, false, false], [[0n, 1n, 2n]]]);
+});
+
+test("a withdrawal request half read is unread, never lapsed and never none", () => {
+  const readyAt = NOW + WITHDRAW_DELAY;
+  for (const reads of [{ requested: 5_000_000n }, { requested: 5_000_000n, readyAt: null }, { readyAt }, {}]) {
+    assert.deepEqual(withdrawRequest({ pool: POOL, ...reads, now: NOW, keccak256 }),
+      { status: "unread", amount: null, requestedAt: null, readyAt: null, lapsesAt: null, calls: {} }, JSON.stringify(reads, (_, v) => typeof v === "bigint" ? String(v) : v));
+  }
+  assert.equal(withdrawRequest({ pool: POOL, requested: 0n, readyAt: 0, now: NOW, keccak256 }), null, "read, and none");
+});
+
 test("the review the script writes is read as it is written", () => {
   // The document's fields, as ops/payout_review.py's card() names them: the two hold each other to one schema.
   const src = readFileSync(new URL("../../ops/payout_review.py", import.meta.url), "utf8");

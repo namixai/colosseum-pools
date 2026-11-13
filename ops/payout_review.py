@@ -149,7 +149,9 @@ def mirror(mine: list[dict], theirs: list[dict], until: int, ratio: float, their
             before = pos[side].get(f["asset"], 0)
             after = before + (f["sz"] if f["buy"] else -f["sz"])
             pos[side][f["asset"]] = after
-            if abs(after) > abs(before):
+            # A fill that opens, adds to, or turns a position over (a sell of 100 then a buy of 150 opens a long of 50)
+            # is the fill that opened this stretch; one that only makes it smaller is not (review of #290).
+            if abs(after) > abs(before) or before * after < 0:
                 grew[side][f["asset"]] = f
         # To the next fill of either, or, after the last, to `until`: a position still open runs on.
         stop = events[i][0] if i < len(events) else max(until, t)
@@ -438,7 +440,7 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
                               "detail": f"day {e['day']} wrote {e['equity']}, the fills and the oracle give {want}"})
         elif name == "StepPassed":
             result("StepPassed", e)
-            cash, pos, days = capital, {}, set()
+            cash, pos = capital, {}  # `days` stays the whole account's, as `fills` does (review of #290)
             trip, day_eq, step = None, capital, step + 1
         elif name == "Passed":
             result("Passed", e)
@@ -530,7 +532,9 @@ def pass_rates(chain: dict, pool: str, p: "Params", th: dict | None = None) -> d
         out["passes"] = per_hundred(sum(r["passed"] for r in last), len(last), th["passes"])
         lastsold = sold[-th["payouts"]["window"]:]
         out["payouts"] = per_hundred(sum(r["payout"] for r in lastsold), len(lastsold), th["payouts"])
-        paid = sum(x["amount"] for x in pays if x["dueAt"] - PAYOUT_DELAY >= since)
+        # A payout is claimed `delay` before it is due: the factory's own, where it was read (review of #290).
+        delay = (chain.get("times") or {}).get("delay") or PAYOUT_DELAY
+        paid = sum(x["amount"] for x in pays if x["dueAt"] - delay >= since)
         net = sum(r["net"] for r in rows if r["t"] is not None and r["t"] >= since)
         ratio = paid / net if net else (float("inf") if paid else 0.0)
         spec = th["payoutsToIncome"]
@@ -602,7 +606,7 @@ def timing(trader: str, chain: dict, who: dict[str, str], p: "Params") -> dict:
                     chance += sum(x == best for x in window) / w
                     gains.append((window[0] - o) * side * BPS / window[0])
             nxt = oracle.get(oracle_key(e["asset"], e["block"] + 1))
-            if nxt is not None and nxt != o:
+            if nxt is not None and nxt != o and nxt > 0 and o > 0:  # no move is read off a price that is not one
                 moved += 1
                 ahead += (nxt - o) * side > 0
     out = {"lateMedian": quantile(lates, 0.5), "fills": len(lates),
@@ -970,8 +974,10 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     elif stop:
         out["action"] = "stop"
         out["tx"] = stop_call(pool, pid, stop["reason"], stop["paired"], stop["trades"], stop["links"])
-    elif "recount" in out["kinds"] and pay["state"] == "Due":
-        # Held back from approval; a payout no longer waiting has nothing to hold back.
+    elif "recount" in out["kinds"] and pay["state"] == "Due" and approvals is True and not approved:
+        # Held back from approval: only an unapproved payout of a pool with approvals has one to be held back. An
+        # approved payout is payable from its due time whatever the recount says, a pool without approvals pays by
+        # itself, and a payout no longer waiting has nothing to hold back (review of #290); the stop draft stays.
         out["action"] = "hold"
         out["tx"] = None
     else:
