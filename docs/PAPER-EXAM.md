@@ -156,12 +156,25 @@ fill at the mark, a flat cost, and the things listed next.
 
 ## Tests
 
-`test/exam/PaperExam.t.sol`, 67 tests on the hyper-evm-lib simulator, and 124 mutations of the
-contract (`X1`–`X124` in `scripts/mutations.py`), each caught by a named test:
+`test/exam/PaperExam.t.sol`, 68 tests on the hyper-evm-lib simulator, among them a price that spikes
+for one block of an order's window: filled at its first block the order gains nothing; the filler can take
+the spike only by choosing its block, and the fill then says it came late (`late`).
+
+`test/exam/PaperExamInvariant.t.sol` drives one exam, filled at the book by its filler, at random: orders
+of any size and side on two assets, fills at any block of their window or after it, the day's snapshot,
+passes, breaches and expiries tried at any time, the first pool's rules and cost, and the oracle never
+moving. N1: it is never passed, and its equity never rises above its starting balance. N2: no fill is
+better for the trader than the oracle, and none at the book is more than `maxWorseBps` worse. The same
+runs again with the book drawn anew before every fill: under, over, around or far from the oracle,
+one-sided, crossed or empty.
+
+The mutations of the contract (`X1`–`X127` in `scripts/mutations.py`) are each caught by a named test,
+the invariants among them (a failed invariant prints its name on a line of its own, which the script
+reads):
 
 ```
 forge test --match-path 'test/exam/*'
-python3 scripts/mutations.py $(seq -f 'X%g' 1 124)
+python3 scripts/mutations.py $(seq -f 'X%g' 1 127)
 ```
 
 ## Not done yet
