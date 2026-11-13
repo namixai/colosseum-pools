@@ -130,7 +130,8 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("A share paid to a code's owner is never taken back", text)
             self.assertIn("USDC sent to the pool other than by the creator's addToPot counts as profit", text)
             self.assertIn("A stopped payout stays in the pool for at least 14 days while the trader can object, unless the "
-                          "checker lifts the stop within them and it is paid as any payout; after them the stop is final",
+                          "checker lifts the stop within them and it is paid as any payout; after them anyone may make "
+                          "the stop final, and only from then is the money the pool's",
                           text)
             self.assertIn("only the platform can close it sooner, with the money going where it would anyway", text)
             self.assertIn("The creator withdraws by a request: the money leaves no sooner than 7 days after it, within "
