@@ -625,8 +625,8 @@ test("a signed purchase: the trader signs the line's price to the pool under the
 
 
 test("the pool's term: the time before which its creator cannot close it, and whether the platform closed it sooner", () => {
-  assert.equal(MIN_TERM, 180 * 24 * 3600);
-  assert.match(FACTORY_SOL, /MIN_TERM = 180 days;/);
+  assert.equal(MIN_TERM, 184 * 24 * 3600);
+  assert.match(FACTORY_SOL, /MIN_TERM = 184 days;/);
   const read = (extra, now) => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, ...extra },
     events: EVENTS, times: TIMES, now });
   const locked = read({ lockedUntil: 5_000n, closedEarly: false }, 4_999);
@@ -690,9 +690,28 @@ test("counts per trader and per code: breached and expired apart, an unread acco
   const code = c.codes[0];
   assert.deepEqual([code.traders, code.purchases, code.examsPassed, code.examsBreached, code.stagesExpired, code.complete],
     [2, 3, 1, 1, 1, false]);
+  // The code's fill days: distinct UTC days across its accounts, not a sum of its traders' days (review of #283).
+  assert.equal(code.fillDays, c.traders.find((k) => k.trader === T1.toLowerCase()).fillDays,
+    "here only trader 1's accounts under the code filled");
+  assert.equal(activityCounts(pool, logs, new Map([[1, 0]])).codes[0].fillDays, null, "a fill without its time: not guessed");
+  const two = [
+    ev("ExamSold", 1, { exam: A(0xf1), trader: T1, line: 0n, size: 1n, price: 10n, fee: 0n, bySignature: false, code: C1, partner: P1 }),
+    ev("ExamSold", 2, { exam: A(0xf2), trader: X, line: 0n, size: 1n, price: 10n, fee: 0n, bySignature: false, code: C1, partner: P1 }),
+  ];
+  const filled = (block) => [ev("Started", block, { trader: T1, pool: P1, capital: 1n }),
+    ev("Filled", block, { asset: 3, isBuy: true, sz: 1n, px: 1n, cost: 0n, late: 0n, source: 0 })];
+  const same = activityCounts(two, { [A(0xf1)]: filled(5), [A(0xf2)]: filled(6) }, new Map([[5, 100], [6, 200]]));
+  assert.deepEqual([same.codes[0].fillDays, same.traders.map((k) => k.fillDays)], [1, [1, 1]],
+    "two traders of the code on the same day: one day for the code, not two");
   assert.deepEqual(EXAM_END, { 3: "breached", 4: "expired" });
   // A fill whose block time was not read: the days are not guessed.
   assert.equal(activityCounts(pool, logs, new Map([[1, 0]])).traders.find((k) => k.trader === T1.toLowerCase()).fillDays, null);
+  // The zero hash is a code like any other: the pool lets a creator set it with a partner, and a sale can name no code
+  // without one (SimPool._sold reverts NoSuchCode), so it is counted, not taken for "no code" (review of #281).
+  const ZERO_CODE = `0x${"0".repeat(64)}`;
+  const zero = activityCounts([ev("ExamSold", 9, { exam: A(0xe9), trader: T1, line: 0n, size: 1n, price: 10n, fee: 0n,
+    bySignature: false, code: ZERO_CODE, partner: P1 })], {}, new Map());
+  assert.deepEqual(zero.codes.map((k) => [k.code, k.partner, k.purchases]), [[ZERO_CODE, P1.toLowerCase(), 1]]);
 });
 
 test("a withdrawal waits a week from its request, then three days to carry it out; finish a week after the close", () => {
@@ -712,6 +731,11 @@ test("a withdrawal waits a week from its request, then three days to carry it ou
   assert.equal(read({ requested: 0n, readyAt: 0n, closed: true, closedAt: 100n }, 5).finishFrom, 100 + WITHDRAW_DELAY);
   assert.equal(read({}, 5), null, "not read: not guessed");
   assert.equal(read({ requested: 500_000_000n }, 5), null, "readyAt not read: not taken for lapsed");
+  const page = (extra) => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, ...extra },
+    events: EVENTS, times: TIMES, now: 5 });
+  assert.equal(page({ staged: 1_200_000_000n }).staged, 1_200_000_000n, "the running stages' payouts");
+  assert.equal(page({}).staged, null, "not read: not guessed");
+  assert.ok(SIM_POOL_ABI.includes("function staged() view returns (uint256)"));
   for (const name of ["requestWithdraw", "withdraw", "cancelWithdraw"]) assert.match(POOL_SOL, new RegExp(`function ${name}\\(`));
   for (const e of ["WithdrawRequested", "WithdrawCancelled"]) {
     assert.ok(SIM_POOL_ABI.some((x) => x.startsWith(`event ${e}(`)), e);

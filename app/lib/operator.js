@@ -191,7 +191,7 @@ function eventsNamed(events, name) {
  * from the struct where the pool has it, else from the PayoutApproved events. `reviews` maps an id to its review
  * document, shown only where it is of this payout. The most urgent first: the earliest of their payment times.
  */
-export function awaitingApproval({ pool, structs, events = [], now, reviews = {}, keccak256 }) {
+export function awaitingApproval({ pool, structs, events = [], now, reviews = {}, keccak256, approvals = true }) {
   const approvedEv = new Set(eventsNamed(events, "PayoutApproved").map((e) => Number(e.args.id)));
   const out = [];
   [...structs].forEach((p, index) => {
@@ -201,16 +201,19 @@ export function awaitingApproval({ pool, structs, events = [], now, reviews = {}
     if (Number(p.state ?? p[4]) !== 1) return;
     const dueAt = Number(p.dueAt ?? p[3]);
     const claimedAt = dueAt - PAYOUT_DELAY;
-    const hardAt = claimedAt + PAYOUT_HARD;
+    // A pool without approvals (it does not answer `approver()`) pays each payout at its 72 hours by itself: no
+    // ceiling, nothing to approve (review of #283).
+    const hardAt = approvals ? claimedAt + PAYOUT_HARD : null;
     const approved = p.approved === undefined ? approvedEv.has(id) : Boolean(p.approved);
-    const payAt = approved ? dueAt : hardAt;
+    const payAt = approved || !approvals ? dueAt : hardAt;
     let status;
-    if (now >= hardAt) status = "past-ceiling";
+    if (!approvals) status = now >= dueAt ? "payable" : "in-72-hours";
+    else if (now >= hardAt) status = "past-ceiling";
     else if (approved) status = now >= dueAt ? "approved-payable" : "approved";
     else status = now >= dueAt ? "awaiting-approval" : "in-72-hours";
     const row = {
       id, account: p.account ?? p[0], trader: p.trader ?? p[1], amount: BigInt(p.amount ?? p[2]),
-      claimedAt, dueAt, hardAt, approved, payAt, status,
+      claimedAt, dueAt, hardAt, approved, payAt, status, approvable: approvals,
     };
     const doc = reviews[id] ?? reviews[String(id)];
     const got = doc === undefined ? { review: null, problem: "no review" } : reviewFor(doc, row, { pool, keccak256 });
@@ -219,7 +222,7 @@ export function awaitingApproval({ pool, structs, events = [], now, reviews = {}
     // A payout whose result did not count up is offered no approval: only a second, deliberate step with the
     // warning (approveAnywayCall). Any other payout is offered its one-signature approval.
     const hold = got.review?.action === "hold";
-    row.approve = hold ? null : approveCall({ pool, ids: [id], keccak256 });
+    row.approve = hold || !approvals ? null : approveCall({ pool, ids: [id], keccak256 });
     row.approveAnyway = hold ? { warning: HOLD_WARNING } : null;
     out.push(row);
   });
@@ -251,7 +254,8 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   }
   let built;
   try {
-    if (c.kind === "approve") built = approveCall({ pool, ids: [payout.id], keccak256 });
+    if (c.kind === "none") built = null;  // a pool without approvals, or a stop the pool would refuse: nothing to sign
+    else if (c.kind === "approve") built = approveCall({ pool, ids: [payout.id], keccak256 });
     else if (c.kind === "stop") {
       const [, reason, paired, trades, links] = c.args;
       built = stopCall({ pool, id: payout.id, reason, paired, trades, links, keccak256 });
@@ -259,7 +263,7 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   } catch (err) {
     return no(`a review whose call the pool would refuse: ${err.message}`);
   }
-  if (c.data && String(c.data).toLowerCase() !== built.data.toLowerCase()) return no("a review whose call data is not its call");
+  if (built && c.data && String(c.data).toLowerCase() !== built.data.toLowerCase()) return no("a review whose call data is not its call");
   if ((action === "stop") !== (c.kind === "stop")) return no(`a review whose action (${action}) is not its call (${c.kind})`);
   return { review: { verdict: doc.verdict, action, reasons: doc.reasons, evidence: doc.evidence, call: built,
     stopDraft: doc.stopDraft ?? null, batchApproval: doc.batchApproval !== false, readAt: doc.readAt }, problem: null };
