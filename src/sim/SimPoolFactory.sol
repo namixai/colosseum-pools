@@ -39,9 +39,10 @@ contract SimPoolFactory {
     /// How long a stopped payout's money stays set aside after the stop: the trader can object and the
     /// checker can lift the stop; after it the stop is final and the money is the pool's again.
     uint32 public constant STOP_RESERVE = 14 days;
-    /// How long a pool runs at least: before it, its creator neither stops its sales nor takes back
-    /// what it put in; only the factory's closer may close it, and the money goes where it would anyway.
-    uint32 public constant MIN_TERM = 180 days;
+    /// How long a pool runs at least: six months, the longest half-year (1 August to 1 February), so "at
+    /// least 6 months" holds whatever the day it opens. Before it, its creator neither stops its sales nor
+    /// takes back what it put in; only the factory's closer may close it, and the money goes where it would anyway.
+    uint32 public constant MIN_TERM = 184 days;
     /// How long a creator's request to withdraw waits before it can be carried out, and how long after
     /// closing a pool `finish` waits: the platform, the traders and the codes' partners see every
     /// withdrawal a week before the money moves.

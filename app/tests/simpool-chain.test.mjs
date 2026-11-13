@@ -164,9 +164,9 @@ test("each code with what its sales brought and what its owner was sent or had s
 });
 
 
-test("the pool's term as the contract keeps it: 180 days from its creation, and the platform's early close", () => {
+test("the pool's term as the contract keeps it: 6 months, 184 days, from its creation, and the platform's early close", () => {
   // The pool was created in the block of its first event (the codes set at once), so its term runs from that time.
-  assert.equal(page.lockedUntil, CHAIN.events[0].time + MIN_TERM, "lockedUntil: the creation plus 180 days");
+  assert.equal(page.lockedUntil, CHAIN.events[0].time + MIN_TERM, "lockedUntil: the creation plus 184 days");
   assert.ok(CHAIN.now < page.lockedUntil, "the chain ends long before the term");
   assert.equal(page.creatorMayClose, false, "before its term the creator may not close it");
   assert.equal(page.closed, true);
