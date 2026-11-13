@@ -43,7 +43,7 @@ contract SimPoolFactory {
     uint32 public constant PAYOUT_HARD = 7 days;
     /// How many payouts a pool settles at most in any `PAYOUT_DAY`, however they came due, approved or by
     /// `PAYOUT_HARD`: one more waits in its place for the next day. Whatever the rules let through, a pool
-    /// loses no more than this many payouts of its largest size in a day (CFO, 13 November).
+    /// settles no more than this many payouts in a day, the largest size at most each (CFO, 13 November).
     uint8 public constant PAYOUTS_PER_DAY = uint8(PAYOUTS_A_DAY);
     uint32 public constant PAYOUT_DAY = 24 hours;
     /// How long a stopped payout's money stays set aside after the stop: the trader can object and the

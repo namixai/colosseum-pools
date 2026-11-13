@@ -331,8 +331,9 @@ class SimKeeper:
                 if found > room:
                     break  # one more than the day has room for: enough to know that one waits
         reach = pay_reach(rows, now, room)
-        if found > room:
-            # A payout may be paid and the day's two are settled: it waits, in its place, for `nextPayAt`.
+        if room == 0 and found:
+            # A payout may be paid and the day's two are settled: it waits, in its place, for `nextPayAt`. Said only
+            # with no room left: while there is room, `nextPayAt` is not yet the time this payout waits for.
             next_at = view(pool, "nextPayAt()", "uint64")
             if self.limit_said.get(pool) != next_at:
                 self.limit_said[pool] = next_at

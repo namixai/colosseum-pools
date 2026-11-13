@@ -356,7 +356,7 @@ class TheLongQueue(unittest.TestCase):
         logged = self.passes()
         self.assertEqual(self.reads, 3 + k.PAY_PER_CALL + 1, "the third payable one says that one waits")
         self.assertEqual(self.calls, [(3 + k.PAY_PER_CALL, k.PAY_PER_CALL)])
-        self.assertEqual([what for what, _ in logged], ["pay_waits_limit"])
+        self.assertEqual(logged, [], "there was room: the wait is said in the pass that finds none")
 
     def test_a_wave_of_five_goes_out_two_two_one_and_no_pay_is_sent_while_the_limit_holds(self):
         self.queue(0, approved_after=5)
@@ -364,8 +364,8 @@ class TheLongQueue(unittest.TestCase):
         logged = self.passes(3)  # three passes in the same half minute
         self.assertEqual(self.calls, [(2, 2)], "one call, the day's two; then none while the limit holds")
         self.assertEqual([(what, kw["room"], kw["next_at"]) for what, kw in logged],
-                         [("pay_waits_limit", 2, 0), ("pay_waits_limit", 0, t0 + self.DAY)],
-                         "said once when it changes, not every pass")
+                         [("pay_waits_limit", 0, t0 + self.DAY)],
+                         "said once, with the time the third waits for, not every pass and not while there was room")
         self.now = t0 + self.DAY - 1
         self.passes()
         self.assertEqual(len(self.calls), 1, "a second before the day is over: no call")

@@ -143,7 +143,7 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   and none waits on the approver longer. A payout waiting for its approval keeps its money: a later one is paid
   only if the pool also covers it (S135). A pool settles at most two payouts in any 24 hours, approved or gone out
   at their 7 days, paid or set aside for a refused trader (S138, S139): one more keeps its place and is paid the
-  next day, so whatever the rules let through, a pool pays out no more than two payouts of its largest size a day. Until a payout is paid, approved or not, the factory's checker, and
+  next day, so whatever the rules let through, `pay` settles no more than two payouts in any 24 hours, of the largest size at most; what was set aside for a refused trader leaves when that trader claims it, whatever the day. Until a payout is paid, approved or not, the factory's checker, and
   nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show
   the opposite positions, and for linked wallets the transactions that link them; or, for a result disputed, the
   transactions that show the flaw and the hash of the published dispute (S113, S114, S137). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the

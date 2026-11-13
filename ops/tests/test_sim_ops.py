@@ -146,8 +146,11 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("a payout that may be paid is paid by a call anyone may make, which the keeper makes pass "
                           "after pass. Each pool pays at most two payouts a day; any more are paid in order on the "
                           "following days. The two are counted over any 24 hours and count every payout, approved or "
-                          "not, so a payout is paid no later than 7 days after it is claimed unless the daily limit "
-                          "moves it to a following day.", text)
+                          "not: a payout whose 72 hours or 7 days have passed still waits for a following day once the "
+                          "day's two are paid.", text)
+            # The 7 days are when a payout may be paid without approval, not a promise of payment by then: it can
+            # also wait for money, or be stopped (review of #293).
+            self.assertNotIn("is paid no later than 7 days", text)
             self.assertNotIn("in its next pass", text, "a payout past the day's two waits for a later day")
             self.assertNotIn("ten payouts a call", text)
             self.assertEqual(keeper.PAY_PER_CALL, 2, "the two of the terms")

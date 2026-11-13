@@ -1046,7 +1046,7 @@ contract SimPoolInvariantTest is Test {
             pool.setCode(code, owner, shares[i]);
         }
         targetContract(address(handler));
-        bytes4[] memory s = new bytes4[](46);
+        bytes4[] memory s = new bytes4[](47);
         s[0] = SimPoolHandler.buy.selector;
         s[1] = SimPoolHandler.buy.selector;
         s[2] = SimPoolHandler.passExam.selector;
@@ -1094,6 +1094,7 @@ contract SimPoolInvariantTest is Test {
         s[43] = SimPoolHandler.approve.selector;
         s[44] = SimPoolHandler.approve.selector;
         s[45] = SimPoolHandler.approve.selector;
+        s[46] = SimPoolHandler.rush.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: s}));
     }
 

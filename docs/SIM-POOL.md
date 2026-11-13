@@ -76,8 +76,10 @@ fail, and their prices pay for the ones that pass.
   approved goes out two at their 72 hours, two a day later, one the day after. So the 7 days are the
   latest a payout waits for its approval, not the latest it is paid: the third and fourth of five
   unapproved payouts are paid 8 days after their claim, the fifth 9. `claimHeld` and `finish` are no
-  payouts of the day. Whatever the rules let through, a pool pays out at most two payouts of its
-  largest size in a day: 1 600 in the first pool, what its creator locked (the CFO, 13 November 2026).
+  payouts of the day. So the limit is on what `pay` settles, not on every transfer of a day: what was
+  set aside for a refused trader on earlier days leaves when that trader claims it. Whatever the rules
+  let through, `pay` settles at most two payouts in any 24 hours, of the largest size at most: 1 600 in
+  the first pool, what its creator locked (the CFO, 13 November 2026).
 - **A stop.** Until a payout is paid, approved or not, the factory's checker may stop it once, with
   a reason: 1, opposite positions with another account of the factory; 2, that and wallets linked;
   3, the result is disputed (a flaw of the exam, the oracle or the filler). For 1 and 2 the call
