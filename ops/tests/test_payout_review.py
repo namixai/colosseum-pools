@@ -664,6 +664,113 @@ class Recount(unittest.TestCase):
         self.assertIn("recount", got["kinds"])
 
 
+class ACoinFlip(unittest.TestCase):
+    """The profile of a pass that needs no view of the market, on a stage of 10 000 with 3 % a day: round trips at
+    a small leverage, a loss closed just over the day's line, nothing more that day, the pass by the last one."""
+
+    C = 10_000 * 10**6
+    DAY = 86_400
+    PX = 1_000_000
+
+    def world(self, trips, daily=300):
+        """Each of `trips` is (UTC day, leverage, result in bps of the capital[, second of the day]): a buy and a
+        sell of asset 3, ten minutes apart, with a snapshot at each new day's start."""
+        ch, _, s1 = honest_world()
+        n = [0]
+
+        def e(name, t, **kw):
+            n[0] += 1
+            return {"name": name, "block": n[0], "index": 0, "t": t, "tx": tx(7_000 + n[0]), **kw}
+
+        events, cash, day, t = [e("Started", 0, capital=self.C)], self.C, 0, 0
+        for d, lev, bps, *at in trips:
+            t = d * self.DAY + (at[0] if at else 3_600)
+            if d != day:
+                events.append(e("DaySnapshot", d * self.DAY + 60, day=d, equity=cash))
+                day = d
+            sz = int(cash * lev) // self.PX
+            out = self.PX + (self.C * bps // 10_000) // sz
+            events += [e("Filled", t, asset=3, buy=True, sz=sz, px=self.PX, cost=0, late=0, source=1),
+                       e("Filled", t + 600, asset=3, buy=False, sz=sz, px=out, cost=0, late=0, source=1)]
+            cash += sz * (out - self.PX)
+        events.append(e("Passed", t + 700, equity=cash))
+        ch.d["exam_events"] = {s1: events, addr(0x201): [e("Started", 0, capital=self.C), e("Passed", 0, equity=self.C)]}
+        if daily is not None:
+            ch.d["dailyLossBps"] = {s1: daily}
+        return ch
+
+    def flip(self, trips, **kw):
+        return r.review(self.world(trips, **kw).d, POOL, 0)["recount"]["stage"]["flip"]
+
+    PLAYER = [(0, 1.5, -290), (1, 1.5, -270), (2, 1.5, 1_600)]
+
+    def test_two_stops_over_the_day_line_a_day_apart_and_a_pass_are_the_profile(self):
+        ch = self.world(self.PLAYER)
+        got = r.review(ch.d, POOL, 0)
+        f = got["recount"]["stage"]["flip"]
+        self.assertEqual((f["trips"], f["stops"], f["leverage"]), (3, 2, 1.5))
+        self.assertIn("coin flip with a stop over the daily line", f["text"])
+        self.assertEqual(got["recount"]["stage"]["flags"], [], "the result counts up")
+        self.assertEqual((got["verdict"], got["kinds"], got["reasons"], got["action"]), ("clean", [], [], "approve"),
+                         "said, never counted: no reason, no colour, the approval as it was")
+        self.assertIn("  profile of the stage: passed in 3 round trips at 1.50x at most", r.summary(got))
+        self.assertEqual(r.card(got, ch.d)["evidence"]["recount"]["stage"]["flip"], f)
+
+    def test_one_round_trip_to_the_target_is_the_same_game_won_at_once(self):
+        f = self.flip([(0, 1.5, 1_100)], daily=None)
+        self.assertEqual((f["trips"], f["stops"], f["leverage"]), (1, 0, 1.5))
+        self.assertIn("one round trip", f["text"])
+
+    def test_a_trader_with_stops_is_not_the_profile(self):
+        self.assertIsNone(self.flip([(0, 2, -100), (1, 2, 1_200)]), "a stop at 1 %, far over the day's line")
+        self.assertIsNone(self.flip([(0, 2, -100, 3_600), (0, 2, 150, 7_200), (1, 2, -80), (1, 2, 300, 20_000),
+                                     (2, 2, 400), (3, 2, 400)]), "stops, and back in the market the same day")
+        self.assertIsNotNone(self.flip([(0, 1.5, -240), (1, 1.5, 1_300)]), "80 % of the day's 3 % gone: at the line")
+        self.assertIsNone(self.flip([(0, 1.5, -239), (1, 1.5, 1_300)]), "a little less: not at the line")
+        self.assertIsNone(self.flip([(0, 1.5, -290), (1, 1.5, -10), (2, 1.5, 1_600)]),
+                          "the second stop at 0.1 % of its own day's start: each day's line is counted from its snapshot")
+
+    def test_back_in_the_market_the_same_day_is_not_the_profile(self):
+        self.assertIsNone(self.flip([(0, 1.5, -290, 3_600), (0, 1.5, 1_400, 40_000)]))
+        self.assertIsNotNone(self.flip([(0, 1.5, -290, 80_000), (1, 1.5, 1_400, 60)]), "an hour and a half later, the next day")
+
+    def test_a_large_leverage_or_many_round_trips_are_not_the_profile(self):
+        self.assertIsNotNone(self.flip([(0, 3, -290), (1, 3, 1_400)]))
+        self.assertIsNone(self.flip([(0, 3.1, -290), (1, 3, 1_400)]), "over 3 times the account")
+        four = [(0, 1.5, -290), (1, 1.5, -270), (2, 1.5, 0), (3, 1.5, 1_700)]
+        self.assertIsNone(self.flip(four), "the third closed at nothing: no stop at the line")
+        stops = [(0, 1, -290), (1, 1, -270), (2, 1, -230), (3, 1, -225)]
+        self.assertIsNotNone(self.flip(stops[:3] + [(3, 1, 2_500)]), "four in a step")
+        self.assertIsNone(self.flip(stops + [(4, 1, 2_500)]), "five in a step")
+
+    def test_a_day_line_not_read_holds_no_loss_to_it(self):
+        self.assertIsNone(self.flip(self.PLAYER, daily=None))
+
+    def test_round_trips_too_small_to_be_a_position_are_not_counted_either_way(self):
+        dust = self.PLAYER + [(2, 0.01, 0, 50_000), (3, 0.04, 1)]
+        f = self.flip(dust)
+        self.assertEqual((f["trips"], f["stops"]), (3, 2), "what fills a trading day after the target")
+        self.assertIsNone(self.flip([(0, 0.04, 1)]), "nothing but dust is no round trip at all")
+        self.assertIsNone(self.flip(self.PLAYER + [(3, 0.06, 1)]), "5 % of the account and more is a position: the pass is its")
+
+    def test_an_exam_of_two_steps_is_held_to_it_a_step_at_a_time(self):
+        ch = self.world([(0, 1.5, -290), (1, 1.5, 1_400)])
+        s1 = addr(0x301)
+        ev = ch.d["exam_events"][s1]
+        second = [dict(x, block=x["block"] + 100, t=x["t"] + 5 * self.DAY, tx=tx(8_000 + x["block"])) for x in ev[1:]]
+        first_end = dict(ev[-1], name="StepPassed", step=0)
+        # The second step starts on the capital again: the same fills, five days on, lose and win what they did.
+        ch.d["exam_events"][s1] = ev[:-1] + [first_end] + second
+        rc = r.review(ch.d, POOL, 0)["recount"]["stage"]
+        self.assertEqual((rc["flags"], rc["flip"]["trips"], rc["flip"]["stops"]), ([], 4, 2))
+
+    def test_an_account_that_did_not_pass_has_none(self):
+        ch = self.world(self.PLAYER)
+        ev = ch.d["exam_events"][addr(0x301)]
+        ev[-1] = dict(ev[-1], name="Stopped", status=3)
+        self.assertIsNone(r.review(ch.d, POOL, 0)["recount"]["stage"]["flip"])
+
+
 class APairFundedFromOneWallet(unittest.TestCase):
     def test_a_sender_of_both_makes_it_reason_two_with_both_transfers(self):
         ch, t1, s1 = honest_world()
@@ -1014,6 +1121,7 @@ class ReadingTheChain(unittest.TestCase):
             return {"balanceOf(address)": (9_000,), "result()": (2, t1, 0, 0), "accountOf(address)": (2, 0, True),
                     "menu()": ([(SIZE // 2, 50), (SIZE, 100)],),
                     "terms()": ((capital, [800], 0, 0, 0, 1_000, 1, 10),),
+                    "rules()": ((300, 600, 1_000, [3], [1_000]),),
                     "approver()": (addr(0xAB),), "PAYOUT_HARD()": (7 * 86_400,)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
@@ -1033,6 +1141,7 @@ class ReadingTheChain(unittest.TestCase):
         self.assertEqual(sorted({b for _, b in asked}), list(range(21, 34)),
                          "each fill's and order's block, their neighbours, and every block of each order's window of 10")
         self.assertEqual(got["fillWindow"], {s1: 10, e1: 10})
+        self.assertEqual(got["dailyLossBps"], {s1: 300, e1: 300}, "the day's allowed loss, the first of each account's rules")
         self.assertEqual({a for a, _ in asked}, {3})
         self.assertEqual((got["oracle"]["3:25"], got["oracle"]["3:28"], got["oracle"]["9:9"]), (7, 8, 1), "the file stands in too")
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
@@ -1072,6 +1181,15 @@ class AgainstTheContracts(unittest.TestCase):
         m = re.search(r"event ExamSold\(\s*address indexed exam,\s*address indexed trader,\s*uint256 line,\s*uint64 size,"
                       r"\s*uint64 price,\s*uint256 fee,\s*bool bySignature,\s*bytes32 code,\s*address indexed partner", pool)
         self.assertIsNotNone(m, "sale_of reads the data in this order")
+
+    def test_the_accounts_rules_are_read_in_the_order_the_contract_holds_them(self):
+        types = (ROOT / "src/Types.sol").read_text()
+        fields = re.search(r"struct Rules \{(.*?)\n\}", types, re.S).group(1)
+        self.assertEqual(re.findall(r"^\s*(\w+(?:\[\])?) (\w+);", fields, re.M),
+                         [("uint16", "dailyLossBps"), ("uint16", "maxDrawdownBps"), ("uint32", "maxLeverageX100"),
+                          ("uint32[]", "assets"), ("uint32[]", "assetLeverageX100")])
+        self.assertEqual(r.EXAM_RULES, "(uint16,uint16,uint32,uint32[],uint32[])")
+        self.assertIn("function rules() external view returns (Rules memory)", (ROOT / "src/exam/PaperExam.sol").read_text())
 
     def test_it_reads_and_never_sends(self):
         src = (ROOT / "ops/payout_review.py").read_text()

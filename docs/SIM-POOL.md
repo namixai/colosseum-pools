@@ -279,6 +279,18 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     back, `--prices` stands in. A pass in three fills or two days at most on the largest size is said
     as a profile, not counted as a reason.
 
+    A second profile is the pass that needs no view of the market: a position at a small leverage held to
+    the target, its stop just over the day's loss line, and after a stop nothing until the next UTC day,
+    when the line is counted from the smaller equity. From the fills, a step at a time: four round trips
+    (flat to flat) at most, each opened at three times the account at most; every one but the last closed
+    with 80 % or more of the day's allowed loss gone (the account's own `rules()`, against the snapshot in
+    force), and none opened again that day; the last one is the pass. One round trip alone is the same
+    game won at once. Round trips under 5 % of the account are not counted either way. The rules allow
+    such a pass and an honest trader may trade so: it is a grey line of the card (`recount.<part>.flip`),
+    in no reason, and changes neither the verdict nor what is offered. A stop is seen only once it is
+    taken: the same player who split one position over several round trips, or re-entered the same day
+    at a size under the line, is not marked.
+
   - how often the pool's exams pass, against the CFO's thresholds (13 November, the first pool's; to be looked
     at again after its first 100 exams; `--thresholds` to change). Three counts:
     - passes among the pool's last 100 exams ended: yellow from 24, red from 28;

@@ -279,10 +279,53 @@ ZERO_ADDRESS = "0x" + "00" * 20
 PPM = 1_000_000
 ANALYSIS = "<keccak256 of the published analysis>"
 SOURCE_ORACLE, SOURCE_BOOK, SOURCE_FALLBACK = 0, 1, 2
+# An account's `rules()` (src/Types.sol, `Rules`): the day's allowed loss in bps comes first.
+EXAM_RULES = "(uint16,uint16,uint32,uint32[],uint32[])"
 
 
 def oracle_key(asset: int, block: int) -> str:
     return f"{asset}:{block}"
+
+
+def coin_flip(trips: list[dict], daily_bps: int | None, p: "Params") -> dict | None:
+    """The shape of a pass that needs no view of the market: one position at a small leverage held to the target,
+    its stop just over the day's loss line, and after a stop nothing until the next UTC day, when the line is
+    counted from the smaller equity. The rules allow it and an honest trader may trade so; it is said as a
+    profile, never as a reason.
+
+    Seen from the fills alone, a step at a time: a few round trips (flat to flat), each opened at `flip_leverage`
+    times the account at most; every one but the last closed with `flip_near` of the day's allowed loss gone or
+    more, and no round trip opened again that day; the last one is the pass. One round trip alone is the same
+    game won at once. Round trips under `flip_dust` of the account are not counted either way: they are what
+    fills a trading day, not a position."""
+    total = stops = 0
+    leverage = 0.0
+    for step in sorted({t["step"] for t in trips}):
+        moves = [t for t in trips if t["step"] == step and t["open"] > 0 and t["ntl"] >= p.flip_dust * t["open"]]
+        if not moves or len(moves) > p.flip_trips:
+            return None
+        if any(t["ntl"] > p.flip_leverage * t["open"] for t in moves):
+            return None
+        if len(moves) > 1 and not daily_bps:
+            return None  # the day's line was not read: a loss cannot be held to it
+        for t, nxt in zip(moves, moves[1:]):
+            if (t["dayEq"] - t["close"]) * BPS < p.flip_near * t["dayEq"] * daily_bps:
+                return None
+            if nxt["t0"] // 86_400 <= t["t1"] // 86_400:
+                return None
+        total += len(moves)
+        stops += len(moves) - 1
+        leverage = max([leverage] + [t["ntl"] / t["open"] for t in moves])
+    if not total:
+        return None
+    if stops:
+        text = (f"passed in {total} round trips at {leverage:.2f}x at most, every one but the last of a step closed with "
+                f"{round(p.flip_near * 100)} % or more of the day's allowed loss gone and none opened again that day: the "
+                "shape of a coin flip with a stop over the daily line, which the rules allow; not a sign of cheating")
+    else:
+        text = (f"passed in one round trip a step at {leverage:.2f}x at most: the shape of a coin flip held to the "
+                "target, which the rules allow; not a sign of cheating")
+    return {"trips": total, "stops": stops, "leverage": round(leverage, 2), "text": text}
 
 
 def recount(account: str, chain: dict, p: "Params", size: int | None = None, largest: int | None = None) -> dict:
@@ -296,11 +339,11 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
     the book never better for the trader. The oracle price of a fill's block is held to the blocks around it
     (one price far from both neighbours, which agree, is an outlier) and, given a file of the venue's prices,
     to the venue's price of that minute. A pass in very few fills or days on the largest size of the menu is
-    said as a profile, not as a suspicion."""
+    said as a profile, not as a suspicion; so is a pass in the shape of a coin flip (`coin_flip`), as `flip`."""
     ev = (chain.get("exam_events") or {}).get(account)
     out = {"read": ev is not None, "capital": None, "fills": 0, "days": 0, "passed": False,
            "checked": {"results": 0, "snapshots": 0, "unchecked": 0, "fills": 0}, "flags": [], "moves": [],
-           "profile": None}
+           "profile": None, "flip": None}
     if ev is None:
         return out
     oracle = chain.get("oracle") or {}
@@ -311,6 +354,13 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
     pos: dict[int, int] = {}
     placed: int | None = None
     days: set[int] = set()
+    # Round trips, flat to flat, for `coin_flip`: the cash each opened on, its largest notional at the prices of
+    # its own fills, the cash it closed on, and the equity the day's line was counted from at its close (the
+    # latest snapshot; the capital before any).
+    trips: list[dict] = []
+    trip: dict | None = None
+    last_px: dict[int, int] = {}
+    day_eq = step = 0
 
     def px(asset: int, block: int) -> int | None:
         return oracle.get(oracle_key(asset, block))
@@ -324,14 +374,21 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
     for e in ev:
         name = e["name"]
         if name == "Started":
-            capital = cash = e["capital"]
+            capital = cash = day_eq = e["capital"]
             out["capital"] = capital
         elif name == "Placed":
             placed = e["block"]
         elif name == "Filled":
             delta = e["sz"] if e["buy"] else -e["sz"]
+            if trip is None:
+                trip = {"step": step, "open": cash, "ntl": 0, "t0": e["t"]}
             cash -= delta * e["px"] + e["cost"]
             pos[e["asset"]] = pos.get(e["asset"], 0) + delta
+            last_px[e["asset"]] = e["px"]
+            trip["ntl"] = max(trip["ntl"], sum(abs(q) * last_px[a] for a, q in pos.items()))
+            if not any(pos.values()):
+                trips.append({**trip, "close": cash, "t1": e["t"], "dayEq": day_eq})
+                trip = None
             out["fills"] += 1
             days.add(e["t"] // 86_400)
             ntl = e["sz"] * e["px"]
@@ -365,6 +422,7 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
                     out["moves"].append({"tx": e["tx"], "bps": round(moved, 1)})
             placed = None
         elif name == "DaySnapshot":
+            day_eq = e["equity"]
             open_ = {a: q for a, q in pos.items() if q}
             marks = {a: px(a, e["block"]) for a in open_}
             if any(m is None for m in marks.values()):
@@ -378,10 +436,13 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
         elif name == "StepPassed":
             result("StepPassed", e)
             cash, pos, days = capital, {}, set()
+            trip, day_eq, step = None, capital, step + 1
         elif name == "Passed":
             result("Passed", e)
             out["passed"] = True
     out["days"] = len(days)
+    if out["passed"]:
+        out["flip"] = coin_flip(trips, (chain.get("dailyLossBps") or {}).get(account), p)
     if out["passed"] and size is not None and size == largest and (out["fills"] <= p.few_fills or out["days"] <= p.few_days):
         out["profile"] = (f"passed in {out['fills']} fills over {out['days']} days on the largest size: a pass that "
                           "could be luck, not a sign of cheating")
@@ -552,7 +613,8 @@ class Params:
                  idle_share: float = 0.5, min_fills: int = 5, mirror_ratio: float = 0.5, mirror_share: float = 0.6,
                  mirror_min_s: int = 3_600, sum_dedication: float = 0.6, timing_min: int = 8,
                  timing_alpha: float = 0.01, outlier_bps: int = 100, venue_bps: int = 100, few_fills: int = 3,
-                 few_days: int = 2):
+                 few_days: int = 2, flip_leverage: float = 3.0, flip_near: float = 0.8, flip_trips: int = 4,
+                 flip_dust: float = 0.05):
         self.window_s = window_s
         self.tolerance = tolerance
         self.wide = wide
@@ -575,6 +637,12 @@ class Params:
         self.venue_bps = venue_bps
         self.few_fills = few_fills
         self.few_days = few_days
+        # The coin flip (`coin_flip`): round trips opened at 3 times the account at most, 4 a step at most, each
+        # loss with 80 % of the day's allowance gone; a round trip under 5 % of the account is not counted.
+        self.flip_leverage = flip_leverage
+        self.flip_near = flip_near
+        self.flip_trips = flip_trips
+        self.flip_dust = flip_dust
 
 
 def owners(chain: dict) -> dict[str, str]:
@@ -891,8 +959,10 @@ def card(r: dict, chain: dict) -> dict:
     """The review as one JSON document a page reads (`app/lib/operator.js`, `reviewFor`). The schema is
     fixed: fields are added under a new SCHEMA, never renamed. /2 added `action`, `evidence.mirrors`,
     `evidence.opposingSum`, `evidence.recount` and `stopDraft`, and the reason kinds `mirror`, `mirror-sum`
-    and `recount`; /3, `evidence.passRates` and `evidence.timing`, and the kinds `pass-rate` and `timing`. Amounts are strings of USDC units (6
-    decimals), since a JSON number loses digits past 2**53; times are seconds on the chain's clock."""
+    and `recount`; /3, `evidence.passRates` and `evidence.timing`, the kinds `pass-rate` and `timing`, and
+    `evidence.recount.<part>.flip` (a profile, shown grey: it is in no reason and changes no colour). Amounts
+    are strings of USDC units (6 decimals), since a JSON number loses digits past 2**53; times are seconds on
+    the chain's clock."""
     tx = r["tx"] or {}
     g = r["running"]
     return {
@@ -951,6 +1021,8 @@ def summary(r: dict) -> str:
                          + ("; ".join(f"{f['what']} at {f['tx']}" for f in rc["flags"]) or "all count up"))
             if rc["profile"]:
                 lines.append(f"  profile: {rc['profile']}")
+            if rc["flip"]:
+                lines.append(f"  profile of the {part}: {rc['flip']['text']}")
     for l in r["links"]:
         lines.append(f"  linked to {l['trader']}" + (f" through {l['sender']}" if l["sender"] else " directly")
                      + (" (wide sender, not counted)" if l["wide"] else "") + ": " + ", ".join(l["txs"]))
@@ -1167,6 +1239,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     oracle: dict[str, int] = dict(prices or {})
     cost_ppm: dict[str, int] = {}
     fill_window: dict[str, int] = {}
+    daily_bps: dict[str, int] = {}
     stage_exam = {f["stage"]: f["exam"] for f in funded}
     for x in payouts:
         if x["state"] != "Due":
@@ -1179,7 +1252,11 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                 cost_ppm[a], fill_window[a] = int(terms[5]), int(terms[7])
             except Exception as exc:
                 core.log("terms_unread", account=a, error=str(exc)[:200])
-            assets = {e["asset"] for e in exam_events[a] if e["name"] == "Filled"}
+            try:
+                daily_bps[a] = int(c.call_view(a, "rules()", [], [], [EXAM_RULES])[0][0])
+            except Exception as exc:
+                core.log("rules_unread", account=a, error=str(exc)[:200])
+            assets ={e["asset"] for e in exam_events[a] if e["name"] == "Filled"}
             wanted = set()
             for e in exam_events[a]:
                 if e["name"] in ("Filled", "Placed"):
@@ -1206,7 +1283,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     return {"now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
             "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
             "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {},
-            "fillWindow": fill_window}
+            "fillWindow": fill_window, "dailyLossBps": daily_bps}
 
 
 def main(argv: list[str] | None = None) -> int:
