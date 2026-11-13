@@ -291,6 +291,8 @@ class ACodeBoughtUp(unittest.TestCase):
         self.assertEqual(r.longest_new_wallet_run(sales, k), 3)
         self.assertEqual(r.longest_new_wallet_run(sales, x), 1)
         self.assertEqual(r.longest_new_wallet_run([], k), 0)
+        again = [{"code": k, "trader": w} for w in ["d", "e", "f", "e", "g", "h"]]
+        self.assertEqual(r.longest_new_wallet_run(again, k), 4, "f e g h: the run goes on after the earlier e")
 
 
 class LateFills(unittest.TestCase):

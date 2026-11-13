@@ -83,18 +83,18 @@ def late_outlier(mine: list[int], others: list[int], min_fills: int) -> bool:
 def longest_new_wallet_run(sales: list[dict], code: str) -> int:
     """The longest run of the pool's sales in a row that all name `code`, each from a wallet not yet in
     the run: what a code's owner buying exams under many wallets at once leaves behind."""
-    best = run = 0
-    seen: set[str] = set()
+    best = start = i = 0
+    last: dict[str, int] = {}  # each wallet's latest place in the current stretch of this code's sales
     for s in sales:
         if s["code"] != code:
-            run, seen = 0, set()
+            start, i, last = 0, 0, {}
             continue
-        if s["trader"] in seen:
-            run, seen = 1, {s["trader"]}
-        else:
-            run += 1
-            seen.add(s["trader"])
-        best = max(best, run)
+        t = s["trader"]
+        if last.get(t, -1) >= start:
+            start = last[t] + 1  # the run goes on from just after the wallet's earlier sale (review of #283)
+        last[t] = i
+        i += 1
+        best = max(best, i - start)
     return best
 
 
@@ -134,21 +134,28 @@ def linked(trader: str, chain: dict, p: Params) -> list[dict]:
     pools = set(chain["pools"])
     buyers = sorted({s["trader"] for s in chain["sales"]})
     transfers = [t for t in chain["transfers"] if t["from"] not in pools]
+    # One pass over the transfers, indexed by sender and pair (review of #283): the first of each sender to each
+    # buyer, the buyers each sender funded, and the transfers between this trader and each other wallet.
+    first: dict[tuple[str, str], str] = {}
     funded: dict[str, set[str]] = {}
+    direct: dict[str, list[str]] = {}
     for t in transfers:
         if t["to"] in buyers:
+            first.setdefault((t["from"], t["to"]), t["tx"])
             funded.setdefault(t["from"], set()).add(t["to"])
+        if trader in (t["from"], t["to"]) and t["from"] != t["to"]:
+            direct.setdefault(t["to"] if t["from"] == trader else t["from"], []).append(t["tx"])
+    mine = sorted(s for s, got in funded.items() if trader in got and s != trader)
     out = []
     for other in buyers:
         if other == trader:
             continue
-        for sender in sorted(s for s, got in funded.items() if trader in got and other in got and s not in (trader, other)):
-            first = {to: next(t["tx"] for t in transfers if t["from"] == sender and t["to"] == to) for to in (trader, other)}
-            out.append({"trader": other, "sender": sender, "txs": [first[trader], first[other]],
-                        "wide": len(funded[sender]) > p.wide})
-        direct = [t["tx"] for t in transfers if {t["from"], t["to"]} == {trader, other}]
-        if direct:
-            out.append({"trader": other, "sender": None, "txs": direct, "wide": False})
+        for sender in mine:
+            if sender != other and other in funded[sender]:
+                out.append({"trader": other, "sender": sender, "txs": [first[(sender, trader)], first[(sender, other)]],
+                            "wide": len(funded[sender]) > p.wide})
+        if direct.get(other):
+            out.append({"trader": other, "sender": None, "txs": direct[other], "wide": False})
     return out
 
 
