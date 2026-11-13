@@ -1388,6 +1388,35 @@ contract SimPoolTest is Test {
         pool.withdraw();
     }
 
+    function test_withdraw_theCfosExample_aWeekOfSalesAndPayouts_thenTheLessOfTheTwo() public {
+        // The example of the letter to the CFO, 13 November: code A (50 %) and code B (the creator's, no share).
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        bytes32 codeB = keccak256("PLATFORM");
+        vm.prank(creator);
+        pool.setCode(codeB, creator, 0);
+        for (uint256 i = 0; i < 40; ++i) _buyWith(pool, makeAddr(string(abi.encode("a", i))), 1, CODE);
+        for (uint256 i = 0; i < 20; ++i) _buyWith(pool, makeAddr(string(abi.encode("b", i))), 1, codeB);
+        deal(address(usdc), address(pool), 5_074_500_000); // 1 600 + 60 x 84.575, less two payouts paid
+        assertEq(pool.withdrawable(), 2_674_500_000, "day 0: 5 074.50 less the floor of 2 400");
+        vm.prank(creator);
+        pool.requestWithdraw(2_000e6);
+        for (uint256 i = 0; i < 6; ++i) _buyWith(pool, makeAddr(string(abi.encode("a2", i))), 1, CODE);
+        for (uint256 i = 0; i < 4; ++i) _buyWith(pool, makeAddr(string(abi.encode("b2", i))), 1, codeB);
+        deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) - 1_600e6); // two more payouts paid
+        assertEq(usdc.balanceOf(address(pool)), 4_320_250_000);
+        vm.warp(block.timestamp + 7 days);
+        assertEq(pool.withdrawable(), 1_920_250_000, "day 7");
+        uint256 fees = usdc.balanceOf(platform);
+        uint256 before = usdc.balanceOf(creator);
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(usdc.balanceOf(platform) - fees, 9_601_250, "0.5 % of 1 920.25");
+        assertEq(usdc.balanceOf(partner), 627_784_589, "A: 50 % of 1 910.64875 x 46/70");
+        assertEq(usdc.balanceOf(creator) - before, 1_282_864_161, "the creator the rest, B's part with it");
+        assertEq(usdc.balanceOf(address(pool)), 2_400e6, "the floor of three payouts stays");
+    }
+
     function test_withdraw_moneyThatCameInAfterTheRequestStays() public {
         SimPool pool = _pool();
         _withSales(pool, 30);
