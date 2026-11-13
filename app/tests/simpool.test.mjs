@@ -462,6 +462,10 @@ test("a stop on a pool with the reserve says where it stands: the 14 days, the o
   assert.equal(stopNote({ status: "paid" }, 0), null);
   // An objection whose block was not dated still says when, by its block.
   assert.match(payouts([stopped], objection, at + 60)[0].stopNote.text, /objected on block 700;/);
+  // A payout handed in without the fields at all, not null but missing, says the same and never reaches utc(undefined),
+  // which throws (review of #272).
+  assert.deepEqual(stopNote({ status: "stopped" }, at), { state: "stopped", until: null, text: "Stopped by the checker." });
+  assert.match(stopNote({ status: "stopped", reserveEnds: until, objection: { block: 700 } }, at).text, /objected on block 700;/);
 });
 
 test("each code's partner, share, part of what the pool took, and what it was sent or had set aside", () => {
