@@ -691,6 +691,19 @@ test("counts per trader and per code: breached and expired apart, an unread acco
   const code = c.codes[0];
   assert.deepEqual([code.traders, code.purchases, code.examsPassed, code.examsBreached, code.stagesExpired, code.complete],
     [2, 3, 1, 1, 1, false]);
+  // The code's fill days: distinct UTC days across its accounts, not a sum of its traders' days (review of #283).
+  assert.equal(code.fillDays, c.traders.find((k) => k.trader === T1.toLowerCase()).fillDays,
+    "here only trader 1's accounts under the code filled");
+  assert.equal(activityCounts(pool, logs, new Map([[1, 0]])).codes[0].fillDays, null, "a fill without its time: not guessed");
+  const two = [
+    ev("ExamSold", 1, { exam: A(0xf1), trader: T1, line: 0n, size: 1n, price: 10n, fee: 0n, bySignature: false, code: C1, partner: P1 }),
+    ev("ExamSold", 2, { exam: A(0xf2), trader: X, line: 0n, size: 1n, price: 10n, fee: 0n, bySignature: false, code: C1, partner: P1 }),
+  ];
+  const filled = (block) => [ev("Started", block, { trader: T1, pool: P1, capital: 1n }),
+    ev("Filled", block, { asset: 3, isBuy: true, sz: 1n, px: 1n, cost: 0n, late: 0n, source: 0 })];
+  const same = activityCounts(two, { [A(0xf1)]: filled(5), [A(0xf2)]: filled(6) }, new Map([[5, 100], [6, 200]]));
+  assert.deepEqual([same.codes[0].fillDays, same.traders.map((k) => k.fillDays)], [1, [1, 1]],
+    "two traders of the code on the same day: one day for the code, not two");
   assert.deepEqual(EXAM_END, { 3: "breached", 4: "expired" });
   // A fill whose block time was not read: the days are not guessed.
   assert.equal(activityCounts(pool, logs, new Map([[1, 0]])).traders.find((k) => k.trader === T1.toLowerCase()).fillDays, null);
