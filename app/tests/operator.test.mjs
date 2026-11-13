@@ -138,6 +138,18 @@ test("a hole in the list of payouts is skipped, and a payout's own id is kept", 
   assert.deepEqual(rows.map((r) => r.id), [2, 9]);
 });
 
+test("a pool without approvals pays at 72 hours by itself: no ceiling, nothing to approve", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - 4 * D })];
+  const none = { ...reviewDoc(0), call: { kind: "none", to: POOL, method: null, signature: null, args: [], data: null,
+    note: "in this pool a payout goes by itself 72 hours after its claim" } };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, approvals: false, reviews: { 0: none } });
+  assert.deepEqual(rows.map((r) => [r.id, r.status, r.hardAt, r.payAt, r.approvable]),
+    [[1, "payable", null, NOW - D, false], [0, "in-72-hours", null, NOW + 2 * D, false]]);
+  const r0 = rows.find((r) => r.id === 0);
+  assert.equal(r0.reviewProblem, null);
+  assert.equal(r0.review.call, null, "nothing to sign");
+});
+
 test("a pool without the field says approved by its events", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
   const rows = awaitingApproval({ pool: POOL, structs, events: [{ name: "PayoutApproved", args: { id: 1n } }], now: NOW, keccak256 });
