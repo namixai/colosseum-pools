@@ -252,8 +252,10 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
   factory: the same asset, opposite sides, at most 10 minutes apart, sizes within 20 %. A match is
   reason 1; with the two traders funded by one address, or one paying the other (USDC transfers since
-  the deployment), reason 2. It stops a payout at least 5 minutes before it is due, once, from the
-  factory's checker key, and lifts its own stop with `--lift POOL:ID`, within 14 days of the stop.
+  the deployment), reason 2. It stops a payout once, from the factory's checker key, and until when
+  is the pool's own rule: on a pool with payout approval until the payout is paid, approved or not (an
+  unapproved one waits up to 7 days, and a pair found on the fourth still stops it); on a pool from
+  before approvals at least 5 minutes before it is due. It and lifts its own stop with `--lift POOL:ID`, within 14 days of the stop.
   Without `--wallet` it only
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
