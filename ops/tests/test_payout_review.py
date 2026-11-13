@@ -529,6 +529,13 @@ class Timing(unittest.TestCase):
 
     best = staticmethod(lambda window, buy: window.index(min(window) if buy else max(window)))
 
+    def test_a_zero_oracle_price_in_a_window_is_not_judged_and_not_divided_by(self):
+        ch = self.world(pick=self.best)
+        ch.d["oracle"]["9:1000"] = 0  # the first block of the first order's window
+        got = r.review(ch.d, POOL, 0)["timing"]
+        self.assertEqual(got["filler"]["fills"], 11, "that order is left out; the other eleven are still judged")
+        self.assertTrue(got["filler"]["flag"])
+
     def test_a_fair_filler_at_once_is_no_flag(self):
         got = r.review(self.world().d, POOL, 0)["timing"]
         self.assertEqual((got["lateMedian"], got["filler"]["fills"]), (0, 12))

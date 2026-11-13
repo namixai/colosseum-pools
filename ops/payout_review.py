@@ -594,7 +594,8 @@ def timing(trader: str, chain: dict, who: dict[str, str], p: "Params") -> dict:
             first = e["block"] - e["late"]
             if w and w > 1:
                 window = [oracle.get(oracle_key(e["asset"], first + k)) for k in range(w)]
-                if all(x is not None for x in window):
+                # A zero price (a feed that was not live, or one a --prices file gave) is no price: not judged, not divided by.
+                if all(x is not None and x > 0 for x in window):
                     best = min(window) if e["buy"] else max(window)
                     picked += 1
                     hits += o == best
