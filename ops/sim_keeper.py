@@ -74,10 +74,17 @@ PAYOUT_HARD = 7 * 86_400
 # A fill's gas, fixed: an estimate first would cost a block. PaperExam's fill, with sixteen assets
 # open, is under it (forge test --gas-report).
 FILL_GAS = 400_000
-PAY_PER_CALL = 16
+PAY_PER_CALL = 10
 # How far past the head the keeper reads payouts to find one to pay: behind a head that waits for its approval,
 # later approved payouts are paid out of order, and `pay` must be told to look that far (review of #286).
-SCAN_PAYOUTS = 256
+# One call fits a small block (2 000 000 gas, ops/keeper.py), measured from cold storage and not estimated
+# (test/sim/SimPool.t.sol, test_pay_theKeepersFullBatch_fitsASmallBlock): PAY_PER_CALL payouts paid past 86
+# waiting, `pay(96)`, take 999 510 gas, each further payout looked at 5 390, and `pay(192)` 1 517 035: three
+# quarters of the block, the rest left for a token whose transfer costs more than the test's. This is the
+# keeper's limit, kept to what was measured, not the block's: a longer look may still fit, by the queue and the
+# token. `pay` counts from the head whatever it is told, so a payout further than this past a waiting head is
+# not paid by the keeper until the head moves, which the approval of the payouts before it does, or their 7 days.
+SCAN_PAYOUTS = 192
 
 
 # ── what is due, from what was read ──────────────────────────────────────────────────
@@ -115,8 +122,14 @@ def pay_reach(rows: list[tuple[str, int, bool]], now: int) -> int:
     the last payable one, or, with none, past the settled ones at the head; zero for nothing to do. `pay` counts
     every payout it looks at, settled ones too (review of #286), so the keeper names how far to go. A payout
     waiting for its approval keeps the head, and the keeper does not call `pay` for it before its 7 days."""
-    last = max((k + 1 for k, (state, due_at, approved) in enumerate(rows) if payable(state, due_at, approved, now)),
-               default=0)
+    last = 0
+    paid = 0
+    for k, (state, due_at, approved) in enumerate(rows):
+        if payable(state, due_at, approved, now):
+            last = k + 1
+            paid += 1
+            if paid == PAY_PER_CALL:
+                break  # a call within a small block's gas; the rest in the next pass
     if last:
         return last
     settled = 0
@@ -296,15 +309,27 @@ class SimKeeper:
         if head >= count:
             return
         rows = []
-        for pid in range(head, min(count, head + SCAN_PAYOUTS)):
+        end = min(count, head + SCAN_PAYOUTS)
+        found = 0
+        early = False
+        for pid in range(head, end):
             p = view(pool, "payout(uint256)", PAYOUT, ["uint256"], [pid])
             rows.append((PAYOUT_STATE[p[4]], p[3], bool(p[7])))
             # `pay` stops at a waiting payout whose 72 hours are not over: nothing after it is read.
             if rows[-1][0] == "Due" and now < rows[-1][1]:
+                early = True
                 break
+            if payable(*rows[-1], now):
+                found += 1
+                if found == PAY_PER_CALL:
+                    break  # all one call pays (pay_reach): the rest is read in the next pass
         reach = pay_reach(rows, now)
         if reach:
             self.send(pool, "pay(uint256)", ["uint256"], [reach])
+        elif not early and count > end:
+            # Every payout within the keeper's reach waits for its approval, and there are more behind them.
+            # They are paid once the head moves: the approver approves the ones in front, or their 7 days come.
+            log("pay_out_of_reach", pool=pool, head=head, looked=len(rows), beyond=count - end)
 
     def slow_pass(self) -> None:
         latest = int(c.rpc("eth_blockNumber"), 16)
