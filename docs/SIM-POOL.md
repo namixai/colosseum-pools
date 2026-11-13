@@ -210,7 +210,10 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `eth_getLogs` an hour, the live accounts' `Placed` and the pools' new exams and stages with their
   orders, so an order placed seconds after its purchase is seen. It sends each order's `fill` from the
   filler's key for the block its window opens; a fill the exam refuses (the book past the ceiling, say)
-  is sent again for the next block, once a block, while the window lasts. A fill waits for its receipt,
+  is sent again for the next block, once a block, while the window lasts. The same loop keeps every
+  running exam's stops and takes from their events (`TriggerSet`, `TriggerCleared`, `TriggerFilled`): each
+  armed one is tried once a block by a call that changes nothing, and carried out (`fillTrigger`, the same
+  fixed gas as a fill) in the block after the oracle has reached it. A fill waits for its receipt,
   so two orders in one block go one after the other. A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
   `expire`, `release`, `claimPayout`, `pay`. One `pay` is told to pay at most ten payouts and to look

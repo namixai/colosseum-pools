@@ -81,6 +81,18 @@ contract PaperExam is Initializable {
         uint64 placedBlock;
     }
 
+    /// A stop or a take on one asset's position. Once the oracle price is at `px` or past it, against the
+    /// position for a stop, for it for a take, it closes `sz` of the position (zero, or more than is open:
+    /// all of it) at the price a fill takes in that block. It acts from block `armedAt`, `fillDelay` after it
+    /// was set; `seenAt` is the block in which somebody showed it had triggered, and `FALLBACK_BLOCKS`
+    /// later anyone may carry it out while it still holds. Zero `px`: none.
+    struct Trigger {
+        uint64 px;
+        uint64 sz;
+        uint64 armedAt;
+        uint64 seenAt;
+    }
+
     uint256 public constant MAX_STEPS = 4;
     uint32 public constant MAX_COST_PPM = 100_000;
     /// The most leverage an exam's rules may allow, times 100: 10x.
@@ -143,6 +155,10 @@ contract PaperExam is Initializable {
     uint8 public drawdownKind;
     Order public pending;
 
+    /// One stop and one take a position, by asset; each only ever makes the position smaller.
+    mapping(uint32 asset => Trigger) public stopOf;
+    mapping(uint32 asset => Trigger) public takeOf;
+
     Rules internal _rules;
     ExamTerms internal _terms;
     mapping(uint32 asset => bool) internal _allowedAsset;
@@ -163,6 +179,16 @@ contract PaperExam is Initializable {
     /// `source`: `SOURCE_ORACLE`, `SOURCE_BOOK` or `SOURCE_ORACLE_FALLBACK`.
     event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late, uint8 source);
     event FillerSet(address indexed filler, bool fromBook, uint16 maxWorseBps);
+    /// A stop (`isTake` false) or a take set on `asset`'s position: it acts from block `armedAt`.
+    event TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt);
+    /// Removed by the trader, or because the position it was on was closed or turned round.
+    event TriggerCleared(uint32 indexed asset, bool isTake);
+    /// Shown to have triggered at `oracle` in block `seenAt`: from `seenAt + FALLBACK_BLOCKS` anyone may carry it out.
+    event TriggerSeen(uint32 indexed asset, bool isTake, uint64 oracle, uint256 seenAt);
+    /// Carried out: `sz` closed at `px`, which cost `cost`, once the oracle had reached `triggerPx`.
+    event TriggerFilled(
+        uint32 indexed asset, bool isTake, uint64 sz, uint64 px, uint256 cost, uint64 triggerPx, uint8 source
+    );
     event DaySnapshot(uint32 indexed day, int256 equity);
     event StepPassed(uint8 indexed step, int256 equity);
     event Passed(address indexed trader, int256 equity);
@@ -193,6 +219,10 @@ contract PaperExam is Initializable {
     error NotFlat();
     error TargetNotMet(int256 equity, int256 target);
     error NotEnoughDays(uint16 traded, uint16 needed);
+    error NoPosition();
+    error NoTrigger();
+    error ZeroPrice();
+    error NotTriggered(uint64 oracle, uint64 triggerPx);
 
     modifier inStatus(Status s) {
         if (status != s) revert BadStatus(status);
@@ -355,32 +385,62 @@ contract PaperExam is Initializable {
         }
         if (_over()) revert TooLate();
         delete pending;
-
-        (uint64 px, uint8 source) = _fillPrice(o.asset, o.isBuy);
-        uint256 ntl = uint256(o.sz) * px;
-        uint256 cost = (ntl * _terms.costPpm + PPM - 1) / PPM;
-        int256 afterFill = before + delta;
-        positionOf[o.asset] = afterFill;
-        cash -= delta * int256(uint256(px)) + int256(cost);
-
-        if (_abs(afterFill) > _abs(before)) {
-            (int256 eq, uint256 open) = _book();
-            if (eq <= 0 || open * 100 > uint256(eq) * _rules.maxLeverageX100 || _overAssetCap(eq)) {
-                revert OverLeverage();
-            }
-        }
-
-        // A fill smaller than the exchange would take is still a fill -- dust has to be closable
-        // -- but it is not a trade: it neither makes a trading day nor ends an idle stretch.
-        if (ntl >= MIN_TRADE_NOTIONAL) {
-            uint32 today = _today();
-            if (_lastFillDayPlusOne != today + 1) {
-                _lastFillDayPlusOne = today + 1;
-                tradingDays += 1;
-            }
-            lastFillAt = uint64(block.timestamp);
-        }
+        (uint64 px, uint256 cost, uint8 source) = _apply(o.asset, o.isBuy, o.sz, before);
         emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);
+    }
+
+    // ── stops and takes ──────────────────────────────────────────
+
+    /// @notice Sets the stop (`isTake` false) or the take of the position in `asset`, replacing the one there:
+    ///         close `sz` of it (zero: all of it) once the oracle price reaches `px`. The trader or their agent.
+    ///         It acts `fillDelay` blocks after it is set, as an order fills no sooner: a stop set past the
+    ///         price is not a way round the delay.
+    function setTrigger(uint32 asset, bool isTake, uint64 px, uint64 sz) external inStatus(Status.Active) {
+        if (msg.sender != trader && msg.sender != agent) revert NotTrader();
+        if (_over()) revert TooLate();
+        if (positionOf[asset] == 0) revert NoPosition();
+        if (px == 0) revert ZeroPrice();
+        uint64 armedAt = uint64(block.number) + _terms.fillDelay;
+        Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
+        (t.px, t.sz, t.armedAt, t.seenAt) = (px, sz, armedAt, 0);
+        emit TriggerSet(asset, isTake, px, sz, armedAt);
+    }
+
+    /// @notice Removes the stop or the take of the position in `asset`. The trader or their agent.
+    function clearTrigger(uint32 asset, bool isTake) external {
+        if (msg.sender != trader && msg.sender != agent) revert NotTrader();
+        if ((isTake ? takeOf[asset] : stopOf[asset]).px == 0) revert NoTrigger();
+        _clear(asset, isTake);
+    }
+
+    /// @notice Records that the stop or the take of `asset` has triggered now: `FALLBACK_BLOCKS` from this block
+    ///         anyone may carry it out while it still holds, so a filler that stops keeps no position open. Anyone.
+    function seeTrigger(uint32 asset, bool isTake) external inStatus(Status.Active) {
+        Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
+        if (t.seenAt != 0) return;
+        uint64 oracle = _triggered(asset, isTake, t);
+        t.seenAt = uint64(block.number);
+        emit TriggerSeen(asset, isTake, oracle, block.number);
+    }
+
+    /// @notice Carries out the stop or the take of `asset` once the oracle price in this block has reached it, at
+    ///         the price a fill takes in this block, with its cost. With a filler, the filler, or anyone
+    ///         `FALLBACK_BLOCKS` after it was seen; without one, anyone but the trader and their agent.
+    function fillTrigger(uint32 asset, bool isTake) external inStatus(Status.Active) {
+        Trigger memory t = isTake ? takeOf[asset] : stopOf[asset];
+        if (filler == address(0)) {
+            if (msg.sender == trader || msg.sender == agent) revert OwnOrder();
+        } else if (msg.sender != filler && (t.seenAt == 0 || block.number < uint256(t.seenAt) + FALLBACK_BLOCKS)) {
+            revert NotFiller();
+        }
+        if (_over()) revert TooLate();
+        _triggered(asset, isTake, t);
+        int256 before = positionOf[asset];
+        uint256 open = _abs(before);
+        uint64 sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;
+        _clear(asset, isTake);
+        (uint64 px, uint256 cost, uint8 source) = _apply(asset, before < 0, sz, before);
+        emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source);
     }
 
     /// @notice Takes the day's snapshot, in the first minutes of the UTC day. Anyone may.
@@ -446,6 +506,62 @@ contract PaperExam is Initializable {
     }
 
     // ── internals ───────────────────────────────────────────────�
+
+    /// @dev Fills `sz` of `asset` on the side `isBuy` at this block's price: the position, the balance, the cost,
+    ///      the leverage rule for a fill that grows the position, the trading day. A position closed or turned
+    ///      round loses its stop and its take.
+    function _apply(uint32 asset, bool isBuy, uint64 sz, int256 before)
+        internal
+        returns (uint64 px, uint256 cost, uint8 source)
+    {
+        (px, source) = _fillPrice(asset, isBuy);
+        int256 delta = isBuy ? int256(uint256(sz)) : -int256(uint256(sz));
+        uint256 ntl = uint256(sz) * px;
+        cost = (ntl * _terms.costPpm + PPM - 1) / PPM;
+        int256 afterFill = before + delta;
+        positionOf[asset] = afterFill;
+        cash -= delta * int256(uint256(px)) + int256(cost);
+
+        if (_abs(afterFill) > _abs(before)) {
+            (int256 eq, uint256 open) = _book();
+            if (eq <= 0 || open * 100 > uint256(eq) * _rules.maxLeverageX100 || _overAssetCap(eq)) {
+                revert OverLeverage();
+            }
+        }
+        if (before != 0 && (afterFill == 0 || (afterFill > 0) != (before > 0))) {
+            if (stopOf[asset].px != 0) _clear(asset, false);
+            if (takeOf[asset].px != 0) _clear(asset, true);
+        }
+
+        // A fill smaller than the exchange would take is still a fill -- dust has to be closable
+        // -- but it is not a trade: it neither makes a trading day nor ends an idle stretch.
+        if (ntl >= MIN_TRADE_NOTIONAL) {
+            uint32 today = _today();
+            if (_lastFillDayPlusOne != today + 1) {
+                _lastFillDayPlusOne = today + 1;
+                tradingDays += 1;
+            }
+            lastFillAt = uint64(block.timestamp);
+        }
+    }
+
+    /// @dev The oracle price now, if the stop or the take `t` of `asset` is armed and has triggered at it.
+    function _triggered(uint32 asset, bool isTake, Trigger memory t) internal view returns (uint64 oracle) {
+        if (t.px == 0) revert NoTrigger();
+        if (block.number < t.armedAt) revert TooEarly(t.armedAt);
+        int256 pos = positionOf[asset];
+        if (pos == 0) revert NoPosition();
+        oracle = _mark(asset);
+        // A take on a long and a stop on a short trigger at the price or above it; the other two at it or below.
+        bool hit = isTake == (pos > 0) ? oracle >= t.px : oracle <= t.px;
+        if (!hit) revert NotTriggered(oracle, t.px);
+    }
+
+    function _clear(uint32 asset, bool isTake) internal {
+        if (isTake) delete takeOf[asset];
+        else delete stopOf[asset];
+        emit TriggerCleared(asset, isTake);
+    }
 
     function _startStep() internal {
         cash = int256(uint256(_terms.capital));

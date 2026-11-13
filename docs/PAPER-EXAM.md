@@ -53,6 +53,20 @@ with a balance, `capital`, that is a number and not money.
   takes the same rule. Equity, the day's snapshot and every rule stay on the oracle price: the
   book is what a fill costs, the oracle what a position is worth, and a book is the thing a trader
   can push.
+- **A stop and a take.** Each open position may have one stop and one take (`setTrigger`, by the trader or
+  their agent; `clearTrigger` removes one). Each closes a set size of the position (zero, or more than is
+  open: all of it) once the oracle price in a block is at its price or past it: against the position for a
+  stop (at or under it for a long, at or over it for a short), for it for a take. It never opens or grows a
+  position. It acts `fillDelay` blocks after it is set or replaced, as an order fills no sooner, so a stop
+  set past the price is not a way round the delay. Once triggered it is carried out (`fillTrigger`) at the
+  price a fill takes in that block, by the same rule and with the same cost as an order: a stop is a market
+  order once triggered, and what it slips is real. With a filler, only the filler carries it out until
+  somebody has shown in a block that it triggered (`seeTrigger`, anyone); from `FALLBACK_BLOCKS` after that
+  block anyone may, the trader too, while it still holds. Without a filler, anyone but the trader and their
+  agent. A position closed or turned round by any fill loses its stop and its take; a take or a stop carried
+  out is gone, and a position it closes loses the other one too. The filler picks the block after the
+  trigger, as it picks the block of an order's window: the contract does not know the first block the
+  oracle crossed the price, and that is checked outside, against the oracle's history.
 - **Equity** is the balance plus every position at the current oracle price. There is nothing else to
   read: no margin, no funding, no resting orders.
 - **The rules** are the four a real account has, with the same arithmetic as `RuledAccount`: a

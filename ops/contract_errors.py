@@ -33,6 +33,7 @@ ERRORS = [
     "ZeroSize()", "OrderPending()", "NoOrder()", "TooEarly(uint256)", "OrderLapsed()", "NoPrice(uint32)",
     "OverLeverage()", "OutsideCheckpointWindow()", "AlreadyCheckpointed()", "NoBreach()", "NotOver()",
     "NotEnoughDays(uint16,uint16)",
+    "NoPosition()", "NoTrigger()", "ZeroPrice()", "NotTriggered(uint64,uint64)",
     # Pool, RuledAccount, KeyRegistry, KeyBinder
     "NotChallenge()", "BadStage(uint8)", "NotReady()", "NotEnoughCapital(uint64,uint64)", "NotAllowed()", "TooEarly()",
     "KeyAvailable()", "WithdrawnThisBlock()", "SalesClosed()", "NotOwnerRun()", "SeatNotOpened()", "TooManyAssets()", "NotRenewable(uint64)", "KeyWorks()", "RekeyClosed()", "TooManyCancels()",
