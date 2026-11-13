@@ -53,12 +53,45 @@ with a balance, `capital`, that is a number and not money.
   takes the same rule. Equity, the day's snapshot and every rule stay on the oracle price: the
   book is what a fill costs, the oracle what a position is worth, and a book is the thing a trader
   can push.
+- **A stop and a take.** Each open position may have one stop and one take (`setTrigger`, by the trader or
+  their agent; `clearTrigger` removes one). Each closes a set size of the position (zero, or more than is
+  open: all of it) once the oracle price in a block is at its price or past it: against the position for a
+  stop (at or under it for a long, at or over it for a short), for it for a take. It never opens or grows a
+  position. It acts `fillDelay` blocks after it is set or replaced, as an order fills no sooner, so a stop
+  set past the price is not a way round the delay. Once triggered it is carried out (`fillTrigger`) at the
+  price a fill takes in that block, by the same rule and with the same cost as an order: a stop is a market
+  order once triggered, and what it slips is real. With a filler, only the filler carries it out until
+  somebody has shown in a block that it triggered (`seeTrigger`, anyone); from `FALLBACK_BLOCKS` after that
+  block anyone may, the trader too, while it still holds. Without a filler, anyone but the trader and their
+  agent. A position closed or turned round by any fill loses its stop and its take; a take or a stop carried
+  out is gone, and a position it closes loses the other one too, and an order waiting on that asset lapses
+  (`Lapsed`): it was made for the position just closed and would open the other side with no stop. A
+  trigger fill emits `Filled`, with a lateness of 0, so whoever reads trades reads it as one, and then
+  `TriggerFilled`, which says it was a stop or a take; whoever judges the filler's lateness skips a
+  `Filled` that a `TriggerFilled` follows. A position never grows past a size an order can name
+  (`uint64`). The filler picks the block after the
+  trigger, as it picks the block of an order's window: the contract does not know the first block the
+  oracle crossed the price, and that is checked outside, against the oracle's history.
 - **Equity** is the balance plus every position at the current oracle price. There is nothing else to
   read: no margin, no funding, no resting orders.
 - **The rules** are the four a real account has, with the same arithmetic as `RuledAccount`: a
-  static drawdown from the starting balance, a daily loss from the snapshot taken in the first
+  drawdown line, a daily loss from the snapshot taken in the first
   15 minutes of the UTC day (`checkpoint()`, anyone), leverage as notional over equity, and a
-  list of assets. `breach()` ends the exam when a rule is broken at that moment; anyone may call
+  list of assets.
+- **The drawdown line** is drawn one of two ways, named by the pool when the exam starts
+  (`drawdownKind`). `FROM_START` (0): the step's starting balance less `maxDrawdownBps` of it, fixed
+  for the step; `initialize` always starts this kind. `TRAILING_TO_START` (1): the highest daily
+  snapshot of the step (`peakSnapshot`) less that same amount, `maxDrawdownBps` of the starting
+  balance, and never above the starting balance. The step's starting balance is its first snapshot, so
+  until a higher one is taken the line is the same as `FROM_START`. Only a snapshot raises it, and a
+  snapshot is taken only in the day's first 15 minutes and only while no rule is broken: equity that
+  rises and falls back within a day does not move the line, a day whose snapshot nobody takes does not
+  move it, and it never comes down. Once a snapshot is `maxDrawdownBps` of the starting balance above
+  it, the line is the starting balance and stays there. `drawdownLine()` is the lowest equity that keeps
+  the rule now. The line is kept exact: equity breaks it when equity times 10 000 is below the line
+  times 10 000. A new step starts its line again from its own starting balance. Until a step's first snapshot its daily loss counts from the step's starting
+  balance. No snapshot is taken while a rule is broken: a day's base is never the equity that
+  broke a rule, and `breach()` ends the exam instead. `breach()` ends the exam when a rule is broken at that moment; anyone may call
   it.
 - **Leverage at the fill.** An order that would take the account over its leverage rule is
   refused. An order that only reduces a position is never refused, so there is always a way out.
@@ -90,11 +123,14 @@ sells anything it can ask `check()` whether an exam would start on its rules and
 | `fillDelay` | uint16, blocks | 1 to 600 | blocks between an order and its first fill |
 | `fillWindow` | uint16, blocks | 1 to 600 | blocks an order can be filled for |
 | `dailyLossBps` | uint16 | 1 to 9 999 | the day's limit, from the day's snapshot |
-| `maxDrawdownBps` | uint16 | 1 to 9 999 | the limit from the starting balance |
+| `maxDrawdownBps` | uint16 | 1 to 9 999 | the drawdown limit, as a share of the starting balance |
+| `drawdownKind` | uint8 | 0 or 1 | how the drawdown line is drawn: from the start, or trailing the daily snapshots to the start |
 | `maxLeverageX100` | uint32 | 100 to 1 000: 1x to 10x | notional over equity, times 100 |
 | `assets` | uint32[] | 1 to 16, none twice, size decimals at most 6 | what may be traded |
 
-The last four are the `Rules` struct every pool already has. The contract takes every value
+The four from `dailyLossBps` are the `Rules` struct every pool already has. `drawdownKind` is in
+neither struct: the pool passes it to `initializeWithFiller`, so the single-trader pool's `Rules` and
+every copy of `ExamTerms` stay as they are. The contract takes every value
 explicitly; it has no defaults of its own.
 
 ## What anyone can check
@@ -156,12 +192,33 @@ fill at the mark, a flat cost, and the things listed next.
 
 ## Tests
 
-`test/exam/PaperExam.t.sol`, 67 tests on the hyper-evm-lib simulator, and 124 mutations of the
-contract (`X1`–`X124` in `scripts/mutations.py`), each caught by a named test:
+`test/exam/PaperExam.t.sol`, 68 tests on the hyper-evm-lib simulator, among them a price that spikes
+for one block of an order's window: filled at its first block the order gains nothing; the filler can take
+the spike only by choosing its block, and the fill then says it came late (`late`).
+
+`test/exam/PaperExamInvariant.t.sol` drives one exam, filled at the book by its filler, at random: orders
+of any size and side on two assets, fills at any block of their window or after it, the day's snapshot,
+passes, breaches and expiries tried at any time, the first pool's rules and cost, and the oracle never
+moving. N1: it is never passed, and its equity never rises above its starting balance. N2: no fill is
+better for the trader than the oracle, and none at the book is more than `maxWorseBps` worse. The same
+runs again with the book drawn anew before every fill: under, over, around or far from the oracle,
+one-sided, crossed or empty.
+
+`test/exam/PaperExamDifferential.t.sol` checks the contract against the rules written again from
+this text, in the test and not from `PaperExam.sol` (D1): the oracle moves, the book is drawn anew,
+orders of any size and side are filled at any block of their window, snapshots, passes, breaches and
+expiries are tried. After every call the two agree on whether it went through, the status, the
+equity and the reason of a breach. Written on 13 November 2026, it found two rules the contract
+kept and this text did not say, both now in the bullet above: the first day's base before any
+snapshot, and no snapshot while a rule is broken.
+
+The mutations of the contract (`X1`–`X129` in `scripts/mutations.py`) are each caught by a named test,
+the invariants among them (a failed invariant prints its name on a line of its own, which the script
+reads):
 
 ```
 forge test --match-path 'test/exam/*'
-python3 scripts/mutations.py $(seq -f 'X%g' 1 124)
+python3 scripts/mutations.py $(seq -f 'X%g' 1 129)
 ```
 
 ## Not done yet

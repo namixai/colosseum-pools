@@ -101,6 +101,10 @@ jobs:
           version: v1.7.1
       - name: build
         run: forge build
+      - name: the size gate can still go red
+        run: ./scripts/test-size-check.sh
+      - name: every contract of src fits a block (EIP-170, EIP-3860)
+        run: python3 scripts/size-check.py
       - name: check can still go red
         run: ./scripts/test-abi-check.sh
       - name: structs match their copies in the app and the agents

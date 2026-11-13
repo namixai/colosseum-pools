@@ -139,7 +139,7 @@ class TheFastLoop(unittest.TestCase):
         with mock.patch.object(k.c, "rpc", return_value=logs) as rpc, \
                 mock.patch.object(sk, "fill", side_effect=lambda e: filled.append(e) or {"transactionHash": "0x01"}):
             self.assertEqual(sk.fast_step(8), [], "the window opens at 10; the next block is 9")
-            self.assertEqual(rpc.call_args[0][1][0]["topics"], [[k.PLACED, k.EXAM_SOLD, k.FUNDED]])
+            self.assertEqual(rpc.call_args[0][1][0]["topics"], [[k.PLACED, k.EXAM_SOLD, k.FUNDED, *k.TRIGGER_TOPICS]])
             self.assertNotIn(k.to_checksum_address(self.OTHER), sk.orders, "its window ended at 5")
             rpc.return_value = []
             self.assertEqual(sk.fast_step(9), [k.to_checksum_address(self.EXAM)])
@@ -426,6 +426,123 @@ class TheLongQueue(unittest.TestCase):
         self.now = self.DUE - 1
         self.assertEqual(self.passes(), [])
         self.assertEqual(self.reads, 1, "nothing behind a payout not yet due is read")
+
+
+def trigger_log(exam: str, topic: str, asset: int, is_take: bool, armed_at: int = 0) -> dict:
+    if topic == k.TRIGGER_SET:
+        data = encode(["bool", "uint64", "uint64", "uint256"], [is_take, 950_000, 0, armed_at])
+    elif topic == k.TRIGGER_CLEARED:
+        data = encode(["bool"], [is_take])
+    else:
+        data = encode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8"], [is_take, 100, 940_000, 0, 950_000, 0])
+    return {"address": exam, "topics": [topic, "0x" + asset.to_bytes(32, "big").hex()], "data": "0x" + data.hex(),
+            "blockNumber": hex(1)}
+
+
+class TheTriggers(unittest.TestCase):
+    """The keeper carries out a stop or a take once the exam would take it: armed, and the oracle reached."""
+    EXAM = k.to_checksum_address("0x" + "11" * 20)
+
+    def keeper(self) -> k.SimKeeper:
+        import shutil
+        tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        sk = k.SimKeeper("0x" + "33" * 20, None, "0x" + "44" * 20, False, pathlib.Path(tmp_dir) / "s.json", 1)
+        sk.accounts = {self.EXAM: {"pool": "0x" + "55" * 20, "kind": "exam"}}
+        return sk
+
+    def test_the_topics_are_the_contracts_events(self):
+        src = (ROOT / "src/exam/PaperExam.sol").read_text()
+        self.assertIn("event TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt);", src)
+        self.assertIn("event TriggerCleared(uint32 indexed asset, bool isTake);", src)
+        self.assertIn("uint32 indexed asset, bool isTake, uint64 sz, uint64 px, uint256 cost, uint64 triggerPx, uint8 source", src)
+
+    def test_set_then_cleared_or_filled_is_forgotten(self):
+        sk = self.keeper()
+        sk._trigger(trigger_log(self.EXAM, k.TRIGGER_SET, 3, False, armed_at=12))
+        sk._trigger(trigger_log(self.EXAM, k.TRIGGER_SET, 3, True, armed_at=14))
+        self.assertEqual(sk.triggers, {(self.EXAM, 3, False): 12, (self.EXAM, 3, True): 14})
+        sk._trigger(trigger_log(self.EXAM, k.TRIGGER_CLEARED, 3, False))
+        sk._trigger(trigger_log(self.EXAM, k.TRIGGER_FILLED, 3, True))
+        self.assertEqual(sk.triggers, {})
+
+    def test_one_armed_and_reached_is_sent_once_a_block_and_one_not_reached_is_not(self):
+        sk = self.keeper()
+        sk._trigger(trigger_log(self.EXAM, k.TRIGGER_SET, 3, False, armed_at=12))
+        reached = {"yes": False}
+
+        def rpc(method, args):
+            self.assertEqual(method, "eth_call")
+            if not reached["yes"]:
+                raise RuntimeError("NotTriggered")
+            return "0x"
+
+        with mock.patch.object(k.c, "rpc", side_effect=rpc) as call, mock.patch.object(sk, "is_filler", return_value=True), \
+                mock.patch.object(k.c, "send_tx", return_value={"transactionHash": "0x01", "blockNumber": hex(12)}) as send:
+            self.assertEqual(sk.trigger_step(10), [], "not armed for block 11")
+            call.assert_not_called()
+            self.assertEqual(sk.trigger_step(11), [], "armed, not reached")
+            reached["yes"] = True
+            self.assertEqual(sk.trigger_step(11), [], "once a block")
+            self.assertEqual(sk.trigger_step(12), [self.EXAM])
+        self.assertEqual(send.call_args[0][1], self.EXAM)
+        self.assertTrue(send.call_args[0][2].startswith(k.c.encode_call("fillTrigger(uint32,bool)", ["uint32", "bool"], [3, False])[:4]))
+
+    def test_a_keeper_that_is_not_the_filler_sends_nothing(self):
+        sk = self.keeper()
+        sk._trigger(trigger_log(self.EXAM, k.TRIGGER_SET, 3, True, armed_at=1))
+        with mock.patch.object(k.c, "rpc", return_value="0x"), mock.patch.object(sk, "is_filler", return_value=False), \
+                mock.patch.object(k.c, "send_tx") as send:
+            self.assertEqual(sk.trigger_step(5), [self.EXAM])
+        send.assert_not_called()
+
+    def test_a_keeper_started_again_reads_the_triggers_from_the_exam(self):
+        sk = self.keeper()  # nothing from the logs: it was down when they were set
+        state = {("stopOf(uint32)", 3): (950_000, 0, 12, 0), ("takeOf(uint32)", 3): (0, 0, 0, 0),
+                 ("stopOf(uint32)", 4): (0, 0, 0, 0), ("takeOf(uint32)", 4): (2_600_000, 10, 15, 0)}
+
+        def view(to, sig, out="uint256", types=(), args=()):
+            self.assertEqual(to, self.EXAM)
+            if sig == "rules()":
+                return (300, 600, 1000, [3, 4], [])
+            return state[(sig, args[0])]
+
+        with mock.patch.object(k, "view", side_effect=view):
+            sk.refresh_triggers(self.EXAM)
+        self.assertEqual(sk.triggers, {(self.EXAM, 3, False): 12, (self.EXAM, 4, True): 15})
+        state[("stopOf(uint32)", 3)] = (0, 0, 0, 0)  # carried out by someone else meanwhile
+        with mock.patch.object(k, "view", side_effect=view):
+            sk.refresh_triggers(self.EXAM)
+        self.assertEqual(sk.triggers, {(self.EXAM, 4, True): 15})
+
+    def test_a_running_exams_triggers_are_read_in_the_slow_pass(self):
+        sk = self.keeper()
+        answers = {"accountOf(address)": (1, 0, False), "result()": (1, "0x" + "77" * 20, 10_000, 0)}
+        reads = {"violation()": 0, "deadline()": 0, "lastFillAt()": 0, "day()": 10**9, "fundWindow()": 604_800}
+
+        def view(to, sig, out="uint256", *a):
+            return (0, [], 0, 0, 0, 0, 1, 1) if sig == "terms()" else reads[sig]
+
+        with mock.patch.object(k.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
+                mock.patch.object(k, "view", side_effect=view), mock.patch.object(sk, "refresh_triggers") as refresh, \
+                mock.patch.object(sk, "send", return_value=True):
+            sk.account_pass(self.EXAM, 1_000)
+        refresh.assert_called_once_with(self.EXAM)
+
+    def test_the_getters_read_are_the_contracts(self):
+        src = (ROOT / "src/exam/PaperExam.sol").read_text()
+        self.assertIn("mapping(uint32 asset => Trigger) public stopOf;", src)
+        self.assertIn("mapping(uint32 asset => Trigger) public takeOf;", src)
+        self.assertIn("struct Trigger {\n        uint64 px;\n        uint64 sz;\n        uint64 armedAt;\n        uint64 seenAt;\n    }", src)
+
+    def test_an_exam_that_is_done_drops_its_triggers(self):
+        sk = self.keeper()
+        sk._trigger(trigger_log(self.EXAM, k.TRIGGER_SET, 3, True, armed_at=1))
+        sk.done.add(self.EXAM)
+        with mock.patch.object(k.c, "rpc") as call:
+            self.assertEqual(sk.trigger_step(5), [])
+        call.assert_not_called()
+        self.assertEqual(sk.triggers, {})
 
 
 class TheHostsOneUnit(unittest.TestCase):

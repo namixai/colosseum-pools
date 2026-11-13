@@ -1692,6 +1692,8 @@ contract SimPoolTest is Test {
         if (topic == SimPool.PayoutPaid.selector) return "PayoutPaid";
         if (topic == SimPool.PayoutStopped.selector) return "PayoutStopped";
         if (topic == SimPool.PayoutHeld.selector) return "PayoutHeld";
+        if (topic == SimPool.PayoutApproved.selector) return "PayoutApproved";
+        if (topic == SimPool.ApproverSet.selector) return "ApproverSet";
         if (topic == SimPool.StopLifted.selector) return "StopLifted";
         if (topic == SimPool.StopObjected.selector) return "StopObjected";
         if (topic == SimPool.StopFinal.selector) return "StopFinal";
@@ -1792,7 +1794,7 @@ contract SimPoolTest is Test {
             list = string.concat(list, i == 0 ? "" : ",", '{"account":"', vm.toString(p.account), '","trader":"',
                 vm.toString(p.trader), '","amount":"', vm.toString(p.amount), '","dueAt":"', vm.toString(p.dueAt),
                 '","state":', vm.toString(uint8(p.state)), ',"wasStopped":', p.wasStopped ? "true" : "false",
-                ',"stoppedAt":"', vm.toString(p.stoppedAt), '"}');
+                ',"stoppedAt":"', vm.toString(p.stoppedAt), '","approved":', p.approved ? "true" : "false", "}");
         }
         r = string.concat('{"menu":[', menu, '],"payouts":[', list, '],"paidCount":"', vm.toString(pool.paidCount()),
             '","paidTotal":"', vm.toString(pool.paidTotal()), '","stoppedCount":"', vm.toString(pool.stoppedCount()),
