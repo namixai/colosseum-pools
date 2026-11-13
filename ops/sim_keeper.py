@@ -63,6 +63,10 @@ FUNDED = "0x" + keccak(text="Funded(address,address,address)").hex()
 PLACED = "0x" + keccak(text="Placed(uint32,bool,uint64,uint256,uint256)").hex()
 FILLED = "0x" + keccak(text="Filled(uint32,bool,uint64,uint64,uint256,uint256,uint8)").hex()
 LAPSED = "0x" + keccak(text="Lapsed(uint32,bool,uint64)").hex()
+TRIGGER_SET = "0x" + keccak(text="TriggerSet(uint32,bool,uint64,uint64,uint256)").hex()
+TRIGGER_CLEARED = "0x" + keccak(text="TriggerCleared(uint32,bool)").hex()
+TRIGGER_FILLED = "0x" + keccak(text="TriggerFilled(uint32,bool,uint64,uint64,uint256,uint64,uint8)").hex()
+TRIGGER_TOPICS = [TRIGGER_SET, TRIGGER_CLEARED, TRIGGER_FILLED]
 EXAM_STATUS = ("None", "Active", "Passed", "Breached", "Expired")
 PAYOUT_STATE = ("None", "Due", "Stopped", "Paid", "Held", "Refused")
 EXAM_TERMS = "(uint64,uint16[],uint32,uint32,uint16,uint32,uint16,uint16)"
@@ -192,6 +196,8 @@ class SimKeeper:
         self.done: set[str] = set()
         self.orders: dict[str, tuple[int, int]] = {}  # exam -> the window of its waiting order
         self.tried: dict[str, int] = {}  # exam -> the block its last fill was sent for
+        self.triggers: dict[tuple[str, int, bool], int] = {}  # (exam, asset, is_take) -> the block it acts from
+        self.trigger_tried: dict[tuple[str, int, bool], int] = {}  # -> the block it was last looked at for
         self.filler: str | None = None
         if state_path.exists():
             state = json.loads(state_path.read_text())
@@ -365,10 +371,13 @@ class SimKeeper:
         lo = max(self.fast_block + 1, latest - MAX_LOG_WINDOW + 1)
         if lo <= latest:
             new: list[str] = []
-            for l in c.rpc("eth_getLogs", [{"address": watched, "topics": [[PLACED, EXAM_SOLD, FUNDED]],
+            for l in c.rpc("eth_getLogs", [{"address": watched, "topics": [[PLACED, EXAM_SOLD, FUNDED, *TRIGGER_TOPICS]],
                                             "fromBlock": hex(lo), "toBlock": hex(latest)}]):
                 if l["topics"][0] == PLACED:
                     self._order(l)
+                    continue
+                if l["topics"][0] in TRIGGER_TOPICS:
+                    self._trigger(l)
                     continue
                 a = to_checksum_address("0x" + l["topics"][1][-40:])
                 if a not in self.accounts:
@@ -376,9 +385,9 @@ class SimKeeper:
                     self.accounts[a] = {"pool": to_checksum_address(l["address"]), "kind": kind}
                     new.append(a)
             if new:  # their orders in the same blocks, which the read above could not name
-                for l in c.rpc("eth_getLogs", [{"address": new, "topics": [PLACED],
+                for l in c.rpc("eth_getLogs", [{"address": new, "topics": [[PLACED, *TRIGGER_TOPICS]],
                                                 "fromBlock": hex(lo), "toBlock": hex(latest)}]):
-                    self._order(l)
+                    self._trigger(l) if l["topics"][0] in TRIGGER_TOPICS else self._order(l)
             self.fast_block = latest
         sent = []
         for exam, (start, until) in list(self.orders.items()):
@@ -391,7 +400,51 @@ class SimKeeper:
                 if self.fill(exam) is not None or self.dry or not self.is_filler():
                     del self.orders[exam]
                     self.tried.pop(exam, None)
+        return sent + self.trigger_step(latest)
+
+    def trigger_step(self, latest: int) -> list[str]:
+        """The stops and takes armed for the next block: each is tried, once a block, by a call that changes
+        nothing, and carried out if the exam would take it (the oracle has reached it). The exams it sent one for."""
+        sent = []
+        for key, armed_at in list(self.triggers.items()):
+            if armed_at > latest + 1 or self.trigger_tried.get(key) == latest:
+                continue
+            self.trigger_tried[key] = latest
+            exam, asset, is_take = key
+            if self.account_done(exam):
+                self.triggers.pop(key, None)
+                continue
+            data = c.encode_call("fillTrigger(uint32,bool)", ["uint32", "bool"], [asset, is_take])
+            try:
+                c.rpc("eth_call", [{"from": self.sender, "to": exam, "data": "0x" + data.hex()}, "latest"])
+            except RuntimeError:
+                continue  # not reached, or not this keeper's to carry out yet
+            sent.append(exam)
+            if self.dry or not self.is_filler():
+                log("would_fill_trigger", exam=exam, asset=asset, take=is_take)
+                continue
+            try:
+                rcpt = c.send_tx(self.wallet, exam, data, gas=FILL_GAS)
+                log("trigger_filled", exam=exam, asset=asset, take=is_take, tx=rcpt["transactionHash"],
+                    block=int(rcpt["blockNumber"], 16))
+            except Exception as exc:  # the next block's price may not hold it; tried again next block
+                log("trigger_fill_failed", exam=exam, asset=asset, take=is_take, error=refusal(exc))
         return sent
+
+    def account_done(self, exam: str) -> bool:
+        return exam in self.done
+
+    def _trigger(self, log_entry: dict) -> None:
+        exam = to_checksum_address(log_entry["address"])
+        asset = int(log_entry["topics"][1], 16)
+        is_take = bool(int(log_entry["data"][2:66], 16))
+        key = (exam, asset, is_take)
+        if log_entry["topics"][0] == TRIGGER_SET:
+            armed_at = int(log_entry["data"][2 + 64 * 3:2 + 64 * 4], 16)
+            self.triggers[key] = armed_at
+        else:
+            self.triggers.pop(key, None)
+        self.trigger_tried.pop(key, None)
 
     def _order(self, log_entry: dict) -> None:
         exam, start, until = placed_of(log_entry)

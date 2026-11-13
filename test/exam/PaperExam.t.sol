@@ -1248,7 +1248,12 @@ contract PaperExamTest is Test {
         vm.expectEmit(address(e));
         emit PaperExam.TriggerFilled(BTC, false, 100, 940_000, 0, 950_000, 0);
         vm.prank(filler);
+        vm.cool(address(e));
+        uint256 before = gasleft();
         e.fillTrigger(BTC, false);
+        // The keeper sends it with a fill's fixed gas (ops/sim_keeper.py, FILL_GAS).
+        emit log_named_uint("fillTrigger gas, from cold storage", before - gasleft());
+        assertLt(before - gasleft(), 400_000);
         assertEq(e.positionOf(BTC), 0);
         assertEq(e.cash(), 94e6, "100 units sold at 940 000");
         (uint64 takePx,,,) = e.takeOf(BTC);
