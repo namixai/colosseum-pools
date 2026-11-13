@@ -124,6 +124,7 @@ export function setAgentCall({ exam, agent, filler, keccak256 }) {
 /** The index the chain's precompiles take for an asset (CoreOps.pxIndex). */
 export function pxIndex(asset) {
   const a = Number(asset);
+  if (!Number.isInteger(a) || a < 0 || a > 0xffffffff) throw new Error(`${asset} is not an asset`);
   return a >= HIP3_BASE ? a - HIP3_BASE : a;
 }
 
@@ -147,6 +148,8 @@ export function bboOf(hex) {
 // ── units ──────────────────────────────────────────────────────────
 
 function decimalUnits(text, decimals, what) {
+  // An asset of more than 6 size decimals has no price decimals left in the contract's units: refused, not sliced.
+  if (!Number.isInteger(Number(decimals)) || Number(decimals) < 0) throw new Error(`${what} is not supported for this asset`);
   const t = String(text).trim();
   const m = /^(\d+)(?:\.(\d+))?$/.exec(t);
   if (!m) throw new Error(`${what} is not a plain positive number: ${text}`);
@@ -468,14 +471,46 @@ export function refusalText(name) {
 export function refusalOf(data, keccak256) {
   const d = String(data ?? "").toLowerCase();
   if (!/^0x[0-9a-f]{8}/.test(d)) return null;
-  for (const [sig, text] of Object.entries(REFUSALS)) {
-    const hex = `0x${[...new TextEncoder().encode(sig)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-    if (keccak256(hex).slice(0, 10).toLowerCase() === d.slice(0, 10)) return { name: sig.split("(")[0], signature: sig, text };
+  return selectorsOf(keccak256).get(d.slice(0, 10)) ?? null;
+}
+
+// The error selectors, worked out once for each hash function handed in: 25 hashes are not worth one lookup.
+const SELECTORS = new WeakMap();
+
+function selectorsOf(keccak256) {
+  if (!SELECTORS.has(keccak256)) {
+    const encoder = new TextEncoder();
+    SELECTORS.set(keccak256, new Map(Object.entries(REFUSALS).map(([sig, text]) => {
+      const hex = `0x${[...encoder.encode(sig)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+      return [keccak256(hex).slice(0, 10).toLowerCase(), { name: sig.split("(")[0], signature: sig, text }];
+    })));
   }
-  return null;
+  return SELECTORS.get(keccak256);
 }
 
 // ── Hyperliquid's open data, for the chart and the book ────────────
+
+/**
+ * Which network a deployment is on and where its chart and book come from. Nothing here names a network or an
+ * address: the deployment's record says its chain (`chainId`, as deployments/LIVE.json and the records carry it),
+ * and the app's settings (`config`, app/config.js, written from spike/hlspike/network.py for the network the app is
+ * built for) give that network's info API and name. The data is the deployment's own network or nothing: a page
+ * built for one network never draws another's candles beside an exam of this one, since the exam fills and is
+ * judged on the prices of its own chain. `rehearsal` is true on a network that is not mainnet: the exam is a run
+ * of the deployment, and traders do not trade there.
+ */
+export function dataSource(deployment, config) {
+  const chainId = Number(deployment?.chainId ?? deployment?.chain_id);
+  if (!Number.isInteger(chainId)) {
+    return { ok: false, reason: "no-chain", text: "The deployment's record names no chain: no chart or book is shown." };
+  }
+  if (!config?.hlInfo || Number(config.chainId) !== chainId) {
+    return { ok: false, reason: "other-network", chainId, text: `This exam is on chain ${chainId}; this page's data is for chain `
+      + `${config?.chainId ?? "none"}. No chart or book is shown rather than another network's.` };
+  }
+  return { ok: true, chainId, info: config.hlInfo, network: config.hyperliquidChain ?? null,
+    rehearsal: config.hyperliquidChain !== "Mainnet" };
+}
 
 /**
  * Candles out of Hyperliquid's `candleSnapshot` (info API): each with its opening time in seconds and its prices as
@@ -483,7 +518,8 @@ export function refusalOf(data, keccak256) {
  * oracle price, which the page reads from the chain (`oraclePxCall`).
  */
 export function candleRows(raw) {
-  return [...(raw ?? [])]
+  if (!Array.isArray(raw)) return [];  // an error answer ({"error": ...}) is no candles
+  return raw
     .map((c) => ({ time: Math.floor(Number(c.t) / 1000), open: Number(c.o), high: Number(c.h), low: Number(c.l),
       close: Number(c.c), volume: Number(c.v) }))
     .filter((c) => Number.isFinite(c.time) && [c.open, c.high, c.low, c.close].every((x) => Number.isFinite(x) && x > 0))
@@ -498,7 +534,7 @@ export function candleRows(raw) {
 export function bookSides(raw, depth = 10) {
   const side = (levels) => {
     let total = 0;
-    return [...(levels ?? [])].slice(0, depth).map((l) => {
+    return (Array.isArray(levels) ? levels : []).slice(0, depth).map((l) => {
       total += Number(l.sz);
       return { px: String(l.px), sz: String(l.sz), total };
     });

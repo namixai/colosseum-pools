@@ -8,7 +8,7 @@ import {
   PAPER_EXAM_ABI, STATUS, BREACH, FALLBACK_BLOCKS, MIN_TRADE_NOTIONAL, ORACLE_PX_PRECOMPILE, BBO_PRECOMPILE, SIGNS,
   ESTIMATE_NOTE, REFUSALS, placeCall, graduateCall, setAgentCall, pxIndex, oraclePxCall, bboCall, bboOf, sizeUnits,
   pxUnits, sizeText, pxText, usdText, pendingOrder, examAccount, fillPrice, orderPreview, refusalText, refusalOf,
-  candleRows, bookSides,
+  candleRows, bookSides, dataSource,
 } from "../lib/exam.js";
 import { keccak256 } from "./keccak.mjs";
 
@@ -377,4 +377,84 @@ test("candles and the book are read as Hyperliquid's info API answers them", () 
   assert.deepEqual([empty.bestBid, empty.bestAsk, empty.mid, empty.spreadBps], [null, 1, null, null]);
   // The book the exam fills at is the chain's own best bid and offer, in the contract's units.
   assert.equal(pxUnits(book.bids[0].px, 5), 694_220n);
+});
+
+// ── review of #294 ─────────────────────────────────────────────────
+
+test("an asset that is no asset is refused before it is made a call for the chain, and a size of no decimals is not sliced", () => {
+  for (const bad of [-5, 1.5, "x", 2 ** 32]) {
+    assert.throws(() => pxIndex(bad), /is not an asset/, String(bad));
+    assert.throws(() => oraclePxCall(bad), /is not an asset/);
+    assert.throws(() => bboCall(bad), /is not an asset/);
+  }
+  assert.equal(pxIndex("3"), 3);
+  // An asset of 8 size decimals has none left for a price in the contract's units: refused, not a RangeError.
+  assert.throws(() => pxUnits("1", 8), /not supported for this asset/);
+  assert.throws(() => sizeUnits("1", -1), /not supported for this asset/);
+  assert.equal(pxUnits("5", 6), 5n, "6 size decimals: a price of no decimals");
+});
+
+test("the error selectors are worked out once for a hash function, and each hash function has its own", () => {
+  let calls = 0;
+  const counting = (hex) => { calls += 1; return keccak256(hex); };
+  assert.equal(refusalOf("0xc1b46258", counting).name, "OverLeverage");
+  const first = calls;
+  assert.equal(first, Object.keys(REFUSALS).length);
+  assert.equal(refusalOf("0x61379ba7", counting).name, "TargetNotMet");
+  assert.equal(refusalOf("0xdeadbeef", counting), null);
+  assert.equal(calls, first, "no more hashing for the next reverts");
+  assert.equal(refusalOf("0xc1b46258", keccak256).name, "OverLeverage", "another function, its own table");
+});
+
+test("an error answer from Hyperliquid is no candles and no book", () => {
+  for (const raw of [{ error: "rate limited" }, "Too many requests", null, 5]) {
+    assert.deepEqual(candleRows(raw), []);
+    const book = bookSides(raw);
+    assert.deepEqual([book.bids, book.asks, book.mid], [[], [], null]);
+  }
+  assert.deepEqual(bookSides({ levels: [{ error: 1 }, "x"] }).bids, [], "levels that are no lists");
+});
+
+// ── the network of the data: the deployment's, from the settings, never a constant here ──
+
+const NETWORK_PY = readFileSync(new URL("../../spike/hlspike/network.py", import.meta.url), "utf8");
+
+/** The app's settings for a network, as scripts/app_config.py writes them from spike/hlspike/network.py. */
+function settingsOf(name) {
+  const block = new RegExp(`^${name.toUpperCase()} = Network\\((.*?)^\\)`, "ms").exec(NETWORK_PY)[1];
+  const field = (key) => new RegExp(`${key}=("?)([^",\\n]+)\\1,`).exec(block)[2];
+  return { chainId: Number(field("chain_id")), hlInfo: `${field("api_url")}/info`, hyperliquidChain: field("hyperliquid_chain") };
+}
+
+test("the data is the deployment's own network: mainnet or the rehearsal's, from the settings the page was built with", () => {
+  const testnet = settingsOf("testnet");
+  const mainnet = settingsOf("mainnet");
+  assert.deepEqual([testnet.chainId, mainnet.chainId], [998, 999]);
+  assert.notEqual(testnet.hlInfo, mainnet.hlInfo);
+  // A deployment on mainnet, a page built for mainnet: its API, and not a rehearsal.
+  assert.deepEqual(dataSource({ chainId: 999 }, mainnet), { ok: true, chainId: 999, info: mainnet.hlInfo, network: "Mainnet", rehearsal: false });
+  // The rehearsal on testnet: its API, said to be a rehearsal.
+  assert.deepEqual(dataSource({ chainId: 998 }, testnet), { ok: true, chainId: 998, info: testnet.hlInfo, network: "Testnet", rehearsal: true });
+  // A record as the deploy writes it (snake case) reads the same.
+  assert.equal(dataSource({ chain_id: 999 }, mainnet).ok, true);
+  // Never the other network's data beside an exam of this one, in either direction.
+  for (const [deployment, config] of [[{ chainId: 999 }, testnet], [{ chainId: 998 }, mainnet]]) {
+    const got = dataSource(deployment, config);
+    assert.deepEqual([got.ok, got.reason, got.info], [false, "other-network", undefined]);
+    assert.match(got.text, /No chart or book is shown rather than another network's/);
+  }
+  assert.equal(dataSource({}, mainnet).reason, "no-chain", "a record without its chain");
+  assert.equal(dataSource({ chainId: 999 }, {}).ok, false, "settings without an API");
+  assert.equal(dataSource({ chainId: 999 }, undefined).ok, false);
+});
+
+test("no Hyperliquid address is written in the screen's library or in its reads: they come from the settings", () => {
+  for (const file of ["../lib/exam.js", "../lib/hl.js"]) {
+    const src = readFileSync(new URL(file, import.meta.url), "utf8");
+    assert.ok(!/https?:\/\/[^\s"'`]*hyperliquid/i.test(src), `${file} names a Hyperliquid host`);
+    assert.ok(!/(?<![\w.])(998|999)(?![\w.])/.test(src.replace(/\/\/.*$/gm, "")), `${file} names a chain id`);
+  }
+  assert.match(readFileSync(new URL("../lib/hl.js", import.meta.url), "utf8"), /fetch\(CONFIG\.hlInfo,/);
+  // The precompiles are the same on both networks (spike/hlspike/network.py), so one address serves both.
+  assert.match(NETWORK_PY, /the precompiles are the same on both networks/);
 });
