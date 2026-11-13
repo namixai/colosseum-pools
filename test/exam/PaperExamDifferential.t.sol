@@ -28,7 +28,8 @@ import {BookStub} from "./PaperExamInvariant.t.sol";
 /// - A stop and a take for the position: set by the trader on an open position, acting `fillDelay` blocks later;
 ///   once the oracle is at the price or past it (against the position for a stop, for it for a take) the filler
 ///   closes the set size, or all of it, at the price of a fill in that block and with its cost. A position
-///   closed or turned round loses both; one carried out is gone.
+///   closed or turned round loses both; one carried out is gone. A trigger that closes the position lets the order
+///   waiting on it lapse.
 /// - The day's snapshot in the first 15 minutes of the UTC day, once a day. A trading day is a UTC day with a fill
 ///   of at least 10 USDC of notional.
 /// - A pass: no rule broken, nothing open, equity at the target, the step's trading days, before the limits. Past
@@ -319,6 +320,7 @@ contract DifferentialHandler is Test {
             calls["fillTrigger"] += 1;
         } catch {}
         if (got != expect) _differ(got ? "fillTrigger: the exam filled, the text refuses" : "fillTrigger: the exam refused, the text fills");
+        if (got && model.pos() == 0) hasOrder = false;
         _compare("fillTrigger");
     }
 

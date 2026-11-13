@@ -1246,6 +1246,8 @@ contract PaperExamTest is Test {
         e.fillTrigger(BTC, false);
         _mark(940_000); // past it: a stop is a market order once triggered, at this block's price
         vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, false, 100, 940_000, 0, 0, 0); // a trade like any, for whoever reads trades
+        vm.expectEmit(address(e));
         emit PaperExam.TriggerFilled(BTC, false, 100, 940_000, 0, 950_000, 0);
         vm.prank(filler);
         vm.cool(address(e));
@@ -1367,6 +1369,48 @@ contract PaperExamTest is Test {
         vm.prank(trader);
         e.fillTrigger(BTC, false);
         assertEq(e.positionOf(BTC), 0);
+    }
+
+    function test_trigger_aCloseLapsesAnOrderWaitingOnThatAsset_onlyThat() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, false, 950_000, 0);
+        _place(e, BTC, false, 100); // a sell meant to close the long
+        vm.roll(block.number + DELAY);
+        _mark(940_000);
+        vm.expectEmit(address(e));
+        emit PaperExam.Lapsed(BTC, false, 100);
+        vm.prank(filler);
+        e.fillTrigger(BTC, false);
+        (, , uint64 sz,) = e.pending();
+        assertEq(sz, 0, "it would have opened a short with no stop");
+        vm.prank(filler);
+        vm.expectRevert(PaperExam.NoOrder.selector);
+        e.fill();
+        // A smaller position keeps its order.
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, true, 1_000_000, 40);
+        _place(e, BTC, true, 10);
+        vm.roll(block.number + DELAY);
+        _mark(1_000_000);
+        vm.prank(filler);
+        e.fillTrigger(BTC, true);
+        (, , sz,) = e.pending();
+        assertEq(sz, 10);
+    }
+
+    function test_position_neverOutgrowsWhatAnOrderCanName() public {
+        ExamTerms memory t = _terms();
+        t.capital = type(uint64).max;
+        PaperExam e = PaperExam(Clones.clone(address(impl)));
+        e.initializeWithFiller(trader, _rules(), t, filler, false, 0, 0);
+        _mark(1);
+        _fillerTrade(e, true, type(uint64).max);
+        _place(e, BTC, true, 1);
+        vm.roll(block.number + DELAY);
+        vm.prank(filler);
+        vm.expectRevert(PaperExam.OverLeverage.selector);
+        e.fill();
     }
 
     function test_trigger_withoutAFiller_anyoneButTheTrader() public {

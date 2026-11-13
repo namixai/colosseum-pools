@@ -64,7 +64,12 @@ with a balance, `capital`, that is a number and not money.
   somebody has shown in a block that it triggered (`seeTrigger`, anyone); from `FALLBACK_BLOCKS` after that
   block anyone may, the trader too, while it still holds. Without a filler, anyone but the trader and their
   agent. A position closed or turned round by any fill loses its stop and its take; a take or a stop carried
-  out is gone, and a position it closes loses the other one too. The filler picks the block after the
+  out is gone, and a position it closes loses the other one too, and an order waiting on that asset lapses
+  (`Lapsed`): it was made for the position just closed and would open the other side with no stop. A
+  trigger fill emits `Filled`, with a lateness of 0, so whoever reads trades reads it as one, and then
+  `TriggerFilled`, which says it was a stop or a take; whoever judges the filler's lateness skips a
+  `Filled` that a `TriggerFilled` follows. A position never grows past a size an order can name
+  (`uint64`). The filler picks the block after the
   trigger, as it picks the block of an order's window: the contract does not know the first block the
   oracle crossed the price, and that is checked outside, against the oracle's history.
 - **Equity** is the balance plus every position at the current oracle price. There is nothing else to
