@@ -538,8 +538,9 @@ contract SimPoolTest is Test {
         assertEq(pool.withdrawable(), 200e6, "before the term, the profit only");
         vm.warp(pool.lockedUntil());
         assertEq(pool.withdrawable(), 2_800e6);
+        _ask(pool, 2_800e6);
         vm.prank(creator);
-        pool.withdraw(2_800e6);
+        pool.withdraw();
         assertEq(usdc.balanceOf(partner), 99_500_000, "half of 200 after the platform's part, not of 1 000");
         assertEq(pool.principal(), 2_400e6, "the rest came back as principal");
     }
@@ -552,6 +553,7 @@ contract SimPoolTest is Test {
         pool.pay(10);
         vm.prank(closer);
         pool.close();
+        vm.warp(block.timestamp + 7 days);
         vm.prank(creator);
         pool.finish();
         assertEq(usdc.balanceOf(address(pool)), LARGE_PAYOUT, "the held payout stays");
@@ -859,8 +861,9 @@ contract SimPoolTest is Test {
         assertEq(pool.withdrawable(), 200e6, "before the term, the profit only");
         vm.warp(pool.lockedUntil());
         assertEq(pool.withdrawable(), 2_800e6);
+        _ask(pool, 2_800e6);
         vm.prank(creator);
-        pool.withdraw(2_800e6);
+        pool.withdraw();
         assertEq(usdc.balanceOf(partner), 99_500_000, "half of 200 after the platform's part, not of 1 000");
         assertEq(pool.principal(), 2_400e6);
     }
@@ -975,7 +978,7 @@ contract SimPoolTest is Test {
         assertEq(pool.head(), c);
         vm.prank(creator);
         vm.expectRevert(SimPool.TooMuch.selector);
-        pool.withdraw(1);
+        pool.requestWithdraw(1);
         // Prices keep coming in, and the queue is paid out of them.
         for (uint256 i = 0; i < 10; ++i) _buy(pool, makeAddr(string(abi.encode(i))), 1);
         assertEq(pool.pay(10), 1);
@@ -998,6 +1001,13 @@ contract SimPoolTest is Test {
         for (uint256 i = 0; i < n; ++i) _buy(pool, makeAddr(string(abi.encode("buyer", i))), 1);
     }
 
+    /// The creator asks to withdraw `amount` and the week passes: `withdraw()` is next.
+    function _ask(SimPool pool, uint256 amount) internal {
+        vm.prank(creator);
+        pool.requestWithdraw(amount);
+        vm.warp(block.timestamp + factory.WITHDRAW_DELAY());
+    }
+
     function test_withdraw_onlyAboveThreePayoutsAndWhatIsOwed() public {
         SimPool pool = _pool();
         _withSales(pool, 30); // 30 x 84.575 = 2 537.25 in, 4 137.25 held
@@ -1009,10 +1019,10 @@ contract SimPoolTest is Test {
         uint256 w = pool.withdrawable();
         vm.prank(stranger);
         vm.expectRevert(SimPool.NotCreator.selector);
-        pool.withdraw(w);
+        pool.requestWithdraw(w);
         vm.prank(creator);
         vm.expectRevert(SimPool.TooMuch.selector);
-        pool.withdraw(w + 1);
+        pool.requestWithdraw(w + 1);
     }
 
     function test_withdraw_halfAPercentToThePlatform() public {
@@ -1020,8 +1030,9 @@ contract SimPoolTest is Test {
         _withSales(pool, 30);
         uint256 fees = usdc.balanceOf(platform);
         uint256 before = usdc.balanceOf(creator);
+        _ask(pool, 1_000e6);
         vm.prank(creator);
-        pool.withdraw(1_000e6);
+        pool.withdraw();
         assertEq(usdc.balanceOf(platform) - fees, 5e6, "0.5 % of 1 000");
         assertEq(usdc.balanceOf(creator) - before, 995e6);
     }
@@ -1031,10 +1042,11 @@ contract SimPoolTest is Test {
         _share(pool, 5000);
         _withSales(pool, 30);
         uint256 before = usdc.balanceOf(creator);
+        _ask(pool, 1_000e6);
         vm.expectEmit(address(pool));
         emit SimPool.Withdrawn(creator, 1_000e6, 5e6, 497_500_000);
         vm.prank(creator);
-        pool.withdraw(1_000e6);
+        pool.withdraw();
         assertEq(usdc.balanceOf(partner), 497_500_000, "half of what is left after the platform's part");
         assertEq(usdc.balanceOf(creator) - before, 497_500_000);
         assertEq(pool.principal(), 1_600e6, "all of it was profit: the principal stays");
@@ -1114,12 +1126,13 @@ contract SimPoolTest is Test {
         uint256 before = usdc.balanceOf(creator);
         assertEq(pool.brought(), 4 * (LARGE_PRICE - 425_000), "each sale brought 84.575");
         deal(address(usdc), address(pool), 6_000e6); // 4 400 above the 1 600 locked; 2 400 kept while open
+        _ask(pool, 3_600e6);
         vm.expectEmit(address(pool));
         emit SimPool.PartnerPaid(CODE, partner, 895_500_000, true);
         vm.expectEmit(address(pool));
         emit SimPool.PartnerPaid(codeB, ownerB, 358_200_000, true);
         vm.prank(creator);
-        pool.withdraw(3_600e6);
+        pool.withdraw();
         // 3 600 less the platform's 18 is 3 582: A brought half of it all, B a quarter, C a quarter.
         assertEq(usdc.balanceOf(partner), 895_500_000, "50 % of A's half");
         assertEq(usdc.balanceOf(ownerB), 358_200_000, "40 % of B's quarter");
@@ -1142,11 +1155,11 @@ contract SimPoolTest is Test {
             _buyWith(pool, makeAddr(string(abi.encode("buyer", i))), 1, keccak256(abi.encode("group", i)));
         }
         deal(address(usdc), address(pool), 6_000e6);
-        uint256 w = pool.withdrawable();
+        _ask(pool, pool.withdrawable());
         vm.recordLogs();
         vm.prank(creator);
         uint256 before = gasleft();
-        pool.withdraw(w);
+        pool.withdraw();
         uint256 used = before - gasleft();
         uint256 paid;
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -1163,8 +1176,9 @@ contract SimPoolTest is Test {
         _share(pool, 5000);
         _withSales(pool, 30);
         usdc.block_(partner);
+        _ask(pool, 1_000e6);
         vm.prank(creator);
-        pool.withdraw(1_000e6);
+        pool.withdraw();
         assertEq(usdc.balanceOf(partner), 0);
         assertEq(pool.heldOf(partner), 497_500_000, "set aside for the partner");
         assertEq(pool.held(), 497_500_000);
@@ -1187,8 +1201,9 @@ contract SimPoolTest is Test {
         vm.warp(pool.lockedUntil());
         // 5 600 in, 2 400 kept: 3 200 may leave, and all of it is the creator's own money.
         assertEq(pool.withdrawable(), 3_200e6);
+        _ask(pool, 3_200e6);
         vm.prank(creator);
-        pool.withdraw(3_200e6);
+        pool.withdraw();
         assertEq(usdc.balanceOf(partner), 0, "no profit, no share");
         assertEq(pool.principal(), 2_400e6);
     }
@@ -1260,6 +1275,7 @@ contract SimPoolTest is Test {
         uint256 profit = bal - 1_600e6;
         uint256 toPartner = (profit - profit * 50 / 10_000) * 5000 / 10_000;
         uint256 before = usdc.balanceOf(creator);
+        vm.warp(block.timestamp + 7 days);
         vm.prank(closer); // the closer may finish it too
         pool.finish();
         assertEq(usdc.balanceOf(closer), 0, "the closer gets none of it");
@@ -1278,9 +1294,10 @@ contract SimPoolTest is Test {
         assertEq(pool.withdrawable(), profit, "the profit, not the 3 200 of principal above the floor");
         vm.prank(creator);
         vm.expectRevert(SimPool.TooMuch.selector);
-        pool.withdraw(profit + 1);
+        pool.requestWithdraw(profit + 1);
+        _ask(pool, profit);
         vm.prank(creator);
-        pool.withdraw(profit);
+        pool.withdraw();
         assertEq(pool.principal(), 5_600e6, "every unit put in stays");
         assertEq(pool.withdrawable(), 0);
         vm.warp(pool.lockedUntil());
@@ -1307,6 +1324,7 @@ contract SimPoolTest is Test {
         uint256 profit = bal - 1_600e6;
         uint256 toPartner = (profit - profit * 50 / 10_000) * 5000 / 10_000;
         uint256 before = usdc.balanceOf(creator);
+        vm.warp(block.timestamp + 7 days);
         vm.prank(creator);
         pool.finish();
         assertEq(usdc.balanceOf(address(pool)), 0);
@@ -1477,9 +1495,14 @@ contract SimPoolTest is Test {
         vm.warp(block.timestamp + factory.PAYOUT_DELAY());
         assertEq(pool.pay(10), 2, "the first paid, the third held, the stopped one passed over");
         _pageCollect(pool);
+        // The creator asks to withdraw, and carries it out a week later: the only way money leaves for the creator.
         vm.roll(block.number + 1);
         vm.prank(creator);
-        pool.withdraw(400e6);
+        pool.requestWithdraw(400e6);
+        vm.roll(block.number + 1);
+        vm.warp(block.timestamp + factory.WITHDRAW_DELAY());
+        vm.prank(creator);
+        pool.withdraw();
         _pageCollect(pool);
         assertEq(pool.paidCount(), 1);
         assertEq(pool.paidTotal(), LARGE_PAYOUT);
@@ -1502,6 +1525,216 @@ contract SimPoolTest is Test {
             assertEq(vm.readFile(PAGE_FIXTURE), json,
                 "the page's recorded chain is not this contract's: SIM_PAGE_FIXTURE=write forge test --match-test test_page_recordedChain");
         }
+    }
+
+    // ── a withdrawal waits a week from its request ───────────────
+
+    function test_withdraw_onlyByARequest_thereIsNoOtherWay() public {
+        SimPool pool = _pool();
+        _withSales(pool, 30);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.NoRequest.selector);
+        pool.withdraw();
+        // The withdrawal of an amount at once is gone from the pool.
+        vm.prank(creator);
+        (bool ok,) = address(pool).call(abi.encodeWithSignature("withdraw(uint256)", 1e6));
+        assertFalse(ok, "no withdraw(amount)");
+        assertEq(usdc.balanceOf(address(pool)), 1_600e6 + 30 * (LARGE_PRICE - 425_000), "nothing left the pool");
+    }
+
+    function test_withdraw_aWeekAfterTheRequest_theLessOfWhatWasAskedAndWhatIsFreeThen() public {
+        SimPool pool = _pool();
+        _withSales(pool, 30);
+        uint256 w0 = pool.withdrawable();
+        uint64 ready = uint64(block.timestamp) + 7 days;
+        vm.expectEmit(address(pool));
+        emit SimPool.WithdrawRequested(w0, ready, ready + 3 days);
+        vm.prank(creator);
+        pool.requestWithdraw(w0);
+        assertEq(pool.requested(), w0);
+        assertEq(pool.readyAt(), ready);
+        assertEq(factory.WITHDRAW_DELAY(), 7 days);
+        assertEq(factory.WITHDRAW_WINDOW(), 3 days);
+        vm.warp(ready - 1);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.NotReady.selector);
+        pool.withdraw();
+        // Within the week: more sales come in, and two stages pass and are claimed.
+        _withSales(pool, 10);
+        pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        pool.claimPayout(address(_passedStage(pool, other, 1)));
+        vm.warp(ready);
+        uint256 now_ = pool.withdrawable();
+        assertLt(now_, w0, "the payouts that came due come first");
+        uint256 before = usdc.balanceOf(creator);
+        vm.prank(stranger);
+        vm.expectRevert(SimPool.NotCreator.selector);
+        pool.withdraw();
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(usdc.balanceOf(creator) - before, now_ - now_ * 50 / 10_000, "what was free then, less 0.5 %");
+        assertEq(pool.requested(), 0);
+        assertEq(pool.readyAt(), 0);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.NoRequest.selector);
+        pool.withdraw();
+    }
+
+    function test_withdraw_theCfosExample_aWeekOfSalesAndPayouts_thenTheLessOfTheTwo() public {
+        // The example of the letter to the CFO, 13 November: code A (50 %) and code B (the creator's, no share).
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        bytes32 codeB = keccak256("PLATFORM");
+        vm.prank(creator);
+        pool.setCode(codeB, creator, 0);
+        for (uint256 i = 0; i < 40; ++i) _buyWith(pool, makeAddr(string(abi.encode("a", i))), 1, CODE);
+        for (uint256 i = 0; i < 20; ++i) _buyWith(pool, makeAddr(string(abi.encode("b", i))), 1, codeB);
+        deal(address(usdc), address(pool), 5_074_500_000); // 1 600 + 60 x 84.575, less two payouts paid
+        assertEq(pool.withdrawable(), 2_674_500_000, "day 0: 5 074.50 less the floor of 2 400");
+        vm.prank(creator);
+        pool.requestWithdraw(2_000e6);
+        for (uint256 i = 0; i < 6; ++i) _buyWith(pool, makeAddr(string(abi.encode("a2", i))), 1, CODE);
+        for (uint256 i = 0; i < 4; ++i) _buyWith(pool, makeAddr(string(abi.encode("b2", i))), 1, codeB);
+        deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) - 1_600e6); // two more payouts paid
+        assertEq(usdc.balanceOf(address(pool)), 4_320_250_000);
+        vm.warp(block.timestamp + 7 days);
+        assertEq(pool.withdrawable(), 1_920_250_000, "day 7");
+        uint256 fees = usdc.balanceOf(platform);
+        uint256 before = usdc.balanceOf(creator);
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(usdc.balanceOf(platform) - fees, 9_601_250, "0.5 % of 1 920.25");
+        assertEq(usdc.balanceOf(partner), 627_784_589, "A: 50 % of 1 910.64875 x 46/70");
+        assertEq(usdc.balanceOf(creator) - before, 1_282_864_161, "the creator the rest, B's part with it");
+        assertEq(usdc.balanceOf(address(pool)), 2_400e6, "the floor of three payouts stays");
+    }
+
+    function test_withdraw_neverMoreThanWasAsked_whateverCameInSince() public {
+        SimPool pool = _pool();
+        _withSales(pool, 30);
+        _ask(pool, 500e6);
+        _withSales(pool, 30);
+        uint256 bal = usdc.balanceOf(address(pool));
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(bal - usdc.balanceOf(address(pool)), 500e6, "what was asked, not more for what came in since");
+    }
+
+    function test_withdraw_aRequestLapsesThreeDaysAfterItIsReady_aNewOneWaitsAgain() public {
+        SimPool pool = _pool();
+        _withSales(pool, 30);
+        _ask(pool, 500e6);
+        vm.warp(pool.readyAt() + 3 days);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.RequestLapsed.selector);
+        pool.withdraw();
+        vm.prank(creator);
+        pool.requestWithdraw(400e6);
+        assertEq(pool.readyAt(), block.timestamp + 7 days, "a new request starts the week again");
+        vm.warp(pool.readyAt() + 3 days - 1);
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(pool.requested(), 0);
+    }
+
+    function test_requestWithdraw_aNewOneReplacesTheStandingOne() public {
+        SimPool pool = _pool();
+        _withSales(pool, 30);
+        _ask(pool, 500e6); // ready now
+        vm.prank(creator);
+        pool.requestWithdraw(100e6);
+        assertEq(pool.requested(), 100e6);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.NotReady.selector);
+        pool.withdraw(); // the ready request is gone with it
+        vm.prank(creator);
+        vm.expectRevert(SimPool.TooMuch.selector);
+        pool.requestWithdraw(0);
+    }
+
+    function test_cancelWithdraw_theCreatorOrTheCloser_movesNothing() public {
+        SimPool pool = _pool();
+        _withSales(pool, 30);
+        vm.prank(closer);
+        vm.expectRevert(SimPool.NoRequest.selector);
+        pool.cancelWithdraw();
+        vm.prank(creator);
+        pool.requestWithdraw(500e6);
+        uint256 bal = usdc.balanceOf(address(pool));
+        vm.prank(stranger);
+        vm.expectRevert(SimPool.NotCreator.selector);
+        pool.cancelWithdraw();
+        vm.expectEmit(address(pool));
+        emit SimPool.WithdrawCancelled(closer, 500e6);
+        vm.prank(closer);
+        pool.cancelWithdraw();
+        assertEq(pool.requested(), 0);
+        assertEq(usdc.balanceOf(address(pool)), bal, "nothing moved");
+        assertEq(usdc.balanceOf(closer), 0);
+        vm.warp(block.timestamp + 7 days);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.NoRequest.selector);
+        pool.withdraw();
+        vm.prank(creator);
+        pool.requestWithdraw(300e6);
+        vm.expectEmit(address(pool));
+        emit SimPool.WithdrawCancelled(creator, 300e6);
+        vm.prank(creator);
+        pool.cancelWithdraw();
+    }
+
+    function test_withdraw_nothingFreeWhenReady_refused_theRequestStands() public {
+        SimPool pool = _pool();
+        _withSales(pool, 20);
+        uint256 w = pool.withdrawable();
+        _ask(pool, w);
+        // Payouts claimed within the week take all of it.
+        pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        pool.claimPayout(address(_passedStage(pool, other, 1)));
+        assertEq(pool.withdrawable(), 0);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.TooMuch.selector);
+        pool.withdraw();
+        assertEq(pool.requested(), w, "still standing, until it lapses or is replaced");
+    }
+
+    function test_finish_aWeekAfterTheClose_evenAnEarlyOne_andItEndsAStandingRequest() public {
+        SimPool pool = _pool();
+        deal(address(usdc), address(pool), 5_000e6); // money, and nothing running
+        vm.prank(creator);
+        pool.requestWithdraw(500e6);
+        vm.prank(closer);
+        pool.close();
+        assertEq(pool.closedAt(), block.timestamp);
+        vm.warp(block.timestamp + 7 days - 1);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.NotReady.selector);
+        pool.finish();
+        vm.warp(block.timestamp + 1);
+        vm.prank(closer);
+        pool.finish();
+        assertEq(pool.requested(), 0, "finish sent everything: no request stands");
+        assertEq(pool.readyAt(), 0);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.Done.selector);
+        pool.requestWithdraw(1);
+        vm.prank(creator);
+        vm.expectRevert(SimPool.Done.selector);
+        pool.withdraw();
+    }
+
+    function test_finish_fromTheTerm_closeAndFinishAreNeverOneBlock() public {
+        SimPool pool = _pool();
+        deal(address(usdc), address(pool), 5_000e6);
+        vm.warp(pool.lockedUntil());
+        vm.startPrank(creator);
+        pool.close();
+        vm.expectRevert(SimPool.NotReady.selector);
+        pool.finish();
+        vm.warp(block.timestamp + 7 days);
+        pool.finish();
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(address(pool)), 0);
     }
 }
 

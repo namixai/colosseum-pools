@@ -62,8 +62,20 @@ fail, and their prices pay for the ones that pass.
   text, `StopObjected`), and the checker lifts a stop that was wrong (`liftStop`): the payout is due
   again, out of the money the stop kept, and paid as any other. After them the stop can no longer be
   lifted; anyone makes it final (`finalizeStop`, `StopFinal`), and its money is the pool's again.
-- **The creator.** `withdraw(amount)`: only what stays above three payouts of the largest size and
-  above every payout owed, held or kept for a recent stop. 0.5 % goes to the platform. Profit is the
+- **The creator.** A withdrawal waits a week. `requestWithdraw(amount)` asks for at most what
+  `withdrawable` allows then and moves nothing (`WithdrawRequested` with when it is ready and when
+  it lapses); one request stands at a time, and a new one replaces it and starts the week again.
+  `withdraw()` carries it out from `WITHDRAW_DELAY` (7 days) on, for `WITHDRAW_WINDOW` (3 days),
+  then it lapses (`RequestLapsed`): a request cannot be left standing to make the week nothing. It
+  pays the less of what was asked and what `withdrawable` allows when it is carried out: never more
+  than was asked, and only what the pool can spare then, so payouts that came due in the week come
+  first. Money that came in during the week counts toward what the pool can spare, within the
+  amount asked; what is above the request waits for another one. The
+  creator or the factory's closer may cancel it (`cancelWithdraw`, `WithdrawCancelled` with who);
+  the closer only cancels: it changes neither the amount nor where the money goes. There is no
+  other way for the creator to take money out before `finish`. `withdrawable` is only what stays
+  above three payouts of the largest size and above every payout owed, held or kept for a recent
+  stop. 0.5 % goes to the platform. Profit is the
   pool's money above what the creator put in, after what the pool owes, holds and keeps for recent
   stops; a withdrawal takes it first. Of the profit a withdrawal takes, less the platform's part,
   each code's partner is sent its `bps` in the part its code brought of all the pool took:
@@ -71,7 +83,9 @@ fail, and their prices pay for the ones that pass.
   creator. A partner whose address the token refuses has its part set aside, `heldOf` and
   `claimHeld` as for a refused payout (`PartnerPaid` says which). `addToPot` puts in more principal,
   never shared, which comes back once the profit above it has been taken, or at `finish`. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
-  can still be lifted, sends what is left, the principal first.
+  can still be lifted, and a week after the close (`closedAt` + `WITHDRAW_DELAY`, `NotReady` before),
+  sends what is left, the principal first, and ends a standing request. The week keeps `close` and
+  `finish` from being a withdrawal of everything in one block.
 - **The term.** A pool runs at least 180 days from its opening (`MIN_TERM`, `lockedUntil`). Before
   then the creator can neither `close` it (`Locked`), so it sells all that time, nor take back what
   it put in: `withdraw` gives the profit only, never the principal, the locked payouts or what
@@ -88,7 +102,9 @@ exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`P
 fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid (`PAYOUT_DELAY`); 14 days a
 stopped payout's money stays set aside and the stop can be lifted (`STOP_RESERVE`); 180 days a
-pool runs before its creator may close it or take back its principal (`MIN_TERM`); a fill
+pool runs before its creator may close it or take back its principal (`MIN_TERM`); 7 days from a
+request to withdraw to its money, and from a close to `finish` (`WITHDRAW_DELAY`), and 3 days to
+carry out a ready request (`WITHDRAW_WINDOW`); a fill
 window of 1 to 60 blocks; a code's share of 0 or 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`)
 and up to 32 codes a pool (`MAX_CODES`).
 
@@ -119,24 +135,27 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 59 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 130 mutations (`SM1`–`SM130` in `scripts/mutations.py`),
-each caught by a named test:
+`test/sim/SimPool.t.sol`, 69 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and every `SM` mutation of `scripts/mutations.py` (SM1 to
+SM149 on this branch: the delay, the window, the less of the two and finish's week among them), each
+caught by a named test. The second command lists them from the file, so a new one is never left out:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 130)
+python3 scripts/mutations.py $(grep -oE "[\"']SM[0-9]+[\"']" scripts/mutations.py | tr -d "\"'")
 ```
 
 `test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a
 handler buys with codes, directly and by signature, sets codes for three groups (40 %, 60 % and no share) and
 tries to set them again after a sale, passes and fails exams and stages, claims, stops, lifts and pays payouts, has
 the trader object to a stop and anyone make it final after its 14 days, has the token refuse a trader or a group's
-owner, claims what was held, withdraws and adds for the creator, closes (the creator from the term on, refused
+owner, claims what was held, asks to withdraw, withdraws (at once now and then, which must be refused, otherwise
+from the week on to past its window), cancels a request (the creator or the closer; a stranger refused) and adds
+for the creator, closes (the creator from the term on, refused
 before it; the closer early) and finishes (by the creator or the closer), jumps past the 180 days now and then
 (48 runs of 120 calls in CI,
 with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
-Thirteen invariants: every dollar in and out accounted for; what is held always there and equal to the refused
+Fourteen invariants: every dollar in and out accounted for; what is held always there and equal to the refused
 payouts and partners' parts less the claims, `reserved` the stopped payouts, and `pay` spending neither; `paidTotal` the sum of the
 payments, and `pay` sends exactly those; a withdrawal never below three payouts above what is owed, held and
 reserved, nor past `withdrawable`, and before the term not past the profit; one purchase, at most one payout; `owed` the due payouts; stops less lifts are
@@ -148,7 +167,10 @@ its code's share and what its code brought (sent, or set aside if the token refu
 partners together never above 60 % of it; before the term, until the pool is finished, `principal` all the creator
 put in (no path gives any of it back), only the closer closing it (`closedEarly`), and no stranger closing or
 finishing it; and, closed early or not, finished by the creator or the closer, the closer getting none of the
-money and the platform only its 0.5 % of each price and each withdrawal. Not an invariant, by design: that the pool
+money and the platform only its 0.5 % of each price and each withdrawal; and no money leaving the pool for the
+creator but by `withdraw()` of its own request a week old and not lapsed, paying the less of the request and
+`withdrawable`, or by `finish` a week after the close, with a request, a cancel or a close moving nothing. Not an
+invariant, by design: that the pool
 covers every payout owed. Passes can come faster than prices, and a payout waits in order (`PayoutQueued`).
 
 ## Running it
@@ -178,7 +200,10 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `buy --code` buys with a code's text. `close --key` and `finish --key` read the pool first and say as
   whom it would take the call or why it would refuse (`Locked` before the term unless the key is the
   closer; for `finish`, each thing still running, owed or reserved, and with `--exam` until when that
-  exam runs). Without `--send` they print what they would do and read no key. The first pool's plan is
+  exam runs, and the week after the close). `request --amount`, `withdraw` and `cancel` do the same for
+  the creator's withdrawal: what it asks and from when to when it can be carried out, what it pays
+  now, or `NotReady`, `RequestLapsed`, `NoRequest` with the times. Without `--send` they print what
+  they would do and read no key. The first pool's plan is
   `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a

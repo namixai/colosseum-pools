@@ -56,11 +56,22 @@ contract SimPoolHandler is Test {
     uint256 public ghostPayMismatch;
     /// A withdrawal that left less than three payouts of the largest size above what is owed and held.
     uint256 public ghostBelowFloor;
-    /// A withdrawal of one unit more than `withdrawable` that went through.
+    /// A request to withdraw one unit more than `withdrawable` that went through.
     uint256 public ghostOverWithdraw;
+    /// The standing request as the handler made it: how much, and when.
+    uint256 public ghostRequested;
+    uint256 public ghostRequestedAt;
+    /// Money the creator got from the pool other than by `withdraw()` of a request `WITHDRAW_DELAY` old and not
+    /// lapsed, or by `finish` `WITHDRAW_DELAY` after the close; or a request, a cancel or a close that moved money.
+    uint256 public ghostInstant;
+    /// A withdrawal that paid other than the less of what was asked and what `withdrawable` allowed then.
+    uint256 public ghostWithdrawMismatch;
+    /// A stranger's cancel of a request that went through.
+    uint256 public ghostBadCancel;
     /// `finish` went through with something still owed, running, or kept for a stop.
     uint256 public ghostEarlyFinish;
-    /// A finish by the creator or the closer refused with the pool closed, nothing owed, running or kept for a stop.
+    /// A finish by the creator or the closer refused with the pool closed a week ago, nothing owed, running or kept for a
+    /// stop.
     uint256 public ghostFinishRefused;
     /// A `pay` that paid or set aside more than was free of what is held and what stops keep.
     uint256 public ghostSpentKept;
@@ -461,25 +472,89 @@ contract SimPoolHandler is Test {
 
     // ── the creator ──────────────────────────────────────────────
 
-    function withdraw(uint256 amount) external {
+    /// Asks to withdraw at most what `withdrawable` allows; one unit more must be refused. Nothing moves.
+    function requestWithdraw(uint256 amount) external {
         if (pool.finished()) return;
         uint256 w = pool.withdrawable();
         vm.prank(creator);
-        try pool.withdraw(w + 1) {
+        try pool.requestWithdraw(w + 1) {
             ghostOverWithdraw += 1;
-            ghostOut += w + 1;
-            // Nothing after it: a later withdrawal could revert for the money gone and undo this record (review).
             return;
         } catch {}
         if (w == 0) return;
         amount = bound(amount, 1, w);
+        uint256 c0 = usdc.balanceOf(creator);
+        uint256 p0 = usdc.balanceOf(address(pool));
+        vm.prank(creator);
+        pool.requestWithdraw(amount);
+        if (usdc.balanceOf(creator) != c0 || usdc.balanceOf(address(pool)) != p0) ghostInstant += 1;
+        ghostRequested = amount;
+        ghostRequestedAt = block.timestamp;
+        calls["request"] += 1;
+    }
+
+    /// Carries out the standing request: now and then at once, which must be refused before the week is out;
+    /// otherwise from when it is ready to a day past its window, so that some requests lapse.
+    function withdraw(uint256 seed) external {
+        if (pool.finished() || pool.requested() == 0) return;
+        uint256 ready = pool.readyAt();
+        if (pool.readyAt() != ghostRequestedAt + _delay() || pool.requested() != ghostRequested) ghostWithdrawMismatch += 1;
+        if (block.timestamp < ready) {
+            if (seed % 4 == 0) {
+                uint256 p0 = usdc.balanceOf(address(pool));
+                vm.prank(creator);
+                try pool.withdraw() {
+                    ghostInstant += 1;
+                    ghostOut += p0 - usdc.balanceOf(address(pool));
+                } catch {}
+                return;
+            }
+            vm.warp(ready + bound(seed >> 8, 0, uint256(_window()) + 1 days));
+            vm.roll(block.number + 1);
+        }
+        uint256 w = pool.withdrawable();
+        uint256 r = pool.requested();
+        uint256 amount = r < w ? r : w;
+        bool good = block.timestamp < uint256(ready) + _window();
         Before memory b = _before();
         vm.prank(creator);
-        pool.withdraw(amount);
-        ghostOut += amount - _checkShares(b, amount);
-        uint256 keep = pool.owed() + pool.held() + pool.reserved() + uint256(pool.largestPayout()) * 3;
-        if (usdc.balanceOf(address(pool)) < keep) ghostBelowFloor += 1;
-        calls["withdraw"] += 1;
+        try pool.withdraw() {
+            uint256 out = b.bal - usdc.balanceOf(address(pool));
+            ghostOut += out;
+            if (!good || amount == 0 || block.timestamp < ghostRequestedAt + _delay()) ghostInstant += 1;
+            if (out != amount - _checkShares(b, amount)) ghostWithdrawMismatch += 1;
+            if (pool.requested() != 0 || pool.readyAt() != 0) ghostWithdrawMismatch += 1;
+            uint256 keep = pool.owed() + pool.held() + pool.reserved() + uint256(pool.largestPayout()) * 3;
+            if (usdc.balanceOf(address(pool)) < keep) ghostBelowFloor += 1;
+            calls["withdraw"] += 1;
+        } catch {
+            // Ready, not lapsed, and something to take: a refusal is a finding.
+            if (good && amount != 0) ghostStuck += 1;
+        }
+    }
+
+    /// Cancels the standing request: the creator or the closer; a stranger must be refused. Nothing moves.
+    function cancelWithdraw(uint256 seed) external {
+        if (pool.requested() == 0) return;
+        vm.prank(stranger);
+        try pool.cancelWithdraw() {
+            ghostBadCancel += 1;
+            return;
+        } catch {}
+        uint256 c0 = usdc.balanceOf(creator);
+        uint256 p0 = usdc.balanceOf(address(pool));
+        vm.prank(seed % 2 == 0 ? closer : creator);
+        pool.cancelWithdraw();
+        if (usdc.balanceOf(creator) != c0 || usdc.balanceOf(address(pool)) != p0) ghostInstant += 1;
+        calls["cancel"] += 1;
+    }
+
+    function _delay() internal view returns (uint256) {
+        return pool.factory().WITHDRAW_DELAY();
+    }
+
+    function _window() internal view returns (uint256) {
+        return pool.factory().WITHDRAW_WINDOW();
     }
 
     function addToPot(uint256 amount) external {
@@ -520,8 +595,11 @@ contract SimPoolHandler is Test {
             } catch {}
         }
         bool byCloser = early || seed % 4 == 0;
+        uint256 c0 = usdc.balanceOf(creator);
+        uint256 p0 = usdc.balanceOf(address(pool));
         vm.prank(byCloser ? closer : creator);
         pool.close();
+        if (usdc.balanceOf(creator) != c0 || usdc.balanceOf(address(pool)) != p0) ghostInstant += 1;
         ghostClosedAt = block.timestamp;
         ghostClosedByCloser = byCloser;
         calls[early ? "closeEarly" : "close"] += 1;
@@ -603,13 +681,16 @@ contract SimPoolHandler is Test {
             _finished(b, owing);
             calls[byCloser ? "finishByCloser" : "finish"] += 1;
         } catch {
-            // With nothing owed, running or kept, the pool has no ground to refuse it (review of #279).
-            if (!owing) ghostFinishRefused += 1;
+            // With nothing owed, running or kept, a week after the close, the pool has no ground to refuse it
+            // (review of #279).
+            if (!owing && block.timestamp >= uint256(pool.closedAt()) + _delay()) ghostFinishRefused += 1;
         }
     }
 
     function _finished(Before memory b, bool owing) internal {
         if (owing) ghostEarlyFinish += 1;
+        if (block.timestamp < uint256(pool.closedAt()) + _delay()) ghostInstant += 1;
+        if (pool.requested() != 0 || pool.readyAt() != 0) ghostWithdrawMismatch += 1;
         // What finish withdraws: all the pool holds that is not set aside (nothing is owed or kept by now).
         uint256 amount = b.bal - b.held - b.reserved;
         ghostOut += amount == 0 ? 0 : amount - _checkShares(b, amount);
@@ -842,7 +923,7 @@ contract SimPoolInvariantTest is Test {
             pool.setCode(code, owner, shares[i]);
         }
         targetContract(address(handler));
-        bytes4[] memory s = new bytes4[](41);
+        bytes4[] memory s = new bytes4[](43);
         s[0] = SimPoolHandler.buy.selector;
         s[1] = SimPoolHandler.buy.selector;
         s[2] = SimPoolHandler.passExam.selector;
@@ -858,7 +939,7 @@ contract SimPoolInvariantTest is Test {
         s[12] = SimPoolHandler.claimHeld.selector;
         s[13] = SimPoolHandler.stop.selector;
         s[14] = SimPoolHandler.lift.selector;
-        s[15] = SimPoolHandler.withdraw.selector;
+        s[15] = SimPoolHandler.requestWithdraw.selector;
         s[16] = SimPoolHandler.addToPot.selector;
         s[17] = SimPoolHandler.close.selector;
         s[18] = SimPoolHandler.finish.selector;
@@ -885,6 +966,8 @@ contract SimPoolInvariantTest is Test {
         s[38] = SimPoolHandler.sales.selector;
         s[39] = SimPoolHandler.refuse.selector;
         s[40] = SimPoolHandler.pastTerm.selector;
+        s[41] = SimPoolHandler.cancelWithdraw.selector;
+        s[42] = SimPoolHandler.requestWithdraw.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: s}));
     }
 
@@ -970,7 +1053,7 @@ contract SimPoolInvariantTest is Test {
     /// forge-config: default.invariant.fail-on-revert = true
     function invariant_creatorKeepsThreePayouts() public view {
         assertEq(handler.ghostBelowFloor(), 0, "a withdrawal left less than three payouts");
-        assertEq(handler.ghostOverWithdraw(), 0, "a withdrawal past withdrawable went through");
+        assertEq(handler.ghostOverWithdraw(), 0, "a request past withdrawable went through");
         if (!pool.finished()) {
             uint256 keep = pool.owed() + pool.held() + pool.reserved() + uint256(pool.largestPayout()) * 3;
             uint256 bal = usdc.balanceOf(address(pool));
@@ -1125,10 +1208,27 @@ contract SimPoolInvariantTest is Test {
         assertEq(handler.ghostShareMismatch(), 0, "a withdrawal's or finish's shares were not the codes'");
     }
 
+    /// I14. No money leaves the pool for the creator but by `withdraw()` of its own request, once `WITHDRAW_DELAY`
+    ///      has passed and before `WITHDRAW_WINDOW` more has, or by `finish`, `WITHDRAW_DELAY` after the close. A
+    ///      withdrawal pays the less of what was asked and what `withdrawable` allows when it is carried out. A
+    ///      request, a cancel and a close move nothing; a stranger cancels nothing.
+    /// forge-config: default.invariant.runs = 48
+    /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_noWithdrawalWithoutAWeeksRequest() public view {
+        assertEq(handler.ghostInstant(), 0, "the creator got money without a request a week old, or finish a week after the close");
+        assertEq(handler.ghostWithdrawMismatch(), 0, "a withdrawal paid other than the less of the request and withdrawable");
+        assertEq(handler.ghostBadCancel(), 0, "a stranger cancelled a request");
+        if (pool.requested() != 0) {
+            assertEq(pool.requested(), handler.ghostRequested(), "the standing request is not the creator's last");
+            assertEq(pool.readyAt(), handler.ghostRequestedAt() + pool.factory().WITHDRAW_DELAY(), "a request ready sooner than a week");
+        }
+    }
+
     /// Not an invariant: what each run reached, printed with `-vv`, so that a run that drove nothing does not pass
     /// unseen for one that did.
     function afterInvariant() external view {
-        string[28] memory names = ["earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
+        string[30] memory names = ["request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
             "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown", "objectStop", "finalizeStop", "pastReserve", "buySigned", "setCode", "sales",
             "closeEarly", "pastTerm", "finishByCloser"];
         string memory line = "reached:";
