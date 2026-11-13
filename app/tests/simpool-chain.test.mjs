@@ -182,6 +182,18 @@ const EXAM_LOGS = new Map(Object.entries(CHAIN.examEvents).map(([a, logs]) => [a
 const ALL_TIMES = new Map([...TIMES, ...Object.values(CHAIN.examEvents).flat().map((e) => [e.block, e.time])]);
 const counts = activityCounts(LOGS, EXAM_LOGS, ALL_TIMES);
 
+test("each fill keeps the block it was emitted in: a pass's two fills are two blocks", () => {
+  // The recording collects the logs after each fill, before the next block (review of #281): a fill recorded at a
+  // later block would date its trading day, and its order against the others, wrongly.
+  const passed = Object.values(CHAIN.examEvents).filter((evs) => evs.some((e) => e.name === "Passed"));
+  assert.ok(passed.length >= 6, "three exams and three stages passed");
+  for (const evs of passed) {
+    const fills = evs.filter((e) => e.name === "Filled").map((e) => e.block);
+    assert.equal(fills.length, 2);
+    assert.ok(fills[0] < fills[1], `fills at ${fills.join(" and ")}`);
+  }
+});
+
 test("the second pass reads exactly the pool's exams and stages, and every one of them was read", () => {
   const accounts = accountsToRead(LOGS);
   assert.deepEqual([accounts.filter((a) => a.kind === "exam").length, accounts.filter((a) => a.kind === "stage").length], [43, 3]);

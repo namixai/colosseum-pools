@@ -1400,6 +1400,19 @@ contract SimPoolTest is Test {
         return "";
     }
 
+    /// `_pass`, with the logs collected after each fill: a fill moves to the next block, and a log takes the block it
+    /// is collected in, so each is collected before the next block (review of #281).
+    function _passCollected(SimPool pool, PaperExam e, address who) internal {
+        (,, uint64 capital,) = e.result();
+        uint64 sz = capital / mark;
+        _fill(e, who, true, sz);
+        _pageCollect(pool);
+        _setMark(mark * 12 / 10);
+        _fill(e, who, false, sz);
+        vm.prank(who);
+        e.graduate();
+    }
+
     /// An exam's or a stage's own event, kept by its account, as the node would give it in a second pass over the logs
     /// of the pool's accounts. An account is the pool's if its Started names the pool; the rest are left out.
     function _examCollect(SimPool pool, Vm.Log memory log) internal {
@@ -1507,11 +1520,11 @@ contract SimPoolTest is Test {
         for (uint256 i = 0; i < 3; ++i) {
             PaperExam exam = _buy(pool, who[i], 1);
             _pageCollect(pool);
-            _pass(exam, who[i]);
+            _passCollected(pool, exam, who[i]);
             vm.prank(who[i]);
             PaperExam stage = PaperExam(pool.fund(address(exam)));
             _pageCollect(pool);
-            _pass(stage, who[i]);
+            _passCollected(pool, stage, who[i]);
             ids[i] = pool.claimPayout(address(stage));
             _pageCollect(pool);
             vm.roll(block.number + 1);
