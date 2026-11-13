@@ -133,14 +133,14 @@ contract PaperExam is Initializable {
     /// UTC day of the latest daily snapshot, and equity at that snapshot.
     uint32 public day;
     int256 public dayStartEquity;
-    /// How the drawdown line is drawn: `FROM_START`, the starting balance less `maxDrawdownBps` of it; or
-    /// `TRAILING_TO_START`, the highest daily snapshot of the step less that same amount, never above the
-    /// starting balance. Set when the exam starts; the pool names it.
-    uint8 public drawdownKind;
     /// The highest daily snapshot of the step, the step's starting balance first. Only `checkpoint` raises it.
     int256 public peakSnapshot;
     /// UTC days of this step that saw a fill.
     uint16 public tradingDays;
+    /// How the drawdown line is drawn: `FROM_START`, the starting balance less `maxDrawdownBps` of it; or
+    /// `TRAILING_TO_START`, the highest daily snapshot of the step less that same amount, never above the
+    /// starting balance. Set when the exam starts; the pool names it. Next to `tradingDays`, in its slot.
+    uint8 public drawdownKind;
     Order public pending;
 
     Rules internal _rules;
@@ -287,13 +287,13 @@ contract PaperExam is Initializable {
         (, ntl) = _book();
     }
 
-    /// @notice Which rule the exam breaks right now, if any.
     /// @notice The lowest equity that keeps the drawdown rule now (`drawdownKind`, `peakSnapshot`).
     function drawdownLine() external view returns (int256) {
         int256 bps = int256(uint256(Units.BPS));
         return (_drawdownLineBps() + bps - 1) / bps;
     }
 
+    /// @notice Which rule the exam breaks right now, if any.
     function violation() public view returns (Breach) {
         (int256 eq, uint256 ntl) = _book();
         return _judge(eq, ntl);
