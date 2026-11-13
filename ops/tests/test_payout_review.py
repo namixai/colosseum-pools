@@ -104,15 +104,21 @@ class ACleanPayout(unittest.TestCase):
         self.assertFalse(any(l["sender"] == POOL for l in got["links"]), "the pool pays every trader")
         self.assertEqual(got["verdict"], "clean")
         self.assertEqual(got["reasons"], [])
-        self.assertEqual(got["tx"]["kind"], "approve")
-        self.assertIsNone(got["tx"]["data"], "no approval call in the pool yet: nothing is assembled")
+        self.assertEqual((got["tx"]["kind"], got["tx"]["to"], got["tx"]["args"]), ("approve", POOL, [[0]]))
+        self.assertEqual(got["tx"]["data"][:10], "0x" + keccak(text="approvePayouts(uint256[])")[:4].hex())
+        self.assertEqual(decode(["uint256[]"], bytes.fromhex(got["tx"]["data"][10:])), ((0,),))
 
-    def test_once_the_pool_has_an_approval_call_its_calldata_is_written(self):
+    def test_the_72_hours_and_the_ceiling_are_counted_from_the_claim(self):
         ch, _, _ = honest_world()
-        with mock.patch.object(r, "APPROVE", "approvePayout(uint256)"):
+        got = r.review(ch.d, POOL, 0)
+        due = ch.d["now"] + 3_600
+        self.assertEqual((got["claimedAt"], got["dueAt"], got["hardAt"]), (due - 72 * 3600, due, due + 4 * 24 * 3600))
+
+    def test_without_an_approval_call_nothing_is_assembled(self):
+        ch, _, _ = honest_world()
+        with mock.patch.object(r, "APPROVE", None):
             got = r.review(ch.d, POOL, 0)
-        self.assertEqual(got["tx"]["data"][:10], "0x" + keccak(text="approvePayout(uint256)")[:4].hex())
-        self.assertEqual(decode(["uint256"], bytes.fromhex(got["tx"]["data"][10:])), (0,))
+        self.assertIsNone(got["tx"]["data"])
 
     def test_what_is_running_is_counted_against_the_free_money(self):
         ch, _, _ = honest_world()
@@ -321,7 +327,7 @@ class TheSummary(unittest.TestCase):
         text = r.summary(r.review(ch.d, POOL, 0))
         self.assertIn("800.00 USDC", text)
         self.assertIn("verdict: clean", text)
-        self.assertIn("to sign (approve): the pool has no approval call yet", text)
+        self.assertIn("to sign (approve): " + POOL + " approvePayouts(uint256[]) 0x", text)
         self.assertNotRegex(text, r"[\u0400-\u04ff]")
 
 

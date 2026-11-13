@@ -209,9 +209,12 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
     whether the money free of what is owed, held back and kept for stops covers them.
 
-  Its verdict is "clean", or "suspicious" with the reasons. The call to sign is written out as text
-  with its calldata: `stopPayout` when there is a pair, since the pool takes no stop without two
-  fills, or the approval otherwise. It cannot see a pair on another factory or another venue,
+  Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
+  72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. The call to
+  sign is written out as text with its calldata: `stopPayout` (reason 1 or 2) when there is a pair,
+  since the pool takes no such stop without two fills, or `approvePayouts` otherwise. The approval is
+  the design of 13 November and not on main yet; a stop of reason 3, a result disputed without a pair,
+  needs a written analysis the script does not make. It cannot see a pair on another factory or another venue,
   accounts under wallets nothing links, or USDC that arrived before the deployment's block.
 
 - **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables

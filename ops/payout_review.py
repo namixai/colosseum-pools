@@ -23,8 +23,9 @@ It reads the chain and nothing else, sends nothing and holds no key. For each pa
   what is running  → exams and stages still able to pass, the payouts they would be if all passed, and
                      whether the pool's free money covers them;
   the verdict      → "clean", or "suspicious" with its reasons, and the call to sign, as text only: a
-                     stop (`stopPayout`, only with a pair: the pool takes no stop without two fills) or
-                     an approval.
+                     stop (`stopPayout`, reason 1 or 2, only with a pair) or the approval
+                     (`approvePayouts`). A stop of reason 3, a result disputed without a pair, needs a
+                     written analysis this script does not make.
 
 What it does not see, by its nature: a pair on another factory or another venue, accounts the
 trader holds under wallets nothing links, and USDC that came from before the deployment's block.
@@ -51,10 +52,14 @@ PAYOUT_DUE = "0x" + keccak(text="PayoutDue(uint256,address,address,uint64,uint64
 TRANSFER = chk.TRANSFER
 PAYOUT_BPS = 800
 BPS = 10_000
-# The pool's call that lets a payout through before its time, with the platform's signature. Not in the
-# contract yet: until it is, the review writes everything but the approval's calldata.
-APPROVE: str | None = None
-APPROVE_TYPES: list[str] = ["uint256"]
+# The pool's call that lets payouts through once their 72 hours are over, from its approver. Not on main yet: the
+# name and the arguments are the design's (approval with a ceiling, 13 November), and a test holds them to the
+# source once the pool has it.
+APPROVE: str | None = "approvePayouts(uint256[])"
+APPROVE_TYPES: list[str] = ["uint256[]"]
+PAYOUT_DELAY = 72 * 3600
+# Past this from its claim a payout is paid unapproved, unless it was stopped (the same design's ceiling).
+PAYOUT_HARD = 7 * 24 * 3600
 
 
 # ── what the numbers say, from what was read ─────────────────────────────────────────
@@ -206,8 +211,8 @@ def approve_call(pool: str, pid: int) -> dict:
     if APPROVE is None:
         return {"kind": "approve", "to": pool, "call": None, "args": [pid], "data": None,
                 "note": "the pool has no approval call yet"}
-    return {"kind": "approve", "to": pool, "call": APPROVE, "args": [pid],
-            "data": "0x" + c.encode_call(APPROVE, APPROVE_TYPES, [pid]).hex()}
+    return {"kind": "approve", "to": pool, "call": APPROVE, "args": [[pid]],
+            "data": "0x" + c.encode_call(APPROVE, APPROVE_TYPES, [[pid]]).hex()}
 
 
 def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
@@ -218,7 +223,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     exam = next((f["exam"] for f in chain["funded"] if f["stage"] == stage), None)
     sale = next((s for s in chain["sales"] if s["exam"] == exam), None)
     out = {"pool": pool, "id": pid, "trader": trader, "stage": stage, "exam": exam, "amount": pay["amount"],
-           "dueAt": pay["dueAt"], "state": pay["state"], "size": sale["size"] if sale else None,
+           "claimedAt": pay["dueAt"] - PAYOUT_DELAY, "dueAt": pay["dueAt"],
+           "hardAt": pay["dueAt"] - PAYOUT_DELAY + PAYOUT_HARD, "state": pay["state"], "size": sale["size"] if sale else None,
            "fills": {"stage": sum(f["account"] == stage for f in chain["fills"]),
                      "exam": sum(f["account"] == exam for f in chain["fills"])}}
     pairs = {"stage": pairs_of(stage, chain, who, p), "exam": pairs_of(exam, chain, who, p) if exam else []}
@@ -277,7 +283,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
 
 def summary(r: dict) -> str:
     """The review in a few lines of text."""
-    lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}",
+    lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}, paid unapproved at {r['hardAt']}",
              f"  stage {r['stage']} ({r['fills']['stage']} fills), exam {r['exam']} ({r['fills']['exam']} fills)"]
     for part in ("stage", "exam"):
         for x in r["pairs"][part]:
