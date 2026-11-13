@@ -455,6 +455,12 @@ export const REFUSALS = Object.freeze({
   "NotOver()": "The step's time is not over.",
   "BadRules()": "These rules cannot start an exam.",
   "UnsupportedSizeDecimals(uint32,uint8)": "That asset's size units are not supported.",
+  // The stop and the take of a position (setTrigger, clearTrigger, fillTrigger). Said here so a refusal is never a bare
+  // name; the screen and the review do not model the triggers yet.
+  "NoPosition()": "There is no position in that asset to set a stop or a take on.",
+  "ZeroPrice()": "A stop or a take needs a price above zero.",
+  "NoTrigger()": "There is no stop or take there to remove.",
+  "NotTriggered(uint64,uint64)": "The oracle price has not reached the stop or the take yet.",
 });
 
 const REFUSAL_BY_NAME = Object.freeze(Object.fromEntries(Object.entries(REFUSALS).map(([sig, text]) => [sig.split("(")[0], text])));
