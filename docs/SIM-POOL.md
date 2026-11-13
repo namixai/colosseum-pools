@@ -279,11 +279,13 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   since the pool takes no such stop without two fills, or `approvePayouts` otherwise.
   Each call is offered only if the pool would take it. The approval goes only to a pool that answers
   `approver()`. A pool without it pays at 72 hours by itself, and the review says so, with no call and no
+  ceiling. A payout approved already is offered no second approval (the pool would revert it), and a pool
+  whose approver is the zero address is offered none: nobody could sign it, and the payout goes out at its
   ceiling. A stop goes only to a payout still waiting and never stopped, and in time by the pool's rule:
   until it is paid on a pool with approvals, until 5 minutes before `dueAt` on one without. Links of
   reason 2 leave out the senders the review does not count. An exam or stage of the pool that was not
-  read makes the pool's running total incomplete: `enough` is false, and the account is named. The approval is
-  the design of 13 November and not on main yet; a stop of reason 3, a result disputed without a pair,
+  read makes the pool's running total incomplete: `enough` is false, and the account is named. The names, the
+  selector, the fields of a payout and the pool's rule for a stop are held to `src/sim` by tests. A stop of reason 3, a result disputed without a pair,
   needs a written analysis the script does not make. It cannot see a pair on another factory or another venue,
   accounts under wallets nothing links, or USDC that arrived before the deployment's block.
 

@@ -53,14 +53,19 @@ TRANSFER = chk.TRANSFER
 PAYOUT_BPS = 800
 FLOOR_PAYOUTS = 3  # SimPoolFactory.FLOOR_PAYOUTS
 BPS = 10_000
-# The pool's call that lets payouts through once their 72 hours are over, from its approver. Not on main yet: the
-# name and the arguments are the design's (approval with a ceiling, 13 November), and a test holds them to the
-# source once the pool has it.
+# The pool's call that lets payouts through once their 72 hours are over, from its approver (SimPool,
+# `approvePayouts`); a test holds the name, the arguments and the rules around it to the source.
 APPROVE: str | None = "approvePayouts(uint256[])"
 APPROVE_TYPES: list[str] = ["uint256[]"]
 PAYOUT_DELAY = 72 * 3600
-# Past this from its claim a payout is paid unapproved, unless it was stopped (the same design's ceiling).
+# Past this from its claim a payout is paid unapproved, unless it was stopped (SimPoolFactory, `PAYOUT_HARD`).
 PAYOUT_HARD = 7 * 24 * 3600
+# `payout(id)` of a pool from before approvals: the same fields without the eighth, `approved`.
+PAYOUT_BEFORE_APPROVALS = "(address,address,uint64,uint64,uint8,bool,uint64)"
+ZERO_ADDRESS = "0x" + "00" * 20
+NO_APPROVER = ("the pool names no approver: the payout goes out unapproved at its ceiling, unless it is stopped; "
+               "there is nobody to sign an approval")
+APPROVED = "approved already: it is paid from its due time, unless it is stopped; nothing more to sign"
 
 
 # ── what the numbers say, from what was read ─────────────────────────────────────────
@@ -241,11 +246,17 @@ def stop_call(pool: str, pid: int, reason: int, paired: str, trades: list[str], 
 NO_APPROVAL = "in this pool a payout goes by itself 72 hours after its claim; there is no approval to sign"
 
 
-def approve_call(pool: str, pid: int, approvals: bool = True) -> dict:
-    """The approval, only for a pool that has it (`approver()` answers): a pool without it pays at 72 hours by
-    itself, and an approval sent to it would revert (review of #283)."""
+def approve_call(pool: str, pid: int, approvals: bool = True, approver: str | None = None, approved: bool = False) -> dict:
+    """The approval, only where the pool would take it (review of #283). A pool without approvals pays at 72 hours
+    by itself, and an approval sent to it would revert. A payout approved already reverts a second approval
+    (`BadPayout`), and a pool whose approver is the zero address has nobody to send one (`NotApprover`)."""
+    none = {"kind": "none", "to": pool, "call": None, "args": [], "data": None}
     if not approvals:
-        return {"kind": "none", "to": pool, "call": None, "args": [], "data": None, "note": NO_APPROVAL}
+        return {**none, "note": NO_APPROVAL}
+    if approved:
+        return {**none, "note": APPROVED}
+    if approver is not None and int(approver, 16) == 0:
+        return {**none, "note": NO_APPROVER}
     if APPROVE is None:
         return {"kind": "approve", "to": pool, "call": None, "args": [pid], "data": None,
                 "note": "the pool has no approval call yet"}
@@ -263,7 +274,11 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     times = chain.get("times") or {"delay": PAYOUT_DELAY, "hard": PAYOUT_HARD}
     delay, hard = times.get("delay"), times.get("hard")
     times_unread = approvals is True and (delay is None or hard is None)
-    if times_unread:
+    # Who approves (the zero address: nobody) and whether this payout is approved already. On a pool with
+    # approvals a payout whose `approved` was not read is not read: an approval offered twice would revert.
+    approver, approved = chain["books"][pool].get("approver"), pay.get("approved", False)
+    approved_unread = approvals is True and approved is None
+    if times_unread or approved_unread:
         approvals = None
     who = owners(chain)
     trader, stage = pay["trader"], pay["account"]
@@ -272,6 +287,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     out = {"pool": pool, "id": pid, "trader": trader, "stage": stage, "exam": exam, "amount": pay["amount"],
            "claimedAt": pay["dueAt"] - delay if delay is not None else None, "dueAt": pay["dueAt"],
            "hardAt": pay["dueAt"] - delay + hard if approvals is True else None, "approvals": approvals,
+           "approver": approver if approvals is True else None, "approved": bool(approved) if approvals is True else None,
            "state": pay["state"], "size": sale["size"] if sale else None,
            "fills": {"stage": sum(f["account"] == stage for f in chain["fills"]),
                      "exam": sum(f["account"] == exam for f in chain["fills"])}}
@@ -318,6 +334,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     unread = [a for a in (stage, exam) if a and a in chain.get("unread", [])]
     if times_unread:
         unread.append("the factory's delay and ceiling")
+    elif approved_unread:
+        unread.append("whether the payout is approved")
     elif approvals is None:
         unread.append("whether the pool takes approvals")
     if unread:
@@ -335,6 +353,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
         out["stoppable"] = None
         out["tx"] = {"kind": "none", "to": pool, "call": None, "args": [], "data": None,
                      "note": ("not read the factory's delay and ceiling" if times_unread else
+                              "not read whether the payout is approved" if approved_unread else
                               "not read whether the pool takes approvals") + ": nothing to sign until it is"}
     elif stop and not out["stoppable"]:
         why = (f"it is {pay['state'].lower()}" if pay["state"] != "Due" else
@@ -344,8 +363,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     elif stop:
         out["tx"] = stop_call(pool, pid, stop["reason"], stop["paired"], stop["trades"], stop["links"])
     else:
-        out["tx"] = approve_call(pool, pid, approvals)
-        if reasons and approvals:
+        out["tx"] = approve_call(pool, pid, approvals, approver, approved)
+        if reasons and out["tx"]["kind"] == "approve":
             out["tx"]["note"] = "no pair, so the pool takes no stop: whoever signs decides"
     return out
 
@@ -353,7 +372,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
 def summary(r: dict) -> str:
     """The review in a few lines of text."""
     # Three answers here too (review of #283): a ceiling, no approval at all, or not read, which says no time.
-    when = (f", paid unapproved at {r['hardAt']}" if r["approvals"] is True else
+    when = (", approved: paid from then" if r["approvals"] is True and r["approved"] else
+            f", paid unapproved at {r['hardAt']}" if r["approvals"] is True else
             ", paid by itself then" if r["approvals"] is False else ", not read when it is paid")
     lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}" + when,
              f"  stage {r['stage']} ({r['fills']['stage']} fills), exam {r['exam']} ({r['fills']['exam']} fills)"]
@@ -466,6 +486,32 @@ def payout_times(factory: str) -> dict:
     return out
 
 
+def payout_struct(pool: str, pid: int) -> tuple:
+    """`payout(id)` as the pool holds it: eight fields, the last `approved`; or the seven of a pool from before
+    approvals, whose answer is a word shorter, with None for the eighth."""
+    try:
+        p = tuple(core.view(pool, "payout(uint256)", sk.PAYOUT, ["uint256"], [pid]))
+        return p[:7] + (bool(p[7]),)
+    except Exception:
+        return tuple(core.view(pool, "payout(uint256)", PAYOUT_BEFORE_APPROVALS, ["uint256"], [pid])) + (None,)
+
+
+def approver_of(pool: str) -> str | None:
+    """The pool's approver, the zero address where none is named; None where it was not read."""
+    try:
+        return to_checksum_address(c.call_view(pool, "approver()", [], [], ["address"])[0])
+    except Exception as exc:
+        core.log("not_read", address=pool, call="approver()", error=str(exc)[:120])
+        return None
+
+
+def with_approver(takes: bool | None, pool: str) -> tuple[bool | None, str | None]:
+    """Whether the pool takes approvals, and who approves on one that does. The approver not read, the pool is
+    not read either: an approval nobody can send must not be offered."""
+    approver = approver_of(pool) if takes is True else None
+    return (None, None) if takes is True and approver is None else (takes, approver)
+
+
 def read_chain(record: dict) -> dict:
     """Everything the review reads, from the deployment's block to the latest one."""
     factory, usdc, start = record["SimPoolFactory"], record["usdc"], int(record["block"])
@@ -477,13 +523,15 @@ def read_chain(record: dict) -> dict:
     funded = [funded_of(l) for l in events if l["topics"][0] == sk.FUNDED]
     payouts = [due_of(l) for l in events if l["topics"][0] == PAYOUT_DUE]
     for x in payouts:
-        p = core.view(x["pool"], "payout(uint256)", sk.PAYOUT, ["uint256"], [x["id"]])
-        x["state"], x["wasStopped"] = sk.PAYOUT_STATE[p[4]], bool(p[5])
+        p = payout_struct(x["pool"], x["id"])
+        x["state"], x["wasStopped"], x["approved"] = sk.PAYOUT_STATE[p[4]], bool(p[5]), p[7]
     books = {pool: {"balance": c.call_view(usdc, "balanceOf(address)", ["address"], [pool], ["uint256"])[0],
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
                     "approvals": has_approvals(factory, pool), "largestPayout": core.view(pool, "largestPayout()", "uint64"),
                     "staged": optional_view(pool, "staged()")}
              for pool in pools}
+    for pool, b in books.items():
+        b["approvals"], b["approver"] = with_approver(b["approvals"], pool)
     pool_of = {s["exam"]: s["pool"] for s in sales} | {f["stage"]: f["pool"] for f in funded}
     accounts = list(pool_of)
     status, done, unread = {}, {}, []

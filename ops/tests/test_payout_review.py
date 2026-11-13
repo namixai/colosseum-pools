@@ -439,6 +439,62 @@ class WhatThePoolWouldTake(unittest.TestCase):
         got = r.review(ch.d, POOL, 0)
         self.assertEqual((got["stoppable"], got["tx"]["kind"]), (True, "stop"))
 
+    def test_a_payout_approved_already_is_offered_no_second_approval_and_can_still_be_stopped(self):
+        ch, _, s1 = honest_world()
+        ch.d["payouts"][0]["approved"] = True
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["tx"]["kind"], got["tx"]["data"], got["tx"]["note"], got["approved"]), ("none", None, r.APPROVED, True))
+        self.assertEqual(got["verdict"], "clean")
+        self.assertIn("approved: paid from then", r.summary(got))
+        self.pair(ch, s1)
+        ch.d["now"] = ch.d["payouts"][0]["dueAt"] + 3_600  # approved, past its 72 hours, not paid yet
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["stoppable"], got["tx"]["kind"]), (True, "stop"), "the pool stops an approved payout until it is paid")
+
+    def test_a_pool_that_names_no_approver_is_offered_no_approval(self):
+        ch, _, _ = honest_world()
+        ch.d["books"][POOL]["approver"] = r.ZERO_ADDRESS
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["tx"]["kind"], got["tx"]["data"], got["tx"]["note"]), ("none", None, r.NO_APPROVER))
+        self.assertEqual(got["hardAt"], got["claimedAt"] + r.PAYOUT_HARD, "the ceiling stands: it goes out then")
+        ch.d["books"][POOL]["approver"] = addr(0xAB)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["tx"]["kind"], got["approver"]), ("approve", addr(0xAB)))
+
+    def test_a_payout_whose_approval_was_not_read_is_offered_nothing(self):
+        ch, _, _ = honest_world()
+        ch.d["payouts"][0]["approved"] = None
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["tx"]["kind"], got["tx"]["data"], got["hardAt"]), ("none", None, None))
+        self.assertIn("not read whether the payout is approved", got["tx"]["note"])
+        self.assertEqual(got["reasons"], ["not read: whether the payout is approved"])
+        ch.d["books"][POOL]["approvals"] = False
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["tx"]["note"], got["reasons"]), (r.NO_APPROVAL, []), "a pool from before approvals has no such field")
+
+    def test_the_payout_is_read_with_its_approval_or_as_a_pool_from_before_approvals_holds_it(self):
+        old = (addr(1), addr(2), 800, 5_000, 1, False, 0)
+
+        def view(a, sig, out, types=(), args=()):
+            if out == sk.PAYOUT:
+                raise Exception("insufficient data for the eighth field")
+            self.assertEqual(out, r.PAYOUT_BEFORE_APPROVALS)
+            return old
+
+        with mock.patch.object(r.core, "view", side_effect=view):
+            self.assertEqual(r.payout_struct(POOL, 0), old + (None,))
+        with mock.patch.object(r.core, "view", return_value=old + (1,)):
+            self.assertEqual(r.payout_struct(POOL, 0), old + (True,))
+
+    def test_an_approver_not_read_leaves_the_pool_not_read(self):
+        with mock.patch.object(r.c, "call_view", side_effect=Exception("429 Too Many Requests")):
+            self.assertEqual(r.with_approver(True, POOL), (None, None))
+        with mock.patch.object(r.c, "call_view", return_value=("0x" + "00" * 20,)):
+            self.assertEqual(r.with_approver(True, POOL), (True, r.ZERO_ADDRESS), "the zero address is an answer: nobody approves")
+        with mock.patch.object(r.c, "call_view", side_effect=AssertionError("not asked")):
+            self.assertEqual(r.with_approver(False, POOL), (False, None))
+            self.assertEqual(r.with_approver(None, POOL), (None, None))
+
     def test_a_wide_sender_is_no_link_in_a_stop_either(self):
         ch, t1, s1 = honest_world()
         t9, _ = self.pair(ch, s1)
@@ -511,7 +567,7 @@ class ReadingTheChain(unittest.TestCase):
 
         views = {("pools()",): [POOL], ("owed()",): 800, ("held()",): 0, ("reserved()",): 0, ("largestPayout()",): 800,
                  ("staged()",): 1_600,
-                 ("payout(uint256)",): (s1, t1, 800, 5_000, 1, False, 0)}
+                 ("payout(uint256)",): (s1, t1, 800, 5_000, 1, False, 0, False)}
 
         def view(a, sig, out, types=(), args=()):
             return views[(sig,)]
@@ -528,11 +584,12 @@ class ReadingTheChain(unittest.TestCase):
                                          "size": SIZE, "price": 100, "code": "0x" + code.hex(), "block": 11, "tx": tx(1)}])
         self.assertEqual(got["funded"], [{"pool": POOL, "stage": s1, "exam": e1, "trader": t1, "block": 20}])
         self.assertEqual(got["payouts"], [{"pool": POOL, "id": 7, "account": s1, "trader": t1, "amount": 800,
-                                           "dueAt": 5_000, "block": 30, "state": "Due", "wasStopped": False}])
+                                           "dueAt": 5_000, "block": 30, "state": "Due", "wasStopped": False,
+                                           "approved": False}])
         self.assertEqual(got["fills"], [{"account": s1, "asset": 3, "buy": True, "sz": 100, "t": 2_500, "tx": tx(4), "late": 4}])
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
         self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "approvals": True,
-                                               "largestPayout": 800, "staged": 1_600}})
+                                               "largestPayout": 800, "staged": 1_600, "approver": addr(0xAB)}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         self.assertEqual(got["times"], {"delay": 72 * 3_600, "hard": 8 * 86_400}, "what the factory answers, not 7 days by rote")
         review = r.review(got, POOL, 7)
@@ -553,6 +610,68 @@ class AgainstTheContracts(unittest.TestCase):
         m = re.search(r"event ExamSold\(\s*address indexed exam,\s*address indexed trader,\s*uint256 line,\s*uint64 size,"
                       r"\s*uint64 price,\s*uint256 fee,\s*bool bySignature,\s*bytes32 code,\s*address indexed partner", pool)
         self.assertIsNotNone(m, "sale_of reads the data in this order")
+
+    POOL_SRC = (ROOT / "src/sim/SimPool.sol").read_text()
+    FACTORY_SRC = (ROOT / "src/sim/SimPoolFactory.sol").read_text()
+
+    @staticmethod
+    def function(src: str, name: str) -> tuple[str, str]:
+        """A Solidity function's head (to its opening brace) and its body, braces matched."""
+        i = src.index(f"function {name}(")
+        j = src.index("{", i)
+        depth = 0
+        for k in range(j, len(src)):
+            depth += (src[k] == "{") - (src[k] == "}")
+            if depth == 0:
+                return src[i:j], src[j:k + 1]
+        raise AssertionError(f"{name}: no end")
+
+    def test_the_approval_call_is_the_pools_own_by_its_source(self):
+        head, body = self.function(self.POOL_SRC, "approvePayouts")
+        types = [p.split()[0] for p in re.search(r"approvePayouts\((.*?)\)", head, re.S).group(1).split(",")]
+        self.assertEqual((f"approvePayouts({','.join(types)})", types), (r.APPROVE, r.APPROVE_TYPES))
+        self.assertIn("external", head)
+        selector = "0x" + keccak(text=f"approvePayouts({','.join(types)})")[:4].hex()
+        self.assertEqual(r.approve_call(POOL, 3)["data"][:10], selector, "the selector of the source's own signature")
+        # Only the approver, never the zero address; only a payout waiting and not approved yet: what
+        # `approve_call` holds back (NO_APPROVER, APPROVED).
+        self.assertIn("if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();", body)
+        self.assertIn("if (p.state != PayoutState.Due || p.approved) revert BadPayout();", body)
+        self.assertRegex(self.POOL_SRC, r"\n    address public approver;", "the getter `has_approvals` and `approver_of` ask")
+
+    def test_the_delay_and_the_ceiling_are_the_factorys_by_its_source(self):
+        unit = {"hours": 3_600, "days": 86_400}
+        for name, mine in (("PAYOUT_DELAY", r.PAYOUT_DELAY), ("PAYOUT_HARD", r.PAYOUT_HARD)):
+            m = re.search(rf"uint32 public constant {name} = (\d+) (hours|days);", self.FACTORY_SRC)
+            self.assertIsNotNone(m, f"{name} is a uint32 the factory answers: `payout_times` decodes it so")
+            self.assertEqual(int(m.group(1)) * unit[m.group(2)], mine)
+        # The ceiling as the pool counts it: the claim (`dueAt` less the delay) plus PAYOUT_HARD; and `pay` pays a
+        # payout from `dueAt` once approved, from the ceiling if not.
+        self.assertIn("return p.dueAt - factory.PAYOUT_DELAY() + factory.PAYOUT_HARD();", self.POOL_SRC)
+        _, pay = self.function(self.POOL_SRC, "pay")
+        self.assertIn("uint256 hardAfter = uint256(factory.PAYOUT_HARD()) - factory.PAYOUT_DELAY();", pay)
+        self.assertIn("if (block.timestamp < p.dueAt) break;", pay)
+        self.assertIn("if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {", pay)
+
+    def test_the_payout_is_read_field_by_field_as_the_pool_holds_it(self):
+        fields = re.findall(r"^\s*(\w+) (\w+);", re.search(r"struct Payout \{(.*?)\n    \}", self.POOL_SRC, re.S).group(1), re.M)
+        self.assertEqual([n for _, n in fields],
+                         ["account", "trader", "amount", "dueAt", "state", "wasStopped", "stoppedAt", "approved"])
+        types = ["uint8" if t == "PayoutState" else t for t, _ in fields]
+        self.assertEqual(sk.PAYOUT, "(" + ",".join(types) + ")")
+        self.assertEqual(r.PAYOUT_BEFORE_APPROVALS, "(" + ",".join(types[:7]) + ")")
+        states = re.sub(r"///[^\n]*", "", re.search(r"enum PayoutState \{(.*?)\}", self.POOL_SRC, re.S).group(1))
+        self.assertEqual(tuple(states.replace(",", " ").split()), sk.PAYOUT_STATE)
+        self.assertIn("function payout(uint256 id) external view returns (Payout memory)", self.POOL_SRC)
+
+    def test_a_stop_is_taken_until_the_payout_is_paid_by_the_pools_source(self):
+        head, body = self.function(self.POOL_SRC, "stopPayout")
+        self.assertIn("onlyChecker", head)
+        self.assertIn("if (p.state != PayoutState.Due || p.wasStopped) revert BadPayout();", body)
+        # No time and no approval in the pool's rule: waiting and never stopped is all it asks, so the review
+        # offers a stop on a pool with approvals until the payout is paid (`in_time`).
+        for word in ("dueAt", "block.timestamp <", "block.timestamp >", "TooLate", "approved", "PAYOUT_"):
+            self.assertNotIn(word, body)
 
     def test_it_reads_and_never_sends(self):
         src = (ROOT / "ops/payout_review.py").read_text()
