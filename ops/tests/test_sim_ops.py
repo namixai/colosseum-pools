@@ -121,6 +121,9 @@ class TheFirstPool(unittest.TestCase):
         for name in ("sim-first-pool", "sim-measure-pool"):
             text = json.loads((ROOT / f"deployments/plans/{name}.json").read_text(encoding="utf-8"))["terms_text"]
             self.assertIn("Every exam is bought with a trading group's code", text)
+            self.assertIn("72 hours after the payout is claimed if the pool's approver has approved it, and 7 days after "
+                          "it is claimed if not", text)
+            self.assertIn("Until it is paid, the platform's checker may stop it", text)
             self.assertIn("once a sale names a code, neither changes", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
             self.assertIn("The pool runs at least 6 months (184 days) from its opening", text)
