@@ -355,7 +355,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     pool takes no such stop without two fills;
   - `approvePayouts` otherwise.
 
-  Each call is offered only if the pool would take it. The approval goes only to a pool that answers
+  Each call is offered only if the pool would take it. A payout that is not waiting (paid, stopped, held or refused, as
+  `--id` may name one) is offered neither an approval nor a stop, only its state in words. The approval goes only to a pool that answers
   `approver()`. A pool without it pays at 72 hours by itself, and the review says so, with no call and no
   ceiling. A payout approved already is offered no second approval (the pool would revert it), and a pool
   whose approver is the zero address is offered none: nobody could sign it, and the payout goes out at its
