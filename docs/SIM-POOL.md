@@ -196,6 +196,24 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
 
+- **The review of a payout**, `ops/payout_review.py`: what whoever signs a payout through, or stops it,
+  reads first. It reads the chain only, sends nothing and holds no key. For each payout still waiting
+  it names the trader, the stage, the exam, the amount and when it is due, and then:
+  - the pairs of the stage and of the exam, by the checker's rule, with both fills' transactions;
+  - every other buyer of the factory this trader shares a sender of USDC with, or exchanged USDC with.
+    The pools are left out, since they pay every trader. A sender that funded more than five buyers
+    is named but not counted, as an exchange's wallet would be;
+  - how late the filler put this trader's fills (`late`) against everyone else's;
+  - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
+    under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
+  - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
+    whether the money free of what is owed, held back and kept for stops covers them.
+
+  Its verdict is "clean", or "suspicious" with the reasons. The call to sign is written out as text
+  with its calldata: `stopPayout` when there is a pair, since the pool takes no stop without two
+  fills, or the approval otherwise. It cannot see a pair on another factory or another venue,
+  accounts under wallets nothing links, or USDC that arrived before the deployment's block.
+
 - **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
   record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route.
