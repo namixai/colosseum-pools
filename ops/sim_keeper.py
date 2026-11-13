@@ -80,9 +80,10 @@ PAY_PER_CALL = 10
 # One call fits a small block (2 000 000 gas, ops/keeper.py), measured from cold storage and not estimated
 # (test/sim/SimPool.t.sol, test_pay_theKeepersFullBatch_fitsASmallBlock): PAY_PER_CALL payouts paid past 86
 # waiting, `pay(96)`, take 999 510 gas, each further payout looked at 5 390, and `pay(192)` 1 517 035: three
-# quarters of the block, the rest left for a token whose transfer costs more than the test's. `pay` counts from
-# the head whatever it is told, so no call in a small block pays a payout further than this past a waiting
-# head: it is paid once the head moves, which the approval of the payouts before it does, or their 7 days.
+# quarters of the block, the rest left for a token whose transfer costs more than the test's. This is the
+# keeper's limit, kept to what was measured, not the block's: a longer look may still fit, by the queue and the
+# token. `pay` counts from the head whatever it is told, so a payout further than this past a waiting head is
+# not paid by the keeper until the head moves, which the approval of the payouts before it does, or their 7 days.
 SCAN_PAYOUTS = 192
 
 
@@ -326,7 +327,7 @@ class SimKeeper:
         if reach:
             self.send(pool, "pay(uint256)", ["uint256"], [reach])
         elif not early and count > end:
-            # Every payout within a small block's reach waits for its approval, and there are more behind them.
+            # Every payout within the keeper's reach waits for its approval, and there are more behind them.
             # They are paid once the head moves: the approver approves the ones in front, or their 7 days come.
             log("pay_out_of_reach", pool=pool, head=head, looked=len(rows), beyond=count - end)
 

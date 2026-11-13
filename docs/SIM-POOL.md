@@ -216,9 +216,11 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   1 517 035 (`test_pay_theKeepersFullBatch_fitsASmallBlock`: ten traders with no USDC, none, five or all
   refused by the token). What is left is paid in the next passes, ten a pass. `pay` counts from the
   head, so an approved payout more than 191 places behind a head that waits for its approval is out of
-  a small block's reach: the keeper logs `pay_out_of_reach`, and the payout is paid once the head
-  moves, when the approver approves the ones in front or their 7 days come, which is before its own;
-  anyone may also send `pay` with a larger `max` in a big block. `--measure EXAM --trader-wallet K` places orders on the
+  the keeper's reach. 192 is the keeper's limit, kept to what was measured, not a small block's: a
+  longer look may still fit one, by the queue and the token. The keeper logs `pay_out_of_reach`, and
+  the payout is paid once the head moves, when the approver approves the ones in front or their 7 days
+  come, which is before its own; anyone may also send `pay` with a larger `max`, in a big block if a
+  small one does not hold it. `--measure EXAM --trader-wallet K` places orders on the
   trader's own exam and writes how many blocks late each fill landed, p50 and p99: the number the
   plan's fill window is set from.
 - **The relayer**, `ops/sim_relay.py`: a signed purchase in, `buyWithAuthorization` out, from a key

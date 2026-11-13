@@ -8,6 +8,7 @@ import unittest
 from eth_utils import keccak
 
 from ops import deploy_sim as d
+from ops import sim_keeper as keeper
 from ops import sim_relay as r
 from ops.tests.test_sim_keeper import declared
 
@@ -141,8 +142,11 @@ class TheFirstPool(unittest.TestCase):
             self.assertNotIn("counts as profit and is shared", text)
             # `pay` is a call of its own, walks in the order of the claims, and passes a payout waiting for its
             # approval only with the money for it kept (review of #286).
-            self.assertIn("a payout that may be paid is paid by a call anyone may make, which the keeper makes in its "
-                          "next pass", text)
+            self.assertIn("a payout that may be paid is paid by a call anyone may make, which the keeper makes pass "
+                          "after pass, at most ten payouts a call, so one of many payable at once may wait some passes.",
+                          text)
+            self.assertNotIn("in its next pass", text, "the eleventh payable payout waits for a later pass")
+            self.assertEqual(keeper.PAY_PER_CALL, 10, "the ten of the terms")
             self.assertIn("Payouts are paid in the order they were claimed, out of the money the pool holds: one still "
                           "waiting for its approval keeps its place, and a later one is paid past it only if the money "
                           "also covers every payout so passed over; one the pool cannot cover waits, and every payout "
