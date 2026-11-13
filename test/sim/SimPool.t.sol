@@ -1661,6 +1661,12 @@ contract SimPoolTest is Test {
         assertEq(pool.pay(4), 1, "the fourth is");
         assertEq(uint8(pool.payout(last).state), uint8(SimPool.PayoutState.Paid));
         assertEq(pool.head(), 0);
+        // A settled payout counts as looked at too: past the paid fourth, a fifth needs five (review of #286).
+        uint256 fifth = _claim(pool, address(_passedStage(pool, other, 1)));
+        vm.warp(block.timestamp + 72 hours);
+        assertEq(pool.pay(4), 0, "the three waiting and the paid one");
+        assertEq(pool.pay(5), 1);
+        assertEq(uint8(pool.payout(fifth).state), uint8(SimPool.PayoutState.Paid));
     }
 
     function test_stop_reasonThree_theResultDisputed_noPairOneTextHash() public {

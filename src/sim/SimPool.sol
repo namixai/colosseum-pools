@@ -464,7 +464,8 @@ contract SimPool is Initializable {
         emit PayoutDue(id, stage, trader, amount, dueAt);
     }
 
-    /// @notice Pays the payouts that are due, in the order they came due, looking at up to `max` of them,
+    /// @notice Pays the payouts that are due, in the order they came due, looking at up to `max` of them from the
+    ///         head, settled ones included,
     ///         while the pool's USDC covers the next. A payout is due `PAYOUT_DELAY` after its claim once
     ///         the approver approved it, and `PAYOUT_HARD` after its claim if not. One not yet due for want
     ///         of approval keeps its place: `pay` moves on to later ones, but pays one only if the money
@@ -476,12 +477,16 @@ contract SimPool is Initializable {
         // What the payouts passed over for want of approval will need, and the first of them: the head.
         uint256 ahead;
         uint256 waiting = len;
+        // Read once: the factory's constants, not a call for each payout (review of #286).
+        uint256 hardAfter = uint256(factory.PAYOUT_HARD()) - factory.PAYOUT_DELAY();
+        // Every payout looked at counts toward `max`, settled ones too: payouts paid out of order behind a head that
+        // waits for its approval cannot make a call run long (review of #286).
         while (i < len && seen < max) {
             Payout storage p = _payouts[i];
+            seen += 1;
             if (p.state == PayoutState.Due) {
-                seen += 1;
                 if (block.timestamp < p.dueAt) break;
-                if (!p.approved && block.timestamp < _hardAt(p)) {
+                if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {
                     ahead += p.amount;
                     if (waiting == len) waiting = i;
                     i += 1;

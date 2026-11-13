@@ -73,6 +73,12 @@ class WhatIsDue(unittest.TestCase):
         self.assertTrue(k.pay_due([("Due", due, False), ("Due", due + 5, True)], due + 5), "pay walks past one waiting")
         self.assertTrue(k.pay_due([("Stopped", 999, False)], 100), "pay walks past a settled head")
         self.assertFalse(k.pay_due([("Due", due, False), ("Stopped", 0, False)], due), "a settled one behind changes nothing")
+        # How far pay is told to look: to the last payable one, past settled ones paid out of order (review of #286).
+        rows = [("Due", due, False)] + [("Paid", due, True)] * 20 + [("Due", due + 5, True)]
+        self.assertEqual(k.pay_reach(rows, due + 5), 22, "past twenty payouts paid out of order")
+        self.assertEqual(k.pay_reach([("Paid", 0, True), ("Held", 0, True), ("Due", due, False)], due), 2,
+                         "a settled head: past the settled ones")
+        self.assertEqual(k.pay_reach([("Due", due, False)], due), 0)
 
     def test_the_payout_times_are_the_factorys(self):
         src = (ROOT / "src/sim/SimPoolFactory.sol").read_text()
@@ -238,7 +244,7 @@ class ThePayoutsClock(unittest.TestCase):
                 sk.pool_pass(self.POOL, at - 1)
                 send.assert_not_called()
                 sk.pool_pass(self.POOL, at)
-            send.assert_called_once_with(self.POOL, "pay(uint256)", ["uint256"], [k.PAY_PER_CALL])
+            send.assert_called_once_with(self.POOL, "pay(uint256)", ["uint256"], [1])
 
 
 class TheHostsOneUnit(unittest.TestCase):

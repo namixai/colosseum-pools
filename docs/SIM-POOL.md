@@ -52,7 +52,7 @@ fail, and their prices pay for the ones that pass.
   payout then waits the 7 days); approving sets neither the amount nor the trader. The keeper sends
   `pay` in its first pass after a payout is due, so an approved payout is paid 72 hours and about a
   minute after the claim, or later, in order, if the pool does not hold enough then. `pay(max)`, by
-  anyone, looks at up to `max` waiting payouts in the order they came due and pays each that is due
+  anyone, looks at up to `max` payouts from the head, settled ones included, in the order they came due and pays each that is due
   while the pool's USDC covers it; one still waiting for its approval keeps its place: `pay` moves
   on to later ones, but pays one only if the money covers every such payout before it too, and the
   queue's head stays at the first unpaid; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from

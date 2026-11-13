@@ -75,6 +75,9 @@ PAYOUT_HARD = 7 * 86_400
 # open, is under it (forge test --gas-report).
 FILL_GAS = 400_000
 PAY_PER_CALL = 16
+# How far past the head the keeper reads payouts to find one to pay: behind a head that waits for its approval,
+# later approved payouts are paid out of order, and `pay` must be told to look that far (review of #286).
+SCAN_PAYOUTS = 256
 
 
 # ── what is due, from what was read ──────────────────────────────────────────────────
@@ -107,15 +110,24 @@ def payable(state: str, due_at: int, approved: bool, now: int) -> bool:
     return approved or now >= due_at - PAYOUT_DELAY + PAYOUT_HARD
 
 
+def pay_reach(rows: list[tuple[str, int, bool]], now: int) -> int:
+    """How many payouts from the head `pay` should look at (its `max`), from the rows read the head first: up to
+    the last payable one, or, with none, past the settled ones at the head; zero for nothing to do. `pay` counts
+    every payout it looks at, settled ones too (review of #286), so the keeper names how far to go. A payout
+    waiting for its approval keeps the head, and the keeper does not call `pay` for it before its 7 days."""
+    last = max((k + 1 for k, (state, due_at, approved) in enumerate(rows) if payable(state, due_at, approved, now)),
+               default=0)
+    if last:
+        return last
+    settled = 0
+    while settled < len(rows) and rows[settled][0] != "Due":
+        settled += 1
+    return settled
+
+
 def pay_due(rows: list[tuple[str, int, bool]], now: int) -> bool:
-    """Whether `pay` would pay something, from the payouts it would look at, the head first: one of
-    them is payable, or the head is settled and `pay` would move past it. A payout waiting for its
-    approval keeps the head, and the keeper does not call `pay` for it before its 7 days."""
-    if not rows:
-        return False
-    if rows[0][0] != "Due":
-        return True
-    return any(payable(state, due_at, approved, now) for state, due_at, approved in rows)
+    """Whether `pay` would pay something or move the head (pay_reach)."""
+    return pay_reach(rows, now) > 0
 
 
 def fill_now(fill_from: int, fill_until: int, latest: int) -> bool:
@@ -284,11 +296,15 @@ class SimKeeper:
         if head >= count:
             return
         rows = []
-        for pid in range(head, min(count, head + PAY_PER_CALL)):
+        for pid in range(head, min(count, head + SCAN_PAYOUTS)):
             p = view(pool, "payout(uint256)", PAYOUT, ["uint256"], [pid])
             rows.append((PAYOUT_STATE[p[4]], p[3], bool(p[7])))
-        if pay_due(rows, now):
-            self.send(pool, "pay(uint256)", ["uint256"], [PAY_PER_CALL])
+            # `pay` stops at a waiting payout whose 72 hours are not over: nothing after it is read.
+            if rows[-1][0] == "Due" and now < rows[-1][1]:
+                break
+        reach = pay_reach(rows, now)
+        if reach:
+            self.send(pool, "pay(uint256)", ["uint256"], [reach])
 
     def slow_pass(self) -> None:
         latest = int(c.rpc("eth_blockNumber"), 16)
