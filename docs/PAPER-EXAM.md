@@ -58,7 +58,9 @@ with a balance, `capital`, that is a number and not money.
 - **The rules** are the four a real account has, with the same arithmetic as `RuledAccount`: a
   static drawdown from the starting balance, a daily loss from the snapshot taken in the first
   15 minutes of the UTC day (`checkpoint()`, anyone), leverage as notional over equity, and a
-  list of assets. `breach()` ends the exam when a rule is broken at that moment; anyone may call
+  list of assets. Until a step's first snapshot its daily loss counts from the step's starting
+  balance. No snapshot is taken while a rule is broken: a day's base is never the equity that
+  broke a rule, and `breach()` ends the exam instead. `breach()` ends the exam when a rule is broken at that moment; anyone may call
   it.
 - **Leverage at the fill.** An order that would take the account over its leverage rule is
   refused. An order that only reduces a position is never refused, so there is always a way out.
@@ -156,12 +158,33 @@ fill at the mark, a flat cost, and the things listed next.
 
 ## Tests
 
-`test/exam/PaperExam.t.sol`, 67 tests on the hyper-evm-lib simulator, and 124 mutations of the
-contract (`X1`–`X124` in `scripts/mutations.py`), each caught by a named test:
+`test/exam/PaperExam.t.sol`, 68 tests on the hyper-evm-lib simulator, among them a price that spikes
+for one block of an order's window: filled at its first block the order gains nothing; the filler can take
+the spike only by choosing its block, and the fill then says it came late (`late`).
+
+`test/exam/PaperExamInvariant.t.sol` drives one exam, filled at the book by its filler, at random: orders
+of any size and side on two assets, fills at any block of their window or after it, the day's snapshot,
+passes, breaches and expiries tried at any time, the first pool's rules and cost, and the oracle never
+moving. N1: it is never passed, and its equity never rises above its starting balance. N2: no fill is
+better for the trader than the oracle, and none at the book is more than `maxWorseBps` worse. The same
+runs again with the book drawn anew before every fill: under, over, around or far from the oracle,
+one-sided, crossed or empty.
+
+`test/exam/PaperExamDifferential.t.sol` checks the contract against the rules written again from
+this text, in the test and not from `PaperExam.sol` (D1): the oracle moves, the book is drawn anew,
+orders of any size and side are filled at any block of their window, snapshots, passes, breaches and
+expiries are tried. After every call the two agree on whether it went through, the status, the
+equity and the reason of a breach. Written on 13 November 2026, it found two rules the contract
+kept and this text did not say, both now in the bullet above: the first day's base before any
+snapshot, and no snapshot while a rule is broken.
+
+The mutations of the contract (`X1`–`X129` in `scripts/mutations.py`) are each caught by a named test,
+the invariants among them (a failed invariant prints its name on a line of its own, which the script
+reads):
 
 ```
 forge test --match-path 'test/exam/*'
-python3 scripts/mutations.py $(seq -f 'X%g' 1 124)
+python3 scripts/mutations.py $(seq -f 'X%g' 1 129)
 ```
 
 ## Not done yet
