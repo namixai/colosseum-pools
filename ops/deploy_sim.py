@@ -28,8 +28,8 @@ ops/sim_keeper.py; it prints the exam.
 
 `codes` sets a pool's codes from the plan's `codes` (setCode, from the creator's key): each a trading
 group's code, the address its owner gave and its share, 0 or 4 000 to 6 000 bps. Every sale names a
-code, so a pool sells nothing until one is set. A code a sale has named is fixed: one that matches is
-skipped, one that does not is refused before anything is sent.
+code, so a pool sells nothing until one is set. A code a sale has named keeps its partner, and its share
+can only rise: one that matches is skipped, a raise is sent, anything else is refused before anything is sent.
 
 `close` closes a pool and `finish` pays out a closed one, from the named key. Without --send each only
 reads the pool and says what it would send, from which key, or why the pool would refuse: before its
@@ -162,14 +162,17 @@ def codes_of(raw: dict, creator: str) -> list[tuple[str, bytes, str, int]]:
 
 
 def to_set(codes: list[tuple[str, bytes, str, int]], on_chain) -> list[tuple[str, bytes, str, int]]:
-    """The codes still to send. `on_chain(hash)` is the pool's codeOf: a code a sale named is fixed, so one that
-    matches is skipped and one that does not stops everything before a transaction."""
+    """The codes still to send. `on_chain(hash)` is the pool's codeOf. A code a sale named keeps its partner and
+    its share may only rise: one that matches is skipped, a raise for the same partner is sent, and anything else
+    stops everything before a transaction."""
     out = []
     for text, h, partner, bps in codes:
         have, have_bps, used = on_chain(h)[:3]
         same = to_checksum_address(have) == partner and int(have_bps) == bps
-        if used and not same:
-            raise SystemExit(f"code {text!r} is fixed on chain as {have} {have_bps} bps: a sale named it")
+        raise_ = to_checksum_address(have) == partner and bps > int(have_bps)
+        if used and not same and not raise_:
+            raise SystemExit(f"code {text!r} is fixed on chain as {have} {have_bps} bps: a sale named it; its share "
+                             "can only rise, for the same partner")
         if not same:
             out.append((text, h, partner, bps))
     return out

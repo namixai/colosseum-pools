@@ -95,6 +95,8 @@ contract SimPoolHandler is Test {
     mapping(bytes32 code => bool) public ghostUsed;
     mapping(bytes32 code => address) public firstPartner;
     mapping(bytes32 code => uint16) public firstBps;
+    /// A used code's share now: it may only have risen since its first sale, for the same partner.
+    mapping(bytes32 code => uint16) public bpsNow;
     /// A `setCode` that went through on a code a sale had named, or was refused on one no sale had.
     uint256 public ghostCodeChanged;
     uint256 public ghostCodeRefused;
@@ -291,6 +293,7 @@ contract SimPoolHandler is Test {
             (address p, uint16 bps,,,) = pool.codeOf(code);
             firstPartner[code] = p;
             firstBps[code] = bps;
+            bpsNow[code] = bps;
         }
     }
 
@@ -826,12 +829,18 @@ contract SimPoolHandler is Test {
         bytes32 code = _codeKeys[i % _codeKeys.length];
         address p = offSale ? address(0) : _partners[i % _codeKeys.length];
         uint16 bps = offSale || bpsSeed % 3 == 0 ? 0 : uint16(4000 + bpsSeed % 2001);
+        // On a used code only a raise for the same partner, within the bounds, may go through (CFO, 13 November).
+        bool raise = ghostUsed[code] && p == firstPartner[code] && bps > bpsNow[code] && bps >= 4000 && bps <= 6000;
         vm.prank(creator);
         try pool.setCode(code, p, bps) {
-            if (ghostUsed[code]) ghostCodeChanged += 1;
+            if (ghostUsed[code] && !raise) ghostCodeChanged += 1;
+            if (raise) {
+                bpsNow[code] = bps;
+                calls["raise"] += 1;
+            }
             calls["setCode"] += 1;
         } catch {
-            if (!ghostUsed[code]) ghostCodeRefused += 1;
+            if (!ghostUsed[code] || raise) ghostCodeRefused += 1;
         }
     }
 
@@ -1218,13 +1227,14 @@ contract SimPoolInvariantTest is Test {
             assertEq(used, handler.ghostUsed(codes[i]), "used: a sale named it");
             if (used) {
                 assertEq(p, handler.firstPartner(codes[i]), "a used code's partner changed");
-                assertEq(bps, handler.firstBps(codes[i]), "a used code's share changed");
+                assertEq(bps, handler.bpsNow(codes[i]), "a used code's share is not the last raise");
+                assertGe(bps, handler.firstBps(codes[i]), "a used code's share fell");
             }
         }
         assertEq(pool.brought(), sum, "brought: the codes' together");
         assertEq(pool.brought(), handler.ghostBrought(), "brought: every price less the platform's part");
-        assertEq(handler.ghostCodeChanged(), 0, "a used code was set again");
-        assertEq(handler.ghostCodeRefused(), 0, "an unused code could not be set");
+        assertEq(handler.ghostCodeChanged(), 0, "a used code was set again other than by a raise");
+        assertEq(handler.ghostCodeRefused(), 0, "an unused code could not be set, or a used one raised");
     }
 
     /// I11. A withdrawal's shares: the platform's 0.5 %, each partner's part of the profit by its code's share and what
@@ -1301,7 +1311,7 @@ contract SimPoolInvariantTest is Test {
     /// Not an invariant: what each run reached, printed with `-vv`, so that a run that drove nothing does not pass
     /// unseen for one that did.
     function afterInvariant() external view {
-        string[31] memory names = ["approve", "request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
+        string[32] memory names = ["approve", "raise", "request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
             "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown", "objectStop", "finalizeStop", "pastReserve", "buySigned", "setCode", "sales",
             "closeEarly", "pastTerm", "finishByCloser"];
         string memory line = "reached:";

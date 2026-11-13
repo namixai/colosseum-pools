@@ -25,8 +25,12 @@ fail, and their prices pay for the ones that pass.
   group's code, `partner` the address the group's owner gave, `bps` its share, 0 or 40 to 60 %, up
   to 32 codes a pool (`MAX_CODES`). A code is public by nature: its owner hands it to a whole
   channel, so nothing hides it, and whoever buys with it is the owner's buyer. A code can be changed,
-  or taken off sale with a zero partner, until a sale names it; from then on its partner and share
-  are fixed (`CodeUsed`), so an owner who has brought traders does not depend on the creator.
+  or taken off sale with a zero partner, until a sale names it; from then on its partner is fixed
+  and its share can only be raised, within the bounds (`CodeUsed` for anything else), so an owner
+  who has brought traders does not depend on the creator. A raise (an owner's steps of 40, 50 and
+  60 %, CFO, 13 November) counts from the next withdrawal on; shares already paid are not
+  recomputed. Each code's part is its own (profit x its `brought` / `brought` x its `bps`), so
+  raising one code's share takes nothing from another's.
 - **Selling.** `buy(line, code)`, with a code the creator set, or `NoSuchCode`. No seats and no
   share of the pool limit a sale. 0.5 % of the price goes to the platform, the rest to the pool,
   and that rest counts as what the code brought (`codeOf(code).brought`, and `brought` for all
@@ -160,10 +164,10 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 78 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+`test/sim/SimPool.t.sol`, 82 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
 FiatToken V2.2's interface and words), and every `SM` mutation of `scripts/mutations.py` (on this branch
-SM1 to SM166 and SM170 to SM177: the delay, the window, the less of the two, finish's week, payout approval and its 7
-days, the running stages' payouts and the 184 days among them), each
+SM1 to SM166, SM170 to SM177 and SM180 to SM182: the delay, the window, the less of the two, finish's week, payout
+approval and its 7 days, the running stages' payouts, the 184 days and a used code's raise among them), each
 caught by a named test. The second command lists them from the file, so a new one is never left out:
 
 ```
@@ -233,7 +237,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's
   keeper nodes. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
   HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
-  is on chain as listed and refusing, before anything is sent, one a sale has fixed otherwise.
+  is on chain as listed, sending a raise of a used code's share for the same partner, and refusing,
+  before anything is sent, anything else on a code a sale has named.
   `buy --code` buys with a code's text. `close --key` and `finish --key` read the pool first and say as
   whom it would take the call or why it would refuse (`Locked` before the term unless the key is the
   closer; for `finish`, each thing still running, owed or reserved, and with `--exam` until when that
