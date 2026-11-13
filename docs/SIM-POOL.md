@@ -238,6 +238,23 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
   record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route.
 
+- **The page's check**: `test_page_recordedChain` (test/sim/SimPool.t.sol) runs a pool on the simulator and
+  records every event of it a page reads, as the node gives them, into `app/tests/fixtures/sim-page-chain.json`,
+  and fails when the file is not what the contract emits (`SIM_PAGE_FIXTURE=write` rewrites it).
+  `app/tests/simpool-chain.test.mjs` decodes those logs by the app's ABI lines, draws the page with
+  `app/lib/simpool.js` and checks it the way a stranger would: the total paid is the sum of the payment events,
+  each with its transaction, and the contract's own `paidTotal`; the stopped and the held payouts are apart; and each
+  of two groups' codes shows what its sales brought and what its owner was sent or, refused by the token, had set
+  aside, worked out again from the events and the share; the chain ends with the platform's closer closing the
+  pool long before its 180 days, and the page shows `lockedUntil` (the creation plus 180 days) and `closedEarly`.
+- **Counts for a points formula**: `activityCounts` (app/lib/simpool.js) gives, per trader and per code, what the
+  chain says each did, with no points and no weights: purchases, what they cost and brought, exams and stages
+  passed, breached or expired, steps passed, fills and the UTC days with a fill, and the payouts written, paid,
+  held, stopped, lifted, objected to and refused. Exams and stages keep their own events, so it reads them in a
+  second pass over the logs of each account the pool sold or started (`accountsToRead`); an account not read is
+  listed in `unread` and its trader's and code's counts are marked incomplete. The recorded chain carries those
+  logs too (`examEvents`), and `app/tests/simpool-chain.test.mjs` holds the counts to it.
+
 ## Measuring the filler's window
 
 The fill window of a plan is fixed at creation, so it is measured first, on a pool of its own
