@@ -9,13 +9,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM, simPoolPage } from "../lib/simpool.js";
+import {
+  SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, PAPER_EXAM_EVENTS_ABI, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM, simPoolPage,
+  activityCounts, accountsToRead,
+} from "../lib/simpool.js";
 
 const CHAIN = JSON.parse(readFileSync(new URL("./fixtures/sim-page-chain.json", import.meta.url), "utf8"));
 const LARGE_PAYOUT = 800_000_000n;
 
 /** The event lines of the library's ABI, by name: each parameter's type, name and whether it is a topic. */
-const EVENTS = new Map([...SIM_POOL_ABI, ...SIM_POOL_STOP_RESERVE_ABI].filter((l) => l.startsWith("event ")).map((l) => {
+const EVENTS = new Map([...SIM_POOL_ABI, ...SIM_POOL_STOP_RESERVE_ABI, ...PAPER_EXAM_EVENTS_ABI].filter((l) => l.startsWith("event ")).map((l) => {
   const [, name, body] = l.match(/^event (\w+)\((.*)\)$/);
   const params = body ? body.split(", ").map((p) => {
     const words = p.split(" ");
@@ -29,6 +32,7 @@ function word(type, hex) {
   if (type === "bool") return BigInt(`0x${hex}`) !== 0n;
   if (type === "bytes32") return `0x${hex}`;
   if (/^uint\d+$/.test(type)) return BigInt(`0x${hex}`);
+  if (type === "int256") return BigInt.asIntN(256, BigInt(`0x${hex}`));
   throw new Error(`no decoding for ${type}`);
 }
 
@@ -160,13 +164,81 @@ test("each code with what its sales brought and what its owner was sent or had s
 });
 
 
-test("the pool's term as the contract keeps it: 180 days from its creation, and the platform's early close", () => {
+test("the pool's term as the contract keeps it: 6 months, 184 days, from its creation, and the platform's early close", () => {
   // The pool was created in the block of its first event (the codes set at once), so its term runs from that time.
-  assert.equal(page.lockedUntil, CHAIN.events[0].time + MIN_TERM, "lockedUntil: the creation plus 180 days");
+  assert.equal(page.lockedUntil, CHAIN.events[0].time + MIN_TERM, "lockedUntil: the creation plus 184 days");
   assert.ok(CHAIN.now < page.lockedUntil, "the chain ends long before the term");
   assert.equal(page.creatorMayClose, false, "before its term the creator may not close it");
   assert.equal(page.closed, true);
   assert.equal(page.closedEarly, true, "the platform's closer closed it early");
   assert.equal(page.termNote.state, "closed-early");
   assert.match(page.termNote.text, /^Closed early by the platform, before its term ended on /, "the library's words");
+});
+
+// ── the counts a points formula would be built from (activityCounts), on the same chain ──
+
+/** Each exam's and stage's own logs, decoded, by account in lower case: the second pass over the logs. */
+const EXAM_LOGS = new Map(Object.entries(CHAIN.examEvents).map(([a, logs]) => [a.toLowerCase(), logs.map(decode)]));
+const ALL_TIMES = new Map([...TIMES, ...Object.values(CHAIN.examEvents).flat().map((e) => [e.block, e.time])]);
+const counts = activityCounts(LOGS, EXAM_LOGS, ALL_TIMES);
+
+test("each fill keeps the block it was emitted in: a pass's two fills are two blocks", () => {
+  // The recording collects the logs after each fill, before the next block (review of #281): a fill recorded at a
+  // later block would date its trading day, and its order against the others, wrongly.
+  const passed = Object.values(CHAIN.examEvents).filter((evs) => evs.some((e) => e.name === "Passed"));
+  assert.ok(passed.length >= 6, "three exams and three stages passed");
+  for (const evs of passed) {
+    const fills = evs.filter((e) => e.name === "Filled").map((e) => e.block);
+    assert.equal(fills.length, 2);
+    assert.ok(fills[0] < fills[1], `fills at ${fills.join(" and ")}`);
+  }
+});
+
+test("the second pass reads exactly the pool's exams and stages, and every one of them was read", () => {
+  const accounts = accountsToRead(LOGS);
+  assert.deepEqual([accounts.filter((a) => a.kind === "exam").length, accounts.filter((a) => a.kind === "stage").length], [43, 3]);
+  assert.deepEqual(accounts.map((a) => a.account.toLowerCase()).sort(), [...EXAM_LOGS.keys()].sort(),
+    "the recorded accounts are those the pool sold and started, no more");
+  assert.deepEqual(counts.unread, []);
+  assert.ok(counts.traders.every((t) => t.complete) && counts.codes.every((c) => c.complete));
+});
+
+test("per trader: purchases, exams and stages passed, fills, fill days and payouts, as the events say", () => {
+  const by = new Map(counts.traders.map((t) => [t.trader, t]));
+  assert.equal(counts.traders.length, 43, "three who passed, ten and thirty who bought");
+  const [paid, stopped, held] = CHAIN.reads.payouts.map((p) => by.get(p.trader.toLowerCase()));
+  for (const t of [paid, stopped, held]) {
+    assert.deepEqual([t.purchases, t.examsPassed, t.stagesStarted, t.stagesPassed, t.payouts.due, t.fills, t.fillDays],
+      [1, 1, 1, 1, 1, 4, 1], "one exam bought, passed, its stage passed and claimed, two trades a step, in one day");
+    assert.equal(t.payouts.dueAmount, LARGE_PAYOUT);
+  }
+  assert.deepEqual([paid.payouts.paid, paid.payouts.paidAmount, paid.payouts.stopped, paid.payouts.held], [1, LARGE_PAYOUT, 0, 0]);
+  assert.deepEqual([stopped.payouts.stopped, stopped.payouts.stoppedAmount, stopped.payouts.objected, stopped.payouts.paid],
+    [1, LARGE_PAYOUT, 1, 0]);
+  assert.deepEqual([held.payouts.held, held.payouts.heldAmount, held.payouts.paid], [1, LARGE_PAYOUT, 0]);
+  const buyers = counts.traders.filter((t) => ![paid, stopped, held].includes(t));
+  assert.ok(buyers.every((t) => t.purchases === 1 && t.examsPassed === 0 && t.fills === 0 && t.payouts.due === 0));
+  // Every trader and every number against the events and the getters, apart from the counts.
+  const sold = LOGS.filter((e) => e.name === "ExamSold");
+  assert.equal(counts.traders.reduce((n, t) => n + t.purchases, 0), sold.length);
+  assert.equal(counts.traders.reduce((n, t) => n + t.spent, 0n), sold.reduce((n, e) => n + e.args.price, 0n));
+  assert.equal(counts.traders.reduce((n, t) => n + t.payouts.paidAmount, 0n), BigInt(CHAIN.reads.paidTotal));
+  assert.equal(counts.traders.reduce((n, t) => n + t.fills, 0),
+    Object.values(CHAIN.examEvents).flat().filter((e) => e.name === "Filled").length);
+});
+
+test("per code: its traders, purchases, what it brought, and what its traders passed and were paid", () => {
+  const [one, two] = page.codes.map((c) => counts.codes.find((k) => k.code === c.code.toLowerCase()));
+  assert.equal(counts.codes.length, 2);
+  for (const [k, c] of [[one, page.codes[0]], [two, page.codes[1]]]) {
+    assert.equal(k.brought, c.brought, "brought: as the page's codes have it, from the same sales");
+    assert.equal(k.partner, c.partner.toLowerCase());
+  }
+  assert.deepEqual([one.traders, one.purchases, one.examsPassed, one.stagesPassed, one.fills], [13, 13, 3, 3, 12]);
+  assert.deepEqual([one.payouts.due, one.payouts.paid, one.payouts.held, one.payouts.stopped, one.payouts.objected],
+    [3, 1, 1, 1, 1]);
+  assert.deepEqual([two.traders, two.purchases, two.examsPassed, two.payouts.due], [30, 30, 0, 0]);
+  assert.ok(counts.traders.every((t) => t.codes.length === 1), "each trader bought with one code");
+  assert.ok(!JSON.stringify(counts, (k, v) => (typeof v === "bigint" ? String(v) : v)).match(/points|score|weight/i),
+    "counts only: no points, scores or weights");
 });
