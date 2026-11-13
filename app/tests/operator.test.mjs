@@ -144,7 +144,7 @@ test("a review is shown only where it is of this very payout and names the call 
   assert.equal(rows.find((r) => r.id === 1).reviewProblem, "no review");
   const row = rows.find((r) => r.id === 0);
   const cases = [
-    [{ schema: "payout-review/0" }, /not a payout-review\/1/],
+    [{ schema: "payout-review/1" }, /not a payout-review\/2/],
     [{ pool: OTHER }, /another pool/],
     [{ id: 1 }, /another payout/],
     [{ trader: OTHER }, /another trader/],
@@ -170,7 +170,7 @@ test("the review the script writes is read as it is written", () => {
   const src = readFileSync(new URL("../../ops/payout_review.py", import.meta.url), "utf8");
   assert.match(src, new RegExp(`SCHEMA = "${REVIEW_SCHEMA}"`));
   for (const key of ["schema", "pool", "id", "trader", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "reasons",
-    "evidence", "call", "readAt"]) {
+    "evidence", "call", "stopDraft", "readAt", "mirrors", "recount"]) {
     assert.match(src, new RegExp(`"${key}":`), key);
   }
 });

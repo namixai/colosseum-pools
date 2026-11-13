@@ -81,7 +81,9 @@ def honest_world() -> tuple[Chain, str, str]:
     ch.stage(t1, e1, s1)
     ch.payout(t1, s1)
     ch.fill(e1, buy=True, t=1_000)
-    ch.fill(s1, buy=False, t=50_000)
+    ch.fill(e1, buy=False, t=5_000)  # a passed exam and a passed stage are flat
+    ch.fill(s1, buy=True, t=50_000)
+    ch.fill(s1, buy=False, t=53_600)
     ch.send(EXCHANGE, t1)
     for i in range(8):
         t, e = addr(0x110 + i), addr(0x210 + i)
@@ -98,7 +100,8 @@ class ACleanPayout(unittest.TestCase):
         ch, t1, s1 = honest_world()
         got = r.review(ch.d, POOL, 0)
         self.assertEqual((got["trader"], got["stage"], got["amount"]), (t1, s1, 800 * 10**6))
-        self.assertEqual(got["fills"], {"stage": 1, "exam": 1})
+        self.assertEqual(got["fills"], {"stage": 2, "exam": 2})
+        self.assertEqual(got["mirrors"], {"stage": [], "exam": []}, "everyone long the same asset mirrors nobody")
         self.assertEqual(got["pairs"], {"stage": [], "exam": []})
         self.assertIsNone(got["stop"])
         self.assertTrue(all(l["wide"] for l in got["links"]), "the exchange funded nine buyers: named, not counted")
@@ -159,7 +162,7 @@ class APairInTheFactory(unittest.TestCase):
         got = r.review(ch.d, POOL, 0)
         self.assertEqual(len(got["pairs"]["stage"]), 1)
         self.assertEqual(got["pairs"]["stage"][0]["trader"], t9)
-        self.assertEqual(got["stop"], {"on": "stage", "reason": 1, "paired": e9, "pairedTrader": t9,
+        self.assertEqual(got["stop"], {"on": "stage", "by": "pair", "reason": 1, "paired": e9, "pairedTrader": t9,
                                        "trades": [mine, other], "links": []})
         self.assertEqual(got["verdict"], "suspicious")
         self.assertIn("pair on the stage", got["reasons"][0])
@@ -178,16 +181,20 @@ class APairInTheFactory(unittest.TestCase):
         ch.send(POOL, t9)  # the pool paid trader 1 before, and now trader 9
         self.assertEqual(r.review(ch.d, POOL, 0)["stop"]["reason"], 1)
 
-    def test_too_far_apart_or_too_unlike_in_size_is_no_pair(self):
+    def test_too_far_apart_or_too_unlike_in_size_is_no_pair_but_the_positions_held_are_a_mirror(self):
         ch, _, _ = honest_world()
         t9, e9 = addr(0x199), addr(0x299)
         ch.sale(t9, e9)
-        ch.fill(addr(0x301), buy=True, sz=100, t=60_000)
-        ch.fill(e9, buy=False, sz=100, t=60_601)
+        mine = ch.fill(addr(0x301), buy=True, sz=100, t=60_000)
+        far = ch.fill(e9, buy=False, sz=100, t=60_601)
         ch.fill(e9, buy=False, sz=79, t=60_000)
         got = r.review(ch.d, POOL, 0)
-        self.assertIsNone(got["stop"])
-        self.assertEqual(got["verdict"], "clean")
+        self.assertEqual(got["pairs"]["stage"], [], "601 s apart, and 79 against 100: no pair by the fills")
+        self.assertEqual((got["stop"]["by"], got["stop"]["paired"], got["stop"]["reason"]), ("mirror", e9, 1))
+        self.assertIn(mine, got["stop"]["trades"])
+        self.assertIn(far, got["stop"]["trades"])
+        self.assertEqual(len(got["stop"]["trades"]), len(set(got["stop"]["trades"])), "each hash once")
+        self.assertEqual(got["kinds"], ["mirror"])
 
     def test_a_pair_on_the_exam_alone_is_a_stop_too(self):
         ch, _, _ = honest_world()
@@ -199,6 +206,203 @@ class APairInTheFactory(unittest.TestCase):
         self.assertEqual(got["stop"]["on"], "exam")
         self.assertEqual(got["stop"]["paired"], e9)
         self.assertEqual(got["tx"]["kind"], "stop")
+
+
+class MirroredAccounts(unittest.TestCase):
+    """Positions held against positions, whatever the timing and size of the fills: the stage of trader 1 is
+    long 100 of asset 7 for ten hours; trader 9's exam in the factory's other pool does something meanwhile."""
+
+    T0, H = 100_000, 3_600
+
+    def world(self, *fills):
+        ch, t1, s1 = honest_world()
+        t9, e9 = addr(0x199), addr(0x299)
+        ch.sale(t9, e9, pool=OTHER_POOL)
+        ch.d["fills"] = [f for f in ch.d["fills"] if f["account"] != s1]  # the stage trades asset 7 alone here
+        opened = ch.fill(s1, buy=True, sz=100, t=self.T0, asset=7)
+        ch.fill(s1, buy=False, sz=100, t=self.T0 + 10 * self.H, asset=7)
+        txs = [ch.fill(e9, buy=buy, sz=sz, t=self.T0 + dt, asset=asset) for buy, sz, dt, asset in fills]
+        return ch, e9, t9, opened, txs
+
+    def test_a_pair_built_in_pieces_is_a_mirror_and_a_stop(self):
+        ch, e9, t9, opened, txs = self.world((False, 40, 600, 7), (False, 30, 1_200, 7), (False, 30, 1_800, 7),
+                                             (True, 100, 10 * self.H + 700, 7))
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual(got["pairs"]["stage"], [], "no two fills close in time and size")
+        [m] = got["mirrors"]["stage"]
+        self.assertEqual((m["account"], m["trader"], m["assets"]), (e9, t9, [7]))
+        self.assertGreater(m["share"], 0.95, "40 against 100 is under half; from the second piece on it is a mirror")
+        self.assertEqual(m["exposed"], 10 * self.H)
+        self.assertEqual(m["mirrored"], 10 * self.H - 1_200)
+        self.assertEqual((got["stop"]["by"], got["stop"]["reason"], got["stop"]["paired"]), ("mirror", 1, e9))
+        self.assertEqual(got["stop"]["trades"][:2], [opened, txs[1]], "the stage's opening fill and the piece that made it a mirror")
+        self.assertEqual(got["tx"]["kind"], "stop")
+        self.assertIn("mirrored positions on the stage with " + e9, got["reasons"][0])
+
+    def test_a_pair_an_hour_late_is_a_mirror(self):
+        ch, e9, _, _, _ = self.world((False, 100, self.H, 7), (True, 100, 11 * self.H, 7))
+        [m] = r.review(ch.d, POOL, 0)["mirrors"]["stage"]
+        self.assertEqual((m["account"], m["share"]), (e9, 0.9))
+
+    def test_a_pair_at_sixty_percent_of_the_size_is_a_mirror(self):
+        ch, e9, _, _, _ = self.world((False, 60, 60, 7), (True, 60, 10 * self.H, 7))
+        [m] = r.review(ch.d, POOL, 0)["mirrors"]["stage"]
+        self.assertEqual(m["account"], e9)
+        self.assertGreater(m["share"], 0.99)
+
+    def test_the_same_trend_another_asset_or_a_short_overlap_is_no_mirror(self):
+        later = 10 * self.H + 700  # each closes apart from the stage: no pair of closing fills either
+        for fills in [((True, 100, 60, 7), (False, 100, later, 7)),        # long too: the same trend
+                      ((False, 100, 60, 8), (True, 100, later, 8)),        # short another asset
+                      ((False, 100, 8 * self.H, 7), (True, 100, later, 7)),  # two hours of ten
+                      ((False, 30, 60, 7), (True, 30, later, 7))]:          # 30 against 100
+            ch, _, _, _, _ = self.world(*fills)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual(got["mirrors"]["stage"], [], fills)
+            self.assertEqual(got["verdict"], "clean", fills)
+
+    def test_an_account_that_ended_holds_nothing_from_then(self):
+        ch, e9, _, _, _ = self.world((False, 100, -1_000, 7))  # short before the stage, and never closed
+        self.assertEqual(r.review(ch.d, POOL, 0)["mirrors"]["stage"][0]["account"], e9, "still open: a mirror")
+        ch.d["ended"] = {e9: self.T0 - 500}  # breached before the stage opened
+        self.assertEqual(r.review(ch.d, POOL, 0)["mirrors"]["stage"], [])
+
+    def test_a_mirror_whose_traders_were_funded_from_one_wallet_is_reason_two(self):
+        ch, e9, t9, _, _ = self.world((False, 100, self.H, 7), (True, 100, 11 * self.H, 7))
+        funder = addr(0xF1)
+        a, b = ch.send(funder, addr(0x101)), ch.send(funder, t9)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["stop"]["by"], got["stop"]["reason"], got["stop"]["links"]), ("mirror", 2, [a, b]))
+        self.assertIn("and linked wallets", got["reasons"][0])
+        self.assertEqual(got["kinds"], ["mirror", "link"])
+
+    def test_the_measure_on_its_own(self):
+        f = lambda acc, buy, sz, t, tx: {"account": acc, "asset": 1, "buy": buy, "sz": sz, "t": t, "tx": tx}
+        mine = [f("A", True, 10, 0, "a1"), f("A", False, 10, 100, "a2")]
+        m = r.mirror(mine, [f("B", False, 10, 50, "b1")], 1_000, 0.5)
+        self.assertEqual((m["exposed"], m["mirrored"], m["share"], m["examples"]), (100, 50, 0.5, [["a1", "b1"]]))
+        self.assertEqual(r.mirror([], mine, 1_000, 0.5)["share"], 0.0)
+        still = r.mirror([f("A", True, 10, 0, "a1")], [f("B", False, 10, 0, "b1")], 1_000, 0.5)
+        self.assertEqual((still["exposed"], still["mirrored"]), (1_000, 1_000), "a position still open runs to now")
+
+
+class Recount(unittest.TestCase):
+    """The stage's result counted again from its own events and the oracle's prices: trader 1's stage buys 100 of
+    asset 3 at 1 000 in block 12, holds it over a day's snapshot in block 20, sells at 1 010 in block 30 and passes."""
+
+    C = 10_000_000
+
+    def world(self, *, buy_px=1_000, buy_source=1, sell_px=1_010, passed=None, oracle=None, snapshot=None, cost=1):
+        ch, t1, s1 = honest_world()
+        e = lambda name, block, **kw: {"name": name, "block": block, "index": 0, "t": 1_000 * block, "tx": tx(5_000 + block), **kw}
+        cash = self.C - 100 * buy_px - cost
+        events = [e("Started", 1, capital=self.C), e("Placed", 10, asset=3),
+                  e("Filled", 12, asset=3, buy=True, sz=100, px=buy_px, cost=cost, late=0, source=buy_source),
+                  e("DaySnapshot", 20, day=0, equity=cash + 100 * 1_005 if snapshot is None else snapshot),
+                  e("Placed", 28, asset=3),
+                  e("Filled", 30, asset=3, buy=False, sz=100, px=sell_px, cost=cost, late=0, source=1)]
+        cash += 100 * sell_px - cost
+        events.append(e("Passed", 31, equity=cash if passed is None else passed))
+        ch.d["exam_events"] = {s1: events, addr(0x201): [e("Started", 0, capital=self.C), e("Passed", 0, equity=self.C)]}
+        prices = {10: 990, 11: 1_000, 12: 1_000, 13: 1_000, 20: 1_005, 28: 1_010, 29: 1_010, 30: 1_010, 31: 1_010}
+        prices.update(oracle or {})
+        ch.d["oracle"] = {f"3:{b}": v for b, v in prices.items() if v is not None}
+        return ch, s1
+
+    def test_a_result_that_counts_up_is_clean(self):
+        ch, s1 = self.world()
+        got = r.review(ch.d, POOL, 0)
+        rc = got["recount"]["stage"]
+        self.assertEqual((rc["read"], rc["capital"], rc["fills"], rc["flags"]), (True, self.C, 2, []))
+        self.assertEqual(rc["checked"], {"results": 1, "snapshots": 1, "unchecked": 0, "fills": 2})
+        self.assertEqual(rc["moves"][0], {"tx": tx(5_012), "bps": -101.0}, "bought at 1 000 after ordering at 990: 1 % against it")
+        self.assertEqual((got["verdict"], got["stopDraft"]), ("clean", None))
+
+    def test_a_result_that_does_not_count_up_is_flagged_with_a_draft_of_reason_three(self):
+        ch, s1 = self.world(passed=self.C + 999_999)
+        got = r.review(ch.d, POOL, 0)
+        [f] = got["recount"]["stage"]["flags"]
+        self.assertEqual((f["what"], f["tx"]), ("result", tx(5_031)))
+        self.assertEqual(got["kinds"], ["recount"])
+        self.assertEqual(got["reasons"], ["recount on the stage: result"])
+        d = got["stopDraft"]
+        self.assertEqual((d["reason"], d["paired"], d["trades"], d["links"], d["data"]),
+                         (3, r.ZERO_ADDRESS, [tx(5_031)], [r.ANALYSIS], None))
+        self.assertEqual(got["tx"]["kind"], "approve", "a draft is no call to sign")
+
+    def test_a_snapshot_that_does_not_count_up_or_cannot_be_checked(self):
+        ch, _ = self.world(snapshot=1)
+        self.assertEqual([f["what"] for f in r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"]], ["snapshot"])
+        ch, _ = self.world(oracle={20: None})
+        rc = r.review(ch.d, POOL, 0)["recount"]["stage"]
+        self.assertEqual((rc["flags"], rc["checked"]["unchecked"]), ([], 1), "a position open and no price: not guessed")
+
+    def test_a_fill_better_than_the_oracle_or_off_it_at_the_oracle(self):
+        ch, _ = self.world(buy_px=990)
+        self.assertEqual([f["what"] for f in r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"]], ["better-than-oracle"])
+        ch, _ = self.world(buy_px=1_001, buy_source=0)
+        self.assertEqual([f["what"] for f in r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"]], ["not-the-oracle"])
+        ch, _ = self.world(buy_px=1_001, buy_source=1)
+        self.assertEqual(r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"], [], "worse than the oracle at the book is allowed")
+
+    def test_one_oracle_price_far_from_both_neighbours_is_an_outlier(self):
+        ch, _ = self.world(buy_px=1_100, oracle={12: 1_100})
+        flags = r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"]
+        self.assertEqual([(f["what"], f["block"]) for f in flags], [("oracle-outlier", 12)])
+        ch, _ = self.world(buy_px=1_100, oracle={12: 1_100, 13: 1_100})
+        self.assertEqual(r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"], [], "a move that stays is no outlier")
+
+    def test_an_oracle_far_from_the_venue_by_the_file(self):
+        ch, _ = self.world()
+        ch.d["venue"] = {"3": {str(12_000 // 60 * 60): 1_050}}
+        self.assertEqual([f["what"] for f in r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"]], ["oracle-off-venue"])
+        ch.d["venue"] = {"3": {str(12_000 // 60 * 60): 1_005}}
+        self.assertEqual(r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"], [], "half a percent: within it")
+
+    def test_a_cost_the_terms_do_not_give(self):
+        ch, s1 = self.world(cost=1)
+        ch.d["costPpm"] = {s1: 950}
+        flags = r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"]
+        self.assertEqual([f["what"] for f in flags], ["cost", "cost"], "100 x 1 000 at 950 ppm is 95, not 1")
+        ch.d["costPpm"] = {s1: 9}
+        self.assertEqual(r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"], [], "100 000 x 9 / 1e6 is 1, rounded up")
+
+    def test_a_pass_in_two_fills_on_the_largest_size_is_a_profile_not_a_reason(self):
+        ch, _ = self.world()
+        got = r.review(ch.d, POOL, 0)
+        self.assertIsNotNone(got["recount"]["stage"]["profile"])
+        self.assertEqual(got["verdict"], "clean")
+        ch.d["books"][POOL]["sizes"] = [SIZE, 2 * SIZE]
+        self.assertIsNone(r.review(ch.d, POOL, 0)["recount"]["stage"]["profile"], "not the largest size")
+
+    def test_an_exam_of_two_steps_starts_its_second_on_the_capital_again(self):
+        ch, _ = self.world()
+        e = lambda name, block, **kw: {"name": name, "block": block, "index": 0, "t": 1_000 * block, "tx": tx(6_000 + block), **kw}
+        fill = lambda block, buy, px: e("Filled", block, asset=3, buy=buy, sz=100, px=px, cost=1, late=0, source=1)
+        first = self.C - 100 * 1_000 - 1 + 100 * 1_010 - 1
+        second = self.C + 100 * 1_010 - 1 - 100 * 1_000 - 1  # a short in the second step: it starts on C, not on `first`
+        ch.d["exam_events"][addr(0x201)] = [e("Started", 1, capital=self.C), fill(12, True, 1_000), fill(30, False, 1_010),
+                                            e("StepPassed", 31, step=0, equity=first),
+                                            fill(40, False, 1_010), fill(41, True, 1_000), e("Passed", 42, equity=second)]
+        rc = r.review(ch.d, POOL, 0)["recount"]["exam"]
+        self.assertEqual((rc["checked"]["results"], rc["flags"]), (2, []))
+
+    def test_an_account_whose_events_were_not_read_is_said(self):
+        ch, s1 = self.world()
+        del ch.d["exam_events"][s1]
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["recount"]["stage"]["read"], got["kinds"]), (False, ["unread"]))
+
+    def test_with_a_pair_the_stop_is_the_pairs_and_no_draft_is_made(self):
+        ch, s1 = self.world(passed=1)
+        t9, e9 = addr(0x199), addr(0x299)
+        ch.sale(t9, e9)
+        ch.fill(s1, buy=True, t=60_000, asset=5)
+        ch.fill(e9, buy=False, t=60_100, asset=5)
+        ch.d["exam_events"][e9] = []
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["stop"]["by"], got["stopDraft"]), ("pair", None))
+        self.assertIn("recount", got["kinds"])
 
 
 class APairFundedFromOneWallet(unittest.TestCase):
@@ -304,7 +508,7 @@ class LateFills(unittest.TestCase):
         for e in [addr(0x210 + i) for i in range(8)]:
             ch.fill(e, buy=True, t=500_000, asset=8, late=1)
         got = r.review(ch.d, POOL, 0)
-        self.assertEqual(got["late"]["trader"], {"n": 8, "median": 20, "max": 20})
+        self.assertEqual(got["late"]["trader"], {"n": 10, "median": 20, "max": 20})
         self.assertTrue(got["late"]["outlier"])
         self.assertIn("fills later than everyone else's", got["reasons"])
 
@@ -338,13 +542,13 @@ class TheDocument(unittest.TestCase):
     """The JSON a page reads: its fields fixed by the schema's name."""
 
     KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict",
-            "reasons", "evidence", "call", "readAt"}
+            "reasons", "evidence", "call", "stopDraft", "readAt"}
 
     def test_a_clean_payout_carries_its_approval(self):
         ch, t1, s1 = honest_world()
         k = r.card(r.review(ch.d, POOL, 0), ch.d)
         self.assertEqual(set(k), self.KEYS)
-        self.assertEqual((k["schema"], k["pool"], k["id"], k["trader"], k["stage"]), ("payout-review/1", POOL, 0, t1, s1))
+        self.assertEqual((k["schema"], k["pool"], k["id"], k["trader"], k["stage"]), ("payout-review/2", POOL, 0, t1, s1))
         self.assertEqual(k["amount"], str(800 * 10**6), "a string: a JSON number loses digits past 2**53")
         self.assertEqual((k["verdict"], k["reasons"]), ("clean", []))
         self.assertEqual((k["call"]["kind"], k["call"]["method"], k["call"]["args"]), ("approve", "approvePayouts", [[0]]))
@@ -377,24 +581,26 @@ class TheDocument(unittest.TestCase):
                 mock.patch("builtins.print"):
             self.assertEqual(r.main(["--deployment", "x", "--out", d]), 0)
             got = json.loads((pathlib.Path(d) / f"{POOL}-0.json").read_text())
-        self.assertEqual((got["schema"], got["id"]), ("payout-review/1", 0))
+        self.assertEqual((got["schema"], got["id"]), ("payout-review/2", 0))
 
 
 class ReadingTheChain(unittest.TestCase):
     """`read_chain` against a node made up here: the logs as the contracts write them."""
 
-    def test_it_reads_sales_stages_payouts_fills_and_transfers(self):
+    def test_it_reads_sales_stages_payouts_the_accounts_events_the_oracle_and_transfers(self):
         factory = addr(0xFA)
         t1, e1, s1, partner = addr(0x101), addr(0x201), addr(0x301), addr(0xB0)
         code = b"\x11" * 32
+        capital = 10_000_000_000
 
         def word(a):
             return "0x" + "00" * 12 + a[2:].lower()
 
-        def log(address, topics, data, block, h):
+        def log(address, topics, data, block, h, index=0):
             return {"address": address, "topics": topics, "data": "0x" + data.hex(), "blockNumber": hex(block),
-                    "transactionHash": h}
+                    "transactionHash": h, "logIndex": hex(index)}
 
+        num = lambda n: "0x" + f"{n:064x}"
         pool_logs = [
             log(POOL, [sk.EXAM_SOLD, word(e1), word(t1), word(partner)],
                 encode(["uint256", "uint64", "uint64", "uint256", "bool", "bytes32"], [2, SIZE, 100, 0, False, code]), 11, tx(1)),
@@ -402,20 +608,35 @@ class ReadingTheChain(unittest.TestCase):
             log(POOL, [r.PAYOUT_DUE, "0x" + "00" * 31 + "07", word(s1), word(t1)],
                 encode(["uint64", "uint64"], [800, 5_000]), 30, tx(3)),
         ]
-        fill_logs = [log(s1, [sk.FILLED, "0x" + "00" * 31 + "03"],
-                         encode(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"], [True, 100, 7, 0, 4, 1]), 25, tx(4))]
+        filled = lambda buy, px: encode(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"], [buy, 100, px, 1, 4, 1])
+        exam_logs = [
+            log(e1, [r.STARTED, word(t1), word(POOL)], encode(["uint64"], [capital]), 12, tx(10)),
+            log(e1, [r.PASSED, word(t1)], encode(["int256"], [capital]), 19, tx(11)),
+            log(s1, [r.STARTED, word(t1), word(POOL)], encode(["uint64"], [capital]), 21, tx(12)),
+            log(s1, [sk.PLACED, num(3)], encode(["bool", "uint64", "uint256", "uint256"], [True, 100, 24, 33]), 23, tx(13)),
+            log(s1, [sk.FILLED, num(3)], filled(True, 7), 25, tx(4)),
+            log(s1, [sk.PLACED, num(3)], encode(["bool", "uint64", "uint256", "uint256"], [False, 100, 27, 36]), 26, tx(14)),
+            log(s1, [sk.FILLED, num(3)], filled(False, 8), 28, tx(15)),
+            log(s1, [r.PASSED, word(t1)], encode(["int256"], [capital - 700 - 1 + 800 - 1]), 29, tx(16)),
+        ]
         usdc_logs = [log(USDC, [r.TRANSFER, word(EXCHANGE), word(t1)], encode(["uint256"], [5]), 5, tx(5))]
+        asked = []
 
         def rpc(method, params=()):
             if method == "eth_blockNumber":
                 return hex(40)
             if method == "eth_getBlockByNumber":
                 return {"timestamp": hex(1_000 if params[0] == "latest" else 100 * int(params[0], 16))}
+            if method == "eth_call":
+                block = int(params[1], 16)
+                asked.append((int(params[0]["data"], 16), block))
+                self.assertEqual(params[0]["to"], r.ORACLE_PX)
+                return "0x" + encode(["uint64"], [7 if block <= 26 else 8]).hex()
             q = params[0]
             if q["address"] == USDC:
                 return usdc_logs
-            if q["topics"] == [sk.FILLED]:
-                return fill_logs
+            if q["topics"] == []:
+                return [l for l in exam_logs if l["address"] in q["address"]]
             return pool_logs
 
         views = {("pools()",): [POOL], ("owed()",): 800, ("held()",): 0, ("reserved()",): 0,
@@ -425,23 +646,38 @@ class ReadingTheChain(unittest.TestCase):
             return views[(sig,)]
 
         def call_view(to, sig, types, args, out):
-            return {"balanceOf(address)": (9_000,), "result()": (2, t1, 0, 0), "accountOf(address)": (2, 0, True)}[sig]
+            return {"balanceOf(address)": (9_000,), "result()": (2, t1, 0, 0), "accountOf(address)": (2, 0, True),
+                    "menu()": ([(SIZE // 2, 50), (SIZE, 100)],),
+                    "terms()": ((capital, [800], 0, 0, 0, 1_000, 1, 10),)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
                 mock.patch.object(r.c, "call_view", side_effect=call_view):
-            got = r.read_chain({"SimPoolFactory": factory, "usdc": USDC, "block": 10})
+            got = r.read_chain({"SimPoolFactory": factory, "usdc": USDC, "block": 10}, prices={"9:9": 1})
         self.assertEqual((got["now"], got["latest"], got["pools"]), (1_000, 40, [POOL]))
         self.assertEqual(got["sales"], [{"pool": POOL, "exam": e1, "trader": t1, "partner": partner, "line": 2,
                                          "size": SIZE, "price": 100, "code": "0x" + code.hex(), "block": 11, "tx": tx(1)}])
         self.assertEqual(got["funded"], [{"pool": POOL, "stage": s1, "exam": e1, "trader": t1, "block": 20}])
         self.assertEqual(got["payouts"], [{"pool": POOL, "id": 7, "account": s1, "trader": t1, "amount": 800,
                                            "dueAt": 5_000, "block": 30, "state": "Due", "wasStopped": False}])
-        self.assertEqual(got["fills"], [{"account": s1, "asset": 3, "buy": True, "sz": 100, "t": 2_500, "tx": tx(4), "late": 4}])
+        self.assertEqual(got["fills"], [{"account": s1, "asset": 3, "buy": True, "sz": 100, "t": 2_500, "tx": tx(4), "late": 4},
+                                        {"account": s1, "asset": 3, "buy": False, "sz": 100, "t": 2_800, "tx": tx(15), "late": 4}])
+        self.assertEqual([e["name"] for e in got["exam_events"][s1]], ["Started", "Placed", "Filled", "Placed", "Filled", "Passed"])
+        self.assertEqual(got["ended"], {e1: 1_900, s1: 2_900})
+        self.assertEqual(got["costPpm"], {s1: 1_000, e1: 1_000})
+        self.assertEqual(sorted({b for _, b in asked}), [22, 23, 24, 25, 26, 27, 28, 29], "each fill's and order's block and their neighbours")
+        self.assertEqual({a for a, _ in asked}, {3})
+        self.assertEqual((got["oracle"]["3:25"], got["oracle"]["3:28"], got["oracle"]["9:9"]), (7, 8, 1), "the file stands in too")
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
-        self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0}})
+        self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "sizes": [SIZE // 2, SIZE]}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         review = r.review(got, POOL, 7)
         self.assertEqual((review["exam"], review["size"], review["verdict"]), (e1, SIZE, "clean"))
+        rc = review["recount"]["stage"]
+        self.assertEqual((rc["capital"], rc["fills"], rc["checked"]["results"], rc["checked"]["fills"], rc["flags"]),
+                         (capital, 2, 1, 2, []))
+        self.assertEqual(rc["profile"], "passed in 2 fills over 1 days on the largest size: a pass that could be luck, "
+                                        "not a sign of cheating")
+        self.assertNotIn("profile", review["kinds"], "a profile is said, not counted against the trader")
 
 
 class AgainstTheContracts(unittest.TestCase):

@@ -232,15 +232,45 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
     under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
   - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
-    whether the money free of what is owed, held back and kept for stops covers them.
+    whether the money free of what is owed, held back and kept for stops covers them;
+  - mirrored accounts: positions held against positions, not fills against fills. Each account's net
+    position per asset is a step in time. A moment counts when another account of the factory holds
+    the opposite position on the same asset, at least half as large. An account mirrored for 60 % of
+    the time the stage (or the exam) held anything, and an hour at least, is named, with the share
+    and the fills that opened each mirrored stretch. A pair built in pieces, an hour apart, or at 60 %
+    of the size is caught this way; two traders in the same trend, or in different assets, are not.
+    An account's positions stop counting when it ends;
+  - the result counted again from the account's own events, as PaperExam counts it:
+    - each step's cash from its capital and its fills, which `StepPassed` and `Passed` must carry
+      exactly (a step passes only flat);
+    - each day's snapshot from that cash and the oracle prices of its block;
+    - each fill against the oracle price of its block: at it, for a fill at the oracle; never better
+      for the trader, at the book;
+    - each fill's cost against the terms;
+    - the oracle price of a fill's block against the blocks on each side, where one price far from
+      both, which agree, is an outlier;
+    - given `--venue-prices`, the oracle against the venue's price of that minute. That file is
+      Hyperliquid's own candles (info API, `candleSnapshot`, interval 1m), read from disk and never
+      fetched by the script.
+
+    The oracle prices are read from the chain at their blocks. Where the node keeps no state that far
+    back, `--prices` stands in. A pass in three fills or two days at most on the largest size is said
+    as a profile, not counted as a reason.
 
   Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
   72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. The call to
-  sign is written out as text with its calldata: `stopPayout` (reason 1 or 2) when there is a pair,
-  since the pool takes no such stop without two fills, or `approvePayouts` otherwise. The approval is
-  the design of 13 November and not on main yet; a stop of reason 3, a result disputed without a pair,
-  needs a written analysis the script does not make. It cannot see a pair on another factory or another venue,
-  accounts under wallets nothing links, or USDC that arrived before the deployment's block.
+  sign is written out as text with its calldata:
+  - `stopPayout`, reason 1 or 2, when there is a pair or a mirror with two opposite fills, since the
+    pool takes no such stop without two fills;
+  - `approvePayouts` otherwise.
+
+  A result that does not count up comes with a draft of a stop of reason 3, a result disputed. The
+  draft names the fills and leaves out the hash of the analysis, which a person writes. The approval is
+  the design of 13 November and not on main yet. The review cannot see:
+  - a pair on another factory or another venue;
+  - accounts under wallets nothing links;
+  - USDC that arrived before the deployment's block;
+  - a flaw in the exam's own rules, which counts up on chain however wrong it is.
 
 - **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
