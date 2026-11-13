@@ -237,7 +237,13 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
   72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. The call to
   sign is written out as text with its calldata: `stopPayout` (reason 1 or 2) when there is a pair,
-  since the pool takes no such stop without two fills, or `approvePayouts` otherwise. The approval is
+  since the pool takes no such stop without two fills, or `approvePayouts` otherwise.
+  Each call is offered only if the pool would take it. The approval goes only to a pool that answers
+  `approver()`. A pool without it pays at 72 hours by itself, and the review says so, with no call and no
+  ceiling. A stop goes only to a payout still waiting and never stopped, and in time by the pool's rule:
+  until it is paid on a pool with approvals, until 5 minutes before `dueAt` on one without. Links of
+  reason 2 leave out the senders the review does not count. An exam or stage of the pool that was not
+  read makes the pool's running total incomplete: `enough` is false, and the account is named. The approval is
   the design of 13 November and not on main yet; a stop of reason 3, a result disputed without a pair,
   needs a written analysis the script does not make. It cannot see a pair on another factory or another venue,
   accounts under wallets nothing links, or USDC that arrived before the deployment's block.

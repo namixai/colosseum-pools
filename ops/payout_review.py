@@ -159,13 +159,23 @@ def linked(trader: str, chain: dict, p: Params) -> list[dict]:
     return out
 
 
-def link_txs(trader: str, other: str | None, chain: dict) -> list[str]:
-    """The links a stop of reason 2 writes between the trader and the paired account's trader, the
-    pools' own payouts left out (they pay every trader)."""
+def link_txs(trader: str, other: str | None, chain: dict, p: Params | None = None) -> list[str]:
+    """The links a stop of reason 2 writes between the trader and the paired account's trader: the pools' own
+    payouts left out (they pay every trader), and a sender that funded more than `p.wide` buyers left out as
+    `linked` leaves it out, so a stop never names a link the review itself does not count (review of #283).
+    Transfers between the two traders stay: they need no sender's count."""
     if other is None:
         return []
+    p = p or Params()
     pools = set(chain["pools"])
-    return chk.links([t for t in chain["transfers"] if t["from"] not in pools], trader, other)
+    buyers = {s["trader"] for s in chain["sales"]}
+    funded: dict[str, set[str]] = {}
+    for t in chain["transfers"]:
+        if t["to"] in buyers and t["from"] not in pools:
+            funded.setdefault(t["from"], set()).add(t["to"])
+    kept = [t for t in chain["transfers"] if t["from"] not in pools
+            and (t["from"] in (trader, other) or len(funded.get(t["from"], ())) <= p.wide)]
+    return chk.links(kept, trader, other)
 
 
 def code_review(pool: str, code: str, chain: dict, who: dict[str, str], p: Params) -> dict:
@@ -194,6 +204,8 @@ def running(pool: str, chain: dict) -> dict:
     exams = stages = worst = 0
     funded_exams = {f["exam"] for f in chain["funded"]}
     stage_accounts = {f["stage"] for f in chain["funded"]}
+    # An account not read may be running: its payout is not in `worst`, so the total is not complete (review of #283).
+    unread = sorted(a for a in lines if a in set(chain.get("unread") or []))
     for a, size in lines.items():
         # Running, or passed and not yet funded or claimed; an exam funded runs on as its stage.
         if chain["done"].get(a) or a in funded_exams or chain["status"].get(a) not in ("Active", "Passed"):
@@ -205,7 +217,8 @@ def running(pool: str, chain: dict) -> dict:
         worst += payout_of(size)
     book = chain["books"][pool]
     free = book["balance"] - book["owed"] - book["held"] - book["reserved"]
-    return {"exams": exams, "stages": stages, "worst": worst, "free": free, "enough": free >= worst}
+    return {"exams": exams, "stages": stages, "worst": worst, "free": free, "enough": free >= worst and not unread,
+            "unread": unread}
 
 
 def stop_call(pool: str, pid: int, reason: int, paired: str, trades: list[str], links: list[str]) -> dict:
@@ -214,7 +227,14 @@ def stop_call(pool: str, pid: int, reason: int, paired: str, trades: list[str], 
             "data": "0x" + c.encode_call(chk.STOP, chk.STOP_TYPES, args).hex()}
 
 
-def approve_call(pool: str, pid: int) -> dict:
+NO_APPROVAL = "in this pool a payout goes by itself 72 hours after its claim; there is no approval to sign"
+
+
+def approve_call(pool: str, pid: int, approvals: bool = True) -> dict:
+    """The approval, only for a pool that has it (`approver()` answers): a pool without it pays at 72 hours by
+    itself, and an approval sent to it would revert (review of #283)."""
+    if not approvals:
+        return {"kind": "none", "to": pool, "call": None, "args": [], "data": None, "note": NO_APPROVAL}
     if APPROVE is None:
         return {"kind": "approve", "to": pool, "call": None, "args": [pid], "data": None,
                 "note": "the pool has no approval call yet"}
@@ -225,13 +245,14 @@ def approve_call(pool: str, pid: int) -> dict:
 def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     p = p or Params()
     pay = next(x for x in chain["payouts"] if x["pool"] == pool and x["id"] == pid)
+    approvals = chain["books"][pool].get("approvals", True)
     who = owners(chain)
     trader, stage = pay["trader"], pay["account"]
     exam = next((f["exam"] for f in chain["funded"] if f["stage"] == stage), None)
     sale = next((s for s in chain["sales"] if s["exam"] == exam), None)
     out = {"pool": pool, "id": pid, "trader": trader, "stage": stage, "exam": exam, "amount": pay["amount"],
            "claimedAt": pay["dueAt"] - PAYOUT_DELAY, "dueAt": pay["dueAt"],
-           "hardAt": pay["dueAt"] - PAYOUT_DELAY + PAYOUT_HARD, "state": pay["state"], "size": sale["size"] if sale else None,
+           "hardAt": pay["dueAt"] - PAYOUT_DELAY + PAYOUT_HARD if approvals else None, "state": pay["state"], "size": sale["size"] if sale else None,
            "fills": {"stage": sum(f["account"] == stage for f in chain["fills"]),
                      "exam": sum(f["account"] == exam for f in chain["fills"])}}
     pairs = {"stage": pairs_of(stage, chain, who, p), "exam": pairs_of(exam, chain, who, p) if exam else []}
@@ -246,7 +267,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
             mine = [f for f in chain["fills"] if f["account"] == account]
             found = chk.pairs(mine, chain["fills"], p.window_s, p.tolerance)
             paired = chk.finding(found, [])[1]
-            links = link_txs(trader, who.get(paired), chain)
+            links = link_txs(trader, who.get(paired), chain, p)
             reason, paired, trades, links = chk.finding(found, links)
             stop = {"on": part, "reason": reason, "paired": paired, "pairedTrader": who.get(paired),
                     "trades": trades, "links": links}
@@ -279,18 +300,30 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
         reasons.append("not read: " + ", ".join(unread))
     out["verdict"] = "suspicious" if reasons else "clean"
     out["reasons"] = reasons
-    if stop:
+    # A stop only for a payout the pool would still stop (review of #283): waiting and never stopped, and in time
+    # by the pool's own rule. A pool with approvals stops until it is paid; one without, until 5 minutes before
+    # `dueAt`, as the checker sends it.
+    waiting = pay["state"] == "Due" and not pay.get("wasStopped")
+    in_time = approvals or chain["now"] + chk.MARGIN_S < pay["dueAt"]
+    out["stoppable"] = waiting and in_time
+    if stop and not out["stoppable"]:
+        why = (f"it is {pay['state'].lower()}" if pay["state"] != "Due" else
+               "it was stopped once already" if pay.get("wasStopped") else "its time to stop is over")
+        out["tx"] = {"kind": "none", "to": pool, "call": None, "args": [], "data": None,
+                     "note": f"the pool would refuse a stop now: {why}"}
+    elif stop:
         out["tx"] = stop_call(pool, pid, stop["reason"], stop["paired"], stop["trades"], stop["links"])
     else:
-        out["tx"] = approve_call(pool, pid)
-        if reasons:
+        out["tx"] = approve_call(pool, pid, approvals)
+        if reasons and approvals:
             out["tx"]["note"] = "no pair, so the pool takes no stop: whoever signs decides"
     return out
 
 
 def summary(r: dict) -> str:
     """The review in a few lines of text."""
-    lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}, paid unapproved at {r['hardAt']}",
+    lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}"
+             + (f", paid unapproved at {r['hardAt']}" if r["hardAt"] else ", paid by itself then"),
              f"  stage {r['stage']} ({r['fills']['stage']} fills), exam {r['exam']} ({r['fills']['exam']} fills)"]
     for part in ("stage", "exam"):
         for x in r["pairs"][part]:
@@ -354,6 +387,17 @@ def logs(address, topics: list, lo: int, hi: int) -> list[dict]:
     return out
 
 
+def has_approvals(pool: str) -> bool:
+    """Whether the pool takes approvals: it answers `approver()`. A pool without it reverts, and pays at 72 hours by
+    itself."""
+    try:
+        c.call_view(pool, "approver()", [], [], ["address"])
+        return True
+    except Exception as exc:
+        core.log("no_approver", pool=pool, error=str(exc)[:120])
+        return False
+
+
 def read_chain(record: dict) -> dict:
     """Everything the review reads, from the deployment's block to the latest one."""
     factory, usdc, start = record["SimPoolFactory"], record["usdc"], int(record["block"])
@@ -368,7 +412,8 @@ def read_chain(record: dict) -> dict:
         p = core.view(x["pool"], "payout(uint256)", sk.PAYOUT, ["uint256"], [x["id"]])
         x["state"], x["wasStopped"] = sk.PAYOUT_STATE[p[4]], bool(p[5])
     books = {pool: {"balance": c.call_view(usdc, "balanceOf(address)", ["address"], [pool], ["uint256"])[0],
-                    **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")}}
+                    **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
+                    "approvals": has_approvals(pool)}
              for pool in pools}
     pool_of = {s["exam"]: s["pool"] for s in sales} | {f["stage"]: f["pool"] for f in funded}
     accounts = list(pool_of)

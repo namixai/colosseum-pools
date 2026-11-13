@@ -750,6 +750,7 @@ export function activityCounts(events, examLogs, times) {
   const examOfStage = new Map();
   const traderOf = new Map();
   const days = new Map();
+  const codeDays = new Map();
   const unread = [];
   const one = (map, key, init) => {
     const k = String(key).toLowerCase();
@@ -758,7 +759,7 @@ export function activityCounts(events, examLogs, times) {
   };
   const trader = (t) => one(traders, t, (k) => ({ trader: k, codes: [], complete: true, fillDays: 0, ...accountCounts() }));
   const code = (c, partner) => one(codes, c, (k) => ({ code: k, partner: partner ? String(partner).toLowerCase() : null,
-    traders: 0, complete: true, ...accountCounts() }));
+    traders: 0, complete: true, fillDays: 0, ...accountCounts() }));
   const both = (account, f) => {
     const a = String(account).toLowerCase();
     const exam = examOfStage.get(a) ?? a;
@@ -833,15 +834,22 @@ export function activityCounts(events, examLogs, times) {
         if (end) both(account, (x) => { x[`${stage ? "stages" : "exams"}${end === "breached" ? "Breached" : "Expired"}`] += 1; });
       } else if (e.name === "Filled") {
         both(account, (x) => { x.fills += 1; });
-        if (t) {
-          const time = times?.get?.(e.block);
-          const entry = one(days, t, () => ({ days: new Set(), unknown: false }));
+        // The UTC days with a fill, for the trader and for the code: distinct days across all its accounts, never a
+        // sum of its traders' days, which may fall on the same day (review of #283).
+        const time = times?.get?.(e.block);
+        const mark = (map, key) => {
+          const entry = one(map, key, () => ({ days: new Set(), unknown: false }));
           if (time === undefined || time === null) entry.unknown = true;
           else entry.days.add(Math.floor(Number(time) / 86_400));
-        }
+        };
+        const a = String(account).toLowerCase();
+        const code = codeOfExam.get(examOfStage.get(a) ?? a);
+        if (t) mark(days, t);
+        if (code) mark(codeDays, code);
       }
     }
   }
   for (const [t, entry] of days) traders.get(t).fillDays = entry.unknown ? null : entry.days.size;
+  for (const [k, entry] of codeDays) codes.get(k).fillDays = entry.unknown ? null : entry.days.size;
   return { traders: [...traders.values()], codes: [...codes.values()], unread };
 }
