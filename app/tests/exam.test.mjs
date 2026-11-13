@@ -191,7 +191,12 @@ test("each line breaks one unit under it, as the contract judges, and the day's 
   assert.equal(at(9_400n * USD, { dayStartEquity: 9_600n * USD }).breach, "none");
   assert.equal(at(9_400n * USD - 1n, { dayStartEquity: 9_600n * USD }).breach, "drawdown");
   assert.equal(at(9_400n * USD - 1n, { dayStartEquity: 0n }).lines.length, 1, "no snapshot, no day's line");
-  assert.match(SRC, /if \(eq \* bps < base \* \(bps - int256\(uint256\(_rules\.maxDrawdownBps\)\)\)\) return Breach\.Drawdown;/);
+  // The drawdown line moved into `_drawdownLineBps` (13 November): a fixed line from the starting balance
+  // (`FROM_START`, the only kind this library models) or one that trails the best day's snapshot
+  // (`TRAILING_TO_START`, not modelled yet: `lines[0].at` is the fixed line, and a page for an exam of the second
+  // kind must take the line the contract answers, `reads.drawdownLine`).
+  assert.match(SRC, /if \(eq \* bps < _drawdownLineBps\(\)\) return Breach\.Drawdown;/);
+  assert.match(SRC, /if \(drawdownKind == FROM_START\) return base \* \(bps - dd\);/);
   assert.match(SRC, /if \(eq \* bps < dayStartEquity \* \(bps - int256\(uint256\(_rules\.dailyLossBps\)\)\)\) return Breach\.DailyLoss;/);
 });
 
@@ -283,7 +288,7 @@ test("an order worked out before it is sent: its price, its cost, and the accoun
   // The cost is rounded up, as the contract rounds it: 1.800003 USDC of notional at 450 ppm is 810.00135 units.
   const dust = orderPreview(reads({ fromBook: false }), { asset: BTC, isBuy: true, size: 3n, oracle: PX + 1n, ...AT });
   assert.deepEqual([dust.cost, dust.countsAsTrade], [811n, false], "under 10 USDC of notional is no trading day");
-  assert.match(SRC, /uint256 cost = \(ntl \* _terms\.costPpm \+ PPM - 1\) \/ PPM;/);
+  assert.match(SRC, /cost = \(ntl \* _terms\.costPpm \+ PPM - 1\) \/ PPM;/);
 });
 
 test("an order that would take the account over its leverage is said before it is sent; one that reduces never is", () => {
