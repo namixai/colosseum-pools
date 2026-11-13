@@ -998,9 +998,12 @@ contract SimPoolTest is Test {
         uint256 c = _claim(pool, address(_passedStage(pool, stranger, 1)));
         assertEq(pool.withdrawable(), 0);
         vm.warp(block.timestamp + 72 hours);
+        assertEq(pool.pay(1), 1);
+        // A day on, so that the daily limit is not what holds the third: the money is.
+        vm.warp(block.timestamp + 24 hours);
         vm.expectEmit(address(pool));
         emit SimPool.PayoutQueued(c, 1_600e6 + 3 * (LARGE_PRICE - 425_000) - 2 * LARGE_PAYOUT);
-        assertEq(pool.pay(10), 2);
+        assertEq(pool.pay(10), 1);
         assertEq(uint8(pool.payout(a).state), uint8(SimPool.PayoutState.Paid));
         assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Paid));
         assertEq(uint8(pool.payout(c).state), uint8(SimPool.PayoutState.Due));
@@ -1012,6 +1015,168 @@ contract SimPoolTest is Test {
         for (uint256 i = 0; i < 10; ++i) _buy(pool, makeAddr(string(abi.encode(i))), 1);
         assertEq(pool.pay(10), 1);
         assertEq(pool.owed(), 0);
+    }
+
+    // ── the daily limit ──────────────────────────────────────────
+
+    /// `n` payouts claimed now, each by a trader of its own, the pool holding the money for all of them;
+    /// `approved`: every one approved.
+    function _wave(SimPool pool, uint256 n, bool approved) internal returns (address[] memory traders) {
+        uint256 first = pool.payoutCount();
+        traders = _claimedPayouts(pool, n);
+        deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) + n * uint256(LARGE_PAYOUT));
+        if (!approved) return traders;
+        uint256[] memory ids = new uint256[](n);
+        for (uint256 k = 0; k < n; ++k) {
+            ids[k] = first + k;
+        }
+        vm.prank(approver);
+        pool.approvePayouts(ids);
+    }
+
+    function test_dailyLimit_isTwoPayoutsInTwentyFourHours() public view {
+        assertEq(factory.PAYOUTS_PER_DAY(), 2);
+        assertEq(factory.PAYOUT_DAY(), 24 hours);
+    }
+
+    function test_dailyLimit_aWaveOfFiveIsPaidTwoTwoOne() public {
+        SimPool pool = _pool();
+        address[] memory traders = _wave(pool, 5, true);
+        uint256 t0 = block.timestamp + 72 hours;
+        vm.warp(t0);
+        assertEq(pool.payRoom(), 2);
+        assertEq(pool.nextPayAt(), 0, "nothing settled yet");
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutWaitsLimit(2, uint64(t0 + 24 hours));
+        assertEq(pool.pay(10), 2, "day 3: two");
+        assertEq(pool.payRoom(), 0);
+        assertEq(pool.nextPayAt(), t0 + 24 hours);
+        assertEq(pool.head(), 2, "the third keeps its place");
+        assertEq(pool.owed(), 3 * uint256(LARGE_PAYOUT), "and stays owed");
+        // A second before the day is over: nothing, and the same event.
+        vm.warp(t0 + 24 hours - 1);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutWaitsLimit(2, uint64(t0 + 24 hours));
+        assertEq(pool.pay(10), 0);
+        vm.warp(t0 + 24 hours);
+        assertEq(pool.payRoom(), 2);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutWaitsLimit(4, uint64(t0 + 48 hours));
+        assertEq(pool.pay(10), 2, "day 4: two");
+        vm.warp(t0 + 48 hours);
+        assertEq(pool.pay(10), 1, "day 5: one");
+        assertEq(pool.owed(), 0);
+        assertEq(pool.paidCount(), 5);
+        assertEq(pool.paidTotal(), 5 * uint256(LARGE_PAYOUT));
+        for (uint256 k = 0; k < 5; ++k) {
+            assertEq(usdc.balanceOf(traders[k]), LARGE_PAYOUT);
+        }
+    }
+
+    function test_dailyLimit_isAnyTwentyFourHours_notACalendarDay() public {
+        SimPool pool = _pool();
+        _wave(pool, 4, true);
+        uint256 t0 = block.timestamp + 72 hours;
+        vm.warp(t0);
+        assertEq(pool.pay(1), 1);
+        vm.warp(t0 + 10 hours);
+        assertEq(pool.payRoom(), 1);
+        assertEq(pool.pay(1), 1);
+        assertEq(pool.payRoom(), 0);
+        assertEq(pool.nextPayAt(), t0 + 24 hours, "when the first of the two is a day old");
+        assertEq(pool.pay(10), 0);
+        // The first is a day old: room for one, not for two, since the second was paid ten hours later.
+        vm.warp(t0 + 24 hours);
+        assertEq(pool.payRoom(), 1);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutWaitsLimit(3, uint64(t0 + 34 hours));
+        assertEq(pool.pay(10), 1);
+        vm.warp(t0 + 34 hours - 1);
+        assertEq(pool.pay(10), 0);
+        vm.warp(t0 + 34 hours);
+        assertEq(pool.pay(10), 1);
+        assertEq(pool.owed(), 0);
+    }
+
+    function test_dailyLimit_countsThePayoutsThatGoOutAtSevenDaysToo() public {
+        // None approved: at their 7 days all three may be paid, and two are. Without this the limit would be
+        // passed by not approving.
+        SimPool pool = _pool();
+        _wave(pool, 3, false);
+        uint256 t7 = block.timestamp + 7 days;
+        vm.warp(t7);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutWaitsLimit(2, uint64(t7 + 24 hours));
+        assertEq(pool.pay(10), 2);
+        assertEq(uint8(pool.payout(2).state), uint8(SimPool.PayoutState.Due), "past its 7 days, and waiting for the day");
+        vm.warp(t7 + 24 hours);
+        assertEq(pool.pay(10), 1, "8 days after its claim");
+    }
+
+    function test_dailyLimit_countsAPayoutSetAsideForItsTrader_andNotItsClaim() public {
+        SimPool pool = _pool();
+        address[] memory traders = _wave(pool, 3, true);
+        usdc.block_(traders[0]);
+        vm.warp(block.timestamp + 72 hours);
+        assertEq(pool.pay(10), 2);
+        assertEq(uint8(pool.payout(0).state), uint8(SimPool.PayoutState.Held), "refused by the token: set aside");
+        assertEq(uint8(pool.payout(1).state), uint8(SimPool.PayoutState.Paid));
+        assertEq(uint8(pool.payout(2).state), uint8(SimPool.PayoutState.Due), "the held one took a place of the day");
+        assertEq(pool.payRoom(), 0);
+        uint64 next = pool.nextPayAt();
+        // Taking what was set aside is no payout of the day: it goes out at once and changes nothing of the limit.
+        vm.prank(traders[0]);
+        pool.claimHeld(other);
+        assertEq(usdc.balanceOf(other), LARGE_PAYOUT);
+        assertEq(pool.payRoom(), 0);
+        assertEq(pool.nextPayAt(), next);
+        assertEq(pool.pay(10), 0);
+    }
+
+    function test_dailyLimit_aPayoutPassedOverForItsApprovalTakesNoPlaceOfTheDay() public {
+        SimPool pool = _pool();
+        _wave(pool, 4, false);
+        uint256[] memory ids = new uint256[](3);
+        (ids[0], ids[1], ids[2]) = (1, 2, 3);
+        vm.prank(approver);
+        pool.approvePayouts(ids);
+        uint256 t0 = block.timestamp + 72 hours;
+        vm.warp(t0);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutWaitsLimit(3, uint64(t0 + 24 hours));
+        assertEq(pool.pay(10), 2, "the two behind the waiting head");
+        assertEq(uint8(pool.payout(0).state), uint8(SimPool.PayoutState.Due));
+        assertEq(pool.head(), 0);
+    }
+
+    function test_dailyLimit_isSaidBeforeTheMoney() public {
+        // The third payout has neither a place in the day nor its money: the event names the limit.
+        SimPool pool = _pool();
+        _claim(pool, address(_passedStage(pool, trader, 1)));
+        _claim(pool, address(_passedStage(pool, other, 1)));
+        uint256 c = _claim(pool, address(_passedStage(pool, stranger, 1)));
+        uint256 t0 = block.timestamp + 72 hours;
+        vm.warp(t0);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutWaitsLimit(c, uint64(t0 + 24 hours));
+        assertEq(pool.pay(10), 2);
+    }
+
+    function test_dailyLimit_finishIsNoPayoutOfTheDay() public {
+        SimPool pool = _pool();
+        _wave(pool, 2, true);
+        vm.prank(closer);
+        pool.close();
+        vm.warp(block.timestamp + 7 days);
+        assertEq(pool.pay(10), 2);
+        assertEq(pool.payRoom(), 0, "two payouts today");
+        uint256 left = usdc.balanceOf(address(pool));
+        assertGt(left, 0);
+        uint256 before = usdc.balanceOf(creator);
+        vm.prank(creator);
+        pool.finish();
+        assertEq(usdc.balanceOf(address(pool)), 0, "everything left goes out the same day");
+        assertGt(usdc.balanceOf(creator), before);
     }
 
     // ── the creator ──────────────────────────────────────────────
@@ -1211,9 +1376,9 @@ contract SimPoolTest is Test {
         }
     }
 
-    /// What `ops/sim_keeper.py` asks of one `pay` at most: PAY_PER_CALL payouts paid and SCAN_PAYOUTS looked at
-    /// (its test holds its numbers to these two).
-    uint256 constant KEEPER_PAYS = 10;
+    /// What `ops/sim_keeper.py` asks of one `pay` at most: PAY_PER_CALL payouts paid, all the daily limit lets
+    /// one call settle, and SCAN_PAYOUTS looked at (its test holds its numbers to these two).
+    uint256 constant KEEPER_PAYS = 2;
     uint256 constant KEEPER_SCAN = 192;
     /// A transaction's own gas and the call's 36 bytes, which `gasleft` around the call does not see.
     uint256 constant PAY_INTRINSIC = 21_300;
@@ -1249,29 +1414,30 @@ contract SimPoolTest is Test {
     }
 
     function test_pay_theKeepersFullBatch_fitsASmallBlock() public {
-        // The costliest call the keeper sends, measured and not estimated (review of #286): ten payouts paid at
-        // the far end of all it looks at, each to a trader of its own who holds no USDC, every payout before
-        // them waiting for its approval. From cold storage, with none, five and all ten refused by the token.
+        // The costliest call the keeper sends, measured and not estimated (review of #286): the two payouts of
+        // a day paid at the far end of all it looks at, each to a trader of its own who holds no USDC, every
+        // payout before them waiting for its approval. From cold storage, with none, one and both refused by
+        // the token.
         SimPool pool = _pool();
         address[] memory traders = _claimedPayouts(pool, KEEPER_SCAN);
         deal(address(usdc), address(pool), KEEPER_SCAN * uint256(LARGE_PAYOUT));
         vm.warp(block.timestamp + 72 hours);
         uint256 worst96;
         uint256 worst;
-        for (uint256 refused = 0; refused <= KEEPER_PAYS; refused += 5) {
+        for (uint256 refused = 0; refused <= KEEPER_PAYS; ++refused) {
             uint256 g96 = _payGas(pool, traders, 96, refused);
             uint256 g = _payGas(pool, traders, KEEPER_SCAN, refused);
             emit log_named_uint("refused by the token", refused);
-            emit log_named_uint("  pay(96), ten settled, gas", g96);
-            emit log_named_uint("  pay(192), ten settled, gas", g);
+            emit log_named_uint("  pay(96), two settled, gas", g96);
+            emit log_named_uint("  pay(192), two settled, gas", g);
             if (g96 > worst96) worst96 = g96;
             if (g > worst) worst = g;
         }
         emit log_named_uint("each further payout looked at, gas", (worst - worst96) / (KEEPER_SCAN - 96));
-        assertLt(worst96, 1_100_000, "pay(96) with ten payments: about half a small block");
-        // The keeper's reach: within three quarters of a small block's 2 000 000, the rest left for a token
-        // whose transfer costs more than the test's.
-        assertLt(worst, 1_600_000, "pay(192) with ten payments");
+        assertLt(worst96, 800_000, "pay(96) with the day's two payments");
+        // The keeper's reach: within two thirds of a small block's 2 000 000, the rest left for a token whose
+        // transfer costs more than the test's.
+        assertLt(worst, 1_300_000, "pay(192) with the day's two payments");
     }
 
     function test_withdraw_aPartnerTheTokenRefusesHasItsPartSetAside() public {

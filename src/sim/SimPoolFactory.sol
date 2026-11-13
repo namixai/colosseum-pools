@@ -6,7 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Rules, Units} from "../Types.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
-import {SimPool, SimPlan, SimSize} from "./SimPool.sol";
+import {SimPool, SimPlan, SimSize, PAYOUTS_A_DAY} from "./SimPool.sol";
 import {TermsBook} from "../multi/TermsBook.sol";
 
 /// @title SimPoolFactory
@@ -14,7 +14,8 @@ import {TermsBook} from "../multi/TermsBook.sol";
 ///         pass is paid out of the prices other traders paid. Anyone opens one for 1 HYPE and the
 ///         money for two payouts of its largest size. The platform's numbers are constants here,
 ///         the same for every pool: what a pool pays the platform, what it pays a trader, what it
-///         keeps, how long a payout waits, how long a pool runs at least, how long a withdrawal waits.
+///         keeps, how long a payout waits, how many payouts a pool pays a day, how long a pool runs at
+///         least, how long a withdrawal waits.
 /// @dev The operator lists the assets and their leverage caps, and names the four roles the
 ///      pools read from here: the filler of every exam's orders, the checker who may stop a
 ///      payout with a reason, the closer who alone may close a pool before `MIN_TERM` and may cancel
@@ -40,6 +41,11 @@ contract SimPoolFactory {
     /// payout only once approved; from it, whether approved or not. The trader's money never depends on
     /// the approver for longer.
     uint32 public constant PAYOUT_HARD = 7 days;
+    /// How many payouts a pool settles at most in any `PAYOUT_DAY`, however they came due, approved or by
+    /// `PAYOUT_HARD`: one more waits in its place for the next day. Whatever the rules let through, a pool
+    /// loses no more than this many payouts of its largest size in a day (CFO, 13 November).
+    uint8 public constant PAYOUTS_PER_DAY = uint8(PAYOUTS_A_DAY);
+    uint32 public constant PAYOUT_DAY = 24 hours;
     /// How long a stopped payout's money stays set aside after the stop: the trader can object and the
     /// checker can lift the stop; after it the stop is final and the money is the pool's again.
     uint32 public constant STOP_RESERVE = 14 days;

@@ -71,6 +71,12 @@ contract SimPoolHandler is Test {
     /// A payout paid (or set aside for a refused trader) before its 72 hours, unapproved before its 7 days, or
     /// that was not waiting when `pay` began (stopped, say).
     uint256 public ghostEarlyPay;
+    /// When each payout left the queue in `pay`, paid or set aside for a refused trader, in order.
+    uint256[] public settledAt;
+    /// A payout settled less than 24 hours after the one two before it: three in a day.
+    uint256 public ghostOverLimit;
+    /// `payRoom` not what the settlements of the last 24 hours leave of the day's two.
+    uint256 public ghostRoomMismatch;
     /// Who approves payouts, named by the creator in setUp.
     address public approver = makeAddr("approver");
     /// `finish` went through with something still owed, running, or kept for a stop.
@@ -200,6 +206,10 @@ contract SimPoolHandler is Test {
     /// payout in one call, beside the steps one at a time.
     function earn(uint256 who, uint256 line) external {
         if (pool.closed()) return;
+        _earn(who, line);
+    }
+
+    function _earn(uint256 who, uint256 line) internal {
         address e = _buy(who, line, who >> 8);
         if (e == address(0)) return;
         try this.passIt(PaperExam(e)) {} catch { return; }
@@ -373,6 +383,37 @@ contract SimPoolHandler is Test {
         calls["approve"] += 1;
     }
 
+    /// A wave: three passes at once and the prices to pay them, every waiting payout approved, its 72 hours
+    /// past, and `pay` as far as it goes, twice within a day: the way three payouts would leave in 24 hours if
+    /// the daily limit did not hold them.
+    function rush(uint256 seed) external {
+        if (!_rare(seed, 4)) return;
+        if (!pool.closed()) {
+            for (uint256 k = 0; k < 3; ++k) {
+                _earn(uint256(keccak256(abi.encode(seed, k))), 1);
+            }
+            for (uint256 k = 0; k < 12; ++k) {
+                _buy(uint256(keccak256(abi.encode(seed, k, "price"))), 1, seed >> 8);
+            }
+        }
+        uint256 n = pool.payoutCount();
+        for (uint256 i = 0; i < n; ++i) {
+            SimPool.Payout memory p = pool.payout(i);
+            if (p.state != SimPool.PayoutState.Due || p.approved) continue;
+            uint256[] memory ids = new uint256[](1);
+            ids[0] = i;
+            vm.prank(approver);
+            pool.approvePayouts(ids);
+        }
+        vm.warp(block.timestamp + 72 hours);
+        vm.roll(block.number + 1);
+        _pay(type(uint256).max);
+        vm.warp(block.timestamp + 1 + (seed >> 16) % 23 hours);
+        vm.roll(block.number + 1);
+        _pay(type(uint256).max);
+        calls["rush"] += 1;
+    }
+
     function _pay(uint256 max) internal {
         uint256 n = pool.payoutCount();
         SimPool.PayoutState[] memory was = new SimPool.PayoutState[](n);
@@ -385,7 +426,24 @@ contract SimPoolHandler is Test {
             if (was[i] != SimPool.PayoutState.Due) ghostEarlyPay += 1;
             if (block.timestamp < p.dueAt) ghostEarlyPay += 1;
             if (!p.approved && block.timestamp < pool.payoutHardAt(i)) ghostEarlyPay += 1;
+            // It left the queue now: at most two do in any 24 hours.
+            settledAt.push(block.timestamp);
+            uint256 k = settledAt.length;
+            if (k > PER_DAY && block.timestamp < settledAt[k - 1 - PER_DAY] + 24 hours) ghostOverLimit += 1;
         }
+        // What `payRoom` says is the day's two less the settlements of the last 24 hours.
+        uint256 recent;
+        for (uint256 k = settledAt.length; k > 0 && recent < PER_DAY; --k) {
+            if (block.timestamp >= settledAt[k - 1] + 24 hours) break;
+            recent += 1;
+        }
+        if (pool.payRoom() != PER_DAY - recent) ghostRoomMismatch += 1;
+    }
+
+    uint256 constant PER_DAY = 2;
+
+    function settledCount() external view returns (uint256) {
+        return settledAt.length;
     }
 
     function _payAndCount(uint256 max) internal {
@@ -693,7 +751,13 @@ contract SimPoolHandler is Test {
             if (pool.payout(i).state != SimPool.PayoutState.Stopped) continue;
             try pool.finalizeStop(i) {} catch { ghostStuck += 1; }
         }
-        _pay(type(uint256).max);
+        // The queue goes out two payouts a day: day after day, until nothing is owed or the money is what holds it.
+        for (uint256 d = 0; d <= pool.payoutCount(); ++d) {
+            _pay(type(uint256).max);
+            if (pool.owed() == 0 || pool.payRoom() != 0) break;
+            vm.warp(pool.nextPayAt());
+            vm.roll(block.number + 1);
+        }
         _finish((seed >> 192) % 2 == 0);
         calls["windDown"] += 1;
     }
@@ -1298,17 +1362,32 @@ contract SimPoolInvariantTest is Test {
         assertEq(handler.ghostEarlyPay(), 0, "a payout left early, unapproved before 7 days, or stopped; or a stranger approved");
     }
 
+    /// I16. In no 24 hours do more than `PAYOUTS_PER_DAY` payouts leave the queue, paid or set aside for a refused
+    ///      trader, approved or gone out at their 7 days; and `payRoom` says what is left of the day.
+    /// forge-config: default.invariant.runs = 48
+    /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_noDaySeesMoreThanTwoPayouts() public view {
+        assertEq(factory.PAYOUTS_PER_DAY(), 2);
+        assertEq(handler.ghostOverLimit(), 0, "three payouts within 24 hours");
+        assertEq(handler.ghostRoomMismatch(), 0, "payRoom is not the day's two less the last 24 hours' settlements");
+        uint256 n = handler.settledCount();
+        for (uint256 i = 2; i < n; ++i) {
+            assertGe(handler.settledAt(i), handler.settledAt(i - 2) + 24 hours, "the third of three is a day after the first");
+        }
+    }
+
     /// Not an invariant: what each run reached, printed with `-vv`, so that a run that drove nothing does not pass
     /// unseen for one that did.
     function afterInvariant() external view {
-        string[31] memory names = ["approve", "request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
+        string[32] memory names = ["rush", "approve", "request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
             "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown", "objectStop", "finalizeStop", "pastReserve", "buySigned", "setCode", "sales",
             "closeEarly", "pastTerm", "finishByCloser"];
         string memory line = "reached:";
         for (uint256 i = 0; i < names.length; ++i) {
             line = string.concat(line, " ", names[i], "=", vm.toString(handler.calls(names[i])));
         }
-        line = string.concat(line, " payouts=", vm.toString(pool.payoutCount()), " paid=", vm.toString(pool.paidCount()),
+        line = string.concat(line, " payouts=", vm.toString(pool.payoutCount()), " paid=", vm.toString(pool.paidCount()), " settled=", vm.toString(handler.settledCount()),
             " toPartners=", vm.toString(handler.ghostToPartners()), " partnerHeld=", vm.toString(handler.ghostPartnerHeld()), " brought=", vm.toString(pool.brought()));
         console2.log(line);
     }
