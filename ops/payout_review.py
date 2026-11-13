@@ -717,14 +717,14 @@ def approve_call(pool: str, pid: int, approvals: bool = True) -> dict:
 def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds: dict | None = None) -> dict:
     p = p or Params()
     pay = next(x for x in chain["payouts"] if x["pool"] == pool and x["id"] == pid)
-    approvals = chain["books"][pool].get("approvals", True)
+    approvals = chain["books"][pool].get("approvals", True)  # True, False, or None: not read
     who = owners(chain)
     trader, stage = pay["trader"], pay["account"]
     exam = next((f["exam"] for f in chain["funded"] if f["stage"] == stage), None)
     sale = next((s for s in chain["sales"] if s["exam"] == exam), None)
     out = {"pool": pool, "id": pid, "trader": trader, "stage": stage, "exam": exam, "amount": pay["amount"],
            "claimedAt": pay["dueAt"] - PAYOUT_DELAY, "dueAt": pay["dueAt"],
-           "hardAt": pay["dueAt"] - PAYOUT_DELAY + PAYOUT_HARD if approvals else None, "state": pay["state"], "size": sale["size"] if sale else None,
+           "hardAt": pay["dueAt"] - PAYOUT_DELAY + PAYOUT_HARD if approvals is True else None, "state": pay["state"], "size": sale["size"] if sale else None,
            "fills": {"stage": sum(f["account"] == stage for f in chain["fills"]),
                      "exam": sum(f["account"] == exam for f in chain["fills"])}}
     pairs = {"stage": pairs_of(stage, chain, who, p), "exam": pairs_of(exam, chain, who, p) if exam else []}
@@ -829,6 +829,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
             found.append(("recount", f"recount on the {part}: " + ", ".join(sorted({f['what'] for f in rc['flags']}))))
     read = chain.get("exam_events")
     unread = [a for a in (stage, exam) if a and (a in (chain.get("unread") or []) or (read is not None and a not in read))]
+    if approvals is None:
+        unread.append("whether the pool takes approvals")
     if unread:
         found.append(("unread", "not read: " + ", ".join(unread)))
     out["verdict"] = "suspicious" if found else "clean"
@@ -838,13 +840,19 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     # by the pool's own rule. A pool with approvals stops until it is paid; one without, until 5 minutes before
     # `dueAt`, as the checker sends it.
     waiting = pay["state"] == "Due" and not pay.get("wasStopped")
-    in_time = approvals or chain["now"] + chk.MARGIN_S < pay["dueAt"]
+    in_time = approvals is True or chain["now"] + chk.MARGIN_S < pay["dueAt"]
     out["stoppable"] = waiting and in_time
     # What whoever signs is offered (review of #287): a stop where there is one the pool would take; nothing to
     # approve where the result did not count up, only the draft of a reason-3 stop, until the analysis is written
     # or the ceiling comes; the approval as a choice where something else is suspicious; the approval where all is
     # clean. A pool without approvals is offered none: it pays at 72 hours by itself (`none`).
-    if stop and not out["stoppable"]:
+    if approvals is None:
+        # Not read whether the pool takes approvals: no call and no word on when it pays, either way it could be wrong.
+        out["stoppable"] = None
+        out["action"] = "none"
+        out["tx"] = {"kind": "none", "to": pool, "call": None, "args": [], "data": None,
+                     "note": "not read whether the pool takes approvals: nothing to sign until it is"}
+    elif stop and not out["stoppable"]:
         why = (f"it is {pay['state'].lower()}" if pay["state"] != "Due" else
                "it was stopped once already" if pay.get("wasStopped") else "its time to stop is over")
         out["action"] = "none"
@@ -1074,15 +1082,29 @@ def optional_view(pool: str, sig: str) -> int | None:
         return None
 
 
-def has_approvals(pool: str) -> bool:
-    """Whether the pool takes approvals: it answers `approver()`. A pool without it reverts, and pays at 72 hours by
-    itself."""
+def answers(addr: str, sig: str, out: list[str]) -> bool | None:
+    """True if the getter answers, False if the call reverts (the contract has no such function), None if it could
+    not be read at all (the node, the rate): a failed read is never taken for "no"."""
     try:
-        c.call_view(pool, "approver()", [], [], ["address"])
+        c.call_view(addr, sig, [], [], out)
         return True
     except Exception as exc:
-        core.log("no_approver", pool=pool, error=str(exc)[:120])
+        if "revert" in str(exc).lower():
+            return False
+        core.log("not_read", address=addr, call=sig, error=str(exc)[:120])
+        return None
+
+
+def has_approvals(factory: str, pool: str) -> bool | None:
+    """Whether the pool takes approvals, with a ceiling: its factory answers `PAYOUT_HARD()` (the ceiling, a constant
+    of the factory whose clones all pools are) and the pool answers `approver()`. False only when the factory's call
+    reverts; None when either was not read, or the two disagree (review of #283)."""
+    hard = answers(factory, "PAYOUT_HARD()", ["uint32"])
+    if hard is False:
         return False
+    if hard is None:
+        return None
+    return True if answers(pool, "approver()", ["address"]) is True else None
 
 
 def read_chain(record: dict, prices: dict | None = None, venue: dict | None = None) -> dict:
@@ -1104,7 +1126,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     books = {pool: {"balance": c.call_view(usdc, "balanceOf(address)", ["address"], [pool], ["uint256"])[0],
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
                     "sizes": [int(m[0]) for m in c.call_view(pool, "menu()", [], [], ["(uint64,uint64)[]"])[0]],
-                    "approvals": has_approvals(pool), "largestPayout": core.view(pool, "largestPayout()", "uint64"),
+                    "approvals": has_approvals(factory, pool), "largestPayout": core.view(pool, "largestPayout()", "uint64"),
                     "staged": optional_view(pool, "staged()")}
              for pool in pools}
     pool_of = {s["exam"]: s["pool"] for s in sales} | {f["stage"]: f["pool"] for f in funded}
