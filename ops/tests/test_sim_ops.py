@@ -202,11 +202,13 @@ class TheClosing(unittest.TestCase):
     refuse; the contract decides the same (test/sim/SimPool.t.sol)."""
     CREATOR, CLOSER, OTHER = ("0x" + x * 20 for x in ("Aa", "Cc", "Ee"))
     DAY = 86_400
+    WEEK = 7 * DAY
 
     def state(self, **kw):
         st = {"creator": d.to_checksum_address(self.CREATOR), "closer": d.to_checksum_address(self.CLOSER),
               "closed": False, "finished": False, "locked_until": 180 * self.DAY, "live": 0, "owed": 0, "reserved": 0,
-              "fund_window": 7 * self.DAY}
+              "fund_window": 7 * self.DAY, "closed_at": 0, "requested": 0, "ready_at": 0, "withdrawable": 0,
+              "delay": 7 * self.DAY, "window": 3 * self.DAY}
         st.update(kw)
         return st
 
@@ -226,26 +228,103 @@ class TheClosing(unittest.TestCase):
     def test_finish_names_what_keeps_the_pool_from_finishing(self):
         creator, closer, other = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER, self.OTHER))
         with self.assertRaises(SystemExit) as caught:
-            d.finish_check(self.state(), 10, creator)
+            d.finish_check(self.state(), self.WEEK, creator)
         self.assertIn("not closed yet", str(caught.exception))
         self.assertIn("only the closer closes it", str(caught.exception))
         closed = self.state(closed=True)
-        self.assertEqual(d.finish_check(closed, 10, creator), "the creator")
-        self.assertEqual(d.finish_check(closed, 10, closer), "the factory's closer")
+        self.assertEqual(d.finish_check(closed, self.WEEK, creator), "the creator")
+        self.assertEqual(d.finish_check(closed, self.WEEK, closer), "the factory's closer")
         with self.assertRaises(SystemExit):
-            d.finish_check(closed, 10, other)
+            d.finish_check(closed, self.WEEK, other)
         with self.assertRaises(SystemExit) as caught:
-            d.finish_check(self.state(closed=True, live=1, owed=800_000_000, reserved=400_000_000), 10, creator,
+            d.finish_check(self.state(closed=True, live=1, owed=800_000_000, reserved=400_000_000), self.WEEK, creator,
                            "0xEXAM runs until 2026-12-12 10:00 UTC at the latest")
         said = str(caught.exception)
         for part in ("NotOver", "1 exam(s) or stage(s) still run: 0xEXAM runs until", "800 USDC of payouts still owed",
                      "400 USDC kept for stops"):
             self.assertIn(part, said)
         with self.assertRaises(SystemExit) as caught:
-            d.finish_check(self.state(closed=True, live=1), 10, creator)
+            d.finish_check(self.state(closed=True, live=1), self.WEEK, creator)
         self.assertIn("--exam ADDRESS says until when", str(caught.exception))
         with self.assertRaises(SystemExit):
-            d.finish_check(self.state(closed=True, finished=True), 10, creator)
+            d.finish_check(self.state(closed=True, finished=True), self.WEEK, creator)
+
+    def test_finish_a_week_after_the_close(self):
+        creator = d.to_checksum_address(self.CREATOR)
+        closed = self.state(closed=True, closed_at=100)
+        with self.assertRaises(SystemExit) as caught:
+            d.finish_check(closed, 100 + self.WEEK - 1, creator)
+        self.assertIn("NotReady: finish from " + d.utc(100 + self.WEEK), str(caught.exception))
+        self.assertEqual(d.finish_check(closed, 100 + self.WEEK, creator), "the creator")
+        with self.assertRaises(SystemExit) as caught:
+            d.finish_check({**closed, "owed": 800_000_000}, 100, creator)
+        self.assertIn("and not before " + d.utc(100 + self.WEEK), str(caught.exception))
+
+    def test_request_at_most_what_the_pool_lets_go(self):
+        creator, closer = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER))
+        st = self.state(withdrawable=500_000_000)
+        said = d.request_check(st, 1_000, creator, 500_000_000)
+        self.assertIn("asks for 500 USDC, to be carried out from " + d.utc(1_000 + self.WEEK), said)
+        self.assertIn("until " + d.utc(1_000 + self.WEEK + 3 * self.DAY), said)
+        self.assertIn("replaces the standing request for 100 USDC",
+                      d.request_check({**st, "requested": 100_000_000}, 1_000, creator, 1))
+        for bad, word in (((st, 1_000, creator, 500_000_001), "TooMuch: the pool lets go at most 500 USDC"),
+                          ((st, 1_000, closer, 1), "NotCreator"),
+                          (({**st, "finished": True}, 1_000, creator, 1), "Done")):
+            with self.assertRaises(SystemExit) as caught:
+                d.request_check(*bad)
+            self.assertIn(word, str(caught.exception))
+
+    def test_an_amount_is_usdc_of_at_most_six_decimals(self):
+        self.assertEqual(d.amount_units("84.575"), 84_575_000)
+        self.assertEqual(d.amount_units(" 250 "), 250_000_000)
+        for bad in ("0", "-1", "1.0000001", "abc", "nan", "inf"):
+            with self.assertRaises(SystemExit):
+                d.amount_units(bad)
+
+    def test_withdraw_a_week_on_for_three_days_the_less_of_asked_and_free(self):
+        creator, closer = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER))
+        st = self.state(requested=500_000_000, ready_at=1_000, withdrawable=300_000_000)
+        self.assertEqual(d.withdraw_check(st, 1_000, creator), 300_000_000, "what is free then")
+        self.assertEqual(d.withdraw_check({**st, "withdrawable": 900_000_000}, 1_000, creator), 500_000_000, "what was asked")
+        lapses = 1_000 + 3 * self.DAY
+        self.assertEqual(d.withdraw_check(st, lapses - 1, creator), 300_000_000)
+        for bad, word in (((st, 999, creator), "NotReady: the request for 500 USDC can be carried out from " + d.utc(1_000)),
+                          ((st, lapses, creator), "RequestLapsed: the request lapsed at " + d.utc(lapses)),
+                          (({**st, "withdrawable": 0}, 1_000, creator), "TooMuch: the pool lets nothing go now"),
+                          (({**st, "requested": 0}, 1_000, creator), "NoRequest"),
+                          ((st, 1_000, closer), "NotCreator"),
+                          (({**st, "finished": True}, 1_000, creator), "Done")):
+            with self.assertRaises(SystemExit) as caught:
+                d.withdraw_check(*bad)
+            self.assertIn(word, str(caught.exception))
+
+    def test_cancel_the_creator_or_the_closer(self):
+        creator, closer, other = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER, self.OTHER))
+        st = self.state(requested=1)
+        self.assertEqual(d.cancel_check(st, creator), "the creator")
+        self.assertEqual(d.cancel_check(st, closer), "the factory's closer")
+        for bad, word in (((st, other), "NotCreator"), ((self.state(), closer), "NoRequest")):
+            with self.assertRaises(SystemExit) as caught:
+                d.cancel_check(*bad)
+            self.assertIn(word, str(caught.exception))
+
+    def test_the_withdrawal_sends_only_with_send(self):
+        from unittest import mock
+        st = self.state(requested=500_000_000, ready_at=1_000, withdrawable=900_000_000)
+        for argv, sig in ((["request", "--amount", "250"], "requestWithdraw(uint256)"), (["withdraw"], "withdraw()"),
+                          (["cancel"], "cancelWithdraw()")):
+            with mock.patch.object(d, "pool_state", return_value=st), mock.patch.object(d, "chain_now", return_value=1_000), \
+                    mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(self.CREATOR)), \
+                    mock.patch.object(d.c, "assert_testnet"), mock.patch.object(d.c, "account") as key, \
+                    mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+                self.assertEqual(d.main([argv[0], "--pool", self.OTHER, "--key", "creator", *argv[1:]]), 0)
+                sent.assert_not_called()
+                key.assert_not_called()
+                self.assertEqual(d.main([argv[0], "--pool", self.OTHER, "--key", "creator", *argv[1:], "--send"]), 0)
+                self.assertEqual(sent.call_args[0][2], sig)
+                if argv[0] == "request":
+                    self.assertEqual(sent.call_args[0][4], [250_000_000])
 
     def test_until_when_an_exam_runs(self):
         x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False}
@@ -270,11 +349,12 @@ class TheClosing(unittest.TestCase):
             self.assertEqual(d.main(["close", "--pool", self.OTHER, "--key", "closer"]), 0)
             sent.assert_not_called()
             key.assert_not_called()
-        with mock.patch.object(d, "pool_state", return_value=st), mock.patch.object(d, "chain_now", return_value=10), \
+        with mock.patch.object(d, "pool_state", return_value=st), mock.patch.object(d, "chain_now", return_value=self.WEEK), \
                 mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(self.CREATOR)), \
                 mock.patch.object(d.c, "assert_testnet"), mock.patch.object(d.c, "account"), \
                 mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
             self.assertEqual(d.main(["finish", "--pool", self.OTHER, "--key", "deployer", "--send"]), 0)
+            self.assertEqual(sent.call_args[0][2], "finish()")
             self.assertEqual(sent.call_args[0][2], "finish()")
 
 

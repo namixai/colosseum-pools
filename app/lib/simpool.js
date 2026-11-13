@@ -32,6 +32,9 @@ export const SIM_POOL_ABI = [
   "function finished() view returns (bool)",
   "function lockedUntil() view returns (uint64)",
   "function closedEarly() view returns (bool)",
+  "function closedAt() view returns (uint64)",
+  "function requested() view returns (uint256)",
+  "function readyAt() view returns (uint64)",
   "function head() view returns (uint256)",
   "function stoppedCount() view returns (uint256)",
   "function liftedCount() view returns (uint256)",
@@ -60,6 +63,9 @@ export const SIM_POOL_ABI = [
   "event StopLifted(uint256 indexed id, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount)",
   "event Closed()",
   "event ClosedEarly(address indexed closer)",
+  "event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount)",
+  "event WithdrawRequested(uint256 amount, uint64 readyAt, uint64 lapsesAt)",
+  "event WithdrawCancelled(address indexed by, uint256 amount)",
 ];
 
 /**
@@ -107,6 +113,9 @@ export const PAYOUT_DELAY = 72 * 3600;
 export const STOP_RESERVE = 14 * 24 * 3600;
 /** How long a pool runs at least: before it the creator neither closes it nor takes back what it put in. */
 export const MIN_TERM = 180 * 24 * 3600;
+/** How long a creator's request to withdraw waits, and `finish` after the close; how long a ready request stays good. */
+export const WITHDRAW_DELAY = 7 * 24 * 3600;
+export const WITHDRAW_WINDOW = 3 * 24 * 3600;
 const BPS = 10_000n;
 
 /** SimPool.PayoutState, by its number. */
@@ -374,6 +383,22 @@ export function gaps(list) {
 }
 
 /**
+ * The creator's standing request to withdraw, as a page shows it: how much, from when it can be carried out and until
+ * when, and where it stands now ("waiting", "ready", "lapsed"); null with none, or for a pool that does not answer
+ * `requested()`. `finishFrom`: from when a closed pool may finish, a week after its close.
+ */
+export function withdrawalOf(reads, now) {
+  if (reads.requested === undefined || reads.requested === null) return null;
+  const finishFrom = reads.closed && reads.closedAt ? Number(reads.closedAt) + WITHDRAW_DELAY : null;
+  const amount = BigInt(reads.requested);
+  if (amount === 0n) return { amount: 0n, readyAt: null, lapsesAt: null, state: "none", finishFrom };
+  const readyAt = Number(reads.readyAt);
+  const lapsesAt = readyAt + WITHDRAW_WINDOW;
+  const state = now < readyAt ? "waiting" : now < lapsesAt ? "ready" : "lapsed";
+  return { amount, readyAt, lapsesAt, state, finishFrom };
+}
+
+/**
  * The whole page of one simulated pool. `reads` are the pool's getters (menu, payoutCount's payouts as `payouts`,
  * paidCount, paidTotal, stoppedCount, liftedCount, owed, held, live, closed, finished, codes (each code's codeOf
  * with its key: { code, partner, bps, used, brought }), terms, fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
@@ -416,6 +441,7 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     lockedUntil: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : Number(reads.lockedUntil),
     closedEarly: Boolean(reads.closedEarly),
     creatorMayClose: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : now >= Number(reads.lockedUntil),
+    withdrawal: withdrawalOf(reads, now),
     codes: codeShares(reads.codes, events),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),
