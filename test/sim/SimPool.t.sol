@@ -1417,7 +1417,7 @@ contract SimPoolTest is Test {
         assertEq(usdc.balanceOf(address(pool)), 2_400e6, "the floor of three payouts stays");
     }
 
-    function test_withdraw_moneyThatCameInAfterTheRequestStays() public {
+    function test_withdraw_neverMoreThanWasAsked_whateverCameInSince() public {
         SimPool pool = _pool();
         _withSales(pool, 30);
         _ask(pool, 500e6);
@@ -1425,7 +1425,7 @@ contract SimPoolTest is Test {
         uint256 bal = usdc.balanceOf(address(pool));
         vm.prank(creator);
         pool.withdraw();
-        assertEq(bal - usdc.balanceOf(address(pool)), 500e6, "what was asked, not what came in since");
+        assertEq(bal - usdc.balanceOf(address(pool)), 500e6, "what was asked, not more for what came in since");
     }
 
     function test_withdraw_aRequestLapsesThreeDaysAfterItIsReady_aNewOneWaitsAgain() public {

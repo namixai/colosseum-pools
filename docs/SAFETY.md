@@ -153,7 +153,8 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   pool's again (S120). The filler and the checker are two keys, and neither they nor the closer open a pool (S116).
 - **A simulated pool's creator** withdraws only by a request a week old (S127, S128), carried out within three
   days of being ready (S130), and gets the less of what it asked and what may leave when it is carried out
-  (S131): money that came in after the request stays, and payouts that came due meanwhile come first. A pool
+  (S131): never more than it asked, and only what the pool can spare then, so payouts that came due meanwhile
+  come first. A pool
   is finished a week after its close at the earliest (S129), so closing and finishing are never one block.
   What may leave is only what stays above three payouts of the largest size and above
   every payout owed and every payout set aside for a trader whose transfer was refused (S117), and it stops

@@ -67,8 +67,10 @@ fail, and their prices pay for the ones that pass.
   it lapses); one request stands at a time, and a new one replaces it and starts the week again.
   `withdraw()` carries it out from `WITHDRAW_DELAY` (7 days) on, for `WITHDRAW_WINDOW` (3 days),
   then it lapses (`RequestLapsed`): a request cannot be left standing to make the week nothing. It
-  pays the less of what was asked and what `withdrawable` allows when it is carried out, so money
-  that came in after the request stays, and payouts that came due in the week come first. The
+  pays the less of what was asked and what `withdrawable` allows when it is carried out: never more
+  than was asked, and only what the pool can spare then, so payouts that came due in the week come
+  first. Money that came in during the week counts toward what the pool can spare, within the
+  amount asked; what is above the request waits for another one. The
   creator or the factory's closer may cancel it (`cancelWithdraw`, `WithdrawCancelled` with who);
   the closer only cancels: it changes neither the amount nor where the money goes. There is no
   other way for the creator to take money out before `finish`. `withdrawable` is only what stays
@@ -133,13 +135,14 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 59 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
-FiatToken V2.2's interface and words), and 130 mutations (`SM1`–`SM130` in `scripts/mutations.py`),
-each caught by a named test:
+`test/sim/SimPool.t.sol`, 69 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+FiatToken V2.2's interface and words), and every `SM` mutation of `scripts/mutations.py` (SM1 to
+SM149 on this branch: the delay, the window, the less of the two and finish's week among them), each
+caught by a named test. The second command lists them from the file, so a new one is never left out:
 
 ```
 forge test --match-path 'test/sim/*'
-python3 scripts/mutations.py $(seq -f 'SM%g' 1 130)
+python3 scripts/mutations.py $(grep -oE "[\"']SM[0-9]+[\"']" scripts/mutations.py | tr -d "\"'")
 ```
 
 `test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a

@@ -43,6 +43,15 @@ class TheNumbers(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 d.main(["deploy", "--label", "never-written", "--filler", keys[0], "--checker", keys[1], "--closer", keys[2]])
             self.assertIn("three keys", str(caught.exception))
+        # A zero key is refused before anything is deployed, even with --send (review of #282).
+        from unittest import mock
+        zero = "0x" + "00" * 20
+        for keys in ((a, b, zero), (zero, a, b), (a, zero, b)):
+            with mock.patch.object(d, "deploy_contract") as deployed, self.assertRaises(SystemExit) as caught:
+                d.main(["deploy", "--label", "never-written", "--filler", keys[0], "--checker", keys[1], "--closer", keys[2],
+                        "--send"])
+            self.assertIn("none of them 0x0", str(caught.exception))
+            deployed.assert_not_called()
 
     def test_the_plan_tuple_is_simplans_layout(self):
         body = re.search(r"struct SimPlan \{(.*?)\n\}", POOL, re.S).group(1)
@@ -116,6 +125,9 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
             self.assertIn("The pool runs at least 180 days from its opening", text)
             self.assertIn("only the platform can close it sooner, with the money going where it would anyway", text)
+            self.assertIn("The creator withdraws by a request: the money leaves no sooner than 7 days after it, within "
+                          "3 days after that, only what the pool can spare then, and never more than was asked; the "
+                          "platform may cancel a withdrawal request; it never moves the money", text)
 
     def test_the_cfos_numbers_of_12_november(self):
         """Thirty days a stage, no idle rule that could bind, no minimum of days, 0.045 % a fill, seven days
