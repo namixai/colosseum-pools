@@ -274,6 +274,24 @@ test("a red pool restricts every selection from it, also of payouts whose own re
     [[false, false, false], [[0n, 1n, 2n]]]);
 });
 
+test("a red pool whose only loaded review holds a payout still forbids a batch of the others", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D }), payout(2, { claimedAt: NOW - D })];
+  const hold = { ...reviewDoc(0), action: "hold", call: null, batchApproval: false };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: hold } });
+  assert.equal(rows[0].review.batchApproval, false, "kept through the hold branch");
+  assert.equal(rows[0].approve, null, "the held payout itself is offered no approval");
+  assert.deepEqual(rows.map((r) => r.poolRed), [true, true, true]);
+  const others = rows.filter((r) => r.id !== 0);
+  assert.throws(() => approveSelectedCall({ pool: POOL, rows: others, keccak256 }), /approve each payout on its own/);
+  assert.equal(others[0].approve.method, "approvePayouts", "each of the others one at a time");
+  // A hold in a green pool restricts nothing, and a document that says nothing of it is green.
+  const green = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: { ...hold, batchApproval: true } } });
+  assert.deepEqual(green.map((r) => r.poolRed), [false, false, false]);
+  const silent = { ...hold };
+  delete silent.batchApproval;
+  assert.equal(awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: silent } })[0].review.batchApproval, true);
+});
+
 test("a withdrawal request half read is unread, never lapsed and never none", () => {
   const readyAt = NOW + WITHDRAW_DELAY;
   for (const reads of [{ requested: 5_000_000n }, { requested: 5_000_000n, readyAt: null }, { readyAt }, {}]) {
