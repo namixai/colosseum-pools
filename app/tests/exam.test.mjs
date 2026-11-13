@@ -463,3 +463,69 @@ test("no Hyperliquid address is written in the screen's library or in its reads:
   // The precompiles are the same on both networks (spike/hlspike/network.py), so one address serves both.
   assert.match(NETWORK_PY, /the precompiles are the same on both networks/);
 });
+
+// ── review of #294, second round ───────────────────────────────────
+
+test("a missing asset is no asset, where Number would make it asset 0; an explicit 0 is one", () => {
+  for (const missing of [null, undefined, "", "  "]) {
+    assert.throws(() => placeCall({ exam: EXAM, asset: missing, isBuy: true, size: 1n, keccak256 }), /is not an asset/, String(missing));
+    assert.throws(() => pxIndex(missing), /is not an asset/);
+    assert.throws(() => oraclePxCall(missing), /is not an asset/);
+    assert.equal(orderPreview(reads(), { asset: missing, isBuy: true, size: 1n, oracle: PX, ...AT }).refusal, "AssetNotAllowed");
+  }
+  assert.equal(placeCall({ exam: EXAM, asset: 0, isBuy: true, size: 1n, keccak256 }).args[0], 0);
+  assert.equal(placeCall({ exam: EXAM, asset: "0", isBuy: true, size: 1n, keccak256 }).args[0], 0);
+  assert.equal(pxIndex(0), 0);
+  const zero = reads({ rules: { ...reads().rules, assets: [0, BTC] } });
+  assert.equal(orderPreview(zero, { asset: 0, isBuy: true, size: 1n, oracle: PX, ...AT }).refusal, null, "asset 0 named, and allowed");
+  for (const missing of [null, undefined, ""]) {
+    assert.equal(orderPreview(zero, { asset: missing, isBuy: true, size: 1n, oracle: PX, ...AT }).refusal, "AssetNotAllowed",
+      "an exam that trades asset 0 is not ordered in by a missing one");
+  }
+});
+
+test("size decimals that were not read are refused, not taken for none", () => {
+  for (const missing of [null, undefined, ""]) {
+    assert.throws(() => sizeUnits("1", missing), /size decimals were not read/);
+    assert.throws(() => pxUnits("60000", missing), /size decimals were not read/);
+    assert.throws(() => sizeText(100_000n, missing), /size decimals were not read/);
+    assert.throws(() => pxText(600_000n, missing), /size decimals were not read/);
+  }
+  assert.deepEqual([sizeUnits("1", 0), pxUnits("60000", 0), sizeUnits("1", 5), pxUnits("60000", 5)], [1n, 60_000_000_000n, 100_000n, 600_000n],
+    "an asset of no size decimals is a number that was read");
+  assert.equal(sizeUnits("1", "5"), 100_000n, "read as text from a list");
+});
+
+test("a mark of zero is no price: a flat account is not made of a short counted at nothing", () => {
+  const short = (mark) => examAccount(reads({ cash: 10_000n * USD + 100_000n * PX, positions: [{ asset: BTC, size: -100_000n, mark }] }), AT);
+  const zero = short(0n);
+  assert.deepEqual([zero.priced, zero.equity, zero.graduate.refusal, zero.breach], [false, null, "NoPrice", null]);
+  assert.equal(short(PX).priced, true);
+  assert.equal(short(-1n).priced, false, "nor a price under zero");
+  // Not eligible to pass on proceeds alone: at zero the short's sale would stay in the equity.
+  assert.notEqual(zero.graduate.can, true);
+});
+
+test("a reduction is not refused for another asset's missing price; an order that adds exposure is", () => {
+  const heldBtc = { cash: 10_000n * USD - 100_000n * PX, positions: [{ asset: BTC, size: 100_000n, mark: PX }, { asset: ETH, size: 1_000n, mark: null }] };
+  const at = (isBuy, size, asset = BTC) => orderPreview(reads({ fromBook: false, ...heldBtc }), { asset, isBuy, size, oracle: asset === BTC ? PX : 30_000n, ...AT });
+  const reduce = at(false, 40_000n);
+  assert.deepEqual([reduce.refusal, reduce.atFill, reduce.reduces, reduce.after.equity], [null, null, true, null], "filled; the equity stays unknown");
+  const add = at(true, 1n);
+  assert.deepEqual([add.refusal, add.atFill], [null, "NoPrice"], "the contract reads the book for it, and the price is not there");
+  assert.equal(at(false, 1n, ETH).atFill, null, "closing the unpriced position itself is a reduction too");
+  assert.match(SRC, /if \(_abs\(afterFill\) > _abs\(before\)\) \{/);
+});
+
+test("when the book is too far and the leverage too large, the price refusal comes first, as in fill", () => {
+  // Over 10x on the account's own cap, and an ask 3 % above the oracle with 150 bps allowed.
+  const got = orderPreview(reads(), { asset: BTC, isBuy: true, size: 200_000n, oracle: PX, bid: 599_000n, ask: 618_000n, ...AT });
+  assert.equal(got.atFill, "TooFarFromOracle");
+  const over = orderPreview(reads(), { asset: BTC, isBuy: true, size: 200_000n, oracle: PX, bid: 599_900n, ask: 600_100n, ...AT });
+  assert.equal(over.atFill, "OverLeverage", "with the book in range the leverage is what refuses");
+  // In the contract the price is read before the exposure check: the function that holds the leverage revert calls
+  // `_fillPrice` above it.
+  const revert = SRC.indexOf("revert OverLeverage();", SRC.indexOf("_fillPrice("));
+  const fn = SRC.slice(SRC.lastIndexOf("function ", revert), revert);
+  assert.ok(fn.includes("_fillPrice("), "the price is taken in the function that refuses the leverage, above the refusal");
+});
