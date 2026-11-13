@@ -67,7 +67,7 @@ struct SimPlan {
 ///      (`owed`) is every payout neither paid nor stopped. The creator withdraws only what stays
 ///      above `FLOOR_PAYOUTS` payouts of the largest size and above what it owes, so a payout that
 ///      comes due finds its money, unless payouts came faster than prices: then payouts are paid in
-///      the order they came due, as money comes in.
+///      the order they were claimed, as money comes in.
 contract SimPool is Initializable {
     using SafeERC20 for IERC20;
 
@@ -155,7 +155,7 @@ contract SimPool is Initializable {
     /// (`withdraw`), for `WITHDRAW_WINDOW` from then. Zero `requested`: none.
     uint256 public requested;
     uint64 public readyAt;
-    /// The first payout not yet settled: payouts are paid in the order they came due.
+    /// The first payout not yet settled: payouts are paid in the order they were claimed (`pay`).
     uint256 public head;
     uint256 public stoppedCount;
     uint256 public liftedCount;
@@ -464,7 +464,7 @@ contract SimPool is Initializable {
         emit PayoutDue(id, stage, trader, amount, dueAt);
     }
 
-    /// @notice Pays the payouts that are due, in the order they came due, looking at up to `max` of them from the
+    /// @notice Pays the payouts that are due, in the order of their claims, looking at up to `max` of them from the
     ///         head, settled ones included,
     ///         while the pool's USDC covers the next. A payout is due `PAYOUT_DELAY` after its claim once
     ///         the approver approved it, and `PAYOUT_HARD` after its claim if not. One not yet due for want

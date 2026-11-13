@@ -77,10 +77,13 @@ FILL_GAS = 400_000
 PAY_PER_CALL = 10
 # How far past the head the keeper reads payouts to find one to pay: behind a head that waits for its approval,
 # later approved payouts are paid out of order, and `pay` must be told to look that far (review of #286).
-# One call fits a small block (2 000 000 gas, ops/keeper.py): at most PAY_PER_CALL payouts paid, about 60 000 gas
-# each (a transfer, measured at about 35 000 in the 32-partner withdrawal test, and four counters), and at most
-# SCAN_PAYOUTS looked at, about 5 000 each: 600 000 + 480 000 (review of #286). What is left goes in the next pass.
-SCAN_PAYOUTS = 96
+# One call fits a small block (2 000 000 gas, ops/keeper.py), measured from cold storage and not estimated
+# (test/sim/SimPool.t.sol, test_pay_theKeepersFullBatch_fitsASmallBlock): PAY_PER_CALL payouts paid past 86
+# waiting, `pay(96)`, take 999 510 gas, each further payout looked at 5 390, and `pay(192)` 1 517 035: three
+# quarters of the block, the rest left for a token whose transfer costs more than the test's. `pay` counts from
+# the head whatever it is told, so no call in a small block pays a payout further than this past a waiting
+# head: it is paid once the head moves, which the approval of the payouts before it does, or their 7 days.
+SCAN_PAYOUTS = 192
 
 
 # ── what is due, from what was read ──────────────────────────────────────────────────
@@ -305,15 +308,27 @@ class SimKeeper:
         if head >= count:
             return
         rows = []
-        for pid in range(head, min(count, head + SCAN_PAYOUTS)):
+        end = min(count, head + SCAN_PAYOUTS)
+        found = 0
+        early = False
+        for pid in range(head, end):
             p = view(pool, "payout(uint256)", PAYOUT, ["uint256"], [pid])
             rows.append((PAYOUT_STATE[p[4]], p[3], bool(p[7])))
             # `pay` stops at a waiting payout whose 72 hours are not over: nothing after it is read.
             if rows[-1][0] == "Due" and now < rows[-1][1]:
+                early = True
                 break
+            if payable(*rows[-1], now):
+                found += 1
+                if found == PAY_PER_CALL:
+                    break  # all one call pays (pay_reach): the rest is read in the next pass
         reach = pay_reach(rows, now)
         if reach:
             self.send(pool, "pay(uint256)", ["uint256"], [reach])
+        elif not early and count > end:
+            # Every payout within a small block's reach waits for its approval, and there are more behind them.
+            # They are paid once the head moves: the approver approves the ones in front, or their 7 days come.
+            log("pay_out_of_reach", pool=pool, head=head, looked=len(rows), beyond=count - end)
 
     def slow_pass(self) -> None:
         latest = int(c.rpc("eth_blockNumber"), 16)

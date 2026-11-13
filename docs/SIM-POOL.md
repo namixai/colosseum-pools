@@ -51,8 +51,9 @@ fail, and their prices pay for the ones that pass.
   longer. The creator names the approver (`setApprover`, `ApproverSet`; zero for none, and every
   payout then waits the 7 days); approving sets neither the amount nor the trader. The keeper sends
   `pay` in its first pass after a payout is due, so an approved payout is paid 72 hours and about a
-  minute after the claim, or later, in order, if the pool does not hold enough then. `pay(max)`, by
-  anyone, looks at up to `max` payouts from the head, settled ones included, in the order they came due and pays each that is due
+  minute after the claim, or later: the 72 hours and the 7 days are the earliest a payout may be paid,
+  and it is paid by a `pay` call, in the order of the claims, when the pool holds enough. `pay(max)`, by
+  anyone, looks at up to `max` payouts from the head, settled ones included, in the order they were claimed and pays each that is due
   while the pool's USDC covers it; one still waiting for its approval keeps its place: `pay` moves
   on to later ones, but pays one only if the money covers every such payout before it too, and the
   queue's head stays at the first unpaid; a payout the pool cannot cover yet waits (`PayoutQueued`) and is paid first from
@@ -99,8 +100,10 @@ fail, and their prices pay for the ones that pass.
   creator. A partner whose address the token refuses has its part set aside, `heldOf` and
   `claimHeld` as for a refused payout (`PartnerPaid` says which). `addToPot` puts in more principal,
   never shared, which comes back once the profit above it has been taken, or at `finish`. It is the
-  only way to put the creator's money in: USDC sent straight to the pool's address is not principal,
-  so it counts as profit and is shared with the codes' owners. A share paid to a code's owner is
+  only way to put the creator's money in: USDC sent straight to the pool's address is not principal.
+  It covers payouts as any money of the pool does, and what of it is profit when a withdrawal is
+  carried out (`_profit`: above what the pool owes, holds and keeps, and above the principal) is
+  shared with the codes' owners as any profit taken; below that it shares nothing. A share paid to a code's owner is
   never taken back: if later payouts take the pool's money below what the creator put in, the
   creator bears it, and shares start again only once the principal is whole. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
   can still be lifted, and a week after the close (`closedAt` + `WITHDRAW_DELAY`, `NotReady` before),
@@ -206,7 +209,16 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   is sent again for the next block, once a block, while the window lasts. A fill waits for its receipt,
   so two orders in one block go one after the other. A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
-  `expire`, `release`, `claimPayout`, `pay`. `--measure EXAM --trader-wallet K` places orders on the
+  `expire`, `release`, `claimPayout`, `pay`. One `pay` is told to pay at most ten payouts and to look
+  at most 192 from the head (`PAY_PER_CALL`, `SCAN_PAYOUTS`), so that it fits a small block of 2 000 000
+  gas: measured from cold storage, ten payouts paid past 86 waiting for approval, `pay(96)`, take
+  999 510 gas with the transaction's own, each further payout looked at 5 390, and `pay(192)` takes
+  1 517 035 (`test_pay_theKeepersFullBatch_fitsASmallBlock`: ten traders with no USDC, none, five or all
+  refused by the token). What is left is paid in the next passes, ten a pass. `pay` counts from the
+  head, so an approved payout more than 191 places behind a head that waits for its approval is out of
+  a small block's reach: the keeper logs `pay_out_of_reach`, and the payout is paid once the head
+  moves, when the approver approves the ones in front or their 7 days come, which is before its own;
+  anyone may also send `pay` with a larger `max` in a big block. `--measure EXAM --trader-wallet K` places orders on the
   trader's own exam and writes how many blocks late each fill landed, p50 and p99: the number the
   plan's fill window is set from.
 - **The relayer**, `ops/sim_relay.py`: a signed purchase in, `buyWithAuthorization` out, from a key

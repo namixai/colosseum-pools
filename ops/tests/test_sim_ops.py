@@ -133,7 +133,22 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator takes "
                           "profit only above it", text)
             self.assertIn("A share paid to a code's owner is never taken back", text)
-            self.assertIn("USDC sent to the pool other than by the creator's addToPot counts as profit", text)
+            # What `_profit` and `_withdraw` do, not more: only the profit a withdrawal takes is shared (review of #286).
+            self.assertIn("USDC sent to the pool other than by the creator's addToPot is not counted as put in by the "
+                          "creator: it covers payouts as any money of the pool does, and what of it is profit when the "
+                          "creator takes money out (above the payouts owed, held and kept, and above what the creator "
+                          "put in) is shared with the codes' owners as any profit taken.", text)
+            self.assertNotIn("counts as profit and is shared", text)
+            # `pay` is a call of its own, walks in the order of the claims, and passes a payout waiting for its
+            # approval only with the money for it kept (review of #286).
+            self.assertIn("a payout that may be paid is paid by a call anyone may make, which the keeper makes in its "
+                          "next pass", text)
+            self.assertIn("Payouts are paid in the order they were claimed, out of the money the pool holds: one still "
+                          "waiting for its approval keeps its place, and a later one is paid past it only if the money "
+                          "also covers every payout so passed over; one the pool cannot cover waits, and every payout "
+                          "after it, until money comes in.", text)
+            self.assertNotIn("came due", text)
+            self.assertNotIn("if the pool does not hold enough then", text)
             self.assertIn("A stopped payout stays in the pool for at least 14 days while the trader can object, unless the "
                           "checker lifts the stop within them and it is paid as any payout; after them anyone may make "
                           "the stop final, and only from then is the money the pool's",

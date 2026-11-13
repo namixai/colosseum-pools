@@ -1200,6 +1200,80 @@ contract SimPoolTest is Test {
         assertLt(used, 1_500_000, "a bounded loop: about one transfer a code");
     }
 
+    /// `n` payouts claimed in one block, each to a trader of its own with no USDC, none approved: all wait.
+    function _claimedPayouts(SimPool pool, uint256 n) internal returns (address[] memory traders) {
+        traders = new address[](n);
+        for (uint256 i = 0; i < n; ++i) {
+            traders[i] = makeAddr(string(abi.encode("queued trader", i)));
+            PaperExam stage = _passedStage(pool, traders[i], 1);
+            _setMark(1_000_000);
+            pool.claimPayout(address(stage));
+        }
+    }
+
+    /// What `ops/sim_keeper.py` asks of one `pay` at most: PAY_PER_CALL payouts paid and SCAN_PAYOUTS looked at
+    /// (its test holds its numbers to these two).
+    uint256 constant KEEPER_PAYS = 10;
+    uint256 constant KEEPER_SCAN = 192;
+    /// A transaction's own gas and the call's 36 bytes, which `gasleft` around the call does not see.
+    uint256 constant PAY_INTRINSIC = 21_300;
+
+    /// One `pay(looked)` from cold storage, as a transaction of its own finds it: the last KEEPER_PAYS of the
+    /// `looked` payouts approved and due, every one before them waiting for its approval. `refused` of the
+    /// payable ones are refused by the token, by a revert and by its answer in turn.
+    function _payGas(SimPool pool, address[] memory traders, uint256 looked, uint256 refused) internal returns (uint256 used) {
+        uint256 snap = vm.snapshotState();
+        uint256[] memory ids = new uint256[](KEEPER_PAYS);
+        for (uint256 k = 0; k < KEEPER_PAYS; ++k) {
+            ids[k] = looked - KEEPER_PAYS + k;
+        }
+        vm.prank(approver);
+        pool.approvePayouts(ids);
+        for (uint256 k = 0; k < refused; ++k) {
+            address t = traders[looked - 1 - k];
+            if (k % 2 == 0) usdc.block_(t);
+            else usdc.saysFalseTo(t);
+        }
+        vm.cool(address(pool));
+        vm.cool(address(usdc));
+        vm.cool(address(factory));
+        vm.cool(factory.poolImpl());
+        uint256 before = gasleft();
+        uint256 n = pool.pay(looked);
+        used = before - gasleft() + PAY_INTRINSIC;
+        assertEq(n, KEEPER_PAYS, "every payable payout settled in the one call");
+        assertEq(pool.paidCount(), KEEPER_PAYS - refused, "the refused ones are held, the rest paid");
+        assertEq(pool.held(), refused * uint256(LARGE_PAYOUT));
+        assertEq(pool.head(), 0, "the head still waits for its approval");
+        vm.revertToState(snap);
+    }
+
+    function test_pay_theKeepersFullBatch_fitsASmallBlock() public {
+        // The costliest call the keeper sends, measured and not estimated (review of #286): ten payouts paid at
+        // the far end of all it looks at, each to a trader of its own who holds no USDC, every payout before
+        // them waiting for its approval. From cold storage, with none, five and all ten refused by the token.
+        SimPool pool = _pool();
+        address[] memory traders = _claimedPayouts(pool, KEEPER_SCAN);
+        deal(address(usdc), address(pool), KEEPER_SCAN * uint256(LARGE_PAYOUT));
+        vm.warp(block.timestamp + 72 hours);
+        uint256 worst96;
+        uint256 worst;
+        for (uint256 refused = 0; refused <= KEEPER_PAYS; refused += 5) {
+            uint256 g96 = _payGas(pool, traders, 96, refused);
+            uint256 g = _payGas(pool, traders, KEEPER_SCAN, refused);
+            emit log_named_uint("refused by the token", refused);
+            emit log_named_uint("  pay(96), ten settled, gas", g96);
+            emit log_named_uint("  pay(192), ten settled, gas", g);
+            if (g96 > worst96) worst96 = g96;
+            if (g > worst) worst = g;
+        }
+        emit log_named_uint("each further payout looked at, gas", (worst - worst96) / (KEEPER_SCAN - 96));
+        assertLt(worst96, 1_100_000, "pay(96) with ten payments: about half a small block");
+        // The keeper's reach: within three quarters of a small block's 2 000 000, the rest left for a token
+        // whose transfer costs more than the test's.
+        assertLt(worst, 1_600_000, "pay(192) with ten payments");
+    }
+
     function test_withdraw_aPartnerTheTokenRefusesHasItsPartSetAside() public {
         SimPool pool = _pool();
         _share(pool, 5000);
