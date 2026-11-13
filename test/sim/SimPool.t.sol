@@ -1503,7 +1503,7 @@ contract SimPoolTest is Test {
     /// checker stops the second payout and its trader objects; ten more exams are sold with the first code and thirty
     /// with the second; the token refuses the third trader and the second group's owner; after the payout delay one
     /// payout is paid, and the creator withdraws 400, sharing its profit with both codes' owners; then, long before the
-    /// pool's 180 days, the platform's closer closes it. The page drawn from
+    /// pool's 184 days, the platform's closer closes it. The page drawn from
     /// these events must show 800 USDC paid, with that payment's event, the stop and the held payout apart, and each
     /// code with what it brought and what its owner was sent or had set aside, and the pool's term with the platform's
     /// early close.
@@ -1571,7 +1571,7 @@ contract SimPoolTest is Test {
         assertGt(pool.heldOf(owner2), 0, "the second's was set aside: the token refuses it");
         assertEq(pool.held(), LARGE_PAYOUT + pool.heldOf(owner2));
         assertEq(pool.reserved(), LARGE_PAYOUT);
-        // Long before its 180 days, the platform's closer closes the pool: it sells no more exams.
+        // Long before its 184 days, the platform's closer closes the pool: it sells no more exams.
         vm.roll(block.number + 1);
         vm.prank(closer);
         pool.close();
