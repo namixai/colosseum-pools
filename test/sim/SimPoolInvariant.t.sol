@@ -60,6 +60,8 @@ contract SimPoolHandler is Test {
     uint256 public ghostOverWithdraw;
     /// `finish` went through with something still owed, running, or kept for a stop.
     uint256 public ghostEarlyFinish;
+    /// A finish by the creator or the closer refused with the pool closed, nothing owed, running or kept for a stop.
+    uint256 public ghostFinishRefused;
     /// A `pay` that paid or set aside more than was free of what is held and what stops keep.
     uint256 public ghostSpentKept;
     /// In a wind-down, past every deadline and window: a passed stage that would not take its claim, or an
@@ -600,7 +602,10 @@ contract SimPoolHandler is Test {
         try pool.finish() {
             _finished(b, owing);
             calls[byCloser ? "finishByCloser" : "finish"] += 1;
-        } catch {}
+        } catch {
+            // With nothing owed, running or kept, the pool has no ground to refuse it (review of #279).
+            if (!owing) ghostFinishRefused += 1;
+        }
     }
 
     function _finished(Before memory b, bool owing) internal {
@@ -1046,6 +1051,7 @@ contract SimPoolInvariantTest is Test {
         }
         assertEq(pool.live(), running);
         assertEq(handler.ghostEarlyFinish(), 0, "finished with something owed, running or kept for a stop");
+        assertEq(handler.ghostFinishRefused(), 0, "a finish by the creator or the closer refused with nothing owed, running or kept");
         if (pool.finished()) assertEq(pool.reserved(), 0, "a finished pool keeps nothing for stops");
         assertEq(handler.ghostStuck(), 0, "past every deadline, an account that would not end or a stage not claimed");
         if (pool.finished()) assertEq(usdc.balanceOf(address(pool)), pool.held(), "a finished pool keeps only what is held");
