@@ -247,11 +247,16 @@ def stop_call(pool: str, pid: int, reason: int, paired: str, trades: list[str], 
 NO_APPROVAL = "in this pool a payout goes by itself 72 hours after its claim; there is no approval to sign"
 
 
-def approve_call(pool: str, pid: int, approvals: bool = True, approver: str | None = None, approved: bool = False) -> dict:
-    """The approval, only where the pool would take it (review of #283). A pool without approvals pays at 72 hours
-    by itself, and an approval sent to it would revert. A payout approved already reverts a second approval
-    (`BadPayout`), and a pool whose approver is the zero address has nobody to send one (`NotApprover`)."""
+def approve_call(pool: str, pid: int, approvals: bool = True, approver: str | None = None, approved: bool = False,
+                 state: str = "Due") -> dict:
+    """The approval, only where the pool would take it (review of #283). A payout that is not waiting (paid,
+    stopped, held, refused) takes none: `approvePayouts` reverts it (`BadPayout`), and the review says its state.
+    A pool without approvals pays at 72 hours by itself, and an approval sent to it would revert. A payout
+    approved already reverts a second approval (`BadPayout`), and a pool whose approver is the zero address has
+    nobody to send one (`NotApprover`)."""
     none = {"kind": "none", "to": pool, "call": None, "args": [], "data": None}
+    if state != "Due":
+        return {**none, "note": f"the payout is {state.lower()}, not waiting: nothing to approve and nothing to stop"}
     if not approvals:
         return {**none, "note": NO_APPROVAL}
     if approved:
@@ -362,7 +367,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     elif stop:
         out["tx"] = stop_call(pool, pid, stop["reason"], stop["paired"], stop["trades"], stop["links"])
     else:
-        out["tx"] = approve_call(pool, pid, approvals, approver, approved)
+        out["tx"] = approve_call(pool, pid, approvals, approver, approved, pay["state"])
         if reasons and out["tx"]["kind"] == "approve":
             out["tx"]["note"] = "no pair, so the pool takes no stop: whoever signs decides"
     return out
