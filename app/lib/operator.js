@@ -14,7 +14,9 @@
 // payout (`reviewFor`). The names of the approval are the design of 13 November (approval with a ceiling), and of the
 // withdrawal the creator's request a week old (WithdrawRequested); a pool without them answers none of their reads.
 
-import { termNote } from "./simpool.js";
+import { termNote, withdrawalOf, WITHDRAW_DELAY, WITHDRAW_WINDOW } from "./simpool.js";
+
+export { WITHDRAW_DELAY, WITHDRAW_WINDOW };
 
 /** What the page reads and sends beyond SIM_POOL_ABI (app/lib/simpool.js), as the contracts declare them. */
 export const OPERATOR_ABI = [
@@ -39,9 +41,6 @@ export const OPERATOR_ABI = [
 export const PAYOUT_DELAY = 72 * 3600;
 /** Past this from its claim a payout is paid unapproved, unless it was stopped. */
 export const PAYOUT_HARD = 7 * 24 * 3600;
-/** A request to withdraw is carried out from this long after it, within WITHDRAW_WINDOW; `finish` waits as long. */
-export const WITHDRAW_DELAY = 7 * 24 * 3600;
-export const WITHDRAW_WINDOW = 3 * 24 * 3600;
 export const REVIEW_SCHEMA = "payout-review/1";
 
 /** Who signs each call, as the page says it beside the button. */
@@ -246,15 +245,14 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
  * and until when, and the calls a page offers for it now.
  */
 export function withdrawRequest({ pool, requested, readyAt, now, keccak256 }) {
-  const amount = BigInt(requested ?? 0);
-  if (amount === 0n) return null;
-  const ready = Number(readyAt);
-  const lapsesAt = ready + WITHDRAW_WINDOW;
-  const status = now < ready ? "waiting" : now < lapsesAt ? "ready" : "lapsed";
+  // The pool page's reading of the request (simpool.js), with the calls the operator's page offers for it.
+  const w = withdrawalOf({ requested: requested ?? 0n, readyAt: readyAt ?? 0n }, now);
+  if (w.state === "none") return null;
   const calls = {};
-  if (status !== "lapsed") calls.cancel = cancelWithdrawCall({ pool, by: "closer", keccak256 });
-  if (status === "ready") calls.withdraw = withdrawCall({ pool, keccak256 });
-  return { amount, requestedAt: ready - WITHDRAW_DELAY, readyAt: ready, lapsesAt, status, calls };
+  if (w.state !== "lapsed") calls.cancel = cancelWithdrawCall({ pool, by: "closer", keccak256 });
+  if (w.state === "ready") calls.withdraw = withdrawCall({ pool, keccak256 });
+  return { amount: w.amount, requestedAt: w.readyAt - WITHDRAW_DELAY, readyAt: w.readyAt, lapsesAt: w.lapsesAt,
+    status: w.state, calls };
 }
 
 /**
