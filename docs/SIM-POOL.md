@@ -248,7 +248,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     whether the money free of what is owed, held back and kept for stops covers them.
 
   Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
-  72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. The call to
+  72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. Both spans are
+  read from the factory (`PAYOUT_DELAY()`, `PAYOUT_HARD()`), not assumed; where one was not read on a
+  pool with approvals, the review offers no call and says no time. The call to
   sign is written out as text with its calldata: `stopPayout` (reason 1 or 2) when there is a pair,
   since the pool takes no such stop without two fills, or `approvePayouts` otherwise.
   Each call is offered only if the pool would take it. The approval goes only to a pool that answers

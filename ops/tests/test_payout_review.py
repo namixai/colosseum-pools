@@ -114,6 +114,41 @@ class ACleanPayout(unittest.TestCase):
         due = ch.d["now"] + 3_600
         self.assertEqual((got["claimedAt"], got["dueAt"], got["hardAt"]), (due - 72 * 3600, due, due + 4 * 24 * 3600))
 
+    def test_the_delay_and_the_ceiling_are_the_factorys_own(self):
+        ch, _, _ = honest_world()
+        ch.d["times"] = {"delay": 48 * 3600, "hard": 8 * 86_400}
+        got = r.review(ch.d, POOL, 0)
+        due = ch.d["now"] + 3_600
+        self.assertEqual((got["claimedAt"], got["hardAt"]), (due - 48 * 3600, due - 48 * 3600 + 8 * 86_400))
+        self.assertIn(f"paid unapproved at {got['hardAt']}", r.summary(got))
+
+    def test_a_ceiling_not_read_offers_nothing_and_says_no_time(self):
+        for times in ({"delay": 72 * 3600, "hard": None}, {"delay": None, "hard": 7 * 86_400}):
+            ch, _, _ = honest_world()
+            ch.d["times"] = times
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["tx"]["kind"], got["tx"]["data"], got["hardAt"], got["stoppable"]), ("none", None, None, None))
+            self.assertIn("not read the factory's delay and ceiling", got["tx"]["note"])
+            self.assertEqual(got["reasons"], ["not read: the factory's delay and ceiling"])
+            self.assertIn("not read when it is paid", r.summary(got))
+        ch, _, _ = honest_world()
+        ch.d["times"] = {"delay": None, "hard": None}
+        ch.d["books"][POOL]["approvals"] = False
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["claimedAt"], got["tx"]["note"], got["reasons"]), (None, r.NO_APPROVAL, []),
+                         "a pool without approvals needs no ceiling: it pays at its due time")
+
+    def test_the_factorys_times_are_read_each_or_none(self):
+        F = addr(0xFA)
+
+        def call_view(to, sig, types, args, out):
+            if sig == "PAYOUT_HARD()":
+                raise Exception("execution reverted")
+            return {"PAYOUT_DELAY()": (72 * 3600,)}[sig]
+
+        with mock.patch.object(r.c, "call_view", side_effect=call_view):
+            self.assertEqual(r.payout_times(F), {"delay": 72 * 3600, "hard": None})
+
     def test_without_an_approval_call_nothing_is_assembled(self):
         ch, _, _ = honest_world()
         with mock.patch.object(r, "APPROVE", None):
@@ -379,6 +414,8 @@ class WhatThePoolWouldTake(unittest.TestCase):
         self.assertIn("not read whether the pool takes approvals", got["tx"]["note"])
         self.assertIn("not read: whether the pool takes approvals", got["reasons"])
         self.assertNotIn(r.NO_APPROVAL, got["tx"]["note"], "no word that it pays by itself")
+        self.assertIn("not read when it is paid", r.summary(got))
+        self.assertNotIn("paid by itself", r.summary(got), "the summary keeps the three answers too")
 
     def test_no_stop_for_a_payout_the_pool_would_refuse_to_stop(self):
         for state, was, now, why in [("Paid", False, None, "it is paid"), ("Stopped", True, None, "it is stopped"),
@@ -481,7 +518,7 @@ class ReadingTheChain(unittest.TestCase):
 
         def call_view(to, sig, types, args, out):
             return {"balanceOf(address)": (9_000,), "result()": (2, t1, 0, 0), "accountOf(address)": (2, 0, True),
-                    "approver()": (addr(0xAB),), "PAYOUT_HARD()": (7 * 86_400,)}[sig]
+                    "approver()": (addr(0xAB),), "PAYOUT_HARD()": (8 * 86_400,), "PAYOUT_DELAY()": (72 * 3_600,)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
                 mock.patch.object(r.c, "call_view", side_effect=call_view):
@@ -497,7 +534,9 @@ class ReadingTheChain(unittest.TestCase):
         self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "approvals": True,
                                                "largestPayout": 800, "staged": 1_600}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
+        self.assertEqual(got["times"], {"delay": 72 * 3_600, "hard": 8 * 86_400}, "what the factory answers, not 7 days by rote")
         review = r.review(got, POOL, 7)
+        self.assertEqual(review["hardAt"], 5_000 - 72 * 3_600 + 8 * 86_400)
         self.assertEqual((review["exam"], review["size"], review["verdict"]), (e1, SIZE, "clean"))
 
 

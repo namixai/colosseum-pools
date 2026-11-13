@@ -257,13 +257,22 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     p = p or Params()
     pay = next(x for x in chain["payouts"] if x["pool"] == pool and x["id"] == pid)
     approvals = chain["books"][pool].get("approvals", True)  # True, False, or None: not read
+    # The delay and the ceiling are the factory's own (`payout_times`), never this file's (review of #283); a
+    # chain made up without them stands on the design's. Not read, a pool with approvals is not read either:
+    # its ceiling would be a guess.
+    times = chain.get("times") or {"delay": PAYOUT_DELAY, "hard": PAYOUT_HARD}
+    delay, hard = times.get("delay"), times.get("hard")
+    times_unread = approvals is True and (delay is None or hard is None)
+    if times_unread:
+        approvals = None
     who = owners(chain)
     trader, stage = pay["trader"], pay["account"]
     exam = next((f["exam"] for f in chain["funded"] if f["stage"] == stage), None)
     sale = next((s for s in chain["sales"] if s["exam"] == exam), None)
     out = {"pool": pool, "id": pid, "trader": trader, "stage": stage, "exam": exam, "amount": pay["amount"],
-           "claimedAt": pay["dueAt"] - PAYOUT_DELAY, "dueAt": pay["dueAt"],
-           "hardAt": pay["dueAt"] - PAYOUT_DELAY + PAYOUT_HARD if approvals is True else None, "state": pay["state"], "size": sale["size"] if sale else None,
+           "claimedAt": pay["dueAt"] - delay if delay is not None else None, "dueAt": pay["dueAt"],
+           "hardAt": pay["dueAt"] - delay + hard if approvals is True else None, "approvals": approvals,
+           "state": pay["state"], "size": sale["size"] if sale else None,
            "fills": {"stage": sum(f["account"] == stage for f in chain["fills"]),
                      "exam": sum(f["account"] == exam for f in chain["fills"])}}
     pairs = {"stage": pairs_of(stage, chain, who, p), "exam": pairs_of(exam, chain, who, p) if exam else []}
@@ -307,7 +316,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     if out["code"] and out["code"]["flag"]:
         reasons.append(f"code {out['code']['code'][:10]}: {out['code']['run']} sales in a row from new wallets")
     unread = [a for a in (stage, exam) if a and a in chain.get("unread", [])]
-    if approvals is None:
+    if times_unread:
+        unread.append("the factory's delay and ceiling")
+    elif approvals is None:
         unread.append("whether the pool takes approvals")
     if unread:
         reasons.append("not read: " + ", ".join(unread))
@@ -323,7 +334,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
         # Not read whether the pool takes approvals: no call and no word on when it pays, either way it could be wrong.
         out["stoppable"] = None
         out["tx"] = {"kind": "none", "to": pool, "call": None, "args": [], "data": None,
-                     "note": "not read whether the pool takes approvals: nothing to sign until it is"}
+                     "note": ("not read the factory's delay and ceiling" if times_unread else
+                              "not read whether the pool takes approvals") + ": nothing to sign until it is"}
     elif stop and not out["stoppable"]:
         why = (f"it is {pay['state'].lower()}" if pay["state"] != "Due" else
                "it was stopped once already" if pay.get("wasStopped") else "its time to stop is over")
@@ -340,8 +352,10 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
 
 def summary(r: dict) -> str:
     """The review in a few lines of text."""
-    lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}"
-             + (f", paid unapproved at {r['hardAt']}" if r["hardAt"] else ", paid by itself then"),
+    # Three answers here too (review of #283): a ceiling, no approval at all, or not read, which says no time.
+    when = (f", paid unapproved at {r['hardAt']}" if r["approvals"] is True else
+            ", paid by itself then" if r["approvals"] is False else ", not read when it is paid")
+    lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}" + when,
              f"  stage {r['stage']} ({r['fills']['stage']} fills), exam {r['exam']} ({r['fills']['exam']} fills)"]
     for part in ("stage", "exam"):
         for x in r["pairs"][part]:
@@ -438,6 +452,20 @@ def has_approvals(factory: str, pool: str) -> bool | None:
     return True if answers(pool, "approver()", ["address"]) is True else None
 
 
+def payout_times(factory: str) -> dict:
+    """The factory's own times in seconds: `delay`, from a payout's claim to its `dueAt` (`PAYOUT_DELAY()`), and
+    `hard`, the ceiling from its claim (`PAYOUT_HARD()`). None where one was not read or the factory has none: a
+    review prints the contract's times or none (review of #283)."""
+    out = {}
+    for key, sig in (("delay", "PAYOUT_DELAY()"), ("hard", "PAYOUT_HARD()")):
+        try:
+            out[key] = int(c.call_view(factory, sig, [], [], ["uint32"])[0])
+        except Exception as exc:
+            core.log("not_read", address=factory, call=sig, error=str(exc)[:120])
+            out[key] = None
+    return out
+
+
 def read_chain(record: dict) -> dict:
     """Everything the review reads, from the deployment's block to the latest one."""
     factory, usdc, start = record["SimPoolFactory"], record["usdc"], int(record["block"])
@@ -485,7 +513,8 @@ def read_chain(record: dict) -> dict:
                               "block": int(l["blockNumber"], 16)})
     transfers.sort(key=lambda t: t["block"])
     return {"now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
-            "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread}
+            "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
+            "times": payout_times(factory)}
 
 
 def main(argv: list[str] | None = None) -> int:
