@@ -230,7 +230,9 @@ class Checker:
             return None
         paired = finding(found, [])[1]
         other_trader = to_checksum_address(c.call_view(paired, "result()", [], [], ["uint8", "address", "uint64", "uint64"])[1])
-        link_txs = links(self.transfers_to([trader, other_trader], latest), trader, other_trader)
+        # The factory's pools pay every trader: a pool is no link between two it paid (review of #283).
+        link_txs = links([t for t in self.transfers_to([trader, other_trader], latest) if t["from"] not in self.keeper.pools],
+                         trader, other_trader)
         return finding(found, link_txs)
 
     def one_pass(self) -> list[dict]:

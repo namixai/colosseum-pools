@@ -234,6 +234,26 @@ class TheService(unittest.TestCase):
         self.assertEqual([(x["id"], x["paired"], x["reason"]) for x in stops], [(0, Bx, 1)], "the pair is found")
         self.assertEqual(sorted(f["account"] for f in ch.fills), sorted([S, Bx]), "C's old fill is dropped once caught up")
 
+    def test_a_pool_that_paid_both_traders_is_no_link(self):
+        """Two traders the same pool paid before are not linked by it: the pool pays every trader, and a stop would
+        write its payouts as links of reason 2 (review of #283). A sender of both that is not a pool still is."""
+        from types import SimpleNamespace
+        from unittest import mock
+        ch = self.checker()
+        pool, S, Bx, T1, T2, W = (s.to_checksum_address("0x" + x * 20) for x in ("55", "a1", "b1", "71", "72", "99"))
+        ch.keeper = SimpleNamespace(pools=[pool], accounts={})
+        ch.tolerance = 0.2
+        ch.fills = [fill(S, buy=True, t=1_000, tx="0x0a"), fill(Bx, buy=False, t=1_100, tx="0x0b")]
+        ch.transfers_to = lambda traders, latest: [
+            {"from": pool, "to": T1, "tx": "0xp1"}, {"from": pool, "to": T2, "tx": "0xp2"}] + extra
+        payout = (S, T1, 800, 10_000, 1, False, 0)
+        with mock.patch.object(s, "view", return_value=payout), \
+                mock.patch.object(s.c, "call_view", return_value=(1, T2, 0, 0)):
+            extra = []
+            self.assertEqual(s.Checker.check(ch, pool, 0, 0, 0), (1, Bx, ["0x0a", "0x0b"], []))
+            extra = [{"from": W, "to": T1, "tx": "0xw1"}, {"from": W, "to": T2, "tx": "0xw2"}]
+            self.assertEqual(s.Checker.check(ch, pool, 0, 0, 0), (2, Bx, ["0x0a", "0x0b"], ["0xw1", "0xw2"]))
+
 
 if __name__ == "__main__":
     unittest.main()

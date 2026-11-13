@@ -7780,6 +7780,10 @@ MUTATIONS = [
      "        if self.keeper.next_block > latest:\n            self.prune(",
      "        if False:\n            self.prune(",
      ["test_a_stage_found_after_its_pair_still_has_it"]),
+    ("SC25", "ops/sim_check.py",
+     "        link_txs = links([t for t in self.transfers_to([trader, other_trader], latest) if t[\"from\"] not in self.keeper.pools],",
+     "        link_txs = links([t for t in self.transfers_to([trader, other_trader], latest)],",
+     ["test_a_pool_that_paid_both_traders_is_no_link"]),
     # The review of a payout before it is signed through or stopped.
     ("RV1", "ops/payout_review.py",
      "    transfers = [t for t in chain[\"transfers\"] if t[\"from\"] not in pools]\n",
