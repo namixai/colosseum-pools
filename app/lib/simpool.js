@@ -647,7 +647,7 @@ export function signedPurchase({ pool, trader, menu, line, code, codes, salt, va
   const { price, args } = purchase({ menu, line, code, codes });
   const key = args[1];
   const s = word(salt, "salt");
-  if (!(Number(validBefore) > Number(validAfter))) throw new Error("the signature must end after it starts");
+  if (!(BigInt(validBefore) > BigInt(validAfter))) throw new Error("the signature must end after it starts");
   const nonce = saleNonce(key, s, keccak256);
   const message = { from: trader, to: pool, value: price, validAfter: BigInt(validAfter), validBefore: BigInt(validBefore), nonce };
   return {
@@ -657,7 +657,9 @@ export function signedPurchase({ pool, trader, menu, line, code, codes, salt, va
     args: ({ v, r, s: sig }) => [trader, args[0], key, s, message.validAfter, message.validBefore, v, r, sig],
     relayBody: ({ v, r, s: sig }) => ({
       pool, trader, line: Number(args[0]), code: key, salt: s,
-      valid_after: Number(validAfter), valid_before: Number(validBefore), v, r, s: sig,
+      // Decimal strings, not numbers: a JSON number past 2^53 would reach the relayer rounded, and the signed
+      // fields would no longer be the trader's (review of #279). The relayer reads them with int().
+      valid_after: BigInt(validAfter).toString(), valid_before: BigInt(validBefore).toString(), v, r, s: sig,
     }),
   };
 }
