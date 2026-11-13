@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
   SIM_POOL_ABI, SIM_FACTORY_ABI, SIM_POOL_STOP_RESERVE_ABI, FEE_BPS, PAYOUT_BPS, PAYOUT_DELAY, STOP_RESERVE, MIN_TERM,
+  WITHDRAW_DELAY, WITHDRAW_WINDOW,
   PAYOUT_STATE, STATUS, TOTAL_INCLUDES, hasStopReserve, stopNote, utc, termNote, activityCounts, accountsToRead,
   EXAM_END,
   stopReasonText, normalizeEvent, blocksToDate, payoutOf, menuLines, soldExams, stages, payouts, paidTotal,
@@ -692,4 +693,27 @@ test("counts per trader and per code: breached and expired apart, an unread acco
   assert.deepEqual(EXAM_END, { 3: "breached", 4: "expired" });
   // A fill whose block time was not read: the days are not guessed.
   assert.equal(activityCounts(pool, logs, new Map([[1, 0]])).traders.find((k) => k.trader === T1.toLowerCase()).fillDays, null);
+});
+
+test("a withdrawal waits a week from its request, then three days to carry it out; finish a week after the close", () => {
+  assert.equal(WITHDRAW_DELAY, 7 * 24 * 3600);
+  assert.equal(WITHDRAW_WINDOW, 3 * 24 * 3600);
+  assert.match(FACTORY_SOL, /WITHDRAW_DELAY = 7 days;/);
+  assert.match(FACTORY_SOL, /WITHDRAW_WINDOW = 3 days;/);
+  const read = (extra, now) => simPoolPage({ pool: POOL, usdc: USDC, chainId: 998, scan: SCAN, reads: { ...READS, ...extra },
+    events: EVENTS, times: TIMES, now }).withdrawal;
+  const asked = { requested: 500_000_000n, readyAt: 10_000n };
+  assert.deepEqual(read(asked, 9_999), { amount: 500_000_000n, readyAt: 10_000, lapsesAt: 10_000 + WITHDRAW_WINDOW,
+    state: "waiting", finishFrom: null });
+  assert.equal(read(asked, 10_000).state, "ready");
+  assert.equal(read(asked, 10_000 + WITHDRAW_WINDOW - 1).state, "ready");
+  assert.equal(read(asked, 10_000 + WITHDRAW_WINDOW).state, "lapsed");
+  assert.equal(read({ requested: 0n, readyAt: 0n }, 5).state, "none");
+  assert.equal(read({ requested: 0n, readyAt: 0n, closed: true, closedAt: 100n }, 5).finishFrom, 100 + WITHDRAW_DELAY);
+  assert.equal(read({}, 5), null, "not read: not guessed");
+  assert.equal(read({ requested: 500_000_000n }, 5), null, "readyAt not read: not taken for lapsed");
+  for (const name of ["requestWithdraw", "withdraw", "cancelWithdraw"]) assert.match(POOL_SOL, new RegExp(`function ${name}\\(`));
+  for (const e of ["WithdrawRequested", "WithdrawCancelled"]) {
+    assert.ok(SIM_POOL_ABI.some((x) => x.startsWith(`event ${e}(`)), e);
+  }
 });

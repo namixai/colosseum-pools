@@ -14,10 +14,11 @@ import {TermsBook} from "../multi/TermsBook.sol";
 ///         pass is paid out of the prices other traders paid. Anyone opens one for 1 HYPE and the
 ///         money for two payouts of its largest size. The platform's numbers are constants here,
 ///         the same for every pool: what a pool pays the platform, what it pays a trader, what it
-///         keeps, how long a payout waits, how long a pool runs at least.
+///         keeps, how long a payout waits, how long a pool runs at least, how long a withdrawal waits.
 /// @dev The operator lists the assets and their leverage caps, and names the four roles the
 ///      pools read from here: the filler of every exam's orders, the checker who may stop a
-///      payout with a reason, the closer who alone may close a pool before `MIN_TERM`, and the
+///      payout with a reason, the closer who alone may close a pool before `MIN_TERM` and may cancel
+///      a creator's request to withdraw, and the
 ///      recipient of the platform's part. A pool's creator is neither the filler, the checker
 ///      nor the closer.
 contract SimPoolFactory {
@@ -41,6 +42,13 @@ contract SimPoolFactory {
     /// How long a pool runs at least: before it, its creator neither stops its sales nor takes back
     /// what it put in; only the factory's closer may close it, and the money goes where it would anyway.
     uint32 public constant MIN_TERM = 180 days;
+    /// How long a creator's request to withdraw waits before it can be carried out, and how long after
+    /// closing a pool `finish` waits: the platform, the traders and the codes' partners see every
+    /// withdrawal a week before the money moves.
+    uint32 public constant WITHDRAW_DELAY = 7 days;
+    /// How long a request stays good once it is ready: one not carried out by then lapses, so a
+    /// request cannot be left standing to make the wait nothing.
+    uint32 public constant WITHDRAW_WINDOW = 3 days;
     /// The bounds of a fill window, in blocks: about a minute of HyperEVM's small blocks at most.
     uint16 public constant MIN_FILL_WINDOW = 1;
     uint16 public constant MAX_FILL_WINDOW = 60;
