@@ -62,10 +62,9 @@ APPROVE_TYPES: list[str] = ["uint256[]"]
 PAYOUT_DELAY = 72 * 3600
 # Past this from its claim a payout is paid unapproved, unless it was stopped (SimPoolFactory, `PAYOUT_HARD`).
 PAYOUT_HARD = 7 * 24 * 3600
-# `payout(id)` of a pool from before approvals: the same fields without the eighth, `approved`.
-PAYOUT_BEFORE_APPROVALS = "(address,address,uint64,uint64,uint8,bool,uint64)"
+PAYOUT_BEFORE_APPROVALS = chk.PAYOUT_BEFORE_APPROVALS
 ZERO_ADDRESS = "0x" + "00" * 20
-NO_APPROVER = ("the pool names no approver: the payout goes out unapproved at its ceiling, unless it is stopped; "
+NO_APPROVER = ("the pool names no approver: the payout goes out unapproved from its ceiling on, unless it is stopped; "
                "there is nobody to sign an approval")
 APPROVED = "approved already: it is paid from its due time, unless it is stopped; nothing more to sign"
 
@@ -346,10 +345,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     out["reasons"] = reasons
     # A stop only for a payout the pool would still stop (review of #283): waiting and never stopped, and in time
     # by the pool's own rule. A pool with approvals stops until it is paid; one without, until 5 minutes before
-    # `dueAt`, as the checker sends it.
-    waiting = pay["state"] == "Due" and not pay.get("wasStopped")
-    in_time = approvals is True or chain["now"] + chk.MARGIN_S < pay["dueAt"]
-    out["stoppable"] = waiting and in_time
+    # `dueAt`. The rule is the checker's own (`stop_due`): the review offers what the checker would send.
+    out["stoppable"] = chk.stop_due(pay["state"], bool(pay.get("wasStopped")), pay["dueAt"], chain["now"], approvals is True)
     if approvals is None:
         # Not read whether the pool takes approvals: no call and no word on when it pays, either way it could be wrong.
         out["stoppable"] = None
@@ -416,8 +413,10 @@ def card(r: dict, chain: dict) -> dict:
 def summary(r: dict) -> str:
     """The review in a few lines of text."""
     # Three answers here too (review of #283): a ceiling, no approval at all, or not read, which says no time.
+    # "From", never "at": a payout is paid by a call, in the order of the claims and ten a call at most, so its time
+    # is the earliest it can be paid, as the pool's terms say.
     when = (", approved: paid from then" if r["approvals"] is True and r["approved"] else
-            f", paid unapproved at {r['hardAt']}" if r["approvals"] is True else
+            f", paid unapproved from {r['hardAt']}" if r["approvals"] is True else
             ", paid by itself then" if r["approvals"] is False else ", not read when it is paid")
     lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}" + when,
              f"  stage {r['stage']} ({r['fills']['stage']} fills), exam {r['exam']} ({r['fills']['exam']} fills)"]
