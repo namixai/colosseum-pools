@@ -265,7 +265,11 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   - `approvePayouts` otherwise.
 
   A result that does not count up comes with a draft of a stop of reason 3, a result disputed. The
-  draft names the fills and leaves out the hash of the analysis, which a person writes. The approval is
+  draft names the fills and leaves out the hash of the analysis, which a person writes. Such a payout
+  is offered nothing to approve: its `action` is `hold` and its call is empty. The operator's page
+  shows no Approve button for it, only "Approve anyway" behind a warning the operator confirms
+  (`approveAnywayCall`). Something else suspicious, with the result counting up, is `decide`: the
+  approval is offered, and the choice is the signer's. The approval is
   the design of 13 November and not on main yet. The review cannot see:
   - a pair on another factory or another venue;
   - accounts under wallets nothing links;

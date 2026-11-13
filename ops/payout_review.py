@@ -529,12 +529,20 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     out["verdict"] = "suspicious" if found else "clean"
     out["reasons"] = [t for _, t in found]
     out["kinds"] = [k for k, _ in found]
+    # What whoever signs is offered (review of #287): a stop where there is one; nothing to approve where the
+    # result did not count up, only the draft of a reason-3 stop, until the analysis is written or the ceiling
+    # comes; the approval as a choice where something else is suspicious; the approval where all is clean.
     if stop:
+        out["action"] = "stop"
         out["tx"] = stop_call(pool, pid, stop["reason"], stop["paired"], stop["trades"], stop["links"])
+    elif "recount" in out["kinds"]:
+        out["action"] = "hold"
+        out["tx"] = None
     else:
+        out["action"] = "decide" if found else "approve"
         out["tx"] = approve_call(pool, pid)
         if found:
-            out["tx"]["note"] = "no pair, so the pool takes no stop: whoever signs decides"
+            out["tx"]["note"] = "no pair, so the pool takes no stop: approve, or wait for the ceiling"
     # A result that does not count up is a stop of reason 3, a result disputed, only with a published analysis:
     # the draft names the fills and leaves the analysis's hash to whoever writes it.
     flagged = [f["tx"] for part in ("stage", "exam") if out["recount"][part] for f in out["recount"][part]["flags"]]
@@ -555,14 +563,14 @@ def card(r: dict, chain: dict) -> dict:
     fixed: fields are added under a new SCHEMA, never renamed. /2 added `evidence.mirrors`,
     `evidence.recount` and `stopDraft`, and the reason kinds `mirror` and `recount`. Amounts are strings of USDC units (6
     decimals), since a JSON number loses digits past 2**53; times are seconds on the chain's clock."""
-    tx = r["tx"]
+    tx = r["tx"] or {}
     g = r["running"]
     return {
         "schema": SCHEMA,
         "pool": r["pool"], "id": r["id"], "trader": r["trader"], "stage": r["stage"], "exam": r["exam"],
         "amount": str(r["amount"]),
         "claimedAt": r["claimedAt"], "dueAt": r["dueAt"], "hardAt": r["hardAt"],
-        "verdict": r["verdict"],
+        "verdict": r["verdict"], "action": r["action"],
         "reasons": [{"kind": k, "text": t} for k, t in zip(r["kinds"], r["reasons"])],
         "evidence": {
             "pairs": r["pairs"]["stage"] + r["pairs"]["exam"],
@@ -575,8 +583,9 @@ def card(r: dict, chain: dict) -> dict:
             "running": {"exams": g["exams"], "stages": g["stages"], "worst": str(g["worst"]), "free": str(g["free"]),
                         "enough": g["enough"]},
         },
-        "call": {"kind": tx["kind"], "to": tx["to"], "method": tx["call"].split("(")[0] if tx["call"] else None,
-                 "signature": tx["call"], "args": tx["args"], "data": tx["data"], "note": tx.get("note")},
+        "call": None if not tx else {"kind": tx["kind"], "to": tx["to"],
+                                     "method": tx["call"].split("(")[0] if tx["call"] else None, "signature": tx["call"],
+                                     "args": tx["args"], "data": tx["data"], "note": tx.get("note")},
         "stopDraft": r["stopDraft"],
         "readAt": {"block": chain["latest"], "time": chain["now"]},
     }
@@ -618,7 +627,10 @@ def summary(r: dict) -> str:
     if r["stopDraft"]:
         lines.append(f"  draft of a stop, reason 3, on {', '.join(r['stopDraft']['trades'])}: {r['stopDraft']['note']}")
     tx = r["tx"]
-    lines.append(f"  to sign ({tx['kind']}): " + (f"{tx['to']} {tx['call']} {tx['data']}" if tx["data"] else tx.get("note", "")))
+    if r["action"] == "hold":
+        lines.append(f"  do not sign: the result did not count up; it waits for an analysis, at most until {r['hardAt']}")
+    else:
+        lines.append(f"  to sign ({tx['kind']}): " + (f"{tx['to']} {tx['call']} {tx['data']}" if tx["data"] else tx.get("note", "")))
     return "\n".join(lines)
 
 

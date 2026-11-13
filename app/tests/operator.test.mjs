@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import {
   OPERATOR_ABI, PAYOUT_DELAY, PAYOUT_HARD, WITHDRAW_DELAY, WITHDRAW_WINDOW, REVIEW_SCHEMA, SIGNERS,
   encodeCall, approveCall, stopCall, requestWithdrawCall, withdrawCall, cancelWithdrawCall, closeCall,
-  awaitingApproval, reviewFor, withdrawRequest, poolState,
+  awaitingApproval, reviewFor, withdrawRequest, poolState, approveAnywayCall, HOLD_WARNING,
 } from "../lib/operator.js";
 import { keccak256 } from "./keccak.mjs";
 
@@ -153,16 +153,39 @@ test("a review is shown only where it is of this very payout and names the call 
     [{ call: { kind: "approve", data: "0xd6532c4d00" } }, /call data is not its call/],
     [{ call: { kind: "stop", args: [0, 1, OTHER, [A], []] } }, /would refuse: a pair needs both trades/],
     [{ call: {} }, /no call/],
+    [{ action: "stop" }, /action \(stop\) is not its call \(approve\)/],
+    [{ action: "hold" }, /holds a payout yet names a call/],
   ];
   for (const [over, msg] of cases) {
     const got = reviewFor({ ...reviewDoc(0), ...over }, row, { pool: POOL, keccak256 });
     assert.equal(got.review, null);
     assert.match(got.problem, msg);
   }
-  const stop = reviewFor({ ...reviewDoc(0), verdict: "suspicious",
+  const stop = reviewFor({ ...reviewDoc(0), verdict: "suspicious", action: "stop",
     call: { kind: "stop", args: [0, 1, OTHER, [A, B], []], data: null } }, row, { pool: POOL, keccak256 });
   assert.equal(stop.review.call.method, "stopPayout");
   assert.equal(stop.review.call.signer, "checker");
+});
+
+test("a payout whose result did not count up is offered no approval, only a deliberate second step", () => {
+  const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
+  const held = { ...reviewDoc(0), verdict: "suspicious", action: "hold", call: null,
+    reasons: [{ kind: "recount", text: "recount on the stage: result" }],
+    stopDraft: { kind: "stop-draft", reason: 3, paired: ZERO, trades: [A], links: ["<keccak256 of the published analysis>"], data: null } };
+  const decide = { ...reviewDoc(1), verdict: "suspicious", action: "decide", reasons: [{ kind: "late", text: "fills later" }] };
+  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: { 0: held, 1: decide }, keccak256 });
+  const r0 = rows.find((r) => r.id === 0);
+  assert.equal(r0.reviewProblem, null);
+  assert.deepEqual([r0.review.action, r0.review.call, r0.approve], ["hold", null, null], "no Approve button");
+  assert.equal(r0.review.stopDraft.reason, 3);
+  assert.deepEqual(r0.approveAnyway, { warning: HOLD_WARNING });
+  assert.throws(() => approveAnywayCall({ pool: POOL, row: r0, confirm: "yes", keccak256 }), /warning confirmed/);
+  assert.equal(approveAnywayCall({ pool: POOL, row: r0, confirm: HOLD_WARNING, keccak256 }).method, "approvePayouts");
+  const r1 = rows.find((r) => r.id === 1);
+  assert.equal(r1.review.action, "decide");
+  assert.equal(r1.approve.method, "approvePayouts", "suspicious but counted up: the approval is there, the choice the signer's");
+  assert.equal(r1.approveAnyway, null);
+  assert.throws(() => approveAnywayCall({ pool: POOL, row: r1, confirm: HOLD_WARNING, keccak256 }), /not held/);
 });
 
 test("the review the script writes is read as it is written", () => {

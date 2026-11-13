@@ -42,6 +42,9 @@ export const PAYOUT_DELAY = 72 * 3600;
 /** Past this from its claim a payout is paid unapproved, unless it was stopped. */
 export const PAYOUT_HARD = 7 * 24 * 3600;
 export const REVIEW_SCHEMA = "payout-review/2";
+/** What the operator confirms, word for word, to approve a payout whose result did not count up (`approveAnywayCall`). */
+export const HOLD_WARNING = "The result did not count up. Approving pays it at 72 hours, before anyone has written the "
+  + "analysis; without approval it waits for its ceiling, and a stop of reason 3 can still be signed.";
 
 /** Who signs each call, as the page says it beside the button. */
 export const SIGNERS = Object.freeze({
@@ -206,6 +209,11 @@ export function awaitingApproval({ pool, structs, events = [], now, reviews = {}
     const got = doc === undefined ? { review: null, problem: "no review" } : reviewFor(doc, row, { pool, keccak256 });
     row.review = got.review;
     row.reviewProblem = got.problem;
+    // A payout whose result did not count up is offered no approval: only a second, deliberate step with the
+    // warning (approveAnywayCall). Any other payout is offered its one-signature approval.
+    const hold = got.review?.action === "hold";
+    row.approve = hold ? null : approveCall({ pool, ids: [id], keccak256 });
+    row.approveAnyway = hold ? { warning: HOLD_WARNING } : null;
     out.push(row);
   });
   return out.sort((a, b) => a.payAt - b.payAt || a.id - b.id);
@@ -224,7 +232,14 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
   if (String(doc.trader).toLowerCase() !== String(payout.trader).toLowerCase()) return no("a review naming another trader");
   if (BigInt(doc.amount) !== BigInt(payout.amount)) return no("a review of another amount");
   if (!doc.readAt || Number(doc.readAt.time) < Number(payout.claimedAt)) return no("a review read before the claim");
+  const action = doc.action ?? "approve";
   const c = doc.call ?? {};
+  if (action === "hold") {
+    // Nothing to sign: the result did not count up. The draft of a stop is shown, never built into a call.
+    if (doc.call) return no("a review that holds a payout yet names a call");
+    return { review: { verdict: doc.verdict, action, reasons: doc.reasons, evidence: doc.evidence, call: null,
+      stopDraft: doc.stopDraft ?? null, readAt: doc.readAt }, problem: null };
+  }
   let built;
   try {
     if (c.kind === "approve") built = approveCall({ pool, ids: [payout.id], keccak256 });
@@ -236,8 +251,19 @@ export function reviewFor(doc, payout, { pool, keccak256 }) {
     return no(`a review whose call the pool would refuse: ${err.message}`);
   }
   if (c.data && String(c.data).toLowerCase() !== built.data.toLowerCase()) return no("a review whose call data is not its call");
-  return { review: { verdict: doc.verdict, reasons: doc.reasons, evidence: doc.evidence, call: built,
-    readAt: doc.readAt }, problem: null };
+  if ((action === "stop") !== (c.kind === "stop")) return no(`a review whose action (${action}) is not its call (${c.kind})`);
+  return { review: { verdict: doc.verdict, action, reasons: doc.reasons, evidence: doc.evidence, call: built,
+    stopDraft: doc.stopDraft ?? null, readAt: doc.readAt }, problem: null };
+}
+
+/**
+ * The approval of a payout whose review holds it (the result did not count up), only with the operator's
+ * confirmation of HOLD_WARNING word for word: the page shows the warning and a second button, and passes its text.
+ */
+export function approveAnywayCall({ pool, row, confirm, keccak256 }) {
+  if (!row.approveAnyway) throw new Error("this payout is not held: its approval is row.approve");
+  if (confirm !== HOLD_WARNING) throw new Error("approving a held payout needs the warning confirmed as it is written");
+  return approveCall({ pool, ids: [row.id], keccak256 });
 }
 
 /**

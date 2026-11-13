@@ -316,7 +316,7 @@ class Recount(unittest.TestCase):
         self.assertEqual((rc["read"], rc["capital"], rc["fills"], rc["flags"]), (True, self.C, 2, []))
         self.assertEqual(rc["checked"], {"results": 1, "snapshots": 1, "unchecked": 0, "fills": 2})
         self.assertEqual(rc["moves"][0], {"tx": tx(5_012), "bps": -101.0}, "bought at 1 000 after ordering at 990: 1 % against it")
-        self.assertEqual((got["verdict"], got["stopDraft"]), ("clean", None))
+        self.assertEqual((got["verdict"], got["stopDraft"], got["action"]), ("clean", None, "approve"))
 
     def test_a_result_that_does_not_count_up_is_flagged_with_a_draft_of_reason_three(self):
         ch, s1 = self.world(passed=self.C + 999_999)
@@ -328,7 +328,11 @@ class Recount(unittest.TestCase):
         d = got["stopDraft"]
         self.assertEqual((d["reason"], d["paired"], d["trades"], d["links"], d["data"]),
                          (3, r.ZERO_ADDRESS, [tx(5_031)], [r.ANALYSIS], None))
-        self.assertEqual(got["tx"]["kind"], "approve", "a draft is no call to sign")
+        self.assertEqual((got["action"], got["tx"]), ("hold", None), "no approval offered: nothing to sign until the analysis")
+        k = r.card(got, ch.d)
+        self.assertEqual((k["action"], k["call"], k["stopDraft"]["reason"]), ("hold", None, 3))
+        self.assertIn("do not sign", r.summary(got))
+        self.assertNotIn("to sign (approve)", r.summary(got))
 
     def test_a_snapshot_that_does_not_count_up_or_cannot_be_checked(self):
         ch, _ = self.world(snapshot=1)
@@ -474,6 +478,8 @@ class ACodeBoughtUp(unittest.TestCase):
         self.assertIn("13 sales in a row from new wallets", got["reasons"][0])
         self.assertEqual(got["tx"]["kind"], "approve", "a code is no reason the pool takes for a stop")
         self.assertIn("no pair", got["tx"]["note"])
+        self.assertEqual(got["action"], "decide", "suspicious, the result counts up: the choice is the signer's")
+        self.assertIn("wait for the ceiling", got["tx"]["note"])
 
     def test_the_same_run_of_buyers_who_trade_is_no_flag(self):
         got = r.review(self.world(traded=12).d, POOL, 0)
@@ -541,7 +547,7 @@ class TheSummary(unittest.TestCase):
 class TheDocument(unittest.TestCase):
     """The JSON a page reads: its fields fixed by the schema's name."""
 
-    KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict",
+    KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action",
             "reasons", "evidence", "call", "stopDraft", "readAt"}
 
     def test_a_clean_payout_carries_its_approval(self):
