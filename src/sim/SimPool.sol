@@ -617,8 +617,8 @@ contract SimPool is Initializable {
     }
 
     /// @notice Carries out the standing request, once ready and before it lapses: the less of what was
-    ///         asked and what `withdrawable` allows now, so money that came in after the request stays,
-    ///         and payouts that came due meanwhile come first. The platform takes its 0.5 %. Profit is
+    ///         asked and what `withdrawable` allows now: never more than was asked, and payouts that came
+    ///         due meanwhile come first. The platform takes its 0.5 %. Profit is
     ///         the pool's money above what it owes, holds and keeps for recent stops, and above what the
     ///         creator put in; a withdrawal takes it first, and each code's partner gets its share of
     ///         it (`_payPartners`). There is no other way for the creator to withdraw before `finish`.

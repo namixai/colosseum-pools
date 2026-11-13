@@ -153,10 +153,11 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   pool's again (S120). The filler and the checker are two keys, and neither they nor the closer open a pool (S116).
 - **A simulated pool's creator** withdraws only by a request a week old (S127, S128), carried out within three
   days of being ready (S130), and gets the less of what it asked and what may leave when it is carried out
-  (S131): money that came in after the request stays, and payouts that came due meanwhile come first. A pool
+  (S131): never more than it asked, and only what the pool can spare then, so payouts that came due meanwhile
+  come first. A pool
   is finished a week after its close at the earliest (S129), so closing and finishing are never one block.
   What may leave is only what stays above the greater of three payouts of the largest size and the payouts of
-  every stage still running, each by its size (S137), and above
+  every stage still running, each by its size (S132), and above
   every payout owed and every payout set aside for a trader whose transfer was refused (S117), and it stops
   nobody's payout. Every sale names a trading group's code (S123), and a partner's share is of the pool's
   money above what the creator put in, after what the pool owes, holds and keeps for a recent stop, in the
@@ -351,4 +352,4 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S129 | `src/sim/SimPool.sol:698` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
 | S130 | `src/sim/SimPool.sol:630` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
 | S131 | `src/sim/SimPool.sol:632` | `uint256 amount = r < w ? r : w;` |
-| S137 | `src/sim/SimPool.sol:333` | `if (staged > floor) floor = staged;` |
+| S132 | `src/sim/SimPool.sol:333` | `if (staged > floor) floor = staged;` |

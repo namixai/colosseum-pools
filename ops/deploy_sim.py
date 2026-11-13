@@ -190,6 +190,10 @@ def deploy(args) -> int:
         raise SystemExit(f"{out.relative_to(ROOT)} exists; pick another label")
     filler, checker = to_checksum_address(args.filler), to_checksum_address(args.checker)
     closer = to_checksum_address(args.closer)
+    # Before anything is deployed: a zero key would pass the checks below and fail only at setCloser, four
+    # contracts later (review of #282).
+    if any(int(a, 16) == 0 for a in (filler, checker, closer)):
+        raise SystemExit("the filler, the checker and the closer are real keys, none of them 0x0")
     if len({filler, checker, closer}) != 3:
         raise SystemExit("the filler, the checker and the closer are three keys")
     print(f"deploy_sim deploy: label {args.label}, USDC {c.TESTNET_USDC_ERC20} (Circle's, EIP-3009)")
