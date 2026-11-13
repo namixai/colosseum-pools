@@ -387,12 +387,188 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
     return out
 
 
+# ── how often the pool's exams pass, against the model ──────────────────────────────
+
+# A draft until the CFO sets them (--thresholds): the model's shares (an exam passed by 16 in 100 buyers, a
+# payout reached by 2.7 in 100), the alarm's multiple of them, the fewest sales a share is judged on, how sure the
+# judgment must be, and the window of recent sales.
+DEFAULT_THRESHOLDS = {"model": {"examPass": 0.16, "payout": 0.027}, "alarm": 1.5, "minSales": 30,
+                      "confidence": 0.99, "windowDays": 30, "draft": True}
+
+
+def binom_tail(k: int, n: int, q: float) -> float:
+    """P(X >= k) for X ~ Binomial(n, q), summed exactly in logs."""
+    if k <= 0:
+        return 1.0
+    if k > n or q <= 0.0:
+        return 0.0
+    if q >= 1.0:
+        return 1.0
+    lq, l1 = math.log(q), math.log1p(-q)
+    base = math.lgamma(n + 1)
+    return min(1.0, sum(math.exp(base - math.lgamma(i + 1) - math.lgamma(n - i + 1) + i * lq + (n - i) * l1)
+                        for i in range(k, n + 1)))
+
+
+def lower_bound(k: int, n: int, confidence: float) -> float:
+    """The exact (Clopper-Pearson) one-sided lower bound of a share seen as k in n: the smallest true share under
+    which k or more would come up with probability 1 - confidence. Zero for k = 0."""
+    if k <= 0 or n <= 0:
+        return 0.0
+    alpha = 1.0 - confidence
+    lo, hi = 0.0, k / n
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if binom_tail(k, n, mid) < alpha:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def rate_line(sold: int, hits: int, model: float, th: dict) -> dict:
+    """One share against the model. Under `minSales` it is "few": a share of a handful says nothing. Over it, the
+    share is "over" only when its exact lower bound is above the model times the alarm: when even the least it can
+    be, as sure as `confidence`, is past the alarm."""
+    line = {"sold": sold, "hits": hits, "rate": round(hits / sold, 4) if sold else None, "model": model,
+            "limit": round(model * th["alarm"], 4)}
+    if sold < th["minSales"]:
+        return {**line, "state": "few"}
+    lb = lower_bound(hits, sold, th["confidence"])
+    return {**line, "lower": round(lb, 4), "state": "over" if lb > model * th["alarm"] else "ok"}
+
+
+def pass_rates(chain: dict, pool: str, p: "Params", th: dict | None = None) -> dict | None:
+    """How many of the exams sold passed, started their stage and reached a payout: for the pool and the factory,
+    over all time and over the last `windowDays` of sales; and for the pool by the code each was bought under, by
+    the asset it traded, by the hour and weekday of the pass, and the passes in very few fills or days. None when
+    the accounts' events were not read. A rule of the exam that is wrong still counts up on chain; it shows as more
+    passing than the model said."""
+    th = {**DEFAULT_THRESHOLDS, **(th or {})}
+    th["model"] = {**DEFAULT_THRESHOLDS["model"], **(th.get("model") or {})}
+    ev = chain.get("exam_events")
+    if ev is None:
+        return None
+    stage_of = {f["exam"]: f["stage"] for f in chain["funded"]}
+    paid_stages = {x["account"] for x in chain["payouts"]}
+    since = chain["now"] - th["windowDays"] * 86_400
+    rows = []
+    for s_ in chain["sales"]:
+        evs = ev.get(s_["exam"])
+        if evs is None:
+            continue
+        started = next((e["t"] for e in evs if e["name"] == "Started"), None)
+        passed = next((e for e in evs if e["name"] == "Passed"), None)
+        fills = [e for e in evs if e["name"] == "Filled"]
+        stage = stage_of.get(s_["exam"])
+        rows.append({"pool": s_["pool"], "code": s_["code"], "t": started, "passed": passed is not None,
+                     "passedAt": passed["t"] if passed else None, "stage": stage is not None,
+                     "payout": stage in paid_stages, "assets": sorted({e["asset"] for e in fills}),
+                     "few": passed is not None and (len(fills) <= p.few_fills
+                                                    or len({e["t"] // 86_400 for e in fills}) <= p.few_days)})
+
+    def scope(rs: list[dict]) -> dict:
+        return {"sold": len(rs), "stages": sum(r["stage"] for r in rs),
+                "examPass": rate_line(len(rs), sum(r["passed"] for r in rs), th["model"]["examPass"], th),
+                "payout": rate_line(len(rs), sum(r["payout"] for r in rs), th["model"]["payout"], th)}
+
+    mine = [r for r in rows if r["pool"] == pool]
+    recent = lambda rs: [r for r in rs if r["t"] is not None and r["t"] >= since]
+    out = {"thresholds": th, "pool": scope(mine), "poolWindow": scope(recent(mine)), "factory": scope(rows),
+           "factoryWindow": scope(recent(rows)), "byCode": {}, "byAsset": {}, "byHour": {}, "byWeekday": {},
+           "fewFillPasses": sum(r["few"] for r in mine)}
+    for code in sorted({r["code"] for r in mine}):
+        out["byCode"][code] = scope([r for r in mine if r["code"] == code])
+    for asset in sorted({a for r in mine for a in r["assets"]}):
+        out["byAsset"][str(asset)] = scope([r for r in mine if asset in r["assets"]])
+    for r in mine:
+        if r["passedAt"] is not None:
+            h, wd = str(r["passedAt"] // 3_600 % 24), str((r["passedAt"] // 86_400 + 3) % 7)  # 1970-01-01 was a Thursday
+            out["byHour"][h] = out["byHour"].get(h, 0) + 1
+            out["byWeekday"][wd] = out["byWeekday"].get(wd, 0) + 1
+    over = []
+    for name in ("pool", "poolWindow", "factory", "factoryWindow"):
+        for what in ("examPass", "payout"):
+            line = out[name][what]
+            if line["state"] == "over":
+                over.append(f"{name} {what} {line['hits']} of {line['sold']} (model {line['model']}, alarm {line['limit']})")
+    for key, by in (("code", "byCode"), ("asset", "byAsset")):
+        for k, sc in out[by].items():
+            for what in ("examPass", "payout"):
+                line = sc[what]
+                if line["state"] == "over":
+                    over.append(f"{key} {k[:10]} {what} {line['hits']} of {line['sold']} (model {line['model']}, alarm {line['limit']})")
+    out["over"] = over
+    return out
+
+
+# ── how the fills were timed: judged, not only shown ─────────────────────────────────
+
+def timing(trader: str, chain: dict, who: dict[str, str], p: "Params") -> dict:
+    """Two questions about each fill of this trader's exams and stages, from the oracle by block.
+
+    The filler's choice: an order can be filled in any block of its window (from `late` 0, the first possible block,
+    to the window's width). Was the block it was filled in the best of the window for the trader, the lowest price
+    for a buy, the highest for a sell? A fair filler fills at once or at random; one working for the trader picks
+    the best block. By chance a fill lands on a best block about as often as best blocks are in the window (ties
+    counted), so the number that did is tested against that: flagged when chance would give as many or more with
+    probability under `p.timing_alpha`, over `p.timing_min` fills at least, and the trader gained by it.
+
+    The lead on the feed: did the oracle move the trader's way in the block right after each fill? A trader who sees
+    the price before the oracle does buys just before it rises. Over the fills where it moved at all, the moves the
+    trader's way are tested against a coin: flagged on the same terms."""
+    ev = chain.get("exam_events") or {}
+    oracle = chain.get("oracle") or {}
+    width = chain.get("fillWindow") or {}
+    accounts = [a for a, t in who.items() if t == trader and a in ev]
+    picked = hits = 0
+    chance = 0.0
+    gains: list[float] = []
+    moved = ahead = 0
+    lates: list[int] = []
+    for a in accounts:
+        w = width.get(a)
+        for e in ev[a]:
+            if e["name"] != "Filled":
+                continue
+            lates.append(e["late"])
+            o = oracle.get(oracle_key(e["asset"], e["block"]))
+            if o is None:
+                continue
+            side = 1 if e["buy"] else -1  # a buy gains from a lower price, a sell from a higher
+            first = e["block"] - e["late"]
+            if w and w > 1:
+                window = [oracle.get(oracle_key(e["asset"], first + k)) for k in range(w)]
+                if all(x is not None for x in window):
+                    best = min(window) if e["buy"] else max(window)
+                    picked += 1
+                    hits += o == best
+                    chance += sum(x == best for x in window) / w
+                    gains.append((window[0] - o) * side * BPS / window[0])
+            nxt = oracle.get(oracle_key(e["asset"], e["block"] + 1))
+            if nxt is not None and nxt != o:
+                moved += 1
+                ahead += (nxt - o) * side > 0
+    out = {"lateMedian": quantile(lates, 0.5), "fills": len(lates),
+           "filler": {"fills": picked, "atBest": hits, "byChance": round(chance, 2),
+                      "gainBps": round(sum(gains) / len(gains), 1) if gains else 0.0, "flag": False},
+           "lead": {"fills": moved, "ahead": ahead, "flag": False}}
+    if picked >= p.timing_min and gains and sum(gains) > 0:
+        out["filler"]["p"] = binom_tail(hits, picked, chance / picked)
+        out["filler"]["flag"] = out["filler"]["p"] < p.timing_alpha
+    if moved >= p.timing_min:
+        out["lead"]["p"] = binom_tail(ahead, moved, 0.5)
+        out["lead"]["flag"] = out["lead"]["p"] < p.timing_alpha
+    return out
+
+
 # ── the review of one payout ─────────────────────────────────────────────────────────
 
 class Params:
     def __init__(self, window_s: int = 600, tolerance: float = 0.2, wide: int = 5, code_run: int = 10,
                  idle_share: float = 0.5, min_fills: int = 5, mirror_ratio: float = 0.5, mirror_share: float = 0.6,
-                 mirror_min_s: int = 3_600, sum_dedication: float = 0.6, outlier_bps: int = 100, venue_bps: int = 100, few_fills: int = 3,
+                 mirror_min_s: int = 3_600, sum_dedication: float = 0.6, timing_min: int = 8,
+                 timing_alpha: float = 0.01, outlier_bps: int = 100, venue_bps: int = 100, few_fills: int = 3,
                  few_days: int = 2):
         self.window_s = window_s
         self.tolerance = tolerance
@@ -407,6 +583,9 @@ class Params:
         self.mirror_min_s = mirror_min_s
         # The opposite side over many accounts: only accounts that spent 60 % of their own time against this one.
         self.sum_dedication = sum_dedication
+        # Timing: judged over 8 fills at least, flagged when chance gives as much with probability under 1 %.
+        self.timing_min = timing_min
+        self.timing_alpha = timing_alpha
         # The recount: an oracle price 1 % off both neighbours that agree within 1 % is an outlier, as is one 1 %
         # off the venue's; a pass in 3 fills or 2 days at most on the largest size is said as a profile.
         self.outlier_bps = outlier_bps
@@ -522,7 +701,7 @@ def approve_call(pool: str, pid: int) -> dict:
             "data": "0x" + c.encode_call(APPROVE, APPROVE_TYPES, [[pid]]).hex()}
 
 
-def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
+def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds: dict | None = None) -> dict:
     p = p or Params()
     pay = next(x for x in chain["payouts"] if x["pool"] == pool and x["id"] == pid)
     who = owners(chain)
@@ -589,6 +768,11 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     out["running"] = running(pool, chain)
 
     found: list[tuple[str, str]] = []  # (kind, text), in the order a page lists them
+    # The pool's passes against the model first: on every payout of the pool while it holds. The trader is not
+    # to blame, so the approval stays; the choice is the signer's.
+    out["passRates"] = pass_rates(chain, pool, p, thresholds)
+    if out["passRates"] and out["passRates"]["over"]:
+        found.append(("pass-rate", "the pool passes more often than the model: " + "; ".join(out["passRates"]["over"])))
     if stop and stop["by"] == "pair":
         found.append(("pair", f"pair on the {stop['on']} with {stop['paired']}"
                       + (" and linked wallets" if stop["reason"] == 2 else "")))
@@ -605,6 +789,13 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
             found.append(("mirror-sum", f"the opposite side of the {part} spread over {len(o['accounts'])} accounts for "
                           f"{round(o['share'] * 100)} % of its time"
                           + (f", {len(o['sharedSenders'])} sender(s) funding several of them" if o["sharedSenders"] else "")))
+    out["timing"] = timing(trader, chain, who, p)
+    tf, tl = out["timing"]["filler"], out["timing"]["lead"]
+    if tf["flag"]:
+        found.append(("timing", f"the filler put {tf['atBest']} of {tf['fills']} fills in the window's best block for "
+                      f"the trader (chance gives about {tf['byChance']}), {tf['gainBps']} bps each"))
+    if tl["flag"]:
+        found.append(("timing", f"the oracle moved the trader's way right after {tl['ahead']} of {tl['fills']} fills"))
     counted = [l for l in links if not l["wide"]]
     if counted:
         found.append(("link", "wallet linked to " + ", ".join(sorted({l["trader"] for l in counted}))))
@@ -649,14 +840,14 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None) -> dict:
     return out
 
 
-SCHEMA = "payout-review/2"
+SCHEMA = "payout-review/3"
 
 
 def card(r: dict, chain: dict) -> dict:
     """The review as one JSON document a page reads (`app/lib/operator.js`, `reviewFor`). The schema is
     fixed: fields are added under a new SCHEMA, never renamed. /2 added `action`, `evidence.mirrors`,
     `evidence.opposingSum`, `evidence.recount` and `stopDraft`, and the reason kinds `mirror`, `mirror-sum`
-    and `recount`. Amounts are strings of USDC units (6
+    and `recount`; /3, `evidence.passRates` and `evidence.timing`, and the kinds `pass-rate` and `timing`. Amounts are strings of USDC units (6
     decimals), since a JSON number loses digits past 2**53; times are seconds on the chain's clock."""
     tx = r["tx"] or {}
     g = r["running"]
@@ -673,6 +864,8 @@ def card(r: dict, chain: dict) -> dict:
             "mirrors": r["mirrors"],
             "opposingSum": r["opposingSum"],
             "recount": r["recount"],
+            "passRates": r["passRates"],
+            "timing": r["timing"],
             "links": r["links"],
             "late": r["late"],
             "code": r["code"],
@@ -713,6 +906,15 @@ def summary(r: dict) -> str:
     for l in r["links"]:
         lines.append(f"  linked to {l['trader']}" + (f" through {l['sender']}" if l["sender"] else " directly")
                      + (" (wide sender, not counted)" if l["wide"] else "") + ": " + ", ".join(l["txs"]))
+    pr = r["passRates"]
+    if pr:
+        e_, w_ = pr["pool"]["examPass"], pr["poolWindow"]["examPass"]
+        lines.append(f"  passes in the pool: {e_['hits']} of {e_['sold']} ({e_['state']}), last {pr['thresholds']['windowDays']} "
+                     f"days {w_['hits']} of {w_['sold']} ({w_['state']}); payouts {pr['pool']['payout']['hits']}; model "
+                     f"{e_['model']}, alarm {e_['limit']}" + (" [draft thresholds]" if pr["thresholds"].get("draft") else ""))
+    tm = r["timing"]
+    lines.append(f"  timing: best block {tm['filler']['atBest']} of {tm['filler']['fills']} (chance {tm['filler']['byChance']}), "
+                 f"oracle the trader's way next block {tm['lead']['ahead']} of {tm['lead']['fills']}")
     lt = r["late"]
     lines.append(f"  late: median {lt['trader']['median']} of {lt['trader']['n']} fills; others median "
                  f"{lt['others']['median']}, p90 {lt['others']['p90']} of {lt['others']['n']}")
@@ -878,6 +1080,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     # at each day's snapshot, and each such account's cost.
     oracle: dict[str, int] = dict(prices or {})
     cost_ppm: dict[str, int] = {}
+    fill_window: dict[str, int] = {}
     stage_exam = {f["stage"]: f["exam"] for f in funded}
     for x in payouts:
         if x["state"] != "Due":
@@ -886,7 +1089,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             if not a or a not in exam_events:
                 continue
             try:
-                cost_ppm[a] = int(c.call_view(a, "terms()", [], [], [sk.EXAM_TERMS])[0][5])
+                terms = c.call_view(a, "terms()", [], [], [sk.EXAM_TERMS])[0]
+                cost_ppm[a], fill_window[a] = int(terms[5]), int(terms[7])
             except Exception as exc:
                 core.log("terms_unread", account=a, error=str(exc)[:200])
             assets = {e["asset"] for e in exam_events[a] if e["name"] == "Filled"}
@@ -894,6 +1098,10 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             for e in exam_events[a]:
                 if e["name"] in ("Filled", "Placed"):
                     wanted |= {(e["asset"], e["block"] + d) for d in (-1, 0, 1)}
+                if e["name"] == "Filled" and fill_window.get(a):
+                    # Every block of the order's window, for the filler's choice (at most 60 blocks).
+                    first = e["block"] - e["late"]
+                    wanted |= {(e["asset"], first + k) for k in range(min(fill_window[a], 60))}
                 elif e["name"] == "DaySnapshot":
                     wanted |= {(asset, e["block"]) for asset in assets}
             for asset, block in sorted(wanted):
@@ -911,7 +1119,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     transfers.sort(key=lambda t: t["block"])
     return {"now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
             "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
-            "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {}}
+            "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {},
+            "fillWindow": fill_window}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -926,6 +1135,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--prices", help='a JSON file of oracle prices the node cannot give, {"asset:block": px}')
     ap.add_argument("--venue-prices", help="a JSON file of the venue's prices, {asset: {minute: px}}: Hyperliquid's "
                     "candleSnapshot (info API, interval 1m), each minute's close; read from the file, never fetched")
+    ap.add_argument("--thresholds", help="a JSON file of the pass-rate thresholds, the CFO's: {model: {examPass, payout}, "
+                    "alarm, minSales, confidence, windowDays}; without it, a draft of the model's shares")
     ap.add_argument("--json", action="store_true", help=f"one {SCHEMA} document a payout, as a list")
     ap.add_argument("--out", help=f"a directory to write each payout's {SCHEMA} document to, as <pool>-<id>.json")
     args = ap.parse_args(argv)
@@ -940,7 +1151,10 @@ def main(argv: list[str] | None = None) -> int:
     todo = [x for x in chain["payouts"]
             if (pool is None or x["pool"] == pool) and (args.id is None or x["id"] == args.id)
             and (args.id is not None or x["state"] == "Due")]
-    reviews = [review(chain, x["pool"], x["id"], p) for x in todo]
+    th = load(args.thresholds)
+    if th is not None:
+        th["draft"] = False
+    reviews = [review(chain, x["pool"], x["id"], p, th) for x in todo]
     cards = [card(r, chain) for r in reviews]
     if args.out:
         out = pathlib.Path(args.out)

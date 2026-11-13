@@ -266,6 +266,24 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     back, `--prices` stands in. A pass in three fills or two days at most on the largest size is said
     as a profile, not counted as a reason.
 
+  - how often the pool's exams pass, against the model. For the pool and the factory, over all time and over
+    the last 30 days of sales, it counts exams sold and passed, stages started, and payouts reached. It also
+    splits them by code, by asset, by the hour and weekday of the pass, and counts passes in very few fills.
+    A rule of the exam that is wrong still counts up on chain; it shows only as more passing than the
+    model said. Under 30 sales a share is "few", not judged. Over that, it is "over" only when its exact
+    (Clopper-Pearson) lower bound, 99 % sure, is above the model times the alarm. The shares (16 in 100
+    exams, 2.7 in 100 payouts) and the alarm (x1.5) are a draft until the CFO's file (`--thresholds`). A
+    pool over the alarm marks every payout of the pool while it holds. The trader is not to blame, so the
+    approval stays and the choice is the signer's;
+  - the timing of the fills, judged against chance:
+    - the filler's choice: how often a fill landed in the best block of its window for the trader, against
+      how often best blocks occur in the window;
+    - the lead on the feed: how often the oracle moved the trader's way in the block right after the fill,
+      against a coin.
+
+    Each is flagged over 8 fills at least, when chance gives as much with probability under 1 %. The oracle
+    of every block of each order's window is read for it.
+
   Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
   72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. The call to
   sign is written out as text with its calldata:
@@ -283,7 +301,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   - a pair on another factory or another venue;
   - accounts under wallets nothing links;
   - USDC that arrived before the deployment's block;
-  - a flaw in the exam's own rules, which counts up on chain however wrong it is.
+  - a flaw in the exam's own rules, until enough exams have passed to show it in the pass rate;
+  - a filler or a trader with an edge too small or too rare to stand out from chance over the fills there
+    are.
 
 - **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the

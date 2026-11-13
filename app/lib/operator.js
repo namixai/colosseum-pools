@@ -9,7 +9,7 @@
 // signatures, in the Safe's own app, which takes the call's `to` and `data` from here. A stop, the cancelling of a
 // request and an early close are the platform's keys (the factory's checker and closer).
 //
-// The review of a payout (ops/payout_review.py, schema "payout-review/2") is read from a file the page is given. It
+// The review of a payout (ops/payout_review.py, schema "payout-review/3") is read from a file the page is given. It
 // is advice, never the call: the page builds every call itself, and shows a review only where it is of this very
 // payout (`reviewFor`). The names of the approval are the design of 13 November (approval with a ceiling), and of the
 // withdrawal the creator's request a week old (WithdrawRequested); a pool without them answers none of their reads.
@@ -41,7 +41,7 @@ export const OPERATOR_ABI = [
 export const PAYOUT_DELAY = 72 * 3600;
 /** Past this from its claim a payout is paid unapproved, unless it was stopped. */
 export const PAYOUT_HARD = 7 * 24 * 3600;
-export const REVIEW_SCHEMA = "payout-review/2";
+export const REVIEW_SCHEMA = "payout-review/3";
 /** What the operator confirms, word for word, to approve a payout whose result did not count up (`approveAnywayCall`). */
 export const HOLD_WARNING = "The result did not count up. Approving pays it at 72 hours, before anyone has written the "
   + "analysis; without approval it waits for its ceiling, and a stop of reason 3 can still be signed.";
