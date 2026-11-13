@@ -25,6 +25,7 @@ contract SimPoolTest is Test {
     uint64 constant SMALL_PRICE = 45e6;
     uint64 constant LARGE_PRICE = 85e6;
     uint64 constant LARGE_PAYOUT = 800e6;
+    uint64 constant SMALL_PAYOUT = 400e6;
 
     HyperCore hyperCore;
     Usdc3009 usdc;
@@ -1208,12 +1209,12 @@ contract SimPoolTest is Test {
         assertEq(pool.principal(), 2_400e6);
     }
 
-    // ── the term: 180 days before the creator closes or takes back what it put in ──
+    // ── the term: 6 months (184 days) before the creator closes or takes back what it put in ──
 
     function test_open_thePoolIsLockedForTheFactorysTerm_andTheCloserOpensNone() public {
         SimPool pool = _pool();
-        assertEq(pool.lockedUntil(), block.timestamp + 180 days);
-        assertEq(factory.MIN_TERM(), 180 days);
+        assertEq(pool.lockedUntil(), block.timestamp + 184 days);
+        assertEq(factory.MIN_TERM(), 184 days, "the longest half-year: at least 6 months whatever the day it opens");
         vm.deal(closer, 1 ether);
         vm.prank(closer);
         vm.expectRevert(SimPoolFactory.BadRole.selector);
@@ -1400,6 +1401,19 @@ contract SimPoolTest is Test {
         return "";
     }
 
+    /// `_pass`, with the logs collected after each fill: a fill moves to the next block, and a log takes the block it
+    /// is collected in, so each is collected before the next block (review of #281).
+    function _passCollected(SimPool pool, PaperExam e, address who) internal {
+        (,, uint64 capital,) = e.result();
+        uint64 sz = capital / mark;
+        _fill(e, who, true, sz);
+        _pageCollect(pool);
+        _setMark(mark * 12 / 10);
+        _fill(e, who, false, sz);
+        vm.prank(who);
+        e.graduate();
+    }
+
     /// An exam's or a stage's own event, kept by its account, as the node would give it in a second pass over the logs
     /// of the pool's accounts. An account is the pool's if its Started names the pool; the rest are left out.
     function _examCollect(SimPool pool, Vm.Log memory log) internal {
@@ -1489,7 +1503,7 @@ contract SimPoolTest is Test {
     /// checker stops the second payout and its trader objects; ten more exams are sold with the first code and thirty
     /// with the second; the token refuses the third trader and the second group's owner; after the payout delay one
     /// payout is paid, and the creator withdraws 400, sharing its profit with both codes' owners; then, long before the
-    /// pool's 180 days, the platform's closer closes it. The page drawn from
+    /// pool's 184 days, the platform's closer closes it. The page drawn from
     /// these events must show 800 USDC paid, with that payment's event, the stop and the held payout apart, and each
     /// code with what it brought and what its owner was sent or had set aside, and the pool's term with the platform's
     /// early close.
@@ -1507,11 +1521,11 @@ contract SimPoolTest is Test {
         for (uint256 i = 0; i < 3; ++i) {
             PaperExam exam = _buy(pool, who[i], 1);
             _pageCollect(pool);
-            _pass(exam, who[i]);
+            _passCollected(pool, exam, who[i]);
             vm.prank(who[i]);
             PaperExam stage = PaperExam(pool.fund(address(exam)));
             _pageCollect(pool);
-            _pass(stage, who[i]);
+            _passCollected(pool, stage, who[i]);
             ids[i] = pool.claimPayout(address(stage));
             _pageCollect(pool);
             vm.roll(block.number + 1);
@@ -1557,7 +1571,7 @@ contract SimPoolTest is Test {
         assertGt(pool.heldOf(owner2), 0, "the second's was set aside: the token refuses it");
         assertEq(pool.held(), LARGE_PAYOUT + pool.heldOf(owner2));
         assertEq(pool.reserved(), LARGE_PAYOUT);
-        // Long before its 180 days, the platform's closer closes the pool: it sells no more exams.
+        // Long before its 184 days, the platform's closer closes the pool: it sells no more exams.
         vm.roll(block.number + 1);
         vm.prank(closer);
         pool.close();
@@ -1768,6 +1782,68 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         vm.expectRevert(SimPool.Done.selector);
         pool.withdraw();
+    }
+
+    // ── a running stage's payout stays in the pool (CFO, 13 November) ──
+
+    /// A stage funded and still running: its payout is in `staged` until it ends.
+    function _runningStage(SimPool pool, address who, uint256 line) internal returns (PaperExam stage) {
+        PaperExam exam = _buy(pool, who, line);
+        _pass(exam, who);
+        vm.prank(who);
+        stage = PaperExam(pool.fund(address(exam)));
+    }
+
+    function test_staged_eachRunningStagesPayoutBySize_untilItIsClaimedOrReleased() public {
+        SimPool pool = _pool();
+        PaperExam large = _runningStage(pool, trader, 1);
+        assertEq(pool.staged(), LARGE_PAYOUT);
+        PaperExam small = _runningStage(pool, other, 0);
+        assertEq(pool.staged(), LARGE_PAYOUT + SMALL_PAYOUT, "each by its own size");
+        _pass(large, trader);
+        pool.claimPayout(address(large));
+        assertEq(pool.staged(), SMALL_PAYOUT, "claimed: owed now, no longer staged");
+        assertEq(pool.owed(), LARGE_PAYOUT);
+        _fail(small, other);
+        pool.release(address(small));
+        assertEq(pool.staged(), 0, "failed and released: free again");
+        PaperExam exam = _buy(pool, stranger, 1);
+        _fail(exam, stranger);
+        pool.release(address(exam));
+        assertEq(pool.staged(), 0, "an exam is not a stage");
+    }
+
+    function test_withdrawable_theGreaterOfThreePayoutsAndTheRunningStages_theCfosCases() public {
+        // The CFO's day 7, 13 November: 4 320.25 in the pool, nothing owed; k large stages running.
+        uint256[3] memory ks = [uint256(1), 3, 5];
+        uint256[3] memory free = [uint256(1_920_250_000), 1_920_250_000, 320_250_000];
+        for (uint256 j = 0; j < 3; ++j) {
+            SimPool pool = _pool();
+            for (uint256 i = 0; i < ks[j]; ++i) _runningStage(pool, makeAddr(string(abi.encode("k", j, i))), 1);
+            deal(address(usdc), address(pool), 4_320_250_000);
+            assertEq(pool.staged(), ks[j] * LARGE_PAYOUT);
+            assertEq(pool.withdrawable(), free[j], "the greater of 2 400 and the stages' payouts stays");
+        }
+        // By size: four large and two small stages keep 4 000, not six large payouts.
+        SimPool mixed = _pool();
+        for (uint256 i = 0; i < 4; ++i) _runningStage(mixed, makeAddr(string(abi.encode("L", i))), 1);
+        for (uint256 i = 0; i < 2; ++i) _runningStage(mixed, makeAddr(string(abi.encode("S", i))), 0);
+        deal(address(usdc), address(mixed), 4_320_250_000);
+        assertEq(mixed.staged(), 4 * LARGE_PAYOUT + 2 * SMALL_PAYOUT);
+        assertEq(mixed.withdrawable(), 4_320_250_000 - 4_000e6);
+    }
+
+    function test_withdraw_aRequestCarriedOutAfterStagesStarted_paysOnlyAboveThem() public {
+        SimPool pool = _pool();
+        deal(address(usdc), address(pool), 6_000e6);
+        uint256 w = pool.withdrawable();
+        _ask(pool, w); // the week passes
+        for (uint256 i = 0; i < 5; ++i) _runningStage(pool, makeAddr(string(abi.encode("w", i))), 1);
+        uint256 bal = usdc.balanceOf(address(pool));
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(usdc.balanceOf(address(pool)), 5 * LARGE_PAYOUT, "the five stages' payouts stay");
+        assertLt(bal - usdc.balanceOf(address(pool)), w, "less than asked: stages started in the week");
     }
 
     function test_finish_fromTheTerm_closeAndFinishAreNeverOneBlock() public {

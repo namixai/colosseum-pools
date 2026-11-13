@@ -677,6 +677,79 @@ class TheDocument(unittest.TestCase):
         self.assertEqual((got["schema"], got["id"]), ("payout-review/2", 0))
 
 
+class WhatThePoolWouldTake(unittest.TestCase):
+    """Review of #283: no call the pool would refuse."""
+
+    def pair(self, ch, s1):
+        t9, e9 = addr(0x199), addr(0x299)
+        ch.sale(t9, e9)
+        ch.fill(s1, buy=True, t=60_000, asset=5)
+        ch.fill(e9, buy=False, t=60_100, asset=5)
+        return t9, e9
+
+    def test_a_pool_without_approvals_is_offered_none_and_says_it_pays_by_itself(self):
+        ch, _, _ = honest_world()
+        ch.d["books"][POOL]["approvals"] = False
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["tx"]["kind"], got["tx"]["data"], got["tx"]["note"]), ("none", None, r.NO_APPROVAL))
+        self.assertIsNone(got["hardAt"], "no ceiling where there is no approval")
+        self.assertEqual(got["action"], "none", "nothing to sign: it pays by itself")
+        self.assertIn("paid by itself then", r.summary(got))
+
+    def test_no_stop_for_a_payout_the_pool_would_refuse_to_stop(self):
+        for state, was, now, why in [("Paid", False, None, "it is paid"), ("Stopped", True, None, "it is stopped"),
+                                     ("Due", True, None, "stopped once already"), ("Due", False, "late", "time to stop is over")]:
+            ch, _, s1 = honest_world()
+            self.pair(ch, s1)
+            ch.d["books"][POOL]["approvals"] = False
+            pay = ch.d["payouts"][0]
+            pay["state"], pay["wasStopped"] = state, was
+            if now == "late":
+                ch.d["now"] = pay["dueAt"] - 60  # inside the checker's last 5 minutes
+            got = r.review(ch.d, POOL, 0)
+            self.assertIsNotNone(got["stop"], "the pair is still said")
+            self.assertEqual((got["stoppable"], got["tx"]["kind"]), (False, "none"), why)
+            self.assertIn(why, got["tx"]["note"])
+
+    def test_a_pool_with_approvals_stops_until_it_is_paid(self):
+        ch, _, s1 = honest_world()
+        self.pair(ch, s1)
+        ch.d["now"] = ch.d["payouts"][0]["dueAt"] + 3_600  # past its 72 hours, not paid
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["stoppable"], got["tx"]["kind"]), (True, "stop"))
+
+    def test_a_wide_sender_is_no_link_in_a_stop_either(self):
+        ch, t1, s1 = honest_world()
+        t9, _ = self.pair(ch, s1)
+        ch.send(EXCHANGE, t9)  # the exchange funded every buyer and now trader 9 too
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["stop"]["reason"], got["stop"]["links"]), (1, []), "the review does not count it, nor does the stop")
+        funder = addr(0xF1)
+        a, b = ch.send(funder, t1), ch.send(funder, t9)
+        self.assertEqual(r.review(ch.d, POOL, 0)["stop"]["links"], [a, b], "a sender of the two alone still links them")
+
+    def test_the_pools_own_floor_and_staged_beside_the_stricter_total(self):
+        ch, _, _ = honest_world()
+        ch.d["books"][POOL].update(staged=0, largestPayout=800 * 10**6)
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual((got["staged"], got["floor"], got["stagesWorst"], got["stagedMatches"]),
+                         (0, 3 * 800 * 10**6, 0, True), "no stage running: the floor is three of the largest")
+        self.assertEqual(got["worst"], 8 * 800 * 10**6, "the eight running exams, each as if it passed")
+        ch.d["books"][POOL]["staged"] = 800 * 10**6
+        self.assertFalse(r.review(ch.d, POOL, 0)["running"]["stagedMatches"], "the pool keeps a stage this count does not see")
+        ch.stage(addr(0x110), addr(0x210), addr(0x310), status="Active", done=False)  # one of the eight starts its stage
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual((got["stages"], got["stagesWorst"], got["stagedMatches"]), (1, 800 * 10**6, True))
+        del ch.d["books"][POOL]["staged"]
+        self.assertIsNone(r.review(ch.d, POOL, 0)["running"]["floor"], "an older pool without staged: not guessed")
+
+    def test_an_account_not_read_makes_the_pool_total_incomplete(self):
+        ch, _, _ = honest_world()
+        ch.d["unread"] = [addr(0x210)]
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual((got["enough"], got["unread"]), (False, [addr(0x210)]))
+
+
 class ReadingTheChain(unittest.TestCase):
     """`read_chain` against a node made up here: the logs as the contracts write them."""
 
@@ -732,7 +805,8 @@ class ReadingTheChain(unittest.TestCase):
                 return [l for l in exam_logs if l["address"] in q["address"]]
             return pool_logs
 
-        views = {("pools()",): [POOL], ("owed()",): 800, ("held()",): 0, ("reserved()",): 0,
+        views = {("pools()",): [POOL], ("owed()",): 800, ("held()",): 0, ("reserved()",): 0, ("largestPayout()",): 800,
+                 ("staged()",): 1_600,
                  ("payout(uint256)",): (s1, t1, 800, 5_000, 1, False, 0)}
 
         def view(a, sig, out, types=(), args=()):
@@ -741,7 +815,8 @@ class ReadingTheChain(unittest.TestCase):
         def call_view(to, sig, types, args, out):
             return {"balanceOf(address)": (9_000,), "result()": (2, t1, 0, 0), "accountOf(address)": (2, 0, True),
                     "menu()": ([(SIZE // 2, 50), (SIZE, 100)],),
-                    "terms()": ((capital, [800], 0, 0, 0, 1_000, 1, 10),)}[sig]
+                    "terms()": ((capital, [800], 0, 0, 0, 1_000, 1, 10),),
+                    "approver()": (addr(0xAB),)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
                 mock.patch.object(r.c, "call_view", side_effect=call_view):
@@ -761,7 +836,8 @@ class ReadingTheChain(unittest.TestCase):
         self.assertEqual({a for a, _ in asked}, {3})
         self.assertEqual((got["oracle"]["3:25"], got["oracle"]["3:28"], got["oracle"]["9:9"]), (7, 8, 1), "the file stands in too")
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
-        self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "sizes": [SIZE // 2, SIZE]}})
+        self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "sizes": [SIZE // 2, SIZE],
+                                               "approvals": True, "largestPayout": 800, "staged": 1_600}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         review = r.review(got, POOL, 7)
         self.assertEqual((review["exam"], review["size"], review["verdict"]), (e1, SIZE, "clean"))

@@ -33,6 +33,7 @@ export const SIM_POOL_ABI = [
   "function lockedUntil() view returns (uint64)",
   "function closedEarly() view returns (bool)",
   "function closedAt() view returns (uint64)",
+  "function staged() view returns (uint256)",
   "function requested() view returns (uint256)",
   "function readyAt() view returns (uint64)",
   "function head() view returns (uint256)",
@@ -111,8 +112,9 @@ export const PAYOUT_BPS = 800n;
 export const PAYOUT_DELAY = 72 * 3600;
 /** How long a stop holds its money and can be lifted or objected to, on a pool with the stop reserve. */
 export const STOP_RESERVE = 14 * 24 * 3600;
-/** How long a pool runs at least: before it the creator neither closes it nor takes back what it put in. */
-export const MIN_TERM = 180 * 24 * 3600;
+/** How long a pool runs at least, "at least 6 months (184 days)": before it the creator neither closes it nor takes
+ *  back what it put in. 184 days is the longest half-year, so the six months hold whatever the day it opens. */
+export const MIN_TERM = 184 * 24 * 3600;
 /** How long a creator's request to withdraw waits, and `finish` after the close; how long a ready request stays good. */
 export const WITHDRAW_DELAY = 7 * 24 * 3600;
 export const WITHDRAW_WINDOW = 3 * 24 * 3600;
@@ -482,6 +484,8 @@ export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, sc
     creatorMayClose: reads.lockedUntil === undefined || reads.lockedUntil === null ? null : now >= Number(reads.lockedUntil),
     termNote: termNote(reads, now),
     withdrawal: withdrawalOf(reads, now),
+    // The payouts of the stages still running, each by its size, which stay in the pool while they run; null if not read.
+    staged: reads.staged === undefined || reads.staged === null ? null : BigInt(reads.staged),
     codes: codeShares(reads.codes, events),
     terms: reads.terms,
     fundWindow: Number(reads.fundWindow),
@@ -750,6 +754,7 @@ export function activityCounts(events, examLogs, times) {
   const examOfStage = new Map();
   const traderOf = new Map();
   const days = new Map();
+  const codeDays = new Map();
   const unread = [];
   const one = (map, key, init) => {
     const k = String(key).toLowerCase();
@@ -758,7 +763,7 @@ export function activityCounts(events, examLogs, times) {
   };
   const trader = (t) => one(traders, t, (k) => ({ trader: k, codes: [], complete: true, fillDays: 0, ...accountCounts() }));
   const code = (c, partner) => one(codes, c, (k) => ({ code: k, partner: partner ? String(partner).toLowerCase() : null,
-    traders: 0, complete: true, ...accountCounts() }));
+    traders: 0, complete: true, fillDays: 0, ...accountCounts() }));
   const both = (account, f) => {
     const a = String(account).toLowerCase();
     const exam = examOfStage.get(a) ?? a;
@@ -833,15 +838,22 @@ export function activityCounts(events, examLogs, times) {
         if (end) both(account, (x) => { x[`${stage ? "stages" : "exams"}${end === "breached" ? "Breached" : "Expired"}`] += 1; });
       } else if (e.name === "Filled") {
         both(account, (x) => { x.fills += 1; });
-        if (t) {
-          const time = times?.get?.(e.block);
-          const set = one(days, t, () => new Set());
-          if (time === undefined || time === null) set.unknown = true;
-          else set.add(Math.floor(Number(time) / 86_400));
-        }
+        // The UTC days with a fill, for the trader and for the code: distinct days across all its accounts, never a
+        // sum of its traders' days, which may fall on the same day (review of #283).
+        const time = times?.get?.(e.block);
+        const mark = (map, key) => {
+          const entry = one(map, key, () => ({ days: new Set(), unknown: false }));
+          if (time === undefined || time === null) entry.unknown = true;
+          else entry.days.add(Math.floor(Number(time) / 86_400));
+        };
+        const a = String(account).toLowerCase();
+        const code = codeOfExam.get(examOfStage.get(a) ?? a);
+        if (t) mark(days, t);
+        if (code) mark(codeDays, code);
       }
     }
   }
-  for (const [t, set] of days) traders.get(t).fillDays = set.unknown ? null : set.size;
+  for (const [t, entry] of days) traders.get(t).fillDays = entry.unknown ? null : entry.days.size;
+  for (const [k, entry] of codeDays) codes.get(k).fillDays = entry.unknown ? null : entry.days.size;
   return { traders: [...traders.values()], codes: [...codes.values()], unread };
 }
