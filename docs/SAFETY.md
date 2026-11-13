@@ -165,7 +165,8 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   nobody's payout. Every sale names a trading group's code (S123), and a partner's share is of the pool's
   money above what the creator put in, after what the pool owes, holds and keeps for a recent stop, in the
   part of all the pool took that its code brought; never of the principal. Once a sale names a code, the
-  creator cannot change its partner's address or share (S121). A sale by signature carries its code in the
+  creator cannot change its partner's address or lower its share; it can only raise the share, within the bounds
+  (S121). A sale by signature carries its code in the
   trader's signature, so whoever sends it cannot give the sale to another code (S122). For 6 months, 184 days, from its opening
   (S124) the creator can neither close the pool (S125) nor take back what it put in: a withdrawal before
   then takes profit only (S126). Only the platform's closer may close a pool sooner, and the money still goes
@@ -344,15 +345,15 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S118 | `src/sim/SimPoolFactory.sol:45` | `uint32 public constant STOP_RESERVE = 14 days;` |
 | S119 | `src/sim/SimPool.sol:499` | `uint256 kept = held + reserved;` |
 | S120 | `src/sim/SimPool.sol:600` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();` |
-| S121 | `src/sim/SimPool.sol:719` | `if (c.used) revert CodeUsed();` |
+| S121 | `src/sim/SimPool.sol:722` | `if (c.used && (partner != c.partner \|\| bps <= c.bps)) revert CodeUsed();` |
 | S122 | `src/sim/SimPool.sol:391` | `_receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);` |
-| S123 | `src/sim/SimPool.sol:788` | `if (partner == address(0)) revert NoSuchCode();` |
+| S123 | `src/sim/SimPool.sol:791` | `if (partner == address(0)) revert NoSuchCode();` |
 | S124 | `src/sim/SimPoolFactory.sol:49` | `uint32 public constant MIN_TERM = 184 days;` |
-| S125 | `src/sim/SimPool.sol:746` | `revert Locked();` |
+| S125 | `src/sim/SimPool.sol:749` | `revert Locked();` |
 | S126 | `src/sim/SimPool.sol:353` | `if (w > p) w = p;` |
 | S127 | `src/sim/SimPoolFactory.sol:53` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
 | S128 | `src/sim/SimPool.sol:686` | `if (block.timestamp < readyAt) revert NotReady();` |
-| S129 | `src/sim/SimPool.sol:761` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
+| S129 | `src/sim/SimPool.sol:764` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
 | S130 | `src/sim/SimPool.sol:687` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
 | S131 | `src/sim/SimPool.sol:689` | `uint256 amount = r < w ? r : w;` |
 | S132 | `src/sim/SimPool.sol:348` | `if (staged > floor) floor = staged;` |
