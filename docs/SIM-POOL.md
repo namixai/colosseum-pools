@@ -426,10 +426,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     own app;
   - `stopPayout`, `cancelWithdraw`, and an early `close`: the platform's checker and closer.
 
-  A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/1`, one file per payout.
+  A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/3`, one file per payout.
   The page shows a review only where it is of this very payout and names the call the page itself would build
-  (`reviewFor`). It never signs what a review hands it. The approval and the request to withdraw are designs not on
-  main yet; the names are theirs.
+  (`reviewFor`). It never signs what a review hands it.
 
 ## Measuring the filler's window
 

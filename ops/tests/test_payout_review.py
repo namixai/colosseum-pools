@@ -274,6 +274,16 @@ class MirroredAccounts(unittest.TestCase):
         self.assertEqual(got["tx"]["kind"], "stop")
         self.assertIn("mirrored positions on the stage with " + e9, got["reasons"][0])
 
+    def test_a_fill_that_turns_a_position_over_is_the_fill_that_opened_the_new_one(self):
+        fill = lambda tx_, buy, sz, t_: {"account": "x", "asset": 7, "buy": buy, "sz": sz, "t": t_, "tx": tx_}
+        # Short 100, then a buy of 150: long 50, the buy opened it. Against another account's short of 50.
+        mine = [fill("sell", False, 100, 0), fill("turn", True, 150, 1_000)]
+        got = r.mirror(mine, [fill("theirs", False, 50, 1_100)], 5_000, 0.5)
+        self.assertEqual(got["examples"], [["turn", "theirs"]], "the buy that turned it over, not the sell it undid")
+        # A fill that only makes the position smaller opens nothing.
+        smaller = [fill("sell", False, 100, 0), fill("less", True, 30, 1_000)]
+        self.assertEqual(r.mirror(smaller, [fill("theirs", True, 50, 1_100)], 5_000, 0.5)["examples"], [["sell", "theirs"]])
+
     def test_a_pair_an_hour_late_is_a_mirror(self):
         ch, e9, _, _, _ = self.world((False, 100, self.H, 7), (True, 100, 11 * self.H, 7))
         [m] = r.review(ch.d, POOL, 0)["mirrors"]["stage"]
@@ -478,6 +488,15 @@ class PassRates(unittest.TestCase):
         ch.d["payouts"][0]["amount"] = 2_000 * 10**6
         self.assertEqual(r.review(ch.d, POOL, 0)["passRates"]["payoutsToIncome"]["level"], "yellow")
 
+    def test_a_claim_is_dated_by_the_factorys_delay_in_the_income_window(self):
+        ch = self.world(40, 5)
+        # Due 60 hours into the window: claimed 12 hours before it on a 72-hour delay, 12 hours into it on a 48-hour one.
+        ch.d["payouts"][0].update(amount=3_100 * 10**6, dueAt=ch.d["now"] - 30 * 86_400 + 60 * 3_600)
+        self.assertEqual(r.review(ch.d, POOL, 0)["passRates"]["payoutsToIncome"]["ratio"], 0.0, "the design's 72 hours")
+        ch.d["times"] = {"delay": 48 * 3_600, "hard": 7 * 86_400}
+        pr = r.review(ch.d, POOL, 0)["passRates"]
+        self.assertEqual((pr["payoutsToIncome"]["ratio"], pr["payoutsToIncome"]["level"], pr["batch"]), (0.775, "red", False))
+
     def test_thresholds_from_a_file(self):
         th = {"passes": {"window": 100, "yellow": 40, "red": 50}}
         self.assertEqual(r.review(self.world(100, 28).d, POOL, 0, thresholds=th)["passRates"]["passes"]["level"], "ok")
@@ -528,6 +547,12 @@ class Timing(unittest.TestCase):
         return ch
 
     best = staticmethod(lambda window, buy: window.index(min(window) if buy else max(window)))
+
+    def test_a_price_of_zero_after_the_fill_is_no_move_for_the_lead_test(self):
+        got = r.review(self.world(n=16, after=lambda o, buy, i: o if buy else 0).d, POOL, 0)
+        self.assertEqual((got["timing"]["lead"]["fills"], got["timing"]["lead"]["flag"]), (0, False),
+                         "eight sells followed by a zero price are eight unavailable prices, not eight moves")
+        self.assertNotIn("timing", got["kinds"])
 
     def test_a_zero_oracle_price_in_a_window_is_not_judged_and_not_divided_by(self):
         ch = self.world(pick=self.best)
@@ -614,6 +639,22 @@ class Recount(unittest.TestCase):
         self.assertEqual(rc["checked"], {"results": 1, "snapshots": 1, "unchecked": 0, "fills": 2})
         self.assertEqual(rc["moves"][0], {"tx": tx(5_012), "bps": -101.0}, "bought at 1 000 after ordering at 990: 1 % against it")
         self.assertEqual((got["verdict"], got["stopDraft"], got["action"]), ("clean", None, "approve"))
+
+    def test_only_an_unapproved_payout_of_a_pool_with_approvals_is_held(self):
+        ch, _ = self.world(passed=self.C + 999_999)
+        held = r.review(ch.d, POOL, 0)
+        self.assertEqual((held["action"], held["tx"]), ("hold", None))
+        ch.d["payouts"][0]["approved"] = True  # payable from its due time whatever the recount says
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["action"], got["tx"]["kind"], got["tx"]["note"]), ("none", "none", r.APPROVED))
+        self.assertIsNotNone(got["stopDraft"], "the draft of a stop stays")
+        self.assertNotIn("until None", r.summary(got))
+        ch.d["payouts"][0]["approved"] = False
+        ch.d["books"][POOL]["approvals"] = False  # a pool without approvals pays by itself: nothing to hold back
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["action"], got["tx"]["note"]), ("none", r.NO_APPROVAL))
+        self.assertNotIn("None", r.summary(got))
+        self.assertIsNotNone(got["stopDraft"])
 
     def test_a_result_that_does_not_count_up_is_flagged_with_a_draft_of_reason_three(self):
         ch, s1 = self.world(passed=self.C + 999_999)
@@ -810,6 +851,15 @@ class ACoinFlip(unittest.TestCase):
         ch.d["exam_events"][s1] = ev[:-1] + [first_end] + second
         rc = r.review(ch.d, POOL, 0)["recount"]["stage"]
         self.assertEqual((rc["flags"], rc["flip"]["trips"], rc["flip"]["stops"]), ([], 4, 2))
+
+    def test_the_days_of_every_step_count_as_the_fills_of_every_step_do(self):
+        ch = self.world([(0, 1.5, -290), (1, 1.5, 1_400)])
+        s1 = addr(0x301)
+        ev = ch.d["exam_events"][s1]
+        second = [dict(x, block=x["block"] + 100, t=x["t"] + 5 * self.DAY, tx=tx(8_000 + x["block"])) for x in ev[1:]]
+        ch.d["exam_events"][s1] = ev[:-1] + [dict(ev[-1], name="StepPassed", step=0)] + second
+        rc = r.review(ch.d, POOL, 0)["recount"]["stage"]
+        self.assertEqual((rc["fills"], rc["days"]), (8, 4), "days 0 and 1 of the first step, 5 and 6 of the second")
 
     def test_the_pool_counts_its_passes_in_this_shape_over_the_window_of_its_share_of_passes(self):
         ch = PassRates.world(PassRates(), 40, 10)
