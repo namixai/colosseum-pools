@@ -82,6 +82,19 @@ export const SIM_POOL_STOP_RESERVE_ABI = [
   "event StopFinal(uint256 indexed id, uint64 amount, uint256 reserved)",
 ];
 
+/**
+ * What a pool with payout approval adds: the approver, each payout's `approved` (its eighth field) and the time it
+ * goes out without approval, and two events. An approved payout is paid from its 72 hours, one not approved from 7
+ * days after its claim (PAYOUT_HARD).
+ */
+export const SIM_POOL_APPROVAL_ABI = [
+  "function approver() view returns (address)",
+  "function payoutHardAt(uint256 id) view returns (uint64)",
+  "function payout(uint256 id) view returns ((address account, address trader, uint64 amount, uint64 dueAt, uint8 state, bool wasStopped, uint64 stoppedAt, bool approved))",
+  "event PayoutApproved(uint256 indexed id, address indexed approver)",
+  "event ApproverSet(address indexed approver)",
+];
+
 /** Whether a pool has the stop reserve, from its answer to `reserved()`: a value, or a revert (a pool without it).
  *  `read` is that call; a failure that is not a revert (the node, the rate) is thrown, never taken for "without". */
 export async function hasStopReserve(read, isRevert) {
@@ -110,6 +123,8 @@ export const SIM_FACTORY_ABI = [
 export const FEE_BPS = 50n;
 export const PAYOUT_BPS = 800n;
 export const PAYOUT_DELAY = 72 * 3600;
+/** How long after its claim a payout not approved goes out anyway, on a pool with payout approval. */
+export const PAYOUT_HARD = 7 * 24 * 3600;
 /** How long a stop holds its money and can be lifted or objected to, on a pool with the stop reserve. */
 export const STOP_RESERVE = 14 * 24 * 3600;
 /** How long a pool runs at least, "at least 6 months (184 days)": before it the creator neither closes it nor takes
@@ -128,6 +143,7 @@ export const PAYOUT_STATE = ["None", "Due", "Stopped", "Paid", "Held", "Refused"
 export const STATUS = Object.freeze({
   waiting: "Waiting out the 72 hours",
   queued: "Due, in the queue to be sent",
+  approval: "Past the 72 hours, waiting for the approver; it goes out by itself 7 days after the claim",
   paid: "Paid",
   stopped: "Stopped by the checker",
   held: "Held: the token refused the transfer, the money is set aside for the trader",
@@ -138,6 +154,7 @@ export const STATUS = Object.freeze({
 export const STOP_REASON = Object.freeze({
   1: "Opposite positions with another account of this platform's pools",
   2: "Opposite positions with another account, and the two wallets linked",
+  3: "The result is disputed: a flaw of the exam, the oracle or the filler, shown by the transactions and the published text",
 });
 
 export function stopReasonText(reason) {
@@ -273,8 +290,12 @@ export function payouts(structs, events, now, times) {
     // Only a pool with the stop reserve has it (SIM_POOL_STOP_RESERVE_ABI); 0 there for a payout never stopped.
     const rawStoppedAt = p.stoppedAt ?? p[6];
     const stoppedAt = rawStoppedAt === undefined ? null : Number(rawStoppedAt);
+    // Only a pool with payout approval has it (SIM_POOL_APPROVAL_ABI): undefined elsewhere, and nothing waits on it.
+    const rawApproved = p.approved ?? p[7];
+    const approved = rawApproved === undefined ? null : Boolean(rawApproved);
+    const hardAt = approved === null ? null : dueAt - PAYOUT_DELAY + PAYOUT_HARD;
     let status;
-    if (state === 1) status = now < dueAt ? "waiting" : "queued";
+    if (state === 1) status = now < dueAt ? "waiting" : approved === false && now < hardAt ? "approval" : "queued";
     else if (state === 2) status = "stopped";
     else if (state === 3) status = "paid";
     else if (state === 4) status = "held";
@@ -291,6 +312,8 @@ export function payouts(structs, events, now, times) {
       dueAt,
       status,
       wasStopped: Boolean(p.wasStopped ?? p[5]),
+      approved,
+      hardAt,
       due: due.has(id) ? at(due.get(id), times) : null,
       paid: paid.has(id) ? at(paid.get(id), times) : null,
       stop: s ? {
