@@ -112,7 +112,7 @@ class TheFirstPool(unittest.TestCase):
         plan = d.plan_of(FIRST, h)
         self.assertEqual(plan[0], [(5_000 * 10**6, 45 * 10**6), (10_000 * 10**6, 85 * 10**6)])
         self.assertEqual(plan[1], (300, 600, 1000, [3, 4, 0], [1000, 1000, 500]))
-        self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 450, 1, 10))
+        self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 450, 4, 3))
         self.assertEqual(plan[4], plan[2], "the stage has the exam's terms")
         self.assertEqual(plan[5:], (604800, True, 150, h))
 
@@ -179,6 +179,23 @@ class TheFirstPool(unittest.TestCase):
             self.assertNotIn("without a fill", plan["terms_text"])
             self.assertIn("72 hours after the payout is claimed", plan["terms_text"])
             self.assertNotIn("up to 72 hours", plan["terms_text"], "the contract pays no earlier, and later if queued")
+
+    def test_the_cfos_fill_numbers_of_13_november(self):
+        """An order waits four blocks in both stages of both plans: a trader who sees the price a block ahead of the
+        oracle gains nothing from it. The first pool's window is three blocks until the filler's lateness is
+        measured; the measuring pool keeps the widest. The terms say both numbers."""
+        measure = json.loads((ROOT / "deployments/plans/sim-measure-pool.json").read_text(encoding="utf-8"))
+        for plan, window in ((FIRST, 3), (measure, int(constant("MAX_FILL_WINDOW")))):
+            for stage in ("exam", "funded"):
+                self.assertEqual(plan[stage]["fill_delay"], 4)
+                self.assertEqual(plan[stage]["fill_window"], window)
+            self.assertIn("An order is filled by the platform's filler no sooner than the fourth block after the one it "
+                          "is placed in, at the price of the block that fills it, and lapses at no cost if it is not "
+                          f"filled within {window} blocks from then.", plan["terms_text"])
+        # The placeholder is the window rule of docs/SIM-POOL.md at a largest lateness of none.
+        max_late = 0
+        self.assertEqual(FIRST["exam"]["fill_window"], max_late + 1 + max(2, -(-(max_late + 1) // 2)))
+        self.assertIn("fill_window: 3 blocks, a placeholder", FIRST["about"])
 
     def test_dollars_round_to_usdc_units(self):
         self.assertEqual(d.usdc_units(2.01), 2_010_000, "int(2.01 * 10**6) is 2 009 999")

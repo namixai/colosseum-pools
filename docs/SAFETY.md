@@ -332,10 +332,10 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S105 | `src/KeyBinder.sol:297` | `if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);` |
 | S106 | `src/Pool.sol:334` | `emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);` |
 | S107 | `src/KeyBinder.sol:212` | `function pause() external onlyGuardianOrOwner` |
-| S108 | `src/exam/PaperExam.sol:330` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
-| S109 | `src/exam/PaperExam.sol:364` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
-| S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
-| S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
+| S108 | `src/exam/PaperExam.sol:379` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
+| S109 | `src/exam/PaperExam.sol:389` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
+| S110 | `src/exam/PaperExam.sol:110` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
+| S111 | `src/exam/PaperExam.sol:678` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
 | S112 | `src/sim/SimPoolFactory.sol:38` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
 | S113 | `src/sim/SimPool.sol:567` | `if (p.state != PayoutState.Due \|\| p.wasStopped) revert BadPayout();` |
 | S114 | `src/sim/SimPool.sol:208` | `event PayoutStopped(` |

@@ -210,7 +210,10 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `eth_getLogs` an hour, the live accounts' `Placed` and the pools' new exams and stages with their
   orders, so an order placed seconds after its purchase is seen. It sends each order's `fill` from the
   filler's key for the block its window opens; a fill the exam refuses (the book past the ceiling, say)
-  is sent again for the next block, once a block, while the window lasts. A fill waits for its receipt,
+  is sent again for the next block, once a block, while the window lasts. The same loop keeps every
+  running exam's stops and takes from their events (`TriggerSet`, `TriggerCleared`, `TriggerFilled`): each
+  armed one is tried once a block by a call that changes nothing, and carried out (`fillTrigger`, the same
+  fixed gas as a fill) in the block after the oracle has reached it. A fill waits for its receipt,
   so two orders in one block go one after the other. A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
   `expire`, `release`, `claimPayout`, `pay`. One `pay` is told to pay at most ten payouts and to look
@@ -254,7 +257,10 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
-  ceiling of 150 bp, a fill window of 10 blocks until `--measure` says otherwise. The factory needs an
+  ceiling of 150 bp, a fill delay of 4 blocks in both stages (an order placed in block B is filled no
+  sooner than block B + 4, so seeing the price a block ahead of the oracle gains a trader nothing; the
+  CFO, 13 November 2026), and a fill window of 3 blocks, the window rule below at a filler that is
+  never late, until `--measure` says otherwise. The factory needs an
   idle limit; the plan sets it to the stage's thirty days, where it never ends a stage before its
   deadline, so the terms name no idle rule.
 
@@ -428,8 +434,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
 ## Measuring the filler's window
 
 The fill window of a plan is fixed at creation, so it is measured first, on a pool of its own
-(`deployments/plans/sim-measure-pool.json`: one line of 1 000 for 9, the widest window, 60 blocks, so a late
-fill is measured and not lapsed), with the host's keeper running and filling from the filler's key.
+(`deployments/plans/sim-measure-pool.json`: one line of 1 000 for 9, the first pool's fill delay of 4 blocks and
+the widest window, 60 blocks, so a late fill is measured and not lapsed), with the host's keeper running and filling from the filler's key.
 
     spike/.venv/bin/python -m ops.deploy_sim buy --deployment <label> --pool <measuring pool> --line 0 --trader trader --send
     spike/.venv/bin/python -m ops.sim_keeper --deployment <label> --measure <exam> --trader-wallet trader --orders 100

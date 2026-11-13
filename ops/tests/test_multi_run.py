@@ -204,7 +204,7 @@ class ExamReads(unittest.TestCase):
 
     def test_the_target_and_the_cost_are_worked_out_as_the_exam_does(self):
         self.assertIn("int256 target = capital + (capital * int256(uint256(_terms.targetsBps[step]))) / int256(uint256(Units.BPS));", EXAM)
-        self.assertIn("uint256 cost = (ntl * _terms.costPpm + PPM - 1) / PPM;", EXAM)
+        self.assertIn("cost = (ntl * _terms.costPpm + PPM - 1) / PPM;", EXAM)
         self.assertEqual(r.target_equity(5_000_000, 10), 5_005_000)
         self.assertEqual(r.target_equity(5_000_001, 10), 5_005_001)  # 5000.001 of profit, rounded down
         self.assertEqual(r.close_cost(20_000_000, 100), 2_000)
