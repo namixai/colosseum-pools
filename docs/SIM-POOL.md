@@ -226,7 +226,12 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   exam runs, and the week after the close). `request --amount`, `withdraw` and `cancel` do the same for
   the creator's withdrawal: what it asks and from when to when it can be carried out, what it pays
   now, or `NotReady`, `RequestLapsed`, `NoRequest` with the times. Without `--send` they print what
-  they would do and read no key. The first pool's plan is
+  they would do and read no key. With `--signer ADDRESS` (`pool`, `codes`, `close`, `finish`, `request`,
+  `withdraw`, `cancel`, `approver`, `approve`) the call is from an address that signs elsewhere, our
+  pool's creator being a Safe and its approver a Ledger: the command checks as that address and prints
+  the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
+  `pool --signer` prints the terms, the approval of the locked USDC and `create` with 1 HYPE; the codes
+  follow with `codes --signer` once the pool's address is known. The first pool's plan is
   `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a

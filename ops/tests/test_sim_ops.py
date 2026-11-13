@@ -415,6 +415,83 @@ class TheClosing(unittest.TestCase):
         stage = {**x, "status": 2, "kind": 2, "passed_at": 5_000, "steps": 1}
         self.assertIn("passed its stage: the keeper claims its payout", d.exam_text("E", stage, 6_000, 7 * self.DAY))
 
+    def test_a_signer_elsewhere_gets_the_calls_printed_and_nothing_is_sent(self):
+        """Our creator is a Safe and our approver a Ledger: --signer prints the calls for them, reads no key, sends
+        nothing; the checks are made as that address."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+        safe = d.to_checksum_address(self.CREATOR)
+        st = self.state(requested=500_000_000, ready_at=1_000, withdrawable=900_000_000)
+        for argv, sig in ((["request", "--amount", "250"], "requestWithdraw(uint256)"), (["withdraw"], "withdraw()"),
+                          (["cancel"], "cancelWithdraw()")):
+            out = io.StringIO()
+            with mock.patch.object(d, "pool_state", return_value=st), mock.patch.object(d, "chain_now", return_value=1_000), \
+                    mock.patch.object(d.c, "address_of") as key_address, mock.patch.object(d.c, "account") as key, \
+                    mock.patch.object(d.c, "transact") as sent, redirect_stdout(out):
+                self.assertEqual(d.main([argv[0], "--pool", self.OTHER, "--signer", safe, *argv[1:], "--send"]), 0)
+            sent.assert_not_called()
+            key.assert_not_called()
+            key_address.assert_not_called()
+            said = out.getvalue()
+            batch = json.loads(said[said.index("{"):])
+            self.assertEqual(len(batch["transactions"]), 1)
+            tx = batch["transactions"][0]
+            self.assertEqual((tx["to"], tx["value"]), (d.to_checksum_address(self.OTHER), "0"))
+            self.assertTrue(tx["data"].startswith("0x" + keccak(text=sig)[:4].hex()), sig)
+        # The closer's close, for a signer elsewhere too.
+        out = io.StringIO()
+        with mock.patch.object(d, "pool_state", return_value=st), mock.patch.object(d, "chain_now", return_value=1_000), \
+                mock.patch.object(d.c, "transact") as sent, redirect_stdout(out):
+            self.assertEqual(d.main(["close", "--pool", self.OTHER, "--signer", d.to_checksum_address(self.CLOSER)]), 0)
+        sent.assert_not_called()
+        said = out.getvalue()
+        self.assertTrue(json.loads(said[said.index("{"):])["transactions"][0]["data"].startswith(
+            "0x" + keccak(text="close()")[:4].hex()))
+        # The checks are the signer's: a Safe that is not the creator is refused, before anything is printed.
+        other = d.to_checksum_address(self.OTHER)
+        with mock.patch.object(d, "pool_state", return_value=st), mock.patch.object(d, "chain_now", return_value=1_000):
+            with self.assertRaises(SystemExit) as caught:
+                d.main(["withdraw", "--pool", self.OTHER, "--signer", other])
+        self.assertIn("NotCreator", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            d.main(["withdraw", "--pool", self.OTHER])
+        self.assertIn("--key or --signer", str(caught.exception))
+
+    def test_a_pool_for_a_safe_is_three_calls_in_order_and_its_codes_a_batch(self):
+        from unittest import mock
+        import io
+        from contextlib import redirect_stdout
+        safe = d.to_checksum_address(self.CREATOR)
+        record = {"SimPoolFactory": "0x" + "f1" * 20, "TermsBook": "0x" + "b0" * 20, "usdc": "0x" + "c0" * 20}
+        out = io.StringIO()
+        with mock.patch.object(d.deployments, "load", return_value=record), \
+                mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "send_tx") as sent, redirect_stdout(out):
+            self.assertEqual(d.main(["pool", "--deployment", "x", "--plan", "deployments/plans/sim-first-pool.json",
+                                     "--signer", safe, "--send"]), 0)
+        key.assert_not_called()
+        sent.assert_not_called()
+        said = out.getvalue()
+        txs = json.loads(said[said.index("{"):])["transactions"]
+        self.assertEqual([t["to"].lower() for t in txs], [record["TermsBook"], record["usdc"], record["SimPoolFactory"]])
+        self.assertEqual([t["value"] for t in txs], ["0", "0", str(d.CREATION_FEE)], "1 HYPE with create")
+        self.assertTrue(txs[2]["data"].startswith("0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex()))
+        # Its codes: one setCode each still to set, read from the pool as the Safe.
+        p1 = d.to_checksum_address("0x" + "11" * 20)
+        plan = {"codes": [{"code": "A", "partner": p1, "bps": 5000}, {"code": "B", "partner": "creator", "bps": 0}]}
+        out = io.StringIO()
+        with mock.patch.object(d.pathlib.Path, "read_text", return_value=json.dumps(plan)), \
+                mock.patch.object(d.c, "call_view", return_value=(d.ZERO, 0, False)), \
+                mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "transact") as sent, redirect_stdout(out):
+            self.assertEqual(d.main(["codes", "--pool", self.OTHER, "--plan", "p.json", "--signer", safe]), 0)
+        key.assert_not_called()
+        sent.assert_not_called()
+        said = out.getvalue()
+        txs = json.loads(said[said.index("{"):])["transactions"]
+        self.assertEqual(len(txs), 2)
+        self.assertTrue(all(t["data"].startswith("0x" + keccak(text=d.SET_CODE)[:4].hex()) for t in txs))
+        self.assertIn(safe[2:].lower(), txs[1]["data"].lower(), "the creator's own code names the Safe")
+
     def test_until_when_an_exam_runs(self):
         x = {"status": 1, "started": 1_000, "duration": 30 * self.DAY, "passed_at": 0, "done": False}
         self.assertIn("runs until " + d.utc(1_000 + 30 * self.DAY), d.exam_text("E", x, 2_000, 7 * self.DAY))

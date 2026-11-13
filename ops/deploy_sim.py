@@ -53,7 +53,12 @@ calls `create` with 1 HYPE, from the creator's key, then sets the plan's codes a
 plan file gives the menu, both stages' rules and terms, the fund window, the book's ceiling, the codes
 and the terms' text.
 
-Without --send nothing is sent and no key is read: each command prints what it would do. With it,
+Without --send nothing is sent and no key is read: each command prints what it would do.
+
+With --signer ADDRESS (pool, codes, close, finish, request, withdraw, cancel, approver, approve) the call is
+from an address that signs elsewhere: our pool's creator is a Safe with two signatures, its approver of payouts
+a Ledger. The command reads the chain as that address, checks as it would for a key, and prints the calls in
+order as the Safe's Transaction Builder takes them (to, value, data); it sends nothing and reads no key. With it,
 the transactions go out from the named keys. Testnet only; on mainnet only after an audit.
 """
 
@@ -261,7 +266,7 @@ def pool(args) -> int:
     text = raw["terms_text"]
     terms_hash = keccak(text=text)
     plan = plan_of(raw, terms_hash)
-    codes = codes_of(raw, c.address_of(args.creator))
+    codes = codes_of(raw, signer_of(args, "creator"))
     locked = locked_of(raw)
     factory = record.get("SimPoolFactory", "(none in this record)")
     print(f"deploy_sim pool: factory {factory}, {len(plan[0])} sizes "
@@ -271,6 +276,14 @@ def pool(args) -> int:
           f"fill window {plan[2][7]} blocks")
     print_codes(codes)
     print(f"  terms            {len(text)} bytes, keccak 0x{terms_hash.hex()}")
+    if getattr(args, "signer", None):
+        # The creator is whoever calls create: the Safe signs all three; its codes come after, by `codes --signer`,
+        # once the pool's address is known.
+        print("  then             `codes --pool <the new pool> --plan … --signer …` for the codes")
+        return print_batch(args, "open a simulated pool", [
+            (record["TermsBook"], 0, c.encode_call("publish(string)", ["string"], [text])),
+            (record["usdc"], 0, c.encode_call("approve(address,uint256)", ["address", "uint256"], [factory, locked])),
+            (factory, CREATION_FEE, c.encode_call(f"create({PLAN_T})", [PLAN_T], [plan]))])
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
@@ -474,7 +487,7 @@ def approve_check(approver: str, sender: str, payouts: dict, ids: list[int], har
 
 
 def approver_cmd(args) -> int:
-    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
     creator = to_checksum_address(c.call_view(pool_, "creator()", [], [], ["address"])[0])
     if sender != creator:
         raise SystemExit(f"NotCreator: {sender} is not the pool's creator ({creator})")
@@ -485,7 +498,7 @@ def approver_cmd(args) -> int:
 
 
 def approve(args) -> int:
-    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
     ids = ids_of(args.ids)
     count = int(c.call_view(pool_, "payoutCount()", [], [], ["uint256"])[0])
     payouts = {i: c.call_view(pool_, "payout(uint256)", ["uint256"], [i], [PAYOUT_T])[0] for i in ids if i < count}
@@ -524,40 +537,56 @@ def chain_now() -> int:
 
 
 def close(args) -> int:
-    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
     role = close_check(pool_state(pool_), chain_now(), sender)
-    print(f"deploy_sim close: pool {pool_}, close() from {args.key} ({sender}) as {role}")
+    print(f"deploy_sim close: pool {pool_}, close() from {args.key or 'the signer'} ({sender}) as {role}")
     print("  the money goes where it would at any finish; the closer gets none of it")
-    if not args.send:
-        print("deploy_sim: nothing was sent (--send sends).")
-        return 0
-    c.assert_testnet()
-    rcpt = c.transact(c.account(args.key), pool_, "close()")
-    print(f"deploy_sim: closed, tx {rcpt['transactionHash']}")
-    return 0
+    return send_or_say(args, pool_, "close()")
 
 
 def finish(args) -> int:
-    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
     st, now = pool_state(pool_), chain_now()
     line = None
     if args.exam:
         exam = to_checksum_address(args.exam)
         line = exam_text(exam, read_exam(pool_, exam), now, st["fund_window"])
     role = finish_check(st, now, sender, line)
-    print(f"deploy_sim finish: pool {pool_}, finish() from {args.key} ({sender}) as {role}")
+    print(f"deploy_sim finish: pool {pool_}, finish() from {args.key or 'the signer'} ({sender}) as {role}")
     print(f"  pays out to the pool's creator {st['creator']} what is left, each code's partner its share; "
           "what is held stays for its traders and partners")
-    if not args.send:
-        print("deploy_sim: nothing was sent (--send sends).")
-        return 0
-    c.assert_testnet()
-    rcpt = c.transact(c.account(args.key), pool_, "finish()")
-    print(f"deploy_sim: finished, tx {rcpt['transactionHash']}")
+    return send_or_say(args, pool_, "finish()")
+
+
+def signer_of(args, key: str = "key") -> str:
+    """Who the call is from: `--signer`, an address that signs elsewhere (our Safe, or the Ledger's address), or the
+    named key's address. Neither given: refused."""
+    if getattr(args, "signer", None):
+        return to_checksum_address(args.signer)
+    if getattr(args, key, None):
+        return c.address_of(getattr(args, key))
+    raise SystemExit(f"--{key} or --signer: who the call is from")
+
+
+def batch(name: str, txs: list[tuple[str, int, bytes]]) -> dict:
+    """The calls for a signer elsewhere, in order, as the Safe's Transaction Builder takes them (a file to load), and
+    as any wallet shows them: to, value in wei, data."""
+    return {"version": "1.0", "chainId": str(c.CHAIN_ID),
+            "meta": {"name": name, "description": "deploy_sim: sign these in this order, from the signer named"},
+            "transactions": [{"to": to_checksum_address(to), "value": str(v), "data": "0x" + d.hex()} for to, v, d in txs]}
+
+
+def print_batch(args, name: str, txs: list[tuple[str, int, bytes]]) -> int:
+    """With --signer nothing is sent and no key is read: the calls are printed for the Safe or the Ledger's wallet."""
+    print(f"deploy_sim: nothing was sent; for {to_checksum_address(args.signer)} to sign, in this order "
+          "(the Safe's Transaction Builder takes this JSON):")
+    print(json.dumps(batch(name, txs), indent=1))
     return 0
 
 
 def send_or_say(args, pool_: str, sig: str, types: list | None = None, values: list | None = None) -> int:
+    if getattr(args, "signer", None):
+        return print_batch(args, f"{sig} on {pool_}", [(pool_, 0, c.encode_call(sig, types or [], values or []))])
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
@@ -568,7 +597,7 @@ def send_or_say(args, pool_: str, sig: str, types: list | None = None, values: l
 
 
 def request(args) -> int:
-    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
     amount = amount_units(args.amount)
     text = request_check(pool_state(pool_), chain_now(), sender, amount)
     print(f"deploy_sim request: pool {pool_}, requestWithdraw({amount}) from {args.key} ({sender}): {text}")
@@ -577,7 +606,7 @@ def request(args) -> int:
 
 
 def withdraw(args) -> int:
-    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
     st = pool_state(pool_)
     amount = withdraw_check(st, chain_now(), sender)
     print(f"deploy_sim withdraw: pool {pool_}, withdraw() from {args.key} ({sender}): pays {usdc(amount)}, the less "
@@ -587,7 +616,7 @@ def withdraw(args) -> int:
 
 
 def cancel(args) -> int:
-    pool_, sender = to_checksum_address(args.pool), c.address_of(args.key)
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
     st = pool_state(pool_)
     role = cancel_check(st, sender)
     print(f"deploy_sim cancel: pool {pool_}, cancelWithdraw() from {args.key} ({sender}) as {role}: "
@@ -597,9 +626,14 @@ def cancel(args) -> int:
 
 def codes(args) -> int:
     pool_ = to_checksum_address(args.pool)
-    codes_ = codes_of(json.loads(pathlib.Path(args.plan).read_text()), c.address_of(args.creator))
-    print(f"deploy_sim codes: pool {pool_}, from {args.creator}")
+    codes_ = codes_of(json.loads(pathlib.Path(args.plan).read_text()), signer_of(args, "creator"))
+    print(f"deploy_sim codes: pool {pool_}, from {args.signer or args.creator}")
     print_codes(codes_)
+    if getattr(args, "signer", None):
+        on_chain = lambda h: c.call_view(pool_, "codeOf(bytes32)", ["bytes32"], [h], CODE_OF)
+        txs = [(pool_, 0, c.encode_call(SET_CODE, ["bytes32", "address", "uint16"], [h, partner, bps]))
+               for _, h, partner, bps in to_set(codes_, on_chain)]
+        return print_batch(args, f"codes on {pool_}", txs)
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
@@ -645,6 +679,7 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--deployment", required=True)
     q.add_argument("--plan", required=True)
     q.add_argument("--creator", default="creator")
+    q.add_argument("--signer", help="the creator as an address that signs elsewhere (our Safe): print the calls, send nothing")
     q.add_argument("--send", action="store_true")
     b = sub.add_parser("buy")
     b.add_argument("--deployment", required=True)
@@ -657,28 +692,33 @@ def main(argv: list[str] | None = None) -> int:
     k.add_argument("--pool", required=True)
     k.add_argument("--plan", required=True)
     k.add_argument("--creator", default="creator")
+    k.add_argument("--signer", help="the creator as an address that signs elsewhere (our Safe): print the calls, send nothing")
     k.add_argument("--send", action="store_true")
     for name in ("close", "finish"):
         z = sub.add_parser(name)
         z.add_argument("--pool", required=True)
-        z.add_argument("--key", required=True, help="the key it is sent from: the closer, or the pool's creator")
+        z.add_argument("--key", help="the key it is sent from: the closer, or the pool's creator")
+        z.add_argument("--signer", help="an address that signs elsewhere (our Safe, a Ledger): print the call, send nothing")
         if name == "finish":
             z.add_argument("--exam", help="an exam or stage of the pool: says until when it keeps the pool from finishing")
         z.add_argument("--send", action="store_true")
     z = sub.add_parser("approver")
     z.add_argument("--pool", required=True)
-    z.add_argument("--key", required=True, help="the pool's creator")
+    z.add_argument("--key", help="the pool's creator")
+    z.add_argument("--signer", help="an address that signs elsewhere (our Safe): print the call, send nothing")
     z.add_argument("--address", required=True, help="the approver of payouts; 0x000…0 for none")
     z.add_argument("--send", action="store_true")
     z = sub.add_parser("approve")
     z.add_argument("--pool", required=True)
-    z.add_argument("--key", required=True, help="the pool's approver")
+    z.add_argument("--key", help="the pool's approver")
+    z.add_argument("--signer", help="an address that signs elsewhere (the Ledger's): print the call, send nothing")
     z.add_argument("--ids", required=True, help="payout numbers, as 3,4,7")
     z.add_argument("--send", action="store_true")
     for name in ("request", "withdraw", "cancel"):
         z = sub.add_parser(name)
         z.add_argument("--pool", required=True)
-        z.add_argument("--key", required=True, help="the key it is sent from: the pool's creator, or for cancel the closer")
+        z.add_argument("--key", help="the key it is sent from: the pool's creator, or for cancel the closer")
+        z.add_argument("--signer", help="an address that signs elsewhere (our Safe): print the call, send nothing")
         if name == "request":
             z.add_argument("--amount", required=True, help='USDC, as "250" or "84.575"')
         z.add_argument("--send", action="store_true")
