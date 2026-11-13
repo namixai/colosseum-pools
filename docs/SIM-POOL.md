@@ -257,11 +257,45 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
   factory: the same asset, opposite sides, at most 10 minutes apart, sizes within 20 %. A match is
   reason 1; with the two traders funded by one address, or one paying the other (USDC transfers since
-  the deployment), reason 2. It stops a payout at least 5 minutes before it is due, once, from the
-  factory's checker key, and lifts its own stop with `--lift POOL:ID`, within 14 days of the stop.
+  the deployment), reason 2. It stops a payout once, from the factory's checker key, and until when
+  is the pool's own rule: on a pool with payout approval until the payout is paid, approved or not (an
+  unapproved one waits up to 7 days, and a pair found on the fourth still stops it); on a pool from
+  before approvals at least 5 minutes before it is due. It and lifts its own stop with `--lift POOL:ID`, within 14 days of the stop.
   Without `--wallet` it only
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
+
+- **The review of a payout**, `ops/payout_review.py`: what whoever signs a payout through, or stops it,
+  reads first. It reads the chain only, sends nothing and holds no key. For each payout still waiting
+  it names the trader, the stage, the exam, the amount and when it is due, and then:
+  - the pairs of the stage and of the exam, by the checker's rule, with both fills' transactions;
+  - every other buyer of the factory this trader shares a sender of USDC with, or exchanged USDC with.
+    The pools are left out, since they pay every trader. A sender that funded more than five buyers
+    is named but not counted, as an exchange's wallet would be;
+  - how late the filler put this trader's fills (`late`) against everyone else's;
+  - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
+    under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
+  - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
+    whether the money free of what is owed, held back and kept for stops covers them.
+
+  Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
+  72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. Both spans are
+  read from the factory (`PAYOUT_DELAY()`, `PAYOUT_HARD()`), not assumed; where one was not read on a
+  pool with approvals, the review offers no call and says no time. The call to
+  sign is written out as text with its calldata: `stopPayout` (reason 1 or 2) when there is a pair,
+  since the pool takes no such stop without two fills, or `approvePayouts` otherwise.
+  Each call is offered only if the pool would take it. A payout that is not waiting (paid, stopped, held or refused, as
+  `--id` may name one) is offered neither an approval nor a stop, only its state in words. The approval goes only to a pool that answers
+  `approver()`. A pool without it pays at 72 hours by itself, and the review says so, with no call and no
+  ceiling. A payout approved already is offered no second approval (the pool would revert it), and a pool
+  whose approver is the zero address is offered none: nobody could sign it, and the payout goes out at its
+  ceiling. A stop goes only to a payout still waiting and never stopped, and in time by the pool's rule:
+  until it is paid on a pool with approvals, until 5 minutes before `dueAt` on one without. Links of
+  reason 2 leave out the senders the review does not count. An exam or stage of the pool that was not
+  read makes the pool's running total incomplete: `enough` is false, and the account is named. The names, the
+  selector, the fields of a payout and the pool's rule for a stop are held to `src/sim` by tests. A stop of reason 3, a result disputed without a pair,
+  needs a written analysis the script does not make. It cannot see a pair on another factory or another venue,
+  accounts under wallets nothing links, or USDC that arrived before the deployment's block.
 
 - **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
