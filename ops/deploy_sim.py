@@ -313,9 +313,17 @@ def exam_text(exam: str, x: dict, now: int, fund_window: int) -> str:
     status = STATUS[x["status"]]
     if status == "Active":
         until = x["started"] + x["duration"]
+        # Each later step has a deadline of its own, a step's duration from its start (review of #279).
+        later = max(x.get("steps", 1) - x.get("step", 0) - 1, 0)
         if now < until:
+            if later:
+                return (f"{exam} is on step {x['step'] + 1} of {x['steps']}: this step runs until {utc(until)} at the "
+                        f"latest and, if it passes, {later} more step(s) of up to {x['duration'] // 86_400} day(s) each "
+                        f"follow, so until {utc(until + later * x['duration'])} at the latest; sooner if it breaks a rule")
             return f"{exam} runs until {utc(until)} at the latest, sooner if it breaks a rule"
         return f"{exam} is past its deadline ({utc(until)}): the keeper expires and releases it at its next pass"
+    if status == "Passed" and x.get("kind") == 2:  # Kind.Stage: its payout is claimed, it is not funded (review of #279)
+        return f"{exam} passed its stage: the keeper claims its payout (claimPayout) at its next pass, and that ends it"
     if status == "Passed":
         until = x["passed_at"] + fund_window
         if now <= until:
@@ -349,9 +357,10 @@ def finish_check(st: dict, now: int, sender: str, exam_line: str | None = None) 
 def read_exam(pool_: str, exam: str) -> dict:
     status, _, _, passed_at = c.call_view(exam, "result()", [], [], ["uint8", "address", "uint64", "uint64"])
     terms = c.call_view(exam, "terms()", [], [], [TERMS_OUT])[0]
-    done = c.call_view(pool_, "accountOf(address)", ["address"], [exam], ["uint8", "uint8", "bool"])[2]
+    kind, _, done = c.call_view(pool_, "accountOf(address)", ["address"], [exam], ["uint8", "uint8", "bool"])
     return {"status": int(status), "started": int(c.call_view(exam, "stepStartedAt()", [], [], ["uint64"])[0]),
-            "duration": int(terms[2]), "passed_at": int(passed_at), "done": bool(done)}
+            "duration": int(terms[2]), "passed_at": int(passed_at), "done": bool(done), "kind": int(kind),
+            "step": int(c.call_view(exam, "step()", [], [], ["uint8"])[0]), "steps": len(terms[1])}
 
 
 def chain_now() -> int:
