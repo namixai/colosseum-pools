@@ -138,10 +138,13 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader
   than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse
   (S111); every fill says where its price came from (S109).
-- **A simulated pool's checker.** A payout of a simulated pool waits 72 hours (S112). Until then the factory's
-  checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the
-  transactions that show the opposite positions, and for linked wallets the transactions that link them
-  (S113, S114). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the
+- **A simulated pool's checker.** A payout of a simulated pool waits 72 hours (S112) and the approval of the
+  approver its creator names (S136), or 7 days from its claim without it (S133, S134): no payout leaves sooner,
+  and none waits on the approver longer. A payout waiting for its approval keeps its money: a later one is paid
+  only if the pool also covers it (S135). Until a payout is paid, approved or not, the factory's checker, and
+  nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show
+  the opposite positions, and for linked wallets the transactions that link them; or, for a result disputed, the
+  transactions that show the flaw and the hash of the published dispute (S113, S114, S137). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the
   creator is the platform that also runs the checker. What holds it is that it shows: every stop and every
   lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`)
   for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and
@@ -333,23 +336,28 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S110 | `src/exam/PaperExam.sol:98` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
 | S111 | `src/exam/PaperExam.sol:519` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
 | S112 | `src/sim/SimPoolFactory.sol:38` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
-| S113 | `src/sim/SimPool.sol:531` | `if (block.timestamp >= p.dueAt) revert NotDue();` |
-| S114 | `src/sim/SimPool.sol:200` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:555` | `function liftStop(uint256 id) external onlyChecker {` |
-| S116 | `src/sim/SimPoolFactory.sol:181` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
-| S117 | `src/sim/SimPool.sol:334` | `uint256 keep = owed + held + reserved + (finished ? 0 : floor);` |
-| S118 | `src/sim/SimPoolFactory.sol:41` | `uint32 public constant STOP_RESERVE = 14 days;` |
-| S119 | `src/sim/SimPool.sol:464` | `uint256 kept = held + reserved;` |
-| S120 | `src/sim/SimPool.sol:560` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();` |
-| S121 | `src/sim/SimPool.sol:656` | `if (c.used) revert CodeUsed();` |
-| S122 | `src/sim/SimPool.sol:376` | `_receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);` |
-| S123 | `src/sim/SimPool.sol:725` | `if (partner == address(0)) revert NoSuchCode();` |
-| S124 | `src/sim/SimPoolFactory.sol:45` | `uint32 public constant MIN_TERM = 184 days;` |
-| S125 | `src/sim/SimPool.sol:683` | `revert Locked();` |
-| S126 | `src/sim/SimPool.sol:338` | `if (w > p) w = p;` |
-| S127 | `src/sim/SimPoolFactory.sol:49` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
-| S128 | `src/sim/SimPool.sol:629` | `if (block.timestamp < readyAt) revert NotReady();` |
-| S129 | `src/sim/SimPool.sol:698` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
-| S130 | `src/sim/SimPool.sol:630` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
-| S131 | `src/sim/SimPool.sol:632` | `uint256 amount = r < w ? r : w;` |
-| S132 | `src/sim/SimPool.sol:333` | `if (staged > floor) floor = staged;` |
+| S113 | `src/sim/SimPool.sol:567` | `if (p.state != PayoutState.Due \|\| p.wasStopped) revert BadPayout();` |
+| S114 | `src/sim/SimPool.sol:208` | `event PayoutStopped(` |
+| S115 | `src/sim/SimPool.sol:595` | `function liftStop(uint256 id) external onlyChecker {` |
+| S116 | `src/sim/SimPoolFactory.sol:185` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
+| S117 | `src/sim/SimPool.sol:349` | `uint256 keep = owed + held + reserved + (finished ? 0 : floor);` |
+| S118 | `src/sim/SimPoolFactory.sol:45` | `uint32 public constant STOP_RESERVE = 14 days;` |
+| S119 | `src/sim/SimPool.sol:499` | `uint256 kept = held + reserved;` |
+| S120 | `src/sim/SimPool.sol:600` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert ReserveOver();` |
+| S121 | `src/sim/SimPool.sol:719` | `if (c.used) revert CodeUsed();` |
+| S122 | `src/sim/SimPool.sol:391` | `_receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);` |
+| S123 | `src/sim/SimPool.sol:788` | `if (partner == address(0)) revert NoSuchCode();` |
+| S124 | `src/sim/SimPoolFactory.sol:49` | `uint32 public constant MIN_TERM = 184 days;` |
+| S125 | `src/sim/SimPool.sol:746` | `revert Locked();` |
+| S126 | `src/sim/SimPool.sol:353` | `if (w > p) w = p;` |
+| S127 | `src/sim/SimPoolFactory.sol:53` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
+| S128 | `src/sim/SimPool.sol:686` | `if (block.timestamp < readyAt) revert NotReady();` |
+| S129 | `src/sim/SimPool.sol:761` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
+| S130 | `src/sim/SimPool.sol:687` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
+| S131 | `src/sim/SimPool.sol:689` | `uint256 amount = r < w ? r : w;` |
+| S132 | `src/sim/SimPool.sol:348` | `if (staged > floor) floor = staged;` |
+| S133 | `src/sim/SimPoolFactory.sol:42` | `uint32 public constant PAYOUT_HARD = 7 days;` |
+| S134 | `src/sim/SimPool.sol:489` | `if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {` |
+| S135 | `src/sim/SimPool.sol:501` | `if (bal < ahead + p.amount) {` |
+| S136 | `src/sim/SimPool.sol:615` | `if (msg.sender != approver \|\| msg.sender == address(0)) revert NotApprover();` |
+| S137 | `src/sim/SimPool.sol:569` | `if (paired != address(0) \|\| trades.length == 0 \|\| links.length != 1) revert BadReason();` |

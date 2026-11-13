@@ -68,6 +68,11 @@ contract SimPoolHandler is Test {
     uint256 public ghostWithdrawMismatch;
     /// A stranger's cancel of a request that went through.
     uint256 public ghostBadCancel;
+    /// A payout paid (or set aside for a refused trader) before its 72 hours, unapproved before its 7 days, or
+    /// that was not waiting when `pay` began (stopped, say).
+    uint256 public ghostEarlyPay;
+    /// Who approves payouts, named by the creator in setUp.
+    address public approver = makeAddr("approver");
     /// `finish` went through with something still owed, running, or kept for a stop.
     uint256 public ghostEarlyFinish;
     /// A finish by the creator or the closer refused with the pool closed a week ago, nothing owed, running or kept for a
@@ -351,7 +356,39 @@ contract SimPoolHandler is Test {
         _pay(bound(max, 1, 5));
     }
 
+    /// The approver approves one waiting payout, now and then; a stranger must be refused.
+    function approve(uint256 seed) external {
+        uint256 n = pool.payoutCount();
+        if (n == 0 || seed % 3 == 0) return;
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = (seed >> 8) % n;
+        SimPool.Payout memory p = pool.payout(ids[0]);
+        if (p.state != SimPool.PayoutState.Due || p.approved) return;
+        vm.prank(stranger);
+        try pool.approvePayouts(ids) {
+            ghostEarlyPay += 1;
+        } catch {}
+        vm.prank(approver);
+        pool.approvePayouts(ids);
+        calls["approve"] += 1;
+    }
+
     function _pay(uint256 max) internal {
+        uint256 n = pool.payoutCount();
+        SimPool.PayoutState[] memory was = new SimPool.PayoutState[](n);
+        for (uint256 i = 0; i < n; ++i) was[i] = pool.payout(i).state;
+        _payAndCount(max);
+        for (uint256 i = 0; i < n; ++i) {
+            SimPool.Payout memory p = pool.payout(i);
+            if (p.state == was[i]) continue;
+            // Only a waiting payout changes in `pay`, to paid or set aside: never a stopped or final one.
+            if (was[i] != SimPool.PayoutState.Due) ghostEarlyPay += 1;
+            if (block.timestamp < p.dueAt) ghostEarlyPay += 1;
+            if (!p.approved && block.timestamp < pool.payoutHardAt(i)) ghostEarlyPay += 1;
+        }
+    }
+
+    function _payAndCount(uint256 max) internal {
         uint256 before = usdc.balanceOf(address(pool));
         uint256 kept = pool.held() + pool.reserved();
         uint256 free = before > kept ? before - kept : 0;
@@ -419,7 +456,8 @@ contract SimPoolHandler is Test {
         if (n == 0 || _exams.length < 2) return;
         uint256 id = seed % n;
         SimPool.Payout memory p = pool.payout(id);
-        if (p.state != SimPool.PayoutState.Due || p.wasStopped || block.timestamp >= p.dueAt) return;
+        // Until it is paid, approved or not.
+        if (p.state != SimPool.PayoutState.Due || p.wasStopped) return;
         address paired = _exams[pairSeed % _exams.length];
         if (paired == p.account) paired = _exams[(pairSeed % _exams.length + 1) % _exams.length];
         bytes32[] memory trades = new bytes32[](2);
@@ -428,7 +466,14 @@ contract SimPoolHandler is Test {
         bytes32[] memory links = new bytes32[](reasonTwo ? 1 : 0);
         if (reasonTwo) links[0] = keccak256(abi.encode("link", id));
         vm.prank(checker);
-        pool.stopPayout(id, reasonTwo ? 2 : 1, paired, trades, links);
+        if (pairSeed % 5 == 0) {
+            // The result disputed: no pair, a transaction, the hash of the dispute's text.
+            bytes32[] memory text = new bytes32[](1);
+            text[0] = keccak256(abi.encode("dispute", id));
+            pool.stopPayout(id, 3, address(0), trades, text);
+        } else {
+            pool.stopPayout(id, reasonTwo ? 2 : 1, paired, trades, links);
+        }
         calls["stop"] += 1;
     }
 
@@ -917,6 +962,9 @@ contract SimPoolInvariantTest is Test {
         pool = SimPool(factory.create{value: 1 ether}(p));
 
         handler = new SimPoolHandler(pool, usdc, filler, checker, creator, closer, usdc.balanceOf(address(pool)));
+        address approver = handler.approver();
+        vm.prank(creator);
+        pool.setApprover(approver);
         // Three codes to start: a partner with 40 %, one with 60 %, and a code that gives its partner nothing.
         uint16[3] memory shares = [uint16(4000), 6000, 0];
         for (uint256 i = 0; i < 3; ++i) {
@@ -925,7 +973,7 @@ contract SimPoolInvariantTest is Test {
             pool.setCode(code, owner, shares[i]);
         }
         targetContract(address(handler));
-        bytes4[] memory s = new bytes4[](43);
+        bytes4[] memory s = new bytes4[](46);
         s[0] = SimPoolHandler.buy.selector;
         s[1] = SimPoolHandler.buy.selector;
         s[2] = SimPoolHandler.passExam.selector;
@@ -970,6 +1018,9 @@ contract SimPoolInvariantTest is Test {
         s[40] = SimPoolHandler.pastTerm.selector;
         s[41] = SimPoolHandler.cancelWithdraw.selector;
         s[42] = SimPoolHandler.requestWithdraw.selector;
+        s[43] = SimPoolHandler.approve.selector;
+        s[44] = SimPoolHandler.approve.selector;
+        s[45] = SimPoolHandler.approve.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: s}));
     }
 
@@ -1237,10 +1288,20 @@ contract SimPoolInvariantTest is Test {
         }
     }
 
+    /// I15. No payout leaves the pool, paid or set aside for a refused trader, before its 72 hours; none not
+    ///      approved before its 7 days; none that was not waiting when `pay` began (a stopped one, say). Only
+    ///      the approver approves.
+    /// forge-config: default.invariant.runs = 48
+    /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_aPayoutWaitsItsApprovalOrSevenDays() public view {
+        assertEq(handler.ghostEarlyPay(), 0, "a payout left early, unapproved before 7 days, or stopped; or a stranger approved");
+    }
+
     /// Not an invariant: what each run reached, printed with `-vv`, so that a run that drove nothing does not pass
     /// unseen for one that did.
     function afterInvariant() external view {
-        string[30] memory names = ["request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
+        string[31] memory names = ["approve", "request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
             "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown", "objectStop", "finalizeStop", "pastReserve", "buySigned", "setCode", "sales",
             "closeEarly", "pastTerm", "finishByCloser"];
         string memory line = "reached:";

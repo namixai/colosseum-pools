@@ -111,7 +111,7 @@ test("the paid payout carries its proof: its id, its transaction, its amount, wh
 
 test("the stopped payout and the held one are apart from the paid, each with what it needs", () => {
   assert.deepEqual(Object.fromEntries(Object.entries(page.byStatus).map(([k, v]) => [k, v.length])),
-    { waiting: 0, queued: 0, paid: 1, stopped: 1, held: 1, refused: 0 });
+    { waiting: 0, queued: 0, approval: 0, paid: 1, stopped: 1, held: 1, refused: 0 });
   const [stopped] = page.byStatus.stopped;
   assert.equal(stopped.stop.reason, 1);
   assert.equal(stopped.stop.trades.length, 2);
