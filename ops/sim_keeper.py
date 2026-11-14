@@ -29,11 +29,15 @@ and a trader who leaves it after a good day loosens their own limit. The keeper 
 --measure EXAM places --orders orders on an exam of the trader's own (`--trader-wallet`), one at a
 time, small and alternating buy and sell, and waits for each to be filled or to lapse; it writes
 each one's `late` (blocks after the first possible one) and `source` to --measure-out and prints p50
-and p99. That is the number the filler's window is set from. It sends transactions: testnet only,
-and run by hand.
+and p99. That is the number the filler's window is set from. It sends transactions, and is run by hand:
+on mainnet it asks for the confirmation phrase at the terminal (ops/sim_network.py).
 
 Every slow call is tried with eth_estimateGas first and sent only if the contract would take it.
-The keeper holds no trader's key except, in --measure, the one it is given. Testnet only.
+The keeper holds no trader's key except, in --measure, the one it is given.
+
+Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet (ops/sim_network.py). On
+mainnet a keeper that sends also needs --confirm-mainnet with its deployment's label and a mainnet key directory,
+and it does not start on the gateway's node (audit M-1); --dry-run needs neither.
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ from eth_utils import keccak, to_checksum_address
 
 from ops import deployments
 from ops import keeper as core
+from ops import sim_network as sn
 from ops.contract_errors import refusal
 from spike.hlspike import common as c
 
@@ -211,6 +216,11 @@ class SimKeeper:
             state = json.loads(state_path.read_text())
             if to_checksum_address(state["factory"]) != self.factory:
                 raise SystemExit(f"{state_path} belongs to another factory")
+            # A state is the chain's it was written on. One from before the chain id was written is testnet's: a
+            # mainnet run never takes it, nor any state of another chain (review of #300).
+            chain = state.get("chain_id")
+            if (chain is not None and chain != c.CHAIN_ID) or (chain is None and c.NETWORK.name == "mainnet"):
+                raise SystemExit(f"{state_path} is not a state of chain {c.CHAIN_ID}; move it away to start over")
             self.next_block = int(state["next_block"])
             self.pools = [to_checksum_address(p) for p in state["pools"]]
             self.accounts = {to_checksum_address(a): v for a, v in state["accounts"].items()}
@@ -219,7 +229,8 @@ class SimKeeper:
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"factory": self.factory, "next_block": self.next_block, "pools": self.pools,
+        tmp.write_text(json.dumps({"factory": self.factory, "chain_id": c.CHAIN_ID, "next_block": self.next_block,
+                                   "pools": self.pools,
                                    "accounts": self.accounts, "done": sorted(self.done)}, indent=2) + "\n")
         tmp.replace(self.state_path)
 
@@ -524,7 +535,7 @@ def measure(exam: str, trader, asset: int, size: int, orders: int, out: pathlib.
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--deployment", required=True, help="label of a record in deployments/ with a SimPoolFactory")
-    p.add_argument("--wallet", default="keeper", help="the factory's filler, or any funded testnet key")
+    p.add_argument("--wallet", default="keeper", help="the factory's filler, or any funded key on the network")
     p.add_argument("--once", action="store_true")
     p.add_argument("--every", type=int, default=30, help="seconds between slow passes")
     p.add_argument("--poll", type=float, default=0.5, help="seconds between looks at the head, in the fast loop")
@@ -536,19 +547,29 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--from", dest="sender", help="address the calls are tried from in a dry run")
     p.add_argument("--measure", metavar="EXAM", help="place orders on this exam of the trader's and time the fills")
     p.add_argument("--trader-wallet", help="the exam's trader, for --measure")
-    p.add_argument("--asset", type=int, default=3, help="the asset --measure trades (BTC, 3)")
+    p.add_argument("--asset", type=int, help="the perp index --measure trades (default BTC's on the network: "
+                   "testnet 3, mainnet 0)")
     p.add_argument("--size", type=int, default=12, help="size units per --measure order (BTC: 0.00012, over 10 USDC)")
     p.add_argument("--orders", type=int, default=20)
     p.add_argument("--measure-out", default="ops/state/sim-measure.json")
+    sn.add_args(p, service=True)
     args = p.parse_args(argv)
 
-    c.assert_testnet()
+    net = sn.selected(args, c.NETWORK)
+    if args.measure:
+        if not args.trader_wallet:
+            raise SystemExit("--measure needs --trader-wallet, the exam's trader")
+        sn.confirm_send(args, f"place {args.orders} orders on the exam {args.measure} from the key {args.trader_wallet!r}", c)
+    else:
+        sn.confirm_service(args, args.deployment, c, sends=not args.dry_run)
+        if net.name == "mainnet":
+            core.check_node(c.RPC_URL, c.CHAIN_ID)
+    if args.asset is None:
+        args.asset = sn.sim(net).index(sn.sim(net).measure_asset)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
     if args.measure:
-        if not args.trader_wallet:
-            raise SystemExit("--measure needs --trader-wallet, the exam's trader")
         s = measure(to_checksum_address(args.measure), c.account(args.trader_wallet), args.asset, args.size,
                     args.orders, pathlib.Path(args.measure_out))
         print(json.dumps({k: s[k] for k in ("orders", "filled", "p50", "p99", "max") if k in s}))

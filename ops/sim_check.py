@@ -27,7 +27,10 @@ is paid, approved or not: an unapproved one waits up to 7 days from its claim, a
 fourth day still stops it. A pool from before approvals pays at 72 hours by itself, and a stop is sent
 no later than 5 minutes before that. Either way only for a pair (reasons 1 and 2): a result disputed
 without a pair (reason 3) needs a written analysis and is never sent from here.
-`--wallet` is the factory's checker; without it, or with --dry-run, nothing is sent. Testnet only.
+`--wallet` is the factory's checker; without it, or with --dry-run, nothing is sent.
+Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet; on mainnet it sends only with
+--confirm-mainnet <the deployment's label> and a mainnet key directory (ops/sim_network.py). --lift there
+asks for the confirmation phrase at the terminal instead.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from eth_utils import keccak, to_checksum_address
 from ops import deployments
 from ops import keeper as core
 from ops import sim_keeper as sk
+from ops import sim_network as sn
 from ops.contract_errors import refusal
 from spike.hlspike import common as c
 
@@ -325,12 +329,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--lift", metavar="POOL:ID", help="lift the checker's own stop of payout ID of POOL")
     p.add_argument("--state", help="the scan's state (default ops/state/check-<deployment>.json)")
     p.add_argument("--dry-run", action="store_true")
+    sn.add_args(p, service=True)
     args = p.parse_args(argv)
-    c.assert_testnet()
+    dry = args.dry_run or not args.wallet
+    if args.lift and not dry:
+        sn.confirm_send(args, f"liftStop of {args.lift} from the key {args.wallet!r}", c)
+    else:
+        sn.confirm_service(args, args.deployment, c, sends=not dry)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
-    dry = args.dry_run or not args.wallet
     wallet = None if dry else c.account(args.wallet)
     sender = wallet.address if wallet else record.get("checker", core.ZERO)
     state = pathlib.Path(args.state) if args.state else sk.STATE_DIR / f"check-{args.deployment}.json"
