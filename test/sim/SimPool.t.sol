@@ -2419,8 +2419,75 @@ contract SimPoolTest is Test {
         pool.stopPayout(id, 3, address(0), one, text);
         vm.stopPrank();
         assertEq(pool.reserved(), LARGE_PAYOUT, "kept 14 days, as any stop");
+        assertEq(pool.stopReasonOf(id), 3);
         vm.prank(trader);
         pool.objectStop(id, keccak256("the exam was right"));
+    }
+
+    /// Prohibited play (reason 4): the published analysis, at least two transactions, and another account of the factory
+    /// or none. Nothing moves but what any stop moves: the payout's money is kept 14 days, the trader may object.
+    function test_stop_reasonFour_prohibitedPlay_twoTransactionsOneAnalysis_aPairOrNone() public {
+        SimPool pool = _pool();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        bytes32[] memory analysis = new bytes32[](1);
+        analysis[0] = keccak256("the published analysis: six exams in a day from two linked wallets, each all in");
+        bytes32[] memory one = new bytes32[](1);
+        bytes32[] memory two = new bytes32[](2);
+        address own = pool.payout(id).account;
+        vm.startPrank(checker);
+        vm.expectRevert(SimPool.BadReason.selector);
+        pool.stopPayout(id, 4, address(0), one, analysis); // two transactions at least
+        vm.expectRevert(SimPool.BadReason.selector);
+        pool.stopPayout(id, 4, address(0), _trades(), new bytes32[](0)); // the analysis's hash
+        vm.expectRevert(SimPool.BadReason.selector);
+        pool.stopPayout(id, 4, address(0), _trades(), two); // one hash, not two
+        address[3] memory bad = [own, stranger, address(pool)];
+        for (uint256 i = 0; i < 3; ++i) {
+            vm.expectRevert(SimPool.BadPaired.selector);
+            pool.stopPayout(id, 4, bad[i], _trades(), analysis);
+        }
+        vm.expectRevert(SimPool.BadReason.selector);
+        pool.stopPayout(id, 5, address(0), _trades(), analysis); // no fifth reason
+        assertEq(pool.stopReasonOf(id), 0, "not stopped yet");
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutStopped(id, trader, LARGE_PAYOUT, 4, address(0), _trades(), analysis, 1, 0, 0);
+        pool.stopPayout(id, 4, address(0), _trades(), analysis);
+        vm.stopPrank();
+        assertEq(pool.stopReasonOf(id), 4);
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Stopped));
+        assertEq(pool.owed(), 0);
+        assertEq(pool.reserved(), LARGE_PAYOUT, "kept 14 days, as any stop");
+        vm.warp(block.timestamp + 72 hours);
+        assertEq(pool.pay(10), 0, "a stopped payout is not paid");
+        vm.prank(trader);
+        pool.objectStop(id, keccak256("one exam a week, never all in"));
+        vm.warp(block.timestamp + 14 days);
+        pool.finalizeStop(id);
+        assertEq(pool.reserved(), 0, "final: the money is the pool's again");
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Refused));
+    }
+
+    /// A hedge between two accounts names the other one, of any pool of the factory; a lifted stop keeps its reason on
+    /// record and the payout is owed again.
+    function test_stop_reasonFour_aHedgeNamesTheOtherAccount_andALiftKeepsTheRecord() public {
+        SimPool pool = _pool();
+        uint256 id = pool.claimPayout(address(_passedStage(pool, trader, 1)));
+        SimPool elsewhere = _pool();
+        address hedge = address(_buy(elsewhere, other, 0));
+        bytes32[] memory analysis = new bytes32[](1);
+        analysis[0] = keccak256("the published analysis: the same size short on the other account");
+        vm.startPrank(checker);
+        pool.stopPayout(id, 4, hedge, _trades(), analysis);
+        assertEq(pool.stopReasonOf(id), 4);
+        pool.liftStop(id);
+        vm.stopPrank();
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Due));
+        assertEq(pool.owed(), LARGE_PAYOUT);
+        assertEq(pool.reserved(), 0);
+        assertEq(pool.stopReasonOf(id), 4, "the record stays: stopped once, for this reason");
+        vm.prank(checker);
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.stopPayout(id, 4, hedge, _trades(), analysis); // once
     }
 
     // ── a running stage's payout stays in the pool (CFO, 13 November) ──

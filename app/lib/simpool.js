@@ -155,6 +155,7 @@ export const STOP_REASON = Object.freeze({
   1: "Opposite positions with another account of this platform's pools",
   2: "Opposite positions with another account, and the two wallets linked",
   3: "The result is disputed: a flaw of the exam, the oracle or the filler, shown by the transactions and the published text",
+  4: "Prohibited play: a series of exams traded at the edge of their risk, or a hedge between accounts, shown by the transactions and the published analysis",
 });
 
 export function stopReasonText(reason) {

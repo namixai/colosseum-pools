@@ -222,6 +222,8 @@ contract SimPool is Initializable {
 
     mapping(address => Account) public accountOf;
     Payout[] internal _payouts;
+    /// Why the checker stopped payout `id` (`PayoutStopped.reason`, 1 to 4); zero if it never was.
+    mapping(uint256 id => uint8) public stopReasonOf;
 
     /// `bySignature`: the price came with the trader's signature (EIP-3009), sent by whoever paid the gas.
     /// `code` is the keccak256 of the sale's code, and `partner` its partner.
@@ -246,7 +248,10 @@ contract SimPool is Initializable {
     event PayoutPaid(uint256 indexed id, address indexed trader, uint64 amount, uint256 paidCount, uint256 paidTotal);
     /// `reason` 1: opposite positions with `paired`; 2: that, and the wallets linked by `links`; 3: the
     /// result is disputed (a flaw of the exam, the oracle or the filler), shown by `trades`, with no
-    /// `paired` and `links` the keccak256 of the published text of the dispute.
+    /// `paired` and `links` the keccak256 of the published text of the dispute; 4: prohibited play, a series
+    /// of exams bought by one person or linked wallets and traded at the edge of their risk, or one account
+    /// hedged by another, shown by at least two `trades`, `links` the keccak256 of the published analysis and
+    /// `paired` another account of the factory, or none.
     event PayoutStopped(
         uint256 indexed id,
         address indexed trader,
@@ -632,7 +637,11 @@ contract SimPool is Initializable {
     ///         `reason` 1, opposite positions with `paired`, shown by `trades`; 2, that and the wallets
     ///         linked, shown by `links`; `paired` is an exam or a stage of any pool of the factory. 3, the
     ///         result is disputed: no `paired`, `trades` (one at least) show the flaw, and `links` is one
-    ///         hash, of the published text of the dispute. The money stays in the pool, set aside for
+    ///         hash, of the published text of the dispute. 4, prohibited play: a series of exams bought by
+    ///         one person or linked wallets and traded at the edge of their risk, or one account hedged by
+    ///         another; `trades` (two at least) show it, `links` is one hash, of the published analysis, and
+    ///         `paired` is the other account, of any pool of the factory, or none. The reason stays on record
+    ///         (`stopReasonOf`). The money stays in the pool, set aside for
     ///         `STOP_RESERVE`: the trader can object (`objectStop`) and the checker can lift the stop;
     ///         after it the stop is final.
     function stopPayout(uint256 id, uint8 reason, address paired, bytes32[] calldata trades, bytes32[] calldata links)
@@ -640,7 +649,7 @@ contract SimPool is Initializable {
         onlyChecker
     {
         uint64 amount = SimPoolStops.stop(
-            _payouts, factory, id, reason, paired, trades, links, [stoppedCount + 1, liftedCount, paidCount]
+            _payouts, stopReasonOf, factory, id, reason, paired, trades, links, [stoppedCount + 1, liftedCount, paidCount]
         );
         owed -= amount;
         reserved += amount;

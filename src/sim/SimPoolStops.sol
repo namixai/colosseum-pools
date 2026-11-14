@@ -13,9 +13,11 @@ import {SimPoolFactory} from "./SimPoolFactory.sol";
 ///         counts the events carry. Moved out of `SimPool` only for the size of its code (EIP-170); what it does
 ///         is what the pool did.
 library SimPoolStops {
-    /// The checks and the record of a stop; the amount the pool now sets aside.
+    /// The checks and the record of a stop; the amount the pool now sets aside. The reason is kept by the payout's id
+    /// (`SimPool.stopReasonOf`).
     function stop(
         SimPool.Payout[] storage payouts,
+        mapping(uint256 => uint8) storage reasonOf,
         SimPoolFactory factory,
         uint256 id,
         uint8 reason,
@@ -29,6 +31,15 @@ library SimPoolStops {
         if (p.state != SimPool.PayoutState.Due || p.wasStopped) revert SimPool.BadPayout();
         if (reason == 3) {
             if (paired != address(0) || trades.length == 0 || links.length != 1) revert SimPool.BadReason();
+        } else if (reason == 4) {
+            // Prohibited play: a series of exams bought by one person or by linked wallets, each traded at the edge of
+            // its risk to pass by luck, or one account hedged by another. The published analysis is the one link;
+            // the transactions that show it are at least two; `paired`, if named, is another account of the factory.
+            if (trades.length < 2 || links.length != 1) revert SimPool.BadReason();
+            if (
+                paired != address(0)
+                    && (paired == p.account || factory.poolOf(paired) == address(0) || factory.poolOf(paired) == paired)
+            ) revert SimPool.BadPaired();
         } else {
             if (reason == 1) {
                 if (links.length != 0) revert SimPool.BadReason();
@@ -45,6 +56,7 @@ library SimPoolStops {
         p.state = SimPool.PayoutState.Stopped;
         p.wasStopped = true;
         p.stoppedAt = uint64(block.timestamp);
+        reasonOf[id] = reason;
         amount = p.amount;
         emit SimPool.PayoutStopped(id, p.trader, amount, reason, paired, trades, links, counts[0], counts[1], counts[2]);
     }

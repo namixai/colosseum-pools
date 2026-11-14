@@ -764,6 +764,8 @@ test("a payout waits for the approver after its 72 hours, and goes out by itself
   assert.equal(row(undefined, dueAt).status, "queued", "a pool without approval: nothing waits on it");
   assert.equal(row(undefined, dueAt).approved, null);
   assert.match(stopReasonText(3), /disputed/);
+  assert.match(stopReasonText(4), /Prohibited play/);
+  assert.match(stopReasonText(5), /Unknown reason 5/);
   const struct = POOL_SOL.match(/struct Payout \{([\s\S]*?)\}/)[1].replace(/\/\/\/.*$/gm, "");
   const line = SIM_POOL_APPROVAL_ABI.find((l) => l.startsWith("function payout("));
   assert.deepEqual([...struct.matchAll(/^\s*(\w+)\s+(\w+);/gm)].map((m) => m[2]),

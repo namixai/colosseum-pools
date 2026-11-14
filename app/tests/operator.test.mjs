@@ -60,6 +60,8 @@ test("a stop is checked as the pool checks it, reason by reason", () => {
   assert.equal(ok.signer, "checker");
   stopCall({ pool: POOL, id: 5, reason: 1, paired: OTHER, trades: [A, B], links: [], keccak256 });
   stopCall({ pool: POOL, id: 5, reason: 3, paired: ZERO, trades: [A], links: [C], keccak256 });
+  stopCall({ pool: POOL, id: 5, reason: 4, paired: ZERO, trades: [A, B], links: [C], keccak256 }); // a series
+  stopCall({ pool: POOL, id: 5, reason: 4, paired: OTHER, trades: [A, B], links: [C], keccak256 }); // a hedge
   const bad = [
     [{ reason: 1, paired: OTHER, trades: [A, B], links: [C] }, /reason 1 has no links/],
     [{ reason: 2, paired: OTHER, trades: [A, B], links: [] }, /reason 2 needs the links/],
@@ -68,7 +70,10 @@ test("a stop is checked as the pool checks it, reason by reason", () => {
     [{ reason: 3, paired: OTHER, trades: [A], links: [C] }, /names no other account/],
     [{ reason: 3, paired: ZERO, trades: [], links: [C] }, /the transaction that shows it/],
     [{ reason: 3, paired: ZERO, trades: [A], links: [C, B] }, /exactly one link/],
-    [{ reason: 4, paired: OTHER, trades: [A, B], links: [] }, /no reason 4/],
+    [{ reason: 4, paired: OTHER, trades: [A], links: [C] }, /at least two transactions/],
+    [{ reason: 4, paired: ZERO, trades: [A, B], links: [] }, /prohibited play needs exactly one link/],
+    [{ reason: 4, paired: ZERO, trades: [A, B], links: [C, B] }, /prohibited play needs exactly one link/],
+    [{ reason: 5, paired: OTHER, trades: [A, B], links: [] }, /no reason 5/],
   ];
   for (const [args, msg] of bad) assert.throws(() => stopCall({ pool: POOL, id: 5, keccak256, ...args }), msg);
 });

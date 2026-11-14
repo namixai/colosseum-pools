@@ -26,7 +26,8 @@ Until when it stops is the pool's own rule. A pool with payout approval takes a 
 is paid, approved or not: an unapproved one waits up to 7 days from its claim, and a pair found on the
 fourth day still stops it. A pool from before approvals pays at 72 hours by itself, and a stop is sent
 no later than 5 minutes before that. Either way only for a pair (reasons 1 and 2): a result disputed
-without a pair (reason 3) needs a written analysis and is never sent from here.
+without a pair (reason 3) and prohibited play (reason 4, a series of exams traded at the edge of their risk, or a
+hedge between accounts) need a written analysis and are never sent from here.
 `--wallet` is the factory's checker; without it, or with --dry-run, nothing is sent.
 Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet; on mainnet it sends only with
 --confirm-mainnet <the deployment's label> and a mainnet key directory (ops/sim_network.py). --lift there

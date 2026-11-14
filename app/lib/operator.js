@@ -127,7 +127,9 @@ export function approveCall({ pool, ids, keccak256 }) {
 /**
  * `stopPayout`, checked as the pool checks it: reason 1, a pair (another account, at least two trades, no links);
  * reason 2, a pair and the wallets linked (at least one link); reason 3, a result disputed (no other account, at
- * least one trade, and exactly one link: the keccak256 of the published analysis).
+ * least one trade, and exactly one link: the keccak256 of the published analysis); reason 4, prohibited play (a series
+ * of exams traded at the edge of their risk, or a hedge between accounts: at least two trades, exactly one link, the
+ * analysis's hash, and the other account or none).
  */
 export function stopCall({ pool, id, reason, paired, trades, links, keccak256 }) {
   const r = Number(reason);
@@ -142,6 +144,9 @@ export function stopCall({ pool, id, reason, paired, trades, links, keccak256 })
     if (!ZERO.test(String(paired))) throw new Error("a disputed result names no other account");
     if (t.length < 1) throw new Error("a disputed result needs the transaction that shows it");
     if (l.length !== 1) throw new Error("a disputed result needs exactly one link: the hash of the analysis");
+  } else if (r === 4) {
+    if (t.length < 2) throw new Error("prohibited play needs at least two transactions that show it");
+    if (l.length !== 1) throw new Error("prohibited play needs exactly one link: the hash of the analysis");
   } else {
     throw new Error(`no reason ${reason}`);
   }

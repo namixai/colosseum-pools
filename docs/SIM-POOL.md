@@ -98,10 +98,18 @@ fail, and their prices pay for the ones that pass.
   the first pool, what its creator locked (the CFO, 13 November 2026).
 - **A stop.** Until a payout is paid, approved or not, the factory's checker may stop it once, with
   a reason: 1, opposite positions with another account of the factory; 2, that and wallets linked;
-  3, the result is disputed (a flaw of the exam, the oracle or the filler). For 1 and 2 the call
+  3, the result is disputed (a flaw of the exam, the oracle or the filler); 4, prohibited play: a
+  series of exams bought by one person or by linked wallets, each traded at the edge of its risk to
+  pass by luck, or one account hedged by another. For 1 and 2 the call
   names the other account, the transactions of the trades (at least two) and, for reason 2, the
   transactions that link the wallets; for 3 it names no account, at least one transaction that shows
-  the flaw, and one hash, the keccak256 of the published text of the dispute. A stopped payout's money stays in the pool, set aside from the
+  the flaw, and one hash, the keccak256 of the published text of the dispute; for 4, at least two
+  transactions that show the play, one hash, the keccak256 of the published analysis, and the other
+  account of the factory if there is one (a hedge), or none (a series, whose purchases the transactions
+  name). Like 3, a stop of reason 4 is written by a person from a published analysis, never sent by
+  `ops/sim_check.py`. Every stop is the same `PayoutStopped`, and the pool keeps its reason by the
+  payout (`stopReasonOf(id)`, zero if never stopped, kept after a lift). The reason moves no money of
+  its own: whatever the reason, a stop keeps the payout's money as follows. A stopped payout's money stays in the pool, set aside from the
   stop (`STOP_RESERVE`, `reserved`) until the checker lifts the stop within 14 days, or until anyone
   makes it final after them (`finalizeStop`, which may come later than the 14 days, never sooner), as
   a held payout's is: the creator does not

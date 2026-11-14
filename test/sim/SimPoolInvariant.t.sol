@@ -526,15 +526,24 @@ contract SimPoolHandler is Test {
         trades[1] = keccak256(abi.encode("fill", id, 1));
         bytes32[] memory links = new bytes32[](reasonTwo ? 1 : 0);
         if (reasonTwo) links[0] = keccak256(abi.encode("link", id));
+        uint8 reason = reasonTwo ? 2 : 1;
         vm.prank(checker);
         if (pairSeed % 5 == 0) {
             // The result disputed: no pair, a transaction, the hash of the dispute's text.
             bytes32[] memory text = new bytes32[](1);
             text[0] = keccak256(abi.encode("dispute", id));
+            reason = 3;
             pool.stopPayout(id, 3, address(0), trades, text);
+        } else if (pairSeed % 5 == 1) {
+            // Prohibited play: two transactions, the hash of the analysis, the other account or none.
+            bytes32[] memory analysis = new bytes32[](1);
+            analysis[0] = keccak256(abi.encode("analysis", id));
+            reason = 4;
+            pool.stopPayout(id, 4, reasonTwo ? address(0) : paired, trades, analysis);
         } else {
-            pool.stopPayout(id, reasonTwo ? 2 : 1, paired, trades, links);
+            pool.stopPayout(id, reason, paired, trades, links);
         }
+        require(pool.stopReasonOf(id) == reason, "the stop's reason is not on record");
         calls["stop"] += 1;
     }
 
