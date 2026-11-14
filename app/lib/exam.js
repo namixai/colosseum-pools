@@ -408,8 +408,9 @@ export function pendingOrder(reads, block) {
  * stands from it (`room`, negative once broken): the drawdown, and the day's loss from the snapshot of the UTC day.
  * `floor` is the nearer of them. The drawdown line is drawn by the exam's `drawdownKind` (`reads.drawdownKind`, with
  * `reads.peakSnapshot`): from the starting balance, or trailing the step's highest day's snapshot to the starting
- * balance (`drawdownLine`); an exam whose kind was not read has no line worked out, since a line from the start would
- * be the wrong one for a trailing exam. A line the contract itself answers is taken as read (`reads.drawdownLine`,
+ * balance (`drawdownLine`); an exam whose kind was not read (and whose line the contract was not asked for) is an
+ * error, not a line from the start, which would be the wrong one for a trailing exam: `examAccount` and
+ * `orderPreview` throw "the exam's drawdown kind was not read", as a missing asset or size decimals do. A line the contract itself answers is taken as read (`reads.drawdownLine`,
  * `reads.dailyLine`). Each position carries its `stop` and its `take` (`triggerView`).
  */
 export function examAccount(reads, { now, block }) {
