@@ -128,7 +128,7 @@ test("the stop on the exchange: the line, and the book on top at both ends", () 
 test("the card reads every figure from the table, and moves with it", () => {
   const card = words(leversCard(TABLES));
   // Two rows, both on BTC, ETH and SOL: the rule's leverage, and 10x on every seat. No 3x, no 5x for all, no alts.
-  assert.match(card, /Leverage Stop on the exchange, at the line \(this site, since 29 Sep 2026\) Stop with the keeper alone, a minute late \(before 29 Sep 2026\) BTC and ETH 10x, SOL 5x \(rule v1\.2\) 3\.4% 40% to 67%, no seat liquidated 10x on every seat 3\.5% 46% to 73%, 3 of 5 seats liquidated The seats hold/);
+  assert.match(card, /Leverage Stop on the exchange at the line \(model; the live stop sits 6 bps before it\) Stop with the keeper alone, a minute late \(before 29 Sep 2026\) BTC and ETH 10x, SOL 5x \(rule v1\.2\) 3\.4% 40% to 67%, no seat liquidated 10x on every seat 3\.5% 46% to 73%, 3 of 5 seats liquidated The seats hold/);
   assert.doesNotMatch(card, /\b3x\b|5x on every seat|[Ww]ith alts|alts at/);
   for (const lev of ["v1.2", 10]) {
     assert.ok(card.includes(`${leverCell(TABLES, "exchange", lev, "default").worst_pct.toFixed(1)}%`), `exchange ${lev}`);
@@ -164,7 +164,8 @@ test("the card reads every figure from the table, and moves with it", () => {
 
 test("the stop on the exchange is labelled with the day it went live here, the keeper alone as before it", () => {
   const card = words(leversCard(TABLES));
-  assert.match(card, /Stop on the exchange, at the line \(this site, since 29 Sep 2026\)/);
+  // The table is a model of a stop at the line; the column says so, and where the live stop sits.
+  assert.match(card, /Stop on the exchange at the line \(model; the live stop sits 6 bps before it\)/);
   assert.match(card, /Stop with the keeper alone, a minute late \(before 29 Sep 2026\)/);
   assert.match(card, /On this site since 29 Sep 2026, after a live check on testnet through a gateway running the same code\./);
   assert.doesNotMatch(card, /[Bb]eing built|today/);
@@ -175,12 +176,14 @@ test("the stop on the exchange is labelled with the day it went live here, the k
 test("the three layers come first, then the levers, and the worst case last, as the case without that stop", () => {
   const card = words(leversCard(TABLES));
   const at = (s) => { const i = card.indexOf(s); assert.ok(i >= 0, `missing: ${s}`); return i; };
-  assert.ok(at("Before signing, the gateway") < at("On the exchange, a stop at the daily-loss and drawdown line"));
-  assert.ok(at("On the exchange, a stop at the daily-loss and drawdown line") < at("After the fact, the contract"));
-  // The stop goes on before an order that opens or grows a position, and is set at the line; its
-  // fill is not promised at the line.
+  assert.ok(at("Before signing, the gateway") < at("On the exchange, a stop 6 basis points before the daily-loss and drawdown line"));
+  assert.ok(at("On the exchange, a stop 6 basis points before the daily-loss and drawdown line") < at("After the fact, the contract"));
+  // The stop goes on before an order that opens or grows a position, 6 bps before the line (docs/SAFETY.md, section 1);
+  // its fill is not promised before the line.
   assert.match(card, /before any order that may open or grow a position/);
-  assert.match(card, /the stop is set at the line, and in a fast market its fill can go past it/);
+  assert.match(card, /The stop fires 6 basis points of the price before the rule's line/);
+  assert.match(card, /A fill more than 1\.5 basis points past the trigger lands beyond the line/);
+  assert.match(card, /a worse fill, or a gap, lands beyond the line/);
   // Leverage is held after the fact only, and the card says so where the layers are.
   assert.ok(at("It does not check leverage") < at("Leverage is not on that line: only the contract and the keeper"));
   assert.ok(at("After the fact, the contract") < at("Where the stop sits is the investor's biggest lever"));

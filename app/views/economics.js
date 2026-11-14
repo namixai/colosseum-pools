@@ -115,7 +115,8 @@ export async function economicsView(page) {
       different thing, and the block below is <strong>not part of the model above</strong>: it is a
       measurement of real crash days replayed through these rules. It carries no frequency, so it is
       never subtracted from the returns. It is the stop <strong>with the keeper alone, a minute late</strong>, as
-      pools ran before 29 Sep 2026: with the stop on the exchange, the same day stays at the line (the levers above).</p>
+      pools ran before 29 Sep 2026: with the stop on the exchange, the same day stays at the line (the levers above;
+      model: stop at the line).</p>
       <div id="cascade" class="muted">…</div>
     </section>`);
   await loadTables();
@@ -314,7 +315,7 @@ export function leverCell(tables, stop, leverage, list, exec = "open") {
 }
 
 /**
- * A stop on the exchange closes at the line; walking the book adds a little on top, measured only in a
+ * A stop on the exchange closes at the line (model: stop at the line); walking the book adds a little on top, measured only in a
  * calm market. The worst day's bracket on BTC, ETH and SOL: the line, plus at the low end half the spread of
  * the calmest coin, and at the high end the 99th percentile of the walk, the highest over every seat and coin,
  * each seat at its own leverage and priced at the nearest measured size at or above its notional. Wider than
@@ -404,10 +405,13 @@ export function leversCard(tables) {
     <ol>
       <li><strong>Before signing, the gateway.</strong> It keeps to the platform's list of assets and its size
       caps. It does not check leverage.</li>
-      <li><strong>On the exchange, a stop at the daily-loss and drawdown line and a take at the target.</strong>
-      The gateway puts them on Hyperliquid before any order that may open or grow a position, so the exchange
-      closes the position without waiting for anyone: the stop is set at the line, and in a fast market its
-      fill can go past it. Leverage is not on that line: only the contract and the keeper
+      <li><strong>On the exchange, a stop 6 basis points before the daily-loss and drawdown line and a take at
+      the target.</strong> The gateway puts them on Hyperliquid before any order that may open or grow a position,
+      so the exchange closes the position without waiting for anyone. The stop fires 6 basis points of the price
+      before the rule's line: room for the taker fee, 4.5 basis points, and a fill 1.1 past the trigger, as
+      measured on a stop on 29 September 2026. A fill more than 1.5 basis points past the trigger lands beyond the
+      line: the two stops the exchange fired on testnet on 12 and 14 October 2026 filled 1.6 to 4.5 past theirs,
+      and a gap goes further. Leverage is not on that line: only the contract and the keeper
       hold it. <em>On this site since 29 Sep 2026, after a live check on testnet through a gateway running the
       same code.</em></li>
       <li><strong>After the fact, the contract.</strong> Anyone may stop an account that broke a rule, and our
@@ -421,7 +425,7 @@ export function leversCard(tables) {
     ${esc([...L.days].sort().at(-1))}, here is what each choice cost on the worst of them, ${esc(day)}, as a share
     of the seats' capital — the investor's own money:</p>
     <div class="scroll"><table>
-      <tr><th>Leverage</th><th>Stop on the exchange, at the line<br>(this site, since 29 Sep 2026)</th>
+      <tr><th>Leverage</th><th>Stop on the exchange at the line<br>(model; the live stop sits 6 bps before it)</th>
         <th>Stop with the keeper alone, a minute late<br>(before 29 Sep 2026)</th></tr>
       ${rows}
     </table></div>
@@ -430,7 +434,9 @@ export function leversCard(tables) {
     ${points(tail[0].worst_pct_of_pool)} to ${points(tail[1].worst_pct_of_pool)} with the keeper alone.</p>
     <p>On the median day the levers barely matter: it cost ${points(Math.min(...medians), 2)} to
     ${points(Math.max(...medians), 2)} in every combination above. They decide the tail.</p>
-    <p>A stop on the exchange closes at the line, and walking the order book comes on top: with it, the
+    <p>The table models a stop on the exchange that closes at the line. The live stop fires 6 basis points before
+    it: room for the taker fee and a fill up to 1.5 basis points past the trigger; a worse fill, or a gap, lands
+    beyond the line. Walking the order book comes on top of the model: with it, the
     worst day is at most ${points(bRule.high, 1)} at the rule's leverage and ${points(bAll.high, 1)} at ${all}x,
     the book taken from ${esc(L.book.measured)}. The book in a cascade has never been measured, so on a day like
     ${esc(day)} the fill could be worse.</p>
