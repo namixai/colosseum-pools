@@ -15,7 +15,7 @@ CHECK="$HERE/size-check.py"
 WORK="$(mktemp -d)" || { echo "mktemp failed"; exit 2; }
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/src/sim"
-printf 'contract Pool {}\nabstract contract Base {}\ninterface IThing {}\nlibrary Maths {}\n    contract Indented {}\n// contract Gone {}\n/* contract Old {\n} */\n' > "$WORK/src/sim/Pool.sol"
+printf 'contract Pool {}\nabstract contract Base {}\ninterface IThing {}\nlibrary Maths {}\n    contract Indented {}\ncontract Left {} contract Right {}\nabstract contract Base2 {} interface I2 {}\n// contract Gone {}\n/* contract Old {\n} */\n' > "$WORK/src/sim/Pool.sol"
 
 failures=0
 case_() {  # case_ <name> <expected exit> <text the output must carry> <json>
@@ -33,15 +33,17 @@ case_() {  # case_ <name> <expected exit> <text the output must carry> <json>
 fit='"runtime_size":24576,"init_size":49152'
 small='"runtime_size":100,"init_size":150'
 case_ "all fit, the limits themselves included; commented-out contracts are not asked for" 0 "size-check: clean" \
-  "{\"Pool\":{$fit},\"Maths\":{$small},\"Indented\":{$small},\"HyperCore\":{\"runtime_size\":54894,\"init_size\":55000}}"
+  "{\"Pool\":{$fit},\"Maths\":{$small},\"Indented\":{$small},\"Left\":{$small},\"Right\":{$small},\"HyperCore\":{\"runtime_size\":54894,\"init_size\":55000}}"
 case_ "a runtime one byte over" 1 "over the limit.*Pool" \
-  "{\"Pool\":{\"runtime_size\":24577,\"init_size\":30000},\"Maths\":{$small},\"Indented\":{$small}}"
+  "{\"Pool\":{\"runtime_size\":24577,\"init_size\":30000},\"Maths\":{$small},\"Indented\":{$small},\"Left\":{$small},\"Right\":{$small}}"
+case_ "the second of two contracts on one line, over" 1 "over the limit.*Right" \
+  "{\"Pool\":{$small},\"Maths\":{$small},\"Indented\":{$small},\"Left\":{$small},\"Right\":{\"runtime_size\":30000,\"init_size\":30000}}"
 case_ "a creation code one byte over" 1 "over the limit.*Maths" \
-  "{\"Pool\":{$small},\"Maths\":{\"runtime_size\":100,\"init_size\":49153},\"Indented\":{$small}}"
+  "{\"Pool\":{$small},\"Maths\":{\"runtime_size\":100,\"init_size\":49153},\"Indented\":{$small},\"Left\":{$small},\"Right\":{$small}}"
 case_ "an indented contract over the limit" 1 "over the limit.*Indented" \
-  "{\"Pool\":{$small},\"Maths\":{$small},\"Indented\":{\"runtime_size\":30000,\"init_size\":30000}}"
+  "{\"Pool\":{$small},\"Maths\":{$small},\"Indented\":{\"runtime_size\":30000,\"init_size\":30000},\"Left\":{$small},\"Right\":{$small}}"
 case_ "a contract of src/ missing from the table" 2 "not in forge's table: Maths" \
-  "{\"Pool\":{$small},\"Indented\":{$small}}"
+  "{\"Pool\":{$small},\"Indented\":{$small},\"Left\":{$small},\"Right\":{$small}}"
 case_ "a table that is not JSON" 2 "could not run" "not json"
 
 if [ "$failures" -ne 0 ]; then

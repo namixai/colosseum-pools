@@ -80,13 +80,15 @@ PAYOUT_HARD = 7 * 86_400
 # A fill's gas, fixed: an estimate first would cost a block. PaperExam's fill, with sixteen assets
 # open, is under it (forge test --gas-report).
 FILL_GAS = 400_000
-PAY_PER_CALL = 10
+# SimPool's PAYOUTS_A_DAY (the factory's PAYOUTS_PER_DAY): a pool settles at most two payouts in any 24 hours,
+# so one call pays at most two; `payRoom()` says how many of the two are left now (the test holds it to the source).
+PAY_PER_CALL = 2
 # How far past the head the keeper reads payouts to find one to pay: behind a head that waits for its approval,
 # later approved payouts are paid out of order, and `pay` must be told to look that far (review of #286).
 # One call fits a small block (2 000 000 gas, ops/keeper.py), measured from cold storage and not estimated
-# (test/sim/SimPool.t.sol, test_pay_theKeepersFullBatch_fitsASmallBlock): PAY_PER_CALL payouts paid past 86
-# waiting, `pay(96)`, take 999 510 gas, each further payout looked at 5 390, and `pay(192)` 1 517 035: three
-# quarters of the block, the rest left for a token whose transfer costs more than the test's. This is the
+# (test/sim/SimPool.t.sol, test_pay_theKeepersFullBatch_fitsASmallBlock): PAY_PER_CALL payouts paid past 94
+# waiting, `pay(96)`, take 730 903 gas, each further payout looked at 5 390, and `pay(192)` 1 248 428: under two
+# thirds of the block, the rest left for a token whose transfer costs more than the test's. This is the
 # keeper's limit, kept to what was measured, not the block's: a longer look may still fit, by the queue and the
 # token. `pay` counts from the head whatever it is told, so a payout further than this past a waiting head is
 # not paid by the keeper until the head moves, which the approval of the payouts before it does, or their 7 days.
@@ -123,19 +125,21 @@ def payable(state: str, due_at: int, approved: bool, now: int) -> bool:
     return approved or now >= due_at - PAYOUT_DELAY + PAYOUT_HARD
 
 
-def pay_reach(rows: list[tuple[str, int, bool]], now: int) -> int:
+def pay_reach(rows: list[tuple[str, int, bool]], now: int, room: int = PAY_PER_CALL) -> int:
     """How many payouts from the head `pay` should look at (its `max`), from the rows read the head first: up to
-    the last payable one, or, with none, past the settled ones at the head; zero for nothing to do. `pay` counts
-    every payout it looks at, settled ones too (review of #286), so the keeper names how far to go. A payout
-    waiting for its approval keeps the head, and the keeper does not call `pay` for it before its 7 days."""
+    the last payable one the daily limit has room for (`room`, the pool's `payRoom()`), or, with none, past the
+    settled ones at the head; zero for nothing to do. `pay` counts every payout it looks at, settled ones too
+    (review of #286), so the keeper names how far to go. A payout waiting for its approval keeps the head, and
+    the keeper does not call `pay` for it before its 7 days, nor for one the daily limit holds."""
     last = 0
     paid = 0
+    most = min(PAY_PER_CALL, room)
     for k, (state, due_at, approved) in enumerate(rows):
+        if paid == most:
+            break  # all the day has room for; the rest when the limit lets it
         if payable(state, due_at, approved, now):
             last = k + 1
             paid += 1
-            if paid == PAY_PER_CALL:
-                break  # a call within a small block's gas; the rest in the next pass
     if last:
         return last
     settled = 0
@@ -198,6 +202,7 @@ class SimKeeper:
         self.done: set[str] = set()
         self.orders: dict[str, tuple[int, int]] = {}  # exam -> the window of its waiting order
         self.tried: dict[str, int] = {}  # exam -> the block its last fill was sent for
+        self.limit_said: dict[str, int] = {}  # pool -> the `nextPayAt` its waiting for the daily limit was logged for
         self.triggers: dict[tuple[str, int, bool], int] = {}  # (exam, asset, is_take) -> the block it acts from
         self.trigger_tried: dict[tuple[str, int, bool], int] = {}  # -> the block it was last looked at for
         self.filler: str | None = None
@@ -320,6 +325,8 @@ class SimKeeper:
         count = view(pool, "payoutCount()", "uint256")
         if head >= count:
             return
+        # What the daily limit leaves: with no room the keeper sends no `pay` for a payable payout.
+        room = min(PAY_PER_CALL, view(pool, "payRoom()", "uint256"))
         rows = []
         end = min(count, head + SCAN_PAYOUTS)
         found = 0
@@ -333,12 +340,19 @@ class SimKeeper:
                 break
             if payable(*rows[-1], now):
                 found += 1
-                if found == PAY_PER_CALL:
-                    break  # all one call pays (pay_reach): the rest is read in the next pass
-        reach = pay_reach(rows, now)
+                if found > room:
+                    break  # one more than the day has room for: enough to know that one waits
+        reach = pay_reach(rows, now, room)
+        if room == 0 and found:
+            # A payout may be paid and the day's two are settled: it waits, in its place, for `nextPayAt`. Said only
+            # with no room left: while there is room, `nextPayAt` is not yet the time this payout waits for.
+            next_at = view(pool, "nextPayAt()", "uint64")
+            if self.limit_said.get(pool) != next_at:
+                self.limit_said[pool] = next_at
+                log("pay_waits_limit", pool=pool, room=room, next_at=next_at)
         if reach:
             self.send(pool, "pay(uint256)", ["uint256"], [reach])
-        elif not early and count > end:
+        elif not early and found == 0 and count > end:
             # Every payout within the keeper's reach waits for its approval, and there are more behind them.
             # They are paid once the head moves: the approver approves the ones in front, or their 7 days come.
             log("pay_out_of_reach", pool=pool, head=head, looked=len(rows), beyond=count - end)

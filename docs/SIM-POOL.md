@@ -1,6 +1,16 @@
 # Design: the simulated pool
 
-`src/sim/SimPool.sol` and `src/sim/SimPoolFactory.sol`. Not deployed yet; no external audit.
+`src/sim/SimPool.sol` and `src/sim/SimPoolFactory.sol`, with two libraries the pool calls,
+`src/sim/SimPoolStops.sol` and `src/sim/SimPoolSetup.sol`. Not deployed yet; no external audit.
+
+**Why two libraries.** A contract's code may be at most 24 576 bytes (EIP-170, in force on HyperEVM's
+Cancun rules), and tests run without that limit. With its daily payout limit the pool came to 24 790. The
+checks and events of the four stop functions (`stopPayout`, `liftStop`, `objectStop`, `finalizeStop`)
+and the copy of the plan at creation (`initialize`) now run in libraries with external functions, which
+the pool calls by DELEGATECALL: in its own storage, with its own caller, emitting its own events. The pool
+keeps its interface, its counters and its money (`owed`, `reserved`, `stoppedCount`, `liftedCount`,
+`head`, the principal); what the code does is what it did. `SimPool` 21 700 bytes, `SimPoolStops` 3 414,
+`SimPoolSetup` 1 962. `scripts/size-check.py` holds every contract and library of `src/` to the limit.
 
 ## Why
 
@@ -64,6 +74,22 @@ fail, and their prices pay for the ones that pass.
   the prices that come in. A payout the token refuses to send (say the trader's address was blocked)
   is set aside for the trader (`PayoutHeld`), who takes it to any address with `claimHeld`, also
   after the pool has finished; the queue moves on. One stage, one payout: the stage has one step and its pass ends it.
+- **The daily limit.** A pool settles at most two payouts in any 24 hours (`PAYOUTS_PER_DAY`,
+  `PAYOUT_DAY`, constants of the factory). `pay` counts every payout that leaves the queue, paid or set
+  aside for a trader the token refused, approved or gone out at its 7 days: if the limit counted only
+  approved payouts, not approving would pass it. A payout that may be paid, with the day's two already
+  settled, keeps its place (`PayoutWaitsLimit` with the time from which it may be paid), stays owed,
+  and so does every payout after it: `pay` stops there, as it stops at a payout the pool cannot cover,
+  so the order holds. The pool keeps the times of its last two settlements; one more goes out once the
+  older is 24 hours old, so no 24 hours see three, and no history is walked. `payRoom()` says how many
+  `pay` may settle now, `nextPayAt()` from when one more. A wave of five payouts claimed together and
+  approved goes out two at their 72 hours, two a day later, one the day after. So the 7 days are the
+  latest a payout waits for its approval, not the latest it is paid: the third and fourth of five
+  unapproved payouts are paid 8 days after their claim, the fifth 9. `claimHeld` and `finish` are no
+  payouts of the day. So the limit is on what `pay` settles, not on every transfer of a day: what was
+  set aside for a refused trader on earlier days leaves when that trader claims it. Whatever the rules
+  let through, `pay` settles at most two payouts in any 24 hours, of the largest size at most: 1 600 in
+  the first pool, what its creator locked (the CFO, 13 November 2026).
 - **A stop.** Until a payout is paid, approved or not, the factory's checker may stop it once, with
   a reason: 1, opposite positions with another account of the factory; 2, that and wallets linked;
   3, the result is disputed (a flaw of the exam, the oracle or the filler). For 1 and 2 the call
@@ -216,12 +242,15 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   fixed gas as a fill) in the block after the oracle has reached it. A fill waits for its receipt,
   so two orders in one block go one after the other. A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
-  `expire`, `release`, `claimPayout`, `pay`. One `pay` is told to pay at most ten payouts and to look
+  `expire`, `release`, `claimPayout`, `pay`. It reads the pool's `payRoom()` and sends `pay` only for
+  as many payouts as the daily limit has room for: none while the day's two are settled (it logs
+  `pay_waits_limit` with `nextPayAt()`, once for each change), though it still moves the head past
+  settled payouts. One `pay` is told to pay at most the day's two payouts and to look
   at most 192 from the head (`PAY_PER_CALL`, `SCAN_PAYOUTS`), so that it fits a small block of 2 000 000
-  gas: measured from cold storage, ten payouts paid past 86 waiting for approval, `pay(96)`, take
-  999 510 gas with the transaction's own, each further payout looked at 5 390, and `pay(192)` takes
-  1 517 035 (`test_pay_theKeepersFullBatch_fitsASmallBlock`: ten traders with no USDC, none, five or all
-  refused by the token). What is left is paid in the next passes, ten a pass. `pay` counts from the
+  gas: measured from cold storage, two payouts paid past 94 waiting for approval, `pay(96)`, take
+  730 903 gas with the transaction's own, each further payout looked at 5 390, and `pay(192)` takes
+  1 248 428 (`test_pay_theKeepersFullBatch_fitsASmallBlock`: two traders with no USDC, none, one or both
+  refused by the token). What is left is paid on the following days, two a day. `pay` counts from the
   head, so an approved payout more than 191 places behind a head that waits for its approval is out of
   the keeper's reach. 192 is the keeper's limit, kept to what was measured, not a small block's: a
   longer look may still fit one, by the queue and the token. The keeper logs `pay_out_of_reach`, and
@@ -234,7 +263,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   that pays the gas. It refuses before spending any: another factory's pool, no such line, a code the
   pool has not set, a signature ending within 30 seconds, a used nonce, a call the pool would refuse. `--serve PORT` listens on
   127.0.0.1 for `POST /buy`.
-- **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, SimPool, a TermsBook and the
+- **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, the pool's two libraries (`SimPoolStops`,
+  `SimPoolSetup`), SimPool linked to them (the record names all three), a TermsBook and the
   factory on testnet with Circle's USDC, names the filler, the checker, the closer (four keys with
   the operator, none the same) and the recipient, lists BTC,
   ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's

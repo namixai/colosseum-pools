@@ -27,8 +27,9 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNTIME_LIMIT = 24_576
 INIT_LIMIT = 49_152
-# A declaration may be indented; `abstract contract` and `interface` are never deployed and do not match.
-DECLARED = re.compile(r"^[ \t]*(?:contract|library)\s+(\w+)", re.M)
+# A declaration starts a line, or follows the end of another one (`;` or `}`) on the same line, indented or not;
+# `abstract contract` and `interface` are never deployed and do not match (review of #298).
+DECLARED = re.compile(r"(?:^|[;}])[ \t]*(?:contract|library)\s+(\w+)", re.M)
 COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 
 
