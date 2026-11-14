@@ -531,7 +531,9 @@ function keccak256(hex) {
 // Vectors from Foundry's `cast keccak` (and `cast abi-encode "f(bytes32,bytes32)"` for the nonce).
 const GROUP_ONE = "0x224fae07b464aab1b3a7320c4a369ed467f616401af5107c645f2636bc520c46";
 const SALT7 = `0x${"7".padStart(64, "0")}`;
-const NONCE_GROUP_ONE_7 = "0x009fc5d0eb2aa96c517c432aa30979862ca89d6e5d55d72ae906e4913a7cbdec";
+// keccak256(abi.encode(GROUP_ONE, line, SALT7)), by eth_abi and eth_utils, for lines 1 and 0.
+const NONCE_GROUP_ONE_7 = "0x274b546441a1666049ef13ea57431b42a3cd0b17270182cb3fa54d0a6a4a9321";
+const NONCE_GROUP_ONE_LINE0_7 = "0x265addca08e3cb61f4e995e6feea7b5ef2cb4910dd5414915ddebdb519568543";
 
 test("the tests' keccak256 is Keccak-256: the empty input's hash", () => {
   assert.equal(keccak256("0x"), "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
@@ -547,13 +549,15 @@ test("a code's hash is the keccak256 of its text exactly as given, as ops/deploy
   assert.match(readFileSync(join(ROOT, "ops", "deploy_sim.py"), "utf8"), /return keccak\(text=text\)/);
 });
 
-test("the signed nonce is keccak256(abi.encode(code, salt)), as the pool and the relayer take it", () => {
-  assert.equal(saleNonce(GROUP_ONE, SALT7, keccak256), NONCE_GROUP_ONE_7);
-  assert.equal(saleNonce(GROUP_ONE.toUpperCase().replace("0X", "0x"), SALT7, keccak256), NONCE_GROUP_ONE_7);
-  assert.throws(() => saleNonce("0x1234", SALT7, keccak256), /code is not 32 bytes/);
-  assert.throws(() => saleNonce(GROUP_ONE, "salt", keccak256), /salt is not 32 bytes/);
-  assert.match(POOL_SOL, /keccak256\(abi\.encode\(code, salt\)\)/);
-  assert.match(readFileSync(join(ROOT, "ops", "sim_relay.py"), "utf8"), /keccak\(encode\(\["bytes32", "bytes32"\], \[code, salt\]\)\)/);
+test("the signed nonce is keccak256(abi.encode(code, line, salt)), as the pool and the relayer take it", () => {
+  assert.equal(saleNonce(GROUP_ONE, 1, SALT7, keccak256), NONCE_GROUP_ONE_7);
+  assert.equal(saleNonce(GROUP_ONE.toUpperCase().replace("0X", "0x"), 1n, SALT7, keccak256), NONCE_GROUP_ONE_7);
+  assert.equal(saleNonce(GROUP_ONE, 0, SALT7, keccak256), NONCE_GROUP_ONE_LINE0_7, "the line is in the nonce");
+  assert.throws(() => saleNonce("0x1234", 1, SALT7, keccak256), /code is not 32 bytes/);
+  assert.throws(() => saleNonce(GROUP_ONE, 1, "salt", keccak256), /salt is not 32 bytes/);
+  assert.throws(() => saleNonce(GROUP_ONE, -1, SALT7, keccak256), /line is not a uint256/);
+  assert.match(POOL_SOL, /keccak256\(abi\.encode\(code, line, salt\)\)/);
+  assert.match(readFileSync(join(ROOT, "ops", "sim_relay.py"), "utf8"), /keccak\(encode\(\["bytes32", "uint256", "bytes32"\], \[code, line, salt\]\)\)/);
 });
 
 /** A function's parameters in the source, as `type name` pairs. */

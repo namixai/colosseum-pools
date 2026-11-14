@@ -6,7 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Rules, Units} from "../Types.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
-import {SimPool, SimPlan, SimSize, PAYOUTS_A_DAY} from "./SimPool.sol";
+import {SimPool, SimPlan, SimSize, SimTier, MAX_PAYOUTS_A_DAY} from "./SimPool.sol";
 import {TermsBook} from "../multi/TermsBook.sol";
 
 /// @title SimPoolFactory
@@ -41,10 +41,12 @@ contract SimPoolFactory {
     /// payout only once approved; from it, whether approved or not. The trader's money never depends on
     /// the approver for longer.
     uint32 public constant PAYOUT_HARD = 7 days;
-    /// How many payouts a pool settles at most in any `PAYOUT_DAY`, however they came due, approved or by
-    /// `PAYOUT_HARD`: one more waits in its place for the next day. Whatever the rules let through, a pool
-    /// settles no more than this many payouts in a day, the largest size at most each (CFO, 13 November).
-    uint8 public constant PAYOUTS_PER_DAY = uint8(PAYOUTS_A_DAY);
+    /// The bounds of a pool's `payoutsPerDay`: how many payouts it settles at most in any `PAYOUT_DAY`, however
+    /// they came due, approved or by `PAYOUT_HARD`; one more waits in its place for the next day. Whatever the
+    /// rules let through, a pool settles no more than that many payouts in a day, the largest size at most each
+    /// (CFO, 13 November: a number of the pool at its creation, within the factory's bounds).
+    uint8 public constant MIN_PAYOUTS_PER_DAY = 1;
+    uint8 public constant MAX_PAYOUTS_PER_DAY = uint8(MAX_PAYOUTS_A_DAY);
     uint32 public constant PAYOUT_DAY = 24 hours;
     /// How long a stopped payout's money stays set aside after the stop: the trader can object and the
     /// checker can lift the stop; after it the stop is final and the money is the pool's again.
@@ -224,23 +226,26 @@ contract SimPoolFactory {
     function _check(SimPlan calldata p) internal view returns (uint256 largest) {
         uint256 n = p.menu.length;
         if (n == 0 || n > MAX_MENU) revert BadPlan();
-        for (uint256 i = 0; i < n; ++i) {
-            SimSize calldata m = p.menu[i];
-            if (m.size == 0 || m.price == 0) revert BadPlan();
-            if (m.size > largest) largest = m.size;
-            // A signed purchase names an amount, not a line: no two lines at one price (review of cp#261).
-            for (uint256 j = 0; j < i; ++j) {
-                if (p.menu[j].price == m.price) revert BadPlan();
-            }
-        }
+        // One tier for each line. Two lines may share a price: a signed purchase names its line (`SimPool`).
+        if (p.tiers.length != n) revert BadPlan();
         _checkRules(p.examRules);
         _checkRules(p.fundedRules);
         _checkTerms(p.exam);
         _checkTerms(p.funded);
-        // Everything PaperExam will refuse at an exam's start, refused at the pool's (review of cp#261).
-        _examCheck(p.examRules, p.exam, uint64(largest));
-        _examCheck(p.fundedRules, p.funded, uint64(largest));
+        for (uint256 i = 0; i < n; ++i) {
+            SimSize calldata m = p.menu[i];
+            SimTier calldata k = p.tiers[i];
+            if (m.size == 0 || m.price == 0) revert BadPlan();
+            if (m.size > largest) largest = m.size;
+            // `PaperExam.FROM_START` or `PaperExam.TRAILING_TO_START`.
+            if (k.drawdownKind > 1) revert BadPlan();
+            // Everything PaperExam will refuse at an exam's start, refused at the pool's, line by line with the
+            // line's own size and tier (review of cp#261).
+            _examCheck(p.examRules, p.exam, m.size, k);
+            _examCheck(p.fundedRules, p.funded, m.size, k);
+        }
         if (p.funded.targetsBps.length != 1) revert BadPlan();
+        if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY || p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();
         if (p.fundWindow < MIN_FUND_WINDOW || p.fundWindow > MAX_FUND_WINDOW) revert BadPlan();
         if (p.fromBook ? p.maxWorseBps == 0 || p.maxWorseBps > MAX_WORSE_BPS : p.maxWorseBps != 0) revert BadPlan();
         if (address(termsBook) == address(0) || termsBook.textAt(p.terms) == address(0)) revert Unpublished();
@@ -260,10 +265,16 @@ contract SimPoolFactory {
         }
     }
 
-    function _examCheck(Rules calldata r, ExamTerms calldata t, uint64 capital) internal view {
+    /// The rules and terms a line's stage starts on, as `SimPoolSetup` copies them, against `PaperExam.check`.
+    function _examCheck(Rules calldata r, ExamTerms calldata t, uint64 capital, SimTier calldata k) internal view {
+        Rules memory rk = r;
+        rk.maxDrawdownBps = k.maxDrawdownBps;
         ExamTerms memory m = t;
         m.capital = capital;
-        try PaperExam(examImpl).check(r, m) {}
+        for (uint256 j = 0; j < m.targetsBps.length; ++j) {
+            m.targetsBps[j] = k.targetBps;
+        }
+        try PaperExam(examImpl).check(rk, m) {}
         catch {
             revert BadPlan();
         }

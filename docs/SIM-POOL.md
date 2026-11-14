@@ -24,10 +24,15 @@ fail, and their prices pay for the ones that pass.
 
 - **Opening.** `SimPoolFactory.create(plan)` with 1 HYPE sent along, which goes to the platform, and
   the USDC for two payouts of the largest size on the menu, taken from the creator. A menu of
-  10 000 locks 1 600. The plan sets the menu (up to eight sizes, each with its price), the rules and
-  terms of both stages, how long a pass may wait before its stage starts, and the hash of the
-  pool's terms written out in a `TermsBook`. No two lines share a price: a signed purchase names an amount, not a line. The
-  factory runs PaperExam's own checks on both stages at the largest size, and checks every asset against its list and every leverage cap against the
+  10 000 locks 1 600. The plan sets the menu (up to eight lines, each a size and its price), each line's
+  tier (`tiers`, one for each line: the loss limit, the target and the kind of loss line, from the start or
+  trailing to it, of both its stages), the rules and terms both stages share otherwise, how many payouts the
+  pool settles at most in a day (`payoutsPerDay`, 1 to 8), how long a pass may wait before its stage starts,
+  and the hash of the pool's terms written out in a `TermsBook`. Two lines may share a price: a signed
+  purchase names its line. A line's exam and stage start on the plan's rules and terms with its tier in them
+  (`maxDrawdownBps`, every step's target, `drawdownKind`), copied once at the opening (`SimPoolSetup`);
+  `tiers()` reads them back, in the order of `menu()`. The
+  factory runs PaperExam's own checks on both stages of every line, at its size and with its tier, and checks every asset against its list and every leverage cap against the
   asset's, that both stages end (a deadline and an idle limit), that the stage is one step, and
   that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler, the checker and the
   closer may not.
@@ -51,8 +56,8 @@ fail, and their prices pay for the ones that pass.
   validBefore, v, r, s)`: the trader signs a USDC transfer of the line's price to the pool (EIP-3009,
   Circle's FiatToken V2.2 on HyperEVM and its testnet) and needs no gas; anyone sends it, a relayer
   of the platform's or a partner's, and pays the gas. The signed nonce is
-  keccak256(abi.encode(code, salt)), so the code is in the trader's signature and whoever sends it
-  cannot name another. The token checks the signature against the line's price, the time and the
+  keccak256(abi.encode(code, line, salt)), so the code and the line are in the trader's signature and
+  whoever sends it can name neither another code nor another line at the same price. The token checks the signature against the line's price, the time and the
   nonce, and takes it only from the pool it names. Same price, same fee,
   `ExamSold` with `bySignature`. A token without EIP-3009 refuses with `NoAuthorization`; `buy`
   works on any.
@@ -74,8 +79,9 @@ fail, and their prices pay for the ones that pass.
   the prices that come in. A payout the token refuses to send (say the trader's address was blocked)
   is set aside for the trader (`PayoutHeld`), who takes it to any address with `claimHeld`, also
   after the pool has finished; the queue moves on. One stage, one payout: the stage has one step and its pass ends it.
-- **The daily limit.** A pool settles at most two payouts in any 24 hours (`PAYOUTS_PER_DAY`,
-  `PAYOUT_DAY`, constants of the factory). `pay` counts every payout that leaves the queue, paid or set
+- **The daily limit.** A pool settles at most `payoutsPerDay` payouts in any 24 hours (`PAYOUT_DAY`), a
+  number the creator sets at the opening, from `MIN_PAYOUTS_PER_DAY` (1) to `MAX_PAYOUTS_PER_DAY` (8) of the
+  factory; our first pool, two (CFO, 13 November). What follows is told for two. `pay` counts every payout that leaves the queue, paid or set
   aside for a trader the token refused, approved or gone out at its 7 days: if the limit counted only
   approved payouts, not approving would pass it. A payout that may be paid, with the day's two already
   settled, keeps its place (`PayoutWaitsLimit` with the time from which it may be paid), stays owed,

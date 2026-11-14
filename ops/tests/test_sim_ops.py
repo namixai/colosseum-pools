@@ -58,9 +58,13 @@ class TheNumbers(unittest.TestCase):
         body = re.search(r"struct SimPlan \{(.*?)\n\}", POOL, re.S).group(1)
         types = [l.split()[0] for l in body.splitlines() if l.strip() and not l.strip().startswith("//")]
         self.assertEqual(types, ["SimSize[]", "Rules", "ExamTerms", "Rules", "ExamTerms", "uint32", "bool", "uint16",
-                                 "bytes32"])
+                                 "bytes32", "SimTier[]", "uint8"])
         self.assertTrue(d.PLAN_T.startswith("((uint64,uint64)[]," + d.RULES_T + "," + d.TERMS_T))
-        self.assertTrue(d.PLAN_T.endswith(",uint32,bool,uint16,bytes32)"))
+        self.assertTrue(d.PLAN_T.endswith(",uint32,bool,uint16,bytes32," + d.TIER_T + "[],uint8)"))
+        tier = re.search(r"struct SimTier \{(.*?)\n\}", POOL, re.S).group(1)
+        self.assertEqual([l.split()[0] for l in tier.splitlines() if l.strip() and not l.strip().startswith("//")],
+                         ["uint16", "uint16", "uint8"])
+        self.assertEqual(d.TIER_T, "(uint16,uint16,uint8)")
 
     def test_the_scripts_calls_are_the_pools(self):
         self.assertIn("function setCode(bytes32 code, address partner, uint16 bps)", POOL)
@@ -80,7 +84,7 @@ class TheNumbers(unittest.TestCase):
     def test_the_relayers_call_and_event_are_the_pools(self):
         self.assertIn("function buyWithAuthorization(\n        address trader,\n        uint256 line,\n        bytes32 code,\n"
                       "        bytes32 salt,\n        uint256 validAfter,\n        uint256 validBefore,\n        uint8 v,", POOL)
-        self.assertIn("keccak256(abi.encode(code, salt))", POOL)
+        self.assertIn("keccak256(abi.encode(code, line, salt))", POOL)
         self.assertEqual(r.SIG.split("(")[0], "buyWithAuthorization")
         self.assertEqual(r.EXAM_SOLD, declared("src/sim/SimPool.sol", "ExamSold"))
 
@@ -134,7 +138,19 @@ class TheFirstPool(unittest.TestCase):
         self.assertEqual(plan[1], (300, 600, 1000, [3, 4, 0], [1000, 1000, 500]))
         self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 450, 4, 3))
         self.assertEqual(plan[4], plan[2], "the stage has the exam's terms")
-        self.assertEqual(plan[5:], (604800, True, 150, h))
+        self.assertEqual(plan[5:9], (604800, True, 150, h))
+        # No line of its own tier: each line takes the plan's 6 % and 10 %, from the start, and two payouts a day.
+        self.assertEqual(plan[9:], ([(600, 1000, 0), (600, 1000, 0)], 2))
+
+    def test_a_line_names_its_own_tier_and_a_plan_its_payouts_a_day(self):
+        raw = json.loads(json.dumps(FIRST))
+        raw["menu"][0].update(max_drawdown_bps=300, target_bps=900, drawdown_kind=1)
+        raw["payouts_per_day"] = 3
+        plan = d.plan_of(raw, b"\0" * 32)
+        self.assertEqual(plan[9:], ([(300, 900, 1), (600, 1000, 0)], 3))
+        raw["funded"]["targets_bps"] = [800]
+        with self.assertRaises(SystemExit):
+            d.plan_of(raw, b"\0" * 32)  # line 1 has no tier, and the stages' targets differ
 
     def test_its_codes_wait_for_the_cfo_and_alex_and_its_terms_say_how_codes_share(self):
         self.assertEqual(FIRST["codes"], [], "an empty list: the codes and their shares come before the pool sells")
@@ -175,7 +191,9 @@ class TheFirstPool(unittest.TestCase):
             self.assertNotIn("ten payouts a call", text)
             self.assertEqual(keeper.PAY_PER_CALL, 2, "the two of the terms")
             self.assertEqual(constant("PAYOUT_DAY"), "24 hours", "the day of the terms")
-            self.assertEqual(constant("PAYOUTS_PER_DAY"), "uint8(PAYOUTS_A_DAY)")
+            self.assertEqual(constant("MAX_PAYOUTS_PER_DAY"), "uint8(MAX_PAYOUTS_A_DAY)")
+            self.assertEqual(d.plan_of(json.loads((ROOT / f"deployments/plans/{name}.json").read_text()), b"\0" * 32)[-1],
+                             2, "the two of the terms: the plan's payouts a day")
             self.assertIn("Payouts are paid in the order they were claimed, out of the money the pool holds: one still "
                           "waiting for its approval keeps its place, and a later one is paid past it only if the money "
                           "also covers every payout so passed over; one the pool cannot cover waits, and every payout "
@@ -645,12 +663,17 @@ class TheRelayer(unittest.TestCase):
         with self.assertRaises(r.Refused):
             r.check(p, 1_000, pools, 2, False, code_set=False)
 
-    def test_the_signed_nonce_is_the_code_and_the_salt(self):
-        """The trader signs keccak256(abi.encode(code, salt)): the relayer cannot send it with another code."""
+    def test_the_signed_nonce_is_the_code_the_line_and_the_salt(self):
+        """The trader signs keccak256(abi.encode(code, line, salt)): the relayer can send it with neither another code
+        nor another line, two lines of a menu may share a price."""
         from eth_abi import encode
         p = r.parsed(GOOD)
-        self.assertEqual(p["nonce"], keccak(encode(["bytes32", "bytes32"], [b"\x66" * 32, b"\x33" * 32])))
+        self.assertEqual(p["nonce"], keccak(encode(["bytes32", "uint256", "bytes32"], [b"\x66" * 32, 1, b"\x33" * 32])))
         self.assertNotEqual(r.parsed({**GOOD, "code": "0x" + "77" * 32})["nonce"], p["nonce"])
+        self.assertNotEqual(r.parsed({**GOOD, "line": 0})["nonce"], p["nonce"])
+        for line in (-1, 2**256):
+            with self.assertRaises(r.Refused):
+                r.parsed({**GOOD, "line": line})  # malformed, a 400: not an encoder's error, a 502 (review of #302)
 
     def test_the_call_takes_the_signed_fields_in_order(self):
         p = r.parsed(GOOD)

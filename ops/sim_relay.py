@@ -8,8 +8,8 @@ exam's price to the pool (EIP-3009 ReceiveWithAuthorization) and needs no gas; t
 
 A signed purchase is JSON: {"pool", "trader", "line", "code", "salt", "valid_after", "valid_before",
 "v", "r", "s"}. `code` is the keccak256 of a trading group's code and `salt` any 32 bytes: the trader
-signs the nonce keccak256(abi.encode(code, salt)), so the code is in the signature and a relayer
-cannot name another. Before it spends gas the relayer checks that the pool is one of the deployment's
+signs the nonce keccak256(abi.encode(code, line, salt)), so the code and the line are in the signature
+and a relayer can name neither another code nor another line at the same price. Before it spends gas the relayer checks that the pool is one of the deployment's
 factory's, the line is on its menu, the code is set on the pool, the signature is not past its time
 and its nonce is unused, and that the pool would take the call (eth_estimateGas). The token itself checks the signature, the amount (the
 line's price) and that only that pool, its payee, can use it. The server listens on 127.0.0.1 only.
@@ -61,13 +61,16 @@ def parsed(raw: dict) -> dict:
         raise Refused(f"malformed: {exc}") from exc
     if out["v"] not in (27, 28):
         raise Refused("malformed: v is 27 or 28")
-    out["nonce"] = nonce_of(out["code"], out["salt"])
+    # The line is in the nonce, a uint256: one outside it is a malformed request, not a failure to retry (review of #302).
+    if not 0 <= out["line"] < 2**256:
+        raise Refused("malformed: line is outside uint256")
+    out["nonce"] = nonce_of(out["code"], out["line"], out["salt"])
     return out
 
 
-def nonce_of(code: bytes, salt: bytes) -> bytes:
-    """The nonce the trader signs, as SimPool.buyWithAuthorization takes it: keccak256(abi.encode(code, salt))."""
-    return keccak(encode(["bytes32", "bytes32"], [code, salt]))
+def nonce_of(code: bytes, line: int, salt: bytes) -> bytes:
+    """The nonce the trader signs, as SimPool.buyWithAuthorization takes it: keccak256(abi.encode(code, line, salt))."""
+    return keccak(encode(["bytes32", "uint256", "bytes32"], [code, line, salt]))
 
 
 def check(p: dict, now: int, pools: list[str], menu_len: int, used: bool, code_set: bool = True) -> None:

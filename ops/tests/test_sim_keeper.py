@@ -337,11 +337,12 @@ class TheLongQueue(unittest.TestCase):
         self.assertIn(f"uint256 constant KEEPER_SCAN = {k.SCAN_PAYOUTS};", src)
         self.assertIn("function test_pay_theKeepersFullBatch_fitsASmallBlock()", src)
         self.assertIn('assertLt(worst, 1_300_000, "pay(192) with the day\'s two payments");', src)
-        # One call pays at most the day's payouts: the keeper's number is the contract's.
+        # One call pays at most PAY_PER_CALL, and never more than the pool's room under its own daily limit.
         pool = (ROOT / "src/sim/SimPool.sol").read_text()
-        self.assertIn(f"uint256 constant PAYOUTS_A_DAY = {k.PAY_PER_CALL};", pool)
-        self.assertIn("uint8 public constant PAYOUTS_PER_DAY = uint8(PAYOUTS_A_DAY);",
-                      (ROOT / "src/sim/SimPoolFactory.sol").read_text())
+        self.assertIn("uint8 public payoutsPerDay;", pool)
+        self.assertIn("for (uint256 k = 0; k < payoutsPerDay; ++k) {", pool)
+        self.assertIn('room = min(PAY_PER_CALL, view(pool, "payRoom()", "uint256"))',
+                      (ROOT / "ops/sim_keeper.py").read_text())
         self.assertIn("event PayoutWaitsLimit(uint256 indexed id, uint64 nextAt);", pool)
 
     def test_an_approved_payout_behind_96_waiting_is_paid_in_the_first_pass(self):

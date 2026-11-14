@@ -661,10 +661,14 @@ export function codeHash(text, keccak256) {
   return word(keccak256(utf8Hex(text)), "keccak256");
 }
 
-/** The nonce a trader signs to buy by signature: keccak256(abi.encode(code, salt)), two 32-byte words, so the code is
- *  in the signature and whoever sends it cannot name another (SimPool.buyWithAuthorization, ops/sim_relay.py). */
-export function saleNonce(code, salt, keccak256) {
-  return word(keccak256(`0x${word(code, "code").slice(2)}${word(salt, "salt").slice(2)}`), "keccak256");
+/** The nonce a trader signs to buy by signature: keccak256(abi.encode(code, line, salt)), three 32-byte words, so the
+ *  code and the line are in the signature and whoever sends it can name neither another code nor another line at the
+ *  same price (SimPool.buyWithAuthorization, ops/sim_relay.py). */
+export function saleNonce(code, line, salt, keccak256) {
+  const n = BigInt(line);
+  if (n < 0n || n >= 1n << 256n) throw new Error("line is not a uint256");
+  const lineWord = n.toString(16).padStart(64, "0");
+  return word(keccak256(`0x${word(code, "code").slice(2)}${lineWord}${word(salt, "salt").slice(2)}`), "keccak256");
 }
 
 /** EIP-3009's message, as Circle's FiatToken signs it (the token's own name, version, chain and address are its domain). */
@@ -706,7 +710,7 @@ export function signedPurchase({ pool, trader, menu, line, code, codes, salt, va
   const key = args[1];
   const s = word(salt, "salt");
   if (!(BigInt(validBefore) > BigInt(validAfter))) throw new Error("the signature must end after it starts");
-  const nonce = saleNonce(key, s, keccak256);
+  const nonce = saleNonce(key, args[0], s, keccak256);
   const message = { from: trader, to: pool, value: price, validAfter: BigInt(validAfter), validBefore: BigInt(validBefore), nonce };
   return {
     nonce,
