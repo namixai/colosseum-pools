@@ -245,7 +245,8 @@ def deploy(args) -> int:
         raise SystemExit("the filler, the checker and the closer are three keys")
     print(f"deploy_sim deploy: {c.NETWORK.name} (chain {c.CHAIN_ID}), label {args.label}, USDC {c.USDC_ERC20} "
           "(Circle's, EIP-3009)")
-    print("  would deploy     PaperExam, SimPool, TermsBook, SimPoolFactory(usdc, exam, pool, operator)  (big blocks on, then off)")
+    print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPool (linked to both), TermsBook, "
+          "SimPoolFactory(usdc, exam, pool, operator)  (big blocks on, then off)")
     print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
           f"setTermsBook, setAsset " + ", ".join(f"{n} ({i}) {cap / 100:g}x" for n, i, cap in assets))
     print(f"  would write      {out.relative_to(ROOT)}")
@@ -271,7 +272,11 @@ def deploy(args) -> int:
         try:
             exam, rcpt = deploy_contract(op, out, record, "PaperExamImpl", "PaperExam", [], [])
             record["block"] = int(rcpt["blockNumber"], 16)
-            pool, _ = deploy_contract(op, out, record, "SimPoolImpl", "SimPool", [], [])
+            # SimPool's stops and the copy of its plan are libraries it calls (EIP-170): deployed first, and linked.
+            stops, _ = deploy_contract(op, out, record, "SimPoolStops", "SimPoolStops", [], [])
+            setup, _ = deploy_contract(op, out, record, "SimPoolSetup", "SimPoolSetup", [], [])
+            pool, _ = deploy_contract(op, out, record, "SimPoolImpl", "SimPool", [], [],
+                                      {"SimPoolStops": stops, "SimPoolSetup": setup})
             book, _ = deploy_contract(op, out, record, "TermsBook", "TermsBook", [], [])
             factory, _ = deploy_contract(op, out, record, "SimPoolFactory", "SimPoolFactory",
                                          ["address", "address", "address", "address"],

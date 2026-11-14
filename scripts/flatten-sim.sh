@@ -4,8 +4,8 @@
 #
 #     scripts/flatten-sim.sh <commit> [out-dir]
 #
-# The four contracts ops/deploy_sim.py deploys -- PaperExam, SimPool, TermsBook and SimPoolFactory -- and
-# everything they import, once each, in one file: `forge flatten` of an entry file that imports the four. The
+# The contracts ops/deploy_sim.py deploys -- PaperExam, SimPool (with its libraries, through its imports), TermsBook
+# and SimPoolFactory -- and everything they import, once each, in one file: `forge flatten` of an entry file that imports the four. The
 # entry is written in a temporary git worktree of the commit and never committed; this checkout is not touched.
 #
 # Writes to out-dir (default: a new directory under $TMPDIR):
