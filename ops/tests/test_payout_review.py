@@ -2252,4 +2252,81 @@ class TheTiersAreTheAccountsOwn(unittest.TestCase):
             stopped = {**log(r.PAYOUT_STOPPED, 12, 0), "data": "0x" + data.hex()}
             self.assertEqual(r.payout_lives([log(r.PAYOUT_DUE, 10, 0), stopped])[(POOL, 4)], ["PayoutDue", "PayoutStopped"], reason)
         src = (ROOT / "ops/payout_review.py").read_text()
-        self.assertNotRegex(src, r"reason in \(1, 2, 3\)|reason <= 3|STOP_REASON", "no list of the stop reasons that 4 could fall out of")
+        self.assertNotRegex(src, r"reason in \(1, 2, 3\)|reason <= 3|reason < 4", "no list of the stop reasons that 4 could fall out of")
+
+
+class WhyAPayoutWasStopped(unittest.TestCase):
+    """A stop's reason, 4 (prohibited play, cp#303) included, is named: by the pool's `stopReasonOf(id)`, else by the
+    event, never an unknown stop."""
+
+    def test_the_words_are_the_page_librarys_and_the_contracts_reasons(self):
+        lib = _source("app/lib/simpool.js")
+        block = re.search(r"export const STOP_REASON = Object.freeze\(\{(.*?)\}\);", lib, re.S).group(1)
+        words = {int(n): re.sub(r"\s+", " ", w) for n, w in re.findall(r'(\d): "(.*?)",\n', block)}
+        self.assertEqual(words, {k: re.sub(r"\s+", " ", v) for k, v in r.STOP_REASONS.items()})
+        self.assertEqual(sorted(r.STOP_REASONS), [1, 2, 3, 4])
+        stops = _source("src/sim/SimPoolStops.sol")
+        for n in (1, 2, 3, 4):
+            self.assertRegex(stops, rf"reason == {n}\b")
+        self.assertIn("mapping(uint256 id => uint8) public stopReasonOf;", _source("src/sim/SimPool.sol"))
+        self.assertIn("reasonOf[id] = reason;", stops)
+        self.assertEqual(r.STOPPED_DATA[1], "uint8", "the reason is the second word of PayoutStopped's data")
+
+    def test_every_reason_has_words_and_one_this_file_has_none_for_is_named_by_its_number(self):
+        for n in (1, 2, 3, 4):
+            self.assertEqual(r.stop_reason_text(n), r.STOP_REASONS[n])
+        self.assertIn("Prohibited play", r.stop_reason_text(4))
+        text = r.stop_reason_text(7)
+        self.assertTrue(text.startswith("Reason 7:"), text)
+        self.assertNotIn("nknown", text)
+
+    def stopped(self, **got):
+        ch, t1, s1 = honest_world()
+        pay = ch.d["payouts"][0]
+        pay.update(state="Stopped", wasStopped=True, approved=True, stopReason=got)
+        return ch
+
+    def test_the_review_says_the_reason_in_words(self):
+        for n in (1, 2, 3, 4, 9):
+            ch = self.stopped(recorded=n, read=n)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["stoppedFor"]["reason"], got["stoppedFor"]["text"], got["stoppedFor"]["disagree"]),
+                             (n, r.stop_reason_text(n), None))
+            self.assertIn(f"stopped for reason {n}: ", r.summary(got))
+        self.assertIn("Prohibited play", r.summary(r.review(self.stopped(recorded=4, read=4).d, POOL, 0)))
+
+    def test_the_pools_answer_stands_in_for_the_event_and_the_event_for_a_pool_that_has_none(self):
+        self.assertEqual(r.review(self.stopped(recorded=None, read=4).d, POOL, 0)["stoppedFor"]["reason"], 4)
+        self.assertEqual(r.review(self.stopped(recorded=4, read=None).d, POOL, 0)["stoppedFor"]["reason"], 4)
+        got = r.review(self.stopped(recorded=None, read=None).d, POOL, 0)
+        self.assertEqual((got["stoppedFor"]["reason"], got["stoppedFor"]["text"]), (None, None))
+        self.assertNotIn("stopped for reason", r.summary(got))
+
+    def test_events_and_pool_that_differ_name_no_reason(self):
+        got = r.review(self.stopped(recorded=3, read=4).d, POOL, 0)
+        self.assertEqual((got["stoppedFor"]["reason"], got["stoppedFor"]["text"]), (None, None))
+        self.assertIn("the stop's reason: the events say 3, the pool says 4", got["stoppedFor"]["disagree"])
+        self.assertIn("unread", got["kinds"])
+        self.assertIn("not read: the stop's reason", got["reasons"][-1])
+
+    def test_a_payout_never_stopped_has_no_reason(self):
+        ch, _, _ = honest_world()
+        self.assertIsNone(r.review(ch.d, POOL, 0)["stoppedFor"])
+        self.assertNotIn("stopped for", r.summary(r.review(ch.d, POOL, 0)))
+
+    def test_the_reason_is_read_from_the_event_and_from_the_pool(self):
+        def log(reason, pid=4):
+            data = encode(r.STOPPED_DATA, [800, reason, addr(0xB1), [b"\x01" * 32, b"\x02" * 32], [b"\x03" * 32], 1, 0, 0])
+            return {"address": POOL, "topics": [r.PAYOUT_STOPPED, "0x" + f"{pid:064x}"], "data": "0x" + data.hex(),
+                    "blockNumber": hex(12), "logIndex": "0x0", "transactionHash": tx(12)}
+        for reason in (1, 2, 3, 4):
+            self.assertEqual(r.payout_stop_reasons([log(reason)]), {(POOL, 4): reason})
+        self.assertEqual(r.payout_stop_reasons([log(4, pid=1), log(2, pid=2)]), {(POOL, 1): 4, (POOL, 2): 2})
+        self.assertEqual(r.payout_stop_reasons([{**log(4), "data": "0x"}]), {}, "a log that is not a stop's is no reason")
+        with mock.patch.object(r.c, "call_view", return_value=(4,)) as view:
+            self.assertEqual(r.stop_reason_read(POOL, 7), 4)
+        self.assertEqual(view.call_args.args[:2], (POOL, "stopReasonOf(uint256)"))
+        with mock.patch.object(r.c, "call_view", side_effect=Exception("execution reverted")):
+            self.assertIsNone(r.stop_reason_read(POOL, 7), "a pool from before the reason is kept")
+        with mock.patch.object(r.c, "call_view", side_effect=Exception("429 Too Many Requests")):
+            self.assertIsNone(r.stop_reason_read(POOL, 7), "not read: not a reason")

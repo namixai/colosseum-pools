@@ -434,6 +434,11 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   limit (no `payoutsPerDay()` and no `payRoom()`) gives `none`; a pool with `payRoom()` and no number of its own, or a
   chain read without the reads, null: the number is not guessed.
 
+  For a payout that was stopped the review names the reason in words and by number (1 to 4, prohibited play
+  included; one it has no words for is named by its number, never an unknown stop): the pool's own
+  `stopReasonOf(id)`, else the reason `PayoutStopped` recorded; where the two differ it names none and says
+  so as not read.
+
   Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
   72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. Both spans are
   read from the factory (`PAYOUT_DELAY()`, `PAYOUT_HARD()`), not assumed; where one was not read on a

@@ -1093,6 +1093,21 @@ def trail_disagreement(trail: dict | None, pay: dict, approvals: bool | None) ->
     return None
 
 
+def stopped_for(pay: dict) -> dict | None:
+    """The reason a stopped payout was stopped for: None for one never stopped. `reason` is what the pool answers
+    (`stopReasonOf`) or, without that, what `PayoutStopped` recorded, None if neither was read; `text` names it, 4 and
+    any reason this file has no words for included; `disagree` says why the two cannot both be right."""
+    if not pay.get("wasStopped"):
+        return None
+    got = pay.get("stopReason") or {}
+    recorded, read = got.get("recorded"), got.get("read")
+    disagree = (f"the stop's reason: the events say {recorded}, the pool says {read}"
+                if recorded is not None and read is not None and recorded != read else None)
+    reason = None if disagree else read if read is not None else recorded
+    return {"reason": reason, "text": None if reason is None else stop_reason_text(reason), "recorded": recorded, "read": read,
+            "disagree": disagree}
+
+
 def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds: dict | None = None) -> dict:
     p = p or Params()
     pay = next(x for x in chain["payouts"] if x["pool"] == pool and x["id"] == pid)
@@ -1249,6 +1264,11 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     # The daily limit on payouts: where it leaves this payout. Said beside the verdict, never a reason in it: a payout the
     # limit holds is waiting its turn, not suspicious.
     out["dailyCap"] = payout_cap(chain, pool, {**pay, "id": pid}, approvals, delay, hard)
+    # Why a payout that was stopped was stopped, said in words and by number: from the pool's own answer, else from the
+    # event; where the two differ, neither is taken and it is said as not read.
+    out["stoppedFor"] = stopped_for(pay)
+    if out["stoppedFor"] and out["stoppedFor"]["disagree"]:
+        found.append(("unread", f"not read: {out['stoppedFor']['disagree']}"))
     out["verdict"] = "suspicious" if found else "clean"
     out["reasons"] = [t for _, t in found]
     out["kinds"] = [k for k, _ in found]
@@ -1360,6 +1380,8 @@ def summary(r: dict) -> str:
             ", paid by itself then" if r["approvals"] is False else ", not read when it is paid")
     lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}" + when,
              f"  stage {r['stage']} ({r['fills']['stage']} fills), exam {r['exam']} ({r['fills']['exam']} fills)"]
+    if r["stoppedFor"] and r["stoppedFor"]["reason"] is not None:
+        lines.append(f"  stopped for reason {r['stoppedFor']['reason']}: {r['stoppedFor']['text']}")
     if r["waitingApproval"]:
         lines.append("  waiting for approval: " + ("its claim is recorded and no approval after it" if r["trail"] else "due and not approved"))
     for part in ("stage", "exam"):
@@ -1601,6 +1623,46 @@ def has_approvals(factory: str, pool: str) -> bool | None:
     return True if answers(pool, "approver()", ["address"]) is True else None
 
 
+# Why the checker stopped a payout (SimPool `stopPayout`, kept by the pool as `stopReasonOf(id)`); the words are the
+# page library's (`STOP_REASON` of app/lib/simpool.js), a test holds them together.
+STOP_REASONS = {
+    1: "Opposite positions with another account of this platform's pools",
+    2: "Opposite positions with another account, and the two wallets linked",
+    3: "The result is disputed: a flaw of the exam, the oracle or the filler, shown by the transactions and the published text",
+    4: "Prohibited play: a series of exams traded at the edge of their risk, or a hedge between accounts, shown by the "
+       "transactions and the published analysis",
+}
+STOPPED_DATA = ["uint64", "uint8", "address", "bytes32[]", "bytes32[]", "uint256", "uint256", "uint256"]
+
+
+def stop_reason_text(reason: int) -> str:
+    """A stop reason in words; one this file has no words for is named by its number, never an unknown stop."""
+    return STOP_REASONS.get(reason) or f"Reason {reason}: not described in this file; the stop's transactions and its published text say what it is"
+
+
+def payout_stop_reasons(events: list[dict]) -> dict[tuple[str, int], int]:
+    """The reason each payout was stopped for, as `PayoutStopped` recorded it (the second word of its data): (pool, id) to
+    the latest stop's reason. A payout is stopped once, so there is one."""
+    out: dict[tuple[str, int], int] = {}
+    for l in sorted((l for l in events if l["topics"][0] == PAYOUT_STOPPED),
+                    key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16))):
+        try:
+            out[(to_checksum_address(l["address"]), int(l["topics"][1], 16))] = int(abi_decode(STOPPED_DATA, bytes.fromhex(l["data"][2:]))[1])
+        except Exception as exc:
+            core.log("stop_reason_unread", address=l["address"], error=str(exc)[:120])
+    return out
+
+
+def stop_reason_read(pool: str, pid: int) -> int | None:
+    """The pool's own `stopReasonOf(id)`; None where it has no such getter or it could not be read (never a guess)."""
+    try:
+        return int(c.call_view(pool, "stopReasonOf(uint256)", ["uint256"], [pid], ["uint8"])[0])
+    except Exception as exc:
+        if "revert" not in str(exc).lower():
+            core.log("not_read", address=pool, call="stopReasonOf(uint256)", error=str(exc)[:120])
+        return None
+
+
 def payout_lives(events: list[dict]) -> dict[tuple[str, int], list[str]]:
     """Each payout's recorded events by name, in the order the chain wrote them: (pool, id) to ["PayoutDue", ...]. A stop
     is `PayoutStopped` whatever its reason (1 to 3 and the ones the pool may add): the reason is in the event's data and
@@ -1698,10 +1760,13 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     payouts = [due_of(l) for l in events if l["topics"][0] == PAYOUT_DUE]
     # Each payout's life as the chain wrote it, in the order of the logs: what the review reports as its status.
     life = payout_lives(events)
+    recorded = payout_stop_reasons(events)
     for x in payouts:
         p = payout_struct(x["pool"], x["id"])
         x["state"], x["wasStopped"], x["approved"] = sk.PAYOUT_STATE[p[4]], bool(p[5]), p[7]
         x["trail"] = payout_trail(life.get((x["pool"], x["id"]), []))
+        if x["wasStopped"]:
+            x["stopReason"] = {"recorded": recorded.get((x["pool"], x["id"])), "read": stop_reason_read(x["pool"], x["id"])}
     books = {pool: {"balance": c.call_view(usdc, "balanceOf(address)", ["address"], [pool], ["uint256"])[0],
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
                     "sizes": [int(m[0]) for m in c.call_view(pool, "menu()", [], [], ["(uint64,uint64)[]"])[0]],
