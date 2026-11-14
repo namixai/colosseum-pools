@@ -10,7 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Rules} from "../../src/Types.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {TermsBook} from "../../src/multi/TermsBook.sol";
-import {SimPool, SimPlan, SimSize} from "../../src/sim/SimPool.sol";
+import {SimPool, SimPlan, SimSize, SimTier} from "../../src/sim/SimPool.sol";
 import {SimPoolFactory} from "../../src/sim/SimPoolFactory.sol";
 import {OracleFollowsMark} from "../PoolHarness.sol";
 import {Usdc3009} from "./SimPool.t.sol";
@@ -278,7 +278,7 @@ contract SimPoolHandler is Test {
                         uint256(m[line].price),
                         0,
                         until,
-                        keccak256(abi.encode(code, salt))
+                        keccak256(abi.encode(code, line, salt))
                     )
                 )
             )
@@ -1031,6 +1031,10 @@ contract SimPoolInvariantTest is Test {
         p.fromBook = true;
         p.maxWorseBps = 50;
         p.terms = termsHash;
+        p.tiers = new SimTier[](2);
+        p.tiers[0] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
+        p.tiers[1] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
+        p.payoutsPerDay = 2;
         vm.prank(creator);
         pool = SimPool(factory.create{value: 1 ether}(p));
 
@@ -1379,7 +1383,7 @@ contract SimPoolInvariantTest is Test {
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
     function invariant_noDaySeesMoreThanTwoPayouts() public view {
-        assertEq(factory.PAYOUTS_PER_DAY(), 2);
+        assertEq(pool.payoutsPerDay(), 2);
         assertEq(handler.ghostOverLimit(), 0, "three payouts within 24 hours");
         assertEq(handler.ghostRoomMismatch(), 0, "payRoom is not the day's two less the last 24 hours' settlements");
         uint256 n = handler.settledCount();

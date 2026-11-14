@@ -10,7 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Rules} from "../../src/Types.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {TermsBook} from "../../src/multi/TermsBook.sol";
-import {SimPool, SimPlan, SimSize} from "../../src/sim/SimPool.sol";
+import {SimPool, SimPlan, SimSize, SimTier} from "../../src/sim/SimPool.sol";
 import {SimPoolFactory} from "../../src/sim/SimPoolFactory.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MockUsdc, OracleFollowsMark} from "../PoolHarness.sol";
@@ -111,6 +111,11 @@ contract SimPoolTest is Test {
         p.fromBook = true;
         p.maxWorseBps = 50;
         p.terms = termsHash;
+        p.tiers = new SimTier[](2);
+        // As the plan's rules and terms: drawdown 6 %, target 10 %, from the start.
+        p.tiers[0] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
+        p.tiers[1] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
+        p.payoutsPerDay = 2;
     }
 
     function _open(SimPlan memory p) internal returns (SimPool pool) {
@@ -270,7 +275,7 @@ contract SimPoolTest is Test {
         bad[13].fundedRules.assets[1] = BTC;
         bad[13].fundedRules.assetLeverageX100 = new uint32[](1);
         bad[13].fundedRules.assetLeverageX100[0] = 500;
-        bad[14].menu[1].price = SMALL_PRICE; // two lines at one price: a signature could buy either
+        bad[14].tiers[1].drawdownKind = 2; // neither from the start nor trailing to it
         bad[15].funded.fillDelay = 0; // a stage PaperExam would refuse to start
         bad[16].exam.costPpm = 100_001; // over PaperExam's ceiling
         for (uint256 i = 0; i < bad.length; ++i) {
@@ -375,7 +380,7 @@ contract SimPoolTest is Test {
         uint256 pot = usdc.balanceOf(address(pool));
         bytes32 salt = keccak256("one");
         (uint8 v, bytes32 r, bytes32 s) =
-            _signed(pk, address(pool), LARGE_PRICE, block.timestamp + 10 minutes, keccak256(abi.encode(CODE, salt)));
+            _signed(pk, address(pool), LARGE_PRICE, block.timestamp + 10 minutes, keccak256(abi.encode(CODE, uint256(1), salt)));
         vm.recordLogs();
         vm.prank(stranger); // the relayer
         address exam = pool.buyWithAuthorization(signer, 1, CODE, salt, 0, block.timestamp + 10 minutes, v, r, s);
@@ -407,7 +412,7 @@ contract SimPoolTest is Test {
         bytes32 salt = keccak256("one");
         // Signed for the small line's price, sent for the large line.
         (uint8 v, bytes32 r, bytes32 s) =
-            _signed(pk, address(pool), SMALL_PRICE, block.timestamp + 1 hours, keccak256(abi.encode(CODE, salt)));
+            _signed(pk, address(pool), SMALL_PRICE, block.timestamp + 1 hours, keccak256(abi.encode(CODE, uint256(1), salt)));
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
         pool.buyWithAuthorization(signer, 1, CODE, salt, 0, block.timestamp + 1 hours, v, r, s);
     }
@@ -418,7 +423,7 @@ contract SimPoolTest is Test {
         deal(address(usdc), signer, 2 * LARGE_PRICE);
         bytes32 salt = keccak256("one");
         uint256 until = block.timestamp + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, salt)));
+        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, uint256(1), salt)));
         // Another pool cannot use it: the token takes it only from its payee.
         SimPool other_ = _pool();
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
@@ -427,7 +432,7 @@ contract SimPoolTest is Test {
         vm.expectRevert(bytes("FiatTokenV2: authorization is used or canceled"));
         pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
         bytes32 later = keccak256("two");
-        (v, r, s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, later)));
+        (v, r, s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, uint256(1), later)));
         vm.warp(until);
         vm.expectRevert(bytes("FiatTokenV2: authorization is expired"));
         pool.buyWithAuthorization(signer, 1, CODE, later, 0, until, v, r, s);
@@ -442,7 +447,7 @@ contract SimPoolTest is Test {
         deal(address(usdc), signer, LARGE_PRICE);
         bytes32 salt = keccak256("one");
         uint256 until = block.timestamp + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, salt)));
+        (uint8 v, bytes32 r, bytes32 s) = _signed(pk, address(pool), LARGE_PRICE, until, keccak256(abi.encode(CODE, uint256(1), salt)));
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
         pool.buyWithAuthorization(signer, 1, theirs, salt, 0, until, v, r, s);
         pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
@@ -1034,8 +1039,8 @@ contract SimPoolTest is Test {
         pool.approvePayouts(ids);
     }
 
-    function test_dailyLimit_isTwoPayoutsInTwentyFourHours() public view {
-        assertEq(factory.PAYOUTS_PER_DAY(), 2);
+    function test_dailyLimit_isTwoPayoutsInTwentyFourHours() public {
+        assertEq(_pool().payoutsPerDay(), 2);
         assertEq(factory.PAYOUT_DAY(), 24 hours);
     }
 
@@ -1071,6 +1076,163 @@ contract SimPoolTest is Test {
         for (uint256 k = 0; k < 5; ++k) {
             assertEq(usdc.balanceOf(traders[k]), LARGE_PAYOUT);
         }
+    }
+
+    // ── the menu: tiers line by line, and the pool's own daily limit ──
+
+    /// The CFO's menu of 13 November: loss limit / target on 5 000
+    /// and 10 000, trailing to the start, at the market's prices. Two lines share 40.
+    function _menuPlan() internal view returns (SimPlan memory p) {
+        p = _plan();
+        uint16[4] memory dd = [uint16(300), 400, 500, 600];
+        uint16[4] memory target = [uint16(900), 1000, 1000, 1000];
+        uint64[8] memory price = [uint64(20e6), 40e6, 30e6, 60e6, 40e6, 79e6, 50e6, 95e6];
+        p.menu = new SimSize[](8);
+        p.tiers = new SimTier[](8);
+        for (uint256 i = 0; i < 8; ++i) {
+            p.menu[i] = SimSize({size: i % 2 == 0 ? SMALL : LARGE, price: price[i]});
+            p.tiers[i] = SimTier({maxDrawdownBps: dd[i / 2], targetBps: target[i / 2], drawdownKind: 1});
+        }
+    }
+
+    function test_menu_eachLineStartsBothStagesOnItsTier() public {
+        SimPool pool = _open(_menuPlan());
+        SimTier[] memory k = pool.tiers();
+        assertEq(k.length, 8);
+        for (uint256 i = 0; i < 8; ++i) {
+            address who = makeAddr(string(abi.encode("tier trader", i)));
+            PaperExam exam = _buy(pool, who, i);
+            for (uint256 s = 0; s < 2; ++s) {
+                assertEq(exam.rules().maxDrawdownBps, k[i].maxDrawdownBps, "the tier's loss limit");
+                assertEq(exam.rules().dailyLossBps, 300, "the plan's daily loss");
+                assertEq(exam.terms().targetsBps.length, 1);
+                assertEq(exam.terms().targetsBps[0], k[i].targetBps, "the tier's target");
+                assertEq(exam.terms().capital, i % 2 == 0 ? SMALL : LARGE, "the line's size");
+                assertEq(exam.drawdownKind(), 1, "trailing to the start");
+                if (s == 1) break;
+                _pass(exam, who);
+                vm.prank(who);
+                exam = PaperExam(pool.fund(address(exam)));
+            }
+            _pass(exam, who);
+            uint256 id = pool.claimPayout(address(exam));
+            assertEq(pool.payout(id).amount, i % 2 == 0 ? SMALL_PAYOUT : LARGE_PAYOUT, "8 % of the line's size");
+            _setMark(1_000_000);
+        }
+        assertEq(k[0].maxDrawdownBps, 300);
+        assertEq(k[0].targetBps, 900);
+        assertEq(k[7].maxDrawdownBps, 600);
+        assertEq(k[7].targetBps, 1000);
+        assertEq(pool.largestPayout(), LARGE_PAYOUT);
+    }
+
+    function test_menu_theTiersLossLimitEndsTheExam_notThePlans() public {
+        SimPlan memory p = _menuPlan();
+        p.examRules.dailyLossBps = 900; // out of the way: the loss limit alone is judged
+        SimPool pool = _open(p);
+        PaperExam tight = _buy(pool, trader, 0); // 3 %
+        PaperExam loose = _buy(pool, other, 6); // 6 %
+        (,, uint64 capital,) = tight.result();
+        _fill(tight, trader, true, capital / mark);
+        _fill(loose, other, true, capital / mark);
+        _setMark(mark * 96 / 100); // 4 % down: past 3, short of 6
+        tight.breach();
+        (PaperExam.Status s1,,,) = tight.result();
+        assertEq(uint8(s1), uint8(PaperExam.Status.Breached));
+        vm.expectRevert(PaperExam.NoBreach.selector);
+        loose.breach();
+    }
+
+    function test_menu_twoLinesAtOnePrice_aSignatureBuysTheLineItNames() public {
+        SimPool pool = _open(_menuPlan());
+        (address signer, uint256 pk) = makeAddrAndKey("signer");
+        deal(address(usdc), signer, 40e6);
+        bytes32 salt = keccak256("one");
+        uint256 until = block.timestamp + 1 hours;
+        // Signed for line 1 (3 % on 10 000), sent for line 4 (5 % on 5 000) at the same 40.
+        (uint8 v, bytes32 r, bytes32 s) =
+            _signed(pk, address(pool), 40e6, until, keccak256(abi.encode(CODE, uint256(1), salt)));
+        vm.prank(stranger);
+        vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
+        pool.buyWithAuthorization(signer, 4, CODE, salt, 0, until, v, r, s);
+        vm.prank(stranger);
+        PaperExam e = PaperExam(pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s));
+        assertEq(e.rules().maxDrawdownBps, 300, "the line signed for");
+        assertEq(e.terms().capital, LARGE);
+    }
+
+    function test_open_refusesTiersThatAreNotOneForEachLine_orThatAnExamWouldRefuse() public {
+        SimPlan[] memory bad = new SimPlan[](5);
+        for (uint256 i = 0; i < bad.length; ++i) bad[i] = _menuPlan();
+        bad[0].tiers = new SimTier[](7); // one line without a tier
+        bad[1].tiers = new SimTier[](9); // a tier without a line
+        for (uint256 i = 0; i < 9; ++i) bad[1].tiers[i] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
+        for (uint256 i = 0; i < 7; ++i) bad[0].tiers[i] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
+        bad[2].tiers[5].drawdownKind = 2;
+        bad[3].tiers[3].targetBps = 0; // a step with no target: PaperExam refuses it
+        bad[4].tiers[6].maxDrawdownBps = 10_000; // a loss limit of the whole size: PaperExam refuses it
+        for (uint256 i = 0; i < bad.length; ++i) {
+            vm.prank(creator);
+            vm.expectRevert(SimPoolFactory.BadPlan.selector);
+            factory.create{value: 1 ether}(bad[i]);
+        }
+    }
+
+    function test_open_payoutsPerDayIsWithinTheFactorysBounds() public {
+        assertEq(factory.MIN_PAYOUTS_PER_DAY(), 1);
+        assertEq(factory.MAX_PAYOUTS_PER_DAY(), 8);
+        uint8[4] memory n = [uint8(0), 1, 8, 9];
+        for (uint256 i = 0; i < 4; ++i) {
+            SimPlan memory p = _plan();
+            p.payoutsPerDay = n[i];
+            vm.prank(creator);
+            if (i == 0 || i == 3) {
+                vm.expectRevert(SimPoolFactory.BadPlan.selector);
+                factory.create{value: 1 ether}(p);
+            } else {
+                SimPool pool = SimPool(factory.create{value: 1 ether}(p));
+                assertEq(pool.payoutsPerDay(), n[i]);
+                assertEq(pool.payRoom(), n[i], "a new pool has the whole day");
+            }
+        }
+    }
+
+    function test_dailyLimit_aPoolOfThreeADay_paysAWaveOfSevenThreeThreeOne() public {
+        SimPlan memory p = _plan();
+        p.payoutsPerDay = 3;
+        SimPool pool = _open(p);
+        _wave(pool, 7, true);
+        uint256 t0 = block.timestamp + 72 hours;
+        vm.warp(t0);
+        assertEq(pool.payRoom(), 3);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutWaitsLimit(3, uint64(t0 + 24 hours));
+        assertEq(pool.pay(10), 3, "day 3: three");
+        assertEq(pool.payRoom(), 0);
+        assertEq(pool.nextPayAt(), t0 + 24 hours);
+        vm.warp(t0 + 12 hours);
+        assertEq(pool.pay(10), 0, "the day is not over");
+        vm.warp(t0 + 24 hours);
+        assertEq(pool.pay(10), 3, "day 4: three");
+        vm.warp(t0 + 48 hours);
+        assertEq(pool.pay(10), 1, "day 5: one");
+        assertEq(pool.paidCount(), 7);
+        assertEq(pool.owed(), 0);
+    }
+
+    function test_dailyLimit_aPoolOfOneADay_paysOneADay() public {
+        SimPlan memory p = _plan();
+        p.payoutsPerDay = 1;
+        SimPool pool = _open(p);
+        _wave(pool, 2, true);
+        vm.warp(block.timestamp + 72 hours);
+        assertEq(pool.pay(10), 1);
+        assertEq(pool.payRoom(), 0);
+        vm.warp(block.timestamp + 24 hours - 1);
+        assertEq(pool.pay(10), 0);
+        vm.warp(block.timestamp + 1);
+        assertEq(pool.payRoom(), 1);
+        assertEq(pool.pay(10), 1);
     }
 
     function test_dailyLimit_isAnyTwentyFourHours_notACalendarDay() public {

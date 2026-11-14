@@ -86,7 +86,10 @@ PAYOUT_BPS = 800
 LOCKED_PAYOUTS = 2
 RULES_T = "(uint16,uint16,uint32,uint32[],uint32[])"
 TERMS_T = "(uint64,uint16[],uint32,uint32,uint16,uint32,uint16,uint16)"
-PLAN_T = f"((uint64,uint64)[],{RULES_T},{TERMS_T},{RULES_T},{TERMS_T},uint32,bool,uint16,bytes32)"
+TIER_T = "(uint16,uint16,uint8)"
+PLAN_T = f"((uint64,uint64)[],{RULES_T},{TERMS_T},{RULES_T},{TERMS_T},uint32,bool,uint16,bytes32,{TIER_T}[],uint8)"
+# A plan file without `payouts_per_day` is a pool of two a day, the first pool's (CFO, 13 November).
+PAYOUTS_PER_DAY = 2
 # SimPoolFactory.MIN_PARTNER_BPS, MAX_PARTNER_BPS and MAX_CODES; the tests hold them against the source.
 MIN_PARTNER_BPS, MAX_PARTNER_BPS, MAX_CODES = 4000, 6000, 32
 SET_CODE = "setCode(bytes32,address,uint16)"
@@ -127,7 +130,20 @@ def plan_of(raw: dict, terms_hash: bytes) -> tuple:
     # round, not int: 0.29 * 100 is 28.999... (review of cp#263)
     menu = [(usdc_units(m["size_usdc"]), usdc_units(m["price_usdc"])) for m in raw["menu"]]
     return (menu, _rules(raw["exam_rules"]), _terms(raw["exam"]), _rules(raw["funded_rules"]), _terms(raw["funded"]),
-            raw["fund_window_s"], raw["from_book"], raw["max_worse_bps"], terms_hash)
+            raw["fund_window_s"], raw["from_book"], raw["max_worse_bps"], terms_hash,
+            [_tier(raw, m) for m in raw["menu"]], raw.get("payouts_per_day", PAYOUTS_PER_DAY))
+
+
+def _tier(raw: dict, line: dict) -> tuple:
+    """A menu line's tier (SimTier): its own `max_drawdown_bps`, `target_bps` and `drawdown_kind` (0 from the start, 1
+    trailing to it), or, for a line without them, the plan's own, which both stages must then share."""
+    if "max_drawdown_bps" in line:
+        return (line["max_drawdown_bps"], line["target_bps"], line.get("drawdown_kind", 0))
+    dd = {raw["exam_rules"]["max_drawdown_bps"], raw["funded_rules"]["max_drawdown_bps"]}
+    targets = set(raw["exam"]["targets_bps"]) | set(raw["funded"]["targets_bps"])
+    if len(dd) != 1 or len(targets) != 1:
+        raise SystemExit("a line without its own tier needs one drawdown and one target for both stages")
+    return (dd.pop(), targets.pop(), 0)
 
 
 def code_hash(text: str) -> bytes:

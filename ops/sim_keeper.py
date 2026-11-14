@@ -80,8 +80,9 @@ PAYOUT_HARD = 7 * 86_400
 # A fill's gas, fixed: an estimate first would cost a block. PaperExam's fill, with sixteen assets
 # open, is under it (forge test --gas-report).
 FILL_GAS = 400_000
-# SimPool's PAYOUTS_A_DAY (the factory's PAYOUTS_PER_DAY): a pool settles at most two payouts in any 24 hours,
-# so one call pays at most two; `payRoom()` says how many of the two are left now (the test holds it to the source).
+# How many payouts one `pay` call settles at most: the gas of a call was measured with two (test/sim/SimPool.t.sol,
+# KEEPER_PAYS). A pool settles at most its own `payoutsPerDay` in any 24 hours, one to eight, set when it is made, and
+# `payRoom()` says how many are left now: a pool of more than two a day is paid two a call, pass after pass.
 PAY_PER_CALL = 2
 # How far past the head the keeper reads payouts to find one to pay: behind a head that waits for its approval,
 # later approved payouts are paid out of order, and `pay` must be told to look that far (review of #286).

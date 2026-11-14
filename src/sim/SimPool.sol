@@ -38,14 +38,37 @@ struct SimSize {
     uint64 price;
 }
 
+/// @notice One tier of a simulated pool's menu, line by line with `menu`: what both stages of the line are judged by.
+struct SimTier {
+    /// The loss limit of both stages, in bps of the line's size: it takes the place of the plan's `maxDrawdownBps`.
+    uint16 maxDrawdownBps;
+    /// The profit target of every step of both stages, in bps of the line's size: it takes the place of the
+    /// plan's `targetsBps`, whose length alone is read (how many steps).
+    uint16 targetBps;
+    /// How the loss line of both stages is drawn: `PaperExam.FROM_START` or `PaperExam.TRAILING_TO_START`.
+    uint8 drawdownKind;
+}
+
+/// @notice What a pool keeps for one line of its menu (`SimPoolSetup`): the rules and terms both its stages start on.
+struct SimLineRules {
+    Rules examRules;
+    ExamTerms exam;
+    Rules fundedRules;
+    ExamTerms funded;
+    uint8 drawdownKind;
+}
+
 /// @notice Everything the creator of a simulated pool sets, at creation.
 struct SimPlan {
     SimSize[] menu;
+    /// The rules of the exam, but for `maxDrawdownBps`, which each line's tier sets.
     Rules examRules;
-    /// The exam's terms. `capital` is not read: every exam takes the size it was bought at.
+    /// The exam's terms. `capital` is not read: every exam takes the size it was bought at; nor the values of
+    /// `targetsBps`, which each line's tier sets.
     ExamTerms exam;
+    /// The rules of the stage, but for `maxDrawdownBps`, as for the exam.
     Rules fundedRules;
-    /// The stage after the exam: one step. `capital` is not read either.
+    /// The stage after the exam: one step. Neither `capital` nor the value of its target is read either.
     ExamTerms funded;
     /// How long a trader who passed the exam has to start the stage, in seconds.
     uint32 fundWindow;
@@ -55,11 +78,16 @@ struct SimPlan {
     uint16 maxWorseBps;
     /// The keccak256 of the pool's terms, every clause written out, as a `TermsBook` keeps them.
     bytes32 terms;
+    /// Each line's tier, in the order of `menu`, one for each line.
+    SimTier[] tiers;
+    /// How many payouts the pool settles at most in any `PAYOUT_DAY`, within the factory's `MIN_PAYOUTS_PER_DAY`
+    /// and `MAX_PAYOUTS_PER_DAY` (CFO, 13 November: a number of the pool, two for the first).
+    uint8 payoutsPerDay;
 }
 
-// How many payouts a pool settles in any `PAYOUT_DAY` at most, and so how many times of settlement it keeps:
-// the factory publishes it as `PAYOUTS_PER_DAY`.
-uint256 constant PAYOUTS_A_DAY = 2;
+// The most payouts any pool settles in a `PAYOUT_DAY`, and so how many times of settlement a pool has room to keep:
+// the factory publishes it as `MAX_PAYOUTS_PER_DAY`.
+uint256 constant MAX_PAYOUTS_A_DAY = 8;
 
 /// @title SimPool
 /// @notice A pool where both stages are paper exams and nobody's capital is traded. A trader buys
@@ -68,7 +96,7 @@ uint256 constant PAYOUTS_A_DAY = 2;
 ///         and what its creator locked at the start. A payout waits 72 hours and the approval of the
 ///         approver the creator names, or 7 days without it; until it is paid the factory's checker
 ///         alone may stop it, with a reason and the transactions that show it; with no stop it goes to
-///         the trader, sent by anyone. A pool settles at most `PAYOUTS_PER_DAY` payouts in any 24 hours:
+///         the trader, sent by anyone. A pool settles at most `payoutsPerDay` payouts in any 24 hours:
 ///         one more waits in its place for the next day, however it came due.
 /// @dev The money is this contract's USDC on HyperEVM; nothing goes to HyperCore. What it owes
 ///      (`owed`) is every payout neither paid nor stopped. The creator withdraws only what stays
@@ -168,10 +196,12 @@ contract SimPool is Initializable {
     uint256 public liftedCount;
     uint256 public paidCount;
     uint256 public paidTotal;
-    /// When `pay` settled its last `PAYOUTS_A_DAY` payouts (paid, or set aside when the token refused), the
-    /// oldest first; zero for none yet. `pay` settles one more only once the oldest is `PAYOUT_DAY` old, so no
-    /// 24 hours see more than `PAYOUTS_A_DAY` (CFO, 13 November).
-    uint64[PAYOUTS_A_DAY] internal _settledAt;
+    /// How many payouts the pool settles at most in any `PAYOUT_DAY`, set at its creation.
+    uint8 public payoutsPerDay;
+    /// When `pay` settled its last `payoutsPerDay` payouts (paid, or set aside when the token refused), the
+    /// oldest first, in the first `payoutsPerDay` places; zero for none yet. `pay` settles one more only once the
+    /// oldest is `PAYOUT_DAY` old, so no 24 hours see more than `payoutsPerDay` (CFO, 13 November).
+    uint64[MAX_PAYOUTS_A_DAY] internal _settledAt;
     /// Payouts, and partners' parts, the token refused to send, set aside for whom they were for (`claimHeld`).
     uint256 public held;
     mapping(address holder => uint256) public heldOf;
@@ -184,10 +214,8 @@ contract SimPool is Initializable {
     uint256 public brought;
 
     SimSize[] internal _menu;
-    Rules internal _examRules;
-    ExamTerms internal _exam;
-    Rules internal _fundedRules;
-    ExamTerms internal _funded;
+    SimTier[] internal _tiers;
+    mapping(uint256 line => SimLineRules) internal _lineRules;
     uint32 public fundWindow;
     bool public fromBook;
     uint16 public maxWorseBps;
@@ -212,7 +240,7 @@ contract SimPool is Initializable {
     event Released(address indexed account);
     event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt);
     event PayoutQueued(uint256 indexed id, uint256 balance);
-    /// Payout `id` may be paid and the pool may hold its money, but the pool has settled `PAYOUTS_PER_DAY`
+    /// Payout `id` may be paid and the pool may hold its money, but the pool has settled `payoutsPerDay`
     /// payouts in the last 24 hours: it waits in its place, and `pay` settles it from `nextAt` on.
     event PayoutWaitsLimit(uint256 indexed id, uint64 nextAt);
     event PayoutPaid(uint256 indexed id, address indexed trader, uint64 amount, uint256 paidCount, uint256 paidTotal);
@@ -307,7 +335,8 @@ contract SimPool is Initializable {
         lockedUntil = uint64(block.timestamp) + factory.MIN_TERM();
         fromBook = p.fromBook;
         maxWorseBps = p.maxWorseBps;
-        largestPayout = _payoutOf(SimPoolSetup.copy(p, _menu, _examRules, _exam, _fundedRules, _funded));
+        payoutsPerDay = p.payoutsPerDay;
+        largestPayout = _payoutOf(SimPoolSetup.copy(p, _menu, _tiers, _lineRules));
     }
 
     /// @notice The factory's note of what the creator locked at the start.
@@ -321,6 +350,12 @@ contract SimPool is Initializable {
 
     function menu() external view returns (SimSize[] memory) {
         return _menu;
+    }
+
+    /// @notice Each line's tier, in the order of `menu()`: the loss limit, the target and the kind of loss line
+    ///         both stages of the line start on.
+    function tiers() external view returns (SimTier[] memory) {
+        return _tiers;
     }
 
     function payout(uint256 id) external view returns (Payout memory) {
@@ -341,17 +376,17 @@ contract SimPool is Initializable {
         return _payouts.length;
     }
 
-    /// @notice How many payouts `pay` may settle now under the daily limit: `PAYOUTS_PER_DAY` less those it
+    /// @notice How many payouts `pay` may settle now under the daily limit: `payoutsPerDay` less those it
     ///         settled in the last `PAYOUT_DAY`.
     function payRoom() external view returns (uint256 room) {
         uint256 day = factory.PAYOUT_DAY();
-        for (uint256 k = 0; k < PAYOUTS_A_DAY; ++k) {
+        for (uint256 k = 0; k < payoutsPerDay; ++k) {
             if (block.timestamp >= uint256(_settledAt[k]) + day) room += 1;
         }
     }
 
     /// @notice From when `pay` may settle one more payout under the daily limit: the oldest of its last
-    ///         `PAYOUTS_PER_DAY` settlements plus `PAYOUT_DAY`; zero while it has settled fewer.
+    ///         `payoutsPerDay` settlements plus `PAYOUT_DAY`; zero while it has settled fewer.
     function nextPayAt() external view returns (uint64) {
         uint64 oldest = _settledAt[0];
         return oldest == 0 ? 0 : oldest + factory.PAYOUT_DAY();
@@ -395,8 +430,8 @@ contract SimPool is Initializable {
     ///         the line's price or the token refuses the signature; the token keeps the nonce, so a
     ///         signature buys once; and only this pool, the payee, can use it. The price and the fee
     ///         are those of `buy`. A token without EIP-3009 refuses with `NoAuthorization`. The code is
-    ///         in the signature: the signed nonce is keccak256(abi.encode(code, salt)), so whoever
-    ///         sends it cannot name another code.
+    ///         in the signature, and so is the line: the signed nonce is keccak256(abi.encode(code, line,
+    ///         salt)), so whoever sends it can name neither another code nor another line at the same price.
     function buyWithAuthorization(
         address trader,
         uint256 line,
@@ -409,7 +444,7 @@ contract SimPool is Initializable {
         bytes32 s
     ) external returns (address exam) {
         SimSize memory m = _line(line);
-        _receive(trader, m.price, keccak256(abi.encode(code, salt)), validAfter, validBefore, v, r, s);
+        _receive(trader, m.price, keccak256(abi.encode(code, line, salt)), validAfter, validBefore, v, r, s);
         uint256 fee = _fee(m.price);
         if (fee != 0) usdc.safeTransfer(factory.feeRecipient(), fee);
         exam = _sold(trader, line, m, fee, true, code);
@@ -448,7 +483,8 @@ contract SimPool is Initializable {
         a.done = true;
         live -= 1;
         staged += _payoutOf(_menu[a.line].size);
-        stage = _start(trader, _fundedRules, _funded, _menu[a.line].size);
+        SimLineRules storage l = _lineRules[a.line];
+        stage = _start(trader, l.fundedRules, l.funded, _menu[a.line].size, l.drawdownKind);
         accountOf[stage] = Account({kind: Kind.Stage, line: a.line, done: false});
         emit Funded(stage, exam, trader);
     }
@@ -490,7 +526,7 @@ contract SimPool is Initializable {
     ///         while the pool's USDC covers the next. A payout is due `PAYOUT_DELAY` after its claim once
     ///         the approver approved it, and `PAYOUT_HARD` after its claim if not. One not yet due for want
     ///         of approval keeps its place: `pay` moves on to later ones, but pays one only if the money
-    ///         also covers every such payout before it. At most `PAYOUTS_PER_DAY` payouts are settled in any
+    ///         also covers every such payout before it. At most `payoutsPerDay` payouts are settled in any
     ///         `PAYOUT_DAY`, whether they came due by approval or by `PAYOUT_HARD`, paid or set aside for a
     ///         trader the token refused: one more waits in its place (`PayoutWaitsLimit`), and every payout
     ///         after it, until the oldest of the last settlements is a day old. Anyone may.
@@ -504,7 +540,8 @@ contract SimPool is Initializable {
         // Read once: the factory's constants, not a call for each payout (review of #286).
         uint256 hardAfter = uint256(factory.PAYOUT_HARD()) - factory.PAYOUT_DELAY();
         // The last settlements, oldest first, and the day they are counted in.
-        uint64[PAYOUTS_A_DAY] memory last = _settledAt;
+        uint64[MAX_PAYOUTS_A_DAY] memory last = _settledAt;
+        uint256 perDay = payoutsPerDay;
         uint256 day = factory.PAYOUT_DAY();
         // Every payout looked at counts toward `max`, settled ones too: payouts paid out of order behind a head that
         // waits for its approval cannot make a call run long (review of #286).
@@ -519,7 +556,7 @@ contract SimPool is Initializable {
                     i += 1;
                     continue;
                 }
-                // The daily limit: the pool has settled `PAYOUTS_A_DAY` payouts since a day ago. This one keeps
+                // The daily limit: the pool has settled `payoutsPerDay` payouts since a day ago. This one keeps
                 // its place, and so does every payout after it (CFO, 13 November).
                 uint256 freeAt = uint256(last[0]) + day;
                 if (block.timestamp < freeAt) {
@@ -539,10 +576,10 @@ contract SimPool is Initializable {
                 owed -= p.amount;
                 n += 1;
                 // Counted before the token is called, sent or refused alike: the money leaves the queue.
-                for (uint256 k = 0; k + 1 < PAYOUTS_A_DAY; ++k) {
+                for (uint256 k = 0; k + 1 < perDay; ++k) {
                     last[k] = last[k + 1];
                 }
-                last[PAYOUTS_A_DAY - 1] = uint64(block.timestamp);
+                last[perDay - 1] = uint64(block.timestamp);
                 _settledAt = last;
                 if (_send(p.trader, p.amount)) {
                     p.state = PayoutState.Paid;
@@ -798,16 +835,20 @@ contract SimPool is Initializable {
         uint256 got = m.price - fee;
         c.brought += got;
         brought += got;
-        exam = _start(trader, _examRules, _exam, m.size);
+        SimLineRules storage l = _lineRules[line];
+        exam = _start(trader, l.examRules, l.exam, m.size, l.drawdownKind);
         accountOf[exam] = Account({kind: Kind.Exam, line: uint8(line), done: false});
         emit ExamSold(exam, trader, line, m.size, m.price, fee, bySignature, code, partner);
     }
 
-    function _start(address trader, Rules storage r, ExamTerms storage t, uint64 size) internal returns (address a) {
+    function _start(address trader, Rules storage r, ExamTerms storage t, uint64 size, uint8 kind)
+        internal
+        returns (address a)
+    {
         a = Clones.clone(factory.examImpl());
         ExamTerms memory terms_ = t;
         terms_.capital = size;
-        PaperExam(a).initializeWithFiller(trader, r, terms_, factory.filler(), fromBook, maxWorseBps, 0);
+        PaperExam(a).initializeWithFiller(trader, r, terms_, factory.filler(), fromBook, maxWorseBps, kind);
         factory.noteAccount(a);
         live += 1;
     }
