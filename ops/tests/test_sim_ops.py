@@ -671,6 +671,9 @@ class TheRelayer(unittest.TestCase):
         self.assertEqual(p["nonce"], keccak(encode(["bytes32", "uint256", "bytes32"], [b"\x66" * 32, 1, b"\x33" * 32])))
         self.assertNotEqual(r.parsed({**GOOD, "code": "0x" + "77" * 32})["nonce"], p["nonce"])
         self.assertNotEqual(r.parsed({**GOOD, "line": 0})["nonce"], p["nonce"])
+        for line in (-1, 2**256):
+            with self.assertRaises(r.Refused):
+                r.parsed({**GOOD, "line": line})  # malformed, a 400: not an encoder's error, a 502 (review of #302)
 
     def test_the_call_takes_the_signed_fields_in_order(self):
         p = r.parsed(GOOD)

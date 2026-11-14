@@ -59,6 +59,9 @@ def parsed(raw: dict) -> dict:
         raise Refused(f"malformed: {exc}") from exc
     if out["v"] not in (27, 28):
         raise Refused("malformed: v is 27 or 28")
+    # The line is in the nonce, a uint256: one outside it is a malformed request, not a failure to retry (review of #302).
+    if not 0 <= out["line"] < 2**256:
+        raise Refused("malformed: line is outside uint256")
     out["nonce"] = nonce_of(out["code"], out["line"], out["salt"])
     return out
 
