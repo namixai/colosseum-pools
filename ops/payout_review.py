@@ -153,12 +153,12 @@ def settle_order(pending: list[tuple[int, int]], slots: list[int], day: int, now
 
 
 def payout_cap(chain: dict, pool: str, pay: dict, approvals: bool | None, delay: int | None, hard: int | None) -> dict | None:
-    """Where the pool's daily limit on payouts leaves one payout, from what the contract answers (`PAYOUTS_PER_DAY()` and
-    `PAYOUT_DAY()` of the factory, `payRoom()` and `nextPayAt()` of the pool) and the settlements it wrote (`PayoutPaid` and
+    """Where the pool's daily limit on payouts leaves one payout, from what the contract answers (the pool's `payoutsPerDay()`, `payRoom()`
+    and `nextPayAt()`, the factory's `PAYOUT_DAY()`) and the settlements it wrote (`PayoutPaid` and
     `PayoutHeld`, each a place used for a day), never a constant here: the limit is whatever was read. None when the chain
     was read without the cap's reads (an older chain: nothing is said); otherwise a document with a `status`:
 
-      none         the factory has no daily limit (its `PAYOUTS_PER_DAY()` reverts): the payout is paid when it is due;
+      none         the pool has no daily limit (no `payoutsPerDay()`, no `payRoom()`): the payout is paid when it is due;
       unread       the limit, the pool's room, the payout's approval or its time was not read, or the events and the
                    pool's answers do not agree on the day's places: no time is said;
       not-waiting  the payout is paid, stopped, held or refused: no limit applies to it any more;
@@ -1601,11 +1601,25 @@ def has_approvals(factory: str, pool: str) -> bool | None:
     return True if answers(pool, "approver()", ["address"]) is True else None
 
 
+def payout_lives(events: list[dict]) -> dict[tuple[str, int], list[str]]:
+    """Each payout's recorded events by name, in the order the chain wrote them: (pool, id) to ["PayoutDue", ...]. A stop
+    is `PayoutStopped` whatever its reason (1 to 3 and the ones the pool may add): the reason is in the event's data and
+    nothing here reads it, so a reason this file has not heard of is no unknown stop."""
+    life: dict[tuple[str, int], list[str]] = {}
+    for l in sorted((l for l in events if l["topics"][0] in PAYOUT_TRAIL),
+                    key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16))):
+        life.setdefault((to_checksum_address(l["address"]), int(l["topics"][1], 16)), []).append(PAYOUT_TRAIL[l["topics"][0]])
+    return life
+
+
 def read_pay_cap(factory: str, pool: str) -> dict | bool | None:
-    """The pool's daily limit on payouts as the contract answers it: the number of payouts (`PAYOUTS_PER_DAY()`) and the
-    day (`PAYOUT_DAY()`) of the factory, and the pool's `payRoom()` and `nextPayAt()`. False where the factory has no such
-    limit (its call reverts); None where a read failed for any other reason (the node, the rate), never taken for "no".
-    This is the one place the limit is read: it is what the contract says, not a number kept here."""
+    """The pool's daily limit on payouts as the contract answers it: the pool's own `payoutsPerDay()` (a setting of the
+    pool, within the factory's `MIN_PAYOUTS_PER_DAY()` and `MAX_PAYOUTS_PER_DAY()`), the factory's `PAYOUT_DAY()`, and the
+    pool's `payRoom()` and `nextPayAt()`. False where there is no such limit (the pool has neither `payoutsPerDay()` nor
+    `payRoom()`: a pool from before it); None where a read failed for any other reason (the node, the rate), and where
+    the pool has `payRoom()` but not `payoutsPerDay()` (a pool from the time the limit was the factory's constant: how
+    many it was is not guessed). This is the one place the limit is read: it is what the contract says, not a number
+    kept here."""
     def read(to: str, sig: str, kind: str):
         try:
             return int(c.call_view(to, sig, [], [], [kind])[0])
@@ -1614,12 +1628,18 @@ def read_pay_cap(factory: str, pool: str) -> dict | bool | None:
                 return False
             core.log("not_read", address=to, call=sig, error=str(exc)[:120])
             return None
-    limit = read(factory, "PAYOUTS_PER_DAY()", "uint8")
-    if limit is False or limit is None:
-        return limit
+    limit = read(pool, "payoutsPerDay()", "uint8")
+    if limit is None:
+        return None
+    if limit is False:
+        # No number of the pool's: no limit if it has no room to ask for either, otherwise a limit of a number unknown.
+        room = read(pool, "payRoom()", "uint256")
+        return False if room is False else None
     got = [read(factory, "PAYOUT_DAY()", "uint32"), read(pool, "payRoom()", "uint256"), read(pool, "nextPayAt()", "uint64")]
     if any(g is False or g is None for g in got):
-        return None  # a factory that has the limit and a pool that does not answer it is not read, not "no limit"
+        return None  # a pool with the limit that does not answer its room is not read, not "no limit"
+    if limit < 1:
+        return None  # a pool's limit is at least one (`MIN_PAYOUTS_PER_DAY`); anything else is not a limit read
     return {"limit": limit, "day": got[0], "room": got[1], "nextAt": got[2]}
 
 
@@ -1677,10 +1697,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     funded = [funded_of(l) for l in events if l["topics"][0] == sk.FUNDED]
     payouts = [due_of(l) for l in events if l["topics"][0] == PAYOUT_DUE]
     # Each payout's life as the chain wrote it, in the order of the logs: what the review reports as its status.
-    life: dict[tuple[str, int], list[str]] = {}
-    for l in sorted((l for l in events if l["topics"][0] in PAYOUT_TRAIL),
-                    key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16))):
-        life.setdefault((to_checksum_address(l["address"]), int(l["topics"][1], 16)), []).append(PAYOUT_TRAIL[l["topics"][0]])
+    life = payout_lives(events)
     for x in payouts:
         p = payout_struct(x["pool"], x["id"])
         x["state"], x["wasStopped"], x["approved"] = sk.PAYOUT_STATE[p[4]], bool(p[5]), p[7]

@@ -1342,7 +1342,7 @@ class ReadingTheChain(unittest.TestCase):
                     "menu()": ([(SIZE // 2, 50), (SIZE, 100)],),
                     "terms()": ((capital, [800], 0, 0, 0, 1_000, 1, 10),),
                     "rules()": ((300, 600, 1_000, [3], [1_000]),), "drawdownKind()": (1,),
-                    "PAYOUTS_PER_DAY()": (3,), "PAYOUT_DAY()": (86_400,), "payRoom()": (3,), "nextPayAt()": (0,),
+                    "payoutsPerDay()": (3,), "PAYOUT_DAY()": (86_400,), "payRoom()": (3,), "nextPayAt()": (0,),
                     "approver()": (addr(0xAB),), "PAYOUT_HARD()": (8 * 86_400,), "PAYOUT_DELAY()": (72 * 3_600,)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
@@ -2141,8 +2141,12 @@ class TheDailyLimit(unittest.TestCase):
 
     def test_the_limits_reads_are_the_contracts_by_their_source(self):
         factory, pool = (ROOT / "src/sim/SimPoolFactory.sol").read_text(), (ROOT / "src/sim/SimPool.sol").read_text()
-        self.assertIn("uint8 public constant PAYOUTS_PER_DAY = uint8(PAYOUTS_A_DAY);", factory)
+        self.assertIn("uint8 public constant MIN_PAYOUTS_PER_DAY = 1;", factory)
+        self.assertIn("uint8 public constant MAX_PAYOUTS_PER_DAY = uint8(MAX_PAYOUTS_A_DAY);", factory)
         self.assertIn("uint32 public constant PAYOUT_DAY = 24 hours;", factory)
+        self.assertNotRegex(factory, r"(?<![A-Z_])PAYOUTS_PER_DAY\(", "the factory no longer answers a number of payouts a day: the pool does")
+        self.assertIn("uint8 public payoutsPerDay;", pool)
+        self.assertIn("payoutsPerDay = p.payoutsPerDay;", pool)
         self.assertIn("function payRoom() external view returns (uint256 room) {", pool)
         self.assertIn("function nextPayAt() external view returns (uint64) {", pool)
         self.assertIn("event PayoutWaitsLimit(uint256 indexed id, uint64 nextAt);", pool)
@@ -2152,32 +2156,100 @@ class TheDailyLimit(unittest.TestCase):
         _, body = AgainstTheContracts.function(pool, "pay")
         order = ["if (block.timestamp < p.dueAt) break;", "if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {",
                  "uint256 freeAt = uint256(last[0]) + day;", "emit PayoutWaitsLimit(i, uint64(freeAt));", "emit PayoutQueued(i, bal);",
-                 "last[PAYOUTS_A_DAY - 1] = uint64(block.timestamp);", "if (_send(p.trader, p.amount)) {"]
+                 "last[perDay - 1] = uint64(block.timestamp);", "if (_send(p.trader, p.amount)) {"]
         self.assertEqual(sorted(order, key=body.index), order)
         self.assertIn("if (block.timestamp < freeAt) {", body)
         self.assertIn("last[k] = last[k + 1];", body)
+        self.assertIn("uint256 perDay = payoutsPerDay;", body, "the places counted are the pool's own number")
         _, room = AgainstTheContracts.function(pool, "payRoom")
+        self.assertIn("for (uint256 k = 0; k < payoutsPerDay; ++k) {", room)
         self.assertIn("if (block.timestamp >= uint256(_settledAt[k]) + day) room += 1;", room)
         _, nxt = AgainstTheContracts.function(pool, "nextPayAt")
         self.assertIn("return oldest == 0 ? 0 : oldest + factory.PAYOUT_DAY();", nxt)
 
     def test_the_limit_and_the_pool_are_read_as_the_chain_answers(self):
+        asked = []
+
         def view(answers):
             def call_view(to, sig, types, args, out):
+                asked.append((to, sig))
                 got = answers[sig]
                 if isinstance(got, Exception):
                     raise got
                 return (got,)
             return call_view
-        ok = {"PAYOUTS_PER_DAY()": 2, "PAYOUT_DAY()": 86_400, "payRoom()": 1, "nextPayAt()": 5}
+        FACTORY = addr(0xFA)
+        ok = {"payoutsPerDay()": 5, "PAYOUT_DAY()": 86_400, "payRoom()": 1, "nextPayAt()": 5}
         with mock.patch.object(r.c, "call_view", side_effect=view(ok)):
-            self.assertEqual(r.read_pay_cap(addr(0xFA), POOL), {"limit": 2, "day": 86_400, "room": 1, "nextAt": 5})
+            self.assertEqual(r.read_pay_cap(FACTORY, POOL), {"limit": 5, "day": 86_400, "room": 1, "nextAt": 5},
+                             "the number is the pool's own setting")
+        self.assertEqual([(to, sig) for to, sig in asked if sig == "payoutsPerDay()"], [(POOL, "payoutsPerDay()")], "asked of the pool")
+        self.assertEqual([(to, sig) for to, sig in asked if sig == "PAYOUT_DAY()"], [(FACTORY, "PAYOUT_DAY()")], "the day of the factory")
         revert = Exception("execution reverted")
-        with mock.patch.object(r.c, "call_view", side_effect=view({**ok, "PAYOUTS_PER_DAY()": revert})):
-            self.assertIs(r.read_pay_cap(addr(0xFA), POOL), False, "a factory without the limit")
+        # A pool from before the limit has neither: no limit. One with `payRoom()` and no number of its own: not guessed.
+        with mock.patch.object(r.c, "call_view", side_effect=view({**ok, "payoutsPerDay()": revert, "payRoom()": revert})):
+            self.assertIs(r.read_pay_cap(FACTORY, POOL), False, "a pool without the limit")
+        with mock.patch.object(r.c, "call_view", side_effect=view({**ok, "payoutsPerDay()": revert})):
+            self.assertIsNone(r.read_pay_cap(FACTORY, POOL), "the factory's old constant is not assumed for a pool with room but no number")
         busy = Exception("429 Too Many Requests")
         for sig in ok:
             with mock.patch.object(r.c, "call_view", side_effect=view({**ok, sig: busy})):
-                self.assertIsNone(r.read_pay_cap(addr(0xFA), POOL), f"{sig} not read: not taken for no limit")
+                self.assertIsNone(r.read_pay_cap(FACTORY, POOL), f"{sig} not read: not taken for no limit")
         with mock.patch.object(r.c, "call_view", side_effect=view({**ok, "payRoom()": revert})):
-            self.assertIsNone(r.read_pay_cap(addr(0xFA), POOL), "a factory with the limit and a pool that has no room: not read")
+            self.assertIsNone(r.read_pay_cap(FACTORY, POOL), "a pool with the limit and no room: not read")
+        with mock.patch.object(r.c, "call_view", side_effect=view({**ok, "payoutsPerDay()": 0})):
+            self.assertIsNone(r.read_pay_cap(FACTORY, POOL), "a limit of none is not one the factory allows")
+        with mock.patch.object(r.c, "call_view", side_effect=view({**ok, "payoutsPerDay()": 8})):
+            self.assertEqual(r.read_pay_cap(FACTORY, POOL)["limit"], 8, "up to the factory's most")
+
+
+class TheTiersAreTheAccountsOwn(unittest.TestCase):
+    """The menu's tier (cp#302) sets each line's loss limit, target and kind of loss line, and they are on the account
+    that line starts: the review reads them there (`rules()`, `drawdownKind()`), never from the pool's plan."""
+
+    def test_the_pool_starts_each_account_with_its_lines_tier(self):
+        setup = _source("src/sim/SimPoolSetup.sol")
+        self.assertIn("_copyRules(l.examRules, p.examRules, k.maxDrawdownBps);", setup)
+        self.assertIn("_copyRules(l.fundedRules, p.fundedRules, k.maxDrawdownBps);", setup)
+        self.assertIn("_copyTerms(l.exam, p.exam, k.targetBps);", setup)
+        self.assertIn("l.drawdownKind = k.drawdownKind;", setup)
+        self.assertIn("to.maxDrawdownBps = maxDrawdownBps;", setup)
+        pool = _source("src/sim/SimPool.sol")
+        self.assertIn("exam = _start(trader, l.examRules, l.exam, m.size, l.drawdownKind);", pool)
+        self.assertIn("stage = _start(trader, l.fundedRules, l.funded, _menu[a.line].size, l.drawdownKind);", pool)
+
+    def test_the_review_reads_the_drawdown_and_its_kind_from_the_account(self):
+        asked = []
+
+        def call_view(to, sig, types, args, out):
+            asked.append((to, sig))
+            return {"rules()": ((300, 450, 1_000, [3], [1_000]),), "drawdownKind()": (1,)}[sig]
+        account = addr(0x301)
+        kinds, bps = {}, {}
+        with mock.patch.object(r.c, "call_view", side_effect=call_view):
+            r.read_drawdown(account, kinds, bps)
+        self.assertEqual((kinds, bps), ({account: 1}, {account: 450}))
+        self.assertEqual(asked, [(account, "rules()"), (account, "drawdownKind()")], "of the account, nothing of the pool")
+        src = (ROOT / "ops/payout_review.py").read_text()
+        for word in ("tiers()", "SimTier", "examRules", "fundedRules", "targetBps"):
+            self.assertNotIn(word, src, "no plan or tier of the pool's is read here")
+        lib = _source("app/lib/exam.js")
+        for word in ("tiers", "targetBps(", "examRules", "fundedRules"):
+            self.assertNotIn(word, lib)
+
+    def test_a_stop_of_a_reason_this_file_has_not_heard_of_is_a_stop(self):
+        log = lambda topic, block, index: {"address": POOL, "topics": [topic, "0x" + f"{4:064x}"], "data": "0x", "blockNumber": hex(block),
+                                          "logIndex": hex(index), "transactionHash": tx(block)}
+        events = [log(r.PAYOUT_DUE, 10, 0), log(r.PAYOUT_STOPPED, 12, 0), log(r.STOP_LIFTED, 20, 0)]
+        life = r.payout_lives(events)
+        self.assertEqual(life, {(POOL, 4): ["PayoutDue", "PayoutStopped", "StopLifted"]})
+        got = r.payout_trail(life[(POOL, 4)])
+        self.assertEqual((got["state"], got["problems"], got["wasStopped"]), ("Due", [], True))
+        # The reason is in the data, never read: a data of any reason (1 to 4) gives the same stop.
+        for reason in (1, 2, 3, 4):
+            data = encode(["uint64", "uint8", "address", "bytes32[]", "bytes32[]", "uint256", "uint256", "uint256"],
+                          [800, reason, addr(0xB1), [b"\x01" * 32, b"\x02" * 32], [], 1, 0, 0])
+            stopped = {**log(r.PAYOUT_STOPPED, 12, 0), "data": "0x" + data.hex()}
+            self.assertEqual(r.payout_lives([log(r.PAYOUT_DUE, 10, 0), stopped])[(POOL, 4)], ["PayoutDue", "PayoutStopped"], reason)
+        src = (ROOT / "ops/payout_review.py").read_text()
+        self.assertNotRegex(src, r"reason in \(1, 2, 3\)|reason <= 3|STOP_REASON", "no list of the stop reasons that 4 could fall out of")
