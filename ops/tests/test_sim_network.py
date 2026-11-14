@@ -376,6 +376,55 @@ class TheProbe(unittest.TestCase):
         out = sim_probe.probe(r)
         self.assertFalse(out["ok"])
         self.assertFalse([x for x in out["checks"] if x["check"] == "SOL: oraclePx 0x…0807"][0]["ok"])
+        self.assertIsNone(out["assets"]["SOL"]["gap_bps"])
+        json.dumps(out, allow_nan=False, default=str)  # strict JSON: no Infinity in a failed report
+
+
+class TheStateIsTheChains(unittest.TestCase):
+    """A keeper's or checker's state file names its chain; one of another chain is refused (review of #300)."""
+
+    def keeper(self, path):
+        return sk.SimKeeper(A, None, B, True, path, 1)
+
+    def write(self, path, **extra):
+        path.write_text(json.dumps({"factory": A, "next_block": 5, "pools": [], "accounts": {}, **extra}))
+
+    def test_save_writes_the_chain(self):
+        with tempfile.TemporaryDirectory() as tmp, on(networks.TESTNET):
+            path = pathlib.Path(tmp) / "s.json"
+            self.keeper(path).save()
+            self.assertEqual(json.loads(path.read_text())["chain_id"], 998)
+
+    def test_another_chains_state_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "s.json"
+            self.write(path, chain_id=998)
+            with on(networks.MAINNET), self.assertRaises(SystemExit) as caught:
+                self.keeper(path)
+            self.assertIn("not a state of chain 999", str(caught.exception))
+            self.write(path, chain_id=999)
+            with on(networks.TESTNET), self.assertRaises(SystemExit):
+                self.keeper(path)
+
+    def test_a_state_from_before_the_chain_was_written_is_testnets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "s.json"
+            self.write(path)
+            with on(networks.TESTNET):
+                self.assertEqual(self.keeper(path).next_block, 5)
+            with on(networks.MAINNET), self.assertRaises(SystemExit):
+                self.keeper(path)
+
+
+class TheReadsOnMainnet(unittest.TestCase):
+    def test_a_mainnet_command_checks_the_rpcs_chain_before_it_reads(self):
+        with on(networks.MAINNET) as m, mock.patch.object(d, "close", return_value=0) as close:
+            self.assertEqual(d.main(["close", "--pool", A, "--signer", B, "--network", "mainnet"]), 0)
+        m["assert_network"].assert_called_once()
+        close.assert_called_once()
+        with on(networks.TESTNET) as t, mock.patch.object(d, "close", return_value=0):
+            d.main(["close", "--pool", A, "--signer", B])
+        t["assert_network"].assert_not_called()  # testnet as before: its sends check, its reads do not
 
 
 if __name__ == "__main__":

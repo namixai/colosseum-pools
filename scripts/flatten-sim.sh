@@ -47,6 +47,9 @@ PIN=$(git -C "$WT" ls-tree HEAD lib/hyper-evm-lib | awk '{print $3}')
 if [ -n "${FLATTEN_LIB_FROM:-}" ]; then
   HAVE=$(git -C "$FLATTEN_LIB_FROM" rev-parse HEAD)
   [ "$HAVE" = "$PIN" ] || { echo "FLATTEN_LIB_FROM is at $HAVE, the commit pins $PIN" >&2; exit 1; }
+  # Its HEAD names a commit, not the files: a change not committed would be flattened under the pin's name.
+  [ -z "$(git -C "$FLATTEN_LIB_FROM" status --porcelain --ignore-submodules=none)" ] \
+    || { echo "FLATTEN_LIB_FROM has uncommitted changes, or a submodule off its pinned revision" >&2; exit 1; }
   rmdir "$WT/lib/hyper-evm-lib" 2>/dev/null || true
   ln -s "$(cd "$FLATTEN_LIB_FROM" && pwd)" "$WT/lib/hyper-evm-lib"
 else
@@ -73,7 +76,13 @@ EVM=$(sed -n 's/^evm_version *= *"\(.*\)"/\1/p' "$WT/foundry.toml")
   --optimizer-runs 200 --skip test --skip script >"$WT/flatcheck.log" 2>&1) \
   || { cat "$WT/flatcheck.log" >&2; echo "the flat file does not compile on its own" >&2; exit 1; }
 
-sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+sha() { local d; d=$(shasum -a 256 "$1" | awk '{print $1}'); [ ${#d} -eq 64 ] || { echo "no sha256 of $1" >&2; exit 1; }; echo "$d"; }
+FLAT_SHA=$(sha "$FLAT")
+SOURCES=$(grep -E '^// (src|lib)/' "$FLAT" | sed 's#^// ##' | sort -u)
+SUMS=""
+for f in $SOURCES; do
+  if [ -f "$WT/$f" ]; then digest=$(sha "$WT/$f"); SUMS+="  $digest  $f"$'\n'; fi
+done
 {
   echo "simulated pool, flat file for an AI code check"
   echo "commit        $COMMIT"
@@ -81,13 +90,11 @@ sha() { shasum -a 256 "$1" | awk '{print $1}'; }
   echo "forge         $(forge --version | head -1)"
   echo "solc          $SOLC, evm $EVM, optimizer 200 runs (foundry.toml of the commit)"
   echo "hyper-evm-lib $PIN"
-  echo "flat file     $(basename "$FLAT")  sha256 $(sha "$FLAT")  $(wc -l < "$FLAT" | tr -d ' ') lines"
+  echo "flat file     $(basename "$FLAT")  sha256 $FLAT_SHA  $(wc -l < "$FLAT" | tr -d ' ') lines"
   echo "compiles      on its own, with nothing to import"
   echo "contracts     ${CONTRACTS[*]}"
   echo "sources (sha256 at the commit):"
-  grep -E '^// (src|lib)/' "$FLAT" | sed 's#^// ##' | sort -u | while read -r f; do
-    if [ -f "$WT/$f" ]; then echo "  $(sha "$WT/$f")  $f"; fi
-  done
+  printf '%s' "$SUMS"
 } > "$OUT/MANIFEST.txt"
 
 echo "flat file: $FLAT"

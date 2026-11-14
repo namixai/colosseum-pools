@@ -770,7 +770,8 @@ def main(argv: list[str] | None = None) -> int:
     for each in sub.choices.values():
         sn.add_args(each)
     args = p.parse_args(argv)
-    sn.selected(args, c.NETWORK)
+    if sn.selected(args, c.NETWORK).name == "mainnet" and args.cmd != "deploy":
+        c.assert_network()  # what a mainnet command reads is the chain's it names, sent or not (review of #300)
     return {"deploy": deploy, "pool": pool, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
             "approve": approve}[args.cmd](args)

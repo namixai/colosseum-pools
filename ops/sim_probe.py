@@ -94,7 +94,9 @@ def probe(r: Reader) -> dict:
         ctx = ctxs[idx] if idx < len(ctxs) and isinstance(ctxs[idx], dict) else {}
         api_oracle = float(ctx.get("oraclePx") or 0)
         gap = abs(oracle - api_oracle) / api_oracle * 10_000 if api_oracle else float("inf")
-        a.update(oracle_raw=oracle_raw, oracle_px=oracle, api_oracle_px=api_oracle, gap_bps=round(gap, 2))
+        # No API price leaves the gap undefined: None, which JSON can carry, and the check fails (review of #300).
+        a.update(oracle_raw=oracle_raw, oracle_px=oracle, api_oracle_px=api_oracle,
+                 gap_bps=round(gap, 2) if api_oracle else None)
         check(f"{name}: oraclePx 0x…0807", oracle_raw > 0 and gap <= ORACLE_TOLERANCE_BPS,
               f"{oracle:g} against the API's {api_oracle:g}, {gap:.2f} bp apart")
         bid_raw, ask_raw = eth_abi.decode(["uint64", "uint64"], r.call(sn.BBO, eth_abi.encode(["uint64"], [idx]), tag))

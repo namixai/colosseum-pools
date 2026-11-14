@@ -215,6 +215,11 @@ class SimKeeper:
             state = json.loads(state_path.read_text())
             if to_checksum_address(state["factory"]) != self.factory:
                 raise SystemExit(f"{state_path} belongs to another factory")
+            # A state is the chain's it was written on. One from before the chain id was written is testnet's: a
+            # mainnet run never takes it, nor any state of another chain (review of #300).
+            chain = state.get("chain_id")
+            if (chain is not None and chain != c.CHAIN_ID) or (chain is None and c.NETWORK.name == "mainnet"):
+                raise SystemExit(f"{state_path} is not a state of chain {c.CHAIN_ID}; move it away to start over")
             self.next_block = int(state["next_block"])
             self.pools = [to_checksum_address(p) for p in state["pools"]]
             self.accounts = {to_checksum_address(a): v for a, v in state["accounts"].items()}
@@ -223,7 +228,8 @@ class SimKeeper:
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"factory": self.factory, "next_block": self.next_block, "pools": self.pools,
+        tmp.write_text(json.dumps({"factory": self.factory, "chain_id": c.CHAIN_ID, "next_block": self.next_block,
+                                   "pools": self.pools,
                                    "accounts": self.accounts, "done": sorted(self.done)}, indent=2) + "\n")
         tmp.replace(self.state_path)
 
