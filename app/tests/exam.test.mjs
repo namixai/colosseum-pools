@@ -5,16 +5,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  PAPER_EXAM_ABI, STATUS, BREACH, FALLBACK_BLOCKS, MIN_TRADE_NOTIONAL, ORACLE_PX_PRECOMPILE, BBO_PRECOMPILE, SIGNS,
-  ESTIMATE_NOTE, REFUSALS, placeCall, graduateCall, setAgentCall, pxIndex, oraclePxCall, bboCall, bboOf, sizeUnits,
-  pxUnits, sizeText, pxText, usdText, pendingOrder, examAccount, fillPrice, orderPreview, refusalText, refusalOf,
-  candleRows, bookSides, dataSource,
+  PAPER_EXAM_ABI, STATUS, BREACH, FROM_START, TRAILING_TO_START, DRAWDOWN_KINDS, FALLBACK_BLOCKS, MIN_TRADE_NOTIONAL,
+  ORACLE_PX_PRECOMPILE, BBO_PRECOMPILE, SIGNS, ESTIMATE_NOTE, REFUSALS, placeCall, graduateCall, setAgentCall,
+  setTriggerCall, clearTriggerCall, pxIndex, oraclePxCall, bboCall, bboOf, sizeUnits, pxUnits, sizeText, pxText, usdText,
+  pendingOrder, examAccount, fillPrice, orderPreview, refusalText, refusalOf, candleRows, bookSides, dataSource,
+  drawdownLine, drawdownLineBps, triggerSetPreview, triggerFill, triggerLedger,
 } from "../lib/exam.js";
 import { keccak256 } from "./keccak.mjs";
 
 const SRC = readFileSync(new URL("../../src/exam/PaperExam.sol", import.meta.url), "utf8");
 const TYPES = readFileSync(new URL("../../src/Types.sol", import.meta.url), "utf8");
-const FOLDED = SRC.replace(/\s+/g, " ").replace(/ (calldata|memory)(?= )/g, "");
+// One line, the way the ABI lines are written: no space inside a bracket that a long declaration broke.
+const FOLDED = SRC.replace(/\s+/g, " ").replace(/ (calldata|memory)(?= )/g, "").replace(/\( /g, "(").replace(/ \)/g, ")");
 
 const EXAM = "0x00000000000000000000000000000000000000e1";
 const FILLER = "0x00000000000000000000000000000000000000f1";
@@ -32,6 +34,7 @@ const PX = 600_000n;
 function reads(over = {}) {
   return {
     status: 1, step: 0, cash: 10_000n * USD, dayStartEquity: 10_000n * USD, tradingDays: 0, deadline: 30 * DAY,
+    drawdownKind: FROM_START, peakSnapshot: 10_000n * USD,
     lastFillAt: 0, pending: { asset: 0, isBuy: false, sz: 0n, placedBlock: 0n }, filler: FILLER, fromBook: true,
     maxWorseBps: 150,
     rules: { dailyLossBps: 300, maxDrawdownBps: 600, maxLeverageX100: 1000, assets: [BTC, ETH, SOL], assetLeverageX100: [1000, 1000, 500] },
@@ -94,6 +97,12 @@ test("every line of the ABI is the exam's own, by its source", () => {
       assert.ok(FOLDED.includes("Order public pending;"), line);
       const fields = /struct Order \{(.*?)\}/.exec(FOLDED)[1].replace(/\/\/\/[^;]*?(?=uint|bool)/g, "").trim();
       assert.equal(returns, fields.split(";").map((f) => f.trim()).filter(Boolean).join(", "));
+      continue;
+    }
+    if (name === "stopOf" || name === "takeOf") {
+      assert.ok(FOLDED.includes(`mapping(uint32 asset => Trigger) public ${name};`), line);
+      const fields = /struct Trigger \{(.*?)\}/.exec(FOLDED)[1].replace(/\/\/\/[^;]*?(?=uint)/g, "").trim();
+      assert.deepEqual([params, returns], ["uint32 asset", fields.split(";").map((f) => f.trim()).filter(Boolean).join(", ")]);
       continue;
     }
     if (name === "positionOf") {
@@ -191,10 +200,8 @@ test("each line breaks one unit under it, as the contract judges, and the day's 
   assert.equal(at(9_400n * USD, { dayStartEquity: 9_600n * USD }).breach, "none");
   assert.equal(at(9_400n * USD - 1n, { dayStartEquity: 9_600n * USD }).breach, "drawdown");
   assert.equal(at(9_400n * USD - 1n, { dayStartEquity: 0n }).lines.length, 1, "no snapshot, no day's line");
-  // The drawdown line moved into `_drawdownLineBps` (13 November): a fixed line from the starting balance
-  // (`FROM_START`, the only kind this library models) or one that trails the best day's snapshot
-  // (`TRAILING_TO_START`, not modelled yet: `lines[0].at` is the fixed line, and a page for an exam of the second
-  // kind must take the line the contract answers, `reads.drawdownLine`).
+  // The drawdown line is `_drawdownLineBps`: a fixed line from the starting balance (`FROM_START`) or one that trails the
+  // best day's snapshot (`TRAILING_TO_START`); the trailing kind is the next tests'.
   assert.match(SRC, /if \(eq \* bps < _drawdownLineBps\(\)\) return Breach\.Drawdown;/);
   assert.match(SRC, /if \(drawdownKind == FROM_START\) return base \* \(bps - dd\);/);
   assert.match(SRC, /if \(eq \* bps < dayStartEquity \* \(bps - int256\(uint256\(_rules\.dailyLossBps\)\)\)\) return Breach\.DailyLoss;/);
@@ -528,4 +535,356 @@ test("when the book is too far and the leverage too large, the price refusal com
   const revert = SRC.indexOf("revert OverLeverage();", SRC.indexOf("_fillPrice("));
   const fn = SRC.slice(SRC.lastIndexOf("function ", revert), revert);
   assert.ok(fn.includes("_fillPrice("), "the price is taken in the function that refuses the leverage, above the refusal");
+});
+
+// ── the drawdown line trailing to the start, and stops and takes (the contract's own cases) ──
+//
+// The numbers are test/exam/PaperExam.t.sol's: a capital of 100, 10 % drawdown, the day's loss out of the way, a
+// fill delay of 2 blocks; 100 units bought at a mark of 1 000 000 is 1x long, so the equity is 100 times the mark's
+// move. A library that counts these differently from the contract turns one of these tests red.
+
+const C100 = 100n * USD;
+const CONTRACT_BLOCK = 500;
+
+/** The contract's `_exam()` after `_fillerTrade(e, isBuy, 100)`: a position of 100 at 1 000 000, cash what it cost. */
+function held({ size = 100n, mark = 1_000_000n, stop = null, take = null, filler = FILLER, ...more } = {}) {
+  return {
+    status: 1, step: 0, cash: C100 - size * 1_000_000n, dayStartEquity: C100, tradingDays: 0, deadline: 7 * DAY, lastFillAt: 0,
+    pending: { asset: 0, isBuy: false, sz: 0n, placedBlock: 0n }, filler, fromBook: false, maxWorseBps: 0,
+    drawdownKind: FROM_START, peakSnapshot: C100,
+    rules: { dailyLossBps: 9999, maxDrawdownBps: 1000, maxLeverageX100: 500, assets: [BTC, ETH], assetLeverageX100: [] },
+    terms: { capital: C100, targetsBps: [1000], stepDuration: 7 * DAY, maxIdle: 0, minTradingDays: 0, costPpm: 0, fillDelay: 2, fillWindow: 3 },
+    positions: [{ asset: BTC, size, mark, stop, take }, { asset: ETH, size: 0n, mark: 250_000n }],
+    ...more,
+  };
+}
+const NOW = { now: DAY, block: CONTRACT_BLOCK };
+/** `stopOf`/`takeOf` as the contract answers: px, sz, armedAt, seenAt. */
+const trig = (px, sz = 0n, armedAt = CONTRACT_BLOCK, seenAt = 0) => ({ px, sz, armedAt, seenAt });
+
+test("the drawdown line trails the highest day's snapshot to the starting balance, and never above it", () => {
+  const at = (peak, kind = TRAILING_TO_START) => drawdownLine({ kind, capital: C100, maxDrawdownBps: 1000, peak });
+  // test_trailingLine_risesWithTheDaysSnapshots_andStopsAtTheStart: 90 until a higher snapshot, then 94, 97, 100, 100.
+  assert.deepEqual([100n, 104n, 107n, 112n, 115n].map((p) => at(p * USD)), [90n, 94n, 97n, 100n, 100n].map((v) => v * USD));
+  assert.equal(at(104n * USD, FROM_START), 90n * USD, "the line from the start does not move (test_trailingLine_breaksWhereTheLineFromTheStartWouldNot)");
+  assert.equal(at(107n * USD, "0"), 90n * USD, "the kind read as text from a list");
+  // The line is kept exact: a fraction of a unit rounds up, as `drawdownLine()` rounds it.
+  assert.equal(drawdownLineBps({ kind: 1, capital: C100, maxDrawdownBps: 1000, peak: 104n * USD + 1n }), (104n * USD + 1n) * 10_000n - C100 * 1000n);
+  assert.equal(drawdownLine({ kind: 1, capital: C100, maxDrawdownBps: 1000, peak: 104n * USD + 1n }), 94n * USD + 1n);
+  assert.equal(drawdownLine({ kind: 1, capital: 10_001n, maxDrawdownBps: 3333, peak: 10_001n }), 6_668n, "10 001 less 3 333 bps of it, rounded up");
+  // An exam whose kind or whose snapshot was not read has no line worked out, and one of no kind is no exam.
+  for (const missing of [null, undefined, ""]) {
+    assert.throws(() => drawdownLine({ kind: missing, capital: C100, maxDrawdownBps: 1000, peak: C100 }), /drawdown kind was not read/);
+  }
+  assert.throws(() => at(100n * USD, 2), /is not a drawdown kind/);
+  assert.throws(() => at(100n * USD, 1.5), /is not a drawdown kind/);
+  assert.throws(() => drawdownLine({ kind: 1, capital: C100, maxDrawdownBps: 1000, peak: null }), /highest snapshot was not read/);
+  assert.equal(drawdownLine({ kind: 0, capital: C100, maxDrawdownBps: 1000, peak: null }), 90n * USD, "from the start needs no peak");
+  assert.deepEqual([FROM_START, TRAILING_TO_START, [...DRAWDOWN_KINDS]], [0, 1, ["from-start", "trailing-to-start"]]);
+});
+
+test("the account breaks a trailing line where the line from the start would not, and one unit under the line, not on it", () => {
+  const acct = (kind, peak, mark) => examAccount(held({ drawdownKind: kind, peakSnapshot: peak * USD, mark: BigInt(mark) }), NOW);
+  // test_trailingLine_breaksWhereTheLineFromTheStartWouldNot: a snapshot of 104, then the mark at 939 000 (equity 93.9).
+  const trailing = acct(TRAILING_TO_START, 104n, 939_000);
+  const fixed = acct(FROM_START, 104n, 939_000);
+  assert.deepEqual([trailing.breach, fixed.breach], ["drawdown", "none"], "under 94, over 90");
+  assert.deepEqual([trailing.lines[0].at, trailing.lines[0].drawdownKind, trailing.lines[0].peak, trailing.drawdownKind, trailing.peakSnapshot],
+    [94n * USD, "trailing-to-start", 104n * USD, "trailing-to-start", 104n * USD]);
+  assert.deepEqual([fixed.lines[0].at, fixed.lines[0].drawdownKind, fixed.floor.kind], [90n * USD, "from-start", "drawdown"]);
+  assert.equal(trailing.lines[0].room, 93_900_000n - 94n * USD, "negative once broken");
+  // test_trailingLine_risesWithTheDaysSnapshots: a snapshot of 112 puts the line at the start's 100; 100 holds, a unit under breaks.
+  assert.equal(acct(TRAILING_TO_START, 112n, 1_000_000).breach, "none");
+  assert.equal(acct(TRAILING_TO_START, 112n, 999_999).breach, "drawdown");
+  assert.equal(acct(TRAILING_TO_START, 115n, 999_999).lines[0].at, 100n * USD, "and it stays there");
+  // The step's first snapshot is its starting balance: the line is the start's until a higher one.
+  assert.equal(acct(TRAILING_TO_START, 100n, 900_000).breach, "none");
+  assert.equal(acct(TRAILING_TO_START, 100n, 899_999).breach, "drawdown");
+  // A rise within the day moves nothing: the peak is the snapshot's, not the equity now (test_trailingLine_aRiseWithinTheDayMovesNothing).
+  const noon = acct(TRAILING_TO_START, 100n, 1_080_000);
+  assert.deepEqual([noon.equity, noon.lines[0].at], [108n * USD, 90n * USD]);
+  // An exam of the trailing kind with no snapshot read, or of no kind read, is not given a line from the start.
+  assert.throws(() => examAccount(held({ drawdownKind: TRAILING_TO_START, peakSnapshot: undefined }), NOW), /highest snapshot was not read/);
+  assert.throws(() => examAccount(held({ drawdownKind: undefined }), NOW), /drawdown kind was not read/);
+  assert.equal(examAccount(held({ drawdownKind: undefined, drawdownLine: 94n * USD }), NOW).lines[0].drawdownKind, null,
+    "a line the contract answered needs no kind to be shown");
+});
+
+test("the drawdown is judged on the line the contract keeps: equity under it, as `equity * BPS < line` is, at every unit", () => {
+  const BPS = 10_000n;
+  for (const [kind, peak, dd] of [[1, 104_000_000n, 1000n], [1, 100_000_001n, 333n], [1, 9_999_999n, 1n], [0, 100_000_000n, 1000n], [1, 250_000_000n, 9_999n]]) {
+    const exact = drawdownLineBps({ kind, capital: C100, maxDrawdownBps: dd, peak });
+    const line = drawdownLine({ kind, capital: C100, maxDrawdownBps: dd, peak });
+    for (const equity of [line - 2n, line - 1n, line, line + 1n, line + 2n, 0n, -5n]) {
+      const a = examAccount(held({ drawdownKind: kind, peakSnapshot: peak, cash: equity, positions: [], rules: { ...held().rules, maxDrawdownBps: dd } }), NOW);
+      assert.equal(a.breach === "drawdown", equity * BPS < exact, `${kind} ${peak} ${dd} ${equity}`);
+    }
+  }
+  assert.match(SRC, /if \(eq \* bps < _drawdownLineBps\(\)\) return Breach\.Drawdown;/);
+  assert.match(SRC, /return \(_drawdownLineBps\(\) \+ bps - 1\) \/ bps;/);
+  assert.match(SRC, /if \(drawdownKind == FROM_START\) return base \* \(bps - dd\);/);
+  assert.match(SRC, /int256 trailing = peakSnapshot \* bps - base \* dd;/);
+  assert.match(SRC, /return trailing < base \* bps \? trailing : base \* bps;/);
+  assert.match(SRC, /if \(eq > peakSnapshot\) peakSnapshot = eq;/, "only `checkpoint` raises the peak");
+  assert.match(SRC, /uint8 public constant FROM_START = 0;\s+uint8 public constant TRAILING_TO_START = 1;/);
+  assert.match(SRC, /if \(drawdownKind_ > TRAILING_TO_START\) revert BadTerms\(\);/);
+  assert.match(SRC, /peakSnapshot = cash;/, "a new step starts again from its balance");
+});
+
+test("an order that closes or turns a position round takes its stop and its take with it; a smaller one does not", () => {
+  // test_trigger_goesWithAPositionAnOrderClosesOrTurnsRound: 100 long with a stop and a take.
+  const r = held({ stop: trig(950_000n), take: trig(1_100_000n) });
+  const sell = (size) => orderPreview(r, { asset: BTC, isBuy: false, size, oracle: 1_000_000n, ...NOW });
+  assert.deepEqual([sell(40n).closesPosition, sell(40n).dropsTriggers], [false, []], "smaller: both stay");
+  assert.deepEqual([sell(100n).closesPosition, sell(100n).dropsTriggers], [true, ["stop", "take"]], "closed");
+  assert.deepEqual([sell(160n).closesPosition, sell(160n).dropsTriggers, sell(160n).after.position], [true, ["stop", "take"], -60n], "turned round");
+  const stopOnly = orderPreview(held({ stop: trig(950_000n) }), { asset: BTC, isBuy: false, size: 100n, oracle: 1_000_000n, ...NOW });
+  assert.deepEqual(stopOnly.dropsTriggers, ["stop"]);
+  assert.deepEqual(orderPreview(held({ size: 0n }), { asset: BTC, isBuy: true, size: 5n, oracle: 1_000_000n, ...NOW }).dropsTriggers, [], "a new position has none");
+  assert.match(SRC, /if \(before != 0 && \(afterFill == 0 \|\| \(afterFill > 0\) != \(before > 0\)\)\) \{\s+if \(stopOf\[asset\]\.px != 0\) _clear\(asset, false\);\s+if \(takeOf\[asset\]\.px != 0\) _clear\(asset, true\);/);
+});
+
+test("a stop and a take as the screen shows them: when they act, how far the oracle is, where they stand, who may carry them out", () => {
+  const view = (more, at = NOW) => examAccount(held(more), at).positions[0];
+  const set = { stop: trig(950_000n, 0n, 502), take: trig(1_100_000n, 40n, 502) };
+  const waiting = view(set, { now: DAY, block: 501 });
+  assert.deepEqual([waiting.stop.state, waiting.stop.blocksToArm, waiting.stop.armedAt, waiting.take.closes], ["waiting", 1, 502, 40n]);
+  const armed = view(set, { now: DAY, block: 502 });
+  assert.deepEqual([armed.stop.state, armed.stop.room, armed.take.room, armed.stop.closes, armed.stop.whole, armed.take.whole],
+    ["armed", 50_000n, 100_000n, 100n, true, false], "a stop on a long is reached from above, a take from below");
+  assert.deepEqual([view({ ...set, mark: 950_000n }, { now: DAY, block: 502 }).stop.state, view({ ...set, mark: 950_000n }, { now: DAY, block: 502 }).stop.room],
+    ["triggered", 0n], "at the stop is reached");
+  assert.equal(view({ ...set, mark: 1_100_000n }, { now: DAY, block: 502 }).take.state, "triggered");
+  // Seen at block 510: the filler carries it out; anyone may from 60 blocks after the sighting, while it holds.
+  const seen = { stop: trig(950_000n, 0n, 502, 510), mark: 940_000n };
+  assert.deepEqual(["510", "569", "570", "700"].map((b) => view(seen, { now: DAY, block: Number(b) }).stop).map((s) => [s.state, s.carriedBy, s.fallbackFrom]),
+    [["seen", "filler", 570], ["seen", "filler", 570], ["seen", "anyone", 570], ["seen", "anyone", 570]]);
+  assert.equal(view({ stop: trig(950_000n, 0n, 502, 510), mark: 960_000n }, { now: DAY, block: 600 }).stop.state, "armed", "back over it: it must hold again");
+  assert.equal(view({ stop: trig(950_000n, 0n, 502), filler: ZERO, mark: 940_000n }, { now: DAY, block: 502 }).stop.carriedBy, "anyone-but-trader");
+  assert.equal(view({ stop: trig(950_000n, 0n, 502), positions: [{ asset: BTC, size: 100n, mark: null, stop: trig(950_000n, 0n, 502) }] }, { now: DAY, block: 502 }).stop.state, "unpriced");
+  // A short's stop is reached from below, its take from above (test_stopAndTake_onAShort_triggerTheOtherWay).
+  const short = view({ size: -100n, stop: trig(1_050_000n, 0n, 502), take: trig(950_000n, 0n, 502) }, { now: DAY, block: 502 });
+  assert.deepEqual([short.stop.room, short.take.room, short.side], [50_000n, 50_000n, "short"]);
+  assert.equal(view({ size: -100n, stop: trig(1_050_000n, 0n, 502), mark: 1_050_000n }, { now: DAY, block: 502 }).stop.state, "triggered");
+  assert.equal(view({ size: -100n, take: trig(950_000n, 0n, 502), mark: 950_000n }, { now: DAY, block: 502 }).take.state, "triggered");
+  // A size bigger than what is open closes all of it; none set is null; a trigger tuple reads like the object.
+  assert.equal(view({ take: trig(1_100_000n, 500n, 502) }, { now: DAY, block: 502 }).take.closes, 100n);
+  assert.deepEqual([view({}).stop, view({}).take], [null, null]);
+  assert.equal(view({ stop: [950_000n, 0n, 502n, 0n] }, { now: DAY, block: 502 }).stop.px, 950_000n);
+  assert.equal(view({ stop: trig(0n) }).stop, null, "a price of zero is none");
+  // The contract's test of the side: a take and a stop on a long and on a short.
+  assert.match(SRC, /bool hit = isTake == \(pos > 0\) \? oracle >= t\.px : oracle <= t\.px;/);
+  assert.match(SRC, /uint64 sz = t\.sz == 0 \|\| t\.sz > open \? uint64\(open\) : t\.sz;/);
+  assert.match(SRC, /\} else if \(msg\.sender != filler && \(t\.seenAt == 0 \|\| block\.number < uint256\(t\.seenAt\) \+ FALLBACK_BLOCKS\)\) \{/);
+});
+
+test("a stop is carried out as a trade: at that block's price, closing what is open, in the contract's order of refusals", () => {
+  const fire = (more, args = {}) => triggerFill(held(more), { asset: BTC, isTake: false, oracle: 940_000n, now: DAY, block: 502, ...args });
+  const stop = { stop: trig(950_000n, 0n, 502), take: trig(1_100_000n, 0n, 502) };
+  // test_stop_onALong_closesItWhenTheOracleIsAtOrUnderIt_atThatBlocksPrice
+  const early = fire(stop, { block: 501 });
+  assert.deepEqual([early.refusal, early.armedAt], ["TooEarly", 502], "TooEarly(block + delay)");
+  const near = fire(stop, { oracle: 951_000n });
+  assert.deepEqual([near.refusal, near.oracle, near.triggerPx], ["NotTriggered", 951_000n, 950_000n]);
+  assert.equal(fire(stop, { oracle: 950_000n }).refusal, null, "at it is enough");
+  const got = fire(stop);
+  assert.deepEqual(got.trade, { asset: BTC, isBuy: false, size: 100n, px: 940_000n, source: "oracle", notional: 94n * USD, cost: 0n,
+    countsAsTrade: true, late: 0 });
+  assert.deepEqual([got.triggerPx, got.isTake, got.after.position, got.after.cash, got.after.equity, got.after.notional, got.after.breach],
+    [950_000n, false, 0n, 94n * USD, 94n * USD, 0n, "none"], "100 units sold at 940 000");
+  assert.deepEqual([got.clears, got.lapsesOrder, got.events], [{ fired: true, other: "take" }, false, ["TriggerCleared", "TriggerCleared", "Filled", "TriggerFilled"]],
+    "the position is closed: its take goes with it");
+  assert.equal(got.note, ESTIMATE_NOTE);
+  // test_take_onALong_closesItsSizeOnly_andTheStopStays
+  const take = { stop: trig(950_000n, 0n, 502), take: trig(1_050_000n, 40n, 502) };
+  const t = (oracle) => triggerFill(held(take), { asset: BTC, isTake: true, oracle, now: DAY, block: 502 });
+  assert.deepEqual([t(1_049_999n).refusal, t(1_049_999n).triggerPx], ["NotTriggered", 1_050_000n]);
+  const big = triggerFill(held({ take: trig(1_050_000n, 500n, 502) }), { asset: BTC, isTake: true, oracle: 1_050_000n, now: DAY, block: 502 });
+  assert.deepEqual([big.trade.size, big.after.position], [100n, 0n], "a size bigger than what is open closes all of it");
+  const part = t(1_050_000n);
+  assert.deepEqual([part.trade.size, part.trade.isBuy, part.after.position, part.clears, part.events],
+    [40n, false, 60n, { fired: true, other: null }, ["TriggerCleared", "Filled", "TriggerFilled"]], "a smaller position keeps its stop, a take is used once");
+  // test_stopAndTake_onAShort_triggerTheOtherWay: bought back at 1 060 000.
+  const short = held({ size: -100n, stop: trig(1_050_000n, 0n, 502), take: trig(950_000n, 0n, 502) });
+  const s = (isTake, oracle) => triggerFill(short, { asset: BTC, isTake, oracle, now: DAY, block: 502 });
+  assert.deepEqual([s(false, 1_000_000n).refusal, s(false, 1_000_000n).triggerPx, s(true, 1_000_000n).triggerPx], ["NotTriggered", 1_050_000n, 950_000n]);
+  const bought = s(false, 1_060_000n);
+  assert.deepEqual([bought.trade.isBuy, bought.after.cash, bought.after.position, bought.clears.other], [true, C100 + 100n * 1_000_000n - 100n * 1_060_000n, 0n, "take"]);
+  // test_stop_setPastThePrice_waitsTheDelayAsAnOrderDoes: set past the price at block 500, acts at 502.
+  const past = { stop: trig(1_200_000n, 0n, 502) };
+  assert.deepEqual([fire(past, { oracle: 1_000_000n, block: 500 }).refusal, fire(past, { oracle: 1_000_000n, block: 501 }).armedAt,
+    fire(past, { oracle: 1_000_000n, block: 502 }).refusal], ["TooEarly", 502, null]);
+  // Nothing set, no position, no price, an exam that is over, a step out of time: in the contract's order.
+  assert.equal(fire({}).refusal, "NoTrigger");
+  assert.equal(fire(stop, { isTake: true, oracle: 1_000_000n }).refusal, "NotTriggered", "the take is there, the oracle is not at it");
+  assert.equal(fire(stop, { isTake: true, oracle: 1_100_000n }).refusal, null, "a take on a long is reached at its price or over it");
+  assert.equal(fire({ take: trig(1_100_000n, 0n, 502) }).refusal, "NoTrigger", "the stop is not there");
+  assert.equal(fire(stop, { oracle: null }).refusal, "NoPrice");
+  assert.equal(fire(stop, { oracle: 0n }).refusal, "NoPrice");
+  assert.equal(fire(stop, { asset: ETH }).refusal, "NoTrigger");
+  assert.equal(fire(stop, { asset: null }).refusal, "NoTrigger", "a missing asset is no asset");
+  assert.equal(fire({ ...stop, status: 2 }).refusal, "BadStatus");
+  assert.equal(fire(stop, { now: 8 * DAY }).refusal, "TooLate");
+  assert.equal(fire({ ...stop, status: 2 }, { block: 1 }).refusal, "BadStatus", "the status is judged before the block");
+  assert.equal(fire(stop, { now: 8 * DAY, block: 1 }).refusal, "TooLate", "the time before the trigger's own block");
+  assert.equal(fire({ ...stop, positions: [{ asset: BTC, size: 0n, mark: 1_000_000n, stop: trig(950_000n, 0n, 502) }] }).refusal, "NoPosition", "a stop read on a flat position: as `_triggered` says it");
+  assert.equal(fire({ ...stop, positions: [{ asset: BTC, size: 0n, mark: null, stop: trig(950_000n, 0n, 502) }] }, { oracle: null }).refusal, "NoPosition",
+    "the position before the price, as `_triggered` reads them");
+  assert.equal(fire(stop, { oracle: 940_000n }).text, null);
+  assert.equal(fire({}).text, REFUSALS["NoTrigger()"]);
+  // The contract's order: status, time, then the trigger (none, its block, the position, the price, reached).
+  const body = SRC.slice(SRC.indexOf("function fillTrigger("), SRC.indexOf("/// @notice Takes the day's snapshot"));
+  const order = ["inStatus(Status.Active)", "revert OwnOrder()", "revert NotFiller()", "revert TooLate()", "_triggered(asset, isTake, t)", "_apply(asset, before < 0, sz, before)"];
+  assert.deepEqual([...order].sort((a, b) => body.indexOf(a) - body.indexOf(b)), order);
+  const trigBody = SRC.slice(SRC.indexOf("function _triggered("), SRC.indexOf("function _clear("));
+  const refusals = ["revert NoTrigger()", "revert TooEarly(t.armedAt)", "revert NoPosition()", "_mark(asset)", "revert NotTriggered(oracle, t.px)"];
+  assert.deepEqual([...refusals].sort((a, b) => trigBody.indexOf(a) - trigBody.indexOf(b)), refusals);
+  assert.match(SRC, /_clear\(asset, isTake\);\s+\(uint64 px, uint256 cost, uint8 source\) = _apply\(asset, before < 0, sz, before\);/);
+  assert.match(SRC, /emit Filled\(asset, before < 0, sz, px, cost, 0, source\);\s+emit TriggerFilled\(asset, isTake, sz, px, cost, t\.px, source\);/);
+});
+
+test("a stop is filled at the book's side as any fill is, waits where the book stands off the oracle, and costs what a fill costs", () => {
+  const book = { fromBook: true, maxWorseBps: 150, terms: { ...held().terms, costPpm: 450 } };
+  const stop = { stop: trig(950_000n, 0n, 502) };
+  const sell = (bid, ask) => triggerFill(held({ ...book, ...stop }), { asset: BTC, isTake: false, oracle: 940_000n, bid, ask, now: DAY, block: 502 });
+  const got = sell(939_900n, 940_100n);
+  assert.deepEqual([got.trade.px, got.trade.source, got.trade.cost, got.after.cash], [939_900n, "book", ceilDiv(100n * 939_900n * 450n, 1_000_000n), 93_990_000n - 42_296n],
+    "a sell takes the bid, never better than the oracle, and pays its cost");
+  assert.equal(sell(940_050n, 940_100n).trade.px, 940_000n, "a bid over the oracle sells at the oracle");
+  assert.equal(sell(null, null).trade.source, "oracle-fallback");
+  const far = sell(900_000n, 940_100n);
+  assert.deepEqual([far.refusal, far.px, far.oracle], ["TooFarFromOracle", 900_000n, 940_000n], "it waits for a later block");
+  assert.equal(sell(926_000n, 940_100n).refusal, null, "150 bps worse exactly is still filled");
+  // A short is bought back at the ask.
+  const short = triggerFill(held({ ...book, size: -100n, stop: trig(1_050_000n, 0n, 502) }), { asset: BTC, isTake: false, oracle: 1_060_000n, bid: 1_059_900n, ask: 1_060_100n, now: DAY, block: 502 });
+  assert.deepEqual([short.trade.isBuy, short.trade.px, short.trade.source], [true, 1_060_100n, "book"]);
+  // A close is never refused for leverage: even at an account far over its cap.
+  const heavy = triggerFill(held({ size: 450n, mark: 940_000n, cash: C100 - 450n * 1_000_000n, stop: trig(950_000n, 0n, 502) }), { asset: BTC, isTake: false, oracle: 940_000n, now: DAY, block: 502 });
+  assert.deepEqual([heavy.refusal, heavy.after.position], [null, 0n]);
+  assert.equal(heavy.trade.countsAsTrade, true);
+  const dust = triggerFill(held({ size: 1n, cash: C100 - 1_000_000n, stop: trig(950_000n, 0n, 502) }), { asset: BTC, isTake: false, oracle: 940_000n, now: DAY, block: 502 });
+  assert.equal(dust.trade.countsAsTrade, false, "under 10 USDC of notional is no trading day");
+  assert.match(SRC, /\/\/ A position never outgrows a size an order or a trigger can name, so a trigger closes all of it\./);
+  assert.match(SRC, /if \(_abs\(afterFill\) > _abs\(before\)\) \{/);
+});
+function ceilDiv(a, b) { return (a + b - 1n) / b; }
+
+test("a close by a stop lapses an order waiting on that asset, and only that asset, and only where the position is closed", () => {
+  // test_trigger_aCloseLapsesAnOrderWaitingOnThatAsset_onlyThat
+  const stop = { stop: trig(950_000n, 0n, 502) };
+  const order = (asset) => ({ pending: { asset, isBuy: false, sz: 100n, placedBlock: 500n } });
+  const f = (more) => triggerFill(held({ ...stop, ...more }), { asset: BTC, isTake: false, oracle: 940_000n, now: DAY, block: 502 });
+  const lapsed = f(order(BTC));
+  assert.deepEqual([lapsed.lapsesOrder, lapsed.events], [true, ["TriggerCleared", "Lapsed", "Filled", "TriggerFilled"]]);
+  assert.equal(f(order(ETH)).lapsesOrder, false, "another asset's order stays");
+  assert.equal(f({}).lapsesOrder, false);
+  assert.equal(f({ ...order(BTC), stop: trig(950_000n, 40n, 502) }).lapsesOrder, false, "a smaller position keeps its order");
+  assert.equal(f({ pending: { asset: BTC, isBuy: true, sz: 10n, placedBlock: 100n } }).lapsesOrder, true, "an order past its window is still in the contract: it lapses too");
+  assert.match(SRC, /if \(positionOf\[asset\] == 0 && o\.sz != 0 && o\.asset == asset\) \{\s+delete pending;\s+emit Lapsed\(o\.asset, o\.isBuy, o\.sz\);/);
+});
+
+test("what setting a stop would do: refused in setTrigger's order, acting a fill delay later, replacing the one there", () => {
+  const set = (more = {}, args = {}) => triggerSetPreview(held(more), { asset: BTC, isTake: false, px: 950_000n, oracle: 1_000_000n, ...NOW, ...args });
+  const ok = set();
+  assert.deepEqual([ok.refusal, ok.kind, ok.px, ok.armedAt, ok.closes, ok.whole, ok.replaces, ok.reached], [null, "stop", 950_000n, 502, 100n, true, null, false],
+    "test_trigger_onlyTheTraderSetsIt_onAnOpenPosition_actingAfterTheDelay: block + fill delay");
+  assert.deepEqual([set({}, { isTake: true, px: 1_100_000n, size: 40n }).closes, set({}, { isTake: true, px: 1_100_000n, size: 40n }).whole], [40n, false]);
+  assert.equal(set({}, { size: 500n }).closes, 100n);
+  assert.deepEqual(set({ stop: trig(900_000n, 10n, 400, 450) }).replaces, { px: 900_000n, sz: 10n });
+  assert.equal(set({ take: trig(900_000n, 10n, 400) }).replaces, null, "a stop replaces a stop only");
+  assert.equal(set({}, { px: 1_200_000n }).reached, true, "set past the price: it closes as soon as it acts");
+  assert.equal(set({}, { px: 1_000_000n }).reached, true);
+  assert.equal(set({}, { px: 1_100_000n, isTake: true }).reached, false);
+  assert.equal(set({}, { oracle: null }).reached, false, "the position's own mark when the oracle is not given");
+  assert.equal(set({ positions: [{ asset: BTC, size: 100n, mark: null }] }, { oracle: null }).reached, null, "no price, not guessed");
+  for (const [refusal, more, args] of [
+    ["BadStatus", { status: 2 }, {}], ["TooLate", {}, { now: 8 * DAY }], ["NoPosition", { size: 0n }, {}],
+    ["NoPosition", {}, { asset: ETH }], ["NoPosition", {}, { asset: null }], ["NoPosition", {}, { asset: "" }], ["ZeroPrice", {}, { px: 0n }],
+  ]) {
+    assert.equal(set(more, args).refusal, refusal, refusal);
+    assert.equal(set(more, args).text, REFUSALS[`${refusal}(${refusal === "BadStatus" ? "uint8" : ""})`]);
+  }
+  assert.equal(set({ status: 2, size: 0n }, { px: 0n, now: 8 * DAY }).refusal, "BadStatus", "in the contract's order");
+  assert.equal(set({ size: 0n }, { px: 0n, now: 8 * DAY }).refusal, "TooLate");
+  assert.equal(set({ size: 0n }, { px: 0n }).refusal, "NoPosition");
+  const body = SRC.slice(SRC.indexOf("function setTrigger("), SRC.indexOf("/// @notice Removes the stop"));
+  const order = ["inStatus(Status.Active)", "revert NotTrader()", "revert TooLate()", "revert NoPosition()", "revert ZeroPrice()", "uint64 armedAt = uint64(block.number) + _terms.fillDelay;"];
+  assert.deepEqual([...order].sort((a, b) => body.indexOf(a) - body.indexOf(b)), order);
+});
+
+test("the calls for a stop and a take are encoded as cast calldata encodes them", () => {
+  // cast calldata "setTrigger(uint32,bool,uint64,uint64)" 3 false 950000 0
+  const stop = setTriggerCall({ exam: EXAM, asset: BTC, isTake: false, px: 950_000n, keccak256 });
+  assert.equal(stop.data, `0x2c1c69ce${W("3")}${W("0")}${W("e7ef0")}${W("0")}`);
+  assert.deepEqual([stop.to, stop.method, stop.signer, stop.signs, stop.args], [EXAM, "setTrigger", "trader", SIGNS.trader, [3, false, 950_000n, 0n]]);
+  // cast calldata "setTrigger(uint32,bool,uint64,uint64)" 110005 true 1050000 40
+  assert.equal(setTriggerCall({ exam: EXAM, asset: 110005, isTake: true, px: 1_050_000n, size: 40n, by: "agent", keccak256 }).data,
+    `0x2c1c69ce${W("1adb5")}${W("1")}${W("100590")}${W("28")}`);
+  assert.equal(setTriggerCall({ exam: EXAM, asset: 3, isTake: true, px: 1n, by: "agent", keccak256 }).signs, SIGNS.agent);
+  // cast calldata "clearTrigger(uint32,bool)" 3 true
+  const clear = clearTriggerCall({ exam: EXAM, asset: BTC, isTake: true, keccak256 });
+  assert.equal(clear.data, `0x308311df${W("3")}${W("1")}`);
+  assert.deepEqual([clear.method, clear.signer], ["clearTrigger", "trader"]);
+  assert.throws(() => setTriggerCall({ exam: EXAM, asset: BTC, isTake: false, px: 0n, keccak256 }), /price above zero/);
+  assert.throws(() => setTriggerCall({ exam: EXAM, asset: BTC, isTake: false, px: -1n, keccak256 }), /price above zero/);
+  assert.throws(() => setTriggerCall({ exam: EXAM, asset: BTC, isTake: false, px: 1n << 64n, keccak256 }), /does not fit/);
+  assert.throws(() => setTriggerCall({ exam: EXAM, asset: BTC, isTake: false, px: 1n, size: -1n, keccak256 }), /zero \(all of it\) or more/);
+  assert.throws(() => setTriggerCall({ exam: EXAM, asset: BTC, isTake: false, px: 1n, size: 1n << 64n, keccak256 }), /does not fit/);
+  assert.throws(() => setTriggerCall({ exam: EXAM, asset: BTC, isTake: false, px: 1n, by: "filler", keccak256 }), /only the trader/);
+  assert.throws(() => setTriggerCall({ exam: EXAM, asset: null, isTake: false, px: 1n, keccak256 }), /not an asset/);
+  assert.throws(() => clearTriggerCall({ exam: EXAM, asset: -1, isTake: true, keccak256 }), /not an asset/);
+  assert.throws(() => clearTriggerCall({ exam: EXAM, asset: 3, isTake: true, by: "x", keccak256 }), /only the trader/);
+  assert.match(SRC, /function clearTrigger\(uint32 asset, bool isTake\) external \{\s+if \(msg\.sender != trader && msg\.sender != agent\) revert NotTrader\(\);/);
+});
+
+test("the stops, the takes and the trades are folded out of the recorded events, and a stop's fill is a trade", () => {
+  const ev = (name, args) => ({ name, args });
+  // The chain of test_stop_onALong…: stop and take set, the stop seen, then carried out (cleared, cleared, Filled, TriggerFilled).
+  const chain = [
+    ev("Filled", { asset: BTC, isBuy: true, sz: 100n, px: 1_000_000n, cost: 0n, late: 1n, source: 0 }),
+    ev("TriggerSet", { asset: BTC, isTake: false, px: 950_000n, sz: 0n, armedAt: 502n }),
+    ev("TriggerSet", [BTC, true, 1_100_000n, 40n, 502n]),
+    ev("Placed", { asset: BTC, isBuy: false, sz: 5n, fillFrom: 600n, fillUntil: 602n }),
+    ev("TriggerSeen", { asset: BTC, isTake: false, oracle: 940_000n, seenAt: 510n }),
+    ev("Lapsed", { asset: BTC, isBuy: false, sz: 5n }),
+  ];
+  const open = triggerLedger(chain);
+  assert.deepEqual(open.stops, [{ asset: BTC, px: 950_000n, sz: 0n, armedAt: 502, seenAt: 510 }]);
+  assert.deepEqual(open.takes, [{ asset: BTC, px: 1_100_000n, sz: 40n, armedAt: 502, seenAt: null }]);
+  assert.deepEqual(open.trades, [{ asset: BTC, isBuy: true, size: 100n, px: 1_000_000n, cost: 0n, late: 1, source: 0, via: "order", triggerPx: null }]);
+  const done = triggerLedger([...chain,
+    ev("TriggerCleared", { asset: BTC, isTake: false }), ev("TriggerCleared", { asset: BTC, isTake: true }),
+    ev("Filled", { asset: BTC, isBuy: false, sz: 100n, px: 940_000n, cost: 0n, late: 0n, source: 0 }),
+    ev("TriggerFilled", { asset: BTC, isTake: false, sz: 100n, px: 940_000n, cost: 0n, triggerPx: 950_000n, source: 0 })]);
+  assert.deepEqual([done.stops, done.takes], [[], []]);
+  assert.deepEqual(done.trades.map((t) => [t.isBuy, t.size, t.px, t.via, t.triggerPx, t.late]),
+    [[true, 100n, 1_000_000n, "order", null, 1], [false, 100n, 940_000n, "stop", 950_000n, 0]], "carried out as a trade, and said to be a stop");
+  // A take of 40: the stop stays; the take is used once.
+  const part = triggerLedger([ev("TriggerSet", { asset: BTC, isTake: false, px: 950_000n, sz: 0n, armedAt: 502n }),
+    ev("TriggerSet", { asset: BTC, isTake: true, px: 1_050_000n, sz: 40n, armedAt: 502n }), ev("TriggerCleared", { asset: BTC, isTake: true }),
+    ev("Filled", { asset: BTC, isBuy: false, sz: 40n, px: 1_050_000n, cost: 7n, late: 0n, source: 1 }),
+    ev("TriggerFilled", { asset: BTC, isTake: true, sz: 40n, px: 1_050_000n, cost: 7n, triggerPx: 1_050_000n, source: 1 })]);
+  assert.deepEqual([part.stops.length, part.takes.length, part.trades[0].via, part.trades[0].source], [1, 0, "take", 1]);
+  // A stop set again replaces the one there and starts unseen; the trader takes one off; one asset's do not touch another's.
+  const again = triggerLedger([ev("TriggerSet", { asset: BTC, isTake: false, px: 950_000n, sz: 0n, armedAt: 502n }),
+    ev("TriggerSeen", { asset: BTC, isTake: false, oracle: 940_000n, seenAt: 510n }),
+    ev("TriggerSet", { asset: BTC, isTake: false, px: 900_000n, sz: 0n, armedAt: 520n }),
+    ev("TriggerSet", { asset: ETH, isTake: false, px: 200_000n, sz: 0n, armedAt: 520n }),
+    ev("TriggerSet", { asset: ETH, isTake: true, px: 300_000n, sz: 0n, armedAt: 520n }), ev("TriggerCleared", { asset: ETH, isTake: true })]);
+  assert.deepEqual(again.stops.map((t) => [t.asset, t.px, t.seenAt]), [[BTC, 900_000n, null], [ETH, 200_000n, null]]);
+  assert.deepEqual(again.takes, []);
+  // The first sighting is the one that counts: the contract writes no second one.
+  const twice = triggerLedger([ev("TriggerSet", { asset: BTC, isTake: false, px: 950_000n, sz: 0n, armedAt: 502n }),
+    ev("TriggerSeen", { asset: BTC, isTake: false, oracle: 940_000n, seenAt: 510n }), ev("TriggerSeen", { asset: BTC, isTake: false, oracle: 930_000n, seenAt: 540n })]);
+  assert.equal(twice.stops[0].seenAt, 510);
+  // A TriggerFilled without the Filled it comes with, or with another's numbers, is a record the contract did not write.
+  const lone = ev("TriggerFilled", { asset: BTC, isTake: false, sz: 100n, px: 940_000n, cost: 0n, triggerPx: 950_000n, source: 0 });
+  assert.throws(() => triggerLedger([lone]), /no Filled before it/);
+  assert.throws(() => triggerLedger([ev("Filled", { asset: BTC, isBuy: false, sz: 99n, px: 940_000n, cost: 0n, late: 0n, source: 0 }), lone]), /no Filled before it/);
+  assert.throws(() => triggerLedger([ev("Filled", { asset: BTC, isBuy: false, sz: 100n, px: 940_000n, cost: 1n, late: 0n, source: 0 }), lone]), /no Filled before it/);
+  assert.throws(() => triggerLedger([ev("Filled", { asset: BTC, isBuy: false, sz: 100n, px: 941_000n, cost: 0n, late: 0n, source: 0 }), lone]), /no Filled before it/);
+  assert.throws(() => triggerLedger([ev("Filled", { asset: ETH, isBuy: false, sz: 100n, px: 940_000n, cost: 0n, late: 0n, source: 0 }), lone]), /no Filled before it/);
+  assert.throws(() => triggerLedger([ev("Filled", { asset: BTC, isBuy: false, sz: 100n, px: 940_000n, cost: 0n, late: 0n, source: 0 }), lone, lone]), /no Filled before it/,
+    "one Filled is one TriggerFilled");
+  assert.deepEqual(triggerLedger([ev("Stopped", {}), ev("DaySnapshot", { day: 1, equity: 1n })]).trades, [], "events it does not read are left out");
 });
