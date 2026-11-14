@@ -1,4 +1,5 @@
-"""Deploys the simulated pool's contracts on testnet, and opens a pool on them (docs/SIM-POOL.md).
+"""Deploys the simulated pool's contracts, on testnet unless mainnet is named, and opens a pool on them
+(docs/SIM-POOL.md).
 
     spike/.venv/bin/python -m ops.deploy_sim deploy --label sim1 --filler 0x.. --checker 0x.. \\
         --closer 0x..                                                                                  # the plan
@@ -17,11 +18,13 @@
     spike/.venv/bin/python -m ops.deploy_sim approve --pool 0x.. --key approver --ids 3,4 [--send]     # payouts
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
-and the SimPoolFactory on HyperEVM testnet, names the filler, the checker, the closer (the platform's
+and the SimPoolFactory on HyperEVM, names the filler, the checker, the closer (the platform's
 key that alone may close a pool before its 6 months, 184 days; four keys, none of them the operator, who
 opens our pools) and the platform's recipient, and lists the assets with their leverage caps from ops/leverage.py (HYPE is left out:
-the platform's decision of 11 November 2026). It writes deployments/testnet-<label>.json, with the
-same keeper nodes as demo3, so the host's keeper unit can run on it.
+the platform's decision of 11 November 2026), each at its perp index on the network (ops/sim_network.py). It
+writes deployments/<network>-<label>.json; on testnet with the same keeper nodes as demo3, on mainnet with the
+ones --keeper-nodes names (a JSON file, as a record's `keeper_nodes`: a node of the keeper's own, not the
+gateway's), so the host's keeper unit can run on it.
 
 `buy` approves a line's price and buys an exam with a code from the trader's key, for --measure in
 ops/sim_keeper.py; it prints the exam.
@@ -59,7 +62,13 @@ With --signer ADDRESS (pool, codes, close, finish, request, withdraw, cancel, ap
 from an address that signs elsewhere: our pool's creator is a Safe with two signatures, its approver of payouts
 a Ledger. The command reads the chain as that address, checks as it would for a key, and prints the calls in
 order as the Safe's Transaction Builder takes them (to, value, data); it sends nothing and reads no key. With it,
-the transactions go out from the named keys. Testnet only; on mainnet only after an audit.
+the transactions go out from the named keys.
+
+The network is testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet
+(ops/sim_network.py). On mainnet every command reads and prints as on testnet, and --signer prints the calls for
+the Safe or the Ledger; --send there also asks the person at the terminal to type the confirmation phrase, wants a
+mainnet key directory, reads the network's meta to hold each asset's index, and `pool` refuses a plan written for
+testnet. Mainnet only after the audit and by the owner's hand.
 """
 
 from __future__ import annotations
@@ -73,7 +82,8 @@ from datetime import datetime, timezone
 from eth_utils import keccak, to_checksum_address
 
 from ops import deployments
-from ops.deploy_testnet import PLATFORM_ASSETS, big_blocks, deploy_contract, git_head, mark_incomplete, save
+from ops import sim_network as sn
+from ops.deploy_testnet import big_blocks, deploy_contract, git_head, mark_incomplete, save
 from ops.leverage import ASSET_LEVERAGE_X100
 from spike.hlspike import common as c
 
@@ -93,17 +103,19 @@ SET_CODE = "setCode(bytes32,address,uint16)"
 CODE_OF = ["address", "uint16", "bool", "bool", "uint256"]
 ZERO = "0x" + "00" * 20
 
+# Each asset's perp index on the network selected now (ops/sim_network.py), read at each lookup.
+PLATFORM_ASSETS = sn.Assets(lambda: c.NETWORK)
+
 
 def asset_list(names: list[str]) -> list[tuple[str, int, int]]:
     """Each named asset's id and leverage cap, for setAsset. Refuses one without a cap."""
-    out = []
+    out, table = [], sn.sim(c.NETWORK)
     for name in names:
-        if name not in PLATFORM_ASSETS:
-            raise SystemExit(f"{name} is not a testnet platform asset ({', '.join(PLATFORM_ASSETS)})")
+        idx = table.index(name)
         cap = ASSET_LEVERAGE_X100.get(name)
         if not cap:
             raise SystemExit(f"{name} has no leverage cap in ops/leverage.py")
-        out.append((name, PLATFORM_ASSETS[name], cap))
+        out.append((name, idx, cap))
     return out
 
 
@@ -198,9 +210,29 @@ def locked_of(raw: dict) -> int:
     return largest * PAYOUT_BPS // 10_000 * LOCKED_PAYOUTS
 
 
+def keeper_nodes_of(args) -> dict | None:
+    """The keeper's nodes for the record: --keeper-nodes's file, checked as the host checks a record's; on testnet
+    without it, demo3's (read at --send). Mainnet has no default: its keeper needs a node of its own (audit M-1)."""
+    if not args.keeper_nodes:
+        if c.NETWORK.name == "mainnet":
+            raise SystemExit("--keeper-nodes is needed on mainnet: the keeper's own node, not the gateway's (audit M-1)")
+        return None
+    nodes = json.loads(pathlib.Path(args.keeper_nodes).read_text())
+    from ops.host_instances import keeper_nodes
+    keeper_nodes({"keeper_nodes": nodes})
+    return nodes
+
+
+def mainnet_plan_ok(raw: dict) -> None:
+    """On mainnet a plan written for testnet is refused: its terms would tell traders the wrong network."""
+    if c.NETWORK.name == "mainnet" and any("testnet" in str(raw.get(f, "")).lower() for f in ("terms_text", "about")):
+        raise SystemExit("this plan is written for testnet (its terms or about say so); mainnet takes a plan of its own")
+
+
 def deploy(args) -> int:
     assets = asset_list(args.assets.split(","))
-    out = ROOT / "deployments" / f"testnet-{args.label}.json"
+    out = deployments.record_path(args.label, c.NETWORK)
+    nodes = keeper_nodes_of(args)
     if out.exists():
         raise SystemExit(f"{out.relative_to(ROOT)} exists; pick another label")
     filler, checker = to_checksum_address(args.filler), to_checksum_address(args.checker)
@@ -211,27 +243,30 @@ def deploy(args) -> int:
         raise SystemExit("the filler, the checker and the closer are real keys, none of them 0x0")
     if len({filler, checker, closer}) != 3:
         raise SystemExit("the filler, the checker and the closer are three keys")
-    print(f"deploy_sim deploy: label {args.label}, USDC {c.TESTNET_USDC_ERC20} (Circle's, EIP-3009)")
+    print(f"deploy_sim deploy: {c.NETWORK.name} (chain {c.CHAIN_ID}), label {args.label}, USDC {c.USDC_ERC20} "
+          "(Circle's, EIP-3009)")
     print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPool (linked to both), TermsBook, "
           "SimPoolFactory(usdc, exam, pool, operator)  (big blocks on, then off)")
     print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
           f"setTermsBook, setAsset " + ", ".join(f"{n} ({i}) {cap / 100:g}x" for n, i, cap in assets))
-    print(f"  would write      deployments/testnet-{args.label}.json")
+    print(f"  would write      {out.relative_to(ROOT)}")
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
-    c.assert_testnet()
+    sn.confirm_send(args, f"deploy the simulated pool's contracts as {args.label!r} from the key {args.operator!r}", c)
+    sn.check_assets([n for n, _, _ in assets], c.NETWORK, c.info_post)
     op = c.account(args.operator)
     recipient = to_checksum_address(args.fee_recipient) if args.fee_recipient else op.address
     if op.address in (filler, checker, closer):
         raise SystemExit("the operator is neither the filler, the checker nor the closer: it opens our pools, and a "
                          "pool's creator is none of them")
-    demo3 = deployments.load("v3-demo3")
-    record: dict = {"chain_id": c.CHAIN_ID, "label": args.label, "commit": git_head(), "status": "deploying",
-                    "deployer": op.address, "operator": op.address, "usdc": c.TESTNET_USDC_ERC20,
+    if nodes is None:
+        nodes = deployments.load("v3-demo3")["keeper_nodes"]
+    record: dict = {"chain_id": c.CHAIN_ID, "network": c.NETWORK.name, "label": args.label, "commit": git_head(), "status": "deploying",
+                    "deployer": op.address, "operator": op.address, "usdc": c.USDC_ERC20,
                     "filler": filler, "checker": checker, "closer": closer, "fee_recipient": recipient,
                     "platform_assets": {n: i for n, i, _ in assets}, "asset_caps_x100": {n: cap for n, _, cap in assets},
-                    "keeper_nodes": demo3["keeper_nodes"], "tx": {}}
+                    "keeper_nodes": nodes, "tx": {}}
     big_blocks(op, True)
     try:
         try:
@@ -245,7 +280,7 @@ def deploy(args) -> int:
             book, _ = deploy_contract(op, out, record, "TermsBook", "TermsBook", [], [])
             factory, _ = deploy_contract(op, out, record, "SimPoolFactory", "SimPoolFactory",
                                          ["address", "address", "address", "address"],
-                                         [c.TESTNET_USDC_ERC20, exam, pool, op.address])
+                                         [c.USDC_ERC20, exam, pool, op.address])
         finally:
             big_blocks(op, False)
         record["status"] = "configuring"
@@ -271,6 +306,7 @@ def deploy(args) -> int:
 def pool(args) -> int:
     record = deployments.load(args.deployment)
     raw = json.loads(pathlib.Path(args.plan).read_text())
+    mainnet_plan_ok(raw)
     text = raw["terms_text"]
     terms_hash = keccak(text=text)
     plan = plan_of(raw, terms_hash)
@@ -295,7 +331,7 @@ def pool(args) -> int:
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
-    c.assert_testnet()
+    sn.confirm_send(args, f"open a pool on {factory} from the key {args.creator!r}: locks {locked / 1e6:g} USDC, pays 1 HYPE", c)
     creator = c.account(args.creator)
     c.transact(creator, record["TermsBook"], "publish(string)", ["string"], [text])
     c.transact(creator, record["usdc"], "approve(address,uint256)", ["address", "uint256"], [factory, locked])
@@ -598,7 +634,7 @@ def send_or_say(args, pool_: str, sig: str, types: list | None = None, values: l
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
-    c.assert_testnet()
+    sn.confirm_send(args, f"{sig} on {pool_} from the key {args.key!r}", c)
     rcpt = c.transact(c.account(args.key), pool_, sig, types or [], values or [])
     print(f"deploy_sim: sent, tx {rcpt['transactionHash']}")
     return 0
@@ -645,7 +681,7 @@ def codes(args) -> int:
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
-    c.assert_testnet()
+    sn.confirm_send(args, f"set {len(codes_)} codes on {pool_} from the key {args.creator!r}", c)
     send_codes(c.account(args.creator), pool_, codes_)
     return 0
 
@@ -657,7 +693,7 @@ def buy(args) -> int:
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
-    c.assert_testnet()
+    sn.confirm_send(args, f"buy line {args.line} of {pool_} from the key {args.trader!r}", c)
     trader = c.account(args.trader)
     price = c.call_view(pool_, "menu()", [], [], ["(uint64,uint64)[]"])[0][args.line][1]
     c.transact(trader, record["usdc"], "approve(address,uint256)", ["address", "uint256"], [pool_, price])
@@ -682,6 +718,7 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--closer", required=True, help="the platform's key that alone may close a pool before its term")
     d.add_argument("--fee-recipient")
     d.add_argument("--assets", default="BTC,ETH,SOL")
+    d.add_argument("--keeper-nodes", help="a JSON file of the keeper's nodes, as a record's keeper_nodes; needed on mainnet")
     d.add_argument("--send", action="store_true")
     q = sub.add_parser("pool")
     q.add_argument("--deployment", required=True)
@@ -730,7 +767,11 @@ def main(argv: list[str] | None = None) -> int:
         if name == "request":
             z.add_argument("--amount", required=True, help='USDC, as "250" or "84.575"')
         z.add_argument("--send", action="store_true")
+    for each in sub.choices.values():
+        sn.add_args(each)
     args = p.parse_args(argv)
+    if sn.selected(args, c.NETWORK).name == "mainnet" and args.cmd != "deploy":
+        c.assert_network()  # what a mainnet command reads is the chain's it names, sent or not (review of #300)
     return {"deploy": deploy, "pool": pool, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
             "approve": approve}[args.cmd](args)

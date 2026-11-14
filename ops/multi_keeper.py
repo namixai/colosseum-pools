@@ -62,7 +62,8 @@ Every call is first tried with eth_estimateGas from the keeper's own address and
 contract would take it; a refusal is logged by its error's name (ops/contract_errors.py). The rules
 live in the contracts and the keeper keeps no second copy of them, only the judgement of when a
 call is worth its gas. It holds no trader's key and makes no call only a trader or the owner may:
-`--wallet` is any funded testnet key, and the plan's noter for noteTrade. Testnet only.
+`--wallet` is any funded testnet key, and the plan's noter for noteTrade. Testnet only; a simulated pool's
+record is handed to ops/sim_keeper.py with the same arguments, and on mainnet only that (ops/sim_network.py).
 """
 
 from __future__ import annotations
@@ -79,6 +80,7 @@ from eth_utils import keccak, to_checksum_address
 
 from ops import deployments
 from ops import keeper as core
+from ops import sim_network as sn
 from ops.contract_errors import refusal
 from ops.deploy_multi import PLAN_T, RULES_T
 from spike.hlspike import common as c
@@ -741,10 +743,14 @@ def main() -> int:
     p.add_argument("--dry-run", action="store_true", help="log what would be sent, send nothing")
     p.add_argument("--from", dest="sender", help="address the calls are tried from in a dry run")
     core.publisher_args(p)  # a seat's request for its key is answered by the same relay as the core keeper's
+    sn.add_args(p, service=True)  # handed on to ops/sim_keeper.py, which decides on mainnet; MultiPool is testnet's
     args = p.parse_args()
 
-    c.assert_testnet()
+    if sn.selected(args, c.NETWORK).name != "mainnet":
+        c.assert_testnet()
     record = deployments.load(args.deployment)
+    if "MultiPool" in record and c.NETWORK.name == "mainnet":
+        raise SystemExit("the MultiPool keeper is testnet only; on mainnet this unit serves a simulated pool's record")
     if "MultiPool" not in record and "SimPoolFactory" in record:
         # A simulated pool's record: its own keeper, so that the host's one unit serves either.
         from ops import sim_keeper
