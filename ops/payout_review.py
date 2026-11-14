@@ -60,6 +60,8 @@ PAYOUT_STOPPED = "0x" + keccak(text="PayoutStopped(uint256,address,uint64,uint8,
 PAYOUT_HELD = "0x" + keccak(text="PayoutHeld(uint256,address,uint64)").hex()
 STOP_LIFTED = "0x" + keccak(text="StopLifted(uint256,uint256,uint256,uint256)").hex()
 STOP_FINAL = "0x" + keccak(text="StopFinal(uint256,uint64,uint256)").hex()
+# `pay` writes this when a payout may be paid and the pool's daily limit has no room: it keeps its place, from `nextAt` on.
+PAYOUT_WAITS_LIMIT = "0x" + keccak(text="PayoutWaitsLimit(uint256,uint64)").hex()
 PAYOUT_TRAIL = {PAYOUT_DUE: "PayoutDue", PAYOUT_APPROVED: "PayoutApproved", PAYOUT_STOPPED: "PayoutStopped",
                 STOP_LIFTED: "StopLifted", STOP_FINAL: "StopFinal", PAYOUT_PAID: "PayoutPaid", PAYOUT_HELD: "PayoutHeld"}
 TRANSFER = chk.TRANSFER
@@ -118,6 +120,92 @@ def longest_new_wallet_run(sales: list[dict], code: str) -> int:
 
 def payout_of(size: int) -> int:
     return size * PAYOUT_BPS // BPS
+
+
+def settle_order(pending: list[tuple[int, int]], slots: list[int], day: int, now: int) -> dict[int, int]:
+    """When each waiting payout is settled, as `SimPool.pay` settles them, if a `pay` call is sent as soon as it can
+    settle one: `pending` is (id, the time it is ready: its `dueAt` once approved, its ceiling if not) for every payout
+    still due; `slots` are the times of the pool's last settlements, oldest first, one for each of the day's places
+    (0: never used). A call looks at the payouts in the order of their ids, passes over one that is not ready, and stops
+    at the first ready one the limit holds (it keeps its place, and so does every payout after it): a place is free when
+    its settlement is a `day` old, and a settlement takes the oldest place. The pool's money is not counted (`PayoutQueued`
+    is a different wait), nor a payout stopped in the meantime."""
+    slots = list(slots)
+    todo = sorted(pending)
+    out: dict[int, int] = {}
+    t = now
+    while todo:
+        ready = [(i, r) for i, r in todo if r <= t]
+        if not ready:
+            t = min(r for _, r in todo)
+            continue
+        i = ready[0][0]
+        free = slots[0] + day if slots[0] else 0
+        if free <= t:
+            out[i] = t
+            slots = slots[1:] + [t]
+            todo = [x for x in todo if x[0] != i]
+        else:
+            # Held by the limit: nothing settles until the place frees (a payout getting ready meanwhile is held too, and
+            # then goes in the order of its id).
+            t = free
+    return out
+
+
+def payout_cap(chain: dict, pool: str, pay: dict, approvals: bool | None, delay: int | None, hard: int | None) -> dict | None:
+    """Where the pool's daily limit on payouts leaves one payout, from what the contract answers (`PAYOUTS_PER_DAY()` and
+    `PAYOUT_DAY()` of the factory, `payRoom()` and `nextPayAt()` of the pool) and the settlements it wrote (`PayoutPaid` and
+    `PayoutHeld`, each a place used for a day), never a constant here: the limit is whatever was read. None when the chain
+    was read without the cap's reads (an older chain: nothing is said); otherwise a document with a `status`:
+
+      none         the factory has no daily limit (its `PAYOUTS_PER_DAY()` reverts): the payout is paid when it is due;
+      unread       the limit, the pool's room, the payout's approval or its time was not read, or the events and the
+                   pool's answers do not agree on the day's places: no time is said;
+      not-waiting  the payout is paid, stopped, held or refused: no limit applies to it any more;
+      free         ready and a place is free: the next `pay` settles it (the pool's money allowing);
+      waits-limit  ready, and every place is used: it waits, in its place, for `settleAt`;
+      not-ready    waiting for its approval or its 72 hours: `readyAt`, and the `settleAt` the limit allows after it.
+
+    `settleAt` is when `settle_order` puts it, an estimate that stands while the payouts ahead of it stay as they are;
+    `ahead` is how many payouts settle before it. `recorded` is the latest `PayoutWaitsLimit` written for it."""
+    cap = (chain.get("payCap") or {}).get(pool, "absent")
+    if cap == "absent":
+        return None
+    if cap is False:
+        return {"status": "none", "limit": None, "dayS": None, "room": None, "nextAt": None, "readyAt": None,
+                "settleAt": None, "ahead": None, "recorded": None, "problem": None}
+    base = {"limit": cap["limit"], "dayS": cap["day"], "room": cap["room"], "nextAt": cap["nextAt"], "readyAt": None,
+            "settleAt": None, "ahead": None, "recorded": (chain.get("waitsLimit") or {}).get((pool, pay["id"])), "problem": None}
+
+    def unread(why: str) -> dict:
+        return {**base, "status": "unread", "problem": why}
+    if pay["state"] != "Due":
+        return {**base, "status": "not-waiting"}
+    if approvals is not True or delay is None or hard is None:
+        return unread("whether the pool takes approvals, or the factory's delay and ceiling, was not read")
+    now, limit, day = chain["now"], cap["limit"], cap["day"]
+    done = (chain.get("settled") or {}).get(pool)
+    if done is None:
+        return unread("the pool's settlements were not read")
+    slots = ([0] * limit + done)[-limit:]
+    room = sum(1 for t in slots if t == 0 or now >= t + day)
+    next_at = slots[0] + day if slots[0] else 0
+    if (room, next_at) != (cap["room"], cap["nextAt"]):
+        return unread(f"the settlements in the events give room {room} and next {next_at}, the pool says room "
+                      f"{cap['room']} and next {cap['nextAt']}")
+    pending = []
+    for x in chain["payouts"]:
+        if x["pool"] == pool and x["state"] == "Due":
+            approved = x.get("approved", False)
+            if approved is None:
+                return unread(f"whether payout {x['id']} is approved was not read")
+            pending.append((x["id"], x["dueAt"] if approved else x["dueAt"] - delay + hard))
+    ready = next(r for i, r in pending if i == pay["id"])
+    when = settle_order(pending, slots, day, now)
+    mine = when[pay["id"]]
+    ahead = sum(1 for i, t in when.items() if i != pay["id"] and (t, i) < (mine, pay["id"]))
+    status = "not-ready" if ready > now else "waits-limit" if mine > now else "free"
+    return {**base, "status": status, "readyAt": ready, "settleAt": mine, "ahead": ahead}
 
 
 def payout_trail(names: list[str]) -> dict:
@@ -1158,6 +1246,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
         unread.append("whether the pool takes approvals")
     if unread:
         found.append(("unread", "not read: " + ", ".join(unread)))
+    # The daily limit on payouts: where it leaves this payout. Said beside the verdict, never a reason in it: a payout the
+    # limit holds is waiting its turn, not suspicious.
+    out["dailyCap"] = payout_cap(chain, pool, {**pay, "id": pid}, approvals, delay, hard)
     out["verdict"] = "suspicious" if found else "clean"
     out["reasons"] = [t for _, t in found]
     out["kinds"] = [k for k, _ in found]
@@ -1252,8 +1343,9 @@ def card(r: dict, chain: dict) -> dict:
                                      "args": tx["args"], "data": tx["data"], "note": tx.get("note")},
         "stopDraft": r["stopDraft"],
         "batchApproval": bool(r["passRates"]["batch"]) if r["passRates"] else True,
-        # The contract's daily cap on payouts (2 a pool, the CFO's): when it lands, the day a payout may move to.
-        "dailyCap": None,
+        # The contract's daily limit on payouts, as read (`payout_cap`): its number, the pool's room, and the time the payout
+        # may be settled from; null for a chain read without it.
+        "dailyCap": r["dailyCap"],
         "readAt": {"block": chain["latest"], "time": chain["now"]},
     }
 
@@ -1310,6 +1402,13 @@ def summary(r: dict) -> str:
     tm = r["timing"]
     lines.append(f"  timing: best block {tm['filler']['atBest']} of {tm['filler']['fills']} (chance {tm['filler']['byChance']}), "
                  f"oracle the trader's way next block {tm['lead']['ahead']} of {tm['lead']['fills']}")
+    cap = r["dailyCap"]
+    if cap and cap["status"] not in ("none", "not-waiting"):
+        lines.append(f"  daily limit ({cap['limit']} a day, room {cap['room']}): " + (
+            f"not read: {cap['problem']}" if cap["status"] == "unread" else
+            "a place is free: settled by the next pay" if cap["status"] == "free" else
+            f"{'ready, ' if cap['status'] == 'waits-limit' else 'ready from ' + str(cap['readyAt']) + ', '}settled from {cap['settleAt']} "
+            f"({cap['ahead']} ahead of it)"))
     lt = r["late"]
     lines.append(f"  late: median {lt['trader']['median']} of {lt['trader']['n']} fills; others median "
                  f"{lt['others']['median']}, p90 {lt['others']['p90']} of {lt['others']['n']}")
@@ -1502,6 +1601,28 @@ def has_approvals(factory: str, pool: str) -> bool | None:
     return True if answers(pool, "approver()", ["address"]) is True else None
 
 
+def read_pay_cap(factory: str, pool: str) -> dict | bool | None:
+    """The pool's daily limit on payouts as the contract answers it: the number of payouts (`PAYOUTS_PER_DAY()`) and the
+    day (`PAYOUT_DAY()`) of the factory, and the pool's `payRoom()` and `nextPayAt()`. False where the factory has no such
+    limit (its call reverts); None where a read failed for any other reason (the node, the rate), never taken for "no".
+    This is the one place the limit is read: it is what the contract says, not a number kept here."""
+    def read(to: str, sig: str, kind: str):
+        try:
+            return int(c.call_view(to, sig, [], [], [kind])[0])
+        except Exception as exc:
+            if "revert" in str(exc).lower():
+                return False
+            core.log("not_read", address=to, call=sig, error=str(exc)[:120])
+            return None
+    limit = read(factory, "PAYOUTS_PER_DAY()", "uint8")
+    if limit is False or limit is None:
+        return limit
+    got = [read(factory, "PAYOUT_DAY()", "uint32"), read(pool, "payRoom()", "uint256"), read(pool, "nextPayAt()", "uint64")]
+    if any(g is False or g is None for g in got):
+        return None  # a factory that has the limit and a pool that does not answer it is not read, not "no limit"
+    return {"limit": limit, "day": got[0], "room": got[1], "nextAt": got[2]}
+
+
 def payout_times(factory: str) -> dict:
     """The factory's own times in seconds: `delay`, from a payout's claim to its `dueAt` (`PAYOUT_DELAY()`), and
     `hard`, the ceiling from its claim (`PAYOUT_HARD()`). None where one was not read or the factory has none: a
@@ -1551,7 +1672,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     latest = int(c.rpc("eth_blockNumber"), 16)
     now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
     pools = [to_checksum_address(p) for p in core.view(factory, "pools()", "address[]")]
-    events = logs(pools, [[sk.EXAM_SOLD, sk.FUNDED, *PAYOUT_TRAIL]], start, latest) if pools else []
+    events = logs(pools, [[sk.EXAM_SOLD, sk.FUNDED, *PAYOUT_TRAIL, PAYOUT_WAITS_LIMIT]], start, latest) if pools else []
     sales = [sale_of(l) for l in events if l["topics"][0] == sk.EXAM_SOLD]
     funded = [funded_of(l) for l in events if l["topics"][0] == sk.FUNDED]
     payouts = [due_of(l) for l in events if l["topics"][0] == PAYOUT_DUE]
@@ -1588,6 +1709,20 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
         if block not in times:
             times[block] = int(c.rpc("eth_getBlockByNumber", [hex(block), False])["timestamp"], 16)
         return times[block]
+
+    # The daily limit: what the contract answers, the times of the pool's settlements (a payout paid or set aside uses a
+    # place for a day) and the waits it wrote, for `payout_cap`.
+    pay_cap = {pool: read_pay_cap(factory, pool) for pool in pools}
+    in_order = sorted(events, key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16)))
+    settled: dict[str, list[int]] = {pool: [] for pool in pools}
+    waits_limit: dict[tuple[str, int], dict] = {}
+    for l in in_order:
+        pool_ = to_checksum_address(l["address"])
+        if l["topics"][0] in (PAYOUT_PAID, PAYOUT_HELD):
+            settled[pool_].append(time_of(int(l["blockNumber"], 16)))
+        elif l["topics"][0] == PAYOUT_WAITS_LIMIT:
+            waits_limit[(pool_, int(l["topics"][1], 16))] = {
+                "nextAt": int(abi_decode(["uint64"], bytes.fromhex(l["data"][2:]))[0]), "time": time_of(int(l["blockNumber"], 16))}
 
     # Every account's own events, in one pass: the fills, and what the recount and the mirror need.
     exam_events: dict[str, list[dict]] = {a: [] for a in accounts}
@@ -1660,7 +1795,9 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
             "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {},
             "fillWindow": fill_window, "dailyLossBps": daily_bps, "drawdownKind": drawdown_kind,
-            "maxDrawdownBps": drawdown_bps, "times": payout_times(factory)}
+            "maxDrawdownBps": drawdown_bps, "times": payout_times(factory),
+            "payCap": {pool: cap for pool, cap in pay_cap.items() if cap is not None}, "settled": settled,
+            "waitsLimit": waits_limit}
 
 
 def main(argv: list[str] | None = None) -> int:

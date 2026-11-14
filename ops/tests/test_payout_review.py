@@ -1297,6 +1297,7 @@ class ReadingTheChain(unittest.TestCase):
             log(POOL, [sk.FUNDED, word(s1), word(e1), word(t1)], b"", 20, tx(2)),
             log(POOL, [r.PAYOUT_DUE, "0x" + "00" * 31 + "07", word(s1), word(t1)],
                 encode(["uint64", "uint64"], [800, 5_000]), 30, tx(3)),
+            log(POOL, [r.PAYOUT_WAITS_LIMIT, "0x" + "00" * 31 + "07"], encode(["uint64"], [9_000]), 31, tx(17)),
         ]
         filled = lambda buy, px: encode(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"], [buy, 100, px, 1, 4, 1])
         exam_logs = [
@@ -1341,6 +1342,7 @@ class ReadingTheChain(unittest.TestCase):
                     "menu()": ([(SIZE // 2, 50), (SIZE, 100)],),
                     "terms()": ((capital, [800], 0, 0, 0, 1_000, 1, 10),),
                     "rules()": ((300, 600, 1_000, [3], [1_000]),), "drawdownKind()": (1,),
+                    "PAYOUTS_PER_DAY()": (3,), "PAYOUT_DAY()": (86_400,), "payRoom()": (3,), "nextPayAt()": (0,),
                     "approver()": (addr(0xAB),), "PAYOUT_HARD()": (8 * 86_400,), "PAYOUT_DELAY()": (72 * 3_600,)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
@@ -1362,6 +1364,9 @@ class ReadingTheChain(unittest.TestCase):
                          "each fill's and order's block, their neighbours, and every block of each order's window of 10")
         self.assertEqual(got["fillWindow"], {s1: 10, e1: 10})
         self.assertEqual(got["dailyLossBps"], {s1: 300, e1: 300}, "the day's allowed loss, the first of each account's rules")
+        self.assertEqual(got["payCap"], {POOL: {"limit": 3, "day": 86_400, "room": 3, "nextAt": 0}},
+                         "the limit is what the factory answers (here 3), not a number of this file's")
+        self.assertEqual((got["settled"], got["waitsLimit"]), ({POOL: []}, {(POOL, 7): {"nextAt": 9_000, "time": 3_100}}))
         self.assertEqual((got["drawdownKind"], got["maxDrawdownBps"]), ({s1: 1, e1: 1}, {s1: 600, e1: 600}),
                          "how the line is drawn and the drawdown allowed: the second of each account's rules")
         self.assertEqual({a for a, _ in asked}, {3})
@@ -1879,9 +1884,10 @@ class AWaitingPayoutByItsEvents(unittest.TestCase):
                            (r.PAYOUT_PAID, "PayoutPaid(uint256,address,uint64,uint256,uint256)")):
             self.assertEqual(topic, "0x" + keccak(text=sig).hex())
         # `liftStop` leaves `approved` alone and `approvePayouts` asks a payout waiting and not approved: the trail's rules.
-        _, lift = AgainstTheContracts.function(pool, "liftStop")
+        # (the pool's `liftStop` runs its checks in the library `SimPoolStops`, by DELEGATECALL)
+        _, lift = AgainstTheContracts.function(_source("src/sim/SimPoolStops.sol"), "lift")
         self.assertNotIn("approved", lift)
-        self.assertIn("p.state = PayoutState.Due;", lift)
+        self.assertIn("p.state = SimPool.PayoutState.Due;", lift)
         self.assertEqual(sorted(r.PAYOUT_TRAIL.values()), sorted(["PayoutDue", "PayoutApproved", "PayoutStopped", "StopLifted", "StopFinal",
                                                                   "PayoutPaid", "PayoutHeld"]))
 
@@ -1982,3 +1988,196 @@ class AHeldPayoutKeepsTheBatchRule(unittest.TestCase):
         del ch.d["exam_events"]
         got = r.review(ch.d, POOL, 0)
         self.assertEqual((got["passRates"], r.card(got, ch.d)["batchApproval"]), (None, True))
+
+
+# ── the daily limit on payouts (src/sim/SimPool.sol, `pay`; the number is read, never kept here) ───────────────────
+
+class TheDailyLimit(unittest.TestCase):
+    D = 86_400
+    T = 1_000_000
+
+    def test_a_wave_of_payouts_goes_out_as_the_pool_settles_them(self):
+        T, D = self.T, self.D
+        # docs/SIM-POOL.md: five claimed together and approved go out two at their 72 hours, two a day later, one the next.
+        five = [(i, T) for i in range(5)]
+        self.assertEqual(r.settle_order(five, [0, 0], D, T), {0: T, 1: T, 2: T + D, 3: T + D, 4: T + 2 * D})
+        # Not approved: the third and fourth 8 days after their claim, the fifth 9 (the ceiling is 7 days from the claim).
+        claim = T - 7 * D
+        self.assertEqual(r.settle_order([(i, claim + 7 * D) for i in range(5)], [0, 0], D, T),
+                         {0: T, 1: T, 2: T + D, 3: T + D, 4: T + 2 * D})
+        # The limit is the contract's number: with three places the same five go out three and two.
+        self.assertEqual(r.settle_order(five, [0, 0, 0], D, T), {0: T, 1: T, 2: T, 3: T + D, 4: T + D})
+        self.assertEqual(r.settle_order(five[:3], [0], D, T), {0: T, 1: T + D, 2: T + 2 * D}, "and with one, one a day")
+
+    def test_the_places_used_in_the_last_day_hold_a_payout_until_the_oldest_is_a_day_old(self):
+        T, D = self.T, self.D
+        self.assertEqual(r.settle_order([(0, T)], [T - 3_600, T - 1_800], D, T), {0: T - 3_600 + D}, "no 24 hours see three")
+        self.assertEqual(r.settle_order([(0, T), (1, T)], [T - 3_600, T - 1_800], D, T), {0: T - 3_600 + D, 1: T - 1_800 + D})
+        self.assertEqual(r.settle_order([(0, T)], [T - D, T - 1_800], D, T), {0: T}, "a settlement a day old is a free place")
+        self.assertEqual(r.settle_order([(0, T)], [T - D + 1, T - 1_800], D, T), {0: T + 1})
+
+    def test_a_payout_not_ready_is_passed_over_and_one_that_gets_ready_before_the_limit_frees_goes_first(self):
+        T, D = self.T, self.D
+        self.assertEqual(r.settle_order([(0, T + 1_000), (1, T)], [0, 0], D, T), {1: T, 0: T + 1_000}, "passed over, not waited for")
+        # Both places used, the first free at T + 300: payout 0 gets ready at T + 100, before it, and goes first.
+        self.assertEqual(r.settle_order([(0, T + 100), (1, T)], [T - D + 300, T - D + 400], D, T), {0: T + 300, 1: T + 400})
+        # A payout whose time never comes before the limit's does not wait for it: the later one that is ready is held by the limit.
+        self.assertEqual(r.settle_order([(0, T + 5 * D), (1, T)], [T - D + 300, T - D + 400], D, T), {1: T + 300, 0: T + 5 * D})
+        self.assertEqual(r.settle_order([], [0, 0], D, T), {})
+
+    def world(self, *, settled, room=None, next_at=None, limit=2, approved=False, now=None, state="Due", pids=1):
+        ch, t1, s1 = honest_world()
+        pay = ch.d["payouts"][0]
+        if now is not None:
+            ch.d["now"] = now
+            pay["dueAt"] = now - 3_600 if approved else pay["dueAt"]
+        pay["state"], pay["approved"] = state, approved
+        for pid in range(1, pids):
+            ch.payout(t1, s1, pid=pid)
+            ch.d["payouts"][-1].update(approved=approved, state=state, dueAt=pay["dueAt"])
+        slots = ([0] * limit + settled)[-limit:]
+        now = ch.d["now"]
+        room = sum(1 for t in slots if now >= t + self.D) if room is None else room
+        next_at = (slots[0] + self.D if slots[0] else 0) if next_at is None else next_at
+        ch.d["payCap"] = {POOL: {"limit": limit, "day": self.D, "room": room, "nextAt": next_at}}
+        ch.d["settled"] = {POOL: settled}
+        return ch
+
+    def cap(self, ch, pid=0):
+        return r.review(ch.d, POOL, pid)["dailyCap"]
+
+    def test_a_chain_read_without_the_limit_says_nothing_of_it(self):
+        ch, _, _ = honest_world()
+        self.assertIsNone(r.review(ch.d, POOL, 0)["dailyCap"])
+        self.assertIsNone(r.card(r.review(ch.d, POOL, 0), ch.d)["dailyCap"])
+        self.assertNotIn("daily limit", r.summary(r.review(ch.d, POOL, 0)))
+
+    def test_a_factory_without_the_limit_has_none_for_a_payout_to_wait_for(self):
+        ch, _, _ = honest_world()
+        ch.d["payCap"] = {POOL: False}
+        got = self.cap(ch)
+        self.assertEqual((got["status"], got["limit"], got["settleAt"]), ("none", None, None))
+        self.assertNotIn("daily limit", r.summary(r.review(ch.d, POOL, 0)))
+
+    def test_a_payout_waiting_for_its_approval_is_not_ready_and_the_limit_is_counted_after_its_ceiling(self):
+        ch = self.world(settled=[])
+        got = self.cap(ch)
+        due = ch.d["payouts"][0]["dueAt"]
+        ceiling = due - 72 * 3_600 + 7 * 86_400
+        self.assertEqual((got["status"], got["readyAt"], got["settleAt"], got["ahead"], got["limit"], got["room"]),
+                         ("not-ready", ceiling, ceiling, 0, 2, 2))
+        ch = self.world(settled=[], approved=True, now=2_000_000)  # approved and due an hour ago
+        got = self.cap(ch)
+        self.assertEqual((got["status"], got["settleAt"], got["readyAt"]), ("free", ch.d["now"], ch.d["payouts"][0]["dueAt"]))
+        self.assertIn("a place is free", r.summary(r.review(ch.d, POOL, 0)))
+
+    def test_a_ready_payout_with_the_days_places_used_waits_for_the_oldest_to_be_a_day_old(self):
+        now = 2_000_000
+        ch = self.world(settled=[now - 3_600, now - 1_800], approved=True, now=now)
+        got = self.cap(ch)
+        self.assertEqual((got["status"], got["settleAt"], got["nextAt"], got["room"], got["ahead"]),
+                         ("waits-limit", now - 3_600 + self.D, now - 3_600 + self.D, 0, 0))
+        text = r.summary(r.review(ch.d, POOL, 0))
+        self.assertIn("daily limit (2 a day, room 0): ready, settled from", text)
+        k = r.card(r.review(ch.d, POOL, 0), ch.d)["dailyCap"]
+        self.assertEqual((k["status"], k["limit"], k["dayS"]), ("waits-limit", 2, self.D))
+        self.assertEqual(r.review(ch.d, POOL, 0)["verdict"], "clean", "a payout the limit holds is not suspicious")
+
+    def test_the_payouts_ahead_take_the_places_first(self):
+        ch = self.world(settled=[], approved=True, now=2_000_000, pids=3)
+        got = [self.cap(ch, pid) for pid in range(3)]
+        self.assertEqual([g["status"] for g in got], ["free", "free", "waits-limit"])
+        self.assertEqual([g["ahead"] for g in got], [0, 1, 2])
+        self.assertEqual(got[2]["settleAt"], ch.d["now"] + self.D)
+
+    def test_the_limit_is_what_the_contract_says_not_two(self):
+        now = 2_000_000
+        three = self.world(settled=[now - 5_000, now - 4_000, now - 3_000], limit=3, approved=True, now=now)
+        got = self.cap(three)
+        self.assertEqual((got["limit"], got["status"], got["settleAt"]), (3, "waits-limit", now - 5_000 + self.D))
+        # The same three settlements under a limit of 4 leave a place; under 2 the last two are the ones counted.
+        four = self.world(settled=[now - 5_000, now - 4_000, now - 3_000], limit=4, approved=True, now=now)
+        self.assertEqual((self.cap(four)["limit"], self.cap(four)["status"]), (4, "free"))
+        two = self.world(settled=[now - 5_000, now - 4_000, now - 3_000], limit=2, approved=True, now=now)
+        self.assertEqual(self.cap(two)["settleAt"], now - 4_000 + self.D)
+        src = (ROOT / "ops/payout_review.py").read_text()
+        self.assertNotRegex(src, r"(?m)^(PAYOUTS_PER_DAY|PAYOUTS_A_DAY|DAILY_CAP|PAY_PER_DAY)\b", "no number of payouts a day kept here")
+
+    def test_what_the_events_and_the_pool_do_not_agree_on_is_not_given_a_time(self):
+        now = 2_000_000
+        ch = self.world(settled=[now - 3_600, now - 1_800], approved=True, now=now, room=2)  # the pool says room, the events say none
+        got = self.cap(ch)
+        self.assertEqual((got["status"], got["settleAt"], got["readyAt"]), ("unread", None, None))
+        self.assertIn("give room 0", got["problem"])
+        self.assertIn("not read:", r.summary(r.review(ch.d, POOL, 0)))
+        ch = self.world(settled=[now - 3_600, now - 1_800], approved=True, now=now, next_at=7)
+        self.assertEqual(self.cap(ch)["status"], "unread")
+        ch = self.world(settled=[], approved=True, now=now)
+        del ch.d["settled"]
+        self.assertIn("settlements were not read", self.cap(ch)["problem"])
+        ch = self.world(settled=[], approved=None, now=now)
+        self.assertEqual(self.cap(ch)["status"], "unread", "whether it is approved was not read")
+        ch = self.world(settled=[], approved=True, now=now)
+        ch.d["payouts"].append({**ch.d["payouts"][0], "id": 5, "approved": None})
+        self.assertIn("payout 5 is approved", self.cap(ch)["problem"])
+        ch = self.world(settled=[], approved=True, now=now)
+        ch.d["books"][POOL]["approvals"] = None
+        self.assertEqual(self.cap(ch)["status"], "unread")
+        ch = self.world(settled=[], approved=True, now=now)
+        ch.d["times"] = {"delay": None, "hard": None}
+        self.assertEqual(self.cap(ch)["status"], "unread")
+
+    def test_a_payout_not_waiting_has_no_limit_to_wait_for(self):
+        ch = self.world(settled=[], state="Paid", approved=True)
+        self.assertEqual(self.cap(ch)["status"], "not-waiting")
+        self.assertNotIn("daily limit", r.summary(r.review(ch.d, POOL, 0)))
+
+    def test_the_latest_wait_the_pool_wrote_is_kept_beside_it(self):
+        now = 2_000_000
+        ch = self.world(settled=[now - 3_600, now - 1_800], approved=True, now=now)
+        ch.d["waitsLimit"] = {(POOL, 0): {"nextAt": now - 3_600 + self.D, "time": now - 10}}
+        self.assertEqual(self.cap(ch)["recorded"], {"nextAt": now - 3_600 + self.D, "time": now - 10})
+        self.assertIsNone(self.cap(self.world(settled=[]))["recorded"])
+
+    def test_the_limits_reads_are_the_contracts_by_their_source(self):
+        factory, pool = (ROOT / "src/sim/SimPoolFactory.sol").read_text(), (ROOT / "src/sim/SimPool.sol").read_text()
+        self.assertIn("uint8 public constant PAYOUTS_PER_DAY = uint8(PAYOUTS_A_DAY);", factory)
+        self.assertIn("uint32 public constant PAYOUT_DAY = 24 hours;", factory)
+        self.assertIn("function payRoom() external view returns (uint256 room) {", pool)
+        self.assertIn("function nextPayAt() external view returns (uint64) {", pool)
+        self.assertIn("event PayoutWaitsLimit(uint256 indexed id, uint64 nextAt);", pool)
+        self.assertEqual(r.PAYOUT_WAITS_LIMIT, "0x" + keccak(text="PayoutWaitsLimit(uint256,uint64)").hex())
+        # `pay`: a place is free when its settlement is a day old; the check comes after the approval and before the money;
+        # a payout it holds keeps its place, and so does every one after it; a settlement, paid or set aside, takes the oldest place.
+        _, body = AgainstTheContracts.function(pool, "pay")
+        order = ["if (block.timestamp < p.dueAt) break;", "if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {",
+                 "uint256 freeAt = uint256(last[0]) + day;", "emit PayoutWaitsLimit(i, uint64(freeAt));", "emit PayoutQueued(i, bal);",
+                 "last[PAYOUTS_A_DAY - 1] = uint64(block.timestamp);", "if (_send(p.trader, p.amount)) {"]
+        self.assertEqual(sorted(order, key=body.index), order)
+        self.assertIn("if (block.timestamp < freeAt) {", body)
+        self.assertIn("last[k] = last[k + 1];", body)
+        _, room = AgainstTheContracts.function(pool, "payRoom")
+        self.assertIn("if (block.timestamp >= uint256(_settledAt[k]) + day) room += 1;", room)
+        _, nxt = AgainstTheContracts.function(pool, "nextPayAt")
+        self.assertIn("return oldest == 0 ? 0 : oldest + factory.PAYOUT_DAY();", nxt)
+
+    def test_the_limit_and_the_pool_are_read_as_the_chain_answers(self):
+        def view(answers):
+            def call_view(to, sig, types, args, out):
+                got = answers[sig]
+                if isinstance(got, Exception):
+                    raise got
+                return (got,)
+            return call_view
+        ok = {"PAYOUTS_PER_DAY()": 2, "PAYOUT_DAY()": 86_400, "payRoom()": 1, "nextPayAt()": 5}
+        with mock.patch.object(r.c, "call_view", side_effect=view(ok)):
+            self.assertEqual(r.read_pay_cap(addr(0xFA), POOL), {"limit": 2, "day": 86_400, "room": 1, "nextAt": 5})
+        revert = Exception("execution reverted")
+        with mock.patch.object(r.c, "call_view", side_effect=view({**ok, "PAYOUTS_PER_DAY()": revert})):
+            self.assertIs(r.read_pay_cap(addr(0xFA), POOL), False, "a factory without the limit")
+        busy = Exception("429 Too Many Requests")
+        for sig in ok:
+            with mock.patch.object(r.c, "call_view", side_effect=view({**ok, sig: busy})):
+                self.assertIsNone(r.read_pay_cap(addr(0xFA), POOL), f"{sig} not read: not taken for no limit")
+        with mock.patch.object(r.c, "call_view", side_effect=view({**ok, "payRoom()": revert})):
+            self.assertIsNone(r.read_pay_cap(addr(0xFA), POOL), "a factory with the limit and a pool that has no room: not read")

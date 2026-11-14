@@ -408,6 +408,17 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   A payout whose result did not count up is held back from approval whatever the pool's rate says of approving
   in a batch, and its card keeps that rate (`batchApproval`).
 
+  The pool's daily limit on payouts is read, never kept in the script: the factory's `PAYOUTS_PER_DAY()` and
+  `PAYOUT_DAY()`, the pool's `payRoom()` and `nextPayAt()`, and the settlements the pool wrote (`PayoutPaid`,
+  `PayoutHeld`: each uses a place for a day). For a payout still waiting the review says (`dailyCap`, beside the
+  verdict and never a reason in it) whether a place is free (`free`), it is ready and every place is used
+  (`waits-limit`, with `settleAt`, when `pay` settles it), or it is not ready (`not-ready`, its approval or its 72
+  hours first). `settleAt` and `ahead` come from the order `pay` takes: ids in order, a payout not ready passed
+  over, the first ready one the limit holds stopping the call, the oldest place taking each settlement; the pool's
+  money is not counted. Where the events and the pool's `payRoom()`/`nextPayAt()` do not agree, or any of the
+  reads or the payout's approval is missing, the status is `unread` and no time is said. A factory with no such
+  limit gives `none`; a chain read without it, null.
+
   Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
   72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. Both spans are
   read from the factory (`PAYOUT_DELAY()`, `PAYOUT_HARD()`), not assumed; where one was not read on a
