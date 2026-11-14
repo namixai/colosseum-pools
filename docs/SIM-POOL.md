@@ -316,6 +316,18 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     - given `--venue-prices`, the oracle against the venue's price of that minute. That file is
       Hyperliquid's own candles (info API, `candleSnapshot`, interval 1m), read from disk and never
       fetched by the script.
+    - the drawdown line as the exam draws it (`drawdownKind`, read from the account): from the
+      starting balance, or trailing the step's highest day's snapshot to the starting balance and never
+      above it. Each snapshot is held to the line as it stood before it (the contract takes none while a
+      rule is broken), and an end by the drawdown to the line at that time. Where the kind was not read,
+      nothing is said of the line;
+    - each stop and take as the contract writes it: a stop or take carried out (`TriggerFilled`, with
+      the `Filled` right before it) counts in the cash and the position like any fill, and is held to the
+      trigger that stood, to its block (not before `armedAt`), to the oracle having reached its price,
+      and to what it closes (the smaller position, the size named or all of it). A trigger left on a
+      position closed or turned round, one set on no position, and a carried-out trigger with no fill of
+      its own are flags. A stop's close is nobody's timing: the lateness and the filler's choice of a
+      block leave it out;
 
     The oracle prices are read from the chain at their blocks. Where the node keeps no state that far
     back, `--prices` stands in. A pass in three fills or two days at most on the largest size is said
@@ -356,6 +368,15 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
 
     Each is flagged over 8 fills at least, when chance gives as much with probability under 1 %. The oracle
     of every block of each order's window is read for it.
+
+  Whether a payout waits for approval is what its own recorded events say (`PayoutDue`, then
+  `PayoutApproved`, `PayoutStopped`, `StopLifted`, `StopFinal`, `PayoutPaid`, `PayoutHeld`, in the order the
+  chain wrote them), not the clock: due and never approved waits, at any hour, and an approval stays through a
+  stop and its lifting. The events and the pool's own answer must agree on the payout's state and, where the
+  pool answered it, on whether it is approved; where they do not, or the events are no payout's life, nothing
+  is offered and the review says what is not read. Where the pool's answer has no `approved`, the events give it.
+  A payout whose result did not count up is held back from approval whatever the pool's rate says of approving
+  in a batch, and its card keeps that rate (`batchApproval`).
 
   Its verdict is "clean", or "suspicious" with the reasons, with the payout's three times: its claim,
   72 hours after it, and the ceiling 7 days after it, past which it is paid unapproved. Both spans are

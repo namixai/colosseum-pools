@@ -52,6 +52,16 @@ from ops import sim_keeper as sk
 from spike.hlspike import common as c
 
 PAYOUT_DUE = "0x" + keccak(text="PayoutDue(uint256,address,address,uint64,uint64)").hex()
+# What a payout's life is written as (SimPool): each event's first topic is the payout's id. The tests hold each
+# signature to the source.
+PAYOUT_APPROVED = "0x" + keccak(text="PayoutApproved(uint256,address)").hex()
+PAYOUT_PAID = "0x" + keccak(text="PayoutPaid(uint256,address,uint64,uint256,uint256)").hex()
+PAYOUT_STOPPED = "0x" + keccak(text="PayoutStopped(uint256,address,uint64,uint8,address,bytes32[],bytes32[],uint256,uint256,uint256)").hex()
+PAYOUT_HELD = "0x" + keccak(text="PayoutHeld(uint256,address,uint64)").hex()
+STOP_LIFTED = "0x" + keccak(text="StopLifted(uint256,uint256,uint256,uint256)").hex()
+STOP_FINAL = "0x" + keccak(text="StopFinal(uint256,uint64,uint256)").hex()
+PAYOUT_TRAIL = {PAYOUT_DUE: "PayoutDue", PAYOUT_APPROVED: "PayoutApproved", PAYOUT_STOPPED: "PayoutStopped",
+                STOP_LIFTED: "StopLifted", STOP_FINAL: "StopFinal", PAYOUT_PAID: "PayoutPaid", PAYOUT_HELD: "PayoutHeld"}
 TRANSFER = chk.TRANSFER
 PAYOUT_BPS = 800
 FLOOR_PAYOUTS = 3  # SimPoolFactory.FLOOR_PAYOUTS
@@ -108,6 +118,44 @@ def longest_new_wallet_run(sales: list[dict], code: str) -> int:
 
 def payout_of(size: int) -> int:
     return size * PAYOUT_BPS // BPS
+
+
+def payout_trail(names: list[str]) -> dict:
+    """Where a payout stands, from its own recorded events in the order the chain wrote them, with no clock and no
+    reading of the pool's storage: `PayoutDue` (the claim), `PayoutApproved`, `PayoutStopped` and `StopLifted`,
+    `StopFinal`, `PayoutPaid` and `PayoutHeld`. It waits for approval while it is due (claimed, not stopped, not
+    paid) and no `PayoutApproved` was written for it: an approval is kept through a stop and its lifting, as the
+    contract keeps `approved`. `problems` are events the contract could not have written in that order (an approval
+    of a payout not waiting or approved already, a stop of one stopped before, a payment of one that is not due,
+    anything before the claim): a trail with problems says nothing."""
+    state: str | None = None
+    approved = was_stopped = False
+    problems: list[str] = []
+    for n in names:
+        if n == "PayoutDue":
+            if state is not None:
+                problems.append("claimed twice")
+            state = "Due"
+        elif state is None:
+            problems.append(f"{n} before the claim")
+        elif n == "PayoutApproved":
+            if state != "Due" or approved:
+                problems.append("an approval of a payout not waiting, or approved already")
+            approved = True
+        elif n == "PayoutStopped":
+            if state != "Due" or was_stopped:
+                problems.append("a stop of a payout not waiting, or stopped before")
+            state, was_stopped = "Stopped", True
+        elif n in ("StopLifted", "StopFinal"):
+            if state != "Stopped":
+                problems.append(f"{n} of a payout not stopped")
+            state = "Due" if n == "StopLifted" else "Refused"
+        elif n in ("PayoutPaid", "PayoutHeld"):
+            if state != "Due":
+                problems.append(f"{n} of a payout not due")
+            state = "Paid" if n == "PayoutPaid" else "Held"
+    return {"state": state, "approved": approved, "wasStopped": was_stopped, "problems": problems,
+            "waitingApproval": state == "Due" and not approved and not problems, "events": list(names)}
 
 
 # ── mirrored accounts: positions against positions, not fills against fills ──────────
@@ -284,8 +332,32 @@ def mirrors_of(account: str, chain: dict, who: dict[str, str], p: "Params") -> l
 PPM = 1_000_000
 ANALYSIS = "<keccak256 of the published analysis>"
 SOURCE_ORACLE, SOURCE_BOOK, SOURCE_FALLBACK = 0, 1, 2
-# An account's `rules()` (src/Types.sol, `Rules`): the day's allowed loss in bps comes first.
+# An account's `rules()` (src/Types.sol, `Rules`): the day's allowed loss in bps comes first, then the drawdown's.
 EXAM_RULES = "(uint16,uint16,uint32,uint32[],uint32[])"
+# How an exam's drawdown line is drawn (PaperExam.drawdownKind): from the starting balance, or trailing the highest
+# day's snapshot of the step to the starting balance. `Breach.Drawdown` is 1 (src/Types.sol).
+FROM_START, TRAILING_TO_START = 0, 1
+DRAWDOWN_KINDS = ("from-start", "trailing-to-start")
+BREACH_DRAWDOWN = 1
+
+
+def drawdown_line_bps(kind: int, capital: int, max_drawdown_bps: int, peak: int) -> int:
+    """The drawdown line times BPS, as `PaperExam._drawdownLineBps` keeps it, exact: the starting balance less
+    `max_drawdown_bps` of it; for the trailing kind the highest day's snapshot of the step less that same amount,
+    never above the starting balance."""
+    base = capital * BPS - capital * max_drawdown_bps
+    if kind == FROM_START:
+        return base
+    if kind != TRAILING_TO_START:
+        raise ValueError(f"{kind} is not a drawdown kind")
+    return min(peak * BPS - capital * max_drawdown_bps, capital * BPS)
+
+
+def drawdown_line(kind: int, capital: int, max_drawdown_bps: int, peak: int) -> int:
+    """`PaperExam.drawdownLine()`: the lowest equity that keeps the drawdown rule, rounded up as the contract rounds it
+    (equity under it, as an integer, is `equity * BPS` under the exact line)."""
+    n = drawdown_line_bps(kind, capital, max_drawdown_bps, peak) + BPS - 1
+    return n // BPS if n >= 0 else -(-n // BPS)  # Solidity's division truncates toward zero
 
 
 def oracle_key(asset: int, block: int) -> str:
@@ -333,6 +405,27 @@ def coin_flip(trips: list[dict], daily_bps: int | None, p: "Params") -> dict | N
     return {"trips": total, "stops": stops, "leverage": round(leverage, 2), "text": text}
 
 
+def trigger_fills(evs: list[dict]) -> dict[int, str]:
+    """The fills among an account's events that a stop or a take made, by their place in the list: the index of a
+    `Filled` to "stop" or "take". `fillTrigger` writes `Filled` and, right after it in the same transaction,
+    `TriggerFilled` with the same size, price, cost and source (src/exam/PaperExam.sol); a `Filled` that is not
+    followed by its own `TriggerFilled` is an order's. The close of a stop is a trade like any fill, so the fills
+    list keeps it; it was not timed by the trader or the filler, so the timing tests leave it out."""
+    out: dict[int, str] = {}
+    for i, e in enumerate(evs[:-1]):
+        n = evs[i + 1]
+        if (e["name"] == "Filled" and n["name"] == "TriggerFilled" and n["tx"] == e["tx"] and n["asset"] == e["asset"]
+                and (n["sz"], n["px"], n["cost"], n["source"]) == (e["sz"], e["px"], e["cost"], e["source"])):
+            out[i] = "take" if n["take"] else "stop"
+    return out
+
+
+def trigger_hit(take: bool, position: int, oracle: int, px: int) -> bool:
+    """Whether the oracle price has reached a stop or a take (`PaperExam._triggered`): a take on a long and a stop on
+    a short at the price or above it, the other two at it or below."""
+    return oracle >= px if take == (position > 0) else oracle <= px
+
+
 def recount(account: str, chain: dict, p: "Params", size: int | None = None, largest: int | None = None) -> dict:
     """The exam's or stage's result counted again from its own events, as PaperExam counts it, and each fill
     against the chain's oracle price.
@@ -344,17 +437,33 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
     the book never better for the trader. The oracle price of a fill's block is held to the blocks around it
     (one price far from both neighbours, which agree, is an outlier) and, given a file of the venue's prices,
     to the venue's price of that minute. A pass in very few fills or days on the largest size of the menu is
-    said as a profile, not as a suspicion; so is a pass in the shape of a coin flip (`coin_flip`), as `flip`."""
+    said as a profile, not as a suspicion; so is a pass in the shape of a coin flip (`coin_flip`), as `flip`.
+
+    The drawdown line moves with the step's highest day's snapshot in an exam of the trailing kind: each
+    snapshot is held to the line as it stood before it (the contract takes none while a rule is broken), and an
+    end by the drawdown to the line at that time. Where the account's kind and drawdown were not read
+    (`chain["drawdownKind"]`, `chain["maxDrawdownBps"]`) nothing is said of the line.
+
+    A stop or a take closes a position at the price a fill takes in the block it is carried out in, and that
+    close is a fill like any: it counts in the cash and the position. Each `TriggerFilled` is held to the stop
+    or take that stood (set, not yet taken off), to its block (not before `armedAt`), to the oracle having
+    reached its price where that price was read, and to what it closes (the smaller position, never more than is
+    open: the size named, or all). A stop or take left standing on a position closed or turned round, a trigger
+    set on no position and a `TriggerFilled` with no `Filled` of its own are flags too."""
     ev = (chain.get("exam_events") or {}).get(account)
     out = {"read": ev is not None, "capital": None, "fills": 0, "days": 0, "passed": False,
            "checked": {"results": 0, "snapshots": 0, "unchecked": 0, "fills": 0}, "flags": [], "moves": [],
-           "profile": None, "flip": None}
+           "profile": None, "flip": None, "drawdown": None, "triggers": {"set": 0, "filled": 0}}
     if ev is None:
         return out
     oracle = chain.get("oracle") or {}
     venue = chain.get("venue") or {}
     cost_ppm = (chain.get("costPpm") or {}).get(account)
+    kind = (chain.get("drawdownKind") or {}).get(account)
+    dd_bps = (chain.get("maxDrawdownBps") or {}).get(account)
+    line_read = kind is not None and dd_bps is not None
     flags = out["flags"]
+    by_trigger = trigger_fills(ev)
     capital = cash = 0
     pos: dict[int, int] = {}
     placed: int | None = None
@@ -366,9 +475,18 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
     trip: dict | None = None
     last_px: dict[int, int] = {}
     day_eq = step = 0
+    peak = 0  # the step's highest day's snapshot, the starting balance first
+    standing: dict[tuple[int, bool], dict] = {}  # the stops and takes now set, by asset and kind
+    taken_off: dict[tuple[str, int, bool], dict | None] = {}  # what a transaction's `TriggerCleared` removed
+    shape: tuple[int, int, int] | None = None  # the latest fill's index, and the position before and after it
+    if line_read:
+        out["drawdown"] = {"kind": DRAWDOWN_KINDS[kind], "bps": dd_bps, "line": None, "peak": None, "checked": 0}
 
     def px(asset: int, block: int) -> int | None:
         return oracle.get(oracle_key(asset, block))
+
+    def flag(what: str, e: dict, detail: str) -> None:
+        flags.append({"what": what, "tx": e["tx"], "block": e["block"], "detail": detail})
 
     def result(name: str, e: dict) -> None:
         out["checked"]["results"] += 1
@@ -376,19 +494,24 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
             flags.append({"what": "result", "tx": e["tx"], "block": e["block"],
                           "detail": f"{name} wrote {e['equity']}, the fills give {cash}" + (" and a position open" if any(pos.values()) else "")})
 
-    for e in ev:
+    def line() -> int | None:
+        return drawdown_line(kind, capital, dd_bps, peak) if line_read else None
+
+    for i, e in enumerate(ev):
         name = e["name"]
         if name == "Started":
-            capital = cash = day_eq = e["capital"]
+            capital = cash = day_eq = peak = e["capital"]
             out["capital"] = capital
         elif name == "Placed":
             placed = e["block"]
         elif name == "Filled":
             delta = e["sz"] if e["buy"] else -e["sz"]
+            before = pos.get(e["asset"], 0)
             if trip is None:
                 trip = {"step": step, "open": cash, "ntl": 0, "t0": e["t"]}
             cash -= delta * e["px"] + e["cost"]
-            pos[e["asset"]] = pos.get(e["asset"], 0) + delta
+            pos[e["asset"]] = before + delta
+            shape = (i, before, before + delta)
             last_px[e["asset"]] = e["px"]
             trip["ntl"] = max(trip["ntl"], sum(abs(q) * last_px[a] for a, q in pos.items()))
             if not any(pos.values()):
@@ -396,38 +519,86 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
                 trip = None
             out["fills"] += 1
             days.add(e["t"] // 86_400)
+            if before != 0 and (before + delta == 0 or before * (before + delta) < 0):
+                # A position closed or turned round loses its stop and its take, before this fill is written.
+                for (asset, take), t in standing.items():
+                    if asset == e["asset"]:
+                        flag("trigger-kept", e, f"a {'take' if take else 'stop'} at {t['px']} stands on asset {asset} after "
+                             "the position was closed or turned round")
             ntl = e["sz"] * e["px"]
             if cost_ppm is not None and e["cost"] != (ntl * cost_ppm + PPM - 1) // PPM:
-                flags.append({"what": "cost", "tx": e["tx"], "block": e["block"],
-                              "detail": f"cost {e['cost']}, the terms give {(ntl * cost_ppm + PPM - 1) // PPM}"})
+                flag("cost", e, f"cost {e['cost']}, the terms give {(ntl * cost_ppm + PPM - 1) // PPM}")
             o = px(e["asset"], e["block"])
             if o is not None:
                 out["checked"]["fills"] += 1
                 better = e["px"] < o if e["buy"] else e["px"] > o
                 if better:
-                    flags.append({"what": "better-than-oracle", "tx": e["tx"], "block": e["block"],
-                                  "detail": f"{'bought' if e['buy'] else 'sold'} at {e['px']}, the oracle {o}"})
+                    flag("better-than-oracle", e, f"{'bought' if e['buy'] else 'sold'} at {e['px']}, the oracle {o}")
                 elif e["source"] != SOURCE_BOOK and e["px"] != o:
-                    flags.append({"what": "not-the-oracle", "tx": e["tx"], "block": e["block"],
-                                  "detail": f"filled at {e['px']} as the oracle's, the oracle {o}"})
+                    flag("not-the-oracle", e, f"filled at {e['px']} as the oracle's, the oracle {o}")
                 prev, nxt = px(e["asset"], e["block"] - 1), px(e["asset"], e["block"] + 1)
                 if prev is not None and nxt is not None:
                     mid = (prev + nxt) / 2
                     if abs(o - mid) * BPS > p.outlier_bps * mid and abs(prev - nxt) * BPS <= p.outlier_bps * mid:
-                        flags.append({"what": "oracle-outlier", "tx": e["tx"], "block": e["block"],
-                                      "detail": f"oracle {o} against {prev} and {nxt} in the blocks around it"})
+                        flag("oracle-outlier", e, f"oracle {o} against {prev} and {nxt} in the blocks around it")
                 v = venue.get(str(e["asset"]), {}).get(str(e["t"] // 60 * 60))
                 if v is not None and abs(o - v) * BPS > p.venue_bps * v:
-                    flags.append({"what": "oracle-off-venue", "tx": e["tx"], "block": e["block"],
-                                  "detail": f"oracle {o}, the venue {v} that minute"})
-                at_order = px(e["asset"], placed) if placed is not None else None
+                    flag("oracle-off-venue", e, f"oracle {o}, the venue {v} that minute")
+                at_order = px(e["asset"], placed) if placed is not None and i not in by_trigger else None
                 if at_order:
                     # In the trader's favour when the price moved toward their side while the order waited.
                     moved = (at_order - o if e["buy"] else o - at_order) * BPS / at_order
                     out["moves"].append({"tx": e["tx"], "bps": round(moved, 1)})
-            placed = None
+            if i not in by_trigger:
+                placed = None  # a stop's close was no order: the order waiting, if any, is still waiting
+        elif name == "TriggerSet":
+            out["triggers"]["set"] += 1
+            if pos.get(e["asset"], 0) == 0:
+                flag("trigger-no-position", e, f"a {'take' if e['take'] else 'stop'} set on asset {e['asset']} with no position")
+            standing[(e["asset"], e["take"])] = {"px": e["px"], "sz": e["sz"], "armedAt": e["armedAt"], "seenAt": None}
+        elif name == "TriggerCleared":
+            taken_off[(e["tx"], e["asset"], e["take"])] = standing.pop((e["asset"], e["take"]), None)
+        elif name == "TriggerSeen":
+            t = standing.get((e["asset"], e["take"]))
+            if t is None:
+                flag("trigger-unset", e, f"a {'take' if e['take'] else 'stop'} on asset {e['asset']} was seen to trigger with none set")
+            elif t["seenAt"] is None:
+                t["seenAt"] = e["seenAt"]
+        elif name == "TriggerFilled":
+            out["triggers"]["filled"] += 1
+            t = taken_off.get((e["tx"], e["asset"], e["take"]))
+            if shape is None or shape[0] != i - 1 or (i - 1) not in by_trigger:
+                flag("trigger-unmatched", e, "a trigger carried out with no fill of its own right before it")
+                continue
+            _, before, after = shape
+            word = "take" if e["take"] else "stop"
+            if t is None:
+                flag("trigger-unset", e, f"a {word} carried out on asset {e['asset']} with none standing")
+                continue
+            if e["block"] < t["armedAt"]:
+                flag("trigger-early", e, f"the {word} acts from block {t['armedAt']}, carried out in {e['block']}")
+            if e["trigger_px"] != t["px"]:
+                flag("trigger-price", e, f"the {word} stood at {t['px']}, the event says {e['trigger_px']}")
+            o = px(e["asset"], e["block"])
+            if o is not None and before != 0 and not trigger_hit(e["take"], before, o, t["px"]):
+                flag("trigger-not-reached", e, f"the {word} at {t['px']} carried out with the oracle at {o}")
+            open_ = abs(before)
+            want = open_ if t["sz"] == 0 or t["sz"] > open_ else t["sz"]
+            filled = ev[i - 1]
+            if filled["buy"] != (before < 0) or abs(after) >= open_ or e["sz"] != want:
+                flag("trigger-size", e, f"the {word} closes {want} of {open_} on the side that makes the position smaller; "
+                     f"it filled {'bought' if filled['buy'] else 'sold'} {e['sz']}")
         elif name == "DaySnapshot":
             day_eq = e["equity"]
+            if line_read:
+                # A snapshot is taken only while no rule is broken: its equity is on or over the line as it stood
+                # before this snapshot could raise it.
+                before_line = line()
+                out["drawdown"]["checked"] += 1
+                if e["equity"] < before_line:
+                    flag("snapshot-under-line", e, f"day {e['day']} wrote {e['equity']}, under the drawdown line {before_line}")
+                peak = max(peak, e["equity"])
+                out["drawdown"]["line"], out["drawdown"]["peak"] = line(), peak
             open_ = {a: q for a, q in pos.items() if q}
             marks = {a: px(a, e["block"]) for a in open_}
             if any(m is None for m in marks.values()):
@@ -436,16 +607,22 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
             out["checked"]["snapshots"] += 1
             want = cash + sum(q * marks[a] for a, q in open_.items())
             if e["equity"] != want:
-                flags.append({"what": "snapshot", "tx": e["tx"], "block": e["block"],
-                              "detail": f"day {e['day']} wrote {e['equity']}, the fills and the oracle give {want}"})
+                flag("snapshot", e, f"day {e['day']} wrote {e['equity']}, the fills and the oracle give {want}")
         elif name == "StepPassed":
             result("StepPassed", e)
             cash, pos = capital, {}  # `days` stays the whole account's, as `fills` does (review of #290)
-            trip, day_eq, step = None, capital, step + 1
+            trip, day_eq, step, peak, standing = None, capital, step + 1, capital, {}
         elif name == "Passed":
             result("Passed", e)
             out["passed"] = True
+        elif name == "Stopped" and line_read and e.get("reason") is not None:
+            # Ended by a rule: by the drawdown if the equity is under the line, which `_judge` asks first.
+            under = e["equity"] < line()
+            if (e["reason"] == BREACH_DRAWDOWN) != under and e["status"] == 3:
+                flag("breach-line", e, f"ended with reason {e['reason']} at {e['equity']}, the drawdown line {line()}")
     out["days"] = len(days)
+    if line_read and capital:
+        out["drawdown"]["line"], out["drawdown"]["peak"] = line(), peak
     if out["passed"]:
         out["flip"] = coin_flip(trips, (chain.get("dailyLossBps") or {}).get(account), p)
     if out["passed"] and size is not None and size == largest and (out["fills"] <= p.few_fills or out["days"] <= p.few_days):
@@ -587,8 +764,11 @@ def timing(trader: str, chain: dict, who: dict[str, str], p: "Params") -> dict:
     lates: list[int] = []
     for a in accounts:
         w = width.get(a)
-        for e in ev[a]:
-            if e["name"] != "Filled":
+        closed_by_trigger = trigger_fills(ev[a])
+        for k, e in enumerate(ev[a]):
+            # A stop's or a take's close has no order and no window: neither the filler's choice of a block nor the
+            # trader's timing is in it (it fires when the oracle reaches a price the trader set earlier).
+            if e["name"] != "Filled" or k in closed_by_trigger:
                 continue
             lates.append(e["late"])
             o = oracle.get(oracle_key(e["asset"], e["block"]))
@@ -809,6 +989,22 @@ def approve_call(pool: str, pid: int, approvals: bool = True, approver: str | No
             "data": "0x" + c.encode_call(APPROVE, APPROVE_TYPES, [[pid]]).hex()}
 
 
+def trail_disagreement(trail: dict | None, pay: dict, approvals: bool | None) -> str | None:
+    """Why a payout's recorded events (`payout_trail`) and the state the pool answered cannot both be right, or None.
+    Without a trail (a chain read before it was kept) there is nothing to compare. The approval is compared only where
+    the pool takes approvals and the payout's `approved` was read."""
+    if trail is None:
+        return None
+    if trail["problems"]:
+        return "the payout's recorded events are not a payout's life (" + "; ".join(trail["problems"]) + ")"
+    if trail["state"] != pay["state"]:
+        return f"the payout's recorded events say {trail['state']}, the pool says {pay['state']}"
+    approved = pay.get("approved")  # compared only as the storage answered it: None is taken from the trail, not against it
+    if approvals is True and approved is not None and trail["approved"] != bool(approved):
+        return f"the payout's recorded events say {'approved' if trail['approved'] else 'not approved'}, the pool says the other"
+    return None
+
+
 def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds: dict | None = None) -> dict:
     p = p or Params()
     pay = next(x for x in chain["payouts"] if x["pool"] == pool and x["id"] == pid)
@@ -822,8 +1018,16 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     # Who approves (the zero address: nobody) and whether this payout is approved already. On a pool with
     # approvals a payout whose `approved` was not read is not read: an approval offered twice would revert.
     approver, approved = chain["books"][pool].get("approver"), pay.get("approved", False)
+    trail = pay.get("trail")
+    # A storage answer that has no `approved` (the eighth field) leaves it to the payout's recorded events; where those
+    # are no payout's life or end elsewhere than the storage says, `trail_disagreement` leaves the pool not read.
+    if approved is None and trail is not None:
+        approved = trail["approved"]
     approved_unread = approvals is True and approved is None
-    if times_unread or approved_unread:
+    # The payout's recorded life (its own events, in order) and the pool's storage must tell the same story: where
+    # they do not (a node that served a partial log, a reorg) neither is taken for the truth.
+    disagree = trail_disagreement(trail, pay, approvals)
+    if times_unread or approved_unread or disagree:
         approvals = None
     who = owners(chain)
     trader, stage = pay["trader"], pay["account"]
@@ -833,9 +1037,14 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
            "claimedAt": pay["dueAt"] - delay if delay is not None else None, "dueAt": pay["dueAt"],
            "hardAt": pay["dueAt"] - delay + hard if approvals is True else None, "approvals": approvals,
            "approver": approver if approvals is True else None, "approved": bool(approved) if approvals is True else None,
-           "state": pay["state"], "size": sale["size"] if sale else None,
+           "state": pay["state"], "trail": trail["events"] if trail else None,
+           "size": sale["size"] if sale else None,
            "fills": {"stage": sum(f["account"] == stage for f in chain["fills"]),
                      "exam": sum(f["account"] == exam for f in chain["fills"])}}
+    # Waiting for approval: due, never approved, on a pool that takes approvals; by the payout's recorded events
+    # where they were kept, by its storage otherwise. Never by the clock: a payout past its 72 hours with no approval
+    # written waits for one, and one approved before them does not.
+    out["waitingApproval"] = bool(approvals is True and (trail["waitingApproval"] if trail else pay["state"] == "Due" and not approved))
     pairs = {"stage": pairs_of(stage, chain, who, p), "exam": pairs_of(exam, chain, who, p) if exam else []}
     out["pairs"] = pairs
 
@@ -881,8 +1090,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
 
     links = linked(trader, chain, p)
     out["links"] = links
-    mine_late = [f["late"] for f in chain["fills"] if who.get(f["account"]) == trader]
-    others_late = [f["late"] for f in chain["fills"] if who.get(f["account"]) not in (trader, None)]
+    # The lateness of a fill is the filler's: a stop's or a take's close has none (`via`), and is left out of both.
+    mine_late = [f["late"] for f in chain["fills"] if who.get(f["account"]) == trader and not f.get("via")]
+    others_late = [f["late"] for f in chain["fills"] if who.get(f["account"]) not in (trader, None) and not f.get("via")]
     out["late"] = {"trader": {"n": len(mine_late), "median": quantile(mine_late, 0.5), "max": max(mine_late, default=0)},
                    "others": {"n": len(others_late), "median": quantile(others_late, 0.5),
                               "p90": quantile(others_late, 0.9)},
@@ -940,6 +1150,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     unread = [a for a in (stage, exam) if a and (a in (chain.get("unread") or []) or (read is not None and a not in read))]
     if times_unread:
         unread.append("the factory's delay and ceiling")
+    elif disagree:
+        unread.append(disagree)
     elif approved_unread:
         unread.append("whether the payout is approved")
     elif approvals is None:
@@ -963,6 +1175,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
         out["action"] = "none"
         out["tx"] = {"kind": "none", "to": pool, "call": None, "args": [], "data": None,
                      "note": ("not read the factory's delay and ceiling" if times_unread else
+                              disagree if disagree else
                               "not read whether the payout is approved" if approved_unread else
                               "not read whether the pool takes approvals") + ": nothing to sign until it is"}
     elif stop and not out["stoppable"]:
@@ -974,7 +1187,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     elif stop:
         out["action"] = "stop"
         out["tx"] = stop_call(pool, pid, stop["reason"], stop["paired"], stop["trades"], stop["links"])
-    elif "recount" in out["kinds"] and pay["state"] == "Due" and approvals is True and not approved:
+    elif "recount" in out["kinds"] and out["waitingApproval"]:
         # Held back from approval: only an unapproved payout of a pool with approvals has one to be held back. An
         # approved payout is payable from its due time whatever the recount says, a pool without approvals pays by
         # itself, and a payout no longer waiting has nothing to hold back (review of #290); the stop draft stays.
@@ -1055,6 +1268,8 @@ def summary(r: dict) -> str:
             ", paid by itself then" if r["approvals"] is False else ", not read when it is paid")
     lines = [f"payout {r['id']} of pool {r['pool']}: {r['amount'] / 1e6:,.2f} USDC to {r['trader']}, due {r['dueAt']}" + when,
              f"  stage {r['stage']} ({r['fills']['stage']} fills), exam {r['exam']} ({r['fills']['exam']} fills)"]
+    if r["waitingApproval"]:
+        lines.append("  waiting for approval: " + ("its claim is recorded and no approval after it" if r["trail"] else "due and not approved"))
     for part in ("stage", "exam"):
         for x in r["pairs"][part]:
             lines.append(f"  pair on the {part}: {x['mine']} against {x['other']} of {x['account']} (trader {x['trader']})")
@@ -1149,6 +1364,7 @@ DAY_SNAPSHOT = "0x" + keccak(text="DaySnapshot(uint32,int256)").hex()
 STEP_PASSED = "0x" + keccak(text="StepPassed(uint8,int256)").hex()
 PASSED = "0x" + keccak(text="Passed(address,int256)").hex()
 STOPPED = "0x" + keccak(text="Stopped(uint8,uint8,int256)").hex()
+TRIGGER_SEEN = "0x" + keccak(text="TriggerSeen(uint32,bool,uint64,uint256)").hex()
 ORACLE_PX = c.PRECOMPILE["oraclePx"]
 HIP3_BASE = 100_000  # CoreOps.HIP3_BASE: an asset's index among the oracle's prices is pxIndex(asset)
 
@@ -1174,7 +1390,24 @@ def exam_event_of(l: dict, t: int) -> dict | None:
     if topic == PASSED:
         return {**e, "name": "Passed", "equity": abi_decode(["int256"], data)[0]}
     if topic == STOPPED:
-        return {**e, "name": "Stopped", "status": int(l["topics"][1], 16), "equity": abi_decode(["int256"], data)[0]}
+        return {**e, "name": "Stopped", "status": int(l["topics"][1], 16), "reason": int(l["topics"][2], 16),
+                "equity": abi_decode(["int256"], data)[0]}
+    # A stop or a take (`setTrigger`, `clearTrigger`, `seeTrigger`, `fillTrigger`): the asset is indexed, `isTake` is the
+    # first word of the data.
+    if topic == sk.TRIGGER_SET:
+        take, tpx, sz, armed = abi_decode(["bool", "uint64", "uint64", "uint256"], data)
+        return {**e, "name": "TriggerSet", "asset": int(l["topics"][1], 16), "take": bool(take), "px": int(tpx),
+                "sz": int(sz), "armedAt": int(armed)}
+    if topic == sk.TRIGGER_CLEARED:
+        return {**e, "name": "TriggerCleared", "asset": int(l["topics"][1], 16), "take": bool(abi_decode(["bool"], data)[0])}
+    if topic == TRIGGER_SEEN:
+        take, oracle_px, seen = abi_decode(["bool", "uint64", "uint256"], data)
+        return {**e, "name": "TriggerSeen", "asset": int(l["topics"][1], 16), "take": bool(take), "oracle": int(oracle_px),
+                "seenAt": int(seen)}
+    if topic == sk.TRIGGER_FILLED:
+        take, sz, tpx, cost, trigger_px, source = abi_decode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8"], data)
+        return {**e, "name": "TriggerFilled", "asset": int(l["topics"][1], 16), "take": bool(take), "sz": int(sz),
+                "px": int(tpx), "cost": int(cost), "trigger_px": int(trigger_px), "source": int(source)}
     return None
 
 
@@ -1189,6 +1422,25 @@ def read_daily(account: str, into: dict[str, int]) -> None:
         into[account] = int(c.call_view(account, "rules()", [], [], [EXAM_RULES])[0][0])
     except Exception as exc:
         core.log("rules_unread", account=account, error=str(exc)[:200])
+
+
+def read_drawdown(account: str, kinds: dict[str, int], bps: dict[str, int]) -> None:
+    """How an exam's drawdown line is drawn (`drawdownKind()`) and its allowed drawdown in bps (the second of `rules()`).
+    An account from before the trailing kind has no getter and its line was from the start; one not read at all
+    (the node, the rate) is left out, never taken for the start's."""
+    try:
+        bps[account] = int(c.call_view(account, "rules()", [], [], [EXAM_RULES])[0][1])
+    except Exception as exc:
+        core.log("rules_unread", account=account, error=str(exc)[:200])
+        return
+    try:
+        kinds[account] = int(c.call_view(account, "drawdownKind()", [], [], ["uint8"])[0])
+    except Exception as exc:
+        if "revert" in str(exc).lower():
+            kinds[account] = FROM_START
+        else:
+            core.log("not_read", address=account, call="drawdownKind()", error=str(exc)[:120])
+            bps.pop(account, None)
 
 
 def oracle_at(asset: int, block: int) -> int | None:
@@ -1298,13 +1550,19 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     latest = int(c.rpc("eth_blockNumber"), 16)
     now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
     pools = [to_checksum_address(p) for p in core.view(factory, "pools()", "address[]")]
-    events = logs(pools, [[sk.EXAM_SOLD, sk.FUNDED, PAYOUT_DUE]], start, latest) if pools else []
+    events = logs(pools, [[sk.EXAM_SOLD, sk.FUNDED, *PAYOUT_TRAIL]], start, latest) if pools else []
     sales = [sale_of(l) for l in events if l["topics"][0] == sk.EXAM_SOLD]
     funded = [funded_of(l) for l in events if l["topics"][0] == sk.FUNDED]
     payouts = [due_of(l) for l in events if l["topics"][0] == PAYOUT_DUE]
+    # Each payout's life as the chain wrote it, in the order of the logs: what the review reports as its status.
+    life: dict[tuple[str, int], list[str]] = {}
+    for l in sorted((l for l in events if l["topics"][0] in PAYOUT_TRAIL),
+                    key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16))):
+        life.setdefault((to_checksum_address(l["address"]), int(l["topics"][1], 16)), []).append(PAYOUT_TRAIL[l["topics"][0]])
     for x in payouts:
         p = payout_struct(x["pool"], x["id"])
         x["state"], x["wasStopped"], x["approved"] = sk.PAYOUT_STATE[p[4]], bool(p[5]), p[7]
+        x["trail"] = payout_trail(life.get((x["pool"], x["id"]), []))
     books = {pool: {"balance": c.call_view(usdc, "balanceOf(address)", ["address"], [pool], ["uint256"])[0],
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
                     "sizes": [int(m[0]) for m in c.call_view(pool, "menu()", [], [], ["(uint64,uint64)[]"])[0]],
@@ -1340,10 +1598,11 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     fills, ended = [], {}
     for a, evs in exam_events.items():
         evs.sort(key=lambda e: (e["block"], e["index"]))
-        for e in evs:
+        closes = trigger_fills(evs)
+        for k, e in enumerate(evs):
             if e["name"] == "Filled":
                 fills.append({"account": a, "asset": e["asset"], "buy": e["buy"], "sz": e["sz"], "t": e["t"],
-                              "tx": e["tx"], "late": e["late"]})
+                              "tx": e["tx"], "late": e["late"], "via": closes.get(k)})
             elif e["name"] in ("Passed", "Stopped"):
                 ended[a] = e["t"]
     # The oracle around each fill of the payouts still waiting (its block, the ones on each side, its order's) and
@@ -1352,6 +1611,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     cost_ppm: dict[str, int] = {}
     fill_window: dict[str, int] = {}
     daily_bps: dict[str, int] = {}
+    drawdown_kind: dict[str, int] = {}
+    drawdown_bps: dict[str, int] = {}
     stage_exam = {f["stage"]: f["exam"] for f in funded}
     for x in payouts:
         if x["state"] != "Due":
@@ -1365,7 +1626,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             except Exception as exc:
                 core.log("terms_unread", account=a, error=str(exc)[:200])
             read_daily(a, daily_bps)
-            assets ={e["asset"] for e in exam_events[a] if e["name"] == "Filled"}
+            read_drawdown(a, drawdown_kind, drawdown_bps)
+            assets = {e["asset"] for e in exam_events[a] if e["name"] == "Filled"}
             wanted = set()
             for e in exam_events[a]:
                 if e["name"] in ("Filled", "Placed"):
@@ -1396,8 +1658,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     return {"now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
             "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
             "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {},
-            "fillWindow": fill_window, "dailyLossBps": daily_bps,
-            "times": payout_times(factory)}
+            "fillWindow": fill_window, "dailyLossBps": daily_bps, "drawdownKind": drawdown_kind,
+            "maxDrawdownBps": drawdown_bps, "times": payout_times(factory)}
 
 
 def main(argv: list[str] | None = None) -> int:

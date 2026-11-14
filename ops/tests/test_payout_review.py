@@ -1340,7 +1340,7 @@ class ReadingTheChain(unittest.TestCase):
             return {"balanceOf(address)": (9_000,), "result()": (2, t1, 0, 0), "accountOf(address)": (2, 0, True),
                     "menu()": ([(SIZE // 2, 50), (SIZE, 100)],),
                     "terms()": ((capital, [800], 0, 0, 0, 1_000, 1, 10),),
-                    "rules()": ((300, 600, 1_000, [3], [1_000]),),
+                    "rules()": ((300, 600, 1_000, [3], [1_000]),), "drawdownKind()": (1,),
                     "approver()": (addr(0xAB),), "PAYOUT_HARD()": (8 * 86_400,), "PAYOUT_DELAY()": (72 * 3_600,)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
@@ -1352,9 +1352,9 @@ class ReadingTheChain(unittest.TestCase):
         self.assertEqual(got["funded"], [{"pool": POOL, "stage": s1, "exam": e1, "trader": t1, "block": 20}])
         self.assertEqual(got["payouts"], [{"pool": POOL, "id": 7, "account": s1, "trader": t1, "amount": 800,
                                            "dueAt": 5_000, "block": 30, "state": "Due", "wasStopped": False,
-                                           "approved": False}])
-        self.assertEqual(got["fills"], [{"account": s1, "asset": 3, "buy": True, "sz": 100, "t": 2_500, "tx": tx(4), "late": 4},
-                                        {"account": s1, "asset": 3, "buy": False, "sz": 100, "t": 2_800, "tx": tx(15), "late": 4}])
+                                           "approved": False, "trail": r.payout_trail(["PayoutDue"])}])
+        self.assertEqual(got["fills"], [{"account": s1, "asset": 3, "buy": True, "sz": 100, "t": 2_500, "tx": tx(4), "late": 4, "via": None},
+                                        {"account": s1, "asset": 3, "buy": False, "sz": 100, "t": 2_800, "tx": tx(15), "late": 4, "via": None}])
         self.assertEqual([e["name"] for e in got["exam_events"][s1]], ["Started", "Placed", "Filled", "Placed", "Filled", "Passed"])
         self.assertEqual(got["ended"], {e1: 1_900, s1: 2_900})
         self.assertEqual(got["costPpm"], {s1: 1_000, e1: 1_000})
@@ -1362,6 +1362,8 @@ class ReadingTheChain(unittest.TestCase):
                          "each fill's and order's block, their neighbours, and every block of each order's window of 10")
         self.assertEqual(got["fillWindow"], {s1: 10, e1: 10})
         self.assertEqual(got["dailyLossBps"], {s1: 300, e1: 300}, "the day's allowed loss, the first of each account's rules")
+        self.assertEqual((got["drawdownKind"], got["maxDrawdownBps"]), ({s1: 1, e1: 1}, {s1: 600, e1: 600}),
+                         "how the line is drawn and the drawdown allowed: the second of each account's rules")
         self.assertEqual({a for a, _ in asked}, {3})
         self.assertEqual((got["oracle"]["3:25"], got["oracle"]["3:28"], got["oracle"]["9:9"]), (7, 8, 1), "the file stands in too")
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
@@ -1484,3 +1486,494 @@ class AgainstTheContracts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── the trailing drawdown line, stops and takes, and a payout waiting for approval by its own events ──────────
+
+def _source(path: str) -> str:
+    return (ROOT / path).read_text()
+
+
+class TheDrawdownLine(unittest.TestCase):
+    """PaperExam's drawdown line as the contract's own tests count it (test/exam/PaperExam.t.sol): a capital of
+    100, a drawdown of 10 %."""
+
+    C100 = 100 * 10**6
+
+    def line(self, kind, peak, capital=None, bps=1_000):
+        return r.drawdown_line(kind, capital or self.C100, bps, peak * 10**6 if peak < 10**6 else peak)
+
+    def test_the_line_trails_the_highest_snapshot_to_the_starting_balance_and_no_higher(self):
+        # test_trailingLine_risesWithTheDaysSnapshots_andStopsAtTheStart: 90, 94, 97, 100, 100.
+        self.assertEqual([self.line(r.TRAILING_TO_START, p) for p in (100, 104, 107, 112, 115)],
+                         [v * 10**6 for v in (90, 94, 97, 100, 100)])
+        self.assertEqual(self.line(r.FROM_START, 104), 90 * 10**6, "the line from the start does not move")
+        # Kept exact, and rounded up as the contract rounds it.
+        self.assertEqual(r.drawdown_line_bps(r.TRAILING_TO_START, self.C100, 1_000, 104 * 10**6 + 1),
+                         (104 * 10**6 + 1) * 10_000 - self.C100 * 1_000)
+        self.assertEqual(r.drawdown_line(r.TRAILING_TO_START, self.C100, 1_000, 104 * 10**6 + 1), 94 * 10**6 + 1)
+        self.assertEqual(r.drawdown_line(r.TRAILING_TO_START, 10_001, 3_333, 10_001), 6_668)
+        with self.assertRaises(ValueError):
+            r.drawdown_line(2, self.C100, 1_000, self.C100)
+
+    def test_it_is_the_contracts_by_its_source(self):
+        src = _source("src/exam/PaperExam.sol")
+        self.assertIn("if (drawdownKind == FROM_START) return base * (bps - dd);", src)
+        self.assertIn("int256 trailing = peakSnapshot * bps - base * dd;", src)
+        self.assertIn("return trailing < base * bps ? trailing : base * bps;", src)
+        self.assertIn("return (_drawdownLineBps() + bps - 1) / bps;", src)
+        self.assertIn("if (eq * bps < _drawdownLineBps()) return Breach.Drawdown;", src)
+        self.assertIn("if (eq > peakSnapshot) peakSnapshot = eq;", src)
+        self.assertRegex(src, r"uint8 public constant FROM_START = 0;\s+uint8 public constant TRAILING_TO_START = 1;")
+        self.assertEqual((r.FROM_START, r.TRAILING_TO_START), (0, 1))
+        breach = re.search(r"enum Breach \{(.*?)\}", _source("src/Types.sol"), re.S).group(1)
+        self.assertEqual(re.sub(r"///[^\n]*", "", breach).replace(",", " ").split()[r.BREACH_DRAWDOWN], "Drawdown")
+        # The events the recount reads, held to the source.
+        for name, sig in (("TRIGGER_SEEN", "TriggerSeen(uint32,bool,uint64,uint256)"),):
+            self.assertEqual(getattr(r, name), "0x" + keccak(text=sig).hex())
+        for sig in ("TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt)",
+                    "TriggerCleared(uint32 indexed asset, bool isTake)",
+                    "TriggerSeen(uint32 indexed asset, bool isTake, uint64 oracle, uint256 seenAt)"):
+            self.assertIn(f"event {sig};", re.sub(r"\s+", " ", src))
+        self.assertIn("event TriggerFilled( uint32 indexed asset, bool isTake, uint64 sz, uint64 px, uint256 cost, "
+                      "uint64 triggerPx, uint8 source );", re.sub(r"\s+", " ", src))
+        self.assertIn("event Stopped(Status indexed status, Breach indexed reason, int256 equity);", src)
+
+
+class StopsAndTheLineInTheRecount(unittest.TestCase):
+    """The result counted again for an account with stops, takes and a trailing line: a capital of 100, one asset
+    at a mark of 1 000 000, a long of 100 bought at the mark (cash 0, equity 100 times the mark's move)."""
+
+    C = 100 * 10**6
+    MARK = 1_000_000
+    TAKE, STOP = True, False
+
+    def world(self, events, *, kind=r.TRAILING_TO_START, bps=1_000, prices=None):
+        ch, t1, s1 = honest_world()
+        ch.d["exam_events"] = {s1: events, addr(0x201): [self.e("Started", 0, capital=self.C), self.e("Passed", 0, equity=self.C)]}
+        ch.d["oracle"] = {f"3:{b}": v for b, v in (prices or {}).items() if v is not None}
+        if kind is not None:
+            ch.d["drawdownKind"], ch.d["maxDrawdownBps"] = {s1: kind}, {s1: bps}
+        return ch, s1
+
+    @staticmethod
+    def e(name, block, index=0, **kw):
+        return {"name": name, "block": block, "index": index, "t": 1_000 * block, "tx": tx(7_000 + block), **kw}
+
+    def bought(self):
+        """Started, a long of 100 bought at the mark in block 12 (an order's fill), the stop and the take set in 20."""
+        return [self.e("Started", 1, capital=self.C), self.e("Placed", 10, asset=3),
+                self.e("Filled", 12, asset=3, buy=True, sz=100, px=self.MARK, cost=0, late=0, source=0)]
+
+    def tset(self, block, take, px, sz=0, armed=None, index=1):
+        return self.e("TriggerSet", block, index, asset=3, take=take, px=px, sz=sz, armedAt=block + 2 if armed is None else armed)
+
+    def cleared(self, block, take, index=0, tx_of=None):
+        return {**self.e("TriggerCleared", block, index, asset=3, take=take), **({"tx": tx_of} if tx_of else {})}
+
+    def closed_by(self, block, take, px, trigger_px, sz=100, buy=False, cost=0, source=0, clears=(), index=2):
+        """What `fillTrigger` writes, in its order: the trigger or triggers cleared, `Filled`, `TriggerFilled`."""
+        t = tx(8_000 + block)
+        out = [{**self.cleared(block, c, index=index + k), "tx": t} for k, c in enumerate(clears)]
+        n = index + len(out)
+        out.append({**self.e("Filled", block, n, asset=3, buy=buy, sz=sz, px=px, cost=cost, late=0, source=source), "tx": t})
+        out.append({**self.e("TriggerFilled", block, n + 1, asset=3, take=take, sz=sz, px=px, cost=cost, trigger_px=trigger_px, source=source), "tx": t})
+        return out
+
+    def flags(self, ch, s1):
+        return [(f["what"], f["block"]) for f in r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"]]
+
+    def stopped_world(self, **kw):
+        """A long of 100 with a stop at 950 000 and a take at 1 100 000, the stop carried out at 940 000 in block 510."""
+        evs = self.bought() + [self.tset(500, self.STOP, 950_000), self.tset(500, self.TAKE, 1_100_000, index=2),
+                               self.e("TriggerSeen", 505, asset=3, take=self.STOP, oracle=940_000, seenAt=505)]
+        evs += self.closed_by(510, self.STOP, 940_000, 950_000, clears=(self.STOP, self.TAKE))
+        evs.append(self.e("Passed", 511, equity=94 * 10**6))
+        prices = {10: self.MARK, 11: self.MARK, 12: self.MARK, 13: self.MARK, 509: 945_000, 510: 940_000, 511: 940_000}
+        return self.world(evs, prices=prices, **kw)
+
+    # ── a stop's close is a fill, and it counts ──
+
+    def test_a_stop_carried_out_is_a_fill_that_counts_in_the_cash_and_clean_when_it_is_the_triggers(self):
+        ch, s1 = self.stopped_world()
+        rc = r.review(ch.d, POOL, 0)["recount"]["stage"]
+        self.assertEqual((rc["flags"], rc["fills"], rc["triggers"], rc["checked"]["results"], rc["checked"]["fills"]),
+                         ([], 2, {"set": 2, "filled": 1}, 1, 2), "100 sold at 940 000 leaves 94: the result says 94")
+        self.assertEqual(rc["moves"], [{"tx": tx(7_012), "bps": 0.0}], "only the order's move; the stop's close was no order")
+
+    def test_a_result_that_ignores_the_stops_close_does_not_count_up(self):
+        ch, s1 = self.stopped_world()
+        ch.d["exam_events"][s1][-1]["equity"] = 100 * 10**6
+        self.assertEqual(self.flags(ch, s1), [("result", 511)])
+
+    # ── what a trigger fill is held to ──
+
+    def test_each_departure_from_the_contract_in_a_trigger_fill_is_a_flag(self):
+        def one(change, **kw):
+            ch, s1 = self.stopped_world(**kw)
+            change(ch.d["exam_events"][s1], ch)
+            return self.flags(ch, s1)
+
+        def at(evs, name):
+            return next(x for x in evs if x["name"] == name and x["block"] == 510)
+        # Before the block it acts from (set in 500, a delay of 2: from 502).
+        self.assertIn(("trigger-early", 501), one(lambda evs, ch: [x.update(block=501) for x in evs if x["block"] == 510]))
+        self.assertNotIn(("trigger-early", 502), one(lambda evs, ch: [x.update(block=502) for x in evs if x["block"] == 510]),
+                         "from its block on, the block it acts from included")
+        # The oracle not at it: a stop on a long is reached at or under its price.
+        self.assertIn(("trigger-not-reached", 510), one(lambda evs, ch: ch.d["oracle"].update({"3:510": 960_000})))
+        # Reached exactly at its price is enough.
+        self.assertNotIn(("trigger-not-reached", 510), one(lambda evs, ch: ch.d["oracle"].update({"3:510": 950_000})))
+        # Another price for the trigger than the one standing.
+        self.assertEqual(one(lambda evs, ch: at(evs, "TriggerFilled").update(trigger_px=951_000)), [("trigger-price", 510)])
+        # A size the trigger does not name: it closes all of 100, here 60 were sold.
+        def short(evs, ch):
+            for x in evs:
+                if x["block"] == 510 and x["name"] in ("Filled", "TriggerFilled"):
+                    x["sz"] = 60
+        self.assertIn(("trigger-size", 510), one(short))
+        # The wrong side: a buy where a long is closed.
+        self.assertIn(("trigger-size", 510), one(lambda evs, ch: [x.update(buy=True) for x in evs if x["name"] == "Filled" and x["block"] == 510]))
+        # No stop standing: it was never set.
+        self.assertIn(("trigger-unset", 510), one(lambda evs, ch: evs.__delitem__(slice(3, 5))))
+        # A TriggerFilled that does not come right after its own Filled.
+        self.assertIn(("trigger-unmatched", 510), one(lambda evs, ch: at(evs, "TriggerFilled").update(px=939_000)))
+        self.assertIn(("trigger-unmatched", 510), one(lambda evs, ch: evs.remove(at(evs, "Filled"))))
+
+    def test_a_take_of_a_size_closes_that_size_and_the_stop_stays(self):
+        evs = self.bought() + [self.tset(500, self.STOP, 950_000), self.tset(500, self.TAKE, 1_050_000, sz=40, index=2)]
+        evs += self.closed_by(510, self.TAKE, 1_050_000, 1_050_000, sz=40, clears=(self.TAKE,))
+        ch, s1 = self.world(evs, prices={10: self.MARK, 11: self.MARK, 12: self.MARK, 13: self.MARK, 509: 1_050_000, 510: 1_050_000, 511: 1_050_000})
+        self.assertEqual(self.flags(ch, s1), [])
+        evs.extend(self.closed_by(520, self.STOP, 940_000, 950_000, sz=60, clears=(self.STOP,)))
+        ch.d["oracle"].update({"3:519": 940_000, "3:520": 940_000, "3:521": 940_000})
+        self.assertEqual(self.flags(ch, s1), [], "the stop closes what is left, 60")
+        # A size bigger than what is open closes all of it.
+        big = self.bought() + [self.tset(500, self.TAKE, 1_050_000, sz=500)]
+        big += self.closed_by(510, self.TAKE, 1_050_000, 1_050_000, sz=100, clears=(self.TAKE,))
+        big_ch, big_s1 = self.world(big, prices={10: self.MARK, 11: self.MARK, 12: self.MARK, 13: self.MARK, 509: 1_050_000, 510: 1_050_000, 511: 1_050_000})
+        self.assertEqual(self.flags(big_ch, big_s1), [])
+        # A take at 1 050 000 is reached from below: an oracle under it is not.
+        ch.d["oracle"]["3:510"] = 1_049_999
+        self.assertIn(("trigger-not-reached", 510), self.flags(ch, s1))
+
+    def test_a_short_is_reached_the_other_way(self):
+        evs = [self.e("Started", 1, capital=self.C), self.e("Placed", 10, asset=3),
+               self.e("Filled", 12, asset=3, buy=False, sz=100, px=self.MARK, cost=0, late=0, source=0),
+               self.tset(500, self.STOP, 1_050_000)]
+        evs += self.closed_by(510, self.STOP, 1_060_000, 1_050_000, buy=True, clears=(self.STOP,))
+        prices = {10: self.MARK, 11: self.MARK, 12: self.MARK, 13: self.MARK, 509: 1_060_000, 510: 1_060_000, 511: 1_060_000}
+        ch, s1 = self.world(evs, prices=prices)
+        self.assertEqual(self.flags(ch, s1), [], "a stop on a short is reached at or over its price")
+        ch.d["oracle"]["3:510"] = 1_040_000
+        self.assertIn(("trigger-not-reached", 510), self.flags(ch, s1))
+
+    # ── what is left behind, and what is set on nothing ──
+
+    def test_a_trigger_left_on_a_position_closed_or_turned_round_is_a_flag(self):
+        evs = self.bought() + [self.tset(500, self.STOP, 950_000)]
+        sell = lambda block, sz, clears: [*[{**self.cleared(block, c, index=0), "tx": tx(9_000 + block)} for c in clears],
+                                          {**self.e("Filled", block, 1, asset=3, buy=False, sz=sz, px=self.MARK, cost=0, late=0, source=0),
+                                           "tx": tx(9_000 + block)}]
+        prices = {10: self.MARK, 11: self.MARK, 12: self.MARK, 13: self.MARK, 599: self.MARK, 600: self.MARK, 601: self.MARK}
+        for sz, name in ((100, "closed"), (160, "turned round")):
+            ch, s1 = self.world(evs + sell(600, sz, ()), prices=prices)
+            self.assertEqual(self.flags(ch, s1), [("trigger-kept", 600)], name)
+            ch, s1 = self.world(evs + sell(600, sz, (self.STOP,)), prices=prices)
+            self.assertEqual(self.flags(ch, s1), [], f"{name}: the stop taken off first, as `_apply` writes it")
+        ch, s1 = self.world(evs + sell(600, 40, ()), prices=prices)
+        self.assertEqual(self.flags(ch, s1), [], "a smaller position keeps its stop")
+
+    def test_a_stop_set_on_no_position_and_a_sighting_of_none_are_flags(self):
+        evs = [self.e("Started", 1, capital=self.C), self.tset(5, self.STOP, 950_000),
+               self.e("TriggerSeen", 8, asset=3, take=self.TAKE, oracle=1_100_000, seenAt=8)]
+        ch, s1 = self.world(evs)
+        self.assertEqual(self.flags(ch, s1), [("trigger-no-position", 5), ("trigger-unset", 8)])
+
+    def test_an_order_waiting_when_a_stop_fires_is_still_the_order_whose_move_is_measured(self):
+        evs = self.bought() + [self.tset(500, self.STOP, 950_000), self.e("Placed", 505, asset=3)]
+        evs += self.closed_by(510, self.STOP, 940_000, 950_000, clears=(self.STOP,))
+        evs.append(self.e("Filled", 515, asset=3, buy=True, sz=10, px=900_000, cost=0, late=1, source=0))
+        prices = {10: self.MARK, 11: self.MARK, 12: self.MARK, 13: self.MARK, 505: 960_000, 509: 940_000, 510: 940_000, 511: 940_000,
+                  514: 900_000, 515: 900_000, 516: 900_000}
+        ch, s1 = self.world(evs, prices=prices)
+        moves = r.review(ch.d, POOL, 0)["recount"]["stage"]["moves"]
+        self.assertEqual([m["tx"] for m in moves], [tx(7_012), tx(7_515)],
+                         "the order placed in 505 and filled in 515 has its move; the stop in between took none of it")
+        self.assertEqual(moves[1]["bps"], round((960_000 - 900_000) * 10_000 / 960_000, 1))
+
+    # ── the trailing line in the snapshots and in the end ──
+
+    def snapshots(self, equities, kind=r.TRAILING_TO_START):
+        """A long of 100 bought at the mark; a snapshot a day with these equities, the mark at 1 000 000 times each / 100."""
+        evs = self.bought()
+        prices = {10: self.MARK, 11: self.MARK, 12: self.MARK, 13: self.MARK}
+        for k, eq in enumerate(equities):
+            evs.append(self.e("DaySnapshot", 100 + k, asset=0, day=k + 1, equity=eq * 10**6))
+            prices[100 + k] = eq * 10**6 // 100
+        return self.world(evs, kind=kind, prices=prices)
+
+    def test_a_snapshot_is_held_to_the_line_as_it_stood_before_it(self):
+        # test_trailingLine_risesWithTheDaysSnapshots: 104, then 107 over the line 94; the line then 97.
+        ch, s1 = self.snapshots([104, 107])
+        self.assertEqual(self.flags(ch, s1), [])
+        rc = r.review(ch.d, POOL, 0)["recount"]["stage"]
+        self.assertEqual(rc["drawdown"], {"kind": "trailing-to-start", "bps": 1_000, "line": 97 * 10**6, "peak": 107 * 10**6, "checked": 2})
+        # 104 then 93: under the line 94 that the 104 drew. From the start, 93 is over 90.
+        ch, s1 = self.snapshots([104, 93])
+        self.assertEqual(self.flags(ch, s1), [("snapshot-under-line", 101)])
+        ch, s1 = self.snapshots([104, 93], kind=r.FROM_START)
+        self.assertEqual(self.flags(ch, s1), [])
+        self.assertEqual(r.review(ch.d, POOL, 0)["recount"]["stage"]["drawdown"]["line"], 90 * 10**6)
+        # On the line holds; a unit under breaks.
+        ch, s1 = self.snapshots([104])
+        ch.d["exam_events"][s1].append(self.e("DaySnapshot", 105, asset=0, day=9, equity=94 * 10**6))
+        ch.d["oracle"]["3:105"] = 940_000
+        self.assertEqual(self.flags(ch, s1), [])
+        ch.d["exam_events"][s1][-1]["equity"] -= 100
+        ch.d["oracle"]["3:105"] = 939_999
+        self.assertEqual(self.flags(ch, s1), [("snapshot-under-line", 105)])
+        # The line does not come down with a smaller snapshot, and a new step starts again from its balance.
+        ch, s1 = self.snapshots([107, 101])
+        ch.d["exam_events"][s1].append(self.e("DaySnapshot", 110, asset=0, day=3, equity=96 * 10**6))
+        ch.d["oracle"]["3:110"] = 960_000
+        self.assertEqual(self.flags(ch, s1), [("snapshot-under-line", 110)], "96 is under the 107's 97, though over the 101's")
+
+    def test_a_new_step_starts_the_line_again_from_its_balance(self):
+        evs = self.bought()
+        evs += [self.e("DaySnapshot", 20, day=1, equity=112 * 10**6)]
+        evs += [self.e("Filled", 25, asset=3, buy=False, sz=100, px=1_120_000, cost=0, late=0, source=0),
+                self.e("StepPassed", 26, equity=112 * 10**6 + 12 * 10**6),
+                self.e("DaySnapshot", 26, 1, day=2, equity=self.C),
+                self.e("DaySnapshot", 40, day=3, equity=91 * 10**6)]
+        ch, s1 = self.world(evs, prices={10: self.MARK, 11: self.MARK, 12: self.MARK, 13: self.MARK, 20: 1_120_000, 24: 1_120_000,
+                                         25: 1_120_000, 26: 1_120_000})
+        # The first step's peak was 112 (a line at the start's 100); the second starts from 100, whose line is 90.
+        self.assertEqual([w for w in self.flags(ch, s1) if w[0] == "snapshot-under-line"], [], "91 is over the new step's 90")
+        self.assertEqual(r.review(ch.d, POOL, 0)["recount"]["stage"]["drawdown"]["peak"], self.C)
+
+    def test_an_end_by_the_drawdown_is_held_to_the_line_at_that_time(self):
+        def ended(equity, reason, status=3, kind=r.TRAILING_TO_START):
+            ch, s1 = self.snapshots([104], kind=kind)
+            ch.d["exam_events"][s1].append(self.e("Stopped", 200, status=status, reason=reason, equity=equity * 10**6 if equity else 0))
+            return self.flags(ch, s1)
+        self.assertEqual(ended(93, 1), [], "under the line of 94, ended by the drawdown")
+        self.assertEqual(ended(93, 2), [("breach-line", 200)], "under the drawdown line, which is judged first: not the day's loss")
+        self.assertEqual(ended(95, 1), [("breach-line", 200)], "over the line: no drawdown")
+        self.assertEqual(ended(95, 2), [], "over the line, broken by the day's loss")
+        self.assertEqual(ended(93, 1, kind=r.FROM_START), [("breach-line", 200)], "from the start the line is 90: 93 is over it")
+        self.assertEqual(ended(0, 0, status=4), [], "an expired exam records no equity and no reason")
+
+    def test_without_the_kind_read_nothing_is_said_of_the_line(self):
+        ch, s1 = self.snapshots([104, 93], kind=None)
+        got = r.review(ch.d, POOL, 0)["recount"]["stage"]
+        self.assertEqual((got["flags"], got["drawdown"]), ([], None))
+        # Pre-existing chains (no kind kept at all) read as before.
+        del ch.d["exam_events"][s1][1:]
+        self.assertEqual(r.review(ch.d, POOL, 0)["recount"]["stage"]["flags"], [])
+
+    # ── the fills of a stop are nobody's timing ──
+
+    def test_a_stops_close_is_left_out_of_the_lateness_and_the_timing(self):
+        evs = self.bought() + [self.tset(500, self.STOP, 950_000)] + self.closed_by(510, self.STOP, 940_000, 950_000, clears=(self.STOP,))
+        ch, s1 = self.world(evs, prices={10: self.MARK, 12: self.MARK, 509: 940_000, 510: 940_000, 511: 940_000})
+        ch.d["fills"] = [{"account": s1, "asset": 3, "buy": True, "sz": 100, "t": 12_000, "tx": tx(7_012), "late": 4, "via": None},
+                         {"account": s1, "asset": 3, "buy": False, "sz": 100, "t": 510_000, "tx": tx(8_510), "late": 0, "via": "stop"}]
+        ch.d["fillWindow"] = {s1: 5}
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["late"]["trader"]["n"], got["late"]["trader"]["median"]), (1, 4), "the stop's 0 is no lateness")
+        self.assertEqual(got["timing"]["fills"], 1)
+        self.assertEqual(r.trigger_fills(ch.d["exam_events"][s1]), {5: "stop"}, "the Filled the TriggerFilled follows")
+        # A Filled with no TriggerFilled right after it in its transaction, or another's numbers, is an order's.
+        evs2 = [x for x in ch.d["exam_events"][s1]]
+        evs2[-1] = {**evs2[-1], "tx": tx(1)}
+        self.assertEqual(r.trigger_fills(evs2), {})
+
+    def test_the_triggers_events_are_read_as_the_contract_writes_them(self):
+        def log(topics, data, block=30):
+            return {"topics": topics, "data": "0x" + data.hex(), "blockNumber": hex(block), "transactionHash": tx(1), "logIndex": "0x1"}
+        asset = "0x" + f"{3:064x}"
+        got = r.exam_event_of(log([sk.TRIGGER_SET, asset], encode(["bool", "uint64", "uint64", "uint256"], [True, 1_050_000, 40, 502])), 7)
+        self.assertEqual((got["name"], got["asset"], got["take"], got["px"], got["sz"], got["armedAt"]), ("TriggerSet", 3, True, 1_050_000, 40, 502))
+        got = r.exam_event_of(log([sk.TRIGGER_CLEARED, asset], encode(["bool"], [False])), 7)
+        self.assertEqual((got["name"], got["asset"], got["take"]), ("TriggerCleared", 3, False))
+        got = r.exam_event_of(log([r.TRIGGER_SEEN, asset], encode(["bool", "uint64", "uint256"], [False, 940_000, 510])), 7)
+        self.assertEqual((got["name"], got["take"], got["oracle"], got["seenAt"]), ("TriggerSeen", False, 940_000, 510))
+        got = r.exam_event_of(log([sk.TRIGGER_FILLED, asset], encode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8"],
+                                                                      [False, 100, 940_000, 7, 950_000, 1])), 7)
+        self.assertEqual((got["name"], got["take"], got["sz"], got["px"], got["cost"], got["trigger_px"], got["source"]),
+                         ("TriggerFilled", False, 100, 940_000, 7, 950_000, 1))
+        got = r.exam_event_of(log([r.STOPPED, "0x" + f"{3:064x}", "0x" + f"{1:064x}"], encode(["int256"], [93])), 7)
+        self.assertEqual((got["name"], got["status"], got["reason"], got["equity"]), ("Stopped", 3, 1, 93))
+
+    def test_a_trigger_is_carried_out_in_the_contracts_order_and_one_the_oracle_has_reached(self):
+        src = _source("src/exam/PaperExam.sol")
+        self.assertIn("bool hit = isTake == (pos > 0) ? oracle >= t.px : oracle <= t.px;", src)
+        self.assertTrue(r.trigger_hit(False, 100, 950_000, 950_000))
+        self.assertTrue(r.trigger_hit(False, 100, 940_000, 950_000))
+        self.assertFalse(r.trigger_hit(False, 100, 951_000, 950_000))
+        self.assertTrue(r.trigger_hit(True, 100, 1_050_000, 1_050_000))
+        self.assertFalse(r.trigger_hit(True, 100, 1_049_999, 1_050_000))
+        self.assertTrue(r.trigger_hit(False, -100, 1_050_000, 1_050_000), "a stop on a short is reached at or over")
+        self.assertFalse(r.trigger_hit(False, -100, 1_049_999, 1_050_000))
+        self.assertTrue(r.trigger_hit(True, -100, 950_000, 950_000), "a take on a short at or under")
+        self.assertFalse(r.trigger_hit(True, -100, 950_001, 950_000))
+        self.assertIn("uint64 sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;", src)
+        self.assertIn("emit Filled(asset, before < 0, sz, px, cost, 0, source);", src)
+        self.assertIn("emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source);", src)
+        self.assertIn("if (block.number < t.armedAt) revert TooEarly(t.armedAt);", src)
+
+
+class AWaitingPayoutByItsEvents(unittest.TestCase):
+    """Whether a payout waits for approval is what its own recorded events say, not a guess from the clock."""
+
+    def world(self, trail, *, approved=False, state="Due", now=None):
+        ch, t1, s1 = honest_world()
+        pay = ch.d["payouts"][0]
+        pay["state"], pay["approved"] = state, approved
+        if trail is not None:
+            pay["trail"] = r.payout_trail(trail)
+        if now is not None:
+            ch.d["now"] = now
+        return ch
+
+    def test_a_payout_waits_while_it_is_due_and_no_approval_was_written(self):
+        T = r.payout_trail
+        self.assertEqual((T(["PayoutDue"])["waitingApproval"], T(["PayoutDue"])["state"]), (True, "Due"))
+        self.assertFalse(T(["PayoutDue", "PayoutApproved"])["waitingApproval"])
+        self.assertFalse(T(["PayoutDue", "PayoutPaid"])["waitingApproval"])
+        self.assertFalse(T(["PayoutDue", "PayoutStopped"])["waitingApproval"], "stopped: not waiting for an approval")
+        # An approval is kept through a stop and its lifting (`liftStop` leaves `approved`), and a stop is lifted once.
+        lifted = T(["PayoutDue", "PayoutApproved", "PayoutStopped", "StopLifted"])
+        self.assertEqual((lifted["state"], lifted["approved"], lifted["wasStopped"], lifted["waitingApproval"]), ("Due", True, True, False))
+        self.assertTrue(T(["PayoutDue", "PayoutStopped", "StopLifted"])["waitingApproval"], "lifted without an approval: waiting again")
+        self.assertEqual(T(["PayoutDue", "PayoutStopped", "StopFinal"])["state"], "Refused")
+        self.assertEqual(T(["PayoutDue", "PayoutHeld"])["state"], "Held")
+        self.assertEqual(T([])["state"], None)
+
+    def test_events_the_contract_could_not_have_written_make_a_trail_that_says_nothing(self):
+        T = r.payout_trail
+        for names in (["PayoutApproved"], ["PayoutDue", "PayoutApproved", "PayoutApproved"], ["PayoutDue", "PayoutPaid", "PayoutApproved"],
+                      ["PayoutDue", "PayoutStopped", "PayoutStopped"], ["PayoutDue", "PayoutStopped", "PayoutApproved"],
+                      ["PayoutDue", "StopLifted"], ["PayoutDue", "PayoutDue"], ["PayoutDue", "PayoutStopped", "PayoutPaid"]):
+            got = T(names)
+            self.assertTrue(got["problems"], names)
+            self.assertFalse(got["waitingApproval"], names)
+
+    def test_the_trail_is_the_contracts_by_its_source(self):
+        pool = _source("src/sim/SimPool.sol")
+        for sig in ("PayoutApproved(uint256 indexed id, address indexed approver)", "PayoutHeld(uint256 indexed id, address indexed trader, uint64 amount)",
+                    "StopLifted(uint256 indexed id, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount)",
+                    "StopFinal(uint256 indexed id, uint64 amount, uint256 reserved)",
+                    "PayoutPaid(uint256 indexed id, address indexed trader, uint64 amount, uint256 paidCount, uint256 paidTotal)"):
+            self.assertIn(f"event {sig};", re.sub(r"\s+", " ", pool))
+        self.assertIn("event PayoutStopped( uint256 indexed id, address indexed trader, uint64 amount, uint8 reason, address paired, "
+                      "bytes32[] trades, bytes32[] links, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount );", re.sub(r"\s+", " ", pool))
+        for topic, sig in ((r.PAYOUT_APPROVED, "PayoutApproved(uint256,address)"), (r.PAYOUT_HELD, "PayoutHeld(uint256,address,uint64)"),
+                           (r.STOP_LIFTED, "StopLifted(uint256,uint256,uint256,uint256)"), (r.STOP_FINAL, "StopFinal(uint256,uint64,uint256)"),
+                           (r.PAYOUT_PAID, "PayoutPaid(uint256,address,uint64,uint256,uint256)")):
+            self.assertEqual(topic, "0x" + keccak(text=sig).hex())
+        # `liftStop` leaves `approved` alone and `approvePayouts` asks a payout waiting and not approved: the trail's rules.
+        _, lift = AgainstTheContracts.function(pool, "liftStop")
+        self.assertNotIn("approved", lift)
+        self.assertIn("p.state = PayoutState.Due;", lift)
+        self.assertEqual(sorted(r.PAYOUT_TRAIL.values()), sorted(["PayoutDue", "PayoutApproved", "PayoutStopped", "StopLifted", "StopFinal",
+                                                                  "PayoutPaid", "PayoutHeld"]))
+
+    def test_past_its_72_hours_with_no_approval_written_it_waits_for_one(self):
+        ch = self.world(["PayoutDue"])
+        due = ch.d["payouts"][0]["dueAt"]
+        for now in (due - 3_600, due + 3_600, due + 4 * 86_400):
+            ch.d["now"] = now
+            got = r.review(ch.d, POOL, 0)
+            self.assertTrue(got["waitingApproval"], now)
+            self.assertEqual(got["trail"], ["PayoutDue"])
+            self.assertEqual((got["tx"]["kind"], got["action"]), ("approve", "approve"))
+        self.assertIn("waiting for approval", r.summary(got))
+
+    def test_an_approval_written_ends_the_wait_at_any_time(self):
+        ch = self.world(["PayoutDue", "PayoutApproved"], approved=True)
+        due = ch.d["payouts"][0]["dueAt"]
+        for now in (due - 3_600, due + 3_600):
+            ch.d["now"] = now
+            got = r.review(ch.d, POOL, 0)
+            self.assertFalse(got["waitingApproval"], now)
+            self.assertEqual((got["tx"]["kind"], got["tx"]["note"]), ("none", r.APPROVED))
+        self.assertNotIn("waiting for approval", r.summary(got))
+
+    def test_a_pool_without_approvals_has_none_to_wait_for(self):
+        ch = self.world(["PayoutDue"])
+        ch.d["books"][POOL]["approvals"] = False
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["waitingApproval"], got["tx"]["note"]), (False, r.NO_APPROVAL))
+
+    def test_the_trail_and_the_pools_storage_must_agree_or_nothing_is_offered(self):
+        # Events say approved, the storage says not: a payout approved twice would revert, one not approved is not paid.
+        ch = self.world(["PayoutDue", "PayoutApproved"], approved=False)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["tx"]["kind"], got["waitingApproval"], got["action"]), ("none", False, "none"))
+        self.assertIn("recorded events say approved, the pool says the other", got["tx"]["note"])
+        self.assertEqual(got["reasons"], ["not read: the payout's recorded events say approved, the pool says the other"])
+        ch = self.world(["PayoutDue", "PayoutStopped"], state="Due")
+        self.assertIn("recorded events say Stopped, the pool says Due", r.review(ch.d, POOL, 0)["tx"]["note"])
+        ch = self.world(["PayoutDue", "PayoutApproved", "PayoutApproved"], approved=True)
+        self.assertIn("not a payout's life", r.review(ch.d, POOL, 0)["tx"]["note"])
+        # Without a trail (a chain read before it was kept) nothing is compared; the storage stands as before.
+        ch = self.world(None)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["trail"], got["waitingApproval"], got["tx"]["kind"]), (None, True, "approve"))
+        # Where the storage's answer has no `approved`, the events say it: waiting, so the approval is offered; approved
+        # already, so none is (one offered twice would revert). With no trail, or one that is not a payout's life or
+        # does not end where the storage says, it stays not read.
+        ch = self.world(["PayoutDue"], approved=None)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["approved"], got["waitingApproval"], got["tx"]["kind"]), (False, True, "approve"))
+        ch = self.world(["PayoutDue", "PayoutApproved"], approved=None)
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["approved"], got["waitingApproval"], got["tx"]["kind"], got["tx"]["note"]), (True, False, "none", r.APPROVED))
+        note = "not read whether the payout is approved: nothing to sign until it is"
+        self.assertEqual(r.review(self.world(None, approved=None).d, POOL, 0)["tx"]["note"], note)
+        for bad, why in ((["PayoutDue", "PayoutApproved", "PayoutApproved"], "not a payout's life"),
+                         (["PayoutDue", "PayoutStopped"], "recorded events say Stopped, the pool says Due")):
+            got = r.review(self.world(bad, approved=None).d, POOL, 0)
+            self.assertEqual((got["tx"]["kind"], got["approved"]), ("none", None), "not the events' word")
+            self.assertIn(why, got["tx"]["note"])
+
+    def test_a_result_that_does_not_count_up_holds_a_payout_that_waits_by_its_events(self):
+        rec = Recount()
+        ch, _ = rec.world(passed=Recount.C + 999_999)
+        ch.d["payouts"][0]["trail"] = r.payout_trail(["PayoutDue"])
+        self.assertEqual((r.review(ch.d, POOL, 0)["action"], r.review(ch.d, POOL, 0)["tx"]), ("hold", None))
+        ch.d["payouts"][0].update(approved=True, trail=r.payout_trail(["PayoutDue", "PayoutApproved"]))
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["action"], got["tx"]["note"]), ("none", r.APPROVED), "approved on the chain: nothing to hold back")
+
+
+class AHeldPayoutKeepsTheBatchRule(unittest.TestCase):
+    """The hold branch gives no approval to sign, and must not lose what the pool's own rate says of approving in a
+    batch (review of #290, which found the page's side of it dropping the field)."""
+
+    def card(self, *, red):
+        rec = Recount()
+        ch, _ = rec.world(passed=Recount.C + 999_999)
+        if red:
+            ch.d["payouts"][0]["amount"] = 2_000 * 10**6  # payouts above the net income before 30 exams ended: red
+        got = r.review(ch.d, POOL, 0)
+        return got, r.card(got, ch.d)
+
+    def test_a_held_payout_of_a_red_pool_is_still_a_card_that_forbids_the_batch(self):
+        got, k = self.card(red=True)
+        self.assertEqual((got["action"], got["passRates"]["level"], got["passRates"]["batch"]), ("hold", "red", False))
+        self.assertEqual((k["action"], k["call"], k["batchApproval"]), ("hold", None, False))
+        self.assertIn("do not sign", r.summary(got))
+
+    def test_a_held_payout_of_a_green_pool_keeps_the_batch_open(self):
+        got, k = self.card(red=False)
+        self.assertEqual((got["action"], got["passRates"]["batch"], k["action"], k["call"], k["batchApproval"]), ("hold", True, "hold", None, True))
+
+    def test_a_held_payout_whose_pool_rates_were_not_read_leaves_the_batch_as_the_card_defaults_it(self):
+        rec = Recount()
+        ch, _ = rec.world(passed=Recount.C + 999_999)
+        del ch.d["exam_events"]
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["passRates"], r.card(got, ch.d)["batchApproval"]), (None, True))
