@@ -235,10 +235,10 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   pool has not set, a signature ending within 30 seconds, a used nonce, a call the pool would refuse. `--serve PORT` listens on
   127.0.0.1 for `POST /buy`.
 - **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, SimPool, a TermsBook and the
-  factory on testnet with Circle's USDC, names the filler, the checker, the closer (four keys with
+  factory on the network (testnet unless named, see Networks) with Circle's USDC, names the filler, the checker, the closer (four keys with
   the operator, none the same) and the recipient, lists BTC,
-  ETH and SOL with their caps (no HYPE), and writes `deployments/testnet-<label>.json` with demo3's
-  keeper nodes. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
+  ETH and SOL with their caps (no HYPE), and writes `deployments/<network>-<label>.json` with demo3's
+  keeper nodes on testnet, `--keeper-nodes` on mainnet. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
   HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
   is on chain as listed, sending a raise of a used code's share for the same partner, and refusing,
   before anything is sent, anything else on a code a sale has named.
@@ -439,7 +439,7 @@ the widest window, 60 blocks, so a late fill is measured and not lapsed), with t
     spike/.venv/bin/python -m ops.deploy_sim buy --deployment <label> --pool <measuring pool> --line 0 --trader trader --send
     spike/.venv/bin/python -m ops.sim_keeper --deployment <label> --measure <exam> --trader-wallet trader --orders 100
 
-`--measure` sends the trader's own transactions (testnet only, by hand; it has no dry run). It places the orders
+`--measure` sends the trader's own transactions (by hand, and on mainnet only after the typed confirmation; it has no dry run). It places the orders
 one at a time, alternating buy and sell, 12 size units of BTC each (0.00012 BTC, over the 10 USDC of a trade),
 and waits up to 120 seconds for each to be filled or to lapse.
 
@@ -468,6 +468,46 @@ offer against the oracle, on the trader's side (the ask above it for a buy, the 
 ceiling is the largest distance seen plus 30 bp, and at most `MAX_WORSE_BPS` (500). On 11 November 2026
 testnet's books stood 77 to 118 bp from the oracle, so the plans say 150. On mainnet, where BTC's and ETH's
 spread is under 1 bp, it is measured there again, and so is the window.
+
+## Networks
+
+The scripts above run on testnet unless mainnet is named twice: `COLOSSEUM_NETWORK=mainnet`, which the plumbing
+reads when it starts (spike/hlspike/network.py: chain id, RPC, info API, USDC), and `--network mainnet` on the
+command line. Either alone stops the program. What is the simulated pool's own per network is in
+`ops/sim_network.py`, in one table: each asset's perp index (testnet BTC 3, ETH 4, SOL 0; mainnet BTC 0, ETH 1,
+SOL 5, from each network's info API meta) and the asset `--measure` trades. The precompiles PaperExam reads, the
+oracle price at 0x…0807 and the best bid and offer at 0x…080e, are at the same addresses on both networks.
+
+On mainnet a command that reads, or that prints calls for a signer elsewhere (`--signer`: the Safe, the
+Ledger), needs nothing more. One that sends needs a key directory named for mainnet (`COLOSSEUM_KEY_DIR`, not
+testnet's default) and a confirmation: `deploy_sim ... --send`, `sim_check --lift` and `sim_keeper --measure`
+ask the person at the terminal to type `send on mainnet` and refuse without a terminal; the keeper, the relayer
+and the checker as services take `--confirm-mainnet <label>`, the deployment's label, so that a unit copied from
+testnet does not start sending there. `deploy_sim deploy` on mainnet reads the meta again and stops if an index
+moved, takes the keeper's node from `--keeper-nodes` (a node of its own, not the gateway's), and `pool` refuses a
+plan whose terms say testnet. The MultiPool keeper stays testnet's; on mainnet the host's unit serves only a
+simulated pool's record.
+
+    spike/.venv/bin/python -m ops.sim_probe --network mainnet
+
+reads, and only reads, each asset's perp info, oracle price and best bid and offer at its index on the network,
+against the info API's own meta and oracle price, and the network's USDC (name, version, decimals, the EIP-3009
+read the relayer uses). On 14 November 2026 at 17:36 UTC (mainnet block 51 261 165) every check held: BTC,
+ETH and SOL at 0, 1 and 5, the oracle precompile within 0.7 bp of the API's oracle price, the books 0.1 to
+0.5 bp wide and standing 8.7 to 12.9 bp below the oracle; USDC "USDC", version "2", 6 decimals.
+
+## A flat file for an AI code check
+
+    scripts/flatten-sim.sh <commit> [out-dir]
+
+writes one Solidity file of the four contracts `deploy` puts on chain (PaperExam, SimPool, TermsBook,
+SimPoolFactory) and everything they import, once each, as they are at that commit, with a MANIFEST of the
+commit, the compiler, each source's sha256 and the flat file's, and checks that the flat file compiles on its
+own. It works in a temporary worktree and leaves this checkout alone. The flat file only repeats the sources of
+its commit, so it is not kept in the repository: for a later commit (the one that brings the menu of sizes, the
+next change of a contract) run the script again with that commit and upload the new file with its MANIFEST, so
+the check's report names the code it read. At bee577415c41 the file has 6 738 lines, sha256
+ea6373c55d99eb409d6d8d938d2a501a7d19fb101b11de67d3bea2c38dad1135.
 
 ## Not done yet
 

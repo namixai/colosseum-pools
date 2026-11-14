@@ -13,7 +13,8 @@ cannot name another. Before it spends gas the relayer checks that the pool is on
 factory's, the line is on its menu, the code is set on the pool, the signature is not past its time
 and its nonce is unused, and that the pool would take the call (eth_estimateGas). The token itself checks the signature, the amount (the
 line's price) and that only that pool, its payee, can use it. The server listens on 127.0.0.1 only.
-Testnet only.
+Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet; on mainnet it sends only with
+--confirm-mainnet <the deployment's label> and a mainnet key directory (ops/sim_network.py).
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from eth_utils import keccak, to_checksum_address
 
 from ops import deployments
 from ops import keeper as core
+from ops import sim_network as sn
 from ops.contract_errors import refusal
 from spike.hlspike import common as c
 
@@ -152,13 +154,14 @@ def serve(relay: Relay, port: int) -> None:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--deployment", required=True)
-    p.add_argument("--wallet", default="relayer", help="a funded testnet key that pays the gas")
+    p.add_argument("--wallet", default="relayer", help="a funded key on the network that pays the gas")
     p.add_argument("--signed", help="a signed purchase, as JSON")
     p.add_argument("--serve", type=int, metavar="PORT", help="listen on 127.0.0.1:PORT for POST /buy")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--from", dest="sender", help="address the call is tried from in a dry run")
+    sn.add_args(p, service=True)
     args = p.parse_args(argv)
-    c.assert_testnet()
+    sn.confirm_service(args, args.deployment, c, sends=not args.dry_run)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
