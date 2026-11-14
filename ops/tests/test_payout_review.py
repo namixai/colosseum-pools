@@ -1805,6 +1805,8 @@ class StopsAndTheLineInTheRecount(unittest.TestCase):
                          ("TriggerFilled", False, 100, 940_000, 7, 950_000, 1))
         got = r.exam_event_of(log([r.STOPPED, "0x" + f"{3:064x}", "0x" + f"{1:064x}"], encode(["int256"], [93])), 7)
         self.assertEqual((got["name"], got["status"], got["reason"], got["equity"]), ("Stopped", 3, 1, 93))
+        got = r.exam_event_of(log([r.STOPPED, "0x" + f"{3:064x}"], encode(["int256"], [93])), 7)
+        self.assertEqual((got["status"], got["reason"]), (3, None), "a log with the reason not indexed is not a crash")
 
     def test_a_trigger_is_carried_out_in_the_contracts_order_and_one_the_oracle_has_reached(self):
         src = _source("src/exam/PaperExam.sol")

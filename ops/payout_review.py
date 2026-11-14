@@ -1390,7 +1390,8 @@ def exam_event_of(l: dict, t: int) -> dict | None:
     if topic == PASSED:
         return {**e, "name": "Passed", "equity": abi_decode(["int256"], data)[0]}
     if topic == STOPPED:
-        return {**e, "name": "Stopped", "status": int(l["topics"][1], 16), "reason": int(l["topics"][2], 16),
+        return {**e, "name": "Stopped", "status": int(l["topics"][1], 16),
+                "reason": int(l["topics"][2], 16) if len(l["topics"]) > 2 else None,  # both are indexed; a short log is read as before
                 "equity": abi_decode(["int256"], data)[0]}
     # A stop or a take (`setTrigger`, `clearTrigger`, `seeTrigger`, `fillTrigger`): the asset is indexed, `isTake` is the
     # first word of the data.
