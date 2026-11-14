@@ -61,6 +61,8 @@ class TheTable(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             sn.check_assets(["SOL"], networks.MAINNET, lambda body: {"universe": moved})
         self.assertIn("index 5 is AVAX", str(caught.exception))
+        with self.assertRaises(SystemExit):
+            sn.check_assets(["BTC"], networks.MAINNET, lambda body: {"universe": [None]})
         delisted = [{"name": "BTC", "isDelisted": True}]
         with self.assertRaises(SystemExit):
             sn.check_assets(["BTC"], networks.MAINNET, lambda body: {"universe": delisted})
@@ -365,6 +367,15 @@ class TheProbe(unittest.TestCase):
         from ops import sim_probe
         self.assertFalse(sim_probe.probe(self.Reader(networks.MAINNET, coin_at_5="AVAX"))["ok"])
         self.assertFalse(sim_probe.probe(self.Reader(networks.MAINNET, oracle_scale=1.01))["ok"])
+
+    def test_a_missing_api_price_fails_the_check_instead_of_crashing(self):
+        from ops import sim_probe
+        r = self.Reader(networks.MAINNET)
+        info = r.info
+        r.info = lambda body: [info(body)[0], info(body)[1][:2]]  # no context for SOL at 5
+        out = sim_probe.probe(r)
+        self.assertFalse(out["ok"])
+        self.assertFalse([x for x in out["checks"] if x["check"] == "SOL: oraclePx 0x…0807"][0]["ok"])
 
 
 if __name__ == "__main__":

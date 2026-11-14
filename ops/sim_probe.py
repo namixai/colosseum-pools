@@ -91,7 +91,8 @@ def probe(r: Reader) -> dict:
         check(f"{name}: perpAssetInfo 0x…080a", coin == name, f"precompile says {coin}")
         oracle_raw = eth_abi.decode(["uint64"], r.call(sn.ORACLE_PX, word, tag))[0]
         oracle = px_from_precompile(oracle_raw, sz_dec)
-        api_oracle = float(ctxs[idx]["oraclePx"])
+        ctx = ctxs[idx] if idx < len(ctxs) and isinstance(ctxs[idx], dict) else {}
+        api_oracle = float(ctx.get("oraclePx") or 0)
         gap = abs(oracle - api_oracle) / api_oracle * 10_000 if api_oracle else float("inf")
         a.update(oracle_raw=oracle_raw, oracle_px=oracle, api_oracle_px=api_oracle, gap_bps=round(gap, 2))
         check(f"{name}: oraclePx 0x…0807", oracle_raw > 0 and gap <= ORACLE_TOLERANCE_BPS,

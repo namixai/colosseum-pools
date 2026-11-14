@@ -137,6 +137,6 @@ def check_assets(names, net: networks.Network, info_post) -> None:
     table = sim(net)
     for name in names:
         idx = table.index(name)
-        got = universe[idx] if idx < len(universe) else {}
+        got = universe[idx] if idx < len(universe) and isinstance(universe[idx], dict) else {}
         if got.get("name") != name or got.get("isDelisted"):
             raise SystemExit(f"{net.name} meta changed: index {idx} is {got.get('name')}, expected {name}")

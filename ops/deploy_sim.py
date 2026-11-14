@@ -122,8 +122,9 @@ def usdc_units(amount) -> int:
 
 
 def _rules(r: dict) -> tuple:
+    table = sn.sim(c.NETWORK)
     return (r["daily_loss_bps"], r["max_drawdown_bps"], r["max_leverage_x100"],
-            [sn.sim(c.NETWORK).index(a) for a in r["assets"]], r.get("asset_leverage_x100", []))
+            [table.index(a) for a in r["assets"]], r.get("asset_leverage_x100", []))
 
 
 def _terms(t: dict) -> tuple:
