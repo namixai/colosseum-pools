@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
@@ -68,6 +69,23 @@ SIM = {
 
 def sim(net: networks.Network | None = None) -> SimNet:
     return SIM[(net or networks.select()).name]
+
+
+class Assets(Mapping):
+    """Asset name -> perp index on the network `net_of()` gives at each lookup: what a script that once held testnet's
+    table reads in its place, so that its own lines stay as they were."""
+
+    def __init__(self, net_of: Callable[[], networks.Network]):
+        self._net_of = net_of
+
+    def __getitem__(self, name: str) -> int:
+        return sim(self._net_of()).index(name)
+
+    def __iter__(self):
+        return iter(sim(self._net_of()).assets)
+
+    def __len__(self) -> int:
+        return len(sim(self._net_of()).assets)
 
 
 def add_args(p, service: bool = False) -> None:

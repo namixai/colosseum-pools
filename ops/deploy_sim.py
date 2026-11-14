@@ -103,6 +103,9 @@ SET_CODE = "setCode(bytes32,address,uint16)"
 CODE_OF = ["address", "uint16", "bool", "bool", "uint256"]
 ZERO = "0x" + "00" * 20
 
+# Each asset's perp index on the network selected now (ops/sim_network.py), read at each lookup.
+PLATFORM_ASSETS = sn.Assets(lambda: c.NETWORK)
+
 
 def asset_list(names: list[str]) -> list[tuple[str, int, int]]:
     """Each named asset's id and leverage cap, for setAsset. Refuses one without a cap."""
@@ -122,9 +125,8 @@ def usdc_units(amount) -> int:
 
 
 def _rules(r: dict) -> tuple:
-    table = sn.sim(c.NETWORK)
     return (r["daily_loss_bps"], r["max_drawdown_bps"], r["max_leverage_x100"],
-            [table.index(a) for a in r["assets"]], r.get("asset_leverage_x100", []))
+            [PLATFORM_ASSETS[a] for a in r["assets"]], r.get("asset_leverage_x100", []))
 
 
 def _terms(t: dict) -> tuple:
