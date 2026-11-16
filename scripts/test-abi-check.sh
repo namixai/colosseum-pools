@@ -280,6 +280,20 @@ expect 1 "an ABI the check does not know" "OPERATOR_EXTRA_ABI is an ABI this che
 drift "$OPJS" 'export const OPERATOR_ABI = [' 'export const OPERATOR_V2_ABI = ['
 expect 2 "an ABI the table names that moved" "no OPERATOR_ABI in app/lib/operator.js"
 
+# 7c. Review of the pull request: the three cases a reviewer found the check blind to.
+# A call whose signature sits on the line after `call(pool,`: the same drift as above must still be seen.
+drift "$OPJS" 'return call(pool, "stopPayout(uint256,uint8,address,bytes32[],bytes32[])", [BigInt(id), r, paired, t, l], "checker",' 'return call(pool,
+    "stopPayout(uint256,uint8,bytes32[],bytes32[])", [BigInt(id), r, paired, t, l], "checker",'
+expect 1 "a stop call whose signature is on the next line" "call stopPayout(uint256,uint8,bytes32"
+# An ABI whose initializer is a call, not a bare list: found by its name, so it cannot go unnamed.
+drift "$OPJS" 'export const OPERATOR_ABI = [' 'export const OPERATOR_FROZEN_ABI = Object.freeze([]);
+export const OPERATOR_ABI = ['
+expect 1 "an ABI built with Object.freeze" "OPERATOR_FROZEN_ABI is an ABI this check does not know"
+# A tuple that holds an array is encoded behind an offset word: a copy that keeps only its first scalar
+# fields would read the offset as a field, so it is not an allowed short read.
+drift "$EXAMJS" 'returns ((uint16 dailyLossBps, uint16 maxDrawdownBps, uint32 maxLeverageX100, uint32[] assets, uint32[] assetLeverageX100))' 'returns ((uint16 dailyLossBps, uint16 maxDrawdownBps, uint32 maxLeverageX100))'
+expect 1 "a dynamic tuple read short" "3 fields, the contract has 5"
+
 # 8. forge answers with something that is not JSON.
 fake_forge 'Error: this is not an ABI'
 expect 2 "forge printing something that is not JSON" "did not print an ABI" "$SAVE"

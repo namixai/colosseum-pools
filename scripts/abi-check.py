@@ -292,9 +292,8 @@ def human_param(text: str, where: str) -> dict:
         words = text.split()
         if not words:
             cannot_run(f"{where}: an empty parameter")
-        out = {"type": words.pop(0)}
-        if out["type"] in ("uint", "int"):
-            out["type"] += "256"
+        # `uint` and `int` are `uint256` and `int256`, bare or as the element of an array: `uint[]`, `int[3]`.
+        out = {"type": re.sub(r"^(u?int)(?!\d)", r"\g<1>256", words.pop(0))}
     out["indexed"] = "indexed" in words
     words = [w for w in words if w != "indexed"]
     if len(words) > 1:
@@ -342,6 +341,21 @@ def js_abi(source: str, name: str, where: str) -> list[str]:
     return lines
 
 
+def is_static(param: dict) -> bool:
+    """A dynamic type is encoded behind an offset word: a dynamic array, `string`, `bytes`, and a tuple holding one.
+    A fixed array is static when its element is."""
+    t = param["type"]
+    if t.endswith("[]"):
+        return False
+    if t.endswith("]"):
+        return is_static({**param, "type": t[:t.rindex("[")]})
+    if t in ("string", "bytes"):
+        return False
+    if t == "tuple":
+        return all(is_static(c) for c in param["components"])
+    return True
+
+
 def same_fields(label: str, copy: list[dict], compiled_: list[dict], prefix: bool) -> list[str]:
     """Types always, names where both sides carry one; indexed for events. With `prefix`, the copy may leave off
     fields at the end: a static tuple or a list of outputs decoded short reads its first fields alike."""
@@ -358,8 +372,9 @@ def same_fields(label: str, copy: list[dict], compiled_: list[dict], prefix: boo
         if got.get("indexed", False) != want.get("indexed", False):
             problems.append(f"{here}: indexed {got.get('indexed', False)}, the contract says {want.get('indexed', False)}")
         if got["type"].startswith("tuple"):
-            # Only a lone static tuple at the end may be decoded short: inside an array each element's size counts.
-            last = prefix and i == len(copy) - 1 and got["type"] == "tuple"
+            # Only a lone static tuple at the end may be decoded short: inside an array each element's size counts,
+            # and a dynamic tuple sits behind an offset word, so its first fields are not at the start of the data.
+            last = prefix and i == len(copy) - 1 and got["type"] == "tuple" and is_static(want)
             problems += same_fields(here, got["components"], want["components"], last)
     return problems
 
@@ -382,7 +397,9 @@ def check_libraries() -> tuple[list[str], int]:
 
     for rel, consts in LIB_ABIS.items():
         text = read(rel)
-        found = set(re.findall(r"^(?:export\s+)?const (\w+_ABI)\s*=\s*\[", text, re.M))
+        # Found by name alone, whatever the initializer is (`[...]`, `Object.freeze([...])`): js_abi then refuses
+        # the ones it cannot read, and the ones this table does not know are named here.
+        found = set(re.findall(r"^(?:export\s+)?(?:const|let|var)\s+(\w+_ABI)\b", text, re.M))
         for name in sorted(found - set(consts)):
             problems.append(f"{rel} {name} is an ABI this check does not know: add it to LIB_ABIS")
         for name, contracts in consts.items():
@@ -407,11 +424,14 @@ def check_libraries() -> tuple[list[str], int]:
     for rel, contract in LIB_CALLS.items():
         declared = {f"{e['name']}({','.join(canonical(i) for i in e['inputs'])})" for e in abi(contract)
                     if e.get("type") == "function" and mutability(e) != "view"}
-        for n, line in enumerate(read(rel).splitlines(), 1):
-            for sig in re.findall(r"""\bcall\(\s*\w+\s*,\s*["'`](\w+\([^"'`]*\))["'`]""", line):
-                count += 1
-                if re.sub(r"\s+", "", sig) not in declared:
-                    problems.append(f"{rel}:{n} call {sig}: {contract} declares no such function that sends")
+        # The whole file, not a line at a time: a call whose signature sits on the line after `call(pool,` counts too.
+        source = read(rel)
+        for m in re.finditer(r"""\bcall\(\s*\w+\s*,\s*["'`](\w+\([^"'`]*\))["'`]""", source):
+            count += 1
+            sig = m.group(1)
+            if re.sub(r"\s+", "", sig) not in declared:
+                n = source.count("\n", 0, m.start()) + 1
+                problems.append(f"{rel}:{n} call {sig}: {contract} declares no such function that sends")
     return problems, count
 
 
