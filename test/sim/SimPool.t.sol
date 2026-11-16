@@ -147,6 +147,18 @@ contract SimPoolTest is Test {
         pool.setCode(CODE, partner, bps);
     }
 
+    /// Sends code `code`'s partner what the code accrued (`claimShares`): anyone may, here a stranger.
+    function _takeShares(SimPool pool, bytes32 code) internal {
+        bytes32[] memory list = new bytes32[](1);
+        list[0] = code;
+        vm.prank(stranger);
+        pool.claimShares(list);
+    }
+
+    function _partnerOf(SimPool pool, bytes32 code) internal view returns (address p) {
+        (p,,,,,,) = pool.codeOf(code);
+    }
+
     function _pool() internal returns (SimPool) {
         return _open(_plan());
     }
@@ -312,7 +324,9 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         vm.expectRevert(SimPool.BadShare.selector);
         pool.setCode(keccak256("nobody's"), address(0), 5000); // a share with no partner
-        assertEq(pool.codes().length, 4, "CODE and the three that took");
+        for (uint256 i = 0; i < 5; ++i) {
+            assertEq(_partnerOf(pool, keccak256(abi.encode(i))), i == 1 || i == 4 ? address(0) : partner, "the three that took");
+        }
     }
 
     function test_open_needsItsTermsWrittenOut() public {
@@ -459,7 +473,7 @@ contract SimPoolTest is Test {
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
         pool.buyWithAuthorization(signer, 1, theirs, salt, 0, until, v, r, s);
         pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
-        (,,,, uint256 got) = pool.codeOf(CODE);
+        (,,, uint256 got,,,) = pool.codeOf(CODE);
         assertEq(got, LARGE_PRICE - 425_000, "the signed code brought it");
     }
 
@@ -574,6 +588,7 @@ contract SimPoolTest is Test {
         _ask(pool, 2_800e6);
         vm.prank(creator);
         pool.withdraw();
+        _takeShares(pool, CODE);
         assertEq(usdc.balanceOf(partner), 99_500_000, "half of 200 after the platform's part, not of 1 000");
         assertEq(pool.principal(), 2_400e6, "the rest came back as principal");
     }
@@ -911,6 +926,7 @@ contract SimPoolTest is Test {
         _ask(pool, 2_800e6);
         vm.prank(creator);
         pool.withdraw();
+        _takeShares(pool, CODE);
         assertEq(usdc.balanceOf(partner), 99_500_000, "half of 200 after the platform's part, not of 1 000");
         assertEq(pool.principal(), 2_400e6);
     }
@@ -1443,12 +1459,25 @@ contract SimPoolTest is Test {
         _withSales(pool, 30);
         uint256 before = usdc.balanceOf(creator);
         _ask(pool, 1_000e6);
+        // Kept for the code: its half, rounded up to the unit above (1 000 less 5 is 995, sold by one code).
         vm.expectEmit(address(pool));
-        emit SimPool.Withdrawn(creator, 1_000e6, 5e6, 497_500_000);
+        emit SimPool.Withdrawn(creator, 1_000e6, 5e6, 497_500_001, true);
         vm.prank(creator);
         pool.withdraw();
+        assertEq(usdc.balanceOf(partner), 0, "nothing sent within the withdrawal: the share is accrued");
+        assertEq(pool.shareDue(CODE), 497_500_000);
+        assertEq(pool.sharesDue(), 497_500_001);
+        assertEq(usdc.balanceOf(creator) - before, 497_499_999, "the creator's part less the unit kept for no one");
+        vm.expectEmit(address(pool));
+        emit SimPool.SharePaid(CODE, partner, 497_500_000, true);
+        _takeShares(pool, CODE);
         assertEq(usdc.balanceOf(partner), 497_500_000, "half of what is left after the platform's part");
-        assertEq(usdc.balanceOf(creator) - before, 497_500_000);
+        assertEq(pool.sharesDue(), 1, "the unit of rounding stays in the pool, for no one");
+        assertEq(pool.shareDue(CODE), 0);
+        (,,,,,, uint256 got) = pool.codeOf(CODE);
+        assertEq(got, 497_500_000, "what the code got, in all");
+        _takeShares(pool, CODE); // a second claim sends nothing
+        assertEq(usdc.balanceOf(partner), 497_500_000);
         assertEq(pool.principal(), 1_600e6, "all of it was profit: the principal stays");
     }
 
@@ -1460,7 +1489,7 @@ contract SimPoolTest is Test {
         vm.expectEmit(address(pool));
         emit SimPool.CodeSet(CODE, partner, 6000);
         _share(pool, 6000); // before any sale: changed
-        (address who, uint16 bps,,,) = pool.codeOf(CODE);
+        (address who, uint16 bps,,,,,) = pool.codeOf(CODE);
         assertEq(who, partner);
         assertEq(bps, 6000);
         _buy(pool, trader, 0);
@@ -1472,7 +1501,7 @@ contract SimPoolTest is Test {
         vm.expectRevert(SimPool.CodeUsed.selector);
         pool.setCode(CODE, address(0), 0); // and it stays on sale
         vm.stopPrank();
-        assertEq(pool.codes().length, 1);
+        assertEq(_partnerOf(pool, CODE), partner);
     }
 
     function test_setCode_aUsedCodesShareOnlyRises_forTheSamePartner_withinTheBound() public {
@@ -1482,7 +1511,7 @@ contract SimPoolTest is Test {
         vm.expectEmit(address(pool));
         emit SimPool.CodeSet(CODE, partner, 5000);
         _share(pool, 5000); // the owner's next step: raised
-        (address who, uint16 bps, bool used,,) = pool.codeOf(CODE);
+        (address who, uint16 bps, bool used,,,,) = pool.codeOf(CODE);
         assertEq(who, partner);
         assertEq(bps, 5000);
         assertTrue(used);
@@ -1497,7 +1526,7 @@ contract SimPoolTest is Test {
         pool.setCode(CODE, partner, 6001); // past the platform's bound
         pool.setCode(CODE, partner, 6000);
         vm.stopPrank();
-        (, bps,,,) = pool.codeOf(CODE);
+        (, bps,,,,,) = pool.codeOf(CODE);
         assertEq(bps, 6000);
 
         // A used code with no share: raised only into the bounds.
@@ -1526,6 +1555,8 @@ contract SimPoolTest is Test {
         _ask(pool, 1_000e6);
         vm.prank(creator);
         pool.withdraw();
+        _takeShares(pool, CODE);
+        _takeShares(pool, codeB);
         uint256 net = 1_000e6 - 5e6;
         assertEq(usdc.balanceOf(partner), net / 2 * 4000 / 10_000, "A: 40 % of half");
         assertEq(usdc.balanceOf(ownerB), net / 2 * 5000 / 10_000, "B: 50 % of half");
@@ -1537,6 +1568,8 @@ contract SimPoolTest is Test {
         _ask(pool, 1_000e6);
         vm.prank(creator);
         pool.withdraw();
+        _takeShares(pool, CODE);
+        _takeShares(pool, codeB);
         assertEq(usdc.balanceOf(partner) - a0, net / 2 * 6000 / 10_000, "A: 60 % from the raise on");
         assertEq(usdc.balanceOf(ownerB) - b0, net / 2 * 5000 / 10_000, "B: the same 50 %, A's raise takes none of it");
         assertLe(usdc.balanceOf(partner) - a0 + usdc.balanceOf(ownerB) - b0, net * 6000 / 10_000, "all partners: 60 % at most");
@@ -1558,21 +1591,8 @@ contract SimPoolTest is Test {
         vm.expectRevert(SimPool.NoSuchCode.selector);
         pool.buy(0, CODE);
         _share(pool, 5000);
-        assertEq(pool.codes().length, 1, "set again, listed once");
-        vm.prank(creator);
-        pool.setCode(keccak256("NEVER-ON-SALE"), address(0), 0);
-        assertEq(pool.codes().length, 1, "a code set off sale before it was ever listed takes no place");
-    }
-
-    function test_setCode_atMostMaxCodes() public {
-        SimPool pool = _pool();
-        vm.startPrank(creator);
-        for (uint256 i = 1; i < factory.MAX_CODES(); ++i) pool.setCode(keccak256(abi.encode(i)), partner, 0);
-        vm.expectRevert(SimPool.TooMuch.selector);
-        pool.setCode(keccak256("one too many"), partner, 0);
-        pool.setCode(CODE, makeAddr("next"), 0); // one already listed can still change
-        vm.stopPrank();
-        assertEq(pool.codes().length, factory.MAX_CODES());
+        assertEq(_partnerOf(pool, CODE), partner, "set again, on sale again");
+        _buy(pool, trader, 0);
     }
 
     function test_withdraw_eachCodeGetsItsShareInThePartItBrought() public {
@@ -1594,48 +1614,122 @@ contract SimPoolTest is Test {
         assertEq(pool.brought(), 4 * (LARGE_PRICE - 425_000), "each sale brought 84.575");
         deal(address(usdc), address(pool), 6_000e6); // 4 400 above the 1 600 locked; 2 400 kept while open
         _ask(pool, 3_600e6);
-        vm.expectEmit(address(pool));
-        emit SimPool.PartnerPaid(CODE, partner, 895_500_000, true);
-        vm.expectEmit(address(pool));
-        emit SimPool.PartnerPaid(codeB, ownerB, 358_200_000, true);
         vm.prank(creator);
         pool.withdraw();
+        uint256 kept = pool.sharesDue();
+        assertEq(pool.shareDue(CODE), 895_500_000);
+        assertEq(pool.shareDue(codeB), 358_200_000);
+        assertEq(pool.shareDue(codeC), 0, "no share, nothing accrued");
+        bytes32[] memory all3 = new bytes32[](3);
+        (all3[0], all3[1], all3[2]) = (CODE, codeB, codeC);
+        vm.expectEmit(address(pool));
+        emit SimPool.SharePaid(CODE, partner, 895_500_000, true);
+        vm.expectEmit(address(pool));
+        emit SimPool.SharePaid(codeB, ownerB, 358_200_000, true);
+        vm.prank(stranger); // anyone, for any codes: the money goes to each code's partner
+        pool.claimShares(all3);
         // 3 600 less the platform's 18 is 3 582: A brought half of it all, B a quarter, C a quarter.
         assertEq(usdc.balanceOf(partner), 895_500_000, "50 % of A's half");
         assertEq(usdc.balanceOf(ownerB), 358_200_000, "40 % of B's quarter");
-        assertEq(usdc.balanceOf(creator) - before, 3_582e6 - 895_500_000 - 358_200_000, "C's quarter stays the creator's");
+        assertEq(usdc.balanceOf(stranger), 0, "who sends it gets nothing");
+        assertLe(kept - 895_500_000 - 358_200_000, 1, "kept for the codes: theirs, and a unit at most");
+        assertEq(usdc.balanceOf(creator) - before, 3_582e6 - kept, "C's quarter stays the creator's");
         assertEq(pool.principal(), 1_600e6, "all of it was profit");
     }
 
-    function test_withdraw_withEveryCodeSharing_staysWithinAMillionAndAHalfGas() public {
-        // MAX_CODES codes, each with a share and a sale: the most transfers one withdrawal makes.
-        SimPool pool = _pool();
-        uint256 n = factory.MAX_CODES();
+    /// The number of codes `test_codes_twoThousand_*` sets, each with a share and a sale of its own.
+    uint256 constant MANY_CODES = 2_000;
+
+    /// A pool with `MANY_CODES` codes, each its own partner, a share of 40 % and one sale of line 1; the setup is not
+    /// metered.
+    function _manyCodes() internal returns (SimPool pool) {
+        vm.pauseGasMetering();
+        pool = _pool();
         vm.startPrank(creator);
-        pool.setCode(CODE, partner, 4000);
-        for (uint256 i = 1; i < n; ++i) {
+        for (uint256 i = 0; i < MANY_CODES; ++i) {
             pool.setCode(keccak256(abi.encode("group", i)), makeAddr(string(abi.encode("owner", i))), 4000);
         }
         vm.stopPrank();
-        _buy(pool, trader, 1);
-        for (uint256 i = 1; i < n; ++i) {
-            _buyWith(pool, makeAddr(string(abi.encode("buyer", i))), 1, keccak256(abi.encode("group", i)));
+        for (uint256 i = 0; i < MANY_CODES; ++i) {
+            _manyExams.push(_buyWith(pool, makeAddr(string(abi.encode("buyer", i))), 1, keccak256(abi.encode("group", i))));
         }
-        deal(address(usdc), address(pool), 6_000e6);
+        vm.resumeGasMetering();
+    }
+
+    PaperExam[] internal _manyExams;
+
+    /// The pool, the token, the factory and the pool's code cold, as a transaction of its own finds them.
+    function _coolPool(SimPool pool) internal {
+        vm.cool(address(pool));
+        vm.cool(address(usdc));
+        vm.cool(address(factory));
+        vm.cool(factory.poolImpl());
+    }
+
+    /// Every exam of `_manyExams` past its time, ended and released.
+    function _releaseAll(SimPool pool) internal {
+        for (uint256 i = 0; i < _manyExams.length; ++i) {
+            _manyExams[i].expire();
+            pool.release(address(_manyExams[i]));
+        }
+    }
+
+    function test_codes_twoThousand_noLimit_withdrawFinishAndAPurchaseFitTheGate() public {
+        // No limit on codes (Alex, 16 November): a withdrawal accrues every code's share by one step, and no call
+        // goes through all the codes. With 2 000 codes sharing, a purchase, a withdrawal and `finish` each stay
+        // within two thirds of a small block, as with one.
+        SimPool pool = _manyCodes();
+        _coolPool(pool);
+        uint256 g = gasleft();
+        PaperExam bought = _buyWith(pool, trader, 1, keccak256(abi.encode("group", MANY_CODES - 1)));
+        g -= gasleft();
+        _manyExams.push(bought);
+        emit log_named_uint("buy with 2 000 codes (with deal and approve)", g);
+        assertLe(g, CREATE_GAS_GATE, "a purchase");
+        vm.pauseGasMetering();
         _ask(pool, pool.withdrawable());
-        vm.recordLogs();
+        _coolPool(pool);
+        vm.resumeGasMetering();
         vm.prank(creator);
-        uint256 before = gasleft();
+        g = gasleft();
         pool.withdraw();
-        uint256 used = before - gasleft();
-        uint256 paid;
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        for (uint256 i = 0; i < logs.length; ++i) {
-            if (logs[i].topics[0] == SimPool.PartnerPaid.selector) paid += 1;
-        }
-        assertEq(paid, n, "every code's partner is paid in the one withdrawal");
-        emit log_named_uint("withdraw gas, 32 codes sharing", used);
-        assertLt(used, 1_500_000, "a bounded loop: about one transfer a code");
+        g -= gasleft();
+        emit log_named_uint("withdraw with 2 000 codes sharing", g);
+        assertLe(g, 200_000, "a withdrawal: no loop over the codes");
+        assertGt(pool.sharesDue(), 0);
+        vm.pauseGasMetering();
+        vm.warp(pool.lockedUntil());
+        vm.prank(creator);
+        pool.close();
+        // Every exam past its time and released: none is live when the pool finishes.
+        vm.warp(block.timestamp + 400 days);
+        assertEq(pool.live(), MANY_CODES + 1, "every exam still to be released");
+        _releaseAll(pool);
+        uint256 before = usdc.balanceOf(creator);
+        _coolPool(pool);
+        vm.resumeGasMetering();
+        vm.prank(creator);
+        g = gasleft();
+        pool.finish();
+        g -= gasleft();
+        assertTrue(pool.finished());
+        assertGt(usdc.balanceOf(creator), before, "finish sent the creator the rest");
+        emit log_named_uint("finish with 2 000 codes sharing", g);
+        assertLe(g, 200_000, "finish: no loop over the codes");
+        // One code's partner takes its share by itself, at the gas of one code.
+        bytes32 last = keccak256(abi.encode("group", MANY_CODES - 1));
+        uint256 due = pool.shareDue(last);
+        assertGt(due, 0);
+        bytes32[] memory one = new bytes32[](1);
+        one[0] = last;
+        _coolPool(pool);
+        g = gasleft();
+        pool.claimShares(one);
+        g -= gasleft();
+        emit log_named_uint("claimShares, one code", g);
+        assertLe(g, 150_000, "one code's claim: the gas of one code");
+        assertEq(usdc.balanceOf(makeAddr(string(abi.encode("owner", MANY_CODES - 1)))), due);
+        assertGe(pool.sharesDue(), 0);
     }
 
     /// `n` payouts claimed in one block, each to a trader of its own with no USDC, none approved: all wait.
@@ -1731,14 +1825,136 @@ contract SimPoolTest is Test {
         _ask(pool, 1_000e6);
         vm.prank(creator);
         pool.withdraw();
+        _takeShares(pool, CODE);
         assertEq(usdc.balanceOf(partner), 0);
         assertEq(pool.heldOf(partner), 497_500_000, "set aside for the partner");
         assertEq(pool.held(), 497_500_000);
-        assertEq(pool.withdrawable(), usdc.balanceOf(address(pool)) - 497_500_000 - 3 * LARGE_PAYOUT,
+        assertEq(pool.withdrawable(), usdc.balanceOf(address(pool)) - 497_500_000 - pool.sharesDue() - 3 * LARGE_PAYOUT,
             "and kept out of what the creator may take");
         vm.prank(partner);
         pool.claimHeld(makeAddr("partner's other address"));
         assertEq(usdc.balanceOf(makeAddr("partner's other address")), 497_500_000);
+    }
+
+    function test_withdraw_aCreatorTheTokenRefusesHasItsPartSetAside_theCodesAndFinishGoOn() public {
+        // The token refuses the creator's address: the withdrawal goes through, the creator's part is set aside for
+        // it, and the code's share does not depend on it (`finish`: the next test).
+        SimPool pool = _pool();
+        _share(pool, 6000);
+        for (uint256 i = 0; i < 30; ++i) _buy(pool, _who(i), 1);
+        vm.warp(pool.lockedUntil() + 1);
+        uint256 w = pool.withdrawable();
+        _ask(pool, w);
+        usdc.block_(creator);
+        uint256 before = usdc.balanceOf(creator);
+        vm.recordLogs();
+        vm.prank(creator);
+        pool.withdraw();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        (,,, bool sent) = abi.decode(logs[logs.length - 1].data, (uint256, uint256, uint256, bool));
+        assertFalse(sent, "Withdrawn says the creator's part was not sent");
+        uint256 fee = w * 50 / 10_000;
+        uint256 rest = w - fee - pool.sharesDue();
+        assertEq(usdc.balanceOf(creator), before, "nothing reached the refused address");
+        assertEq(pool.heldOf(creator), rest, "set aside for the creator");
+        assertEq(pool.held(), rest);
+        _takeShares(pool, CODE);
+        assertGt(usdc.balanceOf(partner), 0, "the partner is paid whatever the creator's address");
+        vm.prank(creator);
+        pool.claimHeld(other);
+        assertEq(usdc.balanceOf(other), rest, "the creator takes it to another address");
+        assertEq(pool.held(), 0);
+    }
+
+    function test_withdraw_aRefusedCreatorDoesNotStopFinish() public {
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        PaperExam exam = _buy(pool, trader, 1);
+        vm.prank(closer);
+        pool.close();
+        _fail(exam, trader);
+        pool.release(address(exam));
+        usdc.block_(creator);
+        vm.warp(block.timestamp + factory.WITHDRAW_DELAY());
+        uint256 bal = usdc.balanceOf(address(pool));
+        vm.prank(closer);
+        pool.finish();
+        assertTrue(pool.finished());
+        uint256 rest = bal - bal * 50 / 10_000 - pool.sharesDue();
+        assertEq(pool.heldOf(creator), rest, "the creator's part set aside, not a refused finish");
+        _takeShares(pool, CODE);
+        assertGt(usdc.balanceOf(partner), 0, "and the code's partner takes its share after the finish");
+        vm.prank(creator);
+        pool.claimHeld(other);
+        assertEq(usdc.balanceOf(other), rest);
+    }
+
+    function test_codes_whatTheyAccruedIsKeptFromSalesPayoutsAndTheNextProfit() public {
+        // What a withdrawal accrued to a code stays in the pool until its partner takes it: it is in no free money,
+        // no later profit, nothing the creator may withdraw and no payout.
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        _withSales(pool, 30);
+        _ask(pool, 1_000e6);
+        vm.prank(creator);
+        pool.withdraw();
+        uint256 due = pool.sharesDue();
+        assertEq(due, 497_500_001);
+        uint256 bal = usdc.balanceOf(address(pool));
+        assertEq(pool.free(), bal - due, "not free for sales or lines");
+        // Before the term, only profit: the pool's money above what the creator put in and what the code accrued.
+        // The creator adds 2 000, so the profit, not the floor, is what limits it.
+        vm.startPrank(creator);
+        usdc.approve(address(pool), 2_000e6);
+        pool.addToPot(2_000e6);
+        vm.stopPrank();
+        assertEq(pool.withdrawable(), bal + 2_000e6 - due - pool.principal(), "not profit a second time");
+        // A payout claimed now is paid only out of what is not the code's.
+        PaperExam stage = _passedStage(pool, trader, 1);
+        uint256 id = _claim(pool, address(stage));
+        deal(address(usdc), address(pool), due + LARGE_PAYOUT - 1);
+        vm.warp(block.timestamp + 72 hours);
+        vm.expectEmit(address(pool));
+        emit SimPool.PayoutQueued(id, LARGE_PAYOUT - 1);
+        pool.pay(10);
+        assertEq(pool.paidCount(), 0, "one unit short of the payout without the code's money: it waits");
+        deal(address(usdc), address(pool), due + LARGE_PAYOUT);
+        pool.pay(10);
+        assertEq(pool.paidCount(), 1);
+        _takeShares(pool, CODE);
+        assertEq(usdc.balanceOf(partner), 497_500_000, "and the partner still takes all of it");
+    }
+
+    function test_codes_aSaleOrARaiseKeepsWhatWasAccrued() public {
+        // A (40 %) and B (50 %), one large sale each. A withdrawal accrues to both; before either partner takes it,
+        // A is raised to 60 % and sells once more. A's partner still gets 40 % of its half of that withdrawal, and
+        // the next withdrawal shares by what each code brought then and its share then.
+        SimPool pool = _pool();
+        _share(pool, 4000);
+        address ownerB = makeAddr("owner B");
+        bytes32 codeB = keccak256("GROUP-TWO");
+        vm.prank(creator);
+        pool.setCode(codeB, ownerB, 5000);
+        _buy(pool, trader, 1);
+        _buyWith(pool, other, 1, codeB);
+        deal(address(usdc), address(pool), 6_000e6);
+        _ask(pool, 1_000e6);
+        vm.prank(creator);
+        pool.withdraw();
+        uint256 net = 1_000e6 - 5e6;
+        _share(pool, 6000);
+        _buy(pool, stranger, 1);
+        assertEq(pool.shareDue(CODE), net / 2 * 4000 / 10_000, "A: 40 % of half, raised and sold since");
+        _takeShares(pool, CODE);
+        assertEq(usdc.balanceOf(partner), net / 2 * 4000 / 10_000);
+        deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) + 1_000e6);
+        _ask(pool, 1_000e6);
+        vm.prank(creator);
+        pool.withdraw();
+        _takeShares(pool, CODE);
+        _takeShares(pool, codeB);
+        assertEq(usdc.balanceOf(partner) - net / 2 * 4000 / 10_000, net * 2 * 6000 / (3 * 10_000), "A: 60 % of two thirds");
+        assertEq(usdc.balanceOf(ownerB), net / 2 * 5000 / 10_000 + net * 5000 / (3 * 10_000), "B: 50 % of half, then a third");
     }
 
     function test_addToPot_comesBackFirstWithoutTheShare() public {
@@ -1830,9 +2046,11 @@ contract SimPoolTest is Test {
         vm.warp(block.timestamp + 7 days);
         vm.prank(closer); // the closer may finish it too
         pool.finish();
+        _takeShares(pool, CODE);
         assertEq(usdc.balanceOf(closer), 0, "the closer gets none of it");
         assertEq(usdc.balanceOf(partner), toPartner, "the code's partner its share");
-        assertEq(usdc.balanceOf(creator) - before, bal - bal * 50 / 10_000 - toPartner, "the creator the rest");
+        assertLe(pool.sharesDue(), 1, "a unit of rounding at most stays");
+        assertEq(usdc.balanceOf(creator) - before, bal - bal * 50 / 10_000 - toPartner - pool.sharesDue(), "the creator the rest");
     }
 
     function test_withdraw_beforeTheTermTheProfitOnly_neverWhatTheCreatorPutIn() public {
@@ -1879,9 +2097,11 @@ contract SimPoolTest is Test {
         vm.warp(block.timestamp + 7 days);
         vm.prank(creator);
         pool.finish();
-        assertEq(usdc.balanceOf(address(pool)), 0);
+        assertEq(usdc.balanceOf(address(pool)), pool.sharesDue(), "what the code accrued stays for its partner");
+        _takeShares(pool, CODE); // after the pool has finished too
         assertEq(usdc.balanceOf(partner), toPartner, "a share of the profit only");
-        assertEq(usdc.balanceOf(creator) - before, bal - bal * 50 / 10_000 - toPartner);
+        assertLe(usdc.balanceOf(address(pool)), 1, "a unit of rounding at most stays");
+        assertEq(usdc.balanceOf(creator) - before, bal - bal * 50 / 10_000 - toPartner - pool.sharesDue());
         vm.prank(checker);
         vm.expectRevert(SimPool.Done.selector);
         pool.liftStop(0);
@@ -1914,7 +2134,7 @@ contract SimPoolTest is Test {
         if (topic == SimPool.StopObjected.selector) return "StopObjected";
         if (topic == SimPool.StopFinal.selector) return "StopFinal";
         if (topic == SimPool.CodeSet.selector) return "CodeSet";
-        if (topic == SimPool.PartnerPaid.selector) return "PartnerPaid";
+        if (topic == SimPool.SharePaid.selector) return "SharePaid";
         return "";
     }
 
@@ -2023,11 +2243,14 @@ contract SimPoolTest is Test {
             '","fundWindow":', vm.toString(pool.fundWindow()), "}");
     }
 
+    /// The codes of the recorded chain, in the order they were set (a page finds them in the pool's `CodeSet` events).
+    bytes32[] internal _pageKeys;
+
     /// Each code as the page reads it: its key, and codeOf's partner, share, whether a sale fixed it, what it brought.
     function _pageCodes(SimPool pool) internal view returns (string memory list) {
-        bytes32[] memory keys = pool.codes();
+        bytes32[] memory keys = _pageKeys;
         for (uint256 i = 0; i < keys.length; ++i) {
-            (address p, uint16 bps, bool used,, uint256 got) = pool.codeOf(keys[i]);
+            (address p, uint16 bps, bool used, uint256 got,,,) = pool.codeOf(keys[i]);
             list = string.concat(list, i == 0 ? "" : ",", '{"code":"', vm.toString(keys[i]), '","partner":"',
                 vm.toString(p), '","bps":', vm.toString(bps), ',"used":', used ? "true" : "false", ',"brought":"',
                 vm.toString(got), '"}');
@@ -2055,7 +2278,8 @@ contract SimPoolTest is Test {
     /// Two trading groups' codes, 50 % and 40 %. Three traders buy with the first, pass both stages and claim; the
     /// checker stops the second payout and its trader objects; nothing is free, so the creator adds 2 200 to the pot
     /// and ten more exams are sold with the first code and thirty with the second; the token refuses the third trader and the second group's owner; after the payout delay one
-    /// payout is paid, and the creator withdraws 400, sharing its profit with both codes' owners; then, long before the
+    /// payout is paid, and the creator withdraws 400, sharing its profit with both codes, which anyone then sends their
+    /// owners; then, long before the
     /// pool's 184 days, the platform's closer closes it. The page drawn from
     /// these events must show 800 USDC paid, with that payment's event, the stop and the held payout apart, and each
     /// code with what it brought and what its owner was sent or had set aside, and the pool's term with the platform's
@@ -2069,6 +2293,8 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         pool.setCode(two, owner2, 4000);
         _pageCollect(pool);
+        _pageKeys.push(CODE);
+        _pageKeys.push(two);
         address[3] memory who = [trader, other, makeAddr("refused by the token")];
         uint256[3] memory ids;
         // Every exam bought first, while line 1 sells.
@@ -2131,6 +2357,11 @@ contract SimPoolTest is Test {
         vm.warp(block.timestamp + factory.WITHDRAW_DELAY());
         vm.prank(creator);
         pool.withdraw();
+        _pageCollect(pool);
+        // Anyone sends both codes' owners what the withdrawal accrued to them.
+        vm.roll(block.number + 1);
+        vm.prank(stranger);
+        pool.claimShares(_pageKeys);
         _pageCollect(pool);
         assertEq(pool.paidCount(), 1);
         assertEq(pool.paidTotal(), LARGE_PAYOUT);
@@ -2231,10 +2462,13 @@ contract SimPoolTest is Test {
         uint256 before = usdc.balanceOf(creator);
         vm.prank(creator);
         pool.withdraw();
+        uint256 kept = pool.sharesDue();
+        _takeShares(pool, CODE);
         assertEq(usdc.balanceOf(platform) - fees, 9_601_250, "0.5 % of 1 920.25");
         assertEq(usdc.balanceOf(partner), 627_784_589, "A: 50 % of 1 910.64875 x 46/70");
-        assertEq(usdc.balanceOf(creator) - before, 1_282_864_161, "the creator the rest, B's part with it");
-        assertEq(usdc.balanceOf(address(pool)), 2_400e6, "the floor of three payouts stays");
+        assertLe(kept - 627_784_589, 1, "kept for the code: its part, and a unit of rounding at most");
+        assertEq(usdc.balanceOf(creator) - before, 1_282_864_161 - (kept - 627_784_589), "the creator the rest, B's part with it");
+        assertEq(usdc.balanceOf(address(pool)), 2_400e6 + pool.sharesDue(), "the floor of three payouts stays");
     }
 
     function test_withdraw_neverMoreThanWasAsked_whateverCameInSince() public {

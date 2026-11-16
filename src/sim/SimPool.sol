@@ -10,6 +10,7 @@ import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
 import {SimPoolFactory} from "./SimPoolFactory.sol";
 import {SimPoolStops} from "./SimPoolStops.sol";
 import {SimPoolSetup} from "./SimPoolSetup.sol";
+import {SimPoolCodes, ACCRUAL_SCALE} from "./SimPoolCodes.sol";
 
 /// @notice The part of USDC's EIP-3009 a pool takes a price through: Circle's FiatToken V2.2, on
 ///         HyperEVM and its testnet. The token itself checks the signature, the time, the nonce,
@@ -160,16 +161,21 @@ contract SimPool is Initializable {
     }
 
     /// A trading group's code: every sale names one. Its partner, the group's owner, gets `bps` of the
-    /// pool's profit in the part the code brought of every price the pool took (`withdraw`, `finish`).
+    /// pool's profit in the part the code brought of every price the pool took (`withdraw`, `finish`): accrued to
+    /// the code at each withdrawal, and sent to the partner by `claimShares`, which anyone may call.
     struct Code {
         address partner;
         uint16 bps;
         /// A sale named it: its partner and share are fixed from then on.
         bool used;
-        /// In `codes()`: set once at least.
-        bool listed;
         /// What the code's sales brought the pool: each price less the platform's part.
         uint256 brought;
+        /// The pool's `accrual` when the code was last counted (`SimPoolCodes`).
+        uint256 mark;
+        /// What the code has accrued and not yet sent or set aside, as last counted (`shareDue` counts the rest).
+        uint256 due;
+        /// What the code has sent its partner or set aside for it, in all.
+        uint256 got;
     }
 
     struct Payout {
@@ -231,16 +237,24 @@ contract SimPool is Initializable {
     /// oldest first, in the first `payoutsPerDay` places; zero for none yet. `pay` settles one more only once the
     /// oldest is `PAYOUT_DAY` old, so no 24 hours see more than `payoutsPerDay` (CFO, 13 November).
     uint64[MAX_PAYOUTS_A_DAY] internal _settledAt;
-    /// Payouts, and partners' parts, the token refused to send, set aside for whom they were for (`claimHeld`).
+    /// Payouts, partners' parts and the creator's withdrawals the token refused to send, set aside for whom they were
+    /// for (`claimHeld`).
     uint256 public held;
     mapping(address holder => uint256) public heldOf;
     /// Payouts stopped within `STOP_RESERVE` and not yet lifted or made final: the money stays set
     /// aside, as `held` is, so a lifted stop finds it (CFO, 12 November).
     uint256 public reserved;
-    /// Every code, by the keccak256 of its text, and what all of them brought together.
+    /// Every code, by the keccak256 of its text, and what all of them brought together. Codes are not listed and
+    /// have no number limit: every one is in a `CodeSet` event.
     mapping(bytes32 code => Code) public codeOf;
-    bytes32[] internal _codes;
     uint256 public brought;
+    /// Every code's weight together: what it brought times its share in bps.
+    uint256 public weight;
+    /// What one unit of a code's weight has accrued from the pool's withdrawals, times `ACCRUAL_SCALE`.
+    uint256 public accrual;
+    /// What the codes have accrued and not yet sent their partners or set aside: never the creator's, kept out of
+    /// every withdrawal and payout as `held` is.
+    uint256 public sharesDue;
 
     SimLine[] internal _lines;
     SimRules internal _rules;
@@ -306,14 +320,19 @@ contract SimPool is Initializable {
     /// The stop of payout `id` was not lifted within `STOP_RESERVE`: final, and its money free.
     event StopFinal(uint256 indexed id, uint64 amount, uint256 reserved);
     event AddedToPot(uint256 amount, uint256 principal);
-    event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount);
+    /// `partnerAmount` is what the withdrawal accrued to the codes, which stays in the pool for their partners
+    /// (`claimShares`); `sent` is false when the token refused the creator's part, set aside for it (`claimHeld`).
+    event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount, bool sent);
     /// The creator asks to withdraw `amount`, which can be carried out from `readyAt` until `lapsesAt`.
     event WithdrawRequested(uint256 amount, uint64 readyAt, uint64 lapsesAt);
     /// A request to withdraw `amount` cancelled by `by`: the creator, or the factory's closer.
     event WithdrawCancelled(address indexed by, uint256 amount);
     event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps);
-    /// A partner's part of a withdrawal: sent, or set aside for the partner (`claimHeld`) if the token refused.
-    event PartnerPaid(bytes32 indexed code, address indexed partner, uint256 amount, bool sent);
+    /// Code `code` was counted what it accrued since it was last touched (a sale, a raise, a claim).
+    event ShareAccrued(bytes32 indexed code, uint256 amount);
+    /// What a code had accrued, sent to `to` by `claimShares`, or set aside for `to` (`claimHeld`) if the token
+    /// refused.
+    event SharePaid(bytes32 indexed code, address indexed to, uint256 amount, bool sent);
     event Closed();
     /// The factory's closer closed the pool before its term; the money goes where it would anyway.
     event ClosedEarly(address indexed closer);
@@ -403,7 +422,7 @@ contract SimPool is Initializable {
     ///         keeps for the stages still running (`staged`) (CFO, 16 November).
     function free() public view returns (uint256) {
         uint256 bal = _bal();
-        uint256 kept = owed + held + reserved + staged;
+        uint256 kept = owed + held + reserved + staged + sharesDue;
         return bal > kept ? bal - kept : 0;
     }
 
@@ -439,9 +458,9 @@ contract SimPool is Initializable {
         return _payouts[id];
     }
 
-    /// @notice Every code of the pool, as `codeOf` keys them, in the order they were set.
-    function codes() external view returns (bytes32[] memory) {
-        return _codes;
+    /// @notice What code `code` has accrued and not yet sent its partner: `claimShares` sends it.
+    function shareDue(bytes32 code) external view returns (uint256) {
+        return SimPoolCodes.due(codeOf, accrual, code);
     }
 
     /// @notice From when payout `id` goes out whether approved or not: its claim plus `PAYOUT_HARD`.
@@ -476,7 +495,7 @@ contract SimPool is Initializable {
     ///         `finish` if the factory's closer closed the pool sooner.
     function withdrawable() public view returns (uint256) {
         uint256 bal = _bal();
-        uint256 keep = owed + held + reserved + (finished ? 0 : floor());
+        uint256 keep = owed + held + reserved + sharesDue + (finished ? 0 : floor());
         uint256 w = bal > keep ? bal - keep : 0;
         if (block.timestamp < lockedUntil) {
             uint256 p = _profit();
@@ -661,7 +680,7 @@ contract SimPool is Initializable {
                 // again: neither is paid out to anyone else (CFO, 12 November). Stops can keep more than the
                 // pool holds, when payouts came faster than prices: then nothing is free (review of #269).
                 uint256 bal = _bal();
-                uint256 kept = held + reserved;
+                uint256 kept = held + reserved + sharesDue;
                 bal = bal > kept ? bal - kept : 0;
                 if (bal < ahead + p.amount) {
                     emit PayoutQueued(i, bal);
@@ -710,8 +729,8 @@ contract SimPool is Initializable {
         emit Released(account);
     }
 
-    /// @notice Sends a trader, or a partner, what was set aside for them when a transfer was refused, to
-    ///         an address they name. Also after the pool has finished.
+    /// @notice Sends a trader, a partner or the creator what was set aside for them when a transfer was refused,
+    ///         to an address they name. Also after the pool has finished.
     function claimHeld(address to) external {
         uint256 amount = heldOf[msg.sender];
         if (amount == 0) revert TooMuch();
@@ -719,6 +738,15 @@ contract SimPool is Initializable {
         held -= amount;
         usdc.safeTransfer(to, amount);
         emit HeldClaimed(msg.sender, to, amount);
+    }
+
+    /// @notice Sends each of `codes` what it has accrued to its partner, or sets it aside for the partner
+    ///         (`claimHeld`) if the token refuses. Anyone may, for any codes, also after the pool has finished: the
+    ///         money goes to each code's partner only. The work is the number of codes named, never all of them.
+    function claimShares(bytes32[] calldata codes) external {
+        (uint256 out, uint256 setAside) = SimPoolCodes.claim(codeOf, heldOf, usdc, accrual, codes);
+        sharesDue -= out;
+        held += setAside;
     }
 
     // ── the checker ──────────────────────────────────────────────
@@ -818,8 +846,8 @@ contract SimPool is Initializable {
     ///         asked and what `withdrawable` allows now: never more than was asked, and payouts that came
     ///         due meanwhile come first. The platform takes its 0.5 %. Profit is
     ///         the pool's money above what it owes, holds and keeps for recent stops, and above what the
-    ///         creator put in; a withdrawal takes it first, and each code's partner gets its share of
-    ///         it (`_payPartners`). There is no other way for the creator to withdraw before `finish`.
+    ///         creator put in; a withdrawal takes it first, and each code accrues its partner's share of
+    ///         it (`claimShares`). There is no other way for the creator to withdraw before `finish`.
     function withdraw() external onlyCreator {
         if (finished) revert Done();
         uint256 r = requested;
@@ -873,20 +901,9 @@ contract SimPool is Initializable {
     ///         within the platform's bounds (an owner's steps of 40, 50 and 60 %, CFO, 13 November); its
     ///         partner never changes and its share never falls: the partner does not depend on the
     ///         creator once it has brought traders. A raise counts from the next withdrawal on. A zero
-    ///         `partner` takes an unused code off sale.
+    ///         `partner` takes an unused code off sale. A pool has as many codes as its creator sets.
     function setCode(bytes32 code, address partner, uint16 bps) external onlyCreator {
-        Code storage c = codeOf[code];
-        if (c.used && (partner != c.partner || bps <= c.bps)) revert CodeUsed();
-        if (partner == address(0) && bps != 0) revert BadShare();
-        if (bps != 0 && (bps < factory.MIN_PARTNER_BPS() || bps > factory.MAX_PARTNER_BPS())) revert BadShare();
-        if (!c.listed && partner != address(0)) {
-            if (_codes.length >= factory.MAX_CODES()) revert TooMuch();
-            c.listed = true;
-            _codes.push(code);
-        }
-        c.partner = partner;
-        c.bps = bps;
-        emit CodeSet(code, partner, bps);
+        weight += SimPoolCodes.set(codeOf, factory, accrual, code, partner, bps);
     }
 
     /// @notice Stops selling exams. What runs, runs to its end. The creator may from `lockedUntil` on;
@@ -922,7 +939,7 @@ contract SimPool is Initializable {
         finished = true;
         requested = 0;
         readyAt = 0;
-        uint256 bal = _bal() - held;
+        uint256 bal = _bal() - held - sharesDue;
         if (bal != 0) _withdraw(bal);
         emit Finished(bal);
     }
@@ -971,12 +988,9 @@ contract SimPool is Initializable {
         internal
         returns (address exam)
     {
-        Code storage c = codeOf[code];
-        address partner = c.partner;
-        if (partner == address(0)) revert NoSuchCode();
-        c.used = true;
         uint256 got = m.price - fee;
-        c.brought += got;
+        (address partner, uint256 added) = SimPoolCodes.sold(codeOf, accrual, code, got);
+        weight += added;
         brought += got;
         exam = _start(trader, line, false);
         accountOf[exam] = Account({kind: Kind.Exam, line: uint8(line), done: false});
@@ -1000,39 +1014,37 @@ contract SimPool is Initializable {
         principal -= amount - shared;
         uint256 fee = amount * factory.FEE_BPS() / Units.BPS;
         if (fee != 0) usdc.safeTransfer(factory.feeRecipient(), fee);
-        uint256 toPartners = _payPartners(shared - shared * factory.FEE_BPS() / Units.BPS);
-        usdc.safeTransfer(creator, amount - fee - toPartners);
-        emit Withdrawn(creator, amount, fee, toPartners);
+        // Each code's share of the profit less the platform's part, in the part the code brought of all the pool
+        // took: one step of `accrual` for all of them. The step is rounded up, so a code's part is its share to the
+        // unit, and what is kept for the codes is rounded up, so they are never counted more than is kept: at most a
+        // unit a withdrawal stays in the pool for no one. It stays in the pool for their partners (`claimShares`).
+        uint256 net = shared - shared * factory.FEE_BPS() / Units.BPS;
+        uint256 toPartners;
+        uint256 all = brought * Units.BPS;
+        if (net != 0 && all != 0) {
+            uint256 step = (net * ACCRUAL_SCALE + all - 1) / all;
+            accrual += step;
+            toPartners = (weight * step + ACCRUAL_SCALE - 1) / ACCRUAL_SCALE;
+            sharesDue += toPartners;
+        }
+        // The creator's part, sent or, if the token refuses it, set aside for the creator: a refused creator holds
+        // up neither the withdrawal nor `finish` nor any code's share (A5, 16 November).
+        uint256 rest = amount - fee - toPartners;
+        bool sent = _send(creator, rest);
+        if (!sent) {
+            held += rest;
+            heldOf[creator] += rest;
+        }
+        emit Withdrawn(creator, amount, fee, toPartners, sent);
     }
 
     /// The pool's money above what it owes, holds and keeps for recent stops, and above the principal.
     ///      Zero, not a revert, when stops keep more than the pool holds.
     function _profit() internal view returns (uint256) {
         uint256 bal = _bal();
-        uint256 kept = held + reserved + owed;
+        uint256 kept = held + reserved + owed + sharesDue;
         uint256 free = bal > kept ? bal - kept : 0;
         return free > principal ? free - principal : 0;
-    }
-
-    /// Each code's partner gets its `bps` of `net` in the part the code brought of all the pool took.
-    /// A part the token refuses is set aside for the partner, as a refused payout is for its trader.
-    function _payPartners(uint256 net) internal returns (uint256 total) {
-        uint256 all = brought;
-        if (net == 0 || all == 0) return 0;
-        for (uint256 i = 0; i < _codes.length; ++i) {
-            bytes32 k = _codes[i];
-            Code storage c = codeOf[k];
-            if (c.bps == 0 || c.brought == 0) continue;
-            uint256 part = net * c.brought * c.bps / (all * Units.BPS);
-            if (part == 0) continue;
-            total += part;
-            bool sent = _send(c.partner, part);
-            if (!sent) {
-                held += part;
-                heldOf[c.partner] += part;
-            }
-            emit PartnerPaid(k, c.partner, part, sent);
-        }
     }
 
     /// A transfer that may be refused: true if the token took it.

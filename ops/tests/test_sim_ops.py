@@ -265,23 +265,24 @@ class TheRecord(unittest.TestCase):
 
 
 class TheLibraries(unittest.TestCase):
-    """SimPool links to two libraries since its code outgrew a block's limit; `deploy` puts both first and names them,
-    and the pool's built code asks for exactly these two."""
+    """SimPool links to three libraries since its code outgrew a block's limit; `deploy` puts them first and names
+    them, and the pool's built code asks for exactly these three."""
 
     def test_deploy_links_the_pool_to_both_libraries(self):
         src = (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8")
         stops = src.index('deploy_contract(op, out, record, "SimPoolStops", "SimPoolStops", [], [])')
         setup = src.index('deploy_contract(op, out, record, "SimPoolSetup", "SimPoolSetup", [], [])')
-        pool = src.index('{"SimPoolStops": stops, "SimPoolSetup": setup})')
-        self.assertLess(max(stops, setup), pool, "the libraries before the pool that links to them")
+        codes = src.index('deploy_contract(op, out, record, "SimPoolCodes", "SimPoolCodes", [], [])')
+        pool = src.index('{"SimPoolStops": stops, "SimPoolSetup": setup, "SimPoolCodes": codes_lib})')
+        self.assertLess(max(stops, setup, codes), pool, "the libraries before the pool that links to them")
 
-    def test_the_pools_code_links_to_these_two_and_no_other(self):
+    def test_the_pools_code_links_to_these_three_and_no_other(self):
         art = ROOT / "out/SimPool.sol/SimPool.json"
         if not art.exists():
             self.skipTest("no forge build here")
         refs = json.loads(art.read_text())["bytecode"].get("linkReferences") or {}
         names = sorted(name for libs in refs.values() for name in libs)
-        self.assertEqual(names, ["SimPoolSetup", "SimPoolStops"])
+        self.assertEqual(names, ["SimPoolCodes", "SimPoolSetup", "SimPoolStops"])
 
 
 class TheFirstPool(unittest.TestCase):
@@ -552,6 +553,7 @@ class TheCheck(unittest.TestCase):
         self.assertEqual(state[d.CHECK_AT["pool"]], {"code": "0xSimPool"})
         self.assertEqual(state[d.CHECK_AT["setup"]], {"code": "0xSimPoolSetup"})
         self.assertEqual(state[d.CHECK_AT["stops"]], {"code": "0xSimPoolStops"})
+        self.assertEqual(state[d.CHECK_AT["codes"]], {"code": "0xSimPoolCodes"})
         f = state[d.CHECK_AT["factory"]]
         self.assertEqual(f["code"], "0xSimPoolFactory")
         word = lambda a: "0x" + int(a, 16).to_bytes(32, "big").hex()

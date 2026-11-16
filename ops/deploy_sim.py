@@ -359,7 +359,7 @@ def deploy(args) -> int:
     safe = safe_of(args, (filler, checker, closer))
     print(f"deploy_sim deploy: {c.NETWORK.name} (chain {c.CHAIN_ID}), label {args.label}, USDC {c.USDC_ERC20} "
           "(Circle's, EIP-3009)")
-    print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPool (linked to both), TermsBook, "
+    print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPoolCodes, SimPool (linked to the three), TermsBook, "
           "SimPoolFactory(usdc, exam, pool, operator)  (big blocks on, then off)")
     print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
           f"setTermsBook, setAsset " + ", ".join(f"{n} ({i}) {cap / 100:g}x" for n, i, cap in assets))
@@ -408,11 +408,13 @@ def deploy(args) -> int:
         try:
             exam, rcpt = deploy_contract(op, out, record, "PaperExamImpl", "PaperExam", [], [])
             record["block"] = int(rcpt["blockNumber"], 16)
-            # SimPool's stops and the copy of its plan are libraries it calls (EIP-170): deployed first, and linked.
+            # SimPool's stops, the copy of its plan and its codes are libraries it calls (EIP-170): deployed first,
+            # and linked.
             stops, _ = deploy_contract(op, out, record, "SimPoolStops", "SimPoolStops", [], [])
             setup, _ = deploy_contract(op, out, record, "SimPoolSetup", "SimPoolSetup", [], [])
+            codes_lib, _ = deploy_contract(op, out, record, "SimPoolCodes", "SimPoolCodes", [], [])
             pool, _ = deploy_contract(op, out, record, "SimPoolImpl", "SimPool", [], [],
-                                      {"SimPoolStops": stops, "SimPoolSetup": setup})
+                                      {"SimPoolStops": stops, "SimPoolSetup": setup, "SimPoolCodes": codes_lib})
             book, _ = deploy_contract(op, out, record, "TermsBook", "TermsBook", [], [])
             factory, _ = deploy_contract(op, out, record, "SimPoolFactory", "SimPoolFactory",
                                          ["address", "address", "address", "address"],
@@ -493,7 +495,7 @@ def pool(args) -> int:
 # Where the contracts `check` reads stand: addresses no key holds, given code by the call's state override.
 CHECK_AT = {"exam": "0x" + "00" * 18 + "c0e1", "factory": "0x" + "00" * 18 + "c0f1", "book": "0x" + "00" * 18 + "c0b1",
             "pool": "0x" + "00" * 18 + "c0d1", "text": "0x" + "00" * 18 + "c0a1", "setup": "0x" + "00" * 18 + "c051",
-            "stops": "0x" + "00" * 18 + "c052", "creator": "0x" + "00" * 18 + "c0c1", "filler": "0x" + "00" * 18 + "c0a2",
+            "stops": "0x" + "00" * 18 + "c052", "codes": "0x" + "00" * 18 + "c053", "creator": "0x" + "00" * 18 + "c0c1", "filler": "0x" + "00" * 18 + "c0a2",
             "checker": "0x" + "00" * 18 + "c0a3", "closer": "0x" + "00" * 18 + "c0a4", "fee": "0x" + "00" * 18 + "c0a5"}
 # SimPoolFactory's slots of `termsBook` and `assetCapX100`, TermsBook's of `textAt` (forge inspect … storageLayout);
 # test/sim/SimPoolFactory.t.sol holds them against the contracts.
@@ -525,18 +527,19 @@ def runtime_of(contract: str, types: list, values: list, libraries: dict | None 
 def check_overrides(assets: list[tuple[str, int, int]], terms_hash: bytes) -> dict:
     """The state the factory's `check` reads, as a state override: PaperExam and the factory as this checkout builds
     them, the factory listing `assets` with their caps as `deploy` would and its roles set, a TermsBook with the
-    terms published, and SimPool with its two libraries, which `create` clones and calls when its gas is measured."""
+    terms published, and SimPool with its three libraries, which `create` clones and calls when its gas is measured."""
     a = CHECK_AT
     factory = runtime_of("SimPoolFactory", ["address", "address", "address", "address"],
                          [c.USDC_ERC20, a["exam"], a["pool"], a["factory"]])
     state = {"0x%064x" % FACTORY_TERMS_BOOK_SLOT: "0x" + _word(int(a["book"], 16)).hex()}
     state.update({map_slot(i, FACTORY_ASSET_CAP_SLOT): "0x" + _word(cap).hex() for _, i, cap in assets})
     state.update({"0x%064x" % slot: "0x" + _word(int(a[role], 16)).hex() for role, slot in FACTORY_ROLE_SLOTS.items()})
-    libraries = {"SimPoolSetup": a["setup"], "SimPoolStops": a["stops"]}
+    libraries = {"SimPoolSetup": a["setup"], "SimPoolStops": a["stops"], "SimPoolCodes": a["codes"]}
     return {a["exam"]: {"code": runtime_of("PaperExam", [], [])},
             a["pool"]: {"code": runtime_of("SimPool", [], [], libraries)},
             a["setup"]: {"code": runtime_of("SimPoolSetup", [], [])},
             a["stops"]: {"code": runtime_of("SimPoolStops", [], [])},
+            a["codes"]: {"code": runtime_of("SimPoolCodes", [], [])},
             a["factory"]: {"code": factory, "stateDiff": state},
             a["book"]: {"code": runtime_of("TermsBook", [], []),
                         "stateDiff": {map_slot(int.from_bytes(terms_hash, "big"), BOOK_TEXT_AT_SLOT):

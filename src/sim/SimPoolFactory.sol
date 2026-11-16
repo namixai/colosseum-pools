@@ -69,8 +69,6 @@ contract SimPoolFactory {
     /// The share of a withdrawal's profit a trading group's code may give its owner (bps), when it gives one.
     uint16 public constant MIN_PARTNER_BPS = 4000;
     uint16 public constant MAX_PARTNER_BPS = 6000;
-    /// How many codes one pool may have: a withdrawal pays every code's partner in one loop.
-    uint8 public constant MAX_CODES = 32;
     /// How many lines a menu has at most: six sizes on four tiers (Alex, 16 November). Opening a pool on that many
     /// fits a small HyperEVM block with room to spare (`test/sim/SimPool.t.sol`, the menu of 24 lines).
     uint256 public constant MAX_MENU = 24;
