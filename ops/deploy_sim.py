@@ -22,7 +22,8 @@ and the SimPoolFactory on HyperEVM, names the filler, the checker, the closer (t
 key that alone may close a pool before its 6 months, 184 days; four keys, none of them the operator, who
 opens our pools) and the platform's recipient, and lists the assets with their leverage caps from ops/leverage.py (HYPE is left out:
 the platform's decision of 11 November 2026), each at its perp index on the network (ops/sim_network.py). It
-writes deployments/<network>-<label>.json; on testnet with the same keeper nodes as demo3, on mainnet with the
+hands the factory to our Safe last (--safe; setOperator, read before and after, the Safe's threshold and owners read and shown first; needed on mainnet, where the
+deployer's key must not stay its operator), and writes deployments/<network>-<label>.json; on testnet with the same keeper nodes as demo3, on mainnet with the
 ones --keeper-nodes names (a JSON file, as a record's `keeper_nodes`: a node of the keeper's own, not the
 gateway's), so the host's keeper unit can run on it.
 
@@ -245,6 +246,71 @@ def mainnet_plan_ok(raw: dict) -> None:
         raise SystemExit("this plan is written for testnet (its terms or about say so); mainnet takes a plan of its own")
 
 
+def operator_of(factory: str) -> str:
+    return to_checksum_address(c.call_view(factory, "operator()", [], [], ["address"])[0])
+
+
+def safe_of(args, keys: tuple) -> str | None:
+    """--safe, the factory's operator once it is set up: our Safe, which opens our pools and alone can change the
+    factory's roles. Needed on mainnet, where the deployer's key must not stay in charge of the factory. Refused as
+    0x0, and as one of the platform's three keys: a pool's creator is none of them."""
+    if not args.safe:
+        if c.NETWORK.name == "mainnet":
+            raise SystemExit("--safe is needed on mainnet: the factory's operator after the deploy is our Safe, never "
+                             "the deployer's key")
+        return None
+    safe = to_checksum_address(args.safe)
+    if int(safe, 16) == 0:
+        raise SystemExit("--safe is 0x0: setOperator would refuse it, after every contract is deployed")
+    if safe in keys:
+        raise SystemExit("--safe is the filler, the checker or the closer: the operator opens our pools, and a pool's "
+                         "creator is none of them")
+    return safe
+
+
+def safe_ok(safe: str, deployer: str) -> None:
+    """Before anything is sent: the Safe is not the deployer's own key."""
+    if safe == to_checksum_address(deployer):
+        raise SystemExit("--safe is the deployer's own key: the factory would stay with the key that deployed it")
+
+
+def safe_facts(safe: str) -> tuple[int, list[str]]:
+    """Read before the person confirms: --safe is a contract on this chain that answers as a Safe does, and the
+    threshold and the owners it names, so that whoever types the phrase sees to whom the factory goes. Any read that
+    fails is a refusal: an address that has code but no getThreshold() and getOwners() is not a Safe."""
+    c.assert_network()      # the RPC is on the network named: what is read below is read from the right chain
+    code = c.rpc("eth_getCode", [safe, "latest"])
+    # Nodes and mocks differ on how they say "no code": "0x", "0x0", "0X", nothing at all.
+    if not isinstance(code, str) or code.lower().removeprefix("0x") in ("", "0"):
+        raise SystemExit(f"--safe {safe} has no code on {c.NETWORK.name}: a Safe is a contract; this is a typo, a "
+                         "key, or a Safe of another chain")
+    try:
+        threshold = int(c.call_view(safe, "getThreshold()", [], [], ["uint256"])[0])
+        owners = [to_checksum_address(o) for o in c.call_view(safe, "getOwners()", [], [], ["address[]"])[0]]
+    except Exception as exc:
+        raise SystemExit(f"--safe {safe} is not a Safe: getThreshold() or getOwners() did not answer ({exc})") from None
+    if not owners or not 1 <= threshold <= len(owners):
+        raise SystemExit(f"--safe {safe} is not a Safe: it reads threshold {threshold} with {len(owners)} owners")
+    return threshold, owners
+
+
+def hand_over(op, factory: str, safe: str, out: pathlib.Path, record: dict) -> None:
+    """The last step of `deploy`: setOperator to the Safe, read before and after. Before, the operator is the
+    deployer's key, or something else has happened and nothing is sent; after, it is the Safe, or the deploy is not
+    complete. From then on only the Safe sets the factory's roles and assets."""
+    before = operator_of(factory)
+    if before != to_checksum_address(op.address):
+        raise SystemExit(f"the factory's operator is {before}, not the deployer's key: setOperator not sent")
+    record["tx"]["setOperator"] = c.transact(op, factory, "setOperator(address)", ["address"], [safe])["transactionHash"]
+    save(out, record)
+    after = operator_of(factory)
+    if after != safe:
+        raise SystemExit(f"after setOperator the factory's operator reads {after}, not the Safe {safe}")
+    record["operator"] = safe
+    save(out, record)
+    print(f"deploy_sim: the factory's operator is the Safe {safe}, tx {record['tx']['setOperator']}")
+
+
 def deploy(args) -> int:
     assets = asset_list(args.assets.split(","))
     out = deployments.record_path(args.label, c.NETWORK)
@@ -259,23 +325,46 @@ def deploy(args) -> int:
         raise SystemExit("the filler, the checker and the closer are real keys, none of them 0x0")
     if len({filler, checker, closer}) != 3:
         raise SystemExit("the filler, the checker and the closer are three keys")
+    safe = safe_of(args, (filler, checker, closer))
     print(f"deploy_sim deploy: {c.NETWORK.name} (chain {c.CHAIN_ID}), label {args.label}, USDC {c.USDC_ERC20} "
           "(Circle's, EIP-3009)")
     print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPool (linked to both), TermsBook, "
           "SimPoolFactory(usdc, exam, pool, operator)  (big blocks on, then off)")
     print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
           f"setTermsBook, setAsset " + ", ".join(f"{n} ({i}) {cap / 100:g}x" for n, i, cap in assets))
+    if safe:
+        print(f"  would hand over  setOperator {safe} last: the factory's operator read as the deployer's key before, "
+              "and as the Safe after")
+    else:
+        print("  operator         stays the deployer's key (no --safe; testnet only)")
     print(f"  would write      {out.relative_to(ROOT)}")
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
-    sn.confirm_send(args, f"deploy the simulated pool's contracts as {args.label!r} from the key {args.operator!r}", c)
+    told: list[str] = []
+
+    def held() -> str:
+        """What the Safe says of itself, read once and printed: to whom the factory goes, and how many of whom must
+        sign for it. On mainnet it is read for the confirmation, once the person is at a terminal; on testnet,
+        which asks for no phrase, right after. Either way before a transaction is sent."""
+        if not told:
+            threshold, owners = safe_facts(safe)
+            told.append(f"the Safe {safe}, {threshold} of its {len(owners)} owners must sign: {', '.join(owners)}")
+            print(f"  the Safe         {told[0]}")
+        return told[0]
+
+    sn.confirm_send(args, lambda: f"deploy the simulated pool's contracts as {args.label!r} from the key {args.operator!r}"
+                    + (f", then hand the factory to {held()}" if safe else ""), c)
+    if safe:
+        held()
     sn.check_assets([n for n, _, _ in assets], c.NETWORK, c.info_post)
     op = c.account(args.operator)
     recipient = to_checksum_address(args.fee_recipient) if args.fee_recipient else op.address
     if op.address in (filler, checker, closer):
         raise SystemExit("the operator is neither the filler, the checker nor the closer: it opens our pools, and a "
                          "pool's creator is none of them")
+    if safe:
+        safe_ok(safe, op.address)
     if nodes is None:
         nodes = deployments.load("v3-demo3")["keeper_nodes"]
     record: dict = {"chain_id": c.CHAIN_ID, "network": c.NETWORK.name, "label": args.label, "commit": git_head(), "status": "deploying",
@@ -310,6 +399,8 @@ def deploy(args) -> int:
         for name, sig, types, values in steps:
             record["tx"][name] = c.transact(op, factory, sig, types, values)["transactionHash"]
             save(out, record)
+        if safe:
+            hand_over(op, factory, safe, out, record)
     except BaseException as exc:
         mark_incomplete(out, record, exc)
         raise
@@ -733,6 +824,8 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--checker", required=True)
     d.add_argument("--closer", required=True, help="the platform's key that alone may close a pool before its term")
     d.add_argument("--fee-recipient")
+    d.add_argument("--safe", help="our Safe: the factory's operator after the deploy, set last (setOperator); needed "
+                                  "on mainnet")
     d.add_argument("--assets", default="BTC,ETH,SOL")
     d.add_argument("--keeper-nodes", help="a JSON file of the keeper's nodes, as a record's keeper_nodes; needed on mainnet")
     d.add_argument("--send", action="store_true")

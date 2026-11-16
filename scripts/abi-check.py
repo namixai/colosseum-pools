@@ -9,6 +9,10 @@ struct and forget one copy and nothing fails loudly: the app decodes a pool's te
 fields, or refuses to decode them at all, and the first place anyone notices is a pool that will
 not open. That is a silent failure with a long fuse, and it fires on the day someone is watching.
 
+The app's libraries of the simulated pool and the paper exam (`app/lib/simpool.js`, `exam.js`,
+`operator.js`) write their ABIs and call signatures out by hand; each function, event and call is held
+to the compiled ABI of its contract too (LIB_ABIS, LIB_CALLS).
+
 So: read the compiled ABI, read the two copies, compare. Types always; names too where the copy
 carries them, because a swap of two fields of the same width is exactly the mistake that is
 invisible otherwise.
@@ -231,6 +235,206 @@ def check_signatures(contract_rules: list[tuple[str, str]]) -> tuple[list[str], 
     return problems, count
 
 
+# ── the app's libraries of the simulated pool and the paper exam ─────────────────────────────────────────────────
+
+# Each ABI an app library writes out by hand, and the contracts whose compiled ABI it is held to (the weekly
+# architecture audit, 16 November 2026, finding A): change an argument of `SimPool.buy` and the contract's tests
+# and the site's stay green while every purchase fails. A constant named *_ABI in one of these files that this
+# table does not name is reported, so a new one is added here rather than read past.
+LIB_ABIS = {
+    "app/lib/simpool.js": {"SIM_POOL_ABI": ("SimPool",), "SIM_POOL_STOP_RESERVE_ABI": ("SimPool",),
+                           "SIM_POOL_APPROVAL_ABI": ("SimPool",), "SIM_FACTORY_ABI": ("SimPoolFactory",),
+                           "PAPER_EXAM_EVENTS_ABI": ("PaperExam",)},
+    "app/lib/exam.js": {"PAPER_EXAM_ABI": ("PaperExam",)},
+    "app/lib/operator.js": {"OPERATOR_ABI": ("SimPool",)},
+}
+# The contract each library's `call(target, "name(types)", ...)` sends to.
+LIB_CALLS = {"app/lib/exam.js": "PaperExam", "app/lib/operator.js": "SimPool"}
+HUMAN_ITEM = re.compile(r"^(function|event|error)\s+(\w+)\s*\((.*)$")
+
+
+def split_top(text: str, where: str) -> list[str]:
+    """`text` split at the commas outside parentheses."""
+    parts, depth, cur = [], 0, ""
+    for ch in text:
+        depth += (ch == "(") - (ch == ")")
+        if depth < 0:
+            cannot_run(f"{where}: unbalanced parentheses in {text[:80]!r}")
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if depth:
+        cannot_run(f"{where}: unbalanced parentheses in {text[:80]!r}")
+    return [x.strip() for x in parts + [cur] if x.strip()]
+
+
+def closing(text: str, where: str) -> int:
+    """The index of the parenthesis that closes the one `text` opens with."""
+    depth = 0
+    for i, ch in enumerate(text):
+        depth += (ch == "(") - (ch == ")")
+        if depth == 0:
+            return i
+    cannot_run(f"{where}: unbalanced parentheses in {text[:80]!r}")
+
+
+def human_param(text: str, where: str) -> dict:
+    """One parameter of a human-readable ABI line, as the compiled ABI writes it: type, components, name, indexed."""
+    text = text.strip()
+    if text.startswith("("):
+        end = closing(text, where)
+        m = re.match(r"((?:\[\d*\])*)\s*(.*)$", text[end + 1:])
+        out = {"type": "tuple" + m.group(1), "components": [human_param(c, where) for c in split_top(text[1:end], where)]}
+        words = m.group(2).split()
+    else:
+        words = text.split()
+        if not words:
+            cannot_run(f"{where}: an empty parameter")
+        # `uint` and `int` are `uint256` and `int256`, bare or as the element of an array: `uint[]`, `int[3]`.
+        out = {"type": re.sub(r"^(u?int)(?!\d)", r"\g<1>256", words.pop(0))}
+    out["indexed"] = "indexed" in words
+    words = [w for w in words if w != "indexed"]
+    if len(words) > 1:
+        cannot_run(f"{where}: {text!r} is not 'type [indexed] [name]'")
+    out["name"] = words[0] if words else ""
+    return out
+
+
+def human_item(line: str, where: str) -> dict:
+    """A line of an ethers human-readable ABI as a compiled ABI entry: type, name, inputs, outputs, mutability."""
+    m = HUMAN_ITEM.match(line.strip())
+    if not m:
+        cannot_run(f"{where}: {line[:80]!r} is not a function, event or error")
+    kind, name, rest = m.groups()
+    end = closing("(" + rest, where)
+    inputs = [human_param(p, where) for p in split_top(rest[:end - 1], where)]
+    tail = rest[end:].strip()
+    entry = {"type": kind, "name": name, "inputs": inputs, "outputs": [], "mutability": "nonpayable"}
+    if kind != "function":
+        if tail:
+            cannot_run(f"{where}: {line[:80]!r} has words after its parameters")
+        return entry
+    r = re.match(r"^((?:view|pure|payable|nonpayable)?)\s*(?:returns\s*(\(.*\)))?$", tail)
+    if not r:
+        cannot_run(f"{where}: {line[:80]!r} ends in something other than a mutability and returns (...)")
+    entry["mutability"] = r.group(1) or "nonpayable"
+    if r.group(2):
+        entry["outputs"] = [human_param(p, where) for p in split_top(r.group(2)[1:-1], where)]
+    return entry
+
+
+def js_abi(source: str, name: str, where: str) -> list[str]:
+    """`export const NAME = [ "…", "…" ];`: the strings, one a line, each in double quotes."""
+    m = re.search(rf"^(?:export\s+)?const {name}\s*=\s*\[\n(.*?)^\];", source, re.M | re.S)
+    if not m:
+        cannot_run(f"no {name} in {where} -- did it move?")
+    lines = []
+    for ln in m.group(1).splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("//"):
+            continue
+        if not re.fullmatch(r'"[^"]+",?', ln):
+            cannot_run(f"{where} {name} has a line that is not one string: {ln[:60]!r}")
+        lines.append(ln.rstrip(",")[1:-1])
+    return lines
+
+
+def is_static(param: dict) -> bool:
+    """A dynamic type is encoded behind an offset word: a dynamic array, `string`, `bytes`, and a tuple holding one.
+    A fixed array is static when its element is."""
+    t = param["type"]
+    if t.endswith("[]"):
+        return False
+    if t.endswith("]"):
+        return is_static({**param, "type": t[:t.rindex("[")]})
+    if t in ("string", "bytes"):
+        return False
+    if t == "tuple":
+        return all(is_static(c) for c in param["components"])
+    return True
+
+
+def same_fields(label: str, copy: list[dict], compiled_: list[dict], prefix: bool) -> list[str]:
+    """Types always, names where both sides carry one; indexed for events. With `prefix`, the copy may leave off
+    fields at the end: a static tuple or a list of outputs decoded short reads its first fields alike."""
+    problems = []
+    if len(copy) > len(compiled_) or (not prefix and len(copy) != len(compiled_)):
+        return [f"{label}: {len(copy)} fields, the contract has {len(compiled_)}"]
+    for i, (got, want) in enumerate(zip(copy, compiled_)):
+        here = f"{label} field {i}"
+        if got["type"] != want["type"]:
+            problems.append(f"{here}: type {canonical(got)}, the contract says {canonical(want)}")
+            continue
+        if got["name"] and want["name"] and got["name"] != want["name"]:
+            problems.append(f"{here}: named {got['name']}, the contract calls it {want['name']}")
+        if got.get("indexed", False) != want.get("indexed", False):
+            problems.append(f"{here}: indexed {got.get('indexed', False)}, the contract says {want.get('indexed', False)}")
+        if got["type"].startswith("tuple"):
+            # Only a lone static tuple at the end may be decoded short: inside an array each element's size counts,
+            # and a dynamic tuple sits behind an offset word, so its first fields are not at the start of the data.
+            last = prefix and i == len(copy) - 1 and got["type"] == "tuple" and is_static(want)
+            problems += same_fields(here, got["components"], want["components"], last)
+    return problems
+
+
+def mutability(entry: dict) -> str:
+    return "view" if entry.get("stateMutability") in ("view", "pure") else entry.get("stateMutability", "nonpayable")
+
+
+def check_libraries() -> tuple[list[str], int]:
+    """Every function, event and error the three app libraries write out, and every call they build from a
+    signature, against the compiled ABI of the contract it goes to: the selector or topic, each field's type,
+    names where both name it, indexed, and whether a function only reads. Outputs may be read short at the end,
+    for a pool from before a field was added (a payout's `stoppedAt`, `approved`)."""
+    problems, count, compiled_abis = [], 0, {}
+
+    def abi(contract: str) -> list[dict]:
+        if contract not in compiled_abis:
+            compiled_abis[contract] = abi_of(contract)
+        return compiled_abis[contract]
+
+    for rel, consts in LIB_ABIS.items():
+        text = read(rel)
+        # Found by name alone, whatever the initializer is (`[...]`, `Object.freeze([...])`): js_abi then refuses
+        # the ones it cannot read, and the ones this table does not know are named here.
+        found = set(re.findall(r"^(?:export\s+)?(?:const|let|var)\s+(\w+_ABI)\b", text, re.M))
+        for name in sorted(found - set(consts)):
+            problems.append(f"{rel} {name} is an ABI this check does not know: add it to LIB_ABIS")
+        for name, contracts in consts.items():
+            for line in js_abi(text, name, rel):
+                count += 1
+                item = human_item(line, f"{rel} {name}")
+                sig = f"{item['name']}({','.join(canonical(i) for i in item['inputs'])})"
+                label = f"{rel} {name} {item['type']} {sig}"
+                matches = [e for c in contracts for e in abi(c) if e.get("type") == item["type"]
+                           and f"{e['name']}({','.join(canonical(i) for i in e['inputs'])})" == sig]
+                if not matches:
+                    problems.append(f"{label}: {' or '.join(contracts)} declares no such {item['type']}")
+                    continue
+                want = matches[0]
+                problems += same_fields(f"{label} inputs", item["inputs"], want["inputs"], False)
+                if item["type"] == "function":
+                    problems += same_fields(f"{label} outputs", item["outputs"], want["outputs"], True)
+                    if item["mutability"] in ("view", "pure"):
+                        item["mutability"] = "view"
+                    if item["mutability"] != mutability(want):
+                        problems.append(f"{label}: {item['mutability']}, the contract says {mutability(want)}")
+    for rel, contract in LIB_CALLS.items():
+        declared = {f"{e['name']}({','.join(canonical(i) for i in e['inputs'])})" for e in abi(contract)
+                    if e.get("type") == "function" and mutability(e) != "view"}
+        # The whole file, not a line at a time: a call whose signature sits on the line after `call(pool,` counts too.
+        source = read(rel)
+        for m in re.finditer(r"""\bcall\(\s*\w+\s*,\s*["'`](\w+\([^"'`]*\))["'`]""", source):
+            count += 1
+            sig = m.group(1)
+            if re.sub(r"\s+", "", sig) not in declared:
+                n = source.count("\n", 0, m.start()) + 1
+                problems.append(f"{rel}:{n} call {sig}: {contract} declares no such function that sends")
+    return problems, count
+
+
 def error_signatures(contract: str) -> set[str]:
     """`Name(type,...)` for every custom error in the contract's ABI."""
     return {f"{e['name']}({','.join(i['type'] for i in e['inputs'])})"
@@ -317,6 +521,9 @@ def main() -> int:
     problems += found
     found, signatures = check_signatures(structs["rules"])
     problems += found
+    # The simulated pool's and the paper exam's libraries in the app, against their contracts.
+    found, library_items = check_libraries()
+    problems += found
     # The stages, in all three places that name them. A stage added to the contract and not to a
     # copy is not a compile error anywhere: the app renders `undefined` and the agent walks off the
     # end of its tuple, both at the moment somebody's pool is in that stage.
@@ -353,7 +560,8 @@ def main() -> int:
         return 1
     fields = sum(len(v) for v in structs.values())
     print(f"abi-check: clean ({fields} fields and {len(stages)} stages x 2 copies, {len(errors)} errors x 1, "
-          f"{copies} copies of Rules, {signatures} signatures that carry it).")
+          f"{copies} copies of Rules, {signatures} signatures that carry it, {library_items} functions, events "
+          "and calls of the app's simulated pool libraries).")
     return 0
 
 
