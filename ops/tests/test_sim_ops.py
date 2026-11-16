@@ -376,6 +376,11 @@ class TheCheck(unittest.TestCase):
             self.run_check([], answer=RuntimeError("eth_call: node down"))
         self.assertIn("node down", str(caught.exception))
 
+    def test_no_answer_is_no_factory(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check(["--deployment", "x"], answer="0x", record={"SimPoolFactory": "0x" + "77" * 20})
+        self.assertIn("gave no answer on testnet: no factory there", str(caught.exception))
+
     def test_an_answer_other_than_the_largest_size_is_no_pass(self):
         with self.assertRaises(SystemExit) as caught:
             self.run_check([], answer="0x" + (5_000 * 10**6).to_bytes(32, "big").hex())

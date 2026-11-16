@@ -426,7 +426,7 @@ def check(args) -> int:
     factory it names on chain, as it stands (its terms must be published, or it says Unpublished); without, the
     factory and PaperExam this checkout builds, put in the call by a state override over the network's precompiles,
     the assets listed as `deploy` lists them and the terms as `pool` publishes them."""
-    raw = json.loads(pathlib.Path(args.plan).read_text())
+    raw = json.loads(pathlib.Path(args.plan).read_text(encoding="utf-8"))
     mainnet_plan_ok(raw)
     terms_hash = keccak(text=raw["terms_text"])
     plan = plan_of(raw, terms_hash)
@@ -447,6 +447,9 @@ def check(args) -> int:
         out = c.rpc("eth_call", params + [overrides] if overrides else params)
     except RuntimeError as exc:
         raise SystemExit(f"deploy_sim check: the factory refuses the plan: {revert_named(exc)}")
+    if not out or out in ("0x", "0x0"):
+        # No answer is no code there: a --deployment of another network, or a wrong address (review of cp#304).
+        raise SystemExit(f"deploy_sim check: {factory} gave no answer on {c.NETWORK.name}: no factory there")
     largest = int(out, 16)
     if largest != max(m[0] for m in plan[0]):
         raise SystemExit(f"deploy_sim check: the factory answered {largest}, not the plan's largest size")
