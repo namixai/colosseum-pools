@@ -49,13 +49,17 @@ struct SimTier {
     uint8 drawdownKind;
 }
 
-/// @notice What a pool keeps for one line of its menu (`SimPoolSetup`): the rules and terms both its stages start on.
-struct SimLineRules {
+/// @notice What a pool keeps once for every line of its menu (`SimPoolSetup`): the rules and terms both stages start
+///         on, but for what each line's tier sets (`maxDrawdownBps`, the values of `targetsBps`, the kind of loss line)
+///         and its size (`capital`), put in when an exam or a stage starts.
+struct SimRules {
     Rules examRules;
     ExamTerms exam;
     Rules fundedRules;
     ExamTerms funded;
-    uint8 drawdownKind;
+    /// The plan's `fromBook` and `maxWorseBps`, the same for both stages.
+    bool fromBook;
+    uint16 maxWorseBps;
 }
 
 /// @notice Everything the creator of a simulated pool sets, at creation.
@@ -215,10 +219,8 @@ contract SimPool is Initializable {
 
     SimSize[] internal _menu;
     SimTier[] internal _tiers;
-    mapping(uint256 line => SimLineRules) internal _lineRules;
+    SimRules internal _rules;
     uint32 public fundWindow;
-    bool public fromBook;
-    uint16 public maxWorseBps;
 
     mapping(address => Account) public accountOf;
     Payout[] internal _payouts;
@@ -338,10 +340,8 @@ contract SimPool is Initializable {
         terms = p.terms;
         fundWindow = p.fundWindow;
         lockedUntil = uint64(block.timestamp) + factory.MIN_TERM();
-        fromBook = p.fromBook;
-        maxWorseBps = p.maxWorseBps;
         payoutsPerDay = p.payoutsPerDay;
-        largestPayout = _payoutOf(SimPoolSetup.copy(p, _menu, _tiers, _lineRules));
+        largestPayout = _payoutOf(SimPoolSetup.copy(p, _menu, _tiers, _rules));
     }
 
     /// @notice The factory's note of what the creator locked at the start.
@@ -361,6 +361,15 @@ contract SimPool is Initializable {
     ///         both stages of the line start on.
     function tiers() external view returns (SimTier[] memory) {
         return _tiers;
+    }
+
+    /// @notice Whether both stages fill at the book, and how much worse than the oracle at most (`SimPlan`).
+    function fromBook() external view returns (bool) {
+        return _rules.fromBook;
+    }
+
+    function maxWorseBps() external view returns (uint16) {
+        return _rules.maxWorseBps;
     }
 
     function payout(uint256 id) external view returns (Payout memory) {
@@ -488,8 +497,7 @@ contract SimPool is Initializable {
         a.done = true;
         live -= 1;
         staged += _payoutOf(_menu[a.line].size);
-        SimLineRules storage l = _lineRules[a.line];
-        stage = _start(trader, l.fundedRules, l.funded, _menu[a.line].size, l.drawdownKind);
+        stage = _start(trader, a.line, true);
         accountOf[stage] = Account({kind: Kind.Stage, line: a.line, done: false});
         emit Funded(stage, exam, trader);
     }
@@ -844,21 +852,14 @@ contract SimPool is Initializable {
         uint256 got = m.price - fee;
         c.brought += got;
         brought += got;
-        SimLineRules storage l = _lineRules[line];
-        exam = _start(trader, l.examRules, l.exam, m.size, l.drawdownKind);
+        exam = _start(trader, line, false);
         accountOf[exam] = Account({kind: Kind.Exam, line: uint8(line), done: false});
         emit ExamSold(exam, trader, line, m.size, m.price, fee, bySignature, code, partner);
     }
 
-    function _start(address trader, Rules storage r, ExamTerms storage t, uint64 size, uint8 kind)
-        internal
-        returns (address a)
-    {
-        a = Clones.clone(factory.examImpl());
-        ExamTerms memory terms_ = t;
-        terms_.capital = size;
-        PaperExam(a).initializeWithFiller(trader, r, terms_, factory.filler(), fromBook, maxWorseBps, kind);
-        factory.noteAccount(a);
+    /// An exam (`funded` false) or a stage of line `line`, on the kept rules with the line's tier (`SimPoolSetup`).
+    function _start(address trader, uint256 line, bool funded) internal returns (address a) {
+        a = SimPoolSetup.start(_rules, funded, _tiers[line], _menu[line].size, trader, factory);
         live += 1;
     }
 

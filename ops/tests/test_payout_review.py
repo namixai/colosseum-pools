@@ -2208,15 +2208,16 @@ class TheTiersAreTheAccountsOwn(unittest.TestCase):
     that line starts: the review reads them there (`rules()`, `drawdownKind()`), never from the pool's plan."""
 
     def test_the_pool_starts_each_account_with_its_lines_tier(self):
+        # The rules are kept once and the line's tier put in when the account starts (A7 of 16 November): the
+        # account holds its tier all the same.
         setup = _source("src/sim/SimPoolSetup.sol")
-        self.assertIn("_copyRules(l.examRules, p.examRules, k.maxDrawdownBps);", setup)
-        self.assertIn("_copyRules(l.fundedRules, p.fundedRules, k.maxDrawdownBps);", setup)
-        self.assertIn("_copyTerms(l.exam, p.exam, k.targetBps);", setup)
-        self.assertIn("l.drawdownKind = k.drawdownKind;", setup)
-        self.assertIn("to.maxDrawdownBps = maxDrawdownBps;", setup)
+        self.assertIn("r.maxDrawdownBps = k.maxDrawdownBps;", setup)
+        self.assertIn("t.targetsBps[j] = k.targetBps;", setup)
+        self.assertIn("rules.fromBook, rules.maxWorseBps, k.drawdownKind);", setup)
         pool = _source("src/sim/SimPool.sol")
-        self.assertIn("exam = _start(trader, l.examRules, l.exam, m.size, l.drawdownKind);", pool)
-        self.assertIn("stage = _start(trader, l.fundedRules, l.funded, _menu[a.line].size, l.drawdownKind);", pool)
+        self.assertIn("exam = _start(trader, line, false);", pool)
+        self.assertIn("stage = _start(trader, a.line, true);", pool)
+        self.assertIn("SimPoolSetup.start(_rules, funded, _tiers[line], _menu[line].size, trader, factory);", pool)
 
     def test_the_review_reads_the_drawdown_and_its_kind_from_the_account(self):
         asked = []

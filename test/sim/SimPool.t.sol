@@ -2565,6 +2565,214 @@ contract SimPoolTest is Test {
         vm.stopPrank();
         assertEq(usdc.balanceOf(address(pool)), 0);
     }
+
+    // ── twelve lines, and what opening a pool costs in gas ───────
+
+    uint32 constant SOL = 5;
+    /// HyperEVM's small block: "Fast block duration is set to 1 seconds with a 3M gas limit" (its documentation,
+    /// https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/dual-block-architecture, read 16
+    /// November 2026; `gasLimit` 3 000 000 on mainnet and testnet blocks the same day). A creator's `create` is an
+    /// ordinary transaction, sent to a small block: the first pool's plan, and the largest plan the factory takes,
+    /// must fit there with room to spare. The gate is two thirds of the block, the transaction's base and calldata
+    /// counted.
+    uint256 constant SMALL_BLOCK_GAS = 3_000_000;
+    uint256 constant CREATE_GAS_GATE = 2_000_000;
+
+    function _threeAssets(SimPlan memory p) internal {
+        hyperCore.registerPerpAssetInfo(
+            ETH, PrecompileLib.PerpAssetInfo({coin: "ETH", marginTableId: 55, szDecimals: 4, maxLeverage: 25, onlyIsolated: false})
+        );
+        hyperCore.registerPerpAssetInfo(
+            SOL, PrecompileLib.PerpAssetInfo({coin: "SOL", marginTableId: 56, szDecimals: 2, maxLeverage: 20, onlyIsolated: false})
+        );
+        factory.setAsset(ETH, 1000);
+        factory.setAsset(SOL, 500);
+        uint32[] memory a = new uint32[](3);
+        (a[0], a[1], a[2]) = (BTC, ETH, SOL);
+        uint32[] memory caps = new uint32[](3);
+        (caps[0], caps[1], caps[2]) = (1000, 1000, 500);
+        p.examRules.assets = a;
+        p.examRules.assetLeverageX100 = caps;
+        p.examRules.maxLeverageX100 = 1000;
+        p.fundedRules = p.examRules;
+    }
+
+    /// The first pool's plan: 5 000, 10 000 and 25 000 on the loss limits 3, 4, 5 and 6 %, BTC, ETH and SOL each at
+    /// its own cap, one step, trailing to the start (CFO, 16 November).
+    function _firstPlan() internal returns (SimPlan memory p) {
+        p = _plan();
+        _threeAssets(p);
+        uint16[4] memory dd = [uint16(300), 400, 500, 600];
+        uint16[4] memory target = [uint16(900), 1000, 1000, 1000];
+        uint64[3] memory size = [uint64(5_000e6), 10_000e6, 25_000e6];
+        uint64[12] memory price = [uint64(20e6), 30e6, 40e6, 50e6, 40e6, 60e6, 79e6, 95e6, 100e6, 150e6, 198e6, 238e6];
+        p.menu = new SimSize[](12);
+        p.tiers = new SimTier[](12);
+        for (uint256 i = 0; i < 12; ++i) {
+            p.menu[i] = SimSize({size: size[i / 4], price: price[i]});
+            p.tiers[i] = SimTier({maxDrawdownBps: dd[i % 4], targetBps: target[i % 4], drawdownKind: 1});
+        }
+    }
+
+    /// The gas of `create` as a transaction: what the call spends, the base of 21 000 and the calldata (EIP-2028).
+    function _createGas(SimPlan memory p) internal returns (uint256 total, SimPool pool) {
+        bytes memory data = abi.encodeCall(factory.create, (p));
+        uint256 cd;
+        for (uint256 i = 0; i < data.length; ++i) {
+            cd += data[i] == 0 ? 4 : 16;
+        }
+        vm.prank(creator);
+        uint256 g = gasleft();
+        pool = SimPool(factory.create{value: 1 ether}(p));
+        total = g - gasleft() + 21_000 + cd;
+    }
+
+    function test_gas_createOfTheFirstPlanFitsASmallBlock() public {
+        (uint256 g, SimPool pool) = _createGas(_firstPlan());
+        emit log_named_uint("create, first plan (12 lines), as a transaction", g);
+        assertEq(pool.menu().length, 12);
+        assertLe(g, CREATE_GAS_GATE, "two thirds of a small block at most");
+    }
+
+    /// The largest plan the factory takes: `MAX_MENU` lines, an exam of four steps, three assets.
+    function test_gas_createOfTheLargestPlanFitsASmallBlock() public {
+        SimPlan memory p = _firstPlan();
+        assertEq(p.menu.length, factory.MAX_MENU());
+        uint16[] memory t4 = new uint16[](4);
+        for (uint256 i = 0; i < 4; ++i) t4[i] = 1000;
+        p.exam.targetsBps = t4;
+        (uint256 g,) = _createGas(p);
+        emit log_named_uint("create, 12 lines and 4 steps, as a transaction", g);
+        assertLe(g, CREATE_GAS_GATE, "two thirds of a small block at most");
+    }
+
+    function test_gas_aPurchaseOnTheFirstPlanFitsASmallBlock() public {
+        (, SimPool pool) = _createGas(_firstPlan());
+        vm.prank(creator);
+        pool.setCode(CODE, partner, 0);
+        uint256 g = gasleft();
+        PaperExam e = _buy(pool, trader, 11);
+        g -= gasleft();
+        emit log_named_uint("buy, line 11 (with deal and approve)", g);
+        assertLe(g, CREATE_GAS_GATE, "two thirds of a small block at most");
+        assertEq(e.rules().assets.length, 3);
+    }
+
+    function test_menu_twelveLinesAtMost() public {
+        SimPlan memory p = _firstPlan();
+        assertEq(factory.check(p), 25_000e6, "twelve lines, the largest 25 000");
+        SimPlan memory past = _firstPlan();
+        past.menu = new SimSize[](13);
+        past.tiers = new SimTier[](13);
+        for (uint256 i = 0; i < 13; ++i) {
+            past.menu[i] = i < 12 ? p.menu[i] : p.menu[0];
+            past.tiers[i] = i < 12 ? p.tiers[i] : p.tiers[0];
+        }
+        vm.prank(creator);
+        vm.expectRevert(SimPoolFactory.BadPlan.selector);
+        factory.create{value: 1 ether}(past);
+    }
+
+    /// The rules and terms are kept once and the tier put in at the start: every exam and every stage starts on
+    /// what the pool kept for its line before (the plan's rules and terms with the line's loss limit, target, kind
+    /// and size), each stage on its own rules, here unlike the exam's.
+    function _checkStart(PaperExam e, Rules memory r, ExamTerms memory t, SimSize memory m, SimTier memory k)
+        internal
+        view
+    {
+        Rules memory got = e.rules();
+        assertEq(got.dailyLossBps, r.dailyLossBps, "the plan's daily loss");
+        assertEq(got.maxDrawdownBps, k.maxDrawdownBps, "the tier's loss limit");
+        assertEq(got.maxLeverageX100, r.maxLeverageX100);
+        assertEq(abi.encode(got.assets), abi.encode(r.assets), "the plan's assets");
+        assertEq(abi.encode(got.assetLeverageX100), abi.encode(r.assetLeverageX100), "their caps");
+        ExamTerms memory tt = e.terms();
+        assertEq(tt.capital, m.size, "the line's size");
+        assertEq(tt.targetsBps.length, t.targetsBps.length, "the plan's steps");
+        for (uint256 j = 0; j < tt.targetsBps.length; ++j) {
+            assertEq(tt.targetsBps[j], k.targetBps, "the tier's target, every step");
+        }
+        assertEq(tt.stepDuration, t.stepDuration);
+        assertEq(tt.maxIdle, t.maxIdle);
+        assertEq(tt.minTradingDays, t.minTradingDays);
+        assertEq(tt.costPpm, t.costPpm);
+        assertEq(tt.fillDelay, t.fillDelay);
+        assertEq(tt.fillWindow, t.fillWindow);
+        assertEq(e.drawdownKind(), k.drawdownKind, "the tier's kind of loss line");
+    }
+
+    function test_menu_eachExamAndStageStartsOnThePlansRulesWithItsLinesTier() public {
+        SimPlan memory p = _firstPlan();
+        uint16[] memory two = new uint16[](2);
+        (two[0], two[1]) = (1, 2); // the values are not read: the tier's target takes their place
+        p.exam.targetsBps = two;
+        p.exam.costPpm = 950;
+        p.funded.stepDuration = 20 days;
+        p.funded.maxIdle = 10 days;
+        p.funded.fillWindow = 9;
+        p.funded.minTradingDays = 2;
+        uint32[] memory btcEth = new uint32[](2);
+        (btcEth[0], btcEth[1]) = (BTC, ETH);
+        uint32[] memory caps = new uint32[](2);
+        (caps[0], caps[1]) = (300, 200);
+        // A struct of its own: `_threeAssets` set both to one struct in memory.
+        p.fundedRules =
+            Rules({dailyLossBps: 400, maxDrawdownBps: 600, maxLeverageX100: 500, assets: btcEth, assetLeverageX100: caps});
+        p.tiers[5].drawdownKind = 0; // one line from the start
+        SimPool pool = _open(p);
+        PaperExam[12] memory exams;
+        for (uint256 i = 0; i < 12; ++i) {
+            exams[i] = _buy(pool, makeAddr(string(abi.encode("twelve", i))), i);
+            _checkStart(exams[i], p.examRules, p.exam, p.menu[i], p.tiers[i]);
+        }
+        uint256[3] memory funded = [uint256(0), 5, 11];
+        for (uint256 n = 0; n < 3; ++n) {
+            uint256 i = funded[n];
+            address who = makeAddr(string(abi.encode("twelve", i)));
+            _pass(exams[i], who);
+            _pass(exams[i], who);
+            vm.prank(who);
+            PaperExam stage = PaperExam(pool.fund(address(exams[i])));
+            _checkStart(stage, p.fundedRules, p.funded, p.menu[i], p.tiers[i]);
+            _setMark(1_000_000);
+        }
+    }
+
+    function test_open_refusesATierPaperExamWouldRefuse() public {
+        uint16[4] memory dd = [uint16(0), 10_000, 600, 600];
+        uint16[4] memory target = [uint16(1000), 1000, 0, 10_001];
+        for (uint256 i = 0; i < 4; ++i) {
+            SimPlan memory p = _plan();
+            p.tiers[1] = SimTier({maxDrawdownBps: dd[i], targetBps: target[i], drawdownKind: 1});
+            vm.prank(creator);
+            vm.expectRevert(SimPoolFactory.BadPlan.selector);
+            factory.create{value: 1 ether}(p);
+        }
+        SimPlan memory edge = _plan();
+        edge.tiers[1] = SimTier({maxDrawdownBps: 9_999, targetBps: 10_000, drawdownKind: 1});
+        assertEq(factory.check(edge), LARGE, "PaperExam's bounds themselves pass");
+    }
+
+    /// The factory checks a tier on every line as PaperExam would at that line's start: the same answer, whatever
+    /// the loss limit and the target.
+    function testFuzz_open_aTierPassesExactlyWhenPaperExamWouldStartOnIt(uint16 dd, uint16 target) public view {
+        SimPlan memory p = _plan();
+        p.tiers[1] = SimTier({maxDrawdownBps: dd, targetBps: target, drawdownKind: 1});
+        Rules memory r = p.examRules;
+        r.maxDrawdownBps = dd;
+        ExamTerms memory t = p.exam;
+        t.capital = p.menu[1].size;
+        t.targetsBps[0] = target;
+        bool exam;
+        try PaperExam(factory.examImpl()).check(r, t) {
+            exam = true;
+        } catch {}
+        bool pool;
+        try factory.check(p) returns (uint256) {
+            pool = true;
+        } catch {}
+        assertEq(pool, exam);
+    }
 }
 
 /// An exam that takes any rules and terms: behind a factory, it leaves the factory's own bounds the only ones.

@@ -70,7 +70,9 @@ contract SimPoolFactory {
     uint16 public constant MAX_PARTNER_BPS = 6000;
     /// How many codes one pool may have: a withdrawal pays every code's partner in one loop.
     uint8 public constant MAX_CODES = 32;
-    uint256 public constant MAX_MENU = 8;
+    /// How many lines a menu has at most: three sizes on four tiers (CFO, 16 November). Opening a pool on that many
+    /// fits a small HyperEVM block with room to spare (`test/sim/SimPoolGas.t.sol`).
+    uint256 public constant MAX_MENU = 12;
     uint32 public constant MIN_FUND_WINDOW = 1 hours;
     uint32 public constant MAX_FUND_WINDOW = 30 days;
     /// The most a fill at the book may be worse than the oracle price, in bps of it: PaperExam's bound.
@@ -239,11 +241,15 @@ contract SimPoolFactory {
             if (m.size > largest) largest = m.size;
             // `PaperExam.FROM_START` or `PaperExam.TRAILING_TO_START`.
             if (k.drawdownKind > 1) revert BadPlan();
-            // Everything PaperExam will refuse at an exam's start, refused at the pool's, line by line with the
-            // line's own size and tier (review of cp#261).
-            _examCheck(p.examRules, p.exam, m.size, k);
-            _examCheck(p.fundedRules, p.funded, m.size, k);
+            // What PaperExam refuses of what a line sets, its size (`capital`, not zero), its loss limit and its
+            // target (`PaperExam._checkRules`, `_checkTerms`), refused here line by line.
+            if (k.maxDrawdownBps == 0 || k.maxDrawdownBps >= Units.BPS) revert BadPlan();
+            if (k.targetBps == 0 || k.targetBps > Units.BPS) revert BadPlan();
         }
+        // Everything else PaperExam will refuse at an exam's start is the same on every line: refused at the pool's,
+        // once for each stage, on the first line's size and tier (review of cp#261; once since A7 of 16 November).
+        _examCheck(p.examRules, p.exam, p.menu[0].size, p.tiers[0]);
+        _examCheck(p.fundedRules, p.funded, p.menu[0].size, p.tiers[0]);
         if (p.funded.targetsBps.length != 1) revert BadPlan();
         if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY || p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();
         if (p.fundWindow < MIN_FUND_WINDOW || p.fundWindow > MAX_FUND_WINDOW) revert BadPlan();
@@ -265,7 +271,7 @@ contract SimPoolFactory {
         }
     }
 
-    /// The rules and terms a line's stage starts on, as `SimPoolSetup` copies them, against `PaperExam.check`.
+    /// The rules and terms a line's stage starts on, as `SimPoolSetup.start` builds them, against `PaperExam.check`.
     function _examCheck(Rules calldata r, ExamTerms calldata t, uint64 capital, SimTier calldata k) internal view {
         Rules memory rk = r;
         rk.maxDrawdownBps = k.maxDrawdownBps;

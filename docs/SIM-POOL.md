@@ -24,15 +24,24 @@ fail, and their prices pay for the ones that pass.
 
 - **Opening.** `SimPoolFactory.create(plan)` with 1 HYPE sent along, which goes to the platform, and
   the USDC for two payouts of the largest size on the menu, taken from the creator. A menu of
-  10 000 locks 1 600. The plan sets the menu (up to eight lines, each a size and its price), each line's
+  10 000 locks 1 600. The plan sets the menu (up to twelve lines, each a size and its price), each line's
   tier (`tiers`, one for each line: the loss limit, the target and the kind of loss line, from the start or
   trailing to it, of both its stages), the rules and terms both stages share otherwise, how many payouts the
   pool settles at most in a day (`payoutsPerDay`, 1 to 8), how long a pass may wait before its stage starts,
   and the hash of the pool's terms written out in a `TermsBook`. Two lines may share a price: a signed
   purchase names its line. A line's exam and stage start on the plan's rules and terms with its tier in them
-  (`maxDrawdownBps`, every step's target, `drawdownKind`), copied once at the opening (`SimPoolSetup`);
-  `tiers()` reads them back, in the order of `menu()`. The
-  factory runs PaperExam's own checks on both stages of every line, at its size and with its tier, and checks every asset against its list and every leverage cap against the
+  (`maxDrawdownBps`, every step's target, `drawdownKind`) and its size as `capital`. The pool keeps the plan's
+  rules and terms once, and for each line only its size, price and tier; `SimPoolSetup.start` puts the tier in
+  when an exam or a stage starts. `tiers()` reads them back, in the order of `menu()`. Opening a pool so costs
+  two words of storage a line: the first pool's plan of twelve lines, BTC, ETH and SOL, takes 1 616 094 gas as a
+  transaction, base and calldata counted, and twelve lines with an exam of four steps 1 623 528, both under
+  two thirds of a small HyperEVM block of 3 000 000 gas, which a creator's ordinary transaction goes to
+  (`test_gas_createOf…FitsASmallBlock`, the gate in CI; "Fast block duration is set to 1 seconds with a 3M gas
+  limit", https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/dual-block-architecture,
+  read 16 November 2026). Before the rules were kept once, twelve lines took 6 972 609. The
+  factory runs PaperExam's own checks on both stages once, on the first line's size and tier, and on every
+  line PaperExam's bounds on what the line sets (a size not zero, a loss limit under 100 %, a target of at most
+  100 %), the same answer as PaperExam's at that line's start (a fuzz test), and checks every asset against its list and every leverage cap against the
   asset's, that both stages end (a deadline and an idle limit), that the stage is one step, and
   that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler, the checker and the
   closer may not.
