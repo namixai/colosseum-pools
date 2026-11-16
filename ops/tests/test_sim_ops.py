@@ -164,7 +164,8 @@ class TheHandOver(unittest.TestCase):
             dc.assert_not_called(), big.assert_not_called()
 
     def test_the_deployers_own_key_or_an_address_without_code_is_refused_before_anything_is_sent(self):
-        for safe, code, said in ((self.D, "0x6080", "the deployer's own key"), (self.S, "0x", "has no code on testnet")):
+        no_code = ((self.S, c, "has no code on testnet") for c in ("0x", "0x0", "0X", "0X0", "", None))
+        for safe, code, said in ((self.D, "0x6080", "the deployer's own key"), *no_code):
             result, sent, _, dc, big, _ = self.send(safe, code=code)
             self.assertIsInstance(result, SystemExit)
             self.assertIn(said, str(result))

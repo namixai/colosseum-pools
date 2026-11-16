@@ -272,7 +272,9 @@ def safe_ok(safe: str, deployer: str) -> None:
     """Before anything is sent: the Safe is not the deployer's own key, and it is a contract on this chain."""
     if safe == to_checksum_address(deployer):
         raise SystemExit("--safe is the deployer's own key: the factory would stay with the key that deployed it")
-    if c.rpc("eth_getCode", [safe, "latest"]) in ("0x", "0x0", None):
+    code = c.rpc("eth_getCode", [safe, "latest"])
+    # Nodes and mocks differ on how they say "no code": "0x", "0x0", "0X", nothing at all.
+    if not isinstance(code, str) or code.lower().removeprefix("0x") in ("", "0"):
         raise SystemExit(f"--safe {safe} has no code on {c.NETWORK.name}: a Safe is a contract; this is a typo, a "
                          "key, or a Safe of another chain")
 
