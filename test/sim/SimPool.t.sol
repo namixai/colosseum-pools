@@ -1932,9 +1932,9 @@ contract SimPoolTest is Test {
     }
 
     function test_codes_aSaleOrARaiseKeepsWhatWasAccrued() public {
-        // A (40 %) and B (50 %), one large sale each. A withdrawal accrues to both; before either partner takes it,
-        // A is raised to 60 % and sells once more. A's partner still gets 40 % of its half of that withdrawal, and
-        // the next withdrawal shares by what each code brought then and its share then.
+        // A (40 %) and B (50 %), one large sale each. Each withdrawal accrues to both; a raise of A, and later a
+        // further sale by A, come after a withdrawal and before A's partner takes what it accrued: neither changes
+        // what was accrued, and the next withdrawal shares by what each code brought then and its share then.
         SimPool pool = _pool();
         _share(pool, 4000);
         address ownerB = makeAddr("owner B");
@@ -1944,23 +1944,31 @@ contract SimPoolTest is Test {
         _buy(pool, trader, 1);
         _buyWith(pool, other, 1, codeB);
         deal(address(usdc), address(pool), 6_000e6);
+        uint256 net = 1_000e6 - 5e6;
         _ask(pool, 1_000e6);
         vm.prank(creator);
         pool.withdraw();
-        uint256 net = 1_000e6 - 5e6;
-        _share(pool, 6000);
-        _buy(pool, stranger, 1);
-        assertEq(_due(pool, CODE), net / 2 * 4000 / 10_000, "A: 40 % of half, raised and sold since");
+        _share(pool, 6000); // raised after the withdrawal, before the claim
+        assertEq(_due(pool, CODE), net / 2 * 4000 / 10_000, "A: 40 % of half, raised since");
         _takeShares(pool, CODE);
-        assertEq(usdc.balanceOf(partner), net / 2 * 4000 / 10_000);
         deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) + 1_000e6);
         _ask(pool, 1_000e6);
         vm.prank(creator);
         pool.withdraw();
+        _buy(pool, stranger, 1); // sold after the withdrawal, before the claim
+        assertEq(_due(pool, CODE), net / 2 * 6000 / 10_000, "A: 60 % of half, sold since");
+        _takeShares(pool, CODE);
+        assertEq(usdc.balanceOf(partner), net / 2 * 4000 / 10_000 + net / 2 * 6000 / 10_000);
+        deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) + 1_000e6);
+        _ask(pool, 1_000e6);
+        vm.prank(creator);
+        pool.withdraw();
+        uint256 a0 = usdc.balanceOf(partner);
         _takeShares(pool, CODE);
         _takeShares(pool, codeB);
-        assertEq(usdc.balanceOf(partner) - net / 2 * 4000 / 10_000, net * 2 * 6000 / (3 * 10_000), "A: 60 % of two thirds");
-        assertEq(usdc.balanceOf(ownerB), net / 2 * 5000 / 10_000 + net * 5000 / (3 * 10_000), "B: 50 % of half, then a third");
+        assertEq(usdc.balanceOf(partner) - a0, net * 2 * 6000 / (3 * 10_000), "A: 60 % of two thirds");
+        assertEq(usdc.balanceOf(ownerB), 2 * (net / 2 * 5000 / 10_000) + net * 5000 / (3 * 10_000),
+            "B: 50 % of half twice, then of a third");
     }
 
     // ── a code for two: a group's owner and an author ────────────
