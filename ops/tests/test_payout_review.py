@@ -170,6 +170,9 @@ class ACleanPayout(unittest.TestCase):
         got = r.review(ch.d, POOL, 0)["running"]
         self.assertEqual(got["free"], 5_900 * 10**6, "what is owed, held back and kept for stops is not free")
         self.assertFalse(got["enough"])
+        ch.d["books"][POOL].update(sharesDue=400 * 10**6)
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual(got["free"], 5_500 * 10**6, "nor what the codes accrued and their owners have not claimed")
 
     def test_a_running_stage_and_a_passed_exam_not_yet_funded_count_a_finished_one_does_not(self):
         ch = Chain()
@@ -1377,7 +1380,7 @@ class ReadingTheChain(unittest.TestCase):
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
         self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "sizes": [SIZE // 2, SIZE],
                                                "approvals": True, "largestPayout": 800, "staged": 1_600,
-                                               "floor": None, "approver": addr(0xAB)}})
+                                               "floor": None, "sharesDue": None, "approver": addr(0xAB)}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         self.assertEqual(got["times"], {"delay": 72 * 3_600, "hard": 8 * 86_400}, "what the factory answers, not 7 days by rote")
         review = r.review(got, POOL, 7)

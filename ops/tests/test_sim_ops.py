@@ -378,15 +378,21 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("The pool's creator may change its approver at any time; whoever approves, no payout waits for "
                           "approval longer than 7 days after it is claimed", text)
             self.assertIn("Until it is paid, the platform's checker may stop it", text)
-            self.assertIn("once a trader has used a code, its owner never changes and its share can be raised, never "
-                          "lowered", text)
+            self.assertIn("Once a trader has used a code, its owner, its author and their split never change and its "
+                          "share can be raised, never lowered", text)
+            self.assertIn("a pool has as many codes as its creator sets", text)
+            # A withdrawal credits the codes; their money waits in the pool until anyone sends it on (16 November).
+            self.assertIn("What a code is credited stays in the pool, out of the creator's reach and out of payouts, "
+                          "until anyone sends it on, at any time: to the code's owner, and the author's part to the "
+                          "author.", text)
+            self.assertNotIn("each code's owner is sent its share", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
             self.assertIn("The pool runs at least 6 months (184 days) from its opening", text)
             self.assertIn("the platform may cancel a withdrawal request; it never moves the money", text)
             if name == "sim-measure-pool":
                 self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator "
                               "takes profit only above it", text)
-            self.assertIn("A share paid to a code's owner is never taken back", text)
+            self.assertIn("A share credited to a code is never taken back", text)
             # What `_profit` and `_withdraw` do, not more: only the profit a withdrawal takes is shared (review of #286).
             self.assertIn("USDC sent to the pool other than by the creator's addToPot is not counted as put in by the "
                           "creator: it covers payouts as any money of the pool does, and what of it is profit when the "

@@ -1031,7 +1031,9 @@ def running(pool: str, chain: dict) -> dict:
             exams += 1
         worst += payout_of(size)
     book = chain["books"][pool]
-    free = book["balance"] - book["owed"] - book["held"] - book["reserved"]
+    # What the codes accrued and their partners and authors have not yet claimed is theirs, not the pool's to pay out
+    # (`sharesDue`, 16 November); a pool before it answers none.
+    free = book["balance"] - book["owed"] - book["held"] - book["reserved"] - (book.get("sharesDue") or 0)
     # What the pool itself keeps above that (SimPool.withdrawable): its `floor()` where it answers one (16 November:
     # the larger of `staged` and FLOOR_PAYOUTS payouts of the largest line live or selling); before, the larger of
     # FLOOR_PAYOUTS of the largest payout and `staged`, the payouts of its running stages. `worst` here is stricter: it counts the running exams
@@ -1773,7 +1775,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
                     "sizes": [int(m[0]) for m in c.call_view(pool, "menu()", [], [], ["(uint64,uint64)[]"])[0]],
                     "approvals": has_approvals(factory, pool), "largestPayout": core.view(pool, "largestPayout()", "uint64"),
-                    "staged": optional_view(pool, "staged()"), "floor": optional_view(pool, "floor()")}
+                    "staged": optional_view(pool, "staged()"), "floor": optional_view(pool, "floor()"),
+                    "sharesDue": optional_view(pool, "sharesDue()")}
              for pool in pools}
     for pool, b in books.items():
         b["approvals"], b["approver"] = with_approver(b["approvals"], pool)

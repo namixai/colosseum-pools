@@ -1,16 +1,19 @@
 # Design: the simulated pool
 
-`src/sim/SimPool.sol` and `src/sim/SimPoolFactory.sol`, with two libraries the pool calls,
-`src/sim/SimPoolStops.sol` and `src/sim/SimPoolSetup.sol`. Not deployed yet; no external audit.
+`src/sim/SimPool.sol` and `src/sim/SimPoolFactory.sol`, with three libraries the pool calls,
+`src/sim/SimPoolStops.sol`, `src/sim/SimPoolSetup.sol` and `src/sim/SimPoolCodes.sol`. Not deployed yet; no
+external audit.
 
-**Why two libraries.** A contract's code may be at most 24 576 bytes (EIP-170, in force on HyperEVM's
+**Why libraries.** A contract's code may be at most 24 576 bytes (EIP-170, in force on HyperEVM's
 Cancun rules), and tests run without that limit. With its daily payout limit the pool came to 24 790. The
 checks and events of the four stop functions (`stopPayout`, `liftStop`, `objectStop`, `finalizeStop`)
 and the copy of the plan at creation (`initialize`) now run in libraries with external functions, which
 the pool calls by DELEGATECALL: in its own storage, with its own caller, emitting its own events. The pool
 keeps its interface, its counters and its money (`owed`, `reserved`, `stoppedCount`, `liftedCount`,
-`head`, the principal); what the code does is what it did. `SimPool` 21 700 bytes, `SimPoolStops` 3 414,
-`SimPoolSetup` 1 962. `scripts/size-check.py` holds every contract and library of `src/` to the limit.
+`head`, the principal); what the code does is what it did. The codes (setting one, a sale by one, what each
+accrued and its claim) run in `SimPoolCodes` the same way since codes have no limit (16 November). `SimPool`
+23 805 bytes, `SimPoolCodes` 2 997, `SimPoolSetup` 5 577, `SimPoolStops` 3 845 (`forge build --sizes`, 16
+November). `scripts/size-check.py` holds every contract and library of `src/` to the limit.
 
 ## Why
 
@@ -49,15 +52,24 @@ fail, and their prices pay for the ones that pass.
   that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler, the checker and the
   closer may not.
 - **Codes.** `setCode(code, partner, bps)`, by the creator: `code` is the keccak256 of a trading
-  group's code, `partner` the address the group's owner gave, `bps` its share, 0 or 40 to 60 %, up
-  to 32 codes a pool (`MAX_CODES`). A code is public by nature: its owner hands it to a whole
+  group's code, `partner` the address the group's owner gave, `bps` its share, 0 or 40 to 60 %. A pool
+  has as many codes as its creator sets: there is no limit (Alex, 16 November: a partner with a network
+  of a thousand authors gets a code for each), and no call goes through all the codes. The pool keeps no
+  list of them; every code is in a `CodeSet` event. A code is public by nature: its owner hands it to a whole
   channel, so nothing hides it, and whoever buys with it is the owner's buyer. A code can be changed,
   or taken off sale with a zero partner, until a sale names it; from then on its partner is fixed
   and its share can only be raised, within the bounds (`CodeUsed` for anything else), so an owner
   who has brought traders does not depend on the creator. A raise (an owner's steps of 40, 50 and
-  60 %, CFO, 13 November) counts from the next withdrawal on; shares already paid are not
-  recomputed. Each code's part is its own (profit x its `brought` / `brought` x its `bps`), so
-  raising one code's share takes nothing from another's.
+  60 %, CFO, 13 November) counts from the next withdrawal on; what the old share accrued stays. Each
+  code's part is its own (profit x its `brought` / `brought` x its `bps`), so raising one code's share
+  takes nothing from another's.
+- **A code for two.** `setSplitCode(code, partner, bps, author, authorBps)`: a code with an author besides
+  its partner, say a blogger of the group's network, and the author's part of the code's share
+  (`authorBps`, 1 to 9 999 bps of it); the partner gets the rest. The bounds of 40 to 60 % hold the code's
+  share as a whole, not each part: a code of 40 % split half and half gives 20 % each. Partner, author and
+  split are fixed by the first sale, as a code's partner is; after it only the share rises, by
+  `setSplitCode` with the same three (`setCode` on such a code is `CodeUsed`: it names no author). A code
+  for one is a code with no author (`setCode`), and works as before.
 - **Selling.** `buy(line, code)`, with a code the creator set, or `NoSuchCode`. No seats and no
   share of the pool limit a sale. 0.5 % of the price goes to the platform, the rest to the pool,
   and that rest counts as what the code brought (`codeOf(code).brought`, and `brought` for all
@@ -172,15 +184,33 @@ fail, and their prices pay for the ones that pass.
   profit is: the codes' shares are of the profit a withdrawal takes, as before. 0.5 % goes to the platform. Profit is the
   pool's money above what the creator put in, after what the pool owes, holds and keeps for recent
   stops; a withdrawal takes it first. Of the profit a withdrawal takes, less the platform's part,
-  each code's partner is sent its `bps` in the part its code brought of all the pool took:
+  each code accrues its `bps` in the part its code brought of all the pool took:
   profit × (the code's `brought` / `brought`) × `bps`. A code with no share leaves its part to the
-  creator. A partner whose address the token refuses has its part set aside, `heldOf` and
-  `claimHeld` as for a refused payout (`PartnerPaid` says which). `addToPot` puts in more principal,
+  creator. The withdrawal does not send the codes' parts: it moves one number (`accrual`, what a unit of
+  a code's weight, its `brought` times its `bps`, has accrued) and keeps all the codes' parts in the pool
+  (`sharesDue`), whatever their number. Each code counts what it accrued when it is next touched (a sale, a
+  raise, a claim; `ShareAccrued`), and `claimShares(codes)` sends each named code's part to its partner,
+  and on a code for two its author's part to the author, each apart (`SharePaid`). Anyone may call it, for
+  any codes, also after `finish`: the money goes to each code's partner and author only, and its work is the
+  number of codes named. What the codes accrued is kept like what is held: out of `free()`, `withdrawable()`,
+  the profit of a later withdrawal, what `pay` may spend and what `finish` sends the creator. A code's part is
+  its share to the unit (the step of `accrual` is rounded up); what is kept for the codes is rounded up too,
+  so they are never counted more than is kept, and at most a unit (0.000001 USDC) a withdrawal stays in the
+  pool for no one. `shareDue(code)` reads what a code may claim now, its partner's part and its author's;
+  `codeOf(code)` what it was counted and what it got (`partnerDue`, `authorDue`, `partnerGot`, `authorGot`).
+  A partner or an author whose address the token refuses has its part set aside, `heldOf` and `claimHeld`
+  as for a refused payout (`SharePaid` with `sent` false says which). So is the creator's part of a
+  withdrawal or of `finish` (`Withdrawn` with `sent` false): a refused creator holds up neither the
+  withdrawal, nor `finish`, nor any code's share.
+- **When shares go out.** The contract knows no days. Alex's schedule, once a week from Monday to
+  Wednesday (16 November), is the signers' and the recipients' to keep: the creator's withdrawal is asked
+  a week ahead and carried out in its window, and `claimShares` sends what the codes accrued whenever
+  anyone calls it, the platform's keeper on that schedule or a partner or author on their own. `addToPot` puts in more principal,
   never shared, which comes back once the profit above it has been taken, or at `finish`. It is the
   only way to put the creator's money in: USDC sent straight to the pool's address is not principal.
   It covers payouts as any money of the pool does, and what of it is profit when a withdrawal is
   carried out (`_profit`: above what the pool owes, holds and keeps, and above the principal) is
-  shared with the codes' owners as any profit taken; below that it shares nothing. A share paid to a code's owner is
+  shared with the codes' owners as any profit taken; below that it shares nothing. A share accrued to a code is
   never taken back: if later payouts take the pool's money below what the creator put in, the
   creator bears it, and shares start again only once the principal is whole. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
   can still be lifted, and a week after the close (`closedAt` + `WITHDRAW_DELAY`, `NotReady` before),
@@ -193,8 +223,8 @@ fail, and their prices pay for the ones that pass.
   `addToPot` added. Only the factory's closer, a platform key the operator names (`setCloser`), may
   close a pool sooner (`closedEarly`, `ClosedEarly`). That changes nothing about where the money
   goes: `finish`, by the creator or the closer, still waits until nothing runs, nothing is owed and
-  no stop can be lifted, leaves what is held for its traders and partners, sends each code's partner
-  its share and the creator the rest; the closer gets none of it. From `lockedUntil` on, the creator closes and finishes as before.
+  no stop can be lifted, leaves what is held for its traders and partners and what the codes accrued,
+  accrues each code its share and sends the creator the rest; the closer gets none of it. From `lockedUntil` on, the creator closes and finishes as before.
 
 ## The platform's numbers
 
@@ -207,8 +237,8 @@ which a stopped payout's money stays set aside and the stop can be lifted, and a
 pool runs before its creator may close it or take back its principal (`MIN_TERM`); 7 days from a
 request to withdraw to its money, and from a close to `finish` (`WITHDRAW_DELAY`), and 3 days to
 carry out a ready request (`WITHDRAW_WINDOW`); a fill
-window of 1 to 60 blocks; a code's share of 0 or 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`)
-and up to 32 codes a pool (`MAX_CODES`).
+window of 1 to 60 blocks; a code's share of 0 or 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`), and
+as many codes a pool as its creator sets.
 
 ## What anyone can check
 
@@ -237,7 +267,7 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 82 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+`test/sim/SimPool.t.sol`, 129 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
 FiatToken V2.2's interface and words), and every `SM` mutation of `scripts/mutations.py` (on this branch
 SM1 to SM166, SM170 to SM177 and SM180 to SM182: the delay, the window, the less of the two, finish's week, payout
 approval and its 7 days, the running stages' payouts, the 184 days and a used code's raise among them), each
@@ -249,25 +279,28 @@ python3 scripts/mutations.py $(grep -oE "[\"']SM[0-9]+[\"']" scripts/mutations.p
 ```
 
 `test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a
-handler buys with codes, directly and by signature, sets codes for three groups (40 %, 60 % and no share) and
-tries to set them again after a sale, passes and fails exams and stages, claims, stops, lifts and pays payouts, has
+handler buys with codes, directly and by signature, sets codes for three groups (40 %, 60 % and no share), now and
+then for two (an author with 20 % or 50 % of the code's share), tries to set them again after a sale, has anyone
+send some codes what they accrued (`claimShares`), passes and fails exams and stages, claims, stops, lifts and pays payouts, has
 the trader object to a stop and anyone make it final after its 14 days, has the token refuse a trader or a group's
-owner, claims what was held, asks to withdraw, withdraws (at once now and then, which must be refused, otherwise
+owner, an author or the creator, claims what was held, asks to withdraw, withdraws (at once now and then, which must be refused, otherwise
 from the week on to past its window), cancels a request (the creator or the closer; a stranger refused) and adds
 for the creator, closes (the creator from the term on, refused
 before it; the closer early) and finishes (by the creator or the closer), jumps past the 184 days now and then
 (48 runs of 120 calls in CI,
 with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
 Fourteen invariants: every dollar in and out accounted for; what is held always there and equal to the refused
-payouts and partners' parts less the claims, `reserved` the stopped payouts, and `pay` spending neither; `paidTotal` the sum of the
+payouts, partners' and authors' parts and the creator's less the claims, `reserved` the stopped payouts, and `pay` spending neither; `paidTotal` the sum of the
 payments, and `pay` sends exactly those; a withdrawal never below three payouts above what is owed, held and
 reserved, nor past `withdrawable`, and before the term not past the profit; one purchase, at most one payout; `owed` the due payouts; stops less lifts are
 those standing and those made final; nothing due behind the head of the queue; `live` the accounts not done, a
-pool finished only with nothing owed, running or reserved, and keeping only what is held; `brought` each code's
-sales and all of them together, and a code a sale has named keeping its partner and share; and each withdrawal's
-shares, worked out apart from the pool: the platform's 0.5 %, each partner's part of the profit less that 0.5 % by
-its code's share and what its code brought (sent, or set aside if the token refuses), the creator the rest, and the
-partners together never above 60 % of it; before the term, until the pool is finished, `principal` all the creator
+pool finished only with nothing owed, running or reserved, and keeping only what is held and what the codes
+accrued; `brought` each code's sales and all of them together, a code a sale has named keeping its partner, author,
+split and share, each code's accrued share its part of every withdrawal worked out apart from the pool to a unit a
+withdrawal, what it got what `claimShares` sent or set aside, and what all codes may claim kept for them and in the
+pool; and each withdrawal's shares: the platform's 0.5 %, what the codes accrued never less than their parts of the
+profit less that 0.5 % nor above 60 % of it and a unit, the creator the rest (sent, or set aside if the token
+refuses); before the term, until the pool is finished, `principal` all the creator
 put in (no path gives any of it back), only the closer closing it (`closedEarly`), and no stranger closing or
 finishing it; and, closed early or not, finished by the creator or the closer, the closer getting none of the
 money and the platform only its 0.5 % of each price and each withdrawal; and no money leaving the pool for the
