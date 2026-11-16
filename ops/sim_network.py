@@ -117,9 +117,10 @@ def key_dir_ok(net: networks.Network, env=None) -> None:
                          "not testnet's default")
 
 
-def confirm_send(args, what: str, c, ask: Callable[[str], str] | None = None, tty: bool | None = None) -> None:
+def confirm_send(args, what: str | Callable[[], str], c, ask: Callable[[str], str] | None = None, tty: bool | None = None) -> None:
     """Before a one-off command sends. Testnet: the plumbing's own check, as before. Mainnet: both switches, a
-    mainnet key directory, the phrase typed at a terminal, and the RPC's chain id."""
+    mainnet key directory, the phrase typed at a terminal, and the RPC's chain id. `what` may be a function: it is
+    called only once the person is known to be at a terminal, so what it reads is read for someone who will see it."""
     net = selected(args, c.NETWORK)
     if net.name != "mainnet":
         c.assert_testnet()
@@ -129,6 +130,7 @@ def confirm_send(args, what: str, c, ask: Callable[[str], str] | None = None, tt
     if not tty:
         raise SystemExit("refusing to send on mainnet without a terminal: the phrase is typed by a person")
     ask = ask or input
+    what = what() if callable(what) else what
     print(f"MAINNET, chain id {net.chain_id}, RPC {c.RPC_URL.split('?')[0]}: {what}")
     if ask(f"type '{CONFIRM_PHRASE}' to send, anything else to stop: ").strip() != CONFIRM_PHRASE:
         raise SystemExit("not confirmed; nothing was sent")

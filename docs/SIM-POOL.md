@@ -290,7 +290,11 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `SimPoolSetup`), SimPool linked to them (the record names all three), a TermsBook and the
   factory on the network (testnet unless named, see Networks) with Circle's USDC, names the filler, the checker, the closer (four keys with
   the operator, none the same) and the recipient, lists BTC,
-  ETH and SOL with their caps (no HYPE), and writes `deployments/<network>-<label>.json` with demo3's
+  ETH and SOL with their caps (no HYPE), hands the factory to our Safe last (`--safe`: `setOperator`, the
+  operator read as the deployer's key before and as the Safe after; refused as 0x0, as one of the three keys, as
+  the deployer's own key, as an address without code or as one that does not answer `getThreshold()` and `getOwners()`
+  as a Safe does; the threshold and the owners it names are printed and shown in the confirmation a person types on mainnet; needed on mainnet, so that the key that deployed the
+  factory never stays in charge of it), and writes `deployments/<network>-<label>.json` with demo3's
   keeper nodes on testnet, `--keeper-nodes` on mainnet. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
   HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
   is on chain as listed, sending a raise of a used code's share for the same partner, and refusing,
@@ -467,6 +471,18 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   reason 2 leave out the senders the review does not count. An exam or stage of the pool that was not
   read makes the pool's running total incomplete: `enough` is false, and the account is named. The names, the
   selector, the fields of a payout and the pool's rule for a stop are held to `src/sim` by tests.
+
+  A payout is stopped once. `stopPayout` sets `wasStopped` and nothing clears it: a lift (`liftStop`)
+  sends the payout back to waiting, and a second `stopPayout` of it reverts (`BadPayout`), whatever the
+  reason. So the stop of reason 4, prohibited play, is put as soon as its published analysis is ready,
+  not after another stop of the same payout has been lifted, and a stop is not lifted meaning to stop
+  again with reason 4. A standing stop keeps its reason (`stopReasonOf`) and cannot be changed to
+  another; the reason moves no money, so a payout stopped for 1, 2 or 3 that turns out to be prohibited
+  play too stays stopped and becomes final in its time, with the analysis published beside it. If the
+  first stop was lifted already, the payout is due again and is paid in its turn: nothing on the chain
+  stops it. What remains is each of the trader's other payouts still waiting, which has a stop of
+  its own and may be stopped with reason 4, and the published analysis, so that the record says what
+  was seen. Lift a stop only when its payout is to be paid.
 
   A result that does not count up comes with a draft of a stop of reason 3, a result disputed. The
   draft names the fills and leaves out the hash of the analysis, which a person writes. Such a payout
