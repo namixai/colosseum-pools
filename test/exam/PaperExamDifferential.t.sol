@@ -431,7 +431,7 @@ contract PaperExamDifferentialTest is Test {
         exam = PaperExam(Clones.clone(address(new PaperExam())));
         model = new RulesModel(block.timestamp, _kind());
         handler = new DifferentialHandler(exam, model);
-        exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, 150, _kind());
+        exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, 150, _kind(), false);
         targetContract(address(handler));
         bytes4[] memory sel = new bytes4[](19);
         (sel[0], sel[1], sel[2]) = (DifferentialHandler.move.selector, DifferentialHandler.move.selector, DifferentialHandler.move.selector);

@@ -66,7 +66,7 @@ fail, and their prices pay for the ones that pass.
   than the oracle price and at most the plan's `maxWorseBps` worse (`PaperExam.initializeWithFiller`).
 - **Lines on and off.** A line sells only while its creator has switched it on and the pool has two of its
   payouts free (`LOCKED_PAYOUTS`, the CFO's K of 16 November): `free()` is the pool's USDC less what it owes,
-  holds, keeps for recent stops and keeps for its running stages (`staged`). Otherwise `buy` and
+  holds, keeps for recent stops and keeps for its passed exams and running stages (`staged`). Otherwise `buy` and
   `buyWithAuthorization` revert before any money moves, `LineOff` or `NotCovered(short)` with how much is
   missing. A line short of money stays on and sells again by itself once the money is back. Only the creator
   switches a line (`setLine(line, on)`, `LineSet` each time): off at any time, on only while the pool is open
@@ -83,8 +83,14 @@ fail, and their prices pay for the ones that pass.
   nonce, and takes it only from the pool it names. Same price, same fee,
   `ExamSold` with `bySignature`. A token without EIP-3009 refuses with `NoAuthorization`; `buy`
   works on any.
+- **The pass.** The exam tells its pool when its trader passes it (`PaperExam.graduate` calls `examPassed()`,
+  `ExamPassed`; `passedOf(exam)`): from that moment its payout is in `staged`, kept from the creator's
+  withdrawal and out of what is free for new sales and for switching lines on (A1 of the pre-deploy check,
+  16 November). Nobody has to call anything for it. A pass not funded within the window is released by
+  anyone (`release`), and its payout is free again, as a stage's that broke a rule or ran out of time.
 - **The stage.** `fund(exam)`: the trader, within the plan's window after the pass, starts a second
-  paper exam on the same size. Nothing moves.
+  paper exam on the same size. Nothing moves, and `staged` does not change: the stage carries on the payout the
+  pass put in.
 - **The payout.** `claimPayout(stage)` once the stage has passed, by anyone, and by the keeper in its next
   slow pass (every 30 seconds): 8 % of the size. It is due 72 hours after the claim once the pool's
   approver has approved it (`approvePayouts`, `PayoutApproved`), and 7 days after the claim whether
@@ -156,11 +162,12 @@ fail, and their prices pay for the ones that pass.
   creator's terms: the platform may cancel a withdrawal request; it never moves the money). There
   is no other way for the creator to take money out before `finish`. `withdrawable` is only what
   stays above every payout owed, held or kept for a recent stop and, until the pool is finished, above
-  `floor()`: the greater of the payouts of every stage still running, each by its own size (`staged`: up
-  in `fund`, down when the stage's payout is claimed or the stage is released), and three payouts of the
+  `floor()`: the greater of the payouts of every exam passed and not yet funded or released and every stage
+  still running, each by its own size (`staged`: up at the pass, down when the stage's payout is claimed or the
+  pass or the stage is released), and three payouts of the
   largest line with an exam or a stage not yet done, or switched on and selling (CFO, 16 November, item 3).
   A trader with a live exam of 250 000 keeps 60 000 in, its line switched off or not; with nothing on and
-  nothing live, nothing is kept above what is owed, held or kept for stops. A funded trader's payout stays in the pool for as long as the stage runs; the
+  nothing live, nothing is kept above what is owed, held or kept for stops. A trader's payout stays in the pool from the pass for as long as the stage runs; the
   creator takes profit only above it (CFO, 13 November). `staged` changes what may leave, not what
   profit is: the codes' shares are of the profit a withdrawal takes, as before. 0.5 % goes to the platform. Profit is the
   pool's money above what the creator put in, after what the pool owes, holds and keeps for recent

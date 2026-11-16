@@ -2216,7 +2216,7 @@ class TheTiersAreTheAccountsOwn(unittest.TestCase):
         setup = _source("src/sim/SimPoolSetup.sol")
         self.assertIn("r.maxDrawdownBps = k.maxDrawdownBps;", setup)
         self.assertIn("t.targetsBps[j] = k.targetBps;", setup)
-        self.assertIn("rules.fromBook, rules.maxWorseBps, k.drawdownKind);", setup)
+        self.assertIn("rules.fromBook, rules.maxWorseBps, k.drawdownKind, !funded);", setup)
         pool = _source("src/sim/SimPool.sol")
         self.assertIn("exam = _start(trader, line, false);", pool)
         self.assertIn("stage = _start(trader, a.line, true);", pool)

@@ -3086,6 +3086,182 @@ contract SimPoolTest is Test {
         assertEq(pool.owed(), 0);
         assertEq(usdc.balanceOf(address(pool)), 60_000e6);
     }
+
+    // ── A1 of the pre-deploy check (16 November): an exam passed and not yet funded keeps its payout in the pool
+    //    from the pass on, against the creator's withdrawal, new sales and switching lines on.
+
+    function _who(uint256 i) internal returns (address) {
+        return makeAddr(string(abi.encodePacked("buyer", vm.toString(i))));
+    }
+
+    /// The check's own case: 40 sales, the creator asks for all it may take, five traders pass on the sixth day and
+    /// the creator carries the request out on the seventh. Before A1 the five were not in `staged`: the withdrawal
+    /// left three payouts, and two of the five payouts were owed for ever on an empty pool.
+    function test_A1_passedExamAwaitingFundIsKeptForByWithdraw() public {
+        SimPool pool = _pool();
+        PaperExam[] memory exams = new PaperExam[](40);
+        for (uint256 i = 0; i < 40; ++i) exams[i] = _buy(pool, _who(i), 1);
+        uint256 before = pool.withdrawable();
+        vm.prank(creator);
+        pool.requestWithdraw(before);
+        vm.warp(block.timestamp + 6 days);
+        for (uint256 i = 0; i < 5; ++i) _pass(exams[i], _who(i));
+        assertEq(pool.staged(), 5 * LARGE_PAYOUT, "five passed exams, five payouts staged");
+        assertEq(pool.floor(), 5 * LARGE_PAYOUT, "the floor is what they would pay");
+        uint256 bal = usdc.balanceOf(address(pool));
+        assertEq(pool.withdrawable(), bal - 5 * LARGE_PAYOUT, "withdrawable sees them");
+        assertEq(pool.free(), bal - 5 * LARGE_PAYOUT, "and so does free");
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.prank(creator);
+        pool.withdraw();
+        assertEq(usdc.balanceOf(address(pool)), 5 * LARGE_PAYOUT, "the five payouts stay");
+        address[] memory stages = new address[](5);
+        for (uint256 i = 0; i < 5; ++i) {
+            vm.prank(_who(i));
+            stages[i] = pool.fund(address(exams[i]));
+        }
+        assertEq(pool.staged(), 5 * LARGE_PAYOUT, "funding moves nothing: staged since the pass");
+        vm.prank(closer);
+        pool.close();
+        for (uint256 i = 0; i < 5; ++i) {
+            _pass(PaperExam(stages[i]), _who(i));
+            _claim(pool, stages[i]);
+        }
+        assertEq(pool.staged(), 0, "claimed: owed now");
+        vm.warp(block.timestamp + 72 hours);
+        for (uint256 d = 0; d < 4; ++d) {
+            pool.pay(10);
+            vm.warp(block.timestamp + 1 days);
+        }
+        assertEq(pool.paidCount(), 5, "all five paid");
+        assertEq(pool.owed(), 0, "nothing owed");
+    }
+
+    /// The pass is told to the pool by the exam itself: no keeper, no call of the trader's.
+    function test_A1_theExamTellsThePoolWhenItPasses() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        assertTrue(e.tellsPool(), "a pool's exam tells it");
+        assertFalse(pool.passedOf(address(e)));
+        (,, uint64 capital,) = e.result();
+        uint64 sz = capital / mark;
+        _fill(e, trader, true, sz);
+        _setMark(mark * 12 / 10);
+        _fill(e, trader, false, sz);
+        vm.expectEmit(address(pool));
+        emit SimPool.ExamPassed(address(e), SMALL_PAYOUT);
+        vm.prank(trader);
+        e.graduate();
+        assertTrue(pool.passedOf(address(e)));
+        assertEq(pool.staged(), SMALL_PAYOUT);
+        assertEq(pool.live(), 1, "still live until funded or released");
+    }
+
+    /// A stage does not tell the pool: its payout is in `staged` once, from the exam's pass to the claim.
+    function test_A1_aStageDoesNotTellThePool() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 1);
+        _pass(e, trader);
+        vm.prank(trader);
+        PaperExam stage = PaperExam(pool.fund(address(e)));
+        assertFalse(stage.tellsPool(), "a stage is claimed instead");
+        _pass(stage, trader);
+        assertEq(pool.staged(), LARGE_PAYOUT, "once");
+        pool.claimPayout(address(stage));
+        assertEq(pool.staged(), 0);
+        assertEq(pool.owed(), LARGE_PAYOUT);
+    }
+
+    /// Anything but an exam of the pool, or a second call, changes nothing.
+    function test_A1_examPassedFromAnyoneElseChangesNothing() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 1);
+        vm.prank(stranger);
+        pool.examPassed();
+        assertEq(pool.staged(), 0, "a stranger");
+        assertFalse(pool.passedOf(stranger));
+        _pass(e, trader);
+        vm.prank(trader);
+        PaperExam stage = PaperExam(pool.fund(address(e)));
+        vm.prank(address(e));
+        pool.examPassed();
+        vm.prank(address(stage));
+        pool.examPassed();
+        assertEq(pool.staged(), LARGE_PAYOUT, "neither the exam again nor its stage");
+    }
+
+    /// A pass not funded within `fundWindow` is released, and its payout is free again: as a stage that ran out.
+    function test_A1_aPassNotFundedInTimeIsFreeAgain() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 1);
+        uint256 free0 = pool.free();
+        _pass(e, trader);
+        assertEq(pool.free(), free0 - LARGE_PAYOUT, "kept from the pass");
+        vm.expectRevert(SimPool.StillRunning.selector);
+        pool.release(address(e));
+        vm.warp(block.timestamp + 7 days + 1);
+        pool.release(address(e));
+        assertEq(pool.staged(), 0, "released: no longer staged");
+        assertEq(pool.free(), free0, "free again");
+        vm.prank(trader);
+        vm.expectRevert(SimPool.Done.selector);
+        pool.fund(address(e));
+    }
+
+    /// A failed exam never was in `staged`, and its release takes nothing out of it.
+    function test_A1_aFailedExamTakesNothingOutOfStaged() public {
+        SimPool pool = _pool();
+        PaperExam a = _buy(pool, trader, 1);
+        PaperExam b = _buy(pool, _who(1), 1);
+        _pass(a, trader);
+        _fail(b, _who(1));
+        pool.release(address(b));
+        assertEq(pool.staged(), LARGE_PAYOUT, "the pass stays");
+    }
+
+    /// A pass takes its payout out of what is free: a line whose two payouts are no longer free stops selling, and
+    /// the creator cannot switch it on, until the stage ends or the creator adds money.
+    function test_A1_aPassStopsSalesWhenItsPayoutIsNotFree() public {
+        SimPool pool = _pool();
+        // 1 600 locked and one price: two payouts of the larger line free, just.
+        PaperExam e = _buy(pool, trader, 1);
+        (, bool sells,,) = pool.lineState(1);
+        assertTrue(sells, "two payouts free before the pass");
+        _pass(e, trader);
+        uint256 short;
+        (, sells,, short) = pool.lineState(1);
+        assertFalse(sells, "the pass keeps one payout: no longer two free");
+        assertEq(short, 2 * LARGE_PAYOUT - pool.free());
+        vm.prank(creator);
+        pool.setLine(1, false);
+        vm.prank(creator);
+        vm.expectRevert(abi.encodeWithSelector(SimPool.NotCovered.selector, short));
+        pool.setLine(1, true);
+        SimSize[] memory m = pool.menu();
+        deal(address(usdc), stranger, m[1].price);
+        vm.startPrank(stranger);
+        usdc.approve(address(pool), m[1].price);
+        vm.expectRevert(SimPool.LineOff.selector);
+        pool.buy(1, CODE);
+        vm.stopPrank();
+    }
+
+    /// More passes than the pool's money: sales stop and the creator takes nothing; the payouts wait for the money
+    /// in their order, as the queue always did. The creator's withdrawal never makes this happen (I4).
+    function test_A1_moreObligationsThanMoneyStopSalesAndWithdrawals() public {
+        SimPool pool = _pool();
+        PaperExam[] memory exams = new PaperExam[](12);
+        for (uint256 i = 0; i < 12; ++i) exams[i] = _buy(pool, _who(i), 1);
+        for (uint256 i = 0; i < 12; ++i) _pass(exams[i], _who(i));
+        uint256 bal = usdc.balanceOf(address(pool));
+        assertGt(pool.staged(), bal, "twelve payouts above the pool's money");
+        assertEq(pool.free(), 0);
+        assertEq(pool.withdrawable(), 0);
+        (, bool sells0,,) = pool.lineState(0);
+        (, bool sells1,,) = pool.lineState(1);
+        assertFalse(sells0 || sells1, "no line sells");
+    }
+
 }
 
 /// An exam that takes any rules and terms: behind a factory, it leaves the factory's own bounds the only ones.
@@ -3166,3 +3342,4 @@ contract Usdc3009 is ERC20 {
         _transfer(from, to, value);
     }
 }
+

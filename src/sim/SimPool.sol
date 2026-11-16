@@ -199,8 +199,10 @@ contract SimPool is Initializable {
     uint256 public principal;
     /// Every payout neither paid nor stopped.
     uint256 public owed;
-    /// The payouts of the stages still running, each by its own size: what they would pay if they all passed.
-    /// The creator withdraws only above `floor()`, which is never less (CFO, 13 November).
+    /// The payouts of the exams passed and not yet funded or released, and of the stages still running, each by its
+    /// own size: what they would pay if they all passed. An exam's payout counts from its pass (`examPassed`), not
+    /// from its stage (A1, 16 November). The creator withdraws only above `floor()`, which is never less (CFO, 13
+    /// November).
     uint256 public staged;
     /// Exams and stages still running or still able to pay.
     uint256 public live;
@@ -248,6 +250,8 @@ contract SimPool is Initializable {
 
     mapping(address => Account) public accountOf;
     Payout[] internal _payouts;
+    /// The exams that told the pool they passed (`examPassed`): their payouts are in `staged`.
+    mapping(address exam => bool) public passedOf;
     /// Why the checker stopped payout `id` (`PayoutStopped.reason`, 1 to 4); zero if it never was.
     mapping(uint256 id => uint8) public stopReasonOf;
 
@@ -264,6 +268,8 @@ contract SimPool is Initializable {
         bytes32 code,
         address indexed partner
     );
+    /// Exam `exam` passed: its payout is kept in `staged` from now on, until its stage starts or it is released.
+    event ExamPassed(address indexed exam, uint256 staged);
     event Funded(address indexed stage, address indexed exam, address indexed trader);
     event Released(address indexed account);
     event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt);
@@ -551,10 +557,22 @@ contract SimPool is Initializable {
         if (block.timestamp > uint256(passedAt) + fundWindow) revert TooLate();
         a.done = true;
         _end(a.line);
-        staged += _payoutOf(_lines[a.line].size);
+        // Its payout is in `staged` since the pass (`examPassed`): the stage carries it on.
         stage = _start(trader, a.line, true);
         accountOf[stage] = Account({kind: Kind.Stage, line: a.line, done: false});
         emit Funded(stage, exam, trader);
+    }
+
+    /// @notice Called by an exam of this pool when its trader passes it (`PaperExam.graduate`): from then on its
+    ///         payout is in `staged`, so `floor()` keeps it from the creator's withdrawal and `free()` leaves it out
+    ///         of new sales and of switching lines on, before the trader starts the stage (`fund`). Released unfunded
+    ///         past `fundWindow`, it is free again (`release`) (A1, 16 November). A call from anything but an exam
+    ///         of this pool, or a second call, changes nothing.
+    function examPassed() external {
+        if (accountOf[msg.sender].kind != Kind.Exam || passedOf[msg.sender]) return;
+        passedOf[msg.sender] = true;
+        staged += _payoutOf(_lines[accountOf[msg.sender].line].size);
+        emit ExamPassed(msg.sender, staged);
     }
 
     // ── anyone ───────────────────────────────────────────────────
@@ -679,7 +697,8 @@ contract SimPool is Initializable {
         if (!over) revert StillRunning();
         a.done = true;
         _end(a.line);
-        if (a.kind == Kind.Stage) staged -= _payoutOf(_lines[a.line].size);
+        // A stage, or an exam passed and not funded in time: its payout was in `staged`, and is free again.
+        if (a.kind == Kind.Stage || s == PaperExam.Status.Passed) staged -= _payoutOf(_lines[a.line].size);
         emit Released(account);
     }
 

@@ -56,6 +56,8 @@ contract SimPoolHandler is Test {
     uint256 public ghostPayMismatch;
     /// A withdrawal that left less than three payouts of the largest size above what is owed and held.
     uint256 public ghostBelowFloor;
+    /// A withdrawal that left the pool less than `staged` with what it owes, holds and keeps for stops (I17).
+    uint256 public ghostShortAfterWithdraw;
     /// A request to withdraw one unit more than `withdrawable` that went through.
     uint256 public ghostOverWithdraw;
     /// A sale that went through on a line not selling (off, or the pool without two of its payouts free).
@@ -654,6 +656,7 @@ contract SimPoolHandler is Test {
             if (pool.requested() != 0 || pool.readyAt() != 0) ghostWithdrawMismatch += 1;
             uint256 keep = pool.owed() + pool.held() + pool.reserved() + floorNow();
             if (usdc.balanceOf(address(pool)) < keep) ghostBelowFloor += 1;
+            if (usdc.balanceOf(address(pool)) < pool.staged() + pool.owed() + pool.held() + pool.reserved()) ghostShortAfterWithdraw += 1;
             calls["withdraw"] += 1;
         } catch {
             // Ready, not lapsed, and something to take: a refusal is a finding.
@@ -1314,19 +1317,26 @@ contract SimPoolInvariantTest is Test {
         }
     }
 
-    /// I9. `live` counts the exams and stages not done, `staged` the payouts of the stages not done, each by its size,
-    ///     and a finished pool holds only what is set aside.
+    /// I9. `live` counts the exams and stages not done, `staged` the payouts of the exams passed and not yet funded or
+    ///     released and of the stages not done, each by its size, and a finished pool holds only what is set aside.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
     function invariant_liveAndFinished() public view {
         uint256 running;
-        for (uint256 i = 0; i < handler.examCount(); ++i) {
-            (,, bool done) = pool.accountOf(handler.exam(i));
-            if (!done) running += 1;
-        }
         uint256 staged;
         SimSize[] memory menu = pool.menu();
+        for (uint256 i = 0; i < handler.examCount(); ++i) {
+            address e = handler.exam(i);
+            (, uint8 line, bool done) = pool.accountOf(e);
+            (PaperExam.Status st,,,) = PaperExam(e).result();
+            // The pool knows a pass from the moment of it: the exam tells it (A1, 16 November).
+            assertEq(pool.passedOf(e), st == PaperExam.Status.Passed, "passedOf is the exam's pass");
+            if (!done) {
+                running += 1;
+                if (st == PaperExam.Status.Passed) staged += uint256(menu[line].size) * pool.factory().PAYOUT_BPS() / 10_000;
+            }
+        }
         for (uint256 i = 0; i < handler.stageCount(); ++i) {
             (, uint8 line, bool done) = pool.accountOf(handler.stage(i));
             if (!done) {
@@ -1335,8 +1345,9 @@ contract SimPoolInvariantTest is Test {
             }
         }
         assertEq(pool.live(), running);
-        // The payouts of the stages still running, each by its size: what withdrawals stay above (CFO, 13 November).
-        assertEq(pool.staged(), staged, "staged is not the running stages' payouts");
+        // The payouts of the passes not yet funded and of the stages still running, each by its size: what withdrawals
+        // stay above (CFO, 13 November; A1, 16 November).
+        assertEq(pool.staged(), staged, "staged is not the passed exams' and running stages' payouts");
         assertEq(handler.ghostEarlyFinish(), 0, "finished with something owed, running or kept for a stop");
         assertEq(handler.ghostFinishRefused(), 0, "a finish by the creator or the closer refused with nothing owed, running or kept");
         if (pool.finished()) assertEq(pool.reserved(), 0, "a finished pool keeps nothing for stops");
@@ -1452,6 +1463,27 @@ contract SimPoolInvariantTest is Test {
         uint256 n = handler.settledCount();
         for (uint256 i = 2; i < n; ++i) {
             assertGe(handler.settledAt(i), handler.settledAt(i - 2) + 24 hours, "the third of three is a day after the first");
+        }
+    }
+
+    /// I17. What the pool owes the traders who passed an exam and those whose stage runs (`staged`), with what it owes,
+    ///      holds and keeps for stops, is never above the pool's money by the creator's doing: no withdrawal leaves
+    ///      less (A1, 16 November). Passes of exams sold earlier can still take it above, as the payout queue always
+    ///      allowed; while they do, nothing is free, no line sells and the creator takes nothing.
+    /// forge-config: default.invariant.runs = 48
+    /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_passedAndFundedAreNeverShortByAWithdrawal() public view {
+        assertEq(handler.ghostShortAfterWithdraw(), 0, "a withdrawal left less than the passed and funded are owed");
+        uint256 due = pool.staged() + pool.owed() + pool.held() + pool.reserved();
+        uint256 bal = usdc.balanceOf(address(pool));
+        if (due >= bal) {
+            assertEq(pool.free(), 0, "nothing free");
+            if (!pool.finished()) assertEq(pool.withdrawable(), 0, "the creator takes nothing");
+            for (uint256 line = 0; line < 2; ++line) {
+                (, bool sells,,) = pool.lineState(line);
+                assertFalse(sells, "no line sells");
+            }
         }
     }
 

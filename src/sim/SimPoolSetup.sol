@@ -39,7 +39,8 @@ library SimPoolSetup {
     /// Starts an exam (`funded` false) or a stage for `trader` on line `k`, its size and tier: the kept rules and
     /// terms with the tier in them, its loss limit in `maxDrawdownBps`, its target in every step of `targetsBps`,
     /// its kind of loss line, and the line's size as `capital`. What each exam starts on is what the pool kept for
-    /// its line before the rules were kept once (`SimPool` up to 16 November 2026).
+    /// its line before the rules were kept once (`SimPool` up to 16 November 2026). An exam tells the pool when it
+    /// passes (`SimPool.examPassed`); a stage does not, its pass is claimed (`SimPool.claimPayout`).
     function start(
         SimRules storage rules,
         bool funded,
@@ -55,7 +56,7 @@ library SimPoolSetup {
             t.targetsBps[j] = k.targetBps;
         }
         a = Clones.clone(factory.examImpl());
-        PaperExam(a).initializeWithFiller(trader, r, t, factory.filler(), rules.fromBook, rules.maxWorseBps, k.drawdownKind);
+        PaperExam(a).initializeWithFiller(trader, r, t, factory.filler(), rules.fromBook, rules.maxWorseBps, k.drawdownKind, !funded);
         factory.noteAccount(a);
     }
 
