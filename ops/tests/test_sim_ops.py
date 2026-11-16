@@ -4,6 +4,7 @@ import io
 import json
 import pathlib
 import re
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -632,15 +633,13 @@ class TheCheck(unittest.TestCase):
 
     def test_terms_the_book_would_refuse_are_refused_first(self):
         for text in ("", "x" * (d.TERMS_MAX_BYTES + 1)):
-            path = ROOT / "out" / "check-plan-test.json"
-            path.write_text(json.dumps(dict(FIRST, terms_text=text)))
-            try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = pathlib.Path(tmp) / "plan.json"
+                path.write_text(json.dumps(dict(FIRST, terms_text=text)))
                 with self.assertRaises(SystemExit) as caught, mock.patch.object(d.c, "rpc") as rpc:
                     d.main(["check", "--plan", str(path)])
-                rpc.assert_not_called()
-                self.assertIn(f"TermsBook.publish takes 1 to {d.TERMS_MAX_BYTES}", str(caught.exception))
-            finally:
-                path.unlink()
+            rpc.assert_not_called()
+            self.assertIn(f"TermsBook.publish takes 1 to {d.TERMS_MAX_BYTES}", str(caught.exception))
 
     def test_the_slots_are_the_ones_the_contract_test_holds(self):
         sol = (ROOT / "test/sim/SimPool.t.sol").read_text()
