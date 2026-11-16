@@ -235,7 +235,8 @@ class TheDeployScript(unittest.TestCase):
             self.assertEqual(d._rules(rules)[3], [0, 1, 5])
 
     def test_mainnet_refuses_a_plan_written_for_testnet(self):
-        plan = str(ROOT / "deployments/plans/sim-first-pool.json")
+        # The measuring pool's plan says testnet; the first pool's is one plan for both networks (16 November).
+        plan = str(ROOT / "deployments/plans/sim-measure-pool.json")
         with on(networks.MAINNET), mock.patch.object(d.deployments, "load", return_value={"SimPoolFactory": A}):
             with self.assertRaises(SystemExit) as caught:
                 d.main(["pool", "--deployment", "x", "--plan", plan, "--signer", B, "--network", "mainnet"])

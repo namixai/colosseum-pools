@@ -7,6 +7,7 @@
     spike/.venv/bin/python -m ops.deploy_sim pool --deployment sim1 \\
         --plan deployments/plans/sim-first-pool.json --creator creator                                  # the plan
     ... pool ... --send                                                                                # sends
+    spike/.venv/bin/python -m ops.deploy_sim check --plan deployments/plans/sim-first-pool.json        # factory says
     spike/.venv/bin/python -m ops.deploy_sim codes --pool 0x.. \\
         --plan deployments/plans/sim-first-pool.json --creator creator [--send]                        # its codes
     spike/.venv/bin/python -m ops.deploy_sim close --pool 0x.. --key closer [--send]                   # stop sales
@@ -51,6 +52,10 @@ approves waiting payouts from it: an approved payout goes out 72 hours after its
 approved 7 days after. Without --send `approve` reads each payout and says whose it is, how much,
 from when it goes out with the approval and from when without, or why the pool would refuse it. Like `close` and `finish`, without --send each reads
 the pool and says what it would send, from which key, or why the pool would refuse.
+
+`check` asks SimPoolFactory.check whether a plan could open a pool, by eth_call, sending nothing and reading no key:
+with --deployment, the factory it names; without, the factory and PaperExam of this checkout, put in the call by a
+state override on the network's precompiles, so a plan is checked before any factory is deployed.
 
 `pool` publishes a pool's terms in the TermsBook, approves the USDC for the two locked payouts and
 calls `create` with 1 HYPE, from the creator's key, then sets the plan's codes as `codes` does. The
@@ -483,6 +488,171 @@ def pool(args) -> int:
     return 0
 
 
+# ── checking a plan before anything is sent ──────────────────────────────────────
+
+# Where the contracts `check` reads stand: addresses no key holds, given code by the call's state override.
+CHECK_AT = {"exam": "0x" + "00" * 18 + "c0e1", "factory": "0x" + "00" * 18 + "c0f1", "book": "0x" + "00" * 18 + "c0b1",
+            "pool": "0x" + "00" * 18 + "c0d1", "text": "0x" + "00" * 18 + "c0a1", "setup": "0x" + "00" * 18 + "c051",
+            "stops": "0x" + "00" * 18 + "c052", "creator": "0x" + "00" * 18 + "c0c1", "filler": "0x" + "00" * 18 + "c0a2",
+            "checker": "0x" + "00" * 18 + "c0a3", "closer": "0x" + "00" * 18 + "c0a4", "fee": "0x" + "00" * 18 + "c0a5"}
+# SimPoolFactory's slots of `termsBook` and `assetCapX100`, TermsBook's of `textAt` (forge inspect … storageLayout);
+# test/sim/SimPoolFactory.t.sol holds them against the contracts.
+FACTORY_TERMS_BOOK_SLOT, FACTORY_ASSET_CAP_SLOT, BOOK_TEXT_AT_SLOT = 5, 6, 0
+# SimPoolFactory's slots of `filler`, `checker`, `closer` and `feeRecipient`: `create` refuses a factory without them.
+FACTORY_ROLE_SLOTS = {"filler": 1, "checker": 2, "closer": 3, "fee": 4}
+# CodeStore.MAX_LENGTH: TermsBook.publish refuses an empty text, and CodeStore one longer than this (review of cp#304).
+TERMS_MAX_BYTES = 24_575
+CHECK_ERRORS = ("BadPlan()", "Unpublished()", "BadRole()")
+CHECK_GAS = 30_000_000
+
+
+def _word(n: int) -> bytes:
+    return int(n).to_bytes(32, "big")
+
+
+def map_slot(key: int, slot: int) -> str:
+    """The storage slot of `mapping[key]` declared at `slot`, for a key that fits a word."""
+    return "0x" + keccak(_word(key) + _word(slot)).hex()
+
+
+def runtime_of(contract: str, types: list, values: list, libraries: dict | None = None) -> str:
+    """The code a contract would have once deployed with these arguments, immutables set, its libraries at the
+    addresses given, read by an eth_call that creates it: nothing is sent."""
+    code = c.link(c.artifact(contract), libraries) + c.eth_abi.encode(types, values)
+    return c.rpc("eth_call", [{"data": "0x" + code.hex(), "gas": hex(CHECK_GAS)}, "latest"])
+
+
+def check_overrides(assets: list[tuple[str, int, int]], terms_hash: bytes) -> dict:
+    """The state the factory's `check` reads, as a state override: PaperExam and the factory as this checkout builds
+    them, the factory listing `assets` with their caps as `deploy` would and its roles set, a TermsBook with the
+    terms published, and SimPool with its two libraries, which `create` clones and calls when its gas is measured."""
+    a = CHECK_AT
+    factory = runtime_of("SimPoolFactory", ["address", "address", "address", "address"],
+                         [c.USDC_ERC20, a["exam"], a["pool"], a["factory"]])
+    state = {"0x%064x" % FACTORY_TERMS_BOOK_SLOT: "0x" + _word(int(a["book"], 16)).hex()}
+    state.update({map_slot(i, FACTORY_ASSET_CAP_SLOT): "0x" + _word(cap).hex() for _, i, cap in assets})
+    state.update({"0x%064x" % slot: "0x" + _word(int(a[role], 16)).hex() for role, slot in FACTORY_ROLE_SLOTS.items()})
+    libraries = {"SimPoolSetup": a["setup"], "SimPoolStops": a["stops"]}
+    return {a["exam"]: {"code": runtime_of("PaperExam", [], [])},
+            a["pool"]: {"code": runtime_of("SimPool", [], [], libraries)},
+            a["setup"]: {"code": runtime_of("SimPoolSetup", [], [])},
+            a["stops"]: {"code": runtime_of("SimPoolStops", [], [])},
+            a["factory"]: {"code": factory, "stateDiff": state},
+            a["book"]: {"code": runtime_of("TermsBook", [], []),
+                        "stateDiff": {map_slot(int.from_bytes(terms_hash, "big"), BOOK_TEXT_AT_SLOT):
+                                      "0x" + _word(int(a["text"], 16)).hex()}}}
+
+
+def revert_named(exc: Exception) -> str:
+    """Which of the factory's errors an eth_call's failure is, by its selector in the node's answer, or the answer."""
+    text = str(exc)
+    for sig in CHECK_ERRORS:
+        if "0x" + c.selector(sig).hex() in text:
+            return sig.removesuffix("()")
+    return text
+
+
+def check(args) -> int:
+    """The plan against SimPoolFactory.check, by eth_call: nothing is sent and no key is read. With --deployment, the
+    factory it names on chain, as it stands (its terms must be published, or it says Unpublished); without, the
+    factory and PaperExam this checkout builds, put in the call by a state override over the network's precompiles,
+    the assets listed as `deploy` lists them and the terms as `pool` publishes them."""
+    raw = json.loads(pathlib.Path(args.plan).read_text(encoding="utf-8"))
+    mainnet_plan_ok(raw)
+    text = raw["terms_text"].encode("utf-8")
+    if not text or len(text) > TERMS_MAX_BYTES:
+        raise SystemExit(f"deploy_sim check: the terms are {len(text)} bytes; TermsBook.publish takes 1 to "
+                         f"{TERMS_MAX_BYTES}")
+    terms_hash = keccak(text=raw["terms_text"])
+    plan = plan_of(raw, terms_hash)
+    data = c.encode_call(f"check({PLAN_T})", [PLAN_T], [plan])
+    if args.deployment:
+        factory, overrides = deployments.load(args.deployment)["SimPoolFactory"], None
+        where = f"the factory of {args.deployment}, {factory}"
+    else:
+        factory, overrides = CHECK_AT["factory"], check_overrides(asset_list(args.assets.split(",")), terms_hash)
+        where = f"SimPoolFactory and PaperExam of this checkout ({git_head()[:12]}), assets {args.assets}"
+    print(f"deploy_sim check: {c.NETWORK.name} (chain {c.CHAIN_ID}), {where}")
+    for (size, price), (dd, target, kind) in zip(plan[0], plan[9]):
+        print(f"  line             {size / 1e6:g} for {price / 1e6:g} USDC: loss limit {dd / 100:g} %, target "
+              f"{target / 100:g} %, {'trailing to the start' if kind else 'from the start'}")
+    print(f"  payouts a day    {plan[10]}; locks {locked_of(raw) / 1e6:g} USDC; terms keccak 0x{terms_hash.hex()}")
+    params = [{"to": factory, "data": "0x" + data.hex(), "gas": hex(CHECK_GAS)}, "latest"]
+    try:
+        out = c.rpc("eth_call", params + [overrides] if overrides else params)
+    except RuntimeError as exc:
+        raise SystemExit(f"deploy_sim check: the factory refuses the plan: {revert_named(exc)}")
+    if not out or out in ("0x", "0x0"):
+        # No answer is no code there: a --deployment of another network, or a wrong address (review of cp#304).
+        raise SystemExit(f"deploy_sim check: {factory} gave no answer on {c.NETWORK.name}: no factory there")
+    largest = int(out, 16)
+    if largest != max(m[0] for m in plan[0]):
+        raise SystemExit(f"deploy_sim check: the factory answered {largest}, not the plan's largest size")
+    print(f"deploy_sim check: the factory accepts the plan; largest size {largest / 1e6:g} USDC.")
+    gas, limit = create_gas(factory, plan, overrides)
+    if gas is None:
+        raise SystemExit(f"deploy_sim check: create does not run on {limit} gas, a small block of {c.NETWORK.name}: "
+                         "the pool would not open by an ordinary transaction")
+    if gas + TOKEN_GAS > limit:
+        raise SystemExit(f"deploy_sim check: create takes {gas} gas and USDC's transfer up to {TOKEN_GAS} more, above "
+                         f"{limit}, a small block of {c.NETWORK.name}: the pool would not open by an ordinary transaction")
+    print(f"deploy_sim check: create takes {gas} gas, and USDC's transfer up to {TOKEN_GAS} more, of {limit} in a small "
+          f"block of {c.NETWORK.name}: the pool opens by an ordinary transaction. Nothing was sent.")
+    return 0
+
+# A token that answers every call with 1: `create`'s transferFrom of the locked USDC goes through for any creator,
+# with no balance or allowance to fake. Runtime: PUSH1 1, PUSH1 0, MSTORE, PUSH1 32, PUSH1 0, RETURN.
+TOKEN_STUB = "0x600160005260206000f3"
+# What the stand-in leaves out: USDC's own transferFrom of the locked amount, well under this.
+TOKEN_GAS = 60_000
+# HyperEVM's small block when the network says nothing: 3 000 000 gas (its documentation, and `gasLimit` on mainnet
+# and testnet blocks, 16 November 2026; test/sim/SimPool.t.sol SMALL_BLOCK_GAS holds the same).
+SMALL_BLOCK_GAS = 3_000_000
+# How many of the latest blocks the small block's limit is read from: big blocks come once a minute, small ones
+# every second, so the least of these is a small block's.
+BLOCKS_READ = 8
+# Below this no `create` fits, whatever its plan: a node that runs the call on so little ignores the call's gas.
+GAS_FLOOR = 100_000
+GAS_STEP = 1_000
+
+
+def small_block_gas() -> int:
+    """The gas limit of the network's small block: the least `gasLimit` of the latest blocks, and never above
+    SMALL_BLOCK_GAS, so a network that raised it does not pass a plan its documentation would not."""
+    head = int(c.rpc("eth_blockNumber", []), 16)
+    limits = [int(c.rpc("eth_getBlockByNumber", [hex(head - i), False])["gasLimit"], 16) for i in range(BLOCKS_READ)]
+    return min(limits + [SMALL_BLOCK_GAS])
+
+
+def create_gas(factory: str, plan: tuple, overrides: dict | None) -> tuple[int | None, int]:
+    """The least gas `create(plan)` with 1 HYPE runs on, from an address no key holds, by eth_call: USDC answered by a
+    stand-in (TOKEN_STUB), the creator given the HYPE. Returns (gas or None if it does not run in a small block, the
+    small block's limit)."""
+    limit = small_block_gas()
+    state = dict(overrides or {})
+    state[c.USDC_ERC20] = {"code": TOKEN_STUB}
+    state[CHECK_AT["creator"]] = {"balance": hex(2 * CREATION_FEE)}
+    data = "0x" + c.encode_call(f"create({PLAN_T})", [PLAN_T], [plan]).hex()
+
+    def runs(gas: int) -> bool:
+        call = {"from": CHECK_AT["creator"], "to": factory, "data": data, "value": hex(CREATION_FEE), "gas": hex(gas)}
+        try:
+            c.rpc("eth_call", [call, "latest", state])
+            return True
+        except RuntimeError:
+            return False
+    if runs(GAS_FLOOR):
+        raise SystemExit(f"deploy_sim check: the node ran create on {GAS_FLOOR} gas: it ignores a call's gas, and "
+                         "the gas of create cannot be measured here")
+    if not runs(limit):
+        return None, limit
+    lo, hi = GAS_FLOOR, limit
+    while hi - lo > GAS_STEP:
+        mid = (lo + hi) // 2
+        lo, hi = (lo, mid) if runs(mid) else (mid, hi)
+    return hi, limit
+
+
 # ── closing a pool ───────────────────────────────────────────────────────────────
 
 STATUS = ["None", "Active", "Passed", "Breached", "Expired"]  # PaperExam.Status
@@ -864,6 +1034,10 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--creator", default="creator")
     q.add_argument("--signer", help="the creator as an address that signs elsewhere (our Safe): print the calls, send nothing")
     q.add_argument("--send", action="store_true")
+    h = sub.add_parser("check")
+    h.add_argument("--plan", required=True)
+    h.add_argument("--deployment", help="a deployed factory to check against; without it, this checkout's code")
+    h.add_argument("--assets", default="BTC,ETH,SOL", help="without --deployment: the assets the factory lists")
     b = sub.add_parser("buy")
     b.add_argument("--deployment", required=True)
     b.add_argument("--pool", required=True)
@@ -910,7 +1084,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     if sn.selected(args, c.NETWORK).name == "mainnet" and args.cmd != "deploy":
         c.assert_network()  # what a mainnet command reads is the chain's it names, sent or not (review of #300)
-    return {"deploy": deploy, "pool": pool, "buy": buy, "codes": codes, "close": close, "finish": finish,
+    return {"deploy": deploy, "pool": pool, "check": check, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
             "approve": approve}[args.cmd](args)
 

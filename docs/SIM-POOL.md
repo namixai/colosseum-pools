@@ -333,9 +333,23 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `withdraw`, `cancel`, `approver`, `approve`) the call is from an address that signs elsewhere, our
   pool's creator being a Safe and its approver a Ledger: the command checks as that address and prints
   the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
+  `check --plan …` asks `SimPoolFactory.check` about a plan by eth_call, sending nothing and reading no key: with
+  `--deployment`, the factory it names; without, the factory, PaperExam and SimPool of the checkout, put in the
+  call by a state override over the network's precompiles, with the assets `deploy` lists, the roles set and the
+  terms as `pool` publishes them, so a plan is checked before any factory stands. Terms `TermsBook.publish` would
+  refuse (empty, or over 24 575 bytes) are refused first. It then measures `create` of the plan with 1 HYPE by
+  eth_call, the creator an address no key holds and USDC answered by a stand-in, at the least gas it runs on, and
+  compares that, with 60 000 for USDC's own transfer, against the network's small block (the least `gasLimit` of
+  the latest blocks, at most 3 000 000): above it, the pool would not open by an ordinary transaction, and `check`
+  stops red. The first pool's plan measured 1 673 901 on testnet on 16 November 2026 (forge,
+  `test_gas_createOfTheFirstPlanFitsASmallBlock`: 1 694 229 with the token, the base and the calldata).
   `pool --signer` prints the terms, the approval of the locked USDC and `create` with 1 HYPE; the codes
   follow with `codes --signer` once the pool's address is known. The first pool's plan is
-  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
+  `deployments/plans/sim-first-pool.json`: 24 lines, the sizes 5 000, 10 000, 25 000, 50 000, 100 000 and
+  250 000 each on the tiers 3 / 9, 4 / 10, 5 / 10 and 6 / 10 % at the CFO's prices, each line's loss limit
+  trailing the highest daily snapshot up to the starting balance (`drawdown_kind` 1), payout 8 % of the size, two
+  payouts a day, 4 000 locked (`locked_usdc`), the lines of 5 000, 10 000 and 25 000 on and the larger ones off
+  (`on`) until the creator switches them on with two of their payouts free; thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
   ceiling of 150 bp, a fill delay of 4 blocks in both stages (an order placed in block B is filled no

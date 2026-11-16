@@ -1,9 +1,12 @@
 """The simulated pool's deploy script and relayer: their numbers and layouts against the contracts,
 the first pool's plan, and what the relayer refuses before it spends gas."""
+import io
 import json
 import pathlib
 import re
 import unittest
+from contextlib import redirect_stdout
+from unittest import mock
 
 from eth_utils import keccak
 
@@ -281,23 +284,77 @@ class TheLibraries(unittest.TestCase):
 
 
 class TheFirstPool(unittest.TestCase):
-    def test_it_is_alexs_menu_and_locks_1600(self):
-        self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], [(5000, 45), (10000, 85)])
-        self.assertEqual(d.locked_of(FIRST), 1_600 * 10**6)
+    # The CFO's prices of 16 November (25 000 and up: its section on large accounts): for each size, the price
+    # on the tiers 3 / 9, 4 / 10, 5 / 10 and 6 / 10.
+    SIZES = (5_000, 10_000, 25_000, 50_000, 100_000, 250_000)
+    TIERS = ((300, 900), (400, 1000), (500, 1000), (600, 1000))
+    PRICES = {5_000: (20, 30, 40, 50), 10_000: (40, 60, 79, 95), 25_000: (100, 150, 198, 238),
+              50_000: (200, 300, 395, 475), 100_000: (400, 600, 790, 950), 250_000: (1_000, 1_500, 1_975, 2_375)}
+
+    def test_it_is_the_cfos_menu_of_24_lines_and_locks_4000(self):
+        want = [(size, self.PRICES[size][k]) for size in self.SIZES for k in range(4)]
+        self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], want)
+        self.assertEqual(d.locked_of(FIRST), 4_000 * 10**6, "the creator's lock of 16 November")
+        self.assertEqual(d.on_of(FIRST), 0xfff, "5 000, 10 000 and 25 000 on; 50 000 and up off")
+        self.assertEqual([m["on"] for m in FIRST["menu"]], [m["size_usdc"] <= 25_000 for m in FIRST["menu"]])
+        # The same menu the contract tests open a pool on and measure the gas of (`_firstPlan`).
+        sol = (ROOT / "test/sim/SimPool.t.sol").read_text()
+        body = sol[sol.index("function _firstPlan()"):]
+        body = body[:body.index("\n    }\n")]
+        self.assertIn("p.locked = 4_000e6;", body)
+        self.assertIn("p.on = 0xfff;", body)
+        self.assertIn("uint16[4] memory dd = [uint16(300), 400, 500, 600];", body)
+        self.assertIn("uint16[4] memory target = [uint16(900), 1000, 1000, 1000];", body)
+        self.assertIn("uint64[12] memory price = [uint64(20e6), 30e6, 40e6, 50e6, 40e6, 60e6, 79e6, 95e6, 100e6, 150e6, "
+                      "198e6, 238e6];", body)
 
     def test_its_tuple(self):
         h = keccak(text=FIRST["terms_text"])
         plan = d.plan_of(FIRST, h)
-        self.assertEqual(plan[0], [(5_000 * 10**6, 45 * 10**6), (10_000 * 10**6, 85 * 10**6)])
+        self.assertEqual(plan[0], [(size * 10**6, self.PRICES[size][k] * 10**6) for size in self.SIZES for k in range(4)])
         self.assertEqual(plan[1], (300, 600, 1000, [3, 4, 0], [1000, 1000, 500]))
         self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 450, 4, 3))
         self.assertEqual(plan[4], plan[2], "the stage has the exam's terms")
         self.assertEqual(plan[5:9], (604800, True, 150, h))
-        # No line of its own tier: each line takes the plan's 6 % and 10 %, from the start, and two payouts a day.
-        self.assertEqual(plan[9:11], ([(600, 1000, 0), (600, 1000, 0)], 2))
+        # Each line its tier, trailing to the start, and two payouts a day.
+        self.assertEqual(plan[9:11], ([(dd, t, 1) for _ in self.SIZES for dd, t in self.TIERS], 2))
+        self.assertEqual(plan[11:], (4_000 * 10**6, 0xfff))
+        # The payout is 8 % of the size: what the terms say each line needs free.
+        self.assertEqual(d.PAYOUT_BPS, 800)
+
+    def test_its_terms_name_the_24_lines_the_large_accounts_and_the_four_reasons(self):
+        text = FIRST["terms_text"]
+        for k, (dd, t) in enumerate(self.TIERS):
+            line = f"{dd // 100} % and {t // 100} %: " + ", ".join(
+                f"{size:,} for {self.PRICES[size][k]:,} USDC".replace(",", " ") for size in self.SIZES)
+            self.assertIn(line, text)
+        self.assertIn("The pool opens with the lines of 5 000, 10 000 and 25 000 switched on; the lines of 50 000, "
+                      "100 000 and 250 000 are there and switched off.", text)
+        self.assertIn("Only the pool's creator switches a line on, and only when the pool holds free money for two "
+                      "payouts of that line: 8 000 for 50 000, 16 000 for 100 000, 40 000 for 250 000. Until the pool "
+                      "holds that money, the line cannot be switched on.", text)
+        for size in (50_000, 100_000, 250_000):
+            self.assertIn(f"{2 * size * d.PAYOUT_BPS // 10_000:,} for {size:,}".replace(",", " "), text)
+        self.assertIn("and the payouts of every trader who has passed an exam or runs a stage", text)
+        self.assertIn("the payout of a trader who has passed the exam stays in the pool from the pass, and for as long "
+                      "as the stage runs", text)
+        self.assertIn("before then its creator can neither close it nor take back what it put in", text)
+        self.assertIn("is paid a fixed 8 % of the size, once, which is not a share of any profit", text)
+        self.assertIn("nothing here promises a profit", text)
+        self.assertIn("may stop it, once, with one of four reasons written on chain", text)
+        # The CFO's words for reason 4 (14 November): a person's decision on a written analysis, with the 14 days.
+        self.assertIn("4, prohibited play: a series of exams bought to trade each at the edge of its risk, or one "
+                      "account hedged by another, shown by transactions and a published analysis, with 14 days for "
+                      "the trader to object.", text)
+        self.assertNotIn("testnet", json.dumps(FIRST).lower(), "one plan for both networks")
+        self.assertLessEqual(len(text.encode("utf-8")), d.TERMS_MAX_BYTES)
 
     def test_a_line_names_its_own_tier_and_a_plan_its_payouts_a_day(self):
         raw = json.loads(json.dumps(FIRST))
+        # Two lines, neither with a tier of its own, no lock and no switches: the plan as every pool had it before.
+        raw["menu"] = [{"size_usdc": 5000, "price_usdc": 45}, {"size_usdc": 10000, "price_usdc": 85}]
+        del raw["locked_usdc"]
+        self.assertEqual(d.plan_of(raw, b"\0" * 32)[9:], ([(600, 1000, 0), (600, 1000, 0)], 2, 1_600 * 10**6, 0b11))
         raw["menu"][0].update(max_drawdown_bps=300, target_bps=900, drawdown_kind=1)
         raw["payouts_per_day"] = 3
         plan = d.plan_of(raw, b"\0" * 32)
@@ -322,8 +379,9 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
             self.assertIn("The pool runs at least 6 months (184 days) from its opening", text)
             self.assertIn("the platform may cancel a withdrawal request; it never moves the money", text)
-            self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator takes "
-                          "profit only above it", text)
+            if name == "sim-measure-pool":
+                self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator "
+                              "takes profit only above it", text)
             self.assertIn("A share paid to a code's owner is never taken back", text)
             # What `_profit` and `_withdraw` do, not more: only the profit a withdrawal takes is shared (review of #286).
             self.assertIn("USDC sent to the pool other than by the creator's addToPot is not counted as put in by the "
@@ -414,7 +472,8 @@ class TheFirstPool(unittest.TestCase):
         with self.assertRaises(SystemExit):
             d.locked_of({"menu": menu, "locked_usdc": 799.99})
         h = keccak(text="t")
-        self.assertEqual(d.plan_of(dict(FIRST, locked_usdc=1600), h)[-2:], (1_600 * 10**6, 0b11))
+        two = dict(FIRST, menu=[{"size_usdc": 5000, "price_usdc": 45}, {"size_usdc": 10000, "price_usdc": 85}])
+        self.assertEqual(d.plan_of(dict(two, locked_usdc=1600), h)[-2:], (1_600 * 10**6, 0b11))
 
     def test_dollars_round_to_usdc_units(self):
         self.assertEqual(d.usdc_units(2.01), 2_010_000, "int(2.01 * 10**6) is 2 009 999")
@@ -441,6 +500,164 @@ class TheMeasurePool(unittest.TestCase):
         self.assertEqual(d.codes_of(m, "0x" + "ab" * 20),
                          [("MEASURE", keccak(text="MEASURE"), d.to_checksum_address("0x" + "ab" * 20), 0)],
                          "one code, the creator's own, with no share: a sale needs one")
+
+
+class TheCheck(unittest.TestCase):
+    """`check`: the plan against SimPoolFactory.check by eth_call, with this checkout's code put in the call, and the
+    gas of `create` against the network's small block."""
+    PLAN = str(ROOT / "deployments/plans/sim-first-pool.json")
+    LARGEST = "0x" + (250_000 * 10**6).to_bytes(32, "big").hex()
+
+    def run_check(self, argv, answer=None, record=None, create_needs=1_700_000, limits=(30_000_000, 3_000_000),
+                  ignores_gas=False):
+        calls = []
+        answer = self.LARGEST if answer is None else answer
+
+        def rpc(method, params):
+            calls.append((method, params))
+            if method == "eth_blockNumber":
+                return hex(100)
+            if method == "eth_getBlockByNumber":
+                return {"gasLimit": hex(limits[int(params[0], 16) % len(limits)])}
+            if params[0]["data"].startswith("0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex()):
+                if ignores_gas or int(params[0]["gas"], 16) >= create_needs:
+                    return "0x" + "00" * 32
+                raise RuntimeError("eth_call: out of gas")
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        out = io.StringIO()
+        with mock.patch.object(d.c, "rpc", side_effect=rpc), \
+                mock.patch.object(d, "runtime_of", side_effect=lambda n, t, v, libs=None: f"0x{n}"), \
+                mock.patch.object(d.deployments, "load", return_value=record or {}), \
+                mock.patch.object(d, "git_head", return_value="ab" * 20), mock.patch.object(d.c, "account") as key, \
+                mock.patch.object(d.c, "send_tx") as sent, mock.patch.object(d.c, "transact") as tx, redirect_stdout(out):
+            code = d.main(["check", "--plan", self.PLAN] + argv)
+        key.assert_not_called(), sent.assert_not_called(), tx.assert_not_called()
+        return code, calls, out.getvalue()
+
+    def test_without_a_deployment_this_checkouts_factory_is_put_in_the_call(self):
+        code, calls, said = self.run_check([])
+        self.assertEqual(code, 0)
+        method, (call, block, state) = calls[0]
+        self.assertEqual((method, block), ("eth_call", "latest"))
+        self.assertEqual(call["to"], d.CHECK_AT["factory"])
+        plan = d.plan_of(FIRST, keccak(text=FIRST["terms_text"]))
+        self.assertEqual(call["data"], "0x" + d.c.encode_call(f"check({d.PLAN_T})", [d.PLAN_T], [plan]).hex())
+        self.assertEqual(state[d.CHECK_AT["exam"]], {"code": "0xPaperExam"})
+        self.assertEqual(state[d.CHECK_AT["pool"]], {"code": "0xSimPool"})
+        self.assertEqual(state[d.CHECK_AT["setup"]], {"code": "0xSimPoolSetup"})
+        self.assertEqual(state[d.CHECK_AT["stops"]], {"code": "0xSimPoolStops"})
+        f = state[d.CHECK_AT["factory"]]
+        self.assertEqual(f["code"], "0xSimPoolFactory")
+        word = lambda a: "0x" + int(a, 16).to_bytes(32, "big").hex()
+        self.assertEqual(f["stateDiff"]["0x" + "00" * 31 + "05"], word(d.CHECK_AT["book"]))
+        for role, slot in (("filler", 1), ("checker", 2), ("closer", 3), ("fee", 4)):
+            self.assertEqual(f["stateDiff"]["0x%064x" % slot], word(d.CHECK_AT[role]), role)
+        # The assets as `deploy` lists them: testnet's BTC 3, ETH 4, SOL 0, with ops/leverage.py's caps.
+        for name, idx, cap in d.asset_list(["BTC", "ETH", "SOL"]):
+            slot = "0x" + keccak(idx.to_bytes(32, "big") + (6).to_bytes(32, "big")).hex()
+            self.assertEqual(f["stateDiff"][slot], "0x" + cap.to_bytes(32, "big").hex(), name)
+        self.assertEqual(len(f["stateDiff"]), 8, "the terms book, four roles and three assets, nothing else")
+        b = state[d.CHECK_AT["book"]]
+        text_slot = "0x" + keccak(keccak(text=FIRST["terms_text"]) + (0).to_bytes(32, "big")).hex()
+        self.assertEqual(b["stateDiff"], {text_slot: word(d.CHECK_AT["text"])}, "the terms, as `pool` publishes them")
+        self.assertIn("the factory accepts the plan; largest size 250000 USDC.", said)
+        self.assertIn("250000 for 2375 USDC: loss limit 6 %, target 10 %, trailing to the start", said)
+        self.assertIn("locks 4000 USDC", said)
+
+    def test_the_gas_of_create_is_measured_by_eth_call_against_the_small_block(self):
+        code, calls, said = self.run_check([], create_needs=1_673_901)
+        self.assertEqual(code, 0)
+        creates = [p for m, p in calls if m == "eth_call" and p[0]["data"].startswith(
+            "0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex())]
+        call, block, state = creates[0]
+        self.assertEqual(call["value"], hex(d.CREATION_FEE))
+        self.assertEqual(call["from"], d.CHECK_AT["creator"])
+        self.assertEqual(int(creates[0][0]["gas"], 16), d.GAS_FLOOR, "first: does the node keep to a call's gas")
+        self.assertEqual(state[d.c.USDC_ERC20], {"code": d.TOKEN_STUB}, "USDC answered by the stand-in")
+        self.assertEqual(state[d.CHECK_AT["creator"]], {"balance": hex(2 * d.CREATION_FEE)})
+        self.assertEqual(state[d.CHECK_AT["pool"]], {"code": "0xSimPool"}, "this checkout's pool, as for check")
+        # The small block is the least limit of the latest blocks, not the big block's.
+        self.assertEqual(sum(1 for m, _ in calls if m == "eth_getBlockByNumber"), d.BLOCKS_READ)
+        measured = int(re.search(r"create takes (\d+) gas", said).group(1))
+        self.assertTrue(1_673_901 <= measured < 1_673_901 + d.GAS_STEP, measured)
+        self.assertIn(f"of 3000000 in a small block of testnet: the pool opens by an ordinary transaction", said)
+        self.assertIn("Nothing was sent.", said)
+
+    def test_a_create_above_the_small_block_is_red(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], create_needs=3_100_000)
+        self.assertIn("create does not run on 3000000 gas", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], create_needs=2_950_000)
+        self.assertIn(f"and USDC's transfer up to {d.TOKEN_GAS} more, above 3000000", str(caught.exception))
+        self.assertIn("would not open by an ordinary transaction", str(caught.exception))
+
+    def test_a_node_that_ignores_the_calls_gas_measures_nothing(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], ignores_gas=True)
+        self.assertIn("ignores a call's gas", str(caught.exception))
+
+    def test_with_a_deployment_its_factory_is_asked_as_it_stands(self):
+        factory = "0x" + "77" * 20
+        code, calls, said = self.run_check(["--deployment", "x"], record={"SimPoolFactory": factory})
+        self.assertEqual(code, 0)
+        method, params = calls[0]
+        self.assertEqual(len(params), 2, "no state override: the factory, its assets and its terms book as they are")
+        self.assertEqual(params[0]["to"], factory)
+        create = next(p for m, p in calls if m == "eth_call" and p[0]["to"] == factory and len(p) == 3)
+        self.assertEqual(set(create[2]), {d.c.USDC_ERC20, d.CHECK_AT["creator"]}, "only the token and the HYPE")
+
+    def test_a_refusal_names_the_factorys_error(self):
+        for sig in ("BadPlan()", "Unpublished()"):
+            err = RuntimeError("eth_call: {'code': 3, 'message': 'execution reverted', 'data': '0x%s'}"
+                               % keccak(text=sig)[:4].hex())
+            with self.assertRaises(SystemExit) as caught:
+                self.run_check([], answer=err)
+            self.assertIn(f"the factory refuses the plan: {sig[:-2]}", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], answer=RuntimeError("eth_call: node down"))
+        self.assertIn("node down", str(caught.exception))
+
+    def test_no_answer_is_no_factory(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check(["--deployment", "x"], answer="0x", record={"SimPoolFactory": "0x" + "77" * 20})
+        self.assertIn("gave no answer on testnet: no factory there", str(caught.exception))
+
+    def test_an_answer_other_than_the_largest_size_is_no_pass(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], answer="0x" + (5_000 * 10**6).to_bytes(32, "big").hex())
+        self.assertIn("not the plan's largest size", str(caught.exception))
+
+    def test_terms_the_book_would_refuse_are_refused_first(self):
+        for text in ("", "x" * (d.TERMS_MAX_BYTES + 1)):
+            path = ROOT / "out" / "check-plan-test.json"
+            path.write_text(json.dumps(dict(FIRST, terms_text=text)))
+            try:
+                with self.assertRaises(SystemExit) as caught, mock.patch.object(d.c, "rpc") as rpc:
+                    d.main(["check", "--plan", str(path)])
+                rpc.assert_not_called()
+                self.assertIn(f"TermsBook.publish takes 1 to {d.TERMS_MAX_BYTES}", str(caught.exception))
+            finally:
+                path.unlink()
+
+    def test_the_slots_are_the_ones_the_contract_test_holds(self):
+        sol = (ROOT / "test/sim/SimPool.t.sol").read_text()
+        for name in ("FACTORY_TERMS_BOOK_SLOT", "FACTORY_ASSET_CAP_SLOT", "BOOK_TEXT_AT_SLOT"):
+            self.assertEqual(int(re.search(rf"constant {name} = (\d+);", sol).group(1)), getattr(d, name), name)
+        for role in ("FILLER", "CHECKER", "CLOSER", "FEE"):
+            self.assertEqual(int(re.search(rf"constant FACTORY_{role}_SLOT = (\d+);", sol).group(1)),
+                             d.FACTORY_ROLE_SLOTS[role.lower()], role)
+        self.assertEqual(d.map_slot(3, 6), "0x" + keccak((3).to_bytes(32, "big") + (6).to_bytes(32, "big")).hex())
+        self.assertEqual(d.SMALL_BLOCK_GAS, int(re.search(r"constant SMALL_BLOCK_GAS = ([\d_]+);", sol).group(1)
+                                                 .replace("_", "")))
+        self.assertEqual(int(re.search(r"MAX_LENGTH = ([\d_]+);", (ROOT / "src/lib/CodeStore.sol").read_text())
+                             .group(1).replace("_", "")), d.TERMS_MAX_BYTES)
+
+    def test_the_check_addresses_are_no_ones_and_distinct(self):
+        self.assertEqual(len(set(d.CHECK_AT.values())), len(d.CHECK_AT))
+        self.assertTrue(all(int(a, 16) < 2**16 for a in d.CHECK_AT.values()), "not a key's address")
 
 
 class TheCodes(unittest.TestCase):

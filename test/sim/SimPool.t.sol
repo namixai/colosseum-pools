@@ -2707,6 +2707,33 @@ contract SimPoolTest is Test {
         total = g - gasleft() + 21_000 + cd;
     }
 
+    /// Where `ops/deploy_sim.py check` writes the factory's terms book, roles and asset caps, and the book's texts,
+    /// when it puts this code in an eth_call by a state override: these slots, and the script's constants are these.
+    uint256 constant FACTORY_FILLER_SLOT = 1;
+    uint256 constant FACTORY_CHECKER_SLOT = 2;
+    uint256 constant FACTORY_CLOSER_SLOT = 3;
+    uint256 constant FACTORY_FEE_SLOT = 4;
+    uint256 constant FACTORY_TERMS_BOOK_SLOT = 5;
+    uint256 constant FACTORY_ASSET_CAP_SLOT = 6;
+    uint256 constant BOOK_TEXT_AT_SLOT = 0;
+
+    function _slotAddress(address at, uint256 slot) internal view returns (address) {
+        return address(uint160(uint256(vm.load(at, bytes32(slot)))));
+    }
+
+    function test_storage_theSlotsTheDeployScriptsCheckWrites() public view {
+        assertEq(_slotAddress(address(factory), FACTORY_FILLER_SLOT), factory.filler());
+        assertEq(_slotAddress(address(factory), FACTORY_CHECKER_SLOT), factory.checker());
+        assertEq(_slotAddress(address(factory), FACTORY_CLOSER_SLOT), factory.closer());
+        assertEq(_slotAddress(address(factory), FACTORY_FEE_SLOT), factory.feeRecipient());
+        assertEq(_slotAddress(address(factory), FACTORY_TERMS_BOOK_SLOT), address(book));
+        bytes32 cap = keccak256(abi.encode(uint256(BTC), FACTORY_ASSET_CAP_SLOT));
+        assertEq(uint256(vm.load(address(factory), cap)), 1000);
+        bytes32 text = keccak256(abi.encode(termsHash, BOOK_TEXT_AT_SLOT));
+        assertEq(address(uint160(uint256(vm.load(address(book), text)))), book.textAt(termsHash));
+        assertTrue(book.textAt(termsHash) != address(0));
+    }
+
     function test_gas_createOfTheFirstPlanFitsASmallBlock() public {
         (uint256 g, SimPool pool) = _createGas(_firstPlan());
         emit log_named_uint("create, first plan (24 lines), as a transaction", g);
