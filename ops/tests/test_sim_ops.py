@@ -510,16 +510,19 @@ class TheCheck(unittest.TestCase):
     LARGEST = "0x" + (250_000 * 10**6).to_bytes(32, "big").hex()
 
     def run_check(self, argv, answer=None, record=None, create_needs=1_700_000, limits=(30_000_000, 3_000_000),
-                  ignores_gas=False):
+                  ignores_gas=False, head=100):
         calls = []
         answer = self.LARGEST if answer is None else answer
 
         def rpc(method, params):
             calls.append((method, params))
             if method == "eth_blockNumber":
-                return hex(100)
+                return hex(head)
             if method == "eth_getBlockByNumber":
-                return {"gasLimit": hex(limits[int(params[0], 16) % len(limits)])}
+                n = int(params[0], 16)
+                if n < 0:
+                    raise RuntimeError("eth_getBlockByNumber: invalid block number")
+                return {"gasLimit": hex(limits[n % len(limits)])}
             if params[0]["data"].startswith("0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex()):
                 if ignores_gas or int(params[0]["gas"], 16) >= create_needs:
                     return "0x" + "00" * 32
@@ -586,6 +589,13 @@ class TheCheck(unittest.TestCase):
         self.assertIn(f"of 3000000 in a small block of testnet: the pool opens by an ordinary transaction", said)
         self.assertIn("Nothing was sent.", said)
 
+    def test_a_young_chain_is_read_down_to_its_first_block_and_no_further(self):
+        code, calls, said = self.run_check([], head=2)
+        self.assertEqual(code, 0)
+        read = [int(p[0], 16) for m, p in calls if m == "eth_getBlockByNumber"]
+        self.assertEqual(read, [2, 1, 0], "three blocks, none below 0")
+        self.assertIn("of 3000000 in a small block", said)
+
     def test_a_create_above_the_small_block_is_red(self):
         with self.assertRaises(SystemExit) as caught:
             self.run_check([], create_needs=3_100_000)
@@ -617,6 +627,11 @@ class TheCheck(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 self.run_check([], answer=err)
             self.assertIn(f"the factory refuses the plan: {sig[:-2]}", str(caught.exception))
+        # Revert data in capitals, as some nodes write it.
+        err = RuntimeError("eth_call: execution reverted, data 0x%s" % keccak(text="BadPlan()")[:4].hex().upper())
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], answer=err)
+        self.assertIn("the factory refuses the plan: BadPlan", str(caught.exception))
         with self.assertRaises(SystemExit) as caught:
             self.run_check([], answer=RuntimeError("eth_call: node down"))
         self.assertIn("node down", str(caught.exception))

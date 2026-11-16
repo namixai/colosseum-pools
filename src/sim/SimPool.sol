@@ -557,7 +557,9 @@ contract SimPool is Initializable {
         if (block.timestamp > uint256(passedAt) + fundWindow) revert TooLate();
         a.done = true;
         _end(a.line);
-        // Its payout is in `staged` since the pass (`examPassed`): the stage carries it on.
+        // Its payout is in `staged` since the pass (`examPassed`), and the stage carries it on; an exam that did not
+        // tell the pool is counted now, once (review of cp#310).
+        if (!passedOf[exam]) _notePassed(exam, a.line);
         stage = _start(trader, a.line, true);
         accountOf[stage] = Account({kind: Kind.Stage, line: a.line, done: false});
         emit Funded(stage, exam, trader);
@@ -570,9 +572,15 @@ contract SimPool is Initializable {
     ///         of this pool, or a second call, changes nothing.
     function examPassed() external {
         if (accountOf[msg.sender].kind != Kind.Exam || passedOf[msg.sender]) return;
-        passedOf[msg.sender] = true;
-        staged += _payoutOf(_lines[accountOf[msg.sender].line].size);
-        emit ExamPassed(msg.sender, staged);
+        _notePassed(msg.sender, accountOf[msg.sender].line);
+    }
+
+    /// An exam's payout into `staged`, marked in `passedOf`: `release` takes it out by the same mark, never by the
+    /// exam's status, so the two always go in pairs (review of cp#310).
+    function _notePassed(address exam, uint256 line) internal {
+        passedOf[exam] = true;
+        staged += _payoutOf(_lines[line].size);
+        emit ExamPassed(exam, staged);
     }
 
     // ── anyone ───────────────────────────────────────────────────
@@ -698,7 +706,7 @@ contract SimPool is Initializable {
         a.done = true;
         _end(a.line);
         // A stage, or an exam passed and not funded in time: its payout was in `staged`, and is free again.
-        if (a.kind == Kind.Stage || s == PaperExam.Status.Passed) staged -= _payoutOf(_lines[a.line].size);
+        if (a.kind == Kind.Stage || passedOf[account]) staged -= _payoutOf(_lines[a.line].size);
         emit Released(account);
     }
 

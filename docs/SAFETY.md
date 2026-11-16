@@ -353,36 +353,36 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S112 | `src/sim/SimPoolFactory.sol:40` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
 | S113 | `src/sim/SimPoolStops.sol:31` | `if (p.state != SimPool.PayoutState.Due \|\| p.wasStopped) revert SimPool.BadPayout();` |
 | S114 | `src/sim/SimPool.sol:287` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:744` | `function liftStop(uint256 id) external onlyChecker {` |
+| S115 | `src/sim/SimPool.sol:752` | `function liftStop(uint256 id) external onlyChecker {` |
 | S116 | `src/sim/SimPoolFactory.sol:197` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
 | S117 | `src/sim/SimPool.sol:479` | `uint256 keep = owed + held + reserved + (finished ? 0 : floor());` |
 | S118 | `src/sim/SimPoolFactory.sol:54` | `uint32 public constant STOP_RESERVE = 14 days;` |
-| S119 | `src/sim/SimPool.sol:656` | `uint256 kept = held + reserved;` |
+| S119 | `src/sim/SimPool.sol:664` | `uint256 kept = held + reserved;` |
 | S120 | `src/sim/SimPoolStops.sol:73` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert SimPool.ReserveOver();` |
-| S121 | `src/sim/SimPool.sol:871` | `if (c.used && (partner != c.partner \|\| bps <= c.bps)) revert CodeUsed();` |
+| S121 | `src/sim/SimPool.sol:879` | `if (c.used && (partner != c.partner \|\| bps <= c.bps)) revert CodeUsed();` |
 | S122 | `src/sim/SimPool.sol:522` | `_receive(trader, m.price, keccak256(abi.encode(code, line, salt)), validAfter, validBefore, v, r, s);` |
-| S123 | `src/sim/SimPool.sol:968` | `if (partner == address(0)) revert NoSuchCode();` |
+| S123 | `src/sim/SimPool.sol:976` | `if (partner == address(0)) revert NoSuchCode();` |
 | S124 | `src/sim/SimPoolFactory.sol:58` | `uint32 public constant MIN_TERM = 184 days;` |
-| S125 | `src/sim/SimPool.sol:898` | `revert Locked();` |
+| S125 | `src/sim/SimPool.sol:906` | `revert Locked();` |
 | S126 | `src/sim/SimPool.sol:483` | `if (w > p) w = p;` |
 | S127 | `src/sim/SimPoolFactory.sol:62` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
-| S128 | `src/sim/SimPool.sol:819` | `if (block.timestamp < readyAt) revert NotReady();` |
-| S129 | `src/sim/SimPool.sol:913` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
-| S130 | `src/sim/SimPool.sol:820` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
-| S131 | `src/sim/SimPool.sol:822` | `uint256 amount = r < w ? r : w;` |
+| S128 | `src/sim/SimPool.sol:827` | `if (block.timestamp < readyAt) revert NotReady();` |
+| S129 | `src/sim/SimPool.sol:921` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
+| S130 | `src/sim/SimPool.sol:828` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
+| S131 | `src/sim/SimPool.sol:830` | `uint256 amount = r < w ? r : w;` |
 | S132 | `src/sim/SimPool.sol:426` | `if (staged > f) f = staged;` |
 | S133 | `src/sim/SimPoolFactory.sol:44` | `uint32 public constant PAYOUT_HARD = 7 days;` |
-| S134 | `src/sim/SimPool.sol:639` | `if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {` |
-| S135 | `src/sim/SimPool.sol:658` | `if (bal < ahead + p.amount) {` |
-| S136 | `src/sim/SimPool.sol:758` | `if (msg.sender != approver \|\| msg.sender == address(0)) revert NotApprover();` |
+| S134 | `src/sim/SimPool.sol:647` | `if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {` |
+| S135 | `src/sim/SimPool.sol:666` | `if (bal < ahead + p.amount) {` |
+| S136 | `src/sim/SimPool.sol:766` | `if (msg.sender != approver \|\| msg.sender == address(0)) revert NotApprover();` |
 | S137 | `src/sim/SimPoolStops.sol:33` | `if (paired != address(0) \|\| trades.length == 0 \|\| links.length != 1) revert SimPool.BadReason();` |
 | S138 | `src/sim/SimPoolFactory.sol:264` | `if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY \|\| p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();` |
-| S139 | `src/sim/SimPool.sol:648` | `if (block.timestamp < freeAt) {` |
+| S139 | `src/sim/SimPool.sol:656` | `if (block.timestamp < freeAt) {` |
 | S140 | `src/sim/SimPoolFactory.sol:255` | `if (k.maxDrawdownBps == 0 \|\| k.maxDrawdownBps >= Units.BPS) revert BadPlan();` |
 | S141 | `src/sim/SimPoolStops.sol:38` | `if (trades.length < 2 \|\| links.length != 1) revert SimPool.BadReason();` |
-| S142 | `src/sim/SimPool.sol:928` | `if (!_isOn(line)) revert LineOff();` |
-| S143 | `src/sim/SimPool.sol:948` | `uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;` |
+| S142 | `src/sim/SimPool.sol:936` | `if (!_isOn(line)) revert LineOff();` |
+| S143 | `src/sim/SimPool.sol:956` | `uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;` |
 | S144 | `src/sim/SimPoolFactory.sol:250` | `if (p.on & (1 << i) != 0 && cover > p.locked) revert BadPlan();` |
 | S145 | `src/sim/SimPoolSetup.sol:78` | `if (l.live != 0 \|\| sells) size = s;` |
 | S146 | `src/exam/PaperExam.sol:526` | `if (tellsPool) IExamPassed(pool).examPassed();` |
-| S147 | `src/sim/SimPool.sol:574` | `staged += _payoutOf(_lines[accountOf[msg.sender].line].size);` |
+| S147 | `src/sim/SimPool.sol:582` | `staged += _payoutOf(_lines[line].size);` |

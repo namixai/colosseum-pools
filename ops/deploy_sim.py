@@ -546,8 +546,9 @@ def check_overrides(assets: list[tuple[str, int, int]], terms_hash: bytes) -> di
 def revert_named(exc: Exception) -> str:
     """Which of the factory's errors an eth_call's failure is, by its selector in the node's answer, or the answer."""
     text = str(exc)
+    # A node may write the revert data in capitals: compared in one case (review of cp#311).
     for sig in CHECK_ERRORS:
-        if "0x" + c.selector(sig).hex() in text:
+        if "0x" + c.selector(sig).hex() in text.lower():
             return sig.removesuffix("()")
     return text
 
@@ -620,7 +621,9 @@ def small_block_gas() -> int:
     """The gas limit of the network's small block: the least `gasLimit` of the latest blocks, and never above
     SMALL_BLOCK_GAS, so a network that raised it does not pass a plan its documentation would not."""
     head = int(c.rpc("eth_blockNumber", []), 16)
-    limits = [int(c.rpc("eth_getBlockByNumber", [hex(head - i), False])["gasLimit"], 16) for i in range(BLOCKS_READ)]
+    # A young chain has fewer blocks than BLOCKS_READ: never a block below 0 (review of cp#311).
+    limits = [int(c.rpc("eth_getBlockByNumber", [hex(head - i), False])["gasLimit"], 16)
+              for i in range(min(head + 1, BLOCKS_READ))]
     return min(limits + [SMALL_BLOCK_GAS])
 
 
