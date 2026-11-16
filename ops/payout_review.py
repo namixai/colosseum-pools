@@ -1362,7 +1362,9 @@ def card(r: dict, chain: dict) -> dict:
             "links": r["links"],
             "late": r["late"],
             "code": r["code"],
-            "running": {"exams": g["exams"], "stages": g["stages"], "worst": str(g["worst"]), "free": str(g["free"]),
+            "running": {"exams": g["exams"], "stages": g["stages"], "worst": str(g["worst"]),
+                        # Unknown when what the codes keep was not read: null, never the text "None".
+                        "free": None if g["free"] is None else str(g["free"]),
                         "enough": g["enough"]},
         },
         "call": None if not tx else {"kind": tx["kind"], "to": tx["to"],

@@ -177,6 +177,9 @@ class ACleanPayout(unittest.TestCase):
         ch.d["books"][POOL].update(balance=1_000 * 10**6 + 800 * 10**6, held=0, reserved=0, sharesDue=None)
         got = r.review(ch.d, POOL, 0)["running"]
         self.assertEqual((got["free"], got["enough"]), (None, None), "what the codes keep was not read: unknown")
+        card = r.card(r.review(ch.d, POOL, 0), ch.d)["evidence"]["running"]
+        self.assertEqual((card["free"], card["enough"]), (None, None), "the card says null, not the text None")
+        self.assertIn('"free": null', json.dumps(card))
 
     def test_what_the_codes_keep_is_read_as_0_on_an_old_pool_and_as_unknown_when_the_read_fails(self):
         from unittest import mock
