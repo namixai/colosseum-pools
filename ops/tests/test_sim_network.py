@@ -210,13 +210,19 @@ class TheDeployScript(unittest.TestCase):
         moved = {"universe": [{"name": "BTC"}, {"name": "ETH"}, {}, {}, {}, {"name": "AVAX"}]}
         with tempfile.TemporaryDirectory() as tmp, on(networks.MAINNET), mock.patch.dict(os.environ, MAINNET_KEYS), \
                 mock.patch("sys.stdin.isatty", return_value=True), mock.patch("builtins.input", return_value=sn.CONFIRM_PHRASE), \
-                mock.patch("builtins.print"), mock.patch.object(d.c, "info_post", return_value=moved), \
+                mock.patch("builtins.print") as shown, mock.patch.object(d.c, "info_post", return_value=moved), \
+                mock.patch.object(d, "safe_facts", return_value=(2, [d.to_checksum_address("0x" + x * 20) for x in ("a1", "a2", "a3")])), \
                 mock.patch.object(d.c, "account") as key, mock.patch.object(d, "deploy_contract") as deployed, \
                 mock.patch.object(d, "big_blocks"), mock.patch.object(d, "save"), mock.patch.object(d, "mark_incomplete"):
             with self.assertRaises(SystemExit) as caught:
                 d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--safe",
                                         "0x" + "5a" * 20, "--send"))
         self.assertIn("mainnet meta changed", str(caught.exception))
+        # What the person was shown before typing the phrase: to whom the factory goes, and the Safe's threshold.
+        prompt = [str(x.args[0]) for x in shown.call_args_list if str(x.args[0]).startswith("MAINNET")]
+        self.assertEqual(len(prompt), 1)
+        self.assertIn("2 of its 3 owners must sign", prompt[0])
+        self.assertIn(d.to_checksum_address("0x" + "a2" * 20), prompt[0])
         key.assert_not_called()
         deployed.assert_not_called()
 

@@ -283,7 +283,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   the operator, none the same) and the recipient, lists BTC,
   ETH and SOL with their caps (no HYPE), hands the factory to our Safe last (`--safe`: `setOperator`, the
   operator read as the deployer's key before and as the Safe after; refused as 0x0, as one of the three keys, as
-  the deployer's own key or as an address without code; needed on mainnet, so that the key that deployed the
+  the deployer's own key, as an address without code or as one that does not answer `getThreshold()` and `getOwners()`
+  as a Safe does; the threshold and the owners it names are printed and shown in the confirmation a person types on mainnet; needed on mainnet, so that the key that deployed the
   factory never stays in charge of it), and writes `deployments/<network>-<label>.json` with demo3's
   keeper nodes on testnet, `--keeper-nodes` on mainnet. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
   HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that

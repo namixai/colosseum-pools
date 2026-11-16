@@ -97,8 +97,21 @@ class TheHandOver(unittest.TestCase):
     def argv(self, *extra):
         return ["deploy", "--label", "never-written", *self.KEYS, *extra]
 
-    def send(self, safe, operators=None, code="0x6080"):
-        """A testnet deploy with --send, every chain call mocked: the transactions it sends, in order, and the record."""
+    OWNERS = ["0x" + "a1" * 20, "0x" + "a2" * 20, "0x" + "a3" * 20]
+
+    def send(self, safe, operators=None, code="0x6080", reads_of_safe=None):
+        """A testnet deploy with --send, every chain call mocked: the transactions it sends, in order, and the record.
+        `reads_of_safe` overrides what the Safe answers to getThreshold() and getOwners(): a tuple, or an exception
+        to raise."""
+        answers = {"getThreshold()": (2,), "getOwners()": (self.OWNERS,), **(reads_of_safe or {})}
+
+        def view(to, sig, *rest):
+            if sig in answers:
+                if isinstance(answers[sig], Exception):
+                    raise answers[sig]
+                return answers[sig]
+            return (next(reads),)
+
         from types import SimpleNamespace
         from unittest import mock
         sent, records = [], []
@@ -111,8 +124,9 @@ class TheHandOver(unittest.TestCase):
                 mock.patch.object(d.c, "account", return_value=op), mock.patch.object(d, "big_blocks") as big, \
                 mock.patch.object(d, "deploy_contract", side_effect=lambda *a, **k: (next(deployed), {"blockNumber": "0x10"})) as dc, \
                 mock.patch.object(d.c, "transact", side_effect=transact), \
-                mock.patch.object(d.c, "call_view", side_effect=lambda *a: (next(reads),)), \
-                mock.patch.object(d.c, "rpc", return_value=code), mock.patch.object(d, "git_head", return_value="ab" * 20), \
+                mock.patch.object(d.c, "call_view", side_effect=view), \
+                mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): hex(d.c.CHAIN_ID) if m == "eth_chainId" else code), \
+                mock.patch.object(d, "git_head", return_value="ab" * 20), \
                 mock.patch.object(d, "save", side_effect=lambda out, rec: records.append(json.loads(json.dumps(rec)))), \
                 mock.patch.object(d, "mark_incomplete") as incomplete, \
                 mock.patch.object(d.deployments, "load", return_value={"keeper_nodes": {}}), mock.patch("builtins.print"):
@@ -171,6 +185,40 @@ class TheHandOver(unittest.TestCase):
             self.assertIn(said, str(result))
             self.assertEqual(sent, [])
             dc.assert_not_called(), big.assert_not_called()
+
+    def test_an_address_that_does_not_answer_as_a_safe_is_refused_before_anything_is_sent(self):
+        for reads, said in (({"getThreshold()": RuntimeError("revert")}, "is not a Safe: getThreshold() or getOwners()"),
+                            ({"getOwners()": ValueError("empty")}, "is not a Safe: getThreshold() or getOwners()"),
+                            ({"getThreshold()": (0,)}, "threshold 0 with 3 owners"),
+                            ({"getThreshold()": (4,)}, "threshold 4 with 3 owners"),
+                            ({"getOwners()": ([],)}, "with 0 owners")):
+            result, sent, _, dc, big, _ = self.send(self.S, reads_of_safe=reads)
+            self.assertIsInstance(result, SystemExit, reads)
+            self.assertIn(said, str(result))
+            self.assertEqual(sent, [])
+            dc.assert_not_called(), big.assert_not_called()
+
+    def test_the_person_confirming_sees_the_safes_threshold_and_owners(self):
+        from unittest import mock
+        texts = []
+
+        def stop_at_the_phrase(args, what, c):
+            texts.append(what())      # the confirmation's text is made once the person is at a terminal
+            raise SystemExit("stop at the confirmation")
+
+        with mock.patch.object(d.sn, "confirm_send", side_effect=stop_at_the_phrase), \
+                mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): hex(d.c.CHAIN_ID) if m == "eth_chainId" else "0x6080"), \
+                mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *r: {
+                    "getThreshold()": (2,), "getOwners()": (self.OWNERS,)}[sig]), \
+                mock.patch("builtins.print") as out:
+            with self.assertRaises(SystemExit):
+                d.main(self.argv("--send", "--safe", self.S))
+        printed = "\n".join(str(x.args[0]) for x in out.call_args_list)
+        for text in (texts[0], printed):
+            self.assertIn(d.to_checksum_address(self.S), text)
+            self.assertIn("2 of its 3 owners must sign", text)
+            for o in self.OWNERS:
+                self.assertIn(d.to_checksum_address(o), text)
 
     def test_an_operator_that_is_not_the_deployer_before_sends_nothing_and_leaves_the_deploy_incomplete(self):
         result, sent, records, _, _, incomplete = self.send(self.S, operators=["0x" + "99" * 20])
