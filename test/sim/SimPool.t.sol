@@ -3208,6 +3208,34 @@ contract SimPoolTest is Test {
         pool.fund(address(e));
     }
 
+    /// A pass the pool was not told of (here the call is mocked away) is never taken out of `staged` by `release`,
+    /// which goes by the pool's own mark, not by the exam's status; its `fund` counts it then, once, so the stage's
+    /// claim takes out what was put in (review of cp#310).
+    function test_A1_aPassThePoolWasNotToldOfIsPairedByItsMark() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 1);
+        PaperExam f = _buy(pool, _who(1), 1);
+        vm.mockCall(address(pool), abi.encodeCall(SimPool.examPassed, ()), "");
+        _pass(e, trader);
+        _pass(f, _who(1));
+        vm.clearMockedCalls();
+        (PaperExam.Status st,,,) = e.result();
+        assertEq(uint8(st), uint8(PaperExam.Status.Passed));
+        assertFalse(pool.passedOf(address(e)));
+        assertEq(pool.staged(), 0, "not told: not staged");
+        vm.prank(_who(1));
+        PaperExam stage = PaperExam(pool.fund(address(f)));
+        assertTrue(pool.passedOf(address(f)), "counted at its fund");
+        assertEq(pool.staged(), LARGE_PAYOUT);
+        vm.warp(block.timestamp + 7 days + 1);
+        pool.release(address(e));
+        assertEq(pool.staged(), LARGE_PAYOUT, "the release of a pass never counted takes nothing out");
+        _pass(stage, _who(1));
+        pool.claimPayout(address(stage));
+        assertEq(pool.staged(), 0, "the claim takes out what the fund put in");
+        assertEq(pool.owed(), LARGE_PAYOUT);
+    }
+
     /// A failed exam never was in `staged`, and its release takes nothing out of it.
     function test_A1_aFailedExamTakesNothingOutOfStaged() public {
         SimPool pool = _pool();
