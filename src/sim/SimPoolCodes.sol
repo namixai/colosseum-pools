@@ -40,8 +40,10 @@ library SimPoolCodes {
         }
         if (partner == address(0) && (bps != 0 || author != address(0))) revert SimPool.BadShare();
         if (bps != 0 && (bps < factory.MIN_PARTNER_BPS() || bps > factory.MAX_PARTNER_BPS())) revert SimPool.BadShare();
-        // A code for two names its author and gives it a part of the code's share, never all of it.
+        // A code for two names its author, another address than its partner's, and gives it a part of the code's
+        // share, never all of it.
         if ((author == address(0)) != (authorBps == 0) || authorBps >= BPS) revert SimPool.BadShare();
+        if (author != address(0) && author == partner) revert SimPool.BadShare();
         _settle(c, code, accrual);
         if (c.used) raised = c.brought * (bps - c.bps);
         c.partner = partner;
@@ -104,7 +106,7 @@ library SimPoolCodes {
         returns (uint256 toPartner, uint256 toAuthor)
     {
         SimPool.Code storage c = codeOf[code];
-        uint256 p = _pending(c, accrual);
+        uint256 p = _pending(c, accrual) / ACCRUAL_SCALE;
         uint256 a = p * c.authorBps / BPS;
         return (c.partnerDue + p - a, c.authorDue + a);
     }
@@ -123,14 +125,19 @@ library SimPoolCodes {
         emit SimPool.SharePaid(code, to, amount, sent);
     }
 
-    /// What the code accrued since it was last touched: its weight times the steps of `accrual` since.
+    /// What the code accrued since it was last touched, times `ACCRUAL_SCALE`: its weight times the steps of
+    /// `accrual` since, and the fraction of a unit it was not counted the last time.
     function _pending(SimPool.Code storage c, uint256 accrual) private view returns (uint256) {
-        return c.brought * c.bps * (accrual - c.mark) / ACCRUAL_SCALE;
+        return c.brought * c.bps * (accrual - c.mark) + c.frac;
     }
 
     /// Counts what the code accrued since it was last touched into what it is owed, before its weight changes.
     function _settle(SimPool.Code storage c, bytes32 code, uint256 accrual) private {
-        uint256 p = _pending(c, accrual);
+        // Whole units are counted; the fraction stays the code's and counts the next time, so a code is counted the
+        // same whenever it is touched, and a claim by anyone between two withdrawals takes nothing from it.
+        uint256 scaled = _pending(c, accrual);
+        uint256 p = scaled / ACCRUAL_SCALE;
+        c.frac = scaled % ACCRUAL_SCALE;
         c.mark = accrual;
         if (p == 0) return;
         // The author's part of it, rounded down, and the partner the rest: the two always add up to what accrued.

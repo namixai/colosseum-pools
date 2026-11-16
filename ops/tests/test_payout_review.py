@@ -173,6 +173,19 @@ class ACleanPayout(unittest.TestCase):
         ch.d["books"][POOL].update(sharesDue=400 * 10**6)
         got = r.review(ch.d, POOL, 0)["running"]
         self.assertEqual(got["free"], 5_500 * 10**6, "nor what the codes accrued and their owners have not claimed")
+        # Not read (the node failed): unknown, never enough; balance 1 000, 400 kept for codes, 800 running.
+        ch.d["books"][POOL].update(balance=1_000 * 10**6 + 800 * 10**6, held=0, reserved=0, sharesDue=None)
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual((got["free"], got["enough"]), (None, None), "what the codes keep was not read: unknown")
+
+    def test_what_the_codes_keep_is_read_as_0_on_an_old_pool_and_as_unknown_when_the_read_fails(self):
+        from unittest import mock
+        with mock.patch.object(r.core, "view", return_value=400):
+            self.assertEqual(r.share_reserve(POOL), 400)
+        with mock.patch.object(r.core, "view", side_effect=RuntimeError("execution reverted")):
+            self.assertEqual(r.share_reserve(POOL), 0, "an old pool has no getter and keeps nothing for codes")
+        with mock.patch.object(r.core, "view", side_effect=RuntimeError("429 Too Many Requests")):
+            self.assertIsNone(r.share_reserve(POOL), "a failed read is not 0")
 
     def test_a_running_stage_and_a_passed_exam_not_yet_funded_count_a_finished_one_does_not(self):
         ch = Chain()

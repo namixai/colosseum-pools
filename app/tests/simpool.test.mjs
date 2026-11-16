@@ -502,6 +502,11 @@ test("a code for two: what each of the two was sent or had set aside, apart, and
   assert.deepEqual(k.due, { toPartner: 7n, toAuthor: 7n });
   const [one] = codeShares([{ ...codes[0], author: "0x" + "00".repeat(20), authorBps: 0, due: undefined }], []);
   assert.equal(one.author, null, "the zero address is no author: a code for one");
+  // One address as both (the pool refuses such a code): its payments are that address's, never a zero to the author.
+  const [same] = codeShares([{ ...codes[0], author: A(0x91) }],
+    [ev("SharePaid", { code: H(0xd1), to: A(0x91), amount: 30n, sent: true }, 200)]);
+  assert.equal(same.toAuthor, null);
+  assert.deepEqual([same.toPartner.paid, same.paid], [30n, 30n]);
 });
 
 // ── buying with a code ───────────────────────────────────────────

@@ -107,7 +107,7 @@ class Relay:
         menu_len = len(core.view(p["pool"], "menu()", "(uint64,uint64)[]")) if known else 0
         code_set = known and int(c.call_view(p["pool"], "codeOf(bytes32)", ["bytes32"], [p["code"]],
                                              ["address", "uint16", "bool", "uint16", "address", "uint256", "uint256",
-                                              "uint256", "uint256", "uint256", "uint256"])[0], 16) != 0
+                                              "uint256", "uint256", "uint256", "uint256", "uint256"])[0], 16) != 0
         used = bool(core.view(self.usdc, "authorizationState(address,bytes32)", "bool", ["address", "bytes32"],
                               [p["trader"], p["nonce"]]))
         now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)

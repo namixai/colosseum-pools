@@ -10,6 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Rules} from "../../src/Types.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {TermsBook} from "../../src/multi/TermsBook.sol";
+import {ACCRUAL_SCALE} from "../../src/sim/SimPoolCodes.sol";
 import {SimPool, SimPlan, SimSize, SimTier} from "../../src/sim/SimPool.sol";
 import {SimPoolFactory} from "../../src/sim/SimPoolFactory.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -162,7 +163,7 @@ contract SimPoolTest is Test {
     }
 
     function _partnerOf(SimPool pool, bytes32 code) internal view returns (address p) {
-        (p,,,,,,,,,,) = pool.codeOf(code);
+        (p,,,,,,,,,,,) = pool.codeOf(code);
     }
 
     function _pool() internal returns (SimPool) {
@@ -479,7 +480,7 @@ contract SimPoolTest is Test {
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
         pool.buyWithAuthorization(signer, 1, theirs, salt, 0, until, v, r, s);
         pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
-        (,,,,, uint256 got,,,,,) = pool.codeOf(CODE);
+        (,,,,, uint256 got,,,,,,) = pool.codeOf(CODE);
         assertEq(got, LARGE_PRICE - 425_000, "the signed code brought it");
     }
 
@@ -1480,7 +1481,7 @@ contract SimPoolTest is Test {
         assertEq(usdc.balanceOf(partner), 497_500_000, "half of what is left after the platform's part");
         assertEq(pool.sharesDue(), 1, "the unit of rounding stays in the pool, for no one");
         assertEq(_due(pool, CODE), 0);
-        (,,,,,,,,, uint256 got,) = pool.codeOf(CODE);
+        (,,,,,,,,, uint256 got,,) = pool.codeOf(CODE);
         assertEq(got, 497_500_000, "what the code got, in all");
         _takeShares(pool, CODE); // a second claim sends nothing
         assertEq(usdc.balanceOf(partner), 497_500_000);
@@ -1495,7 +1496,7 @@ contract SimPoolTest is Test {
         vm.expectEmit(address(pool));
         emit SimPool.CodeSet(CODE, partner, 6000, address(0), 0);
         _share(pool, 6000); // before any sale: changed
-        (address who, uint16 bps,,,,,,,,,) = pool.codeOf(CODE);
+        (address who, uint16 bps,,,,,,,,,,) = pool.codeOf(CODE);
         assertEq(who, partner);
         assertEq(bps, 6000);
         _buy(pool, trader, 0);
@@ -1517,7 +1518,7 @@ contract SimPoolTest is Test {
         vm.expectEmit(address(pool));
         emit SimPool.CodeSet(CODE, partner, 5000, address(0), 0);
         _share(pool, 5000); // the owner's next step: raised
-        (address who, uint16 bps, bool used,,,,,,,,) = pool.codeOf(CODE);
+        (address who, uint16 bps, bool used,,,,,,,,,) = pool.codeOf(CODE);
         assertEq(who, partner);
         assertEq(bps, 5000);
         assertTrue(used);
@@ -1532,7 +1533,7 @@ contract SimPoolTest is Test {
         pool.setCode(CODE, partner, 6001); // past the platform's bound
         pool.setCode(CODE, partner, 6000);
         vm.stopPrank();
-        (, bps,,,,,,,,,) = pool.codeOf(CODE);
+        (, bps,,,,,,,,,,) = pool.codeOf(CODE);
         assertEq(bps, 6000);
 
         // A used code with no share: raised only into the bounds.
@@ -1703,6 +1704,15 @@ contract SimPoolTest is Test {
         emit log_named_uint("withdraw with 2 000 codes sharing", g);
         assertLe(g, 200_000, "a withdrawal: no loop over the codes");
         assertGt(pool.sharesDue(), 0);
+        // Two more withdrawals before the pool closes.
+        vm.pauseGasMetering();
+        for (uint256 k = 0; k < 2; ++k) {
+            deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) + 1_000_000);
+            _ask(pool, 1_000_000);
+            vm.prank(creator);
+            pool.withdraw();
+        }
+        vm.resumeGasMetering();
         vm.pauseGasMetering();
         vm.warp(pool.lockedUntil());
         vm.prank(creator);
@@ -1733,9 +1743,24 @@ contract SimPoolTest is Test {
         pool.claimShares(one);
         g -= gasleft();
         emit log_named_uint("claimShares, one code", g);
-        assertLe(g, 150_000, "one code's claim: the gas of one code");
+        assertLe(g, 200_000, "one code's claim: the gas of one code");
         assertEq(usdc.balanceOf(makeAddr(string(abi.encode("owner", MANY_CODES - 1)))), due);
-        assertGe(pool.sharesDue(), 0);
+        // Every code takes its own, 200 codes a call: what stays kept is the codes' fractions and the rounding up.
+        vm.pauseGasMetering();
+        uint256 gotAll = due;
+        for (uint256 from = 0; from < MANY_CODES; from += 200) {
+            bytes32[] memory batch = new bytes32[](200);
+            for (uint256 i = 0; i < 200; ++i) batch[i] = keccak256(abi.encode("group", from + i));
+            uint256 before = usdc.balanceOf(address(pool));
+            pool.claimShares(batch);
+            gotAll += before - usdc.balanceOf(address(pool));
+        }
+        vm.resumeGasMetering();
+        uint256 left = pool.sharesDue();
+        emit log_named_uint("kept for the codes after all 2 000 took their own, in units", left);
+        assertEq(left, (pool.accruedScaled() + ACCRUAL_SCALE - 1) / ACCRUAL_SCALE - gotAll, "all accrued, less all sent");
+        assertLe(left, MANY_CODES, "less than a unit a code with a share, and one more");
+        assertEq(usdc.balanceOf(address(pool)), pool.held() + left, "and nothing else stays in the finished pool");
     }
 
     /// `n` payouts claimed in one block, each to a trader of its own with no USDC, none approved: all wait.
@@ -1931,6 +1956,36 @@ contract SimPoolTest is Test {
         assertEq(usdc.balanceOf(partner), 497_500_000, "and the partner still takes all of it");
     }
 
+    /// Five withdrawals of 3 units each by a code of 50 % that brought all the pool took, its partner sending its
+    /// share after each one (`claimEach`) or once at the end; returns what the partner got in all.
+    function _smallWithdrawals(bool claimEach) internal returns (uint256) {
+        SimPool pool = _pool();
+        _share(pool, 5000);
+        _withSales(pool, 30);
+        for (uint256 i = 0; i < 5; ++i) {
+            _ask(pool, 3);
+            vm.prank(creator);
+            pool.withdraw();
+            if (claimEach) _takeShares(pool, CODE);
+        }
+        _takeShares(pool, CODE);
+        assertEq(pool.sharesDue(), (pool.accruedScaled() + ACCRUAL_SCALE - 1) / ACCRUAL_SCALE - usdc.balanceOf(partner),
+            "kept for the code: all it accrued, rounded up, less what it got");
+        return usdc.balanceOf(partner);
+    }
+
+    function test_codes_aClaimBetweenWithdrawalsTakesNothingFromTheCode() public {
+        // 3 units less the platform's 0 is 3; half of it is 1.5 a withdrawal, 7.5 in five. Whether anyone sends the
+        // code's share after each withdrawal or only at the end, its partner gets the same 7 units: the half unit of
+        // each withdrawal stays the code's and counts the next time.
+        uint256 snap = vm.snapshotState();
+        uint256 each = _smallWithdrawals(true);
+        vm.revertToState(snap);
+        uint256 once = _smallWithdrawals(false);
+        assertEq(each, 7, "claimed after every withdrawal: 7 of the 7.5");
+        assertEq(once, each, "a claim between withdrawals takes nothing from the code");
+    }
+
     function test_codes_aSaleOrARaiseKeepsWhatWasAccrued() public {
         // A (40 %) and B (50 %), one large sale each. Each withdrawal accrues to both; a raise of A, and later a
         // further sale by A, come after a withdrawal and before A's partner takes what it accrued: neither changes
@@ -2002,7 +2057,7 @@ contract SimPoolTest is Test {
         _takeShares(pool, two);
         assertEq(usdc.balanceOf(partner), 298_500_000, "the owner is paid whatever the author's address");
         assertEq(pool.heldOf(author), 298_500_000, "the author's part set aside for the author");
-        (,,,,,,,,, uint256 partnerGot, uint256 authorGot) = pool.codeOf(two);
+        (,,,,,,,,, uint256 partnerGot, uint256 authorGot,) = pool.codeOf(two);
         assertEq(partnerGot, 298_500_000);
         assertEq(authorGot, 298_500_000);
         vm.prank(author);
@@ -2027,6 +2082,8 @@ contract SimPoolTest is Test {
         vm.expectRevert(SimPool.BadShare.selector);
         pool.setSplitCode(two, address(0), 0, author, 5000); // an author on a code off sale
         vm.expectRevert(SimPool.BadShare.selector);
+        pool.setSplitCode(two, partner, 6000, partner, 5000); // the author is the partner: a code for one
+        vm.expectRevert(SimPool.BadShare.selector);
         pool.setSplitCode(two, partner, 3999, author, 5000); // the code's share under the bound
         vm.expectRevert(SimPool.BadShare.selector);
         pool.setSplitCode(two, partner, 6001, author, 5000);
@@ -2034,7 +2091,7 @@ contract SimPoolTest is Test {
         pool.setSplitCode(two, partner, 4000, author, 5000);
         pool.setSplitCode(two, partner, 4000, author, 3000); // changed until a sale names it
         vm.stopPrank();
-        (address p, uint16 bps,, uint16 ab, address au,,,,,,) = pool.codeOf(two);
+        (address p, uint16 bps,, uint16 ab, address au,,,,,,,) = pool.codeOf(two);
         assertEq(abi.encode(p, bps, ab, au), abi.encode(partner, uint16(4000), uint16(3000), author));
         _buyWith(pool, trader, 0, two);
         vm.startPrank(creator);
@@ -2049,7 +2106,7 @@ contract SimPoolTest is Test {
         pool.setSplitCode(two, partner, 5000, author, 3000); // a raise: the same three, a higher share
         vm.stopPrank();
         uint256 got;
-        (, bps,,,, got,,,,,) = pool.codeOf(two);
+        (, bps,,,, got,,,,,,) = pool.codeOf(two);
         assertEq(bps, 5000);
         assertEq(pool.weight(), got * 5000, "the raise counts in the pool's weight from now on");
     }
@@ -2364,7 +2421,7 @@ contract SimPoolTest is Test {
     function _pageCodes(SimPool pool) internal view returns (string memory list) {
         bytes32[] memory keys = _pageKeys;
         for (uint256 i = 0; i < keys.length; ++i) {
-            (address p, uint16 bps, bool used,,, uint256 got,,,,,) = pool.codeOf(keys[i]);
+            (address p, uint16 bps, bool used,,, uint256 got,,,,,,) = pool.codeOf(keys[i]);
             list = string.concat(list, i == 0 ? "" : ",", '{"code":"', vm.toString(keys[i]), '","partner":"',
                 vm.toString(p), '","bps":', vm.toString(bps), ',"used":', used ? "true" : "false", ',"brought":"',
                 vm.toString(got), '"}');

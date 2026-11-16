@@ -21,7 +21,7 @@ export const SIM_POOL_ABI = [
   "function creator() view returns (address)",
   "function buy(uint256 line, bytes32 code) returns (address exam)",
   "function buyWithAuthorization(address trader, uint256 line, bytes32 code, bytes32 salt, uint256 validAfter, uint256 validBefore, uint8 v, bytes32 r, bytes32 s) returns (address exam)",
-  "function codeOf(bytes32 code) view returns (address partner, uint16 bps, bool used, uint16 authorBps, address author, uint256 brought, uint256 mark, uint256 partnerDue, uint256 authorDue, uint256 partnerGot, uint256 authorGot)",
+  "function codeOf(bytes32 code) view returns (address partner, uint16 bps, bool used, uint16 authorBps, address author, uint256 brought, uint256 mark, uint256 partnerDue, uint256 authorDue, uint256 partnerGot, uint256 authorGot, uint256 frac)",
   "function shareDue(bytes32 code) view returns (uint256 toPartner, uint256 toAuthor)",
   "function sharesDue() view returns (uint256)",
   "function claimShares(bytes32[] codes)",
@@ -592,7 +592,10 @@ export function codeShares(codes, events) {
     const brought = BigInt(k.brought);
     const author = k.author && BigInt(k.author) !== 0n ? k.author : null;
     const toPartner = got(k.code, k.partner);
-    const toAuthor = author && author.toLowerCase() !== String(k.partner).toLowerCase() ? got(k.code, author) : none;
+    // The pool refuses a code whose author is its partner (BadShare); were one read anyway, its payments are one
+    // address's and cannot be told apart: `toAuthor` is then null, never a false zero.
+    const same = author && author.toLowerCase() === String(k.partner).toLowerCase();
+    const toAuthor = !author ? none : same ? null : got(k.code, author);
     return {
       code: k.code,
       partner: k.partner,
@@ -602,8 +605,8 @@ export function codeShares(codes, events) {
       used: Boolean(k.used),
       brought,
       partOfAll: all === 0n ? 0 : Number(brought * BPS / all),
-      paid: toPartner.paid + toAuthor.paid,
-      setAside: toPartner.setAside + toAuthor.setAside,
+      paid: toPartner.paid + (toAuthor?.paid ?? 0n),
+      setAside: toPartner.setAside + (toAuthor?.setAside ?? 0n),
       toPartner,
       toAuthor,
       due: k.due ? { toPartner: BigInt(k.due.toPartner), toAuthor: BigInt(k.due.toAuthor) } : null,

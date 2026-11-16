@@ -69,7 +69,8 @@ fail, and their prices pay for the ones that pass.
   share as a whole, not each part: a code of 40 % split half and half gives 20 % each. Partner, author and
   split are fixed by the first sale, as a code's partner is; after it only the share rises, by
   `setSplitCode` with the same three (`setCode` on such a code is `CodeUsed`: it names no author). A code
-  for one is a code with no author (`setCode`), and works as before.
+  for one is a code with no author (`setCode`), and works as before. An author is never the partner's own address
+  (`BadShare`): that code is a code for one.
 - **Selling.** `buy(line, code)`, with a code the creator set, or `NoSuchCode`. No seats and no
   share of the pool limit a sale. 0.5 % of the price goes to the platform, the rest to the pool,
   and that rest counts as what the code brought (`codeOf(code).brought`, and `brought` for all
@@ -194,10 +195,14 @@ fail, and their prices pay for the ones that pass.
   any codes, also after `finish`: the money goes to each code's partner and author only, and its work is the
   number of codes named. What the codes accrued is kept like what is held: out of `free()`, `withdrawable()`,
   the profit of a later withdrawal, what `pay` may spend and what `finish` sends the creator. A code's part is
-  its share to the unit (the step of `accrual` is rounded up); what is kept for the codes is rounded up too,
-  so they are never counted more than is kept, and at most a unit (0.000001 USDC) a withdrawal stays in the
-  pool for no one. `shareDue(code)` reads what a code may claim now, its partner's part and its author's;
-  `codeOf(code)` what it was counted and what it got (`partnerDue`, `authorDue`, `partnerGot`, `authorGot`).
+  its share to the unit (the step of `accrual` is rounded up). A code is counted whole units, and the fraction of
+  a unit left stays the code's and counts the next time (`frac`): a code is counted the same whenever it is
+  touched, and a claim by anyone between two withdrawals takes nothing from it. What is kept for the codes is all
+  they accrued together, to the fraction (`accruedScaled`), rounded up, less what they got: never less than the
+  codes may claim. Once every code has taken its own, what stays kept is the codes' fractions and that rounding
+  up: at most as many units (0.000001 USDC each) as there are codes with a share. With 2 000 codes, three
+  withdrawals and `finish`, 1 603 units stay (`test_codes_twoThousand_noLimit_withdrawFinishAndAPurchaseFitTheGate`). `shareDue(code)` reads what a code may claim now, its partner's part and its author's;
+  `codeOf(code)` what it was counted and what it got (`partnerDue`, `authorDue`, `partnerGot`, `authorGot`, `frac`).
   A partner or an author whose address the token refuses has its part set aside, `heldOf` and `claimHeld`
   as for a refused payout (`SharePaid` with `sent` false says which). So is the creator's part of a
   withdrawal or of `finish` (`Withdrawn` with `sent` false): a refused creator holds up neither the

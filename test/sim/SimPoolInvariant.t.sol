@@ -10,6 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Rules} from "../../src/Types.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {TermsBook} from "../../src/multi/TermsBook.sol";
+import {ACCRUAL_SCALE} from "../../src/sim/SimPoolCodes.sol";
 import {SimPool, SimPlan, SimSize, SimTier} from "../../src/sim/SimPool.sol";
 import {SimPoolFactory} from "../../src/sim/SimPoolFactory.sol";
 import {OracleFollowsMark} from "../PoolHarness.sol";
@@ -333,7 +334,7 @@ contract SimPoolHandler is Test {
         ghostBroughtOf[code] += got;
         if (!ghostUsed[code]) {
             ghostUsed[code] = true;
-            (address p, uint16 bps,, uint16 ab, address a,,,,,,) = pool.codeOf(code);
+            (address p, uint16 bps,, uint16 ab, address a,,,,,,,) = pool.codeOf(code);
             firstAuthor[code] = a;
             firstAuthorBps[code] = ab;
             firstPartner[code] = p;
@@ -347,7 +348,7 @@ contract SimPoolHandler is Test {
         uint256 n = _codeKeys.length;
         for (uint256 k = 0; k < n; ++k) {
             bytes32 code = _codeKeys[(seed % n + k) % n];
-            (address p,,,,,,,,,,) = pool.codeOf(code);
+            (address p,,,,,,,,,,,) = pool.codeOf(code);
             if (p != address(0)) return code;
         }
         return bytes32(0);
@@ -959,7 +960,7 @@ contract SimPoolHandler is Test {
         b.broughtOf = new uint256[](_codeKeys.length);
         b.bpsOf = new uint256[](_codeKeys.length);
         for (uint256 i = 0; i < _codeKeys.length; ++i) {
-            (, uint16 bps,,,, uint256 got,,,,,) = pool.codeOf(_codeKeys[i]);
+            (, uint16 bps,,,, uint256 got,,,,,,) = pool.codeOf(_codeKeys[i]);
             (b.broughtOf[i], b.bpsOf[i]) = (got, bps);
         }
     }
@@ -1429,11 +1430,17 @@ contract SimPoolInvariantTest is Test {
     function invariant_codesKeepTheirBooks() public view {
         uint256 sum;
         uint256 dueAll;
+        uint256 sentAll;
         for (uint256 i = 0; i < handler.codeCount(); ++i) {
-            (uint256 got, uint256 due) = _checkCode(handler.codeKey(i));
+            (uint256 got, uint256 due, uint256 sent) = _checkCode(handler.codeKey(i));
             sum += got;
             dueAll += due;
+            sentAll += sent;
         }
+        // Kept for the codes: all they accrued together, to the fraction, rounded up, less all they got; never more
+        // over what they may claim than a unit a code.
+        assertEq(pool.sharesDue(), (pool.accruedScaled() + ACCRUAL_SCALE - 1) / ACCRUAL_SCALE - sentAll, "sharesDue");
+        assertLe(pool.sharesDue() - dueAll, handler.codeCount(), "the codes' fractions and the rounding up");
         assertEq(pool.brought(), sum, "brought: the codes' together");
         assertLe(dueAll, pool.sharesDue(), "what the codes may claim is kept for them");
         assertGe(usdc.balanceOf(address(pool)), pool.held() + pool.sharesDue(), "and is in the pool");
@@ -1444,19 +1451,20 @@ contract SimPoolInvariantTest is Test {
 
     /// One code's books: what it brought and accrued, against the handler's; returns what it brought and what it may
     /// still claim.
-    function _checkCode(bytes32 code) internal view returns (uint256 got, uint256 due) {
+    function _checkCode(bytes32 code) internal view returns (uint256 got, uint256 due, uint256 sent) {
         uint256 sentP;
         uint256 sentA;
-        (,,,,, got,,,, sentP, sentA) = pool.codeOf(code);
+        (,,,,, got,,,, sentP, sentA,) = pool.codeOf(code);
         due = _due(code);
         uint256 accrued = sentP + sentA + due;
         assertGe(accrued, handler.ghostAccrued(code), "a code accrued less than its share of the withdrawals");
         assertLe(accrued, handler.ghostAccrued(code) + handler.ghostWithdrawals(), "more than a unit a withdrawal over");
         assertEq(sentP + sentA, handler.ghostGot(code), "what a code got is what claimShares sent or set aside");
         assertEq(got, handler.ghostBroughtOf(code), "a code's brought is what its sales brought");
-        (address p, uint16 bps, bool used, uint16 ab, address au,,,,,,) = pool.codeOf(code);
+        (address p, uint16 bps, bool used, uint16 ab, address au,,,,,,,) = pool.codeOf(code);
         assertEq(used, handler.ghostUsed(code), "used: a sale named it");
-        if (!used) return (got, due);
+        sent = sentP + sentA;
+        if (!used) return (got, due, sent);
         assertEq(au, handler.firstAuthor(code), "a used code's author changed");
         assertEq(ab, handler.firstAuthorBps(code), "a used code's split changed");
         assertEq(p, handler.firstPartner(code), "a used code's partner changed");

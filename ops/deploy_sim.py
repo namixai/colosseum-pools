@@ -115,7 +115,7 @@ MIN_PARTNER_BPS, MAX_PARTNER_BPS = 4000, 6000
 # Every code is sent by setSplitCode: a code for one has no author and a zero split, which is setCode.
 SET_CODE = "setSplitCode(bytes32,address,uint16,address,uint16)"
 SET_CODE_TYPES = ["bytes32", "address", "uint16", "address", "uint16"]
-CODE_OF = ["address", "uint16", "bool", "uint16", "address", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256"]
+CODE_OF = ["address", "uint16", "bool", "uint16", "address", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256"]
 ZERO = "0x" + "00" * 20
 
 # Each asset's perp index on the network selected now (ops/sim_network.py), read at each lookup.

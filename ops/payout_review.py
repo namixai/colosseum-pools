@@ -1032,15 +1032,18 @@ def running(pool: str, chain: dict) -> dict:
         worst += payout_of(size)
     book = chain["books"][pool]
     # What the codes accrued and their partners and authors have not yet claimed is theirs, not the pool's to pay out
-    # (`sharesDue`, 16 November); a pool before it answers none.
-    free = book["balance"] - book["owed"] - book["held"] - book["reserved"] - (book.get("sharesDue") or 0)
+    # (`sharesDue`, 16 November). A pool before it has no such getter and keeps nothing for the codes (0); a getter
+    # that could not be read (None) leaves the free money unknown, never taken for enough.
+    shares = book.get("sharesDue", 0)
+    free = None if shares is None else book["balance"] - book["owed"] - book["held"] - book["reserved"] - shares
     # What the pool itself keeps above that (SimPool.withdrawable): its `floor()` where it answers one (16 November:
     # the larger of `staged` and FLOOR_PAYOUTS payouts of the largest line live or selling); before, the larger of
     # FLOOR_PAYOUTS of the largest payout and `staged`, the payouts of its running stages. `worst` here is stricter: it counts the running exams
     # too, each as if it passed. Where the pool answers `staged`, the stages counted here are held to it.
     staged = book.get("staged")
     largest = book.get("largestPayout")
-    out = {"exams": exams, "stages": stages, "worst": worst, "free": free, "enough": free >= worst and not unread,
+    out = {"exams": exams, "stages": stages, "worst": worst, "free": free,
+           "enough": None if free is None else free >= worst and not unread,
            "unread": unread, "staged": staged,
            "floor": book["floor"] if book.get("floor") is not None else
            max(largest * FLOOR_PAYOUTS, staged) if staged is not None and largest is not None else None,
@@ -1443,8 +1446,10 @@ def summary(r: dict) -> str:
         lines.append(f"  code {k['code']} of {k['partner']}: {k['sales']} sales, {k['wallets']} wallets, run {k['run']},"
                      f" {k['idle']} never traded, {k['paired']} in pairs" + (", its owner buys" if k["partnerBuys"] else ""))
     g = r["running"]
+    free_text = "unknown (what the codes keep was not read): NOT known to be covered" if g["free"] is None else \
+        f"{g['free'] / 1e6:,.2f}: " + ("covered" if g["enough"] else "NOT covered")
     lines.append(f"  running: {g['exams']} exams, {g['stages']} stages, {g['worst'] / 1e6:,.2f} USDC if all pass;"
-                 f" free {g['free'] / 1e6:,.2f}: " + ("covered" if g["enough"] else "NOT covered"))
+                 f" free {free_text}")
     lines.append("  verdict: " + ("clean" if r["verdict"] == "clean" else "suspicious: " + "; ".join(r["reasons"])))
     if r["stopDraft"]:
         lines.append(f"  draft of a stop, reason 3, on {', '.join(r['stopDraft']['trades'])}: {r['stopDraft']['note']}")
@@ -1599,6 +1604,19 @@ def optional_view(pool: str, sig: str) -> int | None:
     try:
         return int(core.view(pool, sig, "uint256"))
     except Exception:
+        return None
+
+
+def share_reserve(pool: str) -> int | None:
+    """What a pool keeps for its codes (`sharesDue`): 0 for a pool from before it, whose getter reverts (it kept
+    nothing for them: their shares were paid within the withdrawal), and None if it could not be read at all (the node,
+    the rate): a failed read is never taken for 0."""
+    try:
+        return int(core.view(pool, "sharesDue()", "uint256"))
+    except Exception as exc:
+        if "revert" in str(exc).lower():
+            return 0
+        core.log("not_read", address=pool, call="sharesDue()", error=str(exc)[:120])
         return None
 
 
@@ -1776,7 +1794,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                     "sizes": [int(m[0]) for m in c.call_view(pool, "menu()", [], [], ["(uint64,uint64)[]"])[0]],
                     "approvals": has_approvals(factory, pool), "largestPayout": core.view(pool, "largestPayout()", "uint64"),
                     "staged": optional_view(pool, "staged()"), "floor": optional_view(pool, "floor()"),
-                    "sharesDue": optional_view(pool, "sharesDue()")}
+                    "sharesDue": share_reserve(pool)}
              for pool in pools}
     for pool, b in books.items():
         b["approvals"], b["approver"] = with_approver(b["approvals"], pool)

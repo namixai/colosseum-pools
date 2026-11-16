@@ -184,6 +184,8 @@ contract SimPool is Initializable {
         /// What the code has sent its partner and its author, or set aside for them, in all.
         uint256 partnerGot;
         uint256 authorGot;
+        /// The fraction of a unit the code accrued and was not yet counted, times `ACCRUAL_SCALE`.
+        uint256 frac;
     }
 
     struct Payout {
@@ -260,6 +262,9 @@ contract SimPool is Initializable {
     uint256 public weight;
     /// What one unit of a code's weight has accrued from the pool's withdrawals, times `ACCRUAL_SCALE`.
     uint256 public accrual;
+    /// What all the codes have accrued together, times `ACCRUAL_SCALE`, to the last fraction: `sharesDue` is it rounded
+    /// up, less what the codes have sent or set aside.
+    uint256 public accruedScaled;
     /// What the codes have accrued and not yet sent their partners or set aside: never the creator's, kept out of
     /// every withdrawal and payout as `held` is.
     uint256 public sharesDue;
@@ -1039,15 +1044,19 @@ contract SimPool is Initializable {
         if (fee != 0) usdc.safeTransfer(factory.feeRecipient(), fee);
         // Each code's share of the profit less the platform's part, in the part the code brought of all the pool
         // took: one step of `accrual` for all of them. The step is rounded up, so a code's part is its share to the
-        // unit, and what is kept for the codes is rounded up, so they are never counted more than is kept: at most a
-        // unit a withdrawal stays in the pool for no one. It stays in the pool for their partners (`claimShares`).
+        // unit. What is kept for the codes is all they accrued together, to the fraction, rounded up: each code is
+        // counted its whole units and keeps its fraction for the next time, so once every code has taken its own,
+        // what stays is the codes' fractions and the rounding up: at most a unit a code with a share.
+        // It stays in the pool for their partners and authors (`claimShares`).
         uint256 net = shared - shared * factory.FEE_BPS() / Units.BPS;
         uint256 toPartners;
         uint256 all = brought * Units.BPS;
         if (net != 0 && all != 0) {
             uint256 step = (net * ACCRUAL_SCALE + all - 1) / all;
             accrual += step;
-            toPartners = (weight * step + ACCRUAL_SCALE - 1) / ACCRUAL_SCALE;
+            uint256 was = (accruedScaled + ACCRUAL_SCALE - 1) / ACCRUAL_SCALE;
+            accruedScaled += weight * step;
+            toPartners = (accruedScaled + ACCRUAL_SCALE - 1) / ACCRUAL_SCALE - was;
             sharesDue += toPartners;
         }
         // The creator's part, sent or, if the token refuses it, set aside for the creator: a refused creator holds
