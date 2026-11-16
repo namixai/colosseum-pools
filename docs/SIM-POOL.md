@@ -23,18 +23,21 @@ fail, and their prices pay for the ones that pass.
 ## What it does
 
 - **Opening.** `SimPoolFactory.create(plan)` with 1 HYPE sent along, which goes to the platform, and
-  the USDC for two payouts of the largest size on the menu, taken from the creator. A menu of
-  10 000 locks 1 600. The plan sets the menu (up to twelve lines, each a size and its price), each line's
+  the plan's `locked` USDC, taken from the creator: what the creator chooses, at least two payouts of the
+  smallest line. The plan's `on` says which lines are switched on at the start, bit `i` for line `i`: only
+  lines whose two payouts the lock covers; the others start off. The first pool locks 4 000: 5 000, 10 000 and
+  25 000 on, 50 000, 100 000 and 250 000 off. The plan sets the menu (up to 24 lines, each a size and its price), each line's
   tier (`tiers`, one for each line: the loss limit, the target and the kind of loss line, from the start or
   trailing to it, of both its stages), the rules and terms both stages share otherwise, how many payouts the
   pool settles at most in a day (`payoutsPerDay`, 1 to 8), how long a pass may wait before its stage starts,
   and the hash of the pool's terms written out in a `TermsBook`. Two lines may share a price: a signed
   purchase names its line. A line's exam and stage start on the plan's rules and terms with its tier in them
   (`maxDrawdownBps`, every step's target, `drawdownKind`) and its size as `capital`. The pool keeps the plan's
-  rules and terms once, and for each line only its size, price and tier; `SimPoolSetup.start` puts the tier in
-  when an exam or a stage starts. `tiers()` reads them back, in the order of `menu()`. Opening a pool so costs
-  two words of storage a line: the first pool's plan of twelve lines, BTC, ETH and SOL, takes 1 616 094 gas as a
-  transaction, base and calldata counted, and twelve lines with an exam of four steps 1 623 528, both under
+  rules and terms once, and for each line only its size, price and tier, in one word of storage with the count
+  of its exams and stages not yet done; `SimPoolSetup.start` puts the tier in when an exam or a stage starts.
+  `tiers()` reads them back, in the order of `menu()`. Opening a pool so costs one word of storage a line: the
+  first pool's plan of 24 lines (six sizes on four tiers), BTC, ETH and SOL, takes 1 694 229 gas as a
+  transaction, base and calldata counted, and 24 lines with an exam of four steps 1 701 648, both under
   two thirds of a small HyperEVM block of 3 000 000 gas, which a creator's ordinary transaction goes to
   (`test_gas_createOf…FitsASmallBlock`, the gate in CI; "Fast block duration is set to 1 seconds with a 3M gas
   limit", https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/dual-block-architecture,
@@ -61,6 +64,16 @@ fail, and their prices pay for the ones that pass.
   codes). `ExamSold` names the code and its partner. The buyer gets a paper exam whose orders only the factory's
   filler fills inside their window, at the book when the plan says so: never better for the trader
   than the oracle price and at most the plan's `maxWorseBps` worse (`PaperExam.initializeWithFiller`).
+- **Lines on and off.** A line sells only while its creator has switched it on and the pool has two of its
+  payouts free (`LOCKED_PAYOUTS`, the CFO's K of 16 November): `free()` is the pool's USDC less what it owes,
+  holds, keeps for recent stops and keeps for its running stages (`staged`). Otherwise `buy` and
+  `buyWithAuthorization` revert before any money moves, `LineOff` or `NotCovered(short)` with how much is
+  missing. A line short of money stays on and sells again by itself once the money is back. Only the creator
+  switches a line (`setLine(line, on)`, `LineSet` each time): off at any time, on only while the pool is open
+  and has the two payouts free (`NotCovered(short)` otherwise). No line switches itself on, and a switch acts on
+  new sales only: exams and stages sold keep their rules. `lineState(line)` reads whether the line is on,
+  whether it sells now, whether the creator may switch it on now, and how much the pool is short of that;
+  `onMask()` holds the switches, bit `i` for line `i`.
 - **Selling by signature.** `buyWithAuthorization(trader, line, code, salt, validAfter,
   validBefore, v, r, s)`: the trader signs a USDC transfer of the line's price to the pool (EIP-3009,
   Circle's FiatToken V2.2 on HyperEVM and its testnet) and needs no gas; anyone sends it, a relayer
@@ -103,8 +116,10 @@ fail, and their prices pay for the ones that pass.
   unapproved payouts are paid 8 days after their claim, the fifth 9. `claimHeld` and `finish` are no
   payouts of the day. So the limit is on what `pay` settles, not on every transfer of a day: what was
   set aside for a refused trader on earlier days leaves when that trader claims it. Whatever the rules
-  let through, `pay` settles at most two payouts in any 24 hours, of the largest size at most: 1 600 in
-  the first pool, what its creator locked (the CFO, 13 November 2026).
+  let through, `pay` settles at most two payouts in any 24 hours, of the largest size at most: 40 000 in
+  the first pool if its creator switches 250 000 on, which sells only while 40 000 are free (the CFO, 13
+  and 16 November 2026). A payout over the day's two keeps its place and its money: the creator's withdrawal
+  leaves it in the pool (`test_dailyLimit_aPayoutOf20000…`).
 - **A stop.** Until a payout is paid, approved or not, the factory's checker may stop it once, with
   a reason: 1, opposite positions with another account of the factory; 2, that and wallets linked;
   3, the result is disputed (a flaw of the exam, the oracle or the filler); 4, prohibited play: a
@@ -140,10 +155,12 @@ fail, and their prices pay for the ones that pass.
   the closer only cancels: it changes neither the amount nor where the money goes (for the
   creator's terms: the platform may cancel a withdrawal request; it never moves the money). There
   is no other way for the creator to take money out before `finish`. `withdrawable` is only what
-  stays above every payout owed, held or kept for a recent stop and, while the pool is open, above
-  the greater of three payouts of the largest size and the payouts of every stage still running,
-  each by its own size (`staged`: up in `fund`, down when the stage's payout is claimed or the
-  stage is released). A funded trader's payout stays in the pool for as long as the stage runs; the
+  stays above every payout owed, held or kept for a recent stop and, until the pool is finished, above
+  `floor()`: the greater of the payouts of every stage still running, each by its own size (`staged`: up
+  in `fund`, down when the stage's payout is claimed or the stage is released), and three payouts of the
+  largest line with an exam or a stage not yet done, or switched on and selling (CFO, 16 November, item 3).
+  A trader with a live exam of 250 000 keeps 60 000 in, its line switched off or not; with nothing on and
+  nothing live, nothing is kept above what is owed, held or kept for stops. A funded trader's payout stays in the pool for as long as the stage runs; the
   creator takes profit only above it (CFO, 13 November). `staged` changes what may leave, not what
   profit is: the codes' shares are of the profit a withdrawal takes, as before. 0.5 % goes to the platform. Profit is the
   pool's money above what the creator put in, after what the pool owes, holds and keeps for recent
@@ -176,7 +193,7 @@ fail, and their prices pay for the ones that pass.
 
 Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE`); 0.5 % of each
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
-fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
+fee on it; two payouts of a line free for it to be switched on or to sell, and at least two of the smallest locked at opening (`LOCKED_PAYOUTS`); three of the largest line live or selling kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid with the approver's approval (`PAYOUT_DELAY`), 7 days
 without it (`PAYOUT_HARD`); 14 days in
 which a stopped payout's money stays set aside and the stop can be lifted, and after which it can be made final (`STOP_RESERVE`); 184 days a

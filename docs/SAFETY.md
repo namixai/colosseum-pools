@@ -167,10 +167,14 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   (S131): never more than it asked, and only what the pool can spare then, so payouts that came due meanwhile
   come first. A pool
   is finished a week after its close at the earliest (S129), so closing and finishing are never one block.
-  What may leave is only what stays above the greater of three payouts of the largest size and the payouts of
-  every stage still running, each by its size (S132), and above
+  What may leave is only what stays above the greater of the payouts of every stage still running, each by its size
+  (S132), and three payouts of the largest line with an exam or a stage not yet done, or switched on and selling
+  (S145), and above
   every payout owed and every payout set aside for a trader whose transfer was refused (S117), and it stops
-  nobody's payout. Every sale names a trading group's code (S123), and a partner's share is of the pool's
+  nobody's payout. A line sells only while its creator has switched it on (S142) and the pool has two of its payouts
+  free, above what it owes, holds, keeps for recent stops and keeps for its running stages (S143); the creator
+  switches a line on only then, and a pool opens with only the lines its creator's lock covers switched on (S144). No
+  line switches itself on. Every sale names a trading group's code (S123), and a partner's share is of the pool's
   money above what the creator put in, after what the pool owes, holds and keeps for a recent stop, in the
   part of all the pool took that its code brought; never of the principal. Once a sale names a code, the
   creator cannot change its partner's address or lower its share; it can only raise the share, within the bounds
@@ -345,33 +349,37 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S109 | `src/exam/PaperExam.sol:389` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
 | S110 | `src/exam/PaperExam.sol:110` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
 | S111 | `src/exam/PaperExam.sol:678` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);` |
-| S112 | `src/sim/SimPoolFactory.sol:39` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
+| S112 | `src/sim/SimPoolFactory.sol:40` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
 | S113 | `src/sim/SimPoolStops.sol:31` | `if (p.state != SimPool.PayoutState.Due \|\| p.wasStopped) revert SimPool.BadPayout();` |
-| S114 | `src/sim/SimPool.sol:257` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:670` | `function liftStop(uint256 id) external onlyChecker {` |
-| S116 | `src/sim/SimPoolFactory.sol:195` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
-| S117 | `src/sim/SimPool.sol:419` | `uint256 keep = owed + held + reserved + (finished ? 0 : floor);` |
-| S118 | `src/sim/SimPoolFactory.sol:53` | `uint32 public constant STOP_RESERVE = 14 days;` |
-| S119 | `src/sim/SimPool.sol:583` | `uint256 kept = held + reserved;` |
+| S114 | `src/sim/SimPool.sol:281` | `event PayoutStopped(` |
+| S115 | `src/sim/SimPool.sol:725` | `function liftStop(uint256 id) external onlyChecker {` |
+| S116 | `src/sim/SimPoolFactory.sol:197` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
+| S117 | `src/sim/SimPool.sol:473` | `uint256 keep = owed + held + reserved + (finished ? 0 : floor());` |
+| S118 | `src/sim/SimPoolFactory.sol:54` | `uint32 public constant STOP_RESERVE = 14 days;` |
+| S119 | `src/sim/SimPool.sol:638` | `uint256 kept = held + reserved;` |
 | S120 | `src/sim/SimPoolStops.sol:73` | `if (block.timestamp >= uint256(p.stoppedAt) + factory.STOP_RESERVE()) revert SimPool.ReserveOver();` |
-| S121 | `src/sim/SimPool.sol:781` | `if (c.used && (partner != c.partner \|\| bps <= c.bps)) revert CodeUsed();` |
-| S122 | `src/sim/SimPool.sol:461` | `_receive(trader, m.price, keccak256(abi.encode(code, line, salt)), validAfter, validBefore, v, r, s);` |
-| S123 | `src/sim/SimPool.sol:850` | `if (partner == address(0)) revert NoSuchCode();` |
-| S124 | `src/sim/SimPoolFactory.sol:57` | `uint32 public constant MIN_TERM = 184 days;` |
-| S125 | `src/sim/SimPool.sol:808` | `revert Locked();` |
-| S126 | `src/sim/SimPool.sol:423` | `if (w > p) w = p;` |
-| S127 | `src/sim/SimPoolFactory.sol:61` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
-| S128 | `src/sim/SimPool.sol:745` | `if (block.timestamp < readyAt) revert NotReady();` |
-| S129 | `src/sim/SimPool.sol:823` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
-| S130 | `src/sim/SimPool.sol:746` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
-| S131 | `src/sim/SimPool.sol:748` | `uint256 amount = r < w ? r : w;` |
-| S132 | `src/sim/SimPool.sol:418` | `if (staged > floor) floor = staged;` |
-| S133 | `src/sim/SimPoolFactory.sol:43` | `uint32 public constant PAYOUT_HARD = 7 days;` |
-| S134 | `src/sim/SimPool.sol:566` | `if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {` |
-| S135 | `src/sim/SimPool.sol:585` | `if (bal < ahead + p.amount) {` |
-| S136 | `src/sim/SimPool.sol:684` | `if (msg.sender != approver \|\| msg.sender == address(0)) revert NotApprover();` |
+| S121 | `src/sim/SimPool.sol:852` | `if (c.used && (partner != c.partner \|\| bps <= c.bps)) revert CodeUsed();` |
+| S122 | `src/sim/SimPool.sol:516` | `_receive(trader, m.price, keccak256(abi.encode(code, line, salt)), validAfter, validBefore, v, r, s);` |
+| S123 | `src/sim/SimPool.sol:949` | `if (partner == address(0)) revert NoSuchCode();` |
+| S124 | `src/sim/SimPoolFactory.sol:58` | `uint32 public constant MIN_TERM = 184 days;` |
+| S125 | `src/sim/SimPool.sol:879` | `revert Locked();` |
+| S126 | `src/sim/SimPool.sol:477` | `if (w > p) w = p;` |
+| S127 | `src/sim/SimPoolFactory.sol:62` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
+| S128 | `src/sim/SimPool.sol:800` | `if (block.timestamp < readyAt) revert NotReady();` |
+| S129 | `src/sim/SimPool.sol:894` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
+| S130 | `src/sim/SimPool.sol:801` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
+| S131 | `src/sim/SimPool.sol:803` | `uint256 amount = r < w ? r : w;` |
+| S132 | `src/sim/SimPool.sol:420` | `if (staged > f) f = staged;` |
+| S133 | `src/sim/SimPoolFactory.sol:44` | `uint32 public constant PAYOUT_HARD = 7 days;` |
+| S134 | `src/sim/SimPool.sol:621` | `if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {` |
+| S135 | `src/sim/SimPool.sol:640` | `if (bal < ahead + p.amount) {` |
+| S136 | `src/sim/SimPool.sol:739` | `if (msg.sender != approver \|\| msg.sender == address(0)) revert NotApprover();` |
 | S137 | `src/sim/SimPoolStops.sol:33` | `if (paired != address(0) \|\| trades.length == 0 \|\| links.length != 1) revert SimPool.BadReason();` |
-| S138 | `src/sim/SimPoolFactory.sol:254` | `if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY \|\| p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();` |
-| S139 | `src/sim/SimPool.sol:575` | `if (block.timestamp < freeAt) {` |
-| S140 | `src/sim/SimPoolFactory.sol:246` | `if (k.maxDrawdownBps == 0 \|\| k.maxDrawdownBps >= Units.BPS) revert BadPlan();` |
+| S138 | `src/sim/SimPoolFactory.sol:264` | `if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY \|\| p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();` |
+| S139 | `src/sim/SimPool.sol:630` | `if (block.timestamp < freeAt) {` |
+| S140 | `src/sim/SimPoolFactory.sol:255` | `if (k.maxDrawdownBps == 0 \|\| k.maxDrawdownBps >= Units.BPS) revert BadPlan();` |
 | S141 | `src/sim/SimPoolStops.sol:38` | `if (trades.length < 2 \|\| links.length != 1) revert SimPool.BadReason();` |
+| S142 | `src/sim/SimPool.sol:909` | `if (!_isOn(line)) revert LineOff();` |
+| S143 | `src/sim/SimPool.sol:929` | `uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;` |
+| S144 | `src/sim/SimPoolFactory.sol:250` | `if (p.on & (1 << i) != 0 && cover > p.locked) revert BadPlan();` |
+| S145 | `src/sim/SimPoolSetup.sol:77` | `if (l.live != 0 \|\| sells) size = s;` |
