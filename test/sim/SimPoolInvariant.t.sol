@@ -58,6 +58,10 @@ contract SimPoolHandler is Test {
     uint256 public ghostBelowFloor;
     /// A request to withdraw one unit more than `withdrawable` that went through.
     uint256 public ghostOverWithdraw;
+    /// A sale that went through on a line not selling (off, or the pool without two of its payouts free).
+    uint256 public ghostUncoveredSale;
+    /// A line switched on that `lineState` said could not be, or refused when it said it could.
+    uint256 public ghostLineMismatch;
     /// The standing request as the handler made it: how much, and when.
     uint256 public ghostRequested;
     uint256 public ghostRequestedAt;
@@ -240,6 +244,14 @@ contract SimPoolHandler is Test {
         deal(address(usdc), t, usdc.balanceOf(t) + m[line].price);
         vm.startPrank(t);
         usdc.approve(address(pool), m[line].price);
+        if (!_sells(line)) {
+            // Off, or short of two of its payouts free: the pool must refuse it.
+            try pool.buy(line, code) {
+                ghostUncoveredSale += 1;
+            } catch {}
+            vm.stopPrank();
+            return address(0);
+        }
         e = pool.buy(line, code);
         vm.stopPrank();
         _sold(e, code, m[line].price);
@@ -261,6 +273,7 @@ contract SimPoolHandler is Test {
         bytes32 code = _saleCode(codeSeed);
         if (code == bytes32(0)) return;
         line = bound(line, 0, 1);
+        if (!_sells(line)) return;
         address t = _actors[who % _actors.length];
         SimSize[] memory m = pool.menu();
         deal(address(usdc), t, usdc.balanceOf(t) + m[line].price);
@@ -639,9 +652,7 @@ contract SimPoolHandler is Test {
             if (!good || amount == 0 || block.timestamp < ghostRequestedAt + _delay()) ghostInstant += 1;
             if (out != amount - _checkShares(b, amount)) ghostWithdrawMismatch += 1;
             if (pool.requested() != 0 || pool.readyAt() != 0) ghostWithdrawMismatch += 1;
-            uint256 floor = uint256(pool.largestPayout()) * 3;
-            if (pool.staged() > floor) floor = pool.staged();
-            uint256 keep = pool.owed() + pool.held() + pool.reserved() + floor;
+            uint256 keep = pool.owed() + pool.held() + pool.reserved() + floorNow();
             if (usdc.balanceOf(address(pool)) < keep) ghostBelowFloor += 1;
             calls["withdraw"] += 1;
         } catch {
@@ -672,6 +683,43 @@ contract SimPoolHandler is Test {
 
     function _window() internal view returns (uint256) {
         return pool.factory().WITHDRAW_WINDOW();
+    }
+
+    function _sells(uint256 line) internal view returns (bool sells) {
+        (, sells,,) = pool.lineState(line);
+    }
+
+    /// The creator switches a line on or off: off always; on only when `lineState` says it may be.
+    function setLine(uint256 seed) external {
+        uint256 line = seed % 2;
+        bool on = (seed >> 8) % 3 != 0;
+        (,, bool can,) = pool.lineState(line);
+        vm.prank(creator);
+        try pool.setLine(line, on) {
+            if (on && !can) ghostLineMismatch += 1;
+        } catch {
+            if (!on || can) ghostLineMismatch += 1;
+        }
+        calls["setLine"] += 1;
+    }
+
+    /// What the pool must keep, counted from the accounts this handler made rather than the pool's own count: the
+    /// greater of `staged` and three payouts of the largest line with an exam or a stage not yet done, or selling.
+    function floorNow() public view returns (uint256 f) {
+        SimSize[] memory m = pool.menu();
+        uint256 top;
+        for (uint256 k = 0; k < 2; ++k) {
+            address[] storage list = k == 0 ? _exams : _stages;
+            for (uint256 i = 0; i < list.length; ++i) {
+                (, uint8 line, bool done) = pool.accountOf(list[i]);
+                if (!done && m[line].size > top) top = m[line].size;
+            }
+        }
+        for (uint256 i = 0; i < m.length; ++i) {
+            if (_sells(i) && m[i].size > top) top = m[i].size;
+        }
+        f = top * 800 / 10_000 * 3;
+        if (pool.staged() > f) f = pool.staged();
     }
 
     function addToPot(uint256 amount) external {
@@ -1044,6 +1092,8 @@ contract SimPoolInvariantTest is Test {
         p.tiers[0] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
         p.tiers[1] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
         p.payoutsPerDay = 2;
+        p.locked = 1_600e6;
+        p.on = 3;
         vm.prank(creator);
         pool = SimPool(factory.create{value: 1 ether}(p));
 
@@ -1059,7 +1109,7 @@ contract SimPoolInvariantTest is Test {
             pool.setCode(code, owner, shares[i]);
         }
         targetContract(address(handler));
-        bytes4[] memory s = new bytes4[](47);
+        bytes4[] memory s = new bytes4[](49);
         s[0] = SimPoolHandler.buy.selector;
         s[1] = SimPoolHandler.buy.selector;
         s[2] = SimPoolHandler.passExam.selector;
@@ -1108,6 +1158,8 @@ contract SimPoolInvariantTest is Test {
         s[44] = SimPoolHandler.approve.selector;
         s[45] = SimPoolHandler.approve.selector;
         s[46] = SimPoolHandler.rush.selector;
+        s[47] = SimPoolHandler.setLine.selector;
+        s[48] = SimPoolHandler.setLine.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: s}));
     }
 
@@ -1194,9 +1246,11 @@ contract SimPoolInvariantTest is Test {
     function invariant_creatorKeepsThreePayouts() public view {
         assertEq(handler.ghostBelowFloor(), 0, "a withdrawal left less than three payouts");
         assertEq(handler.ghostOverWithdraw(), 0, "a request past withdrawable went through");
+        assertEq(handler.ghostUncoveredSale(), 0, "a sale on a line not selling");
+        assertEq(handler.ghostLineMismatch(), 0, "a line switched on against lineState");
         if (!pool.finished()) {
-            uint256 floor = uint256(pool.largestPayout()) * 3;
-            if (pool.staged() > floor) floor = pool.staged();
+            uint256 floor = handler.floorNow();
+            assertEq(pool.floor(), floor, "the floor, from the handler's accounts");
             uint256 keep = pool.owed() + pool.held() + pool.reserved() + floor;
             uint256 bal = usdc.balanceOf(address(pool));
             uint256 w = bal > keep ? bal - keep : 0;

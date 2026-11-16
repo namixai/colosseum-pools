@@ -97,7 +97,8 @@ LOCKED_PAYOUTS = 2
 RULES_T = "(uint16,uint16,uint32,uint32[],uint32[])"
 TERMS_T = "(uint64,uint16[],uint32,uint32,uint16,uint32,uint16,uint16)"
 TIER_T = "(uint16,uint16,uint8)"
-PLAN_T = f"((uint64,uint64)[],{RULES_T},{TERMS_T},{RULES_T},{TERMS_T},uint32,bool,uint16,bytes32,{TIER_T}[],uint8)"
+PLAN_T = (f"((uint64,uint64)[],{RULES_T},{TERMS_T},{RULES_T},{TERMS_T},uint32,bool,uint16,bytes32,{TIER_T}[],uint8,"
+          "uint256,uint32)")
 # A plan file without `payouts_per_day` is a pool of two a day, the first pool's (CFO, 13 November).
 PAYOUTS_PER_DAY = 2
 # SimPoolFactory.MIN_PARTNER_BPS, MAX_PARTNER_BPS and MAX_CODES; the tests hold them against the source.
@@ -143,7 +144,8 @@ def plan_of(raw: dict, terms_hash: bytes) -> tuple:
     menu = [(usdc_units(m["size_usdc"]), usdc_units(m["price_usdc"])) for m in raw["menu"]]
     return (menu, _rules(raw["exam_rules"]), _terms(raw["exam"]), _rules(raw["funded_rules"]), _terms(raw["funded"]),
             raw["fund_window_s"], raw["from_book"], raw["max_worse_bps"], terms_hash,
-            [_tier(raw, m) for m in raw["menu"]], raw.get("payouts_per_day", PAYOUTS_PER_DAY))
+            [_tier(raw, m) for m in raw["menu"]], raw.get("payouts_per_day", PAYOUTS_PER_DAY), locked_of(raw),
+            on_of(raw))
 
 
 def _tier(raw: dict, line: dict) -> tuple:
@@ -220,10 +222,34 @@ def send_codes(creator, pool_: str, codes: list[tuple[str, bytes, str, int]]) ->
         print(f"deploy_sim: code {text!r} set, tx {rcpt['transactionHash']}")
 
 
+def _cover(line: dict) -> int:
+    """LOCKED_PAYOUTS payouts of a line (6 decimals): what the pool must have free for it to be on or to sell."""
+    return usdc_units(line["size_usdc"]) * PAYOUT_BPS // 10_000 * LOCKED_PAYOUTS
+
+
 def locked_of(raw: dict) -> int:
-    """The USDC a pool locks at opening: LOCKED_PAYOUTS payouts of the largest size (6 decimals)."""
-    largest = max(usdc_units(m["size_usdc"]) for m in raw["menu"])
-    return largest * PAYOUT_BPS // 10_000 * LOCKED_PAYOUTS
+    """The USDC a pool locks at opening (6 decimals): the plan's `locked_usdc`, set by its creator, at least
+    LOCKED_PAYOUTS payouts of the smallest line; a plan without it locks LOCKED_PAYOUTS payouts of the largest size,
+    as every pool did before 16 November, and so has every line on."""
+    if "locked_usdc" not in raw:
+        return max(_cover(m) for m in raw["menu"])
+    locked = usdc_units(raw["locked_usdc"])
+    if locked < min(_cover(m) for m in raw["menu"]):
+        raise SystemExit(f"locked_usdc {raw['locked_usdc']} is less than {LOCKED_PAYOUTS} payouts of the smallest line")
+    return locked
+
+
+def on_of(raw: dict) -> int:
+    """The lines on at the start, bit i for line i: each line's `on`, or, for a line without it, whether the lock
+    covers its LOCKED_PAYOUTS payouts. A line on that the lock does not cover is refused here, as the factory would."""
+    locked, mask = locked_of(raw), 0
+    for i, m in enumerate(raw["menu"]):
+        on = m.get("on", _cover(m) <= locked)
+        if on and _cover(m) > locked:
+            raise SystemExit(f"line {i} ({m['size_usdc']:g}) is on, and {locked / 1e6:g} locked does not cover "
+                             f"{LOCKED_PAYOUTS} of its payouts ({_cover(m) / 1e6:g})")
+        mask |= int(bool(on)) << i
+    return mask
 
 
 def keeper_nodes_of(args) -> dict | None:
@@ -331,7 +357,10 @@ def pool(args) -> int:
     factory = record.get("SimPoolFactory", "(none in this record)")
     print(f"deploy_sim pool: factory {factory}, {len(plan[0])} sizes "
           + ", ".join(f"{m[0] / 1e6:g} for {m[1] / 1e6:g}" for m in plan[0]) + " USDC")
-    print(f"  locks            {locked / 1e6:g} USDC (two payouts of the largest size), pays 1 HYPE")
+    on = plan[-1]
+    print(f"  locks            {locked / 1e6:g} USDC, pays 1 HYPE; lines on at the start: "
+          + (", ".join(str(i) for i in range(len(plan[0])) if on >> i & 1) or "none")
+          + " (the creator switches the others on, with two of their payouts free)")
     print(f"  book             {'at the book, ceiling ' + str(plan[7]) + ' bp' if plan[6] else 'at the oracle'}; "
           f"fill window {plan[2][7]} blocks")
     print_codes(codes)

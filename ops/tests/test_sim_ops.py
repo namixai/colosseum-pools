@@ -27,7 +27,9 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(constant("CREATION_FEE"), "1 ether")
         self.assertEqual(d.CREATION_FEE, 10**18)
         self.assertEqual(int(constant("PAYOUT_BPS")), d.PAYOUT_BPS)
-        self.assertEqual(int(constant("LOCKED_PAYOUTS")), d.LOCKED_PAYOUTS)
+        # The factory takes it from SimPool.sol, whose pool counts two payouts of a line free before it sells.
+        self.assertEqual(constant("LOCKED_PAYOUTS"), "uint8(COVER_PAYOUTS)")
+        self.assertEqual(int(re.search(r"constant COVER_PAYOUTS = (\d+);", POOL).group(1)), d.LOCKED_PAYOUTS)
         self.assertEqual(int(constant("MIN_PARTNER_BPS")), d.MIN_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_PARTNER_BPS")), d.MAX_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_CODES")), d.MAX_CODES)
@@ -58,9 +60,9 @@ class TheNumbers(unittest.TestCase):
         body = re.search(r"struct SimPlan \{(.*?)\n\}", POOL, re.S).group(1)
         types = [l.split()[0] for l in body.splitlines() if l.strip() and not l.strip().startswith("//")]
         self.assertEqual(types, ["SimSize[]", "Rules", "ExamTerms", "Rules", "ExamTerms", "uint32", "bool", "uint16",
-                                 "bytes32", "SimTier[]", "uint8"])
+                                 "bytes32", "SimTier[]", "uint8", "uint256", "uint32"])
         self.assertTrue(d.PLAN_T.startswith("((uint64,uint64)[]," + d.RULES_T + "," + d.TERMS_T))
-        self.assertTrue(d.PLAN_T.endswith(",uint32,bool,uint16,bytes32," + d.TIER_T + "[],uint8)"))
+        self.assertTrue(d.PLAN_T.endswith(",uint32,bool,uint16,bytes32," + d.TIER_T + "[],uint8,uint256,uint32)"))
         tier = re.search(r"struct SimTier \{(.*?)\n\}", POOL, re.S).group(1)
         self.assertEqual([l.split()[0] for l in tier.splitlines() if l.strip() and not l.strip().startswith("//")],
                          ["uint16", "uint16", "uint8"])
@@ -140,14 +142,14 @@ class TheFirstPool(unittest.TestCase):
         self.assertEqual(plan[4], plan[2], "the stage has the exam's terms")
         self.assertEqual(plan[5:9], (604800, True, 150, h))
         # No line of its own tier: each line takes the plan's 6 % and 10 %, from the start, and two payouts a day.
-        self.assertEqual(plan[9:], ([(600, 1000, 0), (600, 1000, 0)], 2))
+        self.assertEqual(plan[9:11], ([(600, 1000, 0), (600, 1000, 0)], 2))
 
     def test_a_line_names_its_own_tier_and_a_plan_its_payouts_a_day(self):
         raw = json.loads(json.dumps(FIRST))
         raw["menu"][0].update(max_drawdown_bps=300, target_bps=900, drawdown_kind=1)
         raw["payouts_per_day"] = 3
         plan = d.plan_of(raw, b"\0" * 32)
-        self.assertEqual(plan[9:], ([(300, 900, 1), (600, 1000, 0)], 3))
+        self.assertEqual(plan[9:11], ([(300, 900, 1), (600, 1000, 0)], 3))
         raw["funded"]["targets_bps"] = [800]
         with self.assertRaises(SystemExit):
             d.plan_of(raw, b"\0" * 32)  # line 1 has no tier, and the stages' targets differ
@@ -192,7 +194,7 @@ class TheFirstPool(unittest.TestCase):
             self.assertEqual(keeper.PAY_PER_CALL, 2, "the two of the terms")
             self.assertEqual(constant("PAYOUT_DAY"), "24 hours", "the day of the terms")
             self.assertEqual(constant("MAX_PAYOUTS_PER_DAY"), "uint8(MAX_PAYOUTS_A_DAY)")
-            self.assertEqual(d.plan_of(json.loads((ROOT / f"deployments/plans/{name}.json").read_text()), b"\0" * 32)[-1],
+            self.assertEqual(d.plan_of(json.loads((ROOT / f"deployments/plans/{name}.json").read_text()), b"\0" * 32)[10],
                              2, "the two of the terms: the plan's payouts a day")
             self.assertIn("Payouts are paid in the order they were claimed, out of the money the pool holds: one still "
                           "waiting for its approval keeps its place, and a later one is paid past it only if the money "
@@ -242,6 +244,25 @@ class TheFirstPool(unittest.TestCase):
         max_late = 0
         self.assertEqual(FIRST["exam"]["fill_window"], max_late + 1 + max(2, -(-(max_late + 1) // 2)))
         self.assertIn("fill_window: 3 blocks, a placeholder", FIRST["about"])
+
+    def test_a_plan_sets_its_lock_and_its_lines_on(self):
+        menu = [{"size_usdc": s, "price_usdc": 1} for s in (5000, 10000, 25000, 50000)]
+        old = {"menu": menu}
+        self.assertEqual(d.locked_of(old), 8_000 * 10**6, "no locked_usdc: two payouts of the largest, as before")
+        self.assertEqual(d.on_of(old), 0b1111, "and every line on")
+        plan = {"menu": menu, "locked_usdc": 4000}
+        self.assertEqual(d.locked_of(plan), 4_000 * 10**6)
+        self.assertEqual(d.on_of(plan), 0b0111, "a line without `on`: on if the lock covers two of its payouts")
+        plan["menu"] = [dict(m, on=False) if m["size_usdc"] == 10000 else m for m in menu]
+        self.assertEqual(d.on_of(plan), 0b0101)
+        plan["menu"] = [dict(m, on=True) for m in menu]
+        with self.assertRaises(SystemExit) as caught:
+            d.on_of(plan)
+        self.assertIn("line 3 (50000) is on", str(caught.exception))
+        with self.assertRaises(SystemExit):
+            d.locked_of({"menu": menu, "locked_usdc": 799.99})
+        h = keccak(text="t")
+        self.assertEqual(d.plan_of(dict(FIRST, locked_usdc=1600), h)[-2:], (1_600 * 10**6, 0b11))
 
     def test_dollars_round_to_usdc_units(self):
         self.assertEqual(d.usdc_units(2.01), 2_010_000, "int(2.01 * 10**6) is 2 009 999")

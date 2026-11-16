@@ -1032,14 +1032,16 @@ def running(pool: str, chain: dict) -> dict:
         worst += payout_of(size)
     book = chain["books"][pool]
     free = book["balance"] - book["owed"] - book["held"] - book["reserved"]
-    # What the pool itself keeps above that (SimPool.withdrawable): the larger of FLOOR_PAYOUTS of the largest
-    # payout and `staged`, the payouts of its running stages. `worst` here is stricter: it counts the running exams
+    # What the pool itself keeps above that (SimPool.withdrawable): its `floor()` where it answers one (16 November:
+    # the larger of `staged` and FLOOR_PAYOUTS payouts of the largest line live or selling); before, the larger of
+    # FLOOR_PAYOUTS of the largest payout and `staged`, the payouts of its running stages. `worst` here is stricter: it counts the running exams
     # too, each as if it passed. Where the pool answers `staged`, the stages counted here are held to it.
     staged = book.get("staged")
     largest = book.get("largestPayout")
     out = {"exams": exams, "stages": stages, "worst": worst, "free": free, "enough": free >= worst and not unread,
            "unread": unread, "staged": staged,
-           "floor": max(largest * FLOOR_PAYOUTS, staged) if staged is not None and largest is not None else None,
+           "floor": book["floor"] if book.get("floor") is not None else
+           max(largest * FLOOR_PAYOUTS, staged) if staged is not None and largest is not None else None,
            "stagesWorst": stages_worst}
     out["stagedMatches"] = None if staged is None else staged == stages_worst
     return out
@@ -1771,7 +1773,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
                     "sizes": [int(m[0]) for m in c.call_view(pool, "menu()", [], [], ["(uint64,uint64)[]"])[0]],
                     "approvals": has_approvals(factory, pool), "largestPayout": core.view(pool, "largestPayout()", "uint64"),
-                    "staged": optional_view(pool, "staged()")}
+                    "staged": optional_view(pool, "staged()"), "floor": optional_view(pool, "floor()")}
              for pool in pools}
     for pool, b in books.items():
         b["approvals"], b["approver"] = with_approver(b["approvals"], pool)

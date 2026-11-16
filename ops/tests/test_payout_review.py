@@ -1266,6 +1266,9 @@ class WhatThePoolWouldTake(unittest.TestCase):
         self.assertEqual((got["stages"], got["stagesWorst"], got["stagedMatches"]), (1, 800 * 10**6, True))
         del ch.d["books"][POOL]["staged"]
         self.assertIsNone(r.review(ch.d, POOL, 0)["running"]["floor"], "an older pool without staged: not guessed")
+        # A pool of 16 November answers its own floor (the largest line live or selling): that is what is shown.
+        ch.d["books"][POOL].update(staged=0, floor=60_000 * 10**6)
+        self.assertEqual(r.review(ch.d, POOL, 0)["running"]["floor"], 60_000 * 10**6)
 
     def test_an_account_not_read_makes_the_pool_total_incomplete(self):
         ch, _, _ = honest_world()
@@ -1374,7 +1377,7 @@ class ReadingTheChain(unittest.TestCase):
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
         self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "sizes": [SIZE // 2, SIZE],
                                                "approvals": True, "largestPayout": 800, "staged": 1_600,
-                                               "approver": addr(0xAB)}})
+                                               "floor": None, "approver": addr(0xAB)}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         self.assertEqual(got["times"], {"delay": 72 * 3_600, "hard": 8 * 86_400}, "what the factory answers, not 7 days by rote")
         review = r.review(got, POOL, 7)
@@ -2217,7 +2220,9 @@ class TheTiersAreTheAccountsOwn(unittest.TestCase):
         pool = _source("src/sim/SimPool.sol")
         self.assertIn("exam = _start(trader, line, false);", pool)
         self.assertIn("stage = _start(trader, a.line, true);", pool)
-        self.assertIn("SimPoolSetup.start(_rules, funded, _tiers[line], _menu[line].size, trader, factory);", pool)
+        self.assertIn("a = SimPoolSetup.start(_rules, funded, l, trader, factory);", pool)
+        self.assertIn("SimLine storage l = _lines[line];", pool)
+        self.assertIn("t.capital = k.size;", setup)
 
     def test_the_review_reads_the_drawdown_and_its_kind_from_the_account(self):
         asked = []

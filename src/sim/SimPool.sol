@@ -49,6 +49,18 @@ struct SimTier {
     uint8 drawdownKind;
 }
 
+/// @notice One line of a pool's menu as the pool keeps it, in one storage slot: its size and price (`SimSize`), its
+///         tier (`SimTier`), and how many of its exams and stages are still running or able to pay.
+struct SimLine {
+    uint64 size;
+    uint64 price;
+    uint16 maxDrawdownBps;
+    uint16 targetBps;
+    uint8 drawdownKind;
+    /// Exams and stages of the line not yet done (`SimPool.Account.done`): what `SimPool.floor` counts in.
+    uint32 live;
+}
+
 /// @notice What a pool keeps once for every line of its menu (`SimPoolSetup`): the rules and terms both stages start
 ///         on, but for what each line's tier sets (`maxDrawdownBps`, the values of `targetsBps`, the kind of loss line)
 ///         and its size (`capital`), put in when an exam or a stage starts.
@@ -87,11 +99,21 @@ struct SimPlan {
     /// How many payouts the pool settles at most in any `PAYOUT_DAY`, within the factory's `MIN_PAYOUTS_PER_DAY`
     /// and `MAX_PAYOUTS_PER_DAY` (CFO, 13 November: a number of the pool, two for the first).
     uint8 payoutsPerDay;
+    /// What the creator locks at the start, in HyperEVM USDC units: at least `COVER_PAYOUTS` payouts of the smallest
+    /// line (CFO, 16 November).
+    uint256 locked;
+    /// The lines on at the start, bit `i` for line `i` of `menu`: only lines whose `COVER_PAYOUTS` payouts `locked`
+    /// covers. The others start off; the creator switches a line on later, when the pool has the money (`setLine`).
+    uint32 on;
 }
 
 // The most payouts any pool settles in a `PAYOUT_DAY`, and so how many times of settlement a pool has room to keep:
 // the factory publishes it as `MAX_PAYOUTS_PER_DAY`.
 uint256 constant MAX_PAYOUTS_A_DAY = 8;
+
+// How many payouts of a line the pool must have free for the line to be switched on or sold, and what the creator's
+// lock covers of every line on at the start (CFO, 16 November: K = 2). The factory publishes it as `LOCKED_PAYOUTS`.
+uint256 constant COVER_PAYOUTS = 2;
 
 /// @title SimPool
 /// @notice A pool where both stages are paper exams and nobody's capital is traded. A trader buys
@@ -102,11 +124,13 @@ uint256 constant MAX_PAYOUTS_A_DAY = 8;
 ///         alone may stop it, with a reason and the transactions that show it; with no stop it goes to
 ///         the trader, sent by anyone. A pool settles at most `payoutsPerDay` payouts in any 24 hours:
 ///         one more waits in its place for the next day, however it came due.
+///         A line sells only while its creator has it switched on and the pool has `COVER_PAYOUTS` of its
+///         payouts free; the creator switches a line on only while the pool has that money.
 /// @dev The money is this contract's USDC on HyperEVM; nothing goes to HyperCore. What it owes
 ///      (`owed`) is every payout neither paid nor stopped. The creator withdraws only what stays
-///      above `FLOOR_PAYOUTS` payouts of the largest size and above what it owes, so a payout that
-///      comes due finds its money, unless payouts came faster than prices: then payouts are paid in
-///      the order they were claimed, as money comes in.
+///      above `floor()` and above what it owes, so a payout that comes due finds its money, unless
+///      payouts came faster than prices: then payouts are paid in the order they were claimed, as
+///      money comes in.
 contract SimPool is Initializable {
     using SafeERC20 for IERC20;
 
@@ -169,15 +193,14 @@ contract SimPool is Initializable {
     /// `PAYOUT_HARD` from their claim.
     address public approver;
     bytes32 public terms;
-    /// The largest payout of the menu: what `LOCKED_PAYOUTS` and `FLOOR_PAYOUTS` count in.
+    /// The largest payout of the menu, on or off.
     uint64 public largestPayout;
     /// What the creator put in and has not taken back: a withdrawal shares only what is above it.
     uint256 public principal;
     /// Every payout neither paid nor stopped.
     uint256 public owed;
     /// The payouts of the stages still running, each by its own size: what they would pay if they all passed.
-    /// While the pool is open the creator withdraws only above the greater of this and `FLOOR_PAYOUTS` of the
-    /// largest size (CFO, 13 November).
+    /// The creator withdraws only above `floor()`, which is never less (CFO, 13 November).
     uint256 public staged;
     /// Exams and stages still running or still able to pay.
     uint256 public live;
@@ -217,10 +240,11 @@ contract SimPool is Initializable {
     bytes32[] internal _codes;
     uint256 public brought;
 
-    SimSize[] internal _menu;
-    SimTier[] internal _tiers;
+    SimLine[] internal _lines;
     SimRules internal _rules;
     uint32 public fundWindow;
+    /// The lines the creator has switched on, bit `i` for line `i` (`setLine`).
+    uint32 public onMask;
 
     mapping(address => Account) public accountOf;
     Payout[] internal _payouts;
@@ -288,6 +312,8 @@ contract SimPool is Initializable {
     /// The factory's closer closed the pool before its term; the money goes where it would anyway.
     event ClosedEarly(address indexed closer);
     event Finished(uint256 amount);
+    /// The creator switched line `line` on or off: new sales only; what was sold keeps its rules.
+    event LineSet(uint256 indexed line, bool on);
 
     error NotFactory();
     error NotCreator();
@@ -317,6 +343,9 @@ contract SimPool is Initializable {
     error NotReady();
     error RequestLapsed();
     error NotApprover();
+    error LineOff();
+    /// The pool has `short` less free than `COVER_PAYOUTS` payouts of the line.
+    error NotCovered(uint256 short);
 
     modifier onlyCreator() {
         if (msg.sender != creator) revert NotCreator();
@@ -341,7 +370,8 @@ contract SimPool is Initializable {
         fundWindow = p.fundWindow;
         lockedUntil = uint64(block.timestamp) + factory.MIN_TERM();
         payoutsPerDay = p.payoutsPerDay;
-        largestPayout = _payoutOf(SimPoolSetup.copy(p, _menu, _tiers, _rules));
+        onMask = p.on;
+        largestPayout = _payoutOf(SimPoolSetup.copy(p, _lines, _rules));
     }
 
     /// @notice The factory's note of what the creator locked at the start.
@@ -353,14 +383,41 @@ contract SimPool is Initializable {
 
     // ── views ────────────────────────────────────────────────────
 
-    function menu() external view returns (SimSize[] memory) {
-        return _menu;
+    function menu() external view returns (SimSize[] memory m) {
+        _returnRaw(SimPoolSetup.shown(_lines, false));
     }
 
     /// @notice Each line's tier, in the order of `menu()`: the loss limit, the target and the kind of loss line
     ///         both stages of the line start on.
-    function tiers() external view returns (SimTier[] memory) {
-        return _tiers;
+    function tiers() external view returns (SimTier[] memory k) {
+        _returnRaw(SimPoolSetup.shown(_lines, true));
+    }
+
+    /// @notice What the pool has free for new sales: its USDC less what it owes, holds, keeps for recent stops and
+    ///         keeps for the stages still running (`staged`) (CFO, 16 November).
+    function free() public view returns (uint256) {
+        uint256 bal = _bal();
+        uint256 kept = owed + held + reserved + staged;
+        return bal > kept ? bal - kept : 0;
+    }
+
+    /// @notice Line `line` as a page shows it: whether the creator has it on; whether it sells now (on, the pool
+    ///         open, and `COVER_PAYOUTS` of its payouts free); whether the creator may switch it on now; and how
+    ///         much the pool is short of that, zero if nothing.
+    function lineState(uint256 line) external view returns (bool on, bool sells, bool canSwitchOn, uint256 short) {
+        if (line >= _lines.length) revert NoSuchLine();
+        on = _isOn(line);
+        short = _short(_lines[line].size, free());
+        canSwitchOn = short == 0 && !closed;
+        sells = on && canSwitchOn;
+    }
+
+    /// @notice What the pool keeps while it is not finished, whatever the creator asks: the greater of `staged` and
+    ///         `FLOOR_PAYOUTS` payouts of the largest line with an exam or a stage not yet done, or on and selling
+    ///         now (CFO, 16 November). A trader with a live exam on the largest line keeps three of its payouts in.
+    function floor() public view returns (uint256 f) {
+        f = uint256(_payoutOf(SimPoolSetup.top(_lines, closed ? 0 : onMask, free(), factory))) * factory.FLOOR_PAYOUTS();
+        if (staged > f) f = staged;
     }
 
     /// @notice Whether both stages fill at the book, and how much worse than the oracle at most (`SimPlan`).
@@ -407,16 +464,13 @@ contract SimPool is Initializable {
     }
 
     /// @notice What the creator may withdraw now: the pool's USDC above what it owes, holds and keeps
-    ///         for recent stops and, while it is open, above the greater of `FLOOR_PAYOUTS` payouts of the
-    ///         largest size and the payouts of every stage still running, each by its size (`staged`): a
-    ///         funded trader's payout stays in the pool for as long as the stage runs.
+    ///         for recent stops and, until it is finished, above `floor()`: a funded trader's payout stays
+    ///         in the pool for as long as the stage runs.
     ///         Before `lockedUntil`, only profit: what the creator put in stays until the term, or until
     ///         `finish` if the factory's closer closed the pool sooner.
     function withdrawable() public view returns (uint256) {
-        uint256 bal = usdc.balanceOf(address(this));
-        uint256 floor = uint256(largestPayout) * factory.FLOOR_PAYOUTS();
-        if (staged > floor) floor = staged;
-        uint256 keep = owed + held + reserved + (finished ? 0 : floor);
+        uint256 bal = _bal();
+        uint256 keep = owed + held + reserved + (finished ? 0 : floor());
         uint256 w = bal > keep ? bal - keep : 0;
         if (block.timestamp < lockedUntil) {
             uint256 p = _profit();
@@ -429,9 +483,10 @@ contract SimPool is Initializable {
 
     /// @notice Buys an exam off line `line` of the menu with `code`, the keccak256 of a trading group's
     ///         code that the creator set (`setCode`). No seat and no share limits a sale: the prices of
-    ///         exams that fail stay in the pool and pay for the ones that pass.
+    ///         exams that fail stay in the pool and pay for the ones that pass. The line must be on and the pool
+    ///         must have `COVER_PAYOUTS` of its payouts free (`lineState`): otherwise `LineOff` or `NotCovered`.
     function buy(uint256 line, bytes32 code) external returns (address exam) {
-        SimSize memory m = _line(line);
+        SimLine memory m = _line(line);
         uint256 fee = _fee(m.price);
         usdc.safeTransferFrom(msg.sender, address(this), m.price - fee);
         if (fee != 0) usdc.safeTransferFrom(msg.sender, factory.feeRecipient(), fee);
@@ -457,7 +512,7 @@ contract SimPool is Initializable {
         bytes32 r,
         bytes32 s
     ) external returns (address exam) {
-        SimSize memory m = _line(line);
+        SimLine memory m = _line(line);
         _receive(trader, m.price, keccak256(abi.encode(code, line, salt)), validAfter, validBefore, v, r, s);
         uint256 fee = _fee(m.price);
         if (fee != 0) usdc.safeTransfer(factory.feeRecipient(), fee);
@@ -495,8 +550,8 @@ contract SimPool is Initializable {
         if (msg.sender != trader) revert NotTrader();
         if (block.timestamp > uint256(passedAt) + fundWindow) revert TooLate();
         a.done = true;
-        live -= 1;
-        staged += _payoutOf(_menu[a.line].size);
+        _end(a.line);
+        staged += _payoutOf(_lines[a.line].size);
         stage = _start(trader, a.line, true);
         accountOf[stage] = Account({kind: Kind.Stage, line: a.line, done: false});
         emit Funded(stage, exam, trader);
@@ -513,8 +568,8 @@ contract SimPool is Initializable {
         (PaperExam.Status s, address trader,,) = PaperExam(stage).result();
         if (s != PaperExam.Status.Passed) revert NotPassed();
         a.done = true;
-        live -= 1;
-        uint64 amount = _payoutOf(_menu[a.line].size);
+        _end(a.line);
+        uint64 amount = _payoutOf(_lines[a.line].size);
         staged -= amount;
         uint64 dueAt = uint64(block.timestamp) + factory.PAYOUT_DELAY();
         id = _payouts.length;
@@ -579,7 +634,7 @@ contract SimPool is Initializable {
                 // What is held is its traders' already, and what a recent stop keeps may be its trader's
                 // again: neither is paid out to anyone else (CFO, 12 November). Stops can keep more than the
                 // pool holds, when payouts came faster than prices: then nothing is free (review of #269).
-                uint256 bal = usdc.balanceOf(address(this));
+                uint256 bal = _bal();
                 uint256 kept = held + reserved;
                 bal = bal > kept ? bal - kept : 0;
                 if (bal < ahead + p.amount) {
@@ -623,8 +678,8 @@ contract SimPool is Initializable {
             || (a.kind == Kind.Exam && s == PaperExam.Status.Passed && block.timestamp > uint256(passedAt) + fundWindow);
         if (!over) revert StillRunning();
         a.done = true;
-        live -= 1;
-        if (a.kind == Kind.Stage) staged -= _payoutOf(_menu[a.line].size);
+        _end(a.line);
+        if (a.kind == Kind.Stage) staged -= _payoutOf(_lines[a.line].size);
         emit Released(account);
     }
 
@@ -764,6 +819,22 @@ contract SimPool is Initializable {
     }
 
     /// @notice Names who approves payouts; zero for none, and every payout then goes out at `PAYOUT_HARD`.
+    /// @notice Switches line `line` on or off, for new sales only: exams and stages sold keep their rules. Off,
+    ///         always; on, only while the pool is open and has `COVER_PAYOUTS` of the line's payouts free
+    ///         (`NotCovered` says how much it is short). A line never switches itself on (Alex, 16 November).
+    function setLine(uint256 line, bool on) external onlyCreator {
+        if (line >= _lines.length) revert NoSuchLine();
+        if (on) {
+            if (closed) revert Closing();
+            uint256 short = _short(_lines[line].size, free());
+            if (short != 0) revert NotCovered(short);
+            onMask |= uint32(1 << line);
+        } else {
+            onMask &= ~uint32(1 << line);
+        }
+        emit LineSet(line, on);
+    }
+
     function setApprover(address approver_) external onlyCreator {
         approver = approver_;
         emit ApproverSet(approver_);
@@ -824,24 +895,52 @@ contract SimPool is Initializable {
         finished = true;
         requested = 0;
         readyAt = 0;
-        uint256 bal = usdc.balanceOf(address(this)) - held;
+        uint256 bal = _bal() - held;
         if (bal != 0) _withdraw(bal);
         emit Finished(bal);
     }
 
     // ── internals ────────────────────────────────────────────────
 
-    function _line(uint256 line) internal view returns (SimSize memory) {
-        if (line >= _menu.length) revert NoSuchLine();
+    /// The line a sale is for, while it sells: checked before any money comes in, so the price is not counted free.
+    function _line(uint256 line) internal view returns (SimLine memory m) {
+        if (line >= _lines.length) revert NoSuchLine();
         if (closed) revert Closing();
-        return _menu[line];
+        if (!_isOn(line)) revert LineOff();
+        m = _lines[line];
+        uint256 short = _short(m.size, free());
+        if (short != 0) revert NotCovered(short);
+    }
+
+    /// Returns `data`, ABI-encoded already, as the call's return data: `menu()` and `tiers()`, which the library
+    /// encodes, so the pool's code does not hold a decoder for each of them (EIP-170).
+    function _returnRaw(bytes memory data) internal pure {
+        assembly ("memory-safe") {
+            return(add(data, 32), mload(data))
+        }
+    }
+
+    function _isOn(uint256 line) internal view returns (bool) {
+        return onMask & (1 << line) != 0;
+    }
+
+    /// How much `freeNow` is short of `COVER_PAYOUTS` payouts of a line of `size`; zero if nothing.
+    function _short(uint64 size, uint256 freeNow) internal view returns (uint256) {
+        uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;
+        return freeNow >= need ? 0 : need - freeNow;
+    }
+
+    /// An exam or a stage of line `line` is done.
+    function _end(uint256 line) internal {
+        live -= 1;
+        _lines[line].live -= 1;
     }
 
     function _fee(uint64 price) internal view returns (uint256) {
         return uint256(price) * factory.FEE_BPS() / Units.BPS;
     }
 
-    function _sold(address trader, uint256 line, SimSize memory m, uint256 fee, bool bySignature, bytes32 code)
+    function _sold(address trader, uint256 line, SimLine memory m, uint256 fee, bool bySignature, bytes32 code)
         internal
         returns (address exam)
     {
@@ -859,8 +958,10 @@ contract SimPool is Initializable {
 
     /// An exam (`funded` false) or a stage of line `line`, on the kept rules with the line's tier (`SimPoolSetup`).
     function _start(address trader, uint256 line, bool funded) internal returns (address a) {
-        a = SimPoolSetup.start(_rules, funded, _tiers[line], _menu[line].size, trader, factory);
+        SimLine storage l = _lines[line];
+        a = SimPoolSetup.start(_rules, funded, l, trader, factory);
         live += 1;
+        l.live += 1;
     }
 
     function _withdraw(uint256 amount) internal {
@@ -880,7 +981,7 @@ contract SimPool is Initializable {
     /// The pool's money above what it owes, holds and keeps for recent stops, and above the principal.
     ///      Zero, not a revert, when stops keep more than the pool holds.
     function _profit() internal view returns (uint256) {
-        uint256 bal = usdc.balanceOf(address(this));
+        uint256 bal = _bal();
         uint256 kept = held + reserved + owed;
         uint256 free = bal > kept ? bal - kept : 0;
         return free > principal ? free - principal : 0;
@@ -915,6 +1016,10 @@ contract SimPool is Initializable {
 
     function _hardAt(Payout storage p) internal view returns (uint64) {
         return p.dueAt - factory.PAYOUT_DELAY() + factory.PAYOUT_HARD();
+    }
+
+    function _bal() internal view returns (uint256) {
+        return usdc.balanceOf(address(this));
     }
 
     function _payoutOf(uint64 size) internal view returns (uint64) {
