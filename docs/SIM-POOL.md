@@ -459,6 +459,18 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   read makes the pool's running total incomplete: `enough` is false, and the account is named. The names, the
   selector, the fields of a payout and the pool's rule for a stop are held to `src/sim` by tests.
 
+  A payout is stopped once. `stopPayout` sets `wasStopped` and nothing clears it: a lift (`liftStop`)
+  sends the payout back to waiting, and a second `stopPayout` of it reverts (`BadPayout`), whatever the
+  reason. So the stop of reason 4, prohibited play, is put as soon as its published analysis is ready,
+  not after another stop of the same payout has been lifted, and a stop is not lifted meaning to stop
+  again with reason 4. A standing stop keeps its reason (`stopReasonOf`) and cannot be changed to
+  another; the reason moves no money, so a payout stopped for 1, 2 or 3 that turns out to be prohibited
+  play too stays stopped and becomes final in its time, with the analysis published beside it. If the
+  first stop was lifted already, the payout is due again and is paid in its turn: nothing on the chain
+  stops it. What remains is each of the trader's other payouts still waiting, which has a stop of
+  its own and may be stopped with reason 4, and the published analysis, so that the record says what
+  was seen. Lift a stop only when its payout is to be paid.
+
   A result that does not count up comes with a draft of a stop of reason 3, a result disputed. The
   draft names the fills and leaves out the hash of the analysis, which a person writes. Such a payout
   is offered nothing to approve: its `action` is `hold` and its call is empty. The operator's page
