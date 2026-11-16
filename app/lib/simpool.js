@@ -19,10 +19,12 @@ export const SIM_POOL_ABI = [
   "function factory() view returns (address)",
   "function usdc() view returns (address)",
   "function creator() view returns (address)",
-  "function codes() view returns (bytes32[])",
   "function buy(uint256 line, bytes32 code) returns (address exam)",
   "function buyWithAuthorization(address trader, uint256 line, bytes32 code, bytes32 salt, uint256 validAfter, uint256 validBefore, uint8 v, bytes32 r, bytes32 s) returns (address exam)",
-  "function codeOf(bytes32 code) view returns (address partner, uint16 bps, bool used, bool listed, uint256 brought)",
+  "function codeOf(bytes32 code) view returns (address partner, uint16 bps, bool used, uint16 authorBps, address author, uint256 brought, uint256 mark, uint256 partnerDue, uint256 authorDue, uint256 partnerGot, uint256 authorGot)",
+  "function shareDue(bytes32 code) view returns (uint256 toPartner, uint256 toAuthor)",
+  "function sharesDue() view returns (uint256)",
+  "function claimShares(bytes32[] codes)",
   "function brought() view returns (uint256)",
   "function terms() view returns (bytes32)",
   "function largestPayout() view returns (uint64)",
@@ -51,8 +53,9 @@ export const SIM_POOL_ABI = [
   "function payoutCount() view returns (uint256)",
   "function accountOf(address account) view returns (uint8 kind, uint8 line, bool done)",
   "event ExamSold(address indexed exam, address indexed trader, uint256 line, uint64 size, uint64 price, uint256 fee, bool bySignature, bytes32 code, address indexed partner)",
-  "event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps)",
-  "event PartnerPaid(bytes32 indexed code, address indexed partner, uint256 amount, bool sent)",
+  "event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps, address indexed author, uint16 authorBps)",
+  "event ShareAccrued(bytes32 indexed code, uint256 toPartner, uint256 toAuthor)",
+  "event SharePaid(bytes32 indexed code, address indexed to, uint256 amount, bool sent)",
   "event Funded(address indexed stage, address indexed exam, address indexed trader)",
   "event Released(address indexed account)",
   "event PayoutDue(uint256 indexed id, address indexed account, address indexed trader, uint64 amount, uint64 dueAt)",
@@ -64,7 +67,7 @@ export const SIM_POOL_ABI = [
   "event StopLifted(uint256 indexed id, uint256 stoppedCount, uint256 liftedCount, uint256 paidCount)",
   "event Closed()",
   "event ClosedEarly(address indexed closer)",
-  "event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount)",
+  "event Withdrawn(address indexed to, uint256 amount, uint256 fee, uint256 partnerAmount, bool sent)",
   "event WithdrawRequested(uint256 amount, uint64 readyAt, uint64 lapsesAt)",
   "event WithdrawCancelled(address indexed by, uint256 amount)",
 ];
@@ -466,7 +469,8 @@ export function withdrawalOf(reads, now) {
 /**
  * The whole page of one simulated pool. `reads` are the pool's getters (menu, payoutCount's payouts as `payouts`,
  * paidCount, paidTotal, stoppedCount, liftedCount, owed, held, live, closed, finished, codes (each code's codeOf
- * with its key: { code, partner, bps, used, brought }), terms, fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
+ * with its key: { code, partner, bps, used, brought }, and on a code for two its author and authorBps; the pool
+ * has no list of its codes, a page finds them in its CodeSet events), terms, fundWindow); `events` the pool's events from its creation on; `times` a Map of block → seconds; `now` the chain's
  * clock. No field of it carries what the creator locked or put in.
  */
 export function simPoolPage({ pool, usdc, chainId, reads, events, times, now, scan }) {
@@ -565,32 +569,44 @@ export function factoryPools(events, times) {
 }
 
 /**
- * Each code of a pool: its partner, its share (bps of the profit a withdrawal shares), whether a sale has fixed it,
- * what its sales brought and that part of all the pool took (bps), and what its partner was sent (`paid`) or had set
- * aside because the token refused (`setAside`), from the PartnerPaid events read. `codes` are the codeOf reads.
+ * Each code of a pool: its partner, its share (bps of the profit a withdrawal shares), on a code for two its author
+ * and the author's part of the share (`authorBps`, bps of it), whether a sale has fixed it, what its sales brought and
+ * that part of all the pool took (bps), and what `claimShares` sent (`paid`) or set aside because the token refused
+ * (`setAside`), in all and for each of the two (`toPartner`, `toAuthor`), from the SharePaid events read. A
+ * withdrawal accrues the codes' shares in the pool; each is sent only when someone calls `claimShares` for it, so
+ * `due` (shareDue's two parts, when read) is what waits. `codes` are the codeOf reads, with `due` if read.
  */
 export function codeShares(codes, events) {
   const all = codes.reduce((t, k) => t + BigInt(k.brought), 0n);
   const paid = new Map();
-  for (const e of named(ordered(events), "PartnerPaid")) {
-    const key = String(e.args.code).toLowerCase();
+  for (const e of named(ordered(events), "SharePaid")) {
+    const key = `${String(e.args.code).toLowerCase()} ${String(e.args.to).toLowerCase()}`;
     const was = paid.get(key) ?? { paid: 0n, setAside: 0n };
     if (e.args.sent) was.paid += BigInt(e.args.amount);
     else was.setAside += BigInt(e.args.amount);
     paid.set(key, was);
   }
+  const none = { paid: 0n, setAside: 0n };
+  const got = (code, who) => (who ? paid.get(`${String(code).toLowerCase()} ${String(who).toLowerCase()}`) : null) ?? none;
   return codes.map((k) => {
     const brought = BigInt(k.brought);
-    const got = paid.get(String(k.code).toLowerCase()) ?? { paid: 0n, setAside: 0n };
+    const author = k.author && BigInt(k.author) !== 0n ? k.author : null;
+    const toPartner = got(k.code, k.partner);
+    const toAuthor = author && author.toLowerCase() !== String(k.partner).toLowerCase() ? got(k.code, author) : none;
     return {
       code: k.code,
       partner: k.partner,
+      author,
       bps: Number(k.bps),
+      authorBps: author ? Number(k.authorBps) : 0,
       used: Boolean(k.used),
       brought,
       partOfAll: all === 0n ? 0 : Number(brought * BPS / all),
-      paid: got.paid,
-      setAside: got.setAside,
+      paid: toPartner.paid + toAuthor.paid,
+      setAside: toPartner.setAside + toAuthor.setAside,
+      toPartner,
+      toAuthor,
+      due: k.due ? { toPartner: BigInt(k.due.toPartner), toAuthor: BigInt(k.due.toAuthor) } : null,
     };
   });
 }

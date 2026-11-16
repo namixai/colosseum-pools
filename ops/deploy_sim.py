@@ -31,10 +31,12 @@ gateway's), so the host's keeper unit can run on it.
 `buy` approves a line's price and buys an exam with a code from the trader's key, for --measure in
 ops/sim_keeper.py; it prints the exam.
 
-`codes` sets a pool's codes from the plan's `codes` (setCode, from the creator's key): each a trading
-group's code, the address its owner gave and its share, 0 or 4 000 to 6 000 bps. Every sale names a
-code, so a pool sells nothing until one is set. A code a sale has named keeps its partner, and its share
-can only rise: one that matches is skipped, a raise is sent, anything else is refused before anything is sent.
+`codes` sets a pool's codes from the plan's `codes` (setSplitCode, from the creator's key): each a trading
+group's code, the address its owner gave and its share, 0 or 4 000 to 6 000 bps; a code for two also names
+an author (`author`) and the author's part of the code's share (`author_bps`, 1 to 9 999 bps of it). A pool
+takes as many codes as its creator sets. Every sale names a code, so a pool sells nothing until one is set. A
+code a sale has named keeps its partner, author and split, and its share can only rise: one that matches is
+skipped, a raise is sent, anything else is refused before anything is sent.
 
 `close` closes a pool and `finish` pays out a closed one, from the named key. Without --send each only
 reads the pool and says what it would send, from which key, or why the pool would refuse: before its
@@ -107,10 +109,13 @@ PLAN_T = (f"((uint64,uint64)[],{RULES_T},{TERMS_T},{RULES_T},{TERMS_T},uint32,bo
           "uint256,uint32)")
 # A plan file without `payouts_per_day` is a pool of two a day, the first pool's (CFO, 13 November).
 PAYOUTS_PER_DAY = 2
-# SimPoolFactory.MIN_PARTNER_BPS, MAX_PARTNER_BPS and MAX_CODES; the tests hold them against the source.
-MIN_PARTNER_BPS, MAX_PARTNER_BPS, MAX_CODES = 4000, 6000, 32
-SET_CODE = "setCode(bytes32,address,uint16)"
-CODE_OF = ["address", "uint16", "bool", "bool", "uint256"]
+# SimPoolFactory.MIN_PARTNER_BPS and MAX_PARTNER_BPS; the tests hold them against the source. A pool has no limit on
+# its codes.
+MIN_PARTNER_BPS, MAX_PARTNER_BPS = 4000, 6000
+# Every code is sent by setSplitCode: a code for one has no author and a zero split, which is setCode.
+SET_CODE = "setSplitCode(bytes32,address,uint16,address,uint16)"
+SET_CODE_TYPES = ["bytes32", "address", "uint16", "address", "uint16"]
+CODE_OF = ["address", "uint16", "bool", "uint16", "address", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256"]
 ZERO = "0x" + "00" * 20
 
 # Each asset's perp index on the network selected now (ops/sim_network.py), read at each lookup.
@@ -171,9 +176,10 @@ def code_hash(text: str) -> bytes:
     return keccak(text=text)
 
 
-def codes_of(raw: dict, creator: str) -> list[tuple[str, bytes, str, int]]:
-    """The plan's codes as (text, hash, partner, bps), checked as the pool checks them. "creator" as a partner is
-    the creator's own address: a code with no share, for sales the platform makes itself."""
+def codes_of(raw: dict, creator: str) -> list[tuple[str, bytes, str, int, str, int]]:
+    """The plan's codes as (text, hash, partner, bps, author, author_bps), checked as the pool checks them; the
+    author is the zero address and its part zero on a code for one. "creator" as a partner is the creator's own
+    address: a code with no share, for sales the platform makes itself."""
     out, seen = [], set()
     for entry in raw.get("codes", []):
         if not isinstance(entry, dict) or not {"code", "partner", "bps"} <= set(entry):
@@ -190,41 +196,51 @@ def codes_of(raw: dict, creator: str) -> list[tuple[str, bytes, str, int]]:
             raise SystemExit(f"code {text!r}: no partner address")
         if bps != 0 and not MIN_PARTNER_BPS <= bps <= MAX_PARTNER_BPS:
             raise SystemExit(f"code {text!r}: a share is 0 or {MIN_PARTNER_BPS} to {MAX_PARTNER_BPS} bps, not {bps}")
+        author, author_bps = ZERO, 0
+        if "author" in entry or "author_bps" in entry:
+            if not {"author", "author_bps"} <= set(entry):
+                raise SystemExit(f"code {text!r}: a code for two needs both \"author\" and \"author_bps\"")
+            author, author_bps = to_checksum_address(entry["author"]), int(entry["author_bps"])
+            if author == ZERO or not 0 < author_bps < 10_000:
+                raise SystemExit(f"code {text!r}: a code for two names its author and gives it 1 to 9 999 bps of the "
+                                 f"code's share, not {author_bps}")
         seen.add(text)
-        out.append((text, code_hash(text), partner, bps))
-    if len(out) > MAX_CODES:
-        raise SystemExit(f"{len(out)} codes: a pool takes at most {MAX_CODES}")
+        out.append((text, code_hash(text), partner, bps, author, author_bps))
     return out
 
 
-def to_set(codes: list[tuple[str, bytes, str, int]], on_chain) -> list[tuple[str, bytes, str, int]]:
-    """The codes still to send. `on_chain(hash)` is the pool's codeOf. A code a sale named keeps its partner and
-    its share may only rise: one that matches is skipped, a raise for the same partner is sent, and anything else
-    stops everything before a transaction."""
+def to_set(codes: list[tuple[str, bytes, str, int, str, int]], on_chain) -> list[tuple[str, bytes, str, int, str, int]]:
+    """The codes still to send. `on_chain(hash)` is the pool's codeOf. A code a sale named keeps its partner, author
+    and split, and its share may only rise: one that matches is skipped, a raise for the same partner, author and
+    split is sent, and anything else stops everything before a transaction."""
     out = []
-    for text, h, partner, bps in codes:
-        have, have_bps, used = on_chain(h)[:3]
-        same = to_checksum_address(have) == partner and int(have_bps) == bps
-        raise_ = to_checksum_address(have) == partner and bps > int(have_bps)
+    for text, h, partner, bps, author, author_bps in codes:
+        have, have_bps, used, have_split, have_author = on_chain(h)[:5]
+        who = (to_checksum_address(have) == partner and to_checksum_address(have_author) == author
+               and int(have_split) == author_bps)
+        same = who and int(have_bps) == bps
+        raise_ = who and bps > int(have_bps)
         if used and not same and not raise_:
-            raise SystemExit(f"code {text!r} is fixed on chain as {have} {have_bps} bps: a sale named it; its share "
-                             "can only rise, for the same partner")
+            raise SystemExit(f"code {text!r} is fixed on chain as {have} {have_bps} bps, author {have_author} "
+                             f"{have_split} bps of it: a sale named it; its share can only rise, for the same partner, "
+                             "author and split")
         if not same:
-            out.append((text, h, partner, bps))
+            out.append((text, h, partner, bps, author, author_bps))
     return out
 
 
-def print_codes(codes: list[tuple[str, bytes, str, int]]) -> None:
-    for text, h, partner, bps in codes:
-        print(f"  code             {text!r} 0x{h.hex()[:12]}.. -> {partner} {bps / 100:g}%")
+def print_codes(codes: list[tuple[str, bytes, str, int, str, int]]) -> None:
+    for text, h, partner, bps, author, author_bps in codes:
+        two = f", of it {author_bps / 100:g}% to the author {author}" if author != ZERO else ""
+        print(f"  code             {text!r} 0x{h.hex()[:12]}.. -> {partner} {bps / 100:g}%{two}")
     if not codes:
         print("  codes            none: the pool sells nothing until `codes` sets one")
 
 
-def send_codes(creator, pool_: str, codes: list[tuple[str, bytes, str, int]]) -> None:
+def send_codes(creator, pool_: str, codes: list[tuple[str, bytes, str, int, str, int]]) -> None:
     on_chain = lambda h: c.call_view(pool_, "codeOf(bytes32)", ["bytes32"], [h], CODE_OF)
-    for text, h, partner, bps in to_set(codes, on_chain):
-        rcpt = c.transact(creator, pool_, SET_CODE, ["bytes32", "address", "uint16"], [h, partner, bps])
+    for text, h, *rest in to_set(codes, on_chain):
+        rcpt = c.transact(creator, pool_, SET_CODE, SET_CODE_TYPES, [h, *rest])
         print(f"deploy_sim: code {text!r} set, tx {rcpt['transactionHash']}")
 
 
@@ -987,8 +1003,8 @@ def codes(args) -> int:
     print_codes(codes_)
     if getattr(args, "signer", None):
         on_chain = lambda h: c.call_view(pool_, "codeOf(bytes32)", ["bytes32"], [h], CODE_OF)
-        txs = [(pool_, 0, c.encode_call(SET_CODE, ["bytes32", "address", "uint16"], [h, partner, bps]))
-               for _, h, partner, bps in to_set(codes_, on_chain)]
+        txs = [(pool_, 0, c.encode_call(SET_CODE, SET_CODE_TYPES, [h, *rest]))
+               for _, h, *rest in to_set(codes_, on_chain)]
         return print_batch(args, f"codes on {pool_}", txs)
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")

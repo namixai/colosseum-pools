@@ -262,7 +262,7 @@ drift "$SIMJS" '"function buy(uint256 line, bytes32 code) returns (address exam)
 expect 1 "a purchase whose arguments moved" "SIM_POOL_ABI function buy(bytes32,uint256): SimPool declares no such function"
 drift "$SIMJS" 'uint64 amount, uint64 dueAt, uint8 state, bool wasStopped))",' 'uint64 dueAt, uint64 amount, uint8 state, bool wasStopped))",'
 expect 1 "two fields of a payout swapped" "named dueAt, the contract calls it amount"
-drift "$SIMJS" '"event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps)"' '"event CodeSet(bytes32 indexed code, address partner, uint16 bps)"'
+drift "$SIMJS" '"event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps, address indexed author, uint16 authorBps)"' '"event CodeSet(bytes32 indexed code, address partner, uint16 bps, address indexed author, uint16 authorBps)"'
 expect 1 "an event that lost an indexed" "indexed False, the contract says True"
 drift "$SIMJS" '"function owed() view returns (uint256)"' '"function owed() returns (uint256)"'
 expect 1 "a read written as a call that sends" "nonpayable, the contract says view"

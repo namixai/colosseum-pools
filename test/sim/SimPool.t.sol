@@ -155,8 +155,14 @@ contract SimPoolTest is Test {
         pool.claimShares(list);
     }
 
+    /// What code `code` has accrued and not yet sent, its partner's part and its author's together.
+    function _due(SimPool pool, bytes32 code) internal view returns (uint256) {
+        (uint256 toPartner, uint256 toAuthor) = pool.shareDue(code);
+        return toPartner + toAuthor;
+    }
+
     function _partnerOf(SimPool pool, bytes32 code) internal view returns (address p) {
-        (p,,,,,,) = pool.codeOf(code);
+        (p,,,,,,,,,,) = pool.codeOf(code);
     }
 
     function _pool() internal returns (SimPool) {
@@ -473,7 +479,7 @@ contract SimPoolTest is Test {
         vm.expectRevert(bytes("FiatTokenV2: invalid signature"));
         pool.buyWithAuthorization(signer, 1, theirs, salt, 0, until, v, r, s);
         pool.buyWithAuthorization(signer, 1, CODE, salt, 0, until, v, r, s);
-        (,,, uint256 got,,,) = pool.codeOf(CODE);
+        (,,,,, uint256 got,,,,,) = pool.codeOf(CODE);
         assertEq(got, LARGE_PRICE - 425_000, "the signed code brought it");
     }
 
@@ -1465,7 +1471,7 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         pool.withdraw();
         assertEq(usdc.balanceOf(partner), 0, "nothing sent within the withdrawal: the share is accrued");
-        assertEq(pool.shareDue(CODE), 497_500_000);
+        assertEq(_due(pool, CODE), 497_500_000);
         assertEq(pool.sharesDue(), 497_500_001);
         assertEq(usdc.balanceOf(creator) - before, 497_499_999, "the creator's part less the unit kept for no one");
         vm.expectEmit(address(pool));
@@ -1473,8 +1479,8 @@ contract SimPoolTest is Test {
         _takeShares(pool, CODE);
         assertEq(usdc.balanceOf(partner), 497_500_000, "half of what is left after the platform's part");
         assertEq(pool.sharesDue(), 1, "the unit of rounding stays in the pool, for no one");
-        assertEq(pool.shareDue(CODE), 0);
-        (,,,,,, uint256 got) = pool.codeOf(CODE);
+        assertEq(_due(pool, CODE), 0);
+        (,,,,,,,,, uint256 got,) = pool.codeOf(CODE);
         assertEq(got, 497_500_000, "what the code got, in all");
         _takeShares(pool, CODE); // a second claim sends nothing
         assertEq(usdc.balanceOf(partner), 497_500_000);
@@ -1487,9 +1493,9 @@ contract SimPoolTest is Test {
         vm.expectRevert(SimPool.NotCreator.selector);
         pool.setCode(CODE, stranger, 5000);
         vm.expectEmit(address(pool));
-        emit SimPool.CodeSet(CODE, partner, 6000);
+        emit SimPool.CodeSet(CODE, partner, 6000, address(0), 0);
         _share(pool, 6000); // before any sale: changed
-        (address who, uint16 bps,,,,,) = pool.codeOf(CODE);
+        (address who, uint16 bps,,,,,,,,,) = pool.codeOf(CODE);
         assertEq(who, partner);
         assertEq(bps, 6000);
         _buy(pool, trader, 0);
@@ -1509,9 +1515,9 @@ contract SimPoolTest is Test {
         _share(pool, 4000);
         _buy(pool, trader, 0);
         vm.expectEmit(address(pool));
-        emit SimPool.CodeSet(CODE, partner, 5000);
+        emit SimPool.CodeSet(CODE, partner, 5000, address(0), 0);
         _share(pool, 5000); // the owner's next step: raised
-        (address who, uint16 bps, bool used,,,,) = pool.codeOf(CODE);
+        (address who, uint16 bps, bool used,,,,,,,,) = pool.codeOf(CODE);
         assertEq(who, partner);
         assertEq(bps, 5000);
         assertTrue(used);
@@ -1526,7 +1532,7 @@ contract SimPoolTest is Test {
         pool.setCode(CODE, partner, 6001); // past the platform's bound
         pool.setCode(CODE, partner, 6000);
         vm.stopPrank();
-        (, bps,,,,,) = pool.codeOf(CODE);
+        (, bps,,,,,,,,,) = pool.codeOf(CODE);
         assertEq(bps, 6000);
 
         // A used code with no share: raised only into the bounds.
@@ -1617,9 +1623,9 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         pool.withdraw();
         uint256 kept = pool.sharesDue();
-        assertEq(pool.shareDue(CODE), 895_500_000);
-        assertEq(pool.shareDue(codeB), 358_200_000);
-        assertEq(pool.shareDue(codeC), 0, "no share, nothing accrued");
+        assertEq(_due(pool, CODE), 895_500_000);
+        assertEq(_due(pool, codeB), 358_200_000);
+        assertEq(_due(pool, codeC), 0, "no share, nothing accrued");
         bytes32[] memory all3 = new bytes32[](3);
         (all3[0], all3[1], all3[2]) = (CODE, codeB, codeC);
         vm.expectEmit(address(pool));
@@ -1718,7 +1724,7 @@ contract SimPoolTest is Test {
         assertLe(g, 200_000, "finish: no loop over the codes");
         // One code's partner takes its share by itself, at the gas of one code.
         bytes32 last = keccak256(abi.encode("group", MANY_CODES - 1));
-        uint256 due = pool.shareDue(last);
+        uint256 due = _due(pool, last);
         assertGt(due, 0);
         bytes32[] memory one = new bytes32[](1);
         one[0] = last;
@@ -1944,7 +1950,7 @@ contract SimPoolTest is Test {
         uint256 net = 1_000e6 - 5e6;
         _share(pool, 6000);
         _buy(pool, stranger, 1);
-        assertEq(pool.shareDue(CODE), net / 2 * 4000 / 10_000, "A: 40 % of half, raised and sold since");
+        assertEq(_due(pool, CODE), net / 2 * 4000 / 10_000, "A: 40 % of half, raised and sold since");
         _takeShares(pool, CODE);
         assertEq(usdc.balanceOf(partner), net / 2 * 4000 / 10_000);
         deal(address(usdc), address(pool), usdc.balanceOf(address(pool)) + 1_000e6);
@@ -1955,6 +1961,106 @@ contract SimPoolTest is Test {
         _takeShares(pool, codeB);
         assertEq(usdc.balanceOf(partner) - net / 2 * 4000 / 10_000, net * 2 * 6000 / (3 * 10_000), "A: 60 % of two thirds");
         assertEq(usdc.balanceOf(ownerB), net / 2 * 5000 / 10_000 + net * 5000 / (3 * 10_000), "B: 50 % of half, then a third");
+    }
+
+    // ── a code for two: a group's owner and an author ────────────
+
+    function test_splitCode_100ExamsAt60PercentHalfAndHalf_eachTakesItsPartApart() public {
+        // The example of the letter to the CFO: one code for two, 60 % of the profit it brings, half to the group's
+        // owner and half to the author; 100 exams sold by it, and the creator withdraws 1 000 of profit.
+        SimPool pool = _pool();
+        bytes32 two = keccak256("BLOGGER-1");
+        address author = makeAddr("author");
+        vm.expectEmit(address(pool));
+        emit SimPool.CodeSet(two, partner, 6000, author, 5000);
+        vm.prank(creator);
+        pool.setSplitCode(two, partner, 6000, author, 5000);
+        for (uint256 i = 0; i < 100; ++i) _buyWith(pool, _who(i), 1, two);
+        uint256 before = usdc.balanceOf(creator);
+        _ask(pool, 1_000e6);
+        vm.prank(creator);
+        pool.withdraw();
+        // 1 000 less the platform's 5 is 995; the code brought all the pool took: 60 % of it is 597, half each.
+        (uint256 toPartner, uint256 toAuthor) = pool.shareDue(two);
+        assertEq(toPartner, 298_500_000, "the owner's half of 597");
+        assertEq(toAuthor, 298_500_000, "the author's half of 597");
+        assertLe(pool.sharesDue() - 597e6, 1);
+        assertEq(usdc.balanceOf(creator) - before, 995e6 - pool.sharesDue(), "the creator the rest, 398");
+        usdc.block_(author); // the token refuses the author: only the author's part waits
+        vm.expectEmit(address(pool));
+        emit SimPool.SharePaid(two, partner, 298_500_000, true);
+        vm.expectEmit(address(pool));
+        emit SimPool.SharePaid(two, author, 298_500_000, false);
+        _takeShares(pool, two);
+        assertEq(usdc.balanceOf(partner), 298_500_000, "the owner is paid whatever the author's address");
+        assertEq(pool.heldOf(author), 298_500_000, "the author's part set aside for the author");
+        (,,,,,,,,, uint256 partnerGot, uint256 authorGot) = pool.codeOf(two);
+        assertEq(partnerGot, 298_500_000);
+        assertEq(authorGot, 298_500_000);
+        vm.prank(author);
+        pool.claimHeld(makeAddr("author's other address"));
+        assertEq(usdc.balanceOf(makeAddr("author's other address")), 298_500_000);
+        _takeShares(pool, two); // a second claim sends neither of them anything
+        assertEq(usdc.balanceOf(partner), 298_500_000);
+        assertEq(pool.heldOf(author), 0);
+    }
+
+    function test_splitCode_theBoundsAreOnTheCodesShare_theSplitIsFixedByTheFirstSale() public {
+        SimPool pool = _pool();
+        bytes32 two = keccak256("BLOGGER-2");
+        address author = makeAddr("author");
+        vm.startPrank(creator);
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setSplitCode(two, partner, 6000, address(0), 5000); // a part with no author
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setSplitCode(two, partner, 6000, author, 0); // an author with no part
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setSplitCode(two, partner, 6000, author, 10_000); // all of it to the author: a code for one
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setSplitCode(two, address(0), 0, author, 5000); // an author on a code off sale
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setSplitCode(two, partner, 3999, author, 5000); // the code's share under the bound
+        vm.expectRevert(SimPool.BadShare.selector);
+        pool.setSplitCode(two, partner, 6001, author, 5000);
+        // 40 % in all, 20 % each: the lower bound is the code's share, not each part.
+        pool.setSplitCode(two, partner, 4000, author, 5000);
+        pool.setSplitCode(two, partner, 4000, author, 3000); // changed until a sale names it
+        vm.stopPrank();
+        (address p, uint16 bps,, uint16 ab, address au,,,,,,) = pool.codeOf(two);
+        assertEq(abi.encode(p, bps, ab, au), abi.encode(partner, uint16(4000), uint16(3000), author));
+        _buyWith(pool, trader, 0, two);
+        vm.startPrank(creator);
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setSplitCode(two, partner, 5000, makeAddr("another author"), 3000);
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setSplitCode(two, partner, 5000, author, 4000); // the split stays
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setCode(two, partner, 5000); // and so does the author
+        vm.expectRevert(SimPool.CodeUsed.selector);
+        pool.setSplitCode(two, partner, 4000, author, 3000); // not a raise
+        pool.setSplitCode(two, partner, 5000, author, 3000); // a raise: the same three, a higher share
+        vm.stopPrank();
+        uint256 got;
+        (, bps,,,, got,,,,,) = pool.codeOf(two);
+        assertEq(bps, 5000);
+        assertEq(pool.weight(), got * 5000, "the raise counts in the pool's weight from now on");
+    }
+
+    function test_splitCode_theAuthorsPartIsRoundedDown_theTwoAddUpToWhatAccrued() public {
+        SimPool pool = _pool();
+        bytes32 two = keccak256("BLOGGER-3");
+        vm.prank(creator);
+        pool.setSplitCode(two, partner, 4000, makeAddr("author"), 3333);
+        for (uint256 i = 0; i < 30; ++i) _buyWith(pool, _who(i), 1, two);
+        _ask(pool, 123_456_789);
+        vm.prank(creator);
+        pool.withdraw();
+        (uint256 toPartner, uint256 toAuthor) = pool.shareDue(two);
+        uint256 asked = 123_456_789;
+        uint256 net = asked - asked * 50 / 10_000;
+        uint256 all = net * 4000 / 10_000;
+        assertEq(toPartner + toAuthor, all, "the code's 40 %, to the unit");
+        assertEq(toAuthor, all * 3333 / 10_000, "the author's part, rounded down");
     }
 
     function test_addToPot_comesBackFirstWithoutTheShare() public {
@@ -2250,7 +2356,7 @@ contract SimPoolTest is Test {
     function _pageCodes(SimPool pool) internal view returns (string memory list) {
         bytes32[] memory keys = _pageKeys;
         for (uint256 i = 0; i < keys.length; ++i) {
-            (address p, uint16 bps, bool used, uint256 got,,,) = pool.codeOf(keys[i]);
+            (address p, uint16 bps, bool used,,, uint256 got,,,,,) = pool.codeOf(keys[i]);
             list = string.concat(list, i == 0 ? "" : ",", '{"code":"', vm.toString(keys[i]), '","partner":"',
                 vm.toString(p), '","bps":', vm.toString(bps), ',"used":', used ? "true" : "false", ',"brought":"',
                 vm.toString(got), '"}');

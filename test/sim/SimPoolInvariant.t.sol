@@ -99,6 +99,11 @@ contract SimPoolHandler is Test {
     /// The trading groups' codes the handler may set, the keccak256 of each text, and each code's own partner.
     bytes32[] internal _codeKeys;
     address[] internal _partners;
+    /// Each code's author when the code is set for two (`setSplitCode`), with the author's part fixed by the code's
+    /// place: 20 % or 50 % of the code's share.
+    address[] internal _authors;
+    mapping(bytes32 code => address) public firstAuthor;
+    mapping(bytes32 code => uint16) public firstAuthorBps;
     mapping(address => uint256) internal _keyOf;
     /// What each code's sales brought, and all of them: each price less the platform's part.
     mapping(bytes32 code => uint256) public ghostBroughtOf;
@@ -166,6 +171,7 @@ contract SimPoolHandler is Test {
         for (uint256 i = 0; i < 6; ++i) {
             _codeKeys.push(keccak256(abi.encode("GROUP", i)));
             _partners.push(makeAddr(string(abi.encode("group owner", i))));
+            _authors.push(makeAddr(string(abi.encode("author", i))));
         }
     }
 
@@ -209,12 +215,15 @@ contract SimPoolHandler is Test {
 
     /// Everyone something can be set aside for: the traders, the codes' partners and the creator.
     function holderCount() public view returns (uint256) {
-        return _actors.length + _partners.length + 1;
+        return _actors.length + _partners.length + _authors.length + 1;
     }
 
     function holder(uint256 i) public view returns (address) {
         if (i < _actors.length) return _actors[i];
-        return i < _actors.length + _partners.length ? _partners[i - _actors.length] : creator;
+        i -= _actors.length;
+        if (i < _partners.length) return _partners[i];
+        i -= _partners.length;
+        return i < _authors.length ? _authors[i] : creator;
     }
 
     // ── traders ──────────────────────────────────────────────────
@@ -324,7 +333,9 @@ contract SimPoolHandler is Test {
         ghostBroughtOf[code] += got;
         if (!ghostUsed[code]) {
             ghostUsed[code] = true;
-            (address p, uint16 bps,,,,,) = pool.codeOf(code);
+            (address p, uint16 bps,, uint16 ab, address a,,,,,,) = pool.codeOf(code);
+            firstAuthor[code] = a;
+            firstAuthorBps[code] = ab;
             firstPartner[code] = p;
             firstBps[code] = bps;
             bpsNow[code] = bps;
@@ -336,7 +347,7 @@ contract SimPoolHandler is Test {
         uint256 n = _codeKeys.length;
         for (uint256 k = 0; k < n; ++k) {
             bytes32 code = _codeKeys[(seed % n + k) % n];
-            (address p,,,,,,) = pool.codeOf(code);
+            (address p,,,,,,,,,,) = pool.codeOf(code);
             if (p != address(0)) return code;
         }
         return bytes32(0);
@@ -534,6 +545,11 @@ contract SimPoolHandler is Test {
         calls["claimHeld"] += 1;
     }
 
+    function _due(bytes32 code) internal view returns (uint256) {
+        (uint256 toPartner, uint256 toAuthor) = pool.shareDue(code);
+        return toPartner + toAuthor;
+    }
+
     /// Anyone sends some of the codes what they accrued: a code its partner's share, sent or set aside if the token
     /// refuses. Only the codes named move, and only to their partners.
     function claimShares(uint256 seed) external {
@@ -543,7 +559,7 @@ contract SimPoolHandler is Test {
         uint256 total;
         for (uint256 k = 0; k < list.length; ++k) {
             list[k] = _codeKeys[(seed / n + k) % n];
-            due[k] = pool.shareDue(list[k]);
+            due[k] = _due(list[k]);
             total += due[k];
         }
         uint256 bal = usdc.balanceOf(address(pool));
@@ -554,7 +570,7 @@ contract SimPoolHandler is Test {
         pool.claimShares(list);
         for (uint256 k = 0; k < list.length; ++k) {
             ghostGot[list[k]] += due[k];
-            if (pool.shareDue(list[k]) != 0) ghostShareMismatch += 1;
+            if (_due(list[k]) != 0) ghostShareMismatch += 1;
         }
         uint256 sent = bal - usdc.balanceOf(address(pool));
         uint256 aside = pool.held() - held0;
@@ -943,7 +959,7 @@ contract SimPoolHandler is Test {
         b.broughtOf = new uint256[](_codeKeys.length);
         b.bpsOf = new uint256[](_codeKeys.length);
         for (uint256 i = 0; i < _codeKeys.length; ++i) {
-            (, uint16 bps,, uint256 got,,,) = pool.codeOf(_codeKeys[i]);
+            (, uint16 bps,,,, uint256 got,,,,,) = pool.codeOf(_codeKeys[i]);
             (b.broughtOf[i], b.bpsOf[i]) = (got, bps);
         }
     }
@@ -987,10 +1003,17 @@ contract SimPoolHandler is Test {
         bytes32 code = _codeKeys[i % _codeKeys.length];
         address p = offSale ? address(0) : _partners[i % _codeKeys.length];
         uint16 bps = offSale || bpsSeed % 3 == 0 ? 0 : uint16(4000 + bpsSeed % 2001);
-        // On a used code only a raise for the same partner, within the bounds, may go through (CFO, 13 November).
-        bool raise = ghostUsed[code] && p == firstPartner[code] && bps > bpsNow[code] && bps >= 4000 && bps <= 6000;
+        // Now and then a code for two: the code's author, with 20 % or 50 % of the code's share by its place.
+        uint256 k = i % _codeKeys.length;
+        bool split = !offSale && (bpsSeed >> 16) % 2 == 1;
+        address a = split ? _authors[k] : address(0);
+        uint16 ab = split ? uint16(k % 2 == 0 ? 2000 : 5000) : 0;
+        // On a used code only a raise for the same partner, author and split, within the bounds, may go through
+        // (CFO, 13 November).
+        bool raise = ghostUsed[code] && p == firstPartner[code] && a == firstAuthor[code] && ab == firstAuthorBps[code]
+            && bps > bpsNow[code] && bps >= 4000 && bps <= 6000;
         vm.prank(creator);
-        try pool.setCode(code, p, bps) {
+        try pool.setSplitCode(code, p, bps, a, ab) {
             if (ghostUsed[code] && !raise) ghostCodeChanged += 1;
             if (raise) {
                 bpsNow[code] = bps;
@@ -1398,28 +1421,18 @@ contract SimPoolInvariantTest is Test {
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
+    function _due(bytes32 code) internal view returns (uint256) {
+        (uint256 toPartner, uint256 toAuthor) = pool.shareDue(code);
+        return toPartner + toAuthor;
+    }
+
     function invariant_codesKeepTheirBooks() public view {
-        uint256 n = handler.codeCount();
-        bytes32[] memory codes = new bytes32[](n);
-        for (uint256 i = 0; i < n; ++i) codes[i] = handler.codeKey(i);
         uint256 sum;
         uint256 dueAll;
-        for (uint256 i = 0; i < codes.length; ++i) {
-            (address p, uint16 bps, bool used, uint256 got, , , uint256 sent) = pool.codeOf(codes[i]);
+        for (uint256 i = 0; i < handler.codeCount(); ++i) {
+            (uint256 got, uint256 due) = _checkCode(handler.codeKey(i));
             sum += got;
-            uint256 due = pool.shareDue(codes[i]);
             dueAll += due;
-            uint256 accrued = sent + due;
-            assertGe(accrued, handler.ghostAccrued(codes[i]), "a code accrued less than its share of the withdrawals");
-            assertLe(accrued, handler.ghostAccrued(codes[i]) + handler.ghostWithdrawals(), "more than a unit a withdrawal over");
-            assertEq(sent, handler.ghostGot(codes[i]), "what a code got is what claimShares sent or set aside");
-            assertEq(got, handler.ghostBroughtOf(codes[i]), "a code's brought is what its sales brought");
-            assertEq(used, handler.ghostUsed(codes[i]), "used: a sale named it");
-            if (used) {
-                assertEq(p, handler.firstPartner(codes[i]), "a used code's partner changed");
-                assertEq(bps, handler.bpsNow(codes[i]), "a used code's share is not the last raise");
-                assertGe(bps, handler.firstBps(codes[i]), "a used code's share fell");
-            }
         }
         assertEq(pool.brought(), sum, "brought: the codes' together");
         assertLe(dueAll, pool.sharesDue(), "what the codes may claim is kept for them");
@@ -1427,6 +1440,28 @@ contract SimPoolInvariantTest is Test {
         assertEq(pool.brought(), handler.ghostBrought(), "brought: every price less the platform's part");
         assertEq(handler.ghostCodeChanged(), 0, "a used code was set again other than by a raise");
         assertEq(handler.ghostCodeRefused(), 0, "an unused code could not be set, or a used one raised");
+    }
+
+    /// One code's books: what it brought and accrued, against the handler's; returns what it brought and what it may
+    /// still claim.
+    function _checkCode(bytes32 code) internal view returns (uint256 got, uint256 due) {
+        uint256 sentP;
+        uint256 sentA;
+        (,,,,, got,,,, sentP, sentA) = pool.codeOf(code);
+        due = _due(code);
+        uint256 accrued = sentP + sentA + due;
+        assertGe(accrued, handler.ghostAccrued(code), "a code accrued less than its share of the withdrawals");
+        assertLe(accrued, handler.ghostAccrued(code) + handler.ghostWithdrawals(), "more than a unit a withdrawal over");
+        assertEq(sentP + sentA, handler.ghostGot(code), "what a code got is what claimShares sent or set aside");
+        assertEq(got, handler.ghostBroughtOf(code), "a code's brought is what its sales brought");
+        (address p, uint16 bps, bool used, uint16 ab, address au,,,,,,) = pool.codeOf(code);
+        assertEq(used, handler.ghostUsed(code), "used: a sale named it");
+        if (!used) return (got, due);
+        assertEq(au, handler.firstAuthor(code), "a used code's author changed");
+        assertEq(ab, handler.firstAuthorBps(code), "a used code's split changed");
+        assertEq(p, handler.firstPartner(code), "a used code's partner changed");
+        assertEq(bps, handler.bpsNow(code), "a used code's share is not the last raise");
+        assertGe(bps, handler.firstBps(code), "a used code's share fell");
     }
 
     /// I11. A withdrawal's shares: the platform's 0.5 %, each partner's part of the profit by its code's share and what

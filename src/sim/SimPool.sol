@@ -160,22 +160,30 @@ contract SimPool is Initializable {
         bool done;
     }
 
-    /// A trading group's code: every sale names one. Its partner, the group's owner, gets `bps` of the
-    /// pool's profit in the part the code brought of every price the pool took (`withdraw`, `finish`): accrued to
-    /// the code at each withdrawal, and sent to the partner by `claimShares`, which anyone may call.
+    /// A trading group's code: every sale names one. It gets `bps` of the pool's profit in the part the code
+    /// brought of every price the pool took (`withdraw`, `finish`): accrued to the code at each withdrawal, and
+    /// sent by `claimShares`, which anyone may call. Its partner, the group's owner, gets all of it, or, on a code
+    /// for two (`setSplitCode`), all but the author's `authorBps` of it, which goes to the author.
     struct Code {
         address partner;
         uint16 bps;
-        /// A sale named it: its partner and share are fixed from then on.
+        /// A sale named it: its partner, author, split and share are fixed from then on, but for a raise.
         bool used;
+        /// The author's part of the code's share, in bps of it; zero on a code for one.
+        uint16 authorBps;
+        /// The second of a code for two, say a blogger who brings the group's traders; zero on a code for one.
+        address author;
         /// What the code's sales brought the pool: each price less the platform's part.
         uint256 brought;
         /// The pool's `accrual` when the code was last counted (`SimPoolCodes`).
         uint256 mark;
-        /// What the code has accrued and not yet sent or set aside, as last counted (`shareDue` counts the rest).
-        uint256 due;
-        /// What the code has sent its partner or set aside for it, in all.
-        uint256 got;
+        /// What the code has accrued for its partner and its author and not yet sent or set aside, as last counted
+        /// (`shareDue` counts the rest).
+        uint256 partnerDue;
+        uint256 authorDue;
+        /// What the code has sent its partner and its author, or set aside for them, in all.
+        uint256 partnerGot;
+        uint256 authorGot;
     }
 
     struct Payout {
@@ -327,9 +335,11 @@ contract SimPool is Initializable {
     event WithdrawRequested(uint256 amount, uint64 readyAt, uint64 lapsesAt);
     /// A request to withdraw `amount` cancelled by `by`: the creator, or the factory's closer.
     event WithdrawCancelled(address indexed by, uint256 amount);
-    event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps);
-    /// Code `code` was counted what it accrued since it was last touched (a sale, a raise, a claim).
-    event ShareAccrued(bytes32 indexed code, uint256 amount);
+    /// `author` and `authorBps` are zero on a code for one.
+    event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps, address indexed author, uint16 authorBps);
+    /// Code `code` was counted what it accrued since it was last touched (a sale, a raise, a claim): its partner's
+    /// part and its author's.
+    event ShareAccrued(bytes32 indexed code, uint256 toPartner, uint256 toAuthor);
     /// What a code had accrued, sent to `to` by `claimShares`, or set aside for `to` (`claimHeld`) if the token
     /// refused.
     event SharePaid(bytes32 indexed code, address indexed to, uint256 amount, bool sent);
@@ -458,8 +468,8 @@ contract SimPool is Initializable {
         return _payouts[id];
     }
 
-    /// @notice What code `code` has accrued and not yet sent its partner: `claimShares` sends it.
-    function shareDue(bytes32 code) external view returns (uint256) {
+    /// @notice What code `code` has accrued and not yet sent its partner and its author: `claimShares` sends it.
+    function shareDue(bytes32 code) external view returns (uint256 toPartner, uint256 toAuthor) {
         return SimPoolCodes.due(codeOf, accrual, code);
     }
 
@@ -740,9 +750,10 @@ contract SimPool is Initializable {
         emit HeldClaimed(msg.sender, to, amount);
     }
 
-    /// @notice Sends each of `codes` what it has accrued to its partner, or sets it aside for the partner
-    ///         (`claimHeld`) if the token refuses. Anyone may, for any codes, also after the pool has finished: the
-    ///         money goes to each code's partner only. The work is the number of codes named, never all of them.
+    /// @notice Sends each of `codes` what it has accrued to its partner and to its author, each apart, or sets a
+    ///         part aside for whom it is (`claimHeld`) if the token refuses it. Anyone may, for any codes, also after
+    ///         the pool has finished: the money goes to each code's partner and author only. The work is the number
+    ///         of codes named, never all of them.
     function claimShares(bytes32[] calldata codes) external {
         (uint256 out, uint256 setAside) = SimPoolCodes.claim(codeOf, heldOf, usdc, accrual, codes);
         sharesDue -= out;
@@ -903,7 +914,19 @@ contract SimPool is Initializable {
     ///         creator once it has brought traders. A raise counts from the next withdrawal on. A zero
     ///         `partner` takes an unused code off sale. A pool has as many codes as its creator sets.
     function setCode(bytes32 code, address partner, uint16 bps) external onlyCreator {
-        weight += SimPoolCodes.set(codeOf, factory, accrual, code, partner, bps);
+        weight += SimPoolCodes.set(codeOf, factory, accrual, code, partner, bps, address(0), 0);
+    }
+
+    /// @notice Sets a code for two: as `setCode`, with an author besides the partner (say a blogger who brings the
+    ///         group's traders), who gets `authorBps` of the code's share, and the partner the rest. The code's share
+    ///         `bps` is within the platform's bounds as a whole, not each part. Its partner, author and split are
+    ///         fixed from the first sale by the code on; after it only its share can be raised, by this call with
+    ///         the same partner, author and split.
+    function setSplitCode(bytes32 code, address partner, uint16 bps, address author, uint16 authorBps)
+        external
+        onlyCreator
+    {
+        weight += SimPoolCodes.set(codeOf, factory, accrual, code, partner, bps, author, authorBps);
     }
 
     /// @notice Stops selling exams. What runs, runs to its end. The creator may from `lockedUntil` on;

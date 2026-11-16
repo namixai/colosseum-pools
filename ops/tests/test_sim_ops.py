@@ -36,7 +36,7 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(int(re.search(r"constant COVER_PAYOUTS = (\d+);", POOL).group(1)), d.LOCKED_PAYOUTS)
         self.assertEqual(int(constant("MIN_PARTNER_BPS")), d.MIN_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_PARTNER_BPS")), d.MAX_PARTNER_BPS)
-        self.assertEqual(int(constant("MAX_CODES")), d.MAX_CODES)
+        self.assertNotIn("MAX_CODES", FACTORY, "a pool has no limit on its codes")
         self.assertEqual(constant("MIN_TERM"), "184 days")
 
     def test_deploy_names_the_closer_a_fourth_key(self):
@@ -73,8 +73,10 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(d.TIER_T, "(uint16,uint16,uint8)")
 
     def test_the_scripts_calls_are_the_pools(self):
-        self.assertIn("function setCode(bytes32 code, address partner, uint16 bps)", POOL)
-        self.assertEqual(d.SET_CODE, "setCode(bytes32,address,uint16)")
+        self.assertIn("function setSplitCode(bytes32 code, address partner, uint16 bps, address author, uint16 authorBps)",
+                      re.sub(r"\s+", " ", POOL))
+        self.assertEqual(d.SET_CODE, "setSplitCode(bytes32,address,uint16,address,uint16)")
+        self.assertEqual(d.SET_CODE_TYPES, ["bytes32", "address", "uint16", "address", "uint16"])
         body = re.search(r"struct Code \{(.*?)\n    \}", POOL, re.S).group(1)
         types = [l.split()[0] for l in body.splitlines() if l.strip() and not l.strip().startswith("//")]
         self.assertEqual(types, d.CODE_OF, "codeOf's answer, field by field")
@@ -122,7 +124,7 @@ class TheHandOver(unittest.TestCase):
         from unittest import mock
         sent, records = [], []
         reads = iter(operators or [self.D, safe])
-        deployed = iter(["0x" + f"{i:040x}" for i in range(1, 7)])
+        deployed = iter(["0x" + f"{i:040x}" for i in range(1, 8)])
         op = SimpleNamespace(address=d.to_checksum_address(self.D))
         transact = lambda acct, to, sig, types, values: sent.append((to, sig, values)) or {"transactionHash": f"0x{len(sent):x}"}
         argv = self.argv("--send", *(["--safe", safe] if safe else []))
@@ -500,7 +502,7 @@ class TheMeasurePool(unittest.TestCase):
         self.assertEqual(d.locked_of(m), 160 * 10**6)
         self.assertEqual({k: v for k, v in m["exam_rules"].items()}, FIRST["exam_rules"], "the same rules as the first pool")
         self.assertEqual(d.codes_of(m, "0x" + "ab" * 20),
-                         [("MEASURE", keccak(text="MEASURE"), d.to_checksum_address("0x" + "ab" * 20), 0)],
+                         [("MEASURE", keccak(text="MEASURE"), d.to_checksum_address("0x" + "ab" * 20), 0, d.ZERO, 0)],
                          "one code, the creator's own, with no share: a sale needs one")
 
 
@@ -683,9 +685,17 @@ class TheCodes(unittest.TestCase):
         ok = {"codes": [{"code": "GROUP-ONE", "partner": "0x" + "11" * 20, "bps": 5000},
                         {"code": "PLATFORM", "partner": "creator", "bps": 0}]}
         got = d.codes_of(ok, self.CREATOR)
-        self.assertEqual([(t, h, b) for t, h, _, b in got], [("GROUP-ONE", keccak(text="GROUP-ONE"), 5000),
-                                                             ("PLATFORM", keccak(text="PLATFORM"), 0)])
+        self.assertEqual([(t, h, b) for t, h, _, b, *_ in got], [("GROUP-ONE", keccak(text="GROUP-ONE"), 5000),
+                                                                 ("PLATFORM", keccak(text="PLATFORM"), 0)])
         self.assertEqual(got[1][2], d.to_checksum_address(self.CREATOR))
+        self.assertEqual([g[4:] for g in got], [(d.ZERO, 0), (d.ZERO, 0)], "codes for one")
+        two = d.codes_of({"codes": [{"code": "BLOGGER-1", "partner": "0x" + "11" * 20, "bps": 6000,
+                                     "author": "0x" + "33" * 20, "author_bps": 5000}]}, self.CREATOR)
+        self.assertEqual(two[0][3:], (6000, d.to_checksum_address("0x" + "33" * 20), 5000), "a code for two")
+        # As many codes as the creator sets: a network of a thousand authors, a code each.
+        many = [{"code": f"A{i}", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20,
+                 "author_bps": 5000} for i in range(1_000)]
+        self.assertEqual(len(d.codes_of({"codes": many}, self.CREATOR)), 1_000)
         bad = [[{"code": "A", "partner": "0x" + "11" * 20, "bps": 3999}],
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6001}],
                [{"code": "A", "partner": "0x" + "00" * 20, "bps": 0}],
@@ -696,7 +706,10 @@ class TheCodes(unittest.TestCase):
                [{"code": "GROUP-ONE\n", "partner": "0x" + "11" * 20, "bps": 0}],
                [{"code": "GROUP-ONE\u00a0", "partner": "0x" + "11" * 20, "bps": 0}],
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 0}, {"code": "A", "partner": "0x" + "22" * 20, "bps": 0}],
-               [{"code": str(i), "partner": "0x" + "11" * 20, "bps": 0} for i in range(d.MAX_CODES + 1)]]
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20}],
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "00" * 20, "author_bps": 5000}],
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20, "author_bps": 0}],
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20, "author_bps": 10_000}]]
         for codes in bad:
             with self.assertRaises(SystemExit):
                 d.codes_of({"codes": codes}, self.CREATOR)
@@ -704,18 +717,27 @@ class TheCodes(unittest.TestCase):
 
     def test_a_code_a_sale_named_is_skipped_if_it_matches_and_stops_everything_if_not(self):
         p1, p2 = d.to_checksum_address("0x" + "11" * 20), d.to_checksum_address("0x" + "22" * 20)
-        codes = [("A", b"a" * 32, p1, 5000), ("B", b"b" * 32, p2, 4000), ("C", b"c" * 32, p1, 0)]
-        chain = {b"a" * 32: (p1, 5000, True), b"b" * 32: (p1, 4000, False), b"c" * 32: (d.ZERO, 0, False)}
+        z = d.ZERO
+        codes = [("A", b"a" * 32, p1, 5000, z, 0), ("B", b"b" * 32, p2, 4000, z, 0), ("C", b"c" * 32, p1, 0, z, 0)]
+        chain = {b"a" * 32: (p1, 5000, True, 0, z), b"b" * 32: (p1, 4000, False, 0, z), b"c" * 32: (z, 0, False, 0, z)}
         self.assertEqual([t for t, *_ in d.to_set(codes, chain.__getitem__)], ["B", "C"], "A is there already")
-        chain[b"a" * 32] = (p1, 6000, True)
+        chain[b"a" * 32] = (p1, 6000, True, 0, z)
         with self.assertRaises(SystemExit) as caught:
             d.to_set(codes, chain.__getitem__)
-        self.assertIn("its share can only rise, for the same partner", str(caught.exception))
-        chain[b"a" * 32] = (p1, 4000, True)
+        self.assertIn("its share can only rise, for the same partner, author and split", str(caught.exception))
+        chain[b"a" * 32] = (p1, 4000, True, 0, z)
         self.assertEqual([t for t, *_ in d.to_set(codes, chain.__getitem__)], ["A", "B", "C"], "A raised from 40 to 50 %")
-        chain[b"a" * 32] = (p2, 4000, True)
+        chain[b"a" * 32] = (p2, 4000, True, 0, z)
         with self.assertRaises(SystemExit):
             d.to_set(codes, chain.__getitem__)  # another partner, even with a higher share
+        # A code for two: its author and split stay as a sale fixed them.
+        p3 = d.to_checksum_address("0x" + "33" * 20)
+        two = [("T", b"t" * 32, p1, 6000, p3, 5000)]
+        self.assertEqual(d.to_set(two, {b"t" * 32: (p1, 6000, True, 5000, p3)}.__getitem__), [], "as on chain")
+        self.assertEqual(len(d.to_set(two, {b"t" * 32: (p1, 5000, True, 5000, p3)}.__getitem__)), 1, "a raise")
+        for fixed in [(p1, 4000, True, 4000, p3), (p1, 4000, True, 5000, p2), (p1, 4000, True, 0, z)]:
+            with self.assertRaises(SystemExit):
+                d.to_set(two, {b"t" * 32: fixed}.__getitem__)
 
 
 class TheClosing(unittest.TestCase):
@@ -1003,7 +1025,7 @@ class TheClosing(unittest.TestCase):
         plan = {"codes": [{"code": "A", "partner": p1, "bps": 5000}, {"code": "B", "partner": "creator", "bps": 0}]}
         out = io.StringIO()
         with mock.patch.object(d.pathlib.Path, "read_text", return_value=json.dumps(plan)), \
-                mock.patch.object(d.c, "call_view", return_value=(d.ZERO, 0, False)), \
+                mock.patch.object(d.c, "call_view", return_value=(d.ZERO, 0, False, 0, d.ZERO)), \
                 mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "transact") as sent, redirect_stdout(out):
             self.assertEqual(d.main(["codes", "--pool", self.OTHER, "--plan", "p.json", "--signer", safe]), 0)
         key.assert_not_called()
