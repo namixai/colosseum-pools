@@ -503,6 +503,51 @@ creating the challenge's account. What came back on 12 and 13 October left each 
   `value()` on the pool read 679.017582 USDC on 670e8 shares, 2.37 more than the 676.647582 it read on 13
   October and still read before the transfers. The 2.37 is money we put in, not a gain.
 
+## A seat of the sixth pool: a challenge bought, never traded, run out (7 to 14 November)
+
+On `0x348F9814061B0d26c2aBbdd2FE19ca807ceDa8a4`, the pool of ten seats ([SHARED-POOL.md](SHARED-POOL.md)). Its
+third seat, index 2, is `0x6d869104acA14B77C7F20B8612961BAE350e734d`. The buyer was the wallet of the team's
+agent, `0xd4f31E7234308546c822C619705F1A4B5fC8f629`, the one [EVIDENCE.md](EVIDENCE.md) names. All of it
+was read back from receipts, from the contracts and from Hyperliquid's testnet info API on 16 November, and
+nothing was sent to read it.
+
+- **Bought and started on 7 November.** `buyChallenge` in
+  `0x79b6b78324aa261bb62f3bd659b2b21b8f726a8b7629a3ff85332235ab0aa317`, block 69008004, 18:32:47 UTC:
+  0.20 USDC to the seat (the price, 2% of the capital) and 0.70 to the factory's fee recipient,
+  `0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4`, both transfers of that transaction, and `ChallengeSold`
+  for the challenge `0x53303f80c384ccd1549736b009ca2df1975fe806`. The host's keeper started it in
+  `0xb9d3c7ad24e9e3665479e5db471178969f39f64976308c743b47530ab7819017`, block 69008035, 18:33:17 UTC:
+  `Started(capital 10000000, deadline 1794681197)`, which is 14 November, 18:33:17 UTC. The target was
+  10%, equity 11.00.
+- **It was never traded.** `userFills` for the challenge account is empty, and Hyperliquid's
+  `userNonFundingLedgerUpdates` holds four lines for it, all moves of the capital: the 10 USDC from the seat
+  on 7 November at 18:32:47, to perp at 18:33:17, and the two moves back below.
+- **Expired inside forty seconds of its deadline.** `expire`, sent by the host's keeper
+  `0xD6F07317fC5f12302776b03A7206B1614FD49021`, in
+  `0x05a6ddc92caf9e7750cd14f8f2b002961b7546a3dd70cca8be0b3dc4727bc9a6`, block 69621973, 14 November,
+  18:33:51 UTC (the deadline was 18:33:17). **Read this one from the event, not from `status()`.** It is
+  `Stopped(status 4 Expired, reason 0 None, equity 10000000)`: the account stopped, nothing was broken, and
+  its equity was **10.000000**, exactly the capital. It also carries `AgentCut`: the challenge's key,
+  `0x86f99bab0ab5a2445d1bcd3c82d5dadc68a2b99d`, stopped being its agent.
+- **Settled in three steps, a minute and a half in all**, all from `0xD6F07317…`. `MovedToSpot` of 10000000
+  in `0x0cb14abe3c028b3f3e5ad30c488e7c44b33798b4370e02ef1b5fe648e475433d`, block 69622009, 18:34:26;
+  `ReturnedToPool` of 1000000000 (10.00000000 USDC, in HyperCore's eight decimals) in
+  `0xfc0f05854950cfcf74c90791bcfcd17baf6435eb463285754f998268b17a67b8`, block 69622045, 18:35:01; and
+  `Settled` in `0x7c2058629c05f8d38bfcad3369b37432aa19f504e9f9ac46d2274d2d76ef3391`, block 69622080,
+  18:35:36. The ledger carries the same 10 USDC twice: perp to spot at 18:34:26, and sent to the seat at
+  18:35:01.
+- **Where it ended.** Read at block 69762911, 09:04 UTC on 16 November: the challenge's `status()` 8, `breachReason()` 0,
+  `payoutOwed()` 0, `payoutDone()` false; its HyperCore perp account and spot balance empty. The seat:
+  `stage()` 0, Idle, `challenge()` the zero address, `challengeTrader()` the zero address, `earned()`
+  200000, the 0.20 USDC price, and `heldPrice()` 0; its HyperCore spot read 111.0 USDC. The 10 USDC of
+  capital went back to the seat, the 0.20 price stayed with it, and the 0.70 fee had gone to the fee
+  recipient at the purchase. Nothing was paid to the trader: a payout is owed only on a pass.
+
+What this shows is the plain ending, the same as the three on the fifth pool in the section above: a
+challenge that ran out with nothing traded and nothing broken, ended `Expired` with reason `None`, its
+capital back at the seat inside two minutes of the deadline. It shows nothing of the rules the pool enforces,
+since none was tested; and the buyer is the team's own agent, not a stranger.
+
 ## What this does not show
 
 - A passed challenge or a funded stage on a seat, and the funded term running out. The seats of the fifth
