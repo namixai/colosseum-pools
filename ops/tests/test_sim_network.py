@@ -167,9 +167,15 @@ class TheDeployScript(unittest.TestCase):
         with on(networks.MAINNET), self.assertRaises(SystemExit) as caught:
             d.main(self.deploy_argv("--network", "mainnet"))
         self.assertIn("--keeper-nodes is needed on mainnet", str(caught.exception))
+        with tempfile.TemporaryDirectory() as tmp, on(networks.MAINNET), self.assertRaises(SystemExit) as caught:
+            d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp)))
+        self.assertIn("--safe is needed on mainnet", str(caught.exception))
+        safe = "0x" + "5a" * 20
         with tempfile.TemporaryDirectory() as tmp, on(networks.MAINNET), mock.patch("builtins.print") as out:
-            self.assertEqual(d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp))), 0)
+            self.assertEqual(d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp),
+                                                     "--safe", safe)), 0)
         text = "\n".join(str(x.args[0]) for x in out.call_args_list)
+        self.assertIn(f"would hand over  setOperator {d.to_checksum_address(safe)} last", text)
         self.assertIn(networks.MAINNET.usdc_erc20, text)
         self.assertIn("mainnet (chain 999)", text)
         self.assertIn("BTC (0)", text)
@@ -192,7 +198,8 @@ class TheDeployScript(unittest.TestCase):
                 mock.patch.object(d, "deploy_contract") as deployed, mock.patch.object(d.c, "account") as key, \
                 mock.patch.object(d, "big_blocks") as big:
             with self.assertRaises(SystemExit) as caught:
-                d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--send"))
+                d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--safe",
+                                        "0x" + "5a" * 20, "--send"))
         self.assertIn("without a terminal", str(caught.exception))
         deployed.assert_not_called()
         key.assert_not_called()
@@ -207,7 +214,8 @@ class TheDeployScript(unittest.TestCase):
                 mock.patch.object(d.c, "account") as key, mock.patch.object(d, "deploy_contract") as deployed, \
                 mock.patch.object(d, "big_blocks"), mock.patch.object(d, "save"), mock.patch.object(d, "mark_incomplete"):
             with self.assertRaises(SystemExit) as caught:
-                d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--send"))
+                d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--safe",
+                                        "0x" + "5a" * 20, "--send"))
         self.assertIn("mainnet meta changed", str(caught.exception))
         key.assert_not_called()
         deployed.assert_not_called()

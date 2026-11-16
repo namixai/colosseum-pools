@@ -89,6 +89,109 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(r.EXAM_SOLD, declared("src/sim/SimPool.sol", "ExamSold"))
 
 
+class TheHandOver(unittest.TestCase):
+    """`deploy` hands the factory to our Safe last: setOperator, read before and after; needed on mainnet."""
+    F, S, D = "0x" + "fa" * 20, "0x" + "5a" * 20, "0x" + "de" * 20
+    KEYS = ["--filler", "0x" + "11" * 20, "--checker", "0x" + "22" * 20, "--closer", "0x" + "33" * 20]
+
+    def argv(self, *extra):
+        return ["deploy", "--label", "never-written", *self.KEYS, *extra]
+
+    def send(self, safe, operators=None, code="0x6080"):
+        """A testnet deploy with --send, every chain call mocked: the transactions it sends, in order, and the record."""
+        from types import SimpleNamespace
+        from unittest import mock
+        sent, records = [], []
+        reads = iter(operators or [self.D, safe])
+        deployed = iter(["0x" + f"{i:040x}" for i in range(1, 7)])
+        op = SimpleNamespace(address=d.to_checksum_address(self.D))
+        transact = lambda acct, to, sig, types, values: sent.append((to, sig, values)) or {"transactionHash": f"0x{len(sent):x}"}
+        argv = self.argv("--send", *(["--safe", safe] if safe else []))
+        with mock.patch.object(d.sn, "confirm_send"), mock.patch.object(d.sn, "check_assets"), \
+                mock.patch.object(d.c, "account", return_value=op), mock.patch.object(d, "big_blocks") as big, \
+                mock.patch.object(d, "deploy_contract", side_effect=lambda *a, **k: (next(deployed), {"blockNumber": "0x10"})) as dc, \
+                mock.patch.object(d.c, "transact", side_effect=transact), \
+                mock.patch.object(d.c, "call_view", side_effect=lambda *a: (next(reads),)), \
+                mock.patch.object(d.c, "rpc", return_value=code), mock.patch.object(d, "git_head", return_value="ab" * 20), \
+                mock.patch.object(d, "save", side_effect=lambda out, rec: records.append(json.loads(json.dumps(rec)))), \
+                mock.patch.object(d, "mark_incomplete") as incomplete, \
+                mock.patch.object(d.deployments, "load", return_value={"keeper_nodes": {}}), mock.patch("builtins.print"):
+            try:
+                result = d.main(argv)
+            except SystemExit as exc:
+                result = exc
+        return result, sent, records, dc, big, incomplete
+
+    def test_the_plan_says_the_hand_over_or_that_the_key_stays(self):
+        from unittest import mock
+        with mock.patch("builtins.print") as out:
+            self.assertEqual(d.main(self.argv("--safe", self.S)), 0)
+        text = "\n".join(str(x.args[0]) for x in out.call_args_list)
+        self.assertIn(f"would hand over  setOperator {d.to_checksum_address(self.S)} last", text)
+        with mock.patch("builtins.print") as out:
+            self.assertEqual(d.main(self.argv()), 0)
+        self.assertIn("stays the deployer's key (no --safe; testnet only)", "\n".join(str(x.args[0]) for x in out.call_args_list))
+
+    def test_setoperator_to_the_safe_is_the_last_call_and_read_before_and_after(self):
+        result, sent, records, _, _, incomplete = self.send(self.S)
+        self.assertEqual(result, 0)
+        factory = sent[0][0]
+        self.assertEqual(sent[-1], (factory, "setOperator(address)", [d.to_checksum_address(self.S)]))
+        self.assertEqual([t[1] for t in sent].count("setOperator(address)"), 1)
+        self.assertEqual(records[-1]["status"], d.DONE)
+        self.assertEqual(records[-1]["operator"], d.to_checksum_address(self.S))
+        self.assertEqual(records[-1]["deployer"], d.to_checksum_address(self.D))
+        self.assertIn("setOperator", records[-1]["tx"])
+        # Until the read after, the record does not name the Safe as the operator, nor say it is complete.
+        before_done = [r for r in records if "setOperator" in r["tx"]][0]
+        self.assertEqual(before_done["operator"], d.to_checksum_address(self.D))
+        self.assertNotEqual(before_done["status"], d.DONE)
+        incomplete.assert_not_called()
+
+    def test_without_a_safe_on_testnet_the_key_stays_and_nothing_is_handed_over(self):
+        result, sent, records, *_ = self.send(None)
+        self.assertEqual(result, 0)
+        self.assertNotIn("setOperator(address)", [t[1] for t in sent])
+        self.assertEqual(records[-1]["operator"], d.to_checksum_address(self.D))
+
+    def test_a_safe_that_is_zero_or_a_platform_key_is_refused_before_anything_is_sent(self):
+        for safe, said in (("0x" + "00" * 20, "--safe is 0x0"), (self.KEYS[1], "the filler, the checker or the closer"),
+                           (self.KEYS[5], "the filler, the checker or the closer")):
+            result, sent, _, dc, big, _ = self.send(safe)
+            self.assertIsInstance(result, SystemExit)
+            self.assertIn(said, str(result))
+            self.assertEqual(sent, [])
+            dc.assert_not_called(), big.assert_not_called()
+
+    def test_the_deployers_own_key_or_an_address_without_code_is_refused_before_anything_is_sent(self):
+        for safe, code, said in ((self.D, "0x6080", "the deployer's own key"), (self.S, "0x", "has no code on testnet")):
+            result, sent, _, dc, big, _ = self.send(safe, code=code)
+            self.assertIsInstance(result, SystemExit)
+            self.assertIn(said, str(result))
+            self.assertEqual(sent, [])
+            dc.assert_not_called(), big.assert_not_called()
+
+    def test_an_operator_that_is_not_the_deployer_before_sends_nothing_and_leaves_the_deploy_incomplete(self):
+        result, sent, records, _, _, incomplete = self.send(self.S, operators=["0x" + "99" * 20])
+        self.assertIsInstance(result, SystemExit)
+        self.assertIn("not the deployer's key: setOperator not sent", str(result))
+        self.assertNotIn("setOperator(address)", [t[1] for t in sent])
+        self.assertNotEqual(records[-1]["status"], d.DONE)
+        incomplete.assert_called_once()
+
+    def test_an_operator_that_is_not_the_safe_after_leaves_the_deploy_incomplete(self):
+        result, sent, records, _, _, incomplete = self.send(self.S, operators=[self.D, self.D])
+        self.assertIsInstance(result, SystemExit)
+        self.assertIn("not the Safe", str(result))
+        self.assertNotEqual(records[-1]["status"], d.DONE)
+        self.assertEqual(records[-1]["operator"], d.to_checksum_address(self.D))
+        incomplete.assert_called_once()
+
+    def test_the_call_is_the_factorys(self):
+        self.assertIn("function setOperator(address operator_) external onlyOperator", FACTORY)
+        self.assertIn("address public operator;", FACTORY)
+
+
 class TheRecord(unittest.TestCase):
     def test_a_finished_deploy_writes_a_record_the_loader_takes(self):
         """`deploy` used to end on "deployed", which `deployments.load` refuses: `pool`, `buy`, the keeper and the
