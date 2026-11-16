@@ -1095,6 +1095,21 @@ contract SimPoolTest is Test {
         }
     }
 
+    /// Where `ops/deploy_sim.py check` writes the factory's terms book and asset caps, and the book's texts, when it
+    /// puts this code in an eth_call by a state override: these slots, and the script's constants are these.
+    uint256 constant FACTORY_TERMS_BOOK_SLOT = 5;
+    uint256 constant FACTORY_ASSET_CAP_SLOT = 6;
+    uint256 constant BOOK_TEXT_AT_SLOT = 0;
+
+    function test_storage_theSlotsTheDeployScriptsCheckWrites() public view {
+        assertEq(address(uint160(uint256(vm.load(address(factory), bytes32(FACTORY_TERMS_BOOK_SLOT))))), address(book));
+        bytes32 cap = keccak256(abi.encode(uint256(BTC), FACTORY_ASSET_CAP_SLOT));
+        assertEq(uint256(vm.load(address(factory), cap)), 1000);
+        bytes32 text = keccak256(abi.encode(termsHash, BOOK_TEXT_AT_SLOT));
+        assertEq(address(uint160(uint256(vm.load(address(book), text)))), book.textAt(termsHash));
+        assertTrue(book.textAt(termsHash) != address(0));
+    }
+
     function test_menu_eachLineStartsBothStagesOnItsTier() public {
         SimPool pool = _open(_menuPlan());
         SimTier[] memory k = pool.tiers();

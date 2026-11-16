@@ -296,9 +296,16 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `withdraw`, `cancel`, `approver`, `approve`) the call is from an address that signs elsewhere, our
   pool's creator being a Safe and its approver a Ledger: the command checks as that address and prints
   the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
+  `check --plan …` asks `SimPoolFactory.check` about a plan by eth_call, sending nothing: with
+  `--deployment`, the factory it names; without, the factory and PaperExam of the checkout, put in the call by
+  a state override over the network's precompiles, with the assets `deploy` lists and the terms as `pool`
+  publishes them, so a plan is checked before any factory stands.
   `pool --signer` prints the terms, the approval of the locked USDC and `create` with 1 HYPE; the codes
   follow with `codes --signer` once the pool's address is known. The first pool's plan is
-  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
+  `deployments/plans/sim-first-pool.json`: the menu of 13 November 2026, eight lines, loss limit and target
+  3 % / 9 % at 20 and 40, 4 % / 10 % at 30 and 60, 5 % / 10 % at 40 and 79, 6 % / 10 % at 50 and 95 for 5 000 and
+  10 000, each line's loss limit trailing the highest daily snapshot up to the starting balance (`drawdown_kind`
+  1), two payouts a day, 1 600 locked, thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
   ceiling of 150 bp, a fill delay of 4 blocks in both stages (an order placed in block B is filled no
