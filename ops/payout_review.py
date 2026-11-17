@@ -650,7 +650,9 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
             t = standing.get((e["asset"], e["take"]))
             if t is None:
                 flag("trigger-unset", e, f"a {'take' if e['take'] else 'stop'} on asset {e['asset']} was seen to trigger with none set")
-            elif t["seenAt"] is None:
+            else:
+                # The contract writes a sighting only when it starts a span (a first one, or one after the last span
+                # ended): the latest one stands.
                 t["seenAt"] = e["seenAt"]
         elif name == "TriggerFilled":
             out["triggers"]["filled"] += 1
