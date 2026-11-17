@@ -1,11 +1,13 @@
 // Hyperliquid testnet info API, and the number formats Hyperliquid accepts.
 import { CONFIG } from "../config.js";
 
-export async function info(body) {
+/** `signal` (an AbortSignal) is the caller's own limit on the wait: without it the request waits as long as the browser does. */
+export async function info(body, { signal } = {}) {
   const res = await fetch(CONFIG.hlInfo, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
   // The status goes on the error, not only into its message: the failure page tells a refusal
   // (429) from a failure by the status (app/lib/ui.js) rather than by parsing the words.
@@ -74,8 +76,8 @@ export const fills = (user) => info({ type: "userFills", user });
 export const mids = () => info({ type: "allMids" });
 /** A perp's candles from `startTime` to `endTime` (ms), by its name ("BTC") and an interval ("1m", "15m", "1h", "1d"):
  *  open data, no key. `candleRows` (app/lib/exam.js) reads the answer. */
-export const candles = (coin, interval, startTime, endTime) =>
-  info({ type: "candleSnapshot", req: { coin, interval, startTime, endTime } });
+export const candles = (coin, interval, startTime, endTime, options) =>
+  info({ type: "candleSnapshot", req: { coin, interval, startTime, endTime } }, options);
 /** A perp's book, both sides from the best: open data, no key. `bookSides` (app/lib/exam.js) reads the answer. */
 export const book = (coin) => info({ type: "l2Book", coin });
 /** An account's deposits, withdrawals and transfers since `startTime` (ms), as Hyperliquid's own ledger has them. */

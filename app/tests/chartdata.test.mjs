@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
   INTERVALS, BAR_INTERVALS, MORE_INTERVALS, DEFAULT_INTERVAL, CANDLES_SHOWN, CANDLES_MORE, CANDLES_KEPT, EMPTY_STRETCHES,
-  isInterval, candleWindow, olderWindow, afterOlder, historyStart, mergeRows, tailRows, toSeries, priceDecimals, candleText, once, pollStep,
+  isInterval, candleWindow, olderWindow, afterOlder, historyStart, mergeRows, tailRows, toSeries, priceDecimals, candleText, once, pollStep, withTimeout, REQUEST_MS,
 } from "../lib/chartdata.js";
 import { candleRows } from "../lib/exam.js";
 
@@ -224,4 +224,49 @@ test("two readings of the tail are one at a time: the slow one is let finish and
   await slow;
   assert.deepEqual(drawn, ["older reading"]);
   assert.equal((await flight.run(async () => { drawn.push("next tick"); })).skipped, false);
+});
+
+test("a candle request that never answers is given up after the limit, aborted, and written as a reason; an answer in time is not touched", async () => {
+  let seen = null;
+  const started = Date.now();
+  await assert.rejects(withTimeout((signal) => { seen = signal; return new Promise(() => {}); }, 40), (err) => {
+    assert.equal(err.timedOut, true);
+    assert.match(err.message, /^Hyperliquid did not answer within \d+ s$/);
+    return true;
+  });
+  assert.ok(Date.now() - started < 1000, "it does not wait for ever");
+  assert.equal(seen.aborted, true, "the request is cancelled through its signal");
+  // A call that honours the signal and rejects with an abort after the limit still reads as the limit.
+  await assert.rejects(withTimeout((signal) => new Promise((_, no) => signal.addEventListener("abort", () => no(new Error("aborted")))), 20), /did not answer/);
+  // In time: the value, and the signal is not aborted.
+  let ok = null;
+  assert.equal(await withTimeout((signal) => { ok = signal; return Promise.resolve("rows"); }, 1000), "rows");
+  assert.equal(ok.aborted, false);
+  // Its own error comes through unchanged.
+  await assert.rejects(withTimeout(() => Promise.reject(new Error("HTTP 429")), 1000), /HTTP 429/);
+  assert.ok(REQUEST_MS >= 5000 && REQUEST_MS < 60000);
+});
+
+test("hl.candles passes the caller's signal to the request, and asks as before when there is none", async () => {
+  const hl = await import("../lib/hl.js");
+  const real = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init) => { seen.push(init); return { ok: true, json: async () => [] }; };
+  try {
+    const control = new AbortController();
+    await hl.candles("BTC", "4h", 1, 2, { signal: control.signal });
+    await hl.candles("BTC", "4h", 1, 2);
+    assert.equal(seen[0].signal, control.signal);
+    assert.equal(seen[1].signal, undefined, "other pages that ask without a limit are unchanged");
+    assert.deepEqual(JSON.parse(seen[1].body), { type: "candleSnapshot", req: { coin: "BTC", interval: "4h", startTime: 1, endTime: 2 } });
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("the chart asks Hyperliquid for candles only through the limit", () => {
+  const view = readFileSync(new URL("../views/examchart.js", import.meta.url), "utf8");
+  assert.equal((view.match(/await load\(/g) ?? []).length, 0, "no request goes round the limit");
+  assert.equal((view.match(/await ask\(/g) ?? []).length, 3, "the first stretch, an older one and the tail");
+  assert.match(view, /withTimeout\(\(signal\) => load\(\.\.\.args, \{ signal \}\), REQUEST_MS\)/);
 });
