@@ -247,6 +247,7 @@ LIB_ABIS = {
                            "PAPER_EXAM_EVENTS_ABI": ("PaperExam",)},
     "app/lib/exam.js": {"PAPER_EXAM_ABI": ("PaperExam",)},
     "app/lib/operator.js": {"OPERATOR_ABI": ("SimPool",)},
+    "app/lib/simlines.js": {"SIM_LINES_ABI": ("SimPool",), "SIM_OWNER_ABI": ("SimPool",), "TERMS_BOOK_ABI": ("TermsBook",)},
 }
 # The contract each library's `call(target, "name(types)", ...)` sends to.
 LIB_CALLS = {"app/lib/exam.js": "PaperExam", "app/lib/operator.js": "SimPool"}

@@ -345,3 +345,30 @@ code { font-family: var(--mono); font-size: 13px; }
 .pool-head .kv > span:first-child { display: block; }
 .pool-head .kv > span:last-child { display: block; text-align: left; margin-top: 2px; }
 .pool-head .mono { font-family: var(--mono); word-break: break-all; overflow-wrap: anywhere; }
+
+/* A simulated pool: the trader's menu (six sizes by four tiers) and the owner's switches (app/lib/simlines.js). */
+.block { display: block; font-weight: 500; }
+.sim-code { display: flex; flex-direction: column; gap: 4px; max-width: 420px; margin: 0 0 14px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.sim-scroll { overflow-x: auto; }
+.sim-menu { border-collapse: separate; border-spacing: 6px; width: 100%; min-width: 700px; table-layout: fixed; font-size: 14px; }
+.sim-menu th { background: none; border: 0; text-align: left; font-weight: 700; color: var(--accent); vertical-align: top; padding: 4px 6px; }
+.sim-menu th small { font-weight: 500; }
+.sim-cell { white-space: normal; overflow-wrap: anywhere; vertical-align: top; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.sim-cell.off { background: var(--tint); color: var(--muted); border-style: dashed; }
+.sim-cell.short, .sim-cell.closed, .sim-cell.on-idle { border-color: var(--sun); }
+.sim-cell.sells, .sim-cell.on { border-color: var(--ok); }
+.sim-price { font-weight: 800; font-size: 16px; color: var(--accent); }
+.sim-cell.off .sim-price { color: var(--muted); }
+.sim-cell button.sim-buy { margin: 8px 0 4px; width: 100%; }
+.sim-cell button.sim-buy:disabled { cursor: not-allowed; }
+.sim-why { margin-top: 4px; color: var(--muted); }
+.sim-terms { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font); font-size: 14px; background: var(--bg); padding: 12px; border-radius: 8px; margin: 0 0 8px; }
+.sim-switch { position: relative; width: 44px; height: 24px; padding: 0; margin: 8px 0 2px; border-radius: 999px; border: 1px solid var(--line); background: var(--tint); cursor: pointer; display: block; }
+.sim-switch span { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--card); border: 1px solid var(--muted); transition: left .15s; }
+.sim-switch.is-on { background: var(--ok); border-color: var(--ok); }
+.sim-switch.is-on span { left: 22px; border-color: var(--ok); }
+.sim-switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.panel-nav { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 16px; padding: 0 0 8px; border-bottom: 1px solid var(--line); }
+.panel-tab { padding: 6px 12px; border-radius: 8px; font-weight: 600; font-size: 14px; text-decoration: none; color: var(--text); }
+.panel-tab.on { background: var(--accent); color: var(--accent-text); }
+.panel-tab.off { color: var(--muted); border: 1px dashed var(--line); cursor: not-allowed; }
