@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
   INTERVALS, BAR_INTERVALS, MORE_INTERVALS, DEFAULT_INTERVAL, CANDLES_SHOWN, CANDLES_MORE, CANDLES_KEPT, EMPTY_STRETCHES,
-  isInterval, candleWindow, olderWindow, afterOlder, historyStart, mergeRows, tailRows, toSeries, priceDecimals, candleText,
+  isInterval, candleWindow, olderWindow, afterOlder, historyStart, mergeRows, tailRows, toSeries, priceDecimals, candleText, once, pollStep,
 } from "../lib/chartdata.js";
 import { candleRows } from "../lib/exam.js";
 
@@ -180,4 +180,48 @@ test("the chart's file is the library's own, unchanged, with its licence and not
   const view = readFileSync(new URL("../views/examchart.js", import.meta.url), "utf8");
   assert.match(view, /TradingView Lightweight Charts™ Copyright \(c\) 2026 TradingView, Inc\./);
   assert.match(view, /const TRADINGVIEW = "https:\/\/www\.tradingview\.com\/"/);
+});
+
+test("the library is loaded and the chart built once, however many first readings ask while it loads; a failure is asked again", async () => {
+  let built = 0;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const ready = once(async () => { await gate; built += 1; });
+  const asks = [ready(), ready(), ready()];
+  release();
+  await Promise.all(asks);
+  await ready();
+  assert.equal(built, 1, "one build for four askings");
+  let tries = 0;
+  const flaky = once(async () => { tries += 1; if (tries === 1) throw new Error("did not load"); return "ok"; });
+  await assert.rejects(flaky(), /did not load/);
+  assert.equal(await flaky(), "ok", "a failure is not kept");
+  assert.equal(await flaky(), "ok");
+  assert.equal(tries, 2);
+});
+
+test("the timer never restarts a reading that is out, never overlaps two readings of the tail, and rests while the page is hidden", () => {
+  const idle = { rows: true, loading: false, older: false, polling: false, hidden: false };
+  assert.equal(pollStep(idle), "tail");
+  assert.equal(pollStep({ ...idle, rows: false }), "first", "nothing drawn and nothing on its way: read the first stretch");
+  assert.equal(pollStep({ ...idle, rows: false, loading: true }), "skip", "a slow first reading is waited for, not restarted");
+  assert.equal(pollStep({ ...idle, polling: true }), "skip", "the last reading of the tail is not overtaken");
+  assert.equal(pollStep({ ...idle, older: true }), "skip");
+  assert.equal(pollStep({ ...idle, loading: true }), "skip");
+  assert.equal(pollStep({ ...idle, hidden: true }), "skip");
+  assert.equal(pollStep({ ...idle, rows: false, hidden: true }), "skip");
+});
+
+test("two readings of the tail are one at a time: the slow one is let finish and the second is skipped", async () => {
+  const { singleFlight } = await import("../lib/examscreen.js");
+  const flight = singleFlight();
+  const drawn = [];
+  let release;
+  const slow = flight.run(async () => { await new Promise((r) => { release = r; }); drawn.push("older reading"); });
+  const second = await flight.run(async () => { drawn.push("newer reading"); });
+  assert.equal(second.skipped, true);
+  release();
+  await slow;
+  assert.deepEqual(drawn, ["older reading"]);
+  assert.equal((await flight.run(async () => { drawn.push("next tick"); })).skipped, false);
 });

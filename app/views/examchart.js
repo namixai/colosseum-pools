@@ -12,9 +12,10 @@
 // startTime, endTime)` is Hyperliquid's candle request (hl.candles) and answers its raw reply. Nothing is drawn that
 // Hyperliquid did not send: when no candles are read the chart is empty and says why.
 import { candleRows } from "../lib/exam.js";
+import { singleFlight } from "../lib/examscreen.js";
 import {
   BAR_INTERVALS, MORE_INTERVALS, DEFAULT_INTERVAL, CANDLES_SHOWN, CANDLES_MORE, UP, DOWN, isInterval,
-  candleWindow, olderWindow, afterOlder, historyStart, mergeRows, tailRows, toSeries, priceDecimals, candleText,
+  candleWindow, olderWindow, once, pollStep, afterOlder, historyStart, mergeRows, tailRows, toSeries, priceDecimals, candleText,
 } from "../lib/chartdata.js";
 
 const LIBRARY = new URL("../vendor/lightweight-charts/lightweight-charts.standalone.production.js", import.meta.url).href;
@@ -80,8 +81,13 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
   const state = {
     coin: null, szDecimals: 0, interval: isInterval(keep()) ? keep() : DEFAULT_INTERVAL, rows: [], byTime: new Map(),
     hist: { beforeMs: Infinity, misses: 0, done: true }, run: 0, older: false, retryAt: 0, oracle: null, priceLine: null,
-    chart: null, candles: null, volume: null, lib: null, dead: false, timer: null,
+    chart: null, candles: null, volume: null, lib: null, dead: false, timer: null, loading: false, tail: singleFlight(),
   };
+  // The library is loaded and the chart built once, however many first readings ask while the script is on its way.
+  const ready = once(async () => {
+    const lib = await library();
+    if (!state.dead && !state.chart) build(lib);
+  });
 
   // ── the interval buttons ─────────────────────────────────────
   const more = el("select", "ex-more");
@@ -161,6 +167,11 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
     paintOracle();
   }
 
+  /** The price scale is written only beside candles: an empty chart has no prices to name, least of all another asset's. */
+  function showScale(visible) {
+    if (state.chart) state.chart.priceScale("right").applyOptions({ visible });
+  }
+
   function format() {
     if (!state.candles || !state.rows.length) return;
     const decimals = priceDecimals(state.rows[state.rows.length - 1].close, state.szDecimals);
@@ -211,13 +222,15 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
     state.rows = [];
     state.byTime = new Map();
     state.hist = { beforeMs: Infinity, misses: 0, done: true };
+    state.loading = true;
     say("Loading candles…");
     tell("");
     try {
-      if (!state.chart) build(await library());
-      if (state.dead || run !== state.run) return;
+      await ready();
+      if (state.dead || run !== state.run || !state.chart) return;
       state.candles.setData([]);
       state.volume.setData([]);
+      showScale(false);
       const { startTime, endTime } = candleWindow(state.interval, now(), CANDLES_SHOWN);
       const rows = candleRows(await load(state.coin, state.interval, startTime, endTime));
       if (state.dead || run !== state.run) return;
@@ -227,6 +240,7 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
       }
       say("");
       draw(rows);
+      showScale(true);
       format();
       state.hist = historyStart(rows);
       state.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, rows.length - IN_VIEW), to: rows.length + 6 });
@@ -234,6 +248,8 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
     } catch (err) {
       if (state.dead || run !== state.run) return;
       say(`Candles not read: ${explain(err)}`);
+    } finally {
+      if (run === state.run) state.loading = false;
     }
   }
 
@@ -266,27 +282,33 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
   }
 
   async function poll() {
-    if (state.dead || !state.coin || (typeof document !== "undefined" && document.hidden)) return;
-    if (!state.rows.length) {
-      if (!state.older) first();
+    if (state.dead || !state.coin) return;
+    const step = pollStep({ rows: state.rows.length > 0, loading: state.loading, older: state.older, polling: state.tail.busy,
+      hidden: typeof document !== "undefined" && document.hidden });
+    if (step === "skip") return;
+    if (step === "first") {
+      first();
       return;
     }
-    const run = state.run;
-    const last = state.rows[state.rows.length - 1].time;
-    try {
-      const got = candleRows(await load(state.coin, state.interval, last * 1000, now()));
-      if (state.dead || run !== state.run) return;
-      const tail = tailRows(state.rows, got);
-      if (!tail.length) return;
-      const s = toSeries(tail, state.colors);
-      s.candles.forEach((c) => state.candles.update(c));
-      s.volume.forEach((v) => state.volume.update(v));
-      state.rows = mergeRows(state.rows, tail);
-      for (const r of tail) state.byTime.set(r.time, r);
-      format();
-    } catch {
-      // The candles on the screen stay as they are; the next reading tries again.
-    }
+    // One reading of the tail at a time: a slow answer is not overtaken by a newer one and then written over it.
+    await state.tail.run(async () => {
+      const run = state.run;
+      const last = state.rows[state.rows.length - 1].time;
+      try {
+        const got = candleRows(await load(state.coin, state.interval, last * 1000, now()));
+        if (state.dead || run !== state.run) return;
+        const tail = tailRows(state.rows, got);
+        if (!tail.length) return;
+        const s = toSeries(tail, state.colors);
+        s.candles.forEach((c) => state.candles.update(c));
+        s.volume.forEach((v) => state.volume.update(v));
+        state.rows = mergeRows(state.rows, tail);
+        for (const r of tail) state.byTime.set(r.time, r);
+        format();
+      } catch {
+        // The candles on the screen stay as they are; the next reading tries again.
+      }
+    });
   }
   state.timer = setInterval(poll, POLL_MS);
 

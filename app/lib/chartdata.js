@@ -115,3 +115,30 @@ export function candleText(c) {
   const t = new Date(c.time * 1000).toISOString().replace("T", " ").slice(0, 16);
   return `${t} UTC · O ${c.open} H ${c.high} L ${c.low} C ${c.close}`;
 }
+
+/** A call made once however many ask while it is on its way: everyone gets the same promise. A failure is not kept, so
+ *  the next asking tries again. */
+export function once(fn) {
+  let asked = null;
+  return () => {
+    if (!asked) {
+      asked = Promise.resolve().then(fn).catch((err) => {
+        asked = null;
+        throw err;
+      });
+    }
+    return asked;
+  };
+}
+
+/**
+ * What the timer does at each tick, given what the chart has and what is out: "first" (nothing drawn and nothing on its
+ * way: read the first stretch), "tail" (read what came after the last candle), or "skip" (a reading of the first
+ * stretch, of an older one or of the tail is still out, or the page is hidden). A reading that is out is never
+ * restarted: its answer is the one to draw.
+ */
+export function pollStep({ rows, loading, older, polling, hidden }) {
+  if (hidden || loading || older) return "skip";
+  if (!rows) return "first";
+  return polling ? "skip" : "tail";
+}
