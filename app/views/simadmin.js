@@ -2,7 +2,8 @@
 // A page of its own at #/manage/<pool> with a header of its own (mockup 02): no link to it from
 // the site's navigation, and none from the user panel. The wallet gives the account and the pool's `creator()` the
 // role; only the creator sees the money and the switches. The contract holds the right either way (`setLine` is
-// `onlyCreator`): this page only shows it. Codes, withdrawing and finishing are the panel's next sections.
+// `onlyCreator`): this page only shows it. Codes & shares and Withdraw & finish are the sections of simowner-codes.js
+// and simowner-withdraw.js.
 import * as chain from "../lib/chain.js";
 import { esc, render, $, friendly, refusalName } from "../lib/ui.js";
 import { SIM_POOL_ABI } from "../lib/simpool.js";
@@ -10,7 +11,10 @@ import {
   SIM_LINES_ABI, SIM_OWNER_ABI, menuRows, roleOf, ownerMoney, moneyHtml, switchesHtml, poolRefusal,
 } from "../lib/simlines.js";
 import { manageHeaderHtml, footerHtml, notOwnerHtml, noWalletHtml } from "../lib/simpanel.js";
+import { ownerPairHtml } from "../lib/simowner.js";
 import { accountLabel, wireShell } from "./simshell.js";
+import { readCodes, codesSection, wireCodes } from "./simowner-codes.js";
+import { readWithdraw, withdrawSection, wireWithdraw } from "./simowner-withdraw.js";
 
 const { ethers } = window;
 const ABI = [...SIM_POOL_ABI, ...SIM_LINES_ABI, ...SIM_OWNER_ABI];
@@ -39,7 +43,7 @@ export async function simAdminView(address, page) {
     wireShell(page);
     return;
   }
-  const data = await readOwnerPool(at);
+  const [data, codes, cash] = await Promise.all([readOwnerPool(at), readCodes(at), readWithdraw(at)]);
   render(page, `<div class="sp sp-manage">${header}
     <section class="sp-hero sp-hd">
       <div class="sp-kick">Owner panel · ${esc(name)} · Hyperliquid testnet</div>
@@ -48,9 +52,12 @@ export async function simAdminView(address, page) {
     </section>
     ${moneyHtml(data.money)}
     <div id="sim-switches">${switchesHtml(data.rows, data.money.free)}</div>
+    ${ownerPairHtml(codesSection(codes), withdrawSection(cash))}
     <p id="sim-status" class="sp-status" role="status"></p>
     ${footerHtml()}</div>`);
   wireShell(page);
+  wireCodes(page, { at }, codes);
+  wireWithdraw(page, { at, refresh: () => simAdminView(at, page) }, cash);
 
   const status = $("#sim-status", page);
   $("#sim-switches", page).addEventListener("click", async (e) => {

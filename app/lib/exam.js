@@ -218,6 +218,21 @@ export function sizeUnits(text, szDecimals) {
   return v;
 }
 
+/**
+ * The size, in the asset's size units, that `usdc` (USDC in the contract's units, 1e6 to the dollar) buys at `px` (the
+ * price in the contract's price units): rounded DOWN to the asset's step, so the order never costs more than the amount
+ * typed. The contract counts a notional as size * price in USDC units, so this is the division of the two, and it holds
+ * for an asset of any number of size decimals. An amount that is not above zero, a price that was not read (null,
+ * undefined or zero) and an amount below one step are refused in words, not turned into a size of zero.
+ */
+export function sizeFromUsdc(usdc, px) {
+  if (px === null || px === undefined || BigInt(px) <= 0n) throw new Error("The price was not read, so an amount in USDC cannot be turned into a size.");
+  if (usdc === null || usdc === undefined || BigInt(usdc) <= 0n) throw new Error("The amount must be above zero.");
+  const size = BigInt(usdc) / BigInt(px);
+  if (size === 0n) throw new Error("The amount is less than one step of this asset's size: one step costs " + "$" + usdText(BigInt(px)) + " at this price.");
+  return size;
+}
+
 /** A price as Hyperliquid writes it ("69422.0") in the contract's price units: `6 - szDecimals` decimals. */
 export function pxUnits(text, szDecimals) {
   return decimalUnits(text, 6 - szDecimalsOf(szDecimals), "the price");

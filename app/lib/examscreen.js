@@ -1,11 +1,11 @@
 // What the paper-exam trading page (app/views/exam.js) works out that is not drawing: the reads it hands to
 // app/lib/exam.js, the words beside each number, the form's input turned into an order, the scale of the account, the
-// journal's rows and the chart's geometry. No browser globals and no reads here, so node's test runner loads it
+// journal's rows and the book's rows. No browser globals and no reads here, so node's test runner loads it
 // (app/tests/examscreen.test.mjs). Every sum of money is app/lib/exam.js's: this file adds nothing up, it only says
 // what that file answered, and where it places a number on a bar it works from the numbers that file gave.
 import {
   ESTIMATE_NOTE, WHAT_THIS_IS, sizeUnits, pxUnits, sizeText, pxText, usdText, orderPreview, triggerSetPreview, refusalText,
-  bookSides,
+  bookSides, sizeFromUsdc, fillPrice,
 } from "./exam.js";
 
 export { WHAT_THIS_IS, ESTIMATE_NOTE };
@@ -15,6 +15,7 @@ export const SCREEN_TEXT = Object.freeze({
   strip: "Exam",
   testnetPlaque: "Testnet. Mock USDC. Unaudited.",
   testnetTag: "Testnet app",
+  usdcNoPrice: "The price of this asset was not read, so an amount in USDC is off.",
   fillsLater: "Orders fill a few seconds after you send them, at the price of that moment.",
   exit: "To exit a position, send an order yourself, or set a stop or a take on it.",
   gas: "Each order is a transaction: a signature and gas. Or name a second key and trade without prompts.",
@@ -32,23 +33,8 @@ export const SCREEN_TEXT = Object.freeze({
   lapsed: "Not filled. The order lapsed at no cost — place it again.",
 });
 
-/** The candle intervals the chart offers, with the length of one candle in milliseconds. */
-export const INTERVALS = Object.freeze([
-  { key: "1m", ms: 60_000 },
-  { key: "15m", ms: 15 * 60_000 },
-  { key: "1h", ms: 60 * 60_000 },
-  { key: "1d", ms: 24 * 60 * 60_000 },
-]);
-export const CANDLES_SHOWN = 120;
 /** The depth of the book the page draws, a side. */
 export const BOOK_DEPTH = 10;
-
-/** The `startTime` and `endTime` (ms) of a candle request for `interval`: the last `count` candles up to `nowMs`. */
-export function candleWindow(interval, nowMs, count = CANDLES_SHOWN) {
-  const step = INTERVALS.find((i) => i.key === interval);
-  if (!step) throw new Error(`${interval} is not an interval of the chart`);
-  return { startTime: nowMs - step.ms * count, endTime: nowMs };
-}
 
 /** USDC units as a dollar amount for the screen: the library's text (`usdText`) with thousands grouped and at least two
  *  decimals. Nothing is rounded: more decimals than two stay. */
@@ -329,55 +315,6 @@ export function bookView(raw, depth = BOOK_DEPTH) {
   };
 }
 
-// ── the chart ───────────────────────────────────────────────────
-
-/** Round tick prices between `min` and `max`, about `count` of them. */
-export function niceTicks(min, max, count = 5) {
-  if (!(max > min)) return [min];
-  const rough = (max - min) / count;
-  const mag = 10 ** Math.floor(Math.log10(rough));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= rough) ?? 10 * mag;
-  const ticks = [];
-  for (let t = Math.ceil(min / step) * step; t <= max + step * 1e-9; t += step) ticks.push(Number(t.toPrecision(12)));
-  return ticks;
-}
-
-/**
- * Where each candle goes on a canvas of `width` by `height` pixels: the price range with a little air, a function
- * from a price to a y and from an index to an x, and the width of a body. The right edge keeps `axis` pixels for
- * the prices written there.
- */
-export function chartScale(rows, { width, height, axis = 64, top = 8, bottom = 22 }) {
-  if (!rows.length) return null;
-  let min = Infinity;
-  let max = -Infinity;
-  for (const c of rows) {
-    if (c.low < min) min = c.low;
-    if (c.high > max) max = c.high;
-  }
-  const air = (max - min || max * 0.01) * 0.06;
-  min -= air;
-  max += air;
-  const plotW = Math.max(1, width - axis);
-  const plotH = Math.max(1, height - top - bottom);
-  const slot = plotW / rows.length;
-  return {
-    min, max, plotW, plotH, slot, top, axis,
-    body: Math.max(1, Math.min(14, slot * 0.7)),
-    x: (i) => slot * (i + 0.5),
-    y: (price) => top + ((max - price) / (max - min)) * plotH,
-    index: (x) => Math.max(0, Math.min(rows.length - 1, Math.floor(x / slot))),
-    ticks: niceTicks(min, max, Math.max(2, Math.floor(plotH / 48))),
-  };
-}
-
-/** The candle under the pointer, in words: its time (UTC) and open, high, low, close. */
-export function candleText(c) {
-  if (!c) return "";
-  const t = new Date(c.time * 1000).toISOString().replace("T", " ").slice(0, 16);
-  return `${t} UTC · O ${c.open} H ${c.high} L ${c.low} C ${c.close}`;
-}
-
 // ── the journal ─────────────────────────────────────────────────
 
 const SOURCE = ["oracle", "book", "oracle (book was off)"];
@@ -470,6 +407,10 @@ export function journalPlan({ latest, loaded, direction }) {
   return loaded.from <= 0 ? null : { from: Math.max(0, loaded.from - JOURNAL_BLOCKS), to: loaded.from - 1 };
 }
 
+/** Whether there is anything before the blocks loaded: false once the range starts at block 0, and the control that loads
+ *  earlier events is then off. Nothing loaded yet: the first load is open. */
+export const canLoadEarlier = (loaded) => !loaded || loaded.from > 0;
+
 /** What the journal says of itself: only the blocks that were read. */
 export function journalRange(loaded) {
   return loaded ? `Events from block ${loaded.from} to block ${loaded.top}.` : "";
@@ -498,3 +439,100 @@ export function sendFailure(err, refusalOfData) {
 }
 
 export { refusalText };
+
+// ── the market list and the unit of the size ───────────────────────────────────────────────────────────
+
+/** The asset the page's address names (`?asset=<number>`), when the exam trades it; else the exam's first. */
+export function assetFromQuery(query, assets) {
+  const wanted = new URLSearchParams(String(query ?? "")).get("asset");
+  const n = wanted !== null && /^\d+$/.test(wanted) ? Number(wanted) : null;
+  return n !== null && assets.includes(n) ? n : assets[0];
+}
+
+/** The address's query with `asset` set, whatever else it carries kept: what a link to the same market holds. */
+export function queryWithAsset(query, asset) {
+  const q = new URLSearchParams(String(query ?? ""));
+  q.set("asset", String(asset));
+  return q.toString();
+}
+
+/**
+ * The rows of the market list: only the exam's own assets (`assets`, from its `rules()`), each with its name, the
+ * oracle price, the leverage cap of that asset (`rules.assetLeverageX100`, else the account's) and whether a position
+ * is open on it; `query` keeps the names that contain it, in any case. `perAsset` is what the page read of each asset.
+ */
+export function marketRows({ assets, perps, perAsset, rules, query = "" }) {
+  const q = String(query).trim().toLowerCase();
+  return assets.map((asset, i) => {
+    const perp = perps.get(asset);
+    const read = perAsset.find((a) => a.asset === asset);
+    const cap = rules?.assetLeverageX100?.[i] ?? rules?.maxLeverageX100;
+    return {
+      asset, name: perp?.name ?? `#${asset}`,
+      price: read && read.oracle != null && isKnown(perp) ? pxText(read.oracle, perp.szDecimals) : DASH,
+      leverage: cap === undefined || cap === null ? DASH : `${Number(cap) / 100}×`,
+      held: Boolean(read) && BigInt(read.size ?? 0) !== 0n,
+    };
+  }).filter((r) => q === "" || r.name.toLowerCase().includes(q));
+}
+
+/** The highlighted row after a key in the list of `count` rows: the arrows step (and wrap), Home and End jump; -1 for none. */
+export function stepIndex(count, index, key) {
+  if (count <= 0) return -1;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  if (key === "ArrowDown") return index < 0 ? 0 : (index + 1) % count;
+  if (key === "ArrowUp") return index < 0 ? count - 1 : (index - 1 + count) % count;
+  return Math.min(Math.max(index, -1), count - 1);
+}
+
+/** The units a size can be typed in: the asset's own, or USDC. What the browser remembers is one of these two words. */
+export const SIZE_UNITS = Object.freeze(["asset", "usdc"]);
+export const sizeUnitOf = (stored) => (SIZE_UNITS.includes(stored) ? stored : "asset");
+
+/** An amount of USDC typed ("1035.03") in the contract's units, exactly; more than six decimals are refused. */
+export function usdcUnits(text) {
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(String(text).trim());
+  if (!m) throw new Error(`The amount is not a plain positive number: ${text}`);
+  const frac = m[2] ?? "";
+  if (frac.length > 6 && /[1-9]/.test(frac.slice(6))) throw new Error("An amount has at most 6 decimals.");
+  return BigInt(m[1]) * 1_000_000n + BigInt((frac.slice(0, 6) || "0").padEnd(6, "0"));
+}
+
+const fixedSize = (size, perp) => {
+  const [whole, frac = ""] = sizeText(size, perp.szDecimals).split(".");
+  return perp.szDecimals > 0 ? `${whole}.${frac.padEnd(perp.szDecimals, "0")}` : whole;
+};
+
+/**
+ * The size field as the trader typed it, in the asset's units or in USDC, as the asset-unit text the order takes.
+ * In USDC the size is the amount divided at the price the estimate uses for this side (`fillPrice`, the same as "Est.
+ * fill price") and rounded down (`sizeFromUsdc`); the field is off, with the reason, while that price is not read. In the
+ * asset's units the size is as typed and the amount is shown under it. `conv` is the other number, always with a "≈".
+ * Nothing is worked out here but what the library works out.
+ */
+export function sizeEntry(reads, { perp, isBuy, unit, input, prices }) {
+  const text = String(input ?? "").trim();
+  const have = prices.oracle !== null && prices.oracle !== undefined && BigInt(prices.oracle) > 0n;
+  const fill = have ? fillPrice({ isBuy, oracle: prices.oracle, bid: prices.bid, ask: prices.ask, fromBook: Boolean(reads.fromBook), maxWorseBps: reads.maxWorseBps }) : null;
+  const none = { sizeInput: "", error: null, disabled: null, conv: "" };
+  if (!isKnown(perp)) return none;
+  if (unit === "usdc") {
+    if (!fill) return { ...none, disabled: SCREEN_TEXT.usdcNoPrice };
+    if (text === "") return none;
+    try {
+      const size = sizeFromUsdc(usdcUnits(text), fill.px);
+      return { ...none, sizeInput: sizeText(size, perp.szDecimals), conv: `≈ ${fixedSize(size, perp)} ${perp.name}` };
+    } catch (err) {
+      return { ...none, error: err.message };
+    }
+  }
+  if (text === "") return { ...none, sizeInput: "" };
+  let size = null;
+  try {
+    size = sizeUnits(text, perp.szDecimals);
+  } catch {
+    size = null;
+  }
+  return { ...none, sizeInput: text, conv: size !== null && fill ? `≈ ${usdShown(size * fill.px)}` : "" };
+}

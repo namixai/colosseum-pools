@@ -8,9 +8,10 @@ import {
   WHAT_THIS_IS, ESTIMATE_NOTE, FROM_START, TRAILING_TO_START, REFUSALS, examAccount, refusalText, dataSource,
 } from "../lib/exam.js";
 import {
-  SCREEN_TEXT, INTERVALS, candleWindow, readsFrom, accountFigures, positionRow, triggerText, pendingText, barShare,
-  accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, niceTicks, chartScale, candleText,
-  journalRows, timeLeft, sendFailure, leverageText, usdShown, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange,
+  SCREEN_TEXT, readsFrom, accountFigures, positionRow, triggerText, pendingText, barShare,
+  accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView,
+  journalRows, timeLeft, sendFailure, leverageText, usdShown, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange, canLoadEarlier,
+  assetFromQuery, queryWithAsset, marketRows, stepIndex, sizeUnitOf, usdcUnits, sizeEntry,
 } from "../lib/examscreen.js";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -84,12 +85,6 @@ test("the figures are the library's, said with its formatters; the loss line is 
   assert.equal(days.days, "0 of 3");
 });
 
-test("candles are asked for the last stretch of the chosen interval, and only for an interval the chart has", () => {
-  assert.deepEqual(INTERVALS.map((i) => i.key), ["1m", "15m", "1h", "1d"]);
-  assert.deepEqual(candleWindow("15m", 1_000_000_000_000, 100), { startTime: 1_000_000_000_000 - 100 * 900_000, endTime: 1_000_000_000_000 });
-  assert.throws(() => candleWindow("5m", 0), /not an interval/);
-});
-
 // ── words ──────────────────────────────────────────────────────────
 
 test("a position's row names the asset, side and size, and says its stop and take as the brief does", () => {
@@ -148,8 +143,8 @@ test("a time left, and a refusal of a sent call in the contract's words", () => 
 // ── the order form ─────────────────────────────────────────────────
 
 const PRICES = { oracle: PX, bid: 599_900n, ask: 600_100n };
-const BTC_PERP = PERPS.get(BTC);
-const form = (r, sizeInput, extra = {}) => orderForm(r, { asset: BTC, perp: BTC_PERP, isBuy: true, sizeInput, prices: PRICES, ...AT, ...extra });
+const BTCP = PERPS.get(BTC);
+const form = (r, sizeInput, extra = {}) => orderForm(r, { asset: BTC, perp: BTCP, isBuy: true, sizeInput, prices: PRICES, ...AT, ...extra });
 
 test("a size is typed as a number and turned into units by the library; what it refuses is said in its words", () => {
   assert.deepEqual(form(reads(), ""), { size: null, error: null, preview: null });
@@ -162,7 +157,7 @@ test("a size is typed as a number and turned into units by the library; what it 
 
 test("the estimate shows the price and its source, the cost, the position and the leverage after, and the library's note", () => {
   const f = form(reads(), "0.1");
-  const v = previewView(f.preview, BTC_PERP);
+  const v = previewView(f.preview, BTCP);
   assert.equal(v.blocked, false);
   assert.deepEqual(v.rows, [
     ["Est. fill price", "60010 (book)"], ["Cost", "$2.70045"], ["Position after", "0.1 BTC"], ["Leverage after", "0.60×"]]);
@@ -173,15 +168,15 @@ test("the estimate shows the price and its source, the cost, the position and th
 
 test("an order the contract would refuse is blocked, in the contract's words", () => {
   const waiting = reads({ pending: Object.assign([BTC, true, 1_000n, 1_000n], { asset: BTC, isBuy: true, sz: 1_000n, placedBlock: 1_000n }) });
-  const v = previewView(form(waiting, "0.1").preview, BTC_PERP);
+  const v = previewView(form(waiting, "0.1").preview, BTCP);
   assert.equal(v.blocked, true);
   assert.equal(v.warnings[0].text, refusalText("OrderPending"));
-  assert.equal(previewView(form(reads({ status: 3n }), "0.1").preview, BTC_PERP).warnings[0].text, refusalText("BadStatus"));
-  assert.equal(previewView(null, BTC_PERP), null);
+  assert.equal(previewView(form(reads({ status: 3n }), "0.1").preview, BTCP).warnings[0].text, refusalText("BadStatus"));
+  assert.equal(previewView(null, BTCP), null);
 });
 
 test("an order over the leverage is accepted but not filled, and one that ends under a loss line says so, red", () => {
-  const over = previewView(form(reads(), "2").preview, BTC_PERP);
+  const over = previewView(form(reads(), "2").preview, BTCP);
   assert.equal(over.blocked, false);
   assert.deepEqual(over.warnings.map((w) => [w.tone, w.text]).slice(0, 1), [["bad", refusalText("OverLeverage")]]);
   // BTC is held at a price where the account already stands under its daily line (9 700): any order ends there
@@ -193,23 +188,23 @@ test("an order over the leverage is accepted but not filled, and one that ends u
 test("an order that closes a position says it takes its stop and take off", () => {
   const stop = { px: 550_000n, sz: 0n, armedAt: 900, seenAt: 0 };
   const r = readsFrom(got({ cash: 4_000n * USD }), long({ stop }));
-  const v = previewView(orderForm(r, { asset: BTC, perp: BTC_PERP, isBuy: false, sizeInput: "0.1", prices: PRICES, ...AT }).preview, BTC_PERP);
+  const v = previewView(orderForm(r, { asset: BTC, perp: BTCP, isBuy: false, sizeInput: "0.1", prices: PRICES, ...AT }).preview, BTCP);
   assert.match(v.warnings.at(-1).text, /closes or turns a position round takes its stop and take off\. This one takes off the stop\./);
 });
 
 test("a stop is typed as a price and worked out by the library; one past the oracle price says it closes at once", () => {
   const stop = { px: 550_000n, sz: 0n, armedAt: 900, seenAt: 0 };
   const r = readsFrom(got({ cash: 4_000n * USD }), long({ stop }));
-  const t = triggerForm(r, { asset: BTC, perp: BTC_PERP, isTake: false, pxInput: "59000", sizeInput: "", oracle: PX, ...AT });
+  const t = triggerForm(r, { asset: BTC, perp: BTCP, isTake: false, pxInput: "59000", sizeInput: "", oracle: PX, ...AT });
   assert.equal(t.px, 590_000n);
-  const v = triggerPreviewView(t.preview, BTC_PERP);
+  const v = triggerPreviewView(t.preview, BTCP);
   assert.deepEqual(v.lines.map((l) => l.text), ["Stop 59000 · closes all · acts from block 1001", "Replaces the stop at 55000."]);
-  const past = triggerPreviewView(triggerForm(r, { asset: BTC, perp: BTC_PERP, isTake: false, pxInput: "61000", sizeInput: "0.05", oracle: PX, ...AT }).preview, BTC_PERP);
+  const past = triggerPreviewView(triggerForm(r, { asset: BTC, perp: BTCP, isTake: false, pxInput: "61000", sizeInput: "0.05", oracle: PX, ...AT }).preview, BTCP);
   assert.equal(past.lines.at(-1).text, SCREEN_TEXT.triggerReached);
   assert.equal(past.lines[0].text, "Stop 61000 · closes 0.05 · acts from block 1001");
-  assert.match(triggerForm(r, { asset: BTC, perp: BTC_PERP, isTake: false, pxInput: "61000.55", sizeInput: "", oracle: PX, ...AT }).error, /at most 1 decimals/);
-  assert.equal(triggerForm(r, { asset: BTC, perp: BTC_PERP, isTake: false, pxInput: "", sizeInput: "", oracle: PX, ...AT }).preview, null);
-  const none = triggerPreviewView(triggerForm(reads(), { asset: BTC, perp: BTC_PERP, isTake: true, pxInput: "70000", sizeInput: "", oracle: PX, ...AT }).preview, BTC_PERP);
+  assert.match(triggerForm(r, { asset: BTC, perp: BTCP, isTake: false, pxInput: "61000.55", sizeInput: "", oracle: PX, ...AT }).error, /at most 1 decimals/);
+  assert.equal(triggerForm(r, { asset: BTC, perp: BTCP, isTake: false, pxInput: "", sizeInput: "", oracle: PX, ...AT }).preview, null);
+  const none = triggerPreviewView(triggerForm(reads(), { asset: BTC, perp: BTCP, isTake: true, pxInput: "70000", sizeInput: "", oracle: PX, ...AT }).preview, BTCP);
   assert.deepEqual([none.blocked, none.lines[0].text], [true, refusalText("NoPosition")]);
 });
 
@@ -229,21 +224,6 @@ test("the book shows the asks above the bids, ten a side at most, with each leve
   assert.equal(b.spread, "99.5 bps");
   assert.equal(bookView({ levels: [[], []] }).empty, true);
   assert.equal(bookView({ error: "x" }).empty, true, "an error answer is no book");
-});
-
-test("the chart's scale puts the highest price at the top and every candle inside its slot", () => {
-  const rows = [{ time: 1, open: 10, high: 12, low: 9, close: 11 }, { time: 2, open: 11, high: 15, low: 10, close: 14 }];
-  const s = chartScale(rows, { width: 264, height: 230, axis: 64, top: 8, bottom: 22 });
-  assert.equal(s.plotW, 200);
-  assert.equal(s.slot, 100);
-  assert.ok(s.y(15) < s.y(9) && s.y(15) >= 8 && s.y(9) <= 8 + s.plotH);
-  assert.deepEqual([s.x(0), s.x(1)], [50, 150]);
-  assert.deepEqual([s.index(10), s.index(120), s.index(999)], [0, 1, 1]);
-  assert.ok(s.min < 9 && s.max > 15, "air above and below");
-  assert.equal(chartScale([], { width: 100, height: 100 }), null);
-  assert.deepEqual(niceTicks(0, 10, 5), [0, 2, 4, 6, 8, 10]);
-  assert.deepEqual(niceTicks(5, 5), [5]);
-  assert.equal(candleText(rows[0]), "1970-01-01 00:00 UTC · O 10 H 12 L 9 C 11");
 });
 
 test("the journal reads the events in order, and a stop that was carried out is one row, said as a stop filled", () => {
@@ -309,7 +289,8 @@ test("the page sends nothing to an exchange, shows no exchange's address and doe
 
 test("the page is routed at #/exam/<address>, and the other trading page is left as it is", () => {
   const app = read("../app.js");
-  assert.match(app, /\^#\\\/exam\(\?:\\\/\(0x\[0-9a-fA-F\]\{40\}\)\)\?\$/);
+  assert.match(app, /\^#\\\/exam\(\?:\\\/\(0x\[0-9a-fA-F\]\{40\}\)\)\?\(\?:\\\?\(\.\*\)\)\?\$\//);
+  assert.match(app, /examView\(m\[1\], page, m\[2\]\)/, "the query reaches the page: it names the market");
   assert.match(app, /import \{ examView \} from "\.\/views\/exam\.js"/);
   assert.doesNotMatch(read("../views/trading.js"), /examscreen|PAPER_EXAM/);
 });
@@ -395,7 +376,7 @@ test("an asset the exchange's list does not name is unknown: no size or price is
 });
 
 test("an unknown asset's position, order and journal rows show no size or price, only what is in the contract's own units", () => {
-  const perps = new Map([[BTC, BTC_PERP], [ETH, markUnknown({ index: ETH, name: "#4", szDecimals: 0 }, ETH)]]);
+  const perps = new Map([[BTC, BTCP], [ETH, markUnknown({ index: ETH, name: "#4", szDecimals: 0 }, ETH)]]);
   const stop = { px: 30_000n, sz: 0n, armedAt: 900, seenAt: 0 };
   const a = examAccount(reads({ cash: 9_000n * USD }, () => [{ asset: BTC, size: 0n, oracle: PX }, { asset: ETH, size: 10_000n, oracle: 30_000n, stop }, { asset: SOL, size: 0n, oracle: 1_500n }]), AT);
   const row = positionRow(a.positions[0], perps);
@@ -449,4 +430,155 @@ test("the journal's range joins what is loaded: the newest blocks, then older, t
   const view = read("../views/exam.js");
   assert.match(view, /id="ex-journal-new"/);
   assert.doesNotMatch(view, /to \$\{latest\}/);
+});
+
+test("the journal's button that loads earlier events is off once the range starts at block 0, and open before that", () => {
+  assert.equal(canLoadEarlier(null), true, "nothing loaded: the first load is open");
+  assert.equal(canLoadEarlier({ from: 1, top: 500 }), true);
+  assert.equal(canLoadEarlier({ from: 0, top: 500 }), false);
+  // a plan from block 0 has nothing earlier, and the page switches the button off, not only says so
+  assert.equal(journalPlan({ latest: 500, loaded: { from: 0, top: 500 }, direction: "earlier" }), null);
+  const view = read("../views/exam.js");
+  assert.match(view, /buttons\[0\]\.disabled = !canLoadEarlier\(st\.loaded\);/);
+  assert.ok(view.indexOf("buttons.forEach((x) => { x.disabled = false; });") < view.indexOf("buttons[0].disabled = !canLoadEarlier(st.loaded);"), "the switch-off comes after the buttons are opened again");
+});
+
+test("the trading screen stands in the user panel's header for an exam of a pool of exams, and in the site's for any other", () => {
+  const view = read("../views/exam.js");
+  assert.match(view, /userHeaderHtml\(\{ address: panelPool, account: accountLabel\(\), current: "trade"/);
+  assert.match(view, /if \(!panelPool\) leavePanel\(page\);/);
+  assert.match(view, /const leavePanel = \(page\) => \{ if \(page\.isConnected\) delete document\.body\.dataset\.panel; \};/, "a left-behind view does not clear the marker of the page now on screen");
+  assert.ok(view.indexOf("if (!page.isConnected) return;") < view.indexOf("if (!panelPool) leavePanel(page);"));
+  assert.match(read("../app.js"), /function failed\(page, err\) \{[^}]*delete document\.body\.dataset\.panel;/, "a page that did not load gets the site's navigation back");
+  assert.match(view, /accountOf\(address\)/);
+  // the panel's header and footer carry the testnet tag and badge, so the screen's own are drawn only outside the panel
+  assert.match(view, /marks && !st\.panelPool \? `<span class="ex-tag">/);
+  assert.match(view, /marks && !st\.panelPool \? `<div class="ex-foot">/);
+});
+
+// ── the market list ────────────────────────────────────────────────
+
+const RULES10 = { maxLeverageX100: 1000n, assetLeverageX100: [1000n, 1000n, 500n] };
+const perAsset = (held = []) => [BTC, ETH, SOL].map((asset) => ({ asset, size: held.includes(asset) ? 5_000n : 0n,
+  oracle: { [BTC]: 642_500n, [ETH]: 312_050n, [SOL]: 1_482_500n }[asset] }));
+
+test("the market list holds the exam's assets only, each with its price, its own leverage cap and a mark where a position is open", () => {
+  const rows = marketRows({ assets: [BTC, ETH, SOL], perps: PERPS, perAsset: perAsset([ETH]), rules: RULES10 });
+  assert.deepEqual(rows.map((r) => [r.name, r.price, r.leverage, r.held]), [
+    ["BTC", "64250", "10×", false], ["ETH", "3120.5", "10×", true], ["SOL", "148.25", "5×", false],
+  ]);
+  // an asset the list of perps does not name is still a row, with no price made up
+  const odd = marketRows({ assets: [9], perps: PERPS, perAsset: [{ asset: 9, size: 0n, oracle: 5n }], rules: { maxLeverageX100: 2000n, assetLeverageX100: [] } });
+  assert.deepEqual([odd[0].name, odd[0].price, odd[0].leverage], ["#9", "—", "20×"]);
+  // a price not read is a dash
+  assert.equal(marketRows({ assets: [BTC], perps: PERPS, perAsset: [{ asset: BTC, size: 0n, oracle: null }], rules: RULES10 })[0].price, "—");
+});
+
+test("the search keeps the names that contain it, in any case, and a hundred assets are a list like three", () => {
+  const rows = marketRows({ assets: [BTC, ETH, SOL], perps: PERPS, perAsset: perAsset(), rules: RULES10, query: "  e " });
+  assert.deepEqual(rows.map((r) => r.name), ["ETH"]);
+  assert.deepEqual(marketRows({ assets: [BTC, ETH, SOL], perps: PERPS, perAsset: perAsset(), rules: RULES10, query: "so" }).map((r) => r.name), ["SOL"]);
+  assert.deepEqual(marketRows({ assets: [BTC], perps: PERPS, perAsset: perAsset(), rules: RULES10, query: "zzz" }), []);
+  const many = Array.from({ length: 100 }, (_, i) => 1000 + i);
+  const perps = new Map(many.map((a) => [a, { index: a, name: `A${a}`, szDecimals: 2 }]));
+  const rules = { maxLeverageX100: 1000n, assetLeverageX100: many.map(() => 300n) };
+  const all = marketRows({ assets: many, perps, perAsset: many.map((asset) => ({ asset, size: 0n, oracle: 100_000n })), rules });
+  assert.equal(all.length, 100);
+  assert.equal(marketRows({ assets: many, perps, perAsset: [], rules, query: "A1055" }).length, 1);
+});
+
+test("the arrows step through the list and wrap, Home and End jump, an empty list highlights nothing", () => {
+  assert.equal(stepIndex(3, -1, "ArrowDown"), 0);
+  assert.equal(stepIndex(3, 2, "ArrowDown"), 0);
+  assert.equal(stepIndex(3, 0, "ArrowUp"), 2);
+  assert.equal(stepIndex(3, -1, "ArrowUp"), 2);
+  assert.equal(stepIndex(100, 5, "End"), 99);
+  assert.equal(stepIndex(100, 5, "Home"), 0);
+  assert.equal(stepIndex(0, 0, "ArrowDown"), -1);
+  assert.equal(stepIndex(3, 7, "x"), 2, "an index past the end is brought back");
+});
+
+test("the address names the market: a link opens the same one, and an asset the exam does not trade is not taken", () => {
+  assert.equal(assetFromQuery("asset=4", [BTC, ETH, SOL]), ETH);
+  assert.equal(assetFromQuery("code=x&asset=5", [BTC, ETH, SOL]), SOL);
+  for (const q of ["asset=9", "asset=", "asset=-1", "asset=4x", "asset=0x4", "", undefined]) assert.equal(assetFromQuery(q, [BTC, ETH, SOL]), BTC, String(q));
+  assert.equal(queryWithAsset("", ETH), "asset=4");
+  assert.equal(queryWithAsset("asset=3&x=1", SOL), "asset=5&x=1");
+  const view = read("../views/exam.js");
+  assert.match(view, /history\.replaceState\(history\.state, "", `\$\{base\}\?\$\{queryWithAsset\(st\.query, st\.asset\)\}`\)/, "the address is rewritten without an entry of history");
+  assert.ok(!/ex-assets|id="ex-asset"/.test(view.replace(/\/\/.*$/gm, "")), "no tabs of assets in the order column, no second selector");
+  assert.match(view, /role="listbox"/);
+  assert.match(view, /e\.key === "Escape"/);
+  assert.match(view, /e\.key === "Enter"/);
+});
+
+// ── the unit of the size ───────────────────────────────────────────
+
+const READS = { fromBook: false, maxWorseBps: 150 };
+const prices = { oracle: 642_500n, bid: null, ask: null };
+
+test("the unit is the asset's or USDC, and what the browser holds is one of the two words", () => {
+  assert.equal(sizeUnitOf("usdc"), "usdc");
+  assert.equal(sizeUnitOf("asset"), "asset");
+  for (const v of [null, undefined, "", "USD", "<b>"]) assert.equal(sizeUnitOf(v), "asset");
+});
+
+test("an amount of USDC is read exactly, to six decimals", () => {
+  assert.equal(usdcUnits("1035.03"), 1_035_030_000n);
+  assert.equal(usdcUnits("0.000001"), 1n);
+  assert.equal(usdcUnits("100"), 100_000_000n);
+  assert.throws(() => usdcUnits("0.0000011"), /at most 6 decimals/);
+  for (const bad of ["", "-5", "1e3", "1,000", "abc"]) assert.throws(() => usdcUnits(bad), /plain positive number/);
+});
+
+test("typed in USDC, the size is the amount at the estimate's price rounded down, and both numbers are shown", () => {
+  // $1,035.03 at 64 250.0 is 0.016108... BTC: 0.01610, never 0.01611
+  const e = sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "usdc", input: "1035.03", prices });
+  assert.equal(e.sizeInput, "0.0161");
+  assert.equal(e.conv, "≈ 0.01610 BTC", "the size at the asset's own decimals");
+  assert.equal(e.error, null);
+  assert.equal(e.disabled, null);
+  // on the book's side: a buy at a dearer ask is a smaller size for the same amount
+  const book = { fromBook: true, maxWorseBps: 150 };
+  const dear = sizeEntry(book, { perp: BTCP, isBuy: true, unit: "usdc", input: "1035.03", prices: { oracle: 642_500n, bid: 642_000n, ask: 645_000n } });
+  assert.equal(dear.sizeInput, "0.01604");
+  const sell = sizeEntry(book, { perp: BTCP, isBuy: false, unit: "usdc", input: "1035.03", prices: { oracle: 642_500n, bid: 642_000n, ask: 645_000n } });
+  assert.equal(sell.sizeInput, "0.01612");
+});
+
+test("typed in the asset's units, the amount is shown under the field at the same price", () => {
+  const e = sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "asset", input: "0.0161", prices });
+  assert.equal(e.sizeInput, "0.0161");
+  assert.equal(e.conv, "≈ $1,034.425");
+  assert.equal(sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "asset", input: "", prices }).conv, "");
+  // a size the asset cannot carry says nothing of its amount: the order form refuses it in the library's words
+  assert.equal(sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "asset", input: "0.000001", prices }).conv, "");
+  assert.equal(sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "asset", input: "0.0161", prices: { oracle: null } }).conv, "");
+});
+
+test("in USDC the field is off, with the reason, while the price is not read; an asset with no data is off as before", () => {
+  const off = sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "usdc", input: "100", prices: { oracle: null, bid: null, ask: null } });
+  assert.equal(off.disabled, SCREEN_TEXT.usdcNoPrice);
+  assert.equal(off.sizeInput, "");
+  assert.equal(sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "usdc", input: "100", prices: { oracle: 0n } }).disabled, SCREEN_TEXT.usdcNoPrice);
+  const unknown = sizeEntry(READS, { perp: { index: 9, name: "#9", szDecimals: 0, unknown: true }, isBuy: true, unit: "usdc", input: "100", prices });
+  assert.deepEqual([unknown.sizeInput, unknown.disabled, unknown.error], ["", null, null]);
+  assert.equal(orderForm(reads(), { asset: 9, perp: { unknown: true, name: "#9" }, isBuy: true, sizeInput: "1", prices, ...AT }).error, SCREEN_TEXT.noAsset);
+});
+
+test("an amount below one step, or a zero, is the library's refusal, shown under the field", () => {
+  const less = sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "usdc", input: "0.5", prices });
+  assert.match(less.error, /less than one step of this asset's size/);
+  assert.equal(less.sizeInput, "");
+  assert.match(sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "usdc", input: "0", prices }).error, /above zero/);
+  assert.match(sizeEntry(READS, { perp: BTCP, isBuy: true, unit: "usdc", input: "x", prices }).error, /plain positive number/);
+});
+
+test("the order is sent in the asset's units, the unit is remembered in the browser, and stops and takes keep their own size field", () => {
+  const view = read("../views/exam.js");
+  assert.match(view, /sizeEntry\(reads, \{ perp, isBuy: st\.isBuy, unit: st\.unit/);
+  assert.match(view, /store\(UNIT_KEY, st\.unit\)/);
+  assert.match(view, /orderForm\(reads, \{[^}]*sizeInput: entry\.sizeInput/);
+  assert.match(view, /placeCall\(\{ exam: st\.address, asset: st\.asset, isBuy: st\.isBuy, size: st\.order\.size/);
+  assert.match(view, /id="ex-\$\{k\}-sz" inputmode="decimal" autocomplete="off" placeholder="all"/, "the stop and the take size stays in the asset or 'all'");
 });

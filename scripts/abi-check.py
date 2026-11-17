@@ -249,6 +249,7 @@ LIB_ABIS = {
     "app/lib/operator.js": {"OPERATOR_ABI": ("SimPool",)},
     "app/lib/simoperator.js": {"SIM_OPERATOR_ABI": ("SimPool",), "SIM_OPERATOR_FACTORY_ABI": ("SimPoolFactory",)},
     "app/lib/simlines.js": {"SIM_LINES_ABI": ("SimPool",), "SIM_OWNER_ABI": ("SimPool",), "TERMS_BOOK_ABI": ("TermsBook",)},
+    "app/lib/simowner.js": {"SIM_OWNER_CALLS_ABI": ("SimPool",)},
 }
 # The contract each library's `call(target, "name(types)", ...)` sends to.
 LIB_CALLS = {"app/lib/exam.js": "PaperExam", "app/lib/operator.js": "SimPool"}

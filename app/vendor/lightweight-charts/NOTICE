@@ -1,0 +1,16 @@
+TradingView Lightweight Charts(TM) v5.3.0
+Copyright (c) 2026 TradingView, Inc.
+https://www.tradingview.com/
+
+Licensed under the Apache License, Version 2.0 (see LICENSE in this folder).
+
+The file lightweight-charts.standalone.production.js here is the unmodified
+dist/lightweight-charts.standalone.production.js of the npm package
+lightweight-charts@5.3.0 (npm registry integrity
+sha512-w16fu2/FteUkIJdgc9G2tOCKs1fwFSqnqF8+kMgHGv0uGIfcfpEJhziSaQbML1yrkbeg4nQXV3msjmhBzhLNhw==).
+
+That package ships no NOTICE file of its own. This one was written for this
+repository from the copyright line in the library's own file header. The
+package README asks for the product's attribution notice and a link to
+https://www.tradingview.com/ on the page that shows the chart; the trading
+page prints both under the chart (app/views/examchart.js).

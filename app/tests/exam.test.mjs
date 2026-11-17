@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import {
   PAPER_EXAM_ABI, STATUS, BREACH, FROM_START, TRAILING_TO_START, DRAWDOWN_KINDS, FALLBACK_BLOCKS, MIN_TRADE_NOTIONAL,
   ORACLE_PX_PRECOMPILE, BBO_PRECOMPILE, SIGNS, ESTIMATE_NOTE, REFUSALS, placeCall, graduateCall, setAgentCall,
-  setTriggerCall, clearTriggerCall, pxIndex, oraclePxCall, bboCall, bboOf, sizeUnits, pxUnits, sizeText, pxText, usdText,
+  setTriggerCall, clearTriggerCall, sizeFromUsdc, pxIndex, oraclePxCall, bboCall, bboOf, sizeUnits, pxUnits, sizeText, pxText, usdText,
   pendingOrder, examAccount, fillPrice, orderPreview, refusalText, refusalOf, candleRows, bookSides, dataSource,
   drawdownLine, drawdownLineBps, triggerSetPreview, triggerFill, triggerLedger,
 } from "../lib/exam.js";
@@ -894,4 +894,46 @@ test("the stops, the takes and the trades are folded out of the recorded events,
   assert.throws(() => triggerLedger([ev("Filled", { asset: BTC, isBuy: false, sz: 100n, px: 940_000n, cost: 0n, late: 0n, source: 0 }), lone, lone]), /no Filled before it/,
     "one Filled is one TriggerFilled");
   assert.deepEqual(triggerLedger([ev("Stopped", {}), ev("DaySnapshot", { day: 1, equity: 1n })]).trades, [], "events it does not read are left out");
+});
+
+// ── an amount in USDC as a size ────────────────────────────────────
+
+test("an amount in USDC buys the size it divides into at the price, rounded down to the asset's step", () => {
+  // BTC at 5 size decimals: a price carries one decimal, 60 000.0 is 600 000; 1 size unit is 0.00001 BTC
+  const px = 600_000n;
+  assert.equal(sizeFromUsdc(600n * USD, px), 1_000n, "an exact division: $600 at 60 000.0 is 0.01 BTC");
+  assert.equal(sizeText(sizeFromUsdc(600n * USD, px), 5), "0.01");
+  // 1 000 USDC at 60 000.0 is 0.016666... BTC: the 0.01666 below it, never the 0.01667 above
+  assert.equal(sizeFromUsdc(1_000n * USD, px), 1_666n);
+  assert.equal(sizeText(sizeFromUsdc(1_000n * USD, px), 5), "0.01666");
+  // the boundary: one unit of USDC short of a whole step is the step below, the step's own cost is the step
+  assert.equal(sizeFromUsdc(2n * px - 1n, px), 1n);
+  assert.equal(sizeFromUsdc(2n * px, px), 2n);
+  // the order never costs more than the amount typed
+  for (const usdc of [1n * USD, 1_035_030_000n, 123_456_789n, 10_000n * USD]) {
+    const size = sizeFromUsdc(usdc, px);
+    assert.ok(size * px <= usdc && (size + 1n) * px > usdc, `${usdc}`);
+  }
+});
+
+test("an asset of no size decimals and one of five both divide the same way: price units follow the size decimals", () => {
+  // 0 size decimals: the price carries 6 decimals, 2.5 USDC a unit is 2 500 000; $10 buys 4 units
+  assert.equal(sizeFromUsdc(10n * USD, 2_500_000n), 4n);
+  assert.equal(sizeText(4n, 0), "4");
+  // 2 size decimals (SOL at 148.2500 has 4 price decimals: 1 482 500): $100 buys 0.67
+  assert.equal(sizeFromUsdc(100n * USD, 1_482_500n), 67n);
+  assert.equal(sizeText(67n, 2), "0.67");
+  // 5 size decimals: one step is 0.00001 BTC and costs $0.6 at 60 000.0, so $1 buys exactly one
+  assert.equal(sizeFromUsdc(USD, 600_000n), 1n);
+});
+
+test("an amount below one step, a zero, and a price that was not read are refused in words", () => {
+  assert.throws(() => sizeFromUsdc(599_999n, 600_000n), /less than one step of this asset's size: one step costs \$0\.6 at this price/);
+  assert.throws(() => sizeFromUsdc(1n, 2_500_000n), /less than one step/);
+  assert.throws(() => sizeFromUsdc(0n, 600_000n), /must be above zero/);
+  assert.throws(() => sizeFromUsdc(-5n, 600_000n), /must be above zero/);
+  assert.throws(() => sizeFromUsdc(null, 600_000n), /must be above zero/);
+  for (const px of [null, undefined, 0n, -1n]) assert.throws(() => sizeFromUsdc(100n * USD, px), /The price was not read/);
+  // the price is checked first: no price, no talk of the amount
+  assert.throws(() => sizeFromUsdc(0n, null), /The price was not read/);
 });

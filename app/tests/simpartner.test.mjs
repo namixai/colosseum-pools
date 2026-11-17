@@ -218,7 +218,8 @@ test("the cabinet's route is in the user panel's family, and the tab's address i
   assert.equal(partnerHref(POOL), `#/sim/${POOL}/partner`);
   assert.equal(panelOf(`#/sim/${POOL}/partner`), "user");
   assert.equal(panelOf(`#/sim/${POOL}`), "user");
-  assert.equal(panelOf(`#/sim/${POOL}/exams`), null);
+  assert.equal(panelOf(`#/sim/${POOL}/exams`), "user", "the trader's own pages are the same panel");
+  assert.equal(panelOf(`#/sim/${POOL}/other`), null);
 });
 
 test("small things: a share in percent, a code's short name", () => {

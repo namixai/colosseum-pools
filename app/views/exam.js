@@ -7,22 +7,26 @@ import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { CONFIG } from "../config.js";
 import { esc, render, $, isAddress, friendly } from "../lib/ui.js";
-import { readLogs } from "../lib/simpool.js";
+import { readLogs, SIM_POOL_ABI } from "../lib/simpool.js";
+import { ACCOUNT_ABI, KIND } from "../lib/simtrader.js";
+import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
+import { accountLabel, wireShell } from "./simshell.js";
 import {
   PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, bboOf, placeCall, graduateCall, setAgentCall,
-  setTriggerCall, clearTriggerCall, refusalOf, candleRows,
+  setTriggerCall, clearTriggerCall, refusalOf,
 } from "../lib/exam.js";
 import {
-  SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, INTERVALS, BOOK_DEPTH, candleWindow, readsFrom, accountFigures, positionRow,
-  pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, chartScale, candleText,
-  journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange,
+  SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, BOOK_DEPTH, readsFrom, accountFigures, positionRow,
+  pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView,
+  journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange, canLoadEarlier,
+  assetFromQuery, queryWithAsset, marketRows, stepIndex, sizeUnitOf, sizeEntry,
 } from "../lib/examscreen.js";
+import { createExamChart } from "./examchart.js";
 import { pxText } from "../lib/exam.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
 const BOOK_MS = 4000;
-const CANDLES_MS = 20000;
 const JOURNAL_WINDOW = 50;
 const JOURNAL_CALLS = 20;
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -40,10 +44,28 @@ function store(name, value) {
   }
   return null;
 }
+const UNIT_KEY = "exam-size-unit";
 const kept = new Map();  // the second key where storage is blocked, for this tab
 
-export async function examView(address, page) {
+/** The pool an exam belongs to, when it is an exam or a stage of a pool of exams (the pool's own `accountOf` says): the
+ *  trading screen then stands in that pool's user panel. Null for an account of any other kind of pool. */
+async function simPoolOf(address) {
+  try {
+    const pool = await new ethers.Contract(address, ACCOUNT_ABI, chain.readProvider).pool();
+    if (!isAddress(pool) || same(pool, ZERO)) return null;
+    const account = await new ethers.Contract(pool, SIM_POOL_ABI, chain.readProvider).accountOf(address);
+    return [KIND.exam, KIND.stage].includes(Number(account.kind)) ? ethers.getAddress(pool) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The site's own header and footer come back: this page is not drawn in the user panel. */
+const leavePanel = (page) => { if (page.isConnected) delete document.body.dataset.panel; };
+
+export async function examView(address, page, query = "") {
   if (!isAddress(address)) {
+    leavePanel(page);
     render(page, `<section class="card narrow"><h2>Exam</h2>
       <p>${esc(WHAT_THIS_IS)}</p>
       <p>Open the page from the exam's address:</p>
@@ -52,6 +74,7 @@ export async function examView(address, page) {
     return;
   }
   if ((await chain.readProvider.getCode(address)) === "0x") {
+    leavePanel(page);
     render(page, `<section class="card narrow"><h2>Exam</h2><p>There is no contract at this address on the network this page reads.</p>
       <p><a href="#/exam">Back</a></p></section>`);
     return;
@@ -61,31 +84,52 @@ export async function examView(address, page) {
   // is that chain's or nothing (dataSource), never another network's candles beside this exam.
   const chainId = await nodeChainId();
   const ds = dataSource({ chainId }, CONFIG);
-  const [rules, terms, trader] = await Promise.all([exam.rules(), exam.terms(), exam.trader()]);
+  const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(), simPoolOf(address)]);
+  // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
+  // This continuation may have been left behind by a page change: only the page on screen touches the page-wide marker.
+  if (!page.isConnected) return;
+  if (!panelPool) leavePanel(page);
   const assets = [...rules.assets].map(Number);
   const perps = new Map();
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
-    exam, address, ds, perps, assets, trader, asset: assets[0], isBuy: true, interval: "15m", snap: null, rows: [],
-    book: null, hover: null, journal: [], timers: [],
+    exam, address, ds, perps, assets, trader, panelPool, asset: assetFromQuery(query, assets), query,
+    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, chart: null,
+    book: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };
 
-  page.className = "ex-page";
-  render(page, skeleton(st));
+  if (panelPool) {
+    // The user panel's header and footer, the menu on Trade; the screen itself is the same one.
+    const marks = networkMarks(CONFIG);
+    page.className = "ex-wrap";
+    render(page, `<div class="sp sp-user">${userHeaderHtml({ address: panelPool, account: accountLabel(), current: "trade", route: `#/exam/${address}`, marks })}`
+      + `<div class="ex-page">${skeleton(st)}</div>`
+      + `${footerHtml({ marks, source: "The account is read from the exam's contract. Prices and the book are Hyperliquid's." })}</div>`);
+    wireShell(page);
+  } else {
+    page.className = "ex-page";
+    render(page, skeleton(st));
+  }
   wire(page, st);
+  paintAssets(page, st);
   // The first reading decides whether the page can be drawn: a failure here is the page's failure, not a panel's.
   await tick(page, st);
   paintJournal(page, st);
   if (ds.ok) {
-    paintAssets(page, st);
-    refreshCandles(page, st);
+    st.chart = createExamChart({ node: $("#ex-chart", page), bar: $("#ex-iv", page), load: hl.candles, explain: friendly });
+    st.chart.setAsset(chartAsset(st));
+    paintHead(page, st);
     refreshBook(page, st);
-    st.timers.push(setInterval(() => refreshBook(page, st), BOOK_MS), setInterval(() => refreshCandles(page, st), CANDLES_MS));
+    st.timers.push(setInterval(() => refreshBook(page, st), BOOK_MS));
   }
   st.timers.push(setInterval(() => tick(page, st).catch((err) => note(page, `Could not refresh: ${friendly(err)}`)), POLL_MS));
   // A page that was left stops its readings: it is no longer in the document.
-  st.timers.push(setInterval(() => { if (!page.isConnected) st.timers.forEach(clearInterval); }, 1000));
+  st.timers.push(setInterval(() => {
+    if (page.isConnected) return;
+    st.timers.forEach(clearInterval);
+    st.chart?.destroy();
+  }, 1000));
 }
 
 /** The chain id the node itself answers. Asked of the node directly: the read provider is built with the app's own
@@ -113,15 +157,13 @@ function note(page, text) {
 function skeleton(st) {
   const { ds } = st;
   const marks = networkMarks(CONFIG);
-  const intervals = INTERVALS.map((i) => `<button type="button" data-interval="${i.key}"${i.key === st.interval ? ' class="on"' : ""}>${i.key}</button>`).join("");
-  const options = st.assets.map((a) => `<option value="${a}">${esc(st.perps.get(a)?.name ?? `#${a}`)}</option>`).join("");
   const trigger = (k, label) => `<div class="ex-tr"><label>Set ${label}<input id="ex-${k}-px" inputmode="decimal" autocomplete="off" placeholder="price"></label>
       <label>Size<input id="ex-${k}-sz" inputmode="decimal" autocomplete="off" placeholder="all"></label>
       <button type="button" class="ex-mini2" id="ex-${k}-set" data-set="${k}" disabled>Set ${label}</button></div>
       <div class="ex-prev" id="ex-${k}-prev"></div>`;
   return `
     <div class="ex-strip">
-      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
+      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks && !st.panelPool ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
       <p class="ex-line">${esc(WHAT_THIS_IS)}</p>
       <div class="ex-kv" id="ex-kv"></div>
       <div class="ex-steps" id="ex-steps"></div>
@@ -132,13 +174,20 @@ function skeleton(st) {
     <div class="ex-term" id="ex-term" data-phone="chart">
       <section class="ex-pane ex-chart"${ds.ok ? "" : " hidden"}>
         <div class="ex-mkt">
-          <label class="ex-sel"><select id="ex-asset" aria-label="Asset">${options}</select></label>
+          <div class="ex-mk">
+            <button type="button" id="ex-market" class="ex-mkbtn" aria-haspopup="listbox" aria-expanded="false" aria-controls="ex-pop"><b id="ex-market-name">—</b><i aria-hidden="true">▾</i></button>
+            <div class="ex-pop" id="ex-pop" hidden>
+              <div class="ex-pophead"><input id="ex-mq" type="search" autocomplete="off" spellcheck="false" placeholder="Search markets" aria-label="Search markets" role="combobox" aria-expanded="true" aria-controls="ex-ml">
+                <button type="button" class="ex-mini2" id="ex-mclose" aria-label="Close the list">Close</button></div>
+              <div class="ex-mh"><span>Market</span><span></span><span>Oracle price</span><span>Max leverage</span></div>
+              <ul id="ex-ml" class="ex-ml" role="listbox" aria-label="Markets"></ul>
+            </div>
+          </div>
           <div class="ex-px"><b id="ex-px">—</b><span>Oracle price</span></div>
-          <div class="ex-iv" role="group" aria-label="Interval">${intervals}</div>
+          <div class="ex-iv" id="ex-iv" role="group" aria-label="Interval"></div>
           <span class="ex-cap">${esc(SCREEN_TEXT.chart)}</span>
         </div>
-        <div class="ex-cw"><canvas id="ex-canvas" role="img" aria-label="Candle chart"></canvas></div>
-        <p class="ex-hover" id="ex-hover">&nbsp;</p>
+        <div class="ex-cw" id="ex-chart"></div>
       </section>
       <section class="ex-pane ex-book"${ds.ok ? "" : " hidden"}>
         <div class="ex-ph"><b>Book</b><span class="ex-cap">${esc(SCREEN_TEXT.book)}</span></div>
@@ -147,12 +196,13 @@ function skeleton(st) {
       </section>
       <div class="ex-right">
         <section class="ex-pane ex-form">
-          <div class="ex-tabs" id="ex-assets" role="tablist" aria-label="Asset"></div>
           <div class="ex-bs" role="group" aria-label="Side">
             <button type="button" data-side="buy" class="on b">Buy / Long</button>
             <button type="button" data-side="sell" class="s">Sell / Short</button>
           </div>
-          <label class="ex-fl">Size<span class="ex-inp"><input id="ex-size" inputmode="decimal" autocomplete="off" placeholder="0.00"><span id="ex-unit"></span></span></label>
+          <div class="ex-fl"><label for="ex-size">Size</label><span class="ex-inp"><input id="ex-size" inputmode="decimal" autocomplete="off" placeholder="0.00">
+            <span class="ex-units" role="group" aria-label="Unit of the size"><button type="button" data-unit="asset" id="ex-u-asset"></button><button type="button" data-unit="usdc">USDC</button></span></span>
+            <p class="ex-conv" id="ex-conv" aria-live="polite"></p></div>
           <div id="ex-preview" class="ex-est"></div>
           <button type="button" id="ex-send" class="ex-go b" disabled>Buy / Long</button>
           <p class="ex-sign" id="ex-signs"></p>
@@ -185,7 +235,7 @@ function skeleton(st) {
         </div>
       </section>
     </div>
-    ${marks ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
+    ${marks && !st.panelPool ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
 }
 
 // ── readings ────────────────────────────────────────────────────
@@ -226,19 +276,7 @@ async function tick(page, st) {
   paintPositions(page, st);
   paintTicket(page, st);
   paintAgent(page, st);
-}
-
-function refreshCandles(page, st) {
-  const perp = st.perps.get(st.asset);
-  const { startTime, endTime } = candleWindow(st.interval, Date.now());
-  const wanted = `${st.asset}/${st.interval}`;
-  hl.candles(perp.name, st.interval, startTime, endTime).then((raw) => {
-    if (`${st.asset}/${st.interval}` !== wanted) return;
-    st.rows = candleRows(raw);
-    drawChart(page, st);
-  }).catch((err) => {
-    $("#ex-hover", page).textContent = `Chart: could not load (${friendly(err)})`;
-  });
+  if (st.market.open) paintMarketList(page, st);
 }
 
 function refreshBook(page, st) {
@@ -255,12 +293,53 @@ function refreshBook(page, st) {
 
 // ── painting ────────────────────────────────────────────────────
 
+/** The market button and list, the unit of the size, and the address: it names the market, so a link opens the same one. */
 function paintAssets(page, st) {
-  $("#ex-assets", page).innerHTML = st.assets.map((a) =>
-    `<button type="button" role="tab" data-asset="${a}"${a === st.asset ? ' class="on"' : ""} aria-selected="${a === st.asset}">${esc(st.perps.get(a)?.name ?? `#${a}`)}</button>`).join("");
-  $("#ex-unit", page).textContent = st.perps.get(st.asset)?.name ?? "";
-  const sel = $("#ex-asset", page);
-  if (sel) sel.value = String(st.asset);
+  const name = st.perps.get(st.asset)?.name ?? `#${st.asset}`;
+  $("#ex-market-name", page).textContent = name;
+  $("#ex-u-asset", page).textContent = name;
+  page.querySelectorAll("[data-unit]").forEach((b) => {
+    const on = b.dataset.unit === st.unit;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+  // replaceState writes no entry and fires no hashchange: the page stays as it is, its link names the market.
+  try {
+    const base = location.hash.split("?")[0];
+    history.replaceState(history.state, "", `${base}?${queryWithAsset(st.query, st.asset)}`);
+  } catch {
+    // the address is not writable here: the market is then the page's own
+  }
+  paintMarketList(page, st);
+}
+
+function paintMarketList(page, st) {
+  const rows = marketRows({ assets: st.assets, perps: st.perps, perAsset: st.snap?.perAsset ?? [], rules: st.snap?.reads.rules, query: st.market.q });
+  st.market.rows = rows;
+  if (st.market.at >= rows.length) st.market.at = rows.length - 1;
+  $("#ex-ml", page).innerHTML = rows.length ? rows.map((r, i) => `<li role="option" id="ex-mo-${r.asset}" data-asset="${r.asset}" aria-selected="${r.asset === st.asset}" class="${r.asset === st.asset ? "cur" : ""}${i === st.market.at ? " hl" : ""}">`
+    + `<b>${esc(r.name)}</b>${r.held ? `<em title="A position is open on this asset">position</em>` : "<em></em>"}<span>${esc(r.price)}</span><span>${esc(r.leverage)}</span></li>`).join("")
+    : `<li class="ex-none" role="presentation">No market of this exam matches.</li>`;
+  const input = $("#ex-mq", page);
+  if (st.market.at >= 0 && rows[st.market.at]) input.setAttribute("aria-activedescendant", `ex-mo-${rows[st.market.at].asset}`);
+  else input.removeAttribute("aria-activedescendant");
+}
+
+function setMarketOpen(page, st, open, focus = true) {
+  st.market.open = open;
+  $("#ex-pop", page).hidden = !open;
+  $("#ex-market", page).setAttribute("aria-expanded", String(open));
+  if (open) {
+    st.market.q = "";
+    $("#ex-mq", page).value = "";
+    paintMarketList(page, st);
+    st.market.at = Math.max(0, (st.market.rows ?? []).findIndex((r) => r.asset === st.asset));
+    paintMarketList(page, st);
+    $("#ex-mq", page).focus();
+    $("#ex-ml", page).querySelector(".hl")?.scrollIntoView({ block: "nearest" });
+  } else if (focus) {
+    $("#ex-market", page).focus();
+  }
 }
 
 function paintHead(page, st) {
@@ -268,6 +347,13 @@ function paintHead(page, st) {
   const oracle = st.snap?.perAsset.find((a) => a.asset === st.asset)?.oracle;
   const px = $("#ex-px", page);
   if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
+  st.chart?.setOracle(perp && oracle ? Number(pxText(oracle, perp.szDecimals)) : null);
+}
+
+/** The asset the chart draws: its Hyperliquid name and size decimals. */
+function chartAsset(st) {
+  const perp = st.perps.get(st.asset);
+  return { coin: perp.name, szDecimals: perp.szDecimals };
 }
 
 function paintAccount(page, st) {
@@ -337,8 +423,15 @@ function paintTicket(page, st) {
     return;
   }
   const prices = perAsset.find((a) => a.asset === st.asset);
-  const form = orderForm(reads, { asset: st.asset, perp, isBuy: st.isBuy, sizeInput: $("#ex-size", page).value,
-    prices: { oracle: prices.oracle, bid: prices.bid, ask: prices.ask }, now, block });
+  const priced = { oracle: prices.oracle, bid: prices.bid, ask: prices.ask };
+  const entry = sizeEntry(reads, { perp, isBuy: st.isBuy, unit: st.unit, input: $("#ex-size", page).value, prices: priced });
+  const field = $("#ex-size", page);
+  field.disabled = Boolean(entry.disabled);
+  field.title = entry.disabled ?? "";
+  field.placeholder = st.unit === "usdc" ? "0.00 USDC" : "0.00";
+  $("#ex-conv", page).textContent = entry.disabled ?? (entry.conv || "");
+  const form = entry.error ? { size: null, error: entry.error, preview: null }
+    : orderForm(reads, { asset: st.asset, perp, isBuy: st.isBuy, sizeInput: entry.sizeInput, prices: priced, now, block });
   const view = previewView(form.preview, perp);
   const parts = [];
   if (form.error) parts.push(`<p class="ex-warn bad">${esc(form.error)}</p>`);
@@ -485,30 +578,70 @@ function wire(page, st) {
   const choose = () => { paintTicket(page, st); };
   const setAsset = (asset) => {
     st.asset = asset;
-    st.rows = [];
     st.book = null;
     $("#ex-book", page).textContent = "Loading…";
     paintAssets(page, st);
-    drawChart(page, st);
-    refreshCandles(page, st);
+    st.chart?.setAsset(chartAsset(st));
     refreshBook(page, st);
     choose();
   };
   const on = (list, picked) => list.forEach((x) => x.classList.toggle("on", x === picked));
-  page.addEventListener("change", (e) => { if (e.target.id === "ex-asset") setAsset(Number(e.target.value)); });
+  const pick = (asset) => {
+    if (asset !== st.asset) setAsset(asset);
+    setMarketOpen(page, st, false);
+  };
+  page.addEventListener("click", (e) => {
+    const li = e.target.closest("#ex-ml li[data-asset]");
+    if (li) {
+      pick(Number(li.dataset.asset));
+      return;
+    }
+    // a click elsewhere closes the list, and the click goes on to what it was on
+    if (st.market.open && !e.target.closest(".ex-mk")) setMarketOpen(page, st, false, false);
+  });
+  page.addEventListener("input", (e) => {
+    if (e.target.id !== "ex-mq") return;
+    st.market.q = e.target.value;
+    st.market.at = 0;
+    paintMarketList(page, st);
+  });
+  page.addEventListener("keydown", (e) => {
+    const rows = st.market.rows ?? [];
+    if (e.target.id === "ex-market" && (e.key === "ArrowDown" || e.key === "ArrowUp") && !st.market.open) {
+      e.preventDefault();
+      setMarketOpen(page, st, true);
+    } else if (e.key === "Escape" && st.market.open) {
+      e.preventDefault();
+      setMarketOpen(page, st, false);
+    } else if (e.target.id === "ex-mq") {
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+        e.preventDefault();
+        st.market.at = stepIndex(rows.length, st.market.at, e.key);
+        paintMarketList(page, st);
+        $("#ex-ml", page).querySelector(".hl")?.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter" && rows[st.market.at]) {
+        e.preventDefault();
+        pick(rows[st.market.at].asset);
+      }
+    }
+  });
   page.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || !page.contains(b)) return;
-    if (b.dataset.asset !== undefined) {
-      setAsset(Number(b.dataset.asset));
-    } else if (b.dataset.interval) {
-      st.interval = b.dataset.interval;
-      on([...page.querySelectorAll("[data-interval]")], b);
-      refreshCandles(page, st);
+    if (b.id === "ex-market") {
+      setMarketOpen(page, st, !st.market.open);
+    } else if (b.id === "ex-mclose") {
+      setMarketOpen(page, st, false);
+    } else if (b.dataset.unit) {
+      if (b.dataset.unit === st.unit) return;
+      st.unit = b.dataset.unit;
+      store(UNIT_KEY, st.unit);
+      $("#ex-size", page).value = "";
+      paintAssets(page, st);
+      choose();
     } else if (b.dataset.phone) {
       $("#ex-term", page).dataset.phone = b.dataset.phone;
       on([...page.querySelectorAll("[data-phone]")].filter((x) => x.tagName === "BUTTON"), b);
-      drawChart(page, st);
     } else if (b.dataset.tab) {
       st.tab = b.dataset.tab;
       on([...page.querySelectorAll("[data-tab]")], b);
@@ -550,16 +683,6 @@ function wire(page, st) {
     }
   });
   page.addEventListener("input", (e) => { if (e.target.matches("#ex-size, #ex-stop-px, #ex-stop-sz, #ex-take-px, #ex-take-sz")) paintTicket(page, st); });
-  const canvas = $("#ex-canvas", page);
-  if (canvas) {
-    canvas.addEventListener("mousemove", (e) => {
-      const r = canvas.getBoundingClientRect();
-      st.hover = { x: e.clientX - r.left, y: e.clientY - r.top };
-      drawChart(page, st);
-    });
-    canvas.addEventListener("mouseleave", () => { st.hover = null; drawChart(page, st); });
-    if (window.ResizeObserver) new ResizeObserver(() => drawChart(page, st)).observe(canvas.parentElement);
-  }
 }
 
 async function agentAction(page, st, what) {
@@ -613,7 +736,7 @@ async function loadJournal(page, st, direction = "earlier") {
     st.journal = [...events, ...st.journal].sort((p, q) => p.block - q.block || p.index - q.index);
     st.loaded = st.loaded ? { from: Math.min(st.loaded.from, plan.from), top: Math.max(st.loaded.top, plan.to) } : { from: plan.from, top: plan.to };
     await blockTimes(st, events.map((e) => e.block));
-    info.textContent = journalRange(st.loaded);
+    info.textContent = journalRange(st.loaded) + (canLoadEarlier(st.loaded) ? "" : " That is the start of the chain.");
     paintJournal(page, st);
     buttons[0].textContent = "Load earlier events";
     buttons[1].hidden = false;
@@ -621,113 +744,7 @@ async function loadJournal(page, st, direction = "earlier") {
     info.textContent = `Could not load: ${friendly(err)}`;
   } finally {
     buttons.forEach((x) => { x.disabled = false; });
-  }
-}
-
-// ── the chart: candles drawn on a canvas, no library ────────────
-
-function colors(page) {
-  const css = getComputedStyle(page);
-  const get = (n, fallback) => css.getPropertyValue(n).trim() || fallback;
-  return { up: get("--up", "#2F7FC9"), down: get("--dn", "#C0622A"), text: get("--mute", "#5E6670"), grid: get("--line", "#D6D8D6"), ink: get("--ink", "#0E1116"),
-    vol: "rgba(31,53,80,.12)" };
-}
-
-function drawChart(page, st) {
-  const canvas = $("#ex-canvas", page);
-  if (!canvas) return;
-  const wrap = canvas.parentElement;
-  const width = Math.max(200, Math.floor(wrap.clientWidth));
-  const height = Math.max(220, Math.floor(wrap.clientHeight));
-  const dpr = window.devicePixelRatio || 1;
-  if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-  }
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-  const c = colors(page);
-  const rows = st.rows;
-  ctx.font = "11px Inter, system-ui, sans-serif";
-  if (!rows.length) {
-    ctx.fillStyle = c.text;
-    ctx.fillText("Loading candles…", 12, 20);
-    return;
-  }
-  const dec = Math.max(0, 6 - (st.perps.get(st.asset)?.szDecimals ?? 0));
-  const fmt = (v) => v.toFixed(Math.min(dec, v >= 1000 ? 1 : dec));
-  const s = chartScale(rows, { width, height });
-  const volTop = s.top + s.plotH * 0.86;
-  const volMax = Math.max(...rows.map((k) => k.volume), 1);
-  ctx.fillStyle = c.vol;
-  rows.forEach((k, i) => {
-    const h = (k.volume / volMax) * (s.plotH * 0.14);
-    ctx.fillRect(s.x(i) - s.body / 2, s.top + s.plotH - h, s.body, h);
-  });
-  void volTop;
-  ctx.lineWidth = 1;
-  ctx.textBaseline = "middle";
-  for (const t of s.ticks) {
-    const y = Math.round(s.y(t)) + 0.5;
-    ctx.strokeStyle = c.grid;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(s.plotW, y);
-    ctx.stroke();
-    ctx.fillStyle = c.text;
-    ctx.fillText(fmt(t), s.plotW + 6, y);
-  }
-  rows.forEach((k, i) => {
-    const x = s.x(i);
-    const color = k.close >= k.open ? c.up : c.down;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(Math.round(x) + 0.5, s.y(k.high));
-    ctx.lineTo(Math.round(x) + 0.5, s.y(k.low));
-    ctx.stroke();
-    const top = s.y(Math.max(k.open, k.close));
-    ctx.fillRect(x - s.body / 2, top, s.body, Math.max(1, s.y(Math.min(k.open, k.close)) - top));
-  });
-  const last = rows[rows.length - 1];
-  const ly = s.y(last.close);
-  ctx.setLineDash([4, 3]);
-  ctx.strokeStyle = c.ink;
-  ctx.beginPath();
-  ctx.moveTo(0, ly);
-  ctx.lineTo(s.plotW, ly);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = c.ink;
-  ctx.fillRect(s.plotW, ly - 9, s.axis, 18);
-  ctx.fillStyle = "#fff";
-  ctx.fillText(fmt(last.close), s.plotW + 6, ly);
-  // the time axis: a label every few candles
-  ctx.fillStyle = c.text;
-  ctx.textBaseline = "alphabetic";
-  const every = Math.max(1, Math.round(rows.length / Math.max(2, Math.floor(s.plotW / 90))));
-  for (let i = 0; i < rows.length; i += every) {
-    const d = new Date(rows[i].time * 1000);
-    const label = st.interval === "1d" ? `${d.getUTCMonth() + 1}/${d.getUTCDate()}` : `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-    ctx.fillText(label, Math.max(0, s.x(i) - 12), height - 6);
-  }
-  const hv = st.hover;
-  if (hv && hv.x < s.plotW) {
-    const i = s.index(hv.x);
-    ctx.strokeStyle = c.text;
-    ctx.setLineDash([2, 3]);
-    ctx.beginPath();
-    ctx.moveTo(s.x(i), 0);
-    ctx.lineTo(s.x(i), height - 20);
-    ctx.moveTo(0, hv.y);
-    ctx.lineTo(s.plotW, hv.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    $("#ex-hover", page).textContent = candleText(rows[i]);
-  } else {
-    $("#ex-hover", page).textContent = candleText(last);
+    // The range has reached block 0: there is nothing earlier to load.
+    buttons[0].disabled = !canLoadEarlier(st.loaded);
   }
 }
