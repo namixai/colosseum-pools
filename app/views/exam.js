@@ -19,6 +19,7 @@ import {
   SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, INTERVALS, BOOK_DEPTH, candleWindow, readsFrom, accountFigures, positionRow,
   pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, chartScale, candleText,
   journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange, canLoadEarlier,
+  assetFromQuery, queryWithAsset, marketRows, stepIndex, sizeUnitOf, sizeEntry,
 } from "../lib/examscreen.js";
 import { pxText } from "../lib/exam.js";
 
@@ -43,6 +44,7 @@ function store(name, value) {
   }
   return null;
 }
+const UNIT_KEY = "exam-size-unit";
 const kept = new Map();  // the second key where storage is blocked, for this tab
 
 /** The pool an exam belongs to, when it is an exam or a stage of a pool of exams (the pool's own `accountOf` says): the
@@ -61,7 +63,7 @@ async function simPoolOf(address) {
 /** The site's own header and footer come back: this page is not drawn in the user panel. */
 const leavePanel = () => { delete document.body.dataset.panel; };
 
-export async function examView(address, page) {
+export async function examView(address, page, query = "") {
   if (!isAddress(address)) {
     leavePanel();
     render(page, `<section class="card narrow"><h2>Exam</h2>
@@ -89,7 +91,8 @@ export async function examView(address, page) {
   const perps = new Map();
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
-    exam, address, ds, perps, assets, trader, panelPool, asset: assets[0], isBuy: true, interval: "15m", snap: null, rows: [],
+    exam, address, ds, perps, assets, trader, panelPool, asset: assetFromQuery(query, assets), query,
+    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, interval: "15m", snap: null, rows: [],
     book: null, hover: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };
@@ -107,11 +110,11 @@ export async function examView(address, page) {
     render(page, skeleton(st));
   }
   wire(page, st);
+  paintAssets(page, st);
   // The first reading decides whether the page can be drawn: a failure here is the page's failure, not a panel's.
   await tick(page, st);
   paintJournal(page, st);
   if (ds.ok) {
-    paintAssets(page, st);
     refreshCandles(page, st);
     refreshBook(page, st);
     st.timers.push(setInterval(() => refreshBook(page, st), BOOK_MS), setInterval(() => refreshCandles(page, st), CANDLES_MS));
@@ -147,7 +150,6 @@ function skeleton(st) {
   const { ds } = st;
   const marks = networkMarks(CONFIG);
   const intervals = INTERVALS.map((i) => `<button type="button" data-interval="${i.key}"${i.key === st.interval ? ' class="on"' : ""}>${i.key}</button>`).join("");
-  const options = st.assets.map((a) => `<option value="${a}">${esc(st.perps.get(a)?.name ?? `#${a}`)}</option>`).join("");
   const trigger = (k, label) => `<div class="ex-tr"><label>Set ${label}<input id="ex-${k}-px" inputmode="decimal" autocomplete="off" placeholder="price"></label>
       <label>Size<input id="ex-${k}-sz" inputmode="decimal" autocomplete="off" placeholder="all"></label>
       <button type="button" class="ex-mini2" id="ex-${k}-set" data-set="${k}" disabled>Set ${label}</button></div>
@@ -165,7 +167,15 @@ function skeleton(st) {
     <div class="ex-term" id="ex-term" data-phone="chart">
       <section class="ex-pane ex-chart"${ds.ok ? "" : " hidden"}>
         <div class="ex-mkt">
-          <label class="ex-sel"><select id="ex-asset" aria-label="Asset">${options}</select></label>
+          <div class="ex-mk">
+            <button type="button" id="ex-market" class="ex-mkbtn" aria-haspopup="listbox" aria-expanded="false" aria-controls="ex-pop"><b id="ex-market-name">—</b><i aria-hidden="true">▾</i></button>
+            <div class="ex-pop" id="ex-pop" hidden>
+              <div class="ex-pophead"><input id="ex-mq" type="search" autocomplete="off" spellcheck="false" placeholder="Search markets" aria-label="Search markets" role="combobox" aria-expanded="true" aria-controls="ex-ml">
+                <button type="button" class="ex-mini2" id="ex-mclose" aria-label="Close the list">Close</button></div>
+              <div class="ex-mh"><span>Market</span><span></span><span>Oracle price</span><span>Max leverage</span></div>
+              <ul id="ex-ml" class="ex-ml" role="listbox" aria-label="Markets"></ul>
+            </div>
+          </div>
           <div class="ex-px"><b id="ex-px">—</b><span>Oracle price</span></div>
           <div class="ex-iv" role="group" aria-label="Interval">${intervals}</div>
           <span class="ex-cap">${esc(SCREEN_TEXT.chart)}</span>
@@ -180,12 +190,13 @@ function skeleton(st) {
       </section>
       <div class="ex-right">
         <section class="ex-pane ex-form">
-          <div class="ex-tabs" id="ex-assets" role="tablist" aria-label="Asset"></div>
           <div class="ex-bs" role="group" aria-label="Side">
             <button type="button" data-side="buy" class="on b">Buy / Long</button>
             <button type="button" data-side="sell" class="s">Sell / Short</button>
           </div>
-          <label class="ex-fl">Size<span class="ex-inp"><input id="ex-size" inputmode="decimal" autocomplete="off" placeholder="0.00"><span id="ex-unit"></span></span></label>
+          <div class="ex-fl"><label for="ex-size">Size</label><span class="ex-inp"><input id="ex-size" inputmode="decimal" autocomplete="off" placeholder="0.00">
+            <span class="ex-units" role="group" aria-label="Unit of the size"><button type="button" data-unit="asset" id="ex-u-asset"></button><button type="button" data-unit="usdc">USDC</button></span></span>
+            <p class="ex-conv" id="ex-conv" aria-live="polite"></p></div>
           <div id="ex-preview" class="ex-est"></div>
           <button type="button" id="ex-send" class="ex-go b" disabled>Buy / Long</button>
           <p class="ex-sign" id="ex-signs"></p>
@@ -259,6 +270,7 @@ async function tick(page, st) {
   paintPositions(page, st);
   paintTicket(page, st);
   paintAgent(page, st);
+  if (st.market.open) paintMarketList(page, st);
 }
 
 function refreshCandles(page, st) {
@@ -288,12 +300,53 @@ function refreshBook(page, st) {
 
 // ── painting ────────────────────────────────────────────────────
 
+/** The market button and list, the unit of the size, and the address: it names the market, so a link opens the same one. */
 function paintAssets(page, st) {
-  $("#ex-assets", page).innerHTML = st.assets.map((a) =>
-    `<button type="button" role="tab" data-asset="${a}"${a === st.asset ? ' class="on"' : ""} aria-selected="${a === st.asset}">${esc(st.perps.get(a)?.name ?? `#${a}`)}</button>`).join("");
-  $("#ex-unit", page).textContent = st.perps.get(st.asset)?.name ?? "";
-  const sel = $("#ex-asset", page);
-  if (sel) sel.value = String(st.asset);
+  const name = st.perps.get(st.asset)?.name ?? `#${st.asset}`;
+  $("#ex-market-name", page).textContent = name;
+  $("#ex-u-asset", page).textContent = name;
+  page.querySelectorAll("[data-unit]").forEach((b) => {
+    const on = b.dataset.unit === st.unit;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+  // replaceState writes no entry and fires no hashchange: the page stays as it is, its link names the market.
+  try {
+    const base = location.hash.split("?")[0];
+    history.replaceState(history.state, "", `${base}?${queryWithAsset(st.query, st.asset)}`);
+  } catch {
+    // the address is not writable here: the market is then the page's own
+  }
+  paintMarketList(page, st);
+}
+
+function paintMarketList(page, st) {
+  const rows = marketRows({ assets: st.assets, perps: st.perps, perAsset: st.snap?.perAsset ?? [], rules: st.snap?.reads.rules, query: st.market.q });
+  st.market.rows = rows;
+  if (st.market.at >= rows.length) st.market.at = rows.length - 1;
+  $("#ex-ml", page).innerHTML = rows.length ? rows.map((r, i) => `<li role="option" id="ex-mo-${r.asset}" data-asset="${r.asset}" aria-selected="${r.asset === st.asset}" class="${r.asset === st.asset ? "cur" : ""}${i === st.market.at ? " hl" : ""}">`
+    + `<b>${esc(r.name)}</b>${r.held ? `<em title="A position is open on this asset">position</em>` : "<em></em>"}<span>${esc(r.price)}</span><span>${esc(r.leverage)}</span></li>`).join("")
+    : `<li class="ex-none" role="presentation">No market of this exam matches.</li>`;
+  const input = $("#ex-mq", page);
+  if (st.market.at >= 0 && rows[st.market.at]) input.setAttribute("aria-activedescendant", `ex-mo-${rows[st.market.at].asset}`);
+  else input.removeAttribute("aria-activedescendant");
+}
+
+function setMarketOpen(page, st, open, focus = true) {
+  st.market.open = open;
+  $("#ex-pop", page).hidden = !open;
+  $("#ex-market", page).setAttribute("aria-expanded", String(open));
+  if (open) {
+    st.market.q = "";
+    $("#ex-mq", page).value = "";
+    paintMarketList(page, st);
+    st.market.at = Math.max(0, (st.market.rows ?? []).findIndex((r) => r.asset === st.asset));
+    paintMarketList(page, st);
+    $("#ex-mq", page).focus();
+    $("#ex-ml", page).querySelector(".hl")?.scrollIntoView({ block: "nearest" });
+  } else if (focus) {
+    $("#ex-market", page).focus();
+  }
 }
 
 function paintHead(page, st) {
@@ -370,8 +423,15 @@ function paintTicket(page, st) {
     return;
   }
   const prices = perAsset.find((a) => a.asset === st.asset);
-  const form = orderForm(reads, { asset: st.asset, perp, isBuy: st.isBuy, sizeInput: $("#ex-size", page).value,
-    prices: { oracle: prices.oracle, bid: prices.bid, ask: prices.ask }, now, block });
+  const priced = { oracle: prices.oracle, bid: prices.bid, ask: prices.ask };
+  const entry = sizeEntry(reads, { perp, isBuy: st.isBuy, unit: st.unit, input: $("#ex-size", page).value, prices: priced });
+  const field = $("#ex-size", page);
+  field.disabled = Boolean(entry.disabled);
+  field.title = entry.disabled ?? "";
+  field.placeholder = st.unit === "usdc" ? "0.00 USDC" : "0.00";
+  $("#ex-conv", page).textContent = entry.disabled ?? (entry.conv || "");
+  const form = entry.error ? { size: null, error: entry.error, preview: null }
+    : orderForm(reads, { asset: st.asset, perp, isBuy: st.isBuy, sizeInput: entry.sizeInput, prices: priced, now, block });
   const view = previewView(form.preview, perp);
   const parts = [];
   if (form.error) parts.push(`<p class="ex-warn bad">${esc(form.error)}</p>`);
@@ -528,12 +588,59 @@ function wire(page, st) {
     choose();
   };
   const on = (list, picked) => list.forEach((x) => x.classList.toggle("on", x === picked));
-  page.addEventListener("change", (e) => { if (e.target.id === "ex-asset") setAsset(Number(e.target.value)); });
+  const pick = (asset) => {
+    if (asset !== st.asset) setAsset(asset);
+    setMarketOpen(page, st, false);
+  };
+  page.addEventListener("click", (e) => {
+    const li = e.target.closest("#ex-ml li[data-asset]");
+    if (li) {
+      pick(Number(li.dataset.asset));
+      return;
+    }
+    // a click elsewhere closes the list, and the click goes on to what it was on
+    if (st.market.open && !e.target.closest(".ex-mk")) setMarketOpen(page, st, false, false);
+  });
+  page.addEventListener("input", (e) => {
+    if (e.target.id !== "ex-mq") return;
+    st.market.q = e.target.value;
+    st.market.at = 0;
+    paintMarketList(page, st);
+  });
+  page.addEventListener("keydown", (e) => {
+    const rows = st.market.rows ?? [];
+    if (e.target.id === "ex-market" && (e.key === "ArrowDown" || e.key === "ArrowUp") && !st.market.open) {
+      e.preventDefault();
+      setMarketOpen(page, st, true);
+    } else if (e.key === "Escape" && st.market.open) {
+      e.preventDefault();
+      setMarketOpen(page, st, false);
+    } else if (e.target.id === "ex-mq") {
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+        e.preventDefault();
+        st.market.at = stepIndex(rows.length, st.market.at, e.key);
+        paintMarketList(page, st);
+        $("#ex-ml", page).querySelector(".hl")?.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter" && rows[st.market.at]) {
+        e.preventDefault();
+        pick(rows[st.market.at].asset);
+      }
+    }
+  });
   page.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || !page.contains(b)) return;
-    if (b.dataset.asset !== undefined) {
-      setAsset(Number(b.dataset.asset));
+    if (b.id === "ex-market") {
+      setMarketOpen(page, st, !st.market.open);
+    } else if (b.id === "ex-mclose") {
+      setMarketOpen(page, st, false);
+    } else if (b.dataset.unit) {
+      if (b.dataset.unit === st.unit) return;
+      st.unit = b.dataset.unit;
+      store(UNIT_KEY, st.unit);
+      $("#ex-size", page).value = "";
+      paintAssets(page, st);
+      choose();
     } else if (b.dataset.interval) {
       st.interval = b.dataset.interval;
       on([...page.querySelectorAll("[data-interval]")], b);

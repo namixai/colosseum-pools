@@ -652,3 +652,35 @@ table.ex-jr td, table.ex-jr th { padding: 7px 12px; font-size: 12px; }
   table.ex-cards td[data-l=""]::before { display: none; }
   .ex-disc { font-size: 15px; }
 }
+
+/* The market list of the trading screen and the unit of the size */
+.ex-mk { position: relative; }
+.ex-mkbtn { display: inline-flex; align-items: center; gap: 10px; font: 700 20px var(--font); background: var(--paper); color: var(--ink); border: 1.5px solid var(--navy); border-radius: 0; padding: 6px 12px; cursor: pointer; }
+.ex-mkbtn i { font-style: normal; font-size: 13px; color: var(--navy); }
+.ex-pop { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; width: min(460px, 92vw); max-height: 420px; display: flex; flex-direction: column; background: var(--paper); border: 2px solid var(--ink); box-shadow: 6px 6px 0 rgba(31, 53, 80, .25); }
+.ex-pop[hidden] { display: none; }
+.ex-pophead { display: flex; gap: 8px; padding: 8px; border-bottom: 1px solid var(--ink); }
+.ex-pophead input { flex: 1; font: 500 15px var(--mono); border: 1.5px solid var(--navy); padding: 8px 10px; }
+.ex-mh, .ex-ml li { display: grid; grid-template-columns: 70px minmax(0, 1fr) 100px 110px; gap: 8px; align-items: center; padding: 8px 12px; }
+.ex-mh span:nth-child(3), .ex-mh span:nth-child(4) { text-align: right; }
+.ex-mh { font: 500 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--mute); border-bottom: 1px solid var(--line); }
+.ex-ml { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+.ex-ml li { cursor: pointer; border-bottom: 1px solid var(--line); font: 500 14px var(--mono); }
+.ex-ml li b { font: 700 15px var(--mono); }
+.ex-ml li em { font: 700 9.5px var(--mono); font-style: normal; letter-spacing: .1em; text-transform: uppercase; color: var(--navy); }
+.ex-ml li em:not(:empty) { justify-self: start; background: var(--sky); padding: 2px 6px; }
+.ex-ml li span { text-align: right; min-width: 64px; }
+.ex-ml li.hl, .ex-ml li:hover { background: var(--sky); }
+.ex-ml li.cur b:after { content: " ●"; color: var(--sea); }
+.ex-ml .ex-none { cursor: default; display: block; color: var(--mute); }
+.ex-fl label { font: inherit; }
+.ex-units { display: inline-flex; padding: 0 4px 0 0; }
+.ex-units button { font: 700 12px var(--mono); background: none; color: var(--mute); border: 1px solid var(--rule); border-radius: 0; padding: 5px 8px; margin-left: -1px; cursor: pointer; }
+.ex-units button.on { background: var(--navy); color: #fff; border-color: var(--navy); }
+.ex-conv { margin: 4px 0 0; min-height: 1.4em; font: 500 12px var(--mono); color: var(--navy); letter-spacing: 0; text-transform: none; }
+.ex-inp input:disabled { opacity: .55; cursor: not-allowed; }
+@media (max-width: 760px) {
+  .ex-pop { position: fixed; inset: 0; width: auto; max-height: none; z-index: 60; box-shadow: none; border-width: 0; }
+  .ex-pophead { padding: 12px; } .ex-pophead input { font-size: 16px; padding: 12px; }
+  .ex-ml li { padding: 14px 12px; font-size: 15px; }
+}

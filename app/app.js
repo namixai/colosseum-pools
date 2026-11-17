@@ -49,7 +49,7 @@ const routes = [
   [/^#\/sim\/(0x[0-9a-fA-F]{40})\/exams$/, (m, page) => simExamsView(m[1], page)],
   [/^#\/sim\/(0x[0-9a-fA-F]{40})\/payouts$/, (m, page) => simPayoutsView(m[1], page)],
   [/^#\/manage\/(0x[0-9a-fA-F]{40})$/, (m, page) => simAdminView(m[1], page)],
-  [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => examView(m[1], page)],
+  [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?(?:\?(.*))?$/, (m, page) => examView(m[1], page, m[2])],
   [/^#\/terms$/, (m, page) => termsView(page)],
 ];
 

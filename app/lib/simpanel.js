@@ -8,7 +8,7 @@ import { esc } from "./ui.js";
  *  trading screen #/exam/<exam>, "manage" for #/manage/<pool>, null for any other page. */
 export function panelOf(hash) {
   if (/^#\/sim\/0x[0-9a-fA-F]{40}(?:\/(?:trade|exams|payouts))?(?:\?.*)?$/.test(hash)) return "user";
-  if (/^#\/exam\/0x[0-9a-fA-F]{40}$/.test(hash)) return "user";
+  if (/^#\/exam\/0x[0-9a-fA-F]{40}(?:\?.*)?$/.test(hash)) return "user";
   if (/^#\/manage\/0x[0-9a-fA-F]{40}$/.test(hash)) return "manage";
   return null;
 }
