@@ -1,25 +1,28 @@
-// A simulated pool, the trader's panel: the menu of the pool (six sizes by four tiers), what each line costs and pays,
-// the pool's money, the pool's terms as the chain holds them, and the purchase. Reading, and buying: nothing here
-// manages the pool (its owner's panel is a page of its own, views/simadmin.js, with no link from this one).
-// The reads and the words are app/lib/simlines.js and app/lib/simpool.js; this file only reads the pool and draws.
+// A pool of exams, the user panel: the menu of the pool (six sizes by four tiers), what each line costs, and the
+// purchase. Reading, and buying: nothing here manages the pool (its owner's panel is a page of its own,
+// views/simadmin.js, with no link from this one). Built to mockup 01: no payout column, no
+// strip of facts, no gauge. The states and the words are app/lib/simlines.js; this file reads the pool and draws.
 import * as chain from "../lib/chain.js";
 import { esc, render, $, friendly, refusalName } from "../lib/ui.js";
 import { SIM_POOL_ABI, SIM_FACTORY_ABI, codeHash, purchase } from "../lib/simpool.js";
 import {
-  SIM_LINES_ABI, TERMS_BOOK_ABI, menuRows, traderMoney, moneyHtml, menuHtml, poolRefusal, termsText, isSet,
+  SIM_LINES_ABI, TERMS_BOOK_ABI, menuRows, menuHtml, poolRefusal, termsText, isSet,
 } from "../lib/simlines.js";
+import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
+import { accountLabel, wireShell } from "./simshell.js";
 
 const { ethers } = window;
+const ABI = [...SIM_POOL_ABI, ...SIM_LINES_ABI];
 const ERC20_ABI = [
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
 ];
 
-/** What the pool's page reads: the menu with each line's tier and `lineState`, the pool's money and its terms text. */
+/** What the pool's page reads: the menu with each line's tier and `lineState`, the free money and the terms text. */
 export async function readSimPool(address) {
-  const pool = new ethers.Contract(address, [...SIM_POOL_ABI, ...SIM_LINES_ABI], chain.readProvider);
-  const [menu, tiers, closed, free, floor, held, factory, terms] = await Promise.all([
-    pool.menu(), pool.tiers(), pool.closed(), pool.free(), pool.floor(), pool.held(), pool.factory(), pool.terms(),
+  const pool = new ethers.Contract(address, ABI, chain.readProvider);
+  const [menu, tiers, free, factory, terms] = await Promise.all([
+    pool.menu(), pool.tiers(), pool.free(), pool.factory(), pool.terms(),
   ]);
   const states = await chain.readAll(menu, (_, line) => pool.lineState(line));
   const rows = menuRows({ menu, tiers, states });
@@ -31,7 +34,7 @@ export async function readSimPool(address) {
   } catch {
     text = null;
   }
-  return { rows, closed, money: traderMoney({ free, floor, held }), terms, termsText: text };
+  return { rows, free, terms, termsText: text };
 }
 
 /** The page: `address` is the pool, `query` the link's `?code=` (the group's code the trader was given). */
@@ -39,49 +42,44 @@ export async function simPoolView(address, query, page) {
   const at = ethers.getAddress(address);
   const data = await readSimPool(at);
   const given = new URLSearchParams(query || "").get("code") || "";
-  const state = data.closed ? `<span class="badge bad">Closed to new sales</span>` : `<span class="badge ok">Open</span>`;
-  render(page, `
-    <section class="card pool-head">
-      <h2>Simulation pool ${esc(chain.short(at))} ${state}</h2>
-      <p class="muted">Paper exams: nobody's capital is traded. Pass the exam and then the stage on the same size, and the pool pays
-        8% of the size, once for each stage passed, in USDC from the pool's money.</p>
-      ${moneyHtml(data.money)}
+  render(page, `<div class="sp sp-user">
+    ${userHeaderHtml({ address: at, account: accountLabel() })}
+    <section class="sp-hero">
+      <div class="sp-kick">Pool ${esc(chain.short(at))} · Hyperliquid testnet</div>
+      <h1>How deep<br>is <em>the pool?</em></h1>
+      <p class="sp-lede"><b>Depth = money the pool has free for payouts.</b> Each line is an exam: pass it, then pass the stage on the same size,
+        and the pool pays out. A line sells only while the pool holds <span class="sp-mk">two of its payouts</span> free.</p>
     </section>
-    <section class="card">
-      <h3>Menu</h3>
-      <label class="sim-code">Your group's code
-        <input id="sim-code" type="text" autocomplete="off" spellcheck="false" value="${esc(given)}" placeholder="the code your group gave you">
-      </label>
-      <div id="sim-menu">${menuHtml(data.rows, given)}</div>
-      <p id="sim-status" class="result" role="status"></p>
-    </section>
-    <section class="card">
-      <h3>Terms of this pool</h3>
-      ${data.termsText
-        ? `<pre class="sim-terms">${esc(data.termsText)}</pre>`
-        : `<p class="muted">This pool's terms text could not be read from the chain.</p>`}
-      <p class="muted small mono">terms hash ${esc(data.terms)}</p>
-    </section>`);
+    <div id="sim-menu">${menuHtml(data.rows, data.free, given)}</div>
+    <div class="sp-codebar">
+      <label>Trading group code <input id="sim-code" type="text" autocomplete="off" spellcheck="false" value="${esc(given)}" placeholder="enter your group's code"></label>
+      <span class="sp-why">Every exam is bought with a trading group's code.</span>
+    </div>
+    <p id="sim-status" class="sp-status" role="status"></p>
+    <details class="sp-terms"><summary>Terms of this pool</summary>
+      ${data.termsText ? `<pre>${esc(data.termsText)}</pre>` : `<p class="sp-why">This pool's terms text could not be read from the chain.</p>`}
+      <p class="sp-why">terms hash ${esc(data.terms)}</p></details>
+    ${footerHtml()}</div>`);
+  wireShell(page);
 
   const status = $("#sim-status", page);
   const input = $("#sim-code", page);
   const repaint = () => {
-    $("#sim-menu", page).innerHTML = menuHtml(data.rows, input.value);
+    $("#sim-menu", page).innerHTML = menuHtml(data.rows, data.free, input.value);
   };
   input.addEventListener("input", repaint);
   $("#sim-menu", page).addEventListener("click", async (e) => {
-    const button = e.target.closest("button.sim-buy");
+    const button = e.target.closest("button.sp-buy");
     if (!button || button.disabled) return;
     const line = Number(button.dataset.line);
-    const all = page.querySelectorAll("button.sim-buy");
-    all.forEach((b) => (b.disabled = true));
-    status.className = "result busy";
+    page.querySelectorAll("button.sp-buy").forEach((b) => (b.disabled = true));
+    status.className = "sp-status busy";
     status.textContent = "Working…";
     try {
       status.textContent = await buy(at, data, line, input.value);
-      status.className = "result ok";
+      status.className = "sp-status ok";
     } catch (err) {
-      status.className = "result err";
+      status.className = "sp-status err";
       status.textContent = answer(err);
     } finally {
       repaint();
@@ -91,8 +89,7 @@ export async function simPoolView(address, query, page) {
 
 /** The pool's own refusal in words, or the wallet's and the node's as the app words them. */
 function answer(err) {
-  const iface = new ethers.Interface(SIM_LINES_ABI);
-  const name = refusalName(err, iface);
+  const name = refusalName(err, new ethers.Interface(SIM_LINES_ABI));
   const args = err?.revert?.args ? [...err.revert.args] : [];
   return poolRefusal(name, args) || friendly(err);
 }
@@ -101,7 +98,7 @@ function answer(err) {
 async function buy(address, data, line, codeText) {
   if (!chain.currentSigner()) await chain.connect();
   const signer = chain.currentSigner();
-  const pool = new ethers.Contract(address, [...SIM_POOL_ABI, ...SIM_LINES_ABI], signer);
+  const pool = new ethers.Contract(address, ABI, signer);
   // Not trimmed inside the library and not folded: a code is its text exactly. Stray spaces at the ends of the input are not part of it.
   const code = codeHash(codeText.trim(), ethers.keccak256);
   const set = await pool.codeOf(code);

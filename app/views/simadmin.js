@@ -1,31 +1,29 @@
-// A simulated pool, the control panel, owner's section: the switch of each line and the pool's money as the owner
-// reads it. A page of its own at #/manage/<pool>: no link to it from the trader's navigation, and none from the
-// trader's panel. The wallet gives the account and the pool's `creator()` the role; only the creator sees the
-// switches. The contract holds the right either way (`setLine` is `onlyCreator`): this page only shows it.
-// Withdrawing and finishing, the codes and the operator's section are the panel's next sections (SECTIONS).
+// A pool of exams, the control panel, owner's section: the pool's money in four parts and the switch of each line.
+// A page of its own at #/manage/<pool> with a header of its own (mockup 02): no link to it from
+// the site's navigation, and none from the user panel. The wallet gives the account and the pool's `creator()` the
+// role; only the creator sees the money and the switches. The contract holds the right either way (`setLine` is
+// `onlyCreator`): this page only shows it. Codes, withdrawing and finishing are the panel's next sections.
 import * as chain from "../lib/chain.js";
 import { esc, render, $, friendly, refusalName } from "../lib/ui.js";
 import { SIM_POOL_ABI } from "../lib/simpool.js";
 import {
   SIM_LINES_ABI, SIM_OWNER_ABI, menuRows, roleOf, ownerMoney, moneyHtml, switchesHtml, poolRefusal,
 } from "../lib/simlines.js";
-import { PANEL_SECTIONS, panelNavHtml, notOwnerHtml, noWalletHtml } from "../lib/simpanel.js";
+import { manageHeaderHtml, footerHtml, notOwnerHtml, noWalletHtml } from "../lib/simpanel.js";
+import { accountLabel, wireShell } from "./simshell.js";
 
 const { ethers } = window;
 const ABI = [...SIM_POOL_ABI, ...SIM_LINES_ABI, ...SIM_OWNER_ABI];
 
-function nav(address) {
-  return panelNavHtml(address, "lines", PANEL_SECTIONS);
-}
-
-/** What the owner's section reads: the lines with their `lineState`, and the pool's money. Read only for the creator. */
+/** What the owner's section reads: the lines with their `lineState`, and the pool's money in its parts. */
 export async function readOwnerPool(address) {
   const pool = new ethers.Contract(address, ABI, chain.readProvider);
-  const [menu, tiers, free, floor, sharesDue, principal, closed] = await Promise.all([
-    pool.menu(), pool.tiers(), pool.free(), pool.floor(), pool.sharesDue(), pool.principal(), pool.closed(),
+  const [menu, tiers, free, floor, owed, reserved, held, staged, sharesDue] = await Promise.all([
+    pool.menu(), pool.tiers(), pool.free(), pool.floor(), pool.owed(), pool.reserved(), pool.held(), pool.staged(), pool.sharesDue(),
   ]);
   const states = await chain.readAll(menu, (_, line) => pool.lineState(line));
-  return { rows: menuRows({ menu, tiers, states }), closed, money: ownerMoney({ free, principal, sharesDue, floor }) };
+  return { rows: menuRows({ menu, tiers, states }),
+    money: ownerMoney({ free, owed, reserved, held, staged, sharesDue, floor }) };
 }
 
 export async function simAdminView(address, page) {
@@ -33,56 +31,56 @@ export async function simAdminView(address, page) {
   const pool = new ethers.Contract(at, ABI, chain.readProvider);
   const creator = await pool.creator();
   const role = roleOf(chain.currentAddress(), creator);
+  const name = `Pool ${chain.short(at)}`;
+  const header = manageHeaderHtml({ address: at, account: accountLabel(), role, poolName: name });
   if (role !== "owner") {
     // Nothing of the pool is read for anyone else: the panel says what it is, and who it is for.
-    render(page, role === "no-wallet" ? noWalletHtml() : notOwnerHtml());
-    const connect = $("#panel-connect", page);
-    if (connect) connect.addEventListener("click", () => chain.connect().catch((err) => alert(friendly(err))));
+    render(page, `<div class="sp sp-manage">${header}${role === "no-wallet" ? noWalletHtml() : notOwnerHtml()}${footerHtml()}</div>`);
+    wireShell(page);
     return;
   }
   const data = await readOwnerPool(at);
-  render(page, `
-    ${nav(at)}
-    <section class="card pool-head">
-      <h2>Pool ${esc(chain.short(at))} · owner ${data.closed ? `<span class="badge bad">Closed</span>` : `<span class="badge ok">Open</span>`}</h2>
-      ${moneyHtml(data.money)}
+  render(page, `<div class="sp sp-manage">${header}
+    <section class="sp-hero sp-hd">
+      <div class="sp-kick">Owner panel · ${esc(name)} · Hyperliquid testnet</div>
+      <h1>The pool's <em>water level</em></h1>
+      <p class="sp-lede">Water level = the pool's money. A line can sell, or be switched on, only while the free money covers <span class="sp-mk">two of its payouts</span>.</p>
     </section>
-    <section class="card">
-      <h3>Lines</h3>
-      <p class="muted">A line sells only while it is switched on here and the pool has the money for two of its payouts.
-        You can switch a line off at any time. You can switch it on only when the pool has that money; no line switches itself on.</p>
-      <div id="sim-switches">${switchesHtml(data.rows)}</div>
-      <p id="sim-status" class="result" role="status"></p>
-    </section>`);
+    ${moneyHtml(data.money)}
+    <div id="sim-switches">${switchesHtml(data.rows, data.money.free)}</div>
+    <p id="sim-status" class="sp-status" role="status"></p>
+    ${footerHtml()}</div>`);
+  wireShell(page);
 
   const status = $("#sim-status", page);
   $("#sim-switches", page).addEventListener("click", async (e) => {
-    const button = e.target.closest("button.sim-switch");
+    const button = e.target.closest("button.sp-tg");
     if (!button || button.disabled) return;
     const line = Number(button.dataset.line);
     const on = button.dataset.next === "true";
-    page.querySelectorAll("button.sim-switch").forEach((b) => (b.disabled = true));
-    status.className = "result busy";
+    page.querySelectorAll("button.sp-tg").forEach((b) => (b.disabled = true));
+    status.className = "sp-status busy";
     status.textContent = "Working…";
+    let words;
+    let ok = false;
     try {
       if (!chain.currentSigner()) await chain.connect();
       const signed = new ethers.Contract(at, ABI, chain.currentSigner());
       const receipt = await (await signed.setLine(line, on)).wait();
       chain.forgetLiveReads();
       if (!receipt || receipt.status !== 1) throw new Error("the switch reverted");
-      await simAdminView(at, page);
-      const after = $("#sim-status", page);
-      after.className = "result ok";
-      after.textContent = `Line ${line} switched ${on ? "on" : "off"} (transaction ${receipt.hash}).`;
+      words = `Line ${line} switched ${on ? "on" : "off"} (transaction ${receipt.hash}).`;
+      ok = true;
     } catch (err) {
-      status.className = "result err";
       const iface = new ethers.Interface(SIM_LINES_ABI);
-      status.textContent = poolRefusal(refusalName(err, iface), err?.revert?.args ? [...err.revert.args] : []) || friendly(err);
-      // The switches come back as the chain has them now, not as they were before the refusal.
-      await simAdminView(at, page);
-      const after = $("#sim-status", page);
-      after.className = "result err";
-      after.textContent = status.textContent;
+      words = poolRefusal(refusalName(err, iface), err?.revert?.args ? [...err.revert.args] : []) || friendly(err);
+    }
+    // The switches come back as the chain has them now, whether the switch went through or was refused.
+    await simAdminView(at, page);
+    const after = $("#sim-status", page);
+    if (after) {
+      after.className = `sp-status ${ok ? "ok" : "err"}`;
+      after.textContent = words;
     }
   });
 }

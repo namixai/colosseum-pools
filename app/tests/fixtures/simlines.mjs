@@ -1,23 +1,22 @@
-// A made-up simulated pool's menu as the chain would answer it: 24 lines, six sizes by four tiers, and `lineState` as
-// SimPool computes it from the owner's switches, the free money and whether the pool is closed. Used by the tests of
+// A made-up pool's menu as the chain would answer it: 24 lines, six sizes by four tiers, and `lineState` as SimPool
+// computes it from the owner's switches, the free money and whether the pool is closed. The sizes, tiers and prices are
+// the first pool's plan (deployments/plans/sim-first-pool.json; the test holds them to it). Used by the tests of
 // app/lib/simlines.js and by the preview of the two panels; none of it is a real pool's.
 const USDC = 1_000_000n;
 export const SIZES = [5_000n, 10_000n, 25_000n, 50_000n, 100_000n, 250_000n].map((n) => n * USDC);
-// 3 / 9, 4 / 10, 5 / 10 and 6 / 10 %, each with the loss line that trails up to the start (drawdownKind 1).
-export const TIERS = [[900, 300, 1], [1000, 400, 1], [1000, 500, 1], [1000, 600, 1]];
-// Prices are the fixture's own: a share of the size that rises with the tier.
-const PRICE_BPS = [90n, 110n, 130n, 150n];
+// The loss limit, the target and the kind of loss line (1: trailing up to the start): 3 / 9, 4 / 10, 5 / 10, 6 / 10 %.
+export const TIERS = [[300, 900, 1], [400, 1000, 1], [500, 1000, 1], [600, 1000, 1]];
+// The price of each line in dollars, size by size, tier by tier.
+export const PRICES = [20, 30, 40, 50, 40, 60, 79, 95, 100, 150, 198, 238, 200, 300, 395, 475, 400, 600, 790, 950, 1000, 1500, 1975, 2375];
 
 /** The pool's `menu()` and `tiers()`, in the order of its lines: the sizes in turn, the tiers within each. */
 export function menu() {
   const m = [];
   const t = [];
-  for (const size of SIZES) {
-    TIERS.forEach((tier, i) => {
-      m.push([size, size * PRICE_BPS[i] / 10_000n]);
-      t.push(tier);
-    });
-  }
+  SIZES.forEach((size, s) => TIERS.forEach((tier, i) => {
+    m.push([size, BigInt(PRICES[s * 4 + i]) * USDC]);
+    t.push(tier);
+  }));
   return { menu: m, tiers: t };
 }
 

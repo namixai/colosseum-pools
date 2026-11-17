@@ -15,6 +15,7 @@ import { sharedView } from "./views/shared.js";
 import { evidenceView } from "./views/evidence.js";
 import { simPoolView } from "./views/simpool.js";
 import { simAdminView } from "./views/simadmin.js";
+import { panelOf } from "./lib/simpanel.js";
 
 const GATE_KEY = "pools-gate-v1";
 
@@ -129,6 +130,10 @@ function viewFor(hash) {
 
 function route() {
   const hash = location.hash || "#/";
+  // A pool's two panels draw a header and a footer of their own; the site's are hidden for them (app/style.css).
+  const panel = panelOf(hash);
+  if (panel) document.body.dataset.panel = panel;
+  else delete document.body.dataset.panel;
   if (needsGate(hash, gatePassed())) openGate();
   // A note of the page being left must not land in the entry of the page being opened.
   clearTimeout(scrollNote);

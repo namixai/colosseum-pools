@@ -1,55 +1,78 @@
 // node --test app/tests/simlines.test.mjs
 //
-// The two panels of a simulated pool (app/lib/simlines.js, app/lib/simpanel.js, views/simpool.js, views/simadmin.js):
-// each state of a line for the trader, each state of the owner's switch, the money each panel shows, who sees what,
-// and that neither panel carries the other's controls. On a made-up pool's reads (fixtures/simlines.mjs), shaped as
-// SimPool answers them.
+// The two panels of a pool of exams (app/lib/simlines.js, app/lib/simpanel.js, views/simpool.js, views/simadmin.js),
+// built to the approved mockups 01 and 02: each state of a line for the trader, each state of the owner's switch, the
+// money the owner reads, who sees what, the words Alex struck (a simulation, a paper exam, a fixed payout sum on the
+// trader's page), and that neither panel carries the other's controls or a link to it. On a made-up pool's reads
+// (fixtures/simlines.mjs), shaped as SimPool answers them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  SIM_LINES_ABI, SIM_OWNER_ABI, TERMS_BOOK_ABI, tierOf, menuRows, tradeState, buyControl, switchState, menuGrid, roleOf,
-  traderMoney, ownerMoney, poolRefusal, termsText, isSet, moneyHtml, menuHtml, switchesHtml,
+  SIM_LINES_ABI, SIM_OWNER_ABI, TERMS_BOOK_ABI, COVER_PAYOUTS, dollars, tierOf, menuRows, tradeState, buyControl,
+  switchState, sizeGroups, sizeNotes, sizeStatus, roleOf, ownerMoney, poolRefusal, termsText, isSet, menuHtml,
+  moneyHtml, switchesHtml,
 } from "../lib/simlines.js";
-import { PANEL_SECTIONS, panelNavHtml, notOwnerHtml, noWalletHtml } from "../lib/simpanel.js";
-import { menu, lineStates, FIRST_ON, SIZES } from "./fixtures/simlines.mjs";
+import {
+  panelOf, USER_NAV, MANAGE_NAV, userHeaderHtml, manageHeaderHtml, footerHtml, notOwnerHtml, noWalletHtml,
+} from "../lib/simpanel.js";
+import { menu, lineStates, FIRST_ON, SIZES, PRICES, TIERS } from "./fixtures/simlines.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (...p) => readFileSync(join(ROOT, ...p), "utf8");
 const POOL_SOL = read("src", "sim", "SimPool.sol");
-const USDC = 1_000_000n;
+const U = 1_000_000n;
 
-const pool = ({ on = FIRST_ON, free = 100_000n * USDC, closed = false } = {}) => {
+const pool = ({ on = FIRST_ON, free = 3_600n * U, closed = false } = {}) => {
   const { menu: m, tiers } = menu();
   return menuRows({ menu: m, tiers, states: lineStates({ on, free, closed }) });
 };
-const line = (rows, size, tier) => rows.find((r) => r.size === BigInt(size) * USDC && r.tier.short.startsWith(`${tier}%`));
+const line = (rows, size, loss) => rows.find((r) => r.size === BigInt(size) * U && r.tier.short.startsWith(`${loss}%`));
+const cellsOf = (html, state) => html.split('<div class="sp-cell ').filter((c) => c.startsWith(`${state}"`) || c.includes(`data-state="${state}"`));
+const noComments = (s) => s.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
 
-test("a tier is read from the pool's own numbers, and said as target / loss limit", () => {
-  const t = tierOf([900, 300, 1]);
-  assert.equal(t.short, "3% / 9%");
-  assert.equal(t.words, "3% target, 9% loss limit, trailing to start");
-  assert.equal(tierOf({ maxDrawdownBps: 1000, targetBps: 450, drawdownKind: 0 }).short, "4.5% / 10%");
-  assert.match(tierOf([1000, 600, 0]).words, /from start/);
+test("the fixture is the first pool's plan: sizes, tiers (loss, target), prices", () => {
+  const plan = JSON.parse(read("deployments", "plans", "sim-first-pool.json")).menu;
+  const { menu: m, tiers } = menu();
+  assert.equal(m.length, plan.length);
+  plan.forEach((p, i) => {
+    assert.equal(m[i][0], BigInt(p.size_usdc) * U);
+    assert.equal(m[i][1], BigInt(p.price_usdc) * U);
+    assert.deepEqual(tiers[i], [p.max_drawdown_bps, p.target_bps, p.drawdown_kind]);
+  });
+  assert.equal(PRICES.length, 24);
+  assert.equal(SIZES.length * TIERS.length, 24);
 });
 
-test("the menu has 24 lines: six sizes by four tiers, each with its price and the 8 % payout from the chain's numbers", () => {
+test("a tier is the pool's own numbers, loss limit first, as the mockup says it", () => {
+  const t = tierOf([300, 900, 1]);
+  assert.equal(t.label, "loss 3% · target 9%");
+  assert.equal(t.short, "3% / 9%");
+  assert.equal(t.words, "3% loss limit, 9% target, trailing to start");
+  assert.equal(tierOf({ maxDrawdownBps: 450, targetBps: 1000, drawdownKind: 0 }).short, "4.5% / 10%");
+  assert.match(tierOf([600, 1000, 0]).words, /from start/);
+});
+
+test("the menu has 24 lines in six sizes by four tiers, each need two payouts of 8 % of its size", () => {
+  assert.equal(COVER_PAYOUTS, 2n);
+  assert.match(POOL_SOL, /uint256 constant COVER_PAYOUTS = 2;/);
   const rows = pool();
   assert.equal(rows.length, 24);
   const r = line(rows, 5_000, 3);
-  assert.equal(r.price, 45n * USDC);
-  assert.equal(r.payout, 400n * USDC);
-  const grid = menuGrid(rows);
-  assert.equal(grid.sizes.length, 6);
-  assert.equal(grid.tiers.length, 4);
-  assert.deepEqual(grid.tiers.map((t) => t.short), ["3% / 9%", "4% / 10%", "5% / 10%", "6% / 10%"]);
-  assert.ok(grid.cells.every((row) => row.length === 4 && row.every(Boolean)), "every cell has its line");
-  // Whatever order the pool lists its lines in, the grid reads size by size, tier by tier.
-  const shuffled = [...rows].reverse();
-  assert.deepEqual(menuGrid(shuffled).sizes, SIZES);
-  assert.deepEqual(menuGrid(shuffled).tiers.map((t) => t.short), grid.tiers.map((t) => t.short));
+  assert.equal(r.price, 20n * U);
+  assert.equal(r.payout, 400n * U);
+  assert.equal(r.need, 800n * U);
+  const { tiers, groups } = sizeGroups(rows);
+  assert.deepEqual(tiers.map((t) => t.label), ["loss 3% · target 9%", "loss 4% · target 10%", "loss 5% · target 10%", "loss 6% · target 10%"]);
+  assert.equal(groups.length, 6);
+  assert.deepEqual(groups.map((g) => g.size), SIZES);
+  assert.ok(groups.every((g) => g.lines.length === 4 && g.lines.every(Boolean)));
+  // Whatever order the pool lists its lines in.
+  const back = sizeGroups([...rows].reverse());
+  assert.deepEqual(back.groups.map((g) => g.size), SIZES);
+  assert.deepEqual(back.tiers.map((t) => t.label), tiers.map((t) => t.label));
 });
 
 test("a menu whose tiers or states do not match its lines is refused, not guessed", () => {
@@ -58,101 +81,100 @@ test("a menu whose tiers or states do not match its lines is refused, not guesse
   assert.throws(() => menuRows({ menu: m, tiers, states: lineStates({ on: [], free: 0n }).slice(1) }), /24 lines/);
 });
 
-// ── the trader's four states of a line ────────────────────────────────────────────────────────────────────────
-
-test("trader, a line on and covered is on sale: its button is active once a code is given", () => {
-  const r = line(pool(), 5_000, 3);
-  assert.equal(r.sells, true);
-  assert.deepEqual(tradeState(r), { kind: "sells", words: "On sale" });
-  assert.deepEqual(buyControl(r, "GROUP-ONE"), { shown: true, enabled: true, why: "" });
+test("dollars are written as the mockups write them", () => {
+  assert.equal(dollars(20n * U), "$20");
+  assert.equal(dollars(3_600n * U), "$3,600");
+  assert.equal(dollars(2_375n * U + 500_000n), "$2,375.50");
 });
 
-test("trader, a line on and sold with no code asked: the button is disabled and says a code is needed", () => {
+// ── the trader's states of a line ─────────────────────────────────────────────────────────────────────────────
+
+test("trader, on sale: 'Buy $20', active once a code is given; without one it waits and says why", () => {
   const r = line(pool(), 5_000, 3);
+  assert.equal(r.sells, true);
+  assert.equal(tradeState(r).kind, "sells");
+  assert.deepEqual(buyControl(r, "GROUP-ONE"), { shown: true, enabled: true, label: "Buy $20", why: "" });
   for (const code of ["", "   ", undefined]) {
     const c = buyControl(r, code);
-    assert.equal(c.shown, true);
-    assert.equal(c.enabled, false);
+    assert.deepEqual([c.shown, c.enabled, c.label], [true, false, "Buy $20"]);
     assert.match(c.why, /code/);
   }
 });
 
-test("trader, a line on but the pool lacks the money for two payouts: disabled, and why, with the sum", () => {
-  // 10 000 USDC free is 20 000 payouts' worth short of... the 250 000 line needs 2 x 20 000 = 40 000.
-  const rows = pool({ on: [...FIRST_ON, 20], free: 30_000n * USDC });
-  const r = rows[20];
-  assert.equal(r.size, 250_000n * USDC);
-  assert.equal(r.on, true);
-  assert.equal(r.sells, false);
-  assert.equal(r.short, 10_000n * USDC);
-  const s = tradeState(r);
-  assert.equal(s.kind, "short");
-  assert.match(s.words, /short by 10,000\.00 USDC/);
+test("trader, on but the pool is short: 'Short $400', disabled whatever the code, with the sum", () => {
+  const r = line(pool(), 25_000, 3);
+  assert.deepEqual([r.on, r.sells, r.short], [true, false, 400n * U]);
+  assert.equal(tradeState(r).kind, "short");
   const c = buyControl(r, "GROUP-ONE");
-  assert.equal(c.shown, true);
-  assert.equal(c.enabled, false, "a code does not open it");
-  assert.match(c.why, /short by 10,000\.00 USDC/);
+  assert.deepEqual([c.shown, c.enabled, c.label], [true, false, "Short $400"]);
 });
 
-test("trader, a line on in a pool that is closed to new sales: disabled, and why", () => {
-  const rows = pool({ closed: true });
-  const r = line(rows, 5_000, 3);
-  assert.equal(r.on, true);
-  assert.equal(r.sells, false);
-  assert.equal(r.short, 0n);
+test("trader, on in a closed pool: disabled and says closed", () => {
+  const r = line(pool({ closed: true }), 5_000, 3);
+  assert.deepEqual([r.on, r.sells, r.short], [true, false, 0n]);
   assert.equal(tradeState(r).kind, "closed");
   const c = buyControl(r, "GROUP-ONE");
-  assert.deepEqual([c.shown, c.enabled], [true, false]);
-  assert.match(c.why, /closed to new sales/);
+  assert.deepEqual([c.shown, c.enabled, c.label], [true, false, "Closed"]);
 });
 
-test("trader, a line the owner switched off is shown grey with no button, whatever the pool holds", () => {
-  const rows = pool({ free: 10_000_000n * USDC });
-  const r = line(rows, 250_000, 6);
+test("trader, switched off by the owner: no button at all, whatever the pool holds", () => {
+  const r = line(pool({ free: 10_000_000n * U }), 250_000, 6);
   assert.equal(r.on, false);
-  assert.equal(r.canSwitchOn, true, "the pool could cover it, and it is still off: a line never switches itself on");
+  assert.equal(r.canSwitchOn, true, "the pool could cover it; a line never switches itself on");
   assert.equal(tradeState(r).kind, "off");
-  assert.deepEqual(buyControl(r, "GROUP-ONE"), { shown: false, enabled: false, why: "Switched off by the pool's owner" });
+  assert.equal(buyControl(r, "GROUP-ONE").shown, false);
 });
 
-test("trader's page: only the lines on sale have an active button; a line off has none at all; the owner's controls are absent", () => {
-  const rows = pool({ on: [...FIRST_ON, 20], free: 30_000n * USDC });
-  const html = menuHtml(rows, "GROUP-ONE");
-  const cells = (state) => html.split("<td ").filter((c) => c.includes(`data-state="${state}"`));
-  assert.equal(cells("sells").length, 12);
-  assert.ok(cells("sells").every((c) => /<button[^>]*class="sim-buy"[^>]*data-line="\d+"(?![^>]*disabled)/.test(c)), "each line on sale has an active button");
-  assert.equal(cells("short").length, 1);
-  assert.ok(cells("short").every((c) => /class="sim-buy"[^>]* disabled/.test(c) && /short by 10,000\.00 USDC/.test(c)));
-  assert.equal(cells("off").length, 11);
-  assert.ok(cells("off").every((c) => !c.includes("<button") && /Switched off by the pool/.test(c)));
-  assert.equal((html.match(/<button/g) || []).length, 13, "twelve on sale and one short; none for the eleven off");
-  assert.ok(!/sim-switch|setLine|role="switch"/.test(html), "no control of the pool's management on the trader's page");
-  // Without a code every button waits.
-  assert.ok(!/class="sim-buy"[^>]*data-line="\d+"(?![^>]*disabled)/.test(menuHtml(rows, "")));
+test("trader's menu, the mockup's state: 5K and 10K on sale, 25K short $400, 50K, 100K and 250K off", () => {
+  const html = menuHtml(pool(), 3_600n * U, "GROUP-ONE");
+  const sections = html.split('<section class="sp-size ').slice(1);
+  assert.deepEqual(sections.map((s) => s.split('"')[0]), ["sale", "sale", "short", "off", "off", "off"]);
+  assert.equal(cellsOf(html, "sells").length, 8);
+  assert.equal(cellsOf(html, "short").length, 4);
+  assert.equal(cellsOf(html, "off").length, 12);
+  assert.ok(cellsOf(html, "sells").every((c) => /class="sp-buy"[^>]*data-line="\d+"(?![^>]*disabled)/.test(c)));
+  assert.ok(cellsOf(html, "short").every((c) => /class="sp-buy"[^>]* disabled[^>]*>Short \$400</.test(c)));
+  assert.ok(cellsOf(html, "off").every((c) => !c.includes("<button") && c.includes(">Off<")));
+  assert.equal((html.match(/<button/g) || []).length, 12, "no button for the twelve lines off");
+  // The mockup's own words.
+  assert.match(html, /On sale\.<\/b> The pool has \$3,600 free; this size needs \$800 \(two payouts\)\./);
+  assert.match(html, /On sale\.<\/b> The pool has \$3,600 free; this size needs \$1,600 \(two payouts\)\./);
+  assert.match(html, /On, but the pool is short of money\.<\/b> It has \$3,600 free and needs \$4,000 for two payouts, \$400 short\. Buying comes back by itself when money returns\./);
+  assert.match(html, /Switched off by the pool owner\.<\/b> Not for sale\./);
+  assert.match(html, />Buy \$20</);
+  assert.match(html, />Buy \$95</);
+  assert.match(html, /Menu · 6 sizes × 4 tiers · 24 lines/);
+  // Without a code every Buy waits; the rest does not change.
+  assert.ok(!/class="sp-buy"[^>]*data-line="\d+"(?![^>]*disabled)/.test(menuHtml(pool(), 3_600n * U, "")));
 });
 
-test("the menu's prices and payouts are the chain's, in the cells", () => {
-  const html = menuHtml(pool(), "x");
-  assert.match(html, /45\.00 USDC/, "5 000 on the 3 % tier costs 45.00 in this fixture");
-  assert.match(html, /pays 400\.00 USDC per stage passed/);
-  assert.match(html, /pays 20,000\.00 USDC per stage passed/, "250 000 pays 20 000");
+test("trader's menu: no payout column, no payout sum, no gauge, no facts strip, no management control", () => {
+  const html = menuHtml(pool(), 3_600n * U, "GROUP-ONE");
+  assert.ok(!/payout[^s]/i.test(html.replace(/two payouts/g, "")), "no payout sum or column");
+  assert.ok(!/\$400[^<]*<\/div><button|pays|8%|8 %/.test(html), "no fixed payout");
+  assert.ok(!/gauge|Money free for payouts|locked at opening|payouts a day/i.test(html));
+  assert.ok(!/sp-tg|role="switch"|setLine|sp-swc/.test(html));
+  for (const [, tag] of html.matchAll(/data-line="(\d+)"/g)) assert.ok(Number(tag) < 24);
+});
+
+test("a pool that is closed says so under each size that is on", () => {
+  const html = menuHtml(pool({ closed: true }), 3_600n * U, "GROUP-ONE");
+  // The 25K lines are short as well as closed: lineState answers the sum it lacks whatever the pool's state.
+  assert.equal(cellsOf(html, "closed").length, 8);
+  assert.equal(cellsOf(html, "short").length, 4);
+  assert.match(html, /On, but the pool is closed to new sales\./);
 });
 
 // ── the owner's states of a switch ────────────────────────────────────────────────────────────────────────────
 
 test("owner, a line on and selling: the switch is on and can be switched off", () => {
-  const r = line(pool(), 5_000, 3);
-  assert.deepEqual(switchState(r), { kind: "on", checked: true, enabled: true, next: false, note: "On sale" });
+  assert.deepEqual(switchState(line(pool(), 5_000, 3)), { kind: "on", checked: true, enabled: true, next: false, note: "On sale" });
 });
 
-test("owner, a line on that the pool cannot cover now: still on, still off-able, with the sum it lacks", () => {
-  const r = pool({ on: [...FIRST_ON, 20], free: 30_000n * USDC })[20];
-  const s = switchState(r);
-  assert.equal(s.kind, "on-idle");
-  assert.equal(s.checked, true);
-  assert.equal(s.enabled, true, "off can always be done");
-  assert.equal(s.next, false);
-  assert.match(s.note, /short by 10,000\.00 USDC/);
+test("owner, a line on that the pool cannot cover now: still on, off-able, with the sum it lacks", () => {
+  const s = switchState(line(pool(), 25_000, 3));
+  assert.deepEqual([s.kind, s.checked, s.enabled, s.next], ["on-idle", true, true, false]);
+  assert.match(s.note, /short by \$400/);
 });
 
 test("owner, a line on in a closed pool: still on and can be switched off", () => {
@@ -162,51 +184,56 @@ test("owner, a line on in a closed pool: still on and can be switched off", () =
 });
 
 test("owner, a line off that the pool can cover: the switch can be switched on", () => {
-  const r = line(pool({ free: 1_000_000n * USDC }), 250_000, 3);
-  assert.deepEqual(switchState(r), {
-    kind: "off-ready", checked: false, enabled: true, next: true,
-    note: "Off. The pool has the money for two payouts of this line: it can be switched on",
-  });
+  const s = switchState(line(pool({ free: 1_000_000n * U }), 250_000, 3));
+  assert.deepEqual([s.kind, s.checked, s.enabled, s.next], ["off-ready", false, true, true]);
 });
 
-test("owner, a line off that the pool cannot cover: the switch is disabled and the note names the sum it lacks", () => {
-  const r = line(pool({ free: 30_000n * USDC }), 250_000, 3);
-  const s = switchState(r);
-  assert.equal(s.kind, "off-short");
-  assert.equal(s.enabled, false);
-  assert.equal(s.checked, false);
-  assert.equal(s.note, "Off. Cannot be switched on: short by 10,000.00 USDC");
+test("owner, a line off that the pool cannot cover: disabled, the sum it lacks beside it", () => {
+  const s = switchState(line(pool(), 50_000, 3));
+  assert.deepEqual([s.kind, s.checked, s.enabled], ["off-short", false, false]);
+  assert.equal(s.note, "Off. Cannot be switched on: short by $4,400");
 });
 
-test("owner, a line off in a closed pool: the switch is disabled, the pool is the reason", () => {
-  const s = switchState(line(pool({ closed: true, free: 1_000_000n * USDC }), 250_000, 3));
+test("owner, a line off in a closed pool: disabled, the pool is the reason", () => {
+  const s = switchState(line(pool({ closed: true, free: 1_000_000n * U }), 250_000, 3));
   assert.deepEqual([s.kind, s.enabled, s.checked], ["off-closed", false, false]);
   assert.match(s.note, /pool is closed/);
 });
 
-test("owner's panel: 24 switches, each as its state allows, no purchase control; the sum is beside a disabled one", () => {
-  const rows = pool({ on: [...FIRST_ON, 20], free: 30_000n * USDC });
-  const html = switchesHtml(rows);
+test("owner's switches, the mockup's state: shortfalls $4,400, $12,400 and $36,400 beside the switches that cannot turn on", () => {
+  const html = switchesHtml(pool(), 3_600n * U);
   assert.equal((html.match(/role="switch"/g) || []).length, 24);
-  const cells = (kind) => html.split("<td ").filter((c) => c.includes(`data-switch="${kind}"`));
-  assert.equal(cells("on").length, 12);
-  assert.equal(cells("on-idle").length, 1);
-  assert.equal(cells("off-ready").length, 8, "the 50 000 and 100 000 lines are covered by 30 000 free");
-  assert.equal(cells("off-short").length, 3, "the other three 250 000 lines are not");
-  assert.ok(cells("off-ready").every((c) => !/<button[^>]* disabled/.test(c) && /aria-checked="false"/.test(c)));
-  assert.ok(cells("on").every((c) => !/<button[^>]* disabled/.test(c) && /aria-checked="true"/.test(c)));
-  assert.ok(cells("on-idle").every((c) => !/<button[^>]* disabled/.test(c)), "a line on can always be switched off");
-  assert.ok(cells("off-short").every((c) => /<button[^>]* disabled/.test(c) && /short by/.test(c)));
-  assert.ok(!/sim-buy|Buy exam/.test(html), "the owner's panel has no purchase button");
-  // Money enough for the lines off: every one that is off becomes switchable.
-  const ready = switchesHtml(pool({ free: 1_000_000n * USDC }));
-  assert.equal(ready.split("<td ").filter((c) => c.includes('data-switch="off-ready"')).length, 12);
-  assert.ok(ready.split("<td ").filter((c) => c.includes('data-switch="off-ready"')).every((c) => !/<button[^>]* disabled/.test(c)));
+  const cells = (kind) => html.split('<div class="sp-swc ').filter((c) => c.startsWith(`${kind}"`));
+  assert.equal(cells("on").length, 8);
+  assert.equal(cells("on-idle").length, 4);
+  assert.equal(cells("off-short").length, 12);
+  assert.ok(cells("on").concat(cells("on-idle")).every((c) => !/<button[^>]* disabled/.test(c) && /aria-checked="true"/.test(c)), "a line on can always be switched off");
+  assert.ok(cells("off-short").every((c) => /<button[^>]* disabled/.test(c) && /aria-checked="false"/.test(c)));
+  assert.match(html, /needs \$8,000 free for two payouts\. Short \$4,400\./);
+  assert.match(html, /needs \$16,000 free for two payouts\. Short \$12,400\./);
+  assert.match(html, /needs \$40,000 free for two payouts\. Short \$36,400\./);
+  assert.match(html, /pool short \$400\. Sells again by itself when money returns\. You can switch it off\./);
+  assert.match(html, /free \$3,600 ≥ needs \$800/);
+  assert.match(html, /payout \$400<br>needs \$800/);
+  assert.ok(!/sp-buy|Buy \$/.test(html), "no purchase control on the owner's panel");
+  // Money enough: every line that is off can be switched on.
+  const ready = switchesHtml(pool({ free: 1_000_000n * U }), 1_000_000n * U);
+  const off = ready.split('<div class="sp-swc ').filter((c) => c.startsWith('off-ready"'));
+  assert.equal(off.length, 12);
+  assert.ok(off.every((c) => !/<button[^>]* disabled/.test(c) && /data-next="true"/.test(c)));
+});
+
+test("a size with lines in different states says each, with a count", () => {
+  const rows = pool({ on: [0, 1, 16] });
+  const g = sizeGroups(rows).groups[0];
+  assert.deepEqual(sizeStatus(g, 3_600n * U).badges.map((b) => b.label), ["On · selling ×2", "Off · can switch on ×2"]);
+  assert.deepEqual(sizeNotes(g, 3_600n * U).map((n) => n.kind), ["sells", "off"]);
 });
 
 // ── role, money, words ────────────────────────────────────────────────────────────────────────────────────────
 
 const OWNER = "0x00000000000000000000000000000000000000Aa";
+const POOL_ADDR = "0x0000000000000000000000000000000000009001";
 
 test("the role comes from the pool's creator: the owner, someone else, no wallet", () => {
   assert.equal(roleOf(OWNER.toLowerCase(), OWNER), "owner");
@@ -215,53 +242,34 @@ test("the role comes from the pool's creator: the owner, someone else, no wallet
   assert.equal(roleOf(undefined, OWNER), "no-wallet");
 });
 
-test("an address that is not the owner sees one sentence and no control; no wallet sees only the way to connect", () => {
-  const html = notOwnerHtml();
-  assert.match(html, /This is the pool owner's panel\. Your address is not this pool's owner\./);
-  assert.ok(!/<button|role="switch"|<table|USDC/.test(html), "nothing of the pool, and no control");
-  const none = noWalletHtml();
-  assert.match(none, /Connect/);
-  assert.ok(!/role="switch"|<table|USDC/.test(none));
-});
-
-test("the panel has its own navigation, with the next sections held in place and no link to the trader's pages", () => {
-  const html = panelNavHtml(OWNER, "lines");
-  assert.deepEqual(PANEL_SECTIONS.map((s) => s.key), ["lines", "withdraw", "codes", "operator"]);
-  assert.equal((html.match(/<a /g) || []).length, 1, "only the section that is built is a link");
-  assert.equal((html.match(/aria-disabled="true"/g) || []).length, 3);
-  assert.ok(!html.includes("#/sim/") && !html.includes('href="#/"'), "no link to the trader's panel");
-});
-
-test("the trader sees free, floor and what is set aside for traders: not the creator's reserve, not the partners' shares", () => {
-  const rows = traderMoney({ free: 1_500_000_000n, floor: 120_000_000n, held: 7_000_000n });
-  assert.deepEqual(rows.map((r) => r.key), ["free", "floor", "held"]);
-  const html = moneyHtml(rows);
-  assert.match(html, /1,500\.00 USDC/);
-  assert.match(html, /120\.00 USDC/);
-  assert.match(html, /7\.00 USDC/);
-  assert.ok(!/Locked|principal|partners/i.test(html));
-});
-
-test("the owner sees free, locked, set aside for partners by their codes, and the floor", () => {
-  const rows = ownerMoney({ free: 1_500_000_000n, principal: 1_600_000_000n, sharesDue: 42_500_000n, floor: 120_000_000n });
-  assert.deepEqual(rows.map((r) => r.key), ["free", "locked", "shares", "floor"]);
-  assert.deepEqual(rows.map((r) => r.value), [1_500_000_000n, 1_600_000_000n, 42_500_000n, 120_000_000n]);
-  const html = moneyHtml(rows);
-  assert.match(html, /Set aside for partners by their codes/);
-  assert.match(html, /1,600\.00 USDC/);
-  assert.match(html, /42\.50 USDC/);
+test("the owner's money in four parts: free, locked (owed, stops, held, staged), reserved for partners, floor", () => {
+  const m = ownerMoney({ free: 3_600n * U, owed: 800n * U, reserved: 400n * U, held: 0n, staged: 0n, sharesDue: 120n * U, floor: 2_400n * U });
+  assert.deepEqual([m.free, m.locked, m.shares, m.floor, m.total], [3_600n * U, 1_200n * U, 120n * U, 2_400n * U, 4_920n * U]);
+  assert.deepEqual(m.parts, { locked: 24.39, shares: 2.43, free: 73.17, floor: 75.6 });
+  const html = moneyHtml(m);
+  assert.match(html, /Pool money · \$4,920 in the pool/);
+  for (const k of ["free", "locked", "shares", "floor"]) assert.match(html, new RegExp(`data-money="${k}"`));
+  assert.match(html, /<dd>\$3,600<\/dd>/);
+  assert.match(html, /<dd>\$1,200<\/dd>/);
+  assert.match(html, /<dd>\$120<\/dd>/);
+  assert.match(html, /<dd>\$2,400<\/dd>/);
+  assert.match(html, /Payouts owed \$800, kept for a stop \$400, held for traders \$0, passed exams and running stages \$0\./);
+  assert.match(html, /floor \$2,400 · stays in while open/);
+  assert.match(html, /left:75\.6%/, "the marker is where a withdrawal stops: what the pool keeps and the floor");
+  // A pool with nothing in it draws a bar of nothing.
+  assert.deepEqual(ownerMoney({ free: 0n, owed: 0n, reserved: 0n, held: 0n, staged: 0n, sharesDue: 0n, floor: 0n }).parts, { locked: 0, shares: 0, free: 0, floor: 0 });
 });
 
 test("the pool's refusals are said in words, the sum from the error", () => {
   assert.match(poolRefusal("LineOff"), /switched off/);
-  assert.match(poolRefusal("NotCovered", [12_500_000n]), /short by 12\.50 USDC/);
+  assert.match(poolRefusal("NotCovered", [12_500_000n]), /short by \$12\.50/);
   assert.match(poolRefusal("NoSuchCode"), /not one of this pool's/);
   assert.match(poolRefusal("Closing"), /closed/);
   assert.match(poolRefusal("NotCreator"), /Only the pool's creator/);
   assert.equal(poolRefusal("Anything else"), "");
 });
 
-test("the terms are the book's text under the pool's hash; a pool with none, or a book without it, says nothing made up", () => {
+test("the terms are the book's text under the pool's hash; none, or a book without it, says nothing made up", () => {
   const h = `0x${"ab".repeat(32)}`;
   assert.equal(termsText(h, "Terms."), "Terms.");
   assert.equal(termsText(h, ""), null);
@@ -272,24 +280,83 @@ test("the terms are the book's text under the pool's hash; a pool with none, or 
 
 // ── the two panels are two pages ──────────────────────────────────────────────────────────────────────────────
 
-test("the site's navigation names neither panel's pool pages: the control panel has no link from the trader's side", () => {
-  const index = read("app", "index.html");
-  const nav = index.match(/<nav[\s\S]*?<\/nav>/)[0];
-  assert.ok(!/manage/.test(nav) && !/#\/sim/.test(nav));
-  const trader = read("app", "views", "simpool.js");
-  assert.ok(!/manage|setLine|principal|simadmin/.test(trader.replace(/\/\/.*$/gm, "")), "no management in the trader's view");
-  const admin = read("app", "views", "simadmin.js");
-  assert.ok(!/\.buy\(|menuHtml|sim-buy|#\/sim\//.test(admin.replace(/\/\/.*$/gm, "")), "no purchase and no link to the trader's page in the owner's view");
+test("each panel is its own route, and the panel is read from the hash", () => {
+  assert.equal(panelOf(`#/sim/${POOL_ADDR}`), "user");
+  assert.equal(panelOf(`#/sim/${POOL_ADDR}?code=GROUP-ONE`), "user");
+  assert.equal(panelOf(`#/manage/${POOL_ADDR}`), "manage");
+  for (const h of ["#/", "#/pool/" + POOL_ADDR, "#/economics", "#/manage", "#/sim"]) assert.equal(panelOf(h), null);
   const app = read("app", "app.js");
   assert.match(app, /#\\\/sim\\\/\(0x/);
   assert.match(app, /#\\\/manage\\\/\(0x/);
+  assert.match(app, /panelOf\(hash\)/);
 });
 
-test("the owner's panel reads the reserve and the shares only after the wallet is the pool's creator", () => {
+test("the user panel's header: its badge, Testnet app, the menu with the next sections held, no link to the control panel", () => {
+  const html = userHeaderHtml({ address: POOL_ADDR, account: "0x7a…3f" });
+  assert.match(html, /User panel/);
+  assert.match(html, /Testnet app/);
+  assert.deepEqual(USER_NAV.map((s) => s.label), ["Pool", "Trade", "My exams", "My payouts"]);
+  assert.equal((html.match(/<a /g) || []).length, 1, "only the pool page is built");
+  assert.equal((html.match(/aria-disabled="true"/g) || []).length, 3);
+  assert.ok(!/manage/i.test(html.replace(/Management/g, "")), "no link to the control panel");
+  assert.match(html, /0x7a…3f/);
+  assert.match(userHeaderHtml({ address: POOL_ADDR, account: "" }), /Connect wallet/);
+});
+
+test("the control panel's header: its own band and tag, the role from the contract, its menu, no link to the trader's pages", () => {
+  const owner = manageHeaderHtml({ address: POOL_ADDR, account: "0x12…ab", role: "owner", poolName: "Pool 0x0000…9001" });
+  assert.match(owner, /Management panel/);
+  assert.match(owner, /sp-mtag">Management/);
+  assert.match(owner, /role read from contract/);
+  assert.match(owner, /Pool creator · Pool 0x0000…9001/);
+  assert.deepEqual(MANAGE_NAV.map((s) => s.label), ["Line switches", "Pool money", "Codes &amp; shares".replace("&amp;", "&"), "Withdraw & finish"]);
+  assert.equal((owner.match(/aria-disabled="true"/g) || []).length, 2, "codes and withdrawing are held for the next sections");
+  assert.match(owner, /Separate route\. Not linked from the trader's pages\. No buy buttons here\./);
+  assert.ok(!/#\/sim\/|href="#\/"/.test(owner), "no link to the user panel");
+  assert.match(manageHeaderHtml({ address: POOL_ADDR, account: "0x9…", role: "not-owner", poolName: "P" }), /No role in this pool/);
+  assert.match(manageHeaderHtml({ address: POOL_ADDR, account: "", role: "no-wallet", poolName: "P" }), /Not connected/);
+});
+
+test("an address that is not the owner sees one sentence and no control; no wallet sees the way to connect", () => {
+  assert.match(notOwnerHtml(), /This is the pool owner's panel\. Your address is not this pool's owner\./);
+  assert.ok(!/<button|role="switch"|<table|\$\d/.test(notOwnerHtml()), "nothing of the pool, and no control");
+  assert.match(noWalletHtml(), /Connect the wallet that owns the pool/);
+  assert.ok(!/role="switch"|\$\d/.test(noWalletHtml()));
+});
+
+test("the footer keeps the testnet badge, and no screen calls the product a simulation or a paper exam", () => {
+  assert.match(footerHtml(), /Testnet\. Mock USDC\. Unaudited\./);
+  const rows = pool();
+  const screens = [
+    menuHtml(rows, 3_600n * U, "x"), switchesHtml(rows, 3_600n * U), footerHtml(), notOwnerHtml(), noWalletHtml(),
+    userHeaderHtml({ address: POOL_ADDR, account: "" }), manageHeaderHtml({ address: POOL_ADDR, account: "", role: "owner", poolName: "P" }),
+    moneyHtml(ownerMoney({ free: 1n, owed: 0n, reserved: 0n, held: 0n, staged: 0n, sharesDue: 0n, floor: 0n })),
+    noComments(read("app", "views", "simpool.js")), noComments(read("app", "views", "simadmin.js")),
+  ].join("\n");
+  assert.ok(!/simulat|paper|fixed payout|fixed 8/i.test(screens));
+});
+
+test("the site's navigation names neither panel; neither view carries the other's controls or links", () => {
+  const index = read("app", "index.html");
+  const nav = index.match(/<nav[\s\S]*?<\/nav>/)[0];
+  assert.ok(!/manage/.test(nav) && !/#\/sim/.test(nav));
+  const trader = noComments(read("app", "views", "simpool.js"));
+  assert.ok(!/manage|setLine|simadmin|reserved|sharesDue|owed/.test(trader), "no management and no owner's reads in the trader's view");
+  const admin = noComments(read("app", "views", "simadmin.js"));
+  assert.ok(!/\.buy\(|menuHtml|sp-buy|#\/sim\//.test(admin), "no purchase and no link to the trader's page in the owner's view");
+});
+
+test("the owner's panel reads the pool's money only after the wallet is the pool's creator", () => {
   const admin = read("app", "views", "simadmin.js");
   const view = admin.slice(admin.indexOf("export async function simAdminView"));
   assert.ok(view.indexOf("creator()") < view.indexOf("readOwnerPool(at)"));
   assert.ok(view.indexOf('role !== "owner"') < view.indexOf("readOwnerPool(at)"));
+});
+
+test("the site's own header and footer are hidden on the two panels, and the testnet strip is in each page's footer", () => {
+  const css = read("app", "style.css");
+  assert.match(css, /body\[data-panel\] > header/);
+  assert.match(css, /body\[data-panel\] > footer/);
 });
 
 test("everything the two panels read or send is the pool's own, as the contract declares it", () => {
