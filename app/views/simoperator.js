@@ -6,6 +6,7 @@
 import * as chain from "../lib/chain.js";
 import { render, $, friendly, refusalName, ZERO_ADDRESS } from "../lib/ui.js";
 import { createConfirm, createPending } from "../lib/simconfirm.js";
+import { lookForStops, MORE_CALLS } from "./simstopscan.js";
 import { SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, SIM_POOL_APPROVAL_ABI } from "../lib/simpool.js";
 import { SIM_LINES_ABI } from "../lib/simlines.js";
 import { OPERATOR_ABI } from "../lib/operator.js";
@@ -24,6 +25,8 @@ const ABI = mergeAbis(SIM_POOL_APPROVAL_ABI, SIM_POOL_STOP_RESERVE_ABI, SIM_OPER
 const pending = createPending();
 // How many payouts the queue reads: each "Read later payouts" press adds a window.
 const reading = new Map();
+// Windows of stops' events to read further back at the next drawing (set by "Read earlier stops").
+const moreStops = new Map();
 
 /** The pool's approver, or nobody for a pool that does not answer `approver()`. */
 async function approverOf(pool) {
@@ -36,7 +39,7 @@ async function approverOf(pool) {
 }
 
 /** What the operator's page reads of the pool, for the roles the wallet has. */
-export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW) {
+export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, stopCalls = null) {
   const pool = new ethers.Contract(address, ABI, chain.readProvider);
   const now = await chain.blockTime();
   const out = { now };
@@ -48,12 +51,29 @@ export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW) {
     // From the first payout not settled (and a way below it, for the stops still inside their 14 days), oldest first.
     const range = payoutRange({ count, head, limit });
     const payouts = await chain.readAll(range.ids, (id) => pool.payout(id));
-    const live = payouts.filter((p) => Number(p.state) === 1 || Number(p.state) === 2 || Number(p.state) === 5);
+    // The stops are found in the pool's events, whatever their number; each is then read by its id.
+    let extraIds = [];
+    let stopScan = null;
+    if (roles.includes("checker")) {
+      try {
+        const found = await lookForStops(address, now, stopCalls);
+        stopScan = { done: found.done, note: found.note };
+        const inWindow = new Set(range.ids);
+        extraIds = found.ids.filter((id) => !inWindow.has(id));
+      } catch (err) {
+        // The queue and the stops of its window still draw; the page says the search failed, and the button tries again.
+        stopScan = { done: false, note: `Stops could not be looked for in the events (${friendly(err)}).` };
+      }
+    }
+    const extraPayouts = await chain.readAll(extraIds, (id) => pool.payout(id));
+    const extra = extraIds.map((id, i) => ({ id, payout: extraPayouts[i] })).filter((x) => [1, 2, 5].includes(Number(x.payout.state)));
+    const live = [...payouts, ...extra.map((x) => x.payout)].filter((p) => Number(p.state) === 1 || Number(p.state) === 2 || Number(p.state) === 5);
     const accounts = [...new Set(live.map((p) => p.account.toLowerCase()))];
     const lines = await chain.readAll(accounts, async (a) => (await pool.accountOf(a)).line);
-    const stoppedIds = range.ids.filter((id, i) => Number(payouts[i].state) === 2 || Number(payouts[i].state) === 5);
+    const stoppedIds = [...range.ids.filter((id, i) => Number(payouts[i].state) === 2 || Number(payouts[i].state) === 5),
+      ...extra.filter((x) => Number(x.payout.state) === 2 || Number(x.payout.state) === 5).map((x) => x.id)];
     const why = await chain.readAll(stoppedIds, (id) => pool.stopReasonOf(id));
-    Object.assign(out, { payouts, firstId: range.first, unread: range.unread, payoutsPerDay: perDay, payRoom: room, nextPayAt, menu, tiers,
+    Object.assign(out, { payouts, extra, stopScan, firstId: range.first, unread: range.unread, payoutsPerDay: perDay, payRoom: room, nextPayAt, menu, tiers,
       accountLines: new Map(accounts.map((a, i) => [a, Number(lines[i])])),
       reasons: new Map(stoppedIds.map((id, i) => [id, Number(why[i])])) });
   } else {
@@ -81,7 +101,9 @@ export async function simOperatorView(address, page) {
     wireShell(page);
     return;
   }
-  const reads = await readOperatorPool(at, who.roles, reading.get(at) || PAYOUT_WINDOW);
+  const stopCalls = moreStops.get(at) ?? null;
+  moreStops.delete(at);
+  const reads = await readOperatorPool(at, who.roles, reading.get(at) || PAYOUT_WINDOW, stopCalls);
   const model = operatorModel({ pool: at, roles: who.roles, reads: { ...reads, approver }, keccak256: ethers.keccak256 });
   render(page, `<div class="sp sp-manage sp-op">${header}${operatorHtml(model, { name })}${footerHtml()}</div>`);
   wireShell(page);
@@ -269,6 +291,11 @@ function wire(page, at, model) {
     const call = { data: `${lift ? "lift" : "final"}:${id}` };
     if (lift) twoStep(button, "stops", liftWords(stop), `lift #${id}`, call, (c) => c.liftStop(id), "Stop lifted");
     else twoStep(button, "stops", finalizeWords(stop), `final #${id}`, call, (c) => c.finalizeStop(id), "Stop made final");
+  });
+  $("#stops", page)?.addEventListener("click", (e) => {
+    if (!e.target.closest("#so-stops-more") || pending.active) return;
+    moreStops.set(at, MORE_CALLS);
+    simOperatorView(at, page).catch((err) => say(boxOf("stops"), `Could not read more: ${friendly(err)}`));
   });
   $("#requests", page)?.addEventListener("click", (e) => {
     const button = e.target.closest("button[data-cancel]");

@@ -18,7 +18,7 @@ import { SIM_POOL_APPROVAL_ABI, SIM_POOL_ABI, STOP_RESERVE } from "../lib/simpoo
 import { OPERATOR_ABI, PAYOUT_DELAY, PAYOUT_HARD } from "../lib/operator.js";
 import { panelOf } from "../lib/simpanel.js";
 import { keccak256 } from "./keccak.mjs";
-import { payoutRange, PAYOUT_WINDOW, STOP_LOOKBACK } from "../lib/simoperator.js";
+import { payoutRange, PAYOUT_WINDOW, STOP_LOOKBACK, stopIdsFromEvents, stopScanNote, stopsHtml } from "../lib/simoperator.js";
 import { createConfirm, createPending } from "../lib/simconfirm.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -446,4 +446,63 @@ test("the operator page uses these guards", () => {
   assert.match(view, /payoutRange\(\{ count, head, limit \}\)/);
   assert.doesNotMatch(view, /Math\.max\(0, Number\(count\) - PAYOUT_WINDOW\)/);
   assert.match(view, /twoStep\(button, "stop"/, "the stop form is a two-step too");
+});
+
+// ── stops from the events ──────────────────────────────────────────
+
+test("a stop 400 payouts back is in the list and can be lifted, whatever its number", () => {
+  // payout #3 was stopped a day ago; the pool has since settled 450 payouts, so its head is 450 and the window of ids
+  // (from 150) does not reach #3 any more
+  const range = payoutRange({ count: 850, head: 450 });
+  assert.ok(!range.ids.includes(3), "the number window does not hold it");
+  const stopped = payout({ n: 3, state: 2, wasStopped: true, stoppedAt: NOW - D, amount: 400n * U });
+  const settled = range.ids.map((id) => payout({ n: 10_000 + id, state: 3 }));
+  const base = { ...reads(), payouts: settled, firstId: range.first, reasons: new Map(), accountLines: new Map() };
+  const without = operatorModel({ pool: POOL, roles: ["checker"], reads: base, keccak256 });
+  assert.deepEqual(without.stops, [], "without the events the stop is not found");
+  // the events name #3; it is read by its id
+  const found = operatorModel({ pool: POOL, roles: ["checker"], keccak256,
+    reads: { ...base, extra: [{ id: 3, payout: stopped }], reasons: new Map([[3, 2]]), stopScan: { done: true, note: "x" } } });
+  assert.deepEqual(found.stops.map((s) => [s.id, s.state, s.reason, s.canLift]), [[3, "window", 2, true]]);
+  assert.equal(found.summary.stopsOpen, 1);
+  const html = operatorHtml(found, { name: "Pool", role: "" });
+  assert.match(html, /data-lift="3"(?![^>]*disabled)/, "its lift is offered");
+  // the lift is the contract's call on that id, signed by the checker: the page's handler sends liftStop(stop.id)
+  assert.match(read("app", "views", "simoperator.js"), /\(c\) => c\.liftStop\(id\)/);
+  // an extra that the window holds too is not counted twice
+  const twice = operatorModel({ pool: POOL, roles: ["checker"], keccak256,
+    reads: { ...base, payouts: [stopped, ...settled], firstId: 3, extra: [{ id: 3, payout: stopped }] } });
+  assert.equal(twice.stops.filter((s) => s.id === 3).length, 1);
+  // a stop past its 14 days found the same way can be made final; a final one has nothing left
+  const old = operatorModel({ pool: POOL, roles: ["checker"], keccak256,
+    reads: { ...base, extra: [{ id: 3, payout: { ...stopped, stoppedAt: NOW - 15 * D } }, { id: 4, payout: { ...stopped, state: 5 } }] } });
+  assert.deepEqual(old.stops.map((s) => [s.id, s.state, s.canFinalize]), [[3, "due-final", true], [4, "final", false]]);
+});
+
+test("the stops' ids are the events' ids, each once, oldest first", () => {
+  const ev = (name, id) => ({ name, args: { id } });
+  assert.deepEqual(stopIdsFromEvents([ev("PayoutStopped", 9), ev("StopLifted", 4), ev("PayoutStopped", 2), ev("PayoutStopped", 9)]), [2, 9]);
+  assert.deepEqual(stopIdsFromEvents([]), []);
+});
+
+test("the stops list says how far the events were read, and offers more until the 14 days are covered", () => {
+  assert.match(stopScanNote({ floor: 100, back: 100, latest: 500, head: 500, done: true }), /Every stop of the last 14 days/);
+  const partial = stopScanNote({ floor: 100, back: 400, latest: 500, head: 500, done: false });
+  assert.match(partial, /blocks 401–500; the 14 days reach back to block 100/);
+  assert.match(stopScanNote({ floor: 100, back: 400, latest: 480, head: 500, done: false }), /Blocks after 480 are not read/);
+  const m = model(["checker"], { stopScan: { done: false, note: partial } });
+  assert.match(stopsHtml(m), /id="so-stops-more">Read earlier stops/);
+  assert.match(stopsHtml(model(["checker"], { stopScan: { done: true, note: "done" } })), /^((?!so-stops-more)[\s\S])*$/);
+  assert.doesNotMatch(stopsHtml(model(["checker"])), /so-stop-scan/, "no scan, no note");
+});
+
+test("the events are read within the node's limits, the last 14 days only, and a failed search keeps the page", () => {
+  const scan = read("app", "views", "simstopscan.js");
+  assert.match(scan, /const WINDOW = 1000;/);
+  assert.match(scan, /iface\.getEvent\("PayoutStopped"\)\.topicHash/);
+  assert.match(scan, /Number\(now\) - STOP_RESERVE - MARGIN/);
+  const view = read("app", "views", "simoperator.js");
+  assert.match(view, /lookForStops\(address, now, stopCalls\)/);
+  assert.match(view, /Stops could not be looked for in the events/);
+  assert.match(view, /moreStops\.set\(at, MORE_CALLS\)/);
 });

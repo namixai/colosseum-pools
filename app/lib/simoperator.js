@@ -240,16 +240,35 @@ export function queueWords(row, nobody) {
   return { ...status, lines, claimed: utc(row.claimedAt) };
 }
 
+/** The ids of the stops named by `PayoutStopped` events (`{ name, args: { id } }`), each once, oldest first. */
+export function stopIdsFromEvents(events) {
+  const ids = new Set();
+  for (const e of events) if ((e.name ?? e.eventName) === "PayoutStopped") ids.add(Number(e.args.id));
+  return [...ids].sort((a, b) => a - b);
+}
+
+/** Which blocks the search for stops has covered, in words. `floor` is the oldest block a stop can still be open in. */
+export function stopScanNote({ floor, back, latest, head, done }) {
+  if (done) return "Every stop of the last 14 days was looked for in the pool's events.";
+  const newer = latest < head ? ` Blocks after ${latest} are not read.` : "";
+  return `Stops were looked for in blocks ${back + 1}–${latest}; the 14 days reach back to block ${floor}.${newer}`;
+}
+
 /**
  * The operator's model: what the page draws, from what it read.
  * `reads`: `{ now, approver, payouts (the last of payout(id), ids from firstId), firstId, accountLines (account → line),
- * menu, tiers, reasons (id → stopReasonOf), payoutsPerDay, payRoom, nextPayAt, requested, readyAt, reviews }`.
+ * menu, tiers, reasons (id → stopReasonOf), payoutsPerDay, payRoom, nextPayAt, requested, readyAt, reviews,
+ * extra (`[{ id, payout }]`: payouts read by id that the window does not hold, the stops found in the events), stopScan
+ * (`{ done, note }`) }`. The queue is the payouts from the pool's head; the stops are the stopped ones of the window and
+ * of `extra`, whatever their number.
  */
 export function operatorModel({ pool, roles, reads, keccak256 }) {
   const now = Number(reads.now);
   const may = can(roles);
   const nobody = !isSet(reads.approver);
   const structs = reads.payouts.map((p, i) => plain(p, reads.firstId + i));
+  const inWindow = new Set(structs.map((p) => p.id));
+  for (const { id, payout } of reads.extra ?? []) if (!inWindow.has(Number(id))) structs.push(plain(payout, Number(id)));
   const byId = new Map(structs.map((p) => [p.id, p]));
   const lineOf = (account) => lineLabel(reads.menu, reads.tiers, reads.accountLines?.get?.(String(account).toLowerCase()));
 
@@ -284,7 +303,8 @@ export function operatorModel({ pool, roles, reads, keccak256 }) {
     stopsOpen: stops.filter((s) => s.state !== "final").length,
     requests: request && (request.status === "waiting" || request.status === "ready") ? 1 : 0,
   };
-  return { now, roles, may, queue, stops, request, summary, perDay, nobody, unread: Number(reads.unread || 0) };
+  return { now, roles, may, queue, stops, request, summary, perDay, nobody, unread: Number(reads.unread || 0),
+    stopScan: reads.stopScan ?? null };
 }
 
 /** What a selection of waiting payouts does as one call, or why it cannot be one: the pool's rules (a pool red in the
@@ -421,7 +441,10 @@ export function stopsHtml(model) {
   const { may, stops } = model;
   const head = `<div class="so-colhead so-s"><span>#</span><span>Line</span><span>Payout kept</span><span>Reason</span><span>Can be lifted until</span><span></span></div>`;
   const body = stops.length ? stops.map((s) => stopRowHtml(s, may)).join("") : `<p class="so-empty">No payout is stopped.</p>`;
-  return `<section class="sp-box so-box" id="stops"><div class="sp-bh"><b>Stops</b><span>lift within 14 days · then anyone makes it final</span></div>${head}${body}`
+  const scan = model.stopScan
+    ? `<p class="so-why" id="so-stop-scan">${esc(model.stopScan.note)}${model.stopScan.done ? "" : ` <button type="button" class="so-btn" id="so-stops-more">Read earlier stops</button>`}</p>`
+    : "";
+  return `<section class="sp-box so-box" id="stops"><div class="sp-bh"><b>Stops</b><span>lift within 14 days · then anyone makes it final</span></div>${head}${body}${scan}`
     + `<div class="so-do" id="so-do-stops" role="status"></div></section>`;
 }
 
