@@ -1,4 +1,4 @@
-// The trading page of a paper exam (#/exam/<exam address>): a chart and a book of Hyperliquid's open data, an order
+// The trading page of an exam (#/exam/<exam address>): a chart and a book of Hyperliquid's open data, an order
 // form, the waiting order, the positions with their stops and takes, the account against its lines, and the journal.
 // An order here is a transaction to the trader's own exam contract (PaperExam.place), not an order on any exchange.
 // Every sum is app/lib/exam.js's; what is said and where a number sits is app/lib/examscreen.js; this file reads, draws
@@ -15,8 +15,9 @@ import {
 import {
   SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, INTERVALS, BOOK_DEPTH, candleWindow, readsFrom, accountFigures, positionRow,
   pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, chartScale, candleText,
-  journalRows, sendFailure, timeLeft,
+  journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText,
 } from "../lib/examscreen.js";
+import { pxText } from "../lib/exam.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
@@ -43,7 +44,7 @@ const kept = new Map();  // the second key where storage is blocked, for this ta
 
 export async function examView(address, page) {
   if (!isAddress(address)) {
-    render(page, `<section class="card narrow"><h2>Paper exam</h2>
+    render(page, `<section class="card narrow"><h2>Exam</h2>
       <p>${esc(WHAT_THIS_IS)}</p>
       <p>Open the page from the exam's address:</p>
       <div class="inline"><input id="addr" placeholder="0x…" size="44"><button id="go">Open</button></div></section>`);
@@ -51,7 +52,7 @@ export async function examView(address, page) {
     return;
   }
   if ((await chain.readProvider.getCode(address)) === "0x") {
-    render(page, `<section class="card narrow"><h2>Paper exam</h2><p>There is no contract at this address on the network this page reads.</p>
+    render(page, `<section class="card narrow"><h2>Exam</h2><p>There is no contract at this address on the network this page reads.</p>
       <p><a href="#/exam">Back</a></p></section>`);
     return;
   }
@@ -67,9 +68,10 @@ export async function examView(address, page) {
   const st = {
     exam, address, ds, perps, assets, trader, asset: assets[0], isBuy: true, interval: "15m", snap: null, rows: [],
     book: null, hover: null, journal: [], journalFrom: null, journalComplete: false, busy: false, timers: [],
-    kind: "stop", lastError: "",
+    times: new Map(), tab: "pos", triggers: {},
   };
 
+  page.className = "ex-page";
   render(page, skeleton(st));
   wire(page, st);
   // The first reading decides whether the page can be drawn: a failure here is the page's failure, not a panel's.
@@ -109,83 +111,80 @@ function note(page, text) {
 
 function skeleton(st) {
   const { ds } = st;
-  const intervals = INTERVALS.map((i) => `<button type="button" class="secondary small" data-interval="${i.key}"${i.key === st.interval ? ' aria-pressed="true"' : ""}>${i.key}</button>`).join("");
+  const marks = networkMarks(CONFIG);
+  const intervals = INTERVALS.map((i) => `<button type="button" data-interval="${i.key}"${i.key === st.interval ? ' class="on"' : ""}>${i.key}</button>`).join("");
+  const options = st.assets.map((a) => `<option value="${a}">${esc(st.perps.get(a)?.name ?? `#${a}`)}</option>`).join("");
+  const trigger = (k, label) => `<div class="ex-tr"><label>Set ${label}<input id="ex-${k}-px" inputmode="decimal" autocomplete="off" placeholder="price"></label>
+      <label>Size<input id="ex-${k}-sz" inputmode="decimal" autocomplete="off" placeholder="all"></label>
+      <button type="button" class="ex-mini2" id="ex-${k}-set" data-set="${k}" disabled>Set ${label}</button></div>
+      <div class="ex-prev" id="ex-${k}-prev"></div>`;
   return `
-    ${ds.ok && ds.rehearsal ? `<div class="ex-rehearsal" role="status">${esc(SCREEN_TEXT.rehearsal)}</div>` : ""}
-    <section class="card ex-strip">
-      <div class="ex-strip-head"><span class="badge ex-badge">${esc(SCREEN_TEXT.strip)}</span><p class="small">${esc(WHAT_THIS_IS)}</p></div>
-      <div class="ex-figures" id="ex-figures"></div>
-    </section>
-    <p class="notice" id="ex-error" role="status" hidden></p>
-    ${ds.ok ? "" : `<section class="card"><h3>Chart and book not shown</h3><p>${esc(ds.text)}</p></section>`}
-    <div class="ex-grid">
-      <section class="card ex-chart"${ds.ok ? "" : " hidden"}>
-        <div class="ex-chart-head"><div class="ex-tabs" id="ex-assets" role="tablist" aria-label="Asset"></div>
-          <div class="ex-intervals" role="group" aria-label="Interval">${intervals}</div></div>
-        <div class="ex-canvas-wrap"><canvas id="ex-canvas" role="img" aria-label="Candle chart"></canvas></div>
-        <p class="muted small ex-hover" id="ex-hover">&nbsp;</p>
-        <p class="muted small">${esc(SCREEN_TEXT.chart)}</p>
-      </section>
-      <section class="card ex-book"${ds.ok ? "" : " hidden"}>
-        <h4>Order book</h4>
-        <div id="ex-book" class="muted">Loading…</div>
-        <p class="muted small">${esc(SCREEN_TEXT.book)}</p>
-        <p class="muted small">${esc(SCREEN_TEXT.bookFill)}</p>
-      </section>
-      <section class="card ex-ticket">
-        <h4>Order</h4>
-        <div class="ex-sides" role="group" aria-label="Side">
-          <button type="button" class="ex-buy" data-side="buy" aria-pressed="true">Buy / Long</button>
-          <button type="button" class="ex-sell secondary" data-side="sell" aria-pressed="false">Sell / Short</button>
+    <div class="ex-strip">
+      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
+      <p class="ex-line">${esc(WHAT_THIS_IS)}</p>
+      <div class="ex-kv" id="ex-kv"></div>
+      <div class="ex-steps" id="ex-steps"></div>
+    </div>
+    <p class="ex-notice" id="ex-error" role="status" hidden></p>
+    ${ds.ok ? "" : `<section class="ex-pane ex-pad"><h3>Chart and book not shown</h3><p>${esc(ds.text)}</p></section>`}
+    <div class="ex-phtabs"${ds.ok ? "" : " hidden"}><button type="button" class="on" data-phone="chart">Chart</button><button type="button" data-phone="book">Book</button></div>
+    <div class="ex-term" id="ex-term" data-phone="chart">
+      <section class="ex-pane ex-chart"${ds.ok ? "" : " hidden"}>
+        <div class="ex-mkt">
+          <label class="ex-sel"><select id="ex-asset" aria-label="Asset">${options}</select></label>
+          <div class="ex-px"><b id="ex-px">—</b><span>Oracle price</span></div>
+          <div class="ex-iv" role="group" aria-label="Interval">${intervals}</div>
+          <span class="ex-cap">${esc(SCREEN_TEXT.chart)}</span>
         </div>
-        <label class="ex-field"><span>Size <b id="ex-unit"></b></span><input id="ex-size" inputmode="decimal" autocomplete="off" placeholder="0.00"></label>
-        <div id="ex-preview" class="ex-preview"></div>
-        <button type="button" id="ex-send" class="ex-submit" disabled>Buy / Long</button>
-        <p class="muted small" id="ex-signs"></p>
-        <p class="result" id="ex-send-out"></p>
-        <div id="ex-pending" class="ex-pending" hidden></div>
-        <details class="ex-trigger" open>
-          <summary>Stop or take on a position</summary>
-          <div class="ex-sides ex-kind" role="group" aria-label="Kind">
-            <button type="button" data-kind="stop" aria-pressed="true" class="small">Stop</button>
-            <button type="button" data-kind="take" aria-pressed="false" class="secondary small">Take</button>
+        <div class="ex-cw"><canvas id="ex-canvas" role="img" aria-label="Candle chart"></canvas></div>
+        <p class="ex-hover" id="ex-hover">&nbsp;</p>
+      </section>
+      <section class="ex-pane ex-book"${ds.ok ? "" : " hidden"}>
+        <div class="ex-ph"><b>Book</b><span class="ex-cap">${esc(SCREEN_TEXT.book)}</span></div>
+        <div id="ex-book" class="ex-muted ex-pad">Loading…</div>
+        <p class="ex-bn">${esc(SCREEN_TEXT.bookFill)}</p>
+      </section>
+      <div class="ex-right">
+        <section class="ex-pane ex-form">
+          <div class="ex-tabs" id="ex-assets" role="tablist" aria-label="Asset"></div>
+          <div class="ex-bs" role="group" aria-label="Side">
+            <button type="button" data-side="buy" class="on b">Buy / Long</button>
+            <button type="button" data-side="sell" class="s">Sell / Short</button>
           </div>
-          <label class="ex-field"><span>Price</span><input id="ex-tpx" inputmode="decimal" autocomplete="off" placeholder="price"></label>
-          <label class="ex-field"><span>Size to close (empty: all)</span><input id="ex-tsz" inputmode="decimal" autocomplete="off" placeholder="all"></label>
-          <div id="ex-tpreview" class="ex-preview"></div>
-          <button type="button" id="ex-tset" disabled>Set stop</button>
-          <p class="result" id="ex-tset-out"></p>
-        </details>
+          <label class="ex-fl">Size<span class="ex-inp"><input id="ex-size" inputmode="decimal" autocomplete="off" placeholder="0.00"><span id="ex-unit"></span></span></label>
+          <div id="ex-preview" class="ex-est"></div>
+          <button type="button" id="ex-send" class="ex-go b" disabled>Buy / Long</button>
+          <p class="ex-sign" id="ex-signs"></p>
+          <p class="ex-result" id="ex-send-out"></p>
+          <div class="ex-trg">${trigger("stop", "stop")}${trigger("take", "take")}</div>
+        </section>
+        <div class="ex-pane ex-pend" id="ex-pending" hidden></div>
+        <section class="ex-pane ex-acct">
+          <div class="ex-ph"><b>Exam account</b></div>
+          <div id="ex-account"></div>
+        </section>
+        <section class="ex-pane ex-pass">
+          <button type="button" id="ex-graduate" class="ex-go" disabled>Pass the step</button>
+          <p class="ex-why" id="ex-graduate-text"></p>
+          <p class="ex-result" id="ex-graduate-out"></p>
+        </section>
+        <section class="ex-pane ex-key">
+          <div class="ex-ph"><b>Trade without wallet prompts</b><span class="ex-tg" id="ex-tg" aria-hidden="true"><i></i></span></div>
+          <p>${esc(SCREEN_TEXT.secondKey)}</p>
+          <p>${esc(SCREEN_TEXT.gas)}</p>
+          <div id="ex-agent" class="ex-agent"></div>
+        </section>
+      </div>
+      <section class="ex-pane ex-bottom">
+        <div class="ex-tabs" role="tablist"><button type="button" data-tab="pos" class="on" id="ex-tab-pos">Positions</button><button type="button" data-tab="jrnl" id="ex-tab-jrnl">Journal</button></div>
+        <div id="ex-positions" class="ex-scroll"></div>
+        <div id="ex-journal-pane" hidden>
+          <div id="ex-journal" class="ex-scroll"></div>
+          <p class="ex-pad"><button type="button" class="ex-mini2" id="ex-journal-load">Load recent events</button> <span class="ex-muted" id="ex-journal-note"></span></p>
+        </div>
       </section>
-      <section class="card ex-tables">
-        <h4>Positions</h4>
-        <div id="ex-positions" class="scroll muted">Loading…</div>
-        <h4 class="ex-gap">Journal</h4>
-        <div id="ex-journal" class="muted">Not loaded.</div>
-        <p class="actions"><button type="button" class="secondary small" id="ex-journal-load">Load recent events</button><span class="muted small" id="ex-journal-note"></span></p>
-      </section>
-      <section class="card ex-notes">
-        <h4>How orders work here</h4>
-        <ul class="small">
-          <li>${esc(SCREEN_TEXT.fillsLater)}</li>
-          <li>${esc(SCREEN_TEXT.exit)}</li>
-          <li>${esc(SCREEN_TEXT.gas)}</li>
-          <li>${esc(SCREEN_TEXT.noLimits)}</li>
-          <li>${esc(SCREEN_TEXT.data)}</li>
-        </ul>
-      </section>
-      <section class="card ex-account">
-        <h4>Exam account</h4>
-        <div id="ex-account" class="muted">Loading…</div>
-        <div id="ex-scale"></div>
-        <p><button type="button" id="ex-graduate" disabled>Pass the step</button></p>
-        <p class="muted small" id="ex-graduate-text"></p>
-        <p class="result" id="ex-graduate-out"></p>
-        <h4 class="ex-gap">Trade without wallet prompts</h4>
-        <p class="small">${esc(SCREEN_TEXT.secondKey)}</p>
-        <div id="ex-agent"></div>
-      </section>
-    </div>`;
+    </div>
+    ${marks ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
 }
 
 // ── readings ────────────────────────────────────────────────────
@@ -257,33 +256,40 @@ function refreshBook(page, st) {
 
 function paintAssets(page, st) {
   $("#ex-assets", page).innerHTML = st.assets.map((a) =>
-    `<button type="button" role="tab" class="secondary small" data-asset="${a}" aria-selected="${a === st.asset}">${esc(st.perps.get(a)?.name ?? `#${a}`)}</button>`).join("");
+    `<button type="button" role="tab" data-asset="${a}"${a === st.asset ? ' class="on"' : ""} aria-selected="${a === st.asset}">${esc(st.perps.get(a)?.name ?? `#${a}`)}</button>`).join("");
   $("#ex-unit", page).textContent = st.perps.get(st.asset)?.name ?? "";
+  const sel = $("#ex-asset", page);
+  if (sel) sel.value = String(st.asset);
+}
+
+function paintHead(page, st) {
+  const perp = st.perps.get(st.asset);
+  const oracle = st.snap?.perAsset.find((a) => a.asset === st.asset)?.oracle;
+  const px = $("#ex-px", page);
+  if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
 }
 
 function paintAccount(page, st) {
   const { account, now } = st.snap;
   const f = accountFigures(account);
-  const stateBadge = `<span class="badge ${account.status === "active" ? "ok" : "bad"}">${esc(f.status)}</span>`;
-  $("#ex-figures", page).innerHTML = `
-    <div class="cell"><span class="cell-label">Exam size</span><span class="cell-value">${esc(f.size)}</span></div>
-    <div class="cell"><span class="cell-label">Step</span><span class="cell-value">${esc(f.step)}</span></div>
-    <div class="cell"><span class="cell-label">State</span><span class="cell-value">${stateBadge}</span></div>
-    <div class="cell"><span class="cell-label">Equity</span><span class="cell-value">${esc(f.equity)}</span></div>`;
-  const rows = [
-    ["Equity", f.equity], ["Balance", f.balance], ["Leverage", f.leverage],
-    ...(f.target ? [["Target", `${f.target.at} · ${f.target.toGo} to go`]] : []),
-    ...f.lines.map((l) => [l.label, `${l.at} · room ${l.room}${l.near ? " · nearest" : ""}${l.from ? ` · ${l.from}` : ""}`]),
-    ["Time left", account.time.endsAt === null ? "—" : timeLeft(account.time.endsAt, now)],
-    ...(f.days ? [["Trading days", f.days]] : []),
-  ];
-  $("#ex-account", page).innerHTML = rows.map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("");
+  $("#ex-kv", page).innerHTML = [["Size", f.size], ["Step", f.step], ["Status", f.status]]
+    .map(([k, v]) => `<span><i>${esc(k)}</i><b>${esc(v)}</b></span>`).join("");
+  $("#ex-steps", page).innerHTML = lifeSteps(account).map((x) => `<span class="${x.state}">${x.n} ${esc(x.label)}</span>`).join("");
   const scale = accountScale(account);
-  $("#ex-scale", page).innerHTML = scale ? `<div class="ex-scale${scale.broken ? " broken" : ""}" role="img" aria-label="Equity between the loss limits and the target">
-      ${scale.lines.map((l) => `<i class="line${l.near ? " near" : ""}" style="left:${l.share / 100}%" title="${l.kind === "drawdown" ? "Loss limit" : "Daily loss limit"}"></i>`).join("")}
-      <i class="target" style="left:${scale.target / 100}%" title="Target"></i>
-      <b style="left:${scale.equity / 100}%" title="Equity"></b></div>
-    <p class="muted small ex-scale-key">Loss limit ← equity → target</p>` : "";
+  const lines = [...f.lines].sort((x, y) => Number(y.near) - Number(x.near));
+  const idx = new Map(account.lines.map((l, i) => [l.kind, i]));
+  $("#ex-account", page).innerHTML = `
+    <dl class="ex-eq"><div><dt>Equity</dt><dd>${esc(f.equity)}</dd></div><div><dt>Balance</dt><dd>${esc(f.balance)}</dd></div>
+      <div><dt>Leverage</dt><dd>${esc(f.leverage)} <small>of ${esc(f.maxLeverage)}</small></dd></div></dl>
+    <div class="ex-scale">
+      ${f.target ? `<div class="ex-sl"><span>Target</span><b>${esc(f.target.at)}</b><em>to go ${esc(f.target.toGo)}</em></div>` : ""}
+      ${scale ? `<div class="ex-bar${scale.broken ? " broken" : ""}" role="img" aria-label="Equity between the loss limits and the target">
+        ${scale.lines.map((l) => `<i class="${l.near ? "near" : ""}" style="left:${l.share / 100}%"></i>`).join("")}
+        <i class="tl" style="left:${scale.target / 100}%"></i><i class="now" style="left:${scale.equity / 100}%"></i></div>` : ""}
+      ${lines.map((l) => `<div class="ex-sl${l.near ? " near" : ""}"><span>${esc(l.label)}</span><b>${esc(l.at)}</b><em>room ${esc(l.room)}${l.from ? ` · ${esc(l.from)}` : ""}</em></div>`).join("")}
+      <div class="ex-sl"><span>Time left</span><b>${esc(account.time.endsAt === null ? "—" : timeLeft(account.time.endsAt, now))}</b>${f.days ? `<em>trading days ${esc(f.days)}</em>` : ""}</div>
+    </div>`;
+  void idx;
   const g = $("#ex-graduate", page);
   g.disabled = !account.graduate.can || st.busy;
   $("#ex-graduate-text", page).textContent = account.graduate.can ? "" : account.graduate.text;
@@ -291,22 +297,24 @@ function paintAccount(page, st) {
 
 function paintPositions(page, st) {
   const { account } = st.snap;
+  const box = $("#ex-positions", page);
   if (!st.ds.ok) {
-    $("#ex-positions", page).textContent = "Positions are not shown: the asset list of this network was not read.";
+    box.innerHTML = `<p class="ex-pad ex-muted">Positions are not shown: the asset list of this network was not read.</p>`;
     return;
   }
   const rows = account.positions.map((p) => positionRow(p, st.perps));
   const pending = pendingText(account.pending, st.perps);
-  const box = $("#ex-pending", page);
-  box.hidden = !pending;
-  box.textContent = pending ? pending.text : "";
-  const hasAny = rows.length > 0;
-  $("#ex-positions", page).innerHTML = hasAny ? `<table><thead><tr><th>Asset</th><th>Side</th><th>Size</th><th>Oracle</th><th>Notional</th><th>Leverage</th><th>Stop / take</th><th></th></tr></thead><tbody>
-    ${rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.side)}</td><td>${esc(r.size)}</td><td>${esc(r.mark)}</td><td>${esc(r.notional)}</td><td>${esc(r.leverage)}</td>
-      <td class="ex-trig">${[r.stop && [r.stop, "stop"], r.take && [r.take, "take"]].filter(Boolean).map(([t, k]) =>
-        `<span>${esc(t)} <button type="button" class="secondary small" data-clear="${r.asset}:${k}">Remove ${k}</button></span>`).join("") || "—"}</td>
-      <td><button type="button" class="small" data-close="${r.asset}">Close</button></td></tr>`).join("")}</tbody></table>`
-    : "No open positions.";
+  const pend = $("#ex-pending", page);
+  pend.hidden = !pending;
+  pend.innerHTML = pending ? `<span class="ex-dot"></span>${esc(pending.text)}${account.pending.state === "lapsed" ? "" : `<p class="ex-why">${esc(SCREEN_TEXT.oneAtATime)}</p>`}` : "";
+  $("#ex-tab-pos", page).textContent = `Positions (${rows.length})`;
+  box.innerHTML = (rows.length ? `<table class="ex-t ex-cards ex-pos"><thead><tr><th>Asset</th><th>Side</th><th>Size</th><th>Mark</th><th>Notional</th><th>Leverage</th><th>Stop / take</th><th></th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td data-l="Asset"><b>${esc(r.name)}</b></td><td data-l="Side" class="${r.side === "Long" ? "lg" : "sh"}">${esc(r.side)}</td><td data-l="Size">${esc(r.size)}</td><td data-l="Mark">${esc(r.mark)}</td>
+      <td data-l="Notional">${esc(r.notional)}</td><td data-l="Leverage">${esc(r.leverage)}</td>
+      <td data-l="Stop / take" class="ex-trig">${[r.stop && [r.stop, "stop"], r.take && [r.take, "take"]].filter(Boolean).map(([t, k]) =>
+        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}" aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}</td>
+      <td data-l=""><button type="button" class="ex-cl" data-close="${r.asset}">Close</button></td></tr>`).join("")}</tbody></table>`
+    : `<p class="ex-pad ex-muted">No open positions.</p>`) + `<p class="ex-exit">${esc(SCREEN_TEXT.exit)}</p>`;
   paintJournal(page, st);
 }
 
@@ -315,7 +323,8 @@ function paintTicket(page, st) {
   const perp = st.perps.get(st.asset);
   const send = $("#ex-send", page);
   send.textContent = st.isBuy ? "Buy / Long" : "Sell / Short";
-  send.className = `ex-submit ${st.isBuy ? "ex-buy" : "ex-sell"}`;
+  send.className = `ex-go ${st.isBuy ? "b" : "s"}`;
+  paintHead(page, st);
   if (!perp) {
     $("#ex-preview", page).textContent = "The asset list of this network was not read, so no size can be taken.";
     send.disabled = true;
@@ -328,26 +337,27 @@ function paintTicket(page, st) {
   const parts = [];
   if (form.error) parts.push(`<p class="ex-warn bad">${esc(form.error)}</p>`);
   if (view) {
-    if (view.rows.length) parts.push(view.rows.map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join(""));
+    if (view.rows.length) parts.push(`<dl>${view.rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`);
     parts.push(...view.warnings.map((w) => `<p class="ex-warn ${w.tone}">${esc(w.text)}</p>`));
-    parts.push(`<p class="muted small">${esc(view.note ?? ESTIMATE_NOTE)}</p>`);
+    parts.push(`<p class="ex-note">${esc(view.note ?? ESTIMATE_NOTE)}</p>`);
   } else if (!form.error) {
-    parts.push(`<p class="muted small">${esc(ESTIMATE_NOTE)}</p>`);
+    parts.push(`<p class="ex-note">${esc(ESTIMATE_NOTE)}</p>`);
   }
   $("#ex-preview", page).innerHTML = parts.join("");
   st.order = form;
   send.disabled = st.busy || !account.canPlace || form.size === null || !view || view.blocked;
   const by = agentActive(st) ? "agent" : "trader";
-  $("#ex-signs", page).textContent = `Signed by ${placeSigns(st, by)}`;
+  $("#ex-signs", page).textContent = `Signed by ${placeSigns(st, by)}. ${SCREEN_TEXT.fillsLater}`;
 
-  const tf = triggerForm(reads, { asset: st.asset, perp, isTake: st.kind === "take", pxInput: $("#ex-tpx", page).value,
-    sizeInput: $("#ex-tsz", page).value, oracle: prices.oracle, now, block });
-  const tv = triggerPreviewView(tf.preview, perp);
-  $("#ex-tpreview", page).innerHTML = (tf.error ? `<p class="ex-warn bad">${esc(tf.error)}</p>` : "")
-    + (tv ? tv.lines.map((l) => `<p class="ex-warn ${l.tone}">${esc(l.text)}</p>`).join("") : "");
-  st.trigger = tf;
-  $("#ex-tset", page).disabled = st.busy || tf.px === null || !tv || tv.blocked;
-  $("#ex-tset", page).textContent = st.kind === "take" ? "Set take" : "Set stop";
+  for (const kind of ["stop", "take"]) {
+    const tf = triggerForm(reads, { asset: st.asset, perp, isTake: kind === "take", pxInput: $(`#ex-${kind}-px`, page).value,
+      sizeInput: $(`#ex-${kind}-sz`, page).value, oracle: prices.oracle, now, block });
+    const tv = triggerPreviewView(tf.preview, perp);
+    $(`#ex-${kind}-prev`, page).innerHTML = (tf.error ? `<p class="ex-warn bad">${esc(tf.error)}</p>` : "")
+      + (tv ? tv.lines.map((l) => `<p class="ex-warn ${l.tone}">${esc(l.text)}</p>`).join("") : "");
+    st.triggers[kind] = tf;
+    $(`#ex-${kind}-set`, page).disabled = st.busy || tf.px === null || !tv || tv.blocked;
+  }
 }
 
 function placeSigns(st, by) {
@@ -356,20 +366,22 @@ function placeSigns(st, by) {
 
 function paintBook(page, st) {
   const b = st.book;
-  const dec = (6 - (st.perps.get(st.asset)?.szDecimals ?? 0));
-  const level = (l, side) => `<div class="ex-level ${side}"><i style="width:${l.share}%"></i><span>${esc(l.px)}</span><span>${esc(l.sz)}</span></div>`;
+  const level = (l, side) => `<div class="ex-lv ${side}"><i style="width:${l.share}%"></i><span>${esc(l.px)}</span><span>${esc(l.sz)}</span><span>${esc(l.total.toFixed(3))}</span></div>`;
+  const unit = st.perps.get(st.asset)?.name ?? "";
   $("#ex-book", page).innerHTML = b.empty ? "The book is empty." : `
-    <div class="ex-level head"><span>Price</span><span>Size</span></div>
+    <div class="ex-bkh"><span>Price</span><span>Size (${esc(unit)})</span><span>Total</span></div>
     ${b.asks.map((l) => level(l, "ask")).join("")}
-    <div class="ex-spread">${b.mid === null ? "—" : esc(Number(b.mid.toFixed(dec)))} <span class="muted small">spread ${esc(b.spread)}</span></div>
+    <div class="ex-spr"><span>Spread</span><span>${esc(b.spreadAbs)}</span><span>${esc(b.spread)}</span></div>
     ${b.bids.map((l) => level(l, "bid")).join("")}`;
 }
 
 function paintJournal(page, st) {
   const rows = journalRows(st.journal, st.perps);
   $("#ex-journal", page).innerHTML = rows.length
-    ? `<ul class="ex-log">${[...rows].reverse().map((r) => `<li><span class="muted small">block ${r.block}</span> ${esc(r.text)}</li>`).join("")}</ul>`
-    : "Nothing loaded yet.";
+    ? `<table class="ex-t ex-jr"><thead><tr><th>Time (UTC)</th><th>Event</th><th>Asset</th><th>Side</th><th>Size</th><th>Price</th><th>Cost</th><th>Price from</th><th>Note</th></tr></thead><tbody>
+      ${[...rows].reverse().map((r) => `<tr><td>${esc(st.times.has(r.block) ? timeText(st.times.get(r.block)) : `block ${r.block}`)}</td>
+        ${["event", "asset", "side", "size", "price", "cost", "from", "note"].map((k) => `<td>${esc(r.cells[k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+    : `<p class="ex-pad ex-muted">Nothing loaded yet.</p>`;
 }
 
 // ── the second key ──────────────────────────────────────────────
@@ -395,22 +407,23 @@ function paintAgent(page, st) {
   const box = $("#ex-agent", page);
   const parts = [];
   if (key && same(onChain, key.address)) {
-    parts.push(`<p>Second key on: <span class="mono">${esc(key.address)}</span>. Orders from this browser are signed by it, with no prompts.</p>`,
-      `<p class="actions"><button type="button" class="secondary" data-agent="off">Turn off</button> <button type="button" class="secondary" data-agent="forget">Forget the key in this browser</button></p>`);
+    parts.push(`<p>Second key on: <span class="ex-addr">${esc(key.address)}</span>. Orders from this browser are signed by it, with no prompts.</p>`,
+      `<p class="ex-actions"><button type="button" class="ex-mini2" data-agent="off">Turn off</button> <button type="button" class="ex-mini2" data-agent="forget">Forget the key in this browser</button></p>`);
   } else if (key) {
-    parts.push(`<p>A second key is kept in this browser: <span class="mono">${esc(key.address)}</span>. It is not named on this exam yet.</p>`,
-      `<p class="actions"><button type="button" data-agent="name">Name it on this exam</button> <button type="button" class="secondary" data-agent="forget">Forget the key</button></p>`);
-    if (onChain) parts.push(`<p class="muted small">Another second key is named on this exam: <span class="mono">${esc(onChain)}</span>.</p>`);
+    parts.push(`<p>A second key is kept in this browser: <span class="ex-addr">${esc(key.address)}</span>. It is not named on this exam yet.</p>`,
+      `<p class="ex-actions"><button type="button" class="ex-mini2" data-agent="name">Name it on this exam</button> <button type="button" class="ex-mini2" data-agent="forget">Forget the key</button></p>`);
+    if (onChain) parts.push(`<p class="ex-muted">Another second key is named on this exam: <span class="ex-addr">${esc(onChain)}</span>.</p>`);
   } else {
-    parts.push(onChain ? `<p>A second key is named on this exam (<span class="mono">${esc(onChain)}</span>) that this browser does not hold.</p>
-      <p class="actions"><button type="button" class="secondary" data-agent="off">Turn off</button></p>` : "<p>No second key.</p>",
-      `<p class="actions"><button type="button" data-agent="create">Create a second key in this browser</button></p>`);
+    parts.push(onChain ? `<p>A second key is named on this exam (<span class="ex-addr">${esc(onChain)}</span>) that this browser does not hold.</p>
+      <p class="ex-actions"><button type="button" class="ex-mini2" data-agent="off">Turn off</button></p>` : "<p>No second key.</p>",
+      `<p class="ex-actions"><button type="button" class="ex-mini2" data-agent="create">Create a second key in this browser</button></p>`);
   }
   box.innerHTML = parts.join("");
+  $("#ex-tg", page).classList.toggle("on", Boolean(key && same(onChain, key.address)));
   if (key) {
     chain.readProvider.getBalance(key.address).then((b) => {
       const hint = $("#ex-agent", page);
-      if (hint && !hint.querySelector(".ex-gas")) hint.insertAdjacentHTML("beforeend", `<p class="muted small ex-gas">Its balance: ${esc(ethers.formatEther(b))} HYPE</p>`);
+      if (hint && !hint.querySelector(".ex-gas")) hint.insertAdjacentHTML("beforeend", `<p class="ex-muted ex-gas">Its balance: ${esc(ethers.formatEther(b))} HYPE</p>`);
     }).catch(() => {});
   }
 }
@@ -455,30 +468,40 @@ async function sendCall(page, st, call, out) {
 
 function wire(page, st) {
   const choose = () => { paintTicket(page, st); };
+  const setAsset = (asset) => {
+    st.asset = asset;
+    st.rows = [];
+    st.book = null;
+    $("#ex-book", page).textContent = "Loading…";
+    paintAssets(page, st);
+    drawChart(page, st);
+    refreshCandles(page, st);
+    refreshBook(page, st);
+    choose();
+  };
+  const on = (list, picked) => list.forEach((x) => x.classList.toggle("on", x === picked));
+  page.addEventListener("change", (e) => { if (e.target.id === "ex-asset") setAsset(Number(e.target.value)); });
   page.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || !page.contains(b)) return;
     if (b.dataset.asset !== undefined) {
-      st.asset = Number(b.dataset.asset);
-      st.rows = [];
-      st.book = null;
-      $("#ex-book", page).textContent = "Loading…";
-      paintAssets(page, st);
-      drawChart(page, st);
-      refreshCandles(page, st);
-      refreshBook(page, st);
-      choose();
+      setAsset(Number(b.dataset.asset));
     } else if (b.dataset.interval) {
       st.interval = b.dataset.interval;
-      page.querySelectorAll("[data-interval]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      on([...page.querySelectorAll("[data-interval]")], b);
       refreshCandles(page, st);
+    } else if (b.dataset.phone) {
+      $("#ex-term", page).dataset.phone = b.dataset.phone;
+      on([...page.querySelectorAll("[data-phone]")].filter((x) => x.tagName === "BUTTON"), b);
+      drawChart(page, st);
+    } else if (b.dataset.tab) {
+      st.tab = b.dataset.tab;
+      on([...page.querySelectorAll("[data-tab]")], b);
+      $("#ex-positions", page).hidden = st.tab !== "pos";
+      $("#ex-journal-pane", page).hidden = st.tab !== "jrnl";
     } else if (b.dataset.side) {
       st.isBuy = b.dataset.side === "buy";
-      page.querySelectorAll("[data-side]").forEach((x) => { x.setAttribute("aria-pressed", String(x === b)); x.classList.toggle("secondary", x !== b); });
-      choose();
-    } else if (b.dataset.kind) {
-      st.kind = b.dataset.kind;
-      page.querySelectorAll("[data-kind]").forEach((x) => { x.setAttribute("aria-pressed", String(x === b)); x.classList.toggle("secondary", x !== b); });
+      page.querySelectorAll("[data-side]").forEach((x) => { x.classList.toggle("on", x === b); });
       choose();
     } else if (b.id === "ex-send") {
       if (!st.order || st.order.size === null) return;
@@ -492,11 +515,12 @@ function wire(page, st) {
       const r = positionRow(row, st.perps);
       const call = placeCall({ exam: st.address, asset, isBuy: r.closeIsBuy, size: r.closeSize, by: agentActive(st) ? "agent" : "trader", keccak256: keccak });
       sendCall(page, st, call, "#ex-send-out");
-    } else if (b.id === "ex-tset") {
-      if (!st.trigger || st.trigger.px === null) return;
-      const call = setTriggerCall({ exam: st.address, asset: st.asset, isTake: st.kind === "take", px: st.trigger.px, size: st.trigger.size,
+    } else if (b.dataset.set) {
+      const t = st.triggers[b.dataset.set];
+      if (!t || t.px === null) return;
+      const call = setTriggerCall({ exam: st.address, asset: st.asset, isTake: b.dataset.set === "take", px: t.px, size: t.size,
         by: agentActive(st) ? "agent" : "trader", keccak256: keccak });
-      sendCall(page, st, call, "#ex-tset-out");
+      sendCall(page, st, call, "#ex-send-out");
     } else if (b.dataset.clear) {
       const [asset, kind] = b.dataset.clear.split(":");
       sendCall(page, st, clearTriggerCall({ exam: st.address, asset: Number(asset), isTake: kind === "take", by: agentActive(st) ? "agent" : "trader", keccak256: keccak }), "#ex-send-out");
@@ -508,7 +532,7 @@ function wire(page, st) {
       loadJournal(page, st);
     }
   });
-  page.addEventListener("input", (e) => { if (e.target.matches("#ex-size, #ex-tpx, #ex-tsz")) paintTicket(page, st); });
+  page.addEventListener("input", (e) => { if (e.target.matches("#ex-size, #ex-stop-px, #ex-stop-sz, #ex-take-px, #ex-take-sz")) paintTicket(page, st); });
   const canvas = $("#ex-canvas", page);
   if (canvas) {
     canvas.addEventListener("mousemove", (e) => {
@@ -541,6 +565,15 @@ async function agentAction(page, st, what) {
   out.textContent = "";
 }
 
+/** The time of each block the journal names, up to 40 of them; a row without one says its block. */
+async function blockTimes(st, blocks) {
+  const wanted = [...new Set(blocks)].filter((n) => !st.times.has(n)).slice(-40);
+  await Promise.all(wanted.map((n) => attempt(async () => {
+    const b = await chain.readProvider.getBlock(n);
+    if (b) st.times.set(n, b.timestamp);
+  })));
+}
+
 async function loadJournal(page, st) {
   const btn = $("#ex-journal-load", page);
   btn.disabled = true;
@@ -558,6 +591,7 @@ async function loadJournal(page, st) {
     st.journal = [...events, ...st.journal].sort((x, y) => x.block - y.block || x.index - y.index);
     st.journalFrom = from;
     info.textContent = `Events from block ${from} to ${latest}.`;
+    await blockTimes(st, events.map((e) => e.block));
     paintJournal(page, st);
     btn.textContent = "Load earlier events";
   } catch (err) {
@@ -569,10 +603,11 @@ async function loadJournal(page, st) {
 
 // ── the chart: candles drawn on a canvas, no library ────────────
 
-function colors() {
-  const css = getComputedStyle(document.body);
+function colors(page) {
+  const css = getComputedStyle(page);
   const get = (n, fallback) => css.getPropertyValue(n).trim() || fallback;
-  return { up: get("--ok", "#1a7f37"), down: get("--bad", "#b42318"), text: get("--muted", "#3E5068"), grid: get("--line", "#C7E1F9"), ink: get("--text", "#16181D") };
+  return { up: get("--up", "#2F7FC9"), down: get("--dn", "#C0622A"), text: get("--mute", "#5E6670"), grid: get("--line", "#D6D8D6"), ink: get("--ink", "#0E1116"),
+    vol: "rgba(31,53,80,.12)" };
 }
 
 function drawChart(page, st) {
@@ -591,7 +626,7 @@ function drawChart(page, st) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
-  const c = colors();
+  const c = colors(page);
   const rows = st.rows;
   ctx.font = "11px Inter, system-ui, sans-serif";
   if (!rows.length) {
@@ -602,6 +637,14 @@ function drawChart(page, st) {
   const dec = Math.max(0, 6 - (st.perps.get(st.asset)?.szDecimals ?? 0));
   const fmt = (v) => v.toFixed(Math.min(dec, v >= 1000 ? 1 : dec));
   const s = chartScale(rows, { width, height });
+  const volTop = s.top + s.plotH * 0.86;
+  const volMax = Math.max(...rows.map((k) => k.volume), 1);
+  ctx.fillStyle = c.vol;
+  rows.forEach((k, i) => {
+    const h = (k.volume / volMax) * (s.plotH * 0.14);
+    ctx.fillRect(s.x(i) - s.body / 2, s.top + s.plotH - h, s.body, h);
+  });
+  void volTop;
   ctx.lineWidth = 1;
   ctx.textBaseline = "middle";
   for (const t of s.ticks) {
@@ -628,14 +671,14 @@ function drawChart(page, st) {
   });
   const last = rows[rows.length - 1];
   const ly = s.y(last.close);
-  ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = last.close >= last.open ? c.up : c.down;
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = c.ink;
   ctx.beginPath();
   ctx.moveTo(0, ly);
   ctx.lineTo(s.plotW, ly);
   ctx.stroke();
   ctx.setLineDash([]);
-  ctx.fillStyle = last.close >= last.open ? c.up : c.down;
+  ctx.fillStyle = c.ink;
   ctx.fillRect(s.plotW, ly - 9, s.axis, 18);
   ctx.fillStyle = "#fff";
   ctx.fillText(fmt(last.close), s.plotW + 6, ly);

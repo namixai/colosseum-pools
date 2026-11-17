@@ -12,11 +12,12 @@ export { WHAT_THIS_IS, ESTIMATE_NOTE };
 
 /** The lines the page says in plain sight, beside the strip at the top (the brief for this page). */
 export const SCREEN_TEXT = Object.freeze({
-  strip: "Paper exam",
+  strip: "Exam",
+  testnetPlaque: "Testnet. Mock USDC. Unaudited.",
+  testnetTag: "Testnet app",
   fillsLater: "Orders fill a few seconds after you send them, at the price of that moment.",
   exit: "To exit a position, send an order yourself, or set a stop or a take on it.",
   gas: "Each order is a transaction: a signature and gas. Or name a second key and trade without prompts.",
-  data: "Prices and the book: Hyperliquid.",
   chart: "Chart: Hyperliquid prices",
   book: "Book: Hyperliquid",
   bookFill: "Your order fills at the best price of your side, never better than the oracle price. Size does not move the price.",
@@ -24,9 +25,8 @@ export const SCREEN_TEXT = Object.freeze({
     + "It is kept in this browser; anyone who gets it can trade this exam. It needs a little HYPE for gas.",
   triggerReached: "The oracle price is already past this level: it will close the position as soon as it acts.",
   breach: "This order would put the account under its loss limit.",
-  rehearsal: "Rehearsal on testnet: nobody trades here. The book is thin and stands off the oracle price, and it will show.",
   noPrice: "Price not read",
-  noLimits: "Market orders only, one waiting at a time. The contract does not model book depth and charges no funding.",
+  oneAtATime: "one order at a time: a new one is accepted once this one is filled or lapsed",
   closeDrops: "An order that closes or turns a position round takes its stop and take off.",
   lapsed: "Not filled. The order lapsed at no cost — place it again.",
 });
@@ -47,6 +47,40 @@ export function candleWindow(interval, nowMs, count = CANDLES_SHOWN) {
   const step = INTERVALS.find((i) => i.key === interval);
   if (!step) throw new Error(`${interval} is not an interval of the chart`);
   return { startTime: nowMs - step.ms * count, endTime: nowMs };
+}
+
+/** USDC units as a dollar amount for the screen: the library's text (`usdText`) with thousands grouped and at least two
+ *  decimals. Nothing is rounded: more decimals than two stay. */
+export function usdShown(units) {
+  const text = usdText(units);
+  const neg = text.startsWith("-");
+  const [whole, frac = ""] = (neg ? text.slice(1) : text).split(".");
+  return `${neg ? "-" : ""}$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${frac.padEnd(2, "0")}`;
+}
+
+/** The marks a page built for a network that is not mainnet carries: the plaque and the tag. None on mainnet. */
+export function networkMarks(config) {
+  if (config?.hyperliquidChain === "Mainnet") return null;
+  return { plaque: SCREEN_TEXT.testnetPlaque, tag: SCREEN_TEXT.testnetTag };
+}
+
+/** The four small steps of the strip, by where the account stands: no amounts. The exam is the step in hand while it is
+ *  active, and done once passed; what comes after is the pool's, so it is not marked. */
+export function lifeSteps(account) {
+  return [
+    { n: 1, label: "Bought", state: "done" },
+    { n: 2, label: "Exam", state: account.status === "passed" ? "done" : account.status === "active" ? "now" : "" },
+    { n: 3, label: "Stage", state: "" },
+    { n: 4, label: "Payout", state: "" },
+  ];
+}
+
+/** A moment (seconds) as "17 Nov 13:02:41", in UTC. */
+export function timeText(seconds) {
+  const d = new Date(Number(seconds) * 1000);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getUTCDate())} ${months[d.getUTCMonth()]} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
 }
 
 // ── what the page reads, as the library takes it ──────────────────
@@ -99,21 +133,22 @@ export function leverageText(x100) {
  *  formatters. Where the account is unpriced, the figures that need a price say "Price not read" and show no old one. */
 export function accountFigures(account) {
   const none = SCREEN_TEXT.noPrice;
-  const usd = (v) => (v === null || v === undefined ? none : `${usdText(v)} USDC`);
+  const usd = (v) => (v === null || v === undefined ? none : usdShown(v));
   return {
     status: account.status,
-    size: `${usdText(account.capital)} USDC`,
+    size: usdShown(account.capital),
     step: account.target ? `${account.target.step + 1} of ${account.target.steps}` : "—",
     equity: account.priced ? usd(account.equity) : none,
     balance: usd(account.cash),
-    leverage: account.priced ? `${leverageText(account.leverageX100)} of ${leverageText(account.maxLeverageX100)}` : none,
+    leverage: account.priced ? leverageText(account.leverageX100) : none,
+    maxLeverage: leverageText(account.maxLeverageX100),
     target: account.target ? { at: usd(account.target.at), toGo: account.priced ? usd(account.target.toGo) : none } : null,
     lines: account.lines.map((l) => ({
       kind: l.kind, at: usd(l.at), room: account.priced ? usd(l.room) : none, near: l === account.floor,
       label: l.kind === "drawdown"
         ? (l.drawdownKind === "trailing-to-start" ? "Loss limit (follows your best day's balance up to the starting balance)" : "Total loss limit")
         : "Daily loss limit",
-      from: l.kind === "daily-loss" ? `from the day's snapshot ${usdText(l.from)} USDC` : null,
+      from: l.kind === "daily-loss" ? `from today's snapshot ${usdShown(l.from)}` : null,
     })),
     days: account.days.needed > 0 ? `${account.days.traded} of ${account.days.needed}` : null,
     priced: account.priced,
@@ -126,10 +161,10 @@ export function positionRow(p, perps) {
   const dec = perp.szDecimals;
   return {
     asset: p.asset, name: perp.name, side: p.side === "long" ? "Long" : "Short",
-    size: sizeText(p.size < 0n ? -p.size : p.size, dec),
+    size: `${sizeText(p.size < 0n ? -p.size : p.size, dec)} ${perp.name}`,
     mark: p.mark === null ? SCREEN_TEXT.noPrice : pxText(p.mark, dec),
-    notional: p.notional === null ? SCREEN_TEXT.noPrice : `${usdText(p.notional)} USDC`,
-    leverage: p.leverageX100 === null ? SCREEN_TEXT.noPrice : `${leverageText(p.leverageX100)} of ${leverageText(p.capX100)}`,
+    notional: p.notional === null ? SCREEN_TEXT.noPrice : usdShown(p.notional),
+    leverage: p.leverageX100 === null ? SCREEN_TEXT.noPrice : `${leverageText(p.leverageX100)} / ${leverageText(p.capX100)}`,
     stop: p.stop ? triggerText(p.stop, dec) : null,
     take: p.take ? triggerText(p.take, dec) : null,
     closeIsBuy: p.size < 0n,
@@ -223,7 +258,7 @@ export function previewView(preview, perp) {
     blocked: false,
     rows: [
       ["Est. fill price", `${pxText(preview.px, dec)} (${preview.source === "book" ? "book" : "oracle"})`],
-      ["Cost", `${usdText(preview.cost)} USDC`],
+      ["Cost", usdShown(preview.cost)],
       ["Position after", `${sizeText(preview.after.position, dec)} ${perp.name}`],
       ["Leverage after", preview.after.leverageX100 === null ? SCREEN_TEXT.noPrice : leverageText(preview.after.leverageX100)],
     ],
@@ -268,6 +303,7 @@ export function bookView(raw, depth = BOOK_DEPTH) {
     asks: [...b.asks].reverse().map((l) => ({ ...l, share: share(l) })),
     bids: b.bids.map((l) => ({ ...l, share: share(l) })),
     spread: b.spreadBps === null ? "—" : `${b.spreadBps.toFixed(1)} bps`,
+    spreadAbs: b.bestBid === null || b.bestAsk === null ? "—" : String(Number((b.bestAsk - b.bestBid).toFixed(6))),
     mid: b.mid, empty: b.bids.length === 0 && b.asks.length === 0,
   };
 }
@@ -326,36 +362,52 @@ export function candleText(c) {
 const SOURCE = ["oracle", "book", "oracle (book was off)"];
 
 /**
- * The journal's rows out of decoded events ({name, args, block}), oldest first. A stop or a take that was carried
- * out writes its `Filled` first and its `TriggerFilled` right after: that one row reads "Stop filled".
+ * The journal's rows out of decoded events ({name, args, block}), oldest first: each with a line of words (`text`) and
+ * the cells of the table (`cells`: event, asset, side, size, price, cost, from, note). A stop or a take that was
+ * carried out writes its `Filled` first and its `TriggerFilled` right after: that one row reads "Stop filled".
  */
 export function journalRows(events, perps) {
   const rows = [];
   let lastFilled = null;
+  const dash = "—";
   for (const e of events) {
     const a = e.args;
     const perp = perpOf(perps, a.asset ?? 0);
     const dec = perp.szDecimals;
     const at = { block: e.block, name: e.name };
+    const cells = (c) => ({ event: dash, asset: perp.name, side: dash, size: dash, price: dash, cost: dash, from: dash, note: dash, ...c });
     if (e.name === "Placed") {
-      rows.push({ ...at, text: `Order placed: ${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name} · fills from block ${a.fillFrom} to ${a.fillUntil}` });
+      rows.push({ ...at, text: `Order placed: ${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name} · fills from block ${a.fillFrom} to ${a.fillUntil}`,
+        cells: cells({ event: "Placed", side: sideWord(a.isBuy), size: sizeText(a.sz, dec), note: `blocks ${a.fillFrom} to ${a.fillUntil}` }) });
     } else if (e.name === "Filled") {
       const late = Number(a.late);
-      const head = `${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name} at ${pxText(a.px, dec)} · cost ${usdText(a.cost)} USDC · price from the ${SOURCE[Number(a.source)] ?? "oracle"}`;
-      lastFilled = { ...at, head, text: `Filled: ${head} · ${late === 0 ? "first block it could be filled" : `${late} block${late === 1 ? "" : "s"} after the first`}` };
+      const source = SOURCE[Number(a.source)] ?? "oracle";
+      const head = `${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name} at ${pxText(a.px, dec)} · cost ${usdShown(a.cost)} · price from the ${source}`;
+      lastFilled = { ...at, head, text: `Filled: ${head} · ${late === 0 ? "first block it could be filled" : `${late} block${late === 1 ? "" : "s"} after the first`}`,
+        cells: cells({ event: "Filled", side: sideWord(a.isBuy), size: sizeText(a.sz, dec), price: pxText(a.px, dec), cost: usdShown(a.cost),
+          from: source, note: `${late} block${late === 1 ? "" : "s"}` }) };
       rows.push(lastFilled);
     } else if (e.name === "TriggerFilled") {
-      if (lastFilled) lastFilled.text = `${a.isTake ? "Take" : "Stop"} filled: ${lastFilled.head} · it was set at ${pxText(a.triggerPx, dec)}`;
+      if (lastFilled) {
+        lastFilled.text = `${a.isTake ? "Take" : "Stop"} filled: ${lastFilled.head} · it was set at ${pxText(a.triggerPx, dec)}`;
+        lastFilled.cells.event = a.isTake ? "Take filled" : "Stop filled";
+        lastFilled.cells.note = `set at ${pxText(a.triggerPx, dec)}`;
+      }
     } else if (e.name === "Lapsed") {
-      rows.push({ ...at, text: `Order lapsed at no cost: ${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name}` });
+      rows.push({ ...at, text: `Order lapsed at no cost: ${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name}`,
+        cells: cells({ event: "Lapsed", side: sideWord(a.isBuy), size: sizeText(a.sz, dec) }) });
     } else if (e.name === "DaySnapshot") {
-      rows.push({ ...at, text: `Day ${a.day} snapshot: equity ${usdText(a.equity)} USDC` });
+      rows.push({ ...at, text: `Day ${a.day} snapshot: equity ${usdShown(a.equity)}`,
+        cells: cells({ event: "DaySnapshot", asset: dash, note: `equity ${usdShown(a.equity)}` }) });
     } else if (e.name === "TriggerSet") {
-      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} set on ${perp.name} at ${pxText(a.px, dec)} · closes ${BigInt(a.sz) === 0n ? "all" : sizeText(a.sz, dec)} · acts from block ${a.armedAt}` });
+      const closes = BigInt(a.sz) === 0n ? "all" : sizeText(a.sz, dec);
+      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} set on ${perp.name} at ${pxText(a.px, dec)} · closes ${closes} · acts from block ${a.armedAt}`,
+        cells: cells({ event: a.isTake ? "Take set" : "Stop set", size: closes, price: pxText(a.px, dec), note: `acts from block ${a.armedAt}` }) });
     } else if (e.name === "TriggerCleared") {
-      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} removed` });
+      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} removed`, cells: cells({ event: a.isTake ? "Take removed" : "Stop removed" }) });
     } else if (e.name === "TriggerSeen") {
-      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} reached: oracle at ${pxText(a.oracle, dec)}` });
+      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} reached: oracle at ${pxText(a.oracle, dec)}`,
+        cells: cells({ event: a.isTake ? "Take reached" : "Stop reached", price: pxText(a.oracle, dec) }) });
     }
     if (e.name !== "Filled") lastFilled = null;
   }

@@ -5,12 +5,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  WHAT_THIS_IS, ESTIMATE_NOTE, FROM_START, TRAILING_TO_START, examAccount, refusalText, dataSource,
+  WHAT_THIS_IS, ESTIMATE_NOTE, FROM_START, TRAILING_TO_START, REFUSALS, examAccount, refusalText, dataSource,
 } from "../lib/exam.js";
 import {
   SCREEN_TEXT, INTERVALS, candleWindow, readsFrom, accountFigures, positionRow, triggerText, pendingText, barShare,
   accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, niceTicks, chartScale, candleText,
-  journalRows, timeLeft, sendFailure, leverageText,
+  journalRows, timeLeft, sendFailure, leverageText, usdShown, networkMarks, lifeSteps, timeText,
 } from "../lib/examscreen.js";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -72,14 +72,14 @@ test("a price that was not read leaves the account unpriced, and the page says s
 test("the figures are the library's, said with its formatters; the loss line is named by its kind", () => {
   const a = examAccount(reads(), AT);
   const f = accountFigures(a);
-  assert.deepEqual([f.size, f.step, f.equity, f.balance, f.leverage], ["10000 USDC", "1 of 1", "10000 USDC", "10000 USDC", "0.00× of 10.00×"]);
+  assert.deepEqual([f.size, f.step, f.equity, f.balance, f.leverage], ["$10,000.00", "1 of 1", "$10,000.00", "$10,000.00", "0.00×"]);
   assert.equal(f.lines[0].label, "Total loss limit");
   assert.deepEqual(f.lines.map((l) => l.near), [false, true], "the daily line (9 700) is nearer than the total one (9 400): it is marked");
   assert.equal(f.lines[1].label, "Daily loss limit");
   assert.equal(f.days, null, "no minimum of trading days: nothing to count");
   const trailing = accountFigures(examAccount(reads({ drawdownKind: BigInt(TRAILING_TO_START), peakSnapshot: 10_200n * USD }), AT));
   assert.equal(trailing.lines[0].label, "Loss limit (follows your best day's balance up to the starting balance)");
-  assert.equal(trailing.lines[0].at, "9600 USDC", "the highest snapshot less the same allowance");
+  assert.equal(trailing.lines[0].at, "$9,600.00", "the highest snapshot less the same allowance");
   const days = accountFigures(examAccount(reads({ terms: Object.assign([...got().terms], { ...got().terms, minTradingDays: 3n }) }), AT));
   assert.equal(days.days, "0 of 3");
 });
@@ -97,14 +97,14 @@ test("a position's row names the asset, side and size, and says its stop and tak
   const take = { px: 700_000n, sz: 4_000n, armedAt: 1_003, seenAt: 0 };
   const a = examAccount(reads({ cash: 4_000n * USD }, () => long({ stop, take })), AT);
   const row = positionRow(a.positions[0], PERPS);
-  assert.deepEqual([row.name, row.side, row.size, row.mark, row.notional], ["BTC", "Long", "0.1", "60000", "6000 USDC"]);
-  assert.equal(row.leverage, "0.60× of 10.00×");
+  assert.deepEqual([row.name, row.side, row.size, row.mark, row.notional], ["BTC", "Long", "0.1 BTC", "60000", "$6,000.00"]);
+  assert.equal(row.leverage, "0.60× / 10.00×");
   assert.equal(row.stop, "Stop 55000 · closes all · armed");
   assert.equal(row.take, "Take 70000 · closes 0.04 · armed in 3 blocks");
   assert.deepEqual([row.closeIsBuy, row.closeSize], [false, 10_000n], "Close is an order the other way for the whole size");
   const short = examAccount(reads({ cash: 16_000n * USD }, () => [{ asset: BTC, size: -10_000n, oracle: PX }, ...flat().slice(1)]), AT);
   const s = positionRow(short.positions[0], PERPS);
-  assert.deepEqual([s.side, s.size, s.closeIsBuy], ["Short", "0.1", true]);
+  assert.deepEqual([s.side, s.size, s.closeIsBuy], ["Short", "0.1 BTC", true]);
   assert.equal(triggerText({ kind: "stop", px: 1n, whole: true, blocksToArm: 0, state: "seen", closes: 1n }, 5), "Stop 0.1 · closes all · reached, shown on chain");
 });
 
@@ -165,7 +165,7 @@ test("the estimate shows the price and its source, the cost, the position and th
   const v = previewView(f.preview, BTC_PERP);
   assert.equal(v.blocked, false);
   assert.deepEqual(v.rows, [
-    ["Est. fill price", "60010 (book)"], ["Cost", "2.70045 USDC"], ["Position after", "0.1 BTC"], ["Leverage after", "0.60×"]]);
+    ["Est. fill price", "60010 (book)"], ["Cost", "$2.70045"], ["Position after", "0.1 BTC"], ["Leverage after", "0.60×"]]);
   assert.equal(v.note, ESTIMATE_NOTE);
   assert.deepEqual(v.warnings, []);
   assert.equal(f.preview.px, 600_100n, "the figure is the library's, not worked out here");
@@ -259,23 +259,27 @@ test("the journal reads the events in order, and a stop that was carried out is 
   ], PERPS);
   assert.deepEqual(rows.map((r) => r.text), [
     "Order placed: Buy 0.015 BTC · fills from block 11 to 20",
-    "Filled: Buy 0.015 BTC at 60010 · cost 0.405 USDC · price from the book · 2 blocks after the first",
+    "Filled: Buy 0.015 BTC at 60010 · cost $0.405 · price from the book · 2 blocks after the first",
     "Stop set on BTC at 55000 · closes all · acts from block 16",
-    "Stop filled: Sell 0.015 BTC at 54990 · cost 0.4 USDC · price from the oracle · it was set at 55000",
+    "Stop filled: Sell 0.015 BTC at 54990 · cost $0.40 · price from the oracle · it was set at 55000",
     "Order lapsed at no cost: Buy 0.005 ETH",
-    "Day 20400 snapshot: equity 10100 USDC",
+    "Day 20400 snapshot: equity $10,100.00",
   ]);
+  assert.deepEqual(rows[1].cells, { event: "Filled", asset: "BTC", side: "Buy", size: "0.015", price: "60010", cost: "$0.405", from: "book", note: "2 blocks" });
+  assert.deepEqual([rows[3].cells.event, rows[3].cells.note, rows[3].cells.price], ["Stop filled", "set at 55000", "54990"]);
+  assert.deepEqual([rows[5].cells.event, rows[5].cells.note, rows[5].cells.asset], ["DaySnapshot", "equity $10,100.00", "—"]);
 });
 
 // ── the page's own files ───────────────────────────────────────────
 
 test("the screen says what the brief wants said, and the strip is the library's own words", () => {
-  assert.equal(WHAT_THIS_IS, "A paper exam: your orders are not sent to an exchange and no money is traded. Prices and the book are Hyperliquid's. You close a position with an order of your own, or with a stop or a take you set on it.");
+  assert.equal(WHAT_THIS_IS, "Prices and the book are Hyperliquid's. You close a position with an order of your own, or with a stop or a take you set on it.");
+  assert.equal(SCREEN_TEXT.strip, "Exam");
+  assert.equal(SCREEN_TEXT.testnetPlaque, "Testnet. Mock USDC. Unaudited.");
+  assert.equal(SCREEN_TEXT.testnetTag, "Testnet app");
   assert.equal(SCREEN_TEXT.fillsLater, "Orders fill a few seconds after you send them, at the price of that moment.");
   assert.equal(SCREEN_TEXT.exit, "To exit a position, send an order yourself, or set a stop or a take on it.");
   assert.equal(SCREEN_TEXT.gas, "Each order is a transaction: a signature and gas. Or name a second key and trade without prompts.");
-  assert.equal(SCREEN_TEXT.data, "Prices and the book: Hyperliquid.");
-  assert.equal(SCREEN_TEXT.rehearsal, "Rehearsal on testnet: nobody trades here. The book is thin and stands off the oracle price, and it will show.");
   assert.match(SCREEN_TEXT.secondKey, /^A second key can place orders and pass the step on this exam\. It cannot move money: an exam holds none\./);
   const view = read("../views/exam.js");
   assert.match(view, /esc\(WHAT_THIS_IS\)/, "the strip takes the library's words");
@@ -315,8 +319,59 @@ test("on a network the page is not built for, nothing is drawn but the library's
   assert.equal(off.ok, false);
   assert.match(off.text, /No chart or book is shown/);
   const on = dataSource({ chainId: 998 }, { chainId: 998, hlInfo: "x", hyperliquidChain: "Testnet" });
-  assert.deepEqual([on.ok, on.rehearsal], [true, true], "a testnet exam is a rehearsal: the red strip");
+  assert.deepEqual([on.ok, on.rehearsal], [true, true]);
   assert.equal(dataSource({ chainId: 999 }, { chainId: 999, hlInfo: "x", hyperliquidChain: "Mainnet" }).rehearsal, false);
-  assert.match(read("../views/exam.js"), /ds\.ok && ds\.rehearsal/, "the strip is drawn on a rehearsal only");
-  assert.match(read("../views/exam.js"), /ds\.ok\)? ?\?? ?"" ?: ?`<section class="card"><h3>Chart and book not shown<\/h3><p>\$\{esc\(ds\.text\)\}/, "a refused source shows its text");
+  assert.match(read("../views/exam.js"), /networkMarks\(CONFIG\)/, "the plaque and the tag follow the settings of the network the page is built for");
+  assert.match(read("../views/exam.js"), /<h3>Chart and book not shown<\/h3><p>\$\{esc\(ds\.text\)\}/, "a refused source shows its text");
+});
+
+// ── the approved layout ─────────────────────────────────────────────
+
+test("a dollar amount keeps the library's digits: thousands grouped, two decimals at least, nothing rounded", () => {
+  assert.equal(usdShown(10_240n * USD), "$10,240.00");
+  assert.equal(usdShown(9_999_965_000n), "$9,999.965");
+  assert.equal(usdShown(500n), "$0.0005");
+  assert.equal(usdShown(-5_000n), "-$0.005");
+  assert.equal(usdShown(1_234_567n * USD), "$1,234,567.00");
+});
+
+test("a testnet page carries the plaque and the tag, a mainnet page neither", () => {
+  assert.deepEqual(networkMarks({ hyperliquidChain: "Testnet" }), { plaque: "Testnet. Mock USDC. Unaudited.", tag: "Testnet app" });
+  assert.equal(networkMarks({ hyperliquidChain: "Mainnet" }), null);
+  assert.equal(networkMarks({ hyperliquidChain: "Mainnet", chainId: 998 }), null, "by the network the page is built for, nothing else");
+  assert.match(read("../config.js"), /hyperliquidChain: "Testnet"/);
+});
+
+test("the strip's four steps carry no amounts, and the exam is the one in hand while it is active", () => {
+  const steps = (status) => lifeSteps({ status }).map((x) => `${x.n} ${x.label}:${x.state}`);
+  assert.deepEqual(steps("active"), ["1 Bought:done", "2 Exam:now", "3 Stage:", "4 Payout:"]);
+  assert.deepEqual(steps("passed"), ["1 Bought:done", "2 Exam:done", "3 Stage:", "4 Payout:"]);
+  assert.equal(steps("breached")[1], "2 Exam:");
+});
+
+test("the book's spread is said in price and in bps; a journal time is UTC", () => {
+  const b = bookView({ levels: [[{ px: "91248", sz: "1" }], [{ px: "91252", sz: "1" }]] });
+  assert.equal(b.spreadAbs, "4");
+  assert.equal(bookView({ levels: [[], []] }).spreadAbs, "—");
+  assert.equal(timeText(Date.UTC(2026, 10, 17, 13, 2, 41) / 1000), "17 Nov 13:02:41");
+});
+
+test("no word of a simulation on the screen, no amount of a payout, no sample marks, no chart maker's credit", () => {
+  const strings = Object.values(SCREEN_TEXT).join("\n");
+  const view = read("../views/exam.js").split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
+  const lib = read("../lib/examscreen.js").split("\n").filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join("\n");
+  const exam = read("../lib/exam.js");
+  const said = [strings, WHAT_THIS_IS, ESTIMATE_NOTE, ...Object.values(REFUSALS), view, lib].join("\n").replaceAll("PAPER_EXAM_ABI", "");
+  assert.doesNotMatch(said, /simulat|paper|rehears/i);
+  assert.doesNotMatch(said, /mockup|TradingView|\$800|8 ?%|fixed payout/i);
+  assert.match(exam, /export const WHAT_THIS_IS = "Prices and the book are Hyperliquid's\./);
+});
+
+test("the page's styles are the approved layout's: three columns, the tabs under the chart and the book, the phone's own order", () => {
+  const css = read("../style.css");
+  assert.match(css, /\.ex-term \{ display: grid; grid-template-columns: minmax\(0, 1fr\) 300px 340px;/);
+  assert.match(css, /--up: #2F7FC9; --dn: #C0622A;/);
+  assert.match(css, /\.ex-bottom \{ grid-column: 1 \/ 3; grid-row: 2; \}/);
+  assert.match(css, /\.ex-term\[data-phone="chart"\] \.ex-book \{ display: none; \}/);
+  assert.doesNotMatch(css, /\.ex-rehearsal/);
 });

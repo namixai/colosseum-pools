@@ -96,9 +96,8 @@ export const SIGNS = Object.freeze({
 export const ESTIMATE_NOTE = "An estimate at the prices of this moment. The order is filled a few blocks later, at "
   + "the price of the block that fills it.";
 /** What the screen says once, in plain sight. */
-export const WHAT_THIS_IS = "A paper exam: your orders are not sent to an exchange and no money is traded. Prices "
-  + "and the book are Hyperliquid's. You close a position with an order of your own, or with a stop or a take you set "
-  + "on it.";
+export const WHAT_THIS_IS = "Prices and the book are Hyperliquid's. You close a position with an order of your own, or "
+  + "with a stop or a take you set on it.";
 
 const ADDRESS = /^0x[0-9a-f]{40}$/i;
 const ZERO = /^0x0{40}$/i;
