@@ -13,6 +13,7 @@ import { verifyView } from "./views/verify.js";
 import { economicsView } from "./views/economics.js";
 import { sharedView } from "./views/shared.js";
 import { evidenceView } from "./views/evidence.js";
+import { examView } from "./views/exam.js";
 
 const GATE_KEY = "pools-gate-v1";
 
@@ -37,6 +38,7 @@ const routes = [
   [/^#\/economics$/, (m, page) => economicsView(page)],
   [/^#\/shared(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => sharedView(m[1], page)],
   [/^#\/evidence$/, (m, page) => evidenceView(page)],
+  [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => examView(m[1], page)],
   [/^#\/terms$/, (m, page) => termsView(page)],
 ];
 

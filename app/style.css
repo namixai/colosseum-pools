@@ -345,3 +345,76 @@ code { font-family: var(--mono); font-size: 13px; }
 .pool-head .kv > span:first-child { display: block; }
 .pool-head .kv > span:last-child { display: block; text-align: left; margin-top: 2px; }
 .pool-head .mono { font-family: var(--mono); word-break: break-all; overflow-wrap: anywhere; }
+
+/* The paper exam's trading page (#/exam/<address>): a strip, a chart, a book, an order form, the tables and the account. */
+.ex-rehearsal { margin: 0 0 12px; padding: 10px 14px; border-radius: 8px; background: #b42318; color: #fff; font-weight: 700; font-size: .9rem; }
+.ex-strip { padding: 12px 16px; }
+.ex-strip-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.ex-strip-head p { margin: 0; flex: 1 1 320px; }
+.ex-badge { background: var(--sun); color: var(--ink); border-color: transparent; font-weight: 800; font-size: 13px; padding: 3px 12px; }
+.ex-figures { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.ex-grid { display: grid; gap: 16px; align-items: start; grid-template-columns: minmax(0, 1fr) 250px 320px;
+  grid-template-areas: "chart book ticket" "tables tables account" "notes notes account"; }
+.ex-notes { grid-area: notes; }
+.ex-notes ul { margin: 0; padding-left: 18px; }
+.ex-grid > .card { margin: 0; }
+.ex-chart { grid-area: chart; }
+.ex-book { grid-area: book; }
+.ex-ticket { grid-area: ticket; }
+.ex-tables { grid-area: tables; }
+.ex-account { grid-area: account; }
+.ex-chart-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.ex-tabs, .ex-intervals { display: flex; gap: 4px; flex-wrap: wrap; }
+.ex-tabs button, .ex-intervals button { min-width: 44px; }
+.ex-tabs button[aria-selected="true"], .ex-intervals button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.ex-canvas-wrap { position: relative; width: 100%; height: 360px; }
+.ex-canvas-wrap canvas { position: absolute; inset: 0; display: block; }
+.ex-hover { min-height: 1.4em; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+.ex-level { position: relative; display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 1px 4px; font-variant-numeric: tabular-nums; }
+.ex-level > span { position: relative; }
+.ex-level > i { position: absolute; inset: 0 0 0 auto; opacity: .16; }
+.ex-level.ask > span:first-of-type { color: var(--bad); }
+.ex-level.bid > span:first-of-type { color: var(--ok); }
+.ex-level.ask > i { background: var(--bad); }
+.ex-level.bid > i { background: var(--ok); }
+.ex-level.head { color: var(--muted); font-size: 12px; font-weight: 600; }
+.ex-spread { padding: 5px 4px; margin: 3px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-weight: 700; }
+.ex-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+.ex-sides button { width: 100%; }
+.ex-buy[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
+.ex-sell[aria-pressed="true"] { background: var(--bad); border-color: var(--bad); color: #fff; }
+.ex-submit.ex-buy { background: var(--ok); border-color: var(--ok); color: #fff; }
+.ex-submit.ex-sell { background: var(--bad); border-color: var(--bad); color: #fff; }
+.ex-submit { width: 100%; margin-top: 8px; }
+.ex-kind button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.ex-field { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin: 8px 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+.ex-field input { width: 100%; font-size: 16px; }
+.ex-preview { margin: 6px 0; font-size: 13px; }
+.ex-warn { margin: 6px 0; padding: 6px 8px; border-radius: 6px; font-size: 13px; background: var(--tint); }
+.ex-warn.bad { background: var(--bad-bg); color: var(--bad); font-weight: 600; }
+.ex-warn.warn { background: var(--notice); color: var(--notice-text); }
+.ex-pending { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--sun); border-radius: 8px; background: var(--notice); color: var(--notice-text); font-size: 13px; font-weight: 600; }
+.ex-trigger { margin: 12px 0; border-top: 1px solid var(--line); padding-top: 8px; }
+.ex-trigger > summary { cursor: pointer; font-weight: 700; color: var(--accent); }
+.ex-gap { margin-top: 18px; }
+.ex-tables td { white-space: normal; }
+.ex-tables td:last-child { white-space: nowrap; }
+.ex-trig { min-width: 200px; }
+.ex-trig span { display: block; white-space: normal; margin-bottom: 4px; }
+.ex-log { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; font-size: 13px; }
+.ex-log li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.ex-scale { position: relative; height: 10px; margin: 14px 4px 6px; border-radius: 6px; background: linear-gradient(90deg, var(--bad-bg), var(--tint) 40%, var(--ok-bg)); border: 1px solid var(--line); }
+.ex-scale i { position: absolute; top: -4px; width: 2px; height: 16px; background: var(--bad); opacity: .55; }
+.ex-scale i.near { opacity: 1; }
+.ex-scale i.target { background: var(--ok); opacity: 1; }
+.ex-scale b { position: absolute; top: -3px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--accent); border: 2px solid var(--card); }
+.ex-scale.broken b { background: var(--bad); }
+.ex-scale-key { margin: 0 0 8px; }
+@media (max-width: 1000px) {
+  .ex-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "chart chart" "ticket book" "account account" "tables tables" "notes notes"; }
+}
+@media (max-width: 640px) {
+  .ex-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "chart" "ticket" "book" "account" "tables" "notes"; }
+  .ex-figures { grid-template-columns: 1fr 1fr; }
+  .ex-canvas-wrap { height: 280px; }
+}

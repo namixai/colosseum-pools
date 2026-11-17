@@ -1,0 +1,322 @@
+// What the paper-exam trading page says and works out (app/lib/examscreen.js), without a browser: the reads it hands
+// the library, the words beside each number, the order form, the scale, the book, the chart's geometry and the
+// journal; and what the page's own files must and must not contain (app/views/exam.js, app/app.js).
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import {
+  WHAT_THIS_IS, ESTIMATE_NOTE, FROM_START, TRAILING_TO_START, examAccount, refusalText, dataSource,
+} from "../lib/exam.js";
+import {
+  SCREEN_TEXT, INTERVALS, candleWindow, readsFrom, accountFigures, positionRow, triggerText, pendingText, barShare,
+  accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, niceTicks, chartScale, candleText,
+  journalRows, timeLeft, sendFailure, leverageText,
+} from "../lib/examscreen.js";
+
+const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+const USD = 1_000_000n;
+const DAY = 86_400;
+const BTC = 3;
+const ETH = 4;
+const SOL = 5;
+const PX = 600_000n;  // BTC at 5 size decimals: one price decimal, 60 000.0
+const PERPS = new Map([[BTC, { index: BTC, name: "BTC", szDecimals: 5 }], [ETH, { index: ETH, name: "ETH", szDecimals: 4 }],
+  [SOL, { index: SOL, name: "SOL", szDecimals: 2 }]]);
+const AT = { now: DAY, block: 1_000 };
+
+/** What the chain's getters answer, the way ethers hands them (bigint numbers, a tuple as a list with names). */
+function got(over = {}) {
+  const tuple = (names, values) => Object.assign([...values], Object.fromEntries(names.map((n, i) => [n, values[i]])));
+  return {
+    status: 1n, step: 0n, cash: 10_000n * USD, dayStartEquity: 10_000n * USD, tradingDays: 0n, deadline: BigInt(30 * DAY), lastFillAt: 0n,
+    pending: tuple(["asset", "isBuy", "sz", "placedBlock"], [0n, false, 0n, 0n]),
+    filler: "0x00000000000000000000000000000000000000f1", fromBook: true, maxWorseBps: 150n,
+    drawdownKind: BigInt(FROM_START), peakSnapshot: 10_000n * USD,
+    rules: tuple(["dailyLossBps", "maxDrawdownBps", "maxLeverageX100", "assets", "assetLeverageX100"],
+      [300n, 600n, 1000n, [3n, 4n, 5n], [1000n, 1000n, 500n]]),
+    terms: tuple(["capital", "targetsBps", "stepDuration", "maxIdle", "minTradingDays", "costPpm", "fillDelay", "fillWindow"],
+      [10_000n * USD, [1000n], BigInt(30 * DAY), 0n, 0n, 450n, 1n, 10n]),
+    ...over,
+  };
+}
+const flat = () => [{ asset: BTC, size: 0n, oracle: PX }, { asset: ETH, size: 0n, oracle: 30_000n }, { asset: SOL, size: 0n, oracle: 1_500n }];
+const long = (extra = {}) => [{ asset: BTC, size: 10_000n, oracle: PX, ...extra }, { asset: ETH, size: 0n, oracle: 30_000n }, { asset: SOL, size: 0n, oracle: 1_500n }];
+const reads = (over = {}, per = flat) => readsFrom(got(over), per());
+
+// ── what is read ───────────────────────────────────────────────────
+
+test("an ethers answer (bigint numbers, tuples with names) is handed to the library as the account it counts", () => {
+  const r = reads();
+  const a = examAccount(r, AT);
+  assert.equal(a.status, "active");
+  assert.equal(a.priced, true);
+  assert.equal(a.capital, 10_000n * USD);
+  assert.deepEqual(a.assets, [BTC, ETH, SOL]);
+  assert.equal(a.canPlace, true);
+  assert.equal(a.lines[0].at, 9_400n * USD, "the line from the start: 6 % under 10 000");
+  assert.equal(a.target.at, 11_000n * USD);
+});
+
+test("a price that was not read leaves the account unpriced, and the page says so instead of a figure", () => {
+  const a = examAccount(reads({}, () => long({ oracle: null })), AT);
+  assert.equal(a.priced, false);
+  const f = accountFigures(a);
+  assert.equal(f.equity, SCREEN_TEXT.noPrice);
+  assert.equal(f.leverage, SCREEN_TEXT.noPrice);
+  assert.equal(f.target.toGo, SCREEN_TEXT.noPrice);
+  assert.ok(f.lines.every((l) => l.room === SCREEN_TEXT.noPrice));
+  assert.equal(accountScale(a), null, "no bar without an equity");
+  assert.equal(positionRow(a.positions[0], PERPS).mark, SCREEN_TEXT.noPrice);
+});
+
+test("the figures are the library's, said with its formatters; the loss line is named by its kind", () => {
+  const a = examAccount(reads(), AT);
+  const f = accountFigures(a);
+  assert.deepEqual([f.size, f.step, f.equity, f.balance, f.leverage], ["10000 USDC", "1 of 1", "10000 USDC", "10000 USDC", "0.00× of 10.00×"]);
+  assert.equal(f.lines[0].label, "Total loss limit");
+  assert.deepEqual(f.lines.map((l) => l.near), [false, true], "the daily line (9 700) is nearer than the total one (9 400): it is marked");
+  assert.equal(f.lines[1].label, "Daily loss limit");
+  assert.equal(f.days, null, "no minimum of trading days: nothing to count");
+  const trailing = accountFigures(examAccount(reads({ drawdownKind: BigInt(TRAILING_TO_START), peakSnapshot: 10_200n * USD }), AT));
+  assert.equal(trailing.lines[0].label, "Loss limit (follows your best day's balance up to the starting balance)");
+  assert.equal(trailing.lines[0].at, "9600 USDC", "the highest snapshot less the same allowance");
+  const days = accountFigures(examAccount(reads({ terms: Object.assign([...got().terms], { ...got().terms, minTradingDays: 3n }) }), AT));
+  assert.equal(days.days, "0 of 3");
+});
+
+test("candles are asked for the last stretch of the chosen interval, and only for an interval the chart has", () => {
+  assert.deepEqual(INTERVALS.map((i) => i.key), ["1m", "15m", "1h", "1d"]);
+  assert.deepEqual(candleWindow("15m", 1_000_000_000_000, 100), { startTime: 1_000_000_000_000 - 100 * 900_000, endTime: 1_000_000_000_000 });
+  assert.throws(() => candleWindow("5m", 0), /not an interval/);
+});
+
+// ── words ──────────────────────────────────────────────────────────
+
+test("a position's row names the asset, side and size, and says its stop and take as the brief does", () => {
+  const stop = { px: 550_000n, sz: 0n, armedAt: 900, seenAt: 0 };
+  const take = { px: 700_000n, sz: 4_000n, armedAt: 1_003, seenAt: 0 };
+  const a = examAccount(reads({ cash: 4_000n * USD }, () => long({ stop, take })), AT);
+  const row = positionRow(a.positions[0], PERPS);
+  assert.deepEqual([row.name, row.side, row.size, row.mark, row.notional], ["BTC", "Long", "0.1", "60000", "6000 USDC"]);
+  assert.equal(row.leverage, "0.60× of 10.00×");
+  assert.equal(row.stop, "Stop 55000 · closes all · armed");
+  assert.equal(row.take, "Take 70000 · closes 0.04 · armed in 3 blocks");
+  assert.deepEqual([row.closeIsBuy, row.closeSize], [false, 10_000n], "Close is an order the other way for the whole size");
+  const short = examAccount(reads({ cash: 16_000n * USD }, () => [{ asset: BTC, size: -10_000n, oracle: PX }, ...flat().slice(1)]), AT);
+  const s = positionRow(short.positions[0], PERPS);
+  assert.deepEqual([s.side, s.size, s.closeIsBuy], ["Short", "0.1", true]);
+  assert.equal(triggerText({ kind: "stop", px: 1n, whole: true, blocksToArm: 0, state: "seen", closes: 1n }, 5), "Stop 0.1 · closes all · reached, shown on chain");
+});
+
+test("the waiting order is said in the brief's three ways", () => {
+  const order = (placedBlock) => got({ pending: Object.assign([BTC, true, 1_500n, placedBlock], { asset: BTC, isBuy: true, sz: 1_500n, placedBlock }) });
+  const say = (block) => pendingText(examAccount(readsFrom(order(1_000n), flat()), { now: DAY, block }).pending, PERPS);
+  assert.equal(say(1_000).text, "Order sent: Buy 0.015 BTC · fills from block 1001");
+  assert.equal(say(1_001).text, "Being filled · window until block 1010");
+  assert.equal(say(1_011).text, "Not filled. The order lapsed at no cost — place it again.");
+  assert.equal(pendingText(null, PERPS), null);
+});
+
+test("a number is placed on the bar from the figures the library gave, kept between its ends", () => {
+  assert.equal(barShare(50n, 0n, 100n), 5_000);
+  assert.equal(barShare(-5n, 0n, 100n), 0);
+  assert.equal(barShare(500n, 0n, 100n), 10_000);
+  assert.equal(barShare(1n, 5n, 5n), 0, "a bar of no length");
+  const a = examAccount(reads(), AT);
+  const scale = accountScale(a);
+  assert.deepEqual([scale.equity, scale.target], [3_750, 10_000], "10 000 between the 9 400 line and the 11 000 target");
+  assert.equal(scale.lines.find((l) => l.near).kind, "daily-loss");
+  assert.equal(scale.broken, false);
+  const high = accountScale(examAccount(reads({ cash: 12_000n * USD }), AT));
+  assert.equal(high.equity, 10_000, "an equity past the target ends the bar");
+  assert.equal(high.target, 6_153, "the target is then short of the end");
+});
+
+test("a time left, and a refusal of a sent call in the contract's words", () => {
+  assert.equal(timeLeft(DAY * 3 + 4 * 3600, 0), "3 d 4 h");
+  assert.equal(timeLeft(5 * 3600 + 12 * 60, 0), "5 h 12 min");
+  assert.equal(timeLeft(90, 0), "1 min");
+  assert.equal(timeLeft(100, 100), "Over");
+  assert.equal(timeLeft(null, 5), "—");
+  assert.equal(leverageText(250n), "2.50×");
+  const refusalOfData = (d) => (d === "0xaa" ? { text: refusalText("OrderPending") } : null);
+  assert.match(sendFailure({ data: "0xaa" }, refusalOfData), /already waiting/);
+  assert.equal(sendFailure({ code: "ACTION_REJECTED" }, refusalOfData), "Cancelled in the wallet.");
+  assert.equal(sendFailure({ shortMessage: "nope" }, refusalOfData), "nope");
+});
+
+// ── the order form ─────────────────────────────────────────────────
+
+const PRICES = { oracle: PX, bid: 599_900n, ask: 600_100n };
+const BTC_PERP = PERPS.get(BTC);
+const form = (r, sizeInput, extra = {}) => orderForm(r, { asset: BTC, perp: BTC_PERP, isBuy: true, sizeInput, prices: PRICES, ...AT, ...extra });
+
+test("a size is typed as a number and turned into units by the library; what it refuses is said in its words", () => {
+  assert.deepEqual(form(reads(), ""), { size: null, error: null, preview: null });
+  assert.equal(form(reads(), "0.015").size, 1_500n);
+  assert.match(form(reads(), "0.000001").error, /at most 5 decimals/);
+  assert.match(form(reads(), "abc").error, /not a plain positive number/);
+  assert.match(form(reads(), "0").error, /above zero/);
+  assert.equal(form(reads(), "0.015").error, null);
+});
+
+test("the estimate shows the price and its source, the cost, the position and the leverage after, and the library's note", () => {
+  const f = form(reads(), "0.1");
+  const v = previewView(f.preview, BTC_PERP);
+  assert.equal(v.blocked, false);
+  assert.deepEqual(v.rows, [
+    ["Est. fill price", "60010 (book)"], ["Cost", "2.70045 USDC"], ["Position after", "0.1 BTC"], ["Leverage after", "0.60×"]]);
+  assert.equal(v.note, ESTIMATE_NOTE);
+  assert.deepEqual(v.warnings, []);
+  assert.equal(f.preview.px, 600_100n, "the figure is the library's, not worked out here");
+});
+
+test("an order the contract would refuse is blocked, in the contract's words", () => {
+  const waiting = reads({ pending: Object.assign([BTC, true, 1_000n, 1_000n], { asset: BTC, isBuy: true, sz: 1_000n, placedBlock: 1_000n }) });
+  const v = previewView(form(waiting, "0.1").preview, BTC_PERP);
+  assert.equal(v.blocked, true);
+  assert.equal(v.warnings[0].text, refusalText("OrderPending"));
+  assert.equal(previewView(form(reads({ status: 3n }), "0.1").preview, BTC_PERP).warnings[0].text, refusalText("BadStatus"));
+  assert.equal(previewView(null, BTC_PERP), null);
+});
+
+test("an order over the leverage is accepted but not filled, and one that ends under a loss line says so, red", () => {
+  const over = previewView(form(reads(), "2").preview, BTC_PERP);
+  assert.equal(over.blocked, false);
+  assert.deepEqual(over.warnings.map((w) => [w.tone, w.text]).slice(0, 1), [["bad", refusalText("OverLeverage")]]);
+  // BTC is held at a price where the account already stands under its daily line (9 700): any order ends there
+  const hurt = reads({ cash: 4_000n * USD }, () => long({ oracle: 540_000n }));
+  const v = previewView(orderForm(hurt, { asset: ETH, perp: PERPS.get(ETH), isBuy: true, sizeInput: "0.01", prices: { oracle: 30_000n, bid: 29_990n, ask: 30_010n }, ...AT }).preview, PERPS.get(ETH));
+  assert.ok(v.warnings.some((w) => w.tone === "bad" && w.text === SCREEN_TEXT.breach), "the account would stand under its line");
+});
+
+test("an order that closes a position says it takes its stop and take off", () => {
+  const stop = { px: 550_000n, sz: 0n, armedAt: 900, seenAt: 0 };
+  const r = readsFrom(got({ cash: 4_000n * USD }), long({ stop }));
+  const v = previewView(orderForm(r, { asset: BTC, perp: BTC_PERP, isBuy: false, sizeInput: "0.1", prices: PRICES, ...AT }).preview, BTC_PERP);
+  assert.match(v.warnings.at(-1).text, /closes or turns a position round takes its stop and take off\. This one takes off the stop\./);
+});
+
+test("a stop is typed as a price and worked out by the library; one past the oracle price says it closes at once", () => {
+  const stop = { px: 550_000n, sz: 0n, armedAt: 900, seenAt: 0 };
+  const r = readsFrom(got({ cash: 4_000n * USD }), long({ stop }));
+  const t = triggerForm(r, { asset: BTC, perp: BTC_PERP, isTake: false, pxInput: "59000", sizeInput: "", oracle: PX, ...AT });
+  assert.equal(t.px, 590_000n);
+  const v = triggerPreviewView(t.preview, BTC_PERP);
+  assert.deepEqual(v.lines.map((l) => l.text), ["Stop 59000 · closes all · acts from block 1001", "Replaces the stop at 55000."]);
+  const past = triggerPreviewView(triggerForm(r, { asset: BTC, perp: BTC_PERP, isTake: false, pxInput: "61000", sizeInput: "0.05", oracle: PX, ...AT }).preview, BTC_PERP);
+  assert.equal(past.lines.at(-1).text, SCREEN_TEXT.triggerReached);
+  assert.equal(past.lines[0].text, "Stop 61000 · closes 0.05 · acts from block 1001");
+  assert.match(triggerForm(r, { asset: BTC, perp: BTC_PERP, isTake: false, pxInput: "61000.55", sizeInput: "", oracle: PX, ...AT }).error, /at most 1 decimals/);
+  assert.equal(triggerForm(r, { asset: BTC, perp: BTC_PERP, isTake: false, pxInput: "", sizeInput: "", oracle: PX, ...AT }).preview, null);
+  const none = triggerPreviewView(triggerForm(reads(), { asset: BTC, perp: BTC_PERP, isTake: true, pxInput: "70000", sizeInput: "", oracle: PX, ...AT }).preview, BTC_PERP);
+  assert.deepEqual([none.blocked, none.lines[0].text], [true, refusalText("NoPosition")]);
+});
+
+// ── the book, the chart, the journal ───────────────────────────────
+
+test("the book shows the asks above the bids, ten a side at most, with each level's depth against the deeper side", () => {
+  const side = (px0, dir) => Array.from({ length: 12 }, (_, i) => ({ px: String(px0 + dir * i), sz: "1", n: 1 }));
+  const b = bookView({ time: 5, levels: [side(100, -1), side(101, 1)] });
+  assert.equal(b.asks.length, 10);
+  assert.equal(b.bids.length, 10);
+  assert.equal(b.asks[0].px, "110", "the highest ask first, the best one last");
+  assert.equal(b.asks.at(-1).px, "101");
+  assert.equal(b.bids[0].px, "100");
+  assert.equal(b.bids.at(-1).share, 100);
+  assert.equal(b.asks[0].share, 100);
+  assert.equal(b.asks.at(-1).share, 10);
+  assert.equal(b.spread, "99.5 bps");
+  assert.equal(bookView({ levels: [[], []] }).empty, true);
+  assert.equal(bookView({ error: "x" }).empty, true, "an error answer is no book");
+});
+
+test("the chart's scale puts the highest price at the top and every candle inside its slot", () => {
+  const rows = [{ time: 1, open: 10, high: 12, low: 9, close: 11 }, { time: 2, open: 11, high: 15, low: 10, close: 14 }];
+  const s = chartScale(rows, { width: 264, height: 230, axis: 64, top: 8, bottom: 22 });
+  assert.equal(s.plotW, 200);
+  assert.equal(s.slot, 100);
+  assert.ok(s.y(15) < s.y(9) && s.y(15) >= 8 && s.y(9) <= 8 + s.plotH);
+  assert.deepEqual([s.x(0), s.x(1)], [50, 150]);
+  assert.deepEqual([s.index(10), s.index(120), s.index(999)], [0, 1, 1]);
+  assert.ok(s.min < 9 && s.max > 15, "air above and below");
+  assert.equal(chartScale([], { width: 100, height: 100 }), null);
+  assert.deepEqual(niceTicks(0, 10, 5), [0, 2, 4, 6, 8, 10]);
+  assert.deepEqual(niceTicks(5, 5), [5]);
+  assert.equal(candleText(rows[0]), "1970-01-01 00:00 UTC · O 10 H 12 L 9 C 11");
+});
+
+test("the journal reads the events in order, and a stop that was carried out is one row, said as a stop filled", () => {
+  const ev = (name, args, block) => ({ name, args, block });
+  const rows = journalRows([
+    ev("Placed", { asset: BTC, isBuy: true, sz: 1_500n, fillFrom: 11n, fillUntil: 20n }, 10),
+    ev("Filled", { asset: BTC, isBuy: true, sz: 1_500n, px: 600_100n, cost: 405_000n, late: 2n, source: 1n }, 13),
+    ev("TriggerSet", { asset: BTC, isTake: false, px: 550_000n, sz: 0n, armedAt: 16n }, 14),
+    ev("Filled", { asset: BTC, isBuy: false, sz: 1_500n, px: 549_900n, cost: 400_000n, late: 0n, source: 0n }, 40),
+    ev("TriggerFilled", { asset: BTC, isTake: false, sz: 1_500n, px: 549_900n, cost: 400_000n, triggerPx: 550_000n, source: 0n }, 40),
+    ev("Lapsed", { asset: ETH, isBuy: true, sz: 50n }, 55),
+    ev("DaySnapshot", { day: 20_400n, equity: 10_100n * USD }, 60),
+  ], PERPS);
+  assert.deepEqual(rows.map((r) => r.text), [
+    "Order placed: Buy 0.015 BTC · fills from block 11 to 20",
+    "Filled: Buy 0.015 BTC at 60010 · cost 0.405 USDC · price from the book · 2 blocks after the first",
+    "Stop set on BTC at 55000 · closes all · acts from block 16",
+    "Stop filled: Sell 0.015 BTC at 54990 · cost 0.4 USDC · price from the oracle · it was set at 55000",
+    "Order lapsed at no cost: Buy 0.005 ETH",
+    "Day 20400 snapshot: equity 10100 USDC",
+  ]);
+});
+
+// ── the page's own files ───────────────────────────────────────────
+
+test("the screen says what the brief wants said, and the strip is the library's own words", () => {
+  assert.equal(WHAT_THIS_IS, "A paper exam: your orders are not sent to an exchange and no money is traded. Prices and the book are Hyperliquid's. You close a position with an order of your own, or with a stop or a take you set on it.");
+  assert.equal(SCREEN_TEXT.fillsLater, "Orders fill a few seconds after you send them, at the price of that moment.");
+  assert.equal(SCREEN_TEXT.exit, "To exit a position, send an order yourself, or set a stop or a take on it.");
+  assert.equal(SCREEN_TEXT.gas, "Each order is a transaction: a signature and gas. Or name a second key and trade without prompts.");
+  assert.equal(SCREEN_TEXT.data, "Prices and the book: Hyperliquid.");
+  assert.equal(SCREEN_TEXT.rehearsal, "Rehearsal on testnet: nobody trades here. The book is thin and stands off the oracle price, and it will show.");
+  assert.match(SCREEN_TEXT.secondKey, /^A second key can place orders and pass the step on this exam\. It cannot move money: an exam holds none\./);
+  const view = read("../views/exam.js");
+  assert.match(view, /esc\(WHAT_THIS_IS\)/, "the strip takes the library's words");
+  assert.match(view, /esc\(ESTIMATE_NOTE\)|view\.note/, "the estimate's note comes from the library");
+});
+
+test("the page names no network, chain, address or perp number: the deployment and the settings do", () => {
+  const view = read("../views/exam.js");
+  const lib = read("../lib/examscreen.js");
+  for (const [name, text] of [["views/exam.js", view], ["lib/examscreen.js", lib]]) {
+    assert.doesNotMatch(text, /hyperliquid(-testnet)?\.xyz|api\.hyperliquid|\b998\b|\b999\b|0x3e[67]/i, `${name} names a network`);
+    assert.doesNotMatch(text.replaceAll("0x0000000000000000000000000000000000000000", ""), /0x[0-9a-fA-F]{40}/, `${name} holds an address (the zero address aside)`);
+  }
+  assert.match(view, /dataSource\(\{ chainId \}, CONFIG\)/, "the data source is the library's, from the chain the exam is on and the settings");
+  assert.match(view, /fetch\(CONFIG\.rpc[\s\S]{0,160}eth_chainId/, "the chain id is asked of the node itself");
+  assert.doesNotMatch(view, /readProvider\.send\("eth_chainId"/, "the read provider answers with the app's own chain (staticNetwork): no check");
+  assert.match(view, /exam\.rules\(\)/, "the assets are the exam's rules");
+  assert.doesNotMatch(view, /perps\.set\(\d|assets = \[\d/, "no asset list in the page");
+});
+
+test("the page sends nothing to an exchange, shows no exchange's address and does no money arithmetic of its own", () => {
+  const view = read("../views/exam.js");
+  assert.doesNotMatch(view, /hlExchange|\/exchange|gateway\.[a-z]|hlsend|hlSend/, "no exchange, no gateway");
+  assert.doesNotMatch(view, /real account|real money|deposit|withdraw/i);
+  assert.doesNotMatch(view, /\bBigInt\([^)]*\)\s*[*+\-/]|\* *10n|\/ *10n/, "no money sums in the view");
+});
+
+test("the page is routed at #/exam/<address>, and the other trading page is left as it is", () => {
+  const app = read("../app.js");
+  assert.match(app, /\^#\\\/exam\(\?:\\\/\(0x\[0-9a-fA-F\]\{40\}\)\)\?\$/);
+  assert.match(app, /import \{ examView \} from "\.\/views\/exam\.js"/);
+  assert.doesNotMatch(read("../views/trading.js"), /examscreen|PAPER_EXAM/);
+});
+
+test("on a network the page is not built for, nothing is drawn but the library's words", () => {
+  const off = dataSource({ chainId: 999 }, { chainId: 998, hlInfo: "x", hyperliquidChain: "Testnet" });
+  assert.equal(off.ok, false);
+  assert.match(off.text, /No chart or book is shown/);
+  const on = dataSource({ chainId: 998 }, { chainId: 998, hlInfo: "x", hyperliquidChain: "Testnet" });
+  assert.deepEqual([on.ok, on.rehearsal], [true, true], "a testnet exam is a rehearsal: the red strip");
+  assert.equal(dataSource({ chainId: 999 }, { chainId: 999, hlInfo: "x", hyperliquidChain: "Mainnet" }).rehearsal, false);
+  assert.match(read("../views/exam.js"), /ds\.ok && ds\.rehearsal/, "the strip is drawn on a rehearsal only");
+  assert.match(read("../views/exam.js"), /ds\.ok\)? ?\?? ?"" ?: ?`<section class="card"><h3>Chart and book not shown<\/h3><p>\$\{esc\(ds\.text\)\}/, "a refused source shows its text");
+});
