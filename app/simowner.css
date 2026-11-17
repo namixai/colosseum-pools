@@ -61,3 +61,10 @@
   .so-t td.so-rowact { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
   .so-in { flex-direction: column; }
 }
+
+/* The floor's label above the money bar is one line of about 250 px that starts at the marker: on a phone it ran past the
+   screen's edge and widened the whole page sideways. There the label is dropped; the dashed marker stays, and the Floor
+   figure under the bar (with the same dashed square) says what it is. */
+@media (max-width: 760px) {
+  .sp-floor span { display: none; }
+}
