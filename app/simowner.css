@@ -1,0 +1,63 @@
+/* The owner's "Codes & shares" and "Withdraw & finish" (mockup 02, 17 November), in the control panel's own colours (the
+   variables of body[data-panel] in style.css). The mockups' typefaces are not shipped (no licence file beside them): the
+   site's Inter, and the system's monospace for labels and figures. */
+.so-two { text-align: left; display: grid; grid-template-columns: 1.55fr 1fr; gap: 24px; align-items: start; }
+.so-two > .sp-box { margin-bottom: 24px; min-width: 0; }
+.so-btn { font: 700 12px var(--mono); letter-spacing: 1.4px; text-transform: uppercase; background: var(--navy); color: #fff; border: 2px solid var(--navy); border-radius: 0; padding: 10px 14px; cursor: pointer; text-align: center; }
+.so-btn.ghost { background: transparent; color: var(--navy); }
+.so-btn.sm { font-size: 10.5px; letter-spacing: .8px; padding: 6px 8px; }
+.so-btn.armed { background: var(--ink); color: var(--sun); border-color: var(--ink); }
+.so-btn:disabled { cursor: not-allowed; opacity: 1; background: repeating-linear-gradient(-45deg, rgba(233,197,124,.55) 0 6px, rgba(233,197,124,.2) 6px 12px); color: var(--navy); border: 1px dashed var(--navy); }
+.so-hatch { width: 100%; margin-top: 14px; text-align: left; }
+.so-mut { color: var(--mute); }
+.so-t { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.so-t th:nth-child(1) { width: 15%; } .so-t th:nth-child(2) { width: 14%; } .so-t th:nth-child(3) { width: 8%; } .so-t th:nth-child(4) { width: 15%; }
+.so-t th:nth-child(5) { width: 11%; } .so-t th:nth-child(6) { width: 12%; } .so-t th:nth-child(7) { width: 12%; } .so-t th:nth-child(8) { width: 13%; }
+.so-t th { font: 500 10.5px var(--mono); letter-spacing: .8px; text-transform: uppercase; color: var(--mute); text-align: left; padding: 10px; border-bottom: 1px solid var(--ink); }
+.so-t td { white-space: normal; padding: 10px; border-bottom: 1px solid var(--rule); font-size: 13px; vertical-align: top; overflow-wrap: anywhere; }
+.so-t td small, .so-total small { display: block; font: 500 10.5px var(--mono); color: var(--mute); margin-top: 2px; }
+.so-t .so-text { color: var(--navy); font-size: 11px; }
+.so-t td b { font-weight: 700; }
+.so-rowact .so-btn { max-width: 100%; box-sizing: border-box; white-space: normal; line-height: 1.2; }
+.so-rowact { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.so-t tr.so-empty td { color: var(--mute); padding: 18px; }
+.so-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; padding: 12px 18px; border-bottom: 1px solid var(--rule); }
+.so-total > span:first-child { font: 600 12px var(--mono); letter-spacing: 1.2px; text-transform: uppercase; }
+.so-total b { font: 700 22px "Inter", sans-serif; letter-spacing: -.02em; }
+.so-act { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 14px 18px; }
+.so-act .sp-why { flex: 1 1 260px; }
+.so-codes > .sp-status { margin: 0; padding: 0 18px 12px; }
+.so-codes .sp-status.ok, .so-wd .sp-status.ok { color: #1d6b3a; } .so-codes .sp-status.err, .so-wd .sp-status.err { color: #9c2f1f; }
+.so-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; padding: 14px 18px 4px; border-top: 1px solid var(--ink); background: rgba(199,225,249,.35); }
+.so-form[hidden] { display: none; }
+.so-form label, .so-wdb label { font: 600 11px var(--mono); letter-spacing: 1.2px; text-transform: uppercase; display: flex; flex-direction: column; align-items: stretch; gap: 6px; text-align: left; }
+.so-form input, .so-wdb input { font: 500 15px var(--mono); letter-spacing: 0; text-transform: none; border: 2px solid var(--navy); border-radius: 0; background: var(--paper); color: var(--ink); padding: 9px 12px; min-width: 0; width: 100%; box-sizing: border-box; }
+.so-form .sp-why, .so-form .so-plan, .so-form .so-row { grid-column: 1 / -1; }
+.so-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; }
+.so-plan { font: 500 13px/1.45 var(--font, "Inter", sans-serif); margin: 6px 0 0; color: var(--ink); overflow-wrap: anywhere; }
+.so-plan:empty { display: none; }
+.so-plan.bad { color: #9c2f1f; }
+.so-wdb { padding: 16px 18px; }
+.so-wdb form { margin-bottom: 18px; } .so-wdb [data-money=principal] { margin-bottom: 20px; }
+.so-wdb .sp-why { margin: 10px 0 0; } .so-wdb .sp-why b { background: var(--sky); padding: 0 3px; }
+.so-in { display: flex; gap: 8px; width: 100%; } .so-in input { flex: 1 1 0; }
+.so-in .so-btn { flex: none; }
+.so-standing { border: 1px solid var(--ink); padding: 12px 14px; margin-bottom: 18px; background: rgba(233,197,124,.18); }
+.so-standing[data-request="ready"] { background: rgba(199,225,249,.5); }
+.so-standing p { margin: 8px 0; font-size: 14px; }
+.so-end { border-top: 1px solid var(--ink); padding-top: 4px; }
+.so-why { margin: 8px 0 0; padding-left: 18px; font: 500 12px/1.5 var(--mono); color: var(--navy); }
+.so-failed { margin: 0; padding: 18px; font-size: 14px; color: #9c2f1f; }
+@media (max-width: 760px) {
+  .so-two { display: block; }
+  .so-form { grid-template-columns: 1fr; }
+  .so-t { table-layout: auto; }
+  .so-t thead { display: none; }
+  .so-t, .so-t tbody { display: block; }
+  .so-t tr { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; padding: 12px; border-bottom: 1px solid var(--rule); }
+  .so-t td { display: block; border: 0; padding: 0; font-size: 13px; }
+  .so-t td:before { content: attr(data-l); display: block; font: 500 9.5px var(--mono); letter-spacing: 1px; text-transform: uppercase; color: var(--mute); }
+  .so-t tr.so-empty td { grid-column: 1 / -1; }
+  .so-t td.so-rowact { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
+  .so-in { flex-direction: column; }
+}

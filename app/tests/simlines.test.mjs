@@ -314,7 +314,9 @@ test("the control panel's header: its own band and tag, the role from the contra
   assert.match(owner, /role read from contract/);
   assert.match(owner, /Pool creator · Pool 0x0000…9001/);
   assert.deepEqual(MANAGE_NAV.map((s) => s.label), ["Line switches", "Pool money", "Codes &amp; shares".replace("&amp;", "&"), "Withdraw & finish"]);
-  assert.equal((owner.match(/aria-disabled="true"/g) || []).length, 2, "codes and withdrawing are held for the next sections");
+  assert.equal((owner.match(/aria-disabled="true"/g) || []).length, 0, "all four sections are built");
+  assert.match(owner, /data-jump="codes"/);
+  assert.match(owner, /data-jump="withdraw"/);
   assert.match(owner, /Separate route\. Not linked from the trader's pages\. No buy buttons here\./);
   assert.ok(!/#\/sim\/|href="#\/"/.test(owner), "no link to the user panel");
   assert.match(manageHeaderHtml({ address: POOL_ADDR, account: "0x9…", role: "not-owner", poolName: "P" }), /No role in this pool/);

@@ -23,8 +23,8 @@ export const USER_NAV = Object.freeze([
 export const MANAGE_NAV = Object.freeze([
   { key: "lines", label: "Line switches", built: true, jump: "lines" },
   { key: "money", label: "Pool money", built: true, jump: "money" },
-  { key: "codes", label: "Codes & shares", built: false },
-  { key: "withdraw", label: "Withdraw & finish", built: false },
+  { key: "codes", label: "Codes & shares", built: true, jump: "codes" },
+  { key: "withdraw", label: "Withdraw & finish", built: true, jump: "withdraw" },
 ]);
 
 const BRAND = `<img src="brand/mark-small.svg" alt="" width="40" height="40"><b>Upools</b>`;
