@@ -50,7 +50,8 @@ export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, st
     ]);
     // From the first payout not settled (and a way below it, for the stops still inside their 14 days), oldest first.
     const range = payoutRange({ count, head, limit });
-    const payouts = await chain.readAll(range.ids, (id) => pool.payout(id));
+    // A payout the node does not answer for is kept as a hole, and the page says it was not read: it is never dropped silently.
+    const payouts = await chain.readAll(range.ids, (id) => pool.payout(id).catch(() => null));
     // The stops are found in the pool's events, whatever their number; each is then read by its id.
     let extraIds = [];
     let stopScan = null;
@@ -65,13 +66,14 @@ export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, st
         stopScan = { done: false, note: `Stops could not be looked for in the events (${friendly(err)}).` };
       }
     }
-    const extraPayouts = await chain.readAll(extraIds, (id) => pool.payout(id));
-    const extra = extraIds.map((id, i) => ({ id, payout: extraPayouts[i] })).filter((x) => [1, 2, 5].includes(Number(x.payout.state)));
-    const live = [...payouts, ...extra.map((x) => x.payout)].filter((p) => Number(p.state) === 1 || Number(p.state) === 2 || Number(p.state) === 5);
+    const extraPayouts = await chain.readAll(extraIds, (id) => pool.payout(id).catch(() => null));
+    // A stop named by an event whose payout was not read stays in `extra`, as not read; a payout read and not a stop is left out.
+    const extra = extraIds.map((id, i) => ({ id, payout: extraPayouts[i] })).filter((x) => !x.payout || [1, 2, 5].includes(Number(x.payout.state)));
+    const live = [...payouts, ...extra.map((x) => x.payout)].filter((p) => p && [1, 2, 5].includes(Number(p.state)));
     const accounts = [...new Set(live.map((p) => p.account.toLowerCase()))];
     const lines = await chain.readAll(accounts, async (a) => (await pool.accountOf(a)).line);
-    const stoppedIds = [...range.ids.filter((id, i) => Number(payouts[i].state) === 2 || Number(payouts[i].state) === 5),
-      ...extra.filter((x) => Number(x.payout.state) === 2 || Number(x.payout.state) === 5).map((x) => x.id)];
+    const stoppedIds = [...range.ids.filter((id, i) => payouts[i] && [2, 5].includes(Number(payouts[i].state))),
+      ...extra.filter((x) => x.payout && [2, 5].includes(Number(x.payout.state))).map((x) => x.id)];
     const why = await chain.readAll(stoppedIds, (id) => pool.stopReasonOf(id));
     Object.assign(out, { payouts, extra, stopScan, firstId: range.first, unread: range.unread, payoutsPerDay: perDay, payRoom: room, nextPayAt, menu, tiers,
       accountLines: new Map(accounts.map((a, i) => [a, Number(lines[i])])),

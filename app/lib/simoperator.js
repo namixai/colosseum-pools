@@ -243,7 +243,11 @@ export function queueWords(row, nobody) {
 /** The ids of the stops named by `PayoutStopped` events (`{ name, args: { id } }`), each once, oldest first. */
 export function stopIdsFromEvents(events) {
   const ids = new Set();
-  for (const e of events) if ((e.name ?? e.eventName) === "PayoutStopped") ids.add(Number(e.args.id));
+  for (const e of events) {
+    // An event without its id (a log that did not decode) names no stop.
+    const id = e?.args?.id;
+    if ((e.name ?? e.eventName) === "PayoutStopped" && id !== undefined && id !== null) ids.add(Number(id));
+  }
   return [...ids].sort((a, b) => a - b);
 }
 
@@ -266,9 +270,18 @@ export function operatorModel({ pool, roles, reads, keccak256 }) {
   const now = Number(reads.now);
   const may = can(roles);
   const nobody = !isSet(reads.approver);
-  const structs = reads.payouts.map((p, i) => plain(p, reads.firstId + i));
-  const inWindow = new Set(structs.map((p) => p.id));
-  for (const { id, payout } of reads.extra ?? []) if (!inWindow.has(Number(id))) structs.push(plain(payout, Number(id)));
+  // A payout the node did not answer for is not dropped: it is named as not read (`unread`), and, if a stop event named
+  // it, listed as a stop with that note.
+  const structs = [];
+  const unread = [];
+  reads.payouts.forEach((p, i) => (p ? structs.push(plain(p, reads.firstId + i)) : unread.push(reads.firstId + i)));
+  const inWindow = new Set([...structs.map((p) => p.id), ...unread]);
+  const unreadStops = [];
+  for (const { id, payout } of reads.extra ?? []) {
+    if (inWindow.has(Number(id))) continue;
+    if (payout && (payout.state !== undefined || payout[4] !== undefined)) structs.push(plain(payout, Number(id)));
+    else unreadStops.push(Number(id));
+  }
   const byId = new Map(structs.map((p) => [p.id, p]));
   const lineOf = (account) => lineLabel(reads.menu, reads.tiers, reads.accountLines?.get?.(String(account).toLowerCase()));
 
@@ -289,7 +302,12 @@ export function operatorModel({ pool, roles, reads, keccak256 }) {
     return { id: p.id, trader: p.trader, amount: BigInt(p.amount), line: lineOf(p.account), stoppedAt: at, reserveEnds, state,
       reason, reasonText: reason ? stopReasonText(reason) : "", reasonShort: reason ? `Reason ${reason}` : "Reason not read",
       canLift: may.lift && state === "window", canFinalize: may.lift && state === "due-final" };
-  }).sort((a, b) => a.id - b.id);
+  });
+  for (const id of unreadStops) {
+    stops.push({ id, trader: null, amount: null, line: "", stoppedAt: 0, reserveEnds: null, state: "unread", reason: 0, reasonText: "",
+      reasonShort: "Not read", canLift: false, canFinalize: false });
+  }
+  stops.sort((a, b) => a.id - b.id);
 
   const request = reads.requested === undefined ? null
     : withdrawRequest({ pool, requested: reads.requested, readyAt: reads.readyAt, now, keccak256 });
@@ -303,7 +321,7 @@ export function operatorModel({ pool, roles, reads, keccak256 }) {
     stopsOpen: stops.filter((s) => s.state !== "final").length,
     requests: request && (request.status === "waiting" || request.status === "ready") ? 1 : 0,
   };
-  return { now, roles, may, queue, stops, request, summary, perDay, nobody, unread: Number(reads.unread || 0),
+  return { now, roles, may, queue, stops, request, summary, perDay, nobody, unread: Number(reads.unread || 0), unreadPayouts: unread,
     stopScan: reads.stopScan ?? null };
 }
 
@@ -421,6 +439,10 @@ export function stopFormHtml(model) {
 }
 
 function stopRowHtml(s, may) {
+  if (s.state === "unread") {
+    return `<div class="so-row so-s unread" data-stop="${s.id}" data-state="unread"><div class="so-c id"><span>${esc(idText(s.id))}</span></div>`
+      + `<div class="so-c" data-l="Reason"><span class="so-reasonpill">Not read</span><div class="so-sm">A stop was found in the events, but the node did not give this payout. Reload the page to read it again.</div></div></div>`;
+  }
   const left = s.state === "final" ? "final" : s.state === "window" ? `lift until ${utc(s.reserveEnds)}` : `14 days ended ${utc(s.reserveEnds)}`;
   const buttons = [];
   if (may.lift) {
@@ -441,9 +463,12 @@ export function stopsHtml(model) {
   const { may, stops } = model;
   const head = `<div class="so-colhead so-s"><span>#</span><span>Line</span><span>Payout kept</span><span>Reason</span><span>Can be lifted until</span><span></span></div>`;
   const body = stops.length ? stops.map((s) => stopRowHtml(s, may)).join("") : `<p class="so-empty">No payout is stopped.</p>`;
-  const scan = model.stopScan
-    ? `<p class="so-why" id="so-stop-scan">${esc(model.stopScan.note)}${model.stopScan.done ? "" : ` <button type="button" class="so-btn" id="so-stops-more">Read earlier stops</button>`}</p>`
+  const missing = model.unreadPayouts?.length
+    ? `<p class="so-why so-warn" id="so-unread-payouts">${model.unreadPayouts.length} payout${model.unreadPayouts.length === 1 ? "" : "s"} could not be read (${model.unreadPayouts.map(idText).join(", ")}); a stop among them is not shown. Reload the page to read ${model.unreadPayouts.length === 1 ? "it" : "them"} again.</p>`
     : "";
+  const scan = missing + (model.stopScan
+    ? `<p class="so-why" id="so-stop-scan">${esc(model.stopScan.note)}${model.stopScan.done ? "" : ` <button type="button" class="so-btn" id="so-stops-more">Read earlier stops</button>`}</p>`
+    : "");
   return `<section class="sp-box so-box" id="stops"><div class="sp-bh"><b>Stops</b><span>lift within 14 days · then anyone makes it final</span></div>${head}${body}${scan}`
     + `<div class="so-do" id="so-do-stops" role="status"></div></section>`;
 }

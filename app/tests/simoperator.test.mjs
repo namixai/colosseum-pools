@@ -506,3 +506,47 @@ test("the events are read within the node's limits, the last 14 days only, and a
   assert.match(view, /Stops could not be looked for in the events/);
   assert.match(view, /moreStops\.set\(at, MORE_CALLS\)/);
 });
+
+// ── a payout the node did not answer for ───────────────────────────
+
+test("a stop whose payout was not read stays in the list, marked not read, with no control", () => {
+  const stopped = payout({ n: 3, state: 2, wasStopped: true, stoppedAt: NOW - D, amount: 400n * U });
+  const base = { ...reads(), payouts: [], firstId: 450, accountLines: new Map(), reasons: new Map([[3, 1]]) };
+  const m = operatorModel({ pool: POOL, roles: ["checker"], keccak256,
+    reads: { ...base, extra: [{ id: 3, payout: stopped }, { id: 8, payout: null }, { id: 9, payout: undefined }] } });
+  assert.deepEqual(m.stops.map((s) => [s.id, s.state, s.canLift]), [[3, "window", true], [8, "unread", false], [9, "unread", false]]);
+  assert.equal(m.summary.stopsOpen, 3, "an unread stop is counted open, not dropped");
+  const html = stopsHtml(m);
+  assert.match(html, /data-stop="8" data-state="unread"/);
+  assert.match(html, /Not read/);
+  assert.doesNotMatch(html, /data-lift="8"|data-final="8"/);
+  assert.match(html, /data-lift="3"/);
+});
+
+test("a hole in the window of payouts is named, never a crash and never a silent drop", () => {
+  const rows = reads().payouts;
+  const m = operatorModel({ pool: POOL, roles: ["approver", "checker"], keccak256,
+    reads: { ...reads(), payouts: [rows[0], null, rows[2], undefined], firstId: 10, reasons: new Map(), accountLines: new Map() } });
+  assert.deepEqual(m.unreadPayouts, [11, 13]);
+  assert.deepEqual(m.queue.map((r) => r.id), [10, 12], "the ones read are in the queue under their own numbers");
+  const html = stopsHtml(m);
+  assert.match(html, /id="so-unread-payouts">2 payouts could not be read \(#0011, #0013\); a stop among them is not shown\. Reload the page/);
+  assert.doesNotMatch(stopsHtml(model(["checker"])), /so-unread-payouts/);
+});
+
+test("an event without its id names no stop", () => {
+  assert.deepEqual(stopIdsFromEvents([{ name: "PayoutStopped" }, { name: "PayoutStopped", args: {} }, { name: "PayoutStopped", args: { id: null } },
+    { name: "PayoutStopped", args: { id: 0 } }]), [0]);
+});
+
+test("the events are asked for a few windows at a time, and a cursor moves only past a batch read whole", () => {
+  const scan = read("app", "views", "simstopscan.js");
+  assert.match(scan, /export const BATCH = 3;/);
+  assert.match(scan, /await Promise\.all\(batch\.map\(\(\[from, to\]\) => window_\(address, st, from, to\)\)\);\s*done\(batch\);/);
+  assert.match(scan, /st\.latest = batch\[batch\.length - 1\]\[1\]/);
+  assert.match(scan, /st\.back = batch\[batch\.length - 1\]\[0\] - 1/);
+  assert.match(scan, /l\.topics\.length < 2\) continue;/, "a log without the stop's id is skipped");
+  const view = read("app", "views", "simoperator.js");
+  assert.match(view, /pool\.payout\(id\)\.catch\(\(\) => null\)/);
+  assert.match(view, /payouts\[i\] && \[2, 5\]\.includes/);
+});
