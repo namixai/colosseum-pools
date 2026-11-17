@@ -10,6 +10,9 @@ import {
 } from "../lib/simlines.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
+import { keepFromReceipt } from "./simtrader.js";
+import { networkMarks } from "../lib/examscreen.js";
+import { CONFIG } from "../config.js";
 
 const { ethers } = window;
 const ABI = [...SIM_POOL_ABI, ...SIM_LINES_ABI];
@@ -42,8 +45,9 @@ export async function simPoolView(address, query, page) {
   const at = ethers.getAddress(address);
   const data = await readSimPool(at);
   const given = new URLSearchParams(query || "").get("code") || "";
+  const marks = networkMarks(CONFIG);
   render(page, `<div class="sp sp-user">
-    ${userHeaderHtml({ address: at, account: accountLabel() })}
+    ${userHeaderHtml({ address: at, account: accountLabel(), marks })}
     <section class="sp-hero">
       <div class="sp-kick">Pool ${esc(chain.short(at))} · Hyperliquid testnet</div>
       <h1>How deep<br>is <em>the pool?</em></h1>
@@ -59,7 +63,7 @@ export async function simPoolView(address, query, page) {
     <details class="sp-terms"><summary>Terms of this pool</summary>
       ${data.termsText ? `<pre>${esc(data.termsText)}</pre>` : `<p class="sp-why">This pool's terms text could not be read from the chain.</p>`}
       <p class="sp-why">terms hash ${esc(data.terms)}</p></details>
-    ${footerHtml()}</div>`);
+    ${footerHtml({ marks })}</div>`);
   wireShell(page);
 
   const status = $("#sim-status", page);
@@ -123,5 +127,7 @@ async function buy(address, data, line, codeText) {
   const receipt = await (await pool.buy(...args)).wait();
   chain.forgetLiveReads();
   if (!receipt || receipt.status !== 1) throw new Error("the purchase reverted");
+  // The exam bought is kept in this browser, so My exams lists it however long ago it was bought.
+  keepFromReceipt(address, signer.address, receipt);
   return `Bought: the exam is yours (transaction ${receipt.hash}).`;
 }

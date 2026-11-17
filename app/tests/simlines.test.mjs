@@ -288,23 +288,32 @@ test("each panel is its own route, and the panel is read from the hash", () => {
   assert.equal(panelOf(`#/sim/${POOL_ADDR}`), "user");
   assert.equal(panelOf(`#/sim/${POOL_ADDR}?code=GROUP-ONE`), "user");
   assert.equal(panelOf(`#/manage/${POOL_ADDR}`), "manage");
-  for (const h of ["#/", "#/pool/" + POOL_ADDR, "#/economics", "#/manage", "#/sim"]) assert.equal(panelOf(h), null);
+  for (const tail of ["trade", "exams", "payouts"]) assert.equal(panelOf(`#/sim/${POOL_ADDR}/${tail}`), "user");
+  assert.equal(panelOf(`#/exam/${POOL_ADDR}`), "user", "the trading screen of an exam stands in the user panel");
+  for (const h of ["#/", "#/pool/" + POOL_ADDR, "#/economics", "#/manage", "#/sim", "#/exam", `#/sim/${POOL_ADDR}/manage`, `#/manage/${POOL_ADDR}/exams`]) assert.equal(panelOf(h), null);
   const app = read("app", "app.js");
   assert.match(app, /#\\\/sim\\\/\(0x/);
   assert.match(app, /#\\\/manage\\\/\(0x/);
   assert.match(app, /panelOf\(hash\)/);
 });
 
-test("the user panel's header: its badge, Testnet app, the menu with the next sections held, no link to the control panel", () => {
+test("the user panel's header: its badge, Testnet app, the four sections each a link, no link to the control panel", () => {
   const html = userHeaderHtml({ address: POOL_ADDR, account: "0x7a…3f" });
   assert.match(html, /User panel/);
   assert.match(html, /Testnet app/);
   assert.deepEqual(USER_NAV.map((s) => s.label), ["Pool", "Trade", "My exams", "My payouts"]);
-  assert.equal((html.match(/<a /g) || []).length, 1, "only the pool page is built");
-  assert.equal((html.match(/aria-disabled="true"/g) || []).length, 3);
+  assert.equal((html.match(/<a /g) || []).length, 4, "all four sections are built");
+  assert.equal((html.match(/aria-disabled="true"/g) || []).length, 0);
+  assert.deepEqual([...html.matchAll(/<a href="([^"]+)"/g)].map((m) => m[1]),
+    [`#/sim/${POOL_ADDR}`, `#/sim/${POOL_ADDR}/trade`, `#/sim/${POOL_ADDR}/exams`, `#/sim/${POOL_ADDR}/payouts`]);
+  assert.equal((html.match(/aria-current="page"/g) || []).length, 1);
+  assert.match(userHeaderHtml({ address: POOL_ADDR, account: "", current: "trade" }), /href="#\/sim\/0x[0-9a-fA-F]{40}\/trade" class="on" aria-current="page"/);
   assert.ok(!/manage/i.test(html.replace(/Management/g, "")), "no link to the control panel");
   assert.match(html, /0x7a…3f/);
   assert.match(userHeaderHtml({ address: POOL_ADDR, account: "" }), /Connect wallet/);
+  // A page built for the main network carries neither the tag nor the badge.
+  assert.ok(!/Testnet/.test(userHeaderHtml({ address: POOL_ADDR, account: "", marks: null })));
+  assert.ok(!/Testnet/.test(footerHtml({ marks: null })));
 });
 
 test("the control panel's header: its own band and tag, the role from the contract, its menu, no link to the trader's pages", () => {
@@ -314,7 +323,9 @@ test("the control panel's header: its own band and tag, the role from the contra
   assert.match(owner, /role read from contract/);
   assert.match(owner, /Pool creator · Pool 0x0000…9001/);
   assert.deepEqual(MANAGE_NAV.map((s) => s.label), ["Line switches", "Pool money", "Codes &amp; shares".replace("&amp;", "&"), "Withdraw & finish"]);
-  assert.equal((owner.match(/aria-disabled="true"/g) || []).length, 2, "codes and withdrawing are held for the next sections");
+  assert.equal((owner.match(/aria-disabled="true"/g) || []).length, 0, "all four sections are built");
+  assert.match(owner, /data-jump="codes"/);
+  assert.match(owner, /data-jump="withdraw"/);
   assert.match(owner, /Separate route\. Not linked from the trader's pages\. No buy buttons here\./);
   assert.ok(!/#\/sim\/|href="#\/"/.test(owner), "no link to the user panel");
   assert.match(manageHeaderHtml({ address: POOL_ADDR, account: "0x9…", role: "not-owner", poolName: "P" }), /No role in this pool/);
