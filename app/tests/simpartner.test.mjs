@@ -16,6 +16,8 @@ import {
 import { SIM_POOL_ABI } from "../lib/simpool.js";
 import { panelOf } from "../lib/simpanel.js";
 import { keccak256 } from "./keccak.mjs";
+import { roleIn, confirmedCodes } from "../lib/simpartner.js";
+import { sameAddress, ZERO_ADDRESS } from "../lib/ui.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (...p) => readFileSync(join(ROOT, ...p), "utf8");
@@ -249,8 +251,8 @@ test("the tab is shown by the user panel's shell only to a wallet in a code, and
   assert.match(shell, /revealPartnerTab\(page, user\[1\]/);
   assert.match(shell, /panelOf\(location\.hash\) === "user"/);
   const codes = read("app", "views", "simcodes.js");
-  assert.match(codes, /codes\.length > 0/, "no code, no tab");
-  assert.match(codes, /catch\(\(\) => false\)/, "a failed look adds nothing");
+  assert.match(codes, /\(await currentCodes\(at, account, st\)\)\.length > 0/, "no code, no tab");
+  assert.match(codes, /catch \{\s*found = false;/, "a failed look adds nothing");
 });
 
 test("the cabinet's reads stay inside the node's limits", () => {
@@ -259,5 +261,54 @@ test("the cabinet's reads stay inside the node's limits", () => {
   assert.match(codes, /topics: \[st\.topics\]/);
   const view = read("app", "views", "simpartner.js");
   assert.doesNotMatch(view, /window\.ethereum|localStorage/);
-  assert.match(view, /page\.onclick = /, "one click handler, so a redraw never sends twice");
+  assert.doesNotMatch(view, /page\.onclick/, "no overwriting of the page's other handlers");
+  assert.match(view, /page\.__partnerClicks\?\.abort\(\)/, "one click handler, so a redraw never answers twice");
+  assert.match(view, /addEventListener\("click"/);
+});
+
+// ── review of the first version ────────────────────────────────────
+
+test("the chain has the last word on a code: one set again to another address no longer names the wallet", () => {
+  const was = codeOf({ partner: OTHER, author: ZERO, authorBps: 0 });
+  assert.equal(roleIn(codeOf(), PARTNER), "partner");
+  assert.equal(roleIn(codeOf(), AUTHOR), "author");
+  assert.equal(roleIn(was, PARTNER), null, "reset to another partner");
+  assert.equal(roleIn(codeOf({ partner: ZERO, author: ZERO }), ZERO), null, "the zero address is nobody's");
+  // an old CodeSet names the wallet, the chain's codeOf does not: the code is not the wallet's, and no tab is shown for it
+  const found = codesNamingAccount([set(CODE_A, PARTNER, 5000)], PARTNER);
+  assert.deepEqual(found, [CODE_A]);
+  assert.deepEqual(confirmedCodes([{ code: CODE_A, c: was }], PARTNER), []);
+  assert.deepEqual(confirmedCodes([{ code: CODE_A, c: codeOf() }, { code: CODE_B, c: was }], PARTNER), [CODE_A]);
+});
+
+test("one answer for the zero address and for 'the same address'", () => {
+  assert.equal(ZERO_ADDRESS, "0x0000000000000000000000000000000000000000");
+  assert.equal(sameAddress(PARTNER, PARTNER.toUpperCase().replace("0X", "0x")), true);
+  assert.equal(sameAddress(PARTNER, AUTHOR), false);
+  assert.equal(sameAddress(null, PARTNER), false);
+  for (const f of ["simpartner.js", "simoperator.js"]) {
+    const src = read("app", "lib", f);
+    assert.doesNotMatch(src, /const ZERO(_ADDRESS)? = /, `${f} has no zero address of its own`);
+    assert.doesNotMatch(src, /\(a, b\) => Boolean\(a && b\)/, `${f} has no comparison of its own`);
+  }
+});
+
+test("the cabinet's page keeps a failed read on the page and offers more reading while any block is unread", () => {
+  const view = read("app", "views", "simpartner.js");
+  assert.match(view, /id="sq-retry">Try again/, "a failed read says so, with a retry, on the current page");
+  assert.match(view, /Could not read the pool: /);
+  assert.match(view, /const left = finished\(st\) \? "" :/, "the empty cabinet offers more reading until the whole is read");
+  assert.match(view, /if \(!finished\(st\)\) \$\("#sq-scan", page\)/, "so does the cabinet with codes");
+  assert.match(view, /simPartnerView\(at, page, \{ more: 0, notice \}\)/, "the claim's answer is drawn after the redraw, even a failed one");
+  const codes = read("app", "views", "simcodes.js");
+  assert.match(codes, /export const finished = \(st\) => complete\(st\) && st\.latest >= st\.head;/);
+  assert.doesNotMatch(codes, /known\./, "an unfinished or failed look is not remembered as 'not in a code'");
+  assert.match(codes, /pool\.codeOf\(code\)/, "the tab waits for the chain's own answer");
+});
+
+test("a claim is one at a time, and its second press is the first press's claim", () => {
+  const view = read("app", "views", "simpartner.js");
+  assert.match(view, /const pending = createPending\(\);/);
+  assert.match(view, /if \(pending\.active\) return;/);
+  assert.match(view, /confirm\.press\(call\.data, \(\) => args\)/);
 });

@@ -1,6 +1,10 @@
 // Small DOM helpers. Everything user-visible that comes from the chain or an API goes
 // through esc() or textContent.
 
+/** The zero address, and whether two addresses are the same one (case aside): one answer for every page. */
+export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+export const sameAddress = (a, b) => Boolean(a && b) && String(a).toLowerCase() === String(b).toLowerCase();
+
 export function esc(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")

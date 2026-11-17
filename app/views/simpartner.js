@@ -5,13 +5,18 @@
 // what was read is said on the page, and a button reads further. The words and the figures are app/lib/simpartner.js.
 import * as chain from "../lib/chain.js";
 import { esc, render, $, friendly } from "../lib/ui.js";
+import { createConfirm, createPending } from "../lib/simconfirm.js";
 import { SIM_POOL_ABI } from "../lib/simpool.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
-import { codesNamingAccount, cabinetRows, claimCall, partnerHtml, partnerNoteHtml, noCodeHtml, sendsTo } from "../lib/simpartner.js";
-import { scanOf, complete, note, read, catchUp, eventList, revealPartnerTab, PAGE_CALLS, MORE_CALLS } from "./simcodes.js";
+import { cabinetRows, claimCall, partnerHtml, partnerNoteHtml, noCodeHtml, sendsTo } from "../lib/simpartner.js";
+import { scanOf, finished, note, read, catchUp, eventList, currentCodes, revealPartnerTab, PAGE_CALLS, MORE_CALLS } from "./simcodes.js";
 import { accountLabel, wireShell } from "./simshell.js";
 
 const { ethers } = window;
+// One claim (and the redraw after it) at a time, however the page is drawn again; and the press that arms a claim is the
+// one that sends it only while the screen is the same.
+const pending = createPending();
+const confirm = createConfirm();
 /** What the cabinet reads of the wallet's codes: `codeOf` and `shareDue` of each. */
 async function readCodes(address, codes) {
   const pool = new ethers.Contract(address, SIM_POOL_ABI, chain.readProvider);
@@ -33,65 +38,60 @@ async function timesOf(st, sends) {
   }));
 }
 
-export async function simPartnerView(address, page, { more = null } = {}) {
+const READ_FURTHER = `<button type="button" class="so-btn" id="sq-more">Read further</button>`;
+
+/** The cabinet, drawn into `page`. A read that fails is said on the page, with a way to try again; the windows the scan
+ *  has read stay read. `opts.more`: windows to read further, both ways (null: the first reading); `opts.notice`: what to
+ *  say in the status line once drawn, `{ ok, words }`. */
+export async function simPartnerView(address, page, opts = {}) {
   const at = ethers.getAddress(address);
   const account = chain.currentAddress();
   const name = `Pool ${chain.short(at)}`;
   const shell = (inner) => `<div class="sp sp-user sp-partner">${userHeaderHtml({ address: at, account: accountLabel() })}${inner}${footerHtml()}</div>`;
-  if (!account) {
-    render(page, shell(noCodeHtml(false)));
-    wireShell(page);
-    return;
-  }
-  render(page, shell(`<section class="sp-msg"><h2>Partner cabinet</h2><p>Looking for your codes in the pool's events…</p></section>`));
-  wireShell(page);
-  const st = await scanOf(at);
-  await catchUp(at, st);
-  // The codes are searched from the pool's creation forward, the sends from the newest block back; `more` reads both
-  // further. After a claim (`more` is zero) nothing more is read but the new blocks.
-  if (more === null) await read(at, st, PAGE_CALLS, PAGE_CALLS);
-  else await read(at, st, more, more);
-  const codes = codesNamingAccount(eventList(st), account);
-  const rows = cabinetRows({ account, codes: await readCodes(at, codes) });
-  if (rows.length === 0) {
-    render(page, shell(`${noCodeHtml(true)}${complete(st) ? "" : `<p class="so-why">${esc(note(st))} <button type="button" class="so-btn" id="sq-more">Read further</button></p>`}`));
-    wireShell(page);
-    const again = $("#sq-more", page);
-    if (again) again.addEventListener("click", () => simPartnerView(at, page, { more: MORE_CALLS }).catch((err) => { again.textContent = friendly(err); }));
-    return;
-  }
-  const sends = sendsTo(eventList(st), account);
-  await timesOf(st, sends);
-  const timed = sendsTo(eventList(st), account, st.times);
-  render(page, shell(`${partnerNoteHtml(chain.short(account), name)}${partnerHtml({ rows, sends: timed, scanNote: note(st), poolName: name.toUpperCase() })}`));
-  wireShell(page);
-  await revealPartnerTab(page, at, { current: true });
-  if (!complete(st)) {
-    const box = $("#sq-scan", page);
-    if (box) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "so-btn";
-      button.textContent = "Read further";
-      button.addEventListener("click", () => simPartnerView(at, page, { more: MORE_CALLS }).catch((err) => { box.textContent = friendly(err); }));
-      box.append(" ", button);
-    }
-  }
+  const statusLine = `<p id="sim-status" class="sp-status" role="status"></p>`;
+  const state = { rows: [] };
+  confirm.reset();
 
-  const status = $("#sim-status", page);
-  // A first press says what the claim will do and arms the button; the second press sends it.
-  let armed = null;
-  const press = async (button, chosen, key) => {
+  // One click handler for the page, replaced when the page is drawn again: a second one would answer twice, and the
+  // page's other handlers are left alone.
+  page.__partnerClicks?.abort();
+  const clicks = new AbortController();
+  page.__partnerClicks = clicks;
+  page.addEventListener("click", (e) => {
+    if (pending.active) return;
+    if (e.target.closest("#sq-more")) {
+      simPartnerView(at, page, { more: MORE_CALLS });
+      return;
+    }
+    if (e.target.closest("#sq-retry")) {
+      simPartnerView(at, page, { more: opts.more ?? null });
+      return;
+    }
+    const one = e.target.closest("button[data-claim]");
+    if (one && !one.disabled) return press(one, state.rows.filter((r) => r.code === one.dataset.claim));
+    const all = e.target.closest("#sq-claim-all");
+    if (all && !all.disabled) press(all, state.rows.filter((r) => r.hasWaiting));
+  }, { signal: clicks.signal });
+
+  const say = (ok, words) => {
+    const box = $("#sim-status", page);
+    if (!box) return;
+    box.className = `sp-status ${ok === null ? "" : ok ? "ok" : "err"}`;
+    box.textContent = words;
+  };
+
+  /** A first press says what the claim will do and arms the button; the second press, with the same call, sends it. */
+  function press(button, chosen) {
     let call;
     try {
       call = claimCall({ pool: at, rows: chosen, keccak256: ethers.keccak256 });
     } catch (err) {
-      status.className = "sp-status err";
-      status.textContent = err.message;
+      say(false, err.message);
       return;
     }
-    if (armed !== key) {
-      armed = key;
+    const args = call.args[0];
+    const got = confirm.press(call.data, () => args);
+    if (got.action === "arm") {
       page.querySelectorAll("button[data-armed]").forEach((b) => { b.removeAttribute("data-armed"); b.textContent = b.dataset.was; });
       page.querySelectorAll(".sq-hint[data-was]").forEach((h) => { h.textContent = h.dataset.was; h.removeAttribute("data-was"); });
       button.dataset.was = button.textContent;
@@ -103,45 +103,72 @@ export async function simPartnerView(address, page, { more = null } = {}) {
         hint.dataset.was = hint.textContent;
         hint.textContent = call.words;
       }
-      status.className = "sp-status";
-      status.textContent = call.words;
+      say(null, call.words);
       return;
     }
-    armed = null;
-    page.querySelectorAll("button.sq-claim").forEach((b) => (b.disabled = true));
-    status.className = "sp-status busy";
-    status.textContent = "Confirm in your wallet…";
-    let words;
-    let ok = false;
-    try {
-      const signed = new ethers.Contract(at, SIM_POOL_ABI, chain.currentSigner());
-      const receipt = await (await signed.claimShares(call.args[0])).wait();
-      chain.forgetLiveReads();
-      if (!receipt || receipt.status !== 1) throw new Error("the claim reverted");
-      words = `Sent (transaction ${receipt.hash}).`;
-      ok = true;
-    } catch (err) {
-      words = friendly(err);
-    }
-    try {
-      await simPartnerView(at, page, { more: 0 });
-    } catch (err) {
-      words = `${words} The page could not be read again (${friendly(err)}). Reload it to see the figures as the chain has them.`;
-    }
-    const after = $("#sim-status", page);
-    if (after) {
-      after.className = `sp-status ${ok ? "ok" : "err"}`;
-      after.textContent = words;
-    }
+    send(got.run());
+  }
+
+  async function send(codes) {
+    await pending.run(async () => {
+      page.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      say(null, "Confirm in your wallet…");
+      let notice;
+      try {
+        const signed = new ethers.Contract(at, SIM_POOL_ABI, chain.currentSigner());
+        const receipt = await (await signed.claimShares(codes)).wait();
+        chain.forgetLiveReads();
+        if (!receipt || receipt.status !== 1) throw new Error("the claim reverted");
+        notice = { ok: true, words: `Sent (transaction ${receipt.hash}).` };
+      } catch (err) {
+        notice = { ok: false, words: friendly(err) };
+      }
+      // The cabinet is read again from the chain; a failure of that is said on the page, with the claim's own answer.
+      await simPartnerView(at, page, { more: 0, notice });
+    });
+  }
+
+  const finish = () => {
+    if (opts.notice) say(opts.notice.ok, opts.notice.words);
   };
-  // One handler for the page: the page node is the same when the cabinet is drawn again, and a second listener would send twice.
-  page.onclick = (e) => {
-    const one = e.target.closest("button[data-claim]");
-    if (one && !one.disabled) {
-      press(one, rows.filter((r) => r.code === one.dataset.claim), one.dataset.claim);
+
+  if (!account) {
+    render(page, shell(noCodeHtml(false)));
+    wireShell(page);
+    return;
+  }
+  render(page, shell(`<section class="sp-msg"><h2>Partner cabinet</h2><p>Looking for your codes in the pool's events…</p></section>${statusLine}`));
+  wireShell(page);
+  try {
+    const st = await scanOf(at);
+    await catchUp(at, st);
+    // The codes are searched from the pool's creation forward, the sends from the newest block back; `more` reads both
+    // further. After a claim (`more` is zero) nothing more is read but the new blocks.
+    if (opts.more == null) await read(at, st, PAGE_CALLS, PAGE_CALLS);
+    else await read(at, st, opts.more, opts.more);
+    // Held to the chain: the events say where a code was, `codeOf` what it is now.
+    const codes = await currentCodes(at, account, st);
+    state.rows = cabinetRows({ account, codes: await readCodes(at, codes) });
+    const left = finished(st) ? "" : `<p class="so-why">${esc(note(st))} ${READ_FURTHER}</p>`;
+    if (state.rows.length === 0) {
+      render(page, shell(`${noCodeHtml(true)}${left}${statusLine}`));
+      wireShell(page);
+      finish();
       return;
     }
-    const all = e.target.closest("#sq-claim-all");
-    if (all && !all.disabled) press(all, rows.filter((r) => r.hasWaiting), "all");
-  };
+    const sends = sendsTo(eventList(st), account);
+    await timesOf(st, sends);
+    const timed = sendsTo(eventList(st), account, st.times);
+    render(page, shell(`${partnerNoteHtml(chain.short(account), name)}${partnerHtml({ rows: state.rows, sends: timed, scanNote: note(st), poolName: name.toUpperCase() })}`));
+    wireShell(page);
+    await revealPartnerTab(page, at, { current: true });
+    if (!finished(st)) $("#sq-scan", page)?.insertAdjacentHTML("beforeend", ` ${READ_FURTHER}`);
+    finish();
+  } catch (err) {
+    // Said on the page that is showing, not on one that is gone; what the scan has read stays read.
+    render(page, shell(`<section class="sp-msg"><h2>Partner cabinet</h2><p>Could not read the pool: ${esc(friendly(err))}</p>`
+      + `<p><button type="button" class="so-btn" id="sq-retry">Try again</button></p></section>${statusLine}`));
+    wireShell(page);
+    finish();
+  }
 }

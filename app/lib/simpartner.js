@@ -8,15 +8,14 @@
 // page finds the wallet's codes there. The chain's own `codeOf` and `shareDue` then say what each is and is owed, so a
 // code that was reset by a later event, or taken off sale, is what the chain says now. What the page adds is a sum of
 // the contract's own figures over the wallet's codes, and the words.
-import { esc } from "./ui.js";
+import { esc, sameAddress } from "./ui.js";
+import { isSet } from "./simlines.js";
 import { usd } from "./shared.js";
 import { utc } from "./simpool.js";
 import { encodeCall } from "./operator.js";
 
-const ZERO = /^0x0{40}$/i;
 const BPS = 10_000;
-const same = (a, b) => Boolean(a && b) && String(a).toLowerCase() === String(b).toLowerCase();
-const isSet = (address) => Boolean(address) && !ZERO.test(String(address));
+const same = sameAddress;
 
 /** The CodeSet events of `names` the wallet as partner or as author, one entry for each code (the latest event of it
  *  wins), in the order the codes were first set. Events: `{ name, args, block, index }`. A code taken off sale (its
@@ -32,6 +31,21 @@ export function codesNamingAccount(events, account) {
     if (same(e.args.partner, account) || (isSet(e.args.author) && same(e.args.author, account))) out.push(String(e.args.code));
   }
   return out;
+}
+
+/** The wallet's role in a code, by the chain's own `codeOf`: "partner", "author" or null. What the events say a code was
+ *  is only where to look; this is what it is now. */
+export function roleIn(c, account) {
+  const partner = c.partner ?? c[0];
+  const author = c.author ?? c[4];
+  if (isSet(partner) && same(partner, account)) return "partner";
+  if (isSet(author) && same(author, account)) return "author";
+  return null;
+}
+
+/** The candidate codes the chain still names the wallet in, from `codeOf` of each: `reads` is `[{ code, c }]`. */
+export function confirmedCodes(reads, account) {
+  return reads.filter(({ c }) => roleIn(c, account) !== null).map(({ code }) => code);
 }
 
 /** A share in bps as a percent: 4000 → "40%", 2500 → "25%", 3333 → "33.33%". */
@@ -52,7 +66,7 @@ export function cabinetRows({ account, codes }) {
     const author = c.author ?? c[4];
     const authorBps = Number(c.authorBps ?? c[3]);
     const bps = Number(c.bps ?? c[1]);
-    const role = same(partner, account) ? "partner" : isSet(author) && same(author, account) ? "author" : null;
+    const role = roleIn(c, account);
     if (!role) continue;
     const toPartner = BigInt(due.toPartner ?? due[0]);
     const toAuthor = BigInt(due.toAuthor ?? due[1]);

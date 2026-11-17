@@ -5,7 +5,7 @@
 // tab to a wallet that is written in a code.
 import * as chain from "../lib/chain.js";
 import { SIM_POOL_ABI, MIN_TERM, firstBlockAt, readLogs, normalizeEvent } from "../lib/simpool.js";
-import { codesNamingAccount, partnerHref } from "../lib/simpartner.js";
+import { codesNamingAccount, confirmedCodes, partnerHref } from "../lib/simpartner.js";
 
 const { ethers } = window;
 /** The node's limit on a range of blocks (measured: 1 000), and the windows a page reads at once. */
@@ -40,7 +40,7 @@ export async function scanOf(address) {
 export const complete = (st) => st.fwd > st.back;
 
 export function note(st) {
-  if (complete(st) && st.latest >= st.head) return "All of the pool's events were read.";
+  if (finished(st)) return "All of the pool's events were read.";
   const newest = st.latest < st.head ? ` Blocks after ${st.latest} (the newest is ${st.head}) are not read.` : "";
   return `Read blocks ${st.start}–${st.fwd - 1} from the pool's creation and ${st.back + 1}–${st.latest} from the newest.${newest} `
     + "A code set, or a send made, in the blocks between is not shown until you read further.";
@@ -84,28 +84,39 @@ export async function catchUp(address, st) {
 
 export const eventList = (st) => [...st.events.values()];
 
-/** The codes of the wallet found so far, from the events read. */
-async function codesOf(address, account, calls) {
-  const st = await scanOf(address);
-  await read(address, st, calls, 0);
-  return { st, codes: codesNamingAccount(eventList(st), account) };
+/** Whether every block has been read: the whole history, and the blocks written since. */
+export const finished = (st) => complete(st) && st.latest >= st.head;
+
+/**
+ * The wallet's codes as the chain has them now. The events only say where to look (a code may have been set again to
+ * another address since); each candidate is held to the pool's `codeOf`, which has the last word.
+ */
+export async function currentCodes(address, account, st) {
+  const candidates = codesNamingAccount(eventList(st), account);
+  if (candidates.length === 0) return [];
+  const pool = new ethers.Contract(address, SIM_POOL_ABI, chain.readProvider);
+  const reads = await chain.readAll(candidates, async (code) => ({ code, c: await pool.codeOf(code) }));
+  return confirmedCodes(reads, account);
 }
 
-// Whether a wallet is in a code is asked once for a pool and a wallet, however many pages ask.
-const known = new Map();
-
-/** Puts the Partner tab in the user panel's menu, when the connected wallet is written in a code of this pool; the page
- *  `current` marks it as the page being shown. Nothing is added for any other wallet, and a failed look adds nothing. */
+/** Puts the Partner tab in the user panel's menu, when the chain names the connected wallet in a code of this pool; the
+ *  page `current` marks it as the page being shown. Nothing is added for any other wallet, and a failed or unfinished look
+ *  adds nothing and is not remembered: the next page asks again, from where the reading stopped. */
 export async function revealPartnerTab(page, pool, { current = false } = {}) {
   const account = chain.currentAddress();
   const nav = page.querySelector(".sp-top .sp-nav");
   if (!account || !nav) return false;
   const at = ethers.getAddress(pool);
-  const key = `${at}:${account}`.toLowerCase();
-  if (!known.has(key)) {
-    known.set(key, codesOf(at, account, REVEAL_CALLS).then(({ codes }) => codes.length > 0).catch(() => false));
+  let found = false;
+  try {
+    const st = await scanOf(at);
+    await catchUp(at, st);
+    await read(at, st, REVEAL_CALLS, 0);
+    found = (await currentCodes(at, account, st)).length > 0;
+  } catch {
+    found = false;
   }
-  if (!(await known.get(key))) return false;
+  if (!found) return false;
   if (!nav.querySelector("[data-partner]")) {
     const link = document.createElement("a");
     link.href = partnerHref(at);

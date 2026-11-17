@@ -18,6 +18,8 @@ import { SIM_POOL_APPROVAL_ABI, SIM_POOL_ABI, STOP_RESERVE } from "../lib/simpoo
 import { OPERATOR_ABI, PAYOUT_DELAY, PAYOUT_HARD } from "../lib/operator.js";
 import { panelOf } from "../lib/simpanel.js";
 import { keccak256 } from "./keccak.mjs";
+import { payoutRange, PAYOUT_WINDOW, STOP_LOOKBACK } from "../lib/simoperator.js";
+import { createConfirm, createPending } from "../lib/simconfirm.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (...p) => readFileSync(join(ROOT, ...p), "utf8");
@@ -344,4 +346,104 @@ test("the page is wired into the app's routes", () => {
   const view = read("app", "views", "simoperator.js");
   assert.doesNotMatch(view, /window\.ethereum|localStorage|privateKey/);
   assert.match(read("app", "index.html"), /href="simops\.css"/);
+});
+
+// ── review of the first version ────────────────────────────────────
+
+test("the queue is read from the first payout not settled, however many the pool has had", () => {
+  // 5 000 payouts, the oldest not settled is #1200: the queue starts there (less the stops' look-back), not at the last 200
+  const r = payoutRange({ count: 5000, head: 1200 });
+  assert.equal(r.first, 1200 - STOP_LOOKBACK);
+  assert.equal(r.ids[0], 900);
+  assert.ok(r.ids.includes(1200), "the head is in it");
+  assert.equal(r.ids.length, PAYOUT_WINDOW);
+  assert.equal(r.unread, 5000 - (900 + PAYOUT_WINDOW), "the later ones are said to be unread, not dropped");
+  // a payout 0 still waiting is read, whatever the count
+  assert.equal(payoutRange({ count: 5000, head: 0 }).ids[0], 0);
+  assert.equal(payoutRange({ count: 5000, head: 100 }).ids[0], 0);
+  // nothing waiting: the head is the count; the last of the look-back is read, and nothing is unread
+  const idle = payoutRange({ count: 1000, head: 1000 });
+  assert.equal(idle.ids[0], 700);
+  assert.equal(idle.unread, 0);
+  assert.equal(idle.ids.at(-1), 999);
+  // more asked for: the window grows from the same start
+  const more = payoutRange({ count: 5000, head: 1200, limit: 2 * PAYOUT_WINDOW });
+  assert.equal(more.first, r.first);
+  assert.equal(more.ids.length, 2 * PAYOUT_WINDOW);
+  assert.deepEqual(payoutRange({ count: 0, head: 0 }), { first: 0, end: 0, ids: [], unread: 0 });
+  // a head past the count (not read at the same moment) cannot read past the end
+  assert.equal(payoutRange({ count: 10, head: 50 }).ids.at(-1), 9);
+});
+
+test("an old payout is offered its approval and its stop, and an old stop its lift", () => {
+  const old = [payout({ n: 1, dueAt: NOW - 2 * H }), payout({ n: 2, state: 2, wasStopped: true, stoppedAt: NOW - D, amount: 400n * U })];
+  const m = operatorModel({ pool: POOL, roles: ["approver", "checker"], reads: { ...reads({ payouts: old, firstId: 1200, reasons: new Map([[1201, 3]]), unread: 4000 }) }, keccak256 });
+  assert.deepEqual(m.queue.map((r) => r.id), [1200], "ids are the pool's, not the page's index");
+  assert.ok(m.queue[0].approve && m.queue[0].stoppable);
+  assert.deepEqual(m.stops.map((s) => [s.id, s.reason, s.canLift]), [[1201, 3, true]]);
+  assert.equal(m.unread, 4000);
+  const html = operatorHtml(m, { name: "Pool", role: "" });
+  assert.match(html, /id="so-more">Read later payouts/);
+  assert.match(html, /4000 later payouts are not read yet/);
+  assert.doesNotMatch(page(["approver"]), /so-more/, "nothing unread, no button");
+});
+
+test("a second press belongs to what was on the screen at the first", () => {
+  const c = createConfirm();
+  const sent = [];
+  const call = (ids) => `approve:${ids.join(",")}`;
+  // select payout 1 and press: armed, nothing sent
+  assert.equal(c.press(call([1]), () => "send 1").action, "arm");
+  // the selection changes to payout 2 and the button is pressed again: not a confirmation, nothing of payout 1 is sent
+  const second = c.press(call([2]), () => "send 2");
+  assert.equal(second.action, "arm");
+  // pressed again with payout 2 still selected: that is the confirmation, and it sends the payout the first press named
+  const third = c.press(call([2]), () => "send other");
+  assert.equal(third.action, "send");
+  sent.push(third.run());
+  assert.deepEqual(sent, ["send 2"]);
+  // a confirmation is used once
+  assert.equal(c.press(call([2]), () => "again").action, "arm");
+  // a change on the screen forgets it
+  c.reset();
+  assert.equal(c.key, null);
+  assert.equal(c.press(call([2]), () => "x").action, "arm");
+  // the same holds for the stop form: the call's own data is the key
+  const stop = (reason) => stopFromForm({ pool: POOL, fields: { id: 2, reason, paired: OTHER, trades: `${A},${B}`, links: "" }, keccak256 }).call.data;
+  const f = createConfirm();
+  assert.equal(f.press(stop(1), () => 1).action, "arm");
+  assert.equal(f.press(stop(1), () => 1).action, "send");
+  const g = createConfirm();
+  assert.equal(g.press(stop(1), () => 1).action, "arm");
+  const edited = stopFromForm({ pool: POOL, fields: { id: 2, reason: 1, paired: OTHER, trades: `${A},${C}`, links: "" }, keccak256 }).call.data;
+  assert.equal(g.press(edited, () => 2).action, "arm", "a changed form is not a confirmation");
+});
+
+test("one submission at a time, whatever the buttons say", async () => {
+  const p = createPending();
+  let release;
+  const first = p.run(() => new Promise((r) => { release = r; }));
+  assert.equal(p.active, true);
+  assert.deepEqual(await p.run(async () => "second"), { refused: true });
+  release("done");
+  assert.deepEqual(await first, { refused: false, value: "done" });
+  assert.equal(p.active, false);
+  assert.deepEqual(await p.run(async () => "third"), { refused: false, value: "third" });
+  // a failed job clears the guard
+  await assert.rejects(p.run(async () => { throw new Error("x"); }), /x/);
+  assert.equal(p.active, false);
+});
+
+test("the operator page uses these guards", () => {
+  const view = read("app", "views", "simoperator.js");
+  assert.match(view, /const pending = createPending\(\);/);
+  assert.match(view, /const confirm = createConfirm\(\);/);
+  assert.match(view, /confirm\.press\(call\.data, run\)/);
+  assert.match(view, /disarm\(\);\s*paintSelection\(\)/, "a changed selection forgets the confirmation");
+  assert.match(view, /const changed = \(\) => \{ disarm\(\); paint\(\); \};/, "so does a changed stop form");
+  assert.match(view, /if \(pending\.active\) button\.disabled = true;/, "a redraw of the selection does not re-enable a pending button");
+  assert.match(view, /go\.disabled = !got\.ok \|\| pending\.active;/);
+  assert.match(view, /payoutRange\(\{ count, head, limit \}\)/);
+  assert.doesNotMatch(view, /Math\.max\(0, Number\(count\) - PAYOUT_WINDOW\)/);
+  assert.match(view, /twoStep\(button, "stop"/, "the stop form is a two-step too");
 });

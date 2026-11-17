@@ -4,13 +4,14 @@
 // drawn only the controls its contract call allows. Before a call is sent the page says in words what it will do. The
 // words, the queue's states and the calls are app/lib/simoperator.js and app/lib/operator.js; this file reads and wires.
 import * as chain from "../lib/chain.js";
-import { esc, render, $, friendly, refusalName } from "../lib/ui.js";
+import { render, $, friendly, refusalName, ZERO_ADDRESS } from "../lib/ui.js";
+import { createConfirm, createPending } from "../lib/simconfirm.js";
 import { SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, SIM_POOL_APPROVAL_ABI } from "../lib/simpool.js";
 import { SIM_LINES_ABI } from "../lib/simlines.js";
 import { OPERATOR_ABI } from "../lib/operator.js";
 import { footerHtml } from "../lib/simpanel.js";
 import {
-  SIM_OPERATOR_ABI, SIM_OPERATOR_FACTORY_ABI, PAYOUT_WINDOW, mergeAbis, operatorRoles, operatorModel, operatorHeaderHtml,
+  SIM_OPERATOR_ABI, SIM_OPERATOR_FACTORY_ABI, PAYOUT_WINDOW, payoutRange, mergeAbis, operatorRoles, operatorModel, operatorHeaderHtml,
   operatorHtml, messageHtml, selectionCall, approveAnywayCall, HOLD_WARNING, stopFromForm, stopWords, liftWords,
   finalizeWords, cancelWords, operatorRefusal, approveWords, STOP_FORM,
 } from "../lib/simoperator.js";
@@ -19,41 +20,44 @@ import { accountLabel, wireShell } from "./simshell.js";
 const { ethers } = window;
 // `payout(id)` is named by three of the libraries with different fields: the widest comes first.
 const ABI = mergeAbis(SIM_POOL_APPROVAL_ABI, SIM_POOL_STOP_RESERVE_ABI, SIM_OPERATOR_ABI, OPERATOR_ABI, SIM_LINES_ABI, SIM_POOL_ABI);
-const ZERO = "0x0000000000000000000000000000000000000000";
+// One submission at a time for the whole page, however it is drawn again (a redraw enables its buttons afresh).
+const pending = createPending();
+// How many payouts the queue reads: each "Read later payouts" press adds a window.
+const reading = new Map();
 
 /** The pool's approver, or nobody for a pool that does not answer `approver()`. */
 async function approverOf(pool) {
   try {
     return await pool.approver();
   } catch (err) {
-    if (err?.code === "CALL_EXCEPTION") return ZERO;
+    if (err?.code === "CALL_EXCEPTION") return ZERO_ADDRESS;
     throw err;
   }
 }
 
 /** What the operator's page reads of the pool, for the roles the wallet has. */
-export async function readOperatorPool(address, roles) {
+export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW) {
   const pool = new ethers.Contract(address, ABI, chain.readProvider);
   const now = await chain.blockTime();
   const out = { now };
   const queue = roles.includes("approver") || roles.includes("checker");
   if (queue) {
-    const [count, perDay, room, nextPayAt, menu, tiers] = await Promise.all([
-      pool.payoutCount(), pool.payoutsPerDay(), pool.payRoom(), pool.nextPayAt(), pool.menu(), pool.tiers(),
+    const [count, head, perDay, room, nextPayAt, menu, tiers] = await Promise.all([
+      pool.payoutCount(), pool.head(), pool.payoutsPerDay(), pool.payRoom(), pool.nextPayAt(), pool.menu(), pool.tiers(),
     ]);
-    const firstId = Math.max(0, Number(count) - PAYOUT_WINDOW);
-    const ids = Array.from({ length: Number(count) - firstId }, (_, i) => firstId + i);
-    const payouts = await chain.readAll(ids, (id) => pool.payout(id));
+    // From the first payout not settled (and a way below it, for the stops still inside their 14 days), oldest first.
+    const range = payoutRange({ count, head, limit });
+    const payouts = await chain.readAll(range.ids, (id) => pool.payout(id));
     const live = payouts.filter((p) => Number(p.state) === 1 || Number(p.state) === 2 || Number(p.state) === 5);
     const accounts = [...new Set(live.map((p) => p.account.toLowerCase()))];
     const lines = await chain.readAll(accounts, async (a) => (await pool.accountOf(a)).line);
-    const stoppedIds = ids.filter((id, i) => Number(payouts[i].state) === 2 || Number(payouts[i].state) === 5);
+    const stoppedIds = range.ids.filter((id, i) => Number(payouts[i].state) === 2 || Number(payouts[i].state) === 5);
     const why = await chain.readAll(stoppedIds, (id) => pool.stopReasonOf(id));
-    Object.assign(out, { payouts, firstId, payoutsPerDay: perDay, payRoom: room, nextPayAt, menu, tiers,
+    Object.assign(out, { payouts, firstId: range.first, unread: range.unread, payoutsPerDay: perDay, payRoom: room, nextPayAt, menu, tiers,
       accountLines: new Map(accounts.map((a, i) => [a, Number(lines[i])])),
       reasons: new Map(stoppedIds.map((id, i) => [id, Number(why[i])])) });
   } else {
-    Object.assign(out, { payouts: [], firstId: 0, payoutsPerDay: 0, payRoom: 0, nextPayAt: 0, menu: [], tiers: [] });
+    Object.assign(out, { payouts: [], firstId: 0, unread: 0, payoutsPerDay: 0, payRoom: 0, nextPayAt: 0, menu: [], tiers: [] });
   }
   if (roles.includes("checker") || roles.includes("closer")) {
     const [requested, readyAt] = await Promise.all([pool.requested(), pool.readyAt()]);
@@ -77,7 +81,7 @@ export async function simOperatorView(address, page) {
     wireShell(page);
     return;
   }
-  const reads = await readOperatorPool(at, who.roles);
+  const reads = await readOperatorPool(at, who.roles, reading.get(at) || PAYOUT_WINDOW);
   const model = operatorModel({ pool: at, roles: who.roles, reads: { ...reads, approver }, keccak256: ethers.keccak256 });
   render(page, `<div class="sp sp-manage sp-op">${header}${operatorHtml(model, { name })}${footerHtml()}</div>`);
   wireShell(page);
@@ -89,54 +93,62 @@ function wire(page, at, model) {
   const iface = new ethers.Interface(ABI);
   const keccak256 = ethers.keccak256;
   const byId = new Map(model.queue.map((r) => [r.id, r]));
-  let armed = null;
+  // The second press of a button belongs to what was on the screen at the first: the call is kept at the first press.
+  const confirm = createConfirm();
 
   const say = (box, words) => { if (box) box.textContent = words; };
   const boxOf = (name) => $(`#so-do-${name}`, page);
+  /** Forgets an armed button: the selection or the form it was armed for has changed. */
+  const disarm = () => {
+    confirm.reset();
+    page.querySelectorAll("[data-armed]").forEach((b) => { b.removeAttribute("data-armed"); if (b.dataset.was) b.textContent = b.dataset.was; });
+  };
 
-  /** Sends one call as the connected wallet, says how it ended, and draws the page again from the chain. */
+  /** Sends one call as the connected wallet, says how it ended, and draws the page again from the chain. One at a time. */
   async function send(run, done) {
-    page.querySelectorAll("button").forEach((b) => (b.disabled = true));
-    status.className = "sp-status busy";
-    status.textContent = "Confirm in your wallet…";
-    let words;
-    let ok = false;
-    try {
-      const signed = new ethers.Contract(at, ABI, chain.currentSigner());
-      const receipt = await (await run(signed)).wait();
-      chain.forgetLiveReads();
-      if (!receipt || receipt.status !== 1) throw new Error("the call reverted");
-      words = `${done} (transaction ${receipt.hash}).`;
-      ok = true;
-    } catch (err) {
-      words = operatorRefusal(refusalName(err, iface)) || friendly(err);
-    }
-    try {
-      await simOperatorView(at, page);
-    } catch (err) {
-      words = `${words} The page could not be read again (${friendly(err)}). Reload it to see the queue as the chain has them.`;
-    }
-    const after = $("#sim-status", page);
-    if (after) {
-      after.className = `sp-status ${ok ? "ok" : "err"}`;
-      after.textContent = words;
-    }
+    if (pending.active) return;
+    await pending.run(async () => {
+      page.querySelectorAll("button").forEach((b) => (b.disabled = true));
+      status.className = "sp-status busy";
+      status.textContent = "Confirm in your wallet…";
+      let words;
+      let ok = false;
+      try {
+        const signed = new ethers.Contract(at, ABI, chain.currentSigner());
+        const receipt = await (await run(signed)).wait();
+        chain.forgetLiveReads();
+        if (!receipt || receipt.status !== 1) throw new Error("the call reverted");
+        words = `${done} (transaction ${receipt.hash}).`;
+        ok = true;
+      } catch (err) {
+        words = operatorRefusal(refusalName(err, iface)) || friendly(err);
+      }
+      try {
+        await simOperatorView(at, page);
+      } catch (err) {
+        words = `${words} The page could not be read again (${friendly(err)}). Reload it to see the queue as the chain has them.`;
+      }
+      const after = $("#sim-status", page);
+      if (after) {
+        after.className = `sp-status ${ok ? "ok" : "err"}`;
+        after.textContent = words;
+      }
+    });
   }
 
-  /** A first press says what the call will do and arms the button; the second press sends it. */
-  function twoStep(button, boxName, words, label, run, done) {
-    const key = `${boxName}:${label}`;
-    if (armed !== key) {
-      armed = key;
-      page.querySelectorAll("[data-armed]").forEach((b) => { b.removeAttribute("data-armed"); b.textContent = b.dataset.was || b.textContent; });
+  /** A first press says what the call will do and arms the button; the second press, with the same call, sends it. */
+  function twoStep(button, boxName, words, label, call, run, done) {
+    if (pending.active) return;
+    const got = confirm.press(call.data, run);
+    if (got.action === "arm") {
+      page.querySelectorAll("[data-armed]").forEach((b) => { b.removeAttribute("data-armed"); if (b.dataset.was) b.textContent = b.dataset.was; });
       button.dataset.was = button.textContent;
       button.dataset.armed = "1";
       button.textContent = `Sign: ${label}`;
       say(boxOf(boxName), words);
       return;
     }
-    armed = null;
-    send(run, done);
+    send(got.run, done);
   }
 
   // ── the approver: the queue ──
@@ -146,24 +158,32 @@ function wire(page, at, model) {
     if (!button) return;
     const rows = picked();
     button.textContent = `Approve selected (${rows.length})`;
-    button.disabled = rows.length === 0;
     const why = $("#so-sel-why", page);
-    if (rows.length === 0) why.textContent = "Tick the payouts to approve in one signature.";
-    else {
+    if (rows.length === 0) {
+      why.textContent = "Tick the payouts to approve in one signature.";
+      button.disabled = true;
+    } else {
       const got = selectionCall({ pool: at, rows, keccak256 });
       why.textContent = got.ok ? "One signature approves them all." : got.problem;
       button.disabled = !got.ok;
     }
+    if (pending.active) button.disabled = true;
   };
-  page.querySelectorAll(".so-pick").forEach((c) => c.addEventListener("change", paintSelection));
+  page.querySelectorAll(".so-pick").forEach((c) => c.addEventListener("change", () => {
+    // Another selection is another call: whatever was armed is forgotten.
+    disarm();
+    paintSelection();
+  }));
 
   $("#queue", page)?.addEventListener("click", (e) => {
+    if (pending.active) return;
     const sel = e.target.closest("#so-approve-sel");
     if (sel && !sel.disabled) {
       const rows = picked();
       const got = selectionCall({ pool: at, rows, keccak256 });
       if (!got.ok) return say(boxOf("queue"), got.problem);
-      twoStep(sel, "queue", got.words, `approve ${rows.length}`, (c) => c.approvePayouts(got.call.args[0]), "Approved");
+      const ids = got.call.args[0];
+      twoStep(sel, "queue", got.words, `approve ${rows.length}`, got.call, (c) => c.approvePayouts(ids), "Approved");
       return;
     }
     const one = e.target.closest("button[data-approve]");
@@ -174,7 +194,16 @@ function wire(page, at, model) {
         if (call) send((c) => c.approvePayouts(call.args[0]), "Approved");
         return;
       }
-      twoStep(one, "queue", approveWords([row]), `approve #${row.id}`, (c) => c.approvePayouts([row.id]), "Approved");
+      const rows = [row];
+      const got = selectionCall({ pool: at, rows, keccak256 });
+      if (!got.ok) return say(boxOf("queue"), got.problem);
+      const ids = got.call.args[0];
+      twoStep(one, "queue", approveWords(rows), `approve #${row.id}`, got.call, (c) => c.approvePayouts(ids), "Approved");
+      return;
+    }
+    if (e.target.closest("#so-more")) {
+      reading.set(at, (reading.get(at) || PAYOUT_WINDOW) + PAYOUT_WINDOW);
+      simOperatorView(at, page).catch((err) => say(boxOf("queue"), `Could not read more: ${friendly(err)}`));
       return;
     }
     const stop = e.target.closest("button[data-stop-for]");
@@ -182,7 +211,7 @@ function wire(page, at, model) {
       const select = $("#so-stop-id", page);
       if (select) {
         select.value = stop.dataset.stopFor;
-        select.dispatchEvent(new Event("change"));
+        select.dispatchEvent(new Event("change", { bubbles: true }));
         $("#stop-form", page)?.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     }
@@ -193,6 +222,12 @@ function wire(page, at, model) {
   if (form) {
     const fields = () => ({ id: $("#so-stop-id", page).value, reason: (page.querySelector("input[name=so-reason]:checked") || {}).value,
       paired: $("#so-paired", page).value, trades: $("#so-trades", page).value, links: $("#so-links", page).value });
+    const built = () => {
+      const f = fields();
+      const kind = STOP_FORM.find((x) => x.reason === Number(f.reason));
+      if (!f.id || !kind) return { f, got: null };
+      return { f, got: stopFromForm({ pool: at, fields: { ...f, links: kind.links === "none" ? "" : f.links, paired: kind.paired === "none" ? "" : f.paired }, keccak256 }) };
+    };
     const paint = () => {
       const f = fields();
       const kind = STOP_FORM.find((x) => x.reason === Number(f.reason));
@@ -203,20 +238,22 @@ function wire(page, at, model) {
       page.querySelectorAll(".so-reason").forEach((l) => l.classList.toggle("on", l.dataset.reason === String(f.reason)));
       const go = $("#so-stop-go", page);
       const box = boxOf("stop");
-      if (!f.id || !f.reason) { go.disabled = true; say(box, "Choose a payout and a reason."); return; }
-      const got = stopFromForm({ pool: at, fields: { ...f, links: kind.links === "none" ? "" : f.links, paired: kind.paired === "none" ? "" : f.paired }, keccak256 });
-      go.disabled = !got.ok;
-      const row = byId.get(Number(f.id));
-      say(box, got.ok ? stopWords(row, f.reason, model.now) : got.problem);
+      const { got } = built();
+      if (!got) { go.disabled = true; say(box, "Choose a payout and a reason."); return; }
+      go.disabled = !got.ok || pending.active;
+      say(box, got.ok ? stopWords(byId.get(Number(f.id)), f.reason, model.now) : got.problem);
     };
-    form.addEventListener("input", paint);
-    form.addEventListener("change", paint);
+    // Any change to the form is a different stop: whatever was armed is forgotten.
+    const changed = () => { disarm(); paint(); };
+    form.addEventListener("input", changed);
+    form.addEventListener("change", changed);
     $("#so-stop-go", page).addEventListener("click", () => {
-      const f = fields();
-      const kind = STOP_FORM.find((x) => x.reason === Number(f.reason));
-      const got = stopFromForm({ pool: at, fields: { ...f, links: kind.links === "none" ? "" : f.links, paired: kind.paired === "none" ? "" : f.paired }, keccak256 });
-      if (!got.ok) return;
-      send((c) => c.stopPayout(...got.call.args), "Stop written");
+      if (pending.active) return;
+      const { f, got } = built();
+      if (!got || !got.ok) return;
+      const args = got.call.args;
+      const button = $("#so-stop-go", page);
+      twoStep(button, "stop", stopWords(byId.get(Number(f.id)), f.reason, model.now), "write stop", got.call, (c) => c.stopPayout(...args), "Stop written");
     });
     paint();
   }
@@ -226,14 +263,16 @@ function wire(page, at, model) {
     const lift = e.target.closest("button[data-lift]");
     const fin = e.target.closest("button[data-final]");
     const button = lift || fin;
-    if (!button || button.disabled) return;
+    if (!button || button.disabled || pending.active) return;
     const stop = model.stops.find((s) => s.id === Number(lift ? lift.dataset.lift : fin.dataset.final));
-    if (lift) twoStep(button, "stops", liftWords(stop), `lift #${stop.id}`, (c) => c.liftStop(stop.id), "Stop lifted");
-    else twoStep(button, "stops", finalizeWords(stop), `final #${stop.id}`, (c) => c.finalizeStop(stop.id), "Stop made final");
+    const id = stop.id;
+    const call = { data: `${lift ? "lift" : "final"}:${id}` };
+    if (lift) twoStep(button, "stops", liftWords(stop), `lift #${id}`, call, (c) => c.liftStop(id), "Stop lifted");
+    else twoStep(button, "stops", finalizeWords(stop), `final #${id}`, call, (c) => c.finalizeStop(id), "Stop made final");
   });
   $("#requests", page)?.addEventListener("click", (e) => {
     const button = e.target.closest("button[data-cancel]");
-    if (!button || button.disabled) return;
-    twoStep(button, "requests", cancelWords(model.request), "cancel request", (c) => c.cancelWithdraw(), "Request cancelled");
+    if (!button || button.disabled || pending.active) return;
+    twoStep(button, "requests", cancelWords(model.request), "cancel request", { data: "cancel" }, (c) => c.cancelWithdraw(), "Request cancelled");
   });
 }

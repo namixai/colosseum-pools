@@ -8,7 +8,7 @@
 // `closer()` of its factory) and a control is drawn only for the role that may call it; the contract refuses anyone
 // else all the same. Before every call the page says in words what the call will do. The payout's review
 // (app/lib/operator.js, reviewFor) and the call's calldata are that library's; nothing here does money arithmetic.
-import { esc } from "./ui.js";
+import { esc, ZERO_ADDRESS, sameAddress } from "./ui.js";
 import { dollars, tierOf, isSet } from "./simlines.js";
 import { utc, STOP_RESERVE, stopReasonText } from "./simpool.js";
 import {
@@ -75,12 +75,27 @@ export function mergeAbis(...lists) {
   return out;
 }
 
-/** The most payouts the page reads back from the end of the pool's list. */
-export const PAYOUT_WINDOW = 200;
+/** How many payouts the page reads at once, and how far below the pool's `head()` it looks for stops still inside their
+ *  14 days: the pool's head passes a stopped payout, and a payout stopped lately is below it. */
+export const PAYOUT_WINDOW = 400;
+export const STOP_LOOKBACK = 300;
+
+/**
+ * Which payouts to read, oldest first. The queue is the payouts from the pool's `head()` (the first not settled) on, so
+ * the oldest one still waiting is always in it, however many payouts the pool has had; and a few hundred below the head,
+ * for the stops that are still inside their 14 days. At most `limit` are read; `unread` says how many later ones are not,
+ * and the page asks for more.
+ */
+export function payoutRange({ count, head, limit = PAYOUT_WINDOW, lookback = STOP_LOOKBACK }) {
+  const total = Number(count);
+  const first = Math.max(0, Math.min(Number(head), total) - lookback);
+  const end = Math.min(total, first + limit);
+  return { first, end, ids: Array.from({ length: end - first }, (_, i) => first + i), unread: total - end };
+}
 
 // ── who is looking ─────────────────────────────────────────────────
 
-const same = (a, b) => Boolean(a && b) && String(a).toLowerCase() === String(b).toLowerCase();
+const same = sameAddress;
 
 /**
  * The operator's roles of the connected wallet. `kind` is "no-wallet", "no-role" (a wallet that holds none of the
@@ -134,7 +149,6 @@ export const STOP_FORM = Object.freeze([
     paired: "optional", trades: 2, links: "hash" },
 ]);
 
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const words = (text) => String(text ?? "").split(/[\s,;]+/).filter(Boolean);
 
 /**
@@ -270,7 +284,7 @@ export function operatorModel({ pool, roles, reads, keccak256 }) {
     stopsOpen: stops.filter((s) => s.state !== "final").length,
     requests: request && (request.status === "waiting" || request.status === "ready") ? 1 : 0,
   };
-  return { now, roles, may, queue, stops, request, summary, perDay, nobody };
+  return { now, roles, may, queue, stops, request, summary, perDay, nobody, unread: Number(reads.unread || 0) };
 }
 
 /** What a selection of waiting payouts does as one call, or why it cannot be one: the pool's rules (a pool red in the
@@ -361,10 +375,13 @@ export function queueHtml(model) {
     ? `<div class="so-bar"><button type="button" class="so-btn" id="so-approve-sel" disabled>Approve selected (0)</button>`
       + `<span class="so-why" id="so-sel-why">Tick the payouts to approve in one signature.</span></div>`
     : `<p class="so-why">You see the queue to choose a payout to stop. Approving is the pool's approver's.</p>`;
+  const more = model.unread > 0
+    ? `<p class="so-why" id="so-unread">${model.unread} later payout${model.unread === 1 ? " is" : "s are"} not read yet. <button type="button" class="so-btn" id="so-more">Read later payouts</button></p>`
+    : "";
   const head = `<div class="so-colhead so-q"><span>#</span><span>Line</span><span>Payout</span><span>Claimed</span><span>Approval</span><span>Paid no sooner than</span><span>State</span><span></span></div>`;
   const body = queue.length ? queue.map((r) => queueRowHtml(r, may)).join("") : `<p class="so-empty">No payout is waiting.</p>`;
   return `<section class="sp-box so-box" id="queue"><div class="sp-bh"><b>Payout checks · queue in claim order</b>`
-    + `<span>72 h with approval · 7 days at the latest without it</span></div>${bar}${head}${body}`
+    + `<span>72 h with approval · 7 days at the latest without it</span></div>${bar}${head}${body}${more}`
     + `<div class="so-do" id="so-do-queue" role="status"></div></section>`;
 }
 
