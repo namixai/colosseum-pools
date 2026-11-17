@@ -5,7 +5,7 @@
 // what that file answered, and where it places a number on a bar it works from the numbers that file gave.
 import {
   ESTIMATE_NOTE, WHAT_THIS_IS, sizeUnits, pxUnits, sizeText, pxText, usdText, orderPreview, triggerSetPreview, refusalText,
-  bookSides,
+  bookSides, sizeFromUsdc, fillPrice,
 } from "./exam.js";
 
 export { WHAT_THIS_IS, ESTIMATE_NOTE };
@@ -15,6 +15,7 @@ export const SCREEN_TEXT = Object.freeze({
   strip: "Exam",
   testnetPlaque: "Testnet. Mock USDC. Unaudited.",
   testnetTag: "Testnet app",
+  usdcNoPrice: "The price of this asset was not read, so an amount in USDC is off.",
   fillsLater: "Orders fill a few seconds after you send them, at the price of that moment.",
   exit: "To exit a position, send an order yourself, or set a stop or a take on it.",
   gas: "Each order is a transaction: a signature and gas. Or name a second key and trade without prompts.",
@@ -470,6 +471,10 @@ export function journalPlan({ latest, loaded, direction }) {
   return loaded.from <= 0 ? null : { from: Math.max(0, loaded.from - JOURNAL_BLOCKS), to: loaded.from - 1 };
 }
 
+/** Whether there is anything before the blocks loaded: false once the range starts at block 0, and the control that loads
+ *  earlier events is then off. Nothing loaded yet: the first load is open. */
+export const canLoadEarlier = (loaded) => !loaded || loaded.from > 0;
+
 /** What the journal says of itself: only the blocks that were read. */
 export function journalRange(loaded) {
   return loaded ? `Events from block ${loaded.from} to block ${loaded.top}.` : "";
@@ -498,3 +503,100 @@ export function sendFailure(err, refusalOfData) {
 }
 
 export { refusalText };
+
+// ── the market list and the unit of the size ───────────────────────────────────────────────────────────
+
+/** The asset the page's address names (`?asset=<number>`), when the exam trades it; else the exam's first. */
+export function assetFromQuery(query, assets) {
+  const wanted = new URLSearchParams(String(query ?? "")).get("asset");
+  const n = wanted !== null && /^\d+$/.test(wanted) ? Number(wanted) : null;
+  return n !== null && assets.includes(n) ? n : assets[0];
+}
+
+/** The address's query with `asset` set, whatever else it carries kept: what a link to the same market holds. */
+export function queryWithAsset(query, asset) {
+  const q = new URLSearchParams(String(query ?? ""));
+  q.set("asset", String(asset));
+  return q.toString();
+}
+
+/**
+ * The rows of the market list: only the exam's own assets (`assets`, from its `rules()`), each with its name, the
+ * oracle price, the leverage cap of that asset (`rules.assetLeverageX100`, else the account's) and whether a position
+ * is open on it; `query` keeps the names that contain it, in any case. `perAsset` is what the page read of each asset.
+ */
+export function marketRows({ assets, perps, perAsset, rules, query = "" }) {
+  const q = String(query).trim().toLowerCase();
+  return assets.map((asset, i) => {
+    const perp = perps.get(asset);
+    const read = perAsset.find((a) => a.asset === asset);
+    const cap = rules?.assetLeverageX100?.[i] ?? rules?.maxLeverageX100;
+    return {
+      asset, name: perp?.name ?? `#${asset}`,
+      price: read && read.oracle != null && isKnown(perp) ? pxText(read.oracle, perp.szDecimals) : DASH,
+      leverage: cap === undefined || cap === null ? DASH : `${Number(cap) / 100}×`,
+      held: Boolean(read) && BigInt(read.size ?? 0) !== 0n,
+    };
+  }).filter((r) => q === "" || r.name.toLowerCase().includes(q));
+}
+
+/** The highlighted row after a key in the list of `count` rows: the arrows step (and wrap), Home and End jump; -1 for none. */
+export function stepIndex(count, index, key) {
+  if (count <= 0) return -1;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  if (key === "ArrowDown") return index < 0 ? 0 : (index + 1) % count;
+  if (key === "ArrowUp") return index < 0 ? count - 1 : (index - 1 + count) % count;
+  return Math.min(Math.max(index, -1), count - 1);
+}
+
+/** The units a size can be typed in: the asset's own, or USDC. What the browser remembers is one of these two words. */
+export const SIZE_UNITS = Object.freeze(["asset", "usdc"]);
+export const sizeUnitOf = (stored) => (SIZE_UNITS.includes(stored) ? stored : "asset");
+
+/** An amount of USDC typed ("1035.03") in the contract's units, exactly; more than six decimals are refused. */
+export function usdcUnits(text) {
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(String(text).trim());
+  if (!m) throw new Error(`The amount is not a plain positive number: ${text}`);
+  const frac = m[2] ?? "";
+  if (frac.length > 6 && /[1-9]/.test(frac.slice(6))) throw new Error("An amount has at most 6 decimals.");
+  return BigInt(m[1]) * 1_000_000n + BigInt((frac.slice(0, 6) || "0").padEnd(6, "0"));
+}
+
+const fixedSize = (size, perp) => {
+  const [whole, frac = ""] = sizeText(size, perp.szDecimals).split(".");
+  return perp.szDecimals > 0 ? `${whole}.${frac.padEnd(perp.szDecimals, "0")}` : whole;
+};
+
+/**
+ * The size field as the trader typed it, in the asset's units or in USDC, as the asset-unit text the order takes.
+ * In USDC the size is the amount divided at the price the estimate uses for this side (`fillPrice`, the same as "Est.
+ * fill price") and rounded down (`sizeFromUsdc`); the field is off, with the reason, while that price is not read. In the
+ * asset's units the size is as typed and the amount is shown under it. `conv` is the other number, always with a "≈".
+ * Nothing is worked out here but what the library works out.
+ */
+export function sizeEntry(reads, { perp, isBuy, unit, input, prices }) {
+  const text = String(input ?? "").trim();
+  const have = prices.oracle !== null && prices.oracle !== undefined && BigInt(prices.oracle) > 0n;
+  const fill = have ? fillPrice({ isBuy, oracle: prices.oracle, bid: prices.bid, ask: prices.ask, fromBook: Boolean(reads.fromBook), maxWorseBps: reads.maxWorseBps }) : null;
+  const none = { sizeInput: "", error: null, disabled: null, conv: "" };
+  if (!isKnown(perp)) return none;
+  if (unit === "usdc") {
+    if (!fill) return { ...none, disabled: SCREEN_TEXT.usdcNoPrice };
+    if (text === "") return none;
+    try {
+      const size = sizeFromUsdc(usdcUnits(text), fill.px);
+      return { ...none, sizeInput: sizeText(size, perp.szDecimals), conv: `≈ ${fixedSize(size, perp)} ${perp.name}` };
+    } catch (err) {
+      return { ...none, error: err.message };
+    }
+  }
+  if (text === "") return { ...none, sizeInput: "" };
+  let size = null;
+  try {
+    size = sizeUnits(text, perp.szDecimals);
+  } catch {
+    size = null;
+  }
+  return { ...none, sizeInput: text, conv: size !== null && fill ? `≈ ${usdShown(size * fill.px)}` : "" };
+}

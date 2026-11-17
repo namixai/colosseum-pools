@@ -15,6 +15,7 @@ import { sharedView } from "./views/shared.js";
 import { evidenceView } from "./views/evidence.js";
 import { simPoolView } from "./views/simpool.js";
 import { simAdminView } from "./views/simadmin.js";
+import { simTradeView, simExamsView, simPayoutsView } from "./views/simtrader.js";
 import { panelOf } from "./lib/simpanel.js";
 import { examView } from "./views/exam.js";
 
@@ -44,8 +45,11 @@ const routes = [
   // A simulated pool has two panels, and neither links to the other: the trader's page of the pool, and the control
   // panel (the owner's section), which the site's navigation does not name.
   [/^#\/sim\/(0x[0-9a-fA-F]{40})(?:\?(.*))?$/, (m, page) => simPoolView(m[1], m[2], page)],
+  [/^#\/sim\/(0x[0-9a-fA-F]{40})\/trade$/, (m, page) => simTradeView(m[1], page)],
+  [/^#\/sim\/(0x[0-9a-fA-F]{40})\/exams$/, (m, page) => simExamsView(m[1], page)],
+  [/^#\/sim\/(0x[0-9a-fA-F]{40})\/payouts$/, (m, page) => simPayoutsView(m[1], page)],
   [/^#\/manage\/(0x[0-9a-fA-F]{40})$/, (m, page) => simAdminView(m[1], page)],
-  [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => examView(m[1], page)],
+  [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?(?:\?(.*))?$/, (m, page) => examView(m[1], page, m[2])],
   [/^#\/terms$/, (m, page) => termsView(page)],
 ];
 
@@ -104,6 +108,8 @@ function place(y, shown) {
 // The cause is said only when the error shows it (failureHint): a decode error is not a busy RPC. By the time a
 // rate limit reaches here the reads have already waited and asked again (app/lib/gentle.js); the button asks once more.
 function failed(page, err) {
+  // A page that did not load has no panel header to show: the site's own navigation comes back, so the card has some.
+  delete document.body.dataset.panel;
   const hint = failureHint(err);
   render(page, `<section class="card"><h2>Could not load this page</h2><p>${esc(friendly(err))}</p>
     ${hint ? `<p class="muted">${esc(hint)}</p>` : ""}
@@ -132,7 +138,7 @@ function viewFor(hash) {
 
 function route() {
   const hash = location.hash || "#/";
-  // A pool's two panels draw a header and a footer of their own; the site's are hidden for them (app/style.css).
+  // A pool's two panels (and the trading screen of an exam, in the user panel) draw a header and a footer of their own; the site's are hidden for them (app/style.css).
   const panel = panelOf(hash);
   if (panel) document.body.dataset.panel = panel;
   else delete document.body.dataset.panel;
