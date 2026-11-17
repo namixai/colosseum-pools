@@ -16,6 +16,7 @@ import { evidenceView } from "./views/evidence.js";
 import { simPoolView } from "./views/simpool.js";
 import { simAdminView } from "./views/simadmin.js";
 import { panelOf } from "./lib/simpanel.js";
+import { examView } from "./views/exam.js";
 
 const GATE_KEY = "pools-gate-v1";
 
@@ -44,6 +45,7 @@ const routes = [
   // panel (the owner's section), which the site's navigation does not name.
   [/^#\/sim\/(0x[0-9a-fA-F]{40})(?:\?(.*))?$/, (m, page) => simPoolView(m[1], m[2], page)],
   [/^#\/manage\/(0x[0-9a-fA-F]{40})$/, (m, page) => simAdminView(m[1], page)],
+  [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => examView(m[1], page)],
   [/^#\/terms$/, (m, page) => termsView(page)],
 ];
 
