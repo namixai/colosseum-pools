@@ -9,13 +9,13 @@
 //   chart.destroy();                                   // the page was left
 //
 // `node` holds the chart and what is written under it; `bar` is where the interval buttons go; `load(coin, interval,
-// startTime, endTime)` is Hyperliquid's candle request (hl.candles) and answers its raw reply. Nothing is drawn that
+// startTime, endTime, { signal })` is Hyperliquid's candle request (hl.candles) and answers its raw reply. Nothing is drawn that
 // Hyperliquid did not send: when no candles are read the chart is empty and says why.
 import { candleRows } from "../lib/exam.js";
 import { singleFlight } from "../lib/examscreen.js";
 import {
   BAR_INTERVALS, MORE_INTERVALS, DEFAULT_INTERVAL, CANDLES_SHOWN, CANDLES_MORE, UP, DOWN, isInterval,
-  candleWindow, olderWindow, once, pollStep, afterOlder, historyStart, mergeRows, tailRows, toSeries, priceDecimals, candleText,
+  candleWindow, olderWindow, once, pollStep, withTimeout, REQUEST_MS, afterOlder, historyStart, mergeRows, tailRows, toSeries, priceDecimals, candleText,
 } from "../lib/chartdata.js";
 
 const LIBRARY = new URL("../vendor/lightweight-charts/lightweight-charts.standalone.production.js", import.meta.url).href;
@@ -83,6 +83,8 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
     hist: { beforeMs: Infinity, misses: 0, done: true }, run: 0, older: false, retryAt: 0, oracle: null, priceLine: null,
     chart: null, candles: null, volume: null, lib: null, dead: false, timer: null, loading: false, tail: singleFlight(),
   };
+  // Every candle request has a limit on its wait, so a request that never answers is a failed reading, not a stuck one.
+  const ask = (...args) => withTimeout((signal) => load(...args, { signal }), REQUEST_MS);
   // The library is loaded and the chart built once, however many first readings ask while the script is on its way.
   const ready = once(async () => {
     const lib = await library();
@@ -232,7 +234,7 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
       state.volume.setData([]);
       showScale(false);
       const { startTime, endTime } = candleWindow(state.interval, now(), CANDLES_SHOWN);
-      const rows = candleRows(await load(state.coin, state.interval, startTime, endTime));
+      const rows = candleRows(await ask(state.coin, state.interval, startTime, endTime));
       if (state.dead || run !== state.run) return;
       if (!rows.length) {
         say(`Hyperliquid sent no ${state.interval} candles for ${state.coin}.`);
@@ -264,7 +266,7 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
           state.hist = { ...state.hist, done: true };
           break;
         }
-        const got = candleRows(await load(state.coin, state.interval, w.startTime, w.endTime));
+        const got = candleRows(await ask(state.coin, state.interval, w.startTime, w.endTime));
         if (state.dead || run !== state.run) return;
         state.hist = afterOlder(state.hist, w, got);
         if (got.length) {
@@ -295,7 +297,7 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
       const run = state.run;
       const last = state.rows[state.rows.length - 1].time;
       try {
-        const got = candleRows(await load(state.coin, state.interval, last * 1000, now()));
+        const got = candleRows(await ask(state.coin, state.interval, last * 1000, now()));
         if (state.dead || run !== state.run) return;
         const tail = tailRows(state.rows, got);
         if (!tail.length) return;

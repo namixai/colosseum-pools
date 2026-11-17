@@ -116,6 +116,31 @@ export function candleText(c) {
   return `${t} UTC · O ${c.open} H ${c.high} L ${c.low} C ${c.close}`;
 }
 
+/** How long the chart waits for one candle request before it gives up on it. */
+export const REQUEST_MS = 15000;
+
+/**
+ * `call(signal)` with a limit on the wait: when `ms` pass it is aborted through the signal (a call that ignores the
+ * signal is let go of all the same) and the answer is an error that says so, which the chart writes as any other
+ * reason a reading failed. A call that answers in time is returned as it is, and its timer is cleared.
+ */
+export async function withTimeout(call, ms, what = "Hyperliquid") {
+  const control = new AbortController();
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      // The reason is settled first: aborting makes a call that honours the signal fail at once with its own words.
+      reject(Object.assign(new Error(`${what} did not answer within ${Math.round(ms / 1000)} s`), { timedOut: true }));
+      control.abort();
+    }, ms);
+  });
+  try {
+    return await Promise.race([call(control.signal), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** A call made once however many ask while it is on its way: everyone gets the same promise. A failure is not kept, so
  *  the next asking tries again. */
 export function once(fn) {
