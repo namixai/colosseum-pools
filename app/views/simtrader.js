@@ -12,7 +12,7 @@ import { SIM_LINES_ABI } from "../lib/simlines.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { networkMarks } from "../lib/examscreen.js";
 import {
-  ACCOUNT_ABI, SIM_TRADER_ABI, SCAN_WINDOW, SCAN_CALLS, scanPlan, canLookBack, scanNote, candidatesOf, accountRows, lineInfo,
+  ACCOUNT_ABI, SIM_TRADER_ABI, KIND, SCAN_WINDOW, SCAN_CALLS, scanPlan, canLookBack, scanNote, candidatesOf, accountRows, lineInfo,
   tradeTarget, payoutRows, requestable, traderRefusal, remembered, remember, examsHtml, payoutsHtml, noteHtml,
 } from "../lib/simtrader.js";
 import { accountLabel, wireShell } from "./simshell.js";
@@ -114,12 +114,17 @@ async function refreshRows(st) {
   const candidates = candidatesOf(st.events, st.wallet, keptAddresses(st.at, st.wallet));
   const reads = new Map();
   await chain.readAll(candidates, async (c) => {
+    // The pool answers for any address: kind "none" is an address that is no account of this pool, which is no row. A
+    // read that fails is not that answer, and is not taken for it: it is thrown, and the list is not cut short.
+    const a = await st.pool.accountOf(c.address);
+    if (Number(a.kind) === KIND.none) return;
+    const known = { kind: Number(a.kind), line: Number(a.line), done: Boolean(a.done) };
     try {
-      const [a, r] = await Promise.all([st.pool.accountOf(c.address), new ethers.Contract(c.address, ACCOUNT_ABI, chain.readProvider).result()]);
-      reads.set(c.address.toLowerCase(), { kind: Number(a.kind), line: Number(a.line), done: Boolean(a.done),
-        status: Number(r.status), trader: r.trader, passedAt: Number(r.passedAt) });
+      const r = await new ethers.Contract(c.address, ACCOUNT_ABI, chain.readProvider).result();
+      reads.set(c.address.toLowerCase(), { ...known, status: Number(r.status), trader: r.trader, passedAt: Number(r.passedAt) });
     } catch {
-      // an address that is no account of this pool answers nothing: it is not a row
+      // a known account whose own state could not be read stays in the list, marked "Not read"
+      reads.set(c.address.toLowerCase(), { ...known, unread: true, trader: st.wallet });
     }
   });
   st.rows = accountRows({ candidates, reads, wallet: st.wallet, lines: st.lines, now: st.now, fundWindow: st.fundWindow });
@@ -207,7 +212,15 @@ function wireBack(page, st, status, draw) {
       status.textContent = `Could not look: ${friendly(err)}`;
     } finally {
       st.flight = false;
-      await draw();
+      // A page that cannot be drawn again says so, and the button comes back all the same.
+      try {
+        await draw();
+      } catch (err) {
+        status.className = "sp-status err";
+        status.textContent = `Could not refresh: ${friendly(err)}`;
+      } finally {
+        $("#sim-back", page).disabled = !canLookBack(st.loaded, st.floor);
+      }
     }
   });
 }

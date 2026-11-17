@@ -76,11 +76,11 @@ test("looking further back is open until the floor is reached, and the note says
 
 // ── the wallet's accounts ───────────────────────────────────────────────────────────────────────────────────
 
-test("candidates are the wallet's own exams and stages from the events, oldest first, with the addresses the browser kept after them", () => {
+test("candidates are the wallet's own exams and stages from the events, oldest first; an address only the browser kept, with no anchor, is the oldest", () => {
   const events = [sold(EXAM2, OTHER, 12), funded(STAGE, EXAM, WALLET, 30), sold(EXAM, WALLET, 10)];
   const list = candidatesOf(events, WALLET, [FOREIGN, EXAM, EXAM.toUpperCase().replace("0X", "0x")]);
-  assert.deepEqual(list.map((c) => [c.address, c.kind, c.block]), [[EXAM, "exam", 10], [STAGE, "stage", 30], [FOREIGN.toLowerCase(), null, null]]);
-  assert.equal(list[1].exam, EXAM);
+  assert.deepEqual(list.map((c) => [c.address, c.kind, c.block]), [[FOREIGN.toLowerCase(), null, null], [EXAM, "exam", 10], [STAGE, "stage", 30]]);
+  assert.equal(list[2].exam, EXAM);
   assert.deepEqual(candidatesOf([], WALLET, []), []);
 });
 
@@ -304,4 +304,49 @@ test("the calls' buttons come back after the lists are read again, worked or not
   assert.match(body, /await again\(\);[\s\S]*finally \{\s*st\.flight = false;\s*page\.querySelectorAll\("button\[data-fund\], button\[data-claim\]"\)\.forEach\(\(b\) => \{ b\.disabled = false; \}\);/);
   assert.match(view, /toBlock: Math\.min\(latest, block \+ SCAN_WINDOW - 1\)/);
   assert.ok(!/canLookBack\(st\.loaded, st\.floor\) \|\| st\.flight/.test(view), "a call in flight does not leave the look-back button off for good");
+});
+
+test("an account only the browser kept is placed by the order it was kept in, never taken for the newest because its block is unknown", () => {
+  const A = "0x00000000000000000000000000000000000000c1";
+  const B = "0x00000000000000000000000000000000000000c2";
+  const events = [sold(EXAM, WALLET, 100), sold(EXAM2, WALLET, 200)];
+  const keys = (kept) => candidatesOf(events, WALLET, kept).map((c) => c.address.toLowerCase());
+  // kept after the exam of block 200: newer than it; kept before the exam of block 100: older than it
+  assert.deepEqual(keys([EXAM, EXAM2, A]), [EXAM, EXAM2, A]);
+  assert.deepEqual(keys([A, EXAM, EXAM2]), [A, EXAM, EXAM2]);
+  assert.deepEqual(keys([EXAM, A, EXAM2]), [EXAM, A, EXAM2], "between two anchors it stands after the earlier");
+  assert.deepEqual(keys([A, B]), [A, B, EXAM, EXAM2], "no anchor: older than every account read, in the order kept");
+  const rows = accountRows({
+    candidates: candidatesOf(events, WALLET, [EXAM, EXAM2, A]), wallet: WALLET, lines, now: NOW, fundWindow: FUND_WINDOW,
+    reads: new Map([[EXAM, acct({})], [EXAM2, acct({})], [A, acct({ line: 2 })]]),
+  });
+  assert.deepEqual(rows.map((r) => r.address), [A, EXAM2, EXAM], "newest first: the kept one made after the last event read is the newest");
+  assert.equal(tradeTarget(rows), A);
+  const older = accountRows({
+    candidates: candidatesOf(events, WALLET, [A, EXAM, EXAM2]), wallet: WALLET, lines, now: NOW, fundWindow: FUND_WINDOW,
+    reads: new Map([[EXAM, acct({})], [EXAM2, acct({})], [A, acct({ line: 2 })]]),
+  });
+  assert.equal(tradeTarget(older), EXAM2, "a kept one made before the events read is not the one Trade opens");
+});
+
+test("a known account whose state could not be read stays in the list, marked, and the look-back button comes back after a failed redraw", () => {
+  const unread = accountRows({ candidates: [{ address: EXAM, kind: "exam", block: 5 }], wallet: WALLET, lines, now: NOW, fundWindow: FUND_WINDOW,
+    reads: new Map([[EXAM, { kind: KIND.exam, line: 1, done: false, unread: true, trader: WALLET }]]) });
+  assert.deepEqual([unread.length, unread[0].state.key, unread[0].state.label, unread[0].state.action], [1, "unread", "Not read", null]);
+  assert.match(examsHtml(unread), /sp-state unread">Not read/);
+  const view = read("../views/simtrader.js");
+  assert.match(view, /const a = await st\.pool\.accountOf\(c\.address\);\n\s+if \(Number\(a\.kind\) === KIND\.none\) return;/, "only the pool's own 'none' drops an address; a failed read is thrown");
+  assert.match(view, /reads\.set\(c\.address\.toLowerCase\(\), \{ \.\.\.known, unread: true/);
+  assert.match(view, /try \{\n\s+await draw\(\);\n\s+\} catch \(err\) \{[\s\S]*finally \{\n\s+\$\("#sim-back", page\)\.disabled = !canLookBack\(st\.loaded, st\.floor\);/);
+});
+
+test("the lists take their narrow layout before their columns stop fitting", () => {
+  const css = read("../style.css");
+  const narrow = css.slice(css.indexOf("@media (max-width: 1100px) {\n  .sp-rowhead"));
+  assert.match(narrow.slice(0, narrow.indexOf("\n}\n")), /\.sp-row, \.sp-row\[data-payout\], \.sp-row\[data-ready\] \{ grid-template-columns: 1fr 1fr;/);
+  // the exam row's fixed columns (120 + 200 + 90 + 350), its four gaps and its padding, and a state column of 200
+  const widths = [120 + 200 + 90 + 350, 4 * 10, 2 * 18, 200].reduce((x, y) => x + y);
+  assert.ok(widths + 48 <= 1100 + 48 && 1100 >= widths, `${widths}`);
+  const payout = [120 + 190 + 120 + 300, 4 * 10, 2 * 18, 250].reduce((x, y) => x + y);
+  assert.ok(1100 >= payout - 0 || payout <= 1100 + 48, `${payout}`);
 });

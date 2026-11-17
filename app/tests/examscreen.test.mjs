@@ -467,7 +467,10 @@ test("the journal's button that loads earlier events is off once the range start
 test("the trading screen stands in the user panel's header for an exam of a pool of exams, and in the site's for any other", () => {
   const view = read("../views/exam.js");
   assert.match(view, /userHeaderHtml\(\{ address: panelPool, account: accountLabel\(\), current: "trade"/);
-  assert.match(view, /if \(!panelPool\) leavePanel\(\);/);
+  assert.match(view, /if \(!panelPool\) leavePanel\(page\);/);
+  assert.match(view, /const leavePanel = \(page\) => \{ if \(page\.isConnected\) delete document\.body\.dataset\.panel; \};/, "a left-behind view does not clear the marker of the page now on screen");
+  assert.ok(view.indexOf("if (!page.isConnected) return;") < view.indexOf("if (!panelPool) leavePanel(page);"));
+  assert.match(read("../app.js"), /function failed\(page, err\) \{[^}]*delete document\.body\.dataset\.panel;/, "a page that did not load gets the site's navigation back");
   assert.match(view, /accountOf\(address\)/);
   // the panel's header and footer carry the testnet tag and badge, so the screen's own are drawn only outside the panel
   assert.match(view, /marks && !st\.panelPool \? `<span class="ex-tag">/);

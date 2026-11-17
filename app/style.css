@@ -451,7 +451,7 @@ body[data-panel] main { max-width: 1312px; padding: 0 24px 40px; }
 .sp-act:disabled { background: repeating-linear-gradient(-45deg, rgba(233,197,124,.55) 0 6px, rgba(233,197,124,.2) 6px 12px); border-style: dashed; cursor: not-allowed; opacity: 1; }
 .sp-state.running, .sp-state.passed, .sp-state.paid { background: var(--sky); color: var(--navy); } .sp-state.ready, .sp-state.approved { background: var(--sun); color: var(--ink); }
 .sp-state.waiting { border: 1px solid var(--navy); color: var(--navy); }
-.sp-state.failed, .sp-state.expired, .sp-state.lapsed, .sp-state.stopped, .sp-state.held { border: 1px dashed var(--mute); color: var(--ink); background: rgba(233,197,124,.25); }
+.sp-state.unread, .sp-state.failed, .sp-state.expired, .sp-state.lapsed, .sp-state.stopped, .sp-state.held { border: 1px dashed var(--mute); color: var(--ink); background: rgba(233,197,124,.25); }
 .sp-empty { margin: 0; padding: 22px 18px; font: 500 14px var(--mono); color: var(--navy); }
 .sp-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; font: 500 12.5px var(--mono); color: var(--navy); margin: 0 0 6px; }
 .ex-wrap > .sp > .ex-page { margin-top: 16px; }
@@ -464,6 +464,10 @@ body[data-panel] main { max-width: 1312px; padding: 0 24px 40px; }
   .sp-four { grid-template-columns: 1fr 1fr; } .sp-four > div { border-bottom: 1px solid var(--rule); }
   .sp-swrow { grid-template-columns: 1fr 1fr; } .sp-swsize, .sp-st { grid-column: 1 / -1; }
   .sp-disc { font-size: 16px; } .sp-sig { margin-left: 0; }
+}
+
+/* The lists give up their columns before the columns stop fitting: the exam row needs about 1040px, the payout row 1060px. */
+@media (max-width: 1100px) {
   .sp-rowhead { display: none; }
   .sp-row, .sp-row[data-payout], .sp-row[data-ready] { grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 14px 14px; }
   .sp-c.sz { font-size: 22px; } .sp-c[data-l]:before { content: attr(data-l); display: block; font: 500 10px var(--mono); letter-spacing: 1.1px; text-transform: uppercase; color: var(--mute); margin-bottom: 2px; }

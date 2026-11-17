@@ -108,6 +108,8 @@ function place(y, shown) {
 // The cause is said only when the error shows it (failureHint): a decode error is not a busy RPC. By the time a
 // rate limit reaches here the reads have already waited and asked again (app/lib/gentle.js); the button asks once more.
 function failed(page, err) {
+  // A page that did not load has no panel header to show: the site's own navigation comes back, so the card has some.
+  delete document.body.dataset.panel;
   const hint = failureHint(err);
   render(page, `<section class="card"><h2>Could not load this page</h2><p>${esc(friendly(err))}</p>
     ${hint ? `<p class="muted">${esc(hint)}</p>` : ""}

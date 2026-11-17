@@ -77,13 +77,23 @@ export function scanNote(loaded, floor = 0) {
 export function candidatesOf(events, wallet, kept = []) {
   const mine = (a) => String(a ?? "").toLowerCase() === String(wallet).toLowerCase();
   const found = [
-    ...soldExams(events).filter((x) => mine(x.trader)).map((x) => ({ address: x.exam, kind: "exam", block: x.block })),
-    ...stages(events).filter((x) => mine(x.trader)).map((x) => ({ address: x.stage, kind: "stage", exam: x.exam, block: x.block })),
-  ].sort((a, b) => a.block - b.block);
-  const seen = new Set(found.map((c) => c.address.toLowerCase()));
-  const extra = [...new Set(kept.map((a) => String(a).toLowerCase()))].filter((a) => !seen.has(a))
-    .map((address) => ({ address, kind: null, block: null }));
-  return [...found, ...extra];
+    ...soldExams(events).filter((x) => mine(x.trader)).map((x) => ({ address: x.exam, kind: "exam", block: x.block, key: x.block })),
+    ...stages(events).filter((x) => mine(x.trader)).map((x) => ({ address: x.stage, kind: "stage", exam: x.exam, block: x.block, key: x.block })),
+  ];
+  const blockOf = new Map(found.map((c) => [c.address.toLowerCase(), c.block]));
+  // The browser keeps its addresses in the order it saw them made (oldest first). One no event named has no block, but
+  // it stands after the nearest kept address that has one (made after it), else before the nearest later one, else before
+  // every account read: it is never taken for the newest only because its block is unknown.
+  const order = [...new Set(kept.map((a) => String(a).toLowerCase()))];
+  const extra = [];
+  order.forEach((address, i) => {
+    if (blockOf.has(address)) return;
+    let key = null;
+    for (let j = i - 1; j >= 0 && key === null; j--) if (blockOf.has(order[j])) key = blockOf.get(order[j]) + (i - j) / 1000;
+    for (let j = i + 1; j < order.length && key === null; j++) if (blockOf.has(order[j])) key = blockOf.get(order[j]) - (j - i) / 1000;
+    extra.push({ address, kind: null, block: null, key: key ?? -1 + i / 1000 });
+  });
+  return [...found, ...extra].sort((a, b) => a.key - b.key);
 }
 
 /** The addresses a browser keeps of the wallet's accounts in a pool, from what its storage holds (JSON text, or null):
@@ -121,6 +131,7 @@ export function span(seconds) {
 export function accountState(read, { now, fundWindow }) {
   const status = STATUS[Number(read.status)] ?? "none";
   const stage = Number(read.kind) === KIND.stage;
+  if (read.unread) return { key: "unread", label: "Not read", note: "This account could not be read from the chain just now. Try again.", action: null };
   if (status === "active") return { key: "running", label: "Running", note: "", action: null };
   if (status === "breached") return { key: "failed", label: "Not passed", note: "A rule of the account was broken.", action: null };
   if (status === "expired") return { key: "expired", label: "Expired", note: "Its time ran out.", action: null };
@@ -161,10 +172,10 @@ export function accountRows({ candidates, reads, wallet, lines, now, fundWindow 
     const state = accountState({ ...r, funded: funded.has(c.address.toLowerCase()) ? true : undefined }, { now, fundWindow });
     rows.push({
       address: c.address, kind: stage ? "stage" : "exam", step: stage ? "Stage" : "Exam", line: Number(r.line),
-      size: line.size, tier: line.tier, state, block: c.block, href: `#/exam/${c.address}`,
+      size: line.size, tier: line.tier, state, block: c.block, key: c.key ?? c.block ?? -1, href: `#/exam/${c.address}`,
     });
   }
-  return rows.sort((a, b) => (b.block ?? Infinity) - (a.block ?? Infinity));
+  return rows.sort((a, b) => b.key - a.key);
 }
 
 /** The pool's menu as the lists need it: each line's size and tier, in the pool's order (`menu()` and `tiers()`). */

@@ -61,11 +61,11 @@ async function simPoolOf(address) {
 }
 
 /** The site's own header and footer come back: this page is not drawn in the user panel. */
-const leavePanel = () => { delete document.body.dataset.panel; };
+const leavePanel = (page) => { if (page.isConnected) delete document.body.dataset.panel; };
 
 export async function examView(address, page, query = "") {
   if (!isAddress(address)) {
-    leavePanel();
+    leavePanel(page);
     render(page, `<section class="card narrow"><h2>Exam</h2>
       <p>${esc(WHAT_THIS_IS)}</p>
       <p>Open the page from the exam's address:</p>
@@ -74,7 +74,7 @@ export async function examView(address, page, query = "") {
     return;
   }
   if ((await chain.readProvider.getCode(address)) === "0x") {
-    leavePanel();
+    leavePanel(page);
     render(page, `<section class="card narrow"><h2>Exam</h2><p>There is no contract at this address on the network this page reads.</p>
       <p><a href="#/exam">Back</a></p></section>`);
     return;
@@ -86,7 +86,9 @@ export async function examView(address, page, query = "") {
   const ds = dataSource({ chainId }, CONFIG);
   const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(), simPoolOf(address)]);
   // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
-  if (!panelPool) leavePanel();
+  // This continuation may have been left behind by a page change: only the page on screen touches the page-wide marker.
+  if (!page.isConnected) return;
+  if (!panelPool) leavePanel(page);
   const assets = [...rules.assets].map(Number);
   const perps = new Map();
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
