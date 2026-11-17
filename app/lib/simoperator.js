@@ -417,10 +417,20 @@ export function queueHtml(model) {
     ? `<p class="so-why" id="so-unread">${model.unread} later payout${model.unread === 1 ? " is" : "s are"} not read yet. <button type="button" class="so-btn" id="so-more">Read later payouts</button></p>`
     : "";
   const head = `<div class="so-colhead so-q"><span>#</span><span>Line</span><span>Payout</span><span>Claimed</span><span>Approval</span><span>Paid no sooner than</span><span>State</span><span></span></div>`;
-  const body = queue.length ? queue.map((r) => queueRowHtml(r, may)).join("") : `<p class="so-empty">No payout is waiting.</p>`;
+  const body = queue.length ? queue.map((r) => queueRowHtml(r, may)).join("")
+    : `<p class="so-empty">${model.unreadPayouts?.length ? "No payout is waiting among those read." : "No payout is waiting."}</p>`;
   return `<section class="sp-box so-box" id="queue"><div class="sp-bh"><b>Payout checks · queue in claim order</b>`
-    + `<span>72 h with approval · 7 days at the latest without it</span></div>${bar}${head}${body}${more}`
+    + `<span>72 h with approval · 7 days at the latest without it</span></div>${bar}${unreadHtml(model)}${head}${body}${more}`
     + `<div class="so-do" id="so-do-queue" role="status"></div></section>`;
+}
+
+/** What the page says of payouts the node gave no answer for: they are named, never dropped. */
+export function unreadHtml(model) {
+  const list = model.unreadPayouts ?? [];
+  if (list.length === 0) return "";
+  const them = list.length === 1 ? "it" : "them";
+  const stops = model.may.seeStops ? "; a stop among them is not shown" : "";
+  return `<p class="so-why so-warn" id="so-unread-payouts">${list.length} payout${list.length === 1 ? "" : "s"} could not be read (${esc(list.map(idText).join(", "))})${stops}. Reload the page to read ${them} again.</p>`;
 }
 
 /** The stop form: the four reasons with what each needs, the fields, and what the call will do. */
@@ -463,10 +473,7 @@ export function stopsHtml(model) {
   const { may, stops } = model;
   const head = `<div class="so-colhead so-s"><span>#</span><span>Line</span><span>Payout kept</span><span>Reason</span><span>Can be lifted until</span><span></span></div>`;
   const body = stops.length ? stops.map((s) => stopRowHtml(s, may)).join("") : `<p class="so-empty">No payout is stopped.</p>`;
-  const missing = model.unreadPayouts?.length
-    ? `<p class="so-why so-warn" id="so-unread-payouts">${model.unreadPayouts.length} payout${model.unreadPayouts.length === 1 ? "" : "s"} could not be read (${model.unreadPayouts.map(idText).join(", ")}); a stop among them is not shown. Reload the page to read ${model.unreadPayouts.length === 1 ? "it" : "them"} again.</p>`
-    : "";
-  const scan = missing + (model.stopScan
+  const scan = (model.stopScan
     ? `<p class="so-why" id="so-stop-scan">${esc(model.stopScan.note)}${model.stopScan.done ? "" : ` <button type="button" class="so-btn" id="so-stops-more">Read earlier stops</button>`}</p>`
     : "");
   return `<section class="sp-box so-box" id="stops"><div class="sp-bh"><b>Stops</b><span>lift within 14 days · then anyone makes it final</span></div>${head}${body}${scan}`

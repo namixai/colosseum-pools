@@ -20,6 +20,8 @@ import { panelOf } from "../lib/simpanel.js";
 import { keccak256 } from "./keccak.mjs";
 import { payoutRange, PAYOUT_WINDOW, STOP_LOOKBACK, stopIdsFromEvents, stopScanNote, stopsHtml } from "../lib/simoperator.js";
 import { createConfirm, createPending } from "../lib/simconfirm.js";
+import { newScan, scanStops, planRanges, isDone, serial, addLogs, BATCH, WINDOW } from "../lib/stopscan.js";
+import { queueHtml, unreadHtml } from "../lib/simoperator.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (...p) => readFileSync(join(ROOT, ...p), "utf8");
@@ -498,7 +500,6 @@ test("the stops list says how far the events were read, and offers more until th
 
 test("the events are read within the node's limits, the last 14 days only, and a failed search keeps the page", () => {
   const scan = read("app", "views", "simstopscan.js");
-  assert.match(scan, /const WINDOW = 1000;/);
   assert.match(scan, /iface\.getEvent\("PayoutStopped"\)\.topicHash/);
   assert.match(scan, /Number\(now\) - STOP_RESERVE - MARGIN/);
   const view = read("app", "views", "simoperator.js");
@@ -529,9 +530,18 @@ test("a hole in the window of payouts is named, never a crash and never a silent
     reads: { ...reads(), payouts: [rows[0], null, rows[2], undefined], firstId: 10, reasons: new Map(), accountLines: new Map() } });
   assert.deepEqual(m.unreadPayouts, [11, 13]);
   assert.deepEqual(m.queue.map((r) => r.id), [10, 12], "the ones read are in the queue under their own numbers");
-  const html = stopsHtml(m);
-  assert.match(html, /id="so-unread-payouts">2 payouts could not be read \(#0011, #0013\); a stop among them is not shown\. Reload the page/);
-  assert.doesNotMatch(stopsHtml(model(["checker"])), /so-unread-payouts/);
+  // the checker's queue says so, and that a stop among them is not shown
+  assert.match(queueHtml(m), /id="so-unread-payouts">2 payouts could not be read \(#0011, #0013\); a stop among them is not shown\. Reload the page/);
+  assert.doesNotMatch(queueHtml(model(["checker"])), /so-unread-payouts/);
+  // the approver sees it too, in the queue, and not the words about stops
+  const approver = operatorModel({ pool: POOL, roles: ["approver"], keccak256,
+    reads: { ...reads(), payouts: [rows[0], null], firstId: 10, reasons: new Map(), accountLines: new Map() } });
+  assert.match(queueHtml(approver), /1 payout could not be read \(#0011\)\. Reload the page to read it again\./);
+  assert.doesNotMatch(unreadHtml(approver), /stop/);
+  // and a queue that is empty because of it does not say that nothing is waiting
+  const empty = operatorModel({ pool: POOL, roles: ["approver"], keccak256, reads: { ...reads(), payouts: [null], firstId: 0, reasons: new Map(), accountLines: new Map() } });
+  assert.match(queueHtml(empty), /No payout is waiting among those read\./);
+  assert.doesNotMatch(queueHtml(model(["approver"], { payouts: [] })), /among those read/);
 });
 
 test("an event without its id names no stop", () => {
@@ -539,14 +549,80 @@ test("an event without its id names no stop", () => {
     { name: "PayoutStopped", args: { id: 0 } }]), [0]);
 });
 
-test("the events are asked for a few windows at a time, and a cursor moves only past a batch read whole", () => {
+test("the events are asked for a few windows at a time, and the view hands them to the scanner", () => {
   const scan = read("app", "views", "simstopscan.js");
-  assert.match(scan, /export const BATCH = 3;/);
-  assert.match(scan, /await Promise\.all\(batch\.map\(\(\[from, to\]\) => window_\(address, st, from, to\)\)\);\s*done\(batch\);/);
-  assert.match(scan, /st\.latest = batch\[batch\.length - 1\]\[1\]/);
-  assert.match(scan, /st\.back = batch\[batch\.length - 1\]\[0\] - 1/);
-  assert.match(scan, /l\.topics\.length < 2\) continue;/, "a log without the stop's id is skipped");
+  assert.match(scan, /scanStops\(st, \{ read,/);
+  assert.match(scan, /serial\(locks, address\.toLowerCase\(\)/, "one reading of a pool at a time");
+  assert.match(scan, /Number\(now\) - STOP_RESERVE - MARGIN/);
+  assert.match(read("app", "lib", "stopscan.js"), /export const BATCH = 3;/);
+  assert.match(read("app", "lib", "stopscan.js"), /export const WINDOW = 1000;/);
   const view = read("app", "views", "simoperator.js");
   assert.match(view, /pool\.payout\(id\)\.catch\(\(\) => null\)/);
   assert.match(view, /payouts\[i\] && \[2, 5\]\.includes/);
+  assert.match(view, /more\.disabled = true;/, "the button is off while a search runs");
+});
+
+// ── the scanner: batches, failures, one at a time ──────────────────
+
+const log = (block, id, index = 0) => ({ blockNumber: block, index, topics: ["0xtopic", `0x${id.toString(16).padStart(64, "0")}`] });
+
+test("windows are planned from the cursors, at most three asked at once", async () => {
+  const st = newScan({ floor: 0, latest: 10_000 });
+  st.head = 12_500;
+  const plan = planRanges(st, { forward: 8, backward: 4 });
+  assert.deepEqual(plan.ahead, [[10_001, 11_000], [11_001, 12_000], [12_001, 12_500]]);
+  assert.deepEqual(plan.behind, [[9_001, 10_000], [8_001, 9_000], [7_001, 8_000], [6_001, 7_000]]);
+  let live = 0;
+  let most = 0;
+  const read = async () => { live += 1; most = Math.max(most, live); await new Promise((r) => setTimeout(r, 1)); live -= 1; return []; };
+  await scanStops(st, { read, forward: 8, backward: 9 });
+  assert.equal(most, BATCH, "never more than three at once");
+  assert.equal(st.latest, 12_500);
+  assert.equal(st.back, 10_000 - 9 * WINDOW);
+});
+
+test("a batch that fails keeps the stops found before it, and its blocks are asked for again", async () => {
+  const st = newScan({ floor: 0, latest: 20_000 });
+  // the first press finds stop #3 in the window just below the newest block
+  const first = await scanStops(st, { read: async (from) => (from === 19_001 ? [log(19_500, 3)] : []), forward: 0, backward: 3 });
+  assert.equal(first.failure, null);
+  assert.deepEqual(stopIdsFromEvents([...st.events.values()]), [3]);
+  const backAfterFirst = st.back;
+  // the second press: its batch fails
+  const boom = new Error("node refused");
+  const second = await scanStops(st, { read: async (from) => { if (from === backAfterFirst - 2 * WINDOW + 1) throw boom; return [log(backAfterFirst - 1, 4)]; }, forward: 0, backward: 3 });
+  assert.equal(second.failure, boom);
+  assert.deepEqual(stopIdsFromEvents([...st.events.values()]), [3], "#3 is still found, and nothing of the failed batch is kept");
+  assert.equal(st.back, backAfterFirst, "the cursor did not pass the failed batch");
+  assert.equal(isDone(st), false);
+  // the third press asks for the same blocks again and goes on
+  const asked = [];
+  const third = await scanStops(st, { read: async (from, to) => { asked.push([from, to]); return []; }, forward: 0, backward: 3 });
+  assert.equal(third.failure, null);
+  assert.deepEqual(asked[0], [backAfterFirst - WINDOW + 1, backAfterFirst]);
+  assert.ok(st.back < backAfterFirst);
+});
+
+test("a log without the stop's id is skipped, and the end of the 14 days is the end", async () => {
+  const st = newScan({ floor: 18_500, latest: 20_000 });
+  addLogs(st, [{ blockNumber: 1, index: 0 }, { blockNumber: 2, index: 0, topics: ["0xt"] }, null, log(19_900, 7)]);
+  assert.deepEqual(stopIdsFromEvents([...st.events.values()]), [7]);
+  await scanStops(st, { read: async () => [], forward: 0, backward: 5 });
+  assert.equal(st.back, 18_499);
+  assert.equal(isDone(st), true);
+  assert.equal(isDone({ ...st, head: 20_050 }), false, "blocks not yet read are not 'done'");
+});
+
+test("readings of one pool go one at a time", async () => {
+  const locks = new Map();
+  const order = [];
+  const job = (name, ms, fail = false) => async () => { order.push(`${name} start`); await new Promise((r) => setTimeout(r, ms)); order.push(`${name} end`); if (fail) throw new Error(name); return name; };
+  const a = serial(locks, "pool", job("a", 20, true));
+  const b = serial(locks, "pool", job("b", 1));
+  const other = serial(locks, "other", job("c", 1));
+  await assert.rejects(a, /a/);
+  assert.equal(await b, "b");
+  await other;
+  assert.deepEqual(order.filter((x) => /^[ab]/.test(x)), ["a start", "a end", "b start", "b end"], "b waits for a, even when a failed");
+  assert.ok(order.indexOf("c start") < order.indexOf("a end"), "another pool is not held up");
 });

@@ -295,9 +295,12 @@ function wire(page, at, model) {
     else twoStep(button, "stops", finalizeWords(stop), `final #${id}`, call, (c) => c.finalizeStop(id), "Stop made final");
   });
   $("#stops", page)?.addEventListener("click", (e) => {
-    if (!e.target.closest("#so-stops-more") || pending.active) return;
+    const more = e.target.closest("#so-stops-more");
+    if (!more || pending.active || more.disabled) return;
+    // One search at a time: the button is off until the page is drawn again, and the readings of a pool go one at a time.
+    more.disabled = true;
     moreStops.set(at, MORE_CALLS);
-    simOperatorView(at, page).catch((err) => say(boxOf("stops"), `Could not read more: ${friendly(err)}`));
+    simOperatorView(at, page).catch((err) => { more.disabled = false; say(boxOf("stops"), `Could not read more: ${friendly(err)}`); });
   });
   $("#requests", page)?.addEventListener("click", (e) => {
     const button = e.target.closest("button[data-cancel]");
