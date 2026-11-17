@@ -1,6 +1,6 @@
 // What the paper-exam trading page (app/views/exam.js) works out that is not drawing: the reads it hands to
 // app/lib/exam.js, the words beside each number, the form's input turned into an order, the scale of the account, the
-// journal's rows and the chart's geometry. No browser globals and no reads here, so node's test runner loads it
+// journal's rows and the book's rows. No browser globals and no reads here, so node's test runner loads it
 // (app/tests/examscreen.test.mjs). Every sum of money is app/lib/exam.js's: this file adds nothing up, it only says
 // what that file answered, and where it places a number on a bar it works from the numbers that file gave.
 import {
@@ -32,23 +32,8 @@ export const SCREEN_TEXT = Object.freeze({
   lapsed: "Not filled. The order lapsed at no cost — place it again.",
 });
 
-/** The candle intervals the chart offers, with the length of one candle in milliseconds. */
-export const INTERVALS = Object.freeze([
-  { key: "1m", ms: 60_000 },
-  { key: "15m", ms: 15 * 60_000 },
-  { key: "1h", ms: 60 * 60_000 },
-  { key: "1d", ms: 24 * 60 * 60_000 },
-]);
-export const CANDLES_SHOWN = 120;
 /** The depth of the book the page draws, a side. */
 export const BOOK_DEPTH = 10;
-
-/** The `startTime` and `endTime` (ms) of a candle request for `interval`: the last `count` candles up to `nowMs`. */
-export function candleWindow(interval, nowMs, count = CANDLES_SHOWN) {
-  const step = INTERVALS.find((i) => i.key === interval);
-  if (!step) throw new Error(`${interval} is not an interval of the chart`);
-  return { startTime: nowMs - step.ms * count, endTime: nowMs };
-}
 
 /** USDC units as a dollar amount for the screen: the library's text (`usdText`) with thousands grouped and at least two
  *  decimals. Nothing is rounded: more decimals than two stay. */
@@ -327,55 +312,6 @@ export function bookView(raw, depth = BOOK_DEPTH) {
     spreadAbs: b.bestBid === null || b.bestAsk === null ? "—" : String(Number((b.bestAsk - b.bestBid).toFixed(6))),
     mid: b.mid, empty: b.bids.length === 0 && b.asks.length === 0,
   };
-}
-
-// ── the chart ───────────────────────────────────────────────────
-
-/** Round tick prices between `min` and `max`, about `count` of them. */
-export function niceTicks(min, max, count = 5) {
-  if (!(max > min)) return [min];
-  const rough = (max - min) / count;
-  const mag = 10 ** Math.floor(Math.log10(rough));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= rough) ?? 10 * mag;
-  const ticks = [];
-  for (let t = Math.ceil(min / step) * step; t <= max + step * 1e-9; t += step) ticks.push(Number(t.toPrecision(12)));
-  return ticks;
-}
-
-/**
- * Where each candle goes on a canvas of `width` by `height` pixels: the price range with a little air, a function
- * from a price to a y and from an index to an x, and the width of a body. The right edge keeps `axis` pixels for
- * the prices written there.
- */
-export function chartScale(rows, { width, height, axis = 64, top = 8, bottom = 22 }) {
-  if (!rows.length) return null;
-  let min = Infinity;
-  let max = -Infinity;
-  for (const c of rows) {
-    if (c.low < min) min = c.low;
-    if (c.high > max) max = c.high;
-  }
-  const air = (max - min || max * 0.01) * 0.06;
-  min -= air;
-  max += air;
-  const plotW = Math.max(1, width - axis);
-  const plotH = Math.max(1, height - top - bottom);
-  const slot = plotW / rows.length;
-  return {
-    min, max, plotW, plotH, slot, top, axis,
-    body: Math.max(1, Math.min(14, slot * 0.7)),
-    x: (i) => slot * (i + 0.5),
-    y: (price) => top + ((max - price) / (max - min)) * plotH,
-    index: (x) => Math.max(0, Math.min(rows.length - 1, Math.floor(x / slot))),
-    ticks: niceTicks(min, max, Math.max(2, Math.floor(plotH / 48))),
-  };
-}
-
-/** The candle under the pointer, in words: its time (UTC) and open, high, low, close. */
-export function candleText(c) {
-  if (!c) return "";
-  const t = new Date(c.time * 1000).toISOString().replace("T", " ").slice(0, 16);
-  return `${t} UTC · O ${c.open} H ${c.high} L ${c.low} C ${c.close}`;
 }
 
 // ── the journal ─────────────────────────────────────────────────

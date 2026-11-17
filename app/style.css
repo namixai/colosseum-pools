@@ -446,6 +446,7 @@ body[data-panel] main { max-width: 1312px; padding: 0 24px 40px; }
   .sp-four { grid-template-columns: 1fr 1fr; } .sp-four > div { border-bottom: 1px solid var(--rule); }
   .sp-swrow { grid-template-columns: 1fr 1fr; } .sp-swsize, .sp-st { grid-column: 1 / -1; }
   .sp-disc { font-size: 16px; } .sp-sig { margin-left: 0; }
+}
 
 /* The trading page of an exam (#/exam/<address>), after the approved layout: chart | book | order column, the tabs of
    positions and journal under the chart and the book. Its own colours (paper, ink, navy, sea; buy blue, sell orange)
@@ -486,13 +487,17 @@ main:has(> .ex-page) { max-width: 1440px; padding-left: 12px; padding-right: 12p
 .ex-sel select { font: 700 20px var(--font); border: 1.5px solid var(--navy); padding: 6px 10px; }
 .ex-px b { font: 700 24px var(--mono); letter-spacing: -.02em; }
 .ex-px span { display: block; font: 500 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--mute); }
-.ex-iv { display: flex; gap: 4px; }
-.ex-iv button { font: 600 12px var(--mono); padding: 5px 9px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
-.ex-iv button.on { background: var(--navy); color: #fff; border-color: var(--navy); }
+.ex-iv { display: flex; flex-wrap: wrap; gap: 4px; }
+.ex-iv button, .ex-iv select { font: 600 12px var(--mono); padding: 5px 9px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+.ex-iv button.on, .ex-iv select.on { background: var(--navy); color: #fff; border-color: var(--navy); }
 .ex-cap { margin-left: auto; font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--navy); background: var(--sky); padding: 3px 8px; white-space: nowrap; }
-.ex-cw { position: relative; height: 420px; margin: 8px 6px 0 10px; }
-.ex-cw canvas { position: absolute; inset: 0; display: block; }
-.ex-hover { margin: 4px 12px 8px; min-height: 1.4em; font: 500 11px var(--mono); color: var(--mute); }
+.ex-cw { margin: 8px 6px 0 10px; min-width: 0; }
+.ex-cv { position: relative; height: 420px; min-width: 0; overflow: hidden; }
+.ex-empty { position: absolute; z-index: 3; top: 10px; left: 12px; right: 12px; margin: 0; font: 500 12px var(--mono); color: var(--mute); }
+.ex-empty[hidden] { display: none; }
+.ex-hover { margin: 4px 6px 0; min-height: 1.4em; font: 500 11px var(--mono); color: var(--mute); overflow-wrap: anywhere; }
+.ex-attr { margin: 0 6px 8px; font: 500 10.5px var(--mono); color: var(--mute); overflow-wrap: anywhere; }
+.ex-attr a { color: inherit; }
 .ex-ph { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--ink); }
 .ex-ph b { font: 700 16px var(--font); }
 .ex-ph .ex-cap { font-size: 10px; }
@@ -617,7 +622,7 @@ table.ex-jr td, table.ex-jr th { padding: 7px 12px; font-size: 12px; }
   .ex-phtabs button.on { background: var(--navy); color: #fff; }
   .ex-term[data-phone="chart"] .ex-book { display: none; }
   .ex-term[data-phone="book"] .ex-chart { display: none; }
-  .ex-cw { height: 260px; }
+  .ex-cv { height: 300px; }
   .ex-cap { margin-left: 0; }
   .ex-line { flex-basis: 100%; order: 5; }
   .ex-steps { order: 6; }

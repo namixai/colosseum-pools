@@ -8,8 +8,8 @@ import {
   WHAT_THIS_IS, ESTIMATE_NOTE, FROM_START, TRAILING_TO_START, REFUSALS, examAccount, refusalText, dataSource,
 } from "../lib/exam.js";
 import {
-  SCREEN_TEXT, INTERVALS, candleWindow, readsFrom, accountFigures, positionRow, triggerText, pendingText, barShare,
-  accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, niceTicks, chartScale, candleText,
+  SCREEN_TEXT, readsFrom, accountFigures, positionRow, triggerText, pendingText, barShare,
+  accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView,
   journalRows, timeLeft, sendFailure, leverageText, usdShown, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange,
 } from "../lib/examscreen.js";
 
@@ -82,12 +82,6 @@ test("the figures are the library's, said with its formatters; the loss line is 
   assert.equal(trailing.lines[0].at, "$9,600.00", "the highest snapshot less the same allowance");
   const days = accountFigures(examAccount(reads({ terms: Object.assign([...got().terms], { ...got().terms, minTradingDays: 3n }) }), AT));
   assert.equal(days.days, "0 of 3");
-});
-
-test("candles are asked for the last stretch of the chosen interval, and only for an interval the chart has", () => {
-  assert.deepEqual(INTERVALS.map((i) => i.key), ["1m", "15m", "1h", "1d"]);
-  assert.deepEqual(candleWindow("15m", 1_000_000_000_000, 100), { startTime: 1_000_000_000_000 - 100 * 900_000, endTime: 1_000_000_000_000 });
-  assert.throws(() => candleWindow("5m", 0), /not an interval/);
 });
 
 // ── words ──────────────────────────────────────────────────────────
@@ -229,21 +223,6 @@ test("the book shows the asks above the bids, ten a side at most, with each leve
   assert.equal(b.spread, "99.5 bps");
   assert.equal(bookView({ levels: [[], []] }).empty, true);
   assert.equal(bookView({ error: "x" }).empty, true, "an error answer is no book");
-});
-
-test("the chart's scale puts the highest price at the top and every candle inside its slot", () => {
-  const rows = [{ time: 1, open: 10, high: 12, low: 9, close: 11 }, { time: 2, open: 11, high: 15, low: 10, close: 14 }];
-  const s = chartScale(rows, { width: 264, height: 230, axis: 64, top: 8, bottom: 22 });
-  assert.equal(s.plotW, 200);
-  assert.equal(s.slot, 100);
-  assert.ok(s.y(15) < s.y(9) && s.y(15) >= 8 && s.y(9) <= 8 + s.plotH);
-  assert.deepEqual([s.x(0), s.x(1)], [50, 150]);
-  assert.deepEqual([s.index(10), s.index(120), s.index(999)], [0, 1, 1]);
-  assert.ok(s.min < 9 && s.max > 15, "air above and below");
-  assert.equal(chartScale([], { width: 100, height: 100 }), null);
-  assert.deepEqual(niceTicks(0, 10, 5), [0, 2, 4, 6, 8, 10]);
-  assert.deepEqual(niceTicks(5, 5), [5]);
-  assert.equal(candleText(rows[0]), "1970-01-01 00:00 UTC · O 10 H 12 L 9 C 11");
 });
 
 test("the journal reads the events in order, and a stop that was carried out is one row, said as a stop filled", () => {

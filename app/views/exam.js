@@ -10,19 +10,19 @@ import { esc, render, $, isAddress, friendly } from "../lib/ui.js";
 import { readLogs } from "../lib/simpool.js";
 import {
   PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, bboOf, placeCall, graduateCall, setAgentCall,
-  setTriggerCall, clearTriggerCall, refusalOf, candleRows,
+  setTriggerCall, clearTriggerCall, refusalOf,
 } from "../lib/exam.js";
 import {
-  SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, INTERVALS, BOOK_DEPTH, candleWindow, readsFrom, accountFigures, positionRow,
-  pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, chartScale, candleText,
+  SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, BOOK_DEPTH, readsFrom, accountFigures, positionRow,
+  pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView,
   journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange,
 } from "../lib/examscreen.js";
+import { createExamChart } from "./examchart.js";
 import { pxText } from "../lib/exam.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
 const BOOK_MS = 4000;
-const CANDLES_MS = 20000;
 const JOURNAL_WINDOW = 50;
 const JOURNAL_CALLS = 20;
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -66,8 +66,8 @@ export async function examView(address, page) {
   const perps = new Map();
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
-    exam, address, ds, perps, assets, trader, asset: assets[0], isBuy: true, interval: "15m", snap: null, rows: [],
-    book: null, hover: null, journal: [], timers: [],
+    exam, address, ds, perps, assets, trader, asset: assets[0], isBuy: true, snap: null, chart: null,
+    book: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };
 
@@ -79,13 +79,19 @@ export async function examView(address, page) {
   paintJournal(page, st);
   if (ds.ok) {
     paintAssets(page, st);
-    refreshCandles(page, st);
+    st.chart = createExamChart({ node: $("#ex-chart", page), bar: $("#ex-iv", page), load: hl.candles, explain: friendly });
+    st.chart.setAsset(chartAsset(st));
+    paintHead(page, st);
     refreshBook(page, st);
-    st.timers.push(setInterval(() => refreshBook(page, st), BOOK_MS), setInterval(() => refreshCandles(page, st), CANDLES_MS));
+    st.timers.push(setInterval(() => refreshBook(page, st), BOOK_MS));
   }
   st.timers.push(setInterval(() => tick(page, st).catch((err) => note(page, `Could not refresh: ${friendly(err)}`)), POLL_MS));
   // A page that was left stops its readings: it is no longer in the document.
-  st.timers.push(setInterval(() => { if (!page.isConnected) st.timers.forEach(clearInterval); }, 1000));
+  st.timers.push(setInterval(() => {
+    if (page.isConnected) return;
+    st.timers.forEach(clearInterval);
+    st.chart?.destroy();
+  }, 1000));
 }
 
 /** The chain id the node itself answers. Asked of the node directly: the read provider is built with the app's own
@@ -113,7 +119,6 @@ function note(page, text) {
 function skeleton(st) {
   const { ds } = st;
   const marks = networkMarks(CONFIG);
-  const intervals = INTERVALS.map((i) => `<button type="button" data-interval="${i.key}"${i.key === st.interval ? ' class="on"' : ""}>${i.key}</button>`).join("");
   const options = st.assets.map((a) => `<option value="${a}">${esc(st.perps.get(a)?.name ?? `#${a}`)}</option>`).join("");
   const trigger = (k, label) => `<div class="ex-tr"><label>Set ${label}<input id="ex-${k}-px" inputmode="decimal" autocomplete="off" placeholder="price"></label>
       <label>Size<input id="ex-${k}-sz" inputmode="decimal" autocomplete="off" placeholder="all"></label>
@@ -134,11 +139,10 @@ function skeleton(st) {
         <div class="ex-mkt">
           <label class="ex-sel"><select id="ex-asset" aria-label="Asset">${options}</select></label>
           <div class="ex-px"><b id="ex-px">—</b><span>Oracle price</span></div>
-          <div class="ex-iv" role="group" aria-label="Interval">${intervals}</div>
+          <div class="ex-iv" id="ex-iv" role="group" aria-label="Interval"></div>
           <span class="ex-cap">${esc(SCREEN_TEXT.chart)}</span>
         </div>
-        <div class="ex-cw"><canvas id="ex-canvas" role="img" aria-label="Candle chart"></canvas></div>
-        <p class="ex-hover" id="ex-hover">&nbsp;</p>
+        <div class="ex-cw" id="ex-chart"></div>
       </section>
       <section class="ex-pane ex-book"${ds.ok ? "" : " hidden"}>
         <div class="ex-ph"><b>Book</b><span class="ex-cap">${esc(SCREEN_TEXT.book)}</span></div>
@@ -228,19 +232,6 @@ async function tick(page, st) {
   paintAgent(page, st);
 }
 
-function refreshCandles(page, st) {
-  const perp = st.perps.get(st.asset);
-  const { startTime, endTime } = candleWindow(st.interval, Date.now());
-  const wanted = `${st.asset}/${st.interval}`;
-  hl.candles(perp.name, st.interval, startTime, endTime).then((raw) => {
-    if (`${st.asset}/${st.interval}` !== wanted) return;
-    st.rows = candleRows(raw);
-    drawChart(page, st);
-  }).catch((err) => {
-    $("#ex-hover", page).textContent = `Chart: could not load (${friendly(err)})`;
-  });
-}
-
 function refreshBook(page, st) {
   const perp = st.perps.get(st.asset);
   const wanted = st.asset;
@@ -268,6 +259,13 @@ function paintHead(page, st) {
   const oracle = st.snap?.perAsset.find((a) => a.asset === st.asset)?.oracle;
   const px = $("#ex-px", page);
   if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
+  st.chart?.setOracle(perp && oracle ? Number(pxText(oracle, perp.szDecimals)) : null);
+}
+
+/** The asset the chart draws: its Hyperliquid name and size decimals. */
+function chartAsset(st) {
+  const perp = st.perps.get(st.asset);
+  return { coin: perp.name, szDecimals: perp.szDecimals };
 }
 
 function paintAccount(page, st) {
@@ -485,12 +483,10 @@ function wire(page, st) {
   const choose = () => { paintTicket(page, st); };
   const setAsset = (asset) => {
     st.asset = asset;
-    st.rows = [];
     st.book = null;
     $("#ex-book", page).textContent = "Loading…";
     paintAssets(page, st);
-    drawChart(page, st);
-    refreshCandles(page, st);
+    st.chart?.setAsset(chartAsset(st));
     refreshBook(page, st);
     choose();
   };
@@ -501,14 +497,9 @@ function wire(page, st) {
     if (!b || !page.contains(b)) return;
     if (b.dataset.asset !== undefined) {
       setAsset(Number(b.dataset.asset));
-    } else if (b.dataset.interval) {
-      st.interval = b.dataset.interval;
-      on([...page.querySelectorAll("[data-interval]")], b);
-      refreshCandles(page, st);
     } else if (b.dataset.phone) {
       $("#ex-term", page).dataset.phone = b.dataset.phone;
       on([...page.querySelectorAll("[data-phone]")].filter((x) => x.tagName === "BUTTON"), b);
-      drawChart(page, st);
     } else if (b.dataset.tab) {
       st.tab = b.dataset.tab;
       on([...page.querySelectorAll("[data-tab]")], b);
@@ -550,16 +541,6 @@ function wire(page, st) {
     }
   });
   page.addEventListener("input", (e) => { if (e.target.matches("#ex-size, #ex-stop-px, #ex-stop-sz, #ex-take-px, #ex-take-sz")) paintTicket(page, st); });
-  const canvas = $("#ex-canvas", page);
-  if (canvas) {
-    canvas.addEventListener("mousemove", (e) => {
-      const r = canvas.getBoundingClientRect();
-      st.hover = { x: e.clientX - r.left, y: e.clientY - r.top };
-      drawChart(page, st);
-    });
-    canvas.addEventListener("mouseleave", () => { st.hover = null; drawChart(page, st); });
-    if (window.ResizeObserver) new ResizeObserver(() => drawChart(page, st)).observe(canvas.parentElement);
-  }
 }
 
 async function agentAction(page, st, what) {
@@ -621,113 +602,5 @@ async function loadJournal(page, st, direction = "earlier") {
     info.textContent = `Could not load: ${friendly(err)}`;
   } finally {
     buttons.forEach((x) => { x.disabled = false; });
-  }
-}
-
-// ── the chart: candles drawn on a canvas, no library ────────────
-
-function colors(page) {
-  const css = getComputedStyle(page);
-  const get = (n, fallback) => css.getPropertyValue(n).trim() || fallback;
-  return { up: get("--up", "#2F7FC9"), down: get("--dn", "#C0622A"), text: get("--mute", "#5E6670"), grid: get("--line", "#D6D8D6"), ink: get("--ink", "#0E1116"),
-    vol: "rgba(31,53,80,.12)" };
-}
-
-function drawChart(page, st) {
-  const canvas = $("#ex-canvas", page);
-  if (!canvas) return;
-  const wrap = canvas.parentElement;
-  const width = Math.max(200, Math.floor(wrap.clientWidth));
-  const height = Math.max(220, Math.floor(wrap.clientHeight));
-  const dpr = window.devicePixelRatio || 1;
-  if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-  }
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-  const c = colors(page);
-  const rows = st.rows;
-  ctx.font = "11px Inter, system-ui, sans-serif";
-  if (!rows.length) {
-    ctx.fillStyle = c.text;
-    ctx.fillText("Loading candles…", 12, 20);
-    return;
-  }
-  const dec = Math.max(0, 6 - (st.perps.get(st.asset)?.szDecimals ?? 0));
-  const fmt = (v) => v.toFixed(Math.min(dec, v >= 1000 ? 1 : dec));
-  const s = chartScale(rows, { width, height });
-  const volTop = s.top + s.plotH * 0.86;
-  const volMax = Math.max(...rows.map((k) => k.volume), 1);
-  ctx.fillStyle = c.vol;
-  rows.forEach((k, i) => {
-    const h = (k.volume / volMax) * (s.plotH * 0.14);
-    ctx.fillRect(s.x(i) - s.body / 2, s.top + s.plotH - h, s.body, h);
-  });
-  void volTop;
-  ctx.lineWidth = 1;
-  ctx.textBaseline = "middle";
-  for (const t of s.ticks) {
-    const y = Math.round(s.y(t)) + 0.5;
-    ctx.strokeStyle = c.grid;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(s.plotW, y);
-    ctx.stroke();
-    ctx.fillStyle = c.text;
-    ctx.fillText(fmt(t), s.plotW + 6, y);
-  }
-  rows.forEach((k, i) => {
-    const x = s.x(i);
-    const color = k.close >= k.open ? c.up : c.down;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(Math.round(x) + 0.5, s.y(k.high));
-    ctx.lineTo(Math.round(x) + 0.5, s.y(k.low));
-    ctx.stroke();
-    const top = s.y(Math.max(k.open, k.close));
-    ctx.fillRect(x - s.body / 2, top, s.body, Math.max(1, s.y(Math.min(k.open, k.close)) - top));
-  });
-  const last = rows[rows.length - 1];
-  const ly = s.y(last.close);
-  ctx.setLineDash([4, 3]);
-  ctx.strokeStyle = c.ink;
-  ctx.beginPath();
-  ctx.moveTo(0, ly);
-  ctx.lineTo(s.plotW, ly);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = c.ink;
-  ctx.fillRect(s.plotW, ly - 9, s.axis, 18);
-  ctx.fillStyle = "#fff";
-  ctx.fillText(fmt(last.close), s.plotW + 6, ly);
-  // the time axis: a label every few candles
-  ctx.fillStyle = c.text;
-  ctx.textBaseline = "alphabetic";
-  const every = Math.max(1, Math.round(rows.length / Math.max(2, Math.floor(s.plotW / 90))));
-  for (let i = 0; i < rows.length; i += every) {
-    const d = new Date(rows[i].time * 1000);
-    const label = st.interval === "1d" ? `${d.getUTCMonth() + 1}/${d.getUTCDate()}` : `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-    ctx.fillText(label, Math.max(0, s.x(i) - 12), height - 6);
-  }
-  const hv = st.hover;
-  if (hv && hv.x < s.plotW) {
-    const i = s.index(hv.x);
-    ctx.strokeStyle = c.text;
-    ctx.setLineDash([2, 3]);
-    ctx.beginPath();
-    ctx.moveTo(s.x(i), 0);
-    ctx.lineTo(s.x(i), height - 20);
-    ctx.moveTo(0, hv.y);
-    ctx.lineTo(s.plotW, hv.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    $("#ex-hover", page).textContent = candleText(rows[i]);
-  } else {
-    $("#ex-hover", page).textContent = candleText(last);
   }
 }
