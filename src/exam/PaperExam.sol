@@ -53,8 +53,9 @@ interface IExamPassed {
 ///      An exam started with a filler (`initializeWithFiller`) leaves the trader no such choice:
 ///      inside the window only the filler fills, so a second address of the trader's has nothing to
 ///      fill and nothing to skip. An order nobody filled lapses at no cost. If the filler stops, an
-///      order that only makes a position smaller can be filled by anyone, the trader too,
-///      `FALLBACK_BLOCKS` after its window: a stalled filler never keeps a trader in a position.
+///      order that only makes a position smaller can be filled by anyone, the trader too, for
+///      `FALLBACK_BLOCKS` blocks from `FALLBACK_BLOCKS` after its window: a stalled filler never keeps
+///      a trader in a position, and the trader picks a block only in that span, then places again.
 ///      The filler picks the block inside the window, so every fill says how many blocks after the
 ///      first possible one it came (`late`), for anyone to count.
 ///
@@ -89,8 +90,8 @@ contract PaperExam is Initializable {
     /// A stop or a take on one asset's position. Once the oracle price is at `px` or past it, against the
     /// position for a stop, for it for a take, it closes `sz` of the position (zero, or more than is open:
     /// all of it) at the price a fill takes in that block. It acts from block `armedAt`, `fillDelay` after it
-    /// was set; `seenAt` is the block in which somebody showed it had triggered, and `FALLBACK_BLOCKS`
-    /// later anyone may carry it out while it still holds. Zero `px`: none.
+    /// was set; `seenAt` is the block in which somebody showed it had triggered, and for `FALLBACK_BLOCKS` blocks
+    /// from `FALLBACK_BLOCKS` later anyone may carry it out while it still holds. Zero `px`: none.
     struct Trigger {
         uint64 px;
         uint64 sz;
@@ -111,7 +112,8 @@ contract PaperExam is Initializable {
     /// How long after UTC midnight the day's snapshot may be taken.
     uint256 public constant CHECKPOINT_WINDOW = 15 minutes;
     /// With a filler: blocks after an order's window from which anyone may fill it, if it only
-    /// makes a position smaller. About a minute of HyperEVM's small blocks.
+    /// makes a position smaller, and for as many blocks again; the same from a stop or a take seen
+    /// to trigger. About a minute of HyperEVM's small blocks.
     uint16 public constant FALLBACK_BLOCKS = 60;
     /// The drawdown line kinds (`drawdownKind`).
     uint8 public constant FROM_START = 0;
@@ -183,7 +185,8 @@ contract PaperExam is Initializable {
     event AgentSet(address indexed agent);
     event Placed(uint32 indexed asset, bool isBuy, uint64 sz, uint256 fillFrom, uint256 fillUntil);
     event Lapsed(uint32 indexed asset, bool isBuy, uint64 sz);
-    /// `late`: blocks after the first block that could fill the order (`placedBlock + fillDelay`).
+    /// `late`: blocks after the first block that could fill the order (`placedBlock + fillDelay`), or, for a stop or
+    /// a take, the first block it could act in (`armedAt`).
     /// `source`: `SOURCE_ORACLE`, `SOURCE_BOOK` or `SOURCE_ORACLE_FALLBACK`.
     event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late, uint8 source);
     event FillerSet(address indexed filler, bool fromBook, uint16 maxWorseBps);
@@ -191,7 +194,8 @@ contract PaperExam is Initializable {
     event TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt);
     /// Removed by the trader, or because the position it was on was closed or turned round.
     event TriggerCleared(uint32 indexed asset, bool isTake);
-    /// Shown to have triggered at `oracle` in block `seenAt`: from `seenAt + FALLBACK_BLOCKS` anyone may carry it out.
+    /// Shown to have triggered at `oracle` in block `seenAt`: from `seenAt + FALLBACK_BLOCKS`, for as many blocks, anyone
+    /// may carry it out.
     event TriggerSeen(uint32 indexed asset, bool isTake, uint64 oracle, uint256 seenAt);
     /// Carried out: `sz` closed at `px`, which cost `cost`, once the oracle had reached `triggerPx`.
     event TriggerFilled(
@@ -374,8 +378,9 @@ contract PaperExam is Initializable {
     /// @notice Fills the waiting order at this block's oracle price. Anyone but the trader and their
     ///         agent may call it, from the order's first block to the last of its window: whoever
     ///         placed the order does not pick the block it fills in (deep audit, N6). With a filler,
-    ///         only the filler, inside the window; and anyone, the trader too, from `FALLBACK_BLOCKS`
-    ///         after the window, for an order that only makes a position smaller. An order that
+    ///         only the filler, inside the window; and anyone, the trader too, for the `FALLBACK_BLOCKS`
+    ///         blocks that start `FALLBACK_BLOCKS` after the window, for an order that only makes a
+    ///         position smaller; after them it has lapsed, as one nobody filled. An order that
     ///         would take the account over its leverage rule is refused; one that only reduces a
     ///         position never is.
     function fill() external inStatus(Status.Active) {
@@ -389,8 +394,7 @@ contract PaperExam is Initializable {
             if (msg.sender == trader || msg.sender == agent) revert OwnOrder();
             if (filler != address(0) && msg.sender != filler) revert NotFiller();
         } else if (
-            filler == address(0) || block.number < from + _terms.fillWindow + FALLBACK_BLOCKS
-                || !_onlyReduces(before, delta)
+            filler == address(0) || !_inFallback(from + _terms.fillWindow) || !_onlyReduces(before, delta)
         ) {
             revert OrderLapsed();
         }
@@ -424,24 +428,26 @@ contract PaperExam is Initializable {
         _clear(asset, isTake);
     }
 
-    /// @notice Records that the stop or the take of `asset` has triggered now: `FALLBACK_BLOCKS` from this block
-    ///         anyone may carry it out while it still holds, so a filler that stops keeps no position open. Anyone.
+    /// @notice Records that the stop or the take of `asset` has triggered now: for the `FALLBACK_BLOCKS` blocks that
+    ///         start `FALLBACK_BLOCKS` after this one anyone may carry it out while it still holds, so a filler that
+    ///         stops keeps no position open. Anyone. Seen again only once those blocks are over, so nobody moves them on.
     function seeTrigger(uint32 asset, bool isTake) external inStatus(Status.Active) {
         Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
-        if (t.seenAt != 0) return;
+        if (t.seenAt != 0 && block.number < uint256(t.seenAt) + 2 * FALLBACK_BLOCKS) return;
         uint64 oracle = _triggered(asset, isTake, t);
         t.seenAt = uint64(block.number);
         emit TriggerSeen(asset, isTake, oracle, block.number);
     }
 
     /// @notice Carries out the stop or the take of `asset` once the oracle price in this block has reached it, at
-    ///         the price a fill takes in this block, with its cost. With a filler, the filler, or anyone
-    ///         `FALLBACK_BLOCKS` after it was seen; without one, anyone but the trader and their agent.
+    ///         the price a fill takes in this block, with its cost. With a filler, the filler, or anyone in the
+    ///         `FALLBACK_BLOCKS` blocks that start `FALLBACK_BLOCKS` after it was seen; without one, anyone but the
+    ///         trader and their agent. `Filled.late` counts from `armedAt`, the first block it could act in.
     function fillTrigger(uint32 asset, bool isTake) external inStatus(Status.Active) {
         Trigger memory t = isTake ? takeOf[asset] : stopOf[asset];
         if (filler == address(0)) {
             if (msg.sender == trader || msg.sender == agent) revert OwnOrder();
-        } else if (msg.sender != filler && (t.seenAt == 0 || block.number < uint256(t.seenAt) + FALLBACK_BLOCKS)) {
+        } else if (msg.sender != filler && (t.seenAt == 0 || !_inFallback(t.seenAt))) {
             revert NotFiller();
         }
         if (_over()) revert TooLate();
@@ -458,9 +464,9 @@ contract PaperExam is Initializable {
             delete pending;
             emit Lapsed(o.asset, o.isBuy, o.sz);
         }
-        // A trade like any fill for whoever reads `Filled` (the checker's pairs, the days with a fill), with no lateness
-        // of a window; `TriggerFilled` right after it says it was a stop or a take (review of #297).
-        emit Filled(asset, before < 0, sz, px, cost, 0, source);
+        // A trade like any fill for whoever reads `Filled` (the checker's pairs, the days with a fill), late by the
+        // blocks since it could first act; `TriggerFilled` right after it says it was a stop or a take (review of #297).
+        emit Filled(asset, before < 0, sz, px, cost, block.number - t.armedAt, source);
         emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source);
     }
 
@@ -579,6 +585,11 @@ contract PaperExam is Initializable {
         // A take on a long and a stop on a short trigger at the price or above it; the other two at it or below.
         bool hit = isTake == (pos > 0) ? oracle >= t.px : oracle <= t.px;
         if (!hit) revert NotTriggered(oracle, t.px);
+    }
+
+    /// Whether this block is in the fallback that starts `FALLBACK_BLOCKS` after block `after_` and lasts as long.
+    function _inFallback(uint256 after_) internal view returns (bool) {
+        return block.number >= after_ + FALLBACK_BLOCKS && block.number < after_ + 2 * FALLBACK_BLOCKS;
     }
 
     function _clear(uint32 asset, bool isTake) internal {

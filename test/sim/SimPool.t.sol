@@ -2780,9 +2780,10 @@ contract SimPoolTest is Test {
         vm.prank(approver);
         pool.approvePayouts(ids);
         assertTrue(pool.payout(id).approved);
+        vm.recordLogs();
         vm.prank(approver);
-        vm.expectRevert(SimPool.BadPayout.selector);
-        pool.approvePayouts(ids); // once
+        pool.approvePayouts(ids); // once: approved again, it is passed over
+        assertEq(vm.getRecordedLogs().length, 0, "approved once, no second event");
         ids[0] = id + 1;
         vm.prank(approver);
         vm.expectRevert(SimPool.BadPayout.selector);
@@ -2790,14 +2791,55 @@ contract SimPoolTest is Test {
         uint256 id2 = pool.claimPayout(address(_passedStage(pool, bought2, other)));
         _stop(pool, id2);
         ids[0] = id2;
+        vm.recordLogs();
         vm.prank(approver);
-        vm.expectRevert(SimPool.BadPayout.selector);
-        pool.approvePayouts(ids); // stopped
+        pool.approvePayouts(ids); // stopped: passed over
+        assertEq(vm.getRecordedLogs().length, 0, "a stopped payout is not approved");
+        assertFalse(pool.payout(id2).approved);
         vm.expectEmit(address(pool));
         emit SimPool.ApproverSet(stranger);
         vm.prank(creator);
         pool.setApprover(stranger);
         assertEq(pool.approver(), stranger);
+    }
+
+    /// A batch the approver sent while one of its payouts went out at `PAYOUT_HARD`, or was stopped, still approves
+    /// the rest: the one paid or stopped is passed over without an event, and only an id past the last is refused.
+    function test_approve_aBatchPassesOverOnePaidOrStoppedMeanwhile() public {
+        SimPool pool = _pool();
+        PaperExam bought1 = _buy(pool, trader, 1);
+        PaperExam bought2 = _buy(pool, other, 1);
+        PaperExam bought3 = _buy(pool, stranger, 1);
+        _withSales(pool, 30);
+        uint256 id0 = pool.claimPayout(address(_passedStage(pool, bought1, trader)));
+        vm.warp(block.timestamp + 6 days);
+        uint256 id1 = pool.claimPayout(address(_passedStage(pool, bought2, other)));
+        uint256 id2 = pool.claimPayout(address(_passedStage(pool, bought3, stranger)));
+        _stop(pool, id2);
+        vm.warp(block.timestamp + 1 days);
+        assertEq(pool.pay(10), 1, "the first goes out at 7 days, unapproved");
+        assertEq(uint8(pool.payout(id0).state), uint8(SimPool.PayoutState.Paid));
+        uint256[] memory ids = new uint256[](3);
+        (ids[0], ids[1], ids[2]) = (id0, id1, id2);
+        vm.recordLogs();
+        vm.prank(approver);
+        pool.approvePayouts(ids);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 1, "one approval");
+        assertEq(logs[0].topics[0], SimPool.PayoutApproved.selector);
+        assertEq(uint256(logs[0].topics[1]), id1);
+        assertTrue(pool.payout(id1).approved, "the waiting one is approved");
+        assertFalse(pool.payout(id0).approved, "the paid one is passed over");
+        assertFalse(pool.payout(id2).approved, "the stopped one is passed over");
+        vm.warp(block.timestamp + 72 hours);
+        uint256 before = usdc.balanceOf(other);
+        assertEq(pool.pay(10), 1, "and it is paid from its 72 hours");
+        assertEq(usdc.balanceOf(other) - before, LARGE_PAYOUT);
+        ids = new uint256[](2);
+        (ids[0], ids[1]) = (id1, id2 + 1);
+        vm.prank(approver);
+        vm.expectRevert(SimPool.BadPayout.selector);
+        pool.approvePayouts(ids);
     }
 
     function test_pay_anUnapprovedPayoutGoesOutSevenDaysAfterItsClaim() public {

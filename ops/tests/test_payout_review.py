@@ -1468,7 +1468,7 @@ class AgainstTheContracts(unittest.TestCase):
         # Only the approver, never the zero address; only a payout waiting and not approved yet: what
         # `approve_call` holds back (NO_APPROVER, APPROVED).
         self.assertIn("if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();", body)
-        self.assertIn("if (p.state != PayoutState.Due || p.approved) revert BadPayout();", body)
+        self.assertIn("if (p.state != PayoutState.Due || p.approved) continue;", body)
         self.assertRegex(self.POOL_SRC, r"\n    address public approver;", "the getter `has_approvals` and `approver_of` ask")
 
     def test_the_delay_and_the_ceiling_are_the_factorys_by_its_source(self):
@@ -1851,7 +1851,7 @@ class StopsAndTheLineInTheRecount(unittest.TestCase):
         self.assertTrue(r.trigger_hit(True, -100, 950_000, 950_000), "a take on a short at or under")
         self.assertFalse(r.trigger_hit(True, -100, 950_001, 950_000))
         self.assertIn("uint64 sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;", src)
-        self.assertIn("emit Filled(asset, before < 0, sz, px, cost, 0, source);", src)
+        self.assertIn("emit Filled(asset, before < 0, sz, px, cost, block.number - t.armedAt, source);", src)
         self.assertIn("emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source);", src)
         self.assertIn("if (block.number < t.armedAt) revert TooEarly(t.armedAt);", src)
 

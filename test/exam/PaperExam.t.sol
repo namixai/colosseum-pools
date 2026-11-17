@@ -1399,6 +1399,60 @@ contract PaperExamTest is Test {
         assertEq(e.positionOf(BTC), 0);
     }
 
+    /// The fallback of a stop or a take lasts `FALLBACK_BLOCKS` blocks: after them nobody but the filler carries it out,
+    /// and it may be seen again, which starts a new span; inside them a second sighting moves nothing.
+    function test_trigger_theFallbackLastsAMinute_andIsSeenAgainOnlyAfterIt() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, false, 950_000, 0);
+        vm.roll(block.number + DELAY);
+        _mark(940_000);
+        vm.prank(stranger);
+        e.seeTrigger(BTC, false);
+        uint256 seen = block.number;
+        uint256 fb = e.FALLBACK_BLOCKS();
+        vm.roll(seen + 2 * fb - 1);
+        vm.prank(filler);
+        e.seeTrigger(BTC, false); // inside the span: nothing moves
+        (,,, uint64 seenAt) = e.stopOf(BTC);
+        assertEq(seenAt, seen);
+        vm.roll(seen + 2 * fb);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.NotFiller.selector);
+        e.fillTrigger(BTC, false); // the span is over
+        vm.expectEmit(address(e));
+        emit PaperExam.TriggerSeen(BTC, false, 940_000, block.number);
+        vm.prank(stranger);
+        e.seeTrigger(BTC, false);
+        uint256 again = block.number;
+        (,,, seenAt) = e.stopOf(BTC);
+        assertEq(seenAt, again, "seen again: a new span");
+        vm.roll(again + fb - 1);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.NotFiller.selector);
+        e.fillTrigger(BTC, false);
+        vm.roll(again + 2 * fb - 1);
+        vm.prank(trader);
+        e.fillTrigger(BTC, false); // the last block of the span
+        assertEq(e.positionOf(BTC), 0);
+    }
+
+    /// A stop or a take carried out says in `Filled.late` how many blocks after `armedAt` it came, as an order says
+    /// how many after the first block that could fill it.
+    function test_trigger_aFillSaysHowLateItCameAfterItArmed() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _setTrigger(e, true, 1_050_000, 0);
+        uint64 armed = _armed(e, true);
+        _mark(1_060_000);
+        vm.roll(uint256(armed) + 37);
+        vm.expectEmit(address(e));
+        emit PaperExam.Filled(BTC, false, 100, 1_060_000, 0, 37, 0);
+        vm.prank(filler);
+        e.fillTrigger(BTC, true);
+        assertEq(e.positionOf(BTC), 0);
+    }
+
     function test_trigger_aCloseLapsesAnOrderWaitingOnThatAsset_onlyThat() public {
         PaperExam e = _fillerExam();
         _fillerTrade(e, true, 100);
@@ -1564,6 +1618,31 @@ contract PaperExamTest is Test {
         vm.roll(from + WINDOW + e.FALLBACK_BLOCKS());
         vm.expectEmit(address(e));
         emit PaperExam.Filled(BTC, false, 60, MARK, 0, WINDOW + e.FALLBACK_BLOCKS(), 0);
+        vm.prank(trader);
+        e.fill();
+        assertEq(e.positionOf(BTC), 40);
+    }
+
+    /// The fallback of an order lasts `FALLBACK_BLOCKS` blocks: after them the order has lapsed for everyone, and the
+    /// trader places it again to have a new span, whose last block still fills.
+    function test_filler_theFallbackLastsAMinute_thenTheOrderHasLapsed() public {
+        PaperExam e = _fillerExam();
+        _fillerTrade(e, true, 100);
+        _place(e, BTC, false, 60);
+        uint256 from = block.number + DELAY;
+        uint256 fb = e.FALLBACK_BLOCKS();
+        vm.roll(from + WINDOW + 2 * fb);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        vm.prank(filler);
+        vm.expectRevert(PaperExam.OrderLapsed.selector);
+        e.fill();
+        vm.expectEmit(address(e));
+        emit PaperExam.Lapsed(BTC, false, 60);
+        _place(e, BTC, false, 60);
+        from = block.number + DELAY;
+        vm.roll(from + WINDOW + 2 * fb - 1);
         vm.prank(trader);
         e.fill();
         assertEq(e.positionOf(BTC), 40);

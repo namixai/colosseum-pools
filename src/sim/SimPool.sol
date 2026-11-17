@@ -803,16 +803,18 @@ contract SimPool is Initializable {
 
     // ── the approver ─────────────────────────────────────────────
 
-    /// @notice Approves payouts `ids`, each waiting and not yet approved: each is paid from its `dueAt`
-    ///         instead of from `PAYOUT_HARD`. Approving sets neither the amount nor whom it goes to, and
-    ///         a payout approved can still be stopped until it is paid.
+    /// @notice Approves payouts `ids` that are waiting and not yet approved: each is paid from its `dueAt`
+    ///         instead of from `PAYOUT_HARD`. One that has meanwhile been paid, stopped or approved is
+    ///         passed over, so the rest of the batch still goes through; an id past the last payout is
+    ///         refused. Approving sets neither the amount nor whom it goes to, and a payout approved can
+    ///         still be stopped until it is paid.
     function approvePayouts(uint256[] calldata ids) external {
         if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();
         for (uint256 k = 0; k < ids.length; ++k) {
             uint256 id = ids[k];
             if (id >= _payouts.length) revert BadPayout();
             Payout storage p = _payouts[id];
-            if (p.state != PayoutState.Due || p.approved) revert BadPayout();
+            if (p.state != PayoutState.Due || p.approved) continue;
             p.approved = true;
             emit PayoutApproved(id, msg.sender);
         }

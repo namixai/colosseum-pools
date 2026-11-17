@@ -244,7 +244,7 @@
         },
         {
           "lead": "A paper exam's filler.",
-          "text": "An exam started with a filler takes its orders' fills, inside their window, from that one address, never the trader's agent (S108), so the trader picks no block. The filler does: whoever holds it chooses the block in the window, and where the pool's creator is the platform that also runs the filler, the platform chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only makes a position smaller is anyone's, the trader's too, sixty blocks after its window (S110). Such an exam may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse (S111); every fill says where its price came from (S109).",
+          "text": "An exam started with a filler takes its orders' fills, inside their window, from that one address, never the trader's agent (S108), so the trader picks no block. The filler does: whoever holds it chooses the block in the window, and where the pool's creator is the platform that also runs the filler, the platform chooses for its own pool. What holds it is that it shows: every fill says how many blocks after the first possible one it came (S109), for anyone to count a pool's fills by. If the filler stops, an order that only makes a position smaller is anyone's, the trader's too, for sixty blocks from sixty blocks after its window, and lapses after them (S110). Such an exam may fill at the book, the trader's side of the chain's best bid and offer, never better for the trader than the oracle price, so a book the trader moves gives nothing, and never more than its ceiling worse (S111); every fill says where its price came from (S109).",
           "sources": [
             "S108",
             "S109",
@@ -1183,31 +1183,31 @@
     },
     {
       "id": "S108",
-      "where": "src/exam/PaperExam.sol:390",
+      "where": "src/exam/PaperExam.sol:395",
       "kind": "line",
       "text": "if (filler != address(0) && msg.sender != filler) revert NotFiller();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L390"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L395"
     },
     {
       "id": "S109",
-      "where": "src/exam/PaperExam.sol:400",
+      "where": "src/exam/PaperExam.sol:404",
       "kind": "line",
       "text": "emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L400"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L404"
     },
     {
       "id": "S110",
-      "where": "src/exam/PaperExam.sol:115",
+      "where": "src/exam/PaperExam.sol:117",
       "kind": "line",
       "text": "uint16 public constant FALLBACK_BLOCKS = 60;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L115"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L117"
     },
     {
       "id": "S111",
-      "where": "src/exam/PaperExam.sol:690",
+      "where": "src/exam/PaperExam.sol:701",
       "kind": "line",
       "text": "if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L690"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L701"
     },
     {
       "id": "S112",
@@ -1302,10 +1302,10 @@
     },
     {
       "id": "S125",
-      "where": "src/sim/SimPool.sol:951",
+      "where": "src/sim/SimPool.sol:953",
       "kind": "line",
       "text": "revert Locked();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L951"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L953"
     },
     {
       "id": "S126",
@@ -1323,31 +1323,31 @@
     },
     {
       "id": "S128",
-      "where": "src/sim/SimPool.sol:871",
+      "where": "src/sim/SimPool.sol:873",
       "kind": "line",
       "text": "if (block.timestamp < readyAt) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L871"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L873"
     },
     {
       "id": "S129",
-      "where": "src/sim/SimPool.sol:966",
+      "where": "src/sim/SimPool.sol:968",
       "kind": "line",
       "text": "if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L966"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L968"
     },
     {
       "id": "S130",
-      "where": "src/sim/SimPool.sol:872",
+      "where": "src/sim/SimPool.sol:874",
       "kind": "line",
       "text": "if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L872"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L874"
     },
     {
       "id": "S131",
-      "where": "src/sim/SimPool.sol:874",
+      "where": "src/sim/SimPool.sol:876",
       "kind": "line",
       "text": "uint256 amount = r < w ? r : w;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L874"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L876"
     },
     {
       "id": "S132",
@@ -1379,10 +1379,10 @@
     },
     {
       "id": "S136",
-      "where": "src/sim/SimPool.sol:810",
+      "where": "src/sim/SimPool.sol:812",
       "kind": "line",
       "text": "if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L810"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L812"
     },
     {
       "id": "S137",
@@ -1421,17 +1421,17 @@
     },
     {
       "id": "S142",
-      "where": "src/sim/SimPool.sol:981",
+      "where": "src/sim/SimPool.sol:983",
       "kind": "line",
       "text": "if (!_isOn(line)) revert LineOff();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L981"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L983"
     },
     {
       "id": "S143",
-      "where": "src/sim/SimPool.sol:1001",
+      "where": "src/sim/SimPool.sol:1003",
       "kind": "line",
       "text": "uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L1001"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L1003"
     },
     {
       "id": "S144",
@@ -1449,10 +1449,10 @@
     },
     {
       "id": "S146",
-      "where": "src/exam/PaperExam.sol:526",
+      "where": "src/exam/PaperExam.sol:532",
       "kind": "line",
       "text": "if (tellsPool) IExamPassed(pool).examPassed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L526"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L532"
     },
     {
       "id": "S147",
@@ -1470,10 +1470,10 @@
     },
     {
       "id": "S149",
-      "where": "src/sim/SimPool.sol:1065",
+      "where": "src/sim/SimPool.sol:1067",
       "kind": "line",
       "text": "bool sent = _send(creator, rest);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L1065"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L1067"
     }
   ]
 }

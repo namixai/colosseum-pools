@@ -675,7 +675,9 @@ test("a stop and a take as the screen shows them: when they act, how far the ora
   // The contract's test of the side: a take and a stop on a long and on a short.
   assert.match(SRC, /bool hit = isTake == \(pos > 0\) \? oracle >= t\.px : oracle <= t\.px;/);
   assert.match(SRC, /uint64 sz = t\.sz == 0 \|\| t\.sz > open \? uint64\(open\) : t\.sz;/);
-  assert.match(SRC, /\} else if \(msg\.sender != filler && \(t\.seenAt == 0 \|\| block\.number < uint256\(t\.seenAt\) \+ FALLBACK_BLOCKS\)\) \{/);
+  assert.match(SRC, /\} else if \(msg\.sender != filler && \(t\.seenAt == 0 \|\| !_inFallback\(t\.seenAt\)\)\) \{/);
+  assert.match(SRC, /return block\.number >= after_ \+ FALLBACK_BLOCKS && block\.number < after_ \+ 2 \* FALLBACK_BLOCKS;/);
+  assert.match(SRC, /emit Filled\(asset, before < 0, sz, px, cost, block\.number - t\.armedAt, source\);/);
 });
 
 test("a stop is carried out as a trade: at that block's price, closing what is open, in the contract's order of refusals", () => {
@@ -690,6 +692,7 @@ test("a stop is carried out as a trade: at that block's price, closing what is o
   const got = fire(stop);
   assert.deepEqual(got.trade, { asset: BTC, isBuy: false, size: 100n, px: 940_000n, source: "oracle", notional: 94n * USD, cost: 0n,
     countsAsTrade: true, late: 0 });
+  assert.equal(fire(stop, { block: 510 }).trade.late, 8, "late by the blocks since it armed, as Filled says");
   assert.deepEqual([got.triggerPx, got.isTake, got.after.position, got.after.cash, got.after.equity, got.after.notional, got.after.breach],
     [950_000n, false, 0n, 94n * USD, 94n * USD, 0n, "none"], "100 units sold at 940 000");
   assert.deepEqual([got.clears, got.lapsesOrder, got.events], [{ fired: true, other: "take" }, false, ["TriggerCleared", "TriggerCleared", "Filled", "TriggerFilled"]],
@@ -740,7 +743,7 @@ test("a stop is carried out as a trade: at that block's price, closing what is o
   const refusals = ["revert NoTrigger()", "revert TooEarly(t.armedAt)", "revert NoPosition()", "_mark(asset)", "revert NotTriggered(oracle, t.px)"];
   assert.deepEqual([...refusals].sort((a, b) => trigBody.indexOf(a) - trigBody.indexOf(b)), refusals);
   assert.match(SRC, /_clear\(asset, isTake\);\s+\(uint64 px, uint256 cost, uint8 source\) = _apply\(asset, before < 0, sz, before\);/);
-  assert.match(SRC, /emit Filled\(asset, before < 0, sz, px, cost, 0, source\);\s+emit TriggerFilled\(asset, isTake, sz, px, cost, t\.px, source\);/);
+  assert.match(SRC, /emit Filled\(asset, before < 0, sz, px, cost, block\.number - t\.armedAt, source\);\s+emit TriggerFilled\(asset, isTake, sz, px, cost, t\.px, source\);/);
 });
 
 test("a stop is filled at the book's side as any fill is, waits where the book stands off the oracle, and costs what a fill costs", () => {

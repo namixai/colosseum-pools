@@ -649,7 +649,7 @@ export function triggerSetPreview(reads, { asset, isTake, px, size = 0n, oracle,
  * position, no price, the oracle not at it yet (`NotTriggered`), and the price of the fill too far from the oracle
  * (`TooFarFromOracle`, where it waits for a later block). Who carries it out is the keeper's concern, not worked out here.
  *
- * Without a refusal: the close is a trade like any fill (`trade`, as `Filled` records it, with `late` zero), in the
+ * Without a refusal: the close is a trade like any fill (`trade`, as `Filled` records it, `late` the blocks since `armedAt`), in the
  * direction that makes the position smaller and never larger than what is open, at the price a fill takes, with its
  * cost; it needs no leverage room. `after` is the account then. The trigger that was carried out is removed, and the
  * other one with it where the position is closed (`clears`); an order waiting on that asset lapses then
@@ -692,7 +692,7 @@ export function triggerFill(reads, { asset, isTake, oracle, bid, ask, now, block
     drawdownAt: drawdownOf(reads, rules, capital).at, dayStartEquity: big(reads.dayStartEquity) });
   return {
     refusal: null, text: null, isTake: Boolean(isTake), triggerPx: t.px,
-    trade: { asset: a, isBuy, size: sz, px, source, notional, cost, countsAsTrade: notional >= MIN_TRADE_NOTIONAL, late: 0 },
+    trade: { asset: a, isBuy, size: sz, px, source, notional, cost, countsAsTrade: notional >= MIN_TRADE_NOTIONAL, late: Number(block) - Number(t.armedAt) },
     after: { position: after, cash, equity, notional: openAfter,
       leverageX100: equity !== null && equity > 0n ? (openAfter * 100n) / equity : null, breach },
     clears: { fired: true, other: closed && other !== null ? (isTake ? "stop" : "take") : null },

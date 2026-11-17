@@ -36,8 +36,11 @@ with a balance, `capital`, that is a number and not money.
   fills, and the filler is never the trader's agent, so there is no block to pick and no fill to
   skip. An order the filler missed lapses at no
   cost. If the filler stops, an order that only makes a position smaller can be filled by anyone,
-  the trader too, `FALLBACK_BLOCKS` (60) after its window, so a stalled filler never keeps a trader
-  in a position. Every fill says how many blocks after `placedBlock + fillDelay` it came (`late` in
+  the trader too, for `FALLBACK_BLOCKS` (60) blocks that start `FALLBACK_BLOCKS` after its window, so a
+  stalled filler never keeps a trader in a position. After those blocks the order has lapsed as one
+  nobody filled, and the trader places it again: the trader picks a block only within the 60 blocks
+  that a placement fixed in advance, never at any time later (A3 of the pre-deploy check, 16 November
+  2026). Every fill says how many blocks after `placedBlock + fillDelay` it came (`late` in
   `Filled`). An exam started with `initialize` has no filler and works as before.
 - **Telling the pool of a pass.** An exam started with `initializeWithFiller(..., tellsPool_)` true calls its
   pool's `examPassed()` in the same transaction as its pass (`IExamPassed`), and a pool that refuses it
@@ -65,14 +68,16 @@ with a balance, `capital`, that is a number and not money.
   set past the price is not a way round the delay. Once triggered it is carried out (`fillTrigger`) at the
   price a fill takes in that block, by the same rule and with the same cost as an order: a stop is a market
   order once triggered, and what it slips is real. With a filler, only the filler carries it out until
-  somebody has shown in a block that it triggered (`seeTrigger`, anyone); from `FALLBACK_BLOCKS` after that
-  block anyone may, the trader too, while it still holds. Without a filler, anyone but the trader and their
-  agent. A position closed or turned round by any fill loses its stop and its take; a take or a stop carried
+  somebody has shown in a block that it triggered (`seeTrigger`, anyone); for `FALLBACK_BLOCKS` blocks from
+  `FALLBACK_BLOCKS` after that block anyone may, the trader too, while it still holds. After them it may be
+  shown again, which starts a new span; inside them a second showing moves nothing, so nobody holds the span
+  off. Without a filler, anyone but the trader and their agent. A position closed or turned round by any fill loses its stop and its take; a take or a stop carried
   out is gone, and a position it closes loses the other one too, and an order waiting on that asset lapses
   (`Lapsed`): it was made for the position just closed and would open the other side with no stop. A
-  trigger fill emits `Filled`, with a lateness of 0, so whoever reads trades reads it as one, and then
-  `TriggerFilled`, which says it was a stop or a take; whoever judges the filler's lateness skips a
-  `Filled` that a `TriggerFilled` follows. A position never grows past a size an order can name
+  trigger fill emits `Filled`, its lateness the blocks since `armedAt`, the first block it could act in, so
+  whoever reads trades reads it as one, and then `TriggerFilled`, which says it was a stop or a take;
+  whoever judges the filler's lateness in a window skips a `Filled` that a `TriggerFilled` follows, and
+  holds a trigger's lateness to the oracle's history from `armedAt` instead (A2 of the pre-deploy check). A position never grows past a size an order can name
   (`uint64`). The filler picks the block after the
   trigger, as it picks the block of an order's window: the contract does not know the first block the
   oracle crossed the price, and that is checked outside, against the oracle's history.
