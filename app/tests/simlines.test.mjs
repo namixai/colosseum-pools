@@ -27,7 +27,7 @@ const U = 1_000_000n;
 
 const pool = ({ on = FIRST_ON, free = 3_600n * U, closed = false } = {}) => {
   const { menu: m, tiers } = menu();
-  return menuRows({ menu: m, tiers, states: lineStates({ on, free, closed }) });
+  return menuRows({ menu: m, tiers, states: lineStates({ on, free, closed }), closed });
 };
 const line = (rows, size, loss) => rows.find((r) => r.size === BigInt(size) * U && r.tier.short.startsWith(`${loss}%`));
 const cellsOf = (html, state) => html.split('<div class="sp-cell ').filter((c) => c.startsWith(`${state}"`) || c.includes(`data-state="${state}"`));
@@ -159,10 +159,14 @@ test("trader's menu: no payout column, no payout sum, no gauge, no facts strip, 
 
 test("a pool that is closed says so under each size that is on", () => {
   const html = menuHtml(pool({ closed: true }), 3_600n * U, "GROUP-ONE");
-  // The 25K lines are short as well as closed: lineState answers the sum it lacks whatever the pool's state.
-  assert.equal(cellsOf(html, "closed").length, 8);
-  assert.equal(cellsOf(html, "short").length, 4);
+  // The 25K lines are short as well as closed: lineState answers the sum it lacks whatever the pool's state, and
+  // money does not reopen a closed pool, so they say closed, not short (review of this change).
+  assert.equal(cellsOf(html, "closed").length, 12);
+  assert.equal(cellsOf(html, "short").length, 0);
   assert.match(html, /On, but the pool is closed to new sales\./);
+  assert.ok(!/short of money|Short \$/.test(html));
+  const g = sizeGroups(pool({ closed: true })).groups[2];
+  assert.deepEqual(sizeNotes(g, 3_600n * U).map((n) => n.kind), ["closed"]);
 });
 
 // ── the owner's states of a switch ────────────────────────────────────────────────────────────────────────────
@@ -351,6 +355,16 @@ test("the owner's panel reads the pool's money only after the wallet is the pool
   const view = admin.slice(admin.indexOf("export async function simAdminView"));
   assert.ok(view.indexOf("creator()") < view.indexOf("readOwnerPool(at)"));
   assert.ok(view.indexOf('role !== "owner"') < view.indexOf("readOwnerPool(at)"));
+});
+
+test("the user panel takes one purchase at a time and connects the wallet before it buys; the owner's page survives a failed re-read", () => {
+  const trader = read("app", "views", "simpool.js");
+  assert.match(trader, /let busy = false;/);
+  assert.match(trader, /busy\)\s*return;|\|\| busy\) return;/);
+  assert.ok(trader.indexOf("await chain.connect()") < trader.indexOf("busy = true;"), "connecting comes first and alone");
+  assert.ok(!/if \(!chain\.currentSigner\(\)\) await chain\.connect\(\);\n  const signer/.test(trader), "the purchase itself does not connect");
+  const admin = read("app", "views", "simadmin.js");
+  assert.match(admin, /try \{\n      await simAdminView\(at, page\);\n    \} catch/);
 });
 
 test("the site's own header and footer are hidden on the two panels, and the testnet strip is in each page's footer", () => {

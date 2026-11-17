@@ -18,11 +18,11 @@ const ABI = [...SIM_POOL_ABI, ...SIM_LINES_ABI, ...SIM_OWNER_ABI];
 /** What the owner's section reads: the lines with their `lineState`, and the pool's money in its parts. */
 export async function readOwnerPool(address) {
   const pool = new ethers.Contract(address, ABI, chain.readProvider);
-  const [menu, tiers, free, floor, owed, reserved, held, staged, sharesDue] = await Promise.all([
-    pool.menu(), pool.tiers(), pool.free(), pool.floor(), pool.owed(), pool.reserved(), pool.held(), pool.staged(), pool.sharesDue(),
+  const [menu, tiers, free, closed, floor, owed, reserved, held, staged, sharesDue] = await Promise.all([
+    pool.menu(), pool.tiers(), pool.free(), pool.closed(), pool.floor(), pool.owed(), pool.reserved(), pool.held(), pool.staged(), pool.sharesDue(),
   ]);
   const states = await chain.readAll(menu, (_, line) => pool.lineState(line));
-  return { rows: menuRows({ menu, tiers, states }),
+  return { rows: menuRows({ menu, tiers, states, closed }),
     money: ownerMoney({ free, owed, reserved, held, staged, sharesDue, floor }) };
 }
 
@@ -64,7 +64,6 @@ export async function simAdminView(address, page) {
     let words;
     let ok = false;
     try {
-      if (!chain.currentSigner()) await chain.connect();
       const signed = new ethers.Contract(at, ABI, chain.currentSigner());
       const receipt = await (await signed.setLine(line, on)).wait();
       chain.forgetLiveReads();
@@ -75,8 +74,15 @@ export async function simAdminView(address, page) {
       const iface = new ethers.Interface(SIM_LINES_ABI);
       words = poolRefusal(refusalName(err, iface), err?.revert?.args ? [...err.revert.args] : []) || friendly(err);
     }
-    // The switches come back as the chain has them now, whether the switch went through or was refused.
-    await simAdminView(at, page);
+    // The switches come back as the chain has them now, whether the switch went through or was refused. A page that
+    // cannot be read again (the node's rate, say) keeps the old one, its switches as they were, and says so: a switch
+    // that was sent is not reported as an error for that.
+    try {
+      await simAdminView(at, page);
+    } catch (err) {
+      page.querySelectorAll("button.sp-tg").forEach((b) => (b.disabled = b.classList.contains("dis")));
+      words = `${words} The page could not be read again (${friendly(err)}). Reload it to see the switches as the chain has them.`;
+    }
     const after = $("#sim-status", page);
     if (after) {
       after.className = `sp-status ${ok ? "ok" : "err"}`;

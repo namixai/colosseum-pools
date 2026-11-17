@@ -75,9 +75,10 @@ export function tierOf(tier) {
  * The menu, line by line, with each line's tier and its `lineState`. `menu` is `menu()`, `tiers` is `tiers()` in the
  * same order, `states` is `lineState(i)` for each line, in order. A length that does not agree is an error: a page
  * that guessed which tier or state belongs to a line would sell or switch the wrong one. `need` is the two payouts
- * the pool must have free for the line.
+ * the pool must have free for the line. `closed` is the pool's `closed()`: `lineState` answers the sum a line is short
+ * of whether or not the pool is closed, and a closed pool is not helped by money, so a page says closed first.
  */
-export function menuRows({ menu, tiers, states }) {
+export function menuRows({ menu, tiers, states, closed = false }) {
   if (tiers.length !== menu.length || states.length !== menu.length) {
     throw new Error(`the pool's menu has ${menu.length} lines, its tiers ${tiers.length} and its states ${states.length}`);
   }
@@ -88,7 +89,7 @@ export function menuRows({ menu, tiers, states }) {
       line, size, price: BigInt(m.price ?? m[1]), payout: payoutOf(size), need: payoutOf(size) * COVER_PAYOUTS,
       tier: tierOf(tiers[line]),
       on: Boolean(s.on ?? s[0]), sells: Boolean(s.sells ?? s[1]), canSwitchOn: Boolean(s.canSwitchOn ?? s[2]),
-      short: BigInt(s.short ?? s[3]),
+      short: BigInt(s.short ?? s[3]), closed: Boolean(closed),
     };
   });
 }
@@ -98,7 +99,7 @@ export function menuRows({ menu, tiers, states }) {
 export function tradeState(row) {
   if (!row.on) return { kind: "off" };
   if (row.sells) return { kind: "sells" };
-  return { kind: row.short > 0n ? "short" : "closed" };
+  return { kind: row.closed ? "closed" : row.short > 0n ? "short" : "closed" };
 }
 
 /** The buy control of a line, as the mockup draws it: "Buy $20" while on sale, "Short $400" when the pool lacks the
@@ -121,12 +122,12 @@ export function switchState(row) {
     return {
       kind: row.sells ? "on" : "on-idle", checked: true, enabled: true, next: false,
       note: row.sells ? "On sale"
-        : row.short > 0n ? `On, not selling now: short by ${dollars(row.short)}. It sells again by itself once the money is back`
+        : !row.closed && row.short > 0n ? `On, not selling now: short by ${dollars(row.short)}. It sells again by itself once the money is back`
           : "On, not selling now: the pool is closed to new sales",
     };
   }
   if (row.canSwitchOn) return { kind: "off-ready", checked: false, enabled: true, next: true, note: "Off. The pool has the money for two payouts of this line: it can be switched on" };
-  if (row.short > 0n) return { kind: "off-short", checked: false, enabled: false, next: true, note: `Off. Cannot be switched on: short by ${dollars(row.short)}` };
+  if (!row.closed && row.short > 0n) return { kind: "off-short", checked: false, enabled: false, next: true, note: `Off. Cannot be switched on: short by ${dollars(row.short)}` };
   return { kind: "off-closed", checked: false, enabled: false, next: true, note: "Off. Cannot be switched on: the pool is closed" };
 }
 
@@ -176,7 +177,8 @@ export function sizeStatus(group, free) {
     "off-short": "Off · can't switch on", "off-closed": "Off · pool closed" };
   const kinds = order.filter((k) => states.some((s) => s.kind === k));
   const mixed = kinds.length > 1;
-  const short = lines.reduce((m, r) => (r.short > m ? r.short : m), 0n);
+  const closed = lines.some((r) => r.closed);
+  const short = closed ? 0n : lines.reduce((m, r) => (r.short > m ? r.short : m), 0n);
   const why = [];
   if (kinds.includes("on")) why.push(`free ${dollars(free)} ≥ needs ${dollars(group.need)}`);
   if (kinds.includes("on-idle")) why.push(short > 0n ? `pool short ${dollars(short)}. Sells again by itself when money returns. You can switch it off.` : "The pool is closed to new sales. You can switch it off.");

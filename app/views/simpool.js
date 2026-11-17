@@ -21,11 +21,11 @@ const ERC20_ABI = [
 /** What the pool's page reads: the menu with each line's tier and `lineState`, the free money and the terms text. */
 export async function readSimPool(address) {
   const pool = new ethers.Contract(address, ABI, chain.readProvider);
-  const [menu, tiers, free, factory, terms] = await Promise.all([
-    pool.menu(), pool.tiers(), pool.free(), pool.factory(), pool.terms(),
+  const [menu, tiers, free, closed, factory, terms] = await Promise.all([
+    pool.menu(), pool.tiers(), pool.free(), pool.closed(), pool.factory(), pool.terms(),
   ]);
   const states = await chain.readAll(menu, (_, line) => pool.lineState(line));
-  const rows = menuRows({ menu, tiers, states });
+  const rows = menuRows({ menu, tiers, states, closed });
   // The terms are the book's text under the pool's hash. A pool whose book cannot be read says so: nothing is made up.
   let text = null;
   try {
@@ -64,15 +64,30 @@ export async function simPoolView(address, query, page) {
 
   const status = $("#sim-status", page);
   const input = $("#sim-code", page);
+  // One purchase at a time: while one is pending the menu is redrawn with its buttons off, and a click is not taken.
+  let busy = false;
   const repaint = () => {
     $("#sim-menu", page).innerHTML = menuHtml(data.rows, data.free, input.value);
+    if (busy) page.querySelectorAll("button.sp-buy").forEach((b) => (b.disabled = true));
   };
   input.addEventListener("input", repaint);
   $("#sim-menu", page).addEventListener("click", async (e) => {
     const button = e.target.closest("button.sp-buy");
-    if (!button || button.disabled) return;
+    if (!button || button.disabled || busy) return;
     const line = Number(button.dataset.line);
-    page.querySelectorAll("button.sp-buy").forEach((b) => (b.disabled = true));
+    // Connecting draws the page again (app.js listens to the account), so it comes first and alone: the trader presses
+    // Buy again on the page that knows the wallet. Nothing is written to nodes the redraw would take away.
+    if (!chain.currentSigner()) {
+      try {
+        await chain.connect();
+      } catch (err) {
+        status.className = "sp-status err";
+        status.textContent = friendly(err);
+      }
+      return;
+    }
+    busy = true;
+    repaint();
     status.className = "sp-status busy";
     status.textContent = "Working…";
     try {
@@ -82,6 +97,7 @@ export async function simPoolView(address, query, page) {
       status.className = "sp-status err";
       status.textContent = answer(err);
     } finally {
+      busy = false;
       repaint();
     }
   });
@@ -96,7 +112,6 @@ function answer(err) {
 
 /** Buys `line` with the group's code: checks the code against the pool, approves the price if it must, and buys. */
 async function buy(address, data, line, codeText) {
-  if (!chain.currentSigner()) await chain.connect();
   const signer = chain.currentSigner();
   const pool = new ethers.Contract(address, ABI, signer);
   // Not trimmed inside the library and not folded: a code is its text exactly. Stray spaces at the ends of the input are not part of it.
