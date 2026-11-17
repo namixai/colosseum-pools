@@ -30,6 +30,11 @@ struct ExamTerms {
     uint16 fillWindow;
 }
 
+/// What a pool that sells exams with `tellsPool` answers when one of them passes.
+interface IExamPassed {
+    function examPassed() external;
+}
+
 /// @title PaperExam
 /// @notice An exam traded on no exchange and on nobody's money. The trader's orders are
 ///         transactions, the position is a number here, and every price is the mark the chain
@@ -170,6 +175,9 @@ contract PaperExam is Initializable {
     /// oracle price, in bps of it, that price may be.
     bool public fromBook;
     uint16 public maxWorseBps;
+    /// Whether the exam tells its pool when it passes (`IExamPassed.examPassed`), so the pool keeps the payout
+    /// it owes from the pass on and not only from the stage (`initializeWithFiller`).
+    bool public tellsPool;
 
     event Started(address indexed trader, address indexed pool, uint64 capital);
     event AgentSet(address indexed agent);
@@ -242,7 +250,8 @@ contract PaperExam is Initializable {
     ///         their window. The filler may be neither the trader nor the pool. With `fromBook_` a
     ///         fill takes the book's price, at most `maxWorseBps_` (1 to 500) worse than the oracle's;
     ///         without it, the oracle's, and `maxWorseBps_` is zero. `drawdownKind_` is how the
-    ///         drawdown line is drawn: `FROM_START` or `TRAILING_TO_START`.
+    ///         drawdown line is drawn: `FROM_START` or `TRAILING_TO_START`. With `tellsPool_` the pass
+    ///         calls the pool's `examPassed()`, and a pool that refuses it refuses the pass.
     function initializeWithFiller(
         address trader_,
         Rules calldata rules_,
@@ -250,7 +259,8 @@ contract PaperExam is Initializable {
         address filler_,
         bool fromBook_,
         uint16 maxWorseBps_,
-        uint8 drawdownKind_
+        uint8 drawdownKind_,
+        bool tellsPool_
     ) external initializer {
         if (filler_ == address(0) || filler_ == trader_ || filler_ == msg.sender) revert BadTerms();
         if (fromBook_ ? maxWorseBps_ == 0 || maxWorseBps_ > MAX_WORSE_BPS : maxWorseBps_ != 0) revert BadTerms();
@@ -259,6 +269,7 @@ contract PaperExam is Initializable {
         filler = filler_;
         fromBook = fromBook_;
         maxWorseBps = maxWorseBps_;
+        tellsPool = tellsPool_;
         emit FillerSet(filler_, fromBook_, maxWorseBps_);
         _initialize(trader_, rules_, terms_);
     }
@@ -512,6 +523,7 @@ contract PaperExam is Initializable {
             passedAt = uint64(block.timestamp);
             endEquity = eq;
             emit Passed(trader, eq);
+            if (tellsPool) IExamPassed(pool).examPassed();
         }
     }
 

@@ -6,7 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {Rules, Units} from "../Types.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
-import {SimPool, SimPlan, SimSize, SimTier, MAX_PAYOUTS_A_DAY} from "./SimPool.sol";
+import {SimPool, SimPlan, SimSize, SimTier, MAX_PAYOUTS_A_DAY, COVER_PAYOUTS} from "./SimPool.sol";
 import {TermsBook} from "../multi/TermsBook.sol";
 
 /// @title SimPoolFactory
@@ -31,8 +31,9 @@ contract SimPoolFactory {
     uint16 public constant FEE_BPS = 50;
     /// A payout, out of the size the trader passed on (bps): 8 %.
     uint16 public constant PAYOUT_BPS = 800;
-    /// Payouts of the largest size a pool locks when it opens.
-    uint8 public constant LOCKED_PAYOUTS = 2;
+    /// Payouts of a line a pool must have free for the line to be on at the start, switched on or sold, and so the
+    /// least a creator locks: this many payouts of the smallest line (CFO, 16 November: K = 2).
+    uint8 public constant LOCKED_PAYOUTS = uint8(COVER_PAYOUTS);
     /// Payouts of the largest size a pool keeps while it is open: the creator withdraws above this.
     uint8 public constant FLOOR_PAYOUTS = 3;
     /// How long a payout waits, for the checker to stop it with a reason.
@@ -68,9 +69,9 @@ contract SimPoolFactory {
     /// The share of a withdrawal's profit a trading group's code may give its owner (bps), when it gives one.
     uint16 public constant MIN_PARTNER_BPS = 4000;
     uint16 public constant MAX_PARTNER_BPS = 6000;
-    /// How many codes one pool may have: a withdrawal pays every code's partner in one loop.
-    uint8 public constant MAX_CODES = 32;
-    uint256 public constant MAX_MENU = 8;
+    /// How many lines a menu has at most: six sizes on four tiers (Alex, 16 November). Opening a pool on that many
+    /// fits a small HyperEVM block with room to spare (`test/sim/SimPool.t.sol`, the menu of 24 lines).
+    uint256 public constant MAX_MENU = 24;
     uint32 public constant MIN_FUND_WINDOW = 1 hours;
     uint32 public constant MAX_FUND_WINDOW = 30 days;
     /// The most a fill at the book may be worse than the oracle price, in bps of it: PaperExam's bound.
@@ -183,20 +184,21 @@ contract SimPoolFactory {
 
     // ── anyone ───────────────────────────────────────────────────
 
-    /// @notice Opens a pool on `plan` for 1 HYPE, sent with the call, and the money for
-    ///         `LOCKED_PAYOUTS` payouts of its largest size, taken from the caller.
+    /// @notice Opens a pool on `plan` for 1 HYPE, sent with the call, and the plan's `locked` USDC, taken from the
+    ///         caller: at least `LOCKED_PAYOUTS` payouts of the smallest line, and as many of every line on at the
+    ///         start.
     function create(SimPlan calldata plan) external payable returns (address pool) {
         if (msg.value != CREATION_FEE) revert WrongFee();
         address to = feeRecipient;
         // No pool without a closer: before its term, only the closer can close it (review of #279).
         if (filler == address(0) || checker == address(0) || closer == address(0) || to == address(0)) revert BadRole();
         if (msg.sender == filler || msg.sender == checker || msg.sender == closer) revert BadRole();
-        uint256 largest = _check(plan);
+        _check(plan);
 
         pool = Clones.clone(poolImpl);
         poolOf[pool] = pool;
         _pools.push(pool);
-        uint256 locked = (largest * PAYOUT_BPS / Units.BPS) * LOCKED_PAYOUTS;
+        uint256 locked = plan.locked;
         SimPool(pool).initialize(msg.sender, plan);
         usdc.safeTransferFrom(msg.sender, pool, locked);
         SimPool(pool).noteLocked(locked);
@@ -232,18 +234,30 @@ contract SimPoolFactory {
         _checkRules(p.fundedRules);
         _checkTerms(p.exam);
         _checkTerms(p.funded);
+        // The lines on at the start are lines of the menu, each with `LOCKED_PAYOUTS` of its payouts locked; and the
+        // lock covers that much of the smallest line at least (CFO, 16 November).
+        if (n < 32 && p.on >> n != 0) revert BadPlan();
+        uint256 smallest = type(uint256).max;
         for (uint256 i = 0; i < n; ++i) {
             SimSize calldata m = p.menu[i];
             SimTier calldata k = p.tiers[i];
             if (m.size == 0 || m.price == 0) revert BadPlan();
             if (m.size > largest) largest = m.size;
+            uint256 cover = (uint256(m.size) * PAYOUT_BPS / Units.BPS) * LOCKED_PAYOUTS;
+            if (cover < smallest) smallest = cover;
+            if (p.on & (1 << i) != 0 && cover > p.locked) revert BadPlan();
             // `PaperExam.FROM_START` or `PaperExam.TRAILING_TO_START`.
             if (k.drawdownKind > 1) revert BadPlan();
-            // Everything PaperExam will refuse at an exam's start, refused at the pool's, line by line with the
-            // line's own size and tier (review of cp#261).
-            _examCheck(p.examRules, p.exam, m.size, k);
-            _examCheck(p.fundedRules, p.funded, m.size, k);
+            // What PaperExam refuses of what a line sets, its size (`capital`, not zero), its loss limit and its
+            // target (`PaperExam._checkRules`, `_checkTerms`), refused here line by line.
+            if (k.maxDrawdownBps == 0 || k.maxDrawdownBps >= Units.BPS) revert BadPlan();
+            if (k.targetBps == 0 || k.targetBps > Units.BPS) revert BadPlan();
         }
+        // Everything else PaperExam will refuse at an exam's start is the same on every line: refused at the pool's,
+        // once for each stage, on the first line's size and tier (review of cp#261; once since A7 of 16 November).
+        if (p.locked < smallest) revert BadPlan();
+        _examCheck(p.examRules, p.exam, p.menu[0].size, p.tiers[0]);
+        _examCheck(p.fundedRules, p.funded, p.menu[0].size, p.tiers[0]);
         if (p.funded.targetsBps.length != 1) revert BadPlan();
         if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY || p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();
         if (p.fundWindow < MIN_FUND_WINDOW || p.fundWindow > MAX_FUND_WINDOW) revert BadPlan();
@@ -265,7 +279,7 @@ contract SimPoolFactory {
         }
     }
 
-    /// The rules and terms a line's stage starts on, as `SimPoolSetup` copies them, against `PaperExam.check`.
+    /// The rules and terms a line's stage starts on, as `SimPoolSetup.start` builds them, against `PaperExam.check`.
     function _examCheck(Rules calldata r, ExamTerms calldata t, uint64 capital, SimTier calldata k) internal view {
         Rules memory rk = r;
         rk.maxDrawdownBps = k.maxDrawdownBps;

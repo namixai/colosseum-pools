@@ -170,6 +170,25 @@ class ACleanPayout(unittest.TestCase):
         got = r.review(ch.d, POOL, 0)["running"]
         self.assertEqual(got["free"], 5_900 * 10**6, "what is owed, held back and kept for stops is not free")
         self.assertFalse(got["enough"])
+        ch.d["books"][POOL].update(sharesDue=400 * 10**6)
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual(got["free"], 5_500 * 10**6, "nor what the codes accrued and their owners have not claimed")
+        # Not read (the node failed): unknown, never enough; balance 1 000, 400 kept for codes, 800 running.
+        ch.d["books"][POOL].update(balance=1_000 * 10**6 + 800 * 10**6, held=0, reserved=0, sharesDue=None)
+        got = r.review(ch.d, POOL, 0)["running"]
+        self.assertEqual((got["free"], got["enough"]), (None, None), "what the codes keep was not read: unknown")
+        card = r.card(r.review(ch.d, POOL, 0), ch.d)["evidence"]["running"]
+        self.assertEqual((card["free"], card["enough"]), (None, None), "the card says null, not the text None")
+        self.assertIn('"free": null', json.dumps(card))
+
+    def test_what_the_codes_keep_is_read_as_0_on_an_old_pool_and_as_unknown_when_the_read_fails(self):
+        from unittest import mock
+        with mock.patch.object(r.core, "view", return_value=400):
+            self.assertEqual(r.share_reserve(POOL), 400)
+        with mock.patch.object(r.core, "view", side_effect=RuntimeError("execution reverted")):
+            self.assertEqual(r.share_reserve(POOL), 0, "an old pool has no getter and keeps nothing for codes")
+        with mock.patch.object(r.core, "view", side_effect=RuntimeError("429 Too Many Requests")):
+            self.assertIsNone(r.share_reserve(POOL), "a failed read is not 0")
 
     def test_a_running_stage_and_a_passed_exam_not_yet_funded_count_a_finished_one_does_not(self):
         ch = Chain()
@@ -1266,6 +1285,9 @@ class WhatThePoolWouldTake(unittest.TestCase):
         self.assertEqual((got["stages"], got["stagesWorst"], got["stagedMatches"]), (1, 800 * 10**6, True))
         del ch.d["books"][POOL]["staged"]
         self.assertIsNone(r.review(ch.d, POOL, 0)["running"]["floor"], "an older pool without staged: not guessed")
+        # A pool of 16 November answers its own floor (the largest line live or selling): that is what is shown.
+        ch.d["books"][POOL].update(staged=0, floor=60_000 * 10**6)
+        self.assertEqual(r.review(ch.d, POOL, 0)["running"]["floor"], 60_000 * 10**6)
 
     def test_an_account_not_read_makes_the_pool_total_incomplete(self):
         ch, _, _ = honest_world()
@@ -1374,7 +1396,7 @@ class ReadingTheChain(unittest.TestCase):
         self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
         self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "sizes": [SIZE // 2, SIZE],
                                                "approvals": True, "largestPayout": 800, "staged": 1_600,
-                                               "approver": addr(0xAB)}})
+                                               "floor": None, "sharesDue": None, "approver": addr(0xAB)}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         self.assertEqual(got["times"], {"delay": 72 * 3_600, "hard": 8 * 86_400}, "what the factory answers, not 7 days by rote")
         review = r.review(got, POOL, 7)
@@ -2208,15 +2230,18 @@ class TheTiersAreTheAccountsOwn(unittest.TestCase):
     that line starts: the review reads them there (`rules()`, `drawdownKind()`), never from the pool's plan."""
 
     def test_the_pool_starts_each_account_with_its_lines_tier(self):
+        # The rules are kept once and the line's tier put in when the account starts (A7 of 16 November): the
+        # account holds its tier all the same.
         setup = _source("src/sim/SimPoolSetup.sol")
-        self.assertIn("_copyRules(l.examRules, p.examRules, k.maxDrawdownBps);", setup)
-        self.assertIn("_copyRules(l.fundedRules, p.fundedRules, k.maxDrawdownBps);", setup)
-        self.assertIn("_copyTerms(l.exam, p.exam, k.targetBps);", setup)
-        self.assertIn("l.drawdownKind = k.drawdownKind;", setup)
-        self.assertIn("to.maxDrawdownBps = maxDrawdownBps;", setup)
+        self.assertIn("r.maxDrawdownBps = k.maxDrawdownBps;", setup)
+        self.assertIn("t.targetsBps[j] = k.targetBps;", setup)
+        self.assertIn("rules.fromBook, rules.maxWorseBps, k.drawdownKind, !funded);", setup)
         pool = _source("src/sim/SimPool.sol")
-        self.assertIn("exam = _start(trader, l.examRules, l.exam, m.size, l.drawdownKind);", pool)
-        self.assertIn("stage = _start(trader, l.fundedRules, l.funded, _menu[a.line].size, l.drawdownKind);", pool)
+        self.assertIn("exam = _start(trader, line, false);", pool)
+        self.assertIn("stage = _start(trader, a.line, true);", pool)
+        self.assertIn("a = SimPoolSetup.start(_rules, funded, l, trader, factory);", pool)
+        self.assertIn("SimLine storage l = _lines[line];", pool)
+        self.assertIn("t.capital = k.size;", setup)
 
     def test_the_review_reads_the_drawdown_and_its_kind_from_the_account(self):
         asked = []

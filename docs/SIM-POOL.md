@@ -1,16 +1,19 @@
 # Design: the simulated pool
 
-`src/sim/SimPool.sol` and `src/sim/SimPoolFactory.sol`, with two libraries the pool calls,
-`src/sim/SimPoolStops.sol` and `src/sim/SimPoolSetup.sol`. Not deployed yet; no external audit.
+`src/sim/SimPool.sol` and `src/sim/SimPoolFactory.sol`, with three libraries the pool calls,
+`src/sim/SimPoolStops.sol`, `src/sim/SimPoolSetup.sol` and `src/sim/SimPoolCodes.sol`. Not deployed yet; no
+external audit.
 
-**Why two libraries.** A contract's code may be at most 24 576 bytes (EIP-170, in force on HyperEVM's
+**Why libraries.** A contract's code may be at most 24 576 bytes (EIP-170, in force on HyperEVM's
 Cancun rules), and tests run without that limit. With its daily payout limit the pool came to 24 790. The
 checks and events of the four stop functions (`stopPayout`, `liftStop`, `objectStop`, `finalizeStop`)
 and the copy of the plan at creation (`initialize`) now run in libraries with external functions, which
 the pool calls by DELEGATECALL: in its own storage, with its own caller, emitting its own events. The pool
 keeps its interface, its counters and its money (`owed`, `reserved`, `stoppedCount`, `liftedCount`,
-`head`, the principal); what the code does is what it did. `SimPool` 21 700 bytes, `SimPoolStops` 3 414,
-`SimPoolSetup` 1 962. `scripts/size-check.py` holds every contract and library of `src/` to the limit.
+`head`, the principal); what the code does is what it did. The codes (setting one, a sale by one, what each
+accrued and its claim) run in `SimPoolCodes` the same way since codes have no limit (16 November). `SimPool`
+23 805 bytes, `SimPoolCodes` 2 997, `SimPoolSetup` 5 577, `SimPoolStops` 3 845 (`forge build --sizes`, 16
+November). `scripts/size-check.py` holds every contract and library of `src/` to the limit.
 
 ## Why
 
@@ -23,35 +26,67 @@ fail, and their prices pay for the ones that pass.
 ## What it does
 
 - **Opening.** `SimPoolFactory.create(plan)` with 1 HYPE sent along, which goes to the platform, and
-  the USDC for two payouts of the largest size on the menu, taken from the creator. A menu of
-  10 000 locks 1 600. The plan sets the menu (up to eight lines, each a size and its price), each line's
+  the plan's `locked` USDC, taken from the creator: what the creator chooses, at least two payouts of the
+  smallest line. The plan's `on` says which lines are switched on at the start, bit `i` for line `i`: only
+  lines whose two payouts the lock covers; the others start off. The first pool locks 4 000: 5 000, 10 000 and
+  25 000 on, 50 000, 100 000 and 250 000 off. The plan sets the menu (up to 24 lines, each a size and its price), each line's
   tier (`tiers`, one for each line: the loss limit, the target and the kind of loss line, from the start or
   trailing to it, of both its stages), the rules and terms both stages share otherwise, how many payouts the
   pool settles at most in a day (`payoutsPerDay`, 1 to 8), how long a pass may wait before its stage starts,
   and the hash of the pool's terms written out in a `TermsBook`. Two lines may share a price: a signed
   purchase names its line. A line's exam and stage start on the plan's rules and terms with its tier in them
-  (`maxDrawdownBps`, every step's target, `drawdownKind`), copied once at the opening (`SimPoolSetup`);
-  `tiers()` reads them back, in the order of `menu()`. The
-  factory runs PaperExam's own checks on both stages of every line, at its size and with its tier, and checks every asset against its list and every leverage cap against the
+  (`maxDrawdownBps`, every step's target, `drawdownKind`) and its size as `capital`. The pool keeps the plan's
+  rules and terms once, and for each line only its size, price and tier, in one word of storage with the count
+  of its exams and stages not yet done; `SimPoolSetup.start` puts the tier in when an exam or a stage starts.
+  `tiers()` reads them back, in the order of `menu()`. Opening a pool so costs one word of storage a line: the
+  first pool's plan of 24 lines (six sizes on four tiers), BTC, ETH and SOL, takes 1 694 229 gas as a
+  transaction, base and calldata counted, and 24 lines with an exam of four steps 1 701 648, both under
+  two thirds of a small HyperEVM block of 3 000 000 gas, which a creator's ordinary transaction goes to
+  (`test_gas_createOf…FitsASmallBlock`, the gate in CI; "Fast block duration is set to 1 seconds with a 3M gas
+  limit", https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/dual-block-architecture,
+  read 16 November 2026). Before the rules were kept once, twelve lines took 6 972 609. The
+  factory runs PaperExam's own checks on both stages once, on the first line's size and tier, and on every
+  line PaperExam's bounds on what the line sets (a size not zero, a loss limit under 100 %, a target of at most
+  100 %), the same answer as PaperExam's at that line's start (a fuzz test), and checks every asset against its list and every leverage cap against the
   asset's, that both stages end (a deadline and an idle limit), that the stage is one step, and
   that a fill window is 1 to 60 blocks. Anyone may open a pool; the filler, the checker and the
   closer may not.
 - **Codes.** `setCode(code, partner, bps)`, by the creator: `code` is the keccak256 of a trading
-  group's code, `partner` the address the group's owner gave, `bps` its share, 0 or 40 to 60 %, up
-  to 32 codes a pool (`MAX_CODES`). A code is public by nature: its owner hands it to a whole
+  group's code, `partner` the address the group's owner gave, `bps` its share, 0 or 40 to 60 %. A pool
+  has as many codes as its creator sets: there is no limit (Alex, 16 November: a partner with a network
+  of a thousand authors gets a code for each), and no call goes through all the codes. The pool keeps no
+  list of them; every code is in a `CodeSet` event. A code is public by nature: its owner hands it to a whole
   channel, so nothing hides it, and whoever buys with it is the owner's buyer. A code can be changed,
   or taken off sale with a zero partner, until a sale names it; from then on its partner is fixed
   and its share can only be raised, within the bounds (`CodeUsed` for anything else), so an owner
   who has brought traders does not depend on the creator. A raise (an owner's steps of 40, 50 and
-  60 %, CFO, 13 November) counts from the next withdrawal on; shares already paid are not
-  recomputed. Each code's part is its own (profit x its `brought` / `brought` x its `bps`), so
-  raising one code's share takes nothing from another's.
+  60 %, CFO, 13 November) counts from the next withdrawal on; what the old share accrued stays. Each
+  code's part is its own (profit x its `brought` / `brought` x its `bps`), so raising one code's share
+  takes nothing from another's.
+- **A code for two.** `setSplitCode(code, partner, bps, author, authorBps)`: a code with an author besides
+  its partner, say a blogger of the group's network, and the author's part of the code's share
+  (`authorBps`, 1 to 9 999 bps of it); the partner gets the rest. The bounds of 40 to 60 % hold the code's
+  share as a whole, not each part: a code of 40 % split half and half gives 20 % each. Partner, author and
+  split are fixed by the first sale, as a code's partner is; after it only the share rises, by
+  `setSplitCode` with the same three (`setCode` on such a code is `CodeUsed`: it names no author). A code
+  for one is a code with no author (`setCode`), and works as before. An author is never the partner's own address
+  (`BadShare`): that code is a code for one.
 - **Selling.** `buy(line, code)`, with a code the creator set, or `NoSuchCode`. No seats and no
   share of the pool limit a sale. 0.5 % of the price goes to the platform, the rest to the pool,
   and that rest counts as what the code brought (`codeOf(code).brought`, and `brought` for all
   codes). `ExamSold` names the code and its partner. The buyer gets a paper exam whose orders only the factory's
   filler fills inside their window, at the book when the plan says so: never better for the trader
   than the oracle price and at most the plan's `maxWorseBps` worse (`PaperExam.initializeWithFiller`).
+- **Lines on and off.** A line sells only while its creator has switched it on and the pool has two of its
+  payouts free (`LOCKED_PAYOUTS`, the CFO's K of 16 November): `free()` is the pool's USDC less what it owes,
+  holds, keeps for recent stops and keeps for its passed exams and running stages (`staged`). Otherwise `buy` and
+  `buyWithAuthorization` revert before any money moves, `LineOff` or `NotCovered(short)` with how much is
+  missing. A line short of money stays on and sells again by itself once the money is back. Only the creator
+  switches a line (`setLine(line, on)`, `LineSet` each time): off at any time, on only while the pool is open
+  and has the two payouts free (`NotCovered(short)` otherwise). No line switches itself on, and a switch acts on
+  new sales only: exams and stages sold keep their rules. `lineState(line)` reads whether the line is on,
+  whether it sells now, whether the creator may switch it on now, and how much the pool is short of that;
+  `onMask()` holds the switches, bit `i` for line `i`.
 - **Selling by signature.** `buyWithAuthorization(trader, line, code, salt, validAfter,
   validBefore, v, r, s)`: the trader signs a USDC transfer of the line's price to the pool (EIP-3009,
   Circle's FiatToken V2.2 on HyperEVM and its testnet) and needs no gas; anyone sends it, a relayer
@@ -61,8 +96,14 @@ fail, and their prices pay for the ones that pass.
   nonce, and takes it only from the pool it names. Same price, same fee,
   `ExamSold` with `bySignature`. A token without EIP-3009 refuses with `NoAuthorization`; `buy`
   works on any.
+- **The pass.** The exam tells its pool when its trader passes it (`PaperExam.graduate` calls `examPassed()`,
+  `ExamPassed`; `passedOf(exam)`): from that moment its payout is in `staged`, kept from the creator's
+  withdrawal and out of what is free for new sales and for switching lines on (A1 of the pre-deploy check,
+  16 November). Nobody has to call anything for it. A pass not funded within the window is released by
+  anyone (`release`), and its payout is free again, as a stage's that broke a rule or ran out of time.
 - **The stage.** `fund(exam)`: the trader, within the plan's window after the pass, starts a second
-  paper exam on the same size. Nothing moves.
+  paper exam on the same size. Nothing moves, and `staged` does not change: the stage carries on the payout the
+  pass put in.
 - **The payout.** `claimPayout(stage)` once the stage has passed, by anyone, and by the keeper in its next
   slow pass (every 30 seconds): 8 % of the size. It is due 72 hours after the claim once the pool's
   approver has approved it (`approvePayouts`, `PayoutApproved`), and 7 days after the claim whether
@@ -94,8 +135,10 @@ fail, and their prices pay for the ones that pass.
   unapproved payouts are paid 8 days after their claim, the fifth 9. `claimHeld` and `finish` are no
   payouts of the day. So the limit is on what `pay` settles, not on every transfer of a day: what was
   set aside for a refused trader on earlier days leaves when that trader claims it. Whatever the rules
-  let through, `pay` settles at most two payouts in any 24 hours, of the largest size at most: 1 600 in
-  the first pool, what its creator locked (the CFO, 13 November 2026).
+  let through, `pay` settles at most two payouts in any 24 hours, of the largest size at most: 40 000 in
+  the first pool if its creator switches 250 000 on, which sells only while 40 000 are free (the CFO, 13
+  and 16 November 2026). A payout over the day's two keeps its place and its money: the creator's withdrawal
+  leaves it in the pool (`test_dailyLimit_aPayoutOf20000…`).
 - **A stop.** Until a payout is paid, approved or not, the factory's checker may stop it once, with
   a reason: 1, opposite positions with another account of the factory; 2, that and wallets linked;
   3, the result is disputed (a flaw of the exam, the oracle or the filler); 4, prohibited play: a
@@ -131,23 +174,48 @@ fail, and their prices pay for the ones that pass.
   the closer only cancels: it changes neither the amount nor where the money goes (for the
   creator's terms: the platform may cancel a withdrawal request; it never moves the money). There
   is no other way for the creator to take money out before `finish`. `withdrawable` is only what
-  stays above every payout owed, held or kept for a recent stop and, while the pool is open, above
-  the greater of three payouts of the largest size and the payouts of every stage still running,
-  each by its own size (`staged`: up in `fund`, down when the stage's payout is claimed or the
-  stage is released). A funded trader's payout stays in the pool for as long as the stage runs; the
+  stays above every payout owed, held or kept for a recent stop and, until the pool is finished, above
+  `floor()`: the greater of the payouts of every exam passed and not yet funded or released and every stage
+  still running, each by its own size (`staged`: up at the pass, down when the stage's payout is claimed or the
+  pass or the stage is released), and three payouts of the
+  largest line with an exam or a stage not yet done, or switched on and selling (CFO, 16 November, item 3).
+  A trader with a live exam of 250 000 keeps 60 000 in, its line switched off or not; with nothing on and
+  nothing live, nothing is kept above what is owed, held or kept for stops. A trader's payout stays in the pool from the pass for as long as the stage runs; the
   creator takes profit only above it (CFO, 13 November). `staged` changes what may leave, not what
   profit is: the codes' shares are of the profit a withdrawal takes, as before. 0.5 % goes to the platform. Profit is the
   pool's money above what the creator put in, after what the pool owes, holds and keeps for recent
   stops; a withdrawal takes it first. Of the profit a withdrawal takes, less the platform's part,
-  each code's partner is sent its `bps` in the part its code brought of all the pool took:
+  each code accrues its `bps` in the part its code brought of all the pool took:
   profit × (the code's `brought` / `brought`) × `bps`. A code with no share leaves its part to the
-  creator. A partner whose address the token refuses has its part set aside, `heldOf` and
-  `claimHeld` as for a refused payout (`PartnerPaid` says which). `addToPot` puts in more principal,
+  creator. The withdrawal does not send the codes' parts: it moves one number (`accrual`, what a unit of
+  a code's weight, its `brought` times its `bps`, has accrued) and keeps all the codes' parts in the pool
+  (`sharesDue`), whatever their number. Each code counts what it accrued when it is next touched (a sale, a
+  raise, a claim; `ShareAccrued`), and `claimShares(codes)` sends each named code's part to its partner,
+  and on a code for two its author's part to the author, each apart (`SharePaid`). Anyone may call it, for
+  any codes, also after `finish`: the money goes to each code's partner and author only, and its work is the
+  number of codes named. What the codes accrued is kept like what is held: out of `free()`, `withdrawable()`,
+  the profit of a later withdrawal, what `pay` may spend and what `finish` sends the creator. A code's part is
+  its share to the unit (the step of `accrual` is rounded up). A code is counted whole units, and the fraction of
+  a unit left stays the code's and counts the next time (`frac`): a code is counted the same whenever it is
+  touched, and a claim by anyone between two withdrawals takes nothing from it. What is kept for the codes is all
+  they accrued together, to the fraction (`accruedScaled`), rounded up, less what they got: never less than the
+  codes may claim. Once every code has taken its own, what stays kept is the codes' fractions and that rounding
+  up: at most as many units (0.000001 USDC each) as there are codes with a share. With 2 000 codes, three
+  withdrawals and `finish`, 1 603 units stay (`test_codes_twoThousand_noLimit_withdrawFinishAndAPurchaseFitTheGate`). `shareDue(code)` reads what a code may claim now, its partner's part and its author's;
+  `codeOf(code)` what it was counted and what it got (`partnerDue`, `authorDue`, `partnerGot`, `authorGot`, `frac`).
+  A partner or an author whose address the token refuses has its part set aside, `heldOf` and `claimHeld`
+  as for a refused payout (`SharePaid` with `sent` false says which). So is the creator's part of a
+  withdrawal or of `finish` (`Withdrawn` with `sent` false): a refused creator holds up neither the
+  withdrawal, nor `finish`, nor any code's share.
+- **When shares go out.** The contract knows no days. Alex's schedule, once a week from Monday to
+  Wednesday (16 November), is the signers' and the recipients' to keep: the creator's withdrawal is asked
+  a week ahead and carried out in its window, and `claimShares` sends what the codes accrued whenever
+  anyone calls it, the platform's keeper on that schedule or a partner or author on their own. `addToPot` puts in more principal,
   never shared, which comes back once the profit above it has been taken, or at `finish`. It is the
   only way to put the creator's money in: USDC sent straight to the pool's address is not principal.
   It covers payouts as any money of the pool does, and what of it is profit when a withdrawal is
   carried out (`_profit`: above what the pool owes, holds and keeps, and above the principal) is
-  shared with the codes' owners as any profit taken; below that it shares nothing. A share paid to a code's owner is
+  shared with the codes' owners as any profit taken; below that it shares nothing. A share accrued to a code is
   never taken back: if later payouts take the pool's money below what the creator put in, the
   creator bears it, and shares start again only once the principal is whole. `close` stops sales; `finish`, once nothing runs, nothing is owed and no stop
   can still be lifted, and a week after the close (`closedAt` + `WITHDRAW_DELAY`, `NotReady` before),
@@ -160,22 +228,22 @@ fail, and their prices pay for the ones that pass.
   `addToPot` added. Only the factory's closer, a platform key the operator names (`setCloser`), may
   close a pool sooner (`closedEarly`, `ClosedEarly`). That changes nothing about where the money
   goes: `finish`, by the creator or the closer, still waits until nothing runs, nothing is owed and
-  no stop can be lifted, leaves what is held for its traders and partners, sends each code's partner
-  its share and the creator the rest; the closer gets none of it. From `lockedUntil` on, the creator closes and finishes as before.
+  no stop can be lifted, leaves what is held for its traders and partners and what the codes accrued,
+  accrues each code its share and sends the creator the rest; the closer gets none of it. From `lockedUntil` on, the creator closes and finishes as before.
 
 ## The platform's numbers
 
 Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE`); 0.5 % of each
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
-fee on it; two payouts of the largest size locked at opening (`LOCKED_PAYOUTS`); three kept while
+fee on it; two payouts of a line free for it to be switched on or to sell, and at least two of the smallest locked at opening (`LOCKED_PAYOUTS`); three of the largest line live or selling kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid with the approver's approval (`PAYOUT_DELAY`), 7 days
 without it (`PAYOUT_HARD`); 14 days in
 which a stopped payout's money stays set aside and the stop can be lifted, and after which it can be made final (`STOP_RESERVE`); 184 days a
 pool runs before its creator may close it or take back its principal (`MIN_TERM`); 7 days from a
 request to withdraw to its money, and from a close to `finish` (`WITHDRAW_DELAY`), and 3 days to
 carry out a ready request (`WITHDRAW_WINDOW`); a fill
-window of 1 to 60 blocks; a code's share of 0 or 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`)
-and up to 32 codes a pool (`MAX_CODES`).
+window of 1 to 60 blocks; a code's share of 0 or 40 to 60 % (`MIN_PARTNER_BPS`, `MAX_PARTNER_BPS`), and
+as many codes a pool as its creator sets.
 
 ## What anyone can check
 
@@ -204,7 +272,7 @@ text, and a stop that became final is `StopFinal`.
 
 ## Tests
 
-`test/sim/SimPool.t.sol`, 82 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
+`test/sim/SimPool.t.sol`, 129 tests on the hyper-evm-lib simulator (EIP-3009 on a stand-in with
 FiatToken V2.2's interface and words), and every `SM` mutation of `scripts/mutations.py` (on this branch
 SM1 to SM166, SM170 to SM177 and SM180 to SM182: the delay, the window, the less of the two, finish's week, payout
 approval and its 7 days, the running stages' payouts, the 184 days and a used code's raise among them), each
@@ -216,25 +284,28 @@ python3 scripts/mutations.py $(grep -oE "[\"']SM[0-9]+[\"']" scripts/mutations.p
 ```
 
 `test/sim/SimPoolInvariant.t.sol` holds the pool's money to its books whatever is called in whatever order: a
-handler buys with codes, directly and by signature, sets codes for three groups (40 %, 60 % and no share) and
-tries to set them again after a sale, passes and fails exams and stages, claims, stops, lifts and pays payouts, has
+handler buys with codes, directly and by signature, sets codes for three groups (40 %, 60 % and no share), now and
+then for two (an author with 20 % or 50 % of the code's share), tries to set them again after a sale, has anyone
+send some codes what they accrued (`claimShares`), passes and fails exams and stages, claims, stops, lifts and pays payouts, has
 the trader object to a stop and anyone make it final after its 14 days, has the token refuse a trader or a group's
-owner, claims what was held, asks to withdraw, withdraws (at once now and then, which must be refused, otherwise
+owner, an author or the creator, claims what was held, asks to withdraw, withdraws (at once now and then, which must be refused, otherwise
 from the week on to past its window), cancels a request (the creator or the closer; a stranger refused) and adds
 for the creator, closes (the creator from the term on, refused
 before it; the closer early) and finishes (by the creator or the closer), jumps past the 184 days now and then
 (48 runs of 120 calls in CI,
 with `fail-on-revert`: a handler call the pool refuses unexpectedly fails the run instead of passing unseen).
 Fourteen invariants: every dollar in and out accounted for; what is held always there and equal to the refused
-payouts and partners' parts less the claims, `reserved` the stopped payouts, and `pay` spending neither; `paidTotal` the sum of the
+payouts, partners' and authors' parts and the creator's less the claims, `reserved` the stopped payouts, and `pay` spending neither; `paidTotal` the sum of the
 payments, and `pay` sends exactly those; a withdrawal never below three payouts above what is owed, held and
 reserved, nor past `withdrawable`, and before the term not past the profit; one purchase, at most one payout; `owed` the due payouts; stops less lifts are
 those standing and those made final; nothing due behind the head of the queue; `live` the accounts not done, a
-pool finished only with nothing owed, running or reserved, and keeping only what is held; `brought` each code's
-sales and all of them together, and a code a sale has named keeping its partner and share; and each withdrawal's
-shares, worked out apart from the pool: the platform's 0.5 %, each partner's part of the profit less that 0.5 % by
-its code's share and what its code brought (sent, or set aside if the token refuses), the creator the rest, and the
-partners together never above 60 % of it; before the term, until the pool is finished, `principal` all the creator
+pool finished only with nothing owed, running or reserved, and keeping only what is held and what the codes
+accrued; `brought` each code's sales and all of them together, a code a sale has named keeping its partner, author,
+split and share, each code's accrued share its part of every withdrawal worked out apart from the pool to a unit a
+withdrawal, what it got what `claimShares` sent or set aside, and what all codes may claim kept for them and in the
+pool; and each withdrawal's shares: the platform's 0.5 %, what the codes accrued never less than their parts of the
+profit less that 0.5 % nor above 60 % of it and a unit, the creator the rest (sent, or set aside if the token
+refuses); before the term, until the pool is finished, `principal` all the creator
 put in (no path gives any of it back), only the closer closing it (`closedEarly`), and no stranger closing or
 finishing it; and, closed early or not, finished by the creator or the closer, the closer getting none of the
 money and the platform only its 0.5 % of each price and each withdrawal; and no money leaving the pool for the
@@ -281,7 +352,11 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `SimPoolSetup`), SimPool linked to them (the record names all three), a TermsBook and the
   factory on the network (testnet unless named, see Networks) with Circle's USDC, names the filler, the checker, the closer (four keys with
   the operator, none the same) and the recipient, lists BTC,
-  ETH and SOL with their caps (no HYPE), and writes `deployments/<network>-<label>.json` with demo3's
+  ETH and SOL with their caps (no HYPE), hands the factory to our Safe last (`--safe`: `setOperator`, the
+  operator read as the deployer's key before and as the Safe after; refused as 0x0, as one of the three keys, as
+  the deployer's own key, as an address without code or as one that does not answer `getThreshold()` and `getOwners()`
+  as a Safe does; the threshold and the owners it names are printed and shown in the confirmation a person types on mainnet; needed on mainnet, so that the key that deployed the
+  factory never stays in charge of it), and writes `deployments/<network>-<label>.json` with demo3's
   keeper nodes on testnet, `--keeper-nodes` on mainnet. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
   HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
   is on chain as listed, sending a raise of a used code's share for the same partner, and refusing,
@@ -296,9 +371,23 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `withdraw`, `cancel`, `approver`, `approve`) the call is from an address that signs elsewhere, our
   pool's creator being a Safe and its approver a Ledger: the command checks as that address and prints
   the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
+  `check --plan …` asks `SimPoolFactory.check` about a plan by eth_call, sending nothing and reading no key: with
+  `--deployment`, the factory it names; without, the factory, PaperExam and SimPool of the checkout, put in the
+  call by a state override over the network's precompiles, with the assets `deploy` lists, the roles set and the
+  terms as `pool` publishes them, so a plan is checked before any factory stands. Terms `TermsBook.publish` would
+  refuse (empty, or over 24 575 bytes) are refused first. It then measures `create` of the plan with 1 HYPE by
+  eth_call, the creator an address no key holds and USDC answered by a stand-in, at the least gas it runs on, and
+  compares that, with 60 000 for USDC's own transfer, against the network's small block (the least `gasLimit` of
+  the latest blocks, at most 3 000 000): above it, the pool would not open by an ordinary transaction, and `check`
+  stops red. The first pool's plan measured 1 673 901 on testnet on 16 November 2026 (forge,
+  `test_gas_createOfTheFirstPlanFitsASmallBlock`: 1 694 229 with the token, the base and the calldata).
   `pool --signer` prints the terms, the approval of the locked USDC and `create` with 1 HYPE; the codes
   follow with `codes --signer` once the pool's address is known. The first pool's plan is
-  `deployments/plans/sim-first-pool.json`: 5 000 for 45 and 10 000 for 85, 1 600 locked, thirty days
+  `deployments/plans/sim-first-pool.json`: 24 lines, the sizes 5 000, 10 000, 25 000, 50 000, 100 000 and
+  250 000 each on the tiers 3 / 9, 4 / 10, 5 / 10 and 6 / 10 % at the CFO's prices, each line's loss limit
+  trailing the highest daily snapshot up to the starting balance (`drawdown_kind` 1), payout 8 % of the size, two
+  payouts a day, 4 000 locked (`locked_usdc`), the lines of 5 000, 10 000 and 25 000 on and the larger ones off
+  (`on`) until the creator switches them on with two of their payouts free; thirty days
   a stage with no minimum of trading days, seven days to start the stage after a pass, 0.045 % a fill
   (Hyperliquid's taker fee; no builder fee, since nothing trades on the exchange), at the book with a
   ceiling of 150 bp, a fill delay of 4 blocks in both stages (an order placed in block B is filled no
@@ -458,6 +547,18 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   reason 2 leave out the senders the review does not count. An exam or stage of the pool that was not
   read makes the pool's running total incomplete: `enough` is false, and the account is named. The names, the
   selector, the fields of a payout and the pool's rule for a stop are held to `src/sim` by tests.
+
+  A payout is stopped once. `stopPayout` sets `wasStopped` and nothing clears it: a lift (`liftStop`)
+  sends the payout back to waiting, and a second `stopPayout` of it reverts (`BadPayout`), whatever the
+  reason. So the stop of reason 4, prohibited play, is put as soon as its published analysis is ready,
+  not after another stop of the same payout has been lifted, and a stop is not lifted meaning to stop
+  again with reason 4. A standing stop keeps its reason (`stopReasonOf`) and cannot be changed to
+  another; the reason moves no money, so a payout stopped for 1, 2 or 3 that turns out to be prohibited
+  play too stays stopped and becomes final in its time, with the analysis published beside it. If the
+  first stop was lifted already, the payout is due again and is paid in its turn: nothing on the chain
+  stops it. What remains is each of the trader's other payouts still waiting, which has a stop of
+  its own and may be stopped with reason 4, and the published analysis, so that the record says what
+  was seen. Lift a stop only when its payout is to be paid.
 
   A result that does not count up comes with a draft of a stop of reason 3, a result disputed. The
   draft names the fills and leaves out the hash of the analysis, which a person writes. Such a payout

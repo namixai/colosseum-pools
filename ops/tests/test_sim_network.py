@@ -167,9 +167,15 @@ class TheDeployScript(unittest.TestCase):
         with on(networks.MAINNET), self.assertRaises(SystemExit) as caught:
             d.main(self.deploy_argv("--network", "mainnet"))
         self.assertIn("--keeper-nodes is needed on mainnet", str(caught.exception))
+        with tempfile.TemporaryDirectory() as tmp, on(networks.MAINNET), self.assertRaises(SystemExit) as caught:
+            d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp)))
+        self.assertIn("--safe is needed on mainnet", str(caught.exception))
+        safe = "0x" + "5a" * 20
         with tempfile.TemporaryDirectory() as tmp, on(networks.MAINNET), mock.patch("builtins.print") as out:
-            self.assertEqual(d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp))), 0)
+            self.assertEqual(d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp),
+                                                     "--safe", safe)), 0)
         text = "\n".join(str(x.args[0]) for x in out.call_args_list)
+        self.assertIn(f"would hand over  setOperator {d.to_checksum_address(safe)} last", text)
         self.assertIn(networks.MAINNET.usdc_erc20, text)
         self.assertIn("mainnet (chain 999)", text)
         self.assertIn("BTC (0)", text)
@@ -192,7 +198,8 @@ class TheDeployScript(unittest.TestCase):
                 mock.patch.object(d, "deploy_contract") as deployed, mock.patch.object(d.c, "account") as key, \
                 mock.patch.object(d, "big_blocks") as big:
             with self.assertRaises(SystemExit) as caught:
-                d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--send"))
+                d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--safe",
+                                        "0x" + "5a" * 20, "--send"))
         self.assertIn("without a terminal", str(caught.exception))
         deployed.assert_not_called()
         key.assert_not_called()
@@ -203,12 +210,19 @@ class TheDeployScript(unittest.TestCase):
         moved = {"universe": [{"name": "BTC"}, {"name": "ETH"}, {}, {}, {}, {"name": "AVAX"}]}
         with tempfile.TemporaryDirectory() as tmp, on(networks.MAINNET), mock.patch.dict(os.environ, MAINNET_KEYS), \
                 mock.patch("sys.stdin.isatty", return_value=True), mock.patch("builtins.input", return_value=sn.CONFIRM_PHRASE), \
-                mock.patch("builtins.print"), mock.patch.object(d.c, "info_post", return_value=moved), \
+                mock.patch("builtins.print") as shown, mock.patch.object(d.c, "info_post", return_value=moved), \
+                mock.patch.object(d, "safe_facts", return_value=(2, [d.to_checksum_address("0x" + x * 20) for x in ("a1", "a2", "a3")])), \
                 mock.patch.object(d.c, "account") as key, mock.patch.object(d, "deploy_contract") as deployed, \
                 mock.patch.object(d, "big_blocks"), mock.patch.object(d, "save"), mock.patch.object(d, "mark_incomplete"):
             with self.assertRaises(SystemExit) as caught:
-                d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--send"))
+                d.main(self.deploy_argv("--network", "mainnet", "--keeper-nodes", self.nodes_file(tmp), "--safe",
+                                        "0x" + "5a" * 20, "--send"))
         self.assertIn("mainnet meta changed", str(caught.exception))
+        # What the person was shown before typing the phrase: to whom the factory goes, and the Safe's threshold.
+        prompt = [str(x.args[0]) for x in shown.call_args_list if str(x.args[0]).startswith("MAINNET")]
+        self.assertEqual(len(prompt), 1)
+        self.assertIn("2 of its 3 owners must sign", prompt[0])
+        self.assertIn(d.to_checksum_address("0x" + "a2" * 20), prompt[0])
         key.assert_not_called()
         deployed.assert_not_called()
 
@@ -221,7 +235,8 @@ class TheDeployScript(unittest.TestCase):
             self.assertEqual(d._rules(rules)[3], [0, 1, 5])
 
     def test_mainnet_refuses_a_plan_written_for_testnet(self):
-        plan = str(ROOT / "deployments/plans/sim-first-pool.json")
+        # The measuring pool's plan says testnet; the first pool's is one plan for both networks (16 November).
+        plan = str(ROOT / "deployments/plans/sim-measure-pool.json")
         with on(networks.MAINNET), mock.patch.object(d.deployments, "load", return_value={"SimPoolFactory": A}):
             with self.assertRaises(SystemExit) as caught:
                 d.main(["pool", "--deployment", "x", "--plan", plan, "--signer", B, "--network", "mainnet"])

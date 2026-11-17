@@ -1053,7 +1053,7 @@ contract PaperExamTest is Test {
 
     function _fillerExam() internal returns (PaperExam e) {
         e = PaperExam(Clones.clone(address(impl)));
-        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 0);
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 0, false);
     }
 
     function _fillerTrade(PaperExam e, bool isBuy, uint64 sz) internal {
@@ -1061,6 +1061,34 @@ contract PaperExamTest is Test {
         vm.roll(block.number + DELAY);
         vm.prank(filler);
         e.fill();
+    }
+
+    /// With `tellsPool` the pass calls the pool's `examPassed()` once, and a pool that refuses it refuses the pass;
+    /// without it the pool is not called (this test has no `examPassed`, so a call would revert the pass).
+    function test_tellsPool_aPassCallsThePoolOnlyWhenAsked() public {
+        PaperExam a = _fillerExam();
+        assertFalse(a.tellsPool());
+        _fillerTrade(a, true, 100);
+        _mark(1_100_000);
+        _fillerTrade(a, false, 100);
+        _graduate(a);
+        assertEq(_status(a), uint8(PaperExam.Status.Passed), "not asked: passed, the pool not called");
+        _mark(1_000_000);
+        PassListener l = new PassListener();
+        PaperExam b = PaperExam(Clones.clone(address(impl)));
+        l.start(b, trader, _rules(), _terms(), filler);
+        assertTrue(b.tellsPool());
+        assertEq(b.pool(), address(l));
+        _fillerTrade(b, true, 100);
+        _mark(1_100_000);
+        _fillerTrade(b, false, 100);
+        l.setRefuse(true);
+        vm.prank(trader);
+        vm.expectRevert(PassListener.No.selector);
+        b.graduate();
+        l.setRefuse(false);
+        _graduate(b);
+        assertEq(l.told(), 1, "told once, at the pass");
     }
 
     // ── the drawdown line trailing to the start ──────────────────
@@ -1073,12 +1101,12 @@ contract PaperExamTest is Test {
 
     function _trailing(Rules memory r, ExamTerms memory t) internal returns (PaperExam e) {
         e = PaperExam(Clones.clone(address(impl)));
-        e.initializeWithFiller(trader, r, t, filler, false, 0, 1);
+        e.initializeWithFiller(trader, r, t, filler, false, 0, 1, false);
     }
 
     function _fromStart(Rules memory r) internal returns (PaperExam e) {
         e = PaperExam(Clones.clone(address(impl)));
-        e.initializeWithFiller(trader, r, _terms(), filler, false, 0, 0);
+        e.initializeWithFiller(trader, r, _terms(), filler, false, 0, 0, false);
     }
 
     /// The next UTC day's snapshot, at `px`.
@@ -1097,7 +1125,7 @@ contract PaperExamTest is Test {
         assertEq(e.drawdownLine(), 90e6, "until a higher snapshot, the line is the start's");
         PaperExam x = PaperExam(Clones.clone(address(impl)));
         vm.expectRevert(PaperExam.BadTerms.selector);
-        x.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 2);
+        x.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 2, false);
     }
 
     function test_trailingLine_risesWithTheDaysSnapshots_andStopsAtTheStart() public {
@@ -1403,7 +1431,7 @@ contract PaperExamTest is Test {
         ExamTerms memory t = _terms();
         t.capital = type(uint64).max;
         PaperExam e = PaperExam(Clones.clone(address(impl)));
-        e.initializeWithFiller(trader, _rules(), t, filler, false, 0, 0);
+        e.initializeWithFiller(trader, _rules(), t, filler, false, 0, 0, false);
         _mark(1);
         _fillerTrade(e, true, type(uint64).max);
         _place(e, BTC, true, 1);
@@ -1455,14 +1483,14 @@ contract PaperExamTest is Test {
         PaperExam e = PaperExam(Clones.clone(address(impl)));
         vm.expectEmit(address(e));
         emit PaperExam.FillerSet(filler, false, 0);
-        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 0);
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, false, 0, 0, false);
         assertEq(e.filler(), filler);
         assertEq(_exam().filler(), address(0), "an exam started the old way has none");
         address[3] memory bad = [address(0), trader, address(this)];
         for (uint256 i = 0; i < bad.length; ++i) {
             PaperExam x = PaperExam(Clones.clone(address(impl)));
             vm.expectRevert(PaperExam.BadTerms.selector);
-            x.initializeWithFiller(trader, _rules(), _terms(), bad[i], false, 0, 0);
+            x.initializeWithFiller(trader, _rules(), _terms(), bad[i], false, 0, 0, false);
         }
     }
 
@@ -1655,7 +1683,7 @@ contract PaperExamTest is Test {
 
     function _bookExam(uint16 maxSpread) internal returns (PaperExam e) {
         e = PaperExam(Clones.clone(address(impl)));
-        e.initializeWithFiller(trader, _rules(), _terms(), filler, true, maxSpread, 0);
+        e.initializeWithFiller(trader, _rules(), _terms(), filler, true, maxSpread, 0, false);
     }
 
     function _bookFill(PaperExam e, bool isBuy, uint64 sz) internal returns (uint64 px, uint8 source) {
@@ -1782,11 +1810,11 @@ contract PaperExamTest is Test {
         for (uint256 i = 0; i < 3; ++i) {
             PaperExam x = PaperExam(Clones.clone(address(impl)));
             vm.expectRevert(PaperExam.BadTerms.selector);
-            x.initializeWithFiller(trader, _rules(), _terms(), filler, true, bad[i], 0);
+            x.initializeWithFiller(trader, _rules(), _terms(), filler, true, bad[i], 0, false);
         }
         PaperExam y = PaperExam(Clones.clone(address(impl)));
         vm.expectRevert(PaperExam.BadTerms.selector);
-        y.initializeWithFiller(trader, _rules(), _terms(), filler, false, 20, 0);
+        y.initializeWithFiller(trader, _rules(), _terms(), filler, false, 20, 0, false);
         PaperExam z = _bookExam(500);
         assertTrue(z.fromBook());
         assertEq(z.maxWorseBps(), 500);
@@ -1824,5 +1852,26 @@ contract AnswersShort {
 contract Refuses {
     fallback() external {
         revert();
+    }
+}
+
+/// A pool that hears of its exams' passes, or refuses to.
+contract PassListener {
+    uint256 public told;
+    bool public refuse;
+
+    error No();
+
+    function start(PaperExam e, address trader, Rules calldata r, ExamTerms calldata t, address filler) external {
+        e.initializeWithFiller(trader, r, t, filler, false, 0, 0, true);
+    }
+
+    function setRefuse(bool b) external {
+        refuse = b;
+    }
+
+    function examPassed() external {
+        if (refuse) revert No();
+        told += 1;
     }
 }

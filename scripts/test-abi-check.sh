@@ -23,6 +23,9 @@ GW="$ROOT/gateway/chain.py"
 KEEPER="$ROOT/ops/keeper.py"
 LIVE="$ROOT/ops/create_live_pool.py"
 SHARED="$ROOT/ops/shared_run.py"
+SIMJS="$ROOT/app/lib/simpool.js"
+EXAMJS="$ROOT/app/lib/exam.js"
+OPJS="$ROOT/app/lib/operator.js"
 
 SAVE="$(mktemp -d -t abitest.XXXXXX)" || { echo "mktemp failed"; exit 2; }
 drop_save() { find "$SAVE" -type f -delete 2>/dev/null; rmdir "$SAVE" 2>/dev/null; }
@@ -30,7 +33,8 @@ drop_save() { find "$SAVE" -type f -delete 2>/dev/null; rmdir "$SAVE" 2>/dev/nul
 trap drop_save EXIT
 
 if ! cp "$JS" "$SAVE/chain.js" || ! cp "$PY" "$SAVE/desk.py" || ! cp "$GW" "$SAVE/gateway-chain.py" \
-    || ! cp "$KEEPER" "$SAVE/keeper.py" || ! cp "$LIVE" "$SAVE/create_live_pool.py" || ! cp "$SHARED" "$SAVE/shared_run.py"; then
+    || ! cp "$KEEPER" "$SAVE/keeper.py" || ! cp "$LIVE" "$SAVE/create_live_pool.py" || ! cp "$SHARED" "$SAVE/shared_run.py" \
+    || ! cp "$SIMJS" "$SAVE/simpool.js" || ! cp "$EXAMJS" "$SAVE/exam.js" || ! cp "$OPJS" "$SAVE/operator.js"; then
   echo "could not save the originals"
   exit 2
 fi
@@ -44,6 +48,9 @@ put_back() {
   cp "$SAVE/keeper.py" "$KEEPER" || { echo "FAIL: could not restore ops/keeper.py"; status=2; }
   cp "$SAVE/create_live_pool.py" "$LIVE" || { echo "FAIL: could not restore ops/create_live_pool.py"; status=2; }
   cp "$SAVE/shared_run.py" "$SHARED" || { echo "FAIL: could not restore ops/shared_run.py"; status=2; }
+  cp "$SAVE/simpool.js" "$SIMJS" || { echo "FAIL: could not restore app/lib/simpool.js"; status=2; }
+  cp "$SAVE/exam.js" "$EXAMJS" || { echo "FAIL: could not restore app/lib/exam.js"; status=2; }
+  cp "$SAVE/operator.js" "$OPJS" || { echo "FAIL: could not restore app/lib/operator.js"; status=2; }
   return "$status"
 }
 
@@ -249,6 +256,43 @@ expect 2 "the agents' copy is not a tuple" "agents/desk.py RULES is not a tuple"
 # 7a. The client's table of errors moves or is renamed.
 drift "$PY" 'CONTRACT_ERRORS = (' 'CONTRACT_ERRORS_V2 = ('
 expect 2 "the client's table of errors moved" "no CONTRACT_ERRORS in agents/desk.py"
+
+# 7b. The app's libraries of the simulated pool (weekly architecture audit, 16 November 2026, finding A).
+drift "$SIMJS" '"function buy(uint256 line, bytes32 code) returns (address exam)"' '"function buy(bytes32 code, uint256 line) returns (address exam)"'
+expect 1 "a purchase whose arguments moved" "SIM_POOL_ABI function buy(bytes32,uint256): SimPool declares no such function"
+drift "$SIMJS" 'uint64 amount, uint64 dueAt, uint8 state, bool wasStopped))",' 'uint64 dueAt, uint64 amount, uint8 state, bool wasStopped))",'
+expect 1 "two fields of a payout swapped" "named dueAt, the contract calls it amount"
+drift "$SIMJS" '"event CodeSet(bytes32 indexed code, address indexed partner, uint16 bps, address indexed author, uint16 authorBps)"' '"event CodeSet(bytes32 indexed code, address partner, uint16 bps, address indexed author, uint16 authorBps)"'
+expect 1 "an event that lost an indexed" "indexed False, the contract says True"
+drift "$SIMJS" '"function owed() view returns (uint256)"' '"function owed() returns (uint256)"'
+expect 1 "a read written as a call that sends" "nonpayable, the contract says view"
+drift "$SIMJS" '"function menu() view returns ((uint64 size, uint64 price)[])"' '"function menu() view returns ((uint64 size)[])"'
+expect 1 "an array of structs read short" "1 fields, the contract has 2"
+drift "$EXAMJS" '"place(uint32,bool,uint64)"' '"place(uint32,uint64,bool)"'
+expect 1 "an exam's call built from a stale signature" "call place(uint32,uint64,bool): PaperExam declares no such function"
+drift "$EXAMJS" '"event DaySnapshot(uint32 indexed day, int256 equity)"' '"event DaySnapshot(uint32 indexed day, uint256 equity)"'
+expect 1 "an exam's event with the wrong type" "PAPER_EXAM_ABI event DaySnapshot(uint32,uint256): PaperExam declares no such event"
+drift "$OPJS" '"stopPayout(uint256,uint8,address,bytes32[],bytes32[])"' '"stopPayout(uint256,uint8,bytes32[],bytes32[])"'
+expect 1 "the checker's stop built without its paired account" "call stopPayout(uint256,uint8,bytes32"
+drift "$OPJS" 'export const OPERATOR_ABI = [' 'export const OPERATOR_EXTRA_ABI = [];
+export const OPERATOR_ABI = ['
+expect 1 "an ABI the check does not know" "OPERATOR_EXTRA_ABI is an ABI this check does not know"
+drift "$OPJS" 'export const OPERATOR_ABI = [' 'export const OPERATOR_V2_ABI = ['
+expect 2 "an ABI the table names that moved" "no OPERATOR_ABI in app/lib/operator.js"
+
+# 7c. Review of the pull request: the three cases a reviewer found the check blind to.
+# A call whose signature sits on the line after `call(pool,`: the same drift as above must still be seen.
+drift "$OPJS" 'return call(pool, "stopPayout(uint256,uint8,address,bytes32[],bytes32[])", [BigInt(id), r, paired, t, l], "checker",' 'return call(pool,
+    "stopPayout(uint256,uint8,bytes32[],bytes32[])", [BigInt(id), r, paired, t, l], "checker",'
+expect 1 "a stop call whose signature is on the next line" "call stopPayout(uint256,uint8,bytes32"
+# An ABI whose initializer is a call, not a bare list: found by its name, so it cannot go unnamed.
+drift "$OPJS" 'export const OPERATOR_ABI = [' 'export const OPERATOR_FROZEN_ABI = Object.freeze([]);
+export const OPERATOR_ABI = ['
+expect 1 "an ABI built with Object.freeze" "OPERATOR_FROZEN_ABI is an ABI this check does not know"
+# A tuple that holds an array is encoded behind an offset word: a copy that keeps only its first scalar
+# fields would read the offset as a field, so it is not an allowed short read.
+drift "$EXAMJS" 'returns ((uint16 dailyLossBps, uint16 maxDrawdownBps, uint32 maxLeverageX100, uint32[] assets, uint32[] assetLeverageX100))' 'returns ((uint16 dailyLossBps, uint16 maxDrawdownBps, uint32 maxLeverageX100))'
+expect 1 "a dynamic tuple read short" "3 fields, the contract has 5"
 
 # 8. forge answers with something that is not JSON.
 fake_forge 'Error: this is not an ABI'

@@ -226,7 +226,7 @@ contract PaperExamStillOracleInvariantTest is Test {
         address impl = address(new PaperExam());
         exam = PaperExam(Clones.clone(impl));
         handler = new PaperExamHandler(exam, randomBook);
-        exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, MAX_WORSE, 0);
+        exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, MAX_WORSE, 0, false);
         targetContract(address(handler));
         bytes4[] memory sel = new bytes4[](13);
         sel[0] = PaperExamHandler.place.selector;

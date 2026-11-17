@@ -1,9 +1,13 @@
 """The simulated pool's deploy script and relayer: their numbers and layouts against the contracts,
 the first pool's plan, and what the relayer refuses before it spends gas."""
+import io
 import json
 import pathlib
 import re
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from unittest import mock
 
 from eth_utils import keccak
 
@@ -27,10 +31,12 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(constant("CREATION_FEE"), "1 ether")
         self.assertEqual(d.CREATION_FEE, 10**18)
         self.assertEqual(int(constant("PAYOUT_BPS")), d.PAYOUT_BPS)
-        self.assertEqual(int(constant("LOCKED_PAYOUTS")), d.LOCKED_PAYOUTS)
+        # The factory takes it from SimPool.sol, whose pool counts two payouts of a line free before it sells.
+        self.assertEqual(constant("LOCKED_PAYOUTS"), "uint8(COVER_PAYOUTS)")
+        self.assertEqual(int(re.search(r"constant COVER_PAYOUTS = (\d+);", POOL).group(1)), d.LOCKED_PAYOUTS)
         self.assertEqual(int(constant("MIN_PARTNER_BPS")), d.MIN_PARTNER_BPS)
         self.assertEqual(int(constant("MAX_PARTNER_BPS")), d.MAX_PARTNER_BPS)
-        self.assertEqual(int(constant("MAX_CODES")), d.MAX_CODES)
+        self.assertNotIn("MAX_CODES", FACTORY, "a pool has no limit on its codes")
         self.assertEqual(constant("MIN_TERM"), "184 days")
 
     def test_deploy_names_the_closer_a_fourth_key(self):
@@ -58,17 +64,19 @@ class TheNumbers(unittest.TestCase):
         body = re.search(r"struct SimPlan \{(.*?)\n\}", POOL, re.S).group(1)
         types = [l.split()[0] for l in body.splitlines() if l.strip() and not l.strip().startswith("//")]
         self.assertEqual(types, ["SimSize[]", "Rules", "ExamTerms", "Rules", "ExamTerms", "uint32", "bool", "uint16",
-                                 "bytes32", "SimTier[]", "uint8"])
+                                 "bytes32", "SimTier[]", "uint8", "uint256", "uint32"])
         self.assertTrue(d.PLAN_T.startswith("((uint64,uint64)[]," + d.RULES_T + "," + d.TERMS_T))
-        self.assertTrue(d.PLAN_T.endswith(",uint32,bool,uint16,bytes32," + d.TIER_T + "[],uint8)"))
+        self.assertTrue(d.PLAN_T.endswith(",uint32,bool,uint16,bytes32," + d.TIER_T + "[],uint8,uint256,uint32)"))
         tier = re.search(r"struct SimTier \{(.*?)\n\}", POOL, re.S).group(1)
         self.assertEqual([l.split()[0] for l in tier.splitlines() if l.strip() and not l.strip().startswith("//")],
                          ["uint16", "uint16", "uint8"])
         self.assertEqual(d.TIER_T, "(uint16,uint16,uint8)")
 
     def test_the_scripts_calls_are_the_pools(self):
-        self.assertIn("function setCode(bytes32 code, address partner, uint16 bps)", POOL)
-        self.assertEqual(d.SET_CODE, "setCode(bytes32,address,uint16)")
+        self.assertIn("function setSplitCode(bytes32 code, address partner, uint16 bps, address author, uint16 authorBps)",
+                      re.sub(r"\s+", " ", POOL))
+        self.assertEqual(d.SET_CODE, "setSplitCode(bytes32,address,uint16,address,uint16)")
+        self.assertEqual(d.SET_CODE_TYPES, ["bytes32", "address", "uint16", "address", "uint16"])
         body = re.search(r"struct Code \{(.*?)\n    \}", POOL, re.S).group(1)
         types = [l.split()[0] for l in body.splitlines() if l.strip() and not l.strip().startswith("//")]
         self.assertEqual(types, d.CODE_OF, "codeOf's answer, field by field")
@@ -89,6 +97,158 @@ class TheNumbers(unittest.TestCase):
         self.assertEqual(r.EXAM_SOLD, declared("src/sim/SimPool.sol", "ExamSold"))
 
 
+class TheHandOver(unittest.TestCase):
+    """`deploy` hands the factory to our Safe last: setOperator, read before and after; needed on mainnet."""
+    F, S, D = "0x" + "fa" * 20, "0x" + "5a" * 20, "0x" + "de" * 20
+    KEYS = ["--filler", "0x" + "11" * 20, "--checker", "0x" + "22" * 20, "--closer", "0x" + "33" * 20]
+
+    def argv(self, *extra):
+        return ["deploy", "--label", "never-written", *self.KEYS, *extra]
+
+    OWNERS = ["0x" + "a1" * 20, "0x" + "a2" * 20, "0x" + "a3" * 20]
+
+    def send(self, safe, operators=None, code="0x6080", reads_of_safe=None):
+        """A testnet deploy with --send, every chain call mocked: the transactions it sends, in order, and the record.
+        `reads_of_safe` overrides what the Safe answers to getThreshold() and getOwners(): a tuple, or an exception
+        to raise."""
+        answers = {"getThreshold()": (2,), "getOwners()": (self.OWNERS,), **(reads_of_safe or {})}
+
+        def view(to, sig, *rest):
+            if sig in answers:
+                if isinstance(answers[sig], Exception):
+                    raise answers[sig]
+                return answers[sig]
+            return (next(reads),)
+
+        from types import SimpleNamespace
+        from unittest import mock
+        sent, records = [], []
+        reads = iter(operators or [self.D, safe])
+        deployed = iter(["0x" + f"{i:040x}" for i in range(1, 8)])
+        op = SimpleNamespace(address=d.to_checksum_address(self.D))
+        transact = lambda acct, to, sig, types, values: sent.append((to, sig, values)) or {"transactionHash": f"0x{len(sent):x}"}
+        argv = self.argv("--send", *(["--safe", safe] if safe else []))
+        with mock.patch.object(d.sn, "confirm_send"), mock.patch.object(d.sn, "check_assets"), \
+                mock.patch.object(d.c, "account", return_value=op), mock.patch.object(d, "big_blocks") as big, \
+                mock.patch.object(d, "deploy_contract", side_effect=lambda *a, **k: (next(deployed), {"blockNumber": "0x10"})) as dc, \
+                mock.patch.object(d.c, "transact", side_effect=transact), \
+                mock.patch.object(d.c, "call_view", side_effect=view), \
+                mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): hex(d.c.CHAIN_ID) if m == "eth_chainId" else code), \
+                mock.patch.object(d, "git_head", return_value="ab" * 20), \
+                mock.patch.object(d, "save", side_effect=lambda out, rec: records.append(json.loads(json.dumps(rec)))), \
+                mock.patch.object(d, "mark_incomplete") as incomplete, \
+                mock.patch.object(d.deployments, "load", return_value={"keeper_nodes": {}}), mock.patch("builtins.print"):
+            try:
+                result = d.main(argv)
+            except SystemExit as exc:
+                result = exc
+        return result, sent, records, dc, big, incomplete
+
+    def test_the_plan_says_the_hand_over_or_that_the_key_stays(self):
+        from unittest import mock
+        with mock.patch("builtins.print") as out:
+            self.assertEqual(d.main(self.argv("--safe", self.S)), 0)
+        text = "\n".join(str(x.args[0]) for x in out.call_args_list)
+        self.assertIn(f"would hand over  setOperator {d.to_checksum_address(self.S)} last", text)
+        with mock.patch("builtins.print") as out:
+            self.assertEqual(d.main(self.argv()), 0)
+        self.assertIn("stays the deployer's key (no --safe; testnet only)", "\n".join(str(x.args[0]) for x in out.call_args_list))
+
+    def test_setoperator_to_the_safe_is_the_last_call_and_read_before_and_after(self):
+        result, sent, records, _, _, incomplete = self.send(self.S)
+        self.assertEqual(result, 0)
+        factory = sent[0][0]
+        self.assertEqual(sent[-1], (factory, "setOperator(address)", [d.to_checksum_address(self.S)]))
+        self.assertEqual([t[1] for t in sent].count("setOperator(address)"), 1)
+        self.assertEqual(records[-1]["status"], d.DONE)
+        self.assertEqual(records[-1]["operator"], d.to_checksum_address(self.S))
+        self.assertEqual(records[-1]["deployer"], d.to_checksum_address(self.D))
+        self.assertIn("setOperator", records[-1]["tx"])
+        # Until the read after, the record does not name the Safe as the operator, nor say it is complete.
+        before_done = [r for r in records if "setOperator" in r["tx"]][0]
+        self.assertEqual(before_done["operator"], d.to_checksum_address(self.D))
+        self.assertNotEqual(before_done["status"], d.DONE)
+        incomplete.assert_not_called()
+
+    def test_without_a_safe_on_testnet_the_key_stays_and_nothing_is_handed_over(self):
+        result, sent, records, *_ = self.send(None)
+        self.assertEqual(result, 0)
+        self.assertNotIn("setOperator(address)", [t[1] for t in sent])
+        self.assertEqual(records[-1]["operator"], d.to_checksum_address(self.D))
+
+    def test_a_safe_that_is_zero_or_a_platform_key_is_refused_before_anything_is_sent(self):
+        for safe, said in (("0x" + "00" * 20, "--safe is 0x0"), (self.KEYS[1], "the filler, the checker or the closer"),
+                           (self.KEYS[5], "the filler, the checker or the closer")):
+            result, sent, _, dc, big, _ = self.send(safe)
+            self.assertIsInstance(result, SystemExit)
+            self.assertIn(said, str(result))
+            self.assertEqual(sent, [])
+            dc.assert_not_called(), big.assert_not_called()
+
+    def test_the_deployers_own_key_or_an_address_without_code_is_refused_before_anything_is_sent(self):
+        no_code = ((self.S, c, "has no code on testnet") for c in ("0x", "0x0", "0X", "0X0", "", None))
+        for safe, code, said in ((self.D, "0x6080", "the deployer's own key"), *no_code):
+            result, sent, _, dc, big, _ = self.send(safe, code=code)
+            self.assertIsInstance(result, SystemExit)
+            self.assertIn(said, str(result))
+            self.assertEqual(sent, [])
+            dc.assert_not_called(), big.assert_not_called()
+
+    def test_an_address_that_does_not_answer_as_a_safe_is_refused_before_anything_is_sent(self):
+        for reads, said in (({"getThreshold()": RuntimeError("revert")}, "is not a Safe: getThreshold() or getOwners()"),
+                            ({"getOwners()": ValueError("empty")}, "is not a Safe: getThreshold() or getOwners()"),
+                            ({"getThreshold()": (0,)}, "threshold 0 with 3 owners"),
+                            ({"getThreshold()": (4,)}, "threshold 4 with 3 owners"),
+                            ({"getOwners()": ([],)}, "with 0 owners")):
+            result, sent, _, dc, big, _ = self.send(self.S, reads_of_safe=reads)
+            self.assertIsInstance(result, SystemExit, reads)
+            self.assertIn(said, str(result))
+            self.assertEqual(sent, [])
+            dc.assert_not_called(), big.assert_not_called()
+
+    def test_the_person_confirming_sees_the_safes_threshold_and_owners(self):
+        from unittest import mock
+        texts = []
+
+        def stop_at_the_phrase(args, what, c):
+            texts.append(what())      # the confirmation's text is made once the person is at a terminal
+            raise SystemExit("stop at the confirmation")
+
+        with mock.patch.object(d.sn, "confirm_send", side_effect=stop_at_the_phrase), \
+                mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): hex(d.c.CHAIN_ID) if m == "eth_chainId" else "0x6080"), \
+                mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *r: {
+                    "getThreshold()": (2,), "getOwners()": (self.OWNERS,)}[sig]), \
+                mock.patch("builtins.print") as out:
+            with self.assertRaises(SystemExit):
+                d.main(self.argv("--send", "--safe", self.S))
+        printed = "\n".join(str(x.args[0]) for x in out.call_args_list)
+        for text in (texts[0], printed):
+            self.assertIn(d.to_checksum_address(self.S), text)
+            self.assertIn("2 of its 3 owners must sign", text)
+            for o in self.OWNERS:
+                self.assertIn(d.to_checksum_address(o), text)
+
+    def test_an_operator_that_is_not_the_deployer_before_sends_nothing_and_leaves_the_deploy_incomplete(self):
+        result, sent, records, _, _, incomplete = self.send(self.S, operators=["0x" + "99" * 20])
+        self.assertIsInstance(result, SystemExit)
+        self.assertIn("not the deployer's key: setOperator not sent", str(result))
+        self.assertNotIn("setOperator(address)", [t[1] for t in sent])
+        self.assertNotEqual(records[-1]["status"], d.DONE)
+        incomplete.assert_called_once()
+
+    def test_an_operator_that_is_not_the_safe_after_leaves_the_deploy_incomplete(self):
+        result, sent, records, _, _, incomplete = self.send(self.S, operators=[self.D, self.D])
+        self.assertIsInstance(result, SystemExit)
+        self.assertIn("not the Safe", str(result))
+        self.assertNotEqual(records[-1]["status"], d.DONE)
+        self.assertEqual(records[-1]["operator"], d.to_checksum_address(self.D))
+        incomplete.assert_called_once()
+
+    def test_the_call_is_the_factorys(self):
+        self.assertIn("function setOperator(address operator_) external onlyOperator", FACTORY)
+        self.assertIn("address public operator;", FACTORY)
+
+
 class TheRecord(unittest.TestCase):
     def test_a_finished_deploy_writes_a_record_the_loader_takes(self):
         """`deploy` used to end on "deployed", which `deployments.load` refuses: `pool`, `buy`, the keeper and the
@@ -107,47 +267,102 @@ class TheRecord(unittest.TestCase):
 
 
 class TheLibraries(unittest.TestCase):
-    """SimPool links to two libraries since its code outgrew a block's limit; `deploy` puts both first and names them,
-    and the pool's built code asks for exactly these two."""
+    """SimPool links to three libraries since its code outgrew a block's limit; `deploy` puts them first and names
+    them, and the pool's built code asks for exactly these three."""
 
     def test_deploy_links_the_pool_to_both_libraries(self):
         src = (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8")
         stops = src.index('deploy_contract(op, out, record, "SimPoolStops", "SimPoolStops", [], [])')
         setup = src.index('deploy_contract(op, out, record, "SimPoolSetup", "SimPoolSetup", [], [])')
-        pool = src.index('{"SimPoolStops": stops, "SimPoolSetup": setup})')
-        self.assertLess(max(stops, setup), pool, "the libraries before the pool that links to them")
+        codes = src.index('deploy_contract(op, out, record, "SimPoolCodes", "SimPoolCodes", [], [])')
+        pool = src.index('{"SimPoolStops": stops, "SimPoolSetup": setup, "SimPoolCodes": codes_lib})')
+        self.assertLess(max(stops, setup, codes), pool, "the libraries before the pool that links to them")
 
-    def test_the_pools_code_links_to_these_two_and_no_other(self):
+    def test_the_pools_code_links_to_these_three_and_no_other(self):
         art = ROOT / "out/SimPool.sol/SimPool.json"
         if not art.exists():
             self.skipTest("no forge build here")
         refs = json.loads(art.read_text())["bytecode"].get("linkReferences") or {}
         names = sorted(name for libs in refs.values() for name in libs)
-        self.assertEqual(names, ["SimPoolSetup", "SimPoolStops"])
+        self.assertEqual(names, ["SimPoolCodes", "SimPoolSetup", "SimPoolStops"])
 
 
 class TheFirstPool(unittest.TestCase):
-    def test_it_is_alexs_menu_and_locks_1600(self):
-        self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], [(5000, 45), (10000, 85)])
-        self.assertEqual(d.locked_of(FIRST), 1_600 * 10**6)
+    # The CFO's prices of 16 November (25 000 and up: its section on large accounts): for each size, the price
+    # on the tiers 3 / 9, 4 / 10, 5 / 10 and 6 / 10.
+    SIZES = (5_000, 10_000, 25_000, 50_000, 100_000, 250_000)
+    TIERS = ((300, 900), (400, 1000), (500, 1000), (600, 1000))
+    PRICES = {5_000: (20, 30, 40, 50), 10_000: (40, 60, 79, 95), 25_000: (100, 150, 198, 238),
+              50_000: (200, 300, 395, 475), 100_000: (400, 600, 790, 950), 250_000: (1_000, 1_500, 1_975, 2_375)}
+
+    def test_it_is_the_cfos_menu_of_24_lines_and_locks_4000(self):
+        want = [(size, self.PRICES[size][k]) for size in self.SIZES for k in range(4)]
+        self.assertEqual([(m["size_usdc"], m["price_usdc"]) for m in FIRST["menu"]], want)
+        self.assertEqual(d.locked_of(FIRST), 4_000 * 10**6, "the creator's lock of 16 November")
+        self.assertEqual(d.on_of(FIRST), 0xfff, "5 000, 10 000 and 25 000 on; 50 000 and up off")
+        self.assertEqual([m["on"] for m in FIRST["menu"]], [m["size_usdc"] <= 25_000 for m in FIRST["menu"]])
+        # The same menu the contract tests open a pool on and measure the gas of (`_firstPlan`).
+        sol = (ROOT / "test/sim/SimPool.t.sol").read_text()
+        body = sol[sol.index("function _firstPlan()"):]
+        body = body[:body.index("\n    }\n")]
+        self.assertIn("p.locked = 4_000e6;", body)
+        self.assertIn("p.on = 0xfff;", body)
+        self.assertIn("uint16[4] memory dd = [uint16(300), 400, 500, 600];", body)
+        self.assertIn("uint16[4] memory target = [uint16(900), 1000, 1000, 1000];", body)
+        self.assertIn("uint64[12] memory price = [uint64(20e6), 30e6, 40e6, 50e6, 40e6, 60e6, 79e6, 95e6, 100e6, 150e6, "
+                      "198e6, 238e6];", body)
 
     def test_its_tuple(self):
         h = keccak(text=FIRST["terms_text"])
         plan = d.plan_of(FIRST, h)
-        self.assertEqual(plan[0], [(5_000 * 10**6, 45 * 10**6), (10_000 * 10**6, 85 * 10**6)])
+        self.assertEqual(plan[0], [(size * 10**6, self.PRICES[size][k] * 10**6) for size in self.SIZES for k in range(4)])
         self.assertEqual(plan[1], (300, 600, 1000, [3, 4, 0], [1000, 1000, 500]))
         self.assertEqual(plan[2], (0, [1000], 2592000, 2592000, 0, 450, 4, 3))
         self.assertEqual(plan[4], plan[2], "the stage has the exam's terms")
         self.assertEqual(plan[5:9], (604800, True, 150, h))
-        # No line of its own tier: each line takes the plan's 6 % and 10 %, from the start, and two payouts a day.
-        self.assertEqual(plan[9:], ([(600, 1000, 0), (600, 1000, 0)], 2))
+        # Each line its tier, trailing to the start, and two payouts a day.
+        self.assertEqual(plan[9:11], ([(dd, t, 1) for _ in self.SIZES for dd, t in self.TIERS], 2))
+        self.assertEqual(plan[11:], (4_000 * 10**6, 0xfff))
+        # The payout is 8 % of the size: what the terms say each line needs free.
+        self.assertEqual(d.PAYOUT_BPS, 800)
+
+    def test_its_terms_name_the_24_lines_the_large_accounts_and_the_four_reasons(self):
+        text = FIRST["terms_text"]
+        for k, (dd, t) in enumerate(self.TIERS):
+            line = f"{dd // 100} % and {t // 100} %: " + ", ".join(
+                f"{size:,} for {self.PRICES[size][k]:,} USDC".replace(",", " ") for size in self.SIZES)
+            self.assertIn(line, text)
+        self.assertIn("The pool opens with the lines of 5 000, 10 000 and 25 000 switched on; the lines of 50 000, "
+                      "100 000 and 250 000 are there and switched off.", text)
+        self.assertIn("Only the pool's creator switches a line on, and only when the pool holds free money for two "
+                      "payouts of that line: 8 000 for 50 000, 16 000 for 100 000, 40 000 for 250 000. Until the pool "
+                      "holds that money, the line cannot be switched on.", text)
+        for size in (50_000, 100_000, 250_000):
+            self.assertIn(f"{2 * size * d.PAYOUT_BPS // 10_000:,} for {size:,}".replace(",", " "), text)
+        self.assertIn("and the payouts of every trader who has passed an exam or runs a stage", text)
+        self.assertIn("the payout of a trader who has passed the exam stays in the pool from the pass, and for as long "
+                      "as the stage runs", text)
+        self.assertIn("before then its creator can neither close it nor take back what it put in", text)
+        self.assertIn("is paid a fixed 8 % of the size, once, which is not a share of any profit", text)
+        self.assertIn("nothing here promises a profit", text)
+        self.assertIn("may stop it, once, with one of four reasons written on chain", text)
+        # The CFO's words for reason 4 (14 November): a person's decision on a written analysis, with the 14 days.
+        self.assertIn("4, prohibited play: a series of exams bought to trade each at the edge of its risk, or one "
+                      "account hedged by another, shown by transactions and a published analysis, with 14 days for "
+                      "the trader to object.", text)
+        self.assertNotIn("testnet", json.dumps(FIRST).lower(), "one plan for both networks")
+        self.assertLessEqual(len(text.encode("utf-8")), d.TERMS_MAX_BYTES)
 
     def test_a_line_names_its_own_tier_and_a_plan_its_payouts_a_day(self):
         raw = json.loads(json.dumps(FIRST))
+        # Two lines, neither with a tier of its own, no lock and no switches: the plan as every pool had it before.
+        raw["menu"] = [{"size_usdc": 5000, "price_usdc": 45}, {"size_usdc": 10000, "price_usdc": 85}]
+        del raw["locked_usdc"]
+        self.assertEqual(d.plan_of(raw, b"\0" * 32)[9:], ([(600, 1000, 0), (600, 1000, 0)], 2, 1_600 * 10**6, 0b11))
         raw["menu"][0].update(max_drawdown_bps=300, target_bps=900, drawdown_kind=1)
         raw["payouts_per_day"] = 3
         plan = d.plan_of(raw, b"\0" * 32)
-        self.assertEqual(plan[9:], ([(300, 900, 1), (600, 1000, 0)], 3))
+        self.assertEqual(plan[9:11], ([(300, 900, 1), (600, 1000, 0)], 3))
         raw["funded"]["targets_bps"] = [800]
         with self.assertRaises(SystemExit):
             d.plan_of(raw, b"\0" * 32)  # line 1 has no tier, and the stages' targets differ
@@ -163,14 +378,21 @@ class TheFirstPool(unittest.TestCase):
             self.assertIn("The pool's creator may change its approver at any time; whoever approves, no payout waits for "
                           "approval longer than 7 days after it is claimed", text)
             self.assertIn("Until it is paid, the platform's checker may stop it", text)
-            self.assertIn("once a trader has used a code, its owner never changes and its share can be raised, never "
-                          "lowered", text)
+            self.assertIn("Once a trader has used a code, its owner, its author and their split never change and its "
+                          "share can be raised, never lowered", text)
+            self.assertIn("a pool has as many codes as its creator sets", text)
+            # A withdrawal credits the codes; their money waits in the pool until anyone sends it on (16 November).
+            self.assertIn("What a code is credited stays in the pool, out of the creator's reach and out of payouts, "
+                          "until anyone sends it on, at any time: to the code's owner, and the author's part to the "
+                          "author.", text)
+            self.assertNotIn("each code's owner is sent its share", text)
             self.assertIn("in the part of every price the pool took that its code's sales brought", text)
             self.assertIn("The pool runs at least 6 months (184 days) from its opening", text)
             self.assertIn("the platform may cancel a withdrawal request; it never moves the money", text)
-            self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator takes "
-                          "profit only above it", text)
-            self.assertIn("A share paid to a code's owner is never taken back", text)
+            if name == "sim-measure-pool":
+                self.assertIn("a funded trader's payout stays in the pool for as long as the stage runs; the creator "
+                              "takes profit only above it", text)
+            self.assertIn("A share credited to a code is never taken back", text)
             # What `_profit` and `_withdraw` do, not more: only the profit a withdrawal takes is shared (review of #286).
             self.assertIn("USDC sent to the pool other than by the creator's addToPot is not counted as put in by the "
                           "creator: it covers payouts as any money of the pool does, and what of it is profit when the "
@@ -192,7 +414,7 @@ class TheFirstPool(unittest.TestCase):
             self.assertEqual(keeper.PAY_PER_CALL, 2, "the two of the terms")
             self.assertEqual(constant("PAYOUT_DAY"), "24 hours", "the day of the terms")
             self.assertEqual(constant("MAX_PAYOUTS_PER_DAY"), "uint8(MAX_PAYOUTS_A_DAY)")
-            self.assertEqual(d.plan_of(json.loads((ROOT / f"deployments/plans/{name}.json").read_text()), b"\0" * 32)[-1],
+            self.assertEqual(d.plan_of(json.loads((ROOT / f"deployments/plans/{name}.json").read_text()), b"\0" * 32)[10],
                              2, "the two of the terms: the plan's payouts a day")
             self.assertIn("Payouts are paid in the order they were claimed, out of the money the pool holds: one still "
                           "waiting for its approval keeps its place, and a later one is paid past it only if the money "
@@ -243,6 +465,26 @@ class TheFirstPool(unittest.TestCase):
         self.assertEqual(FIRST["exam"]["fill_window"], max_late + 1 + max(2, -(-(max_late + 1) // 2)))
         self.assertIn("fill_window: 3 blocks, a placeholder", FIRST["about"])
 
+    def test_a_plan_sets_its_lock_and_its_lines_on(self):
+        menu = [{"size_usdc": s, "price_usdc": 1} for s in (5000, 10000, 25000, 50000)]
+        old = {"menu": menu}
+        self.assertEqual(d.locked_of(old), 8_000 * 10**6, "no locked_usdc: two payouts of the largest, as before")
+        self.assertEqual(d.on_of(old), 0b1111, "and every line on")
+        plan = {"menu": menu, "locked_usdc": 4000}
+        self.assertEqual(d.locked_of(plan), 4_000 * 10**6)
+        self.assertEqual(d.on_of(plan), 0b0111, "a line without `on`: on if the lock covers two of its payouts")
+        plan["menu"] = [dict(m, on=False) if m["size_usdc"] == 10000 else m for m in menu]
+        self.assertEqual(d.on_of(plan), 0b0101)
+        plan["menu"] = [dict(m, on=True) for m in menu]
+        with self.assertRaises(SystemExit) as caught:
+            d.on_of(plan)
+        self.assertIn("line 3 (50000) is on", str(caught.exception))
+        with self.assertRaises(SystemExit):
+            d.locked_of({"menu": menu, "locked_usdc": 799.99})
+        h = keccak(text="t")
+        two = dict(FIRST, menu=[{"size_usdc": 5000, "price_usdc": 45}, {"size_usdc": 10000, "price_usdc": 85}])
+        self.assertEqual(d.plan_of(dict(two, locked_usdc=1600), h)[-2:], (1_600 * 10**6, 0b11))
+
     def test_dollars_round_to_usdc_units(self):
         self.assertEqual(d.usdc_units(2.01), 2_010_000, "int(2.01 * 10**6) is 2 009 999")
         self.assertEqual(d.usdc_units(45), 45_000_000)
@@ -266,8 +508,180 @@ class TheMeasurePool(unittest.TestCase):
         self.assertEqual(d.locked_of(m), 160 * 10**6)
         self.assertEqual({k: v for k, v in m["exam_rules"].items()}, FIRST["exam_rules"], "the same rules as the first pool")
         self.assertEqual(d.codes_of(m, "0x" + "ab" * 20),
-                         [("MEASURE", keccak(text="MEASURE"), d.to_checksum_address("0x" + "ab" * 20), 0)],
+                         [("MEASURE", keccak(text="MEASURE"), d.to_checksum_address("0x" + "ab" * 20), 0, d.ZERO, 0)],
                          "one code, the creator's own, with no share: a sale needs one")
+
+
+class TheCheck(unittest.TestCase):
+    """`check`: the plan against SimPoolFactory.check by eth_call, with this checkout's code put in the call, and the
+    gas of `create` against the network's small block."""
+    PLAN = str(ROOT / "deployments/plans/sim-first-pool.json")
+    LARGEST = "0x" + (250_000 * 10**6).to_bytes(32, "big").hex()
+
+    def run_check(self, argv, answer=None, record=None, create_needs=1_700_000, limits=(30_000_000, 3_000_000),
+                  ignores_gas=False, head=100):
+        calls = []
+        answer = self.LARGEST if answer is None else answer
+
+        def rpc(method, params):
+            calls.append((method, params))
+            if method == "eth_blockNumber":
+                return hex(head)
+            if method == "eth_getBlockByNumber":
+                n = int(params[0], 16)
+                if n < 0:
+                    raise RuntimeError("eth_getBlockByNumber: invalid block number")
+                return {"gasLimit": hex(limits[n % len(limits)])}
+            if params[0]["data"].startswith("0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex()):
+                if ignores_gas or int(params[0]["gas"], 16) >= create_needs:
+                    return "0x" + "00" * 32
+                raise RuntimeError("eth_call: out of gas")
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        out = io.StringIO()
+        with mock.patch.object(d.c, "rpc", side_effect=rpc), \
+                mock.patch.object(d, "runtime_of", side_effect=lambda n, t, v, libs=None: f"0x{n}"), \
+                mock.patch.object(d.deployments, "load", return_value=record or {}), \
+                mock.patch.object(d, "git_head", return_value="ab" * 20), mock.patch.object(d.c, "account") as key, \
+                mock.patch.object(d.c, "send_tx") as sent, mock.patch.object(d.c, "transact") as tx, redirect_stdout(out):
+            code = d.main(["check", "--plan", self.PLAN] + argv)
+        key.assert_not_called(), sent.assert_not_called(), tx.assert_not_called()
+        return code, calls, out.getvalue()
+
+    def test_without_a_deployment_this_checkouts_factory_is_put_in_the_call(self):
+        code, calls, said = self.run_check([])
+        self.assertEqual(code, 0)
+        method, (call, block, state) = calls[0]
+        self.assertEqual((method, block), ("eth_call", "latest"))
+        self.assertEqual(call["to"], d.CHECK_AT["factory"])
+        plan = d.plan_of(FIRST, keccak(text=FIRST["terms_text"]))
+        self.assertEqual(call["data"], "0x" + d.c.encode_call(f"check({d.PLAN_T})", [d.PLAN_T], [plan]).hex())
+        self.assertEqual(state[d.CHECK_AT["exam"]], {"code": "0xPaperExam"})
+        self.assertEqual(state[d.CHECK_AT["pool"]], {"code": "0xSimPool"})
+        self.assertEqual(state[d.CHECK_AT["setup"]], {"code": "0xSimPoolSetup"})
+        self.assertEqual(state[d.CHECK_AT["stops"]], {"code": "0xSimPoolStops"})
+        self.assertEqual(state[d.CHECK_AT["codes"]], {"code": "0xSimPoolCodes"})
+        f = state[d.CHECK_AT["factory"]]
+        self.assertEqual(f["code"], "0xSimPoolFactory")
+        word = lambda a: "0x" + int(a, 16).to_bytes(32, "big").hex()
+        self.assertEqual(f["stateDiff"]["0x" + "00" * 31 + "05"], word(d.CHECK_AT["book"]))
+        for role, slot in (("filler", 1), ("checker", 2), ("closer", 3), ("fee", 4)):
+            self.assertEqual(f["stateDiff"]["0x%064x" % slot], word(d.CHECK_AT[role]), role)
+        # The assets as `deploy` lists them: testnet's BTC 3, ETH 4, SOL 0, with ops/leverage.py's caps.
+        for name, idx, cap in d.asset_list(["BTC", "ETH", "SOL"]):
+            slot = "0x" + keccak(idx.to_bytes(32, "big") + (6).to_bytes(32, "big")).hex()
+            self.assertEqual(f["stateDiff"][slot], "0x" + cap.to_bytes(32, "big").hex(), name)
+        self.assertEqual(len(f["stateDiff"]), 8, "the terms book, four roles and three assets, nothing else")
+        b = state[d.CHECK_AT["book"]]
+        text_slot = "0x" + keccak(keccak(text=FIRST["terms_text"]) + (0).to_bytes(32, "big")).hex()
+        self.assertEqual(b["stateDiff"], {text_slot: word(d.CHECK_AT["text"])}, "the terms, as `pool` publishes them")
+        self.assertIn("the factory accepts the plan; largest size 250000 USDC.", said)
+        self.assertIn("250000 for 2375 USDC: loss limit 6 %, target 10 %, trailing to the start", said)
+        self.assertIn("locks 4000 USDC", said)
+
+    def test_the_gas_of_create_is_measured_by_eth_call_against_the_small_block(self):
+        code, calls, said = self.run_check([], create_needs=1_673_901)
+        self.assertEqual(code, 0)
+        creates = [p for m, p in calls if m == "eth_call" and p[0]["data"].startswith(
+            "0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex())]
+        call, block, state = creates[0]
+        self.assertEqual(call["value"], hex(d.CREATION_FEE))
+        self.assertEqual(call["from"], d.CHECK_AT["creator"])
+        self.assertEqual(int(creates[0][0]["gas"], 16), d.GAS_FLOOR, "first: does the node keep to a call's gas")
+        self.assertEqual(state[d.c.USDC_ERC20], {"code": d.TOKEN_STUB}, "USDC answered by the stand-in")
+        self.assertEqual(state[d.CHECK_AT["creator"]], {"balance": hex(2 * d.CREATION_FEE)})
+        self.assertEqual(state[d.CHECK_AT["pool"]], {"code": "0xSimPool"}, "this checkout's pool, as for check")
+        # The small block is the least limit of the latest blocks, not the big block's.
+        self.assertEqual(sum(1 for m, _ in calls if m == "eth_getBlockByNumber"), d.BLOCKS_READ)
+        measured = int(re.search(r"create takes (\d+) gas", said).group(1))
+        self.assertTrue(1_673_901 <= measured < 1_673_901 + d.GAS_STEP, measured)
+        self.assertIn(f"of 3000000 in a small block of testnet: the pool opens by an ordinary transaction", said)
+        self.assertIn("Nothing was sent.", said)
+
+    def test_a_young_chain_is_read_down_to_its_first_block_and_no_further(self):
+        code, calls, said = self.run_check([], head=2)
+        self.assertEqual(code, 0)
+        read = [int(p[0], 16) for m, p in calls if m == "eth_getBlockByNumber"]
+        self.assertEqual(read, [2, 1, 0], "three blocks, none below 0")
+        self.assertIn("of 3000000 in a small block", said)
+
+    def test_a_create_above_the_small_block_is_red(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], create_needs=3_100_000)
+        self.assertIn("create does not run on 3000000 gas", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], create_needs=2_950_000)
+        self.assertIn(f"and USDC's transfer up to {d.TOKEN_GAS} more, above 3000000", str(caught.exception))
+        self.assertIn("would not open by an ordinary transaction", str(caught.exception))
+
+    def test_a_node_that_ignores_the_calls_gas_measures_nothing(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], ignores_gas=True)
+        self.assertIn("ignores a call's gas", str(caught.exception))
+
+    def test_with_a_deployment_its_factory_is_asked_as_it_stands(self):
+        factory = "0x" + "77" * 20
+        code, calls, said = self.run_check(["--deployment", "x"], record={"SimPoolFactory": factory})
+        self.assertEqual(code, 0)
+        method, params = calls[0]
+        self.assertEqual(len(params), 2, "no state override: the factory, its assets and its terms book as they are")
+        self.assertEqual(params[0]["to"], factory)
+        create = next(p for m, p in calls if m == "eth_call" and p[0]["to"] == factory and len(p) == 3)
+        self.assertEqual(set(create[2]), {d.c.USDC_ERC20, d.CHECK_AT["creator"]}, "only the token and the HYPE")
+
+    def test_a_refusal_names_the_factorys_error(self):
+        for sig in ("BadPlan()", "Unpublished()"):
+            err = RuntimeError("eth_call: {'code': 3, 'message': 'execution reverted', 'data': '0x%s'}"
+                               % keccak(text=sig)[:4].hex())
+            with self.assertRaises(SystemExit) as caught:
+                self.run_check([], answer=err)
+            self.assertIn(f"the factory refuses the plan: {sig[:-2]}", str(caught.exception))
+        # Revert data in capitals, as some nodes write it.
+        err = RuntimeError("eth_call: execution reverted, data 0x%s" % keccak(text="BadPlan()")[:4].hex().upper())
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], answer=err)
+        self.assertIn("the factory refuses the plan: BadPlan", str(caught.exception))
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], answer=RuntimeError("eth_call: node down"))
+        self.assertIn("node down", str(caught.exception))
+
+    def test_no_answer_is_no_factory(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check(["--deployment", "x"], answer="0x", record={"SimPoolFactory": "0x" + "77" * 20})
+        self.assertIn("gave no answer on testnet: no factory there", str(caught.exception))
+
+    def test_an_answer_other_than_the_largest_size_is_no_pass(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.run_check([], answer="0x" + (5_000 * 10**6).to_bytes(32, "big").hex())
+        self.assertIn("not the plan's largest size", str(caught.exception))
+
+    def test_terms_the_book_would_refuse_are_refused_first(self):
+        for text in ("", "x" * (d.TERMS_MAX_BYTES + 1)):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = pathlib.Path(tmp) / "plan.json"
+                path.write_text(json.dumps(dict(FIRST, terms_text=text)))
+                with self.assertRaises(SystemExit) as caught, mock.patch.object(d.c, "rpc") as rpc:
+                    d.main(["check", "--plan", str(path)])
+            rpc.assert_not_called()
+            self.assertIn(f"TermsBook.publish takes 1 to {d.TERMS_MAX_BYTES}", str(caught.exception))
+
+    def test_the_slots_are_the_ones_the_contract_test_holds(self):
+        sol = (ROOT / "test/sim/SimPool.t.sol").read_text()
+        for name in ("FACTORY_TERMS_BOOK_SLOT", "FACTORY_ASSET_CAP_SLOT", "BOOK_TEXT_AT_SLOT"):
+            self.assertEqual(int(re.search(rf"constant {name} = (\d+);", sol).group(1)), getattr(d, name), name)
+        for role in ("FILLER", "CHECKER", "CLOSER", "FEE"):
+            self.assertEqual(int(re.search(rf"constant FACTORY_{role}_SLOT = (\d+);", sol).group(1)),
+                             d.FACTORY_ROLE_SLOTS[role.lower()], role)
+        self.assertEqual(d.map_slot(3, 6), "0x" + keccak((3).to_bytes(32, "big") + (6).to_bytes(32, "big")).hex())
+        self.assertEqual(d.SMALL_BLOCK_GAS, int(re.search(r"constant SMALL_BLOCK_GAS = ([\d_]+);", sol).group(1)
+                                                 .replace("_", "")))
+        self.assertEqual(int(re.search(r"MAX_LENGTH = ([\d_]+);", (ROOT / "src/lib/CodeStore.sol").read_text())
+                             .group(1).replace("_", "")), d.TERMS_MAX_BYTES)
+
+    def test_the_check_addresses_are_no_ones_and_distinct(self):
+        self.assertEqual(len(set(d.CHECK_AT.values())), len(d.CHECK_AT))
+        self.assertTrue(all(int(a, 16) < 2**16 for a in d.CHECK_AT.values()), "not a key's address")
 
 
 class TheCodes(unittest.TestCase):
@@ -277,9 +691,17 @@ class TheCodes(unittest.TestCase):
         ok = {"codes": [{"code": "GROUP-ONE", "partner": "0x" + "11" * 20, "bps": 5000},
                         {"code": "PLATFORM", "partner": "creator", "bps": 0}]}
         got = d.codes_of(ok, self.CREATOR)
-        self.assertEqual([(t, h, b) for t, h, _, b in got], [("GROUP-ONE", keccak(text="GROUP-ONE"), 5000),
-                                                             ("PLATFORM", keccak(text="PLATFORM"), 0)])
+        self.assertEqual([(t, h, b) for t, h, _, b, *_ in got], [("GROUP-ONE", keccak(text="GROUP-ONE"), 5000),
+                                                                 ("PLATFORM", keccak(text="PLATFORM"), 0)])
         self.assertEqual(got[1][2], d.to_checksum_address(self.CREATOR))
+        self.assertEqual([g[4:] for g in got], [(d.ZERO, 0), (d.ZERO, 0)], "codes for one")
+        two = d.codes_of({"codes": [{"code": "BLOGGER-1", "partner": "0x" + "11" * 20, "bps": 6000,
+                                     "author": "0x" + "33" * 20, "author_bps": 5000}]}, self.CREATOR)
+        self.assertEqual(two[0][3:], (6000, d.to_checksum_address("0x" + "33" * 20), 5000), "a code for two")
+        # As many codes as the creator sets: a network of a thousand authors, a code each.
+        many = [{"code": f"A{i}", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20,
+                 "author_bps": 5000} for i in range(1_000)]
+        self.assertEqual(len(d.codes_of({"codes": many}, self.CREATOR)), 1_000)
         bad = [[{"code": "A", "partner": "0x" + "11" * 20, "bps": 3999}],
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6001}],
                [{"code": "A", "partner": "0x" + "00" * 20, "bps": 0}],
@@ -290,7 +712,10 @@ class TheCodes(unittest.TestCase):
                [{"code": "GROUP-ONE\n", "partner": "0x" + "11" * 20, "bps": 0}],
                [{"code": "GROUP-ONE\u00a0", "partner": "0x" + "11" * 20, "bps": 0}],
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 0}, {"code": "A", "partner": "0x" + "22" * 20, "bps": 0}],
-               [{"code": str(i), "partner": "0x" + "11" * 20, "bps": 0} for i in range(d.MAX_CODES + 1)]]
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20}],
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "00" * 20, "author_bps": 5000}],
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20, "author_bps": 0}],
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20, "author_bps": 10_000}]]
         for codes in bad:
             with self.assertRaises(SystemExit):
                 d.codes_of({"codes": codes}, self.CREATOR)
@@ -298,18 +723,27 @@ class TheCodes(unittest.TestCase):
 
     def test_a_code_a_sale_named_is_skipped_if_it_matches_and_stops_everything_if_not(self):
         p1, p2 = d.to_checksum_address("0x" + "11" * 20), d.to_checksum_address("0x" + "22" * 20)
-        codes = [("A", b"a" * 32, p1, 5000), ("B", b"b" * 32, p2, 4000), ("C", b"c" * 32, p1, 0)]
-        chain = {b"a" * 32: (p1, 5000, True), b"b" * 32: (p1, 4000, False), b"c" * 32: (d.ZERO, 0, False)}
+        z = d.ZERO
+        codes = [("A", b"a" * 32, p1, 5000, z, 0), ("B", b"b" * 32, p2, 4000, z, 0), ("C", b"c" * 32, p1, 0, z, 0)]
+        chain = {b"a" * 32: (p1, 5000, True, 0, z), b"b" * 32: (p1, 4000, False, 0, z), b"c" * 32: (z, 0, False, 0, z)}
         self.assertEqual([t for t, *_ in d.to_set(codes, chain.__getitem__)], ["B", "C"], "A is there already")
-        chain[b"a" * 32] = (p1, 6000, True)
+        chain[b"a" * 32] = (p1, 6000, True, 0, z)
         with self.assertRaises(SystemExit) as caught:
             d.to_set(codes, chain.__getitem__)
-        self.assertIn("its share can only rise, for the same partner", str(caught.exception))
-        chain[b"a" * 32] = (p1, 4000, True)
+        self.assertIn("its share can only rise, for the same partner, author and split", str(caught.exception))
+        chain[b"a" * 32] = (p1, 4000, True, 0, z)
         self.assertEqual([t for t, *_ in d.to_set(codes, chain.__getitem__)], ["A", "B", "C"], "A raised from 40 to 50 %")
-        chain[b"a" * 32] = (p2, 4000, True)
+        chain[b"a" * 32] = (p2, 4000, True, 0, z)
         with self.assertRaises(SystemExit):
             d.to_set(codes, chain.__getitem__)  # another partner, even with a higher share
+        # A code for two: its author and split stay as a sale fixed them.
+        p3 = d.to_checksum_address("0x" + "33" * 20)
+        two = [("T", b"t" * 32, p1, 6000, p3, 5000)]
+        self.assertEqual(d.to_set(two, {b"t" * 32: (p1, 6000, True, 5000, p3)}.__getitem__), [], "as on chain")
+        self.assertEqual(len(d.to_set(two, {b"t" * 32: (p1, 5000, True, 5000, p3)}.__getitem__)), 1, "a raise")
+        for fixed in [(p1, 4000, True, 4000, p3), (p1, 4000, True, 5000, p2), (p1, 4000, True, 0, z)]:
+            with self.assertRaises(SystemExit):
+                d.to_set(two, {b"t" * 32: fixed}.__getitem__)
 
 
 class TheClosing(unittest.TestCase):
@@ -597,7 +1031,7 @@ class TheClosing(unittest.TestCase):
         plan = {"codes": [{"code": "A", "partner": p1, "bps": 5000}, {"code": "B", "partner": "creator", "bps": 0}]}
         out = io.StringIO()
         with mock.patch.object(d.pathlib.Path, "read_text", return_value=json.dumps(plan)), \
-                mock.patch.object(d.c, "call_view", return_value=(d.ZERO, 0, False)), \
+                mock.patch.object(d.c, "call_view", return_value=(d.ZERO, 0, False, 0, d.ZERO)), \
                 mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "transact") as sent, redirect_stdout(out):
             self.assertEqual(d.main(["codes", "--pool", self.OTHER, "--plan", "p.json", "--signer", safe]), 0)
         key.assert_not_called()

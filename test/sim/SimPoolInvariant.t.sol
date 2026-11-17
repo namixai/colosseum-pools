@@ -10,6 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Rules} from "../../src/Types.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {TermsBook} from "../../src/multi/TermsBook.sol";
+import {ACCRUAL_SCALE} from "../../src/sim/SimPoolCodes.sol";
 import {SimPool, SimPlan, SimSize, SimTier} from "../../src/sim/SimPool.sol";
 import {SimPoolFactory} from "../../src/sim/SimPoolFactory.sol";
 import {OracleFollowsMark} from "../PoolHarness.sol";
@@ -56,8 +57,14 @@ contract SimPoolHandler is Test {
     uint256 public ghostPayMismatch;
     /// A withdrawal that left less than three payouts of the largest size above what is owed and held.
     uint256 public ghostBelowFloor;
+    /// A withdrawal that left the pool less than `staged` with what it owes, holds and keeps for stops (I17).
+    uint256 public ghostShortAfterWithdraw;
     /// A request to withdraw one unit more than `withdrawable` that went through.
     uint256 public ghostOverWithdraw;
+    /// A sale that went through on a line not selling (off, or the pool without two of its payouts free).
+    uint256 public ghostUncoveredSale;
+    /// A line switched on that `lineState` said could not be, or refused when it said it could.
+    uint256 public ghostLineMismatch;
     /// The standing request as the handler made it: how much, and when.
     uint256 public ghostRequested;
     uint256 public ghostRequestedAt;
@@ -93,6 +100,11 @@ contract SimPoolHandler is Test {
     /// The trading groups' codes the handler may set, the keccak256 of each text, and each code's own partner.
     bytes32[] internal _codeKeys;
     address[] internal _partners;
+    /// Each code's author when the code is set for two (`setSplitCode`), with the author's part fixed by the code's
+    /// place: 20 % or 50 % of the code's share.
+    address[] internal _authors;
+    mapping(bytes32 code => address) public firstAuthor;
+    mapping(bytes32 code => uint16) public firstAuthorBps;
     mapping(address => uint256) internal _keyOf;
     /// What each code's sales brought, and all of them: each price less the platform's part.
     mapping(bytes32 code => uint256) public ghostBroughtOf;
@@ -110,8 +122,16 @@ contract SimPoolHandler is Test {
     uint256 public ghostShareMismatch;
     /// What the token refused to send to partners, set aside for them.
     uint256 public ghostPartnerHeld;
-    /// Every partner's part of every withdrawal, sent or set aside: to see that runs reach shares at all.
+    /// What the token refused to send to the creator out of a withdrawal or `finish`, set aside for it (A5).
+    uint256 public ghostCreatorHeld;
+    /// What every withdrawal accrued to the codes, kept in the pool for them: to see that runs reach shares at all.
     uint256 public ghostToPartners;
+    /// Each code's part of every withdrawal, worked out apart from the pool and rounded down each time; and how many
+    /// withdrawals there were: a code's accrued share is this, to a unit a withdrawal.
+    mapping(bytes32 code => uint256) public ghostAccrued;
+    uint256 public ghostWithdrawals;
+    /// What `claimShares` sent each code's partner or set aside for it.
+    mapping(bytes32 code => uint256) public ghostGot;
     uint256 internal _salt;
 
     /// What the creator put in: the locked two payouts and every `addToPot`. Before the term, until the pool is
@@ -152,6 +172,7 @@ contract SimPoolHandler is Test {
         for (uint256 i = 0; i < 6; ++i) {
             _codeKeys.push(keccak256(abi.encode("GROUP", i)));
             _partners.push(makeAddr(string(abi.encode("group owner", i))));
+            _authors.push(makeAddr(string(abi.encode("author", i))));
         }
     }
 
@@ -193,13 +214,17 @@ contract SimPoolHandler is Test {
         return _partners[i];
     }
 
-    /// Everyone something can be set aside for: the traders and the codes' partners.
-    function holderCount() external view returns (uint256) {
-        return _actors.length + _partners.length;
+    /// Everyone something can be set aside for: the traders, the codes' partners and the creator.
+    function holderCount() public view returns (uint256) {
+        return _actors.length + _partners.length + _authors.length + 1;
     }
 
     function holder(uint256 i) public view returns (address) {
-        return i < _actors.length ? _actors[i] : _partners[i - _actors.length];
+        if (i < _actors.length) return _actors[i];
+        i -= _actors.length;
+        if (i < _partners.length) return _partners[i];
+        i -= _partners.length;
+        return i < _authors.length ? _authors[i] : creator;
     }
 
     // ── traders ──────────────────────────────────────────────────
@@ -240,6 +265,14 @@ contract SimPoolHandler is Test {
         deal(address(usdc), t, usdc.balanceOf(t) + m[line].price);
         vm.startPrank(t);
         usdc.approve(address(pool), m[line].price);
+        if (!_sells(line)) {
+            // Off, or short of two of its payouts free: the pool must refuse it.
+            try pool.buy(line, code) {
+                ghostUncoveredSale += 1;
+            } catch {}
+            vm.stopPrank();
+            return address(0);
+        }
         e = pool.buy(line, code);
         vm.stopPrank();
         _sold(e, code, m[line].price);
@@ -261,6 +294,7 @@ contract SimPoolHandler is Test {
         bytes32 code = _saleCode(codeSeed);
         if (code == bytes32(0)) return;
         line = bound(line, 0, 1);
+        if (!_sells(line)) return;
         address t = _actors[who % _actors.length];
         SimSize[] memory m = pool.menu();
         deal(address(usdc), t, usdc.balanceOf(t) + m[line].price);
@@ -300,7 +334,9 @@ contract SimPoolHandler is Test {
         ghostBroughtOf[code] += got;
         if (!ghostUsed[code]) {
             ghostUsed[code] = true;
-            (address p, uint16 bps,,,) = pool.codeOf(code);
+            (address p, uint16 bps,, uint16 ab, address a,,,,,,,) = pool.codeOf(code);
+            firstAuthor[code] = a;
+            firstAuthorBps[code] = ab;
             firstPartner[code] = p;
             firstBps[code] = bps;
             bpsNow[code] = bps;
@@ -312,7 +348,7 @@ contract SimPoolHandler is Test {
         uint256 n = _codeKeys.length;
         for (uint256 k = 0; k < n; ++k) {
             bytes32 code = _codeKeys[(seed % n + k) % n];
-            (address p,,,,) = pool.codeOf(code);
+            (address p,,,,,,,,,,,) = pool.codeOf(code);
             if (p != address(0)) return code;
         }
         return bytes32(0);
@@ -492,15 +528,15 @@ contract SimPoolHandler is Test {
         calls["pastReserve"] += 1;
     }
 
-    /// The token refuses every transfer to one of the traders, or to one of the codes' partners, from now on.
+    /// The token refuses every transfer to one of the traders, one of the codes' partners or the creator, from now on.
     function refuse(uint256 who) external {
         if (!_rare(who, 4)) return;
-        usdc.block_(holder(who % (_actors.length + _partners.length)));
+        usdc.block_(holder(who % holderCount()));
         calls["refuse"] += 1;
     }
 
     function claimHeld(uint256 who) external {
-        address t = holder(who % (_actors.length + _partners.length));
+        address t = holder(who % holderCount());
         uint256 amount = pool.heldOf(t);
         if (amount == 0) return;
         vm.prank(t);
@@ -508,6 +544,42 @@ contract SimPoolHandler is Test {
         ghostOut += amount;
         ghostClaimed += amount;
         calls["claimHeld"] += 1;
+    }
+
+    function _due(bytes32 code) internal view returns (uint256) {
+        (uint256 toPartner, uint256 toAuthor) = pool.shareDue(code);
+        return toPartner + toAuthor;
+    }
+
+    /// Anyone sends some of the codes what they accrued: a code its partner's share, sent or set aside if the token
+    /// refuses. Only the codes named move, and only to their partners.
+    function claimShares(uint256 seed) external {
+        uint256 n = _codeKeys.length;
+        bytes32[] memory list = new bytes32[](1 + seed % n);
+        uint256[] memory due = new uint256[](list.length);
+        uint256 total;
+        for (uint256 k = 0; k < list.length; ++k) {
+            list[k] = _codeKeys[(seed / n + k) % n];
+            due[k] = _due(list[k]);
+            total += due[k];
+        }
+        uint256 bal = usdc.balanceOf(address(pool));
+        uint256 held0 = pool.held();
+        uint256 owed0 = pool.sharesDue();
+        uint256 s0 = usdc.balanceOf(stranger);
+        vm.prank(stranger);
+        pool.claimShares(list);
+        for (uint256 k = 0; k < list.length; ++k) {
+            ghostGot[list[k]] += due[k];
+            if (_due(list[k]) != 0) ghostShareMismatch += 1;
+        }
+        uint256 sent = bal - usdc.balanceOf(address(pool));
+        uint256 aside = pool.held() - held0;
+        if (sent + aside != total || owed0 - pool.sharesDue() != total) ghostShareMismatch += 1;
+        if (usdc.balanceOf(stranger) != s0) ghostShareMismatch += 1;
+        ghostOut += sent;
+        ghostPartnerHeld += aside;
+        if (total != 0) calls["claimShares"] += 1;
     }
 
     // ── the checker ──────────────────────────────────────────────
@@ -639,10 +711,9 @@ contract SimPoolHandler is Test {
             if (!good || amount == 0 || block.timestamp < ghostRequestedAt + _delay()) ghostInstant += 1;
             if (out != amount - _checkShares(b, amount)) ghostWithdrawMismatch += 1;
             if (pool.requested() != 0 || pool.readyAt() != 0) ghostWithdrawMismatch += 1;
-            uint256 floor = uint256(pool.largestPayout()) * 3;
-            if (pool.staged() > floor) floor = pool.staged();
-            uint256 keep = pool.owed() + pool.held() + pool.reserved() + floor;
+            uint256 keep = pool.owed() + pool.held() + pool.reserved() + pool.sharesDue() + floorNow();
             if (usdc.balanceOf(address(pool)) < keep) ghostBelowFloor += 1;
+            if (usdc.balanceOf(address(pool)) < pool.staged() + pool.owed() + pool.held() + pool.reserved()) ghostShortAfterWithdraw += 1;
             calls["withdraw"] += 1;
         } catch {
             // Ready, not lapsed, and something to take: a refusal is a finding.
@@ -672,6 +743,43 @@ contract SimPoolHandler is Test {
 
     function _window() internal view returns (uint256) {
         return pool.factory().WITHDRAW_WINDOW();
+    }
+
+    function _sells(uint256 line) internal view returns (bool sells) {
+        (, sells,,) = pool.lineState(line);
+    }
+
+    /// The creator switches a line on or off: off always; on only when `lineState` says it may be.
+    function setLine(uint256 seed) external {
+        uint256 line = seed % 2;
+        bool on = (seed >> 8) % 3 != 0;
+        (,, bool can,) = pool.lineState(line);
+        vm.prank(creator);
+        try pool.setLine(line, on) {
+            if (on && !can) ghostLineMismatch += 1;
+        } catch {
+            if (!on || can) ghostLineMismatch += 1;
+        }
+        calls["setLine"] += 1;
+    }
+
+    /// What the pool must keep, counted from the accounts this handler made rather than the pool's own count: the
+    /// greater of `staged` and three payouts of the largest line with an exam or a stage not yet done, or selling.
+    function floorNow() public view returns (uint256 f) {
+        SimSize[] memory m = pool.menu();
+        uint256 top;
+        for (uint256 k = 0; k < 2; ++k) {
+            address[] storage list = k == 0 ? _exams : _stages;
+            for (uint256 i = 0; i < list.length; ++i) {
+                (, uint8 line, bool done) = pool.accountOf(list[i]);
+                if (!done && m[line].size > top) top = m[line].size;
+            }
+        }
+        for (uint256 i = 0; i < m.length; ++i) {
+            if (_sells(i) && m[i].size > top) top = m[i].size;
+        }
+        f = top * 800 / 10_000 * 3;
+        if (pool.staged() > f) f = pool.staged();
     }
 
     function addToPot(uint256 amount) external {
@@ -814,8 +922,9 @@ contract SimPoolHandler is Test {
         if (owing) ghostEarlyFinish += 1;
         if (block.timestamp < uint256(pool.closedAt()) + _delay()) ghostInstant += 1;
         if (pool.requested() != 0 || pool.readyAt() != 0) ghostWithdrawMismatch += 1;
-        // What finish withdraws: all the pool holds that is not set aside (nothing is owed or kept by now).
-        uint256 amount = b.bal - b.held - b.reserved;
+        // What finish withdraws: all the pool holds that is not set aside or the codes' (nothing is owed or kept by
+        // now).
+        uint256 amount = b.bal - b.held - b.reserved - b.sharesDue;
         ghostOut += amount == 0 ? 0 : amount - _checkShares(b, amount);
     }
 
@@ -828,10 +937,13 @@ contract SimPoolHandler is Test {
         uint256 owed;
         uint256 principal;
         uint256 creator;
+        uint256 creatorHeld;
         uint256 platform;
-        bytes32[] codes;
-        uint256[] partnerBal;
-        uint256[] partnerHeld;
+        uint256 sharesDue;
+        uint256 brought;
+        /// Each of the handler's codes: what it brought, and its share, before the withdrawal.
+        uint256[] broughtOf;
+        uint256[] bpsOf;
     }
 
     function _before() internal view returns (Before memory b) {
@@ -841,57 +953,47 @@ contract SimPoolHandler is Test {
         b.owed = pool.owed();
         b.principal = pool.principal();
         b.creator = usdc.balanceOf(creator);
+        b.creatorHeld = pool.heldOf(creator);
         b.platform = usdc.balanceOf(pool.factory().feeRecipient());
-        b.codes = pool.codes();
-        b.partnerBal = new uint256[](b.codes.length);
-        b.partnerHeld = new uint256[](b.codes.length);
-        for (uint256 i = 0; i < b.codes.length; ++i) {
-            (address p,,,,) = pool.codeOf(b.codes[i]);
-            if (p == address(0)) continue;
-            b.partnerBal[i] = usdc.balanceOf(p);
-            b.partnerHeld[i] = pool.heldOf(p);
+        b.sharesDue = pool.sharesDue();
+        b.brought = pool.brought();
+        b.broughtOf = new uint256[](_codeKeys.length);
+        b.bpsOf = new uint256[](_codeKeys.length);
+        for (uint256 i = 0; i < _codeKeys.length; ++i) {
+            (, uint16 bps,,,, uint256 got,,,,,,) = pool.codeOf(_codeKeys[i]);
+            (b.broughtOf[i], b.bpsOf[i]) = (got, bps);
         }
     }
 
     /// The shares of a withdrawal of `amount` as docs/SIM-POOL.md states them: the platform takes 0.5 % of it; the
-    /// profit is what is above what is owed, held, kept for stops and put in by the creator, and the withdrawal takes
-    /// it first; of that profit less the platform's 0.5 %, each code's partner gets the code's share in the part its
-    /// sales brought of all the pool took, sent or, if the token refuses, set aside for the partner; the creator gets
-    /// the rest. Returns what was set aside for partners: it stays in the pool.
-    function _checkShares(Before memory b, uint256 amount) internal returns (uint256 setAsideAll) {
-        uint256 free = b.bal - b.held - b.reserved;
+    /// profit is what is above what is owed, held, kept for stops, kept for the codes and put in by the creator, and the
+    /// withdrawal takes it first; of that profit less the platform's 0.5 %, each code accrues its share in the part
+    /// its sales brought of all the pool took, kept in the pool for its partner; the creator gets the rest, sent or, if
+    /// the token refuses, set aside for it. Returns what of `amount` stayed in the pool: the codes' and the creator's
+    /// set aside.
+    function _checkShares(Before memory b, uint256 amount) internal returns (uint256 stays) {
+        uint256 free = b.bal - b.held - b.reserved - b.sharesDue;
         free = free > b.owed ? free - b.owed : 0;
         uint256 profit = free > b.principal ? free - b.principal : 0;
         uint256 shared = amount < profit ? amount : profit;
         uint256 net = shared - shared * 50 / 10_000;
         uint256 fee = amount * 50 / 10_000;
-        uint256 toPartners;
-        for (uint256 i = 0; i < b.codes.length; ++i) {
-            (uint256 part, uint256 setAside, bool right) = _partnerPart(b, i, net);
-            toPartners += part;
-            setAsideAll += setAside;
-            if (!right) ghostShareMismatch += 1;
+        uint256 parts;
+        for (uint256 i = 0; i < _codeKeys.length; ++i) {
+            uint256 part = b.brought == 0 ? 0 : net * b.broughtOf[i] * b.bpsOf[i] / (b.brought * 10_000);
+            ghostAccrued[_codeKeys[i]] += part;
+            parts += part;
         }
-        if (toPartners > net * 6000 / 10_000) ghostShareMismatch += 1;
+        ghostWithdrawals += 1;
+        uint256 toPartners = pool.sharesDue() - b.sharesDue;
+        if (toPartners < parts || toPartners > net * 6000 / 10_000 + 1 || toPartners > net) ghostShareMismatch += 1;
+        uint256 creatorHeld = pool.heldOf(creator) - b.creatorHeld;
+        if (usdc.balanceOf(creator) - b.creator + creatorHeld != amount - fee - toPartners) ghostShareMismatch += 1;
+        if (usdc.balanceOf(pool.factory().feeRecipient()) - b.platform != fee) ghostShareMismatch += 1;
         ghostPlatform += fee;
         ghostToPartners += toPartners;
-        if (usdc.balanceOf(creator) - b.creator != amount - fee - toPartners) ghostShareMismatch += 1;
-        if (usdc.balanceOf(pool.factory().feeRecipient()) - b.platform != fee) ghostShareMismatch += 1;
-        ghostPartnerHeld += setAsideAll;
-    }
-
-    /// Code `i`'s partner's part of `net`, what of it was set aside, and whether what the partner got is that part.
-    function _partnerPart(Before memory b, uint256 i, uint256 net)
-        internal
-        view
-        returns (uint256 part, uint256 setAside, bool right)
-    {
-        (address p, uint16 bps,,, uint256 got) = pool.codeOf(b.codes[i]);
-        if (p == address(0)) return (0, 0, true);
-        uint256 all = pool.brought();
-        part = (net == 0 || all == 0 || bps == 0 || got == 0) ? 0 : net * got * bps / (all * 10_000);
-        setAside = pool.heldOf(p) - b.partnerHeld[i];
-        right = usdc.balanceOf(p) - b.partnerBal[i] + setAside == part;
+        ghostCreatorHeld += creatorHeld;
+        stays = toPartners + creatorHeld;
     }
 
     // ── the creator's codes ──────────────────────────────────────
@@ -902,10 +1004,17 @@ contract SimPoolHandler is Test {
         bytes32 code = _codeKeys[i % _codeKeys.length];
         address p = offSale ? address(0) : _partners[i % _codeKeys.length];
         uint16 bps = offSale || bpsSeed % 3 == 0 ? 0 : uint16(4000 + bpsSeed % 2001);
-        // On a used code only a raise for the same partner, within the bounds, may go through (CFO, 13 November).
-        bool raise = ghostUsed[code] && p == firstPartner[code] && bps > bpsNow[code] && bps >= 4000 && bps <= 6000;
+        // Now and then a code for two: the code's author, with 20 % or 50 % of the code's share by its place.
+        uint256 k = i % _codeKeys.length;
+        bool split = !offSale && (bpsSeed >> 16) % 2 == 1;
+        address a = split ? _authors[k] : address(0);
+        uint16 ab = split ? uint16(k % 2 == 0 ? 2000 : 5000) : 0;
+        // On a used code only a raise for the same partner, author and split, within the bounds, may go through
+        // (CFO, 13 November).
+        bool raise = ghostUsed[code] && p == firstPartner[code] && a == firstAuthor[code] && ab == firstAuthorBps[code]
+            && bps > bpsNow[code] && bps >= 4000 && bps <= 6000;
         vm.prank(creator);
-        try pool.setCode(code, p, bps) {
+        try pool.setSplitCode(code, p, bps, a, ab) {
             if (ghostUsed[code] && !raise) ghostCodeChanged += 1;
             if (raise) {
                 bpsNow[code] = bps;
@@ -1044,6 +1153,8 @@ contract SimPoolInvariantTest is Test {
         p.tiers[0] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
         p.tiers[1] = SimTier({maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0});
         p.payoutsPerDay = 2;
+        p.locked = 1_600e6;
+        p.on = 3;
         vm.prank(creator);
         pool = SimPool(factory.create{value: 1 ether}(p));
 
@@ -1059,7 +1170,7 @@ contract SimPoolInvariantTest is Test {
             pool.setCode(code, owner, shares[i]);
         }
         targetContract(address(handler));
-        bytes4[] memory s = new bytes4[](47);
+        bytes4[] memory s = new bytes4[](51);
         s[0] = SimPoolHandler.buy.selector;
         s[1] = SimPoolHandler.buy.selector;
         s[2] = SimPoolHandler.passExam.selector;
@@ -1108,6 +1219,10 @@ contract SimPoolInvariantTest is Test {
         s[44] = SimPoolHandler.approve.selector;
         s[45] = SimPoolHandler.approve.selector;
         s[46] = SimPoolHandler.rush.selector;
+        s[47] = SimPoolHandler.setLine.selector;
+        s[48] = SimPoolHandler.setLine.selector;
+        s[49] = SimPoolHandler.claimShares.selector;
+        s[50] = SimPoolHandler.claimShares.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: s}));
     }
 
@@ -1161,12 +1276,12 @@ contract SimPoolInvariantTest is Test {
         (uint256 heldPayouts,) = _sum(SimPool.PayoutState.Held);
         assertEq(
             pool.held(),
-            heldPayouts + handler.ghostPartnerHeld() - handler.ghostClaimed(),
-            "held: refused payouts and partners' parts, less what was claimed"
+            heldPayouts + handler.ghostPartnerHeld() + handler.ghostCreatorHeld() - handler.ghostClaimed(),
+            "held: refused payouts, partners' parts and the creator's, less what was claimed"
         );
         uint256 byHolder;
         for (uint256 i = 0; i < handler.holderCount(); ++i) byHolder += pool.heldOf(handler.holder(i));
-        assertEq(byHolder, pool.held(), "held: the traders' and partners' own amounts");
+        assertEq(byHolder, pool.held(), "held: the traders', partners' and creator's own amounts");
         // What stops keep may exceed what the pool holds, when payouts came faster than prices (review of #269):
         // so it is held to the stopped payouts, not to the balance.
         (uint256 stoppedPayouts,) = _sum(SimPool.PayoutState.Stopped);
@@ -1194,14 +1309,16 @@ contract SimPoolInvariantTest is Test {
     function invariant_creatorKeepsThreePayouts() public view {
         assertEq(handler.ghostBelowFloor(), 0, "a withdrawal left less than three payouts");
         assertEq(handler.ghostOverWithdraw(), 0, "a request past withdrawable went through");
+        assertEq(handler.ghostUncoveredSale(), 0, "a sale on a line not selling");
+        assertEq(handler.ghostLineMismatch(), 0, "a line switched on against lineState");
         if (!pool.finished()) {
-            uint256 floor = uint256(pool.largestPayout()) * 3;
-            if (pool.staged() > floor) floor = pool.staged();
-            uint256 keep = pool.owed() + pool.held() + pool.reserved() + floor;
+            uint256 floor = handler.floorNow();
+            assertEq(pool.floor(), floor, "the floor, from the handler's accounts");
+            uint256 keep = pool.owed() + pool.held() + pool.reserved() + pool.sharesDue() + floor;
             uint256 bal = usdc.balanceOf(address(pool));
             uint256 w = bal > keep ? bal - keep : 0;
             if (block.timestamp < pool.lockedUntil()) {
-                uint256 kept = pool.owed() + pool.held() + pool.reserved();
+                uint256 kept = pool.owed() + pool.held() + pool.reserved() + pool.sharesDue();
                 uint256 free = bal > kept ? bal - kept : 0;
                 uint256 profit = free > pool.principal() ? free - pool.principal() : 0;
                 if (w > profit) w = profit;
@@ -1260,19 +1377,26 @@ contract SimPoolInvariantTest is Test {
         }
     }
 
-    /// I9. `live` counts the exams and stages not done, `staged` the payouts of the stages not done, each by its size,
-    ///     and a finished pool holds only what is set aside.
+    /// I9. `live` counts the exams and stages not done, `staged` the payouts of the exams passed and not yet funded or
+    ///     released and of the stages not done, each by its size, and a finished pool holds only what is set aside.
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
     function invariant_liveAndFinished() public view {
         uint256 running;
-        for (uint256 i = 0; i < handler.examCount(); ++i) {
-            (,, bool done) = pool.accountOf(handler.exam(i));
-            if (!done) running += 1;
-        }
         uint256 staged;
         SimSize[] memory menu = pool.menu();
+        for (uint256 i = 0; i < handler.examCount(); ++i) {
+            address e = handler.exam(i);
+            (, uint8 line, bool done) = pool.accountOf(e);
+            (PaperExam.Status st,,,) = PaperExam(e).result();
+            // The pool knows a pass from the moment of it: the exam tells it (A1, 16 November).
+            assertEq(pool.passedOf(e), st == PaperExam.Status.Passed, "passedOf is the exam's pass");
+            if (!done) {
+                running += 1;
+                if (st == PaperExam.Status.Passed) staged += uint256(menu[line].size) * pool.factory().PAYOUT_BPS() / 10_000;
+            }
+        }
         for (uint256 i = 0; i < handler.stageCount(); ++i) {
             (, uint8 line, bool done) = pool.accountOf(handler.stage(i));
             if (!done) {
@@ -1281,13 +1405,16 @@ contract SimPoolInvariantTest is Test {
             }
         }
         assertEq(pool.live(), running);
-        // The payouts of the stages still running, each by its size: what withdrawals stay above (CFO, 13 November).
-        assertEq(pool.staged(), staged, "staged is not the running stages' payouts");
+        // The payouts of the passes not yet funded and of the stages still running, each by its size: what withdrawals
+        // stay above (CFO, 13 November; A1, 16 November).
+        assertEq(pool.staged(), staged, "staged is not the passed exams' and running stages' payouts");
         assertEq(handler.ghostEarlyFinish(), 0, "finished with something owed, running or kept for a stop");
         assertEq(handler.ghostFinishRefused(), 0, "a finish by the creator or the closer refused with nothing owed, running or kept");
         if (pool.finished()) assertEq(pool.reserved(), 0, "a finished pool keeps nothing for stops");
         assertEq(handler.ghostStuck(), 0, "past every deadline, an account that would not end or a stage not claimed");
-        if (pool.finished()) assertEq(usdc.balanceOf(address(pool)), pool.held(), "a finished pool keeps only what is held");
+        if (pool.finished()) {
+            assertEq(usdc.balanceOf(address(pool)), pool.held() + pool.sharesDue(), "a finished pool keeps only what is held and the codes'");
+        }
     }
 
     /// I10. The codes: what all of them brought is the sum of each code's, and each is what its sales brought; a
@@ -1295,24 +1422,54 @@ contract SimPoolInvariantTest is Test {
     /// forge-config: default.invariant.runs = 48
     /// forge-config: default.invariant.depth = 120
     /// forge-config: default.invariant.fail-on-revert = true
+    function _due(bytes32 code) internal view returns (uint256) {
+        (uint256 toPartner, uint256 toAuthor) = pool.shareDue(code);
+        return toPartner + toAuthor;
+    }
+
     function invariant_codesKeepTheirBooks() public view {
-        bytes32[] memory codes = pool.codes();
         uint256 sum;
-        for (uint256 i = 0; i < codes.length; ++i) {
-            (address p, uint16 bps, bool used,, uint256 got) = pool.codeOf(codes[i]);
+        uint256 dueAll;
+        uint256 sentAll;
+        for (uint256 i = 0; i < handler.codeCount(); ++i) {
+            (uint256 got, uint256 due, uint256 sent) = _checkCode(handler.codeKey(i));
             sum += got;
-            assertEq(got, handler.ghostBroughtOf(codes[i]), "a code's brought is what its sales brought");
-            assertEq(used, handler.ghostUsed(codes[i]), "used: a sale named it");
-            if (used) {
-                assertEq(p, handler.firstPartner(codes[i]), "a used code's partner changed");
-                assertEq(bps, handler.bpsNow(codes[i]), "a used code's share is not the last raise");
-                assertGe(bps, handler.firstBps(codes[i]), "a used code's share fell");
-            }
+            dueAll += due;
+            sentAll += sent;
         }
+        // Kept for the codes: all they accrued together, to the fraction, rounded up, less all they got; never more
+        // over what they may claim than a unit a code.
+        assertEq(pool.sharesDue(), (pool.accruedScaled() + ACCRUAL_SCALE - 1) / ACCRUAL_SCALE - sentAll, "sharesDue");
+        assertLe(pool.sharesDue() - dueAll, handler.codeCount(), "the codes' fractions and the rounding up");
         assertEq(pool.brought(), sum, "brought: the codes' together");
+        assertLe(dueAll, pool.sharesDue(), "what the codes may claim is kept for them");
+        assertGe(usdc.balanceOf(address(pool)), pool.held() + pool.sharesDue(), "and is in the pool");
         assertEq(pool.brought(), handler.ghostBrought(), "brought: every price less the platform's part");
         assertEq(handler.ghostCodeChanged(), 0, "a used code was set again other than by a raise");
         assertEq(handler.ghostCodeRefused(), 0, "an unused code could not be set, or a used one raised");
+    }
+
+    /// One code's books: what it brought and accrued, against the handler's; returns what it brought and what it may
+    /// still claim.
+    function _checkCode(bytes32 code) internal view returns (uint256 got, uint256 due, uint256 sent) {
+        uint256 sentP;
+        uint256 sentA;
+        (,,,,, got,,,, sentP, sentA,) = pool.codeOf(code);
+        due = _due(code);
+        uint256 accrued = sentP + sentA + due;
+        assertGe(accrued, handler.ghostAccrued(code), "a code accrued less than its share of the withdrawals");
+        assertLe(accrued, handler.ghostAccrued(code) + handler.ghostWithdrawals(), "more than a unit a withdrawal over");
+        assertEq(sentP + sentA, handler.ghostGot(code), "what a code got is what claimShares sent or set aside");
+        assertEq(got, handler.ghostBroughtOf(code), "a code's brought is what its sales brought");
+        (address p, uint16 bps, bool used, uint16 ab, address au,,,,,,,) = pool.codeOf(code);
+        assertEq(used, handler.ghostUsed(code), "used: a sale named it");
+        sent = sentP + sentA;
+        if (!used) return (got, due, sent);
+        assertEq(au, handler.firstAuthor(code), "a used code's author changed");
+        assertEq(ab, handler.firstAuthorBps(code), "a used code's split changed");
+        assertEq(p, handler.firstPartner(code), "a used code's partner changed");
+        assertEq(bps, handler.bpsNow(code), "a used code's share is not the last raise");
+        assertGe(bps, handler.firstBps(code), "a used code's share fell");
     }
 
     /// I11. A withdrawal's shares: the platform's 0.5 %, each partner's part of the profit by its code's share and what
@@ -1401,10 +1558,31 @@ contract SimPoolInvariantTest is Test {
         }
     }
 
+    /// I17. What the pool owes the traders who passed an exam and those whose stage runs (`staged`), with what it owes,
+    ///      holds and keeps for stops, is never above the pool's money by the creator's doing: no withdrawal leaves
+    ///      less (A1, 16 November). Passes of exams sold earlier can still take it above, as the payout queue always
+    ///      allowed; while they do, nothing is free, no line sells and the creator takes nothing.
+    /// forge-config: default.invariant.runs = 48
+    /// forge-config: default.invariant.depth = 120
+    /// forge-config: default.invariant.fail-on-revert = true
+    function invariant_passedAndFundedAreNeverShortByAWithdrawal() public view {
+        assertEq(handler.ghostShortAfterWithdraw(), 0, "a withdrawal left less than the passed and funded are owed");
+        uint256 due = pool.staged() + pool.owed() + pool.held() + pool.reserved();
+        uint256 bal = usdc.balanceOf(address(pool));
+        if (due >= bal) {
+            assertEq(pool.free(), 0, "nothing free");
+            if (!pool.finished()) assertEq(pool.withdrawable(), 0, "the creator takes nothing");
+            for (uint256 line = 0; line < 2; ++line) {
+                (, bool sells,,) = pool.lineState(line);
+                assertFalse(sells, "no line sells");
+            }
+        }
+    }
+
     /// Not an invariant: what each run reached, printed with `-vv`, so that a run that drove nothing does not pass
     /// unseen for one that did.
     function afterInvariant() external view {
-        string[33] memory names = ["rush", "approve", "raise", "request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
+        string[34] memory names = ["claimShares", "rush", "approve", "raise", "request", "cancel", "earn", "buy", "passExam", "passStage", "fail", "fund", "claim", "pay", "release", "warp",
             "refuse", "claimHeld", "stop", "lift", "withdraw", "addToPot", "close", "finish", "windDown", "objectStop", "finalizeStop", "pastReserve", "buySigned", "setCode", "sales",
             "closeEarly", "pastTerm", "finishByCloser"];
         string memory line = "reached:";

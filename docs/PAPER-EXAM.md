@@ -39,6 +39,10 @@ with a balance, `capital`, that is a number and not money.
   the trader too, `FALLBACK_BLOCKS` (60) after its window, so a stalled filler never keeps a trader
   in a position. Every fill says how many blocks after `placedBlock + fillDelay` it came (`late` in
   `Filled`). An exam started with `initialize` has no filler and works as before.
+- **Telling the pool of a pass.** An exam started with `initializeWithFiller(..., tellsPool_)` true calls its
+  pool's `examPassed()` in the same transaction as its pass (`IExamPassed`), and a pool that refuses it
+  refuses the pass. The simulated pool asks it of every exam it sells, not of its stages, so it keeps a passed
+  trader's payout from the pass on (A1 of the pre-deploy check, 16 November 2026). Without it nothing is called.
 - **A fill at the book.** Started with a filler and `fromBook`, an exam fills a buy at the best ask
   and a sell at the best bid, from the chain's own best bid and offer (`PrecompileLib.bbo`), so a
   fill pays up to half the spread as on the exchange (the pools team, 11 November 2026). Never
