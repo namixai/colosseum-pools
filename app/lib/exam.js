@@ -381,7 +381,8 @@ function over(reads, terms, now) {
  * The order waiting, if any, with its window in blocks: the first block that may fill it (`fillFrom`), the last
  * of its window (`fillUntil`), and where `block` stands. `waiting` before the window, `filling` inside it, `lapsed`
  * past it: a lapsed order costs nothing and is replaced by the next one placed. Where the exam has a filler, an
- * order that only makes a position smaller can be filled by anyone from `fallbackFrom` on.
+ * order that only makes a position smaller can be filled by anyone from `fallbackFrom` to `fallbackUntil`, the
+ * contract's `FALLBACK_BLOCKS` blocks; after them it has lapsed for everyone.
  */
 export function pendingOrder(reads, block) {
   const o = reads.pending ?? {};
@@ -394,7 +395,8 @@ export function pendingOrder(reads, block) {
   const state = b < fillFrom ? "waiting" : b <= fillUntil ? "filling" : "lapsed";
   const hasFiller = reads.filler != null && !ZERO.test(String(reads.filler));
   return { asset: Number(o.asset ?? o[0]), isBuy: Boolean(o.isBuy ?? o[1]), size: sz, fillFrom, fillUntil, state,
-    blocksToFill: Math.max(0, fillFrom - b), fallbackFrom: hasFiller ? fillUntil + 1 + FALLBACK_BLOCKS : null };
+    blocksToFill: Math.max(0, fillFrom - b), fallbackFrom: hasFiller ? fillUntil + 1 + FALLBACK_BLOCKS : null,
+    fallbackUntil: hasFiller ? fillUntil + 2 * FALLBACK_BLOCKS : null };
 }
 
 /**
@@ -591,8 +593,9 @@ function triggerRefusal(t, size, mark, block) {
  * its size is zero or more than is open), when it acts (`armedAt`, `fillDelay` after it was set), how far the oracle is
  * from it (`room`), and where it stands: `waiting` before its block, `armed`, `triggered` (the oracle has reached it,
  * nobody has shown it yet), `seen` (shown at `seenAt`), or `unpriced` where the oracle price was not read. `carriedBy`
- * is who may carry it out now: the exam's filler, anyone from `fallbackFrom` on once it was seen, or, with no filler,
- * anyone but the trader and the second key. Null where there is none.
+ * is who may carry it out now: the exam's filler, anyone from `fallbackFrom` to `fallbackUntil` once it was seen (the
+ * contract's `FALLBACK_BLOCKS` blocks; after them it may be seen again), or, with no filler, anyone but the trader and
+ * the second key. Null where there is none.
  */
 function triggerView(t, isTake, p, reads, block) {
   if (t === null || p.size === 0n) return null;
@@ -601,12 +604,13 @@ function triggerView(t, isTake, p, reads, block) {
   const room = triggerRoom(t, isTake, p.size, p.mark);
   const hasFiller = reads.filler != null && !ZERO.test(String(reads.filler));
   const fallbackFrom = hasFiller && t.seenAt !== null ? t.seenAt + FALLBACK_BLOCKS : null;
+  const fallbackUntil = fallbackFrom === null ? null : fallbackFrom + FALLBACK_BLOCKS - 1;
   const state = b < t.armedAt ? "waiting" : room === null ? "unpriced" : room > 0n ? "armed" : t.seenAt !== null ? "seen" : "triggered";
   return {
     kind: isTake ? "take" : "stop", px: t.px, sz: t.sz, closes: t.sz === 0n || t.sz > open ? open : t.sz,
     whole: t.sz === 0n || t.sz >= open, armedAt: t.armedAt, blocksToArm: Math.max(0, t.armedAt - b), seenAt: t.seenAt,
-    fallbackFrom, room, state,
-    carriedBy: !hasFiller ? "anyone-but-trader" : fallbackFrom !== null && b >= fallbackFrom ? "anyone" : "filler",
+    fallbackFrom, fallbackUntil, room, state,
+    carriedBy: !hasFiller ? "anyone-but-trader" : fallbackFrom !== null && b >= fallbackFrom && b <= fallbackUntil ? "anyone" : "filler",
   };
 }
 
@@ -649,7 +653,7 @@ export function triggerSetPreview(reads, { asset, isTake, px, size = 0n, oracle,
  * position, no price, the oracle not at it yet (`NotTriggered`), and the price of the fill too far from the oracle
  * (`TooFarFromOracle`, where it waits for a later block). Who carries it out is the keeper's concern, not worked out here.
  *
- * Without a refusal: the close is a trade like any fill (`trade`, as `Filled` records it, with `late` zero), in the
+ * Without a refusal: the close is a trade like any fill (`trade`, as `Filled` records it, `late` the blocks since `armedAt`), in the
  * direction that makes the position smaller and never larger than what is open, at the price a fill takes, with its
  * cost; it needs no leverage room. `after` is the account then. The trigger that was carried out is removed, and the
  * other one with it where the position is closed (`clears`); an order waiting on that asset lapses then
@@ -692,7 +696,7 @@ export function triggerFill(reads, { asset, isTake, oracle, bid, ask, now, block
     drawdownAt: drawdownOf(reads, rules, capital).at, dayStartEquity: big(reads.dayStartEquity) });
   return {
     refusal: null, text: null, isTake: Boolean(isTake), triggerPx: t.px,
-    trade: { asset: a, isBuy, size: sz, px, source, notional, cost, countsAsTrade: notional >= MIN_TRADE_NOTIONAL, late: 0 },
+    trade: { asset: a, isBuy, size: sz, px, source, notional, cost, countsAsTrade: notional >= MIN_TRADE_NOTIONAL, late: Number(block) - Number(t.armedAt) },
     after: { position: after, cash, equity, notional: openAfter,
       leverageX100: equity !== null && equity > 0n ? (openAfter * 100n) / equity : null, breach },
     clears: { fired: true, other: closed && other !== null ? (isTake ? "stop" : "take") : null },
@@ -743,7 +747,8 @@ export function triggerLedger(events) {
       side.delete(asset);
     } else if (event.name === "TriggerSeen") {
       const t = side.get(asset);
-      if (t && t.seenAt === null) t.seenAt = Number(a.seenAt);
+      // The contract writes a sighting only when it starts a span: the latest one is the one that stands.
+      if (t) t.seenAt = Number(a.seenAt);
     } else if (event.name === "Filled") {
       trades.push({ asset, isBuy: Boolean(a.isBuy), size: BigInt(a.sz), px: BigInt(a.px), cost: BigInt(a.cost), late: Number(a.late),
         source: Number(a.source), via: "order", triggerPx: null });

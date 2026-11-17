@@ -109,7 +109,9 @@ fail, and their prices pay for the ones that pass.
   approver has approved it (`approvePayouts`, `PayoutApproved`), and 7 days after the claim whether
   approved or not (`PAYOUT_HARD`, `payoutHardAt`): the trader's money never waits on the approver
   longer. The creator names the approver (`setApprover`, `ApproverSet`; zero for none, and every
-  payout then waits the 7 days); approving sets neither the amount nor the trader. The keeper sends
+  payout then waits the 7 days); approving sets neither the amount nor the trader. A batch of
+  approvals passes over a payout that was paid, stopped or approved while it was on its way, and
+  approves the rest. The keeper sends
   `pay` in its first pass after a payout is due, so an approved payout is paid 72 hours and about a
   minute after the claim, or later: the 72 hours and the 7 days are the earliest a payout may be paid,
   and it is paid by a `pay` call, in the order of the claims, when the pool holds enough. `pay(max)`, by

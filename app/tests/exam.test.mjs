@@ -243,7 +243,7 @@ test("the order waiting: its window in blocks, and when another can be placed", 
   const r = reads({ pending: { asset: BTC, isBuy: true, sz: 10_000n, placedBlock: 1_000n } });
   assert.equal(pendingOrder(reads(), 1_000), null);
   assert.deepEqual(pendingOrder(r, 1_000), { asset: BTC, isBuy: true, size: 10_000n, fillFrom: 1_001, fillUntil: 1_010, state: "waiting",
-    blocksToFill: 1, fallbackFrom: 1_071 });
+    blocksToFill: 1, fallbackFrom: 1_071, fallbackUntil: 1_130 });
   assert.equal(pendingOrder(r, 1_001).state, "filling");
   assert.equal(pendingOrder(r, 1_010).state, "filling");
   assert.equal(pendingOrder(r, 1_011).state, "lapsed");
@@ -655,10 +655,13 @@ test("a stop and a take as the screen shows them: when they act, how far the ora
   assert.deepEqual([view({ ...set, mark: 950_000n }, { now: DAY, block: 502 }).stop.state, view({ ...set, mark: 950_000n }, { now: DAY, block: 502 }).stop.room],
     ["triggered", 0n], "at the stop is reached");
   assert.equal(view({ ...set, mark: 1_100_000n }, { now: DAY, block: 502 }).take.state, "triggered");
-  // Seen at block 510: the filler carries it out; anyone may from 60 blocks after the sighting, while it holds.
+  // Seen at block 510: the filler carries it out; anyone may for 60 blocks from 60 blocks after the sighting, while it
+  // holds, and after them only the filler again, until it is seen again.
   const seen = { stop: trig(950_000n, 0n, 502, 510), mark: 940_000n };
-  assert.deepEqual(["510", "569", "570", "700"].map((b) => view(seen, { now: DAY, block: Number(b) }).stop).map((s) => [s.state, s.carriedBy, s.fallbackFrom]),
-    [["seen", "filler", 570], ["seen", "filler", 570], ["seen", "anyone", 570], ["seen", "anyone", 570]]);
+  assert.deepEqual(["510", "569", "570", "629", "630", "700"].map((b) => view(seen, { now: DAY, block: Number(b) }).stop)
+    .map((s) => [s.state, s.carriedBy, s.fallbackFrom, s.fallbackUntil]),
+    [["seen", "filler", 570, 629], ["seen", "filler", 570, 629], ["seen", "anyone", 570, 629], ["seen", "anyone", 570, 629],
+      ["seen", "filler", 570, 629], ["seen", "filler", 570, 629]]);
   assert.equal(view({ stop: trig(950_000n, 0n, 502, 510), mark: 960_000n }, { now: DAY, block: 600 }).stop.state, "armed", "back over it: it must hold again");
   assert.equal(view({ stop: trig(950_000n, 0n, 502), filler: ZERO, mark: 940_000n }, { now: DAY, block: 502 }).stop.carriedBy, "anyone-but-trader");
   assert.equal(view({ stop: trig(950_000n, 0n, 502), positions: [{ asset: BTC, size: 100n, mark: null, stop: trig(950_000n, 0n, 502) }] }, { now: DAY, block: 502 }).stop.state, "unpriced");
@@ -675,7 +678,9 @@ test("a stop and a take as the screen shows them: when they act, how far the ora
   // The contract's test of the side: a take and a stop on a long and on a short.
   assert.match(SRC, /bool hit = isTake == \(pos > 0\) \? oracle >= t\.px : oracle <= t\.px;/);
   assert.match(SRC, /uint64 sz = t\.sz == 0 \|\| t\.sz > open \? uint64\(open\) : t\.sz;/);
-  assert.match(SRC, /\} else if \(msg\.sender != filler && \(t\.seenAt == 0 \|\| block\.number < uint256\(t\.seenAt\) \+ FALLBACK_BLOCKS\)\) \{/);
+  assert.match(SRC, /\} else if \(msg\.sender != filler && \(t\.seenAt == 0 \|\| !_inFallback\(t\.seenAt\)\)\) \{/);
+  assert.match(SRC, /return block\.number >= after_ \+ FALLBACK_BLOCKS && block\.number < after_ \+ 2 \* FALLBACK_BLOCKS;/);
+  assert.match(SRC, /emit Filled\(asset, before < 0, sz, px, cost, block\.number - t\.armedAt, source\);/);
 });
 
 test("a stop is carried out as a trade: at that block's price, closing what is open, in the contract's order of refusals", () => {
@@ -690,6 +695,7 @@ test("a stop is carried out as a trade: at that block's price, closing what is o
   const got = fire(stop);
   assert.deepEqual(got.trade, { asset: BTC, isBuy: false, size: 100n, px: 940_000n, source: "oracle", notional: 94n * USD, cost: 0n,
     countsAsTrade: true, late: 0 });
+  assert.equal(fire(stop, { block: 510 }).trade.late, 8, "late by the blocks since it armed, as Filled says");
   assert.deepEqual([got.triggerPx, got.isTake, got.after.position, got.after.cash, got.after.equity, got.after.notional, got.after.breach],
     [950_000n, false, 0n, 94n * USD, 94n * USD, 0n, "none"], "100 units sold at 940 000");
   assert.deepEqual([got.clears, got.lapsesOrder, got.events], [{ fired: true, other: "take" }, false, ["TriggerCleared", "TriggerCleared", "Filled", "TriggerFilled"]],
@@ -740,7 +746,7 @@ test("a stop is carried out as a trade: at that block's price, closing what is o
   const refusals = ["revert NoTrigger()", "revert TooEarly(t.armedAt)", "revert NoPosition()", "_mark(asset)", "revert NotTriggered(oracle, t.px)"];
   assert.deepEqual([...refusals].sort((a, b) => trigBody.indexOf(a) - trigBody.indexOf(b)), refusals);
   assert.match(SRC, /_clear\(asset, isTake\);\s+\(uint64 px, uint256 cost, uint8 source\) = _apply\(asset, before < 0, sz, before\);/);
-  assert.match(SRC, /emit Filled\(asset, before < 0, sz, px, cost, 0, source\);\s+emit TriggerFilled\(asset, isTake, sz, px, cost, t\.px, source\);/);
+  assert.match(SRC, /emit Filled\(asset, before < 0, sz, px, cost, block\.number - t\.armedAt, source\);\s+emit TriggerFilled\(asset, isTake, sz, px, cost, t\.px, source\);/);
 });
 
 test("a stop is filled at the book's side as any fill is, waits where the book stands off the oracle, and costs what a fill costs", () => {
@@ -873,10 +879,11 @@ test("the stops, the takes and the trades are folded out of the recorded events,
     ev("TriggerSet", { asset: ETH, isTake: true, px: 300_000n, sz: 0n, armedAt: 520n }), ev("TriggerCleared", { asset: ETH, isTake: true })]);
   assert.deepEqual(again.stops.map((t) => [t.asset, t.px, t.seenAt]), [[BTC, 900_000n, null], [ETH, 200_000n, null]]);
   assert.deepEqual(again.takes, []);
-  // The first sighting is the one that counts: the contract writes no second one.
+  // A second sighting is written only once the first one's span is over, and starts a new one: the latest stands.
   const twice = triggerLedger([ev("TriggerSet", { asset: BTC, isTake: false, px: 950_000n, sz: 0n, armedAt: 502n }),
-    ev("TriggerSeen", { asset: BTC, isTake: false, oracle: 940_000n, seenAt: 510n }), ev("TriggerSeen", { asset: BTC, isTake: false, oracle: 930_000n, seenAt: 540n })]);
-  assert.equal(twice.stops[0].seenAt, 510);
+    ev("TriggerSeen", { asset: BTC, isTake: false, oracle: 940_000n, seenAt: 510n }), ev("TriggerSeen", { asset: BTC, isTake: false, oracle: 930_000n, seenAt: 630n })]);
+  assert.equal(twice.stops[0].seenAt, 630);
+  assert.match(SRC, /if \(t\.seenAt != 0 && block\.number < uint256\(t\.seenAt\) \+ 2 \* FALLBACK_BLOCKS\) return;/);
   // A TriggerFilled without the Filled it comes with, or with another's numbers, is a record the contract did not write.
   const lone = ev("TriggerFilled", { asset: BTC, isTake: false, sz: 100n, px: 940_000n, cost: 0n, triggerPx: 950_000n, source: 0 });
   assert.throws(() => triggerLedger([lone]), /no Filled before it/);
