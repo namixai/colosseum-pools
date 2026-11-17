@@ -176,10 +176,18 @@ function wireCalls(page, st, status, again) {
     } catch (err) {
       status.className = "sp-status err";
       status.textContent = traderRefusal(refusalName(err, IFACE)) || friendly(err);
+    }
+    // The flight lasts until the lists are read again, so a press on a row that is about to change is not taken; the
+    // buttons come back whether or not the reading worked.
+    try {
+      await again();
+    } catch (err) {
+      status.className = "sp-status err";
+      status.textContent = `Could not refresh: ${friendly(err)}`;
     } finally {
       st.flight = false;
+      page.querySelectorAll("button[data-fund], button[data-claim]").forEach((b) => { b.disabled = false; });
     }
-    await again().catch((err) => { status.className = "sp-status err"; status.textContent = `Could not refresh: ${friendly(err)}`; });
   });
 }
 
@@ -240,7 +248,7 @@ export async function simExamsView(address, page) {
   const draw = async () => {
     $("#sim-list", page).innerHTML = examsHtml(st.rows);
     $("#sim-scan", page).textContent = scanNote(st.loaded, st.floor);
-    $("#sim-back", page).disabled = !canLookBack(st.loaded, st.floor) || st.flight;
+    $("#sim-back", page).disabled = !canLookBack(st.loaded, st.floor);
   };
   await draw();
   wireBack(page, st, status, draw);
@@ -260,7 +268,7 @@ async function stopReasons(st, list, latest) {
       const block = await firstBlockAt(p.stoppedAt, { low: Math.max(0, st.floor), high: latest,
         timeOf: async (n) => (await chain.readProvider.getBlock(n))?.timestamp ?? 0 });
       if (block === null) return;
-      const logs = await chain.readProvider.getLogs({ address: st.at, fromBlock: block, toBlock: block + SCAN_WINDOW - 1,
+      const logs = await chain.readProvider.getLogs({ address: st.at, fromBlock: block, toBlock: Math.min(latest, block + SCAN_WINDOW - 1),
         topics: [topic, ethers.zeroPadValue(ethers.toBeHex(p.id), 32)] });
       const parsed = logs.length ? IFACE.parseLog(logs[0]) : null;
       if (parsed) reasons.set(p.id, Number(parsed.args.reason));
@@ -297,7 +305,7 @@ export async function simPayoutsView(address, page) {
     await refreshRows(st);
     $("#sim-list", page).innerHTML = payoutsHtml({ ready: requestable(st.rows), rows: payoutRows({ structs, wallet: st.wallet, now, reasons }) });
     $("#sim-scan", page).textContent = scanNote(st.loaded, st.floor);
-    $("#sim-back", page).disabled = !canLookBack(st.loaded, st.floor) || st.flight;
+    $("#sim-back", page).disabled = !canLookBack(st.loaded, st.floor);
   };
   await draw();
   wireBack(page, st, status, draw);

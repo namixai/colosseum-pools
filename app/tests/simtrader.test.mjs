@@ -297,3 +297,11 @@ test("the stylesheet's braces balance: an unclosed block swallows every rule aft
   const depth = css.slice(0, css.indexOf("main:has(> .ex-page)")).split("{").length - css.slice(0, css.indexOf("main:has(> .ex-page)")).split("}").length;
   assert.equal(depth, 0, "the trading screen's rules are at the top level, for every width");
 });
+
+test("the calls' buttons come back after the lists are read again, worked or not; a stop's reason is read no further than the newest block", () => {
+  const view = read("../views/simtrader.js");
+  const body = view.slice(view.indexOf("function wireCalls"), view.indexOf("// ── Trade"));
+  assert.match(body, /await again\(\);[\s\S]*finally \{\s*st\.flight = false;\s*page\.querySelectorAll\("button\[data-fund\], button\[data-claim\]"\)\.forEach\(\(b\) => \{ b\.disabled = false; \}\);/);
+  assert.match(view, /toBlock: Math\.min\(latest, block \+ SCAN_WINDOW - 1\)/);
+  assert.ok(!/canLookBack\(st\.loaded, st\.floor\) \|\| st\.flight/.test(view), "a call in flight does not leave the look-back button off for good");
+});
