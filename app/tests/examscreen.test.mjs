@@ -10,7 +10,7 @@ import {
 import {
   SCREEN_TEXT, INTERVALS, candleWindow, readsFrom, accountFigures, positionRow, triggerText, pendingText, barShare,
   accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, niceTicks, chartScale, candleText,
-  journalRows, timeLeft, sendFailure, leverageText, usdShown, networkMarks, lifeSteps, timeText,
+  journalRows, timeLeft, sendFailure, leverageText, usdShown, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange,
 } from "../lib/examscreen.js";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -374,4 +374,79 @@ test("the page's styles are the approved layout's: three columns, the tabs under
   assert.match(css, /\.ex-bottom \{ grid-column: 1 \/ 3; grid-row: 2; \}/);
   assert.match(css, /\.ex-term\[data-phone="chart"\] \.ex-book \{ display: none; \}/);
   assert.doesNotMatch(css, /\.ex-rehearsal/);
+});
+
+// ── review of #314 ─────────────────────────────────────────────────
+
+test("an asset the exchange's list does not name is unknown: no size or price is taken in its units", () => {
+  const stand = { index: ETH, name: `#${ETH}`, szDecimals: 0 };
+  const unknown = markUnknown(stand, ETH);
+  assert.deepEqual([unknown.unknown, isKnown(unknown), isKnown(markUnknown(PERPS.get(ETH), ETH))], [true, false, true]);
+  assert.equal(markUnknown({ index: ETH, name: "ETH", szDecimals: 4 }, ETH).unknown, undefined);
+  assert.equal(markUnknown(undefined, ETH).unknown, true);
+  // a size of 1 would be one unit at no decimals, 10 000 times too small for an asset of four
+  const o = orderForm(reads(), { asset: ETH, perp: unknown, isBuy: true, sizeInput: "1", prices: { oracle: 30_000n, bid: 29_990n, ask: 30_010n }, ...AT });
+  assert.deepEqual([o.size, o.preview, o.error], [null, null, SCREEN_TEXT.noAsset]);
+  const t = triggerForm(reads(), { asset: ETH, perp: unknown, isTake: false, pxInput: "3000", sizeInput: "", oracle: 30_000n, ...AT });
+  assert.deepEqual([t.px, t.preview, t.error], [null, null, SCREEN_TEXT.noAsset]);
+  assert.equal(previewView(o.preview, unknown), null, "nothing to show but the message");
+  const none = orderForm(reads(), { asset: ETH, perp: undefined, isBuy: true, sizeInput: "1", prices: PRICES, ...AT });
+  assert.equal(none.error, SCREEN_TEXT.noAsset, "a missing asset is as unknown");
+});
+
+test("an unknown asset's position, order and journal rows show no size or price, only what is in the contract's own units", () => {
+  const perps = new Map([[BTC, BTC_PERP], [ETH, markUnknown({ index: ETH, name: "#4", szDecimals: 0 }, ETH)]]);
+  const stop = { px: 30_000n, sz: 0n, armedAt: 900, seenAt: 0 };
+  const a = examAccount(reads({ cash: 9_000n * USD }, () => [{ asset: BTC, size: 0n, oracle: PX }, { asset: ETH, size: 10_000n, oracle: 30_000n, stop }, { asset: SOL, size: 0n, oracle: 1_500n }]), AT);
+  const row = positionRow(a.positions[0], perps);
+  assert.deepEqual([row.name, row.size, row.mark, row.stop, row.closeSize], ["#4", "—", "—", "Stop set", 10_000n]);
+  assert.equal(row.notional, "$300.00", "the notional is the library's, in USDC");
+  const order = got({ pending: Object.assign([ETH, true, 1_500n, 1_000n], { asset: ETH, isBuy: true, sz: 1_500n, placedBlock: 1_000n }) });
+  assert.equal(pendingText(examAccount(readsFrom(order, flat()), { now: DAY, block: 1_000 }).pending, perps).text, "Order sent: Buy — #4 · fills from block 1001");
+  const rows = journalRows([{ name: "Filled", args: { asset: ETH, isBuy: true, sz: 1_500n, px: 30_000n, cost: 1n, late: 0n, source: 0n }, block: 5 }], perps);
+  assert.deepEqual([rows[0].cells.size, rows[0].cells.price], ["—", "—"]);
+});
+
+test("one call is in flight at a time: a second press does nothing, and only the call that started clears the flag", async () => {
+  const f = singleFlight();
+  let release;
+  const first = f.run(() => new Promise((r) => { release = r; }));
+  assert.equal(f.busy, true);
+  let ran = false;
+  assert.deepEqual(await f.run(async () => { ran = true; }), { skipped: true });
+  assert.equal(ran, false);
+  assert.equal(f.busy, true, "the refused press did not clear it");
+  release("done");
+  assert.deepEqual(await first, { skipped: false, value: "done" });
+  assert.equal(f.busy, false);
+  await assert.rejects(f.run(async () => { throw new Error("x"); }), /x/);
+  assert.equal(f.busy, false, "a failed call clears it too");
+  assert.deepEqual(await f.run(async () => 1), { skipped: false, value: 1 });
+});
+
+test("the page reads the flag in its handlers and paints the sending buttons off while a call is out", () => {
+  const view = read("../views/exam.js");
+  assert.match(view, /st\.flight\.run\(async/);
+  assert.doesNotMatch(view, /st\.busy/);
+  assert.match(view, /data-close="\$\{r\.asset\}"\$\{st\.flight\.busy \? " disabled" : ""\}/);
+  assert.match(view, /data-clear="\$\{r\.asset\}:\$\{k\}"\$\{st\.flight\.busy/);
+  assert.match(view, /g\.disabled = !account\.graduate\.can \|\| st\.flight\.busy/);
+  const poll = view.slice(view.indexOf("function paintPositions"), view.indexOf("function paintTicket"));
+  assert.doesNotMatch(poll, /paintJournal/, "the poll does not repaint the journal (its scroll is the reader's)");
+});
+
+test("the journal's range joins what is loaded: the newest blocks, then older, then the ones since the top", () => {
+  assert.deepEqual(journalPlan({ latest: 5_000, loaded: null, direction: "earlier" }), { from: 4_001, to: 5_000 });
+  assert.deepEqual(journalPlan({ latest: 500, loaded: null, direction: "earlier" }), { from: 0, to: 500 });
+  const loaded = { from: 4_001, top: 5_000 };
+  assert.deepEqual(journalPlan({ latest: 5_000, loaded, direction: "newer" }), null, "nothing newer");
+  assert.deepEqual(journalPlan({ latest: 5_060, loaded, direction: "newer" }), { from: 5_001, to: 5_060 });
+  assert.deepEqual(journalPlan({ latest: 9_000, loaded, direction: "newer" }), { from: 5_001, to: 6_000 }, "a long gap is read a stretch at a time, from the top");
+  assert.deepEqual(journalPlan({ latest: 5_000, loaded, direction: "earlier" }), { from: 3_001, to: 4_000 });
+  assert.equal(journalPlan({ latest: 5_000, loaded: { from: 0, top: 5_000 }, direction: "earlier" }), null);
+  assert.equal(journalRange(null), "");
+  assert.equal(journalRange({ from: 3_001, top: 5_060 }), "Events from block 3001 to block 5060.", "the loaded run, not the latest block");
+  const view = read("../views/exam.js");
+  assert.match(view, /id="ex-journal-new"/);
+  assert.doesNotMatch(view, /to \$\{latest\}/);
 });

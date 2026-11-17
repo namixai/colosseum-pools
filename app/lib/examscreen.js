@@ -27,6 +27,7 @@ export const SCREEN_TEXT = Object.freeze({
   breach: "This order would put the account under its loss limit.",
   noPrice: "Price not read",
   oneAtATime: "one order at a time: a new one is accepted once this one is filled or lapsed",
+  noAsset: "This asset's data was not read from Hyperliquid, so no size or price can be taken for it.",
   closeDrops: "An order that closes or turns a position round takes its stop and take off.",
   lapsed: "Not filled. The order lapsed at no cost — place it again.",
 });
@@ -120,8 +121,20 @@ const sideWord = (isBuy) => (isBuy ? "Buy" : "Sell");
 
 /** The perp's name and size decimals for an asset number, from the list the page read (`perps`: Map by number). */
 function perpOf(perps, asset) {
-  return perps.get(Number(asset)) ?? { index: Number(asset), name: `#${asset}`, szDecimals: 0 };
+  return perps.get(Number(asset)) ?? { index: Number(asset), name: `#${asset}`, szDecimals: 0, unknown: true };
 }
+
+/** An asset as the page keeps it: `hl.perp` answers a stand-in (`#<index>`, no size decimals) for an asset the list
+ *  does not name, and a size or price at a scale of no decimals would be wrong by orders of magnitude. Such an asset
+ *  is marked `unknown`: nothing is typed or worked out in its units. */
+export function markUnknown(perp, asset) {
+  const named = perp && perp.name !== `#${asset}` && Number.isInteger(Number(perp.szDecimals)) && perp.szDecimals !== null;
+  return named ? perp : { ...(perp ?? {}), index: Number(asset), name: `#${asset}`, unknown: true };
+}
+
+/** Whether an asset's size decimals were read, so that a size or a price can be taken in its units. */
+export const isKnown = (perp) => Boolean(perp) && perp.unknown !== true;
+const DASH = "—";
 
 /** "×" times a hundredth: a leverage kept as hundredths, said as "2.50×". For showing only. */
 export function leverageText(x100) {
@@ -159,6 +172,12 @@ export function accountFigures(account) {
 export function positionRow(p, perps) {
   const perp = perpOf(perps, p.asset);
   const dec = perp.szDecimals;
+  if (perp.unknown) {
+    return { asset: p.asset, name: perp.name, side: p.side === "long" ? "Long" : "Short", size: DASH, mark: DASH,
+      notional: p.notional === null ? SCREEN_TEXT.noPrice : usdShown(p.notional),
+      leverage: p.leverageX100 === null ? SCREEN_TEXT.noPrice : `${leverageText(p.leverageX100)} / ${leverageText(p.capX100)}`,
+      stop: p.stop ? "Stop set" : null, take: p.take ? "Take set" : null, closeIsBuy: p.size < 0n, closeSize: p.size < 0n ? -p.size : p.size };
+  }
   return {
     asset: p.asset, name: perp.name, side: p.side === "long" ? "Long" : "Short",
     size: `${sizeText(p.size < 0n ? -p.size : p.size, dec)} ${perp.name}`,
@@ -191,7 +210,7 @@ export function pendingText(pending, perps) {
   if (!pending) return null;
   const perp = perpOf(perps, pending.asset);
   if (pending.state === "lapsed") return { tone: "", text: SCREEN_TEXT.lapsed };
-  const what = `${sideWord(pending.isBuy)} ${sizeText(pending.size, perp.szDecimals)} ${perp.name}`;
+  const what = `${sideWord(pending.isBuy)} ${perp.unknown ? DASH : sizeText(pending.size, perp.szDecimals)} ${perp.name}`;
   if (pending.state === "waiting") return { tone: "", text: `Order sent: ${what} · fills from block ${pending.fillFrom}` };
   return { tone: "", text: `Being filled · window until block ${pending.fillUntil}` };
 }
@@ -231,6 +250,7 @@ export function accountScale(account) {
  * `prices` are the asset's, in the contract's price units: `{oracle, bid, ask}`, null where not read.
  */
 export function orderForm(reads, { asset, perp, isBuy, sizeInput, prices, now, block }) {
+  if (!isKnown(perp)) return { size: null, error: SCREEN_TEXT.noAsset, preview: null };
   const text = String(sizeInput ?? "").trim();
   if (text === "") return { size: null, error: null, preview: null };
   let size;
@@ -268,6 +288,7 @@ export function previewView(preview, perp) {
 
 /** A stop or a take being set: the text typed turned into a price by the library, then `triggerSetPreview`. */
 export function triggerForm(reads, { asset, perp, isTake, pxInput, sizeInput, oracle, now, block }) {
+  if (!isKnown(perp)) return { px: null, size: 0n, error: SCREEN_TEXT.noAsset, preview: null };
   const priceText = String(pxInput ?? "").trim();
   if (priceText === "") return { px: null, size: 0n, error: null, preview: null };
   let px;
@@ -374,44 +395,84 @@ export function journalRows(events, perps) {
     const a = e.args;
     const perp = perpOf(perps, a.asset ?? 0);
     const dec = perp.szDecimals;
+    const S = (n) => (perp.unknown ? DASH : sizeText(n, dec));
+    const P = (n) => (perp.unknown ? DASH : pxText(n, dec));
     const at = { block: e.block, name: e.name };
     const cells = (c) => ({ event: dash, asset: perp.name, side: dash, size: dash, price: dash, cost: dash, from: dash, note: dash, ...c });
     if (e.name === "Placed") {
-      rows.push({ ...at, text: `Order placed: ${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name} · fills from block ${a.fillFrom} to ${a.fillUntil}`,
-        cells: cells({ event: "Placed", side: sideWord(a.isBuy), size: sizeText(a.sz, dec), note: `blocks ${a.fillFrom} to ${a.fillUntil}` }) });
+      rows.push({ ...at, text: `Order placed: ${sideWord(a.isBuy)} ${S(a.sz)} ${perp.name} · fills from block ${a.fillFrom} to ${a.fillUntil}`,
+        cells: cells({ event: "Placed", side: sideWord(a.isBuy), size: S(a.sz), note: `blocks ${a.fillFrom} to ${a.fillUntil}` }) });
     } else if (e.name === "Filled") {
       const late = Number(a.late);
       const source = SOURCE[Number(a.source)] ?? "oracle";
-      const head = `${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name} at ${pxText(a.px, dec)} · cost ${usdShown(a.cost)} · price from the ${source}`;
+      const head = `${sideWord(a.isBuy)} ${S(a.sz)} ${perp.name} at ${P(a.px)} · cost ${usdShown(a.cost)} · price from the ${source}`;
       lastFilled = { ...at, head, text: `Filled: ${head} · ${late === 0 ? "first block it could be filled" : `${late} block${late === 1 ? "" : "s"} after the first`}`,
-        cells: cells({ event: "Filled", side: sideWord(a.isBuy), size: sizeText(a.sz, dec), price: pxText(a.px, dec), cost: usdShown(a.cost),
+        cells: cells({ event: "Filled", side: sideWord(a.isBuy), size: S(a.sz), price: P(a.px), cost: usdShown(a.cost),
           from: source, note: `${late} block${late === 1 ? "" : "s"}` }) };
       rows.push(lastFilled);
     } else if (e.name === "TriggerFilled") {
       if (lastFilled) {
-        lastFilled.text = `${a.isTake ? "Take" : "Stop"} filled: ${lastFilled.head} · it was set at ${pxText(a.triggerPx, dec)}`;
+        lastFilled.text = `${a.isTake ? "Take" : "Stop"} filled: ${lastFilled.head} · it was set at ${P(a.triggerPx)}`;
         lastFilled.cells.event = a.isTake ? "Take filled" : "Stop filled";
-        lastFilled.cells.note = `set at ${pxText(a.triggerPx, dec)}`;
+        lastFilled.cells.note = `set at ${P(a.triggerPx)}`;
       }
     } else if (e.name === "Lapsed") {
-      rows.push({ ...at, text: `Order lapsed at no cost: ${sideWord(a.isBuy)} ${sizeText(a.sz, dec)} ${perp.name}`,
-        cells: cells({ event: "Lapsed", side: sideWord(a.isBuy), size: sizeText(a.sz, dec) }) });
+      rows.push({ ...at, text: `Order lapsed at no cost: ${sideWord(a.isBuy)} ${S(a.sz)} ${perp.name}`,
+        cells: cells({ event: "Lapsed", side: sideWord(a.isBuy), size: S(a.sz) }) });
     } else if (e.name === "DaySnapshot") {
       rows.push({ ...at, text: `Day ${a.day} snapshot: equity ${usdShown(a.equity)}`,
         cells: cells({ event: "DaySnapshot", asset: dash, note: `equity ${usdShown(a.equity)}` }) });
     } else if (e.name === "TriggerSet") {
-      const closes = BigInt(a.sz) === 0n ? "all" : sizeText(a.sz, dec);
-      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} set on ${perp.name} at ${pxText(a.px, dec)} · closes ${closes} · acts from block ${a.armedAt}`,
-        cells: cells({ event: a.isTake ? "Take set" : "Stop set", size: closes, price: pxText(a.px, dec), note: `acts from block ${a.armedAt}` }) });
+      const closes = BigInt(a.sz) === 0n ? "all" : S(a.sz);
+      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} set on ${perp.name} at ${P(a.px)} · closes ${closes} · acts from block ${a.armedAt}`,
+        cells: cells({ event: a.isTake ? "Take set" : "Stop set", size: closes, price: P(a.px), note: `acts from block ${a.armedAt}` }) });
     } else if (e.name === "TriggerCleared") {
       rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} removed`, cells: cells({ event: a.isTake ? "Take removed" : "Stop removed" }) });
     } else if (e.name === "TriggerSeen") {
-      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} reached: oracle at ${pxText(a.oracle, dec)}`,
-        cells: cells({ event: a.isTake ? "Take reached" : "Stop reached", price: pxText(a.oracle, dec) }) });
+      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} reached: oracle at ${P(a.oracle)}`,
+        cells: cells({ event: a.isTake ? "Take reached" : "Stop reached", price: P(a.oracle) }) });
     }
     if (e.name !== "Filled") lastFilled = null;
   }
   return rows;
+}
+
+/** One call in flight at a time: `run(fn)` does nothing while a call is out, and `busy` is true from its start to its end. */
+export function singleFlight() {
+  let busy = false;
+  return {
+    get busy() { return busy; },
+    async run(fn) {
+      if (busy) return { skipped: true };
+      busy = true;
+      try {
+        return { skipped: false, value: await fn() };
+      } finally {
+        busy = false;
+      }
+    },
+  };
+}
+
+/** The blocks one press of a journal button reads. */
+export const JOURNAL_BLOCKS = 1000;
+
+/**
+ * The next range of blocks to read, given what is loaded (`loaded`: {from, top}, or null for nothing yet) and the
+ * latest block: the newest blocks at first, then older ones, or the ones since the top of what is loaded. Null where
+ * there is nothing more in that direction. The ranges join: what is loaded is always one run of blocks.
+ */
+export function journalPlan({ latest, loaded, direction }) {
+  if (!loaded) return { from: Math.max(0, latest - JOURNAL_BLOCKS + 1), to: latest };
+  if (direction === "newer") {
+    return loaded.top >= latest ? null : { from: loaded.top + 1, to: Math.min(latest, loaded.top + JOURNAL_BLOCKS) };
+  }
+  return loaded.from <= 0 ? null : { from: Math.max(0, loaded.from - JOURNAL_BLOCKS), to: loaded.from - 1 };
+}
+
+/** What the journal says of itself: only the blocks that were read. */
+export function journalRange(loaded) {
+  return loaded ? `Events from block ${loaded.from} to block ${loaded.top}.` : "";
 }
 
 /** What is left until `endsAt` (seconds), as "2 d 3 h", "5 h 12 min" or "7 min"; "Over" at or past it, "—" with no end. */

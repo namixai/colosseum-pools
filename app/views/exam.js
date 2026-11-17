@@ -15,7 +15,7 @@ import {
 import {
   SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, INTERVALS, BOOK_DEPTH, candleWindow, readsFrom, accountFigures, positionRow,
   pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, chartScale, candleText,
-  journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText,
+  journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange,
 } from "../lib/examscreen.js";
 import { pxText } from "../lib/exam.js";
 
@@ -64,11 +64,11 @@ export async function examView(address, page) {
   const [rules, terms, trader] = await Promise.all([exam.rules(), exam.terms(), exam.trader()]);
   const assets = [...rules.assets].map(Number);
   const perps = new Map();
-  if (ds.ok) for (const a of assets) perps.set(a, await hl.perp(a));
+  if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
     exam, address, ds, perps, assets, trader, asset: assets[0], isBuy: true, interval: "15m", snap: null, rows: [],
-    book: null, hover: null, journal: [], journalFrom: null, journalComplete: false, busy: false, timers: [],
-    times: new Map(), tab: "pos", triggers: {},
+    book: null, hover: null, journal: [], timers: [],
+    times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };
 
   page.className = "ex-page";
@@ -76,6 +76,7 @@ export async function examView(address, page) {
   wire(page, st);
   // The first reading decides whether the page can be drawn: a failure here is the page's failure, not a panel's.
   await tick(page, st);
+  paintJournal(page, st);
   if (ds.ok) {
     paintAssets(page, st);
     refreshCandles(page, st);
@@ -180,7 +181,7 @@ function skeleton(st) {
         <div id="ex-positions" class="ex-scroll"></div>
         <div id="ex-journal-pane" hidden>
           <div id="ex-journal" class="ex-scroll"></div>
-          <p class="ex-pad"><button type="button" class="ex-mini2" id="ex-journal-load">Load recent events</button> <span class="ex-muted" id="ex-journal-note"></span></p>
+          <p class="ex-pad"><button type="button" class="ex-mini2" id="ex-journal-load">Load recent events</button> <button type="button" class="ex-mini2" id="ex-journal-new" hidden>Load newer events</button> <span class="ex-muted" id="ex-journal-note"></span></p>
         </div>
       </section>
     </div>
@@ -291,7 +292,7 @@ function paintAccount(page, st) {
     </div>`;
   void idx;
   const g = $("#ex-graduate", page);
-  g.disabled = !account.graduate.can || st.busy;
+  g.disabled = !account.graduate.can || st.flight.busy;
   $("#ex-graduate-text", page).textContent = account.graduate.can ? "" : account.graduate.text;
 }
 
@@ -312,10 +313,9 @@ function paintPositions(page, st) {
     ${rows.map((r) => `<tr><td data-l="Asset"><b>${esc(r.name)}</b></td><td data-l="Side" class="${r.side === "Long" ? "lg" : "sh"}">${esc(r.side)}</td><td data-l="Size">${esc(r.size)}</td><td data-l="Mark">${esc(r.mark)}</td>
       <td data-l="Notional">${esc(r.notional)}</td><td data-l="Leverage">${esc(r.leverage)}</td>
       <td data-l="Stop / take" class="ex-trig">${[r.stop && [r.stop, "stop"], r.take && [r.take, "take"]].filter(Boolean).map(([t, k]) =>
-        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}" aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}</td>
-      <td data-l=""><button type="button" class="ex-cl" data-close="${r.asset}">Close</button></td></tr>`).join("")}</tbody></table>`
+        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}"${st.flight.busy ? " disabled" : ""} aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}</td>
+      <td data-l=""><button type="button" class="ex-cl" data-close="${r.asset}"${st.flight.busy ? " disabled" : ""}>Close</button></td></tr>`).join("")}</tbody></table>`
     : `<p class="ex-pad ex-muted">No open positions.</p>`) + `<p class="ex-exit">${esc(SCREEN_TEXT.exit)}</p>`;
-  paintJournal(page, st);
 }
 
 function paintTicket(page, st) {
@@ -325,9 +325,15 @@ function paintTicket(page, st) {
   send.textContent = st.isBuy ? "Buy / Long" : "Sell / Short";
   send.className = `ex-go ${st.isBuy ? "b" : "s"}`;
   paintHead(page, st);
-  if (!perp) {
-    $("#ex-preview", page).textContent = "The asset list of this network was not read, so no size can be taken.";
+  if (!isKnown(perp)) {
+    $("#ex-preview", page).innerHTML = `<p class="ex-warn bad">${esc(perp ? SCREEN_TEXT.noAsset : "The asset list of this network was not read, so no size can be taken.")}</p>`;
     send.disabled = true;
+    for (const kind of ["stop", "take"]) {
+      $(`#ex-${kind}-prev`, page).innerHTML = "";
+      $(`#ex-${kind}-set`, page).disabled = true;
+    }
+    st.order = null;
+    st.triggers = {};
     return;
   }
   const prices = perAsset.find((a) => a.asset === st.asset);
@@ -345,7 +351,7 @@ function paintTicket(page, st) {
   }
   $("#ex-preview", page).innerHTML = parts.join("");
   st.order = form;
-  send.disabled = st.busy || !account.canPlace || form.size === null || !view || view.blocked;
+  send.disabled = st.flight.busy || !account.canPlace || form.size === null || !view || view.blocked;
   const by = agentActive(st) ? "agent" : "trader";
   $("#ex-signs", page).textContent = `Signed by ${placeSigns(st, by)}. ${SCREEN_TEXT.fillsLater}`;
 
@@ -356,7 +362,7 @@ function paintTicket(page, st) {
     $(`#ex-${kind}-prev`, page).innerHTML = (tf.error ? `<p class="ex-warn bad">${esc(tf.error)}</p>` : "")
       + (tv ? tv.lines.map((l) => `<p class="ex-warn ${l.tone}">${esc(l.text)}</p>`).join("") : "");
     st.triggers[kind] = tf;
-    $(`#ex-${kind}-set`, page).disabled = st.busy || tf.px === null || !tv || tv.blocked;
+    $(`#ex-${kind}-set`, page).disabled = st.flight.busy || tf.px === null || !tv || tv.blocked;
   }
 }
 
@@ -442,26 +448,35 @@ async function signerFor(st, signer) {
 }
 
 async function sendCall(page, st, call, out) {
-  st.busy = true;
-  const el = $(out, page);
-  el.className = "result busy";
-  el.textContent = "Waiting for the signature…";
-  try {
-    const signer = await signerFor(st, call.signer);
-    const tx = await signer.sendTransaction({ to: call.to, data: call.data });
-    el.textContent = "Sent. Waiting for the block…";
-    const receipt = await tx.wait();
-    chain.forgetLiveReads();
-    if (!receipt || receipt.status !== 1) throw new Error(`${call.method} reverted`);
-    el.className = "result ok";
-    el.textContent = call.method === "place" ? "Order sent. It is filled a few blocks later." : "Done.";
-  } catch (err) {
-    el.className = "result err";
-    el.textContent = sendFailure(err, (d) => refusalOf(d, keccak));
-  } finally {
-    st.busy = false;
-    await tick(page, st).catch(() => {});
-  }
+  // One call at a time: a second press while one is out does nothing, and only the call that set `busy` clears it.
+  await st.flight.run(async () => {
+    repaint(page, st);
+    const el = $(out, page);
+    el.className = "result busy";
+    el.textContent = "Waiting for the signature…";
+    try {
+      const signer = await signerFor(st, call.signer);
+      const tx = await signer.sendTransaction({ to: call.to, data: call.data });
+      el.textContent = "Sent. Waiting for the block…";
+      const receipt = await tx.wait();
+      chain.forgetLiveReads();
+      if (!receipt || receipt.status !== 1) throw new Error(`${call.method} reverted`);
+      el.className = "result ok";
+      el.textContent = call.method === "place" ? "Order sent. It is filled a few blocks later." : "Done.";
+    } catch (err) {
+      el.className = "result err";
+      el.textContent = sendFailure(err, (d) => refusalOf(d, keccak));
+    }
+  });
+  await tick(page, st).catch(() => {});
+}
+
+/** Paints what depends on a call being out: the buttons that send. */
+function repaint(page, st) {
+  if (!st.snap) return;
+  paintAccount(page, st);
+  paintPositions(page, st);
+  paintTicket(page, st);
 }
 
 // ── events ──────────────────────────────────────────────────────
@@ -529,7 +544,9 @@ function wire(page, st) {
     } else if (b.dataset.agent) {
       agentAction(page, st, b.dataset.agent);
     } else if (b.id === "ex-journal-load") {
-      loadJournal(page, st);
+      loadJournal(page, st, "earlier");
+    } else if (b.id === "ex-journal-new") {
+      loadJournal(page, st, "newer");
     }
   });
   page.addEventListener("input", (e) => { if (e.target.matches("#ex-size, #ex-stop-px, #ex-stop-sz, #ex-take-px, #ex-take-sz")) paintTicket(page, st); });
@@ -574,30 +591,36 @@ async function blockTimes(st, blocks) {
   })));
 }
 
-async function loadJournal(page, st) {
-  const btn = $("#ex-journal-load", page);
-  btn.disabled = true;
+/** Reads the next range of the journal (`journalPlan`): the newest blocks at first, then older ones or the ones since the
+ *  top of what is loaded. What the note says is what was read: the range joins what was there, and a read that failed
+ *  changes neither the rows nor the range. */
+async function loadJournal(page, st, direction = "earlier") {
+  const buttons = [$("#ex-journal-load", page), $("#ex-journal-new", page)];
   const info = $("#ex-journal-note", page);
+  buttons.forEach((x) => { x.disabled = true; });
   try {
-    const latest = st.snap.block;
-    const to = st.journalFrom === null ? latest : st.journalFrom - 1;
-    const from = Math.max(0, to - JOURNAL_WINDOW * JOURNAL_CALLS + 1);
-    const { logs, readTo } = await readLogs({ from, to, window: JOURNAL_WINDOW, maxCalls: JOURNAL_CALLS,
-      getLogs: (a, b) => chain.readProvider.getLogs({ address: st.address, fromBlock: a, toBlock: b }) });
+    const plan = journalPlan({ latest: st.snap.block, loaded: st.loaded, direction });
+    if (!plan) {
+      info.textContent = direction === "newer" ? "Nothing newer yet." : "That is the start of the chain.";
+      return;
+    }
+    const { logs } = await readLogs({ from: plan.from, to: plan.to, window: JOURNAL_WINDOW, maxCalls: JOURNAL_CALLS,
+      getLogs: (x, y) => chain.readProvider.getLogs({ address: st.address, fromBlock: x, toBlock: y }) });
     const events = logs.map((l) => {
       const parsed = st.exam.interface.parseLog(l);
       return parsed ? { name: parsed.name, args: parsed.args, block: l.blockNumber, index: l.index } : null;
     }).filter(Boolean);
-    st.journal = [...events, ...st.journal].sort((x, y) => x.block - y.block || x.index - y.index);
-    st.journalFrom = from;
-    info.textContent = `Events from block ${from} to ${latest}.`;
+    st.journal = [...events, ...st.journal].sort((p, q) => p.block - q.block || p.index - q.index);
+    st.loaded = st.loaded ? { from: Math.min(st.loaded.from, plan.from), top: Math.max(st.loaded.top, plan.to) } : { from: plan.from, top: plan.to };
     await blockTimes(st, events.map((e) => e.block));
+    info.textContent = journalRange(st.loaded);
     paintJournal(page, st);
-    btn.textContent = "Load earlier events";
+    buttons[0].textContent = "Load earlier events";
+    buttons[1].hidden = false;
   } catch (err) {
     info.textContent = `Could not load: ${friendly(err)}`;
   } finally {
-    btn.disabled = false;
+    buttons.forEach((x) => { x.disabled = false; });
   }
 }
 
