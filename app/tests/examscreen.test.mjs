@@ -10,7 +10,7 @@ import {
 import {
   SCREEN_TEXT, INTERVALS, candleWindow, readsFrom, accountFigures, positionRow, triggerText, pendingText, barShare,
   accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, niceTicks, chartScale, candleText,
-  journalRows, timeLeft, sendFailure, leverageText, usdShown, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange,
+  journalRows, timeLeft, sendFailure, leverageText, usdShown, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange, canLoadEarlier,
 } from "../lib/examscreen.js";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -449,4 +449,25 @@ test("the journal's range joins what is loaded: the newest blocks, then older, t
   const view = read("../views/exam.js");
   assert.match(view, /id="ex-journal-new"/);
   assert.doesNotMatch(view, /to \$\{latest\}/);
+});
+
+test("the journal's button that loads earlier events is off once the range starts at block 0, and open before that", () => {
+  assert.equal(canLoadEarlier(null), true, "nothing loaded: the first load is open");
+  assert.equal(canLoadEarlier({ from: 1, top: 500 }), true);
+  assert.equal(canLoadEarlier({ from: 0, top: 500 }), false);
+  // a plan from block 0 has nothing earlier, and the page switches the button off, not only says so
+  assert.equal(journalPlan({ latest: 500, loaded: { from: 0, top: 500 }, direction: "earlier" }), null);
+  const view = read("../views/exam.js");
+  assert.match(view, /buttons\[0\]\.disabled = !canLoadEarlier\(st\.loaded\);/);
+  assert.ok(view.indexOf("buttons.forEach((x) => { x.disabled = false; });") < view.indexOf("buttons[0].disabled = !canLoadEarlier(st.loaded);"), "the switch-off comes after the buttons are opened again");
+});
+
+test("the trading screen stands in the user panel's header for an exam of a pool of exams, and in the site's for any other", () => {
+  const view = read("../views/exam.js");
+  assert.match(view, /userHeaderHtml\(\{ address: panelPool, account: accountLabel\(\), current: "trade"/);
+  assert.match(view, /if \(!panelPool\) leavePanel\(\);/);
+  assert.match(view, /accountOf\(address\)/);
+  // the panel's header and footer carry the testnet tag and badge, so the screen's own are drawn only outside the panel
+  assert.match(view, /marks && !st\.panelPool \? `<span class="ex-tag">/);
+  assert.match(view, /marks && !st\.panelPool \? `<div class="ex-foot">/);
 });

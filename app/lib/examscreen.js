@@ -470,6 +470,10 @@ export function journalPlan({ latest, loaded, direction }) {
   return loaded.from <= 0 ? null : { from: Math.max(0, loaded.from - JOURNAL_BLOCKS), to: loaded.from - 1 };
 }
 
+/** Whether there is anything before the blocks loaded: false once the range starts at block 0, and the control that loads
+ *  earlier events is then off. Nothing loaded yet: the first load is open. */
+export const canLoadEarlier = (loaded) => !loaded || loaded.from > 0;
+
 /** What the journal says of itself: only the blocks that were read. */
 export function journalRange(loaded) {
   return loaded ? `Events from block ${loaded.from} to block ${loaded.top}.` : "";

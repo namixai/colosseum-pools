@@ -15,6 +15,7 @@ import { sharedView } from "./views/shared.js";
 import { evidenceView } from "./views/evidence.js";
 import { simPoolView } from "./views/simpool.js";
 import { simAdminView } from "./views/simadmin.js";
+import { simTradeView, simExamsView, simPayoutsView } from "./views/simtrader.js";
 import { panelOf } from "./lib/simpanel.js";
 import { examView } from "./views/exam.js";
 
@@ -44,6 +45,9 @@ const routes = [
   // A simulated pool has two panels, and neither links to the other: the trader's page of the pool, and the control
   // panel (the owner's section), which the site's navigation does not name.
   [/^#\/sim\/(0x[0-9a-fA-F]{40})(?:\?(.*))?$/, (m, page) => simPoolView(m[1], m[2], page)],
+  [/^#\/sim\/(0x[0-9a-fA-F]{40})\/trade$/, (m, page) => simTradeView(m[1], page)],
+  [/^#\/sim\/(0x[0-9a-fA-F]{40})\/exams$/, (m, page) => simExamsView(m[1], page)],
+  [/^#\/sim\/(0x[0-9a-fA-F]{40})\/payouts$/, (m, page) => simPayoutsView(m[1], page)],
   [/^#\/manage\/(0x[0-9a-fA-F]{40})$/, (m, page) => simAdminView(m[1], page)],
   [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => examView(m[1], page)],
   [/^#\/terms$/, (m, page) => termsView(page)],
@@ -132,7 +136,7 @@ function viewFor(hash) {
 
 function route() {
   const hash = location.hash || "#/";
-  // A pool's two panels draw a header and a footer of their own; the site's are hidden for them (app/style.css).
+  // A pool's two panels (and the trading screen of an exam, in the user panel) draw a header and a footer of their own; the site's are hidden for them (app/style.css).
   const panel = panelOf(hash);
   if (panel) document.body.dataset.panel = panel;
   else delete document.body.dataset.panel;

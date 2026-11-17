@@ -7,7 +7,10 @@ import * as chain from "../lib/chain.js";
 import * as hl from "../lib/hl.js";
 import { CONFIG } from "../config.js";
 import { esc, render, $, isAddress, friendly } from "../lib/ui.js";
-import { readLogs } from "../lib/simpool.js";
+import { readLogs, SIM_POOL_ABI } from "../lib/simpool.js";
+import { ACCOUNT_ABI, KIND } from "../lib/simtrader.js";
+import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
+import { accountLabel, wireShell } from "./simshell.js";
 import {
   PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, bboOf, placeCall, graduateCall, setAgentCall,
   setTriggerCall, clearTriggerCall, refusalOf, candleRows,
@@ -15,7 +18,7 @@ import {
 import {
   SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, INTERVALS, BOOK_DEPTH, candleWindow, readsFrom, accountFigures, positionRow,
   pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView, chartScale, candleText,
-  journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange,
+  journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange, canLoadEarlier,
 } from "../lib/examscreen.js";
 import { pxText } from "../lib/exam.js";
 
@@ -42,8 +45,25 @@ function store(name, value) {
 }
 const kept = new Map();  // the second key where storage is blocked, for this tab
 
+/** The pool an exam belongs to, when it is an exam or a stage of a pool of exams (the pool's own `accountOf` says): the
+ *  trading screen then stands in that pool's user panel. Null for an account of any other kind of pool. */
+async function simPoolOf(address) {
+  try {
+    const pool = await new ethers.Contract(address, ACCOUNT_ABI, chain.readProvider).pool();
+    if (!isAddress(pool) || same(pool, ZERO)) return null;
+    const account = await new ethers.Contract(pool, SIM_POOL_ABI, chain.readProvider).accountOf(address);
+    return [KIND.exam, KIND.stage].includes(Number(account.kind)) ? ethers.getAddress(pool) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The site's own header and footer come back: this page is not drawn in the user panel. */
+const leavePanel = () => { delete document.body.dataset.panel; };
+
 export async function examView(address, page) {
   if (!isAddress(address)) {
+    leavePanel();
     render(page, `<section class="card narrow"><h2>Exam</h2>
       <p>${esc(WHAT_THIS_IS)}</p>
       <p>Open the page from the exam's address:</p>
@@ -52,6 +72,7 @@ export async function examView(address, page) {
     return;
   }
   if ((await chain.readProvider.getCode(address)) === "0x") {
+    leavePanel();
     render(page, `<section class="card narrow"><h2>Exam</h2><p>There is no contract at this address on the network this page reads.</p>
       <p><a href="#/exam">Back</a></p></section>`);
     return;
@@ -61,18 +82,30 @@ export async function examView(address, page) {
   // is that chain's or nothing (dataSource), never another network's candles beside this exam.
   const chainId = await nodeChainId();
   const ds = dataSource({ chainId }, CONFIG);
-  const [rules, terms, trader] = await Promise.all([exam.rules(), exam.terms(), exam.trader()]);
+  const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(), simPoolOf(address)]);
+  // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
+  if (!panelPool) leavePanel();
   const assets = [...rules.assets].map(Number);
   const perps = new Map();
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
-    exam, address, ds, perps, assets, trader, asset: assets[0], isBuy: true, interval: "15m", snap: null, rows: [],
+    exam, address, ds, perps, assets, trader, panelPool, asset: assets[0], isBuy: true, interval: "15m", snap: null, rows: [],
     book: null, hover: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };
 
-  page.className = "ex-page";
-  render(page, skeleton(st));
+  if (panelPool) {
+    // The user panel's header and footer, the menu on Trade; the screen itself is the same one.
+    const marks = networkMarks(CONFIG);
+    page.className = "ex-wrap";
+    render(page, `<div class="sp sp-user">${userHeaderHtml({ address: panelPool, account: accountLabel(), current: "trade", route: `#/exam/${address}`, marks })}`
+      + `<div class="ex-page">${skeleton(st)}</div>`
+      + `${footerHtml({ marks, source: "The account is read from the exam's contract. Prices and the book are Hyperliquid's." })}</div>`);
+    wireShell(page);
+  } else {
+    page.className = "ex-page";
+    render(page, skeleton(st));
+  }
   wire(page, st);
   // The first reading decides whether the page can be drawn: a failure here is the page's failure, not a panel's.
   await tick(page, st);
@@ -121,7 +154,7 @@ function skeleton(st) {
       <div class="ex-prev" id="ex-${k}-prev"></div>`;
   return `
     <div class="ex-strip">
-      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
+      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks && !st.panelPool ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
       <p class="ex-line">${esc(WHAT_THIS_IS)}</p>
       <div class="ex-kv" id="ex-kv"></div>
       <div class="ex-steps" id="ex-steps"></div>
@@ -185,7 +218,7 @@ function skeleton(st) {
         </div>
       </section>
     </div>
-    ${marks ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
+    ${marks && !st.panelPool ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
 }
 
 // ── readings ────────────────────────────────────────────────────
@@ -613,7 +646,7 @@ async function loadJournal(page, st, direction = "earlier") {
     st.journal = [...events, ...st.journal].sort((p, q) => p.block - q.block || p.index - q.index);
     st.loaded = st.loaded ? { from: Math.min(st.loaded.from, plan.from), top: Math.max(st.loaded.top, plan.to) } : { from: plan.from, top: plan.to };
     await blockTimes(st, events.map((e) => e.block));
-    info.textContent = journalRange(st.loaded);
+    info.textContent = journalRange(st.loaded) + (canLoadEarlier(st.loaded) ? "" : " That is the start of the chain.");
     paintJournal(page, st);
     buttons[0].textContent = "Load earlier events";
     buttons[1].hidden = false;
@@ -621,13 +654,15 @@ async function loadJournal(page, st, direction = "earlier") {
     info.textContent = `Could not load: ${friendly(err)}`;
   } finally {
     buttons.forEach((x) => { x.disabled = false; });
+    // The range has reached block 0: there is nothing earlier to load.
+    buttons[0].disabled = !canLoadEarlier(st.loaded);
   }
 }
 
 // ── the chart: candles drawn on a canvas, no library ────────────
 
 function colors(page) {
-  const css = getComputedStyle(page);
+  const css = getComputedStyle(page.querySelector(".ex-page") || page);
   const get = (n, fallback) => css.getPropertyValue(n).trim() || fallback;
   return { up: get("--up", "#2F7FC9"), down: get("--dn", "#C0622A"), text: get("--mute", "#5E6670"), grid: get("--line", "#D6D8D6"), ink: get("--ink", "#0E1116"),
     vol: "rgba(31,53,80,.12)" };
