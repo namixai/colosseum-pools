@@ -5,6 +5,7 @@
 // whatever this page does.
 import * as chain from "../lib/chain.js";
 import { $ } from "../lib/ui.js";
+import { utc } from "../lib/simpool.js";
 import {
   requestState, requestPlan, addPlan, approverPlan, closeState, finishState, receiptFacts, afterWithdrawWords,
   withdrawHtml,
@@ -70,7 +71,7 @@ export function wireWithdraw(page, ctx, data) {
       const p = plan();
       const box = $(words, page);
       box.className = `so-plan${p.ok ? "" : " bad"}`;
-      box.textContent = p.ok ? p.words : (form.elements[0].value ? p.error : "");
+      box.textContent = p.ok ? p.words : (form.querySelector("input").value ? p.error : "");
       button.disabled = !p.ok;
     };
     form.addEventListener("input", update);
@@ -88,8 +89,8 @@ export function wireWithdraw(page, ctx, data) {
       say(`${plan.words} Sign it in your wallet.`);
       const receipt = await mined(signed.requestWithdraw(plan.amount), "the request");
       const ev = eventsOf(receipt, ctx.at, iface).find((x) => x.name === "WithdrawRequested");
-      const when = ev ? new Date(Number(ev.args.readyAt) * 1000).toISOString().slice(0, 16).replace("T", " ") : "";
-      return `Requested (transaction ${receipt.hash}).${when ? ` You can carry it out no sooner than ${when} UTC.` : ""}`;
+      const when = ev ? utc(ev.args.readyAt) : "";
+      return `Requested (transaction ${receipt.hash}).${when ? ` You can carry it out no sooner than ${when}.` : ""}`;
     });
   });
 

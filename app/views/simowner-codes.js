@@ -71,7 +71,7 @@ export async function readCodes(at, { more = false } = {}) {
     const pool = poolAt(at);
     const [scan, sharesDue] = await Promise.all([scanEvents(at, pool, more), pool.sharesDue()]);
     const texts = loadTexts(at);
-    const hashes = [...scan.found.entries()].sort((a, b) => a[1] - b[1]).map(([h]) => h);
+    const hashes = [...scan.found.entries()].sort((a, b) => b[1] - a[1]).map(([h]) => h);
     for (const h of Object.keys(texts)) if (!hashes.includes(h)) hashes.push(h);
     const rows = await chain.readAll(hashes, async (h) => {
       const [read, due] = await Promise.all([pool.codeOf(h), pool.shareDue(h)]);
@@ -152,6 +152,11 @@ export function wireCodes(page, ctx, data) {
   });
 
   $("#so-new-code", page).addEventListener("click", () => {
+    // A new code starts from an empty form, whatever was being edited before.
+    form.reset();
+    existing = null;
+    readFor = "";
+    replan();
     form.hidden = false;
     form.elements.text.focus();
   });
