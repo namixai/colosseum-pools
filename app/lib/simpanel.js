@@ -6,8 +6,8 @@ import { esc } from "./ui.js";
 
 /** The panel a route belongs to: "user" for #/sim/<pool>, "manage" for #/manage/<pool>, null for any other page. */
 export function panelOf(hash) {
-  if (/^#\/sim\/0x[0-9a-fA-F]{40}(?:\?.*)?$/.test(hash)) return "user";
-  if (/^#\/manage\/0x[0-9a-fA-F]{40}$/.test(hash)) return "manage";
+  if (/^#\/sim\/0x[0-9a-fA-F]{40}(?:\/partner)?(?:\?.*)?$/.test(hash)) return "user";
+  if (/^#\/manage\/0x[0-9a-fA-F]{40}(?:\/operator)?$/.test(hash)) return "manage";
   return null;
 }
 

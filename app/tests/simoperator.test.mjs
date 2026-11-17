@@ -1,0 +1,347 @@
+// node --test app/tests/simoperator.test.mjs
+//
+// The operator's section of the control panel (app/lib/simoperator.js), built to mockup 04: who is shown what by the
+// role the chain gives the wallet (the pool's approver, the factory's checker and closer), the queue in claim order with
+// its times, the stop form's four reasons, the stops with their 14 days, the owner's request, the words before each
+// call, and that the page carries no word Alex struck and no link to the user panel. On a made-up pool's reads.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import {
+  SIM_OPERATOR_ABI, SIM_OPERATOR_FACTORY_ABI, STOP_FORM, mergeAbis, operatorRoles, roleWords, can, stopFromForm, stopWords,
+  approveWords, liftWords, finalizeWords, cancelWords, operatorRefusal, lineLabel, operatorModel, selectionCall,
+  operatorHeaderHtml, messageHtml, operatorHtml, NO_ROLE_WORDS, NO_WALLET_WORDS, idText,
+} from "../lib/simoperator.js";
+import { SIM_POOL_APPROVAL_ABI, SIM_POOL_ABI, STOP_RESERVE } from "../lib/simpool.js";
+import { OPERATOR_ABI, PAYOUT_DELAY, PAYOUT_HARD } from "../lib/operator.js";
+import { panelOf } from "../lib/simpanel.js";
+import { keccak256 } from "./keccak.mjs";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const read = (...p) => readFileSync(join(ROOT, ...p), "utf8");
+const POOL = "0x00000000000000000000000000000000000000a1";
+const APPROVER = "0x00000000000000000000000000000000000000b1";
+const CHECKER = "0x00000000000000000000000000000000000000c1";
+const CLOSER = "0x00000000000000000000000000000000000000d1";
+const STRANGER = "0x00000000000000000000000000000000000000e1";
+const TRADER = "0x0000000000000000000000000000000000000101";
+const OTHER = "0x0000000000000000000000000000000000000299";
+const ZERO = "0x0000000000000000000000000000000000000000";
+const U = 1_000_000n;
+const H = 3600;
+const D = 24 * H;
+const NOW = 1_800_000_000;
+const A = `0x${"a".repeat(64)}`;
+const B = `0x${"b".repeat(64)}`;
+const C = `0x${"c".repeat(64)}`;
+
+const payout = (o) => ({ account: `0x${String(o.n).padStart(40, "0")}`, trader: TRADER, amount: 800n * U, dueAt: NOW + 10 * H, state: 1,
+  wasStopped: false, stoppedAt: 0, approved: false, ...o });
+const MENU = [{ size: 10_000_000_000n, price: 1_000_000_000n }, { size: 5_000_000_000n, price: 500_000_000n }];
+const TIERS = [{ maxDrawdownBps: 600, targetBps: 1000, drawdownKind: 0 }, { maxDrawdownBps: 300, targetBps: 900, drawdownKind: 1 }];
+
+/** Three waiting payouts (claimed 60 h ago, 100 h ago, 5 h ago), one stopped 1 day ago, one stopped 15 days ago. */
+function reads(over = {}) {
+  const payouts = [
+    payout({ n: 1, dueAt: NOW - 28 * H, approved: true }),            // 0: claimed 100 h ago, approved, past its 72 h
+    payout({ n: 2, dueAt: NOW + 12 * H }),                             // 1: claimed 60 h ago, 72 h running
+    payout({ n: 3, dueAt: NOW - 5 * H }),                              // 2: claimed 77 h ago, past 72 h, waiting for the approver
+    payout({ n: 4, dueAt: NOW + 67 * H }),                             // 3: claimed 5 h ago
+    payout({ n: 5, state: 2, wasStopped: true, stoppedAt: NOW - D, amount: 400n * U }),
+    payout({ n: 6, state: 5, wasStopped: true, stoppedAt: NOW - 15 * D, amount: 400n * U }),
+    payout({ n: 7, state: 3 }),
+  ];
+  return { now: NOW, approver: APPROVER, payouts, firstId: 0, menu: MENU, tiers: TIERS,
+    accountLines: new Map(payouts.map((p, i) => [p.account.toLowerCase(), i % 2])),
+    reasons: new Map([[4, 1], [5, 3]]), payoutsPerDay: 2, payRoom: 1, nextPayAt: 0, requested: 300n * U, readyAt: NOW + 2 * D, ...over };
+}
+const model = (roles, over) => operatorModel({ pool: POOL, roles, reads: reads(over), keccak256 });
+const page = (roles, over) => operatorHtml(model(roles, over), { name: "Pool 0xa1…", role: roleWords(roles) });
+
+// ── who is looking ─────────────────────────────────────────────────
+
+test("the roles are the chain's: the pool's approver, the factory's checker and closer", () => {
+  const roles = (account) => operatorRoles({ account, approver: APPROVER, checker: CHECKER, closer: CLOSER });
+  assert.deepEqual(roles(null), { kind: "no-wallet", roles: [] });
+  assert.deepEqual(roles(STRANGER), { kind: "no-role", roles: [] });
+  assert.deepEqual(roles(APPROVER.toUpperCase().replace("0X", "0x")), { kind: "operator", roles: ["approver"] });
+  assert.deepEqual(roles(CHECKER).roles, ["checker"]);
+  assert.deepEqual(roles(CLOSER).roles, ["closer"]);
+  // one key may hold two roles
+  assert.deepEqual(operatorRoles({ account: CHECKER, approver: CHECKER, checker: CHECKER, closer: CLOSER }).roles, ["approver", "checker"]);
+  // a zero address names nobody: the wallet that is the zero address is not the approver of a pool with none
+  assert.equal(operatorRoles({ account: ZERO, approver: ZERO, checker: CHECKER, closer: CLOSER }).kind, "no-role");
+  assert.equal(roleWords(["approver", "checker"]), "Approver · Checker");
+});
+
+test("each role can do what its contract call allows, and no more", () => {
+  assert.deepEqual(can(["approver"]), { seeQueue: true, approve: true, stop: false, lift: false, seeStops: false, seeRequests: false, cancelRequest: false });
+  assert.deepEqual(can(["checker"]), { seeQueue: true, approve: false, stop: true, lift: true, seeStops: true, seeRequests: true, cancelRequest: false });
+  assert.deepEqual(can(["closer"]), { seeQueue: false, approve: false, stop: false, lift: false, seeStops: false, seeRequests: true, cancelRequest: true });
+  assert.deepEqual(can([]), { seeQueue: false, approve: false, stop: false, lift: false, seeStops: false, seeRequests: false, cancelRequest: false });
+});
+
+test("a wallet with no role sees one sentence and nothing else; a wallet not connected is asked to connect", () => {
+  const body = messageHtml("no-role");
+  assert.match(body, new RegExp(NO_ROLE_WORDS));
+  assert.equal((body.match(/<p>/g) || []).length, 1);
+  assert.doesNotMatch(body, /<button|<input|<select|<table|so-row/);
+  assert.match(messageHtml("no-wallet"), new RegExp(NO_WALLET_WORDS));
+  const head = operatorHeaderHtml({ address: POOL, account: "0xe1…", state: "no-role", roles: [] });
+  assert.doesNotMatch(head, /<nav/, "no menu for a wallet with no role");
+  assert.match(head, /No role in this pool/);
+});
+
+// ── the queue ──────────────────────────────────────────────────────
+
+test("the queue is in the order the payouts were claimed, each with its times in 'not before' words", () => {
+  const m = model(["approver"]);
+  assert.deepEqual(m.queue.map((r) => r.id), [0, 1, 2, 3], "only the waiting ones, by id");
+  const words = Object.fromEntries(m.queue.map((r) => [r.id, r.words]));
+  // approved: one time
+  assert.match(words[0].lines[0], /^approved: not before 20\d\d-\d\d-\d\d \d\d:\d\d UTC$/);
+  assert.equal(words[0].text, "Approved · can be paid now");
+  // not approved: both times, 72 hours with approval and 7 days without
+  assert.match(words[1].lines[0], /^with approval: not before /);
+  assert.match(words[1].lines[1], /^without it: not before .* \(7 days\)$/);
+  assert.equal(words[1].text, "Waiting · 72 h running");
+  assert.equal(words[2].text, "Past 72 h · waiting for the approver");
+  assert.equal(m.queue[1].hardAt - m.queue[1].dueAt, PAYOUT_HARD - PAYOUT_DELAY);
+  assert.equal(m.queue[1].claimedAt, m.queue[1].dueAt - PAYOUT_DELAY);
+});
+
+test("the line is the size and the tier of the trader's account", () => {
+  assert.equal(lineLabel(MENU, TIERS, 0), "10K · loss 6% · target 10%");
+  assert.equal(lineLabel(MENU, TIERS, 1), "5K · loss 3% · target 9%");
+  assert.equal(lineLabel(MENU, TIERS, 9), "line 9");
+  const m = model(["approver"]);
+  assert.equal(m.queue[0].line, "10K · loss 6% · target 10%");
+  assert.equal(m.queue[1].line, "5K · loss 3% · target 9%");
+});
+
+test("a pool with no approver says so: every payout goes out at its 7 days", () => {
+  const m = model(["checker"], { approver: ZERO });
+  assert.equal(m.nobody, true);
+  const past = m.queue.find((r) => r.id === 2);
+  assert.equal(past.status, "no-approver");
+  assert.equal(past.words.text, "No approver set · goes out at the 7 days");
+  assert.ok(!past.words.lines.some((l) => l.startsWith("with approval")), "no approval to wait for");
+  assert.equal(past.approve, null, "nothing to approve");
+});
+
+test("the five figures: the queue, the day's payouts, the next slot, the stops open, the requests", () => {
+  const s = model(["checker"]).summary;
+  assert.deepEqual(s, { inQueue: 4, paidDay: 1, perDay: 2, nextSlot: "now", stopsOpen: 1, requests: 1 });
+  const full = model(["checker"], { payRoom: 0, nextPayAt: NOW + 5 * H }).summary;
+  assert.match(full.nextSlot, /UTC$/);
+  assert.equal(full.paidDay, 2);
+});
+
+// ── what each role is drawn ────────────────────────────────────────
+
+test("the approver is drawn the queue and its approve buttons, no stop form and no stops", () => {
+  const html = page(["approver"]);
+  assert.match(html, /id="queue"/);
+  assert.match(html, /data-approve="1"/);
+  assert.match(html, /id="so-approve-sel"/);
+  assert.match(html, /class="so-pick"/);
+  assert.doesNotMatch(html, /data-approve="0"/, "an approved payout has nothing to approve");
+  assert.doesNotMatch(html, /id="stop-form"|data-stop-for|id="stops"|id="requests"|data-lift|data-cancel/);
+});
+
+test("the checker is drawn the stop form, the stops with their lift and the request to look at; not the approve buttons", () => {
+  const html = page(["checker"]);
+  assert.match(html, /id="stop-form"/);
+  assert.match(html, /data-stop-for="1"/);
+  assert.doesNotMatch(html, /data-stop-for="4"|data-stop-for="0"\b.*data-stop-for="0"/, "a payout stopped already is not offered a stop");
+  assert.match(html, /id="stops"/);
+  assert.match(html, /data-lift="4"(?![^>]*disabled)/, "a stop inside its 14 days can be lifted");
+  assert.match(html, /data-lift="5"[^>]*disabled/, "a stop past its 14 days cannot");
+  assert.match(html, /data-final="5"[^>]*disabled/, "a stop already final has nothing left to send");
+  assert.match(html, /data-final="4"[^>]*disabled/, "and one inside its 14 days is not final yet");
+  const late = page(["checker"], { payouts: reads().payouts.map((p, i) => (i === 4 ? { ...p, stoppedAt: NOW - 15 * D } : p)) });
+  assert.match(late, /data-final="4"(?![^>]*disabled)/, "a stop whose 14 days ended can be made final");
+  assert.match(late, /data-lift="4"[^>]*disabled/);
+  assert.match(html, /id="requests"/);
+  assert.doesNotMatch(html, /data-cancel/, "the contract gives the checker no cancel");
+  assert.match(html, /View only: the contract lets the closer cancel, not the checker/);
+  assert.doesNotMatch(html, /data-approve|so-pick|so-approve-sel/);
+});
+
+test("the closer is drawn the request and its cancel, nothing of the queue or the stops", () => {
+  const html = page(["closer"]);
+  assert.match(html, /id="requests"/);
+  assert.match(html, /data-cancel="1"/);
+  assert.doesNotMatch(html, /id="queue"|id="stop-form"|id="stops"|data-approve|Payouts in queue/);
+  assert.match(html, /Requests to check/);
+});
+
+test("a lapsed request has nothing to cancel; no request says so", () => {
+  assert.match(page(["closer"], { readyAt: NOW - 5 * D }), /Nothing to cancel/);
+  assert.doesNotMatch(page(["closer"], { readyAt: NOW - 5 * D }), /data-cancel/);
+  assert.match(page(["closer"], { requested: 0n, readyAt: 0 }), /No request to withdraw/);
+});
+
+test("a wallet with two roles is drawn both", () => {
+  const html = page(["approver", "checker"]);
+  assert.match(html, /data-approve="1"/);
+  assert.match(html, /id="stop-form"/);
+});
+
+// ── the stops ──────────────────────────────────────────────────────
+
+test("a stop shows its reason, its 14 days and what can be done with it", () => {
+  const m = model(["checker"]);
+  assert.deepEqual(m.stops.map((s) => [s.id, s.state, s.reason]), [[4, "window", 1], [5, "final", 3]].map((x) => x),
+    "stopped 1 day ago: inside its 14 days; refused: final");
+  assert.equal(m.stops[0].reserveEnds, NOW - D + STOP_RESERVE);
+  assert.equal(m.stops[0].canLift, true);
+  assert.equal(m.stops[0].canFinalize, false);
+  assert.match(m.stops[0].reasonText, /Opposite positions/);
+  const late = model(["checker"], { payouts: reads().payouts.map((p, i) => (i === 4 ? { ...p, stoppedAt: NOW - 15 * D } : p)) });
+  assert.equal(late.stops[0].state, "due-final");
+  assert.equal(late.stops[0].canFinalize, true);
+  assert.equal(late.stops[0].canLift, false);
+});
+
+test("an approver does not lift", () => {
+  const m = model(["approver"]);
+  assert.ok(m.stops.every((s) => !s.canLift && !s.canFinalize));
+});
+
+// ── the stop form ──────────────────────────────────────────────────
+
+test("the four reasons are the contract's, each with the evidence it needs", () => {
+  assert.deepEqual(STOP_FORM.map((f) => f.reason), [1, 2, 3, 4]);
+  assert.match(STOP_FORM[0].needs, /the other account/);
+  assert.match(STOP_FORM[1].needs, /link the wallets/);
+  assert.match(STOP_FORM[2].needs, /hash of the published dispute text/);
+  assert.match(STOP_FORM[3].needs, /hash of the published analysis/);
+});
+
+test("the form builds the call the pool would take, or says what is missing", () => {
+  const ok = (fields) => stopFromForm({ pool: POOL, fields: { id: 2, ...fields }, keccak256 });
+  assert.equal(ok({ reason: 1, paired: OTHER, trades: `${A}, ${B}`, links: "" }).ok, true);
+  assert.equal(ok({ reason: 1, paired: OTHER, trades: `${A} ${B}`, links: "" }).call.method, "stopPayout");
+  assert.match(ok({ reason: 1, paired: "", trades: `${A},${B}`, links: "" }).problem, /needs the other account/);
+  assert.match(ok({ reason: 1, paired: OTHER, trades: A, links: "" }).problem, /both trades/);
+  assert.match(ok({ reason: 2, paired: OTHER, trades: `${A},${B}`, links: "" }).problem, /needs the links/);
+  assert.equal(ok({ reason: 2, paired: OTHER, trades: `${A},${B}`, links: C }).ok, true);
+  assert.equal(ok({ reason: 3, paired: "", trades: A, links: C }).ok, true);
+  assert.match(ok({ reason: 3, paired: OTHER, trades: A, links: C }).problem, /names no other account/);
+  assert.match(ok({ reason: 3, paired: "", trades: A, links: `${B},${C}` }).problem, /exactly one link/);
+  assert.equal(ok({ reason: 4, paired: "", trades: `${A},${B}`, links: C }).ok, true, "prohibited play may name no other account");
+  assert.equal(ok({ reason: 4, paired: OTHER, trades: `${A},${B}`, links: C }).ok, true);
+  assert.match(ok({ reason: 4, paired: "", trades: A, links: C }).problem, /at least two/);
+  assert.match(ok({ reason: 9, paired: "", trades: A, links: "" }).problem, /four reasons/);
+  assert.match(stopFromForm({ pool: POOL, fields: { id: "", reason: 1 }, keccak256 }).problem, /Choose the payout/);
+  assert.match(ok({ reason: 1, paired: OTHER, trades: "not-a-hash,also-not", links: "" }).problem, /not 32 bytes/);
+});
+
+test("a stop is signed by the checker's key; the words say what it will do", () => {
+  const got = stopFromForm({ pool: POOL, fields: { id: 2, reason: 3, paired: "", trades: A, links: C }, keccak256 });
+  assert.equal(got.call.signer, "checker");
+  const row = model(["checker"]).queue.find((r) => r.id === 2);
+  const words = stopWords(row, 3, NOW);
+  assert.match(words, /Writes a stop on payout #0002 \(\$800\) with reason 3 on chain/);
+  assert.match(words, /stays in the pool, set aside, for 14 days/);
+  assert.match(words, /may object/);
+});
+
+// ── the words before each call ─────────────────────────────────────
+
+test("every call is described in words before it is sent", () => {
+  const m = model(["approver", "checker", "closer"]);
+  const rows = m.queue.filter((r) => r.approvable);
+  const sentence = approveWords(rows.slice(0, 2));
+  assert.match(sentence, /^Approves 2 payouts #0001 \(\$800\), #0002 \(\$800\)\./);
+  assert.match(sentence, /instead of 7 days after its claim/);
+  assert.match(sentence, /Approving sets neither the amount nor the trader/);
+  assert.match(approveWords([rows[0]]), /^Approves payout #0001/);
+  assert.match(liftWords(m.stops[0]), /Lifts the stop of payout #0004 \(\$400\)/);
+  assert.match(finalizeWords(m.stops[1]), /final.*Anyone may send it/);
+  assert.match(cancelWords(m.request), /Cancels the creator's request to withdraw \$300\..*never moves the money/);
+  assert.equal(idText(7), "#0007");
+});
+
+test("approving several payouts is one call; a red pool is approved one by one", () => {
+  const m = model(["approver"]);
+  const rows = m.queue.filter((r) => r.approvable);
+  const got = selectionCall({ pool: POOL, rows, keccak256 });
+  assert.equal(got.ok, true);
+  assert.equal(got.call.method, "approvePayouts");
+  assert.deepEqual(got.call.args[0], rows.map((r) => BigInt(r.id)));
+  assert.equal(got.call.signer, "approver");
+  const red = selectionCall({ pool: POOL, rows: rows.map((r) => ({ ...r, poolRed: true })), keccak256 });
+  assert.equal(red.ok, false);
+  assert.match(red.problem, /approve each payout on its own/);
+  assert.equal(selectionCall({ pool: POOL, rows: [], keccak256 }).ok, false);
+});
+
+test("the pool's refusals are said in words", () => {
+  for (const name of ["NotApprover", "NotChecker", "NotCreator", "BadPayout", "BadReason", "BadPaired", "ReserveOver", "ReserveRunning", "NoRequest", "Done"]) {
+    assert.match(operatorRefusal(name), /^Refused: /, name);
+  }
+  assert.equal(operatorRefusal("Nothing"), "");
+});
+
+// ── the page and the rules Alex set ────────────────────────────────
+
+test("no word Alex struck, no link to the user panel, no buy button", () => {
+  const html = `${operatorHeaderHtml({ address: POOL, account: "0xc1…", state: "operator", roles: ["checker"] })}${page(["approver", "checker", "closer"])}`;
+  assert.doesNotMatch(html, /simulat|paper/i);
+  assert.doesNotMatch(html, /href="#\/sim\//, "the management panel never links to the user panel");
+  assert.doesNotMatch(html, /class="sp-buy"|>Buy</);
+  assert.match(html, /Management panel/);
+});
+
+test("the header names the sections of the role and reads the role from the contract", () => {
+  const head = (roles) => operatorHeaderHtml({ address: POOL, account: "0x…", state: "operator", roles });
+  assert.match(head(["checker"]), /data-jump="queue"[\s\S]*data-jump="stops"[\s\S]*data-jump="requests"/);
+  assert.doesNotMatch(head(["closer"]), /data-jump="queue"|data-jump="stops"/);
+  assert.match(head(["approver"]), /data-jump="queue"/);
+  assert.doesNotMatch(head(["approver"]), /data-jump="stops"|data-jump="requests"/);
+  assert.match(head(["approver", "closer"]), /Approver · Closer/);
+  assert.match(head(["checker"]), /role read from contract/);
+});
+
+test("the operator's route is in the management panel's family", () => {
+  assert.equal(panelOf(`#/manage/${POOL}/operator`), "manage");
+  assert.equal(panelOf(`#/manage/${POOL}`), "manage");
+  assert.equal(panelOf(`#/manage/${POOL}/other`), null);
+});
+
+// ── the ABI and the app ────────────────────────────────────────────
+
+test("the ABI this page reads is the contract's: each function and event is in the source", () => {
+  const pool = read("src", "sim", "SimPool.sol");
+  const factory = read("src", "sim", "SimPoolFactory.sol");
+  const names = (abi, kind) => abi.map((s) => new RegExp(`^${kind}\\s+(\\w+)`).exec(s)?.[1]).filter(Boolean);
+  for (const n of names(SIM_OPERATOR_ABI, "function")) assert.match(pool, new RegExp(`function ${n}\\(|\\bpublic\\s+${n}\\b`), `SimPool has ${n}`);
+  for (const n of names(SIM_OPERATOR_ABI, "error")) assert.match(pool, new RegExp(`error ${n}\\(`), `SimPool declares ${n}`);
+  for (const n of names(SIM_OPERATOR_FACTORY_ABI, "function")) assert.match(factory, new RegExp(`\\b${n}\\b`), `the factory has ${n}`);
+  // the two functions the page sends that no other library names
+  assert.match(pool, /function liftStop\(uint256 id\) external onlyChecker/);
+  assert.match(pool, /function finalizeStop\(uint256 id\) external/);
+  assert.match(pool, /function approvePayouts\(uint256\[\] calldata ids\) external/);
+  assert.match(pool, /function stopPayout\(uint256 id, uint8 reason, address paired, bytes32\[\] calldata trades, bytes32\[\] calldata links\)\s+external\s+onlyChecker/);
+});
+
+test("a merged ABI names each function once and keeps the widest payout()", () => {
+  const abi = mergeAbis(SIM_POOL_APPROVAL_ABI, SIM_OPERATOR_ABI, OPERATOR_ABI, SIM_POOL_ABI);
+  assert.equal(abi.filter((s) => s.startsWith("function payout(")).length, 1);
+  assert.match(abi.find((s) => s.startsWith("function payout(")), /bool approved/);
+  assert.equal(new Set(abi).size, abi.length);
+  assert.equal(abi.filter((s) => /^function approver\(/.test(s)).length, 1);
+});
+
+test("the page is wired into the app's routes", () => {
+  const app = read("app", "app.js");
+  assert.match(app, /\^#\\\/manage\\\/\(0x\[0-9a-fA-F\]\{40\}\)\\\/operator\$/);
+  assert.match(app, /simOperatorView\(m\[1\], page\)/);
+  const view = read("app", "views", "simoperator.js");
+  assert.doesNotMatch(view, /window\.ethereum|localStorage|privateKey/);
+  assert.match(read("app", "index.html"), /href="simops\.css"/);
+});

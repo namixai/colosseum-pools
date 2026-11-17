@@ -15,6 +15,8 @@ import { sharedView } from "./views/shared.js";
 import { evidenceView } from "./views/evidence.js";
 import { simPoolView } from "./views/simpool.js";
 import { simAdminView } from "./views/simadmin.js";
+import { simOperatorView } from "./views/simoperator.js";
+import { simPartnerView } from "./views/simpartner.js";
 import { panelOf } from "./lib/simpanel.js";
 import { examView } from "./views/exam.js";
 
@@ -43,7 +45,9 @@ const routes = [
   [/^#\/evidence$/, (m, page) => evidenceView(page)],
   // A simulated pool has two panels, and neither links to the other: the trader's page of the pool, and the control
   // panel (the owner's section), which the site's navigation does not name.
+  [/^#\/sim\/(0x[0-9a-fA-F]{40})\/partner$/, (m, page) => simPartnerView(m[1], page)],
   [/^#\/sim\/(0x[0-9a-fA-F]{40})(?:\?(.*))?$/, (m, page) => simPoolView(m[1], m[2], page)],
+  [/^#\/manage\/(0x[0-9a-fA-F]{40})\/operator$/, (m, page) => simOperatorView(m[1], page)],
   [/^#\/manage\/(0x[0-9a-fA-F]{40})$/, (m, page) => simAdminView(m[1], page)],
   [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => examView(m[1], page)],
   [/^#\/terms$/, (m, page) => termsView(page)],
