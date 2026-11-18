@@ -23,6 +23,7 @@ import {
 } from "../lib/examscreen.js";
 import { createExamChart } from "./examchart.js";
 import { positionLines } from "../lib/positionlines.js";
+import { createEntryTracker, browserStore } from "../lib/entrytrack.js";
 import { pxText } from "../lib/exam.js";
 
 const { ethers } = window;
@@ -120,6 +121,9 @@ export async function examView(address, page, query = "") {
   if (ds.ok) {
     st.chart = createExamChart({ node: $("#ex-chart", page), bar: $("#ex-iv", page), load: hl.candles, explain: friendly });
     st.chart.setAsset(chartAsset(st));
+    // The entry price of an open position is proven from the exam's logs in the background, after the screen is drawn.
+    st.entries = createEntryTracker({ address, read: (from, to) => readEntryEvents(st, from, to), store: browserStore(), onChange: () => paintHead(page, st) });
+    trackEntry(st);
     paintHead(page, st);
     refreshBook(page, st);
     st.timers.push(setInterval(() => refreshBook(page, st), BOOK_MS));
@@ -130,6 +134,7 @@ export async function examView(address, page, query = "") {
     if (page.isConnected) return;
     st.timers.forEach(clearInterval);
     st.chart?.destroy();
+    st.entries?.stop();
   }, 1000));
 }
 
@@ -278,6 +283,7 @@ async function tick(page, st) {
   paintTicket(page, st);
   paintAgent(page, st);
   if (st.market.open) paintMarketList(page, st);
+  trackEntry(st);
 }
 
 function refreshBook(page, st) {
@@ -350,7 +356,26 @@ function paintHead(page, st) {
   if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
   st.chart?.setOracle(perp && oracle ? Number(pxText(oracle, perp.szDecimals)) : null);
   // The lines of this market's open position, from the account the page has read and the fills its journal holds.
-  st.chart?.setPositionLines(positionLines({ account: st.snap?.account, asset: st.asset, perps: st.perps, events: st.journal }));
+  st.chart?.setPositionLines(positionLines({ account: st.snap?.account, asset: st.asset, perps: st.perps, entryOf: (asset, size) => st.entries?.entry(asset, size) ?? null }));
+}
+
+/** Tells the entry price's tracker the market on screen and its size as the chain reports it: it reads the logs only when
+ *  no proof stands for that size (never on a timer). Nothing is waited for. */
+function trackEntry(st) {
+  const p = st.snap?.account.positions.find((x) => x.asset === st.asset);
+  st.entries?.observe({ asset: st.asset, size: p ? p.size : 0n, block: st.snap.block });
+}
+
+/** The exam's fills and stops between two blocks, decoded, the way one press of the journal's button reads them: windows of
+ *  `JOURNAL_WINDOW` blocks, at most `JOURNAL_CALLS` calls (1000 blocks, as the tracker's `READ_BLOCKS`). A reading that did not reach its end fails. */
+async function readEntryEvents(st, from, to) {
+  const { logs, complete } = await readLogs({ from, to, window: JOURNAL_WINDOW, maxCalls: JOURNAL_CALLS,
+    getLogs: (x, y) => chain.readProvider.getLogs({ address: st.address, fromBlock: x, toBlock: y }) });
+  if (!complete) throw new Error("the logs were not read to the end");
+  return logs.map((l) => {
+    const parsed = st.exam.interface.parseLog(l);
+    return parsed ? { name: parsed.name, args: parsed.args, block: l.blockNumber, index: l.index } : null;
+  }).filter(Boolean).sort((p, q) => p.block - q.block || p.index - q.index);
 }
 
 /** The asset the chart draws: its Hyperliquid name and size decimals. */
@@ -586,6 +611,7 @@ function wire(page, st) {
     paintAssets(page, st);
     st.chart?.setAsset(chartAsset(st));
     refreshBook(page, st);
+    trackEntry(st);
     choose();
   };
   const on = (list, picked) => list.forEach((x) => x.classList.toggle("on", x === picked));
@@ -741,7 +767,9 @@ async function loadJournal(page, st, direction = "earlier") {
     await blockTimes(st, events.map((e) => e.block));
     info.textContent = journalRange(st.loaded) + (canLoadEarlier(st.loaded) ? "" : " That is the start of the chain.");
     paintJournal(page, st);
-    paintHead(page, st);
+    // What the button read may prove the entry price too.
+    const held = st.snap.account.positions.find((x) => x.asset === st.asset);
+    if (held) st.entries?.feed({ events: st.journal, from: st.loaded.from, to: st.loaded.top }, { asset: st.asset, size: held.size, block: st.snap.block });
     buttons[0].textContent = "Load earlier events";
     buttons[1].hidden = false;
   } catch (err) {
