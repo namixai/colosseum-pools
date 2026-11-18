@@ -25,7 +25,7 @@ import { createExamChart } from "./examchart.js";
 import { positionLines } from "../lib/positionlines.js";
 import { createEntryTracker, browserStore } from "../lib/entrytrack.js";
 import { pxText } from "../lib/exam.js";
-import { readPass, readList, fullyRead, listPrices, withPrices, LIST_MS } from "../lib/examreads.js";
+import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, LIST_MS } from "../lib/examreads.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
@@ -97,7 +97,7 @@ export async function examView(address, page, query = "") {
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
     exam, address, ds, perps, assets, trader, panelPool, asset: assetFromQuery(query, assets), query,
-    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listSession: 0, listReading: null, chart: null,
+    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listSession: 0, listReading: null, passes: createPasses(), chart: null,
     book: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };
@@ -129,7 +129,12 @@ export async function examView(address, page, query = "") {
     refreshBook(page, st);
     st.timers.push(setInterval(() => refreshBook(page, st), BOOK_MS));
   }
-  st.timers.push(setInterval(() => tick(page, st).catch((err) => note(page, `Could not refresh: ${friendly(err)}`)), POLL_MS));
+  // A pass still out is let to finish: a poll that started another would pass it by, and a pass longer than the interval
+  // would never be drawn.
+  st.timers.push(setInterval(() => {
+    if (st.passes.running) return;
+    tick(page, st).catch((err) => note(page, `Could not refresh: ${friendly(err)}`));
+  }, POLL_MS));
   // The list's prices of the markets a pass does not read: only while the list is open.
   st.timers.push(setInterval(() => refreshList(page, st).catch(() => {}), LIST_MS));
   // A page that was left stops its readings: it is no longer in the document.
@@ -280,24 +285,35 @@ async function readExam(st, selected) {
 }
 
 async function tick(page, st) {
-  const seq = (st.tickSeq = (st.tickSeq ?? 0) + 1);
-  const selected = st.asset;
-  const snap = await readExam(st, selected);
-  // A pass that started after this one is out: only the latest one draws, so an older answer never covers a newer one.
-  if (seq !== st.tickSeq) return undefined;
-  // The market was changed while this was being read: what was read is not what the screen now needs. Read again.
-  if (selected !== st.asset) return tick(page, st);
-  st.snap = snap;
-  // With the list closed only the prices this pass read are kept: the others would be old when the list opens again.
-  st.prices = st.market.open ? withPrices(st.prices, snap.fresh) : snap.fresh;
-  note(page, "");
-  paintAccount(page, st);
-  paintPositions(page, st);
-  paintTicket(page, st);
-  paintAgent(page, st);
-  if (st.market.open) paintMarketList(page, st);
-  trackEntry(st);
-  return undefined;
+  const pass = st.passes.start();
+  try {
+    const selected = st.asset;
+    let snap;
+    try {
+      snap = await readExam(st, selected);
+    } catch (err) {
+      // The error of a pass that a newer one passed by is not told: the newer one says what the screen can say.
+      if (!pass.isLatest()) return undefined;
+      throw err;
+    }
+    // A pass that started after this one is out: only the latest one draws, so an older answer never covers a newer one.
+    if (!pass.isLatest()) return undefined;
+    // The market was changed while this was being read: what was read is not what the screen now needs. Read again.
+    if (selected !== st.asset) return tick(page, st);
+    st.snap = snap;
+    // With the list closed only the prices this pass read are kept: the others would be old when the list opens again.
+    st.prices = st.market.open ? withPrices(st.prices, snap.fresh) : snap.fresh;
+    note(page, "");
+    paintAccount(page, st);
+    paintPositions(page, st);
+    paintTicket(page, st);
+    paintAgent(page, st);
+    if (st.market.open) paintMarketList(page, st);
+    trackEntry(st);
+    return undefined;
+  } finally {
+    pass.end();
+  }
 }
 
 /** The oracle prices of the markets a pass does not read, for the list while it is open. One reading at a time for each
@@ -354,7 +370,7 @@ function paintAssets(page, st) {
 
 /** What the list shows of each market: its size and the latest oracle price read for it, by a pass or by the list's own reading. */
 function listAssets(st) {
-  return (st.snap?.perAsset ?? []).map((a) => ({ asset: a.asset, size: a.size, oracle: st.prices.has(a.asset) ? st.prices.get(a.asset) : a.oracle }));
+  return (st.snap?.perAsset ?? []).map((a) => ({ asset: a.asset, size: a.size, oracle: shownPrice(st.prices, a) }));
 }
 
 function paintMarketList(page, st) {
@@ -394,7 +410,7 @@ function setMarketOpen(page, st, open, focus = true) {
 function paintHead(page, st) {
   const perp = st.perps.get(st.asset);
   // A price kept as null is a price that was not read: no older one stands in for it.
-  const oracle = st.prices.has(st.asset) ? st.prices.get(st.asset) : st.snap?.perAsset?.find((a) => a.asset === st.asset)?.oracle;
+  const oracle = shownPrice(st.prices, st.snap?.perAsset?.find((a) => a.asset === st.asset) ?? { asset: st.asset });
   const px = $("#ex-px", page);
   if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
   st.chart?.setOracle(perp && oracle ? Number(pxText(oracle, perp.szDecimals)) : null);

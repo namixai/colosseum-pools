@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { createGentle, GENTLE } from "../lib/gentle.js";
 import { MULTICALL3, encodeAggregate3, decodeAggregate3 } from "../lib/multicall.js";
 import { ORACLE_PX_PRECOMPILE, BBO_PRECOMPILE, bboOf } from "../lib/exam.js";
-import { readPass, readList, fullyRead, listPrices, withPrices, oracleOf, LIST_MS } from "../lib/examreads.js";
+import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, oracleOf, LIST_MS } from "../lib/examreads.js";
 
 const EXAM = "0x70066669eC7Eb992055c82B615eD822CFF14e44A";
 const word = (n) => BigInt.asUintN(256, BigInt(n)).toString(16).padStart(64, "0");
@@ -290,10 +290,14 @@ test("the page reads through this module and asks the list's prices only while t
   assert.match(page, /if \(!st\.market\.open \|\| st\.listReading === session\) return;/);
   assert.match(page, /refreshList\(page, st\)\.catch/);
   assert.match(page, /selected !== st\.asset\) return tick\(page, st\)/, "a market chosen during a reading is read again");
-  assert.match(page, /if \(seq !== st\.tickSeq\) return undefined;/, "only the latest pass draws");
+  assert.equal((page.match(/if \(!pass\.isLatest\(\)\) return undefined;/g) ?? []).length, 2, "only the latest pass draws, and only its error is told");
+  assert.match(page, /if \(st\.passes\.running\) return;\s*tick\(page, st\)\.catch/, "the poll does not start a pass while one is out");
+  assert.match(page, /await tick\(page, st\)\.catch\(\(\) => \{\}\);/, "the pass after a transaction is not held off");
+  assert.match(page, /tick\(page, st\)\.catch\(\(err\) => note\(page, `Could not refresh: \$\{friendly\(err\)\}`\)\);\n  \};/, "nor the one after a change of market");
   assert.match(page, /st\.prices = withPrices\(st\.prices, listPrices\(fresh, fullyRead\(st\.snap\?\.perAsset \?\? \[\]\)\)\);/, "a market the latest pass reads is not overwritten by the older list reading");
   assert.match(page, /if \(st\.market\.open && session === st\.listSession\) \{/, "a list closed, or closed and opened again, during its reading keeps nothing of it");
-  assert.match(page, /oracle: st\.prices\.has\(a\.asset\) \? st\.prices\.get\(a\.asset\) : a\.oracle/, "a price kept as null shows no price");
+  assert.match(page, /oracle: shownPrice\(st\.prices, a\)/, "the list takes its price from the cache first");
+  assert.match(page, /const oracle = shownPrice\(st\.prices,/, "and so does the header");
   assert.match(page, /Reading this market…<\/p>`;\s*\$\("#ex-conv", page\)\.textContent = "";/, "the conversion of the market left is not left under the new one");
   assert.match(page, /st\.listSession \+= 1;/, "every opening and closing is a new session");
   assert.match(page, /st\.prices = st\.market\.open \? withPrices\(st\.prices, snap\.fresh\) : snap\.fresh;/, "with the list closed only what the pass read is kept");
@@ -323,4 +327,36 @@ test("a list reading that ends after a pass does not cover what the pass read: a
   assert.equal(merged.get(2), 1_000_002n, "a market only the list read keeps the list's price");
   assert.equal(merged.get(4), 1_000_004n);
   assert.equal(withPrices(kept, listRead).get(3), 1_000_003n, "(without the guard the older list price would have covered it)");
+});
+
+test("a pass that takes longer than the poll interval still draws: the poll waits for it, and only a pass the page starts itself passes it by", () => {
+  const passes = createPasses();
+  assert.equal(passes.running, false);
+  const slow = passes.start();
+  // five seconds later the poll asks, and there is a pass out: it starts none
+  assert.equal(passes.running, true);
+  assert.equal(slow.isLatest(), true, "so the slow pass is still the latest when its answer comes, and draws");
+  slow.end();
+  assert.equal(passes.running, false, "and the next poll may start one");
+  // a market changed (or a transaction confirmed) while a pass is out: the page starts its own, which is the latest
+  const old = passes.start();
+  const own = passes.start();
+  assert.equal(old.isLatest(), false, "the older one is passed by: neither its answer nor its error is the screen's");
+  assert.equal(own.isLatest(), true);
+  old.end();
+  assert.equal(passes.running, true, "the poll still waits for the one that is out");
+  own.end();
+  own.end();
+  assert.equal(passes.running, false, "ending twice counts once");
+});
+
+test("a price shown comes from the cache first, a kept null is no price, and an unread row never brings back one the list dropped", () => {
+  const read = { asset: 3, oracle: 70n, read: true };
+  const unread = { asset: 4, oracle: 80n, read: false };
+  assert.equal(shownPrice(new Map([[3, 71n]]), read), 71n, "the cache is the newer");
+  assert.equal(shownPrice(new Map(), read), 70n, "a row read in full stands without the cache");
+  assert.equal(shownPrice(new Map([[3, null]]), read), null, "a price that was not read is no price, not the old one");
+  assert.equal(shownPrice(new Map(), unread), null, "the list dropped it: the row's copy is not brought back");
+  assert.equal(shownPrice(new Map([[4, 81n]]), unread), 81n);
+  assert.equal(shownPrice(new Map(), undefined), null);
 });

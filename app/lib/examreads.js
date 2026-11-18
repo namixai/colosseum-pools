@@ -93,3 +93,46 @@ export function listPrices(fresh, covered) {
 export function fullyRead(perAsset) {
   return new Set(perAsset.filter((a) => a.read).map((a) => a.asset));
 }
+
+/**
+ * Which passes are out and which one may draw. `start()` takes a number; only the pass with the highest number draws, so
+ * an older answer never covers a newer one (`isLatest`), and an error of one that was passed by is not the screen's
+ * business either. The background poll asks `running` and does not start a pass while one is out: a pass that takes
+ * longer than the interval is let to finish and draw, instead of being passed by the next poll again and again. Passes
+ * the page starts itself (after a transaction, after a change of market) are not held off, and pass the older ones.
+ */
+export function createPasses() {
+  let last = 0;
+  let out = 0;
+  return {
+    start() {
+      const seq = ++last;
+      out += 1;
+      let ended = false;
+      return {
+        seq,
+        isLatest: () => seq === last,
+        end() {
+          if (!ended) {
+            ended = true;
+            out -= 1;
+          }
+        },
+      };
+    },
+    get running() {
+      return out > 0;
+    },
+  };
+}
+
+/**
+ * The price shown for a market: the one kept for it (a kept null is a price that was not read, and stands as that), else
+ * the row's own where a pass read the row in full, else none. A row a pass did not read carries only what was kept when
+ * the pass began, which the list may have dropped since.
+ */
+export function shownPrice(prices, row) {
+  if (!row) return null;
+  if (prices.has(row.asset)) return prices.get(row.asset);
+  return row.read ? row.oracle : null;
+}
