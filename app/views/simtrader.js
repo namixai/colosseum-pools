@@ -160,6 +160,20 @@ function heldTarget(page) {
   }
 }
 
+/** The line under the call's outcome that says the lists could not be read again (and nothing when they could). */
+function refreshNote(status, text) {
+  let note = status.parentElement.querySelector("#sim-refresh");
+  if (!note) {
+    if (!text) return;
+    note = document.createElement("p");
+    note.id = "sim-refresh";
+    note.className = "sp-status err";
+    note.setAttribute("role", "status");
+    status.insertAdjacentElement("afterend", note);
+  }
+  note.textContent = text;
+}
+
 /** The call a button sends: connects first and alone when there is no wallet (the page is drawn again when it does),
  *  then sends one call at a time, keeps what the receipt names, and reads again. */
 function wireCalls(page, st, status, again) {
@@ -197,19 +211,24 @@ function wireCalls(page, st, status, again) {
       if (!receipt || receipt.status !== 1) throw new Error("the call reverted");
       keepFromReceipt(st.at, st.wallet, receipt);
       status.className = "sp-status ok";
+      // The money is gone from the pool: its box goes now, whether or not the lists can be read again.
+      if (held) $("#held", page)?.remove();
       status.textContent = held ? `The money set aside was sent to ${target.to} (transaction ${receipt.hash}).`
         : fund ? `The stage is started (transaction ${receipt.hash}).` : `The payout is requested (transaction ${receipt.hash}).`;
     } catch (err) {
+      // A call that was refused may have been asked about a sum that was read a moment ago: the lists read what is there now.
+      chain.forgetLiveReads();
       status.className = "sp-status err";
       status.textContent = traderRefusal(refusalName(err, IFACE)) || friendly(err);
     }
     // The flight lasts until the lists are read again, so a press on a row that is about to change is not taken; the
-    // buttons come back whether or not the reading worked.
+    // buttons come back whether or not the reading worked. What the call came to stays on the screen; a reading that
+    // fails is said apart from it.
     try {
       await again();
+      refreshNote(status, "");
     } catch (err) {
-      status.className = "sp-status err";
-      status.textContent = `Could not refresh: ${friendly(err)}`;
+      refreshNote(status, `Could not refresh: ${friendly(err)}`);
     } finally {
       st.flight = false;
       page.querySelectorAll("button[data-fund], button[data-claim], button[data-held]").forEach((b) => { b.disabled = false; });
@@ -332,18 +351,37 @@ export async function simPayoutsView(address, page) {
     // The payouts of the wallet, whose stops' reasons are read where there are stops.
     const now = head.timestamp;
     // What the pool set aside for the wallet, read by the wallet's address: a wallet with nothing set aside sees no Claim.
-    const held = BigInt(await st.pool.heldOf(st.wallet));
+    // A balance that cannot be read costs the Claim box, not the lists: the page says it was not read.
+    let held = null;
+    try {
+      held = BigInt(await st.pool.heldOf(st.wallet));
+    } catch {
+      held = null;
+    }
     const mine = payoutRows({ structs, wallet: st.wallet, now });
     const stoppedIds = new Set(mine.filter((p) => p.key === "stopped").map((p) => p.id));
     const reasons = stoppedIds.size
       ? await stopReasons(st, structs.map((s, id) => ({ id, stoppedAt: Number(s.stoppedAt ?? 0), trader: s.trader })).filter((p) => stoppedIds.has(p.id)), head.number)
       : new Map();
     await refreshRows(st);
-    const typed = $("#sim-held-to", page)?.value;
-    $("#sim-list", page).innerHTML = payoutsHtml({ ready: requestable(st.rows), rows: payoutRows({ structs, wallet: st.wallet, now, reasons, heldLeft: held > 0n }),
+    const field = $("#sim-held-to", page);
+    const typed = field?.value;
+    const focus = field && document.activeElement === field ? { from: field.selectionStart, to: field.selectionEnd, dir: field.selectionDirection } : null;
+    $("#sim-list", page).innerHTML = payoutsHtml({ ready: requestable(st.rows), rows: payoutRows({ structs, wallet: st.wallet, now, reasons, heldLeft: held === null ? null : held > 0n }),
       held, wallet: st.wallet });
     // The address the wallet was typing stays where it was when the lists are drawn again.
-    if (typed !== undefined && $("#sim-held-to", page)) $("#sim-held-to", page).value = typed;
+    const again = $("#sim-held-to", page);
+    if (typed !== undefined && again) {
+      again.value = typed;
+      if (focus) {
+        again.focus();
+        try {
+          again.setSelectionRange(focus.from, focus.to, focus.dir ?? undefined);
+        } catch {
+          // the field takes no selection: the focus is enough
+        }
+      }
+    }
     $("#sim-scan", page).textContent = scanNote(st.loaded, st.floor);
     $("#sim-back", page).disabled = !canLookBack(st.loaded, st.floor);
   };

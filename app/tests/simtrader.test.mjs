@@ -402,13 +402,13 @@ test("the page reads what is set aside by the wallet's address and sends claimHe
   const view = read("../views/simtrader.js");
   assert.match(view, /BigInt\(await st\.pool\.heldOf\(st\.wallet\)\)/);
   assert.match(view, /pool\.claimHeld\(target\.to\)/);
-  assert.match(view, /heldLeft: held > 0n/);
+  assert.match(view, /heldLeft: held === null \? null : held > 0n/);
   const calls = view.slice(view.indexOf("function wireCalls"), view.indexOf("function wireBack"));
   assert.ok(calls.indexOf("await chain.connect()") < calls.indexOf("heldTarget(page)"), "connecting comes first and alone");
   assert.ok(calls.indexOf("heldTarget(page)") < calls.indexOf("st.flight = true;"), "an address that is none never reaches the wallet");
   assert.equal(calls.split("button[data-fund], button[data-claim], button[data-held]").length - 1, 3, "the new button is held off like the others during a call");
   assert.match(calls, /traderRefusal\(refusalName\(err, IFACE\)\) \|\| friendly\(err\)/, "a refusal by the wallet reads as it does for the other buttons");
-  assert.match(view, /typed !== undefined && \$\("#sim-held-to", page\)/, "the address being typed survives a redraw, a cleared field too");
+  assert.match(view, /typed !== undefined && again\b/, "the address being typed survives a redraw, a cleared field too");
   assert.match(view, /return \{ to: ethers\.getAddress\(typed\.to\) \};/, "an address whose capitals do not match its checksum is refused, not sent");
   assert.match(view, /const target = held \? heldTarget\(page\) : null;/);
 });
@@ -419,4 +419,36 @@ test("the held box and its phone layout stay in the page's tone: no simulation, 
   const css = read("../style.css");
   assert.match(css, /\.sp-row\.held \{ grid-template-columns: 1fr;/);
   assert.match(css, /\.sp-to input \{[^}]*width: 100%[^}]*min-width: 0[^}]*box-sizing: border-box/);
+});
+
+test("a refused claim reads the chain afresh, the outcome of a call stays on the screen, and a reading that fails is said apart", () => {
+  const view = read("../views/simtrader.js");
+  const calls = view.slice(view.indexOf("function wireCalls"), view.indexOf("function wireBack"));
+  const refused = calls.slice(calls.indexOf("} catch (err) {\n      // A call that was refused"));
+  assert.match(refused, /chain\.forgetLiveReads\(\);\s*status\.className = "sp-status err";/, "a refusal forgets the live reads like a success does");
+  const again = calls.slice(calls.indexOf("await again();"), calls.indexOf("} finally {\n      st.flight = false;"));
+  assert.match(again, /refreshNote\(status, ""\);/);
+  assert.match(again, /refreshNote\(status, `Could not refresh: \$\{friendly\(err\)\}`\);/);
+  assert.ok(!/status\.textContent/.test(again), "the outcome of the call (the hash, or the wallet's cancellation) is not written over");
+  assert.match(calls, /if \(held\) \$\("#held", page\)\?\.remove\(\);/, "the box of money that was sent goes at once");
+  assert.match(view, /note\.id = "sim-refresh";/);
+});
+
+test("a balance that cannot be read costs the Claim box, not the lists; the page says it was not read and does not say nothing is set aside", () => {
+  const view = read("../views/simtrader.js");
+  assert.match(view, /let held = null;\s*try \{\s*held = BigInt\(await st\.pool\.heldOf\(st\.wallet\)\);\s*\} catch \{\s*held = null;\s*\}/);
+  const html = payoutsHtml({ ready: [], rows: payoutRows({ structs: [struct({ state: 4 }), struct({ state: 3 })], wallet: WALLET, now: NOW, heldLeft: null }), held: null, wallet: WALLET });
+  assert.match(html, /could not be read, so Claim is not offered/);
+  assert.ok(!/data-held|<button[^>]*>Claim|sim-held-to/.test(html), "no Claim without a balance");
+  assert.ok(!/nothing is set aside|Claim above/.test(html), "and no word on what is or is not set aside");
+  assert.match(html, /data-payout="1"/, "the payouts are listed all the same");
+  assert.equal(one({ state: 4 }).key, "held");
+  const [row] = payoutRows({ structs: [struct({ state: 4 })], wallet: WALLET, now: NOW, heldLeft: null });
+  assert.equal(row.note, "The token refused the transfer. The money was set aside for you in the pool.");
+});
+
+test("the field of the address keeps its focus and selection when the lists are drawn again", () => {
+  const view = read("../views/simtrader.js");
+  assert.match(view, /document\.activeElement === field \? \{ from: field\.selectionStart, to: field\.selectionEnd/);
+  assert.match(view, /again\.focus\(\);\s*try \{\s*again\.setSelectionRange\(focus\.from, focus\.to/);
 });
