@@ -148,6 +148,18 @@ function needWallet(page, at, current, path, what) {
   shell(page, at, current, path, noteHtml(what, "Connect your wallet to see what it holds in this pool."));
 }
 
+/** Where the money set aside goes, from the field: an address that is none, or whose capitals do not match its checksum, is
+ *  told so and nothing is sent. The checksum is kept: a mistyped capital is how a mistyped address looks. */
+function heldTarget(page) {
+  const typed = claimTarget($("#sim-held-to", page)?.value);
+  if (typed.error) return typed;
+  try {
+    return { to: ethers.getAddress(typed.to) };
+  } catch {
+    return { error: "The capital and small letters of this address do not match its checksum. Check it, or type it all in small letters." };
+  }
+}
+
 /** The call a button sends: connects first and alone when there is no wallet (the page is drawn again when it does),
  *  then sends one call at a time, keeps what the receipt names, and reads again. */
 function wireCalls(page, st, status, again) {
@@ -166,7 +178,7 @@ function wireCalls(page, st, status, again) {
     const fund = button.dataset.fund !== undefined;
     const held = button.dataset.held !== undefined;
     // Where the money set aside goes is read before anything is sent: an address that is none is told so, and nothing is asked of the wallet.
-    const target = held ? claimTarget($("#sim-held-to", page)?.value) : null;
+    const target = held ? heldTarget(page) : null;
     if (target?.error) {
       status.className = "sp-status err";
       status.textContent = target.error;
@@ -331,7 +343,7 @@ export async function simPayoutsView(address, page) {
     $("#sim-list", page).innerHTML = payoutsHtml({ ready: requestable(st.rows), rows: payoutRows({ structs, wallet: st.wallet, now, reasons, heldLeft: held > 0n }),
       held, wallet: st.wallet });
     // The address the wallet was typing stays where it was when the lists are drawn again.
-    if (typed && $("#sim-held-to", page)) $("#sim-held-to", page).value = typed;
+    if (typed !== undefined && $("#sim-held-to", page)) $("#sim-held-to", page).value = typed;
     $("#sim-scan", page).textContent = scanNote(st.loaded, st.floor);
     $("#sim-back", page).disabled = !canLookBack(st.loaded, st.floor);
   };

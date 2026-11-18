@@ -404,11 +404,13 @@ test("the page reads what is set aside by the wallet's address and sends claimHe
   assert.match(view, /pool\.claimHeld\(target\.to\)/);
   assert.match(view, /heldLeft: held > 0n/);
   const calls = view.slice(view.indexOf("function wireCalls"), view.indexOf("function wireBack"));
-  assert.ok(calls.indexOf("await chain.connect()") < calls.indexOf("claimTarget("), "connecting comes first and alone");
-  assert.ok(calls.indexOf("claimTarget(") < calls.indexOf("st.flight = true;"), "an address that is none never reaches the wallet");
+  assert.ok(calls.indexOf("await chain.connect()") < calls.indexOf("heldTarget(page)"), "connecting comes first and alone");
+  assert.ok(calls.indexOf("heldTarget(page)") < calls.indexOf("st.flight = true;"), "an address that is none never reaches the wallet");
   assert.equal(calls.split("button[data-fund], button[data-claim], button[data-held]").length - 1, 3, "the new button is held off like the others during a call");
   assert.match(calls, /traderRefusal\(refusalName\(err, IFACE\)\) \|\| friendly\(err\)/, "a refusal by the wallet reads as it does for the other buttons");
-  assert.match(view, /typed && \$\("#sim-held-to", page\)/, "the address being typed survives a redraw");
+  assert.match(view, /typed !== undefined && \$\("#sim-held-to", page\)/, "the address being typed survives a redraw, a cleared field too");
+  assert.match(view, /return \{ to: ethers\.getAddress\(typed\.to\) \};/, "an address whose capitals do not match its checksum is refused, not sent");
+  assert.match(view, /const target = held \? heldTarget\(page\) : null;/);
 });
 
 test("the held box and its phone layout stay in the page's tone: no simulation, paper or fixed payout, a row of one column, an input that fits", () => {
