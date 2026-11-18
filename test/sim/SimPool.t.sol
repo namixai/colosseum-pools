@@ -303,31 +303,24 @@ contract SimPoolTest is Test {
         assertEq(address(f).balance, 0, "the factory keeps none of it");
     }
 
-    /// A fee of none, or above `MAX_CREATION_FEE`, is refused at the deploy; 1 wei and the bound are taken.
-    function test_deploy_refusesAFeeOfNoneOrAboveTheBound() public {
-        assertEq(factory.MAX_CREATION_FEE(), 10 ether, "ten times mainnet's 1 HYPE");
+    /// A fee of none is refused at the deploy; any fee above it is taken, however large: there is no cap.
+    function test_deploy_refusesAFeeOfNone_andHasNoCap() public {
         (address exam, address impl) = (factory.examImpl(), factory.poolImpl());
-        uint256[2] memory bad = [uint256(0), 10 ether + 1];
-        for (uint256 i = 0; i < bad.length; ++i) {
-            vm.expectRevert(SimPoolFactory.BadFee.selector);
-            new SimPoolFactory(IERC20(address(usdc)), exam, impl, address(this), bad[i]);
-        }
-        uint256[2] memory good = [uint256(1), 10 ether];
+        vm.expectRevert(SimPoolFactory.BadFee.selector);
+        new SimPoolFactory(IERC20(address(usdc)), exam, impl, address(this), 0);
+        uint256[4] memory good = [uint256(1), 1 ether, 1_000_000 ether, type(uint256).max];
         for (uint256 i = 0; i < good.length; ++i) {
             SimPoolFactory f = new SimPoolFactory(IERC20(address(usdc)), exam, impl, address(this), good[i]);
             assertEq(f.creationFee(), good[i]);
         }
     }
 
-    /// The operator changes the fee within its bounds, with an event of the old and the new; nobody else, and
-    /// nothing outside them. A pool opened before keeps what it paid; the next takes the new fee and no other.
-    function test_setCreationFee_onlyTheOperatorWithinTheBounds() public {
+    /// The operator changes the fee to any amount above zero, with an event of the old and the new; nobody else,
+    /// and never to none. A pool opened before keeps what it paid; the next takes the new fee and no other.
+    function test_setCreationFee_onlyTheOperator_neverNone() public {
         SimPool before = _pool();
-        uint256[3] memory bad = [uint256(0), 10 ether + 1, type(uint256).max];
-        for (uint256 i = 0; i < bad.length; ++i) {
-            vm.expectRevert(SimPoolFactory.BadFee.selector);
-            factory.setCreationFee(bad[i]);
-        }
+        vm.expectRevert(SimPoolFactory.BadFee.selector);
+        factory.setCreationFee(0);
         address[4] memory notOperator = [creator, platform, closer, stranger];
         for (uint256 i = 0; i < notOperator.length; ++i) {
             vm.prank(notOperator[i]);
@@ -353,11 +346,18 @@ contract SimPoolTest is Test {
         factory.create{value: 2 ether}(p);
         assertEq(platform.balance - hype, 2 ether, "the new fee to the platform");
 
-        // Down as well as up, to the bounds themselves.
+        // Down as well as up, as far as the operator sets it: any amount above zero, with no cap. A large fee is
+        // taken whole by `create` and sent on.
         factory.setCreationFee(1);
         assertEq(factory.creationFee(), 1);
-        factory.setCreationFee(10 ether);
-        assertEq(factory.creationFee(), 10 ether);
+        factory.setCreationFee(type(uint256).max);
+        assertEq(factory.creationFee(), type(uint256).max);
+        factory.setCreationFee(50 ether);
+        vm.deal(creator, 60 ether);
+        hype = platform.balance;
+        vm.prank(creator);
+        factory.create{value: 50 ether}(p);
+        assertEq(platform.balance - hype, 50 ether, "a fee of 50 HYPE, taken and sent on");
     }
 
     function test_open_theCreatorIsNeitherTheFillerNorTheChecker() public {

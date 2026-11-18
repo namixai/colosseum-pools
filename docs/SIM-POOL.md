@@ -237,12 +237,12 @@ fail, and their prices pay for the ones that pass.
 
 ## The platform's numbers
 
-The fee to open a pool (`creationFee`) is set when the factory is deployed: 1 HYPE on mainnet, 0.1 HYPE on testnet
-by default, where a rehearsal runs on test HYPE (`ops/deploy_sim.py` deploys mainnet's at 1 HYPE and no other). The factory's
-operator may change it at any time, with no delay (`setCreationFee`, event `CreationFeeSet` with the old fee and the
-new), from 1 wei to 10 HYPE inclusive (`MAX_CREATION_FEE`, ten times mainnet's fee: room to follow HYPE's price
-either way; it refuses a fee two or more zeros too large, not one too small); a deploy outside the same bounds is
-refused. A pool already
+The fee to open a pool (`creationFee`) is set when the factory is deployed: 1 HYPE on mainnet and 0.1 HYPE on testnet
+by default, where a rehearsal runs on test HYPE. The factory's operator may change it at any time, with no delay
+(`setCreationFee`, event `CreationFeeSet` with the old fee and the new), to any amount above zero: there is no cap,
+and opening is never free (a fee of none reverts `BadFee`, at the deploy as at a change). The guard against a slip of
+a zero is the script's: `ops/deploy_sim.py` prints the fee in HYPE and in wei, refuses none before anything is sent,
+and on mainnet sends a fee above 10 HYPE only with `--confirm-large-fee`. A pool already
 open paid its fee once and is not touched by a change. A creator reads the fee from the factory before opening:
 `create` compares the HYPE sent with `creationFee` as it stands when the transaction runs. If they differ, `create`
 reverts (`WrongFee`): the fee is not taken, though the creator pays the gas of the reverted transaction. A fee
@@ -364,7 +364,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
 - **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, the pool's two libraries (`SimPoolStops`,
   `SimPoolSetup`), SimPool linked to them (the record names all three), a TermsBook and the
   factory on the network (testnet unless named, see Networks) with Circle's USDC and the fee to open a pool set
-  in it (`--creation-fee` in HYPE: 0.1 on testnet unless named, 1 on mainnet and nothing else there; the plan prints
+  in it (`--creation-fee` in HYPE: 0.1 on testnet and 1 on mainnet unless named, above 10 HYPE on mainnet only with
+  `--confirm-large-fee`; the plan prints
   it with the network's name, the factory is read back for it before anything else is sent, and the record keeps
   the fee at the deploy as `creation_fee_at_deploy_wei` and `creation_fee_at_deploy_hype`; the factory's own
   `creationFee` is the one in force), names the filler, the checker, the closer (four keys with
@@ -390,7 +391,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
   `fee --deployment … --amount 0.5` changes the factory's fee from its operator (`--key`, or `--signer` for our
   Safe, which gets the call printed): it reads the fee and the operator first and says what it would send, or that
-  the factory would refuse it (not the operator, 0 or above 10 HYPE); the same fee as the factory's it does not send
+  the factory would refuse it (not the operator, a fee of none; on mainnet above 10 HYPE without
+  `--confirm-large-fee` it refuses before reading anything); the same fee as the factory's it does not send
   at all, a check of the script's own (the factory would take it and change nothing); with `--send` it reads the fee
   back after.
   `check --plan …` asks `SimPoolFactory.check` about a plan by eth_call, sending nothing and reading no key: with

@@ -14,8 +14,8 @@ import {TermsBook} from "../multi/TermsBook.sol";
 ///         pass is paid out of the prices other traders paid. Anyone opens one for the creation fee
 ///         and a lock of USDC: two payouts of its smallest line at least, and two of each line on at
 ///         the start. The fee is set when the factory is
-///         deployed (1 HYPE on mainnet, 0.1 HYPE on testnet) and the operator may change it within
-///         fixed bounds; a pool already open is not touched by it. The platform's other numbers are
+///         deployed (1 HYPE on mainnet, 0.1 HYPE on testnet) and the operator may change it to any
+///         amount above zero; a pool already open is not touched by it. The platform's other numbers are
 ///         constants here, the same for every pool: what a pool pays the platform, what it pays a
 ///         trader, what it keeps, how long a payout waits, how many payouts a pool pays a day, how
 ///         long a pool runs at least, how long a withdrawal waits.
@@ -28,10 +28,6 @@ import {TermsBook} from "../multi/TermsBook.sol";
 contract SimPoolFactory {
     using SafeERC20 for IERC20;
 
-    /// The most the fee to open a pool may be, in HYPE (18 decimals): ten times mainnet's 1 HYPE, room to follow
-    /// HYPE's price either way. The fee is 1 wei to this, inclusive: the bound refuses a fee two or more zeros too
-    /// large, not one too small.
-    uint256 public constant MAX_CREATION_FEE = 10 ether;
     /// The platform's part of every exam's price, out of the price, and of every withdrawal (bps).
     uint16 public constant FEE_BPS = 50;
     /// A payout, out of the size the trader passed on (bps): 8 %.
@@ -102,8 +98,8 @@ contract SimPoolFactory {
     mapping(address => address) public poolOf;
     address[] internal _pools;
     /// What opening a pool costs, in HYPE (18 decimals), paid to the platform: set at the deploy, changed only by the
-    /// operator, above zero and at most `MAX_CREATION_FEE`. `create` takes exactly this, so a creator who read another
-    /// pays nothing: the call reverts. Declared last, so the slots `ops/deploy_sim.py check` writes stay where they were.
+    /// operator, any amount above zero (opening is never free; there is no cap). `create` takes exactly this, so a
+    /// creator who read another pays nothing: the call reverts. Declared last, so the slots `ops/deploy_sim.py check` writes stay where they were.
     uint256 public creationFee;
 
     event OperatorSet(address indexed operator);
@@ -243,7 +239,7 @@ contract SimPoolFactory {
     // ── internals ────────────────────────────────────────────────
 
     function _setCreationFee(uint256 fee) internal {
-        if (fee == 0 || fee > MAX_CREATION_FEE) revert BadFee();
+        if (fee == 0) revert BadFee();
         emit CreationFeeSet(creationFee, fee);
         creationFee = fee;
     }

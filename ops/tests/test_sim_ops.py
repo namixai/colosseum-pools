@@ -28,13 +28,13 @@ def constant(name: str) -> str:
 
 class TheNumbers(unittest.TestCase):
     def test_the_scripts_constants_are_the_factorys(self):
-        # The fee is the factory's, set at its deploy and changed by its operator within a bound: the script holds
-        # each network's fee at the deploy and the factory's bound.
+        # The fee is the factory's, set at its deploy and changed by its operator, above zero with no cap: the script
+        # holds each network's fee at the deploy, and asks mainnet to confirm one above 10 HYPE.
         self.assertIn("uint256 public creationFee;", FACTORY)
-        self.assertIsNone(re.search(r"(?<![A-Z_])CREATION_FEE\b", FACTORY), "no constant or immutable fee is left")
+        self.assertIsNone(re.search(r"CREATION_FEE", FACTORY), "no constant, immutable or cap of the fee is left")
         self.assertIn("function setCreationFee(uint256 fee) external onlyOperator", FACTORY)
-        self.assertEqual(constant("MAX_CREATION_FEE"), "10 ether")
-        self.assertEqual(d.MAX_CREATION_FEE, 10 * 10**18)
+        self.assertIn("if (fee == 0) revert BadFee();", FACTORY)
+        self.assertEqual(d.LARGE_FEE, 10 * 10**18)
         self.assertEqual(d.CREATION_FEES, {"mainnet": 10**18, "testnet": 10**17}, "1 HYPE on mainnet, 0.1 on testnet")
         self.assertIn("uint256 creationFee_) {", FACTORY)
         self.assertEqual(int(constant("PAYOUT_BPS")), d.PAYOUT_BPS)
@@ -318,11 +318,11 @@ class TheCreationFee(unittest.TestCase):
     factory."""
     KEYS = ["--filler", "0x" + "11" * 20, "--checker", "0x" + "22" * 20, "--closer", "0x" + "33" * 20]
 
-    def fee(self, net, given=None):
+    def fee(self, net, given=None, confirm=False):
         from types import SimpleNamespace
         from spike.hlspike import network as networks
         with mock.patch.object(d.c, "NETWORK", {"testnet": networks.TESTNET, "mainnet": networks.MAINNET}[net]):
-            return d.creation_fee_of(SimpleNamespace(creation_fee=given))
+            return d.creation_fee_of(SimpleNamespace(creation_fee=given, confirm_large_fee=confirm))
 
     def test_each_network_has_its_own_and_mainnet_only_its_own(self):
         self.assertEqual(self.fee("testnet"), 10**17)
@@ -330,19 +330,26 @@ class TheCreationFee(unittest.TestCase):
         self.assertEqual(self.fee("mainnet", "1"), 10**18)
         self.assertEqual(self.fee("mainnet", "1.000"), 10**18)
         self.assertEqual(self.fee("testnet", "0.25"), 25 * 10**16)
-        self.assertEqual(self.fee("testnet", "10"), 10 * 10**18, "the factory's bound itself")
+        self.assertEqual(self.fee("mainnet", "0.5"), 5 * 10**17, "mainnet takes another fee when named")
+        self.assertEqual(self.fee("mainnet", "10"), 10 * 10**18, "10 HYPE needs no confirmation")
+        self.assertEqual(self.fee("mainnet", "10.5", confirm=True), 105 * 10**17, "above it, with the confirmation")
+        self.assertEqual(self.fee("testnet", "1000"), 1000 * 10**18, "testnet: no cap and no confirmation")
         self.assertEqual(self.fee("testnet", "0.000000000000000001"), 1)
-        for net, given, said in (("mainnet", "0.1", "mainnet's fee for opening a pool is 1 HYPE"),
-                                 ("mainnet", "0.5", "not 0.5"),
-                                 ("mainnet", "10", "not 10"),
-                                 ("testnet", "0", "above 0 and at most 10 HYPE"),
-                                 ("testnet", "-0.1", "above 0 and at most 10 HYPE"),
-                                 ("testnet", "10.000000000000000001", "above 0 and at most 10 HYPE"),
-                                 ("mainnet", "100", "above 0 and at most 10 HYPE"),
+        self.assertEqual(self.fee("testnet", "1e3"), 1000 * 10**18)
+        self.assertEqual(self.fee("testnet", "1.2e40"), 12 * 10**57, "converted from its digits, not rounded")
+        self.assertEqual(self.fee("testnet", "123456789012345678901234567890.123456789012345678"),
+                         123456789012345678901234567890123456789012345678, "every digit kept")
+        for net, given, said in (("mainnet", "10.000000000000000001", "more than 10 HYPE on mainnet: add "
+                                                                       "--confirm-large-fee"),
+                                 ("mainnet", "100", "nothing was sent"),
+                                 ("testnet", "0", "above 0: the factory refuses a fee of none"),
+                                 ("mainnet", "0", "above 0: the factory refuses a fee of none"),
+                                 ("testnet", "-0.1", "above 0"),
+                                 ("testnet", "1.2e59", "does not fit a uint256 of wei"),
+                                 ("testnet", "1e999999", "does not fit a uint256 of wei"),
                                  ("testnet", "0.0000000000000000001", "at most 18 decimals"),
-                                 ("testnet", "10.0000000000000000000000000001", "above 0 and at most 10 HYPE"),
+                                 ("testnet", "10.0000000000000000000000000001", "at most 18 decimals"),
                                  ("testnet", "0.10000000000000000000000000001", "at most 18 decimals"),
-                                 ("testnet", "1e999999", "above 0 and at most 10 HYPE"),
                                  ("testnet", "Infinity", "not an amount of HYPE"),
                                  ("testnet", "-Infinity", "not an amount of HYPE"),
                                  ("testnet", "NaN", "not an amount of HYPE"),
@@ -354,7 +361,7 @@ class TheCreationFee(unittest.TestCase):
 
     def test_the_plan_says_the_fee_and_the_network_and_sends_nothing(self):
         for extra, said in (([], "creation fee     0.1 HYPE to open a pool on testnet (100000000000000000 wei), set in "
-                                 "the factory; its operator may change it after, up to 10 HYPE (`fee`)"),
+                                 "the factory; its operator may change it after (`fee`)"),
                             (["--creation-fee", "0.5"], "creation fee     0.5 HYPE to open a pool on testnet")):
             out = io.StringIO()
             with mock.patch.object(d.c, "rpc") as rpc, mock.patch.object(d, "deploy_contract") as dc, redirect_stdout(out):
@@ -372,8 +379,8 @@ class TheCreationFee(unittest.TestCase):
                 mock.patch.object(d, "big_blocks", side_effect=reached) as big, \
                 mock.patch.object(d.c, "rpc", side_effect=reached), mock.patch.object(d, "save"), \
                 mock.patch.object(d, "mark_incomplete"):
-            d.main(["deploy", "--label", "never-written", *self.KEYS, "--creation-fee", "20", "--send"])
-        self.assertIn("at most 10 HYPE", str(caught.exception))
+            d.main(["deploy", "--label", "never-written", *self.KEYS, "--creation-fee", "0", "--send"])
+        self.assertIn("the factory refuses a fee of none", str(caught.exception))
         dc.assert_not_called(), key.assert_not_called(), big.assert_not_called()
 
     def test_the_fee_is_read_from_the_factory(self):
@@ -401,7 +408,8 @@ class TheFeeCommand(unittest.TestCase):
     sent only with --send, read back after; for our Safe, the call printed."""
     FACTORY, OPERATOR, OTHER = "0x" + "f1" * 20, "0x" + "0a" * 20, "0x" + "0b" * 20
 
-    def run_fee(self, argv, now=10**17, operator=None, after=None, key_address=None):
+    def run_fee(self, argv, now=10**17, operator=None, after=None, key_address=None, net="testnet"):
+        from spike.hlspike import network as networks
         reads = iter([now, after if after is not None else now])
         out = io.StringIO()
         sent = []
@@ -415,9 +423,11 @@ class TheFeeCommand(unittest.TestCase):
                 mock.patch.object(d.c, "call_view", return_value=(operator or self.OPERATOR,)), \
                 mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(key_address or self.OPERATOR)), \
                 mock.patch.object(d.c, "account") as key, mock.patch.object(d.sn, "confirm_send") as confirm, \
-                mock.patch.object(d.c, "transact", side_effect=transact), redirect_stdout(out):
+                mock.patch.object(d.c, "transact", side_effect=transact), \
+                mock.patch.object(d.c, "NETWORK", {"testnet": networks.TESTNET, "mainnet": networks.MAINNET}[net]), \
+                mock.patch.object(d.c, "assert_network"), redirect_stdout(out):
             try:
-                code = d.main(["fee", "--deployment", "x", *argv])
+                code = d.main(["fee", "--deployment", "x", "--network", net, *argv])
             except SystemExit as exc:
                 code = exc
         return code, sent, out.getvalue(), key, confirm
@@ -428,7 +438,7 @@ class TheFeeCommand(unittest.TestCase):
         self.assertEqual(sent, [])
         confirm.assert_not_called()
         self.assertIn("a pool opens for 0.1 HYPE now; setCreationFee(500000000000000000) from deployer", said)
-        self.assertIn("makes it 0.5 HYPE for every pool opened after; the pools open already are not touched", said)
+        self.assertIn("makes it 0.5 HYPE (500000000000000000 wei) for every pool opened after; the pools open already are not touched", said)
         self.assertIn("nothing was sent", said)
 
     def test_with_send_it_sends_from_the_operator_and_reads_the_fee_back(self):
@@ -447,8 +457,8 @@ class TheFeeCommand(unittest.TestCase):
         for argv, kw, said in ((["--amount", "0.5", "--key", "other"], {"key_address": self.OTHER},
                                 f"NotOperator; its operator is {d.to_checksum_address(self.OPERATOR)}"),
                                (["--amount", "0.1", "--key", "deployer"], {}, "is 0.1 HYPE already"),
-                               (["--amount", "0", "--key", "deployer"], {}, "at most 10 HYPE"),
-                               (["--amount", "10.5", "--key", "deployer"], {}, "at most 10 HYPE")):
+                               (["--amount", "0", "--key", "deployer"], {}, "the factory refuses a fee of none"),
+                               (["--amount", "-1", "--key", "deployer"], {}, "above 0")):
             code, sent, _, key, confirm = self.run_fee(argv + ["--send"], **kw)
             self.assertIsInstance(code, SystemExit, argv)
             self.assertIn(said, str(code))
@@ -456,6 +466,19 @@ class TheFeeCommand(unittest.TestCase):
             confirm.assert_not_called()
         code, *_ = self.run_fee(["--amount", "0.5"])
         self.assertIn("--key or --signer", str(code))
+
+    def test_on_mainnet_a_fee_above_10_hype_wants_its_confirmation_and_testnet_none(self):
+        safe = d.to_checksum_address(self.OPERATOR)
+        code, sent, said, key, confirm = self.run_fee(["--amount", "20", "--signer", safe], now=10**18, net="mainnet")
+        self.assertIsInstance(code, SystemExit)
+        self.assertIn("--amount is 20 HYPE, more than 10 HYPE on mainnet: add --confirm-large-fee", str(code))
+        self.assertEqual(said, "", "refused before anything is read or printed")
+        code, sent, said, *_ = self.run_fee(["--amount", "20", "--signer", safe, "--confirm-large-fee"], now=10**18,
+                                            net="mainnet")
+        self.assertEqual(code, 0)
+        self.assertIn("makes it 20 HYPE (20000000000000000000 wei)", said)
+        code, sent, said, *_ = self.run_fee(["--amount", "20", "--key", "deployer"])
+        self.assertEqual(code, 0, "testnet asks no confirmation")
 
     def test_for_a_safe_the_call_is_printed_and_nothing_is_sent(self):
         safe = d.to_checksum_address(self.OPERATOR)

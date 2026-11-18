@@ -18,10 +18,12 @@
     spike/.venv/bin/python -m ops.deploy_sim approver --pool 0x.. --key creator --address 0x.. [--send] # name it
     spike/.venv/bin/python -m ops.deploy_sim approve --pool 0x.. --key approver --ids 3,4 [--send]     # payouts
     spike/.venv/bin/python -m ops.deploy_sim fee --deployment sim1 --amount 0.5 --key deployer [--send] # the fee
+                                                       ... [--confirm-large-fee]       # mainnet, above 10 HYPE
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
 and the SimPoolFactory on HyperEVM, with the fee for opening a pool set in the factory (--creation-fee, in HYPE: 1 on
-mainnet, the platform's, and no other there at the deploy; 0.1 on testnet unless named), names the filler, the checker, the closer (the platform's
+mainnet, the platform's, and 0.1 on testnet unless named; on mainnet a fee above 10 HYPE also wants
+--confirm-large-fee), names the filler, the checker, the closer (the platform's
 key that alone may close a pool before its 6 months, 184 days; four keys, none of them the operator, who
 opens our pools) and the platform's recipient, and lists the assets with their leverage caps from ops/leverage.py (HYPE is left out:
 the platform's decision of 11 November 2026), each at its perp index on the network (ops/sim_network.py). It
@@ -58,7 +60,8 @@ from when it goes out with the approval and from when without, or why the pool w
 the pool and says what it would send, from which key, or why the pool would refuse.
 
 `fee` changes the fee for opening a pool on a deployment's factory (setCreationFee, from its operator: the deployer's
-key on testnet, our Safe with --signer on mainnet), above 0 and at most 10 HYPE; a pool already open is not touched.
+key on testnet, our Safe with --signer on mainnet), to any amount above 0 (the factory has no cap; on mainnet a fee
+above 10 HYPE also wants --confirm-large-fee, against a slip of a zero); a pool already open is not touched.
 Without --send it reads the factory's fee and operator and says what it would send, or why the factory would refuse;
 with --send it reads the fee back after.
 
@@ -108,12 +111,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 # keeper and the checker can read the record `deploy` wrote.
 DONE = "complete"
 HYPE = 10**18
-# What opening a pool costs on each network at the deploy, in wei (SimPoolFactory.creationFee, which its operator may
-# change after, within its bounds: `fee`). Mainnet's is the platform's 1 HYPE and no other at the deploy; testnet's
-# 0.1, so a rehearsal on test HYPE opens a pool (18 November 2026).
+# What opening a pool costs on each network at the deploy, in wei, unless --creation-fee names another
+# (SimPoolFactory.creationFee, which its operator may change after: `fee`). Mainnet's is the platform's 1 HYPE;
+# testnet's 0.1, so a rehearsal on test HYPE opens a pool (18 November 2026).
 CREATION_FEES = {"mainnet": HYPE, "testnet": HYPE // 10}
-# SimPoolFactory.MAX_CREATION_FEE: the most the fee may be; the tests hold it against the source.
-MAX_CREATION_FEE = 10 * HYPE
+# The factory takes any fee above zero, with no cap. On mainnet a fee above this also wants --confirm-large-fee: a
+# zero too many is caught here, before anything is sent, not by the contract.
+LARGE_FEE = 10 * HYPE
 PAYOUT_BPS = 800
 LOCKED_PAYOUTS = 2
 RULES_T = "(uint16,uint16,uint32,uint32[],uint32[])"
@@ -159,22 +163,37 @@ def hype(wei: int) -> str:
 
 
 def fee_units(text: str, flag: str) -> int:
-    """A fee written in HYPE, in wei: above 0 and at most the factory's bound, as setCreationFee takes it. The amount
-    as written is checked, before any arithmetic could round it: finite, within the bound, a whole number of wei."""
+    """A fee written in HYPE, in wei, as setCreationFee takes it: above 0 (the factory refuses none), a whole number of
+    wei, a uint256. The amount as written is checked and converted from its digits, so no context rounds it."""
     try:
         amount = Decimal(text)
     except InvalidOperation:
         amount = None
     if amount is None or not amount.is_finite():
         raise SystemExit(f"{flag} {text!r} is not an amount of HYPE")
-    if not 0 < amount <= Decimal(MAX_CREATION_FEE) / HYPE:
-        raise SystemExit(f"{flag} is above 0 and at most {hype(MAX_CREATION_FEE)} HYPE, the factory's bound")
-    # Its decimals read off its digits, which no context rounds: trailing zeros are no decimals.
+    if amount <= 0:
+        raise SystemExit(f"{flag} is above 0: the factory refuses a fee of none")
+    # Its decimals read off its digits: trailing zeros are no decimals.
     _, digits, exponent = amount.as_tuple()
     zeros = len(digits) - len("".join(map(str, digits)).rstrip("0"))
     if exponent + zeros < -18:
         raise SystemExit(f"{flag} {text!r} is not an amount of HYPE of at most 18 decimals")
-    return int(amount.scaleb(18))
+    if amount.adjusted() > 60:
+        raise SystemExit(f"{flag} {text!r} does not fit a uint256 of wei")
+    shift = exponent + 18
+    number = int("".join(map(str, digits)))
+    wei = number * 10**shift if shift >= 0 else number // 10**-shift
+    if wei >= 2**256:
+        raise SystemExit(f"{flag} {text!r} does not fit a uint256 of wei")
+    return wei
+
+
+def large_fee_ok(wei: int, args, flag: str) -> None:
+    """On mainnet a fee above LARGE_FEE goes only with --confirm-large-fee: refused here, before anything is read or
+    sent. The factory has no cap of its own."""
+    if c.NETWORK.name == "mainnet" and wei > LARGE_FEE and not getattr(args, "confirm_large_fee", False):
+        raise SystemExit(f"{flag} is {hype(wei)} HYPE, more than {hype(LARGE_FEE)} HYPE on mainnet: add "
+                         "--confirm-large-fee to send a fee that large; nothing was sent")
 
 
 def network_fee() -> int:
@@ -185,14 +204,13 @@ def network_fee() -> int:
 
 
 def creation_fee_of(args) -> int:
-    """The fee `deploy` sets in the factory, in wei: --creation-fee in HYPE, or the network's. At the deploy mainnet
-    takes only its own, the platform's 1 HYPE; any network, nothing above the factory's bound and not nothing."""
+    """The fee `deploy` sets in the factory, in wei: --creation-fee in HYPE, or the network's. Not nothing; on mainnet
+    above 10 HYPE only with --confirm-large-fee."""
     own = network_fee()
     if args.creation_fee is None:
         return own
     wei = fee_units(args.creation_fee, "--creation-fee")
-    if c.NETWORK.name == "mainnet" and wei != own:
-        raise SystemExit(f"mainnet's fee for opening a pool is {hype(own)} HYPE, the platform's; not {hype(wei)}")
+    large_fee_ok(wei, args, "--creation-fee")
     return wei
 
 
@@ -447,7 +465,7 @@ def deploy(args) -> int:
     print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPoolCodes, SimPool (linked to the three), TermsBook, "
           "SimPoolFactory(usdc, exam, pool, operator, fee)  (big blocks on, then off)")
     print(f"  creation fee     {hype(fee)} HYPE to open a pool on {c.NETWORK.name} ({fee} wei), set in the factory; its "
-          f"operator may change it after, up to {hype(MAX_CREATION_FEE)} HYPE (`fee`)")
+          "operator may change it after (`fee`)")
     print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
           f"setTermsBook, setAsset " + ", ".join(f"{n} ({i}) {cap / 100:g}x" for n, i, cap in assets))
     if safe:
@@ -1062,10 +1080,11 @@ def fee_cmd(args) -> int:
     if not factory:
         raise SystemExit(f"the record {args.deployment!r} names no SimPoolFactory")
     new = fee_units(args.amount, "--amount")
+    large_fee_ok(new, args, "--amount")
     now, operator, sender = factory_fee(factory), operator_of(factory), signer_of(args)
     who = args.key or "the signer"
     print(f"deploy_sim fee: {c.NETWORK.name} (chain {c.CHAIN_ID}), factory {factory}: a pool opens for {hype(now)} HYPE "
-          f"now; setCreationFee({new}) from {who} ({sender}) makes it {hype(new)} HYPE for every pool opened after; "
+          f"now; setCreationFee({new}) from {who} ({sender}) makes it {hype(new)} HYPE ({new} wei) for every pool opened after; "
           "the pools open already are not touched")
     if sender != operator:
         raise SystemExit(f"the factory would refuse it: NotOperator; its operator is {operator}")
@@ -1168,7 +1187,9 @@ def main(argv: list[str] | None = None) -> int:
                                   "on mainnet")
     d.add_argument("--assets", default="BTC,ETH,SOL")
     d.add_argument("--creation-fee", help="HYPE to open a pool, set in the factory: 0.1 on testnet unless named; "
-                                          "mainnet takes only its own, 1, at the deploy")
+                                          "mainnet 1 unless named")
+    d.add_argument("--confirm-large-fee", action="store_true",
+                   help="on mainnet, send a --creation-fee above 10 HYPE: refused without it")
     d.add_argument("--keeper-nodes", help="a JSON file of the keeper's nodes, as a record's keeper_nodes; needed on mainnet")
     d.add_argument("--send", action="store_true")
     q = sub.add_parser("pool")
@@ -1217,6 +1238,8 @@ def main(argv: list[str] | None = None) -> int:
     z = sub.add_parser("fee")
     z.add_argument("--deployment", required=True)
     z.add_argument("--amount", required=True, help='the new fee to open a pool, in HYPE, as "0.5"')
+    z.add_argument("--confirm-large-fee", action="store_true",
+                   help="on mainnet, send a fee above 10 HYPE: refused without it")
     z.add_argument("--key", help="the factory's operator")
     z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
     z.add_argument("--send", action="store_true")
