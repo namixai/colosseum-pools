@@ -1,0 +1,63 @@
+# The checker of instance %i's simulated pool (ops/sim_check.py): every 10 minutes it reads the fills of the factory's
+# exams and stages, and stops a payout still waiting whose stage held a position opposite another account's, close
+# in time and size (reason 1), or that with the two traders' wallets linked (reason 2). It sends nothing else: no
+# lift (a person runs --lift by hand, docs/HOSTING.md), no stop without a pair, no second stop of a payout.
+#
+# It sends with the factory's checker, checker in the instance's secrets: the one key that may stop a payout, which
+# the factory refuses to share with the filler, and which install.sh checks against the record before it switches.
+# ops/host/install.sh installs it and enables it for an instance whose record is a simulated pool's (docs/HOSTING.md,
+# "A simulated pool's checker"); for any other instance it is never started.
+[Unit]
+Description=colosseum-pools simulated pool checker %i (HyperEVM testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=colosseum-keeper
+Group=colosseum-keeper
+WorkingDirectory=/opt/colosseum-pools/current
+# The record's file last, as the keeper's: it wins over a line by hand in keeper-%i.env. The node is the keeper's.
+EnvironmentFile=/etc/colosseum/keeper-%i.env
+EnvironmentFile=/etc/colosseum/deployment-%i.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# Only flags every release with the service loop reads, so a release rolled back to still starts it.
+ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.sim_check --deployment ${COLOSSEUM_DEPLOYMENT} \
+    --wallet checker --state /var/lib/colosseum-keeper/check-${COLOSSEUM_DEPLOYMENT}.json --every 600
+Restart=always
+# A start that fails (the node at its first read, mostly) is tried again a minute on, not every few seconds.
+RestartSec=60
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/colosseum-keeper
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+# Not the gateway's, not the first keeper's key and not the shared pool keeper's, nor its own instance's filler:
+# the checker sends with its own key alone.
+InaccessiblePaths=/var/lib/colosseum-gw -/var/lib/colosseum-keeper/secrets -/var/lib/colosseum-keeper/shared
+InaccessiblePaths=-/var/lib/colosseum-keeper/instances/%i/secrets/filler.key
+# Nor another instance's: under instances/ this one sees an empty, read-only directory with its own directory alone
+# bound back into it. Its state is /var/lib/colosseum-keeper/check-<label>.json.
+TemporaryFileSystem=/var/lib/colosseum-keeper/instances:ro
+BindReadOnlyPaths=/var/lib/colosseum-keeper/instances/%i
+ProtectProc=invisible
+ProcSubset=pid
+
+[Install]
+WantedBy=multi-user.target

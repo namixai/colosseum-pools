@@ -29,6 +29,16 @@ no later than 5 minutes before that. Either way only for a pair (reasons 1 and 2
 without a pair (reason 3) and prohibited play (reason 4, a series of exams traded at the edge of their risk, or a
 hedge between accounts) need a written analysis and are never sent from here.
 `--wallet` is the factory's checker; without it, or with --dry-run, nothing is sent.
+
+As a service (no --once; on the host colosseum-sim-checker@<name>, docs/HOSTING.md) it runs the same pass every
+--every seconds, 600 by default, and writes one JSON line a pass (`check_done`) and one an action: `sent` with the
+pool, the payout's id, the reason and the transaction's hash, `would_send` the same without a key, `send_failed` with
+the refusal. Before it sends it reads the payout again, at the head as it is then, and sends only if it can still be
+stopped; a payout it stopped, or would have, it does not take up again while it runs, and the pool takes one stop a
+payout anyway. A pass the node fails is logged (`pass_failed`) and the next one comes on time; what a failed pass
+read is dropped whole, so the next reads it again and counts nothing twice. Its reads are spaced --rpc-gap seconds
+apart, 1 by default, to leave the node's allowance to the keeper. It never lifts a stop: --lift is a command a
+person runs.
 Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet; on mainnet it sends only with
 --confirm-mainnet <the deployment's label> and a mainnet key directory (ops/sim_network.py). --lift there
 asks for the confirmation phrase at the terminal instead.
@@ -63,6 +73,30 @@ MARGIN_S = 300
 # `payout(id)` of a pool from before approvals: the same fields without the eighth, `approved`.
 PAYOUT_BEFORE_APPROVALS = "(address,address,uint64,uint64,uint8,bool,uint64)"
 ADDRESS_BATCH = 100
+# The service's pace: a pass every this many seconds, and its node reads at least this far apart. A payout waits 72
+# hours from its claim, and a pair is there from the claim on: ten minutes late is nothing for a stop, and a
+# restarted service finds what it missed in its first pass. The gap holds the checker to about 60 reads a minute
+# while it reads, on a node the keeper (its fills, every block) shares.
+DEFAULT_EVERY_S = 600
+RPC_GAP_S = 1.0
+
+
+def paced(rpc, gap_s: float, clock=time.monotonic, sleep=time.sleep):
+    """`rpc` with every call started at least `gap_s` after the last one ended. One process, one node: the pace holds
+    across every read of the pass, the retries `rpc` makes on a 429 included."""
+    last: list[float | None] = [None]
+
+    def call(method, params=()):
+        if last[0] is not None:
+            wait = last[0] + gap_s - clock()
+            if wait > 0:
+                sleep(wait)
+        try:
+            return rpc(method, params)
+        finally:
+            last[0] = clock()
+
+    return call
 
 
 # ── what is a pair, from what was read ───────────────────────────────────────────────
@@ -177,6 +211,9 @@ class Checker:
         self.started: dict[str, int] = {}
         # Each pool's kind, read once: with payout approval (a stop until the payout is paid) or from before it.
         self.approvals: dict[str, bool] = {}
+        # The payouts this process stopped, or would have without a key: never taken up again while it runs. A
+        # stop that failed is not here, and is tried again in the next pass.
+        self.stopped: set[tuple[str, int]] = set()
 
     def until_paid(self, pool: str) -> bool:
         """Whether this pool takes a stop until the payout is paid. Not read, it counts as yes for this pass and is
@@ -204,26 +241,31 @@ class Checker:
         block, once, and then with the others."""
         accounts = list(self.keeper.accounts)
         new = [a for a in accounts if a not in self.fills_read]
-        self._read_fills([a for a in accounts if a in self.fills_read], self.fills_from, latest)
-        self._read_fills(new, self.start_block, latest)
+        # Kept only once both reads are whole: a read the node breaks off is read again from the same place in the
+        # next pass, and a fill kept from the broken one would be counted twice.
+        got = self._read_fills([a for a in accounts if a in self.fills_read], self.fills_from, latest)
+        got += self._read_fills(new, self.start_block, latest)
+        self.fills += got
         self.fills_read.update(new)
         self.fills_from = latest + 1
 
-    def _read_fills(self, accounts: list[str], lo: int, latest: int) -> None:
+    def _read_fills(self, accounts: list[str], lo: int, latest: int) -> list[dict]:
+        got = []
         while accounts and lo <= latest:
             hi = min(lo + core.MAX_LOG_WINDOW - 1, latest)
             for i in range(0, len(accounts), ADDRESS_BATCH):
                 for l in c.rpc("eth_getLogs", [{"address": accounts[i:i + ADDRESS_BATCH], "topics": [sk.FILLED],
                                                 "fromBlock": hex(lo), "toBlock": hex(hi)}]):
-                    self.fills.append(fill_of(l, self.time_of(int(l["blockNumber"], 16))))
+                    got.append(fill_of(l, self.time_of(int(l["blockNumber"], 16))))
             lo = hi + 1
+        return got
 
     def transfers_to(self, traders: list[str], latest: int) -> list[dict]:
         """USDC sent to each trader since the deployment (before it is not read: docs/SIM-POOL.md),
         each trader's read once and then from where it stopped."""
         for t in traders:
             lo = self.transfers_from.setdefault(t, self.start_block)
-            got = self.transfers.setdefault(t, [])
+            got = []  # kept once the trader's read is whole, as the fills are
             word = "0x" + "00" * 12 + t[2:].lower()
             while lo <= latest:
                 hi = min(lo + core.MAX_LOG_WINDOW - 1, latest)
@@ -232,6 +274,7 @@ class Checker:
                     got.append({"from": to_checksum_address("0x" + l["topics"][1][-40:]),
                                 "to": to_checksum_address("0x" + l["topics"][2][-40:]), "tx": l["transactionHash"]})
                 lo = hi + 1
+            self.transfers.setdefault(t, []).extend(got)
             self.transfers_from[t] = lo
         return [x for t in traders for x in self.transfers[t]]
 
@@ -294,29 +337,62 @@ class Checker:
         for pool in self.keeper.pools:
             head, count = view(pool, "head()", "uint256"), view(pool, "payoutCount()", "uint256")
             for pid in range(head, count):
+                if (pool, pid) in self.stopped:
+                    continue
                 f = self.check(pool, pid, now, latest)
                 if f is None:
                     continue
                 reason, paired, trades, link_txs = f
                 stop = {"pool": pool, "id": pid, "reason": reason, "paired": paired, "trades": trades, "links": link_txs}
                 log("pair_found", **stop)
+                if not self.still_due(pool, pid):
+                    continue
                 stops.append(stop)
-                self.send(pool, [pid, reason, paired, [bytes.fromhex(t[2:]) for t in trades],
-                                 [bytes.fromhex(t[2:]) for t in link_txs]], STOP, STOP_TYPES)
+                if self.send(pool, [pid, reason, paired, [bytes.fromhex(t[2:]) for t in trades],
+                                    [bytes.fromhex(t[2:]) for t in link_txs]], STOP, STOP_TYPES,
+                             id=pid, reason=reason, paired=paired) or self.dry:
+                    self.stopped.add((pool, pid))
         log("check_done", pools=len(self.keeper.pools), fills=len(self.fills), stops=len(stops))
         return stops
 
-    def send(self, to: str, args: list, sig: str, types: list) -> bool:
+    def still_due(self, pool: str, pid: int) -> bool:
+        """The payout read again right before its stop, at the head's time as it is now: a pass reads for minutes,
+        and in them the payout may have been paid, stopped by another hand, or come within MARGIN_S of its time."""
+        now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
+        p = self.payout(pool, pid)
+        if stop_due(sk.PAYOUT_STATE[p[4]], p[5], p[3], now, self.until_paid(pool)):
+            return True
+        log("stop_not_sent", pool=pool, id=pid, state=sk.PAYOUT_STATE[p[4]], was_stopped=bool(p[5]))
+        return False
+
+    def send(self, to: str, args: list, sig: str, types: list, **fields) -> bool:
         if self.dry:
-            log("would_send", to=to, call=sig.split("(")[0])
+            log("would_send", to=to, call=sig.split("(")[0], **fields)
             return False
         try:
             rcpt = c.transact(self.wallet, to, sig, types, args)
-            log("sent", to=to, call=sig.split("(")[0], tx=rcpt["transactionHash"])
+            log("sent", to=to, call=sig.split("(")[0], **fields, tx=rcpt["transactionHash"])
             return True
         except Exception as exc:
-            log("send_failed", to=to, call=sig.split("(")[0], error=refusal(exc))
+            log("send_failed", to=to, call=sig.split("(")[0], **fields, error=refusal(exc))
             return False
+
+
+def run(ch: Checker, every: float, once: bool, sleep=time.sleep) -> int:
+    """The service: a pass, then `every` seconds, for ever. A pass that fails (the node, mostly) is logged and the next
+    one comes on time; the process never ends on it. --once: one pass, its stops printed, 1 if it failed."""
+    while True:
+        try:
+            stops = ch.one_pass()
+            if once:
+                print(json.dumps(stops))
+        except Exception as exc:
+            log("pass_failed", error=str(exc)[:200])
+            if once:
+                return 1
+        if once:
+            return 0
+        sleep(every)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -324,7 +400,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--deployment", required=True)
     p.add_argument("--wallet", help="the factory's checker; without it nothing is sent")
     p.add_argument("--once", action="store_true")
-    p.add_argument("--every", type=int, default=3_600, help="seconds between passes")
+    p.add_argument("--every", type=int, default=DEFAULT_EVERY_S, help="seconds between passes")
+    p.add_argument("--rpc-gap", type=float, default=RPC_GAP_S, help="seconds between two reads of the node, at least")
     p.add_argument("--window", type=int, default=600, help="seconds two opposite fills may be apart")
     p.add_argument("--size-tolerance", type=float, default=0.2)
     p.add_argument("--lift", metavar="POOL:ID", help="lift the checker's own stop of payout ID of POOL")
@@ -341,22 +418,17 @@ def main(argv: list[str] | None = None) -> int:
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
     wallet = None if dry else c.account(args.wallet)
+    c.rpc = paced(c.rpc, max(0.0, args.rpc_gap))
     sender = wallet.address if wallet else record.get("checker", core.ZERO)
     state = pathlib.Path(args.state) if args.state else sk.STATE_DIR / f"check-{args.deployment}.json"
     ch = Checker(record, wallet, sender, dry, state, args.window, args.size_tolerance)
     if args.lift:
         pool, pid = args.lift.split(":")
-        return 0 if ch.send(to_checksum_address(pool), [int(pid)], "liftStop(uint256)", ["uint256"]) else 1
-    while True:
-        try:
-            print(json.dumps(ch.one_pass()))
-        except Exception as exc:
-            log("pass_failed", error=str(exc)[:200])
-            if args.once:
-                return 1
-        if args.once:
-            return 0
-        time.sleep(args.every)
+        return 0 if ch.send(to_checksum_address(pool), [int(pid)], "liftStop(uint256)", ["uint256"], id=int(pid)) else 1
+    if not args.once:
+        log("checker_started", deployment=args.deployment, sends=not dry, sender=sender, every=args.every,
+            rpc_gap=args.rpc_gap)
+    return run(ch, args.every, args.once)
 
 
 if __name__ == "__main__":

@@ -23,9 +23,10 @@
 #   ops/host/bootstrap.sh --sim-instance <name> <label>
 #
 # adds a simulated pool's instance (docs/SIM-POOL.md): no exchange, so no gateway, no instance keeper and no
-# nginx route. Only colosseum-multi-keeper@<name> runs for it, with the factory's filler. It makes the keeper's
-# directories and writes, when missing, deployment-<name> and keeper-<name>.env; never gateway-<name>.env, whose
-# absence is how ops/host_instances.py and install.sh know the instance has no gateway.
+# nginx route. colosseum-multi-keeper@<name> runs for it, with the factory's filler, and colosseum-sim-checker@<name>,
+# with the factory's checker. It makes the keeper's directories and writes, when missing, deployment-<name> and
+# keeper-<name>.env; never gateway-<name>.env, whose absence is how ops/host_instances.py and install.sh know the
+# instance has no gateway.
 set -euo pipefail
 
 say() { printf 'bootstrap: %s\n' "$*"; }
@@ -212,7 +213,8 @@ fi
 if [ -n "$sim" ]; then
   say "instance $instance: a simulated pool's, no gateway. Put the filler's and the checker's wallets, filler.key/.addr"
   say "  and checker.key/.addr, in /var/lib/colosseum-keeper/instances/$instance/secrets (docs/HOSTING.md, \"A simulated"
-  say "  pool's keeper\") and deploy: install.sh checks them and enables colosseum-multi-keeper@$instance"
+  say "  pool's keeper\") and deploy: install.sh checks them and enables colosseum-multi-keeper@$instance and"
+  say "  colosseum-sim-checker@$instance"
   exit 0
 fi
 say "instance $instance: put its agent keys in /var/lib/colosseum-gw/instances/$instance/keys and its keeper key in"

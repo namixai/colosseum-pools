@@ -17,7 +17,8 @@
 #   7. an instance whose record names a MultiPool has its keeper enabled, colosseum-multi-keeper@<name>
 #      (ops/multi_keeper.py), and the watchdog on it;
 #   8. a simulated pool's instance (a SimPoolFactory, no PoolFactory) has no gateway, no instance keeper and no
-#      nginx route: only colosseum-multi-keeper@<name>, with the factory's filler, both its wallets checked first.
+#      nginx route: only colosseum-multi-keeper@<name>, with the factory's filler, and colosseum-sim-checker@<name>,
+#      with its checker (ops/sim_check.py), both wallets checked first.
 #
 # It makes no key and reads none; the copier it starts moves an instance's agent keys from its keeper to
 # its gateway, and nothing else. Testnet only.
@@ -66,6 +67,7 @@ install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.service" /etc
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.path" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-multi-keeper@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-checker@.service" /etc/systemd/system/
 systemctl daemon-reload
 
 # The further instances, read once: a file that names one badly stops the release here, before nginx
@@ -127,6 +129,7 @@ done <<< "$instances"
 # race for its nonces. It is served as an instance, and its wallet is checked here, or that keeper would start,
 # die on the missing key and restart for ever.
 multis=""
+sims=""
 watched=""
 if [ -n "$first_label" ]; then
   first_multi="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances multi "$first_label")" \
@@ -159,6 +162,8 @@ while read -r name label port; do
       [ "$(lower <<< "$had")" = "$(lower <<< "$address")" ] \
         || fail "instance $name: $own/secrets/$wallet.addr says ${had:-nothing}, its record's $wallet is $address; nothing switched"
     done <<< "$wallets"
+    # Its checker stops a payout with a pair (ops/sim_check.py), from the checker's wallet checked just above.
+    sims+="$name "
   else
     [ -f "$own/secrets/multi-keeper.key" ] && [ -f "$own/secrets/multi-keeper.addr" ] \
       && owned_alone "$own/secrets/multi-keeper.key" colosseum-keeper 600 \
@@ -262,6 +267,11 @@ for name in $multis; do
   systemctl enable --quiet "colosseum-multi-keeper@$name"
   say "instance $name: its pool's keeper is enabled (colosseum-multi-keeper@$name)"
 done
+# A simulated pool's checker, the same way: enabled by its record (both wallets checked above), restarted below.
+for name in $sims; do
+  systemctl enable --quiet "colosseum-sim-checker@$name"
+  say "instance $name: its payouts' checker is enabled (colosseum-sim-checker@$name)"
+done
 units=(colosseum-gateway colosseum-keeper)
 while read -r name _ port; do
   [ -n "$name" ] || continue
@@ -269,6 +279,7 @@ while read -r name _ port; do
   units+=("colosseum-gateway@$name" "colosseum-keeper@$name")
 done <<< "$instances"
 for name in $multis; do units+=("colosseum-multi-keeper@$name"); done
+for name in $sims; do units+=("colosseum-sim-checker@$name"); done
 # An instance whose record no longer names a test publisher, or a MultiPool, has what an earlier release enabled
 # for it stopped: a keeper left running would go on sending to the pool it loaded, a copier would watch for nothing.
 while read -r name _ port; do
@@ -292,6 +303,12 @@ while read -r name _ port; do
     if systemctl is-enabled --quiet "colosseum-multi-keeper@$name" 2>/dev/null; then
       systemctl disable --quiet --now "colosseum-multi-keeper@$name"
       say "instance $name: no MultiPool in its record now; its keeper is stopped"
+    fi ;;
+  esac
+  case " $sims " in *" $name "*) ;; *)
+    if systemctl is-enabled --quiet "colosseum-sim-checker@$name" 2>/dev/null; then
+      systemctl disable --quiet --now "colosseum-sim-checker@$name"
+      say "instance $name: no simulated pool in its record now; its checker is stopped"
     fi ;;
   esac
 done <<< "$instances"

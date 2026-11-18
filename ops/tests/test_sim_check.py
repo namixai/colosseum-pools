@@ -140,6 +140,7 @@ class TheService(unittest.TestCase):
         ch.fills_from, ch.fills_read = 10, set()
         ch.settled, ch.started, ch.window_s = set(), {}, 600
         ch.approvals = Before()
+        ch.stopped = set()
         return ch
 
     def test_an_account_found_later_has_its_fills_read_from_the_start(self):
@@ -346,6 +347,294 @@ class TheService(unittest.TestCase):
             self.assertEqual(s.Checker.check(ch, pool, 0, 0, 0), (1, Bx, ["0x0a", "0x0b"], []))
             extra = [{"from": W, "to": T1, "tx": "0xw1"}, {"from": W, "to": T2, "tx": "0xw2"}]
             self.assertEqual(s.Checker.check(ch, pool, 0, 0, 0), (2, Bx, ["0x0a", "0x0b"], ["0xw1", "0xw2"]))
+
+
+
+class Node:
+    """A node of one pool with one payout claimed: the stage S paid, B on the other side of every fill of S. It
+    answers what the checker reads; `down` makes every call fail as a node does that is not there."""
+
+    def __init__(self, pairs=True):
+        self.pool, self.S, self.B, self.T1, self.T2 = (s.to_checksum_address("0x" + x * 20)
+                                                       for x in ("55", "a1", "b1", "71", "72"))
+        self.latest, self.now, self.due = 100, 50_000, 300_000
+        # account, block, is a buy; a block's time is 1000 + 10 a block.
+        self.fills = [(self.S, 30, True), (self.B, 31, not pairs)]
+        # account, trader, claimed, due, state (1 Due, 2 Stopped), was stopped, paid at, approved
+        self.payouts = [[self.S, self.T1, 800, self.due, 1, False, 0, False]]
+        self.down = False
+        self.calls = 0
+        self.sent = []
+
+    def rpc(self, method, params=()):
+        self.calls += 1
+        if self.down:
+            raise RuntimeError("connection refused")
+        if method == "eth_blockNumber":
+            return hex(self.latest)
+        if method == "eth_getBlockByNumber":
+            return {"timestamp": hex(self.now if params[0] == "latest" else 1_000 + 10 * int(params[0], 16))}
+        if method != "eth_getLogs":
+            return None  # a view or a send: answered by the methods below
+        q = params[0]
+        if q["topics"][0] != s.sk.FILLED:
+            return []  # no USDC moved: reason 1
+        return [{"address": a, "blockNumber": hex(b), "transactionHash": "0x%064x" % b,
+                 "topics": [s.sk.FILLED, "0x%064x" % 3],
+                 "data": "0x" + encode(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"],
+                                       [buy, 100, 0, 0, 0, 0]).hex()}
+                for a, b, buy in self.fills
+                if a in q["address"] and int(q["fromBlock"], 16) <= b <= int(q["toBlock"], 16)]
+
+    def view(self, to, sig, out="uint256", types=(), args=()):
+        self.rpc("eth_call")
+        return {"head()": 0, "payoutCount()": len(self.payouts), "stepStartedAt()": 1_000,
+                "payout(uint256)": tuple(self.payouts[args[0]]) if args else None}[sig]
+
+    def call_view(self, to, sig, types, args, out):
+        self.rpc("eth_call")
+        if sig == "approver()":
+            return ("0x" + "99" * 20,)  # a pool with payout approval
+        if sig == "result()":
+            return (2, self.T2, 0, 0)
+        return (2, 1, False)  # accountOf: not done
+
+    def transact(self, wallet, to, sig, types, args):
+        self.rpc("eth_sendRawTransaction")
+        self.sent.append((to, sig, args))
+        self.payouts[args[0]][4:6] = [2, True]  # the pool holds it stopped, and stopped once
+        return {"transactionHash": "0x" + "ee" * 32}
+
+
+class TheLoop(unittest.TestCase):
+    """The service: passes on a node that answers, fails and comes back, with a key and without one."""
+
+    def checker(self, node, dry=False):
+        import tempfile
+        from types import SimpleNamespace
+        state = pathlib.Path(tempfile.mkdtemp()) / "check.json"
+        record = {"SimPoolFactory": "0x" + "fa" * 20, "usdc": "0x" + "dd" * 20, "block": 10}
+        ch = s.Checker(record, None if dry else object(), "0x" + "c1" * 20, dry, state)
+        ch.keeper = SimpleNamespace(pools=[node.pool], next_block=node.latest + 1, scan=lambda latest: None,
+                                    accounts={node.S: {"pool": node.pool, "kind": "stage"},
+                                              node.B: {"pool": node.pool, "kind": "exam"}})
+        return ch
+
+    def on(self, node):
+        from contextlib import ExitStack
+        from unittest import mock
+        stack = ExitStack()
+        stack.enter_context(mock.patch.object(s.c, "rpc", side_effect=node.rpc))
+        stack.enter_context(mock.patch.object(s, "view", side_effect=node.view))
+        stack.enter_context(mock.patch.object(s.c, "call_view", side_effect=node.call_view))
+        stack.enter_context(mock.patch.object(s.c, "transact", side_effect=node.transact))
+        self.lines = []
+        stack.enter_context(mock.patch.object(s, "log", side_effect=lambda event, **f: self.lines.append({"event": event, **f})))
+        return stack
+
+    def events(self, name):
+        return [l for l in self.lines if l["event"] == name]
+
+    def test_a_payout_with_a_pair_is_stopped_once_and_the_line_says_which_why_and_the_hash(self):
+        node = Node()
+        ch = self.checker(node)
+        with self.on(node):
+            stops = ch.one_pass()
+            self.assertEqual([(x["id"], x["reason"], x["paired"]) for x in stops], [(0, 1, node.B)])
+            self.assertEqual(len(node.sent), 1)
+            to, sig, args = node.sent[0]
+            self.assertEqual((to, sig, args[:3]), (node.pool, s.STOP, [0, 1, node.B]))
+            sent = self.events("sent")
+            self.assertEqual(len(sent), 1)
+            self.assertEqual({k: sent[0][k] for k in ("to", "call", "id", "reason", "paired", "tx")},
+                             {"to": node.pool, "call": "stopPayout", "id": 0, "reason": 1, "paired": node.B,
+                              "tx": "0x" + "ee" * 32})
+            self.assertEqual(self.events("check_done")[-1]["stops"], 1)
+            # The next pass: the pool holds it stopped, and the checker remembers it. Nothing is sent.
+            self.assertEqual(ch.one_pass(), [])
+            self.assertEqual(len(node.sent), 1)
+            self.assertEqual(self.events("check_done")[-1]["stops"], 0)
+
+    def test_a_payout_it_stopped_is_not_taken_up_again_even_before_the_pool_shows_it(self):
+        node = Node()
+        ch = self.checker(node)
+        with self.on(node):
+            ch.one_pass()
+            node.payouts[0][4:6] = [1, False]  # a node behind the head that saw no stop yet
+            self.assertEqual(ch.one_pass(), [])
+        self.assertEqual(len(node.sent), 1)
+
+    def test_a_payout_lifted_by_hand_is_never_stopped_again(self):
+        node = Node()
+        ch = self.checker(node)
+        with self.on(node):
+            ch.one_pass()
+            ch.stopped.clear()  # a restarted service
+            node.payouts[0][4:6] = [1, True]  # lifted: waiting again, stopped once
+            self.assertEqual(ch.one_pass(), [])
+        self.assertEqual(len(node.sent), 1, "the pool's one stop a payout, and the checker's own rule")
+
+    def test_no_pair_no_stop(self):
+        node = Node(pairs=False)
+        ch = self.checker(node)
+        with self.on(node):
+            self.assertEqual(ch.one_pass(), [])
+        self.assertEqual(node.sent, [])
+        self.assertEqual(self.events("pair_found"), [])
+
+    def test_the_payout_is_read_again_before_the_stop_and_one_stopped_meanwhile_is_left(self):
+        node = Node()
+        ch = self.checker(node)
+        real = ch.check
+
+        def check(pool, pid, now, latest):
+            got = real(pool, pid, now, latest)
+            node.payouts[pid][4:6] = [2, True]  # another hand stopped it while this pass read
+            return got
+
+        ch.check = check
+        with self.on(node):
+            self.assertEqual(ch.one_pass(), [])
+        self.assertEqual(node.sent, [])
+        self.assertEqual([(l["id"], l["state"]) for l in self.events("stop_not_sent")], [(0, "Stopped")])
+
+    def test_without_a_key_it_only_says_what_it_would_send_and_says_it_once(self):
+        node = Node()
+        ch = self.checker(node, dry=True)
+        with self.on(node):
+            self.assertEqual(len(ch.one_pass()), 1)
+            ch.one_pass()
+        self.assertEqual(node.sent, [])
+        would = self.events("would_send")
+        self.assertEqual([(l["to"], l["call"], l["id"], l["reason"]) for l in would], [(node.pool, "stopPayout", 0, 1)])
+        self.assertEqual(self.events("sent"), [])
+
+    def test_a_stop_that_failed_is_tried_again_in_the_next_pass(self):
+        node = Node()
+        ch = self.checker(node)
+        real = node.transact
+        failures = [RuntimeError("execution reverted")]
+
+        def transact(*a):
+            if failures:
+                raise failures.pop()
+            return real(*a)
+
+        node.transact = transact
+        with self.on(node):
+            ch.one_pass()
+            self.assertEqual([l["id"] for l in self.events("send_failed")], [0])
+            self.assertEqual(ch.stopped, set())
+            ch.one_pass()
+        self.assertEqual(len(node.sent), 1)
+
+    def test_a_node_that_fails_skips_the_pass_the_process_lives_and_the_next_pass_stops_it(self):
+        node = Node()
+        ch = self.checker(node)
+        sleeps = []
+
+        class Enough(Exception):
+            pass
+
+        def sleep(t):
+            sleeps.append(t)
+            if len(sleeps) == 1:
+                node.down = False  # the node is back for the second pass
+            if len(sleeps) == 2:
+                raise Enough
+
+        node.down = True
+        with self.on(node), mock_print():
+            with self.assertRaises(Enough):
+                s.run(ch, 600, once=False, sleep=sleep)
+        self.assertEqual(sleeps, [600, 600], "the next pass on time, not at once")
+        self.assertEqual(len(self.events("pass_failed")), 1)
+        self.assertIn("connection refused", self.events("pass_failed")[0]["error"])
+        self.assertEqual(len(node.sent), 1, "the second pass stopped it")
+
+    def test_a_read_the_node_breaks_off_is_read_again_whole_and_nothing_is_counted_twice(self):
+        node = Node()
+        ch = self.checker(node)
+        node.latest = 200  # four windows of 50 blocks
+        node.fills.append((node.S, 180, True))
+        real = node.rpc
+        state = {"n": 0}
+
+        def rpc(method, params=()):
+            if method == "eth_getLogs" and params[0]["topics"][0] == s.sk.FILLED:
+                state["n"] += 1
+                if state["n"] == 3:
+                    raise RuntimeError("timeout")
+            return real(method, params)
+
+        node.rpc = rpc
+        with self.on(node):
+            with self.assertRaises(RuntimeError):
+                ch.read_fills(200)
+            self.assertEqual((ch.fills, ch.fills_from, ch.fills_read), ([], 10, set()), "nothing kept of it")
+            ch.read_fills(200)
+        self.assertEqual(sorted(f["tx"] for f in ch.fills), ["0x%064x" % b for b in (30, 31, 180)])
+
+    def test_once_prints_the_stops_and_says_a_failed_pass_by_its_code(self):
+        node = Node()
+        ch = self.checker(node, dry=True)
+        with self.on(node), mock_print() as out:
+            self.assertEqual(s.run(ch, 600, once=True, sleep=lambda t: self.fail("--once never sleeps")), 0)
+        self.assertEqual([x["id"] for x in json.loads(out.getvalue())], [0])
+        node.down = True
+        with self.on(node), mock_print():
+            self.assertEqual(s.run(self.checker(node, dry=True), 600, once=True, sleep=lambda t: None), 1)
+
+    def test_the_service_never_lifts_a_stop(self):
+        src = (ROOT / "ops" / "sim_check.py").read_text()
+        body = src[src.index("class Checker"):src.index("def main(")]
+        self.assertNotIn("liftStop", body, "the lift is a command a person runs (--lift), never the loop's")
+        self.assertEqual(src.count('"liftStop(uint256)"'), 1)
+        self.assertIn("if args.lift:", src[src.index("def main("):])
+
+
+class ThePace(unittest.TestCase):
+    def test_reads_are_spaced_by_the_gap_from_the_end_of_the_last(self):
+        clock = [100.0]
+        waits = []
+
+        def sleep(t):
+            waits.append(round(t, 6))
+            clock[0] += t
+
+        def rpc(method, params=()):
+            clock[0] += 0.25  # the node takes a quarter of a second
+            return method
+
+        call = s.paced(rpc, 1.0, clock=lambda: clock[0], sleep=sleep)
+        self.assertEqual(call("a"), "a")
+        call("b")
+        clock[0] += 3
+        call("c")
+        self.assertEqual(waits, [1.0], "the first at once, the second a second after the first ended, the third late enough")
+
+    def test_a_failed_read_counts_for_the_pace_too(self):
+        clock, waits = [0.0], []
+
+        def rpc(method, params=()):
+            raise RuntimeError("429")
+
+        call = s.paced(rpc, 2.0, clock=lambda: clock[0], sleep=waits.append)
+        for _ in range(2):
+            with self.assertRaises(RuntimeError):
+                call("x")
+        self.assertEqual(waits, [2.0])
+
+    def test_the_defaults(self):
+        self.assertEqual(s.DEFAULT_EVERY_S, 600)
+        self.assertLessEqual(s.DEFAULT_EVERY_S + 3_600, 72 * 3_600, "a pass, even a slow one, comes long before 72 hours")
+        self.assertEqual(s.RPC_GAP_S, 1.0)
+
+
+def mock_print():
+    import contextlib
+    import io
+    return contextlib.redirect_stdout(io.StringIO())
 
 
 if __name__ == "__main__":

@@ -825,6 +825,77 @@ class SimulatedPoolHost(unittest.TestCase):
         self.assertLess(tail.index("exit 0\nfi\nsay \"instance $instance: put its agent keys"), len(tail))
 
 
+
+class SimulatedPoolChecker(unittest.TestCase):
+    """A simulated pool's checker on the host (ops/sim_check.py): its unit beside the pool's keeper, with the
+    checker's key alone, and what install.sh enables, restarts and stops for it."""
+
+    UNIT = HOST / "colosseum-sim-checker@.service"
+
+    def test_its_unit_is_the_pool_keepers_with_its_own_program_key_state_and_pace(self):
+        multi = Units.directives(HOST / "colosseum-multi-keeper@.service")
+        checker = Units.directives(self.UNIT)
+        # The same user, sandbox, env files and view of instances/ as the keeper; its own program, a minute between
+        # restarts, its instance's filler hidden from it, and no directory of made keys.
+        only_keeper = sorted(set(multi) - set(checker))
+        only_checker = sorted(set(checker) - set(multi))
+        self.assertEqual([l.split("=", 1)[0] for l in only_keeper],
+                         ["BindPaths", "Description", "Environment", "ExecStart", "RestartSec"], only_keeper)
+        self.assertEqual([l.split("=", 1)[0] for l in only_checker],
+                         ["Description", "ExecStart", "InaccessiblePaths", "RestartSec"], only_checker)
+        for line in ("User=colosseum-keeper", "Restart=always", "ProtectSystem=strict", "NoNewPrivileges=true",
+                     "ReadWritePaths=/var/lib/colosseum-keeper", "EnvironmentFile=/etc/colosseum/keeper-%i.env",
+                     "EnvironmentFile=/etc/colosseum/deployment-%i.env", "TemporaryFileSystem=/var/lib/colosseum-keeper/instances:ro",
+                     "BindReadOnlyPaths=/var/lib/colosseum-keeper/instances/%i", "RestartSec=60", "WantedBy=multi-user.target"):
+            self.assertIn(line, checker)
+        self.assertIn("InaccessiblePaths=-/var/lib/colosseum-keeper/instances/%i/secrets/"
+                      f"{hi.FILLER_WALLET}.key", checker)
+        # The deployment env file is read last: the record's node wins, as for the keeper.
+        envs = [l for l in checker if l.startswith("EnvironmentFile=")]
+        self.assertEqual(envs[-1], "EnvironmentFile=/etc/colosseum/deployment-%i.env")
+
+    def test_it_runs_the_checker_with_the_checkers_key_and_its_own_state(self):
+        start = next(l for l in Units.directives(self.UNIT) if l.startswith("ExecStart="))
+        self.assertIn("/opt/colosseum-pools/venv/bin/python -m ops.sim_check --deployment ${COLOSSEUM_DEPLOYMENT} ", start)
+        self.assertIn(f" --wallet {hi.CHECKER_WALLET} ", start)
+        self.assertIn("--state /var/lib/colosseum-keeper/check-${COLOSSEUM_DEPLOYMENT}.json", start)
+        multi = next(l for l in Units.directives(HOST / "colosseum-multi-keeper@.service") if l.startswith("ExecStart="))
+        self.assertNotIn("check-", multi, "one state file a process")
+        for never in ("--once", "--lift", "--dry-run", f"--wallet {hi.FILLER_WALLET}", "--confirm-mainnet"):
+            self.assertNotIn(never, start)
+        # Only flags the service loop has read since before this unit: a release rolled back to still starts it.
+        flags = re.findall(r" (--[a-z-]+)", start)
+        self.assertEqual(flags, ["--deployment", "--wallet", "--state", "--every"])
+        self.assertIn("--every 600", start)
+        from ops import sim_check
+        self.assertEqual(sim_check.DEFAULT_EVERY_S, 600)
+
+    def test_install_enables_restarts_and_stops_it_by_the_record(self):
+        install = (HOST / "install.sh").read_text()
+        self.assertIn('install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-checker@.service" /etc/systemd/system/\n'
+                      "systemctl daemon-reload", install)
+        check = install.index('-m ops.host_instances multi "$label"')
+        guard = install[check:install.index('multis+="$name "')]
+        # Counted only once both its wallets, the checker's among them, are the record's, and only for a simulated pool.
+        self.assertLess(guard.index('done <<< "$wallets"'), guard.index('    sims+="$name "\n'))
+        self.assertLess(guard.index('if [ -n "$wallets" ]; then'), guard.index('    sims+="$name "\n'))
+        self.assertLess(guard.index('    sims+="$name "\n'), guard.index("  else\n"))
+        self.assertLess(check, install.index("site=/etc/nginx/conf.d/pools-api.conf"))
+        enable = install.index('systemctl enable --quiet "colosseum-sim-checker@$name"')
+        self.assertLess(install.index('ln -sfn "releases/$sha"'), enable)
+        self.assertLess(enable, install.index('for unit in "${units[@]}"; do'))
+        self.assertIn('for name in $sims; do units+=("colosseum-sim-checker@$name"); done\n', install)
+        stop = install.index('systemctl disable --quiet --now "colosseum-sim-checker@$name"')
+        self.assertIn('case " $sims " in *" $name "*) ;; *)', install[stop - 300:stop])
+        self.assertLess(stop, install.index("units+=(colosseum-shared-keeper)"))
+
+    def test_bootstrap_names_it_for_a_simulated_instance(self):
+        boot = (HOST / "bootstrap.sh").read_text()
+        tail = boot[boot.index('if [ -n "$sim" ]; then\n  say'):]
+        self.assertIn("colosseum-sim-checker@$instance", tail[:tail.index("exit 0")])
+        self.assertIn("checker.key/.addr", tail[:tail.index("exit 0")])
+
+
 class Bootstrap(unittest.TestCase):
     def env_of(self, name: str) -> list[str]:
         boot = (HOST / "bootstrap.sh").read_text()

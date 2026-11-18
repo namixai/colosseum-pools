@@ -772,7 +772,8 @@ the day's snapshots, `breach`, `expire`, `release`, `claimPayout` and `pay`. Its
 (`keeper_nodes`), and `deployment-<name>.env` has no gateway line.
 
 It sends with the factory's **filler**, the one key whose fills the exams take; any other key would only log.
-The **checker**, the one key that may stop a payout, is kept beside it for `ops/sim_check.py`, which runs by hand with it until it has a unit of its own. They are two
+The **checker**, the one key that may stop a payout, is kept beside it for `colosseum-sim-checker@<name>` ("A simulated
+pool's checker", below). They are two
 keys, as the factory requires, and each is the address the record names (`filler`, `checker`, written by
 `ops/deploy_sim.py`).
 
@@ -796,6 +797,63 @@ Before it switches, `install.sh` stops the release if any of these does not hold
 no gateway and no instance keeper for the instance, and stops any that an earlier release left enabled. The
 watchdogs of a gateway and an instance keeper are not put in for it. demo2 and demo3 have gateways and change in
 nothing.
+
+### A simulated pool's checker
+
+`colosseum-sim-checker@<name>` runs `ops/sim_check.py` for the same instance, with the factory's **checker**. Every
+600 seconds it makes the pass that `--once` makes by hand: it reads the fills of every exam and stage of the factory
+and, for each payout still waiting, looks for the pair of docs/SIM-POOL.md ("The checker"): a fill of the paid
+stage against an opposite fill of another account, close in time and size (reason 1), or that with the two traders'
+wallets linked by USDC (reason 2). For each one it sends `stopPayout` from the checker's key, with the reason, the
+other account and the fills' hashes.
+
+What it does by itself, and only that:
+
+- it stops a payout only with a pair, and only while the pool takes the stop (a pool with payout approval until
+  the payout is paid; one from before approvals until 5 minutes before it is due);
+- it reads the payout again, at the head as it is then, right before it sends, and sends nothing if it was paid or
+  stopped meanwhile (`stop_not_sent`);
+- it stops a payout once: one it stopped is never taken up again, and the pool itself takes one stop a payout.
+  A stop that failed is tried again in the next pass;
+- a pass the node fails is logged and skipped; the next one comes on time, and what the failed pass read is read
+  again whole. Its reads are at least a second apart, so it never takes more than about sixty a minute of the
+  node it shares with the keeper.
+
+What it never does: lift a stop, stop for any reason but a pair (a result disputed without one, reason 3, and
+prohibited play, reason 4, need a written analysis and are sent by a person), approve a payout, or send with any
+key but the checker's. Its unit cannot read the instance's filler key, nor any other instance's keys. It runs on
+testnet alone: the unit passes no `--confirm-mainnet`, so on mainnet it would refuse to start.
+
+`install.sh` installs the unit with the others. For an instance whose record is a simulated pool's it checks both
+wallets against the record before it switches ("A simulated pool's keeper", above), then enables the checker and
+restarts it with the keeper; for an instance whose record is no longer a simulated pool's it stops it. A release
+is updated and rolled back the way the keeper is, by deploying a commit. The unit passes only the flags the
+checker has read since before it had a unit, so a release rolled back to still starts it; a release from before
+the unit does not touch it, so on such a rollback it is stopped by hand if it should not run:
+`sudo systemctl disable --now colosseum-sim-checker@<name>`. Its state, the scan of the factory's pools and
+accounts, is `/var/lib/colosseum-keeper/check-<label>.json`; removed, the next start reads the factory from its
+deployment's block again.
+
+Its log, one JSON line an event:
+
+    journalctl -u colosseum-sim-checker@<name> -f
+
+- `checker_started`: the deployment, whether it sends (`sends`), the key's address, the pace;
+- `check_done`: one a pass, with the pools, the fills it holds and the stops of that pass;
+- `pair_found`: the pool, the payout's `id`, the `reason`, the `paired` account, the fills' and links' hashes;
+- `sent`: a stop sent, with the pool (`to`), the payout's `id`, the `reason`, the `paired` account and the
+  transaction's hash `tx`; `would_send` the same with no key, nothing sent; `send_failed` with the pool's refusal;
+- `stop_not_sent`: a pair found on a payout that was paid or stopped by the time it was read again;
+- `pass_failed`: a pass the node broke off, with its error; the next one comes in 600 seconds.
+
+A stop that was wrong is lifted by a person, from the same key, within 14 days of the stop (a stop not lifted by
+then is final). `--lift` sends `liftStop` for the payout `<id>` of the pool `<pool>`:
+
+    cd /opt/colosseum-pools/current && sudo -u colosseum-keeper bash -c 'set -a; . /etc/colosseum/keeper-<name>.env
+        . /etc/colosseum/deployment-<name>.env; set +a; exec /opt/colosseum-pools/venv/bin/python -m ops.sim_check \
+        --deployment "$COLOSSEUM_DEPLOYMENT" --wallet checker --lift <pool>:<id>'
+
+The checker does not stop that payout again: the pool counts it as stopped once.
 
 ## The shared pool's keeper
 
