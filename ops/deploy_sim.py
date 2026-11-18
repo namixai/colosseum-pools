@@ -115,8 +115,8 @@ HYPE = 10**18
 # (SimPoolFactory.creationFee, which its operator may change after: `fee`). Mainnet's is the platform's 1 HYPE;
 # testnet's 0.1, so a rehearsal on test HYPE opens a pool (18 November 2026).
 CREATION_FEES = {"mainnet": HYPE, "testnet": HYPE // 10}
-# The factory takes any fee above zero, with no cap. On mainnet a fee above this also wants --confirm-large-fee: a
-# zero too many is caught here, before anything is sent, not by the contract.
+# The factory takes any fee above zero, with no cap. On mainnet a fee above this also wants --confirm-large-fee,
+# asked before anything is sent: a fee of more than 10 HYPE, not every slip (1 HYPE typed as 10 asks nothing).
 LARGE_FEE = 10 * HYPE
 PAYOUT_BPS = 800
 LOCKED_PAYOUTS = 2
