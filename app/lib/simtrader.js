@@ -35,7 +35,12 @@ export const SIM_TRADER_ABI = [
   "error NotPassed()",
   "error TooLate()",
   "error StillRunning()",
+  "error TooMuch()",
 ];
+
+/** The call that sends the money the pool set aside for the caller (SimPool.sol: all of `heldOf(msg.sender)`, to `to`).
+ *  `heldOf` and the event `HeldClaimed` are in SIM_POOL_ABI (app/lib/simpool.js). */
+export const HELD_ABI = ["function claimHeld(address to)"];
 
 /** SimPool.Kind: what `accountOf(account).kind` says. */
 export const KIND = Object.freeze({ none: 0, exam: 1, stage: 2 });
@@ -197,7 +202,7 @@ export function tradeTarget(rows) {
  * gave, or null where that was not read. The sum is the payout's own: the pool wrote it when the payout was requested.
  * A time is only ever "not before": the money moves when the contract's rules and the pool's money allow, never at an hour.
  */
-export function payoutLine(p, now, reason = null) {
+export function payoutLine(p, now, reason = null, heldLeft = true) {
   const base = { id: p.id, account: p.account, amountText: dollars(p.amount) };
   // The contract's words end without a full stop: one is put where the sentence goes on.
   const said = reason == null ? "The reason is recorded on chain with the stop" : stopReasonText(reason);
@@ -224,8 +229,12 @@ export function payoutLine(p, now, reason = null) {
       return { ...base, key: "stopped", label: "Refused", when: null,
         note: `${why} The stop was not lifted within ${span(STOP_RESERVE)}: the refusal is final.` };
     case "held":
+      // `claimHeld` sends everything set aside for the wallet at once and the payout keeps its state, so a row cannot say it
+      // was claimed: it says what is true of the wallet, whether anything is still set aside for it.
       return { ...base, key: "held", label: "Set aside", when: null,
-        note: "The token refused the transfer. The money is set aside for you in the pool." };
+        note: heldLeft
+          ? "The token refused the transfer. The money was set aside for you in the pool; Claim above takes what is still set aside."
+          : "The token refused the transfer. The money was set aside for you in the pool, and nothing is set aside for this wallet now." };
     default:
       return { ...base, key: "none", label: "Unknown", when: null, note: "The pool answered a state this page has no words for." };
   }
@@ -233,10 +242,10 @@ export function payoutLine(p, now, reason = null) {
 
 /** The wallet's payouts, newest first, from the pool's `payout(id)` for each id (`structs`, in id order) and the reasons
  *  of the stops that were read (`reasons`: a Map from a payout's id to the number). */
-export function payoutRows({ structs, wallet, now, reasons = new Map() }) {
+export function payoutRows({ structs, wallet, now, reasons = new Map(), heldLeft = true }) {
   return payouts(structs, [], now, new Map())
     .filter((p) => String(p.trader).toLowerCase() === String(wallet).toLowerCase())
-    .map((p) => payoutLine(p, now, reasons.get(p.id) ?? null))
+    .map((p) => payoutLine(p, now, reasons.get(p.id) ?? null, heldLeft))
     .reverse();
 }
 
@@ -255,6 +264,7 @@ export function traderRefusal(name) {
     case "NotPassed": return "It has not been passed.";
     case "TooLate": return `The time to start the stage is over.`;
     case "StillRunning": return "It is still running.";
+    case "TooMuch": return "Nothing is set aside for this wallet.";
     default: return "";
   }
 }
@@ -301,11 +311,34 @@ function readyRowHtml(r) {
     + `<div class="sp-c wide"><div class="sp-why">Passed, not requested yet. The pool writes the payout when you request it.</div></div></div>`;
 }
 
-/** My payouts: the stages ready to be requested, then the payouts the pool holds for the wallet. */
-export function payoutsHtml({ ready, rows }) {
+const ZERO_ADDRESS = /^0x0{40}$/i;
+
+/** Where the money set aside is sent: the address typed, which is the wallet's own until it is changed. `{ to }`, or
+ *  `{ error }` in words for a text that is no address or is the zero address (the token would refuse it). */
+export function claimTarget(text) {
+  const to = String(text ?? "").trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(to) || ZERO_ADDRESS.test(to)) return { error: "Enter the address to send it to: 0x and 40 characters." };
+  return { to };
+}
+
+/** What the pool set aside for the wallet, and the button that sends it. Nothing at all where nothing is set aside. */
+export function heldHtml({ amount, wallet }) {
+  if (amount === undefined || amount === null || BigInt(amount) === 0n) return "";
+  const sum = dollars(amount);
+  return `<div class="sp-box sp-list" id="held"><div class="sp-bh"><b>Set aside for this wallet · ${esc(sum)}</b>`
+    + `<span>from the pool's contract</span></div>`
+    + `<div class="sp-row held"><div class="sp-c wide"><div class="sp-why">A transfer to this wallet was refused by the token, so the pool set the money aside for it. `
+    + `Claim sends all of it to the address below.</div></div>`
+    + `<label class="sp-c wide sp-to"><span>Send to</span><input id="sim-held-to" type="text" spellcheck="false" autocomplete="off" value="${esc(wallet)}"></label>`
+    + `<div class="sp-c go"><button type="button" class="sp-act" data-held="1">Claim ${esc(sum)}</button></div></div></div>`;
+}
+
+/** My payouts: what is set aside for the wallet, the stages ready to be requested, then the payouts the pool holds for it. */
+export function payoutsHtml({ ready, rows, held = 0n, wallet = "" }) {
+  const box = heldHtml({ amount: held, wallet });
   const head = `<div class="sp-rowhead pay"><span>Payout</span><span>State</span><span>Amount</span><span>When</span><span></span></div>`;
   const body = ready.map(readyRowHtml).join("") + rows.map(payoutRowHtml).join("");
-  return `<div class="sp-box sp-list" id="payouts"><div class="sp-bh"><b>My payouts · ${ready.length + rows.length}</b>`
+  return box + `<div class="sp-box sp-list" id="payouts"><div class="sp-bh"><b>My payouts · ${ready.length + rows.length}</b>`
     + `<span>from the pool's contract · a time is "not before", never an hour</span></div>`
     + (body ? head + body : `<p class="sp-empty">No payout is held for this wallet, and no passed stage waits for its request.</p>`)
     + `</div>`;

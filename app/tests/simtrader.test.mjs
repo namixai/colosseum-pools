@@ -10,8 +10,9 @@ import { readFileSync } from "node:fs";
 import {
   ACCOUNT_ABI, SIM_TRADER_ABI, KIND, SCAN_BLOCKS, scanPlan, canLookBack, scanNote, candidatesOf, span, accountState,
   accountRows, lineInfo, tradeTarget, payoutLine, payoutRows, requestable, traderRefusal, remembered, remember, examsHtml,
-  payoutsHtml, noteHtml,
+  payoutsHtml, noteHtml, HELD_ABI, claimTarget,
 } from "../lib/simtrader.js";
+import { SIM_POOL_ABI } from "../lib/simpool.js";
 import { panelOf } from "../lib/simpanel.js";
 import { menu } from "./fixtures/simlines.mjs";
 
@@ -301,7 +302,7 @@ test("the stylesheet's braces balance: an unclosed block swallows every rule aft
 test("the calls' buttons come back after the lists are read again, worked or not; a stop's reason is read no further than the newest block", () => {
   const view = read("../views/simtrader.js");
   const body = view.slice(view.indexOf("function wireCalls"), view.indexOf("// ── Trade"));
-  assert.match(body, /await again\(\);[\s\S]*finally \{\s*st\.flight = false;\s*page\.querySelectorAll\("button\[data-fund\], button\[data-claim\]"\)\.forEach\(\(b\) => \{ b\.disabled = false; \}\);/);
+  assert.match(body, /await again\(\);[\s\S]*finally \{\s*st\.flight = false;\s*page\.querySelectorAll\("button\[data-fund\], button\[data-claim\], button\[data-held\]"\)\.forEach\(\(b\) => \{ b\.disabled = false; \}\);/);
   assert.match(view, /toBlock: Math\.min\(latest, block \+ SCAN_WINDOW - 1\)/);
   assert.ok(!/canLookBack\(st\.loaded, st\.floor\) \|\| st\.flight/.test(view), "a call in flight does not leave the look-back button off for good");
 });
@@ -349,4 +350,73 @@ test("the lists take their narrow layout before their columns stop fitting", () 
   assert.ok(widths + 48 <= 1100 + 48 && 1100 >= widths, `${widths}`);
   const payout = [120 + 190 + 120 + 300, 4 * 10, 2 * 18, 250].reduce((x, y) => x + y);
   assert.ok(1100 >= payout - 0 || payout <= 1100 + 48, `${payout}`);
+});
+
+// ── money the token refused: heldOf and claimHeld ───────────────────────────────────────────────────────────
+
+test("the held-money calls are the contract's own: a public mapping, a call that sends all of the caller's to an address they name, and its event", () => {
+  const pool = ROOT("src/sim/SimPool.sol");
+  assert.match(pool, /mapping\(address holder => uint256\) public heldOf;/);
+  assert.match(pool, /function claimHeld\(address to\) external \{\s*uint256 amount = heldOf\[msg\.sender\];\s*if \(amount == 0\) revert TooMuch\(\);/);
+  assert.match(pool, /event HeldClaimed\(address indexed trader, address indexed to, uint256 amount\);/);
+  assert.match(pool, /error TooMuch\(\);/);
+  assert.deepEqual(HELD_ABI, ["function claimHeld(address to)"]);
+  for (const l of ["function heldOf(address holder) view returns (uint256)", "event HeldClaimed(address indexed trader, address indexed to, uint256 amount)"]) {
+    assert.ok(SIM_POOL_ABI.includes(l), `${l} is declared once, in the pool's ABI`);
+  }
+  // A payout the token refused is Held, and counts into the wallet's `heldOf`.
+  assert.match(pool, /p\.state = PayoutState\.Held;\s*held \+= p\.amount;\s*heldOf\[p\.trader\] \+= p\.amount;/);
+});
+
+test("a wallet with money set aside sees its sum and Claim, to its own address until it is changed; a wallet with none sees neither", () => {
+  const html = payoutsHtml({ ready: [], rows: [], held: 12_500_000n, wallet: WALLET });
+  assert.match(html, /Set aside for this wallet · \$12\.5/);
+  assert.match(html, /<button type="button" class="sp-act" data-held="1">Claim \$12\.5/);
+  assert.match(html, new RegExp(`id="sim-held-to"[^>]*value="${WALLET}"`));
+  assert.match(html, /refused by the token, so the pool set the money aside for it/);
+  assert.ok(html.indexOf('id="held"') < html.indexOf('id="payouts"'), "above the payouts");
+  for (const none of [payoutsHtml({ ready: [], rows: [] }), payoutsHtml({ ready: [], rows: [], held: 0n, wallet: WALLET }), payoutsHtml({ ready: [], rows: payoutRows({ structs: [struct({ state: 4 })], wallet: WALLET, now: NOW, heldLeft: false }), held: 0n, wallet: WALLET })]) {
+    assert.ok(!/data-held|Claim|sim-held-to|Set aside for this wallet/.test(none), "no button where nothing is set aside");
+  }
+  assert.match(payoutsHtml({ ready: [], rows: [], held: 5n, wallet: WALLET }), /Claim \$0\.000005/, "the sum is exact");
+});
+
+test("a payout the token refused says what is true of the wallet now: something still set aside, or nothing", () => {
+  assert.match(one({ state: 4 }).note, /Claim above takes what is still set aside/);
+  const [claimed] = payoutRows({ structs: [struct({ state: 4 })], wallet: WALLET, now: NOW, heldLeft: false });
+  assert.equal(claimed.label, "Set aside");
+  assert.match(claimed.note, /nothing is set aside for this wallet now/);
+  // no reason for the refusal is made up: only that the token refused
+  assert.ok(!/blocked|sanction|frozen|compliance/i.test(`${one({ state: 4 }).note} ${claimed.note}`));
+});
+
+test("the address the money is sent to is checked before the wallet is asked", () => {
+  assert.deepEqual(claimTarget(` ${OTHER} `), { to: OTHER });
+  for (const bad of ["", "   ", "0x123", "hello", "0x0000000000000000000000000000000000000000", `${OTHER}00`, undefined]) {
+    assert.match(claimTarget(bad).error, /Enter the address to send it to/, String(bad));
+  }
+  assert.equal(traderRefusal("TooMuch"), "Nothing is set aside for this wallet.");
+});
+
+test("the page reads what is set aside by the wallet's address and sends claimHeld to the address in the field, one call at a time", () => {
+  const view = read("../views/simtrader.js");
+  assert.match(view, /BigInt\(await st\.pool\.heldOf\(st\.wallet\)\)/);
+  assert.match(view, /pool\.claimHeld\(target\.to\)/);
+  assert.match(view, /heldLeft: held > 0n/);
+  const calls = view.slice(view.indexOf("function wireCalls"), view.indexOf("function wireBack"));
+  assert.ok(calls.indexOf("await chain.connect()") < calls.indexOf("heldTarget(page)"), "connecting comes first and alone");
+  assert.ok(calls.indexOf("heldTarget(page)") < calls.indexOf("st.flight = true;"), "an address that is none never reaches the wallet");
+  assert.equal(calls.split("button[data-fund], button[data-claim], button[data-held]").length - 1, 3, "the new button is held off like the others during a call");
+  assert.match(calls, /traderRefusal\(refusalName\(err, IFACE\)\) \|\| friendly\(err\)/, "a refusal by the wallet reads as it does for the other buttons");
+  assert.match(view, /typed !== undefined && \$\("#sim-held-to", page\)/, "the address being typed survives a redraw, a cleared field too");
+  assert.match(view, /return \{ to: ethers\.getAddress\(typed\.to\) \};/, "an address whose capitals do not match its checksum is refused, not sent");
+  assert.match(view, /const target = held \? heldTarget\(page\) : null;/);
+});
+
+test("the held box and its phone layout stay in the page's tone: no simulation, paper or fixed payout, a row of one column, an input that fits", () => {
+  const html = payoutsHtml({ ready: [], rows: [], held: 800n * U, wallet: WALLET });
+  assert.ok(!/simulat|paper|demo|fixed payout/i.test(html));
+  const css = read("../style.css");
+  assert.match(css, /\.sp-row\.held \{ grid-template-columns: 1fr;/);
+  assert.match(css, /\.sp-to input \{[^}]*width: 100%[^}]*min-width: 0[^}]*box-sizing: border-box/);
 });
