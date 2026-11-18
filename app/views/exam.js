@@ -12,7 +12,7 @@ import { ACCOUNT_ABI, KIND } from "../lib/simtrader.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
 import {
-  PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, bboOf, placeCall, graduateCall, setAgentCall,
+  PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, placeCall, graduateCall, setAgentCall,
   setTriggerCall, clearTriggerCall, refusalOf,
 } from "../lib/exam.js";
 import {
@@ -25,6 +25,7 @@ import { createExamChart } from "./examchart.js";
 import { positionLines } from "../lib/positionlines.js";
 import { createEntryTracker, browserStore } from "../lib/entrytrack.js";
 import { pxText } from "../lib/exam.js";
+import { readPass, readList, fullyRead, withPrices, LIST_MS } from "../lib/examreads.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
@@ -96,7 +97,7 @@ export async function examView(address, page, query = "") {
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
     exam, address, ds, perps, assets, trader, panelPool, asset: assetFromQuery(query, assets), query,
-    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, chart: null,
+    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listBusy: false, chart: null,
     book: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };
@@ -129,6 +130,8 @@ export async function examView(address, page, query = "") {
     st.timers.push(setInterval(() => refreshBook(page, st), BOOK_MS));
   }
   st.timers.push(setInterval(() => tick(page, st).catch((err) => note(page, `Could not refresh: ${friendly(err)}`)), POLL_MS));
+  // The list's prices of the markets a pass does not read: only while the list is open.
+  st.timers.push(setInterval(() => refreshList(page, st).catch(() => {}), LIST_MS));
   // A page that was left stops its readings: it is no longer in the document.
   st.timers.push(setInterval(() => {
     if (page.isConnected) return;
@@ -248,35 +251,41 @@ function skeleton(st) {
 
 const attempt = (fn) => Promise.resolve().then(fn).catch(() => null);
 
-/** Everything the account needs, read from the chain at its latest block. A price that could not be read is null. */
-async function readExam(st) {
+/** What the page reads with: each getter of the exam, and the precompiles' raw answers (app/lib/examreads.js). */
+function readerOf(st) {
   const { exam } = st;
-  const [block, got] = await Promise.all([
-    chain.readProvider.getBlock("latest"),
-    Promise.all([exam.status(), exam.step(), exam.cash(), exam.dayStartEquity(), exam.tradingDays(), exam.deadline(), exam.lastFillAt(),
+  return {
+    block: () => chain.readProvider.getBlock("latest"),
+    account: () => Promise.all([exam.status(), exam.step(), exam.cash(), exam.dayStartEquity(), exam.tradingDays(), exam.deadline(), exam.lastFillAt(),
       exam.pending(), exam.filler(), exam.fromBook(), exam.maxWorseBps(), exam.drawdownKind(), exam.peakSnapshot(), exam.agent(),
       exam.rules(), exam.terms()]),
-  ]);
+    position: (asset) => exam.positionOf(asset),
+    stop: (asset) => exam.stopOf(asset),
+    take: (asset) => exam.takeOf(asset),
+    oracle: (asset) => chain.readProvider.call(oraclePxCall(asset)),
+    bbo: (asset) => chain.readProvider.call(bboCall(asset)),
+  };
+}
+
+/** Everything the account needs, read from the chain at its latest block. A price that could not be read is null. */
+async function readExam(st, selected) {
+  const { block, got, perAsset, fresh } = await readPass(readerOf(st), { assets: st.assets, selected, prices: st.prices });
   const [status, step, cash, dayStartEquity, tradingDays, deadline, lastFillAt, pending, filler, fromBook, maxWorseBps,
     drawdownKind, peakSnapshot, agent, rules, terms] = got;
-  const perAsset = await Promise.all(st.assets.map(async (asset) => {
-    const [size, stop, take, oracleHex, bboHex] = await Promise.all([
-      exam.positionOf(asset), attempt(() => exam.stopOf(asset)), attempt(() => exam.takeOf(asset)),
-      attempt(() => chain.readProvider.call(oraclePxCall(asset))), attempt(() => chain.readProvider.call(bboCall(asset))),
-    ]);
-    const oracle = oracleHex && oracleHex !== "0x" ? BigInt(oracleHex) : null;
-    const bbo = bboOf(bboHex);
-    return { asset, size, stop, take, oracle: oracle === 0n ? null : oracle, bid: bbo?.bid ?? null, ask: bbo?.ask ?? null };
-  }));
   const reads = readsFrom({ status, step, cash, dayStartEquity, tradingDays, deadline, lastFillAt, pending, filler, fromBook,
     maxWorseBps, drawdownKind, peakSnapshot, rules, terms }, perAsset);
   const now = block.timestamp;
   const account = examAccount(reads, { now, block: block.number });
-  return { reads, account, perAsset, agent, block: block.number, now };
+  return { reads, account, perAsset, fresh, agent, block: block.number, now, selected };
 }
 
 async function tick(page, st) {
-  st.snap = await readExam(st);
+  const selected = st.asset;
+  const snap = await readExam(st, selected);
+  // The market was changed while this was being read: what was read is not what the screen now needs. Read again.
+  if (selected !== st.asset) return tick(page, st);
+  st.snap = snap;
+  st.prices = withPrices(st.prices, snap.fresh);
   note(page, "");
   paintAccount(page, st);
   paintPositions(page, st);
@@ -284,6 +293,19 @@ async function tick(page, st) {
   paintAgent(page, st);
   if (st.market.open) paintMarketList(page, st);
   trackEntry(st);
+  return undefined;
+}
+
+/** The oracle prices of the markets a pass does not read, for the list while it is open. One reading at a time. */
+async function refreshList(page, st) {
+  if (st.listBusy || !st.market.open) return;
+  st.listBusy = true;
+  try {
+    st.prices = withPrices(st.prices, await readList(readerOf(st), { assets: st.assets, skip: fullyRead(st.snap?.perAsset ?? []) }));
+    if (st.market.open && page.isConnected) paintMarketList(page, st);
+  } finally {
+    st.listBusy = false;
+  }
 }
 
 function refreshBook(page, st) {
@@ -320,8 +342,13 @@ function paintAssets(page, st) {
   paintMarketList(page, st);
 }
 
+/** What the list shows of each market: its size and the latest oracle price read for it, by a pass or by the list's own reading. */
+function listAssets(st) {
+  return (st.snap?.perAsset ?? []).map((a) => ({ asset: a.asset, size: a.size, oracle: st.prices.get(a.asset) ?? a.oracle }));
+}
+
 function paintMarketList(page, st) {
-  const rows = marketRows({ assets: st.assets, perps: st.perps, perAsset: st.snap?.perAsset ?? [], rules: st.snap?.reads.rules, query: st.market.q });
+  const rows = marketRows({ assets: st.assets, perps: st.perps, perAsset: listAssets(st), rules: st.snap?.reads.rules, query: st.market.q });
   st.market.rows = rows;
   if (st.market.at >= rows.length) st.market.at = rows.length - 1;
   $("#ex-ml", page).innerHTML = rows.length ? rows.map((r, i) => `<li role="option" id="ex-mo-${r.asset}" data-asset="${r.asset}" aria-selected="${r.asset === st.asset}" class="${r.asset === st.asset ? "cur" : ""}${i === st.market.at ? " hl" : ""}">`
@@ -344,14 +371,18 @@ function setMarketOpen(page, st, open, focus = true) {
     paintMarketList(page, st);
     $("#ex-mq", page).focus();
     $("#ex-ml", page).querySelector(".hl")?.scrollIntoView({ block: "nearest" });
-  } else if (focus) {
-    $("#ex-market", page).focus();
+    refreshList(page, st).catch(() => {});
+  } else {
+    // What the list was shown is not kept: a price of a market no pass reads would be old by the time the list opens again.
+    const read = fullyRead(st.snap?.perAsset ?? []);
+    st.prices = new Map([...st.prices].filter(([asset]) => read.has(asset) || asset === st.asset));
+    if (focus) $("#ex-market", page).focus();
   }
 }
 
 function paintHead(page, st) {
   const perp = st.perps.get(st.asset);
-  const oracle = st.snap?.perAsset.find((a) => a.asset === st.asset)?.oracle;
+  const oracle = st.prices.get(st.asset) ?? st.snap?.perAsset.find((a) => a.asset === st.asset)?.oracle;
   const px = $("#ex-px", page);
   if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
   st.chart?.setOracle(perp && oracle ? Number(pxText(oracle, perp.szDecimals)) : null);
@@ -452,6 +483,18 @@ function paintTicket(page, st) {
     return;
   }
   const prices = perAsset.find((a) => a.asset === st.asset);
+  if (!prices.read) {
+    // This market was chosen after the last pass: its stop, take and prices arrive with the next reading, a moment.
+    $("#ex-preview", page).innerHTML = `<p class="ex-note">Reading this market…</p>`;
+    send.disabled = true;
+    for (const kind of ["stop", "take"]) {
+      $(`#ex-${kind}-prev`, page).innerHTML = "";
+      $(`#ex-${kind}-set`, page).disabled = true;
+    }
+    st.order = null;
+    st.triggers = {};
+    return;
+  }
   const priced = { oracle: prices.oracle, bid: prices.bid, ask: prices.ask };
   const entry = sizeEntry(reads, { perp, isBuy: st.isBuy, unit: st.unit, input: $("#ex-size", page).value, prices: priced });
   const field = $("#ex-size", page);
@@ -614,6 +657,8 @@ function wire(page, st) {
     refreshBook(page, st);
     trackEntry(st);
     choose();
+    // The new market's stop, take, prices and book are not in the last pass: read them now.
+    tick(page, st).catch((err) => note(page, `Could not refresh: ${friendly(err)}`));
   };
   const on = (list, picked) => list.forEach((x) => x.classList.toggle("on", x === picked));
   const pick = (asset) => {
