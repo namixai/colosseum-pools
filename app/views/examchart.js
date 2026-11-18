@@ -336,11 +336,12 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
   /** Draws the lines in `state.lines`, each at its price with its name; only when what is to be drawn has changed. */
   function paintLines() {
     if (!state.candles) return;
-    const wanted = LINES.filter(([key]) => Number.isFinite(state.lines?.[key]) && state.lines[key] > 0);
-    const key = JSON.stringify(wanted.map(([k]) => [k, state.lines[k]]));
+    const lines = state.lines ?? {};
+    const wanted = LINES.filter(([key]) => Number.isFinite(lines[key]) && lines[key] > 0);
+    const key = JSON.stringify(wanted.map(([k]) => [k, lines[k]]));
     if (key === state.lineKey) return;
     for (const l of state.lineSeries) state.candles.removePriceLine(l);
-    state.lineSeries = wanted.map(([k, title, style]) => state.candles.createPriceLine({ price: state.lines[k], color: lineColor(k, state.colors),
+    state.lineSeries = wanted.map(([k, title, style]) => state.candles.createPriceLine({ price: lines[k], color: lineColor(k, state.colors),
       lineWidth: 1, lineStyle: state.lib.LineStyle[style], axisLabelVisible: true, title }));
     state.lineKey = key;
     state.candles.applyOptions({});  // the scale is worked out again with the lines in it
