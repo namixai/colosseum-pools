@@ -844,8 +844,26 @@ test("a call whose request never comes back is joined for a while, not for ever:
   await new Promise((done) => setImmediate(done));
   assert.equal(w.posts.length, 1, "inside the time it joins the call that is out");
   w.t = GENTLE.joinMs;
-  const fresh = await w.reader.request(call(STAGE));
+  // A reading that still waits on the stuck call fails the test instead of hanging it.
+  const fresh = await Promise.race([w.reader.request(call(STAGE)), new Promise((_, no) => setTimeout(() => no(new Error("still waiting on the stuck call")), 300))]);
   assert.equal(w.posts.length, 2, "past it, it is asked again");
   assert.deepEqual(fresh, { result: "0xc040e6b8aa" });
   assert.ok(GENTLE.joinMs < 15_000, "before the trading screen gives up the pass that asked it");
+});
+
+test("a request the node never answered, given up by its time limit, is a request that did not reach the node: sent again, then failed as fetch fails", async () => {
+  const timedOut = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  const once = world({ reply: (n) => (n === 1 ? timedOut : null) });
+  assert.deepEqual(await once.go(once.reader.request(call(STAGE))), { result: "0xc040e6b8aa" });
+  assert.equal(once.posts.length, 2);
+  assert.deepEqual(once.waits, [], "not a rate limit");
+  const never = world({ reply: () => timedOut });
+  const lost = await never.go(never.reader.request(call(STAGE)));
+  assert.equal(lost.thrown, timedOut, "the page says the node was not reached");
+  assert.equal(never.posts.length, GENTLE.networkRetries + 1);
+  // the limit is on the request itself, in the one function that sends it, and is longer than a slow answer and shorter than a stuck page
+  const chain = readFileSync(new URL("../lib/chain.js", import.meta.url), "utf8");
+  assert.match(chain, /export const RPC_TIMEOUT_MS = 30_000;/);
+  assert.match(chain, /AbortSignal\.timeout\(RPC_TIMEOUT_MS\)/);
+  assert.match(chain, /body: JSON\.stringify\(batch\), signal,/);
 });

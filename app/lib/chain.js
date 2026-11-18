@@ -178,10 +178,17 @@ function sessionStore() {
   }
 }
 
+/** How long one request to the node may take before it is given up. */
+export const RPC_TIMEOUT_MS = 30_000;
+
 /** One JSON-RPC batch to the node: the HTTP status and the answer as parsed, or null when it is not JSON. */
 async function postRpc(batch) {
+  // A request the node never answers must not hold one of the two places for batches for ever: past this it fails the way
+  // a request that did not reach the node fails (a TimeoutError, like fetch's own network error), and the reader sends it
+  // again or says the node was not reached.
+  const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(RPC_TIMEOUT_MS) : undefined;
   const response = await fetch(CONFIG.rpc, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(batch),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(batch), signal,
   });
   let body = null;
   try {
