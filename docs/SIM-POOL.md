@@ -25,7 +25,9 @@ fail, and their prices pay for the ones that pass.
 
 ## What it does
 
-- **Opening.** `SimPoolFactory.create(plan)` with 1 HYPE sent along, which goes to the platform, and
+- **Opening.** `SimPoolFactory.create(plan)` with exactly the factory's fee sent along (`creationFee`: 1 HYPE on
+  mainnet and 0.1 HYPE on testnet at the deploy; read it from the factory before opening), which goes to the
+  platform, and
   the plan's `locked` USDC, taken from the creator: what the creator chooses, at least two payouts of the
   smallest line. The plan's `on` says which lines are switched on at the start, bit `i` for line `i`: only
   lines whose two payouts the lock covers; the others start off. The first pool locks 4 000: 5 000, 10 000 and
@@ -235,7 +237,14 @@ fail, and their prices pay for the ones that pass.
 
 ## The platform's numbers
 
-Constants of the factory, the same for every pool: 1 HYPE to open (`CREATION_FEE`); 0.5 % of each
+The fee to open a pool (`creationFee`) is set when the factory is deployed: 1 HYPE on mainnet, 0.1 HYPE on testnet,
+where a rehearsal runs on test HYPE (`ops/deploy_sim.py` deploys mainnet's at 1 HYPE and no other). The factory's
+operator may change it at any time, with no delay (`setCreationFee`, event `CreationFeeSet` with the old fee and the
+new), above zero and at most 10 HYPE (`MAX_CREATION_FEE`, ten times mainnet's fee: room to follow HYPE's price
+either way, while a fee off by two zeros is refused); a deploy outside the same bounds is refused. A pool already
+open paid its fee once and is not touched by a change. A creator reads the fee from the factory before opening:
+`create` takes exactly `creationFee`, so a fee changed between the read and the call makes `create` revert
+(`WrongFee`) and nothing is paid. Constants of the factory, the same for every pool: 0.5 % of each
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
 fee on it; two payouts of a line free for it to be switched on or to sell, and at least two of the smallest locked at opening (`LOCKED_PAYOUTS`); three of the largest line live or selling kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid with the approver's approval (`PAYOUT_DELAY`), 7 days
@@ -352,15 +361,19 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   127.0.0.1 for `POST /buy`.
 - **The deployment**, `ops/deploy_sim.py`: `deploy` puts PaperExam, the pool's two libraries (`SimPoolStops`,
   `SimPoolSetup`), SimPool linked to them (the record names all three), a TermsBook and the
-  factory on the network (testnet unless named, see Networks) with Circle's USDC, names the filler, the checker, the closer (four keys with
+  factory on the network (testnet unless named, see Networks) with Circle's USDC and the fee to open a pool set
+  in it (`--creation-fee` in HYPE: 0.1 on testnet unless named, 1 on mainnet and nothing else there; the plan prints
+  it with the network's name, the factory is read back for it before anything else is sent, and the record keeps
+  the fee at the deploy as `creation_fee_at_deploy_wei` and `creation_fee_at_deploy_hype`; the factory's own
+  `creationFee` is the one in force), names the filler, the checker, the closer (four keys with
   the operator, none the same) and the recipient, lists BTC,
   ETH and SOL with their caps (no HYPE), hands the factory to our Safe last (`--safe`: `setOperator`, the
   operator read as the deployer's key before and as the Safe after; refused as 0x0, as one of the three keys, as
   the deployer's own key, as an address without code or as one that does not answer `getThreshold()` and `getOwners()`
   as a Safe does; the threshold and the owners it names are printed and shown in the confirmation a person types on mainnet; needed on mainnet, so that the key that deployed the
   factory never stays in charge of it), and writes `deployments/<network>-<label>.json` with demo3's
-  keeper nodes on testnet, `--keeper-nodes` on mainnet. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with 1
-  HYPE and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
+  keeper nodes on testnet, `--keeper-nodes` on mainnet. `pool --plan` publishes the terms, approves the locked USDC, opens the pool with the
+  fee read from the factory and sets the plan's codes; `codes --plan` sets them on a pool already open, skipping one that
   is on chain as listed, sending a raise of a used code's share for the same partner, and refusing,
   before anything is sent, anything else on a code a sale has named.
   `buy --code` buys with a code's text. `close --key` and `finish --key` read the pool first and say as
@@ -373,17 +386,21 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `withdraw`, `cancel`, `approver`, `approve`) the call is from an address that signs elsewhere, our
   pool's creator being a Safe and its approver a Ledger: the command checks as that address and prints
   the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
+  `fee --deployment … --amount 0.5` changes the factory's fee from its operator (`--key`, or `--signer` for our
+  Safe, which gets the call printed): it reads the fee and the operator first and says what it would send, or that
+  the factory would refuse it (not the operator, the same fee, 0 or above 10 HYPE); with `--send` it reads the fee
+  back after.
   `check --plan …` asks `SimPoolFactory.check` about a plan by eth_call, sending nothing and reading no key: with
   `--deployment`, the factory it names; without, the factory, PaperExam and SimPool of the checkout, put in the
   call by a state override over the network's precompiles, with the assets `deploy` lists, the roles set and the
   terms as `pool` publishes them, so a plan is checked before any factory stands. Terms `TermsBook.publish` would
-  refuse (empty, or over 24 575 bytes) are refused first. It then measures `create` of the plan with 1 HYPE by
-  eth_call, the creator an address no key holds and USDC answered by a stand-in, at the least gas it runs on, and
+  refuse (empty, or over 24 575 bytes) are refused first. It then measures `create` of the plan with the factory's fee, read
+  from it, by eth_call, the creator an address no key holds and USDC answered by a stand-in, at the least gas it runs on, and
   compares that, with 60 000 for USDC's own transfer, against the network's small block (the least `gasLimit` of
   the latest blocks, at most 3 000 000): above it, the pool would not open by an ordinary transaction, and `check`
   stops red. The first pool's plan measured 1 673 901 on testnet on 16 November 2026 (forge,
   `test_gas_createOfTheFirstPlanFitsASmallBlock`: 1 694 229 with the token, the base and the calldata).
-  `pool --signer` prints the terms, the approval of the locked USDC and `create` with 1 HYPE; the codes
+  `pool --signer` prints the terms, the approval of the locked USDC and `create` with the factory's fee; the codes
   follow with `codes --signer` once the pool's address is known. The first pool's plan is
   `deployments/plans/sim-first-pool.json`: 24 lines, the sizes 5 000, 10 000, 25 000, 50 000, 100 000 and
   250 000 each on the tiers 3 / 9, 4 / 10, 5 / 10 and 6 / 10 % at the CFO's prices, each line's loss limit

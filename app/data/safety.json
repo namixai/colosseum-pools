@@ -1211,10 +1211,10 @@
     },
     {
       "id": "S112",
-      "where": "src/sim/SimPoolFactory.sol:40",
+      "where": "src/sim/SimPoolFactory.sol:43",
       "kind": "line",
       "text": "uint32 public constant PAYOUT_DELAY = 72 hours;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L40"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L43"
     },
     {
       "id": "S113",
@@ -1239,10 +1239,10 @@
     },
     {
       "id": "S116",
-      "where": "src/sim/SimPoolFactory.sol:195",
+      "where": "src/sim/SimPoolFactory.sol:210",
       "kind": "line",
       "text": "if (msg.sender == filler || msg.sender == checker || msg.sender == closer) revert BadRole();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L195"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L210"
     },
     {
       "id": "S117",
@@ -1253,10 +1253,10 @@
     },
     {
       "id": "S118",
-      "where": "src/sim/SimPoolFactory.sol:54",
+      "where": "src/sim/SimPoolFactory.sol:57",
       "kind": "line",
       "text": "uint32 public constant STOP_RESERVE = 14 days;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L54"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L57"
     },
     {
       "id": "S119",
@@ -1295,10 +1295,10 @@
     },
     {
       "id": "S124",
-      "where": "src/sim/SimPoolFactory.sol:58",
+      "where": "src/sim/SimPoolFactory.sol:61",
       "kind": "line",
       "text": "uint32 public constant MIN_TERM = 184 days;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L58"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L61"
     },
     {
       "id": "S125",
@@ -1316,10 +1316,10 @@
     },
     {
       "id": "S127",
-      "where": "src/sim/SimPoolFactory.sol:62",
+      "where": "src/sim/SimPoolFactory.sol:65",
       "kind": "line",
       "text": "uint32 public constant WITHDRAW_DELAY = 7 days;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L62"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L65"
     },
     {
       "id": "S128",
@@ -1358,10 +1358,10 @@
     },
     {
       "id": "S133",
-      "where": "src/sim/SimPoolFactory.sol:44",
+      "where": "src/sim/SimPoolFactory.sol:47",
       "kind": "line",
       "text": "uint32 public constant PAYOUT_HARD = 7 days;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L44"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L47"
     },
     {
       "id": "S134",
@@ -1393,10 +1393,10 @@
     },
     {
       "id": "S138",
-      "where": "src/sim/SimPoolFactory.sol:262",
+      "where": "src/sim/SimPoolFactory.sol:283",
       "kind": "line",
       "text": "if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY || p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L262"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L283"
     },
     {
       "id": "S139",
@@ -1407,10 +1407,10 @@
     },
     {
       "id": "S140",
-      "where": "src/sim/SimPoolFactory.sol:253",
+      "where": "src/sim/SimPoolFactory.sol:274",
       "kind": "line",
       "text": "if (k.maxDrawdownBps == 0 || k.maxDrawdownBps >= Units.BPS) revert BadPlan();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L253"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L274"
     },
     {
       "id": "S141",
@@ -1435,10 +1435,10 @@
     },
     {
       "id": "S144",
-      "where": "src/sim/SimPoolFactory.sol:248",
+      "where": "src/sim/SimPoolFactory.sol:269",
       "kind": "line",
       "text": "if (p.on & (1 << i) != 0 && cover > p.locked) revert BadPlan();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L248"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPoolFactory.sol#L269"
     },
     {
       "id": "S145",

@@ -1125,7 +1125,7 @@ contract SimPoolInvariantTest is Test {
         usdc = new Usdc3009();
         TermsBook book = new TermsBook();
         bytes32 termsHash = book.publish("The simulated pool's terms, every clause written out.");
-        factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), address(this));
+        factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), address(this), 1 ether);
         factory.setFiller(filler);
         factory.setChecker(checker);
         factory.setCloser(closer);

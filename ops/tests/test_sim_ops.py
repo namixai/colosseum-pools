@@ -28,8 +28,15 @@ def constant(name: str) -> str:
 
 class TheNumbers(unittest.TestCase):
     def test_the_scripts_constants_are_the_factorys(self):
-        self.assertEqual(constant("CREATION_FEE"), "1 ether")
-        self.assertEqual(d.CREATION_FEE, 10**18)
+        # The fee is the factory's, set at its deploy and changed by its operator within a bound: the script holds
+        # each network's fee at the deploy and the factory's bound.
+        self.assertIn("uint256 public creationFee;", FACTORY)
+        self.assertIsNone(re.search(r"(?<![A-Z_])CREATION_FEE\b", FACTORY), "no constant or immutable fee is left")
+        self.assertIn("function setCreationFee(uint256 fee) external onlyOperator", FACTORY)
+        self.assertEqual(constant("MAX_CREATION_FEE"), "10 ether")
+        self.assertEqual(d.MAX_CREATION_FEE, 10 * 10**18)
+        self.assertEqual(d.CREATION_FEES, {"mainnet": 10**18, "testnet": 10**17}, "1 HYPE on mainnet, 0.1 on testnet")
+        self.assertIn("uint256 creationFee_) {", FACTORY)
         self.assertEqual(int(constant("PAYOUT_BPS")), d.PAYOUT_BPS)
         # The factory takes it from SimPool.sol, whose pool counts two payouts of a line free before it sells.
         self.assertEqual(constant("LOCKED_PAYOUTS"), "uint8(COVER_PAYOUTS)")
@@ -107,7 +114,7 @@ class TheHandOver(unittest.TestCase):
 
     OWNERS = ["0x" + "a1" * 20, "0x" + "a2" * 20, "0x" + "a3" * 20]
 
-    def send(self, safe, operators=None, code="0x6080", reads_of_safe=None):
+    def send(self, safe, operators=None, code="0x6080", reads_of_safe=None, fee_read=10**17, extra=()):
         """A testnet deploy with --send, every chain call mocked: the transactions it sends, in order, and the record.
         `reads_of_safe` overrides what the Safe answers to getThreshold() and getOwners(): a tuple, or an exception
         to raise."""
@@ -127,13 +134,24 @@ class TheHandOver(unittest.TestCase):
         deployed = iter(["0x" + f"{i:040x}" for i in range(1, 8)])
         op = SimpleNamespace(address=d.to_checksum_address(self.D))
         transact = lambda acct, to, sig, types, values: sent.append((to, sig, values)) or {"transactionHash": f"0x{len(sent):x}"}
-        argv = self.argv("--send", *(["--safe", safe] if safe else []))
+        argv = self.argv("--send", *(["--safe", safe] if safe else []), *extra)
+
+        def rpc(m, p=()):
+            if m == "eth_chainId":
+                return hex(d.c.CHAIN_ID)
+            if m == "eth_call":
+                self.assertEqual(p[0]["data"], "0x" + keccak(text="creationFee()")[:4].hex())
+                fee_reads.append(p[0]["to"])
+                return "0x%064x" % fee_read
+            return code
+        fee_reads = []
+        self.fee_reads = fee_reads
         with mock.patch.object(d.sn, "confirm_send"), mock.patch.object(d.sn, "check_assets"), \
                 mock.patch.object(d.c, "account", return_value=op), mock.patch.object(d, "big_blocks") as big, \
                 mock.patch.object(d, "deploy_contract", side_effect=lambda *a, **k: (next(deployed), {"blockNumber": "0x10"})) as dc, \
                 mock.patch.object(d.c, "transact", side_effect=transact), \
                 mock.patch.object(d.c, "call_view", side_effect=view), \
-                mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): hex(d.c.CHAIN_ID) if m == "eth_chainId" else code), \
+                mock.patch.object(d.c, "rpc", side_effect=rpc), \
                 mock.patch.object(d, "git_head", return_value="ab" * 20), \
                 mock.patch.object(d, "save", side_effect=lambda out, rec: records.append(json.loads(json.dumps(rec)))), \
                 mock.patch.object(d, "mark_incomplete") as incomplete, \
@@ -244,6 +262,33 @@ class TheHandOver(unittest.TestCase):
         self.assertEqual(records[-1]["operator"], d.to_checksum_address(self.D))
         incomplete.assert_called_once()
 
+    def test_the_factory_is_deployed_with_the_networks_fee_read_back_and_recorded(self):
+        result, sent, records, dc, _, incomplete = self.send(None)
+        self.assertEqual(result, 0)
+        factory_call = next(call for call in dc.call_args_list if call.args[3] == "SimPoolFactory")
+        types, values = factory_call.args[5], factory_call.args[6]
+        self.assertEqual((types[-1], values[-1]), ("uint256", 10**17), "testnet's 0.1 HYPE, the constructor's last")
+        self.assertEqual(len(types), 5)
+        self.assertEqual(self.fee_reads, [sent[0][0]], "read back from the factory once, before it is configured")
+        self.assertEqual((records[-1]["creation_fee_at_deploy_wei"], records[-1]["creation_fee_at_deploy_hype"]),
+                         (str(10**17), "0.1"))
+        incomplete.assert_not_called()
+        # A fee named for testnet is the one deployed and recorded.
+        result, _, records, dc, _, _ = self.send(None, fee_read=25 * 10**16, extra=("--creation-fee", "0.25"))
+        self.assertEqual(result, 0)
+        factory_call = next(call for call in dc.call_args_list if call.args[3] == "SimPoolFactory")
+        self.assertEqual(factory_call.args[6][-1], 25 * 10**16)
+        self.assertEqual(records[-1]["creation_fee_at_deploy_hype"], "0.25")
+
+    def test_a_factory_that_reads_back_another_fee_leaves_the_deploy_incomplete(self):
+        result, sent, records, _, _, incomplete = self.send(None, fee_read=10**18)
+        self.assertIsInstance(result, SystemExit)
+        self.assertIn(f"takes {10**18} wei to open a pool, not the {10**17} deployed", str(result))
+        self.assertEqual(sent, [], "nothing configured on a factory of another fee")
+        self.assertEqual(records, [], "no record saved as configuring")
+        incomplete.assert_called_once()
+        self.assertNotEqual(incomplete.call_args.args[1]["status"], d.DONE)
+
     def test_the_call_is_the_factorys(self):
         self.assertIn("function setOperator(address operator_) external onlyOperator", FACTORY)
         self.assertIn("address public operator;", FACTORY)
@@ -264,6 +309,158 @@ class TheRecord(unittest.TestCase):
             with mock.patch.object(deployments, "record_path", return_value=path):
                 self.assertEqual(deployments.load("x", net)["status"], "complete")
         self.assertIn('record["status"] = DONE', (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8"))
+
+
+class TheCreationFee(unittest.TestCase):
+    """The fee for opening a pool is set in the factory at its deploy: 0.1 HYPE on testnet unless named, 1 on mainnet
+    and nothing else there; its operator may change it after (`fee`), so every later command reads it from the
+    factory."""
+    KEYS = ["--filler", "0x" + "11" * 20, "--checker", "0x" + "22" * 20, "--closer", "0x" + "33" * 20]
+
+    def fee(self, net, given=None):
+        from types import SimpleNamespace
+        from spike.hlspike import network as networks
+        with mock.patch.object(d.c, "NETWORK", {"testnet": networks.TESTNET, "mainnet": networks.MAINNET}[net]):
+            return d.creation_fee_of(SimpleNamespace(creation_fee=given))
+
+    def test_each_network_has_its_own_and_mainnet_only_its_own(self):
+        self.assertEqual(self.fee("testnet"), 10**17)
+        self.assertEqual(self.fee("mainnet"), 10**18)
+        self.assertEqual(self.fee("mainnet", "1"), 10**18)
+        self.assertEqual(self.fee("mainnet", "1.000"), 10**18)
+        self.assertEqual(self.fee("testnet", "0.25"), 25 * 10**16)
+        self.assertEqual(self.fee("testnet", "10"), 10 * 10**18, "the factory's bound itself")
+        self.assertEqual(self.fee("testnet", "0.000000000000000001"), 1)
+        for net, given, said in (("mainnet", "0.1", "mainnet's fee for opening a pool is 1 HYPE"),
+                                 ("mainnet", "0.5", "not 0.5"),
+                                 ("mainnet", "10", "not 10"),
+                                 ("testnet", "0", "above 0 and at most 10 HYPE"),
+                                 ("testnet", "-0.1", "above 0 and at most 10 HYPE"),
+                                 ("testnet", "10.000000000000000001", "above 0 and at most 10 HYPE"),
+                                 ("mainnet", "100", "above 0 and at most 10 HYPE"),
+                                 ("testnet", "0.0000000000000000001", "at most 18 decimals"),
+                                 ("testnet", "Infinity", "at most 18 decimals"),
+                                 ("testnet", "NaN", "at most 18 decimals"),
+                                 ("testnet", "one", "not an amount of HYPE")):
+            with self.assertRaises(SystemExit) as caught:
+                self.fee(net, given)
+            self.assertIn(said, str(caught.exception), (net, given))
+
+    def test_the_plan_says_the_fee_and_the_network_and_sends_nothing(self):
+        for extra, said in (([], "creation fee     0.1 HYPE to open a pool on testnet (100000000000000000 wei), set in "
+                                 "the factory; its operator may change it after, up to 10 HYPE (`fee`)"),
+                            (["--creation-fee", "0.5"], "creation fee     0.5 HYPE to open a pool on testnet")):
+            out = io.StringIO()
+            with mock.patch.object(d.c, "rpc") as rpc, mock.patch.object(d, "deploy_contract") as dc, redirect_stdout(out):
+                self.assertEqual(d.main(["deploy", "--label", "never-written", *self.KEYS, *extra]), 0)
+            rpc.assert_not_called(), dc.assert_not_called()
+            self.assertIn(said, out.getvalue())
+            self.assertIn("SimPoolFactory(usdc, exam, pool, operator, fee)", out.getvalue())
+        # A fee mainnet would refuse is refused before anything is read or sent, on any network's bound.
+        with self.assertRaises(SystemExit) as caught, mock.patch.object(d, "deploy_contract") as dc:
+            d.main(["deploy", "--label", "never-written", *self.KEYS, "--creation-fee", "20", "--send"])
+        self.assertIn("at most 10 HYPE", str(caught.exception))
+        dc.assert_not_called()
+
+    def test_the_fee_is_read_from_the_factory(self):
+        factory = "0x" + "f1" * 20
+        with mock.patch.object(d.c, "rpc", return_value="0x%064x" % 10**17) as rpc:
+            self.assertEqual(d.factory_fee(factory), 10**17)
+        method, params = rpc.call_args.args
+        self.assertEqual(method, "eth_call")
+        self.assertEqual(params, [{"to": factory, "data": "0x" + keccak(text="creationFee()")[:4].hex()}, "latest"])
+        state = {factory: {"code": "0x60"}}
+        with mock.patch.object(d.c, "rpc", return_value="0x%064x" % 10**18) as rpc:
+            self.assertEqual(d.factory_fee(factory, state), 10**18)
+        self.assertEqual(rpc.call_args.args[1][2], state, "a factory put in the call by a state override")
+        for answer in ("0x", "0x0", "", None, "0x" + "00" * 32):
+            with mock.patch.object(d.c, "rpc", return_value=answer), self.assertRaises(SystemExit) as caught:
+                d.factory_fee(factory)
+            self.assertIn("gave no fee for opening a pool on testnet", str(caught.exception))
+
+    def test_hype_is_written_as_people_write_it(self):
+        self.assertEqual([d.hype(w) for w in (10**18, 10**17, 25 * 10**16, 1)], ["1", "0.1", "0.25", "0.000000000000000001"])
+
+
+class TheFeeCommand(unittest.TestCase):
+    """`fee`: setCreationFee on a deployment's factory, from its operator, within the factory's bound; read first,
+    sent only with --send, read back after; for our Safe, the call printed."""
+    FACTORY, OPERATOR, OTHER = "0x" + "f1" * 20, "0x" + "0a" * 20, "0x" + "0b" * 20
+
+    def run_fee(self, argv, now=10**17, operator=None, after=None, key_address=None):
+        reads = iter([now, after if after is not None else now])
+        out = io.StringIO()
+        sent = []
+
+        def rpc(m, p=()):
+            self.assertEqual(p[0], {"to": self.FACTORY, "data": "0x" + keccak(text="creationFee()")[:4].hex()})
+            return "0x%064x" % next(reads)
+        transact = lambda acct, to, sig, types, values: sent.append((to, sig, values)) or {"transactionHash": "0x01"}
+        with mock.patch.object(d.deployments, "load", return_value={"SimPoolFactory": self.FACTORY}), \
+                mock.patch.object(d.c, "rpc", side_effect=rpc), \
+                mock.patch.object(d.c, "call_view", return_value=(operator or self.OPERATOR,)), \
+                mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(key_address or self.OPERATOR)), \
+                mock.patch.object(d.c, "account") as key, mock.patch.object(d.sn, "confirm_send") as confirm, \
+                mock.patch.object(d.c, "transact", side_effect=transact), redirect_stdout(out):
+            try:
+                code = d.main(["fee", "--deployment", "x", *argv])
+            except SystemExit as exc:
+                code = exc
+        return code, sent, out.getvalue(), key, confirm
+
+    def test_without_send_it_says_what_it_would_send_and_sends_nothing(self):
+        code, sent, said, key, confirm = self.run_fee(["--amount", "0.5", "--key", "deployer"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        confirm.assert_not_called()
+        self.assertIn("a pool opens for 0.1 HYPE now; setCreationFee(500000000000000000) from deployer", said)
+        self.assertIn("makes it 0.5 HYPE for every pool opened after; the pools open already are not touched", said)
+        self.assertIn("nothing was sent", said)
+
+    def test_with_send_it_sends_from_the_operator_and_reads_the_fee_back(self):
+        code, sent, said, key, confirm = self.run_fee(["--amount", "0.5", "--key", "deployer", "--send"],
+                                                      after=5 * 10**17)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [(self.FACTORY, "setCreationFee(uint256)", [5 * 10**17])])
+        confirm.assert_called_once()
+        self.assertIn("the fee to open a pool is 0.5 HYPE, tx 0x01", said)
+        # A fee that does not read back as sent is said, with the transaction.
+        code, sent, said, *_ = self.run_fee(["--amount", "0.5", "--key", "deployer", "--send"], after=10**17)
+        self.assertIsInstance(code, SystemExit)
+        self.assertIn("reads 0.1 HYPE, not 0.5: tx 0x01", str(code))
+
+    def test_only_the_operator_within_the_bound_and_not_the_same_fee(self):
+        for argv, kw, said in ((["--amount", "0.5", "--key", "other"], {"key_address": self.OTHER},
+                                f"NotOperator; its operator is {d.to_checksum_address(self.OPERATOR)}"),
+                               (["--amount", "0.1", "--key", "deployer"], {}, "is 0.1 HYPE already"),
+                               (["--amount", "0", "--key", "deployer"], {}, "at most 10 HYPE"),
+                               (["--amount", "10.5", "--key", "deployer"], {}, "at most 10 HYPE")):
+            code, sent, _, key, confirm = self.run_fee(argv + ["--send"], **kw)
+            self.assertIsInstance(code, SystemExit, argv)
+            self.assertIn(said, str(code))
+            self.assertEqual(sent, [])
+            confirm.assert_not_called()
+        code, *_ = self.run_fee(["--amount", "0.5"])
+        self.assertIn("--key or --signer", str(code))
+
+    def test_for_a_safe_the_call_is_printed_and_nothing_is_sent(self):
+        safe = d.to_checksum_address(self.OPERATOR)
+        code, sent, said, key, confirm = self.run_fee(["--amount", "2", "--signer", safe, "--send"], now=10**18)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        self.assertIn(f"from the signer ({safe})", said)
+        tx = json.loads(said[said.index("{"):])["transactions"]
+        self.assertEqual(len(tx), 1)
+        self.assertEqual((tx[0]["to"], tx[0]["value"]), (d.to_checksum_address(self.FACTORY), "0"))
+        self.assertEqual(tx[0]["data"], "0x" + d.c.encode_call("setCreationFee(uint256)", ["uint256"], [2 * 10**18]).hex())
+        # A Safe that is not the operator is refused before anything is printed.
+        code, *_ = self.run_fee(["--amount", "2", "--signer", d.to_checksum_address(self.OTHER)], now=10**18)
+        self.assertIn("NotOperator", str(code))
+
+    def test_the_call_is_the_factorys(self):
+        self.assertIn("function setCreationFee(uint256 fee) external onlyOperator", FACTORY)
+        self.assertIn("event CreationFeeSet(uint256 previous, uint256 fee);", FACTORY)
 
 
 class TheLibraries(unittest.TestCase):
@@ -518,9 +715,12 @@ class TheCheck(unittest.TestCase):
     PLAN = str(ROOT / "deployments/plans/sim-first-pool.json")
     LARGEST = "0x" + (250_000 * 10**6).to_bytes(32, "big").hex()
 
+    FEE_SEL = "0x" + keccak(text="creationFee()")[:4].hex()
+
     def run_check(self, argv, answer=None, record=None, create_needs=1_700_000, limits=(30_000_000, 3_000_000),
-                  ignores_gas=False, head=100):
+                  ignores_gas=False, head=100, fee=10**17):
         calls = []
+        self.built = built = []
         answer = self.LARGEST if answer is None else answer
 
         def rpc(method, params):
@@ -532,6 +732,8 @@ class TheCheck(unittest.TestCase):
                 if n < 0:
                     raise RuntimeError("eth_getBlockByNumber: invalid block number")
                 return {"gasLimit": hex(limits[n % len(limits)])}
+            if params[0]["data"] == self.FEE_SEL:
+                return "0x%064x" % fee
             if params[0]["data"].startswith("0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex()):
                 if ignores_gas or int(params[0]["gas"], 16) >= create_needs:
                     return "0x" + "00" * 32
@@ -541,7 +743,7 @@ class TheCheck(unittest.TestCase):
             return answer
         out = io.StringIO()
         with mock.patch.object(d.c, "rpc", side_effect=rpc), \
-                mock.patch.object(d, "runtime_of", side_effect=lambda n, t, v, libs=None: f"0x{n}"), \
+                mock.patch.object(d, "runtime_of", side_effect=lambda n, t, v, libs=None: built.append((n, t, v)) or f"0x{n}"), \
                 mock.patch.object(d.deployments, "load", return_value=record or {}), \
                 mock.patch.object(d, "git_head", return_value="ab" * 20), mock.patch.object(d.c, "account") as key, \
                 mock.patch.object(d.c, "send_tx") as sent, mock.patch.object(d.c, "transact") as tx, redirect_stdout(out):
@@ -564,6 +766,9 @@ class TheCheck(unittest.TestCase):
         self.assertEqual(state[d.CHECK_AT["codes"]], {"code": "0xSimPoolCodes"})
         f = state[d.CHECK_AT["factory"]]
         self.assertEqual(f["code"], "0xSimPoolFactory")
+        # This checkout's factory, built with testnet's fee as `deploy` builds it there.
+        name, types, values = next(b for b in self.built if b[0] == "SimPoolFactory")
+        self.assertEqual((types[-1], values[-1], len(values)), ("uint256", 10**17, 5))
         word = lambda a: "0x" + int(a, 16).to_bytes(32, "big").hex()
         self.assertEqual(f["stateDiff"]["0x" + "00" * 31 + "05"], word(d.CHECK_AT["book"]))
         for role, slot in (("filler", 1), ("checker", 2), ("closer", 3), ("fee", 4)):
@@ -572,7 +777,9 @@ class TheCheck(unittest.TestCase):
         for name, idx, cap in d.asset_list(["BTC", "ETH", "SOL"]):
             slot = "0x" + keccak(idx.to_bytes(32, "big") + (6).to_bytes(32, "big")).hex()
             self.assertEqual(f["stateDiff"][slot], "0x" + cap.to_bytes(32, "big").hex(), name)
-        self.assertEqual(len(f["stateDiff"]), 8, "the terms book, four roles and three assets, nothing else")
+        # The fee is storage: a constructor's storage is not in the code, so the call is given testnet's fee.
+        self.assertEqual(f["stateDiff"]["0x%064x" % 9], "0x" + (10**17).to_bytes(32, "big").hex())
+        self.assertEqual(len(f["stateDiff"]), 9, "the terms book, the fee, four roles and three assets, nothing else")
         b = state[d.CHECK_AT["book"]]
         text_slot = "0x" + keccak(keccak(text=FIRST["terms_text"]) + (0).to_bytes(32, "big")).hex()
         self.assertEqual(b["stateDiff"], {text_slot: word(d.CHECK_AT["text"])}, "the terms, as `pool` publishes them")
@@ -586,11 +793,16 @@ class TheCheck(unittest.TestCase):
         creates = [p for m, p in calls if m == "eth_call" and p[0]["data"].startswith(
             "0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex())]
         call, block, state = creates[0]
-        self.assertEqual(call["value"], hex(d.CREATION_FEE))
+        # The fee is the factory's, read from it in the call it is measured in: the one sent with create.
+        read = [p for m, p in calls if m == "eth_call" and p[0]["data"] == self.FEE_SEL]
+        self.assertEqual(len(read), 1)
+        self.assertEqual(read[0][0]["to"], d.CHECK_AT["factory"])
+        self.assertEqual(read[0][2][d.CHECK_AT["factory"]], state[d.CHECK_AT["factory"]], "this checkout's factory")
+        self.assertEqual(call["value"], hex(10**17))
         self.assertEqual(call["from"], d.CHECK_AT["creator"])
         self.assertEqual(int(creates[0][0]["gas"], 16), d.GAS_FLOOR, "first: does the node keep to a call's gas")
         self.assertEqual(state[d.c.USDC_ERC20], {"code": d.TOKEN_STUB}, "USDC answered by the stand-in")
-        self.assertEqual(state[d.CHECK_AT["creator"]], {"balance": hex(2 * d.CREATION_FEE)})
+        self.assertEqual(state[d.CHECK_AT["creator"]], {"balance": hex(2 * 10**17)})
         self.assertEqual(state[d.CHECK_AT["pool"]], {"code": "0xSimPool"}, "this checkout's pool, as for check")
         # The small block is the least limit of the latest blocks, not the big block's.
         self.assertEqual(sum(1 for m, _ in calls if m == "eth_getBlockByNumber"), d.BLOCKS_READ)
@@ -629,6 +841,12 @@ class TheCheck(unittest.TestCase):
         self.assertEqual(params[0]["to"], factory)
         create = next(p for m, p in calls if m == "eth_call" and p[0]["to"] == factory and len(p) == 3)
         self.assertEqual(set(create[2]), {d.c.USDC_ERC20, d.CHECK_AT["creator"]}, "only the token and the HYPE")
+        # The deployed factory's own fee, read from it as it stands, is the one sent: here mainnet's 1 HYPE.
+        code, calls, said = self.run_check(["--deployment", "x"], record={"SimPoolFactory": factory}, fee=10**18)
+        read = next(p for m, p in calls if m == "eth_call" and p[0]["data"] == self.FEE_SEL)
+        self.assertEqual((read[0]["to"], len(read)), (factory, 2), "no state override")
+        create = next(p for m, p in calls if m == "eth_call" and p[0]["to"] == factory and len(p) == 3)
+        self.assertEqual(create[0]["value"], hex(10**18))
 
     def test_a_refusal_names_the_factorys_error(self):
         for sig in ("BadPlan()", "Unpublished()"):
@@ -670,6 +888,8 @@ class TheCheck(unittest.TestCase):
         sol = (ROOT / "test/sim/SimPool.t.sol").read_text()
         for name in ("FACTORY_TERMS_BOOK_SLOT", "FACTORY_ASSET_CAP_SLOT", "BOOK_TEXT_AT_SLOT"):
             self.assertEqual(int(re.search(rf"constant {name} = (\d+);", sol).group(1)), getattr(d, name), name)
+        self.assertEqual(int(re.search(r"constant FACTORY_CREATION_FEE_SLOT = (\d+);", sol).group(1)),
+                         d.FACTORY_CREATION_FEE_SLOT)
         for role in ("FILLER", "CHECKER", "CLOSER", "FEE"):
             self.assertEqual(int(re.search(rf"constant FACTORY_{role}_SLOT = (\d+);", sol).group(1)),
                              d.FACTORY_ROLE_SLOTS[role.lower()], role)
@@ -1016,15 +1236,19 @@ class TheClosing(unittest.TestCase):
         record = {"SimPoolFactory": "0x" + "f1" * 20, "TermsBook": "0x" + "b0" * 20, "usdc": "0x" + "c0" * 20}
         out = io.StringIO()
         with mock.patch.object(d.deployments, "load", return_value=record), \
+                mock.patch.object(d.c, "rpc", return_value="0x%064x" % 10**17) as rpc, \
                 mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "send_tx") as sent, redirect_stdout(out):
             self.assertEqual(d.main(["pool", "--deployment", "x", "--plan", "deployments/plans/sim-first-pool.json",
                                      "--signer", safe, "--send"]), 0)
         key.assert_not_called()
         sent.assert_not_called()
+        self.assertEqual(rpc.call_args.args[1][0], {"to": record["SimPoolFactory"],
+                                                    "data": "0x" + keccak(text="creationFee()")[:4].hex()})
         said = out.getvalue()
+        self.assertIn("pays 0.1 HYPE (the factory's fee)", said)
         txs = json.loads(said[said.index("{"):])["transactions"]
         self.assertEqual([t["to"].lower() for t in txs], [record["TermsBook"], record["usdc"], record["SimPoolFactory"]])
-        self.assertEqual([t["value"] for t in txs], ["0", "0", str(d.CREATION_FEE)], "1 HYPE with create")
+        self.assertEqual([t["value"] for t in txs], ["0", "0", str(10**17)], "the factory's fee with create")
         self.assertTrue(txs[2]["data"].startswith("0x" + keccak(text=f"create({d.PLAN_T})")[:4].hex()))
         # Its codes: one setCode each still to set, read from the pool as the Safe.
         p1 = d.to_checksum_address("0x" + "11" * 20)
