@@ -453,6 +453,9 @@ body[data-panel] main { max-width: 1312px; padding: 0 24px 40px; }
 .sp-state.waiting { border: 1px solid var(--navy); color: var(--navy); }
 .sp-state.unread, .sp-state.failed, .sp-state.expired, .sp-state.lapsed, .sp-state.stopped, .sp-state.held { border: 1px dashed var(--mute); color: var(--ink); background: rgba(233,197,124,.25); }
 .sp-empty { margin: 0; padding: 22px 18px; font: 500 14px var(--mono); color: var(--navy); }
+.sp-row.held { grid-template-columns: 1fr; gap: 10px; } .sp-row.held .sp-c.go { justify-content: flex-start; }
+.sp-to { display: grid; gap: 4px; font: 600 11.5px var(--mono); letter-spacing: 1.2px; text-transform: uppercase; color: var(--mute); }
+.sp-to input { font: 500 14px var(--mono); letter-spacing: 0; text-transform: none; color: var(--ink); border: 2px solid var(--navy); border-radius: 0; background: var(--paper); padding: 9px 12px; width: 100%; min-width: 0; box-sizing: border-box; }
 .sp-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; font: 500 12.5px var(--mono); color: var(--navy); margin: 0 0 6px; }
 .ex-wrap > .sp > .ex-page { margin-top: 16px; }
 @media (max-width: 760px) {

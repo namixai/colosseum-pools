@@ -12,15 +12,15 @@ import { SIM_LINES_ABI } from "../lib/simlines.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { networkMarks } from "../lib/examscreen.js";
 import {
-  ACCOUNT_ABI, SIM_TRADER_ABI, KIND, SCAN_WINDOW, SCAN_CALLS, scanPlan, canLookBack, scanNote, candidatesOf, accountRows, lineInfo,
-  tradeTarget, payoutRows, requestable, traderRefusal, remembered, remember, examsHtml, payoutsHtml, noteHtml,
+  ACCOUNT_ABI, SIM_TRADER_ABI, HELD_ABI, KIND, SCAN_WINDOW, SCAN_CALLS, scanPlan, canLookBack, scanNote, candidatesOf, accountRows, lineInfo,
+  tradeTarget, payoutRows, requestable, traderRefusal, claimTarget, remembered, remember, examsHtml, payoutsHtml, noteHtml,
 } from "../lib/simtrader.js";
 import { accountLabel, wireShell } from "./simshell.js";
 
 const { ethers } = window;
 // The pool's own getters and events, with the payout the pool of this repository answers (its eight fields), and the two
 // calls of the trader. `payout` is declared once: the first, shorter form of SIM_POOL_ABI would not decode the answer.
-const ABI = [...SIM_POOL_ABI.filter((l) => !l.startsWith("function payout(")), ...SIM_LINES_ABI, ...SIM_POOL_APPROVAL_ABI, ...SIM_TRADER_ABI];
+const ABI = [...SIM_POOL_ABI.filter((l) => !l.startsWith("function payout(")), ...SIM_LINES_ABI, ...SIM_POOL_APPROVAL_ABI, ...SIM_TRADER_ABI, ...HELD_ABI];
 const IFACE = new ethers.Interface(ABI);
 
 const storeKey = (pool, wallet) => `sim-accounts-${String(pool).toLowerCase()}-${String(wallet).toLowerCase()}`;
@@ -152,7 +152,7 @@ function needWallet(page, at, current, path, what) {
  *  then sends one call at a time, keeps what the receipt names, and reads again. */
 function wireCalls(page, st, status, again) {
   page.addEventListener("click", async (e) => {
-    const button = e.target.closest("button[data-fund], button[data-claim]");
+    const button = e.target.closest("button[data-fund], button[data-claim], button[data-held]");
     if (!button || button.disabled || st.flight) return;
     if (!chain.currentSigner()) {
       try {
@@ -164,20 +164,29 @@ function wireCalls(page, st, status, again) {
       return;
     }
     const fund = button.dataset.fund !== undefined;
+    const held = button.dataset.held !== undefined;
+    // Where the money set aside goes is read before anything is sent: an address that is none is told so, and nothing is asked of the wallet.
+    const target = held ? claimTarget($("#sim-held-to", page)?.value) : null;
+    if (target?.error) {
+      status.className = "sp-status err";
+      status.textContent = target.error;
+      return;
+    }
     st.flight = true;
-    page.querySelectorAll("button[data-fund], button[data-claim]").forEach((b) => { b.disabled = true; });
+    page.querySelectorAll("button[data-fund], button[data-claim], button[data-held]").forEach((b) => { b.disabled = true; });
     status.className = "sp-status busy";
     status.textContent = "Working…";
     try {
       const signer = chain.currentSigner();
       const pool = new ethers.Contract(st.at, ABI, signer);
-      const tx = fund ? await pool.fund(button.dataset.fund) : await pool.claimPayout(button.dataset.claim);
+      const tx = held ? await pool.claimHeld(target.to) : fund ? await pool.fund(button.dataset.fund) : await pool.claimPayout(button.dataset.claim);
       const receipt = await tx.wait();
       chain.forgetLiveReads();
       if (!receipt || receipt.status !== 1) throw new Error("the call reverted");
       keepFromReceipt(st.at, st.wallet, receipt);
       status.className = "sp-status ok";
-      status.textContent = fund ? `The stage is started (transaction ${receipt.hash}).` : `The payout is requested (transaction ${receipt.hash}).`;
+      status.textContent = held ? `The money set aside was sent to ${target.to} (transaction ${receipt.hash}).`
+        : fund ? `The stage is started (transaction ${receipt.hash}).` : `The payout is requested (transaction ${receipt.hash}).`;
     } catch (err) {
       status.className = "sp-status err";
       status.textContent = traderRefusal(refusalName(err, IFACE)) || friendly(err);
@@ -191,7 +200,7 @@ function wireCalls(page, st, status, again) {
       status.textContent = `Could not refresh: ${friendly(err)}`;
     } finally {
       st.flight = false;
-      page.querySelectorAll("button[data-fund], button[data-claim]").forEach((b) => { b.disabled = false; });
+      page.querySelectorAll("button[data-fund], button[data-claim], button[data-held]").forEach((b) => { b.disabled = false; });
     }
   });
 }
@@ -310,13 +319,19 @@ export async function simPayoutsView(address, page) {
     const structs = await chain.readAll(Array.from({ length: count }, (_, i) => i), (id) => st.pool.payout(id));
     // The payouts of the wallet, whose stops' reasons are read where there are stops.
     const now = head.timestamp;
+    // What the pool set aside for the wallet, read by the wallet's address: a wallet with nothing set aside sees no Claim.
+    const held = BigInt(await st.pool.heldOf(st.wallet));
     const mine = payoutRows({ structs, wallet: st.wallet, now });
     const stoppedIds = new Set(mine.filter((p) => p.key === "stopped").map((p) => p.id));
     const reasons = stoppedIds.size
       ? await stopReasons(st, structs.map((s, id) => ({ id, stoppedAt: Number(s.stoppedAt ?? 0), trader: s.trader })).filter((p) => stoppedIds.has(p.id)), head.number)
       : new Map();
     await refreshRows(st);
-    $("#sim-list", page).innerHTML = payoutsHtml({ ready: requestable(st.rows), rows: payoutRows({ structs, wallet: st.wallet, now, reasons }) });
+    const typed = $("#sim-held-to", page)?.value;
+    $("#sim-list", page).innerHTML = payoutsHtml({ ready: requestable(st.rows), rows: payoutRows({ structs, wallet: st.wallet, now, reasons, heldLeft: held > 0n }),
+      held, wallet: st.wallet });
+    // The address the wallet was typing stays where it was when the lists are drawn again.
+    if (typed && $("#sim-held-to", page)) $("#sim-held-to", page).value = typed;
     $("#sim-scan", page).textContent = scanNote(st.loaded, st.floor);
     $("#sim-back", page).disabled = !canLookBack(st.loaded, st.floor);
   };
