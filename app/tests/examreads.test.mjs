@@ -287,11 +287,13 @@ test("the page reads through this module and asks the list's prices only while t
   assert.match(page, /readPass\(readerOf\(st\)/);
   assert.match(page, /readList\(readerOf\(st\)/);
   assert.doesNotMatch(page, /st\.assets\.map\(async \(asset\)/, "no pass reads five things of every market");
-  assert.match(page, /if \(st\.listBusy \|\| !st\.market\.open\) return;/);
+  assert.match(page, /if \(!st\.market\.open \|\| st\.listReading === session\) return;/);
   assert.match(page, /refreshList\(page, st\)\.catch/);
   assert.match(page, /selected !== st\.asset\) return tick\(page, st\)/, "a market chosen during a reading is read again");
   assert.match(page, /if \(seq !== st\.tickSeq\) return undefined;/, "only the latest pass draws");
-  assert.match(page, /if \(st\.market\.open\) \{\s*st\.prices = withPrices\(st\.prices, fresh\);/, "a list closed during its reading keeps nothing of it");
+  assert.match(page, /if \(st\.market\.open && session === st\.listSession\) \{\s*st\.prices = withPrices\(st\.prices, fresh\);/, "a list closed, or closed and opened again, during its reading keeps nothing of it");
+  assert.match(page, /st\.listSession \+= 1;/, "every opening and closing is a new session");
+  assert.match(page, /st\.prices = st\.market\.open \? withPrices\(st\.prices, snap\.fresh\) : snap\.fresh;/, "with the list closed only what the pass read is kept");
 });
 
 test("encode and decode of a pack still agree with the test's node", () => {

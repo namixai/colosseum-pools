@@ -97,7 +97,7 @@ export async function examView(address, page, query = "") {
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
     exam, address, ds, perps, assets, trader, panelPool, asset: assetFromQuery(query, assets), query,
-    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listBusy: false, chart: null,
+    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listSession: 0, listReading: null, chart: null,
     book: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };
@@ -288,7 +288,8 @@ async function tick(page, st) {
   // The market was changed while this was being read: what was read is not what the screen now needs. Read again.
   if (selected !== st.asset) return tick(page, st);
   st.snap = snap;
-  st.prices = withPrices(st.prices, snap.fresh);
+  // With the list closed only the prices this pass read are kept: the others would be old when the list opens again.
+  st.prices = st.market.open ? withPrices(st.prices, snap.fresh) : snap.fresh;
   note(page, "");
   paintAccount(page, st);
   paintPositions(page, st);
@@ -299,19 +300,20 @@ async function tick(page, st) {
   return undefined;
 }
 
-/** The oracle prices of the markets a pass does not read, for the list while it is open. One reading at a time. */
+/** The oracle prices of the markets a pass does not read, for the list while it is open. One reading at a time for each
+ *  opening of the list: a reading that was out when the list was closed, or closed and opened again, is not kept. */
 async function refreshList(page, st) {
-  if (st.listBusy || !st.market.open) return;
-  st.listBusy = true;
+  const session = st.listSession;
+  if (!st.market.open || st.listReading === session) return;
+  st.listReading = session;
   try {
     const fresh = await readList(readerOf(st), { assets: st.assets, skip: fullyRead(st.snap?.perAsset ?? []) });
-    // The list was closed while this was out: what it read is not kept, as the closing dropped what the list had shown.
-    if (st.market.open) {
+    if (st.market.open && session === st.listSession) {
       st.prices = withPrices(st.prices, fresh);
       if (page.isConnected) paintMarketList(page, st);
     }
   } finally {
-    st.listBusy = false;
+    if (st.listReading === session) st.listReading = null;
   }
 }
 
@@ -368,6 +370,7 @@ function paintMarketList(page, st) {
 
 function setMarketOpen(page, st, open, focus = true) {
   st.market.open = open;
+  st.listSession += 1;
   $("#ex-pop", page).hidden = !open;
   $("#ex-market", page).setAttribute("aria-expanded", String(open));
   if (open) {
