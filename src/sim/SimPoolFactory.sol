@@ -11,11 +11,14 @@ import {TermsBook} from "../multi/TermsBook.sol";
 
 /// @title SimPoolFactory
 /// @notice Makes simulated pools: both stages are paper exams, nobody's capital is traded, and a
-///         pass is paid out of the prices other traders paid. Anyone opens one for 1 HYPE and the
-///         money for two payouts of its largest size. The platform's numbers are constants here,
-///         the same for every pool: what a pool pays the platform, what it pays a trader, what it
-///         keeps, how long a payout waits, how many payouts a pool pays a day, how long a pool runs at
-///         least, how long a withdrawal waits.
+///         pass is paid out of the prices other traders paid. Anyone opens one for the creation fee
+///         and a lock of USDC: two payouts of its smallest line at least, and two of each line on at
+///         the start. The fee is set when the factory is
+///         deployed (1 HYPE on mainnet, 0.1 HYPE on testnet) and the operator may change it to any
+///         amount above zero; a pool already open is not touched by it. The platform's other numbers are
+///         constants here, the same for every pool: what a pool pays the platform, what it pays a
+///         trader, what it keeps, how long a payout waits, how many payouts a pool pays a day, how
+///         long a pool runs at least, how long a withdrawal waits.
 /// @dev The operator lists the assets and their leverage caps, and names the four roles the
 ///      pools read from here: the filler of every exam's orders, the checker who may stop a
 ///      payout with a reason, the closer who alone may close a pool before `MIN_TERM` and may cancel
@@ -25,8 +28,6 @@ import {TermsBook} from "../multi/TermsBook.sol";
 contract SimPoolFactory {
     using SafeERC20 for IERC20;
 
-    /// What opening a pool costs, in HYPE (18 decimals), paid to the platform.
-    uint256 public constant CREATION_FEE = 1 ether;
     /// The platform's part of every exam's price, out of the price, and of every withdrawal (bps).
     uint16 public constant FEE_BPS = 50;
     /// A payout, out of the size the trader passed on (bps): 8 %.
@@ -96,6 +97,10 @@ contract SimPoolFactory {
     /// The pool each pool and each of its exams and stages belongs to.
     mapping(address => address) public poolOf;
     address[] internal _pools;
+    /// What opening a pool costs, in HYPE (18 decimals), paid to the platform: set at the deploy, changed only by the
+    /// operator, any amount above zero (opening is never free; there is no cap). `create` takes exactly this, so a
+    /// creator who read another pays nothing: the call reverts. Declared last, so the slots `ops/deploy_sim.py check` writes stay where they were.
+    uint256 public creationFee;
 
     event OperatorSet(address indexed operator);
     event FillerSet(address indexed filler);
@@ -104,6 +109,7 @@ contract SimPoolFactory {
     event FeeRecipientSet(address indexed recipient);
     event TermsBookSet(address indexed book);
     event AssetSet(uint32 indexed asset, uint32 capX100);
+    event CreationFeeSet(uint256 previous, uint256 fee);
     event PoolCreated(address indexed pool, address indexed creator, uint256 locked);
 
     error NotOperator();
@@ -111,6 +117,7 @@ contract SimPoolFactory {
     error BadRole();
     error BadPlan();
     error WrongFee();
+    error BadFee();
     error FeeNotSent();
     error Unpublished();
 
@@ -119,7 +126,7 @@ contract SimPoolFactory {
         _;
     }
 
-    constructor(IERC20 usdc_, address examImpl_, address poolImpl_, address operator_) {
+    constructor(IERC20 usdc_, address examImpl_, address poolImpl_, address operator_, uint256 creationFee_) {
         if (address(usdc_) == address(0) || examImpl_ == address(0) || poolImpl_ == address(0)) revert BadRole();
         if (operator_ == address(0)) revert BadRole();
         usdc = usdc_;
@@ -127,9 +134,15 @@ contract SimPoolFactory {
         poolImpl = poolImpl_;
         operator = operator_;
         emit OperatorSet(operator_);
+        _setCreationFee(creationFee_);
     }
 
     // ── operator ─────────────────────────────────────────────────
+
+    /// @notice The fee of every pool opened from now on; a pool already open paid what it paid and is not touched.
+    function setCreationFee(uint256 fee) external onlyOperator {
+        _setCreationFee(fee);
+    }
 
     function setOperator(address operator_) external onlyOperator {
         if (operator_ == address(0)) revert BadRole();
@@ -184,11 +197,11 @@ contract SimPoolFactory {
 
     // ── anyone ───────────────────────────────────────────────────
 
-    /// @notice Opens a pool on `plan` for 1 HYPE, sent with the call, and the plan's `locked` USDC, taken from the
-    ///         caller: at least `LOCKED_PAYOUTS` payouts of the smallest line, and as many of every line on at the
-    ///         start.
+    /// @notice Opens a pool on `plan` for `creationFee`, sent with the call, and the plan's `locked` USDC, taken
+    ///         from the caller: at least `LOCKED_PAYOUTS` payouts of the smallest line, and as many of every line on
+    ///         at the start.
     function create(SimPlan calldata plan) external payable returns (address pool) {
-        if (msg.value != CREATION_FEE) revert WrongFee();
+        if (msg.value != creationFee) revert WrongFee();
         address to = feeRecipient;
         // No pool without a closer: before its term, only the closer can close it (review of #279).
         if (filler == address(0) || checker == address(0) || closer == address(0) || to == address(0)) revert BadRole();
@@ -224,6 +237,12 @@ contract SimPoolFactory {
     }
 
     // ── internals ────────────────────────────────────────────────
+
+    function _setCreationFee(uint256 fee) internal {
+        if (fee == 0) revert BadFee();
+        emit CreationFeeSet(creationFee, fee);
+        creationFee = fee;
+    }
 
     function _check(SimPlan calldata p) internal view returns (uint256 largest) {
         uint256 n = p.menu.length;

@@ -93,3 +93,49 @@ export function listPrices(fresh, covered) {
 export function fullyRead(perAsset) {
   return new Set(perAsset.filter((a) => a.read).map((a) => a.asset));
 }
+
+/**
+ * Which passes are out and which one may draw. `start()` takes a number; only the pass with the highest number draws, so
+ * an older answer never covers a newer one (`isLatest`), and an error of one that was passed by is not the screen's
+ * business either. The background poll asks `running` and does not start a pass while one is out: a pass that takes
+ * longer than the interval is let to finish and draw, instead of being passed by the next poll again and again. Passes
+ * the page starts itself (after a transaction, after a change of market) are not held off, and pass the older ones. A pass
+ * older than `staleMs` is not waited for (a request the node never answers would otherwise stop the poll for good).
+ */
+export function createPasses({ now = Date.now, staleMs = Infinity } = {}) {
+  let last = 0;
+  const out = new Map();   // seq -> when it started, for the passes not ended
+  return {
+    start() {
+      const seq = ++last;
+      out.set(seq, now());
+      return {
+        seq,
+        isLatest: () => seq === last,
+        end() {
+          out.delete(seq);
+        },
+      };
+    },
+    /** Whether a pass is out that the poll should wait for: not one older than `staleMs`, which may never come back. A
+     *  pass given up like that is not ended, but the poll's next pass is the latest, so if it does come back it is not drawn. */
+    get running() {
+      for (const startedAt of out.values()) if (now() - startedAt < staleMs) return true;
+      return false;
+    },
+  };
+}
+
+/** How many poll intervals a pass may be out before the poll stops waiting for it. */
+export const STALE_PASS_POLLS = 3;
+
+/**
+ * The price shown for a market: the one kept for it (a kept null is a price that was not read, and stands as that), else
+ * the row's own where a pass read the row in full, else none. A row a pass did not read carries only what was kept when
+ * the pass began, which the list may have dropped since.
+ */
+export function shownPrice(prices, row) {
+  if (!row) return null;
+  if (prices.has(row.asset)) return prices.get(row.asset);
+  return row.read ? row.oracle : null;
+}

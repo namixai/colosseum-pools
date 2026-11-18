@@ -232,9 +232,11 @@ export function payoutLine(p, now, reason = null, heldLeft = true) {
       // `claimHeld` sends everything set aside for the wallet at once and the payout keeps its state, so a row cannot say it
       // was claimed: it says what is true of the wallet, whether anything is still set aside for it.
       return { ...base, key: "held", label: "Set aside", when: null,
-        note: heldLeft
-          ? "The token refused the transfer. The money was set aside for you in the pool; Claim above takes what is still set aside."
-          : "The token refused the transfer. The money was set aside for you in the pool, and nothing is set aside for this wallet now." };
+        note: heldLeft === null
+          ? "The token refused the transfer. The money was set aside for you in the pool."
+          : heldLeft
+            ? "The token refused the transfer. The money was set aside for you in the pool; Claim above takes what is still set aside."
+            : "The token refused the transfer. The money was set aside for you in the pool, and nothing is set aside for this wallet now." };
     default:
       return { ...base, key: "none", label: "Unknown", when: null, note: "The pool answered a state this page has no words for." };
   }
@@ -323,6 +325,11 @@ export function claimTarget(text) {
 
 /** What the pool set aside for the wallet, and the button that sends it. Nothing at all where nothing is set aside. */
 export function heldHtml({ amount, wallet }) {
+  // null: the balance could not be read. Nothing is said of what is set aside, and there is no button to press.
+  if (amount === null) {
+    return `<div class="sp-box sp-list" id="held"><div class="sp-bh"><b>Set aside for this wallet</b><span>from the pool's contract</span></div>`
+      + `<p class="sp-empty">What the pool has set aside for this wallet could not be read, so Claim is not offered. Reload the page to read it again.</p></div>`;
+  }
   if (amount === undefined || amount === null || BigInt(amount) === 0n) return "";
   const sum = dollars(amount);
   return `<div class="sp-box sp-list" id="held"><div class="sp-bh"><b>Set aside for this wallet · ${esc(sum)}</b>`
