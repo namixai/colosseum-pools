@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { createGentle, GENTLE } from "../lib/gentle.js";
 import { MULTICALL3, encodeAggregate3, decodeAggregate3 } from "../lib/multicall.js";
 import { ORACLE_PX_PRECOMPILE, BBO_PRECOMPILE, bboOf } from "../lib/exam.js";
-import { readPass, readList, fullyRead, withPrices, oracleOf, LIST_MS } from "../lib/examreads.js";
+import { readPass, readList, fullyRead, listPrices, withPrices, oracleOf, LIST_MS } from "../lib/examreads.js";
 
 const EXAM = "0x70066669eC7Eb992055c82B615eD822CFF14e44A";
 const word = (n) => BigInt.asUintN(256, BigInt(n)).toString(16).padStart(64, "0");
@@ -291,7 +291,8 @@ test("the page reads through this module and asks the list's prices only while t
   assert.match(page, /refreshList\(page, st\)\.catch/);
   assert.match(page, /selected !== st\.asset\) return tick\(page, st\)/, "a market chosen during a reading is read again");
   assert.match(page, /if \(seq !== st\.tickSeq\) return undefined;/, "only the latest pass draws");
-  assert.match(page, /if \(st\.market\.open && session === st\.listSession\) \{\s*st\.prices = withPrices\(st\.prices, fresh\);/, "a list closed, or closed and opened again, during its reading keeps nothing of it");
+  assert.match(page, /st\.prices = withPrices\(st\.prices, listPrices\(fresh, fullyRead\(st\.snap\?\.perAsset \?\? \[\]\)\)\);/, "a market the latest pass reads is not overwritten by the older list reading");
+  assert.match(page, /if \(st\.market\.open && session === st\.listSession\) \{/, "a list closed, or closed and opened again, during its reading keeps nothing of it");
   assert.match(page, /oracle: st\.prices\.has\(a\.asset\) \? st\.prices\.get\(a\.asset\) : a\.oracle/, "a price kept as null shows no price");
   assert.match(page, /Reading this market…<\/p>`;\s*\$\("#ex-conv", page\)\.textContent = "";/, "the conversion of the market left is not left under the new one");
   assert.match(page, /st\.listSession \+= 1;/, "every opening and closing is a new session");
@@ -303,4 +304,23 @@ test("encode and decode of a pack still agree with the test's node", () => {
   assert.deepEqual(inner(encodeAggregate3(calls)).map((c) => c.data), calls.map((c) => c.data));
   assert.deepEqual(decodeAggregate3(packed([{ success: true, data: "0x01" }, { success: false, data: "0x" }]), 2),
     [{ success: true, data: "0x01" }, { success: false, data: "0x" }]);
+});
+
+test("a list reading that ends after a pass does not cover what the pass read: a market that gained a position meanwhile keeps the pass's price", async () => {
+  const w = world({ held: new Map() });
+  const assets = assetsOf(4);
+  // The list starts while market 3 has no position: it reads 3's price (the old one) and returns it late.
+  const listRead = await readList(w.io, { assets, skip: new Set([1]) });
+  // A position opens in 3 and a pass reads it in full, at a newer price.
+  w.chain.held.set(3, 5n);
+  w.chain.oracle = (a) => 2_000_000n + BigInt(a);
+  w.clock += 5_000;
+  const pass = await readPass(w.io, { assets, selected: 1 });
+  assert.deepEqual([...fullyRead(pass.perAsset)], [1, 3]);
+  const kept = withPrices(new Map(), pass.fresh);
+  const merged = withPrices(kept, listPrices(listRead, fullyRead(pass.perAsset)));
+  assert.equal(merged.get(3), 2_000_003n, "the pass's price for the market that gained a position stands");
+  assert.equal(merged.get(2), 1_000_002n, "a market only the list read keeps the list's price");
+  assert.equal(merged.get(4), 1_000_004n);
+  assert.equal(withPrices(kept, listRead).get(3), 1_000_003n, "(without the guard the older list price would have covered it)");
 });

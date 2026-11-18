@@ -81,6 +81,14 @@ export async function readList(io, { assets, skip = new Set() }) {
   return new Map(wanted.map((a, i) => [a, oracleOf(hexes[i])]));
 }
 
+/**
+ * The list's prices (`fresh`) without the markets the latest pass reads in full (`covered`): a pass that finished while the
+ * list was being read has a newer price for them, and a position may have opened in one of them meanwhile.
+ */
+export function listPrices(fresh, covered) {
+  return new Map([...fresh].filter(([asset]) => !covered.has(asset)));
+}
+
 /** The assets a pass of this account reads in full: the one on screen and every one with a position. */
 export function fullyRead(perAsset) {
   return new Set(perAsset.filter((a) => a.read).map((a) => a.asset));

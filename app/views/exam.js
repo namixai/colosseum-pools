@@ -25,7 +25,7 @@ import { createExamChart } from "./examchart.js";
 import { positionLines } from "../lib/positionlines.js";
 import { createEntryTracker, browserStore } from "../lib/entrytrack.js";
 import { pxText } from "../lib/exam.js";
-import { readPass, readList, fullyRead, withPrices, LIST_MS } from "../lib/examreads.js";
+import { readPass, readList, fullyRead, listPrices, withPrices, LIST_MS } from "../lib/examreads.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
@@ -309,7 +309,8 @@ async function refreshList(page, st) {
   try {
     const fresh = await readList(readerOf(st), { assets: st.assets, skip: fullyRead(st.snap?.perAsset ?? []) });
     if (st.market.open && session === st.listSession) {
-      st.prices = withPrices(st.prices, fresh);
+      // A pass that finished meanwhile read its markets later than the list did: its prices stand.
+      st.prices = withPrices(st.prices, listPrices(fresh, fullyRead(st.snap?.perAsset ?? [])));
       if (page.isConnected) paintMarketList(page, st);
     }
   } finally {
