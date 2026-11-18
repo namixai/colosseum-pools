@@ -17,9 +17,13 @@
     spike/.venv/bin/python -m ops.deploy_sim cancel --pool 0x.. --key closer [--send]                  # cancel it
     spike/.venv/bin/python -m ops.deploy_sim approver --pool 0x.. --key creator --address 0x.. [--send] # name it
     spike/.venv/bin/python -m ops.deploy_sim approve --pool 0x.. --key approver --ids 3,4 [--send]     # payouts
+    spike/.venv/bin/python -m ops.deploy_sim fee --deployment sim1 --amount 0.5 --key deployer [--send] # the fee
+                                                       ... [--confirm-large-fee]       # mainnet, above 10 HYPE
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
-and the SimPoolFactory on HyperEVM, names the filler, the checker, the closer (the platform's
+and the SimPoolFactory on HyperEVM, with the fee for opening a pool set in the factory (--creation-fee, in HYPE: 1 on
+mainnet, the platform's, and 0.1 on testnet unless named; on mainnet a fee above 10 HYPE also wants
+--confirm-large-fee), names the filler, the checker, the closer (the platform's
 key that alone may close a pool before its 6 months, 184 days; four keys, none of them the operator, who
 opens our pools) and the platform's recipient, and lists the assets with their leverage caps from ops/leverage.py (HYPE is left out:
 the platform's decision of 11 November 2026), each at its perp index on the network (ops/sim_network.py). It
@@ -55,12 +59,18 @@ approved 7 days after. Without --send `approve` reads each payout and says whose
 from when it goes out with the approval and from when without, or why the pool would refuse it. Like `close` and `finish`, without --send each reads
 the pool and says what it would send, from which key, or why the pool would refuse.
 
+`fee` changes the fee for opening a pool on a deployment's factory (setCreationFee, from its operator: the deployer's
+key on testnet, our Safe with --signer on mainnet), to any amount above 0 (the factory has no cap; on mainnet a fee
+above 10 HYPE also wants --confirm-large-fee, against a slip of a zero); a pool already open is not touched.
+Without --send it reads the factory's fee and operator and says what it would send, or why the factory would refuse;
+with --send it reads the fee back after.
+
 `check` asks SimPoolFactory.check whether a plan could open a pool, by eth_call, sending nothing and reading no key:
 with --deployment, the factory it names; without, the factory and PaperExam of this checkout, put in the call by a
 state override on the network's precompiles, so a plan is checked before any factory is deployed.
 
 `pool` publishes a pool's terms in the TermsBook, approves the USDC for the two locked payouts and
-calls `create` with 1 HYPE, from the creator's key, then sets the plan's codes as `codes` does. The
+calls `create` with the factory's fee, read from the factory, from the creator's key, then sets the plan's codes as `codes` does. The
 plan file gives the menu, both stages' rules and terms, the fund window, the book's ceiling, the codes
 and the terms' text.
 
@@ -86,6 +96,7 @@ import json
 import pathlib
 import sys
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from eth_utils import keccak, to_checksum_address
 
@@ -99,7 +110,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 # What a finished deployment's record says: the one status `deployments.load` takes, so that `pool`, `buy`, the
 # keeper and the checker can read the record `deploy` wrote.
 DONE = "complete"
-CREATION_FEE = 10**18  # SimPoolFactory.CREATION_FEE; the tests hold it against the source
+HYPE = 10**18
+# What opening a pool costs on each network at the deploy, in wei, unless --creation-fee names another
+# (SimPoolFactory.creationFee, which its operator may change after: `fee`). Mainnet's is the platform's 1 HYPE;
+# testnet's 0.1, so a rehearsal on test HYPE opens a pool (18 November 2026).
+CREATION_FEES = {"mainnet": HYPE, "testnet": HYPE // 10}
+# The factory takes any fee above zero, with no cap. On mainnet a fee above this also wants --confirm-large-fee,
+# asked before anything is sent: a fee of more than 10 HYPE, not every slip (1 HYPE typed as 10 asks nothing).
+LARGE_FEE = 10 * HYPE
 PAYOUT_BPS = 800
 LOCKED_PAYOUTS = 2
 RULES_T = "(uint16,uint16,uint32,uint32[],uint32[])"
@@ -137,6 +155,74 @@ def asset_list(names: list[str]) -> list[tuple[str, int, int]]:
 def usdc_units(amount) -> int:
     """USDC (6 decimals) of an amount written in dollars, rounded."""
     return int(round(amount * 10**6))
+
+
+def hype(wei: int) -> str:
+    """An amount of HYPE in wei, written in HYPE: 1, 0.1."""
+    return f"{Decimal(wei) / HYPE:f}"
+
+
+def fee_units(text: str, flag: str) -> int:
+    """A fee written in HYPE, in wei, as setCreationFee takes it: above 0 (the factory refuses none), a whole number of
+    wei, a uint256. The amount as written is checked and converted from its digits, so no context rounds it."""
+    try:
+        amount = Decimal(text)
+    except InvalidOperation:
+        amount = None
+    if amount is None or not amount.is_finite():
+        raise SystemExit(f"{flag} {text!r} is not an amount of HYPE")
+    if amount <= 0:
+        raise SystemExit(f"{flag} is above 0: the factory refuses a fee of none")
+    # Its decimals read off its digits: trailing zeros are no decimals.
+    _, digits, exponent = amount.as_tuple()
+    zeros = len(digits) - len("".join(map(str, digits)).rstrip("0"))
+    if exponent + zeros < -18:
+        raise SystemExit(f"{flag} {text!r} is not an amount of HYPE of at most 18 decimals")
+    if amount.adjusted() > 60:
+        raise SystemExit(f"{flag} {text!r} does not fit a uint256 of wei")
+    shift = exponent + 18
+    number = int("".join(map(str, digits)))
+    wei = number * 10**shift if shift >= 0 else number // 10**-shift
+    if wei >= 2**256:
+        raise SystemExit(f"{flag} {text!r} does not fit a uint256 of wei")
+    return wei
+
+
+def large_fee_ok(wei: int, args, flag: str) -> None:
+    """On mainnet a fee above LARGE_FEE goes only with --confirm-large-fee: refused here, before anything is read or
+    sent. The factory has no cap of its own."""
+    if c.NETWORK.name == "mainnet" and wei > LARGE_FEE and not getattr(args, "confirm_large_fee", False):
+        raise SystemExit(f"{flag} is {hype(wei)} HYPE, more than {hype(LARGE_FEE)} HYPE on mainnet: add "
+                         "--confirm-large-fee to send a fee that large; nothing was sent")
+
+
+def network_fee() -> int:
+    """The fee at the deploy on the network selected now; a network without one is refused, never given another's."""
+    if c.NETWORK.name not in CREATION_FEES:
+        raise SystemExit(f"no fee to open a pool is set for {c.NETWORK.name}: only {', '.join(sorted(CREATION_FEES))}")
+    return CREATION_FEES[c.NETWORK.name]
+
+
+def creation_fee_of(args) -> int:
+    """The fee `deploy` sets in the factory, in wei: --creation-fee in HYPE, or the network's. Not nothing; on mainnet
+    above 10 HYPE only with --confirm-large-fee."""
+    own = network_fee()
+    if args.creation_fee is None:
+        return own
+    wei = fee_units(args.creation_fee, "--creation-fee")
+    large_fee_ok(wei, args, "--creation-fee")
+    return wei
+
+
+def factory_fee(factory: str, overrides: dict | None = None, block: str = "latest") -> int:
+    """The fee `factory` takes to open a pool, in wei, read from it at `block` (creationFee(), which its operator may
+    change): the factory's own, not this checkout's number."""
+    params = [{"to": factory, "data": "0x" + c.selector("creationFee()").hex()}, block]
+    out = c.rpc("eth_call", params + [overrides] if overrides else params)
+    if not out or out in ("0x", "0x0") or int(out, 16) == 0:
+        raise SystemExit(f"{factory} gave no fee for opening a pool on {c.NETWORK.name}: no simulated pool's factory "
+                         "there")
+    return int(out, 16)
 
 
 def _rules(r: dict) -> tuple:
@@ -373,10 +459,13 @@ def deploy(args) -> int:
     if len({filler, checker, closer}) != 3:
         raise SystemExit("the filler, the checker and the closer are three keys")
     safe = safe_of(args, (filler, checker, closer))
+    fee = creation_fee_of(args)
     print(f"deploy_sim deploy: {c.NETWORK.name} (chain {c.CHAIN_ID}), label {args.label}, USDC {c.USDC_ERC20} "
           "(Circle's, EIP-3009)")
     print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPoolCodes, SimPool (linked to the three), TermsBook, "
-          "SimPoolFactory(usdc, exam, pool, operator)  (big blocks on, then off)")
+          "SimPoolFactory(usdc, exam, pool, operator, fee)  (big blocks on, then off)")
+    print(f"  creation fee     {hype(fee)} HYPE to open a pool on {c.NETWORK.name} ({fee} wei), set in the factory; its "
+          "operator may change it after (`fee`)")
     print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
           f"setTermsBook, setAsset " + ", ".join(f"{n} ({i}) {cap / 100:g}x" for n, i, cap in assets))
     if safe:
@@ -418,7 +507,7 @@ def deploy(args) -> int:
                     "deployer": op.address, "operator": op.address, "usdc": c.USDC_ERC20,
                     "filler": filler, "checker": checker, "closer": closer, "fee_recipient": recipient,
                     "platform_assets": {n: i for n, i, _ in assets}, "asset_caps_x100": {n: cap for n, _, cap in assets},
-                    "keeper_nodes": nodes, "tx": {}}
+                    "keeper_nodes": nodes, "creation_fee_at_deploy_wei": str(fee), "creation_fee_at_deploy_hype": hype(fee), "tx": {}}
     big_blocks(op, True)
     try:
         try:
@@ -433,10 +522,14 @@ def deploy(args) -> int:
                                       {"SimPoolStops": stops, "SimPoolSetup": setup, "SimPoolCodes": codes_lib})
             book, _ = deploy_contract(op, out, record, "TermsBook", "TermsBook", [], [])
             factory, _ = deploy_contract(op, out, record, "SimPoolFactory", "SimPoolFactory",
-                                         ["address", "address", "address", "address"],
-                                         [c.USDC_ERC20, exam, pool, op.address])
+                                         ["address", "address", "address", "address", "uint256"],
+                                         [c.USDC_ERC20, exam, pool, op.address, fee])
         finally:
             big_blocks(op, False)
+        read_back = factory_fee(factory)
+        if read_back != fee:
+            raise SystemExit(f"the factory {factory} takes {read_back} wei to open a pool, not the {fee} "
+                             "deployed: read it before anything else")
         record["status"] = "configuring"
         save(out, record)
         steps = [("setFiller", "setFiller(address)", ["address"], [filler]),
@@ -468,11 +561,14 @@ def pool(args) -> int:
     plan = plan_of(raw, terms_hash)
     codes = codes_of(raw, signer_of(args, "creator"))
     locked = locked_of(raw)
-    factory = record.get("SimPoolFactory", "(none in this record)")
+    factory = record.get("SimPoolFactory")
+    if not factory:
+        raise SystemExit(f"the record {args.deployment!r} names no SimPoolFactory")
+    fee = factory_fee(factory)
     print(f"deploy_sim pool: factory {factory}, {len(plan[0])} sizes "
           + ", ".join(f"{m[0] / 1e6:g} for {m[1] / 1e6:g}" for m in plan[0]) + " USDC")
     on = plan[-1]
-    print(f"  locks            {locked / 1e6:g} USDC, pays 1 HYPE; lines on at the start: "
+    print(f"  locks            {locked / 1e6:g} USDC, pays {hype(fee)} HYPE (the factory's fee); lines on at the start: "
           + (", ".join(str(i) for i in range(len(plan[0])) if on >> i & 1) or "none")
           + " (the creator switches the others on, with two of their payouts free)")
     print(f"  book             {'at the book, ceiling ' + str(plan[7]) + ' bp' if plan[6] else 'at the oracle'}; "
@@ -486,16 +582,16 @@ def pool(args) -> int:
         return print_batch(args, "open a simulated pool", [
             (record["TermsBook"], 0, c.encode_call("publish(string)", ["string"], [text])),
             (record["usdc"], 0, c.encode_call("approve(address,uint256)", ["address", "uint256"], [factory, locked])),
-            (factory, CREATION_FEE, c.encode_call(f"create({PLAN_T})", [PLAN_T], [plan]))])
+            (factory, fee, c.encode_call(f"create({PLAN_T})", [PLAN_T], [plan]))])
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
-    sn.confirm_send(args, f"open a pool on {factory} from the key {args.creator!r}: locks {locked / 1e6:g} USDC, pays 1 HYPE", c)
+    sn.confirm_send(args, f"open a pool on {factory} from the key {args.creator!r}: locks {locked / 1e6:g} USDC, pays {hype(fee)} HYPE", c)
     creator = c.account(args.creator)
     c.transact(creator, record["TermsBook"], "publish(string)", ["string"], [text])
     c.transact(creator, record["usdc"], "approve(address,uint256)", ["address", "uint256"], [factory, locked])
     data = c.encode_call(f"create({PLAN_T})", [PLAN_T], [plan])
-    rcpt = c.send_tx(creator, factory, data, value=CREATION_FEE)
+    rcpt = c.send_tx(creator, factory, data, value=fee)
     topic = "0x" + keccak(text="PoolCreated(address,address,uint256)").hex()
     created = [l for l in rcpt["logs"] if l["topics"] and l["topics"][0] == topic]
     if not created:
@@ -516,6 +612,9 @@ CHECK_AT = {"exam": "0x" + "00" * 18 + "c0e1", "factory": "0x" + "00" * 18 + "c0
 # SimPoolFactory's slots of `termsBook` and `assetCapX100`, TermsBook's of `textAt` (forge inspect … storageLayout);
 # test/sim/SimPoolFactory.t.sol holds them against the contracts.
 FACTORY_TERMS_BOOK_SLOT, FACTORY_ASSET_CAP_SLOT, BOOK_TEXT_AT_SLOT = 5, 6, 0
+# SimPoolFactory's slot of `creationFee`, the network's fee at the deploy in the call (a constructor's storage is not in
+# the code an eth_call returns).
+FACTORY_CREATION_FEE_SLOT = 9
 # SimPoolFactory's slots of `filler`, `checker`, `closer` and `feeRecipient`: `create` refuses a factory without them.
 FACTORY_ROLE_SLOTS = {"filler": 1, "checker": 2, "closer": 3, "fee": 4}
 # CodeStore.MAX_LENGTH: TermsBook.publish refuses an empty text, and CodeStore one longer than this (review of cp#304).
@@ -542,12 +641,14 @@ def runtime_of(contract: str, types: list, values: list, libraries: dict | None 
 
 def check_overrides(assets: list[tuple[str, int, int]], terms_hash: bytes) -> dict:
     """The state the factory's `check` reads, as a state override: PaperExam and the factory as this checkout builds
-    them, the factory listing `assets` with their caps as `deploy` would and its roles set, a TermsBook with the
+    them, with the network's fee, the factory listing `assets` with their caps as `deploy` would and its roles set, a TermsBook with the
     terms published, and SimPool with its three libraries, which `create` clones and calls when its gas is measured."""
     a = CHECK_AT
-    factory = runtime_of("SimPoolFactory", ["address", "address", "address", "address"],
-                         [c.USDC_ERC20, a["exam"], a["pool"], a["factory"]])
-    state = {"0x%064x" % FACTORY_TERMS_BOOK_SLOT: "0x" + _word(int(a["book"], 16)).hex()}
+    fee = network_fee()
+    factory = runtime_of("SimPoolFactory", ["address", "address", "address", "address", "uint256"],
+                         [c.USDC_ERC20, a["exam"], a["pool"], a["factory"], fee])
+    state = {"0x%064x" % FACTORY_TERMS_BOOK_SLOT: "0x" + _word(int(a["book"], 16)).hex(),
+             "0x%064x" % FACTORY_CREATION_FEE_SLOT: "0x" + _word(fee).hex()}
     state.update({map_slot(i, FACTORY_ASSET_CAP_SLOT): "0x" + _word(cap).hex() for _, i, cap in assets})
     state.update({"0x%064x" % slot: "0x" + _word(int(a[role], 16)).hex() for role, slot in FACTORY_ROLE_SLOTS.items()})
     libraries = {"SimPoolSetup": a["setup"], "SimPoolStops": a["stops"], "SimPoolCodes": a["codes"]}
@@ -597,7 +698,10 @@ def check(args) -> int:
         print(f"  line             {size / 1e6:g} for {price / 1e6:g} USDC: loss limit {dd / 100:g} %, target "
               f"{target / 100:g} %, {'trailing to the start' if kind else 'from the start'}")
     print(f"  payouts a day    {plan[10]}; locks {locked_of(raw) / 1e6:g} USDC; terms keccak 0x{terms_hash.hex()}")
-    params = [{"to": factory, "data": "0x" + data.hex(), "gas": hex(CHECK_GAS)}, "latest"]
+    # One block for the plan, the fee and every gas probe: an asset delisted or a fee changed meanwhile would read as
+    # gas that does not suffice.
+    block = c.rpc("eth_blockNumber", [])
+    params = [{"to": factory, "data": "0x" + data.hex(), "gas": hex(CHECK_GAS)}, block]
     try:
         out = c.rpc("eth_call", params + [overrides] if overrides else params)
     except RuntimeError as exc:
@@ -609,7 +713,7 @@ def check(args) -> int:
     if largest != max(m[0] for m in plan[0]):
         raise SystemExit(f"deploy_sim check: the factory answered {largest}, not the plan's largest size")
     print(f"deploy_sim check: the factory accepts the plan; largest size {largest / 1e6:g} USDC.")
-    gas, limit = create_gas(factory, plan, overrides)
+    gas, limit = create_gas(factory, plan, overrides, block)
     if gas is None:
         raise SystemExit(f"deploy_sim check: create does not run on {limit} gas, a small block of {c.NETWORK.name}: "
                          "the pool would not open by an ordinary transaction")
@@ -646,20 +750,21 @@ def small_block_gas() -> int:
     return min(limits + [SMALL_BLOCK_GAS])
 
 
-def create_gas(factory: str, plan: tuple, overrides: dict | None) -> tuple[int | None, int]:
-    """The least gas `create(plan)` with 1 HYPE runs on, from an address no key holds, by eth_call: USDC answered by a
-    stand-in (TOKEN_STUB), the creator given the HYPE. Returns (gas or None if it does not run in a small block, the
-    small block's limit)."""
+def create_gas(factory: str, plan: tuple, overrides: dict | None, block: str) -> tuple[int | None, int]:
+    """The least gas `create(plan)` with the factory's fee runs on, from an address no key holds, by eth_call: USDC
+    answered by a stand-in (TOKEN_STUB), the creator given the HYPE. Returns (gas or None if it does not run in a small
+    block, the small block's limit), every call at `block`, the one the plan was checked at."""
     limit = small_block_gas()
+    fee = factory_fee(factory, overrides, block)
     state = dict(overrides or {})
     state[c.USDC_ERC20] = {"code": TOKEN_STUB}
-    state[CHECK_AT["creator"]] = {"balance": hex(2 * CREATION_FEE)}
+    state[CHECK_AT["creator"]] = {"balance": hex(2 * fee)}
     data = "0x" + c.encode_call(f"create({PLAN_T})", [PLAN_T], [plan]).hex()
 
     def runs(gas: int) -> bool:
-        call = {"from": CHECK_AT["creator"], "to": factory, "data": data, "value": hex(CREATION_FEE), "gas": hex(gas)}
+        call = {"from": CHECK_AT["creator"], "to": factory, "data": data, "value": hex(fee), "gas": hex(gas)}
         try:
-            c.rpc("eth_call", [call, "latest", state])
+            c.rpc("eth_call", [call, block, state])
             return True
         except RuntimeError:
             return False
@@ -968,6 +1073,40 @@ def send_or_say(args, pool_: str, sig: str, types: list | None = None, values: l
     return 0
 
 
+def fee_cmd(args) -> int:
+    """setCreationFee on a deployment's factory, from its operator: the fee of every pool opened after; a pool already
+    open is not touched. Reads the fee and the operator first, and says what it would send or why it would be
+    refused; with --send, reads the fee back after."""
+    factory = deployments.load(args.deployment).get("SimPoolFactory")
+    if not factory:
+        raise SystemExit(f"the record {args.deployment!r} names no SimPoolFactory")
+    new = fee_units(args.amount, "--amount")
+    large_fee_ok(new, args, "--amount")
+    now, operator, sender = factory_fee(factory), operator_of(factory), signer_of(args)
+    who = args.key or "the signer"
+    print(f"deploy_sim fee: {c.NETWORK.name} (chain {c.CHAIN_ID}), factory {factory}: a pool opens for {hype(now)} HYPE "
+          f"now; setCreationFee({new}) from {who} ({sender}) makes it {hype(new)} HYPE ({new} wei) for every pool opened after; "
+          "the pools open already are not touched")
+    if sender != operator:
+        raise SystemExit(f"the factory would refuse it: NotOperator; its operator is {operator}")
+    if new == now:
+        raise SystemExit(f"the factory's fee is {hype(now)} HYPE already: nothing to send")
+    if getattr(args, "signer", None):
+        return print_batch(args, f"setCreationFee on {factory}",
+                           [(factory, 0, c.encode_call("setCreationFee(uint256)", ["uint256"], [new]))])
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    sn.confirm_send(args, f"set the fee to open a pool on {factory} to {hype(new)} HYPE from the key {args.key!r}", c)
+    rcpt = c.transact(c.account(args.key), factory, "setCreationFee(uint256)", ["uint256"], [new])
+    after = factory_fee(factory)
+    if after != new:
+        raise SystemExit(f"after setCreationFee the factory's fee reads {hype(after)} HYPE, not {hype(new)}: "
+                         f"tx {rcpt['transactionHash']}")
+    print(f"deploy_sim: the fee to open a pool is {hype(after)} HYPE, tx {rcpt['transactionHash']}")
+    return 0
+
+
 def request(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     amount = amount_units(args.amount)
@@ -1048,6 +1187,10 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--safe", help="our Safe: the factory's operator after the deploy, set last (setOperator); needed "
                                   "on mainnet")
     d.add_argument("--assets", default="BTC,ETH,SOL")
+    d.add_argument("--creation-fee", help="HYPE to open a pool, set in the factory: 0.1 on testnet unless named; "
+                                          "mainnet 1 unless named")
+    d.add_argument("--confirm-large-fee", action="store_true",
+                   help="on mainnet, send a --creation-fee above 10 HYPE: refused without it")
     d.add_argument("--keeper-nodes", help="a JSON file of the keeper's nodes, as a record's keeper_nodes; needed on mainnet")
     d.add_argument("--send", action="store_true")
     q = sub.add_parser("pool")
@@ -1093,6 +1236,14 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--signer", help="an address that signs elsewhere (the Ledger's): print the call, send nothing")
     z.add_argument("--ids", required=True, help="payout numbers, as 3,4,7")
     z.add_argument("--send", action="store_true")
+    z = sub.add_parser("fee")
+    z.add_argument("--deployment", required=True)
+    z.add_argument("--amount", required=True, help='the new fee to open a pool, in HYPE, as "0.5"')
+    z.add_argument("--confirm-large-fee", action="store_true",
+                   help="on mainnet, send a fee above 10 HYPE: refused without it")
+    z.add_argument("--key", help="the factory's operator")
+    z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
+    z.add_argument("--send", action="store_true")
     for name in ("request", "withdraw", "cancel"):
         z = sub.add_parser(name)
         z.add_argument("--pool", required=True)
@@ -1108,7 +1259,7 @@ def main(argv: list[str] | None = None) -> int:
         c.assert_network()  # what a mainnet command reads is the chain's it names, sent or not (review of #300)
     return {"deploy": deploy, "pool": pool, "check": check, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
-            "approve": approve}[args.cmd](args)
+            "approve": approve, "fee": fee_cmd}[args.cmd](args)
 
 
 if __name__ == "__main__":

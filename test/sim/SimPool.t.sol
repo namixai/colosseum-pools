@@ -64,7 +64,7 @@ contract SimPoolTest is Test {
         usdc = new Usdc3009();
         book = new TermsBook();
         termsHash = book.publish("The simulated pool's terms, every clause written out.");
-        factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), address(this));
+        factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), address(this), 1 ether);
         factory.setFiller(filler);
         factory.setChecker(checker);
         factory.setCloser(closer);
@@ -265,6 +265,101 @@ contract SimPoolTest is Test {
         }
     }
 
+    /// A factory of another fee, configured as this test's: what `ops/deploy_sim.py deploy` makes on testnet.
+    function _factoryOf(uint256 fee) internal returns (SimPoolFactory f) {
+        f = new SimPoolFactory(IERC20(address(usdc)), factory.examImpl(), factory.poolImpl(), address(this), fee);
+        f.setFiller(filler);
+        f.setChecker(checker);
+        f.setCloser(closer);
+        f.setFeeRecipient(platform);
+        f.setAsset(BTC, 1000);
+        f.setTermsBook(book);
+        vm.prank(creator);
+        usdc.approve(address(f), type(uint256).max);
+    }
+
+    /// The fee is the factory's, set at its deploy: a testnet factory of 0.1 HYPE takes exactly that, and sends it to
+    /// the platform; 1 HYPE, mainnet's fee, is the wrong fee there.
+    function test_open_theFeeIsTheOneSetAtTheDeploy() public {
+        vm.expectEmit(false, false, false, true);
+        emit SimPoolFactory.CreationFeeSet(0, 0.1 ether);
+        SimPoolFactory f = _factoryOf(0.1 ether);
+        assertEq(f.creationFee(), 0.1 ether, "the fee the deploy named");
+        assertEq(factory.creationFee(), 1 ether, "the fee of this test's factory, mainnet's");
+        SimPlan memory p = _plan();
+        uint256[3] memory wrong = [uint256(1 ether), 0.1 ether - 1, 0.1 ether + 1];
+        for (uint256 i = 0; i < wrong.length; ++i) {
+            vm.prank(creator);
+            vm.expectRevert(SimPoolFactory.WrongFee.selector);
+            f.create{value: wrong[i]}(p);
+        }
+        uint256 hype = platform.balance;
+        uint256 held = creator.balance;
+        vm.prank(creator);
+        address pool = f.create{value: 0.1 ether}(p);
+        assertEq(f.poolOf(pool), pool);
+        assertEq(platform.balance - hype, 0.1 ether, "0.1 HYPE to the platform");
+        assertEq(held - creator.balance, 0.1 ether, "the creator paid the fee and no more");
+        assertEq(address(f).balance, 0, "the factory keeps none of it");
+    }
+
+    /// A fee of none is refused at the deploy; any fee above it is taken, however large: there is no cap.
+    function test_deploy_refusesAFeeOfNone_andHasNoCap() public {
+        (address exam, address impl) = (factory.examImpl(), factory.poolImpl());
+        vm.expectRevert(SimPoolFactory.BadFee.selector);
+        new SimPoolFactory(IERC20(address(usdc)), exam, impl, address(this), 0);
+        uint256[4] memory good = [uint256(1), 1 ether, 1_000_000 ether, type(uint256).max];
+        for (uint256 i = 0; i < good.length; ++i) {
+            SimPoolFactory f = new SimPoolFactory(IERC20(address(usdc)), exam, impl, address(this), good[i]);
+            assertEq(f.creationFee(), good[i]);
+        }
+    }
+
+    /// The operator changes the fee to any amount above zero, with an event of the old and the new; nobody else,
+    /// and never to none. A pool opened before keeps what it paid; the next takes the new fee and no other.
+    function test_setCreationFee_onlyTheOperator_neverNone() public {
+        SimPool before = _pool();
+        vm.expectRevert(SimPoolFactory.BadFee.selector);
+        factory.setCreationFee(0);
+        address[4] memory notOperator = [creator, platform, closer, stranger];
+        for (uint256 i = 0; i < notOperator.length; ++i) {
+            vm.prank(notOperator[i]);
+            vm.expectRevert(SimPoolFactory.NotOperator.selector);
+            factory.setCreationFee(2 ether);
+        }
+        assertEq(factory.creationFee(), 1 ether, "nothing changed it");
+
+        vm.expectEmit(false, false, false, true, address(factory));
+        emit SimPoolFactory.CreationFeeSet(1 ether, 2 ether);
+        factory.setCreationFee(2 ether);
+        assertEq(factory.creationFee(), 2 ether);
+        assertEq(factory.poolOf(address(before)), address(before), "the pool opened before is still the factory's");
+        assertEq(before.creator(), creator);
+
+        // The fee read before the change: refused, nothing paid. The new one: taken, and all of it to the platform.
+        SimPlan memory p = _plan();
+        vm.prank(creator);
+        vm.expectRevert(SimPoolFactory.WrongFee.selector);
+        factory.create{value: 1 ether}(p);
+        uint256 hype = platform.balance;
+        vm.prank(creator);
+        factory.create{value: 2 ether}(p);
+        assertEq(platform.balance - hype, 2 ether, "the new fee to the platform");
+
+        // Down as well as up, as far as the operator sets it: any amount above zero, with no cap. A large fee is
+        // taken whole by `create` and sent on.
+        factory.setCreationFee(1);
+        assertEq(factory.creationFee(), 1);
+        factory.setCreationFee(type(uint256).max);
+        assertEq(factory.creationFee(), type(uint256).max);
+        factory.setCreationFee(50 ether);
+        vm.deal(creator, 60 ether);
+        hype = platform.balance;
+        vm.prank(creator);
+        factory.create{value: 50 ether}(p);
+        assertEq(platform.balance - hype, 50 ether, "a fee of 50 HYPE, taken and sent on");
+    }
+
     function test_open_theCreatorIsNeitherTheFillerNorTheChecker() public {
         SimPlan memory p = _plan();
         address[2] memory roles = [filler, checker];
@@ -359,7 +454,7 @@ contract SimPoolTest is Test {
     /// it behind the factory a missing check of the factory's would not show (mutants SM13, SM15).
     function test_open_theFactoryHoldsItsOwnBounds_notOnlyTheExams() public {
         SimPoolFactory lax =
-            new SimPoolFactory(IERC20(address(usdc)), address(new TakesAnyRules()), address(new SimPool()), address(this));
+            new SimPoolFactory(IERC20(address(usdc)), address(new TakesAnyRules()), address(new SimPool()), address(this), 1 ether);
         lax.setAsset(BTC, 1000);
         lax.setTermsBook(book);
         lax.check(_plan()); // the plan itself is within every bound
@@ -496,7 +591,7 @@ contract SimPoolTest is Test {
 
     function test_buyWithAuthorization_aTokenWithoutItRefusesClearly_buyStillWorks() public {
         MockUsdc plain = new MockUsdc();
-        SimPoolFactory f = new SimPoolFactory(IERC20(address(plain)), factory.examImpl(), factory.poolImpl(), address(this));
+        SimPoolFactory f = new SimPoolFactory(IERC20(address(plain)), factory.examImpl(), factory.poolImpl(), address(this), 1 ether);
         f.setFiller(filler);
         f.setChecker(checker);
         f.setCloser(closer);
@@ -2164,7 +2259,7 @@ contract SimPoolTest is Test {
         factory.setCloser(address(0));
 
         // A factory with no closer opens no pool: nobody could close one before its term.
-        SimPoolFactory none = new SimPoolFactory(IERC20(address(usdc)), factory.examImpl(), factory.poolImpl(), address(this));
+        SimPoolFactory none = new SimPoolFactory(IERC20(address(usdc)), factory.examImpl(), factory.poolImpl(), address(this), 1 ether);
         none.setFiller(filler);
         none.setChecker(checker);
         none.setFeeRecipient(platform);
@@ -3162,6 +3257,7 @@ contract SimPoolTest is Test {
     uint256 constant FACTORY_FEE_SLOT = 4;
     uint256 constant FACTORY_TERMS_BOOK_SLOT = 5;
     uint256 constant FACTORY_ASSET_CAP_SLOT = 6;
+    uint256 constant FACTORY_CREATION_FEE_SLOT = 9;
     uint256 constant BOOK_TEXT_AT_SLOT = 0;
 
     function _slotAddress(address at, uint256 slot) internal view returns (address) {
@@ -3174,6 +3270,7 @@ contract SimPoolTest is Test {
         assertEq(_slotAddress(address(factory), FACTORY_CLOSER_SLOT), factory.closer());
         assertEq(_slotAddress(address(factory), FACTORY_FEE_SLOT), factory.feeRecipient());
         assertEq(_slotAddress(address(factory), FACTORY_TERMS_BOOK_SLOT), address(book));
+        assertEq(uint256(vm.load(address(factory), bytes32(FACTORY_CREATION_FEE_SLOT))), factory.creationFee());
         bytes32 cap = keccak256(abi.encode(uint256(BTC), FACTORY_ASSET_CAP_SLOT));
         assertEq(uint256(vm.load(address(factory), cap)), 1000);
         bytes32 text = keccak256(abi.encode(termsHash, BOOK_TEXT_AT_SLOT));
