@@ -695,5 +695,5 @@ the check's report names the code it read.
 
 ## Not done yet
 
-- The checker's unit on the host. The instance keeps the checker's wallet (docs/HOSTING.md, "A simulated
-  pool's keeper"), and `ops/sim_check.py --wallet checker` runs by hand with it until a unit runs it.
+Nothing for now. The checker's unit on the host, the last item here, is `colosseum-sim-checker@<name>`
+(docs/HOSTING.md, "A simulated pool's checker").
