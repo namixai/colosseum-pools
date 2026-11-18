@@ -784,7 +784,7 @@ The instance is made without a gateway, and the missing `gateway-<name>.env` is 
     for w in filler checker; do
       sudo -u colosseum-keeper /opt/colosseum-pools/venv/bin/python /opt/colosseum-pools/current/ops/make_demo_keys.py \
           --wallet $w --dir /var/lib/colosseum-keeper/instances/<name>/secrets
-    done                                                                     # fund the filler with HYPE
+    done                                                       # fund both with HYPE: each sends its own calls
 
 Before it switches, `install.sh` stops the release if any of these does not hold:
 
@@ -815,8 +815,8 @@ What it does by itself, and only that:
   stopped meanwhile (`stop_not_sent`);
 - it stops a payout once: one it stopped is never taken up again, and the pool itself takes one stop a payout.
   A stop that failed is tried again in the next pass;
-- a pass the node fails is logged and skipped; the next one comes on time, and what the failed pass read is read
-  again whole. Its reads are at least a second apart, so it never takes more than about sixty a minute of the
+- a pass the node fails is logged and skipped; the next one comes on time, and a read the node broke off is read
+  again whole, so nothing is counted twice. Its reads are at least a second apart, so it never takes more than about sixty a minute of the
   node it shares with the keeper.
 
 What it never does: lift a stop, stop for any reason but a pair (a result disputed without one, reason 3, and
@@ -847,11 +847,15 @@ Its log, one JSON line an event:
 - `pass_failed`: a pass the node broke off, with its error; the next one comes in 600 seconds.
 
 A stop that was wrong is lifted by a person, from the same key, within 14 days of the stop (a stop not lifted by
-then is final). `--lift` sends `liftStop` for the payout `<id>` of the pool `<pool>`:
+then is final). `--lift` sends `liftStop` for the payout `<id>` of the pool `<pool>`. The service is stopped for it
+and started again after: two processes sending from one key at once could take the same nonce, and one of the two
+transactions would be refused.
 
+    sudo systemctl stop colosseum-sim-checker@<name>
     cd /opt/colosseum-pools/current && sudo -u colosseum-keeper bash -c 'set -a; . /etc/colosseum/keeper-<name>.env
         . /etc/colosseum/deployment-<name>.env; set +a; exec /opt/colosseum-pools/venv/bin/python -m ops.sim_check \
         --deployment "$COLOSSEUM_DEPLOYMENT" --wallet checker --lift <pool>:<id>'
+    sudo systemctl start colosseum-sim-checker@<name>
 
 The checker does not stop that payout again: the pool counts it as stopped once.
 

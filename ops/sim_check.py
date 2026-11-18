@@ -35,9 +35,11 @@ As a service (no --once; on the host colosseum-sim-checker@<name>, docs/HOSTING.
 pool, the payout's id, the reason and the transaction's hash, `would_send` the same without a key, `send_failed` with
 the refusal. Before it sends it reads the payout again, at the head as it is then, and sends only if it can still be
 stopped; a payout it stopped, or would have, it does not take up again while it runs, and the pool takes one stop a
-payout anyway. A pass the node fails is logged (`pass_failed`) and the next one comes on time; what a failed pass
-read is dropped whole, so the next reads it again and counts nothing twice. Its reads are spaced --rpc-gap seconds
-apart, 1 by default, to leave the node's allowance to the keeper. It never lifts a stop: --lift is a command a
+payout anyway. A pass the node fails is logged (`pass_failed`) and the next one comes on time. A read the node breaks
+off (the fills of the accounts, or one trader's transfers) is dropped whole and read again from the same block in the
+next pass, so nothing is counted twice; what was read whole before the failure is kept. A node whose head is behind
+what was read already is read nothing from. Its calls start --rpc-gap seconds apart at least, 1 by default, to leave
+the node's allowance to the keeper. It never lifts a stop: --lift is a command a
 person runs.
 Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet; on mainnet it sends only with
 --confirm-mainnet <the deployment's label> and a mainnet key directory (ops/sim_network.py). --lift there
@@ -83,7 +85,8 @@ RPC_GAP_S = 1.0
 
 def paced(rpc, gap_s: float, clock=time.monotonic, sleep=time.sleep):
     """`rpc` with every call started at least `gap_s` after the last one ended. One process, one node: the pace holds
-    across every read of the pass, the retries `rpc` makes on a 429 included."""
+    across every call of the process (views and sends go through `rpc` too). A call `rpc` retries on a 429 is spaced by
+    its own ladder instead (1, 2, 4 ... 32 seconds), longer than the default gap from its first step on."""
     last: list[float | None] = [None]
 
     def call(method, params=()):
@@ -239,6 +242,11 @@ class Checker:
         """Every fill of the factory's accounts up to `latest`. The keeper's scan finds accounts a few windows at a
         time, so an account it finds later has fills from before the cursor: it is read from the deployment's
         block, once, and then with the others."""
+        if latest < self.fills_from - 1:
+            # A node behind the head already read (another node behind a balancer, or one catching up): nothing is read
+            # from it, and the cursor stays where it is; moved back, it would read kept fills a second time.
+            log("node_behind", head=latest, read_to=self.fills_from - 1)
+            return
         accounts = list(self.keeper.accounts)
         new = [a for a in accounts if a not in self.fills_read]
         # Kept only once both reads are whole: a read the node breaks off is read again from the same place in the

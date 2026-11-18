@@ -866,7 +866,7 @@ class SimulatedPoolChecker(unittest.TestCase):
         # Only flags the service loop has read since before this unit: a release rolled back to still starts it.
         flags = re.findall(r" (--[a-z-]+)", start)
         self.assertEqual(flags, ["--deployment", "--wallet", "--state", "--every"])
-        self.assertIn("--every 600", start)
+        self.assertEqual(re.findall(r" --every (\S+)", start), ["600"])
         from ops import sim_check
         self.assertEqual(sim_check.DEFAULT_EVERY_S, 600)
 

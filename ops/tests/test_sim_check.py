@@ -575,6 +575,18 @@ class TheLoop(unittest.TestCase):
             ch.read_fills(200)
         self.assertEqual(sorted(f["tx"] for f in ch.fills), ["0x%064x" % b for b in (30, 31, 180)])
 
+    def test_a_node_behind_the_head_already_read_is_read_nothing_from(self):
+        node = Node()
+        ch = self.checker(node)
+        with self.on(node):
+            ch.read_fills(100)
+            self.assertEqual((len(ch.fills), ch.fills_from), (2, 101))
+            ch.read_fills(60)  # another node, behind
+            self.assertEqual((len(ch.fills), ch.fills_from), (2, 101), "no fill twice, the cursor where it was")
+            self.assertEqual([(l["head"], l["read_to"]) for l in self.events("node_behind")], [(60, 100)])
+            ch.read_fills(100)
+        self.assertEqual(len(ch.fills), 2)
+
     def test_once_prints_the_stops_and_says_a_failed_pass_by_its_code(self):
         node = Node()
         ch = self.checker(node, dry=True)

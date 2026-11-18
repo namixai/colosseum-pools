@@ -306,7 +306,8 @@ while read -r name _ port; do
     fi ;;
   esac
   case " $sims " in *" $name "*) ;; *)
-    if systemctl is-enabled --quiet "colosseum-sim-checker@$name" 2>/dev/null; then
+    if systemctl is-enabled --quiet "colosseum-sim-checker@$name" 2>/dev/null \
+        || systemctl is-active --quiet "colosseum-sim-checker@$name" 2>/dev/null; then
       systemctl disable --quiet --now "colosseum-sim-checker@$name"
       say "instance $name: no simulated pool in its record now; its checker is stopped"
     fi ;;
