@@ -69,6 +69,14 @@ test("no proof, no price: the fills run out before the position is accounted for
   assert.equal(entryFromFills(null, 5n), null);
 });
 
+test("a part closed leaves the average exactly where it was, whatever the sizes", () => {
+  // 95 at 550000 and 5 at 550010, then 42 sold: the average must not move by a rounding
+  const events = [fill(BTC, true, 95, 550_000), fill(BTC, true, 5, 550_010), fill(BTC, false, 42, 560_000)];
+  const before = entryPrice(events.slice(0, 2), BTC, 100n);
+  assert.equal(entryPrice(events, BTC, 58n), before);
+  assert.equal(Math.round(before), 550_001);
+});
+
 test("the running state folds one fill at a time", () => {
   let s = foldFill(FLAT, { isBuy: true, size: 10n, px: 100n });
   assert.deepEqual([s.held, entryOfState(s)], [10n, 100]);
@@ -79,5 +87,5 @@ test("the running state folds one fill at a time", () => {
   s = foldFill(s, { isBuy: false, size: 15n, px: 90n });
   assert.deepEqual([s.held, entryOfState(s)], [0n, null]);
   assert.equal(entryOfState(stateOf(-4n, 250)), 250);
-  assert.equal(stateOf(-4n, 250).cost, 1000);
+  assert.equal(stateOf(-4n, 250).avg, 250);
 });

@@ -20,8 +20,9 @@ export function tradesOf(events, asset) {
   }
 }
 
-/** The running state of a position: its size (signed) and what was paid for it (price units times size units). */
-export const FLAT = Object.freeze({ held: 0n, cost: 0 });
+/** The running state of a position: its size (signed) and its average price (price units). The average is kept, not the
+ *  sum paid: a part closed leaves it as it is, with no scaling that could move it by a rounding. */
+export const FLAT = Object.freeze({ held: 0n, avg: 0 });
 
 /**
  * The state after one fill ({isBuy, size, px}). More on the side held moves the average by size; part of the position
@@ -30,21 +31,25 @@ export const FLAT = Object.freeze({ held: 0n, cost: 0 });
  */
 export function foldFill(state, fill) {
   const delta = signed(fill);
-  const px = Number(fill.px);
   const held = state.held;
-  if (held === 0n || sign(held) === sign(delta)) return { held: held + delta, cost: state.cost + px * Number(fill.size) };
-  if (fill.size <= abs(held)) return { held: held + delta, cost: state.cost * (Number(abs(held) - fill.size) / Number(abs(held))) };
+  if (held === 0n) return { held: delta, avg: Number(fill.px) };
+  if (sign(held) === sign(delta)) {
+    const have = Number(abs(held));
+    const more = Number(fill.size);
+    return { held: held + delta, avg: (state.avg * have + Number(fill.px) * more) / (have + more) };
+  }
+  if (fill.size < abs(held)) return { held: held + delta, avg: state.avg };
   const after = held + delta;
-  return { held: after, cost: px * Number(abs(after)) };
+  return after === 0n ? FLAT : { held: after, avg: Number(fill.px) };
 }
 
 export const foldFills = (state, fills) => fills.reduce(foldFill, state);
 
 /** The average price of a state, or null where it holds nothing. */
-export const entryOfState = (state) => (state.held === 0n ? null : state.cost / Number(abs(state.held)));
+export const entryOfState = (state) => (state.held === 0n ? null : state.avg);
 
 /** A state that holds `size` bought or sold at `entry`: what a kept record says. */
-export const stateOf = (size, entry) => ({ held: BigInt(size), cost: entry * Number(abs(BigInt(size))) });
+export const stateOf = (size, entry) => ({ held: BigInt(size), avg: entry });
 
 /**
  * The entry price of a position of `size` (signed, as the chain reports it) out of `trades` (oldest first, all of them

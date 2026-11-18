@@ -138,7 +138,6 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
   const indWrap = el("span", "ex-indw");
   const indBtn = el("button", "ex-indbtn", "Indicators");
   indBtn.type = "button";
-  indBtn.setAttribute("aria-haspopup", "true");
   indBtn.setAttribute("aria-expanded", "false");
   indBtn.setAttribute("aria-controls", menuId);
   const indMenu = el("div", "ex-indmenu");
@@ -184,7 +183,8 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
   });
   const outside = (e) => { if (!indMenu.hidden && !indWrap.contains(e.target)) openMenu(false); };
   const escape = (e) => {
-    if (e.key === "Escape" && !indMenu.hidden) {
+    // Only Escape pressed inside the list's own part of the page: another control's Escape is that control's.
+    if (e.key === "Escape" && !indMenu.hidden && indWrap.contains(e.target)) {
       openMenu(false);
       indBtn.focus();
     }
@@ -232,7 +232,10 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
       autoscaleInfoProvider: (original) => {
         const r = original();
         const last = state.rows.length ? state.rows[state.rows.length - 1].close : null;
-        const near = last === null || !r ? [] : linePrices().filter((p) => Math.abs(p - last) / last <= LINE_REACH);
+        // Near the price, and near what the scale shows already: a line far from the candles in view would flatten them.
+        const reach = last === null ? 0 : LINE_REACH * last;
+        const near = last === null || !r ? [] : linePrices().filter((p) => Math.abs(p - last) <= reach
+          && p >= r.priceRange.minValue - reach && p <= r.priceRange.maxValue + reach);
         if (!near.length) return r;
         return { ...r, priceRange: { minValue: Math.min(r.priceRange.minValue, ...near), maxValue: Math.max(r.priceRange.maxValue, ...near) } };
       },
@@ -244,7 +247,8 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
     chart.subscribeCrosshairMove((p) => {
       const row = p.time !== undefined ? state.byTime.get(p.time) : null;
       tell(row ? candleText(row) : lastText());
-      paintLegend(p.time);
+      state.hover = p.time;
+      paintLegend();
     });
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (range && range.from < EDGE) loadOlder();
@@ -271,7 +275,7 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
   const fixed = (v) => (v === null || v === undefined ? "—" : v.toFixed(state.decimals));
 
   /** The legend of the averages that are on, each with its value at `time` (the last one without a time under the pointer). */
-  function paintLegend(time) {
+  function paintLegend(time = state.hover) {
     const on = INDICATORS.filter((d) => d.period && state.choice[d.key] && state.emas.has(d.key));
     emaLegend.hidden = !on.length || !state.rows.length;
     emaLegend.replaceChildren(...on.map((def) => {
@@ -401,6 +405,7 @@ export function createExamChart({ node, bar, load, explain = (e) => (e && e.mess
     if (state.dead || !state.coin) return;
     const run = ++state.run;
     state.older = false;
+    state.hover = undefined;
     state.rows = [];
     state.byTime = new Map();
     state.hist = { beforeMs: Infinity, misses: 0, done: true };
