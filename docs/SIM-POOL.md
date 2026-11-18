@@ -26,7 +26,7 @@ fail, and their prices pay for the ones that pass.
 ## What it does
 
 - **Opening.** `SimPoolFactory.create(plan)` with exactly the factory's fee sent along (`creationFee`: 1 HYPE on
-  mainnet and 0.1 HYPE on testnet at the deploy; read it from the factory before opening), which goes to the
+  mainnet at the deploy, 0.1 HYPE on testnet by default; read it from the factory before opening), which goes to the
   platform, and
   the plan's `locked` USDC, taken from the creator: what the creator chooses, at least two payouts of the
   smallest line. The plan's `on` says which lines are switched on at the start, bit `i` for line `i`: only
@@ -237,14 +237,16 @@ fail, and their prices pay for the ones that pass.
 
 ## The platform's numbers
 
-The fee to open a pool (`creationFee`) is set when the factory is deployed: 1 HYPE on mainnet, 0.1 HYPE on testnet,
-where a rehearsal runs on test HYPE (`ops/deploy_sim.py` deploys mainnet's at 1 HYPE and no other). The factory's
+The fee to open a pool (`creationFee`) is set when the factory is deployed: 1 HYPE on mainnet, 0.1 HYPE on testnet
+by default, where a rehearsal runs on test HYPE (`ops/deploy_sim.py` deploys mainnet's at 1 HYPE and no other). The factory's
 operator may change it at any time, with no delay (`setCreationFee`, event `CreationFeeSet` with the old fee and the
-new), above zero and at most 10 HYPE (`MAX_CREATION_FEE`, ten times mainnet's fee: room to follow HYPE's price
-either way, while a fee off by two zeros is refused); a deploy outside the same bounds is refused. A pool already
+new), from 1 wei to 10 HYPE inclusive (`MAX_CREATION_FEE`, ten times mainnet's fee: room to follow HYPE's price
+either way; it refuses a fee two or more zeros too large, not one too small); a deploy outside the same bounds is
+refused. A pool already
 open paid its fee once and is not touched by a change. A creator reads the fee from the factory before opening:
-`create` takes exactly `creationFee`, so a fee changed between the read and the call makes `create` revert
-(`WrongFee`) and nothing is paid. Constants of the factory, the same for every pool: 0.5 % of each
+`create` compares the HYPE sent with `creationFee` as it stands when the transaction runs. If they differ, `create`
+reverts (`WrongFee`): the fee is not taken, though the creator pays the gas of the reverted transaction. A fee
+changed and changed back before the transaction runs matches again. Constants of the factory, the same for every pool: 0.5 % of each
 exam's price and of each withdrawal (`FEE_BPS`); a payout of 8 % of the size (`PAYOUT_BPS`), with no
 fee on it; two payouts of a line free for it to be switched on or to sell, and at least two of the smallest locked at opening (`LOCKED_PAYOUTS`); three of the largest line live or selling kept while
 the pool is open (`FLOOR_PAYOUTS`); 72 hours before a payout is paid with the approver's approval (`PAYOUT_DELAY`), 7 days
@@ -388,7 +390,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
   `fee --deployment … --amount 0.5` changes the factory's fee from its operator (`--key`, or `--signer` for our
   Safe, which gets the call printed): it reads the fee and the operator first and says what it would send, or that
-  the factory would refuse it (not the operator, the same fee, 0 or above 10 HYPE); with `--send` it reads the fee
+  the factory would refuse it (not the operator, 0 or above 10 HYPE); the same fee as the factory's it does not send
+  at all, a check of the script's own (the factory would take it and change nothing); with `--send` it reads the fee
   back after.
   `check --plan …` asks `SimPoolFactory.check` about a plan by eth_call, sending nothing and reading no key: with
   `--deployment`, the factory it names; without, the factory, PaperExam and SimPool of the checkout, put in the

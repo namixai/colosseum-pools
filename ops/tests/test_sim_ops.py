@@ -286,6 +286,7 @@ class TheHandOver(unittest.TestCase):
         self.assertIn(f"takes {10**18} wei to open a pool, not the {10**17} deployed", str(result))
         self.assertEqual(sent, [], "nothing configured on a factory of another fee")
         self.assertEqual(records, [], "no record saved as configuring")
+        self.assertEqual(len(self.fee_reads), 1, "the fee that failed is the one said, read once")
         incomplete.assert_called_once()
         self.assertNotEqual(incomplete.call_args.args[1]["status"], d.DONE)
 
@@ -339,8 +340,13 @@ class TheCreationFee(unittest.TestCase):
                                  ("testnet", "10.000000000000000001", "above 0 and at most 10 HYPE"),
                                  ("mainnet", "100", "above 0 and at most 10 HYPE"),
                                  ("testnet", "0.0000000000000000001", "at most 18 decimals"),
-                                 ("testnet", "Infinity", "at most 18 decimals"),
-                                 ("testnet", "NaN", "at most 18 decimals"),
+                                 ("testnet", "10.0000000000000000000000000001", "above 0 and at most 10 HYPE"),
+                                 ("testnet", "0.10000000000000000000000000001", "at most 18 decimals"),
+                                 ("testnet", "1e999999", "above 0 and at most 10 HYPE"),
+                                 ("testnet", "Infinity", "not an amount of HYPE"),
+                                 ("testnet", "-Infinity", "not an amount of HYPE"),
+                                 ("testnet", "NaN", "not an amount of HYPE"),
+                                 ("testnet", "sNaN", "not an amount of HYPE"),
                                  ("testnet", "one", "not an amount of HYPE")):
             with self.assertRaises(SystemExit) as caught:
                 self.fee(net, given)
@@ -356,11 +362,19 @@ class TheCreationFee(unittest.TestCase):
             rpc.assert_not_called(), dc.assert_not_called()
             self.assertIn(said, out.getvalue())
             self.assertIn("SimPoolFactory(usdc, exam, pool, operator, fee)", out.getvalue())
-        # A fee mainnet would refuse is refused before anything is read or sent, on any network's bound.
-        with self.assertRaises(SystemExit) as caught, mock.patch.object(d, "deploy_contract") as dc:
+        # A fee above the bound is refused before anything is read or sent. Every way out is stubbed: should the
+        # refusal ever go, the test fails at the confirmation, and no key is read and nothing reaches a network.
+        reached = AssertionError("deploy went past the fee's check")
+        with self.assertRaises(SystemExit) as caught, mock.patch.object(d, "deploy_contract") as dc, \
+                mock.patch.object(d.sn, "confirm_send", side_effect=reached), \
+                mock.patch.object(d.sn, "check_assets", side_effect=reached), \
+                mock.patch.object(d.c, "account", side_effect=reached) as key, \
+                mock.patch.object(d, "big_blocks", side_effect=reached) as big, \
+                mock.patch.object(d.c, "rpc", side_effect=reached), mock.patch.object(d, "save"), \
+                mock.patch.object(d, "mark_incomplete"):
             d.main(["deploy", "--label", "never-written", *self.KEYS, "--creation-fee", "20", "--send"])
         self.assertIn("at most 10 HYPE", str(caught.exception))
-        dc.assert_not_called()
+        dc.assert_not_called(), key.assert_not_called(), big.assert_not_called()
 
     def test_the_fee_is_read_from_the_factory(self):
         factory = "0x" + "f1" * 20
@@ -799,6 +813,9 @@ class TheCheck(unittest.TestCase):
         self.assertEqual(read[0][0]["to"], d.CHECK_AT["factory"])
         self.assertEqual(read[0][2][d.CHECK_AT["factory"]], state[d.CHECK_AT["factory"]], "this checkout's factory")
         self.assertEqual(call["value"], hex(10**17))
+        # The fee and every probe at one block, the head read once: a fee changed meanwhile cannot pass as gas.
+        self.assertEqual(read[0][1], hex(100))
+        self.assertEqual({p[1] for p in creates}, {hex(100)})
         self.assertEqual(call["from"], d.CHECK_AT["creator"])
         self.assertEqual(int(creates[0][0]["gas"], 16), d.GAS_FLOOR, "first: does the node keep to a call's gas")
         self.assertEqual(state[d.c.USDC_ERC20], {"code": d.TOKEN_STUB}, "USDC answered by the stand-in")

@@ -159,24 +159,35 @@ def hype(wei: int) -> str:
 
 
 def fee_units(text: str, flag: str) -> int:
-    """A fee written in HYPE, in wei: above 0 and at most the factory's bound, as setCreationFee takes it."""
+    """A fee written in HYPE, in wei: above 0 and at most the factory's bound, as setCreationFee takes it. The amount
+    as written is checked, before any arithmetic could round it: finite, within the bound, a whole number of wei."""
     try:
         amount = Decimal(text)
     except InvalidOperation:
+        amount = None
+    if amount is None or not amount.is_finite():
         raise SystemExit(f"{flag} {text!r} is not an amount of HYPE")
-    wei = amount * HYPE
-    if not amount.is_finite() or wei != wei.to_integral_value():
-        raise SystemExit(f"{flag} {text!r} is not an amount of HYPE of at most 18 decimals")
-    wei = int(wei)
-    if not 0 < wei <= MAX_CREATION_FEE:
+    if not 0 < amount <= Decimal(MAX_CREATION_FEE) / HYPE:
         raise SystemExit(f"{flag} is above 0 and at most {hype(MAX_CREATION_FEE)} HYPE, the factory's bound")
-    return wei
+    # Its decimals read off its digits, which no context rounds: trailing zeros are no decimals.
+    _, digits, exponent = amount.as_tuple()
+    zeros = len(digits) - len("".join(map(str, digits)).rstrip("0"))
+    if exponent + zeros < -18:
+        raise SystemExit(f"{flag} {text!r} is not an amount of HYPE of at most 18 decimals")
+    return int(amount.scaleb(18))
+
+
+def network_fee() -> int:
+    """The fee at the deploy on the network selected now; a network without one is refused, never given another's."""
+    if c.NETWORK.name not in CREATION_FEES:
+        raise SystemExit(f"no fee to open a pool is set for {c.NETWORK.name}: only {', '.join(sorted(CREATION_FEES))}")
+    return CREATION_FEES[c.NETWORK.name]
 
 
 def creation_fee_of(args) -> int:
     """The fee `deploy` sets in the factory, in wei: --creation-fee in HYPE, or the network's. At the deploy mainnet
     takes only its own, the platform's 1 HYPE; any network, nothing above the factory's bound and not nothing."""
-    own = CREATION_FEES[c.NETWORK.name]
+    own = network_fee()
     if args.creation_fee is None:
         return own
     wei = fee_units(args.creation_fee, "--creation-fee")
@@ -185,10 +196,10 @@ def creation_fee_of(args) -> int:
     return wei
 
 
-def factory_fee(factory: str, overrides: dict | None = None) -> int:
-    """The fee `factory` takes to open a pool now, in wei, read from it (creationFee(), which its operator may change):
-    the factory's own, not this checkout's number."""
-    params = [{"to": factory, "data": "0x" + c.selector("creationFee()").hex()}, "latest"]
+def factory_fee(factory: str, overrides: dict | None = None, block: str = "latest") -> int:
+    """The fee `factory` takes to open a pool, in wei, read from it at `block` (creationFee(), which its operator may
+    change): the factory's own, not this checkout's number."""
+    params = [{"to": factory, "data": "0x" + c.selector("creationFee()").hex()}, block]
     out = c.rpc("eth_call", params + [overrides] if overrides else params)
     if not out or out in ("0x", "0x0") or int(out, 16) == 0:
         raise SystemExit(f"{factory} gave no fee for opening a pool on {c.NETWORK.name}: no simulated pool's factory "
@@ -497,8 +508,9 @@ def deploy(args) -> int:
                                          [c.USDC_ERC20, exam, pool, op.address, fee])
         finally:
             big_blocks(op, False)
-        if factory_fee(factory) != fee:
-            raise SystemExit(f"the factory {factory} takes {factory_fee(factory)} wei to open a pool, not the {fee} "
+        read_back = factory_fee(factory)
+        if read_back != fee:
+            raise SystemExit(f"the factory {factory} takes {read_back} wei to open a pool, not the {fee} "
                              "deployed: read it before anything else")
         record["status"] = "configuring"
         save(out, record)
@@ -614,7 +626,7 @@ def check_overrides(assets: list[tuple[str, int, int]], terms_hash: bytes) -> di
     them, with the network's fee, the factory listing `assets` with their caps as `deploy` would and its roles set, a TermsBook with the
     terms published, and SimPool with its three libraries, which `create` clones and calls when its gas is measured."""
     a = CHECK_AT
-    fee = CREATION_FEES[c.NETWORK.name]
+    fee = network_fee()
     factory = runtime_of("SimPoolFactory", ["address", "address", "address", "address", "uint256"],
                          [c.USDC_ERC20, a["exam"], a["pool"], a["factory"], fee])
     state = {"0x%064x" % FACTORY_TERMS_BOOK_SLOT: "0x" + _word(int(a["book"], 16)).hex(),
@@ -722,7 +734,9 @@ def create_gas(factory: str, plan: tuple, overrides: dict | None) -> tuple[int |
     answered by a stand-in (TOKEN_STUB), the creator given the HYPE. Returns (gas or None if it does not run in a small
     block, the small block's limit)."""
     limit = small_block_gas()
-    fee = factory_fee(factory, overrides)
+    # One block for the fee and every probe: a fee changed meanwhile would read as gas that does not suffice.
+    block = c.rpc("eth_blockNumber", [])
+    fee = factory_fee(factory, overrides, block)
     state = dict(overrides or {})
     state[c.USDC_ERC20] = {"code": TOKEN_STUB}
     state[CHECK_AT["creator"]] = {"balance": hex(2 * fee)}
@@ -731,7 +745,7 @@ def create_gas(factory: str, plan: tuple, overrides: dict | None) -> tuple[int |
     def runs(gas: int) -> bool:
         call = {"from": CHECK_AT["creator"], "to": factory, "data": data, "value": hex(fee), "gas": hex(gas)}
         try:
-            c.rpc("eth_call", [call, "latest", state])
+            c.rpc("eth_call", [call, block, state])
             return True
         except RuntimeError:
             return False
