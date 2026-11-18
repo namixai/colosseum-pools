@@ -698,7 +698,10 @@ def check(args) -> int:
         print(f"  line             {size / 1e6:g} for {price / 1e6:g} USDC: loss limit {dd / 100:g} %, target "
               f"{target / 100:g} %, {'trailing to the start' if kind else 'from the start'}")
     print(f"  payouts a day    {plan[10]}; locks {locked_of(raw) / 1e6:g} USDC; terms keccak 0x{terms_hash.hex()}")
-    params = [{"to": factory, "data": "0x" + data.hex(), "gas": hex(CHECK_GAS)}, "latest"]
+    # One block for the plan, the fee and every gas probe: an asset delisted or a fee changed meanwhile would read as
+    # gas that does not suffice.
+    block = c.rpc("eth_blockNumber", [])
+    params = [{"to": factory, "data": "0x" + data.hex(), "gas": hex(CHECK_GAS)}, block]
     try:
         out = c.rpc("eth_call", params + [overrides] if overrides else params)
     except RuntimeError as exc:
@@ -710,7 +713,7 @@ def check(args) -> int:
     if largest != max(m[0] for m in plan[0]):
         raise SystemExit(f"deploy_sim check: the factory answered {largest}, not the plan's largest size")
     print(f"deploy_sim check: the factory accepts the plan; largest size {largest / 1e6:g} USDC.")
-    gas, limit = create_gas(factory, plan, overrides)
+    gas, limit = create_gas(factory, plan, overrides, block)
     if gas is None:
         raise SystemExit(f"deploy_sim check: create does not run on {limit} gas, a small block of {c.NETWORK.name}: "
                          "the pool would not open by an ordinary transaction")
@@ -747,13 +750,11 @@ def small_block_gas() -> int:
     return min(limits + [SMALL_BLOCK_GAS])
 
 
-def create_gas(factory: str, plan: tuple, overrides: dict | None) -> tuple[int | None, int]:
+def create_gas(factory: str, plan: tuple, overrides: dict | None, block: str) -> tuple[int | None, int]:
     """The least gas `create(plan)` with the factory's fee runs on, from an address no key holds, by eth_call: USDC
     answered by a stand-in (TOKEN_STUB), the creator given the HYPE. Returns (gas or None if it does not run in a small
-    block, the small block's limit)."""
+    block, the small block's limit), every call at `block`, the one the plan was checked at."""
     limit = small_block_gas()
-    # One block for the fee and every probe: a fee changed meanwhile would read as gas that does not suffice.
-    block = c.rpc("eth_blockNumber", [])
     fee = factory_fee(factory, overrides, block)
     state = dict(overrides or {})
     state[c.USDC_ERC20] = {"code": TOKEN_STUB}

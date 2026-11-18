@@ -791,8 +791,9 @@ class TheCheck(unittest.TestCase):
     def test_without_a_deployment_this_checkouts_factory_is_put_in_the_call(self):
         code, calls, said = self.run_check([])
         self.assertEqual(code, 0)
-        method, (call, block, state) = calls[0]
-        self.assertEqual((method, block), ("eth_call", "latest"))
+        self.assertEqual(calls[0], ("eth_blockNumber", []), "the head first: the plan is checked at it")
+        method, (call, block, state) = calls[1]
+        self.assertEqual((method, block), ("eth_call", hex(100)))
         self.assertEqual(call["to"], d.CHECK_AT["factory"])
         plan = d.plan_of(FIRST, keccak(text=FIRST["terms_text"]))
         self.assertEqual(call["data"], "0x" + d.c.encode_call(f"check({d.PLAN_T})", [d.PLAN_T], [plan]).hex())
@@ -876,7 +877,8 @@ class TheCheck(unittest.TestCase):
         factory = "0x" + "77" * 20
         code, calls, said = self.run_check(["--deployment", "x"], record={"SimPoolFactory": factory})
         self.assertEqual(code, 0)
-        method, params = calls[0]
+        method, params = calls[1]
+        self.assertEqual(params[1], hex(100), "at the block the gas is measured at")
         self.assertEqual(len(params), 2, "no state override: the factory, its assets and its terms book as they are")
         self.assertEqual(params[0]["to"], factory)
         create = next(p for m, p in calls if m == "eth_call" and p[0]["to"] == factory and len(p) == 3)
