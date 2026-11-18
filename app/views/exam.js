@@ -22,6 +22,7 @@ import {
   assetFromQuery, queryWithAsset, marketRows, stepIndex, sizeUnitOf, sizeEntry,
 } from "../lib/examscreen.js";
 import { createExamChart } from "./examchart.js";
+import { positionLines } from "../lib/positionlines.js";
 import { pxText } from "../lib/exam.js";
 
 const { ethers } = window;
@@ -348,6 +349,8 @@ function paintHead(page, st) {
   const px = $("#ex-px", page);
   if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
   st.chart?.setOracle(perp && oracle ? Number(pxText(oracle, perp.szDecimals)) : null);
+  // The lines of this market's open position, from the account the page has read and the fills its journal holds.
+  st.chart?.setPositionLines(positionLines({ account: st.snap?.account, asset: st.asset, perps: st.perps, events: st.journal }));
 }
 
 /** The asset the chart draws: its Hyperliquid name and size decimals. */
@@ -738,6 +741,7 @@ async function loadJournal(page, st, direction = "earlier") {
     await blockTimes(st, events.map((e) => e.block));
     info.textContent = journalRange(st.loaded) + (canLoadEarlier(st.loaded) ? "" : " That is the start of the chain.");
     paintJournal(page, st);
+    paintHead(page, st);
     buttons[0].textContent = "Load earlier events";
     buttons[1].hidden = false;
   } catch (err) {

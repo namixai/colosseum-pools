@@ -516,6 +516,17 @@ main:has(> .ex-page) { max-width: 1440px; padding-left: 12px; padding-right: 12p
 .ex-iv { display: flex; flex-wrap: wrap; gap: 4px; }
 .ex-iv button, .ex-iv select { font: 600 12px var(--mono); padding: 5px 9px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
 .ex-iv button.on, .ex-iv select.on { background: var(--navy); color: #fff; border-color: var(--navy); }
+.ex-indw { position: relative; display: inline-block; }
+.ex-indmenu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 150px; max-width: calc(100vw - 16px); padding: 4px; background: var(--paper); border: 1.5px solid var(--ink); box-shadow: 0 6px 18px rgba(14, 17, 22, .18); }
+.ex-indmenu[hidden] { display: none; }
+.ex-indmenu label { display: flex; align-items: center; gap: 8px; padding: 8px 8px; font: 600 12px var(--mono); color: var(--ink); cursor: pointer; white-space: nowrap; }
+.ex-indmenu label:hover { background: var(--sky); }
+.ex-indmenu input { margin: 0; width: 16px; height: 16px; accent-color: var(--navy); }
+.ex-sw { display: inline-block; width: 14px; height: 2px; flex: none; }
+.ex-leg { position: absolute; z-index: 2; top: 6px; left: 8px; right: 70px; display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 0; font: 500 11px var(--mono); color: var(--mute); pointer-events: none; }
+.ex-leg[hidden] { display: none; }
+.ex-leg span { display: inline-flex; align-items: center; gap: 5px; }
+.ex-leg b { font-weight: 600; color: var(--ink); }
 .ex-cap { margin-left: auto; font: 600 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--navy); background: var(--sky); padding: 3px 8px; white-space: nowrap; }
 .ex-cw { margin: 8px 6px 0 10px; min-width: 0; }
 .ex-chart { min-width: 0; }
