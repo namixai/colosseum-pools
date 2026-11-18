@@ -280,8 +280,11 @@ async function readExam(st, selected) {
 }
 
 async function tick(page, st) {
+  const seq = (st.tickSeq = (st.tickSeq ?? 0) + 1);
   const selected = st.asset;
   const snap = await readExam(st, selected);
+  // A pass that started after this one is out: only the latest one draws, so an older answer never covers a newer one.
+  if (seq !== st.tickSeq) return undefined;
   // The market was changed while this was being read: what was read is not what the screen now needs. Read again.
   if (selected !== st.asset) return tick(page, st);
   st.snap = snap;
@@ -301,8 +304,12 @@ async function refreshList(page, st) {
   if (st.listBusy || !st.market.open) return;
   st.listBusy = true;
   try {
-    st.prices = withPrices(st.prices, await readList(readerOf(st), { assets: st.assets, skip: fullyRead(st.snap?.perAsset ?? []) }));
-    if (st.market.open && page.isConnected) paintMarketList(page, st);
+    const fresh = await readList(readerOf(st), { assets: st.assets, skip: fullyRead(st.snap?.perAsset ?? []) });
+    // The list was closed while this was out: what it read is not kept, as the closing dropped what the list had shown.
+    if (st.market.open) {
+      st.prices = withPrices(st.prices, fresh);
+      if (page.isConnected) paintMarketList(page, st);
+    }
   } finally {
     st.listBusy = false;
   }
@@ -382,7 +389,7 @@ function setMarketOpen(page, st, open, focus = true) {
 
 function paintHead(page, st) {
   const perp = st.perps.get(st.asset);
-  const oracle = st.prices.get(st.asset) ?? st.snap?.perAsset.find((a) => a.asset === st.asset)?.oracle;
+  const oracle = st.prices.get(st.asset) ?? st.snap?.perAsset?.find((a) => a.asset === st.asset)?.oracle;
   const px = $("#ex-px", page);
   if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
   st.chart?.setOracle(perp && oracle ? Number(pxText(oracle, perp.szDecimals)) : null);
@@ -483,7 +490,7 @@ function paintTicket(page, st) {
     return;
   }
   const prices = perAsset.find((a) => a.asset === st.asset);
-  if (!prices.read) {
+  if (!prices || !prices.read) {
     // This market was chosen after the last pass: its stop, take and prices arrive with the next reading, a moment.
     $("#ex-preview", page).innerHTML = `<p class="ex-note">Reading this market…</p>`;
     send.disabled = true;

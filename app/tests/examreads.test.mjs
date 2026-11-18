@@ -290,6 +290,8 @@ test("the page reads through this module and asks the list's prices only while t
   assert.match(page, /if \(st\.listBusy \|\| !st\.market\.open\) return;/);
   assert.match(page, /refreshList\(page, st\)\.catch/);
   assert.match(page, /selected !== st\.asset\) return tick\(page, st\)/, "a market chosen during a reading is read again");
+  assert.match(page, /if \(seq !== st\.tickSeq\) return undefined;/, "only the latest pass draws");
+  assert.match(page, /if \(st\.market\.open\) \{\s*st\.prices = withPrices\(st\.prices, fresh\);/, "a list closed during its reading keeps nothing of it");
 });
 
 test("encode and decode of a pack still agree with the test's node", () => {
