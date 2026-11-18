@@ -38,6 +38,12 @@ export const GENTLE = Object.freeze({
   staticMs: 30 * 60_000,
   /** The waits after a refusal for the rate, in turn: a minute in all, a little over what the node held a refusal. */
   retryDelaysMs: Object.freeze([1_000, 2_000, 4_000, 8_000, 15_000, 30_000]),
+  /**
+   * How long a call that is out is joined by a later asking of the same call. A call whose request never comes back would
+   * otherwise be joined for ever: every later reading of it would wait on the one that hangs. Past this, the same call is
+   * asked again (and the new asking is the one later ones join). Under the screens' own limit for a reading that is out.
+   */
+  joinMs: 10_000,
   /** A request that did not reach the node at all, or met a 5xx, is sent again this many times. */
   networkRetries: 2,
   networkDelayMs: 800,
@@ -182,7 +188,7 @@ export function createGentle({
         return Promise.resolve(copy(answer));
       }
       const same = flying.get(key);
-      if (same) {
+      if (same && now() - same.at < o.joinMs) {
         stats.shared++;
         // The page that is open now wants it too: it is no longer only a read of a page that was left.
         if (same.item.visit < visit) same.item.visit = visit;
@@ -195,7 +201,7 @@ export function createGentle({
     });
     queue.push(item);
     if (kept) {
-      const entry = { asked, item };
+      const entry = { asked, item, at: now() };
       flying.set(key, entry);
       // Only its own entry: by now a later asking of the same call may be the one that is out.
       asked.then(() => {

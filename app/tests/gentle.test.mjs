@@ -833,3 +833,19 @@ test("coming back to the list shows what was read before, says how old it is, an
     globalThis.fetch = real;
   }
 });
+
+test("a call whose request never comes back is joined for a while, not for ever: past joinMs the same call is asked again", async () => {
+  const w = world({ reply: (n) => (n === 1 ? new Promise(() => {}) : null) });
+  w.reader.request(call(STAGE));   // the first request hangs; nobody waits for its answer here
+  await new Promise((done) => setImmediate(done));
+  assert.equal(w.posts.length, 1);
+  w.t = GENTLE.joinMs - 1;
+  w.reader.request(call(STAGE));
+  await new Promise((done) => setImmediate(done));
+  assert.equal(w.posts.length, 1, "inside the time it joins the call that is out");
+  w.t = GENTLE.joinMs;
+  const fresh = await w.reader.request(call(STAGE));
+  assert.equal(w.posts.length, 2, "past it, it is asked again");
+  assert.deepEqual(fresh, { result: "0xc040e6b8aa" });
+  assert.ok(GENTLE.joinMs < 15_000, "before the trading screen gives up the pass that asked it");
+});

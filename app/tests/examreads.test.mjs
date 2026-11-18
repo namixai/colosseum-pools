@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { createGentle, GENTLE } from "../lib/gentle.js";
 import { MULTICALL3, encodeAggregate3, decodeAggregate3 } from "../lib/multicall.js";
 import { ORACLE_PX_PRECOMPILE, BBO_PRECOMPILE, bboOf } from "../lib/exam.js";
-import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, oracleOf, LIST_MS } from "../lib/examreads.js";
+import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, oracleOf, STALE_PASS_POLLS, LIST_MS } from "../lib/examreads.js";
 
 const EXAM = "0x70066669eC7Eb992055c82B615eD822CFF14e44A";
 const word = (n) => BigInt.asUintN(256, BigInt(n)).toString(16).padStart(64, "0");
@@ -76,7 +76,7 @@ function packed(results) {
  * the bytes of the answers, `node.packs` the packs. `fail(call)` makes a read fail, in a pack or plain; `failInner(call)`
  * only inside a pack (the same read asked plain then answers); `refusePacks` makes the node revert a pack as a whole.
  */
-function world({ held = new Map(), failInner = () => false, refusePacks = false, fail = () => false } = {}) {
+function world({ held = new Map(), failInner = () => false, refusePacks = false, fail = () => false, hang = () => false } = {}) {
   const chain = chainOf(held);
   const node = { reads: 0, bytes: 0, packs: 0, requests: 0, calls: 0 };
   const w = { clock: 0, node, chain, asked: 0 };
@@ -85,6 +85,8 @@ function world({ held = new Map(), failInner = () => false, refusePacks = false,
     options: { gatherMs: 0 }, pack: { address: MULTICALL3.address, check: async () => true },
     post: async (batch) => {
       node.requests++;
+      // A request the node never answers: the promise stays open for ever.
+      if (hang(node.requests)) return new Promise(() => {});
       const body = batch.map((c) => {
         node.calls++;
         if (c.method === "eth_getBlockByNumber") {
@@ -359,4 +361,66 @@ test("a price shown comes from the cache first, a kept null is no price, and an 
   assert.equal(shownPrice(new Map(), unread), null, "the list dropped it: the row's copy is not brought back");
   assert.equal(shownPrice(new Map([[4, 81n]]), unread), 81n);
   assert.equal(shownPrice(new Map(), undefined), null);
+});
+
+test("a pass that is out longer than the limit is not waited for: it is given up, a newer one is started, and the old one is not drawn if it ever returns", () => {
+  let clock = 0;
+  const passes = createPasses({ now: () => clock, staleMs: 15_000 });
+  const stuck = passes.start();
+  clock = 14_999;
+  assert.equal(passes.running, true, "inside the limit the poll waits");
+  clock = 15_000;
+  assert.equal(passes.running, false, "at the limit it does not");
+  const next = passes.start();
+  assert.equal(passes.running, true, "and waits for the new one");
+  assert.equal(stuck.isLatest(), false, "so that the stuck one, if it returns, is passed by number");
+  assert.equal(next.isLatest(), true);
+  next.end();
+  assert.equal(passes.running, false);
+  assert.equal(STALE_PASS_POLLS, 3);
+  assert.match(readFileSync(new URL("../views/exam.js", import.meta.url), "utf8"), /createPasses\(\{ staleMs: STALE_PASS_POLLS \* POLL_MS \}\)/);
+});
+
+test("a node that never answers one request: the poll resumes after the limit and the next pass draws, though it asks what the stuck one asked", async () => {
+  const w = world({ hang: (n) => n === 2 });
+  await warm(w);   // request 1 is the block's; the pass below is the second request
+  const assets = assetsOf(3);
+  const POLL = 5_000;
+  const passes = createPasses({ now: () => w.clock, staleMs: STALE_PASS_POLLS * POLL });
+  let snap = null;
+  let started = 0;
+  const tick = async () => {
+    const pass = passes.start();
+    started += 1;
+    try {
+      const out = await readPass(w.io, { assets, selected: 1 });
+      if (pass.isLatest()) snap = out;
+    } finally {
+      pass.end();
+    }
+  };
+  const poll = () => {
+    if (passes.running) return;
+    tick().catch(() => {});
+  };
+  const settle = () => new Promise((done) => setTimeout(done, 40));
+  poll();
+  await settle();
+  assert.equal(snap, null, "the first pass is stuck");
+  for (const t of [5_000, 10_000]) {
+    w.clock = t;
+    poll();
+  }
+  await settle();
+  assert.equal(started, 1, "inside three intervals the poll waits and starts nothing");
+  w.clock = 15_000;
+  poll();
+  await settle();
+  assert.equal(started, 2, "at three intervals it does not wait any more");
+  assert.ok(snap && snap.block.number === 100, "and the new pass draws, though the stuck one asked the same calls");
+  assert.equal(passes.running, false);
+  w.clock = 20_000;
+  poll();
+  await settle();
+  assert.equal(started, 3, "the stuck pass, still out, does not hold the poll again");
 });

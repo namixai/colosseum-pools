@@ -25,7 +25,7 @@ import { createExamChart } from "./examchart.js";
 import { positionLines } from "../lib/positionlines.js";
 import { createEntryTracker, browserStore } from "../lib/entrytrack.js";
 import { pxText } from "../lib/exam.js";
-import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, LIST_MS } from "../lib/examreads.js";
+import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, STALE_PASS_POLLS, LIST_MS } from "../lib/examreads.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
@@ -97,7 +97,7 @@ export async function examView(address, page, query = "") {
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
     exam, address, ds, perps, assets, trader, panelPool, asset: assetFromQuery(query, assets), query,
-    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listSession: 0, listReading: null, passes: createPasses(), chart: null,
+    unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listSession: 0, listReading: null, passes: createPasses({ staleMs: STALE_PASS_POLLS * POLL_MS }), chart: null,
     book: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
   };

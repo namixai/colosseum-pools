@@ -99,32 +99,35 @@ export function fullyRead(perAsset) {
  * an older answer never covers a newer one (`isLatest`), and an error of one that was passed by is not the screen's
  * business either. The background poll asks `running` and does not start a pass while one is out: a pass that takes
  * longer than the interval is let to finish and draw, instead of being passed by the next poll again and again. Passes
- * the page starts itself (after a transaction, after a change of market) are not held off, and pass the older ones.
+ * the page starts itself (after a transaction, after a change of market) are not held off, and pass the older ones. A pass
+ * older than `staleMs` is not waited for (a request the node never answers would otherwise stop the poll for good).
  */
-export function createPasses() {
+export function createPasses({ now = Date.now, staleMs = Infinity } = {}) {
   let last = 0;
-  let out = 0;
+  const out = new Map();   // seq -> when it started, for the passes not ended
   return {
     start() {
       const seq = ++last;
-      out += 1;
-      let ended = false;
+      out.set(seq, now());
       return {
         seq,
         isLatest: () => seq === last,
         end() {
-          if (!ended) {
-            ended = true;
-            out -= 1;
-          }
+          out.delete(seq);
         },
       };
     },
+    /** Whether a pass is out that the poll should wait for: not one older than `staleMs`, which may never come back. A
+     *  pass given up like that is not ended, but the poll's next pass is the latest, so if it does come back it is not drawn. */
     get running() {
-      return out > 0;
+      for (const startedAt of out.values()) if (now() - startedAt < staleMs) return true;
+      return false;
     },
   };
 }
+
+/** How many poll intervals a pass may be out before the poll stops waiting for it. */
+export const STALE_PASS_POLLS = 3;
 
 /**
  * The price shown for a market: the one kept for it (a kept null is a price that was not read, and stands as that), else
