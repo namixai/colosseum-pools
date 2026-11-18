@@ -359,11 +359,12 @@ function paintHead(page, st) {
   st.chart?.setPositionLines(positionLines({ account: st.snap?.account, asset: st.asset, perps: st.perps, entryOf: (asset, size) => st.entries?.entry(asset, size) ?? null }));
 }
 
-/** Tells the entry price's tracker the market on screen and its size as the chain reports it: it reads the logs only when
- *  no proof stands for that size (never on a timer). Nothing is waited for. */
+/** Tells the entry price's tracker the market on screen, its size and the exam's last fill and cash as the chain reports
+ *  them: it reads the logs only when no proof stands for that state (never on a timer). Nothing is waited for. */
 function trackEntry(st) {
   const p = st.snap?.account.positions.find((x) => x.asset === st.asset);
-  st.entries?.observe({ asset: st.asset, size: p ? p.size : 0n, block: st.snap.block });
+  // The exam's lastFillAt and cash are read by the screen's own reading already: a fill of any market moves them.
+  st.entries?.observe({ asset: st.asset, size: p ? p.size : 0n, block: st.snap.block, fillAt: st.snap.reads.lastFillAt, cash: st.snap.reads.cash });
 }
 
 /** The exam's fills and stops between two blocks, decoded, the way one press of the journal's button reads them: windows of
@@ -769,7 +770,7 @@ async function loadJournal(page, st, direction = "earlier") {
     paintJournal(page, st);
     // What the button read may prove the entry price too.
     const held = st.snap.account.positions.find((x) => x.asset === st.asset);
-    if (held) st.entries?.feed({ events: st.journal, from: st.loaded.from, to: st.loaded.top }, { asset: st.asset, size: held.size, block: st.snap.block });
+    if (held) st.entries?.feed({ events: st.journal, from: st.loaded.from, to: st.loaded.top }, { asset: st.asset, size: held.size, block: st.snap.block, fillAt: st.snap.reads.lastFillAt, cash: st.snap.reads.cash });
     buttons[0].textContent = "Load earlier events";
     buttons[1].hidden = false;
   } catch (err) {
