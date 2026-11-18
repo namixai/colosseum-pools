@@ -353,7 +353,7 @@ function paintAssets(page, st) {
 
 /** What the list shows of each market: its size and the latest oracle price read for it, by a pass or by the list's own reading. */
 function listAssets(st) {
-  return (st.snap?.perAsset ?? []).map((a) => ({ asset: a.asset, size: a.size, oracle: st.prices.get(a.asset) ?? a.oracle }));
+  return (st.snap?.perAsset ?? []).map((a) => ({ asset: a.asset, size: a.size, oracle: st.prices.has(a.asset) ? st.prices.get(a.asset) : a.oracle }));
 }
 
 function paintMarketList(page, st) {
@@ -392,7 +392,8 @@ function setMarketOpen(page, st, open, focus = true) {
 
 function paintHead(page, st) {
   const perp = st.perps.get(st.asset);
-  const oracle = st.prices.get(st.asset) ?? st.snap?.perAsset?.find((a) => a.asset === st.asset)?.oracle;
+  // A price kept as null is a price that was not read: no older one stands in for it.
+  const oracle = st.prices.has(st.asset) ? st.prices.get(st.asset) : st.snap?.perAsset?.find((a) => a.asset === st.asset)?.oracle;
   const px = $("#ex-px", page);
   if (px) px.textContent = perp && oracle ? pxText(oracle, perp.szDecimals) : "—";
   st.chart?.setOracle(perp && oracle ? Number(pxText(oracle, perp.szDecimals)) : null);
@@ -496,6 +497,7 @@ function paintTicket(page, st) {
   if (!prices || !prices.read) {
     // This market was chosen after the last pass: its stop, take and prices arrive with the next reading, a moment.
     $("#ex-preview", page).innerHTML = `<p class="ex-note">Reading this market…</p>`;
+    $("#ex-conv", page).textContent = "";
     send.disabled = true;
     for (const kind of ["stop", "take"]) {
       $(`#ex-${kind}-prev`, page).innerHTML = "";
