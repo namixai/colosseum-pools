@@ -385,8 +385,16 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   exam runs, and the week after the close). `request --amount`, `withdraw` and `cancel` do the same for
   the creator's withdrawal: what it asks and from when to when it can be carried out, what it pays
   now, or `NotReady`, `RequestLapsed`, `NoRequest` with the times. Without `--send` they print what
-  they would do and read no key. With `--signer ADDRESS` (`pool`, `codes`, `close`, `finish`, `request`,
-  `withdraw`, `cancel`, `approver`, `approve`) the call is from an address that signs elsewhere, our
+  they would do and read no key. `code --code … --partner … --bps …` (with `--author` and `--author-bps` for a
+  code for two) sets one code from the creator, checked as `codes` checks a plan's (`BadShare`, `CodeUsed`; the
+  same as on chain, nothing sent). `pot --amount` puts more of the creator's USDC in (`approve`, then `addToPot`),
+  or says `NotCreator`, `Done`, or that the creator holds less than that. `claim --code … [--code …]` says what
+  each named code sends its partner and author and sends `claimShares` from anyone's key; nothing due, nothing
+  sent. `pay --max N` lists the payouts within N of the head, asks the pool by eth_call from the sender how many
+  `pay(N)` settles now, and with none says why (not yet due, waiting for its approval, the day's payouts paid, the
+  money) and sends nothing. None of them caps an amount. With `--signer ADDRESS` (`pool`, `codes`, `code`, `pot`,
+  `claim`, `pay`, `close`, `finish`, `request`, `withdraw`, `cancel`, `approver`, `approve`) the call is from an
+  address that signs elsewhere, our
   pool's creator being a Safe and its approver a Ledger: the command checks as that address and prints
   the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
   `fee --deployment … --amount 0.5` changes the factory's fee from its operator (`--key`, or `--signer` for our
@@ -419,7 +427,11 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   CFO, 13 November 2026), and a fill window of 3 blocks, the window rule below at a filler that is
   never late, until `--measure` says otherwise. The factory needs an
   idle limit; the plan sets it to the stage's thirty days, where it never ends a stage before its
-  deadline, so the terms name no idle rule.
+  deadline, so the terms name no idle rule. The rehearsal on testnet has a plan of its own,
+  `deployments/plans/sim-rehearsal-998.json`: one line of 20 for 2 test USDC, a target of 0.25 % in both stages,
+  3.2 locked (two payouts of 1.6), the first pool's rules, cost and fill delay, the widest fill window, and the
+  creator's own code `OWN`; the partners' codes come by `code`. `check` takes it as it takes the first pool's, and
+  mainnet refuses it.
 
 - **The checker**, `ops/sim_check.py`: the open script behind every stop. For each payout still
   waiting it matches every fill of the paid stage with the fills of every other exam and stage of the

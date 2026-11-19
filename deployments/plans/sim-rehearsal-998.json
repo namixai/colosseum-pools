@@ -1,0 +1,78 @@
+{
+  "about": "Testnet only: the rehearsal of the simulated pool's whole path on HyperEVM testnet (998) by the owner's hand, on test money, within the 12 test USDC the owner has there. One line, a paper account of 20 for 2 test USDC: two sales leave the pool 3.98, a profit after one payout of 1.6, so the owner's withdrawal with the partners' shares can be rehearsed; the lock is two payouts of 1.6, 3.2 test USDC. A target of 0.25 % in both stages, so that one trade of about 16 USDC on paper (above the exam's least trade of 10) takes it on a move of the testnet book's distance below the oracle and half a percent more, and a stop 2 % away keeps the day's loss under 3 % with that distance up to 1 %; the first pool's daily loss of 3 % and loss limit of 6 % trailing to the start, its fill delay of 4 blocks, its cost of 450 ppm, at the book with its ceiling of 150 bp, and the widest fill window, 60 blocks, so that no order of the rehearsal lapses while the keeper runs on the owner's computer. Its one code here, OWN, is the creator's own with no share; the partners' codes are set by the rehearsal sheet once their test addresses exist. Not the first pool: its plan is sim-first-pool.json.",
+  "menu": [
+    {
+      "size_usdc": 20,
+      "price_usdc": 2,
+      "max_drawdown_bps": 600,
+      "target_bps": 25,
+      "drawdown_kind": 1,
+      "on": true
+    }
+  ],
+  "payouts_per_day": 2,
+  "locked_usdc": 3.2,
+  "exam_rules": {
+    "daily_loss_bps": 300,
+    "max_drawdown_bps": 600,
+    "max_leverage_x100": 1000,
+    "assets": [
+      "BTC",
+      "ETH",
+      "SOL"
+    ],
+    "asset_leverage_x100": [
+      1000,
+      1000,
+      500
+    ]
+  },
+  "exam": {
+    "targets_bps": [
+      25
+    ],
+    "step_duration_s": 2592000,
+    "max_idle_s": 2592000,
+    "min_trading_days": 0,
+    "cost_ppm": 450,
+    "fill_delay": 4,
+    "fill_window": 60
+  },
+  "funded_rules": {
+    "daily_loss_bps": 300,
+    "max_drawdown_bps": 600,
+    "max_leverage_x100": 1000,
+    "assets": [
+      "BTC",
+      "ETH",
+      "SOL"
+    ],
+    "asset_leverage_x100": [
+      1000,
+      1000,
+      500
+    ]
+  },
+  "funded": {
+    "targets_bps": [
+      25
+    ],
+    "step_duration_s": 2592000,
+    "max_idle_s": 2592000,
+    "min_trading_days": 0,
+    "cost_ppm": 450,
+    "fill_delay": 4,
+    "fill_window": 60
+  },
+  "fund_window_s": 604800,
+  "from_book": true,
+  "max_worse_bps": 150,
+  "codes": [
+    {
+      "code": "OWN",
+      "partner": "creator",
+      "bps": 0
+    }
+  ],
+  "terms_text": "Rehearsal on HyperEVM testnet, test money only: nothing here is worth anything and nothing is promised. A simulated pool with one line, a paper account of 20 for 2 test USDC. Both stages are paper exams: a loss limit of 6 % of the starting balance, measured from the highest equity recorded at the start of a UTC day and never above the starting balance; no more than 3 % below the day's first snapshot; a profit target of 0.25 %; leverage at most 10x on BTC and ETH and 5x on SOL; thirty days at most. An order is filled by the platform's filler no sooner than the fourth block after the one it is placed in, at the book's price, never better than the oracle's and at most 1.5 % worse, and lapses if it is not filled within 60 blocks; a fill pays 0.045 % of its notional. Whoever passes the exam starts the stage within seven days; whoever passes the stage is paid 1.6 test USDC, no sooner than 72 hours after the payout is claimed once the pool's approver has approved it, or 7 days after it is claimed without approval, at most two payouts a day. Until it is paid, the platform's checker may stop it with a reason written on chain (1, opposite positions with another account; 2, that and the wallets linked; 3, a result disputed; 4, prohibited play), and may lift its own stop within 14 days. Every exam is bought with a trading group's code; when the creator takes profit out, each code is credited its share. The platform takes 0.5 % of each price and of each withdrawal, and a fee in HYPE to open the pool. The pool runs at least 184 days; only the platform can close it sooner. The creator withdraws by a request carried out no sooner than 7 days after it, within 3 days after that."
+}

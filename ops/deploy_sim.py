@@ -19,6 +19,11 @@
     spike/.venv/bin/python -m ops.deploy_sim approve --pool 0x.. --key approver --ids 3,4 [--send]     # payouts
     spike/.venv/bin/python -m ops.deploy_sim fee --deployment sim1 --amount 0.5 --key deployer [--send] # the fee
                                                        ... [--confirm-large-fee]       # mainnet, above 10 HYPE
+    spike/.venv/bin/python -m ops.deploy_sim code --pool 0x.. --key creator --code G1 --partner 0x.. --bps 5000 \\
+        [--author 0x.. --author-bps 3000] [--send]                                                     # one code
+    spike/.venv/bin/python -m ops.deploy_sim pot --pool 0x.. --key creator --amount 2 [--send]         # add to it
+    spike/.venv/bin/python -m ops.deploy_sim claim --pool 0x.. --key partner --code G1 [--code G2] [--send] # shares
+    spike/.venv/bin/python -m ops.deploy_sim pay --pool 0x.. --key deployer --max 10 [--send]          # payouts
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
 and the SimPoolFactory on HyperEVM, with the fee for opening a pool set in the factory (--creation-fee, in HYPE: 1 on
@@ -65,6 +70,15 @@ above 10 HYPE also wants --confirm-large-fee, against a slip of a zero); a pool 
 Without --send it reads the factory's fee and operator and says what it would send, or why the factory would refuse;
 with --send it reads the fee back after.
 
+`code` sets one code by its flags (setSplitCode, from the creator's key), checked as `codes` checks a plan's: a code
+for one, or for two with --author and --author-bps. `pot` puts more of the creator's USDC in (addToPot, after
+approving the pool's USDC for it): principal, never shared with the partners. `claim` sends what the named codes have
+accrued to each one's partner and author (claimShares; anyone may, the money goes to them only), and says how much
+each gets; nothing due, nothing sent. `pay` settles the payouts that may go out now (pay(max), from the head; anyone
+may, the keeper does it pass after pass): it lists each payout within --max from the head and asks the pool, by
+eth_call from the sender, how many it settles; none, and it says why and sends nothing. None of them caps an amount:
+each passes what it is given, and says what the pool or its token would refuse.
+
 `check` asks SimPoolFactory.check whether a plan could open a pool, by eth_call, sending nothing and reading no key:
 with --deployment, the factory it names; without, the factory and PaperExam of this checkout, put in the call by a
 state override on the network's precompiles, so a plan is checked before any factory is deployed.
@@ -76,7 +90,8 @@ and the terms' text.
 
 Without --send nothing is sent and no key is read: each command prints what it would do.
 
-With --signer ADDRESS (pool, codes, close, finish, request, withdraw, cancel, approver, approve) the call is
+With --signer ADDRESS (pool, codes, code, pot, claim, pay, close, finish, request, withdraw, cancel, approver,
+approve, fee) the call is
 from an address that signs elsewhere: our pool's creator is a Safe with two signatures, its approver of payouts
 a Ledger. The command reads the chain as that address, checks as it would for a key, and prints the calls in
 order as the Safe's Transaction Builder takes them (to, value, data); it sends nothing and reads no key. With it,
@@ -281,15 +296,18 @@ def codes_of(raw: dict, creator: str) -> list[tuple[str, bytes, str, int, str, i
         if partner == ZERO:
             raise SystemExit(f"code {text!r}: no partner address")
         if bps != 0 and not MIN_PARTNER_BPS <= bps <= MAX_PARTNER_BPS:
-            raise SystemExit(f"code {text!r}: a share is 0 or {MIN_PARTNER_BPS} to {MAX_PARTNER_BPS} bps, not {bps}")
+            raise SystemExit(f"BadShare: code {text!r}: a share is 0 or {MIN_PARTNER_BPS} to {MAX_PARTNER_BPS} bps, "
+                             f"not {bps}")
         author, author_bps = ZERO, 0
         if "author" in entry or "author_bps" in entry:
             if not {"author", "author_bps"} <= set(entry):
                 raise SystemExit(f"code {text!r}: a code for two needs both \"author\" and \"author_bps\"")
             author, author_bps = to_checksum_address(entry["author"]), int(entry["author_bps"])
             if author == ZERO or not 0 < author_bps < 10_000:
-                raise SystemExit(f"code {text!r}: a code for two names its author and gives it 1 to 9 999 bps of the "
-                                 f"code's share, not {author_bps}")
+                raise SystemExit(f"BadShare: code {text!r}: a code for two names its author and gives it 1 to 9 999 "
+                                 f"bps of the code's share, not {author_bps}")
+            if author == partner:
+                raise SystemExit(f"BadShare: code {text!r}: its author is another address than its partner")
         seen.add(text)
         out.append((text, code_hash(text), partner, bps, author, author_bps))
     return out
@@ -307,7 +325,7 @@ def to_set(codes: list[tuple[str, bytes, str, int, str, int]], on_chain) -> list
         same = who and int(have_bps) == bps
         raise_ = who and bps > int(have_bps)
         if used and not same and not raise_:
-            raise SystemExit(f"code {text!r} is fixed on chain as {have} {have_bps} bps, author {have_author} "
+            raise SystemExit(f"CodeUsed: code {text!r} is fixed on chain as {have} {have_bps} bps, author {have_author} "
                              f"{have_split} bps of it: a sale named it; its share can only rise, for the same partner, "
                              "author and split")
         if not same:
@@ -1153,6 +1171,167 @@ def codes(args) -> int:
     return 0
 
 
+# ── one code, the pot, the codes' shares and the payouts: a call each ───────────────
+
+def code_cmd(args) -> int:
+    """One code by its flags (setSplitCode, from the creator), checked as `codes` checks a plan's: a code for one, or
+    for two with --author and --author-bps."""
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
+    creator = to_checksum_address(c.call_view(pool_, "creator()", [], [], ["address"])[0])
+    if sender != creator:
+        raise SystemExit(f"NotCreator: {sender} is not the pool's creator ({creator}); only the creator sets its codes")
+    entry = {"code": args.code, "partner": args.partner, "bps": args.bps}
+    entry.update({k: v for k, v in (("author", args.author), ("author_bps", args.author_bps)) if v is not None})
+    one = codes_of({"codes": [entry]}, sender)
+    on_chain = lambda h: c.call_view(pool_, "codeOf(bytes32)", ["bytes32"], [h], CODE_OF)
+    print(f"deploy_sim code: pool {pool_}, {SET_CODE.split('(')[0]} from {args.key or 'the signer'} ({sender})")
+    print_codes(one)
+    if not to_set(one, on_chain):
+        raise SystemExit(f"the pool has code {args.code!r} so already: nothing to send")
+    _, h, *rest = one[0]
+    return send_or_say(args, pool_, SET_CODE, SET_CODE_TYPES, [h, *rest])
+
+
+def pot_check(creator: str, sender: str, finished: bool, balance: int, amount: int) -> str:
+    """What addToPot(amount) from `sender` would do now, or why the pool or its token would refuse."""
+    if sender != creator:
+        raise SystemExit(f"NotCreator: {sender} is not the pool's creator ({creator}); only the creator adds to the pot")
+    if finished:
+        raise SystemExit("Done: the pool is finished: nothing more goes in")
+    if balance < amount:
+        raise SystemExit(f"the token would refuse it: {sender} holds {usdc(balance)}, less than the {usdc(amount)} to "
+                         "put in")
+    return (f"puts in {usdc(amount)} of the creator's own: principal, never shared with the partners; it comes back once "
+            "what is above it has been taken, or at `finish`")
+
+
+def pot(args) -> int:
+    """addToPot from the creator: the pool's USDC approved for the amount, then the call."""
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
+    amount = amount_units(args.amount)
+    v = lambda sig, out: c.call_view(pool_, sig, [], [], [out])[0]
+    creator, token = to_checksum_address(v("creator()", "address")), to_checksum_address(v("usdc()", "address"))
+    balance = int(c.call_view(token, "balanceOf(address)", ["address"], [sender], ["uint256"])[0])
+    text = pot_check(creator, sender, bool(v("finished()", "bool")), balance, amount)
+    print(f"deploy_sim pot: pool {pool_}, approve({pool_}, {amount}) on USDC {token}, then addToPot({amount}), from "
+          f"{args.key or 'the signer'} ({sender}): {text}")
+    calls = [(token, "approve(address,uint256)", ["address", "uint256"], [pool_, amount]),
+             (pool_, "addToPot(uint256)", ["uint256"], [amount])]
+    if getattr(args, "signer", None):
+        return print_batch(args, f"addToPot on {pool_}", [(to, 0, c.encode_call(sig, t, val)) for to, sig, t, val in calls])
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    sn.confirm_send(args, f"put {usdc(amount)} in the pot of {pool_} from the key {args.key!r}", c)
+    key = c.account(args.key)
+    for to, sig, types, values in calls:
+        rcpt = c.transact(key, to, sig, types, values)
+    print(f"deploy_sim: sent, tx {rcpt['transactionHash']}")
+    return 0
+
+
+def claim_lines(codes: list[tuple[str, bytes]], read) -> tuple[list[str], int]:
+    """What claimShares sends each code's partner and author, a line a code, and all of it. `read(hash)` is the pool's
+    (codeOf, shareDue) of a code."""
+    lines, total = [], 0
+    for text, h in codes:
+        of, (to_partner, to_author) = read(h)
+        partner, author = to_checksum_address(of[0]), to_checksum_address(of[4])
+        if partner == ZERO and not of[2]:
+            lines.append(f"code {text!r} 0x{h.hex()[:12]}..: not set on this pool; it sends nothing")
+            continue
+        two = f", {usdc(to_author)} to its author {author}" if author != ZERO else ""
+        lines.append(f"code {text!r} 0x{h.hex()[:12]}..: {usdc(to_partner)} to its partner {partner}{two}")
+        total += to_partner + to_author
+    return lines, total
+
+
+def claim(args) -> int:
+    """claimShares: what the named codes have accrued, to each one's partner and author; anyone may send it."""
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
+    codes_ = [(text, code_hash(text)) for text in args.code]
+    if len(set(args.code)) != len(args.code):
+        raise SystemExit("--code: each code once")
+    read = lambda h: (c.call_view(pool_, "codeOf(bytes32)", ["bytes32"], [h], CODE_OF),
+                      c.call_view(pool_, "shareDue(bytes32)", ["bytes32"], [h], ["uint256", "uint256"]))
+    lines, total = claim_lines(codes_, read)
+    print(f"deploy_sim claim: pool {pool_}, claimShares({[t for t, _ in codes_]}) from {args.key or 'the signer'} "
+          f"({sender}): sends {usdc(total)}; the money goes to each code's partner and author, whoever sends it")
+    for line in lines:
+        print("  " + line)
+    if not total:
+        raise SystemExit("nothing is due to these codes now: nothing to send (a code is credited at the creator's "
+                         "withdrawal and at `finish`)")
+    return send_or_say(args, pool_, "claimShares(bytes32[])", ["bytes32[]"], [[h for _, h in codes_]])
+
+
+def pay_lines(payouts: list[tuple[int, tuple]], now: int, hard: int) -> list[str]:
+    """Each payout `pay` would look at, from the head: whose, how much, and from when it goes out."""
+    lines = []
+    for i, p in payouts:
+        state = PAYOUT_STATE[p[4]]
+        head = f"payout {i}: {usdc(p[2])} to {to_checksum_address(p[1])}"
+        if state != "Due":
+            lines.append(f"{head}, {state}")
+        elif now >= p[3] and (p[7] or now >= p[3] + hard):
+            lines.append(f"{head}, may go out now")
+        elif p[7]:
+            lines.append(f"{head}, approved: goes out from {utc(p[3])}")
+        else:
+            lines.append(f"{head}, goes out from {utc(p[3])} approved; {utc(p[3] + hard)} without")
+    return lines
+
+
+def pay_reason(payouts: list[tuple[int, tuple]], now: int, hard: int, room: int, next_at: int) -> str:
+    """Why `pay` settles nothing now, as the pool decides it: the first payout it would stop at, or the daily limit,
+    or the money."""
+    ready = False
+    for i, p in payouts:
+        if PAYOUT_STATE[p[4]] != "Due":
+            continue
+        if now < p[3]:
+            return f"payout {i} goes out from {utc(p[3])} at the soonest"
+        if p[7] or now >= p[3] + hard:
+            ready = True
+            break
+    if not ready:
+        waiting = [i for i, p in payouts if PAYOUT_STATE[p[4]] == "Due"]
+        if waiting:
+            return f"payout(s) {', '.join(map(str, waiting))} wait for their approval or for their 7 days"
+        return "no payout waits within its reach"
+    if not room:
+        return f"the day's payouts are paid (PayoutWaitsLimit): the next from {utc(next_at)}"
+    return "the pool's free USDC does not cover it (PayoutQueued): it waits, and every payout after it, until money comes in"
+
+
+def pay_cmd(args) -> int:
+    """pay(max): the payouts that may go out now, from the head, in the order of their claims; anyone may send it.
+    The pool's own answer, by eth_call from the sender, says how many it settles."""
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
+    if args.max < 0:
+        raise SystemExit(f"--max {args.max}: a number of payouts, as `pay(uint256)` takes it")
+    v = lambda sig, out: c.call_view(pool_, sig, [], [], [out])[0]
+    head, count = int(v("head()", "uint256")), int(v("payoutCount()", "uint256"))
+    payouts = [(i, c.call_view(pool_, "payout(uint256)", ["uint256"], [i], [PAYOUT_T])[0])
+               for i in range(head, min(head + args.max, count))]
+    factory = v("factory()", "address")
+    hard = int(c.call_view(factory, "PAYOUT_HARD()", [], [], ["uint32"])[0]) - \
+        int(c.call_view(factory, "PAYOUT_DELAY()", [], [], ["uint32"])[0])
+    room, next_at, now = int(v("payRoom()", "uint256")), int(v("nextPayAt()", "uint64")), chain_now()
+    data = c.encode_call("pay(uint256)", ["uint256"], [args.max])
+    try:
+        settled = int(c.rpc("eth_call", [{"from": sender, "to": pool_, "data": "0x" + data.hex()}, "latest"]), 16)
+    except RuntimeError as exc:
+        raise SystemExit(f"the pool would refuse it: {exc}")
+    print(f"deploy_sim pay: pool {pool_}, pay({args.max}) from {args.key or 'the signer'} ({sender}): settles {settled} "
+          f"payout(s) now, of {count - head} from the head ({head}); the daily limit lets {room} more through now")
+    for line in pay_lines(payouts, now, hard):
+        print("  " + line)
+    if not settled:
+        raise SystemExit(f"pay would settle nothing now: {pay_reason(payouts, now, hard, room, next_at)}")
+    return send_or_say(args, pool_, "pay(uint256)", ["uint256"], [args.max])
+
+
 def buy(args) -> int:
     record = deployments.load(args.deployment)
     pool_ = to_checksum_address(args.pool)
@@ -1252,6 +1431,34 @@ def main(argv: list[str] | None = None) -> int:
         if name == "request":
             z.add_argument("--amount", required=True, help='USDC, as "250" or "84.575"')
         z.add_argument("--send", action="store_true")
+    z = sub.add_parser("code")
+    z.add_argument("--pool", required=True)
+    z.add_argument("--key", help="the pool's creator")
+    z.add_argument("--signer", help="the creator as an address that signs elsewhere (our Safe): print the call, send nothing")
+    z.add_argument("--code", required=True, help="the code's text, as a buyer types it")
+    z.add_argument("--partner", required=True, help="the code's partner; \"creator\" for the creator's own")
+    z.add_argument("--bps", required=True, type=int, help="the code's share of the profit, in bps")
+    z.add_argument("--author", help="a code for two: its author")
+    z.add_argument("--author-bps", type=int, help="a code for two: the author's part of the code's share, in bps")
+    z.add_argument("--send", action="store_true")
+    z = sub.add_parser("pot")
+    z.add_argument("--pool", required=True)
+    z.add_argument("--key", help="the pool's creator")
+    z.add_argument("--signer", help="the creator as an address that signs elsewhere (our Safe): print the calls, send nothing")
+    z.add_argument("--amount", required=True, help='USDC, as "2" or "84.575"')
+    z.add_argument("--send", action="store_true")
+    z = sub.add_parser("claim")
+    z.add_argument("--pool", required=True)
+    z.add_argument("--key", help="the key it is sent from: anyone's, a code's partner as a rule")
+    z.add_argument("--signer", help="an address that signs elsewhere: print the call, send nothing")
+    z.add_argument("--code", required=True, action="append", help="a code's text; once for each code")
+    z.add_argument("--send", action="store_true")
+    z = sub.add_parser("pay")
+    z.add_argument("--pool", required=True)
+    z.add_argument("--key", help="the key it is sent from: anyone's")
+    z.add_argument("--signer", help="an address that signs elsewhere: print the call, send nothing")
+    z.add_argument("--max", required=True, type=int, help="how many payouts from the head `pay` looks at")
+    z.add_argument("--send", action="store_true")
     for each in sub.choices.values():
         sn.add_args(each)
     args = p.parse_args(argv)
@@ -1259,7 +1466,8 @@ def main(argv: list[str] | None = None) -> int:
         c.assert_network()  # what a mainnet command reads is the chain's it names, sent or not (review of #300)
     return {"deploy": deploy, "pool": pool, "check": check, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
-            "approve": approve, "fee": fee_cmd}[args.cmd](args)
+            "approve": approve, "fee": fee_cmd, "code": code_cmd, "pot": pot, "claim": claim,
+            "pay": pay_cmd}[args.cmd](args)
 
 
 if __name__ == "__main__":

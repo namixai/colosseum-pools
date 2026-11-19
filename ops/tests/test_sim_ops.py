@@ -61,11 +61,20 @@ class TheNumbers(unittest.TestCase):
         from unittest import mock
         zero = "0x" + "00" * 20
         for keys in ((a, b, zero), (zero, a, b), (a, zero, b)):
-            with mock.patch.object(d, "deploy_contract") as deployed, self.assertRaises(SystemExit) as caught:
+            # Every send path a stand-in: a mutant that drops the refusal must not read a key, switch big blocks or
+            # write a record (it did once, on testnet).
+            with mock.patch.object(d, "deploy_contract") as deployed, mock.patch.object(d.sn, "confirm_send"), \
+                    mock.patch.object(d.sn, "check_assets"), mock.patch.object(d.c, "account") as key, \
+                    mock.patch.object(d, "big_blocks") as big, mock.patch.object(d.c, "rpc") as rpc, \
+                    mock.patch.object(d.c, "transact") as sent, mock.patch.object(d, "save") as saved, \
+                    mock.patch.object(d, "mark_incomplete") as incomplete, \
+                    mock.patch.object(d.deployments, "load", return_value={"keeper_nodes": {}}), \
+                    self.assertRaises(SystemExit) as caught:
                 d.main(["deploy", "--label", "never-written", "--filler", keys[0], "--checker", keys[1], "--closer", keys[2],
                         "--send"])
             self.assertIn("none of them 0x0", str(caught.exception))
-            deployed.assert_not_called()
+            for stand_in in (deployed, key, big, rpc, sent, saved, incomplete):
+                stand_in.assert_not_called()
 
     def test_the_plan_tuple_is_simplans_layout(self):
         body = re.search(r"struct SimPlan \{(.*?)\n\}", POOL, re.S).group(1)
@@ -500,6 +509,312 @@ class TheFeeCommand(unittest.TestCase):
         self.assertIn("event CreationFeeSet(uint256 previous, uint256 fee);", FACTORY)
 
 
+class ThePoolsCalls(unittest.TestCase):
+    """`code`, `pot`, `claim` and `pay`: the creator's, a partner's and anyone's calls on a pool, made as `fee` and
+    `approver` are: read first and checked as the pool checks them, sent only with --send from the key named, printed
+    for a signer elsewhere with no key read; no cap on an amount. Every send path here is a stand-in: no test reads a
+    key or reaches a node, whatever a mutant takes away."""
+    POOL, CREATOR, TOKEN, P1, P2, OTHER, FACTORY = ("0x" + x * 20 for x in ("e1", "aa", "c0", "11", "22", "ee", "f1"))
+    DAY = 86_400
+    NOW = 100 * DAY
+
+    def run_cmd(self, argv, answers=None, key_address=None, settles=1, net="testnet", confirm_raises=None):
+        from spike.hlspike import network as networks
+        reads = {"creator()": [self.CREATOR], "usdc()": [self.TOKEN], "finished()": [False],
+                 "balanceOf(address)": [10**15], "codeOf(bytes32)": (d.ZERO, 0, False, 0, d.ZERO) + (0,) * 7,
+                 "shareDue(bytes32)": (0, 0), "head()": [0], "payoutCount()": [0], "factory()": [self.FACTORY],
+                 "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "payRoom()": [2],
+                 "nextPayAt()": [0]}
+        reads.update(answers or {})
+        self.read = []
+
+        def call_view(to, sig, types, values, out):
+            self.read.append((to, sig, list(values)))
+            got = reads[sig]
+            return got(values) if callable(got) else got
+        rpcs, sent = [], []
+
+        def rpc(method, params=()):
+            rpcs.append((method, params))
+            if method == "eth_getBlockByNumber":
+                return {"timestamp": hex(self.NOW)}
+            if method == "eth_call":
+                return "0x%064x" % settles
+            raise AssertionError(f"no {method} here")
+        transact = lambda acct, to, sig, types, values: sent.append((to, sig, values)) or {"transactionHash": "0x01"}
+        out = io.StringIO()
+        with mock.patch.object(d.c, "call_view", side_effect=call_view), mock.patch.object(d.c, "rpc", side_effect=rpc), \
+                mock.patch.object(d.c, "address_of", return_value=d.to_checksum_address(key_address or self.CREATOR)), \
+                mock.patch.object(d.c, "account") as key, \
+                mock.patch.object(d.sn, "confirm_send", side_effect=confirm_raises) as confirm, \
+                mock.patch.object(d.c, "transact", side_effect=transact), mock.patch.object(d.c, "send_tx") as raw, \
+                mock.patch.object(d.c, "NETWORK", {"testnet": networks.TESTNET, "mainnet": networks.MAINNET}[net]), \
+                mock.patch.object(d.c, "assert_network"), mock.patch.object(d.c, "assert_testnet"), redirect_stdout(out):
+            try:
+                code = d.main([argv[0], "--network", net, *argv[1:]])
+            except SystemExit as exc:
+                code = exc
+        raw.assert_not_called()
+        return code, sent, out.getvalue(), key, confirm, rpcs
+
+    def assert_refused(self, argv, word, **kw):
+        code, sent, said, key, confirm, _ = self.run_cmd(argv + ["--send"], **kw)
+        self.assertIsInstance(code, SystemExit, argv)
+        self.assertIn(word, str(code))
+        self.assertEqual(sent, [], argv)
+        key.assert_not_called(), confirm.assert_not_called()
+        return said
+
+    def batch_of(self, said):
+        return json.loads(said[said.index("{"):])["transactions"]
+
+    def test_the_calls_are_the_pools(self):
+        pool = re.sub(r"\s+", " ", POOL)
+        for line in ("function addToPot(uint256 amount) external onlyCreator {", "if (finished) revert Done();",
+                     "function claimShares(bytes32[] calldata codes) external {",
+                     "function shareDue(bytes32 code) external view returns (uint256 toPartner, uint256 toAuthor)",
+                     "function pay(uint256 max) external returns (uint256 n)", "uint256 public head;",
+                     "IERC20 public usdc;", "function payRoom() external view returns (uint256 room)",
+                     "function nextPayAt() external view returns (uint64)"):
+            self.assertIn(line, pool)
+        script = (ROOT / "ops/deploy_sim.py").read_text(encoding="utf-8")
+        for sig in ('"addToPot(uint256)"', '"claimShares(bytes32[])"', '"pay(uint256)"', '"shareDue(bytes32)"',
+                    '"head()"', '"usdc()"', '"payRoom()"', '"nextPayAt()"'):
+            self.assertIn(sig, script)
+
+    # ── code ──
+
+    def test_code_says_what_it_would_set_and_sends_only_with_send(self):
+        argv = ["code", "--pool", self.POOL, "--key", "creator", "--code", "TWO", "--partner", self.P1, "--bps", "4000",
+                "--author", self.P2, "--author-bps", "3000"]
+        code, sent, said, key, confirm, _ = self.run_cmd(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        p1, p2 = d.to_checksum_address(self.P1), d.to_checksum_address(self.P2)
+        self.assertIn(f"setSplitCode from creator ({d.to_checksum_address(self.CREATOR)})", said)
+        self.assertIn(f"'TWO' 0x{keccak(text='TWO').hex()[:12]}.. -> {p1} 40%, of it 30% to the author {p2}", said)
+        self.assertIn("nothing was sent", said)
+        code, sent, said, key, confirm, _ = self.run_cmd(argv + ["--send"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [(d.to_checksum_address(self.POOL), d.SET_CODE, [keccak(text="TWO"), p1, 4000, p2, 3000])])
+        confirm.assert_called_once()
+        # A code for one: no author, a zero split; "creator" is the creator's own address.
+        code, sent, *_ = self.run_cmd(["code", "--pool", self.POOL, "--key", "creator", "--code", "OWN", "--partner",
+                                       "creator", "--bps", "0", "--send"])
+        self.assertEqual(sent[0][2], [keccak(text="OWN"), d.to_checksum_address(self.CREATOR), 0, d.ZERO, 0])
+
+    def test_code_only_from_the_creator_and_as_the_pool_checks_it(self):
+        base = ["code", "--pool", self.POOL, "--key", "creator", "--code", "P1", "--partner", self.P1]
+        p1 = d.to_checksum_address(self.P1)
+        self.assert_refused(base + ["--bps", "5000"], "NotCreator", key_address=self.OTHER)
+        self.assert_refused(base + ["--bps", "3999"], "BadShare")
+        self.assert_refused(base + ["--bps", "5000", "--author", self.P1, "--author-bps", "3000"],
+                            "its author is another address than its partner")
+        self.assert_refused(base + ["--bps", "5000", "--author", self.P2], "needs both")
+        on_chain = {"codeOf(bytes32)": (p1, 5000, False, 0, d.ZERO) + (0,) * 7}
+        self.assert_refused(base + ["--bps", "5000"], "so already: nothing to send", answers=on_chain)
+        # A code a sale named: its share may rise, nothing else changes.
+        used = {"codeOf(bytes32)": (p1, 4000, True, 0, d.ZERO) + (0,) * 7}
+        self.assert_refused(base + ["--bps", "5000", "--author", self.P2, "--author-bps", "3000"], "CodeUsed",
+                            answers=used)
+        code, sent, *_ = self.run_cmd(base + ["--bps", "5000", "--send"], answers=used)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent[0][2][2], 5000, "a raise from 40 to 50 %")
+        code, *_ = self.run_cmd(["code", "--pool", self.POOL, "--code", "P1", "--partner", self.P1, "--bps", "5000"])
+        self.assertIn("--key or --signer", str(code))
+
+    def test_code_for_a_safe_is_printed_and_nothing_is_sent(self):
+        safe = d.to_checksum_address(self.CREATOR)
+        code, sent, said, key, confirm, _ = self.run_cmd(["code", "--pool", self.POOL, "--signer", safe, "--code", "P1",
+                                                          "--partner", self.P1, "--bps", "5000", "--send"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        self.assertIn(f"from the signer ({safe})", said)
+        tx = self.batch_of(said)
+        self.assertEqual([(t["to"], t["value"]) for t in tx], [(d.to_checksum_address(self.POOL), "0")])
+        self.assertEqual(tx[0]["data"], "0x" + d.c.encode_call(d.SET_CODE, d.SET_CODE_TYPES, [
+            keccak(text="P1"), d.to_checksum_address(self.P1), 5000, d.ZERO, 0]).hex())
+        self.assert_refused(["code", "--pool", self.POOL, "--signer", d.to_checksum_address(self.OTHER), "--code", "P1",
+                             "--partner", self.P1, "--bps", "5000"], "NotCreator")
+
+    # ── pot ──
+
+    def test_pot_says_what_it_would_put_in_and_sends_only_with_send(self):
+        argv = ["pot", "--pool", self.POOL, "--key", "creator", "--amount", "2"]
+        code, sent, said, key, confirm, _ = self.run_cmd(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        pool, token = d.to_checksum_address(self.POOL), d.to_checksum_address(self.TOKEN)
+        self.assertIn(f"approve({pool}, 2000000) on USDC {token}, then addToPot(2000000), from creator", said)
+        self.assertIn("puts in 2 USDC of the creator's own: principal, never shared with the partners", said)
+        self.assertIn("nothing was sent", said)
+        code, sent, said, key, confirm, _ = self.run_cmd(argv + ["--send"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [(token, "approve(address,uint256)", [pool, 2_000_000]),
+                                (pool, "addToPot(uint256)", [2_000_000])])
+        confirm.assert_called_once()
+        key.assert_called_once_with("creator")
+        self.assertIn("deploy_sim: sent, tx 0x01", said)
+        # The balance read is the sender's, of the pool's own USDC.
+        self.assertIn((token, "balanceOf(address)", [d.to_checksum_address(self.CREATOR)]), self.read)
+        # Not confirmed: no key read, nothing sent.
+        code, sent, _, key, _, _ = self.run_cmd(argv + ["--send"], confirm_raises=SystemExit("not confirmed"))
+        self.assertIn("not confirmed", str(code))
+        self.assertEqual(sent, [])
+        key.assert_not_called()
+
+    def test_pot_only_from_the_creator_before_the_finish_and_what_the_creator_holds(self):
+        argv = ["pot", "--pool", self.POOL, "--key", "creator", "--amount", "2"]
+        self.assert_refused(argv, "NotCreator", key_address=self.OTHER)
+        self.assert_refused(argv, "Done: the pool is finished", answers={"finished()": [True]})
+        self.assert_refused(argv, "the token would refuse it: ", answers={"balanceOf(address)": [1_999_999]})
+        for amount in ("0", "-1", "abc", "1.0000001"):
+            said = self.assert_refused(["pot", "--pool", self.POOL, "--key", "creator", "--amount", amount], "--amount")
+            self.assertEqual(said, "", "refused before anything is read")
+        # No cap: what the creator holds goes in, however much.
+        code, sent, *_ = self.run_cmd(["pot", "--pool", self.POOL, "--key", "creator", "--amount", "1000000000",
+                                       "--send"], answers={"balanceOf(address)": [10**15]})
+        self.assertEqual(code, 0)
+        self.assertEqual(sent[1][2], [10**15])
+
+    def test_pot_for_a_safe_is_two_calls_in_order(self):
+        safe = d.to_checksum_address(self.CREATOR)
+        code, sent, said, key, confirm, _ = self.run_cmd(["pot", "--pool", self.POOL, "--signer", safe, "--amount", "2",
+                                                          "--send"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        pool, token = d.to_checksum_address(self.POOL), d.to_checksum_address(self.TOKEN)
+        tx = self.batch_of(said)
+        self.assertEqual([(t["to"], t["value"]) for t in tx], [(token, "0"), (pool, "0")])
+        self.assertEqual(tx[0]["data"], "0x" + d.c.encode_call("approve(address,uint256)", ["address", "uint256"],
+                                                               [pool, 2_000_000]).hex())
+        self.assertEqual(tx[1]["data"], "0x" + d.c.encode_call("addToPot(uint256)", ["uint256"], [2_000_000]).hex())
+        self.assert_refused(["pot", "--pool", self.POOL, "--signer", d.to_checksum_address(self.OTHER), "--amount", "2"],
+                            "NotCreator")
+
+    # ── claim ──
+
+    def shares(self):
+        p1, p2 = d.to_checksum_address(self.P1), d.to_checksum_address(self.P2)
+        codes = {keccak(text="P1"): ((p1, 5000, True, 0, d.ZERO) + (0,) * 7, (248_750, 0)),
+                 keccak(text="TWO"): ((p1, 4000, True, 3000, p2) + (0,) * 7, (139_300, 59_700))}
+        none = ((d.ZERO, 0, False, 0, d.ZERO) + (0,) * 7, (0, 0))
+        return {"codeOf(bytes32)": lambda v: codes.get(v[0], none)[0],
+                "shareDue(bytes32)": lambda v: codes.get(v[0], none)[1]}
+
+    def test_claim_says_what_each_code_sends_and_sends_only_with_send(self):
+        argv = ["claim", "--pool", self.POOL, "--key", "partner-1", "--code", "P1", "--code", "TWO"]
+        code, sent, said, key, confirm, _ = self.run_cmd(argv, answers=self.shares(), key_address=self.P1)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        p1, p2 = d.to_checksum_address(self.P1), d.to_checksum_address(self.P2)
+        self.assertIn("claimShares(['P1', 'TWO']) from partner-1", said)
+        self.assertIn("sends 0.44775 USDC", said)
+        self.assertIn(f"code 'P1' 0x{keccak(text='P1').hex()[:12]}..: 0.24875 USDC to its partner {p1}\n", said)
+        self.assertIn(f"0.1393 USDC to its partner {p1}, 0.0597 USDC to its author {p2}", said)
+        code, sent, said, key, confirm, _ = self.run_cmd(argv + ["--send"], answers=self.shares(), key_address=self.P1)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [(d.to_checksum_address(self.POOL), "claimShares(bytes32[])",
+                                 [[keccak(text="P1"), keccak(text="TWO")]])])
+        confirm.assert_called_once()
+        key.assert_called_once_with("partner-1")
+
+    def test_claim_with_nothing_due_or_a_code_twice_sends_nothing(self):
+        said = self.assert_refused(["claim", "--pool", self.POOL, "--key", "partner-1", "--code", "NOPE"],
+                                   "nothing is due to these codes now", answers=self.shares())
+        self.assertIn("'NOPE'", said)
+        self.assertIn("not set on this pool; it sends nothing", said)
+        self.assert_refused(["claim", "--pool", self.POOL, "--key", "partner-1", "--code", "P1"],
+                            "nothing is due", answers={**self.shares(), "shareDue(bytes32)": (0, 0)})
+        self.assert_refused(["claim", "--pool", self.POOL, "--key", "partner-1", "--code", "P1", "--code", "P1"],
+                            "each code once", answers=self.shares())
+        # A code not set beside one with a share: the share goes, and the line says the other sends nothing.
+        code, sent, said, *_ = self.run_cmd(["claim", "--pool", self.POOL, "--key", "partner-1", "--code", "P1",
+                                             "--code", "NOPE", "--send"], answers=self.shares())
+        self.assertEqual(code, 0)
+        self.assertEqual(sent[0][2], [[keccak(text="P1"), keccak(text="NOPE")]])
+
+    def test_claim_for_a_signer_elsewhere_is_printed_and_nothing_is_sent(self):
+        ledger = d.to_checksum_address(self.OTHER)
+        code, sent, said, key, confirm, _ = self.run_cmd(["claim", "--pool", self.POOL, "--signer", ledger, "--code",
+                                                          "TWO", "--send"], answers=self.shares())
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        self.assertIn(f"from the signer ({ledger})", said)
+        tx = self.batch_of(said)
+        self.assertEqual(tx[0]["data"], "0x" + d.c.encode_call("claimShares(bytes32[])", ["bytes32[]"],
+                                                               [[keccak(text="TWO")]]).hex())
+
+    # ── pay ──
+
+    def payouts(self, *rows, head=0, room=2, next_at=0):
+        """Payouts as SimPool.payout reads them: (state, dueAt, approved) a row, 1.6 USDC each to trader A."""
+        ps = [("0x" + "ac" * 20, "0x" + "7a" * 20, 1_600_000, due, state, False, 0, approved)
+              for state, due, approved in rows]
+        return {"head()": [head], "payoutCount()": [len(ps)], "payout(uint256)": lambda v: [ps[v[0]]],
+                "payRoom()": [room], "nextPayAt()": [next_at]}
+
+    def test_pay_asks_the_pool_how_many_it_settles_and_sends_only_with_send(self):
+        argv = ["pay", "--pool", self.POOL, "--key", "deployer", "--max", "10"]
+        answers = self.payouts((3, self.NOW - self.DAY, False), (1, self.NOW - self.DAY, True))
+        code, sent, said, key, confirm, rpcs = self.run_cmd(argv, answers=answers, key_address=self.OTHER)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        call = [p for m, p in rpcs if m == "eth_call"]
+        self.assertEqual(call, [[{"from": d.to_checksum_address(self.OTHER), "to": d.to_checksum_address(self.POOL),
+                                  "data": "0x" + d.c.encode_call("pay(uint256)", ["uint256"], [10]).hex()}, "latest"]])
+        self.assertIn("pay(10) from deployer", said)
+        self.assertIn("settles 1 payout(s) now, of 2 from the head (0); the daily limit lets 2 more through now", said)
+        self.assertIn("payout 0: 1.6 USDC to 0x7A7a", said)
+        self.assertIn(", Paid\n", said)
+        self.assertIn("payout 1: 1.6 USDC to 0x7A7a", said)
+        self.assertIn(", may go out now", said)
+        self.assertIn("nothing was sent", said)
+        code, sent, said, key, confirm, _ = self.run_cmd(argv + ["--send"], answers=answers, key_address=self.OTHER)
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [(d.to_checksum_address(self.POOL), "pay(uint256)", [10])])
+        confirm.assert_called_once()
+        key.assert_called_once_with("deployer")
+        # Only the payouts within --max from the head are read.
+        self.run_cmd(["pay", "--pool", self.POOL, "--key", "deployer", "--max", "1"], answers={**answers, "head()": [1]})
+        self.assertEqual([v for _, sig, v in self.read if sig == "payout(uint256)"], [[1]])
+
+    def test_pay_that_settles_nothing_says_why_and_sends_nothing(self):
+        argv = ["pay", "--pool", self.POOL, "--key", "deployer", "--max", "10"]
+        due, hard = self.NOW + self.DAY, 4 * self.DAY
+        cases = ((self.payouts((1, due, True)), f"payout 0 goes out from {d.utc(due)} at the soonest"),
+                 (self.payouts((1, self.NOW - self.DAY, False)), "payout(s) 0 wait for their approval or for their 7 days"),
+                 (self.payouts((3, 0, False), (2, 0, False)), "no payout waits within its reach"),
+                 (self.payouts((1, self.NOW - self.DAY, True), room=0, next_at=self.NOW + 60),
+                  f"the day's payouts are paid (PayoutWaitsLimit): the next from {d.utc(self.NOW + 60)}"),
+                 (self.payouts((1, self.NOW - hard, False)), "the pool's free USDC does not cover it (PayoutQueued)"))
+        for answers, word in cases:
+            said = self.assert_refused(argv, "pay would settle nothing now: " + word, answers=answers, settles=0)
+            self.assertIn("settles 0 payout(s) now", said)
+        said = self.assert_refused(argv, "nothing", answers=self.payouts((1, due, False)), settles=0)
+        self.assertIn(f"goes out from {d.utc(due)} approved; {d.utc(due + hard)} without", said)
+        self.assert_refused(["pay", "--pool", self.POOL, "--key", "deployer", "--max", "-1"], "a number of payouts")
+
+    def test_pay_for_a_signer_elsewhere_is_printed_and_nothing_is_sent(self):
+        safe = d.to_checksum_address(self.CREATOR)
+        code, sent, said, key, confirm, rpcs = self.run_cmd(["pay", "--pool", self.POOL, "--signer", safe, "--max", "4",
+                                                             "--send"],
+                                                            answers=self.payouts((1, self.NOW - self.DAY, True)))
+        self.assertEqual(code, 0)
+        self.assertEqual(sent, [])
+        key.assert_not_called(), confirm.assert_not_called()
+        self.assertEqual([p[0]["from"] for m, p in rpcs if m == "eth_call"], [safe], "asked as the signer")
+        tx = self.batch_of(said)
+        self.assertEqual(tx[0]["data"], "0x" + d.c.encode_call("pay(uint256)", ["uint256"], [4]).hex())
+
+
 class TheLibraries(unittest.TestCase):
     """SimPool links to three libraries since its code outgrew a block's limit; `deploy` puts them first and names
     them, and the pool's built code asks for exactly these three."""
@@ -746,6 +1061,52 @@ class TheMeasurePool(unittest.TestCase):
                          "one code, the creator's own, with no share: a sale needs one")
 
 
+class TheRehearsalPlan(unittest.TestCase):
+    """The plan of the rehearsal on testnet: one line of 20 for 2 test USDC, the first pool's rules, a lock of two
+    payouts, the creator's own code; checked by `check` as the first pool's plan is."""
+    PLAN = str(ROOT / "deployments/plans/sim-rehearsal-998.json")
+    LARGEST = "0x" + (20 * 10**6).to_bytes(32, "big").hex()
+    FEE_SEL = "0x" + keccak(text="creationFee()")[:4].hex()
+    RAW = json.loads((ROOT / "deployments/plans/sim-rehearsal-998.json").read_text(encoding="utf-8"))
+
+    def test_it_is_one_line_of_20_for_2_with_the_first_pools_rules(self):
+        raw = self.RAW
+        terms = keccak(text=raw["terms_text"])
+        self.assertEqual("0x" + terms.hex(), "0xda786804c83457034d7f3389126f3eced08a316812ee613e89cd6c56ef930c16",
+                         "the terms the rehearsal sheet names")
+        plan = d.plan_of(raw, terms)
+        self.assertEqual(plan[0], [(20 * 10**6, 2 * 10**6)])
+        self.assertEqual(plan[9], [(600, 25, 1)], "a loss limit of 6 % trailing to the start, a target of 0.25 %")
+        self.assertEqual((plan[10], plan[11], plan[12]), (2, 3_200_000, 1), "two a day, two payouts of 1.6 locked, on")
+        self.assertEqual((plan[5], plan[6], plan[7]), (7 * 86_400, True, 150), "seven days to fund, at the book, 150 bp")
+        for stage in ("exam", "funded"):
+            self.assertEqual(raw[stage]["targets_bps"], [25])
+            self.assertEqual({k: raw[stage][k] for k in ("cost_ppm", "fill_delay", "fill_window")},
+                             {"cost_ppm": FIRST["exam"]["cost_ppm"], "fill_delay": FIRST["exam"]["fill_delay"],
+                              "fill_window": int(constant("MAX_FILL_WINDOW"))})
+        self.assertEqual(raw["exam_rules"], FIRST["exam_rules"], "the first pool's rules")
+        self.assertEqual(raw["funded_rules"], FIRST["funded_rules"])
+        self.assertEqual(d.codes_of(raw, "0x" + "ab" * 20),
+                         [("OWN", keccak(text="OWN"), d.to_checksum_address("0x" + "ab" * 20), 0, d.ZERO, 0)],
+                         "the creator's own code, with no share; the partners' come by `code`")
+        self.assertIn("1.6 test USDC", raw["terms_text"])
+
+    def test_mainnet_refuses_it(self):
+        from spike.hlspike import network as networks
+        with mock.patch.object(d.c, "NETWORK", networks.MAINNET):
+            with self.assertRaises(SystemExit) as caught:
+                d.mainnet_plan_ok(self.RAW)
+        self.assertIn("written for testnet", str(caught.exception))
+
+    def test_check_takes_it_as_it_takes_the_first_pools(self):
+        code, calls, said = TheCheck.run_check(self, [], create_needs=1_000_000)
+        self.assertEqual(code, 0)
+        self.assertIn("line             20 for 2 USDC: loss limit 6 %, target 0.25 %, trailing to the start", said)
+        self.assertIn("payouts a day    2; locks 3.2 USDC; terms keccak 0xda786804c834", said)
+        self.assertIn("the factory accepts the plan; largest size 20 USDC.", said)
+        self.assertIn("the pool opens by an ordinary transaction. Nothing was sent.", said)
+
+
 class TheCheck(unittest.TestCase):
     """`check`: the plan against SimPoolFactory.check by eth_call, with this checkout's code put in the call, and the
     gas of `create` against the network's small block."""
@@ -977,7 +1338,8 @@ class TheCodes(unittest.TestCase):
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20}],
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "00" * 20, "author_bps": 5000}],
                [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20, "author_bps": 0}],
-               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20, "author_bps": 10_000}]]
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "33" * 20, "author_bps": 10_000}],
+               [{"code": "A", "partner": "0x" + "11" * 20, "bps": 6000, "author": "0x" + "11" * 20, "author_bps": 5000}]]
         for codes in bad:
             with self.assertRaises(SystemExit):
                 d.codes_of({"codes": codes}, self.CREATOR)
