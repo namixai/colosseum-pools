@@ -1281,11 +1281,12 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     # The lateness of stops and takes, a series of its own (`trigger_lates`): blocks from the oracle reaching the price
     # to the close, against everyone else's, by the same rule as the orders'.
     sides = {"trader": {"lates": [], "atLeast": 0, "unread": 0}, "others": {"lates": [], "atLeast": 0, "unread": 0}}
+    oracle = chain.get("oracle") or {}
     for a, evs in (chain.get("exam_events") or {}).items():
         owner = who.get(a)
         if owner is None:
             continue
-        side, got = sides["trader" if owner == trader else "others"], trigger_lates(evs, chain.get("oracle") or {})
+        side, got = sides["trader" if owner == trader else "others"], trigger_lates(evs, oracle)
         side["lates"] += got["lates"]
         side["atLeast"] += got["atLeast"]
         side["unread"] += got["unread"]
@@ -1693,14 +1694,19 @@ def oracle_at(asset: int, block: int) -> int | None:
 def read_trigger_oracle(exam_events: dict[str, list[dict]], oracle: dict[str, int]) -> None:
     """The oracle back from each stop's and take's close in every account of the factory, for as long as it held the
     price and `TRIGGER_BACK` blocks at most, into `oracle` (what a --prices file gave stands): what the lateness of
-    stops and takes (`trigger_lates`) is counted from."""
+    stops and takes (`trigger_lates`) is counted from. A price the node did not give is asked once: the stops of other
+    accounts in the same blocks do not ask again. It is remembered here, never put in `oracle` as a price."""
+    unread: set[str] = set()
     for evs in exam_events.values():
         for t in trigger_closes(evs):
             def got(block: int, asset: int = t["asset"]) -> int | None:
                 key = oracle_key(asset, block)
+                if key in unread:
+                    return None
                 if key not in oracle:
                     read = oracle_at(asset, block)
                     if read is None:
+                        unread.add(key)
                         return None
                     oracle[key] = read
                 return oracle[key]

@@ -1187,6 +1187,26 @@ class LateStopsAndTakes(unittest.TestCase):
         self.assertEqual(r.TRIGGER_BACK, 60)
         self.assertIn("uint16 public constant MAX_FILL_WINDOW = 60;", _source("src/sim/SimPoolFactory.sol"))
 
+    def test_a_price_the_node_did_not_give_is_asked_once_and_never_kept_as_a_price(self):
+        ch, _ = self.world([], [[5], [5]])
+        both = {addr(0x210): ch.d["exam_events"][addr(0x210)]}
+        both[addr(0x211)] = [{**x, "tx": tx(int(x["tx"], 16) + 1)} for x in both[addr(0x210)]]  # the same blocks, another account
+        missing = r.oracle_key(3, 50_000 + 50 + 2)
+        prices = {k: v for k, v in ch.d["oracle"].items() if k != missing}
+        asked = []
+
+        def oracle_at(asset, block):
+            asked.append(block)
+            return prices.get(r.oracle_key(asset, block))
+
+        oracle = {}
+        with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
+            r.read_trigger_oracle(both, oracle)
+        self.assertEqual(asked.count(50_052), 1, "the second stop does not ask the node again")
+        self.assertEqual(asked, [50_055, 50_054, 50_053, 50_052])
+        self.assertNotIn(missing, oracle)
+        self.assertEqual(r.trigger_lates(both[addr(0x211)], oracle), {"lates": [], "atLeast": 0, "unread": 1})
+
 
 class Unread(unittest.TestCase):
     def test_an_account_not_read_is_said(self):
