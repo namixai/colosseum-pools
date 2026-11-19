@@ -441,6 +441,15 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     The pools are left out, since they pay every trader. A sender that funded more than five buyers
     is named but not counted, as an exchange's wallet would be;
   - how late the filler put this trader's fills (`late`) against everyone else's;
+  - how late this trader's stops and takes were carried out, a series of its own beside the fills', against
+    everyone else's by the same rule (the trader's median above the others' 90th percentile, five of each at
+    least). A stop's lateness is the blocks from the oracle reaching its price to its close (`TriggerFilled`):
+    from the first block of the stretch in which the oracle stood at or past the price without a break up to
+    the close, never before `armedAt`. `fillTrigger` takes a trigger only while it holds, so the filler's
+    choice is inside that stretch; a stop the oracle reached, left and reached again counts from the second
+    reach. The oracle is read back from each close of every account of the factory, 60 blocks at most (the
+    widest window an order may have); a stop that stood reached longer is counted as at least 60, and one
+    whose prices were not read is said as not read and counted on neither side;
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
     under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
   - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
@@ -483,8 +492,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
       trigger that stood, to its block (not before `armedAt`), to the oracle having reached its price,
       and to what it closes (the smaller position, the size named or all of it). A trigger left on a
       position closed or turned round, one set on no position, and a carried-out trigger with no fill of
-      its own are flags. A stop's close is nobody's timing: the lateness and the filler's choice of a
-      block leave it out;
+      its own are flags. A stop's close is no order's timing: the fills' lateness and the filler's choice
+      of a block leave it out, and its own lateness is the series of stops and takes above;
 
     The oracle prices are read from the chain at their blocks. Where the node keeps no state that far
     back, `--prices` stands in. A pass in three fills or two days at most on the largest size is said
