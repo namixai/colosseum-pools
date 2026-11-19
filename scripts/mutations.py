@@ -9974,6 +9974,38 @@ MUTATIONS = [
      '    return send_or_say(args, pool_, "pay(uint256)", ["uint256"], [args.max])',
      '    return send_or_say(args, pool_, "pay(uint256)", ["uint256"], [settled])',
      ['test_pay_asks_the_pool_how_many_it_settles_and_sends_only_with_send']),
+    # The guard of the ops tests: no real key, no live node; each mutation run an empty key directory (19 November 2026).
+    # Its probes are harmless with the guard gone: a key under ~/secure that does not exist, an address that routes nowhere.
+    ('TG1', 'ops/tests/__init__.py',
+     'os.environ["COLOSSEUM_KEY_DIR"] = KEY_DIR\n',
+     '',
+     ['test_the_key_directory_is_an_empty_one_of_the_tests']),
+    ('TG2', 'ops/tests/__init__.py',
+     '        if path:\n            raise GuardTripped(f"ops/tests guard: a test opened',
+     '        if False:\n            raise GuardTripped(f"ops/tests guard: a test opened',
+     ['test_nothing_under_secure_is_opened_or_listed']),
+    ('TG3', 'ops/tests/__init__.py',
+     '    elif event == "socket.getaddrinfo" and not local(args[0]):',
+     '    elif False:',
+     ['test_a_lookup_or_a_connection_elsewhere_fails_the_test']),
+    ('TG4', 'ops/tests/__init__.py',
+     '        if sock.family in (socket.AF_INET, socket.AF_INET6) and not local(address[0]):',
+     '        if False:',
+     ['test_a_lookup_or_a_connection_elsewhere_fails_the_test']),
+    ('TG5', 'ops/tests/__init__.py',
+     '    return host in ("localhost", "::1") or host.startswith("127.")',
+     '    return True',
+     ['test_no_live_host_is_this_machine', 'test_a_lookup_or_a_connection_elsewhere_fails_the_test',
+      'test_the_rpc_and_the_api_of_the_scripts_fail_the_test']),
+    ('TG6', 'ops/tests/__init__.py',
+     'class GuardTripped(BaseException):',
+     'class GuardTripped(Exception):',
+     ['test_what_trips_it_is_no_exception_the_code_could_swallow']),
+    # Its text in escapes, so that this entry does not match itself.
+    ('TG7', 'scripts/mutations.py',
+     ', \x22COLOSSEUM_KEY_DIR\x22: keys}',
+     '}',
+     ['test_each_run_gets_an_empty_key_directory']),
     ("SM106", "src/sim/SimPoolStops.sol",
      '        if (p.state != SimPool.PayoutState.Stopped) revert SimPool.BadPayout();\n        if (msg.sender != p.trader)',
      '        if (msg.sender != p.trader)',
@@ -16386,6 +16418,8 @@ RUNNERS = {
            r"^(?:FAIL|ERROR): (\w+) \("),
     # The host's watchdogs: the two checks, the wrapper, the units and how install.sh puts them in place.
     "WD": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_host_watchdogs"], r"^(?:FAIL|ERROR): (\w+) \("),
+    # The guard of the ops tests (no real key, no live node) and the mutation run's empty key directory.
+    "TG": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_no_keys_no_network"], r"^(?:FAIL|ERROR): (\w+) \("),
 }
 
 
@@ -16400,9 +16434,12 @@ RUN_TIMEOUT_S = 900
 def run_suite(cmd: list[str]) -> subprocess.CompletedProcess:
     """One test run with its own empty bytecode cache. Python trusts a cached .pyc when the
     source's size and modification second match, and a mutation of the same length restored
-    within the same second would otherwise keep running as the mutant afterwards."""
+    within the same second would otherwise keep running as the mutant afterwards. And an empty
+    key directory of its own: a mutant that takes a refusal away must not find a real key (the ops
+    tests also refuse ~/secure and every live node: ops/tests/__init__.py)."""
     with tempfile.TemporaryDirectory(prefix="mutations-pyc-") as cache:
-        env = {**os.environ, "PYTHONPYCACHEPREFIX": cache}
+        keys = tempfile.mkdtemp(prefix="no-keys-", dir=cache)
+        env = {**os.environ, "PYTHONPYCACHEPREFIX": cache, "COLOSSEUM_KEY_DIR": keys}
         return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=RUN_TIMEOUT_S, env=env)
 
 
