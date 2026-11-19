@@ -1226,7 +1226,7 @@ def pot(args) -> int:
     key = c.account(args.key)
     for to, sig, types, values in calls:
         rcpt = c.transact(key, to, sig, types, values)
-    print(f"deploy_sim: sent, tx {rcpt['transactionHash']}")
+        print(f"deploy_sim: {sig.split('(')[0]} sent, tx {rcpt['transactionHash']}")
     return 0
 
 

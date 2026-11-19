@@ -657,7 +657,7 @@ class ThePoolsCalls(unittest.TestCase):
                                 (pool, "addToPot(uint256)", [2_000_000])])
         confirm.assert_called_once()
         key.assert_called_once_with("creator")
-        self.assertIn("deploy_sim: sent, tx 0x01", said)
+        self.assertIn("deploy_sim: approve sent, tx 0x01\ndeploy_sim: addToPot sent, tx 0x01\n", said, "each call's tx")
         # The balance read is the sender's, of the pool's own USDC.
         self.assertIn((token, "balanceOf(address)", [d.to_checksum_address(self.CREATOR)]), self.read)
         # Not confirmed: no key read, nothing sent.
@@ -794,7 +794,14 @@ class ThePoolsCalls(unittest.TestCase):
                  (self.payouts((3, 0, False), (2, 0, False)), "no payout waits within its reach"),
                  (self.payouts((1, self.NOW - self.DAY, True), room=0, next_at=self.NOW + 60),
                   f"the day's payouts are paid (PayoutWaitsLimit): the next from {d.utc(self.NOW + 60)}"),
-                 (self.payouts((1, self.NOW - hard, False)), "the pool's free USDC does not cover it (PayoutQueued)"))
+                 (self.payouts((1, self.NOW - hard, False)), "the pool's free USDC does not cover it (PayoutQueued)"),
+                 # A payout waiting for its approval is passed over, not stopped at (SimPool.pay: `continue`): the ready one
+                 # after it waits for the money of both.
+                 (self.payouts((1, self.NOW - self.DAY, False), (1, self.NOW - self.DAY, True)),
+                  "the pool's free USDC does not cover it (PayoutQueued)"),
+                 # One not yet due stops `pay` (`break`): nothing after it is reached.
+                 (self.payouts((1, self.NOW - self.DAY, False), (1, due, True), (1, self.NOW - self.DAY, True)),
+                  f"payout 1 goes out from {d.utc(due)} at the soonest"))
         for answers, word in cases:
             said = self.assert_refused(argv, "pay would settle nothing now: " + word, answers=answers, settles=0)
             self.assertIn("settles 0 payout(s) now", said)

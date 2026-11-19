@@ -9974,6 +9974,11 @@ MUTATIONS = [
      '    return send_or_say(args, pool_, "pay(uint256)", ["uint256"], [args.max])',
      '    return send_or_say(args, pool_, "pay(uint256)", ["uint256"], [settled])',
      ['test_pay_asks_the_pool_how_many_it_settles_and_sends_only_with_send']),
+    # Review of #328: a payout waiting for its approval is passed over by `pay`, not stopped at.
+    ('SK229', 'ops/deploy_sim.py',
+     '            ready = True\n            break\n    if not ready:',
+     '            ready = True\n            break\n        break\n    if not ready:',
+     ['test_pay_that_settles_nothing_says_why_and_sends_nothing']),
     # The guard of the ops tests: no real key, no live node; each mutation run an empty key directory (19 November 2026).
     # Its probes are harmless with the guard gone: a key under ~/secure that does not exist, an address that routes nowhere.
     ('TG1', 'ops/tests/__init__.py',
