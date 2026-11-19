@@ -1,7 +1,7 @@
 # The checker of instance %i's simulated pool (ops/sim_check.py): every 10 minutes it reads the fills of the factory's
 # exams and stages, and stops a payout still waiting whose stage held a position opposite another account's, close
 # in time and size (reason 1), or that with the two traders' wallets linked (reason 2). It sends nothing else: no
-# lift (a person runs --lift by hand, docs/HOSTING.md), no stop without a pair, no second stop of a payout.
+# lift (lifting a stop is the factory's operator's, docs/HOSTING.md), no stop without a pair, no second stop of a payout.
 #
 # It sends with the factory's checker, checker in the instance's secrets: the one key that may stop a payout, which
 # the factory refuses to share with the filler, and which install.sh checks against the record before it switches.

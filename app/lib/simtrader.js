@@ -224,7 +224,7 @@ export function payoutLine(p, now, reason = null, heldLeft = true) {
       return { ...base, key: "paid", label: "Paid", when: null, note: "Sent to your wallet." };
     case "stopped":
       return { ...base, key: "stopped", label: "Stopped", when: p.reserveEnds ? `Final not before ${utc(p.reserveEnds)}` : null,
-        note: `${why} For ${span(STOP_RESERVE)} after the stop you may object, and the checker may lift it.` };
+        note: `${why} For ${span(STOP_RESERVE)} after the stop you may object, and the platform's operator may lift it.` };
     case "refused":
       return { ...base, key: "stopped", label: "Refused", when: null,
         note: `${why} The stop was not lifted within ${span(STOP_RESERVE)}: the refusal is final.` };

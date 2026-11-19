@@ -157,12 +157,13 @@ fail, and their prices pay for the ones that pass.
   `ops/sim_check.py`. Every stop is the same `PayoutStopped`, and the pool keeps its reason by the
   payout (`stopReasonOf(id)`, zero if never stopped, kept after a lift). The reason moves no money of
   its own: whatever the reason, a stop keeps the payout's money as follows. A stopped payout's money stays in the pool, set aside from the
-  stop (`STOP_RESERVE`, `reserved`) until the checker lifts the stop within 14 days, or until anyone
+  stop (`STOP_RESERVE`, `reserved`) until the factory's operator lifts the stop within 14 days, or until anyone
   makes it final after them (`finalizeStop`, which may come later than the 14 days, never sooner), as
   a held payout's is: the creator does not
   withdraw it, it is no profit for the partners' shares, and `pay` pays no other payout out of it.
   Within those days the trader may object on chain (`objectStop`, the keccak256 of the objection's
-  text, `StopObjected`), and the checker lifts a stop that was wrong (`liftStop`): the payout is due
+  text, `StopObjected`), and the factory's operator, our Safe, lifts a stop that was wrong (`liftStop`; the checker
+  stops, it does not lift; `NotOperator` for anyone else): the payout is due
   again, out of the money the stop kept, and paid as any other. After them the stop can no longer be
   lifted; anyone makes it final (`finalizeStop`, `StopFinal`), and its money is the pool's again.
 - **The creator.** A withdrawal waits a week. `requestWithdraw(amount)` asks for at most what
@@ -393,10 +394,14 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   sent. `pay --max N` lists the payouts within N of the head, asks the pool by eth_call from the sender how many
   `pay(N)` settles now, and with none says why (not yet due, waiting for its approval, the day's payouts paid, the
   money) and sends nothing. None of them caps an amount. With `--signer ADDRESS` (`pool`, `codes`, `code`, `pot`,
-  `claim`, `pay`, `close`, `finish`, `request`, `withdraw`, `cancel`, `approver`, `approve`) the call is from an
+  `claim`, `pay`, `close`, `finish`, `request`, `withdraw`, `cancel`, `approver`, `approve`, `lift`) the call is from an
   address that signs elsewhere, our
   pool's creator being a Safe and its approver a Ledger: the command checks as that address and prints
   the calls in order as the Safe's Transaction Builder takes them, sending nothing and reading no key.
+  `lift --pool … --id 3` lifts the stop of a payout (`liftStop`) from the factory's operator (`--signer` for our
+  Safe, which gets the call printed: to, value, data; or `--key` for the deployer's key on a testnet factory not
+  handed to a Safe): it reads the pool, the payout and the factory first and says what it would send, or why the
+  pool would refuse it (not the operator, a finished pool, a payout not stopped, its 14 days over).
   `fee --deployment … --amount 0.5` changes the factory's fee from its operator (`--key`, or `--signer` for our
   Safe, which gets the call printed): it reads the fee and the operator first and says what it would send, or that
   the factory would refuse it (not the operator, a fee of none; on mainnet above 10 HYPE without
@@ -440,7 +445,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   the deployment), reason 2. It stops a payout once, from the factory's checker key, and until when
   is the pool's own rule: on a pool with payout approval until the payout is paid, approved or not (an
   unapproved one waits up to 7 days, and a pair found on the fourth still stops it); on a pool from
-  before approvals at least 5 minutes before it is due. It and lifts its own stop with `--lift POOL:ID`, within 14 days of the stop.
+  before approvals at least 5 minutes before it is due. It never lifts a stop: lifting is the factory's operator's
+  (`deploy_sim lift`).
   Without `--wallet` it only
   reports. Anyone can run it on the same blocks and get the same pairs. It reads this factory's
   accounts only, not the MultiPool's or the other deployments'.
@@ -654,6 +660,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     own app;
   - `stopPayout`, `cancelWithdraw`, and an early `close`: the platform's checker and closer.
 
+  The operator's section of the control panel (`app/lib/simoperator.js`) draws the stops to the checker and to the
+  factory's operator, and the button that lifts one (`liftStop`) to the operator alone, our Safe.
+
   A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/3`, one file per payout.
   The page shows a review only where it is of this very payout and names the call the page itself would build
   (`reviewFor`). It never signs what a review hands it.
@@ -708,7 +717,7 @@ oracle price at 0x…0807 and the best bid and offer at 0x…080e, are at the sa
 
 On mainnet a command that reads, or that prints calls for a signer elsewhere (`--signer`: the Safe, the
 Ledger), needs nothing more. One that sends needs a key directory named for mainnet (`COLOSSEUM_KEY_DIR`, not
-testnet's default) and a confirmation: `deploy_sim ... --send`, `sim_check --lift` and `sim_keeper --measure`
+testnet's default) and a confirmation: `deploy_sim ... --send` and `sim_keeper --measure`
 ask the person at the terminal to type `send on mainnet` and refuse without a terminal; the keeper, the relayer
 and the checker as services take `--confirm-mainnet <label>`, the deployment's label, so that a unit copied from
 testnet does not start sending there. `deploy_sim deploy` on mainnet reads the meta again and stops if an index

@@ -75,6 +75,8 @@ contract SimPoolHandler is Test {
     uint256 public ghostWithdrawMismatch;
     /// A stranger's cancel of a request that went through.
     uint256 public ghostBadCancel;
+    /// A lift of a stop that went through from the checker: lifting is the factory's operator's.
+    uint256 public ghostBadLift;
     /// A payout paid (or set aside for a refused trader) before its 72 hours, unapproved before its 7 days, or
     /// that was not waiting when `pay` began (stopped, say).
     uint256 public ghostEarlyPay;
@@ -619,6 +621,9 @@ contract SimPoolHandler is Test {
         calls["stop"] += 1;
     }
 
+    // ── the factory's operator ───────────────────────────────────
+
+    /// Lifts a stop within its 14 days: the factory's operator; the checker, which stops, must be refused.
     function lift(uint256 seed) external {
         uint256 n = pool.payoutCount();
         if (n == 0 || pool.finished()) return;
@@ -626,6 +631,11 @@ contract SimPoolHandler is Test {
         SimPool.Payout memory p = pool.payout(id);
         if (p.state != SimPool.PayoutState.Stopped || block.timestamp >= uint256(p.stoppedAt) + _reserve()) return;
         vm.prank(checker);
+        try pool.liftStop(id) {
+            ghostBadLift += 1;
+            return;
+        } catch {}
+        vm.prank(pool.factory().operator());
         pool.liftStop(id);
         calls["lift"] += 1;
     }
@@ -1527,6 +1537,7 @@ contract SimPoolInvariantTest is Test {
         assertEq(handler.ghostInstant(), 0, "the creator got money without a request a week old, or finish a week after the close");
         assertEq(handler.ghostWithdrawMismatch(), 0, "a withdrawal paid other than the less of the request and withdrawable");
         assertEq(handler.ghostBadCancel(), 0, "a stranger cancelled a request");
+        assertEq(handler.ghostBadLift(), 0, "the checker lifted a stop");
         if (pool.requested() != 0) {
             assertEq(pool.requested(), handler.ghostRequested(), "the standing request is not the creator's last");
             assertEq(pool.readyAt(), handler.ghostRequestedAt() + pool.factory().WITHDRAW_DELAY(), "a request ready sooner than a week");

@@ -776,8 +776,8 @@ contract SimPool is Initializable {
     ///         another; `trades` (two at least) show it, `links` is one hash, of the published analysis, and
     ///         `paired` is the other account, of any pool of the factory, or none. The reason stays on record
     ///         (`stopReasonOf`). The money stays in the pool, set aside for
-    ///         `STOP_RESERVE`: the trader can object (`objectStop`) and the checker can lift the stop;
-    ///         after it the stop is final.
+    ///         `STOP_RESERVE`: the trader can object (`objectStop`) and the factory's operator can lift the
+    ///         stop (`liftStop`); after it the stop is final.
     function stopPayout(uint256 id, uint8 reason, address paired, bytes32[] calldata trades, bytes32[] calldata links)
         external
         onlyChecker
@@ -790,10 +790,13 @@ contract SimPool is Initializable {
         stoppedCount += 1;
     }
 
-    /// @notice Lifts the checker's own stop of payout `id`, a stop that was wrong, within `STOP_RESERVE`
-    ///         of it: the payout is due again, out of the money the stop kept, and paid as any other
-    ///         once its time has come. After that the stop is final.
-    function liftStop(uint256 id) external onlyChecker {
+    // ── the operator ─────────────────────────────────────────────
+
+    /// @notice Lifts the stop of payout `id`, a stop that was wrong, within `STOP_RESERVE` of it: the
+    ///         factory's operator alone may, not the checker. The payout is due again, out of the money the
+    ///         stop kept, and paid as any other once its time has come. After that the stop is final.
+    function liftStop(uint256 id) external {
+        if (msg.sender != factory.operator()) revert SimPoolFactory.NotOperator();
         uint64 amount = SimPoolStops.lift(_payouts, factory, id, finished, [stoppedCount, liftedCount + 1, paidCount]);
         reserved -= amount;
         owed += amount;
@@ -824,7 +827,7 @@ contract SimPool is Initializable {
 
     /// @notice The trader of stopped payout `id` objects to the stop, within `STOP_RESERVE` of it:
     ///         the chain keeps the keccak256 of the objection's text, so the dispute is seen as the
-    ///         stop is. Nothing else changes; lifting the stop is the checker's.
+    ///         stop is. Nothing else changes; lifting the stop is the factory's operator's.
     function objectStop(uint256 id, bytes32 text) external {
         SimPoolStops.object(_payouts, factory, id, text);
     }

@@ -17,6 +17,7 @@
     spike/.venv/bin/python -m ops.deploy_sim cancel --pool 0x.. --key closer [--send]                  # cancel it
     spike/.venv/bin/python -m ops.deploy_sim approver --pool 0x.. --key creator --address 0x.. [--send] # name it
     spike/.venv/bin/python -m ops.deploy_sim approve --pool 0x.. --key approver --ids 3,4 [--send]     # payouts
+    spike/.venv/bin/python -m ops.deploy_sim lift --pool 0x.. --signer 0xSafe --id 3                   # a stop
     spike/.venv/bin/python -m ops.deploy_sim fee --deployment sim1 --amount 0.5 --key deployer [--send] # the fee
                                                        ... [--confirm-large-fee]       # mainnet, above 10 HYPE
     spike/.venv/bin/python -m ops.deploy_sim code --pool 0x.. --key creator --code G1 --partner 0x.. --bps 5000 \\
@@ -64,6 +65,12 @@ approved 7 days after. Without --send `approve` reads each payout and says whose
 from when it goes out with the approval and from when without, or why the pool would refuse it. Like `close` and `finish`, without --send each reads
 the pool and says what it would send, from which key, or why the pool would refuse.
 
+`lift` lifts the stop of payout --id (liftStop, from the factory's operator: our Safe with --signer, or the deployer's
+key on a testnet factory not handed to a Safe), within 14 days of the stop (STOP_RESERVE): the payout is due again and
+paid as any other. The checker stops; it does not lift. It reads the pool, the payout and the factory first and says
+what it would send, or why the pool would refuse: not the operator, a finished pool, a payout not stopped, the 14 days
+over.
+
 `fee` changes the fee for opening a pool on a deployment's factory (setCreationFee, from its operator: the deployer's
 key on testnet, our Safe with --signer on mainnet), to any amount above 0 (the factory has no cap; on mainnet a fee
 above 10 HYPE also wants --confirm-large-fee, against a slip of a zero); a pool already open is not touched.
@@ -91,7 +98,7 @@ and the terms' text.
 Without --send nothing is sent and no key is read: each command prints what it would do.
 
 With --signer ADDRESS (pool, codes, code, pot, claim, pay, close, finish, request, withdraw, cancel, approver,
-approve, fee) the call is
+approve, lift, fee) the call is
 from an address that signs elsewhere: our pool's creator is a Safe with two signatures, its approver of payouts
 a Ledger. The command reads the chain as that address, checks as it would for a key, and prints the calls in
 order as the Safe's Transaction Builder takes them (to, value, data); it sends nothing and reads no key. With it,
@@ -1009,6 +1016,46 @@ def approve(args) -> int:
     return send_or_say(args, pool_, "approvePayouts(uint256[])", ["uint256[]"], [ids])
 
 
+def lift_check(operator: str, sender: str, finished: bool, p: tuple | None, i: int, now: int, reserve: int) -> str:
+    """What lifting the stop of payout `i` from `sender` would do, or why the pool would refuse it, in the pool's
+    order: the factory's operator alone lifts, not on a finished pool, a stopped payout only, within `reserve`
+    (STOP_RESERVE) of its stop. `p`: the pool's payout(i) as read (None: no such payout)."""
+    if sender != operator:
+        raise SystemExit(f"NotOperator: {sender} is not the factory's operator ({operator}): the checker stops a payout, "
+                         "the operator lifts the stop")
+    if finished:
+        raise SystemExit("Done: the pool has finished")
+    if p is None:
+        raise SystemExit(f"BadPayout: payout {i} does not exist")
+    state = PAYOUT_STATE[p[4]]
+    if state != "Stopped":
+        raise SystemExit(f"BadPayout: payout {i} is {state}, not stopped")
+    until = p[6] + reserve
+    if now >= until:
+        raise SystemExit(f"ReserveOver: payout {i} was stopped at {utc(p[6])}, its stop could be lifted until "
+                         f"{utc(until)}; it is made final now (finalizeStop, anyone)")
+    return (f"payout {i}: {usdc(p[2])} to {to_checksum_address(p[1])}, stopped at {utc(p[6])}, can be lifted until "
+            f"{utc(until)}; lifted, it is due again and paid as any other once its time has come")
+
+
+def lift_cmd(args) -> int:
+    """liftStop on a pool, from its factory's operator: our Safe with --signer, which gets the call printed (to,
+    value, data), or the operator's key (the deployer's, on a testnet factory not handed to a Safe). Reads the pool,
+    the payout and the factory first, and says what it would send or why the pool would refuse it."""
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
+    factory = c.call_view(pool_, "factory()", [], [], ["address"])[0]
+    operator = operator_of(factory)
+    finished = bool(c.call_view(pool_, "finished()", [], [], ["bool"])[0])
+    count = int(c.call_view(pool_, "payoutCount()", [], [], ["uint256"])[0])
+    p = c.call_view(pool_, "payout(uint256)", ["uint256"], [args.id], [PAYOUT_T])[0] if 0 <= args.id < count else None
+    reserve = int(c.call_view(factory, "STOP_RESERVE()", [], [], ["uint32"])[0])
+    line = lift_check(operator, sender, finished, p, args.id, chain_now(), reserve)
+    print(f"deploy_sim lift: pool {pool_}, liftStop({args.id}) from {args.key or 'the signer'} ({sender}), the factory's "
+          "operator")
+    print("  " + line)
+    return send_or_say(args, pool_, "liftStop(uint256)", ["uint256"], [args.id])
+
+
 def cancel_check(st: dict, sender: str) -> str:
     """As whom `sender` cancels the standing request, or why the pool would refuse."""
     if sender not in (st["creator"], st["closer"]):
@@ -1415,6 +1462,12 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--signer", help="an address that signs elsewhere (the Ledger's): print the call, send nothing")
     z.add_argument("--ids", required=True, help="payout numbers, as 3,4,7")
     z.add_argument("--send", action="store_true")
+    z = sub.add_parser("lift")
+    z.add_argument("--pool", required=True)
+    z.add_argument("--key", help="the factory's operator")
+    z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
+    z.add_argument("--id", required=True, type=int, help="the stopped payout's number")
+    z.add_argument("--send", action="store_true")
     z = sub.add_parser("fee")
     z.add_argument("--deployment", required=True)
     z.add_argument("--amount", required=True, help='the new fee to open a pool, in HYPE, as "0.5"')
@@ -1466,7 +1519,7 @@ def main(argv: list[str] | None = None) -> int:
         c.assert_network()  # what a mainnet command reads is the chain's it names, sent or not (review of #300)
     return {"deploy": deploy, "pool": pool, "check": check, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
-            "approve": approve, "fee": fee_cmd, "code": code_cmd, "pot": pot, "claim": claim,
+            "approve": approve, "lift": lift_cmd, "fee": fee_cmd, "code": code_cmd, "pot": pot, "claim": claim,
             "pay": pay_cmd}[args.cmd](args)
 
 

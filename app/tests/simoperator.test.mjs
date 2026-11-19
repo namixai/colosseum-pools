@@ -1,7 +1,7 @@
 // node --test app/tests/simoperator.test.mjs
 //
 // The operator's section of the control panel (app/lib/simoperator.js), built to mockup 04: who is shown what by the
-// role the chain gives the wallet (the pool's approver, the factory's checker and closer), the queue in claim order with
+// role the chain gives the wallet (the pool's approver, the factory's checker, closer and operator), the queue in claim order with
 // its times, the stop form's four reasons, the stops with their 14 days, the owner's request, the words before each
 // call, and that the page carries no word Alex struck and no link to the user panel. On a made-up pool's reads.
 import { test } from "node:test";
@@ -29,6 +29,7 @@ const POOL = "0x00000000000000000000000000000000000000a1";
 const APPROVER = "0x00000000000000000000000000000000000000b1";
 const CHECKER = "0x00000000000000000000000000000000000000c1";
 const CLOSER = "0x00000000000000000000000000000000000000d1";
+const OPERATOR = "0x00000000000000000000000000000000000000f1";
 const STRANGER = "0x00000000000000000000000000000000000000e1";
 const TRADER = "0x0000000000000000000000000000000000000101";
 const OTHER = "0x0000000000000000000000000000000000000299";
@@ -66,23 +67,27 @@ const page = (roles, over) => operatorHtml(model(roles, over), { name: "Pool 0xa
 
 // ── who is looking ─────────────────────────────────────────────────
 
-test("the roles are the chain's: the pool's approver, the factory's checker and closer", () => {
-  const roles = (account) => operatorRoles({ account, approver: APPROVER, checker: CHECKER, closer: CLOSER });
+test("the roles are the chain's: the pool's approver, the factory's checker, closer and operator", () => {
+  const roles = (account) => operatorRoles({ account, approver: APPROVER, checker: CHECKER, closer: CLOSER, operator: OPERATOR });
   assert.deepEqual(roles(null), { kind: "no-wallet", roles: [] });
   assert.deepEqual(roles(STRANGER), { kind: "no-role", roles: [] });
   assert.deepEqual(roles(APPROVER.toUpperCase().replace("0X", "0x")), { kind: "operator", roles: ["approver"] });
   assert.deepEqual(roles(CHECKER).roles, ["checker"]);
   assert.deepEqual(roles(CLOSER).roles, ["closer"]);
+  assert.deepEqual(roles(OPERATOR), { kind: "operator", roles: ["operator"] });
   // one key may hold two roles
   assert.deepEqual(operatorRoles({ account: CHECKER, approver: CHECKER, checker: CHECKER, closer: CLOSER }).roles, ["approver", "checker"]);
   // a zero address names nobody: the wallet that is the zero address is not the approver of a pool with none
   assert.equal(operatorRoles({ account: ZERO, approver: ZERO, checker: CHECKER, closer: CLOSER }).kind, "no-role");
   assert.equal(roleWords(["approver", "checker"]), "Approver · Checker");
+  assert.equal(roleWords(["operator"]), "Factory operator");
 });
 
 test("each role can do what its contract call allows, and no more", () => {
   assert.deepEqual(can(["approver"]), { seeQueue: true, approve: true, stop: false, lift: false, seeStops: false, seeRequests: false, cancelRequest: false });
-  assert.deepEqual(can(["checker"]), { seeQueue: true, approve: false, stop: true, lift: true, seeStops: true, seeRequests: true, cancelRequest: false });
+  assert.deepEqual(can(["checker"]), { seeQueue: true, approve: false, stop: true, lift: false, seeStops: true, seeRequests: true, cancelRequest: false });
+  // lifting a stop is the factory's operator's (SimPool.liftStop), and the checker's no more
+  assert.deepEqual(can(["operator"]), { seeQueue: false, approve: false, stop: false, lift: true, seeStops: true, seeRequests: false, cancelRequest: false });
   assert.deepEqual(can(["closer"]), { seeQueue: false, approve: false, stop: false, lift: false, seeStops: false, seeRequests: true, cancelRequest: true });
   assert.deepEqual(can([]), { seeQueue: false, approve: false, stop: false, lift: false, seeStops: false, seeRequests: false, cancelRequest: false });
 });
@@ -155,23 +160,35 @@ test("the approver is drawn the queue and its approve buttons, no stop form and 
   assert.doesNotMatch(html, /id="stop-form"|data-stop-for|id="stops"|id="requests"|data-lift|data-cancel/);
 });
 
-test("the checker is drawn the stop form, the stops with their lift and the request to look at; not the approve buttons", () => {
+test("the checker is drawn the stop form, the stops without a lift and the request to look at; not the approve buttons", () => {
   const html = page(["checker"]);
   assert.match(html, /id="stop-form"/);
   assert.match(html, /data-stop-for="1"/);
   assert.doesNotMatch(html, /data-stop-for="4"|data-stop-for="0"\b.*data-stop-for="0"/, "a payout stopped already is not offered a stop");
   assert.match(html, /id="stops"/);
-  assert.match(html, /data-lift="4"(?![^>]*disabled)/, "a stop inside its 14 days can be lifted");
-  assert.match(html, /data-lift="5"[^>]*disabled/, "a stop past its 14 days cannot");
+  assert.doesNotMatch(html, /data-lift/, "the checker stops; lifting is the factory's operator's");
   assert.match(html, /data-final="5"[^>]*disabled/, "a stop already final has nothing left to send");
   assert.match(html, /data-final="4"[^>]*disabled/, "and one inside its 14 days is not final yet");
   const late = page(["checker"], { payouts: reads().payouts.map((p, i) => (i === 4 ? { ...p, stoppedAt: NOW - 15 * D } : p)) });
   assert.match(late, /data-final="4"(?![^>]*disabled)/, "a stop whose 14 days ended can be made final");
-  assert.match(late, /data-lift="4"[^>]*disabled/);
   assert.match(html, /id="requests"/);
   assert.doesNotMatch(html, /data-cancel/, "the contract gives the checker no cancel");
   assert.match(html, /View only: the contract lets the closer cancel, not the checker/);
   assert.doesNotMatch(html, /data-approve|so-pick|so-approve-sel/);
+});
+
+test("the factory's operator is drawn the stops with their lift, and nothing of the queue, the stop form or the requests", () => {
+  const html = page(["operator"]);
+  assert.match(html, /Stops <em>&amp; lifts<\/em>/);
+  assert.match(html, /id="stops"/);
+  assert.match(html, /Stops open/);
+  assert.match(html, /data-lift="4"(?![^>]*disabled)/, "a stop inside its 14 days can be lifted");
+  assert.match(html, /data-lift="5"[^>]*disabled/, "a stop past its 14 days cannot");
+  assert.match(html, /data-final="4"[^>]*disabled/, "one inside its 14 days is not final yet");
+  const late = page(["operator"], { payouts: reads().payouts.map((p, i) => (i === 4 ? { ...p, stoppedAt: NOW - 15 * D } : p)) });
+  assert.match(late, /data-lift="4"[^>]*disabled/, "nor one whose 14 days ended");
+  assert.match(late, /data-final="4"(?![^>]*disabled)/, "that one anyone makes final");
+  assert.doesNotMatch(html, /id="queue"|id="stop-form"|data-stop-for|id="requests"|data-approve|data-cancel|Payouts in queue/);
 });
 
 test("the closer is drawn the request and its cancel, nothing of the queue or the stops", () => {
@@ -197,22 +214,27 @@ test("a wallet with two roles is drawn both", () => {
 // ── the stops ──────────────────────────────────────────────────────
 
 test("a stop shows its reason, its 14 days and what can be done with it", () => {
-  const m = model(["checker"]);
+  const m = model(["operator"]);
   assert.deepEqual(m.stops.map((s) => [s.id, s.state, s.reason]), [[4, "window", 1], [5, "final", 3]].map((x) => x),
     "stopped 1 day ago: inside its 14 days; refused: final");
   assert.equal(m.stops[0].reserveEnds, NOW - D + STOP_RESERVE);
   assert.equal(m.stops[0].canLift, true);
   assert.equal(m.stops[0].canFinalize, false);
   assert.match(m.stops[0].reasonText, /Opposite positions/);
-  const late = model(["checker"], { payouts: reads().payouts.map((p, i) => (i === 4 ? { ...p, stoppedAt: NOW - 15 * D } : p)) });
+  const late = model(["operator"], { payouts: reads().payouts.map((p, i) => (i === 4 ? { ...p, stoppedAt: NOW - 15 * D } : p)) });
   assert.equal(late.stops[0].state, "due-final");
   assert.equal(late.stops[0].canFinalize, true);
   assert.equal(late.stops[0].canLift, false);
+  // the checker sees the same stops and makes one final, and lifts none
+  const checker = model(["checker"], { payouts: reads().payouts.map((p, i) => (i === 4 ? { ...p, stoppedAt: NOW - 15 * D } : p)) });
+  assert.deepEqual(checker.stops.map((s) => [s.id, s.canLift, s.canFinalize]), [[4, false, true], [5, false, false]]);
+  assert.ok(model(["checker"]).stops.every((s) => !s.canLift));
 });
 
-test("an approver does not lift", () => {
+test("an approver does not lift, nor does the checker", () => {
   const m = model(["approver"]);
   assert.ok(m.stops.every((s) => !s.canLift && !s.canFinalize));
+  assert.ok(model(["checker"]).stops.every((s) => !s.canLift));
 });
 
 // ── the stop form ──────────────────────────────────────────────────
@@ -285,7 +307,7 @@ test("approving several payouts is one call; a red pool is approved one by one",
 });
 
 test("the pool's refusals are said in words", () => {
-  for (const name of ["NotApprover", "NotChecker", "NotCreator", "BadPayout", "BadReason", "BadPaired", "ReserveOver", "ReserveRunning", "NoRequest", "Done"]) {
+  for (const name of ["NotApprover", "NotChecker", "NotOperator", "NotCreator", "BadPayout", "BadReason", "BadPaired", "ReserveOver", "ReserveRunning", "NoRequest", "Done"]) {
     assert.match(operatorRefusal(name), /^Refused: /, name);
   }
   assert.equal(operatorRefusal("Nothing"), "");
@@ -324,10 +346,14 @@ test("the ABI this page reads is the contract's: each function and event is in t
   const factory = read("src", "sim", "SimPoolFactory.sol");
   const names = (abi, kind) => abi.map((s) => new RegExp(`^${kind}\\s+(\\w+)`).exec(s)?.[1]).filter(Boolean);
   for (const n of names(SIM_OPERATOR_ABI, "function")) assert.match(pool, new RegExp(`function ${n}\\(|\\bpublic\\s+${n}\\b`), `SimPool has ${n}`);
-  for (const n of names(SIM_OPERATOR_ABI, "error")) assert.match(pool, new RegExp(`error ${n}\\(`), `SimPool declares ${n}`);
+  // an error the pool declares, or the factory's that the pool reverts with (NotOperator, of liftStop)
+  for (const n of names(SIM_OPERATOR_ABI, "error")) {
+    assert.ok(new RegExp(`error ${n}\\(`).test(pool) || (new RegExp(`revert SimPoolFactory\\.${n}\\(\\)`).test(pool)
+      && new RegExp(`error ${n}\\(`).test(factory)), `SimPool declares ${n}, or reverts with the factory's`);
+  }
   for (const n of names(SIM_OPERATOR_FACTORY_ABI, "function")) assert.match(factory, new RegExp(`\\b${n}\\b`), `the factory has ${n}`);
   // the two functions the page sends that no other library names
-  assert.match(pool, /function liftStop\(uint256 id\) external onlyChecker/);
+  assert.match(pool, /function liftStop\(uint256 id\) external \{\s+if \(msg\.sender != factory\.operator\(\)\) revert SimPoolFactory\.NotOperator\(\);/);
   assert.match(pool, /function finalizeStop\(uint256 id\) external/);
   assert.match(pool, /function approvePayouts\(uint256\[\] calldata ids\) external/);
   assert.match(pool, /function stopPayout\(uint256 id, uint8 reason, address paired, bytes32\[\] calldata trades, bytes32\[\] calldata links\)\s+external\s+onlyChecker/);
@@ -379,7 +405,7 @@ test("the queue is read from the first payout not settled, however many the pool
 
 test("an old payout is offered its approval and its stop, and an old stop its lift", () => {
   const old = [payout({ n: 1, dueAt: NOW - 2 * H }), payout({ n: 2, state: 2, wasStopped: true, stoppedAt: NOW - D, amount: 400n * U })];
-  const m = operatorModel({ pool: POOL, roles: ["approver", "checker"], reads: { ...reads({ payouts: old, firstId: 1200, reasons: new Map([[1201, 3]]), unread: 4000 }) }, keccak256 });
+  const m = operatorModel({ pool: POOL, roles: ["approver", "checker", "operator"], reads: { ...reads({ payouts: old, firstId: 1200, reasons: new Map([[1201, 3]]), unread: 4000 }) }, keccak256 });
   assert.deepEqual(m.queue.map((r) => r.id), [1200], "ids are the pool's, not the page's index");
   assert.ok(m.queue[0].approve && m.queue[0].stoppable);
   assert.deepEqual(m.stops.map((s) => [s.id, s.reason, s.canLift]), [[1201, 3, true]]);
@@ -460,16 +486,16 @@ test("a stop 400 payouts back is in the list and can be lifted, whatever its num
   const stopped = payout({ n: 3, state: 2, wasStopped: true, stoppedAt: NOW - D, amount: 400n * U });
   const settled = range.ids.map((id) => payout({ n: 10_000 + id, state: 3 }));
   const base = { ...reads(), payouts: settled, firstId: range.first, reasons: new Map(), accountLines: new Map() };
-  const without = operatorModel({ pool: POOL, roles: ["checker"], reads: base, keccak256 });
+  const without = operatorModel({ pool: POOL, roles: ["operator"], reads: base, keccak256 });
   assert.deepEqual(without.stops, [], "without the events the stop is not found");
   // the events name #3; it is read by its id
-  const found = operatorModel({ pool: POOL, roles: ["checker"], keccak256,
+  const found = operatorModel({ pool: POOL, roles: ["operator"], keccak256,
     reads: { ...base, extra: [{ id: 3, payout: stopped }], reasons: new Map([[3, 2]]), stopScan: { done: true, note: "x" } } });
   assert.deepEqual(found.stops.map((s) => [s.id, s.state, s.reason, s.canLift]), [[3, "window", 2, true]]);
   assert.equal(found.summary.stopsOpen, 1);
   const html = operatorHtml(found, { name: "Pool", role: "" });
   assert.match(html, /data-lift="3"(?![^>]*disabled)/, "its lift is offered");
-  // the lift is the contract's call on that id, signed by the checker: the page's handler sends liftStop(stop.id)
+  // the lift is the contract's call on that id, signed by the factory's operator: the page's handler sends liftStop(stop.id)
   assert.match(read("app", "views", "simoperator.js"), /\(c\) => c\.liftStop\(id\)/);
   // an extra that the window holds too is not counted twice
   const twice = operatorModel({ pool: POOL, roles: ["checker"], keccak256,
@@ -513,7 +539,7 @@ test("the events are read within the node's limits, the last 14 days only, and a
 test("a stop whose payout was not read stays in the list, marked not read, with no control", () => {
   const stopped = payout({ n: 3, state: 2, wasStopped: true, stoppedAt: NOW - D, amount: 400n * U });
   const base = { ...reads(), payouts: [], firstId: 450, accountLines: new Map(), reasons: new Map([[3, 1]]) };
-  const m = operatorModel({ pool: POOL, roles: ["checker"], keccak256,
+  const m = operatorModel({ pool: POOL, roles: ["operator"], keccak256,
     reads: { ...base, extra: [{ id: 3, payout: stopped }, { id: 8, payout: null }, { id: 9, payout: undefined }] } });
   assert.deepEqual(m.stops.map((s) => [s.id, s.state, s.canLift]), [[3, "window", true], [8, "unread", false], [9, "unread", false]]);
   assert.equal(m.summary.stopsOpen, 3, "an unread stop is counted open, not dropped");

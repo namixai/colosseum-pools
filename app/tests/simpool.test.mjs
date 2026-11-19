@@ -446,7 +446,7 @@ test("a stop on a pool with the reserve says where it stands: the 14 days, the o
   const times = new Map([[700, at + 3_600]]);
   const [w] = payouts([stopped], objection, at + 60, times);
   assert.deepEqual([w.stopNote.state, w.stopNote.until], ["window", until]);
-  assert.equal(w.stopNote.text, `Stopped. Until ${utc(until)} the trader may object and the checker may lift the stop; `
+  assert.equal(w.stopNote.text, `Stopped. Until ${utc(until)} the trader may object and the platform's operator may lift the stop; `
     + `the money stays in the pool, set aside. The trader objected on ${utc(at + 3_600)}; the objection is on chain.`);
   assert.equal(utc(until), "2027-01-29 08:00 UTC");
   const [d] = payouts([stopped], [], until, times);

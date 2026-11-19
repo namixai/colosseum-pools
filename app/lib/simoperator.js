@@ -1,11 +1,12 @@
 // The operator's section of a pool's control panel, as mockup 04 draws it: the payouts waiting in the order they were
-// claimed (for the pool's approver), the form that stops one with a reason, the stops with their 14 days, and the
-// owner's request to withdraw (for the platform's checker and closer). No browser globals and no reads here, so node's
+// claimed (for the pool's approver), the form that stops one with a reason, the stops with their 14 days (lifted by the
+// factory's operator), and the owner's request to withdraw (for the platform's checker and closer). No browser globals
+// and no reads here, so node's
 // test runner loads it (app/tests/simoperator.test.mjs): the view reads the pool and the factory and hands the answers
 // in; these functions say who may do what and write the words and the markup.
 //
-// The contract is the only authority. The role is what the chain says (`approver()` of the pool, `checker()` and
-// `closer()` of its factory) and a control is drawn only for the role that may call it; the contract refuses anyone
+// The contract is the only authority. The role is what the chain says (`approver()` of the pool, `checker()`, `closer()`
+// and `operator()` of its factory) and a control is drawn only for the role that may call it; the contract refuses anyone
 // else all the same. Before every call the page says in words what the call will do. The payout's review
 // (app/lib/operator.js, reviewFor) and the call's calldata are that library's; nothing here does money arithmetic.
 import { esc, ZERO_ADDRESS, sameAddress } from "./ui.js";
@@ -16,7 +17,7 @@ import {
 } from "./operator.js";
 
 /** What this page reads and sends beyond the libraries' ABIs (SimPool.sol): the daily limit, the reason of a stop, the
- *  checker's lift and the final stop. */
+ *  operator's lift and the final stop. */
 export const SIM_OPERATOR_ABI = [
   "function payoutsPerDay() view returns (uint8)",
   "function payRoom() view returns (uint256 room)",
@@ -27,6 +28,7 @@ export const SIM_OPERATOR_ABI = [
   "function accountOf(address account) view returns (uint8 kind, uint8 line, bool done)",
   "error NotApprover()",
   "error NotChecker()",
+  "error NotOperator()",
   "error NotCreator()",
   "error BadPayout()",
   "error BadReason()",
@@ -41,7 +43,8 @@ export const SIM_OPERATOR_ABI = [
 export function operatorRefusal(name) {
   return {
     NotApprover: "Refused: only the pool's approver approves payouts.",
-    NotChecker: "Refused: only the platform's checker stops or lifts a payout.",
+    NotChecker: "Refused: only the platform's checker stops a payout.",
+    NotOperator: "Refused: only the factory's operator lifts a stop.",
     NotCreator: "Refused: only the pool's creator or the platform's closer cancels a request.",
     BadPayout: "Refused: that payout is not waiting any more (it was paid, stopped already, or the number is wrong).",
     BadReason: "Refused: the evidence does not fit the reason (check the number of transactions and the links).",
@@ -53,11 +56,12 @@ export function operatorRefusal(name) {
   }[name] || "";
 }
 
-/** The factory's two keys that act on every pool of it (SimPoolFactory.sol): the checker stops and lifts, the closer may
- *  cancel a creator's request. */
+/** The factory's keys that act on every pool of it (SimPoolFactory.sol): the checker stops a payout, the operator lifts a
+ *  stop, the closer may cancel a creator's request. */
 export const SIM_OPERATOR_FACTORY_ABI = [
   "function checker() view returns (address)",
   "function closer() view returns (address)",
+  "function operator() view returns (address)",
 ];
 
 /** An ABI from several lists, a name once: the first list to name a function or an event wins. `payout(id)` is the one
@@ -99,19 +103,20 @@ const same = sameAddress;
 
 /**
  * The operator's roles of the connected wallet. `kind` is "no-wallet", "no-role" (a wallet that holds none of the
- * three: it sees one sentence and nothing else) or "operator". Roles: "approver" (the pool's `approver()`), "checker"
- * and "closer" (the factory's). A zero address names nobody.
+ * four: it sees one sentence and nothing else) or "operator". Roles: "approver" (the pool's `approver()`), "checker",
+ * "closer" and "operator" (the factory's, our Safe: it lifts a stop). A zero address names nobody.
  */
-export function operatorRoles({ account, approver, checker, closer }) {
+export function operatorRoles({ account, approver, checker, closer, operator }) {
   if (!account) return { kind: "no-wallet", roles: [] };
   const roles = [];
   if (isSet(approver) && same(account, approver)) roles.push("approver");
   if (isSet(checker) && same(account, checker)) roles.push("checker");
   if (isSet(closer) && same(account, closer)) roles.push("closer");
+  if (isSet(operator) && same(account, operator)) roles.push("operator");
   return { kind: roles.length ? "operator" : "no-role", roles };
 }
 
-const ROLE_WORDS = { approver: "Approver", checker: "Checker", closer: "Closer" };
+const ROLE_WORDS = { approver: "Approver", checker: "Checker", closer: "Closer", operator: "Factory operator" };
 export const roleWords = (roles) => roles.map((r) => ROLE_WORDS[r]).join(" · ");
 
 /** What each role can do on this page, as the contract gives it. */
@@ -120,8 +125,8 @@ export function can(roles) {
     seeQueue: roles.includes("approver") || roles.includes("checker"),
     approve: roles.includes("approver"),
     stop: roles.includes("checker"),
-    lift: roles.includes("checker"),
-    seeStops: roles.includes("checker"),
+    lift: roles.includes("operator"),
+    seeStops: roles.includes("checker") || roles.includes("operator"),
     seeRequests: roles.includes("checker") || roles.includes("closer"),
     cancelRequest: roles.includes("closer"),
   };
@@ -189,7 +194,7 @@ export function stopWords(row, reason, now) {
   const form = STOP_FORM.find((f) => f.reason === Number(reason));
   const until = utc(Number(now) + STOP_RESERVE);
   return `Writes a stop on payout ${idText(row.id)} (${dollars(row.amount)}) with reason ${form.reason} on chain: ${form.title.toLowerCase()}. `
-    + `A payout is stopped once. Its money stays in the pool, set aside, for 14 days: the trader may object, and you may lift the stop until ${until}. `
+    + `A payout is stopped once. Its money stays in the pool, set aside, for 14 days: the trader may object, and the factory's operator may lift the stop until ${until}. `
     + "After that the stop is final.";
 }
 
@@ -301,7 +306,7 @@ export function operatorModel({ pool, roles, reads, keccak256 }) {
     const reason = Number(reads.reasons?.get?.(p.id) ?? 0);
     return { id: p.id, trader: p.trader, amount: BigInt(p.amount), line: lineOf(p.account), stoppedAt: at, reserveEnds, state,
       reason, reasonText: reason ? stopReasonText(reason) : "", reasonShort: reason ? `Reason ${reason}` : "Reason not read",
-      canLift: may.lift && state === "window", canFinalize: may.lift && state === "due-final" };
+      canLift: may.lift && state === "window", canFinalize: may.seeStops && state === "due-final" };
   });
   for (const id of unreadStops) {
     stops.push({ id, trader: null, amount: null, line: "", stoppedAt: 0, reserveEnds: null, state: "unread", reason: 0, reasonText: "",
@@ -457,6 +462,8 @@ function stopRowHtml(s, may) {
   const buttons = [];
   if (may.lift) {
     buttons.push(`<button type="button" class="so-btn" data-lift="${s.id}"${s.canLift ? "" : " disabled"}>Lift stop ${esc(idText(s.id))}</button>`);
+  }
+  if (may.seeStops) {
     buttons.push(`<button type="button" class="so-btn hatched" data-final="${s.id}"${s.canFinalize ? "" : " disabled"}>Make final${s.state === "window" ? ` · after ${esc(utc(s.reserveEnds))}` : ""}</button>`);
   }
   return `<div class="so-row so-s ${esc(s.state)}" data-stop="${s.id}" data-state="${esc(s.state)}">`
@@ -468,7 +475,8 @@ function stopRowHtml(s, may) {
     + `<div class="so-c act">${buttons.join("")}</div></div>`;
 }
 
-/** The stops, each with its 14 days, and the lift (the checker's) or the final stop (anyone's, after the 14 days). */
+/** The stops, each with its 14 days, and the lift (the factory's operator's) or the final stop (anyone's, after the 14
+ *  days). */
 export function stopsHtml(model) {
   const { may, stops } = model;
   const head = `<div class="so-colhead so-s"><span>#</span><span>Line</span><span>Payout kept</span><span>Reason</span><span>Can be lifted until</span><span></span></div>`;
@@ -508,12 +516,15 @@ export function operatorHtml(model, { name, role }) {
     ? "Every payout passes here in the order it was claimed. Until it is paid, the checker may stop it once, with one of four reasons written on chain. The trader has 14 days to object."
     : may.approve
       ? "Every payout passes here in the order it was claimed. Approving one lets it go out at its 72 hours instead of 7 days after its claim."
-      : "The creator's request to withdraw waits here for a week. The closer may cancel it.";
-  const h1 = may.stop ? `Payout checks <em>&amp; stops</em>` : may.approve ? `Payout <em>approvals</em>` : `Withdrawal <em>requests</em>`;
+      : may.lift
+        ? "A stop the checker wrote keeps its payout's money for 14 days. Within them the factory's operator may lift a stop that was wrong: the payout is due again. After them anyone makes the stop final."
+        : "The creator's request to withdraw waits here for a week. The closer may cancel it.";
+  const h1 = may.stop ? `Payout checks <em>&amp; stops</em>` : may.approve ? `Payout <em>approvals</em>`
+    : may.lift ? `Stops <em>&amp; lifts</em>` : `Withdrawal <em>requests</em>`;
   return `<section class="sp-hero sp-hd"><div class="sp-kick">Operator panel · ${esc(name)} · Hyperliquid testnet</div>`
     + `<h1>${h1}</h1><p class="sp-lede">${esc(lede)}</p></section>`
     + summaryHtml(model.summary, may)
     + (may.seeQueue ? queueHtml(model) : "")
-    + (may.stop || may.seeRequests ? `<div class="so-two${may.stop ? "" : " one"}">${may.stop ? stopFormHtml(model) : ""}<div class="so-stack">${may.seeStops ? stopsHtml(model) : ""}${may.seeRequests ? requestsHtml(model) : ""}</div></div>` : "")
+    + (may.stop || may.seeStops || may.seeRequests ? `<div class="so-two${may.stop ? "" : " one"}">${may.stop ? stopFormHtml(model) : ""}<div class="so-stack">${may.seeStops ? stopsHtml(model) : ""}${may.seeRequests ? requestsHtml(model) : ""}</div></div>` : "")
     + `<p id="sim-status" class="sp-status" role="status"></p>`;
 }

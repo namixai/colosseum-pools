@@ -846,16 +846,10 @@ Its log, one JSON line an event:
 - `stop_not_sent`: a pair found on a payout that was paid or stopped by the time it was read again;
 - `pass_failed`: a pass the node broke off, with its error; the next one comes in 600 seconds.
 
-A stop that was wrong is lifted by a person, from the same key, within 14 days of the stop (a stop not lifted by
-then is final). `--lift` sends `liftStop` for the payout `<id>` of the pool `<pool>`. The service is stopped for it
-and started again after: two processes sending from one key at once could take the same nonce, and one of the two
-transactions would be refused.
-
-    sudo systemctl stop colosseum-sim-checker@<name>
-    cd /opt/colosseum-pools/current && sudo -u colosseum-keeper bash -c 'set -a; . /etc/colosseum/keeper-<name>.env
-        . /etc/colosseum/deployment-<name>.env; set +a; exec /opt/colosseum-pools/venv/bin/python -m ops.sim_check \
-        --deployment "$COLOSSEUM_DEPLOYMENT" --wallet checker --lift <pool>:<id>'
-    sudo systemctl start colosseum-sim-checker@<name>
+A stop that was wrong is lifted within 14 days of the stop (a stop not lifted by then is final), and not from the
+checker's key: lifting is the factory's operator's, our Safe (`SimPool.liftStop`). Nothing on the host sends it.
+`deploy_sim lift --pool <pool> --id <id> --signer <the Safe>` reads the pool and prints the call for the Safe to sign
+(to, value, data); the checker's service keeps running meanwhile.
 
 The checker does not stop that payout again: the pool counts it as stopped once.
 

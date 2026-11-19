@@ -254,7 +254,7 @@
         },
         {
           "lead": "A simulated pool's checker.",
-          "text": "A payout of a simulated pool waits 72 hours (S112) and the approval of the approver its creator names (S136), or 7 days from its claim without it (S133, S134): no payout leaves sooner, and none waits on the approver longer. A payout waiting for its approval keeps its money: a later one is paid only if the pool also covers it (S135). A pool settles at most its own number of payouts in any 24 hours, set when it is made, from one to eight by the factory (S138), two in our first pool, approved or gone out at their 7 days, paid or set aside for a refused trader (S139): one more keeps its place and is paid the next day, so whatever the rules let through, `pay` settles no more than that number of payouts in any 24 hours, of the largest size at most; each line of a pool's menu starts both its stages on its own tier, the loss limit, the target and the kind of loss line the factory checked for that line as an exam would (S140); what was set aside for a refused trader leaves when that trader claims it, whatever the day. Until a payout is paid, approved or not, the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them; or, for a result disputed, the transactions that show the flaw and the hash of the published dispute (S113, S114, S137); or, for prohibited play (a series of exams bought by one person or linked wallets and traded at the edge of their risk, or one account hedged by another), at least two transactions that show it, the hash of the published analysis, and the other account if there is one (S141). The pool keeps each stop's reason by the payout (`stopReasonOf`). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`) for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and links on chain), and the checker lifts a stop that was wrong (S115). A stopped payout's money stays set aside for 14 days after the stop (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no profit for a partner's share. Within those days the trader can object on chain, with the hash of the objection's text, and the checker can lift the stop; after them the stop is final, and the money is the pool's again (S120). The filler and the checker are two keys, and neither they nor the closer open a pool (S116).",
+          "text": "A payout of a simulated pool waits 72 hours (S112) and the approval of the approver its creator names (S136), or 7 days from its claim without it (S133, S134): no payout leaves sooner, and none waits on the approver longer. A payout waiting for its approval keeps its money: a later one is paid only if the pool also covers it (S135). A pool settles at most its own number of payouts in any 24 hours, set when it is made, from one to eight by the factory (S138), two in our first pool, approved or gone out at their 7 days, paid or set aside for a refused trader (S139): one more keeps its place and is paid the next day, so whatever the rules let through, `pay` settles no more than that number of payouts in any 24 hours, of the largest size at most; each line of a pool's menu starts both its stages on its own tier, the loss limit, the target and the kind of loss line the factory checked for that line as an exam would (S140); what was set aside for a refused trader leaves when that trader claims it, whatever the day. Until a payout is paid, approved or not, the factory's checker, and nobody else, may stop it once, with a reason the chain keeps: the other account and the transactions that show the opposite positions, and for linked wallets the transactions that link them; or, for a result disputed, the transactions that show the flaw and the hash of the published dispute (S113, S114, S137); or, for prohibited play (a series of exams bought by one person or linked wallets and traded at the edge of their risk, or one account hedged by another), at least two transactions that show it, the hash of the published analysis, and the other account if there is one (S141). The pool keeps each stop's reason by the payout (`stopReasonOf`). A stopped payout's money stays in the pool, which is its creator's, and in our first pools the creator is the platform that also runs the checker. What holds it is that it shows: every stop and every lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`) for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and links on chain), and a stop that was wrong is lifted by the factory's operator, not by the checker (S115). A stopped payout's money stays set aside for 14 days after the stop (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no profit for a partner's share. Within those days the trader can object on chain, with the hash of the objection's text, and the factory's operator can lift the stop; after them the stop is final, and the money is the pool's again (S120). The filler and the checker are two keys, and neither they nor the closer open a pool (S116).",
           "sources": [
             "S112",
             "S136",
@@ -1232,10 +1232,10 @@
     },
     {
       "id": "S115",
-      "where": "src/sim/SimPool.sol:796",
+      "where": "src/sim/SimPool.sol:799",
       "kind": "line",
-      "text": "function liftStop(uint256 id) external onlyChecker {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L796"
+      "text": "if (msg.sender != factory.operator()) revert SimPoolFactory.NotOperator();",
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L799"
     },
     {
       "id": "S116",
@@ -1302,10 +1302,10 @@
     },
     {
       "id": "S125",
-      "where": "src/sim/SimPool.sol:953",
+      "where": "src/sim/SimPool.sol:956",
       "kind": "line",
       "text": "revert Locked();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L953"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L956"
     },
     {
       "id": "S126",
@@ -1323,31 +1323,31 @@
     },
     {
       "id": "S128",
-      "where": "src/sim/SimPool.sol:873",
+      "where": "src/sim/SimPool.sol:876",
       "kind": "line",
       "text": "if (block.timestamp < readyAt) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L873"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L876"
     },
     {
       "id": "S129",
-      "where": "src/sim/SimPool.sol:968",
+      "where": "src/sim/SimPool.sol:971",
       "kind": "line",
       "text": "if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L968"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L971"
     },
     {
       "id": "S130",
-      "where": "src/sim/SimPool.sol:874",
+      "where": "src/sim/SimPool.sol:877",
       "kind": "line",
       "text": "if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L874"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L877"
     },
     {
       "id": "S131",
-      "where": "src/sim/SimPool.sol:876",
+      "where": "src/sim/SimPool.sol:879",
       "kind": "line",
       "text": "uint256 amount = r < w ? r : w;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L876"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L879"
     },
     {
       "id": "S132",
@@ -1379,10 +1379,10 @@
     },
     {
       "id": "S136",
-      "where": "src/sim/SimPool.sol:812",
+      "where": "src/sim/SimPool.sol:815",
       "kind": "line",
       "text": "if (msg.sender != approver || msg.sender == address(0)) revert NotApprover();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L812"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L815"
     },
     {
       "id": "S137",
@@ -1421,17 +1421,17 @@
     },
     {
       "id": "S142",
-      "where": "src/sim/SimPool.sol:983",
+      "where": "src/sim/SimPool.sol:986",
       "kind": "line",
       "text": "if (!_isOn(line)) revert LineOff();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L983"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L986"
     },
     {
       "id": "S143",
-      "where": "src/sim/SimPool.sol:1003",
+      "where": "src/sim/SimPool.sol:1006",
       "kind": "line",
       "text": "uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L1003"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L1006"
     },
     {
       "id": "S144",
@@ -1470,10 +1470,10 @@
     },
     {
       "id": "S149",
-      "where": "src/sim/SimPool.sol:1067",
+      "where": "src/sim/SimPool.sol:1070",
       "kind": "line",
       "text": "bool sent = _send(creator, rest);",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L1067"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/sim/SimPool.sol#L1070"
     }
   ]
 }

@@ -157,11 +157,11 @@ publisher in main) and the gateway's host: whoever has either can trade accounts
   creator is the platform that also runs the checker. What holds it is that it shows: every stop and every
   lift carries the pool's counts of stops, lifts and payouts, the checking script is open (`ops/sim_check.py`)
   for anyone to run on the same blocks while a payout still waits (a stop itself carries its pair, trades and
-  links on chain), and the checker
-  lifts a stop that was wrong (S115). A stopped payout's money stays set aside for 14 days after the stop
+  links on chain), and a stop that was wrong is lifted by the factory's operator, not by the checker
+  (S115). A stopped payout's money stays set aside for 14 days after the stop
   (S118): the creator does not withdraw it (S117), no other payout is paid out of it (S119), and it is no
   profit for a partner's share. Within those days the trader can object on chain, with the hash of the
-  objection's text, and the checker can lift the stop; after them the stop is final, and the money is the
+  objection's text, and the factory's operator can lift the stop; after them the stop is final, and the money is the
   pool's again (S120). The filler and the checker are two keys, and neither they nor the closer open a pool (S116).
 - **A simulated pool's creator** withdraws only by a request a week old (S127, S128), carried out within three
   days of being ready (S130), and gets the less of what it asked and what may leave when it is carried out
@@ -360,7 +360,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S112 | `src/sim/SimPoolFactory.sol:41` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
 | S113 | `src/sim/SimPoolStops.sol:31` | `if (p.state != SimPool.PayoutState.Due \|\| p.wasStopped) revert SimPool.BadPayout();` |
 | S114 | `src/sim/SimPool.sol:314` | `event PayoutStopped(` |
-| S115 | `src/sim/SimPool.sol:796` | `function liftStop(uint256 id) external onlyChecker {` |
+| S115 | `src/sim/SimPool.sol:799` | `if (msg.sender != factory.operator()) revert SimPoolFactory.NotOperator();` |
 | S116 | `src/sim/SimPoolFactory.sol:208` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
 | S117 | `src/sim/SimPool.sol:513` | `uint256 keep = owed + held + reserved + sharesDue + (finished ? 0 : floor());` |
 | S118 | `src/sim/SimPoolFactory.sol:55` | `uint32 public constant STOP_RESERVE = 14 days;` |
@@ -370,28 +370,28 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S122 | `src/sim/SimPool.sol:556` | `_receive(trader, m.price, keccak256(abi.encode(code, line, salt)), validAfter, validBefore, v, r, s);` |
 | S123 | `src/sim/SimPoolCodes.sol:63` | `if (partner == address(0)) revert SimPool.NoSuchCode();` |
 | S124 | `src/sim/SimPoolFactory.sol:59` | `uint32 public constant MIN_TERM = 184 days;` |
-| S125 | `src/sim/SimPool.sol:953` | `revert Locked();` |
+| S125 | `src/sim/SimPool.sol:956` | `revert Locked();` |
 | S126 | `src/sim/SimPool.sol:517` | `if (w > p) w = p;` |
 | S127 | `src/sim/SimPoolFactory.sol:63` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
-| S128 | `src/sim/SimPool.sol:873` | `if (block.timestamp < readyAt) revert NotReady();` |
-| S129 | `src/sim/SimPool.sol:968` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
-| S130 | `src/sim/SimPool.sol:874` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
-| S131 | `src/sim/SimPool.sol:876` | `uint256 amount = r < w ? r : w;` |
+| S128 | `src/sim/SimPool.sol:876` | `if (block.timestamp < readyAt) revert NotReady();` |
+| S129 | `src/sim/SimPool.sol:971` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
+| S130 | `src/sim/SimPool.sol:877` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
+| S131 | `src/sim/SimPool.sol:879` | `uint256 amount = r < w ? r : w;` |
 | S132 | `src/sim/SimPool.sol:460` | `if (staged > f) f = staged;` |
 | S133 | `src/sim/SimPoolFactory.sol:45` | `uint32 public constant PAYOUT_HARD = 7 days;` |
 | S134 | `src/sim/SimPool.sol:681` | `if (!p.approved && block.timestamp < uint256(p.dueAt) + hardAfter) {` |
 | S135 | `src/sim/SimPool.sol:700` | `if (bal < ahead + p.amount) {` |
-| S136 | `src/sim/SimPool.sol:812` | `if (msg.sender != approver \|\| msg.sender == address(0)) revert NotApprover();` |
+| S136 | `src/sim/SimPool.sol:815` | `if (msg.sender != approver \|\| msg.sender == address(0)) revert NotApprover();` |
 | S137 | `src/sim/SimPoolStops.sol:33` | `if (paired != address(0) \|\| trades.length == 0 \|\| links.length != 1) revert SimPool.BadReason();` |
 | S138 | `src/sim/SimPoolFactory.sol:281` | `if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY \|\| p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();` |
 | S139 | `src/sim/SimPool.sol:690` | `if (block.timestamp < freeAt) {` |
 | S140 | `src/sim/SimPoolFactory.sol:272` | `if (k.maxDrawdownBps == 0 \|\| k.maxDrawdownBps >= Units.BPS) revert BadPlan();` |
 | S141 | `src/sim/SimPoolStops.sol:38` | `if (trades.length < 2 \|\| links.length != 1) revert SimPool.BadReason();` |
-| S142 | `src/sim/SimPool.sol:983` | `if (!_isOn(line)) revert LineOff();` |
-| S143 | `src/sim/SimPool.sol:1003` | `uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;` |
+| S142 | `src/sim/SimPool.sol:986` | `if (!_isOn(line)) revert LineOff();` |
+| S143 | `src/sim/SimPool.sol:1006` | `uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;` |
 | S144 | `src/sim/SimPoolFactory.sol:267` | `if (p.on & (1 << i) != 0 && cover > p.locked) revert BadPlan();` |
 | S145 | `src/sim/SimPoolSetup.sol:78` | `if (l.live != 0 \|\| sells) size = s;` |
 | S146 | `src/exam/PaperExam.sol:532` | `if (tellsPool) IExamPassed(pool).examPassed();` |
 | S147 | `src/sim/SimPool.sol:616` | `staged += _payoutOf(_lines[line].size);` |
 | S148 | `src/sim/SimPoolCodes.sol:96` | `setAside += _pay(heldOf, usdc, k, c.author, amount);` |
-| S149 | `src/sim/SimPool.sol:1067` | `bool sent = _send(creator, rest);` |
+| S149 | `src/sim/SimPool.sol:1070` | `bool sent = _send(creator, rest);` |

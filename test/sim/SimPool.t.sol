@@ -46,6 +46,9 @@ contract SimPoolTest is Test {
     address trader = makeAddr("trader");
     address other = makeAddr("other");
     address stranger = makeAddr("stranger");
+    /// The factory's operator, our Safe on a deploy: here this contract, which deploys the factory. It alone lifts a
+    /// stop; the checker stops.
+    address operator = address(this);
 
     uint64 mark = 1_000_000;
 
@@ -64,7 +67,7 @@ contract SimPoolTest is Test {
         usdc = new Usdc3009();
         book = new TermsBook();
         termsHash = book.publish("The simulated pool's terms, every clause written out.");
-        factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), address(this), 1 ether);
+        factory = new SimPoolFactory(IERC20(address(usdc)), address(new PaperExam()), address(new SimPool()), operator, 1 ether);
         factory.setFiller(filler);
         factory.setChecker(checker);
         factory.setCloser(closer);
@@ -866,8 +869,8 @@ contract SimPoolTest is Test {
     function test_stop_theCheckerAloneWithAReasonTheChainKeeps() public {
         SimPool pool = _pool();
         (uint256 id, address paired) = _duePayout(pool);
-        address[2] memory notChecker = [creator, stranger];
-        for (uint256 i = 0; i < 2; ++i) {
+        address[3] memory notChecker = [creator, stranger, operator];
+        for (uint256 i = 0; i < notChecker.length; ++i) {
             vm.prank(notChecker[i]);
             vm.expectRevert(SimPool.NotChecker.selector);
             pool.stopPayout(id, 1, paired, _trades(), new bytes32[](0));
@@ -932,7 +935,7 @@ contract SimPoolTest is Test {
         vm.warp(block.timestamp + 72 hours);
         vm.prank(checker);
         pool.stopPayout(id2, 1, paired2, _trades(), new bytes32[](0)); // approved, not yet paid
-        vm.prank(checker);
+        vm.prank(operator);
         pool.liftStop(id2);
         vm.prank(checker);
         vm.expectRevert(SimPool.BadPayout.selector);
@@ -946,27 +949,57 @@ contract SimPoolTest is Test {
         pool.stopPayout(id3, 1, paired3, _trades(), new bytes32[](0)); // paid: too late
     }
 
-    function test_liftStop_thePayoutIsDueAgainAndPaidAsAnyOther() public {
+    /// Lifting a stop is the factory's operator's alone: the checker that stopped the payout, the creator, the
+    /// approver, the closer, the filler and anyone else are refused. Lifted, the payout is due again and paid as any
+    /// other.
+    function test_liftStop_theOperatorAlone_thePayoutIsDueAgainAndPaidAsAnyOther() public {
         SimPool pool = _pool();
         (uint256 id, address paired) = _duePayout(pool);
         vm.prank(checker);
         pool.stopPayout(id, 1, paired, _trades(), new bytes32[](0));
         vm.warp(block.timestamp + 72 hours);
         assertEq(pool.pay(10), 0);
-        vm.prank(stranger);
-        vm.expectRevert(SimPool.NotChecker.selector);
-        pool.liftStop(id);
+        address[6] memory notOperator = [checker, creator, approver, closer, filler, stranger];
+        for (uint256 i = 0; i < notOperator.length; ++i) {
+            vm.prank(notOperator[i]);
+            vm.expectRevert(SimPoolFactory.NotOperator.selector);
+            pool.liftStop(id);
+        }
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Stopped), "refused: still stopped");
         vm.expectEmit(address(pool));
         emit SimPool.StopLifted(id, 1, 1, 0);
-        vm.prank(checker);
+        vm.prank(operator);
         pool.liftStop(id);
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Due), "due again");
         assertEq(pool.owed(), LARGE_PAYOUT);
+        assertEq(pool.reserved(), 0);
         uint256 before = usdc.balanceOf(trader);
         assertEq(pool.pay(10), 1, "past its time: paid at once");
         assertEq(usdc.balanceOf(trader) - before, LARGE_PAYOUT);
-        vm.prank(checker);
+        vm.prank(operator);
         vm.expectRevert(SimPool.BadPayout.selector);
         pool.liftStop(id);
+    }
+
+    /// The pool asks the factory for its operator at the lift: once the factory is handed to another key (the Safe,
+    /// on a deploy), that key lifts, and the key that was the operator before, and the checker, are refused.
+    function test_liftStop_theOperatorTheFactoryNamesNow() public {
+        SimPool pool = _pool();
+        uint256 id = _claim(pool, address(_passedStage(pool, trader, 1)));
+        _stop(pool, id);
+        address safe = makeAddr("safe");
+        factory.setOperator(safe);
+        address[2] memory notOperator = [operator, checker];
+        for (uint256 i = 0; i < notOperator.length; ++i) {
+            vm.prank(notOperator[i]);
+            vm.expectRevert(SimPoolFactory.NotOperator.selector);
+            pool.liftStop(id);
+        }
+        vm.prank(safe);
+        pool.liftStop(id);
+        assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Due));
+        assertEq(pool.owed(), LARGE_PAYOUT);
+        assertEq(pool.reserved(), 0);
     }
 
     // ── a stopped payout's 14 days (CFO, 12 November) ───────────
@@ -992,7 +1025,7 @@ contract SimPoolTest is Test {
         vm.expectRevert(SimPool.ReserveRunning.selector);
         pool.finalizeStop(id);
         vm.warp(block.timestamp + 1);
-        vm.prank(checker);
+        vm.prank(operator);
         vm.expectRevert(SimPool.ReserveOver.selector);
         pool.liftStop(id);
         vm.expectEmit(address(pool));
@@ -1004,7 +1037,7 @@ contract SimPoolTest is Test {
         assertEq(pool.withdrawable(), bal - 3 * LARGE_PAYOUT, "then it is the pool's again");
         vm.expectRevert(SimPool.BadPayout.selector);
         pool.finalizeStop(id);
-        vm.prank(checker);
+        vm.prank(operator);
         vm.expectRevert(SimPool.BadPayout.selector);
         pool.liftStop(id);
     }
@@ -1049,7 +1082,7 @@ contract SimPoolTest is Test {
         assertEq(uint8(pool.payout(b).state), uint8(SimPool.PayoutState.Paid));
         assertEq(uint8(pool.payout(c).state), uint8(SimPool.PayoutState.Due));
         vm.warp(block.timestamp + 10 days);
-        vm.prank(checker);
+        vm.prank(operator);
         pool.liftStop(a);
         assertEq(pool.reserved(), 0);
         uint256 before = usdc.balanceOf(trader);
@@ -1088,7 +1121,7 @@ contract SimPoolTest is Test {
         _stop(pool, b);
         assertEq(pool.payout(a).stoppedAt, block.timestamp);
         vm.warp(block.timestamp + 14 days - 1);
-        vm.startPrank(checker);
+        vm.startPrank(operator);
         pool.liftStop(a);
         vm.warp(block.timestamp + 1);
         vm.expectRevert(SimPool.ReserveOver.selector);
@@ -2368,7 +2401,7 @@ contract SimPoolTest is Test {
         assertEq(usdc.balanceOf(partner), toPartner, "a share of the profit only");
         assertLe(usdc.balanceOf(address(pool)), 1, "a unit of rounding at most stays");
         assertEq(usdc.balanceOf(creator) - before, bal - bal * 50 / 10_000 - toPartner - pool.sharesDue());
-        vm.prank(checker);
+        vm.prank(operator);
         vm.expectRevert(SimPool.Done.selector);
         pool.liftStop(0);
     }
@@ -3089,11 +3122,11 @@ contract SimPoolTest is Test {
         address hedge = address(_buy(elsewhere, other, 0));
         bytes32[] memory analysis = new bytes32[](1);
         analysis[0] = keccak256("the published analysis: the same size short on the other account");
-        vm.startPrank(checker);
+        vm.prank(checker);
         pool.stopPayout(id, 4, hedge, _trades(), analysis);
         assertEq(pool.stopReasonOf(id), 4);
+        vm.prank(operator);
         pool.liftStop(id);
-        vm.stopPrank();
         assertEq(uint8(pool.payout(id).state), uint8(SimPool.PayoutState.Due));
         assertEq(pool.owed(), LARGE_PAYOUT);
         assertEq(pool.reserved(), 0);

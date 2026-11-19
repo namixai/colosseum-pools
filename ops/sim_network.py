@@ -22,7 +22,7 @@ Mainnet is only ever chosen by naming it twice: COLOSSEUM_NETWORK=mainnet, which
 imported, and --network mainnet on the command line. A command that only reads, or that prints calls for a signer
 elsewhere (--signer: our Safe, the Ledger), needs nothing more. A command that sends needs a confirmation as well:
 
-- a one-off command (deploy_sim's, sim_check --lift, sim_keeper --measure) asks the person at the terminal to
+- a one-off command (deploy_sim's, sim_keeper --measure) asks the person at the terminal to
   type the confirmation phrase, and refuses without a terminal;
 - a service (sim_keeper, sim_relay, sim_check with a wallet) takes --confirm-mainnet with the deployment's label,
   so that a unit file copied from testnet does not start on mainnet until someone writes the label into it.

@@ -20,7 +20,8 @@ rules is no reason either: that stage ends at once and never pays.
 
 Everything it reads is on chain, and so is everything it writes: the reason, the other account,
 the hashes. Anyone can run this script on the same blocks and get the same pairs. It stops a payout
-only while it waits and only once; it lifts its own stop with --lift ID when a stop was wrong.
+only while it waits and only once. It never lifts a stop: lifting is the factory's operator's, our Safe
+(`deploy_sim lift`), not the checker's.
 
 Until when it stops is the pool's own rule. A pool with payout approval takes a stop until the payout
 is paid, approved or not: an unapproved one waits up to 7 days from its claim, and a pair found on the
@@ -39,11 +40,9 @@ payout anyway. A pass the node fails is logged (`pass_failed`) and the next one 
 off (the fills of the accounts, or one trader's transfers) is dropped whole and read again from the same block in the
 next pass, so nothing is counted twice; what was read whole before the failure is kept. A node whose head is behind
 what was read already is read nothing from. Its calls start --rpc-gap seconds apart at least, 1 by default, to leave
-the node's allowance to the keeper. It never lifts a stop: --lift is a command a
-person runs.
+the node's allowance to the keeper.
 Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet; on mainnet it sends only with
---confirm-mainnet <the deployment's label> and a mainnet key directory (ops/sim_network.py). --lift there
-asks for the confirmation phrase at the terminal instead.
+--confirm-mainnet <the deployment's label> and a mainnet key directory (ops/sim_network.py).
 """
 
 from __future__ import annotations
@@ -412,16 +411,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rpc-gap", type=float, default=RPC_GAP_S, help="seconds between two reads of the node, at least")
     p.add_argument("--window", type=int, default=600, help="seconds two opposite fills may be apart")
     p.add_argument("--size-tolerance", type=float, default=0.2)
-    p.add_argument("--lift", metavar="POOL:ID", help="lift the checker's own stop of payout ID of POOL")
     p.add_argument("--state", help="the scan's state (default ops/state/check-<deployment>.json)")
     p.add_argument("--dry-run", action="store_true")
     sn.add_args(p, service=True)
     args = p.parse_args(argv)
     dry = args.dry_run or not args.wallet
-    if args.lift and not dry:
-        sn.confirm_send(args, f"liftStop of {args.lift} from the key {args.wallet!r}", c)
-    else:
-        sn.confirm_service(args, args.deployment, c, sends=not dry)
+    sn.confirm_service(args, args.deployment, c, sends=not dry)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
@@ -430,9 +425,6 @@ def main(argv: list[str] | None = None) -> int:
     sender = wallet.address if wallet else record.get("checker", core.ZERO)
     state = pathlib.Path(args.state) if args.state else sk.STATE_DIR / f"check-{args.deployment}.json"
     ch = Checker(record, wallet, sender, dry, state, args.window, args.size_tolerance)
-    if args.lift:
-        pool, pid = args.lift.split(":")
-        return 0 if ch.send(to_checksum_address(pool), [int(pid)], "liftStop(uint256)", ["uint256"], id=int(pid)) else 1
     if not args.once:
         log("checker_started", deployment=args.deployment, sends=not dry, sender=sender, every=args.every,
             rpc_gap=args.rpc_gap)

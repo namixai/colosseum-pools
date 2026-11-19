@@ -307,16 +307,6 @@ class TheServices(unittest.TestCase):
                     self.assertRaises(self.Stop):
                 main(argv)  # testnet as before: no flag, no label
 
-    def test_the_checkers_lift_on_mainnet_asks_for_the_phrase(self):
-        with on(networks.MAINNET), mock.patch.dict(os.environ, MAINNET_KEYS), \
-                mock.patch("sys.stdin.isatty", return_value=False), \
-                mock.patch.object(chk.deployments, "load", side_effect=self.Stop) as load:
-            with self.assertRaises(SystemExit) as caught:
-                chk.main(["--deployment", "sim1", "--wallet", "checker", "--lift", f"{A}:1", "--network", "mainnet",
-                          "--confirm-mainnet", "sim1"])
-        self.assertIn("without a terminal", str(caught.exception))
-        load.assert_not_called()
-
     def test_the_hosts_unit_hands_mainnet_only_a_simulated_record(self):
         from ops import multi_keeper
         argv = ["multi_keeper", "--deployment", "sim1", "--once", "--network", "mainnet", "--confirm-mainnet", "sim1"]

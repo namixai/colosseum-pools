@@ -165,7 +165,7 @@ test("a payout waits, is approved, is due in the queue, is paid, is stopped (wit
   const stopped = one({ state: 2, wasStopped: true, stoppedAt: BigInt(NOW - DAY) }, 3);
   assert.equal(stopped.label, "Stopped");
   assert.match(stopped.note, /The result is disputed: a flaw of the exam, the oracle or the filler/);
-  assert.match(stopped.note, /For 14 days after the stop you may object, and the checker may lift it\./);
+  assert.match(stopped.note, /For 14 days after the stop you may object, and the platform's operator may lift it\./);
   assert.match(stopped.when, /^Final not before /);
   assert.match(one({ state: 2, wasStopped: true, stoppedAt: BigInt(NOW - DAY) }).note, /The reason is recorded on chain with the stop\./, "no reason is made up where the event was not read");
   const refused = one({ state: 5, wasStopped: true, stoppedAt: BigInt(NOW - 20 * DAY) }, 1);

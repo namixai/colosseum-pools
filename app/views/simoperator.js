@@ -1,6 +1,6 @@
 // A pool of exams, the control panel's operator section (#/manage/<pool>/operator), built to mockup 04. It is a page of the
 // management panel, apart from the owner's page and from the user panel: the wallet's roles are read from the chain (the
-// pool's `approver()`, the factory's `checker()` and `closer()`), a wallet with none sees one sentence, and each role is
+// pool's `approver()`, the factory's `checker()`, `closer()` and `operator()`), a wallet with none sees one sentence, and each role is
 // drawn only the controls its contract call allows. Before a call is sent the page says in words what it will do. The
 // words, the queue's states and the calls are app/lib/simoperator.js and app/lib/operator.js; this file reads and wires.
 import * as chain from "../lib/chain.js";
@@ -43,7 +43,8 @@ export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, st
   const pool = new ethers.Contract(address, ABI, chain.readProvider);
   const now = await chain.blockTime();
   const out = { now };
-  const queue = roles.includes("approver") || roles.includes("checker");
+  // The payouts are read for the stops too: the factory's operator, who lifts them, sees the stops and not the queue.
+  const queue = roles.includes("approver") || roles.includes("checker") || roles.includes("operator");
   if (queue) {
     const [count, head, perDay, room, nextPayAt, menu, tiers] = await Promise.all([
       pool.payoutCount(), pool.head(), pool.payoutsPerDay(), pool.payRoom(), pool.nextPayAt(), pool.menu(), pool.tiers(),
@@ -55,7 +56,7 @@ export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, st
     // The stops are found in the pool's events, whatever their number; each is then read by its id.
     let extraIds = [];
     let stopScan = null;
-    if (roles.includes("checker")) {
+    if (roles.includes("checker") || roles.includes("operator")) {
       try {
         const found = await lookForStops(address, now, stopCalls);
         stopScan = { done: found.done, note: found.note };
@@ -93,8 +94,9 @@ export async function simOperatorView(address, page) {
   const account = chain.currentAddress();
   const pool = new ethers.Contract(at, ABI, chain.readProvider);
   const factory = new ethers.Contract(await pool.factory(), SIM_OPERATOR_FACTORY_ABI, chain.readProvider);
-  const [approver, checker, closer] = await Promise.all([approverOf(pool), factory.checker(), factory.closer()]);
-  const who = operatorRoles({ account, approver, checker, closer });
+  const [approver, checker, closer, operator] = await Promise.all([approverOf(pool), factory.checker(), factory.closer(),
+    factory.operator()]);
+  const who = operatorRoles({ account, approver, checker, closer, operator });
   const name = `Pool ${chain.short(at)}`;
   const header = operatorHeaderHtml({ address: at, account: accountLabel(), state: who.kind, roles: who.roles });
   if (who.kind !== "operator") {
@@ -282,7 +284,7 @@ function wire(page, at, model) {
     paint();
   }
 
-  // ── the checker: lifting a stop, making it final; the closer: cancelling a request ──
+  // ── the factory's operator: lifting a stop; the checker or the operator: making it final; the closer: cancelling a request ──
   $("#stops", page)?.addEventListener("click", (e) => {
     const lift = e.target.closest("button[data-lift]");
     const fin = e.target.closest("button[data-final]");

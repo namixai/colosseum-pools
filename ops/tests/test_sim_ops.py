@@ -979,7 +979,8 @@ class TheFirstPool(unittest.TestCase):
             self.assertNotIn("came due", text)
             self.assertNotIn("if the pool does not hold enough then", text)
             self.assertIn("A stopped payout stays in the pool for at least 14 days while the trader can object, unless the "
-                          "checker lifts the stop within them and it is paid as any payout; after them anyone may make "
+                          "platform's operator lifts the stop within them and it is paid as any payout; after them anyone "
+                          "may make "
                           "the stop final, and only from then is the money the pool's",
                           text)
             self.assertIn("only the platform can close it sooner, with the money going where it would anyway", text)
@@ -1079,7 +1080,7 @@ class TheRehearsalPlan(unittest.TestCase):
     def test_it_is_one_line_of_20_for_2_with_the_first_pools_rules(self):
         raw = self.RAW
         terms = keccak(text=raw["terms_text"])
-        self.assertEqual("0x" + terms.hex(), "0xda786804c83457034d7f3389126f3eced08a316812ee613e89cd6c56ef930c16",
+        self.assertEqual("0x" + terms.hex(), "0xbede31afeee8efd47bf2f6e09010cb4e7c752d8a1d391de85ac54eea17831b55",
                          "the terms the rehearsal sheet names")
         plan = d.plan_of(raw, terms)
         self.assertEqual(plan[0], [(20 * 10**6, 2 * 10**6)])
@@ -1109,7 +1110,7 @@ class TheRehearsalPlan(unittest.TestCase):
         code, calls, said = TheCheck.run_check(self, [], create_needs=1_000_000)
         self.assertEqual(code, 0)
         self.assertIn("line             20 for 2 USDC: loss limit 6 %, target 0.25 %, trailing to the start", said)
-        self.assertIn("payouts a day    2; locks 3.2 USDC; terms keccak 0xda786804c834", said)
+        self.assertIn("payouts a day    2; locks 3.2 USDC; terms keccak 0xbede31afeee8", said)
         self.assertIn("the factory accepts the plan; largest size 20 USDC.", said)
         self.assertIn("the pool opens by an ordinary transaction. Nothing was sent.", said)
 
@@ -1541,6 +1542,77 @@ class TheClosing(unittest.TestCase):
             key.assert_not_called()
             self.assertEqual(d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--ids", "3,4", "--send"]), 0)
             self.assertEqual(sent.call_args[0][2:], ("approvePayouts(uint256[])", ["uint256[]"], [[3, 4]]))
+
+    def test_lift_only_the_factorys_operator_a_stopped_payout_within_its_14_days(self):
+        """The pool's order of refusals (SimPool.liftStop, SimPoolStops.lift): the factory's operator alone, not on a
+        finished pool, a stopped payout, within STOP_RESERVE of the stop. The checker stops; it does not lift."""
+        operator, checker = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER))
+        reserve = 14 * self.DAY
+        stopped = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 2, True, 5_000, False)
+        said = d.lift_check(operator, operator, False, stopped, 3, 5_000 + reserve - 1, reserve)
+        self.assertIn("payout 3: 800 USDC to 0x7777", said)
+        self.assertIn("stopped at " + d.utc(5_000) + ", can be lifted until " + d.utc(5_000 + reserve), said)
+        self.assertIn("due again and paid as any other", said)
+        for args, word in (((operator, checker, False, stopped, 3, 5_000, reserve), "NotOperator"),
+                           ((operator, checker, True, None, 3, 5_000 + reserve, reserve), "NotOperator"),
+                           ((operator, operator, True, stopped, 3, 5_000, reserve), "Done"),
+                           ((operator, operator, False, None, 3, 5_000, reserve), "payout 3 does not exist"),
+                           ((operator, operator, False, stopped[:4] + (1,) + stopped[5:], 3, 5_000, reserve),
+                            "payout 3 is Due, not stopped"),
+                           ((operator, operator, False, stopped[:4] + (5,) + stopped[5:], 3, 5_000, reserve),
+                            "payout 3 is Refused"),
+                           ((operator, operator, False, stopped, 3, 5_000 + reserve, reserve), "ReserveOver")):
+            with self.assertRaises(SystemExit) as caught:
+                d.lift_check(*args)
+            self.assertIn(word, str(caught.exception))
+
+    def test_lift_from_the_safe_prints_the_call_and_from_a_key_sends_only_with_send(self):
+        """Our factory's operator is a Safe: --signer prints liftStop for it (to, value, data), reads no key and sends
+        nothing. The checker's key is refused before anything is sent; the operator's key (a testnet factory not
+        handed to a Safe) sends only with --send."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+        safe, checker, deployer = (d.to_checksum_address(a) for a in (self.CREATOR, self.CLOSER, "0x" + "dd" * 20))
+        pool = d.to_checksum_address(self.OTHER)
+        stopped = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 2, True, 5_000, False)
+
+        def views(operator):
+            answers = {"factory()": ["0x" + "99" * 20], "operator()": [operator], "finished()": [False],
+                       "payoutCount()": [5], "payout(uint256)": [stopped], "STOP_RESERVE()": [14 * self.DAY]}
+            return lambda to, sig, *a: answers[sig]
+
+        out = io.StringIO()
+        with mock.patch.object(d.c, "call_view", side_effect=views(safe)), mock.patch.object(d, "chain_now", return_value=6_000), \
+                mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "transact") as sent, redirect_stdout(out):
+            self.assertEqual(d.main(["lift", "--pool", pool, "--signer", safe, "--id", "3"]), 0)
+        sent.assert_not_called()
+        key.assert_not_called()
+        printed = out.getvalue()
+        self.assertIn(f"liftStop(3) from the signer ({safe}), the factory's operator", printed)
+        self.assertNotIn("None", printed)
+        batch = json.loads(printed[printed.index("{"):])
+        self.assertEqual(batch["transactions"], [{"to": pool, "value": "0",
+                                                  "data": "0x" + (keccak(text="liftStop(uint256)")[:4] + (3).to_bytes(32, "big")).hex()}])
+
+        with mock.patch.object(d.c, "call_view", side_effect=views(safe)), mock.patch.object(d, "chain_now", return_value=6_000), \
+                mock.patch.object(d.c, "address_of", return_value=checker), mock.patch.object(d.c, "assert_testnet"), \
+                mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "transact") as sent:
+            with self.assertRaises(SystemExit) as caught:
+                d.main(["lift", "--pool", pool, "--key", "checker", "--id", "3", "--send"])
+            self.assertIn(f"NotOperator: {checker} is not the factory's operator ({safe})", str(caught.exception))
+            sent.assert_not_called()
+            key.assert_not_called()
+
+        with mock.patch.object(d.c, "call_view", side_effect=views(deployer)), mock.patch.object(d, "chain_now", return_value=6_000), \
+                mock.patch.object(d.c, "address_of", return_value=deployer), mock.patch.object(d.c, "assert_testnet"), \
+                mock.patch.object(d.c, "account") as key, \
+                mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+            self.assertEqual(d.main(["lift", "--pool", pool, "--key", "deployer", "--id", "3"]), 0)
+            sent.assert_not_called()
+            key.assert_not_called()
+            self.assertEqual(d.main(["lift", "--pool", pool, "--key", "deployer", "--id", "3", "--send"]), 0)
+            self.assertEqual(sent.call_args[0][1:], (pool, "liftStop(uint256)", ["uint256"], [3]))
 
     def test_an_approval_and_a_new_approver_from_a_signer_elsewhere_say_the_signer_not_none(self):
         import io

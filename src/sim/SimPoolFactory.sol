@@ -19,10 +19,10 @@ import {TermsBook} from "../multi/TermsBook.sol";
 ///         constants here, the same for every pool: what a pool pays the platform, what it pays a
 ///         trader, what it keeps, how long a payout waits, how many payouts a pool pays a day, how
 ///         long a pool runs at least, how long a withdrawal waits.
-/// @dev The operator lists the assets and their leverage caps, and names the four roles the
-///      pools read from here: the filler of every exam's orders, the checker who may stop a
-///      payout with a reason, the closer who alone may close a pool before `MIN_TERM` and may cancel
-///      a creator's request to withdraw, and the
+/// @dev The operator lists the assets and their leverage caps, alone lifts a pool's stop that was
+///      wrong (`SimPool.liftStop`), and names the four roles the pools read from here: the filler of
+///      every exam's orders, the checker who may stop a payout with a reason, the closer who alone may
+///      close a pool before `MIN_TERM` and may cancel a creator's request to withdraw, and the
 ///      recipient of the platform's part. A pool's creator is neither the filler, the checker
 ///      nor the closer.
 contract SimPoolFactory {
@@ -51,7 +51,7 @@ contract SimPoolFactory {
     uint8 public constant MAX_PAYOUTS_PER_DAY = uint8(MAX_PAYOUTS_A_DAY);
     uint32 public constant PAYOUT_DAY = 24 hours;
     /// How long a stopped payout's money stays set aside after the stop: the trader can object and the
-    /// checker can lift the stop; after it the stop is final and the money is the pool's again.
+    /// factory's operator can lift the stop; after it the stop is final and the money is the pool's again.
     uint32 public constant STOP_RESERVE = 14 days;
     /// How long a pool runs at least: six months, the longest half-year (1 August to 1 February), so "at
     /// least 6 months" holds whatever the day it opens. Before it, its creator neither stops its sales nor
@@ -158,7 +158,7 @@ contract SimPoolFactory {
         emit FillerSet(filler_);
     }
 
-    /// @notice The checker every pool reads when a payout is stopped or a stop lifted. Not the filler.
+    /// @notice The checker every pool reads when a payout is stopped. Not the filler.
     function setChecker(address checker_) external onlyOperator {
         if (checker_ == address(0) || checker_ == filler) revert BadRole();
         checker = checker_;

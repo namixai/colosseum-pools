@@ -464,7 +464,7 @@ class TheLoop(unittest.TestCase):
             self.assertEqual(ch.one_pass(), [])
         self.assertEqual(len(node.sent), 1)
 
-    def test_a_payout_lifted_by_hand_is_never_stopped_again(self):
+    def test_a_payout_whose_stop_the_operator_lifted_is_never_stopped_again(self):
         node = Node()
         ch = self.checker(node)
         with self.on(node):
@@ -597,12 +597,18 @@ class TheLoop(unittest.TestCase):
         with self.on(node), mock_print():
             self.assertEqual(s.run(self.checker(node, dry=True), 600, once=True, sleep=lambda t: None), 1)
 
-    def test_the_service_never_lifts_a_stop(self):
+    def test_the_checker_never_lifts_a_stop(self):
+        """Lifting a stop is the factory's operator's (SimPool.liftStop; `deploy_sim lift` for our Safe): the checker's
+        script has no lift, as a service or as a command, and refuses --lift before it reads anything."""
+        from unittest import mock
         src = (ROOT / "ops" / "sim_check.py").read_text()
-        body = src[src.index("class Checker"):src.index("def main(")]
-        self.assertNotIn("liftStop", body, "the lift is a command a person runs (--lift), never the loop's")
-        self.assertEqual(src.count('"liftStop(uint256)"'), 1)
-        self.assertIn("if args.lift:", src[src.index("def main("):])
+        self.assertNotIn('"liftStop(uint256)"', src)
+        self.assertNotIn("args.lift", src)
+        with mock.patch.object(s.deployments, "load") as load, mock.patch("sys.stderr"):
+            with self.assertRaises(SystemExit) as caught:
+                s.main(["--deployment", "sim1", "--wallet", "checker", "--lift", "0x" + "ab" * 20 + ":1"])
+        self.assertEqual(caught.exception.code, 2, "an unknown flag")
+        load.assert_not_called()
 
 
 class ThePace(unittest.TestCase):

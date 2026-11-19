@@ -349,7 +349,7 @@ export function utc(seconds) {
 
 /**
  * Where a stopped or refused payout stands, in words, on a pool with the stop reserve: the 14 days in which the
- * trader may object and the checker may lift the stop, then the refusal, final once anyone sends `finalizeStop`.
+ * trader may object and the factory's operator may lift the stop, then the refusal, final once anyone sends `finalizeStop`.
  * `state` is "window" (the 14 days run), "due-final" (they are over, the stop not yet made final), "final", or
  * "stopped" (a pool without the reserve: no window to speak of). Null for a payout never stopped or since lifted.
  */
@@ -367,7 +367,7 @@ export function stopNote(p, now) {
   if (p.reserveEnds == null) return { state: "stopped", until: null, text: "Stopped by the checker." };
   if (now < p.reserveEnds) {
     return { state: "window", until: p.reserveEnds,
-      text: `Stopped. Until ${utc(p.reserveEnds)} the trader may object and the checker may lift the stop; the money `
+      text: `Stopped. Until ${utc(p.reserveEnds)} the trader may object and the platform's operator may lift the stop; the money `
         + `stays in the pool, set aside.${objected}` };
   }
   return { state: "due-final", until: p.reserveEnds,
