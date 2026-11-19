@@ -18,6 +18,9 @@ It reads the chain and nothing else, sends nothing and holds no key. For each pa
                      as a wallet an exchange pays out of funds thousands of strangers;
   late fills       → how many blocks late the filler put this trader's fills (`late` of `Filled`)
                      against everyone else's;
+  late stops       → how many blocks after the oracle reached a stop's or a take's price it was
+                     carried out (`TriggerFilled`), a series of its own against everyone else's, by
+                     the same rule as the fills';
   the group's code → whose code the exam was bought under, its sales, from how many wallets, the
                      longest run of sales in a row under it each from a new wallet, and how many of its
                      buyers never traded or stand in a pair;
@@ -76,6 +79,10 @@ PAYOUT_DELAY = 72 * 3600
 # Past this from its claim a payout is paid unapproved, unless it was stopped (SimPoolFactory, `PAYOUT_HARD`).
 PAYOUT_HARD = 7 * 24 * 3600
 PAYOUT_BEFORE_APPROVALS = chk.PAYOUT_BEFORE_APPROVALS
+# How far back from a stop's or a take's close the oracle is read for its lateness (`trigger_reached`): the widest
+# window an order may have (SimPoolFactory.MAX_FILL_WINDOW), as far as an order's window is read. A stop that stood
+# reached longer than that is said as at least this many blocks late.
+TRIGGER_BACK = 60
 ZERO_ADDRESS = "0x" + "00" * 20
 NO_APPROVER = ("the pool names no approver: the payout goes out unapproved from its ceiling on, unless it is stopped; "
                "there is nobody to sign an approval")
@@ -512,6 +519,68 @@ def trigger_hit(take: bool, position: int, oracle: int, px: int) -> bool:
     """Whether the oracle price has reached a stop or a take (`PaperExam._triggered`): a take on a long and a stop on
     a short at the price or above it, the other two at it or below."""
     return oracle >= px if take == (position > 0) else oracle <= px
+
+
+def trigger_closes(evs: list[dict]) -> list[dict]:
+    """Each stop or take an account's events show carried out, with what it stood at: its block, its asset, whether a
+    take, the side of the position it closed (1 a long, -1 a short: the close of a short buys), its price and the
+    block it acts from (`armedAt`). Only a `TriggerFilled` right after its own `Filled`, of the trigger that stood and
+    was taken off in the same transaction, as the recount holds them; any other is the recount's flag, not counted."""
+    out: list[dict] = []
+    closes = trigger_fills(evs)
+    standing: dict[tuple[int, bool], dict] = {}
+    taken_off: dict[tuple[str, int, bool], dict | None] = {}
+    for i, e in enumerate(evs):
+        name = e["name"]
+        if name == "TriggerSet":
+            standing[(e["asset"], e["take"])] = e
+        elif name == "TriggerCleared":
+            taken_off[(e["tx"], e["asset"], e["take"])] = standing.pop((e["asset"], e["take"]), None)
+        elif name == "StepPassed":
+            standing = {}
+        elif name == "TriggerFilled" and (i - 1) in closes:
+            t = taken_off.get((e["tx"], e["asset"], e["take"]))
+            if t is not None:
+                out.append({"block": e["block"], "asset": e["asset"], "take": e["take"], "side": -1 if evs[i - 1]["buy"] else 1,
+                            "px": t["px"], "armedAt": t["armedAt"], "tx": e["tx"]})
+    return out
+
+
+def trigger_reached(close: dict, px_of, back: int) -> tuple[int | None, bool]:
+    """How many blocks a stop or a take waited, carried out, after the oracle reached its price: from the first block of
+    the stretch in which the oracle stood at or past it without a break up to the block it was carried out in, never
+    before `armedAt`. `fillTrigger` takes a trigger only while it holds, so the filler's choice is inside that stretch.
+    `px_of(block)` is the oracle's price of the close's asset, or None where not read. Read back `back` blocks at most:
+    a stretch longer than that is (back, True), at least `back`. (None, False) where the oracle was not read on the
+    way, or did not hold the price in the close's own block (the recount's `trigger-not-reached`)."""
+    o = px_of(close["block"])
+    if o is None or o <= 0 or not trigger_hit(close["take"], close["side"], o, close["px"]):
+        return None, False
+    b = close["block"]
+    while b > close["armedAt"]:
+        if close["block"] - b >= back:
+            return back, True
+        o = px_of(b - 1)
+        if o is None or o <= 0:  # a zero price (a feed not live, or one a --prices file gave) is no price
+            return None, False
+        if not trigger_hit(close["take"], close["side"], o, close["px"]):
+            break
+        b -= 1
+    return close["block"] - b, False
+
+
+def trigger_lates(evs: list[dict], oracle: dict[str, int]) -> dict:
+    """The lateness of an account's stops and takes carried out (`trigger_reached`), from the oracle prices read: each
+    one's blocks, how many of them are the read-back limit (at least that), and how many were not read."""
+    out = {"lates": [], "atLeast": 0, "unread": 0}
+    for t in trigger_closes(evs):
+        late, at_least = trigger_reached(t, lambda b, a=t["asset"]: oracle.get(oracle_key(a, b)), TRIGGER_BACK)
+        if late is None:
+            out["unread"] += 1
+            continue
+        out["lates"].append(late)
+        out["atLeast"] += at_least
+    return out
 
 
 def recount(account: str, chain: dict, p: "Params", size: int | None = None, largest: int | None = None) -> dict:
@@ -1209,6 +1278,27 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
                    "others": {"n": len(others_late), "median": quantile(others_late, 0.5),
                               "p90": quantile(others_late, 0.9)},
                    "outlier": late_outlier(mine_late, others_late, p.min_fills)}
+    # The lateness of stops and takes, a series of its own (`trigger_lates`): blocks from the oracle reaching the price
+    # to the close, against everyone else's, by the same rule as the orders'.
+    sides = {"trader": {"lates": [], "atLeast": 0, "unread": 0}, "others": {"lates": [], "atLeast": 0, "unread": 0}}
+    oracle = chain.get("oracle") or {}
+    for a, evs in (chain.get("exam_events") or {}).items():
+        owner = who.get(a)
+        if owner is None:
+            continue
+        side, got = sides["trader" if owner == trader else "others"], trigger_lates(evs, oracle)
+        side["lates"] += got["lates"]
+        side["atLeast"] += got["atLeast"]
+        side["unread"] += got["unread"]
+    mine_t, others_t = sides["trader"], sides["others"]
+    out["triggerLate"] = {"trader": {"n": len(mine_t["lates"]), "median": quantile(mine_t["lates"], 0.5),
+                                     "max": max(mine_t["lates"], default=0), "atLeast": mine_t["atLeast"],
+                                     "unread": mine_t["unread"]},
+                          "others": {"n": len(others_t["lates"]), "median": quantile(others_t["lates"], 0.5),
+                                     "p90": quantile(others_t["lates"], 0.9), "atLeast": others_t["atLeast"],
+                                     "unread": others_t["unread"]},
+                          "readBack": TRIGGER_BACK,
+                          "outlier": late_outlier(mine_t["lates"], others_t["lates"], p.min_fills)}
     out["code"] = code_review(pool, sale["code"], chain, who, p) if sale else None
     out["running"] = running(pool, chain)
 
@@ -1252,6 +1342,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
         found.append(("link", "wallet linked to " + ", ".join(sorted({l["trader"] for l in counted}))))
     if out["late"]["outlier"]:
         found.append(("late", "fills later than everyone else's"))
+    if out["triggerLate"]["outlier"]:
+        found.append(("late", "stops and takes carried out later than everyone else's after the oracle reached them"))
     if out["code"] and out["code"]["flag"]:
         found.append(("code", f"code {out['code']['code'][:10]}: {out['code']['run']} sales in a row from new wallets"))
     for part in ("stage", "exam"):
@@ -1341,7 +1433,9 @@ def card(r: dict, chain: dict) -> dict:
     fixed: fields are added under a new SCHEMA, never renamed. /2 added `action`, `evidence.mirrors`,
     `evidence.opposingSum`, `evidence.recount` and `stopDraft`, and the reason kinds `mirror`, `mirror-sum`
     and `recount`; /3, `evidence.passRates` and `evidence.timing`, the kinds `pass-rate` and `timing`, and
-    `evidence.recount.<part>.flip` (a profile, shown grey: it is in no reason and changes no colour). Amounts
+    `evidence.recount.<part>.flip` (a profile, shown grey: it is in no reason and changes no colour). Under /3 too,
+    later, fields a page shows as they come and need not know: `dailyCap`, `evidence.recount.<part>.triggers` and
+    `.drawdown`, and `evidence.triggerLate` (the lateness of stops and takes, said as a reason of the kind `late`). Amounts
     are strings of USDC units (6 decimals), since a JSON number loses digits past 2**53; times are seconds on
     the chain's clock."""
     tx = r["tx"] or {}
@@ -1363,6 +1457,7 @@ def card(r: dict, chain: dict) -> dict:
             "timing": r["timing"],
             "links": r["links"],
             "late": r["late"],
+            "triggerLate": r["triggerLate"],
             "code": r["code"],
             "running": {"exams": g["exams"], "stages": g["stages"], "worst": str(g["worst"]),
                         # Unknown when what the codes keep was not read: null, never the text "None".
@@ -1445,6 +1540,12 @@ def summary(r: dict) -> str:
     lt = r["late"]
     lines.append(f"  late: median {lt['trader']['median']} of {lt['trader']['n']} fills; others median "
                  f"{lt['others']['median']}, p90 {lt['others']['p90']} of {lt['others']['n']}")
+    tg = r["triggerLate"]
+    said = lambda s: (f" ({s['atLeast']} at least {tg['readBack']})" if s["atLeast"] else "") + (
+        f", {s['unread']} not read" if s["unread"] else "")
+    lines.append(f"  late stops and takes, blocks after the oracle reached them: median {tg['trader']['median']} of "
+                 f"{tg['trader']['n']}{said(tg['trader'])}; others median {tg['others']['median']}, p90 "
+                 f"{tg['others']['p90']} of {tg['others']['n']}{said(tg['others'])}")
     if r["code"]:
         k = r["code"]
         lines.append(f"  code {k['code']} of {k['partner']}: {k['sales']} sales, {k['wallets']} wallets, run {k['run']},"
@@ -1588,6 +1689,28 @@ def oracle_at(asset: int, block: int) -> int | None:
         return int(px) or None
     except Exception:
         return None
+
+
+def read_trigger_oracle(exam_events: dict[str, list[dict]], oracle: dict[str, int]) -> None:
+    """The oracle back from each stop's and take's close in every account of the factory, for as long as it held the
+    price and `TRIGGER_BACK` blocks at most, into `oracle` (what a --prices file gave stands): what the lateness of
+    stops and takes (`trigger_lates`) is counted from. A price the node did not give is asked once: the stops of other
+    accounts in the same blocks do not ask again. It is remembered here, never put in `oracle` as a price."""
+    unread: set[str] = set()
+    for evs in exam_events.values():
+        for t in trigger_closes(evs):
+            def got(block: int, asset: int = t["asset"]) -> int | None:
+                key = oracle_key(asset, block)
+                if key in unread:
+                    return None
+                if key not in oracle:
+                    read = oracle_at(asset, block)
+                    if read is None:
+                        unread.add(key)
+                        return None
+                    oracle[key] = read
+                return oracle[key]
+            trigger_reached(t, got, TRIGGER_BACK)
 
 
 def _addr(topic: str) -> str:
@@ -1889,6 +2012,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                     got = oracle_at(asset, block)
                     if got is not None:
                         oracle[key] = got
+    read_trigger_oracle(exam_events, oracle)
     # The day's allowed loss of every exam that passed too: the pool's count of passes in the shape of a coin flip.
     for a in passed_accounts(exam_events):
         if a not in daily_bps:

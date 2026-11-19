@@ -1043,6 +1043,171 @@ class LateFills(unittest.TestCase):
         self.assertFalse(r.late_outlier([2] * 5, [0] * 8 + [2, 2], 5), "at the others' p90 is not above it")
 
 
+class LateStopsAndTakes(unittest.TestCase):
+    """The lateness of stops and takes, a series of its own: blocks from the oracle reaching the price to the close
+    (`TriggerFilled`), against everyone else's, by the orders' rule. Each account holds longs of 100 bought at a mark
+    of 1 000 000, each closed by a stop at 950 000 that acts from 2 blocks after it is set; the oracle stands at the
+    mark until the block it reaches 940 000, and there until the close."""
+
+    MARK, STOP, LOW = 1_000_000, 950_000, 940_000
+
+    @staticmethod
+    def e(name, block, index=0, **kw):
+        return {"name": name, "block": block, "index": index, "t": 1_000 * block, "tx": tx(70_000 + block), **kw}
+
+    def account(self, ch, account, lates, start=1_000):
+        """Stops carried out `late` blocks after the oracle reached them, one round trip each, 200 blocks apart."""
+        evs = [self.e("Started", start - 1, capital=100 * 10**6)]
+        for k, late in enumerate(lates):
+            b = start + 200 * k
+            reach, close = b + 50, b + 50 + late
+            t = tx(90_000_000 + int(account, 16) % 10**6 * 1_000 + k)
+            evs += [self.e("Filled", b, asset=3, buy=True, sz=100, px=self.MARK, cost=0, late=1, source=0),
+                    self.e("TriggerSet", b + 1, asset=3, take=False, px=self.STOP, sz=0, armedAt=b + 3),
+                    {**self.e("TriggerCleared", close, 0, asset=3, take=False), "tx": t},
+                    {**self.e("Filled", close, 1, asset=3, buy=False, sz=100, px=self.LOW, cost=0, late=close - b - 3, source=0), "tx": t},
+                    {**self.e("TriggerFilled", close, 2, asset=3, take=False, sz=100, px=self.LOW, cost=0,
+                              trigger_px=self.STOP, source=0), "tx": t}]
+            for x in range(b, close + 1):
+                ch.d["oracle"][r.oracle_key(3, x)] = self.LOW if x >= reach else self.MARK
+        ch.d.setdefault("exam_events", {})[account] = evs
+
+    def world(self, mine, theirs):
+        ch, t1, s1 = honest_world()
+        ch.d["oracle"] = {}
+        self.account(ch, s1, mine)
+        for i, lates in enumerate(theirs):
+            self.account(ch, addr(0x210 + i), lates, start=50_000 + 10_000 * i)
+        return ch, s1
+
+    def test_a_trader_whose_stops_are_carried_out_later_than_everyone_elses_is_suspicious(self):
+        ch, _ = self.world([20] * 6, [[1]] * 8)
+        got = r.review(ch.d, POOL, 0)
+        tl = got["triggerLate"]
+        self.assertEqual(tl["trader"], {"n": 6, "median": 20, "max": 20, "atLeast": 0, "unread": 0})
+        self.assertEqual(tl["others"], {"n": 8, "median": 1, "p90": 1, "atLeast": 0, "unread": 0})
+        self.assertTrue(tl["outlier"])
+        self.assertIn("stops and takes carried out later than everyone else's after the oracle reached them", got["reasons"])
+        self.assertEqual(got["kinds"].count("late"), 1)
+        self.assertFalse(got["late"]["outlier"], "the orders' lateness is its own series, and in order here")
+        self.assertNotIn("fills later than everyone else's", got["reasons"])
+        self.assertEqual(r.card(got, ch.d)["evidence"]["triggerLate"], tl)
+        self.assertIn("late stops and takes, blocks after the oracle reached them: median 20 of 6; others median 1, p90 1 of 8",
+                      r.summary(got))
+
+    def test_late_orders_with_stops_in_order_are_the_orders_finding_only(self):
+        ch, s1 = self.world([1] * 6, [[1]] * 8)
+        for i in range(6):
+            ch.fill(s1, buy=bool(i % 2), t=100_000 + i * 10_000, asset=9, late=20)
+        for e in [addr(0x210 + i) for i in range(8)]:
+            ch.fill(e, buy=True, t=500_000, asset=8, late=1)
+        got = r.review(ch.d, POOL, 0)
+        self.assertTrue(got["late"]["outlier"])
+        self.assertFalse(got["triggerLate"]["outlier"])
+        self.assertEqual((got["triggerLate"]["trader"]["median"], got["triggerLate"]["others"]["p90"]), (1, 1))
+        self.assertIn("fills later than everyone else's", got["reasons"])
+        self.assertNotIn("stops and takes carried out later than everyone else's after the oracle reached them", got["reasons"])
+
+    def test_too_few_stops_on_either_side_say_nothing(self):
+        for mine, theirs in [([20] * 4, [[1]] * 8), ([20] * 6, [[1]] * 4), ([], [[1]] * 8)]:
+            ch, _ = self.world(mine, theirs)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["triggerLate"]["trader"]["n"], got["triggerLate"]["others"]["n"]), (len(mine), len(theirs)))
+            self.assertFalse(got["triggerLate"]["outlier"], (mine, theirs))
+            self.assertNotIn("late", got["kinds"])
+        # A stop whose prices were not read is said as not read, and counts on neither side.
+        ch, s1 = self.world([20] * 6, [[1]] * 8)
+        for k in range(2):
+            del ch.d["oracle"][r.oracle_key(3, 1_000 + 200 * k + 60)]
+        got = r.review(ch.d, POOL, 0)["triggerLate"]
+        self.assertEqual((got["trader"]["n"], got["trader"]["unread"], got["outlier"]), (4, 2, False))
+        # No events read at all: nothing to say.
+        ch, _ = self.world([20] * 6, [[1]] * 8)
+        del ch.d["exam_events"]
+        self.assertEqual(r.review(ch.d, POOL, 0)["triggerLate"]["trader"]["n"], 0)
+
+    def test_the_lateness_runs_from_the_stretch_the_oracle_held_the_price_never_before_it_could_act(self):
+        prices = {b: self.MARK for b in range(100, 200)}
+        close = {"block": 150, "asset": 3, "take": False, "side": 1, "px": self.STOP, "armedAt": 102}
+        reached = lambda pr, c=close, back=r.TRIGGER_BACK: r.trigger_reached(c, pr.get, back)
+        self.assertEqual(reached({**prices, **{b: self.LOW for b in range(140, 151)}}), (10, False))
+        # Reached at 120, back over at 130, reached again at 140: the stretch the close is in counts.
+        self.assertEqual(reached({**prices, **{b: self.LOW for b in (*range(120, 130), *range(140, 151))}}), (10, False))
+        self.assertEqual(reached({**prices, **{b: self.STOP for b in range(140, 151)}}), (10, False), "at the price is reached")
+        # Held since before the stop could act: from `armedAt`.
+        self.assertEqual(reached({b: self.LOW for b in range(100, 151)}), (48, False))
+        # Held longer than is read back: at least that.
+        self.assertEqual(reached({b: self.LOW for b in range(100, 151)}, back=20), (20, True))
+        self.assertEqual(reached({b: self.LOW for b in range(100, 151)}, back=48), (48, False), "to `armedAt` exactly is exact")
+        # A price on the way not read, or zero, or the close's own block not reached: not read.
+        held = {b: self.LOW for b in range(100, 151)}
+        self.assertEqual(reached({**held, 145: None}), (None, False))
+        self.assertEqual(reached({**held, 145: 0}), (None, False))
+        self.assertEqual(reached({**held, 150: self.MARK}), (None, False))
+        # A stop on a short at the price or above; a take on a long at it or above; a take on a short at it or below.
+        up = {**prices, **{b: 1_060_000 for b in range(147, 151)}}
+        self.assertEqual(reached(up, {**close, "side": -1, "px": 1_050_000}), (3, False))
+        self.assertEqual(reached(up, {**close, "take": True, "px": 1_050_000}), (3, False))
+        self.assertEqual(reached({**prices, **{b: self.LOW for b in range(149, 151)}}, {**close, "take": True, "side": -1}), (1, False))
+
+    def test_a_close_is_its_trigger_that_stood_on_the_side_it_closed(self):
+        ch, s1 = self.world([5, 7], [])
+        evs = ch.d["exam_events"][s1]
+        self.assertEqual(r.trigger_closes(evs), [
+            {"block": 1_055, "asset": 3, "take": False, "side": 1, "px": self.STOP, "armedAt": 1_003, "tx": evs[5]["tx"]},
+            {"block": 1_257, "asset": 3, "take": False, "side": 1, "px": self.STOP, "armedAt": 1_203, "tx": evs[10]["tx"]}])
+        self.assertEqual(r.trigger_lates(evs, ch.d["oracle"]), {"lates": [5, 7], "atLeast": 0, "unread": 0})
+        short = [{**x, "buy": not x["buy"]} if x["name"] == "Filled" else x for x in evs]
+        self.assertEqual([c["side"] for c in r.trigger_closes(short)], [-1, -1], "the close of a short buys")
+        # No trigger standing (never set, or gone with the step), or no fill of its own: not a close.
+        self.assertEqual(r.trigger_closes([x for x in evs if x["name"] != "TriggerSet"]), [])
+        stepped = evs[:3] + [self.e("StepPassed", 1_002, equity=0)] + evs[3:6]
+        self.assertEqual(r.trigger_closes(stepped), [])
+        self.assertEqual(r.trigger_closes([x for x in evs if x["name"] != "Filled" or x["late"] == 1]), [])
+
+    def test_the_oracle_is_read_back_from_each_close_while_it_held_the_price(self):
+        ch, s1 = self.world([5], [[61]])
+        prices = dict(ch.d["oracle"])
+        asked = []
+
+        def oracle_at(asset, block):
+            asked.append(block)
+            return prices.get(r.oracle_key(asset, block))
+
+        oracle = {r.oracle_key(3, 1_055): self.MARK}  # what a --prices file gave stands
+        with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
+            r.read_trigger_oracle(ch.d["exam_events"], oracle)
+        theirs = 50_000 + 50 + 61
+        self.assertEqual(oracle[r.oracle_key(3, 1_055)], self.MARK)
+        self.assertNotIn(1_055, asked)
+        self.assertEqual([b for b in asked if b < 2_000], [], "the stop not reached in its block: nothing more is read")
+        self.assertEqual([b for b in asked if b > 2_000], list(range(theirs, theirs - r.TRIGGER_BACK - 1, -1)),
+                         "the close's block and 60 blocks back, no further")
+        self.assertEqual(r.trigger_lates(ch.d["exam_events"][addr(0x210)], oracle), {"lates": [60], "atLeast": 1, "unread": 0})
+        self.assertEqual(r.TRIGGER_BACK, 60)
+        self.assertIn("uint16 public constant MAX_FILL_WINDOW = 60;", _source("src/sim/SimPoolFactory.sol"))
+
+    def test_a_price_the_node_did_not_give_is_asked_once_and_never_kept_as_a_price(self):
+        ch, _ = self.world([], [[5], [5]])
+        both = {addr(0x210): ch.d["exam_events"][addr(0x210)]}
+        both[addr(0x211)] = [{**x, "tx": tx(int(x["tx"], 16) + 1)} for x in both[addr(0x210)]]  # the same blocks, another account
+        missing = r.oracle_key(3, 50_000 + 50 + 2)
+        prices = {k: v for k, v in ch.d["oracle"].items() if k != missing}
+        asked = []
+
+        def oracle_at(asset, block):
+            asked.append(block)
+            return prices.get(r.oracle_key(asset, block))
+
+        oracle = {}
+        with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
+            r.read_trigger_oracle(both, oracle)
+        self.assertEqual(asked.count(50_052), 1, "the second stop does not ask the node again")
+        self.assertEqual(asked, [50_055, 50_054, 50_053, 50_052])
+        self.assertNotIn(missing, oracle)
+        self.assertEqual(r.trigger_lates(both[addr(0x211)], oracle), {"lates": [], "atLeast": 0, "unread": 1})
+
+
 class Unread(unittest.TestCase):
     def test_an_account_not_read_is_said(self):
         ch, _, s1 = honest_world()
@@ -1368,8 +1533,12 @@ class ReadingTheChain(unittest.TestCase):
                     "approver()": (addr(0xAB),), "PAYOUT_HARD()": (8 * 86_400,), "PAYOUT_DELAY()": (72 * 3_600,)}[sig]
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
-                mock.patch.object(r.c, "call_view", side_effect=call_view):
+                mock.patch.object(r.c, "call_view", side_effect=call_view), \
+                mock.patch.object(r, "read_trigger_oracle", wraps=r.read_trigger_oracle) as back:
             got = r.read_chain({"SimPoolFactory": factory, "usdc": USDC, "block": 10}, prices={"9:9": 1})
+        back.assert_called_once()
+        self.assertIs(back.call_args.args[1], got["oracle"], "the stops' prices go where the review reads them")
+        self.assertEqual(list(back.call_args.args[0]), [e1, s1], "every account of the factory, not only the payouts'")
         self.assertEqual((got["now"], got["latest"], got["pools"]), (1_000, 40, [POOL]))
         self.assertEqual(got["sales"], [{"pool": POOL, "exam": e1, "trader": t1, "partner": partner, "line": 2,
                                          "size": SIZE, "price": 1_000, "fee": 0, "code": "0x" + code.hex(), "block": 11, "tx": tx(1)}])
