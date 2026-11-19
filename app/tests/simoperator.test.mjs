@@ -191,6 +191,15 @@ test("the factory's operator is drawn the stops with their lift, and nothing of 
   assert.doesNotMatch(html, /id="queue"|id="stop-form"|data-stop-for|id="requests"|data-approve|data-cancel|Payouts in queue/);
 });
 
+test("a wallet that is only the factory's operator is told of payouts not read, in the stops; the checker once, in the queue", () => {
+  const holes = reads().payouts.map((p, i) => (i === 2 ? null : p));
+  const op = page(["operator"], { payouts: holes });
+  assert.match(op, /id="stops"[\s\S]*id="so-unread-payouts"/);
+  assert.match(op, /1 payout could not be read \(#0002\); a stop among them is not shown/);
+  assert.equal(page(["checker"], { payouts: holes }).match(/id="so-unread-payouts"/g).length, 1, "in the queue, not twice");
+  assert.doesNotMatch(page(["operator"]), /so-unread-payouts/, "every payout read: nothing to say");
+});
+
 test("the closer is drawn the request and its cancel, nothing of the queue or the stops", () => {
   const html = page(["closer"]);
   assert.match(html, /id="requests"/);

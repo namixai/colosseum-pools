@@ -484,7 +484,9 @@ export function stopsHtml(model) {
   const scan = (model.stopScan
     ? `<p class="so-why" id="so-stop-scan">${esc(model.stopScan.note)}${model.stopScan.done ? "" : ` <button type="button" class="so-btn" id="so-stops-more">Read earlier stops</button>`}</p>`
     : "");
-  return `<section class="sp-box so-box" id="stops"><div class="sp-bh"><b>Stops</b><span>lift within 14 days · then anyone makes it final</span></div>${head}${body}${scan}`
+  // A wallet without the queue (the factory's operator alone) is told here of the payouts the node gave no answer for.
+  const unread = may.seeQueue ? "" : unreadHtml(model);
+  return `<section class="sp-box so-box" id="stops"><div class="sp-bh"><b>Stops</b><span>lift within 14 days · then anyone makes it final</span></div>${unread}${head}${body}${scan}`
     + `<div class="so-do" id="so-do-stops" role="status"></div></section>`;
 }
 

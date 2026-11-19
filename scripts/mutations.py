@@ -2060,6 +2060,10 @@ MUTATIONS = [
      '    + (may.stop || may.seeStops || may.seeRequests ? `<div class="so-two',
      '    + (may.stop || may.seeRequests ? `<div class="so-two',
      ["the factory's operator is drawn the stops with their lift, and nothing of the queue, the stop form or the requests"]),
+    ("J219", "app/lib/simoperator.js",
+     '  const unread = may.seeQueue ? "" : unreadHtml(model);',
+     '  const unread = "";',
+     ["a wallet that is only the factory's operator is told of payouts not read, in the stops; the checker once, in the queue"]),
     # A resting HIP-3 order is taken off for the whole weekend, not the Friday hour alone: the perp trades
     # until Sunday, so a cancel that did not land by 17:00 is sent again (10 Nov 2026).
     ("G274", "gateway/assets.py",
