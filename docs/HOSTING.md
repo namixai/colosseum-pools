@@ -771,6 +771,24 @@ A simulated pool (docs/SIM-POOL.md) trades nothing on an exchange: its record na
 the day's snapshots, `breach`, `expire`, `release`, `claimPayout` and `pay`. Its node is the record's
 (`keeper_nodes`), and `deployment-<name>.env` has no gateway line.
 
+The stops and takes of the exams are tried in the keeper's one loop, as before, unless `keeper-<name>.env` sets
+`COLOSSEUM_STOPS=loop`. Then they are carried out by a loop in a thread of the same process (`ops/stop_filler.py`,
+docs/SIM-POOL.md, "The stops"), on the same filler key, and every transaction of that key goes out through it. It
+writes two files beside the keeper's state, in `/var/lib/colosseum-keeper`, the one directory the unit may write:
+`prices-<label>.json`, the oracle prices it read (the file `ops/payout_review.py --prices` takes; it grows and is not
+cut), and `stops-<label>.alarm`, one entry for each stop reached and not carried out and for a stops' loop that is
+dead, stalled or blind, which stays until a person removes it. An alarm also goes to the journal as an `ALARM` line
+and, when `COLOSSEUM_ALERT_CMD` is set, to that command, as the watchdogs' do. Its other settings, also in
+`keeper-<name>.env` and each the old behaviour when not set: `COLOSSEUM_STOP_RPC_URL`, a node for the stops and the
+key's transactions (the keeper's node when empty; on mainnet not the gateway's); `COLOSSEUM_STOP_TIP_GWEI`, the
+stops' priority fee (zero when empty). On the keeper's node the loop adds, as a base, a look at the head every half
+second, one `eth_getLogs` a block (one for each 50 blocks it reads back) and one `eth_call` a block for each asset with
+a stop standing. On top of that, as they come: a second `eth_getLogs` for a block with a sale, a position read for each
+stop set or fill, a receipt read a block for each stop in flight, a gas price read every ten blocks, the keeper's own
+transactions, and four reads before each alarm (whether the exam was over). A node of its own takes that load and
+the rate limit off the keeper's and the gateway's address. Without `COLOSSEUM_STOPS=loop` none of this
+runs, in a dry run neither.
+
 It sends with the factory's **filler**, the one key whose fills the exams take; any other key would only log.
 The **checker**, the one key that may stop a payout, is kept beside it for `colosseum-sim-checker@<name>` ("A simulated
 pool's checker", below). They are two

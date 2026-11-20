@@ -322,6 +322,10 @@ text, and a stop that became final is `StopFinal`.
   for anyone to read.
 - **A pass comes faster than prices.** Payouts then wait in order. A trading group that trades one
   signal passes together; its creator can lock more with `addToPot`.
+- **A stop is carried out only in a block where the oracle stands at it, and only by the filler inside its
+  window.** A reach no transaction of the filler's lands in leaves no trace on chain. The keeper looks at every
+  block with nothing in the way and says each miss at once ("The stops"), but a reach of a block or two can
+  still go by, and so can every stop while the filler's one key or machine is down.
 - **No depth, no funding, no resting orders**: those of the paper exam (`docs/PAPER-EXAM.md`).
 
 ## Tests
@@ -375,11 +379,11 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   `eth_getLogs` an hour, the live accounts' `Placed` and the pools' new exams and stages with their
   orders, so an order placed seconds after its purchase is seen. It sends each order's `fill` from the
   filler's key for the block its window opens; a fill the exam refuses (the book past the ceiling, say)
-  is sent again for the next block, once a block, while the window lasts. The same loop keeps every
-  running exam's stops and takes from their events (`TriggerSet`, `TriggerCleared`, `TriggerFilled`): each
-  armed one is tried once a block by a call that changes nothing, and carried out (`fillTrigger`, the same
-  fixed gas as a fill) in the block after the oracle has reached it. A fill waits for its receipt,
-  so two orders in one block go one after the other. A slow pass
+  is sent again for the next block, once a block, while the window lasts. A fill waits for its receipt,
+  so two orders in one block go one after the other. The same loop keeps every running exam's stops and
+  takes from their events and tries each armed one once a block by a call that changes nothing, sending
+  `fillTrigger` when the exam would take it; with `--stops loop` they are a loop's of their own instead,
+  in a thread beside this one ("The stops", below). A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
   `expire`, `release`, `claimPayout`, `pay`. It reads the pool's `payRoom()` and sends `pay` only for
   as many payouts as the daily limit has room for: none while the day's two are settled (it logs
@@ -719,6 +723,75 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/3`, one file per payout.
   The page shows a review only where it is of this very payout and names the call the page itself would build
   (`reviewFor`). It never signs what a review hands it.
+
+## The stops
+
+A stop exists for the chain only in a block whose transaction carries it out: `fillTrigger` takes it while the
+oracle price of that very block is at the stop or past it, and inside its window only from the factory's filler.
+A reach that no transaction of the filler's lands in leaves no trace on chain. The keeper's one loop has blind
+spots there: its slow pass, a receipt it waits for, and a node's rate limit (up to 63 seconds) each hold the stops.
+With `--stops loop` (COLOSSEUM_STOPS=loop; the default is `inline`, the keeper as it was, with none of what follows)
+the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a thread beside its own loops:
+
+- every block: one `eth_getLogs` of the blocks since its last look (stops and takes set, cleared and filled, the
+  fills that move a position, exams sold and ended), one read of the oracle price for each asset with a stop or a
+  take standing, and the comparison made by the loop itself, not one `eth_call` a stop;
+- a stop reached at the head is signed and sent at once, with the fills' fixed gas, no read before it and no wait
+  for its receipt; the receipt is read in the next blocks. A stop the exam refused once is tried with a call first
+  the next time (a book past the ceiling, say);
+- the filler's one key sends from both threads, and a nonce one thread took and had not yet handed to the node
+  would hold every later transaction of the other. So every transaction of the key is numbered and handed to the
+  node by this thread alone, one call each, never behind a retry ladder: the keeper's thread queues its fills and
+  slow calls, they go out between two looks at the head, and the keeper waits for their receipts in its own
+  thread. A nonce is spent only once the node took the transaction; one whose answer was lost on the way is sent
+  again with the same bytes after 10 seconds without a receipt, never with other bytes under that nonce. The count
+  is read from the node at the start and again only if the node says a nonce is taken by something else, and the
+  next nonce never goes below one handed out. A stop still waits behind any earlier transaction of the key that is
+  in the node and not yet in a block;
+- the slow pass, a receipt the keeper's own thread waits for, and that thread's retry ladder hold only that
+  thread. Every call of the loop is tried once: a busy node costs it that look. The blocks it missed are read back
+  the next time, their events always (1 000 blocks at most) and their prices for the last 20; the head's stops go
+  out before the blocks behind it are read. Blocks with no prices are said (`stop_watch_blind`); past 1 000 the
+  loop says it lost the thread (an alarm), forgets its reaches and takes the stops again from the next read of
+  the exams;
+- a stop set while the keeper was down or behind its logs is read back from the exam by the slow pass at one
+  block and handed to the loop (`stop_found_by_read`); a stop set on an exam sold in the same blocks is known in
+  the step that sees the sale;
+- the keeper's loop checks that the thread is there and moving: one that ended is an alarm and is started again,
+  one that has not heard the node for 30 seconds is an alarm, and so are calls failing for 30 seconds and 30 blocks
+  without prices while a stop stands. A line `stop_loop_alive` every ten minutes says it works.
+
+Two settings, each the keeper's old behaviour by default: `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the node the
+loop reads through and the key's transactions go to, the keeper's own when empty; and `--stop-tip-gwei`
+(COLOSSEUM_STOP_TIP_GWEI), the priority fee of a stop's transaction, zero when empty. On mainnet the stops' node
+must not be the gateway's, as the keeper's must not.
+
+The watch runs on the same prices. For each stop or take standing, armed, with a position open, a stretch of
+blocks in which the oracle stood at it or past it is a reach. A reach that ends with no `TriggerFilled` in it,
+the price back, the stop taken off or moved by the trader, the position closed or the exam over, is an alarm,
+`stop_missed`; a reach still unfilled after `--stop-overdue` blocks (5) is one too, `stop_overdue`. Two are lines,
+not alarms: a reach of a single block that the price ended (`stop_reach_too_short`: a transaction sent on seeing
+it lands after it; `--stop-alarm-min-blocks 1` makes it an alarm too), and a reach after the exam's deadline or
+idle limit (`stop_reach_after_exam_over`: `fillTrigger` refuses it, `TooLate`, and the keeper's `expire` is what
+is due). An alarm is written as the host's watchdogs write theirs: an `ALARM` line in the journal, the line added
+to the flag file `stops-<deployment>.alarm` next to the keeper's state, and the line handed to
+`COLOSSEUM_ALERT_CMD` when the host has a channel. A miss does not mend itself: the flag stays until a person
+removes it. Blocks whose prices were not read judge nothing, and are said.
+
+Every price the loop read goes to `prices-<deployment>.json` next to the state: one JSON object
+`{"asset:block": px}`, valid between any two writes and written by one process, the file
+`ops/payout_review.py --prices` takes. It grows with every block a stop stands and is not cut. It is the keeper's
+own record, not an independent one: check a sample of it against the node. The watch also runs alone, with no
+key and sending nothing, on another machine and node (`python -m ops.stop_filler --deployment <label>`), with
+files of its own (`watch-prices-…`, `watch-stops-…`): it sees what the keeper missed even while the keeper is
+down.
+
+What the loop does not do: carry out a stop whose reach is shorter than the way from a block seen to a
+transaction landed, about one or two blocks (the oracle moves about every three); carry out a stop the exam
+refuses (its book more than `maxWorseBps` from the oracle); stop the trader taking a reached stop off; replace
+a transaction the gas price left behind; free a stop from an earlier transaction of the same key; or go on while
+the filler's one key or its one machine is down. Each needs the contract (a key of the stops' own, or anyone
+allowed to carry a stop out), a second filler, or both.
 
 ## Measuring the filler's window
 

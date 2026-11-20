@@ -100,6 +100,7 @@ import os
 import pathlib
 import re
 import sys
+import threading
 import time
 from decimal import Decimal
 
@@ -187,8 +188,16 @@ def gas_balance(wallet) -> int | None:
         return None
 
 
+_LOG_LOCK = threading.Lock()
+
+
 def log(event: str, **fields) -> None:
-    print(json.dumps({"t": int(time.time()), "event": event, **fields}, default=str), flush=True)
+    # One write a line, under a lock: the simulated pools' keeper logs from two threads (ops/stop_filler.py), and
+    # sys.stdout is not safe to write from two at once (print's two writes, the text and its end, the less so).
+    line = json.dumps({"t": int(time.time()), "event": event, **fields}, default=str) + "\n"
+    with _LOG_LOCK:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 def view(addr: str, sig: str, out: str, types=(), args=()):
