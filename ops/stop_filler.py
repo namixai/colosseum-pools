@@ -515,7 +515,7 @@ class StopLoop:
         Each is copied whole first (`list` and `set` of a dict or a set copy it in one step)."""
         done = set(self.keeper.done)
         accounts = [a for a in list(self.keeper.accounts) if a not in done]
-        accounts = [a for a in dict.fromkeys(accounts + sorted(self.extra)) if a not in self.ended]
+        accounts = [a for a in dict.fromkeys(accounts + sorted(self.extra)) if a not in self.ended and a not in done]
         return accounts, list(self.keeper.pools)
 
     def reread(self, exam: str, call=None) -> None:
@@ -595,7 +595,6 @@ class StopLoop:
                 break
         if head <= self.block:
             return []
-        self._read_signs_again()
         lo = head if not self.block else self.block + 1
         if head - lo + 1 > self.catchup:
             self.alarm("stop_watch_lost", from_block=lo, to=head - self.catchup,
@@ -624,6 +623,8 @@ class StopLoop:
             sent = self._act(head, cache[head])
         by_block = self._logs(accounts, pools, lo, head)
         for b in range(lo, head + 1):
+            if self.unread_signs:  # read again at the block before, inside the step too: no block judged without them
+                self._read_signs_again(b - 1)
             due: list = []
             if b >= price_lo:
                 prices = cache.get(b)
@@ -806,6 +807,8 @@ class StopLoop:
             if topic in (STOPPED, PASSED):
                 self._ended(exam, block, "the exam ended")
                 continue
+            if exam in self.ended:
+                continue  # an exam that ended keeps no stop, whatever its later logs say
             asset = int(l["topics"][1], 16)
             if topic == sk.FILLED:
                 moved.add((exam, asset))
@@ -859,13 +862,13 @@ class StopLoop:
                     self._missed((exam, asset, take), t, block, "the position was closed")
         self.signs[(exam, asset)] = s
 
-    def _read_signs_again(self) -> None:
-        """The positions a read failed for, read again at the last block whose events are in."""
+    def _read_signs_again(self, block: int) -> None:
+        """The positions a read failed for, read again at `block`, the last one whose events are in."""
         for exam, asset in sorted(self.unread_signs):
             if not any(k[0] == exam and k[1] == asset for k in self.triggers):
                 self.unread_signs.discard((exam, asset))
-            elif self.block:
-                self._read_sign(exam, asset, self.block)
+            elif block > 0:
+                self._read_sign(exam, asset, block)
 
     def _drop(self, key) -> None:
         self.triggers.pop(key, None)

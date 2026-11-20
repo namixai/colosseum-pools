@@ -1012,6 +1012,42 @@ class TheBotsReview(Base):
             self.run_to(loop, 101)
         self.assertEqual(loop.signs[(EXAM, BTC)], 1, "read again at the next step")
 
+    def test_a_failed_position_read_is_read_again_inside_one_step(self):
+        """The read fails after TriggerSet; the reach and its end come in the same step: still judged."""
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 99)
+        real = self.node.call
+        fails = {"n": 1}
+
+        def call(method, params=()):
+            if method == "eth_call" and params[0]["data"].startswith(SEL["positionOf(uint32)"]) and fails["n"]:
+                fails["n"] -= 1
+                raise RuntimeError("eth_call: HTTP 403")
+            return real(method, params)
+
+        self.node.logs.append(set_log(100, 950_000, 101))
+        self.node.price.update({101: 900_000, 103: 960_000})
+        with mock.patch.object(self.node, "call", side_effect=call):
+            self.run_to(loop, 103)
+        missed = self.events("stop_missed")
+        self.assertEqual((missed[0]["reached_from"], missed[0]["reached_to"]), (101, 102))
+        reads = [int(p[1], 16) for m, p in self.node.calls if m == "eth_call" and p[0]["data"].startswith(SEL["positionOf(uint32)"])]
+        self.assertEqual(reads, [100], "the retry pinned to block 100, the one before 101")
+
+    def test_a_done_exam_sold_meanwhile_gets_no_stop_back_from_its_logs(self):
+        new = to_checksum_address("0x" + "68" * 20)
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 99)
+        loop.extra.add(new)  # sold since the keeper's last look, and done in its thread since
+        self.keeper.done.add(new)
+        self.node.positions[(new, BTC)] = 4
+        self.node.logs.append(set_log(100, 950_000, 101, exam=new))
+        self.run_to(loop, 100)
+        self.assertEqual(loop.triggers, {})
+        loop.ended.add(EXAM)  # and an exam that ended: a TriggerSet among its logs brings nothing back
+        loop._events(101, [set_log(101, 950_000, 102)])
+        self.assertEqual(loop.triggers, {})
+
     def test_an_exam_the_keeper_holds_done_is_dropped_and_its_open_reach_said(self):
         loop = self.loop(wallet=None)
         self.armed_stop(loop)

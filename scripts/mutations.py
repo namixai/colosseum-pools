@@ -16791,6 +16791,18 @@ MUTATIONS = [
      '    with _LOG_LOCK:\n        sys.stdout.write(line)\n        sys.stdout.flush()',
      '    sys.stdout.write(line)\n    sys.stdout.flush()',
      ['test_a_line_is_written_under_the_lock']),
+    ('SF53', 'ops/stop_filler.py',
+     'if a not in self.ended and a not in done]',
+     'if a not in self.ended]',
+     ['test_a_done_exam_sold_meanwhile_gets_no_stop_back_from_its_logs']),
+    ('SF54', 'ops/stop_filler.py',
+     '            if exam in self.ended:\n                continue  # an exam that ended keeps no stop',
+     '            if False:\n                continue  # an exam that ended keeps no stop',
+     ['test_a_done_exam_sold_meanwhile_gets_no_stop_back_from_its_logs']),
+    ('SF55', 'ops/stop_filler.py',
+     '            if self.unread_signs:  # read again at the block before',
+     '            if False:  # read again at the block before',
+     ['test_a_failed_position_read_is_read_again_inside_one_step', 'test_a_position_read_that_failed_is_read_again_with_no_event']),
 ]
 
 RUNNERS = {
