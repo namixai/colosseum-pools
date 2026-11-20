@@ -1,0 +1,62 @@
+{
+  "PaperExamImpl": "0x6b6379B017237Bd1340C126944E7ba562986f607",
+  "SimPoolCodes": "0x75948024F59dD5809EeFa67b6405Ca1b1F6B23cD",
+  "SimPoolFactory": "0x67EB56Fbbb86CCc74126372f6690DD2a24dF944B",
+  "SimPoolImpl": "0xB768B3D3ba4406FAbcc66Ffa41209736137f7768",
+  "SimPoolSetup": "0xe5C87754FE6508E2108E300FeBaa585ca56F055C",
+  "SimPoolStops": "0x4756cCf077DC33a9589df3b2149ED3C0BC6546FA",
+  "TermsBook": "0x5ce1C759b3Dca18a23209f4cde3170009271792C",
+  "asset_caps_x100": {
+    "BTC": 1000,
+    "ETH": 1000,
+    "SOL": 500
+  },
+  "block": 70121384,
+  "chain_id": 998,
+  "checker": "0x99313795AB77feDa303FA390184fD10C821948c4",
+  "closer": "0xBC202296Aaed24a79Da78ED91bb99a5e20FbcDBa",
+  "commit": "884280120e759bd8f13d12e539e7fe0515c144d4",
+  "creation_fee_at_deploy_hype": "0.1",
+  "creation_fee_at_deploy_wei": "100000000000000000",
+  "deployer": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
+  "fee_recipient": "0xEFAB247351E964f7288668EdA328a9732eD4a7b7",
+  "filler": "0xb443776fCc2E02b7aD2bBfa0Eb29D03647A67128",
+  "keeper_nodes": {
+    "backup": {
+      "log_window": 100,
+      "url": "https://hyperliquid-testnet.drpc.org"
+    },
+    "primary": {
+      "log_window": 50,
+      "url": "https://rpc.hyperliquid-testnet.xyz/evm"
+    }
+  },
+  "label": "rehearsal998",
+  "network": "testnet",
+  "operator": "0x51f4909c66f3d118EdEa47F2aEF952C4D2296732",
+  "platform_assets": {
+    "BTC": 3,
+    "ETH": 4,
+    "SOL": 0
+  },
+  "status": "complete",
+  "tx": {
+    "PaperExamImpl": "0x144a1fba674dfcca3069bbbc3921c31231b63426217b858c0ce50e54493c37e2",
+    "SimPoolCodes": "0x519519bccdc8534e9dd196b064397577b73bbe54054d895b86fa077c12cf835b",
+    "SimPoolFactory": "0x3e55ddbe96f9e6c914dc74555c64132eeb084df74217c9b58d3eedd1fb35b87e",
+    "SimPoolImpl": "0x1cdd282b2fa31a29f18dc9e55a69b2d0dd43c3a77feee74d1cef36a2537ead61",
+    "SimPoolSetup": "0x9cb33b75c598662039e55081c7ac0fa27e36a6bc5536c590df77c448cc05dc73",
+    "SimPoolStops": "0x0ec7517d33a757173127f7bbc744456c5579cee6ff0de9f8e9416d292908cbe4",
+    "TermsBook": "0xe09962212e34898c3445151e222105322ed57d43e2cc6e35c1446da5a30cbcfb",
+    "setAsset_BTC": "0xf9cef0f5782d83db030a023a1b4977f0636e731bcdc8a2eb32d799c7b87ddbae",
+    "setAsset_ETH": "0x506f9de92300a62d78b3a29a9765039056f772c876fd085589ca7a01fe23d748",
+    "setAsset_SOL": "0xf082c8caa4b41288a81641c463fc2edb62cd7ebdfc71c41301fae0472db95e8f",
+    "setChecker": "0xe0aa52fa9a99acfecbc4746128a55984d9f157675d0f5748e8df84d4947d2e7a",
+    "setCloser": "0xb4fead0ac81e3fb3c0ddb46697fe83020a3e94609843498f94c6aee952e5e725",
+    "setFeeRecipient": "0x1d1a9168634c314c87ba5899dbc22b51969bb40b682fe36fe32ce9bfbba176d5",
+    "setFiller": "0xe70dc361ff6d433d550cdb08cc6d30afb9930be6179848f4bde631e9941ba47d",
+    "setOperator": "0xb0b02fb14de9b0579186baf65e3ee7287eaa36ce233343dcdeeefe99cd1b446e",
+    "setTermsBook": "0x58461af9bc4bc2d352a0ae43bd86de7d15b2bcd9d71682c0b7ab0fc8c928943d"
+  },
+  "usdc": "0x2B3370eE501B4a559b57D449569354196457D8Ab"
+}
