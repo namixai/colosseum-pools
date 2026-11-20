@@ -1349,22 +1349,74 @@ class MissedTouches(unittest.TestCase):
         s1, s2 = addr(0x301), addr(0x302)
         events = {s1: self.events(), s2: [{**x, "tx": tx(int(x["tx"], 16) + 7)} for x in self.events()], addr(0x303): self.events()}
         oracle = {r.oracle_key(3, 1_003): self.MARK}  # what was read already, or a --prices file gave, stands
+        before = dict(oracle)
         with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
-            every = r.read_touch_oracle([s1, s2], events, oracle, 2_000)
+            every, touch = r.read_touch_oracle([s1, s2], events, oracle, 2_000)
         self.assertEqual(every, {s1: 60, s2: 60})
         self.assertEqual(asked, [1_063, 1_123, 1_183, 1_243, 1_303, 1_305],
                          "from `armedAt` one in sixty and the last block, each asked once; the price not given is not asked again")
-        self.assertNotIn(missing, oracle)
-        got = r.missed_touches(events[s1], r.oracle_by_asset(oracle), 2_000, every[s1])
+        self.assertEqual(oracle, before, "the review's other prices are not changed")
+        self.assertEqual(sorted(touch), [r.oracle_key(3, b) for b in (1_123, 1_183, 1_243, 1_303, 1_305)])
+        got = r.missed_touches(events[s1], r.oracle_by_asset({**oracle, **touch}), 2_000, every[s1])
         self.assertEqual(([(m["first"], m["reads"]) for m in got["missed"]], got["unread"]), ([(1_123, 1)], 1))
-        # More blocks than the reads allow at sixty: the step grows to fit them.
+        # A price the review's reads before did not get is not asked again either.
         asked.clear()
         with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
-            self.assertEqual(r.read_touch_oracle([s1], events, {}, 2_000, reads=2), {s1: 152})
-        self.assertEqual(asked, [1_003, 1_155, 1_305])
+            r.read_touch_oracle([s1], events, {}, 2_000, unread={r.oracle_key(3, 1_003), missing})
+        self.assertEqual(asked, [1_123, 1_183, 1_243, 1_303, 1_305])
+        asked.clear()
+        with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
+            r.read_trigger_oracle({s1: events[s1]}, {}, {r.oracle_key(3, 1_305)})
+        self.assertEqual(asked, [], "nor by the read back from a close")
+        # More blocks than the reads allow at sixty: the step grows to fit them, each span's last block counted.
+        asked.clear()
+        with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
+            self.assertEqual(r.read_touch_oracle([s1], events, {}, 2_000, reads=2)[0], {s1: 302})
+        self.assertEqual(asked, [1_003, 1_305])
+        self.assertEqual(r.touch_every([{"armedAt": 0, "end": 600}], 5), 150)
+        self.assertEqual(r.touch_points({"armedAt": 0, "end": 600}, 150), [0, 150, 300, 450, 600])
         self.assertEqual(r.touch_every([], 1), 60)
         self.assertEqual((r.TOUCH_EVERY, r.TOUCH_READS), (60, 3000))
         self.assertIn("uint16 public constant FALLBACK_BLOCKS = 60;", _source("src/exam/PaperExam.sol"))
+
+    def test_the_reads_stay_within_their_number_however_many_stops_were_set(self):
+        """Review of #330: each span's first and last block count in the reads, and past the reads nothing is asked."""
+        def spans(n, length):
+            return [{"armedAt": 1_000 * k, "end": 1_000 * k + length} for k in range(n)]
+        for n, length, reads in ((10, 60, 25), (10, 600, 25), (100, 60, 50), (3, 0, 2), (1, 2_592_000, 3_000)):
+            every = r.touch_every(spans(n, length), reads)
+            got = r.touch_count(spans(n, length), every)
+            self.assertEqual(got, sum(len(r.touch_points(x, every)) for x in spans(n, length)), (n, length))
+            if 2 * n <= reads or (length == 0 and n <= reads):
+                self.assertLessEqual(got, reads, (n, length, reads))
+                self.assertTrue(every == r.TOUCH_EVERY or r.touch_count(spans(n, length), every - 1) > reads,
+                                "the smallest step that fits")
+        self.assertEqual(r.touch_every(spans(100, 60), 50), 61, "the first and last blocks alone are more: one step past the longest")
+        # A trader who set a hundred stops gets the reads and no more; the rest is said as not read.
+        evs = [self.e("Started", 999, capital=100 * 10**6),
+               self.e("Filled", 1_000, asset=3, buy=True, sz=100, px=self.MARK, cost=0, late=1, source=0)]
+        for k in range(100):
+            evs.append({**self.e("TriggerSet", 2_000 + 100 * k, asset=3, take=False, px=self.STOP, sz=0, armedAt=2_002 + 100 * k),
+                        "tx": tx(7_000 + 2 * k)})
+            evs.append({**self.e("TriggerCleared", 2_062 + 100 * k, asset=3, take=False), "tx": tx(7_001 + 2 * k)})
+        asked = []
+        with mock.patch.object(r, "oracle_at", side_effect=lambda a, b: asked.append(b) or self.MARK):
+            every, touch = r.read_touch_oracle([addr(0x301)], {addr(0x301): evs}, {}, 30_000, reads=50)
+        self.assertEqual((len(asked), every), (50, {addr(0x301): 61}))
+        got = r.missed_touches(evs, r.oracle_by_asset(touch), 30_000, every[addr(0x301)])
+        self.assertEqual((got["spans"], got["unread"], got["missed"]), (100, 150, []))
+        self.assertIn("150 blocks not read", "\n".join(r.missed_lines("stage", got)))
+
+    def test_its_prices_reach_no_other_check(self):
+        """Review of #330: the prices read along the stops are kept apart; the lateness of stops (and every other check)
+        reads only what it read before."""
+        ch, s1 = self.world({*range(1_100, 1_131), *range(1_300, 1_306)})
+        ch.d["touchOracle"] = {k: v for k, v in ch.d["oracle"].items() if int(k.split(":")[1]) >= 1_003}
+        ch.d["oracle"] = {k: v for k, v in ch.d["oracle"].items() if int(k.split(":")[1]) < 1_003}
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual([(m["first"], m["last"]) for m in got["missedTouch"]["stage"]["missed"]], [(1_100, 1_130)])
+        self.assertEqual((got["triggerLate"]["trader"]["n"], got["triggerLate"]["trader"]["unread"]), (0, 1))
+        self.assertEqual(got["recount"]["stage"]["checked"]["fills"], 1, "the close's price is not the recount's")
 
 
 class Unread(unittest.TestCase):
@@ -1671,6 +1723,8 @@ class ReadingTheChain(unittest.TestCase):
                 block = int(params[1], 16)
                 asked.append((int(params[0]["data"], 16), block))
                 self.assertEqual(params[0]["to"], r.ORACLE_PX)
+                if block == 22:
+                    raise RuntimeError("missing trie node")
                 return "0x" + encode(["uint64"], [7 if block <= 26 else 8]).hex()
             q = params[0]
             if q["address"] == USDC:
@@ -1703,8 +1757,11 @@ class ReadingTheChain(unittest.TestCase):
         along.assert_called_once()
         self.assertEqual(along.call_args.args[0], [s1, e1], "along the stops of the waiting payout's own accounts only")
         self.assertIs(along.call_args.args[2], got["oracle"])
-        self.assertEqual(along.call_args.args[3:], (40, 500))
-        self.assertEqual(got["touchEvery"], {s1: 60, e1: 60})
+        self.assertEqual(along.call_args.args[3:5], (40, 500))
+        self.assertIs(along.call_args.args[5], back.call_args.args[2], "one set of prices not given for all the reads")
+        self.assertIn("3:22", along.call_args.args[5], "a fill's neighbour the node did not give")
+        self.assertEqual([b for _, b in asked].count(22), 1)
+        self.assertEqual((got["touchEvery"], got["touchOracle"]), ({s1: 60, e1: 60}, {}))
         self.assertIs(back.call_args.args[1], got["oracle"], "the stops' prices go where the review reads them")
         self.assertEqual(list(back.call_args.args[0]), [e1, s1], "every account of the factory, not only the payouts'")
         self.assertEqual((got["now"], got["latest"], got["pools"]), (1_000, 40, [POOL]))

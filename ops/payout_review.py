@@ -651,11 +651,33 @@ def trigger_spans(evs: list[dict], latest: int) -> list[dict]:
     return sorted(spans, key=lambda s: (s["set"], s["asset"], s["take"]))
 
 
+def touch_count(spans: list[dict], every: int) -> int:
+    """How many blocks `touch_points` gives along `spans` at the step `every`: each span's first and last block count
+    whatever the step (review of #330)."""
+    n = 0
+    for s in spans:
+        length = s["end"] - s["armedAt"]
+        if length >= 0:
+            n += -(-length // every) + 1 if length else 1
+    return n
+
+
 def touch_every(spans: list[dict], reads: int) -> int:
-    """One block in how many the oracle is read along `spans`: TOUCH_EVERY, or more where their blocks need more than
-    `reads` reads at that step."""
-    total = sum(max(0, s["end"] - s["armedAt"] + 1) for s in spans)
-    return max(TOUCH_EVERY, math.ceil(total / max(1, reads)))
+    """One block in how many the oracle is read along `spans`: TOUCH_EVERY, or the smallest step past it whose blocks,
+    each span's first and last among them, are `reads` at most. Where even those first and last blocks are more, the
+    longest span's length and one: each span is then its first and last block, and `read_touch_oracle` stops asking
+    at `reads` (the rest is said as not read)."""
+    lo = TOUCH_EVERY
+    hi = max([lo] + [s["end"] - s["armedAt"] + 1 for s in spans])
+    if touch_count(spans, hi) > reads:
+        return hi
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if touch_count(spans, mid) <= reads:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
 
 
 def touch_points(span: dict, every: int) -> list[int]:
@@ -689,7 +711,7 @@ def missed_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: i
     its last stretch with no read block off the price after it is the close's own, the one its lateness is counted in
     (`trigger_reached`); each other stretch is missed. Said for each: the trigger, the first and the last read block of
     the stretch, how many reads stood at the price in it, whether it was seen on chain, and how the trigger's time ended.
-    `unread` counts the blocks of `touch_points` the node did not give; `every` None: not read (an account the review
+    `unread` counts the blocks of `touch_points` not read (the node did not give them, or the reads ran out); `every` None: not read (an account the review
     does not read along)."""
     out = {"read": every is not None, "every": every, "spans": 0, "unread": 0, "missed": []}
     if every is None:
@@ -1444,7 +1466,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
                           "outlier": late_outlier(mine_t["lates"], others_t["lates"], p.min_fills)}
     # The stops and takes of the payout's own accounts that the oracle reached and nobody carried out then
     # (`missed_touches`): a fact shown to whoever signs, in no reason and changing no verdict.
-    by_asset, every_of = oracle_by_asset(oracle), chain.get("touchEvery") or {}
+    # Its prices are kept apart (`touchOracle`): read for this alone, they reach no other check (review of #330).
+    by_asset = oracle_by_asset({**oracle, **(chain.get("touchOracle") or {})})
+    every_of = chain.get("touchEvery") or {}
     out["missedTouch"] = {part: missed_touches((chain.get("exam_events") or {}).get(account) or [], by_asset,
                                                chain["latest"], every_of.get(account)) if account else None
                           for part, account in (("stage", stage), ("exam", exam))}
@@ -1640,7 +1664,7 @@ def missed_lines(part: str, m: dict | None) -> list[str]:
     if not m["read"]:
         return [f"  stops and takes the oracle reached and nobody carried out, {part}: not read"]
     lines = [f"  stops and takes the oracle reached and nobody carried out, {part}: {len(m['missed'])} stretches missed "
-             f"over {m['spans']} stops and takes that stood, read one block in {m['every']}" + (f", {m['unread']} blocks not given" if m["unread"] else "")]
+             f"over {m['spans']} stops and takes that stood, read one block in {m['every']}" + (f", {m['unread']} blocks not read" if m["unread"] else "")]
     for x in m["missed"]:
         lines.append(f"    the {'take' if x['take'] else 'stop'} at {x['px']} on asset {x['asset']} "
                      f"({'long' if x['side'] > 0 else 'short'}): the oracle at it or past it from block {x['first']}, "
@@ -1866,12 +1890,13 @@ def oracle_at(asset: int, block: int) -> int | None:
         return None
 
 
-def read_trigger_oracle(exam_events: dict[str, list[dict]], oracle: dict[str, int]) -> None:
+def read_trigger_oracle(exam_events: dict[str, list[dict]], oracle: dict[str, int], unread: set[str] | None = None) -> None:
     """The oracle back from each stop's and take's close in every account of the factory, for as long as it held the
     price and `TRIGGER_BACK` blocks at most, into `oracle` (what a --prices file gave stands): what the lateness of
     stops and takes (`trigger_lates`) is counted from. A price the node did not give is asked once: the stops of other
-    accounts in the same blocks do not ask again. It is remembered here, never put in `oracle` as a price."""
-    unread: set[str] = set()
+    accounts in the same blocks do not ask again. It is remembered in `unread` (shared with the other reads of the
+    review, review of #330), never put in `oracle` as a price."""
+    unread = set() if unread is None else unread
     for evs in exam_events.values():
         for t in trigger_closes(evs):
             def got(block: int, asset: int = t["asset"]) -> int | None:
@@ -1889,27 +1914,32 @@ def read_trigger_oracle(exam_events: dict[str, list[dict]], oracle: dict[str, in
 
 
 def read_touch_oracle(accounts: list[str], exam_events: dict[str, list[dict]], oracle: dict[str, int], latest: int,
-                      reads: int = TOUCH_READS) -> dict[str, int]:
-    """The oracle along the time each stop and take of `accounts` stood (`touch_points`), into `oracle` (what was read
-    already, or a --prices file gave, stands and is not asked again), for `missed_touches`: about `reads` blocks an
-    account at the most. A price the node did not give is asked once and never kept as a price. Returns each account's
-    step, one block in how many."""
+                      reads: int = TOUCH_READS, unread: set[str] | None = None) -> tuple[dict[str, int], dict[str, int]]:
+    """The oracle along the time each stop and take of `accounts` stood (`touch_points`), for `missed_touches`: what
+    `oracle` holds already (read, or a --prices file gave) is not asked again, and `oracle` is not changed. The prices
+    read here are kept apart, so that no other check of the review sees what it did not see before (review of #330).
+    At most `reads` requests an account, in the order the triggers were set: past them a block is left not read. A
+    price the node did not give, here or in the review's reads before (`unread`, shared), is asked once and never kept
+    as a price. Returns each account's step (one block in how many) and the prices read here."""
     every_of: dict[str, int] = {}
-    unread: set[str] = set()
+    touch: dict[str, int] = {}
+    unread = set() if unread is None else unread
     for a in accounts:
         spans = trigger_spans(exam_events.get(a) or [], latest)
         every_of[a] = every = touch_every(spans, reads)
+        asked = 0
         for s in spans:
             for b in touch_points(s, every):
                 key = oracle_key(s["asset"], b)
-                if key in oracle or key in unread:
+                if key in oracle or key in touch or key in unread or asked >= reads:
                     continue
+                asked += 1
                 got = oracle_at(s["asset"], b)
                 if got is None:
                     unread.add(key)
                 else:
-                    oracle[key] = got
-    return every_of
+                    touch[key] = got
+    return every_of, touch
 
 
 def _addr(topic: str) -> str:
@@ -2176,6 +2206,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     # The oracle around each fill of the payouts still waiting (its block, the ones on each side, its order's) and
     # at each day's snapshot, and each such account's cost.
     oracle: dict[str, int] = dict(prices or {})
+    unread_px: set[str] = set()  # prices the node did not give: each asked once in all of the reads below (review of #330)
     cost_ppm: dict[str, int] = {}
     fill_window: dict[str, int] = {}
     daily_bps: dict[str, int] = {}
@@ -2211,12 +2242,14 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                     wanted |= {(asset, e["block"]) for asset in assets}
             for asset, block in sorted(wanted):
                 key = oracle_key(asset, block)
-                if key not in oracle:
+                if key not in oracle and key not in unread_px:
                     got = oracle_at(asset, block)
                     if got is not None:
                         oracle[key] = got
-    read_trigger_oracle(exam_events, oracle)
-    touch_every_of = read_touch_oracle(touch_accounts, exam_events, oracle, latest, touch_reads)
+                    else:
+                        unread_px.add(key)
+    read_trigger_oracle(exam_events, oracle, unread_px)
+    touch_every_of, touch_oracle = read_touch_oracle(touch_accounts, exam_events, oracle, latest, touch_reads, unread_px)
     # The day's allowed loss of every exam that passed too: the pool's count of passes in the shape of a coin flip.
     for a in passed_accounts(exam_events):
         if a not in daily_bps:
@@ -2234,7 +2267,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             "fillWindow": fill_window, "dailyLossBps": daily_bps, "drawdownKind": drawdown_kind,
             "maxDrawdownBps": drawdown_bps, "times": payout_times(factory),
             "payCap": {pool: cap for pool, cap in pay_cap.items() if cap is not None}, "settled": settled,
-            "waitsLimit": waits_limit, "touchEvery": touch_every_of}
+            "waitsLimit": waits_limit, "touchEvery": touch_every_of,
+            "touchOracle": touch_oracle}
 
 
 def main(argv: list[str] | None = None) -> int:
