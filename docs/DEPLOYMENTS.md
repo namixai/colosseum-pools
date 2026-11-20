@@ -15,8 +15,8 @@ instead of keeping a copy.
 | `chainId` | that network's HyperEVM chain id; the record's `chain_id` matches it |
 | `role` | what the deployment is for today, one of the roles below |
 | `record` | `deployments/<network>-<label>.json`, written by the deploy |
-| `factory` | the record's `PoolFactory`; for a shared pool, the factory its seats come from |
-| `pool` | the record's `SharedPool`; `null` for a factory's deployment, which has many pools |
+| `factory` | the record's `PoolFactory`, or its `SimPoolFactory` for a simulation-pool deployment; for a shared pool, the factory its seats come from |
+| `pool` | the record's `SharedPool`; `null` for a factory's deployment, which has many pools. A simulation-pool deployment may name one pool its record does not carry (below) |
 | `gateway` | where the deployment's own gateway answers, as in `<gateway>/v1/health`; `null` if it has none |
 | `deployer` | the record's `deployer` |
 | `keeper` | the address the keeper tending it on the host sends from; `null` if nothing tends it |
@@ -38,6 +38,19 @@ this list go by the file name.
 - `archive`: the site reads it and sells nothing on it (`role: "archive"` in `app/config.js`).
 - `retired`: nothing serves it and the site doesn't name it. The record stays, since the evidence pages still point
   at what it made.
+
+## A simulation-pool deployment
+
+`ops/deploy_sim.py` writes a record that names `SimPoolFactory` (and `SimPoolImpl`, `TermsBook` and the rest) where a
+pool deployment names `PoolFactory`; its `label` and `status` are the same. It is listed like any other, with these
+differences, which `app/tests/deployments.test.mjs` holds:
+
+- `factory` is the record's `SimPoolFactory`.
+- `pool` is `null`, or the address of the one pool the team opened on that factory. The record is written by the deploy,
+  before any pool exists, so it cannot carry that pool, as `liveRunPool` in `app/config.js` is not in demo2's record.
+- `role` is `staged` or `retired`, never `live`, `testers`, `shared` or `archive`: the site, the weekly watch and the
+  keepers read `PoolFactory`, and a simulation-pool deployment is none of what they serve or show. Its keeper, the
+  simulation pool's, runs from the machine that opened the pool, not the host, so `keeper` and `gateway` are `null`.
 
 ## Adding or retiring a deployment
 

@@ -6582,6 +6582,15 @@ MUTATIONS = [
      "    chain_id=999,",
      "    chain_id=998,",
      ["a mainnet deployment goes through the same checks beside testnet's, and app/config.js answers for its own network only"]),
+    # A simulation-pool deployment (the rehearsal): listed by its SimPoolFactory, and only as staged or retired.
+    ("PC34", "deployments/LIVE.json",
+     "\"factory\": \"0x67EB56Fbbb86CCc74126372f6690DD2a24dF944B\"",
+     "\"factory\": \"0x67EB56Fbbb86CCc74126372f6690DD2a24dF944C\"",
+     ["deployments/LIVE.json lists every record in deployments/, and each entry says what its record says"]),
+    ("PC35", "deployments/LIVE.json",
+     "\"role\": \"staged\",",
+     "\"role\": \"archive\",",
+     ["deployments/LIVE.json lists every record in deployments/, and each entry says what its record says"]),
     # app/config.js written from network.py and LIVE.json (scripts/app_config.py): its own test file, and the packer's.
     ("NC1", "scripts/app_config.py",
      '    mine = [e for e in entries if e["network"] == network.name]',

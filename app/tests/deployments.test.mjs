@@ -325,8 +325,16 @@ function checkLive(live, records, recordOf) {
     assert.equal(r.status, "complete", `${e.label}: the record's status`);
     assert.equal(r.chain_id, e.chainId, `${e.label}: the record's chain_id`);
     if ("network" in r) assert.equal(r.network, e.network, `${e.label}: the record's network`);
-    assert.equal(e.factory, r.PoolFactory, `${e.label}: factory`);
-    assert.equal(e.pool, r.SharedPool ?? null, `${e.label}: pool`);
+    // A simulation-pool deployment (ops/deploy_sim.py) names its factory SimPoolFactory, and the pool the team opened on
+    // it afterwards is no part of the record, as the live run's pool is none of demo2's: the entry may name one.
+    // Everything that serves or shows a deployment reads PoolFactory (scripts/app_config.py, scripts/settled_accounts.py,
+    // the keepers), so it is listed staged or retired, never as one of those.
+    const sim = "SimPoolFactory" in r;
+    assert.equal(e.factory, r.PoolFactory ?? r.SimPoolFactory, `${e.label}: factory`);
+    if (sim) {
+      assert.ok(e.pool === null || /^0x[0-9a-fA-F]{40}$/.test(e.pool), `${e.label}: pool is an address or null`);
+      assert.ok(["staged", "retired"].includes(e.role), `${e.label}: a simulation-pool deployment is staged or retired`);
+    } else assert.equal(e.pool, r.SharedPool ?? null, `${e.label}: pool`);
     // A registry handed over at the deploy (--operator): from the deployer, to the address the owner gave, pending
     // until that address accepts the role on chain.
     if (r.registry_operator) {
@@ -403,6 +411,31 @@ test("a registry handed over at the deploy is the deployer's handover, to anothe
   assert.throws(() => checkLive(...list, handover({ from: given, to: MAINNET_RECORD.deployer, state: "pending" })), /deployer's/);
   assert.throws(() => checkLive(...list, handover({ from: MAINNET_RECORD.deployer, to: MAINNET_RECORD.deployer, state: "pending" })), /is none/);
   assert.throws(() => checkLive(...list, handover({ from: MAINNET_RECORD.deployer, to: given, state: "sent" })), /handover sent/);
+});
+
+test("a simulation-pool deployment is listed by its SimPoolFactory, with the pool opened on it, staged or retired", () => {
+  const SIM_RECORD = { label: "sim-example", network: "testnet", chain_id: 998, status: "complete",
+    SimPoolFactory: "0x00000000000000000000000000000000000000F5", deployer: "0x00000000000000000000000000000000000000D1" };
+  const SIM = { label: "sim-example", network: "testnet", chainId: 998, role: "staged", record: "deployments/testnet-sim-example.json",
+    factory: SIM_RECORD.SimPoolFactory, pool: "0x00000000000000000000000000000000000000B1", gateway: null,
+    deployer: SIM_RECORD.deployer, keeper: null };
+  const recordOf = (path) => (path === SIM.record ? SIM_RECORD : readRecord(path));
+  const testnet = LIVE.filter((e) => e.network === "testnet");
+  const plus = (entry) => [[...testnet.filter((e) => e.label !== SIM.label), entry],
+    [...testnet.filter((e) => e.label !== SIM.label).map((e) => e.record), entry.record]];
+  checkLive(...plus(SIM), recordOf);
+  checkLive(...plus({ ...SIM, pool: null }), recordOf);
+  checkLive(...plus({ ...SIM, role: "retired" }), recordOf);
+  checkSite(plus(SIM)[0]);
+  assert.throws(() => checkLive(...plus({ ...SIM, factory: "0x00000000000000000000000000000000000000F6" }), recordOf), /sim-example: factory/);
+  assert.throws(() => checkLive(...plus({ ...SIM, pool: "0xnot-an-address" }), recordOf), /sim-example: pool is an address or null/);
+  assert.throws(() => checkLive(...plus({ ...SIM, role: "archive" }), recordOf), /a simulation-pool deployment is staged or retired/);
+  assert.throws(() => checkLive(...plus({ ...SIM, role: "testers", gateway: "https://pools-api.usenami.io/sim", keeper: SIM.deployer }), recordOf),
+    /a simulation-pool deployment is staged or retired/);
+  assert.throws(() => checkLive(...plus({ ...SIM, role: "shared" }), recordOf), /a simulation-pool deployment is staged or retired/);
+  // A pool the record does name still has to be the record's: only a simulation-pool entry may carry one the record lacks.
+  const SHARED = LIVE.find((e) => e.role === "shared");
+  assert.throws(() => checkLive(LIVE.map((e) => (e === SHARED ? { ...e, pool: SIM.pool } : e)), RECORDS, readRecord), /: pool/);
 });
 
 test("a mainnet deployment goes through the same checks beside testnet's, and app/config.js answers for its own network only", () => {

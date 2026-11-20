@@ -119,6 +119,18 @@
       "gateway": null,
       "deployer": "0x962Cf63A030A6caB62DEa2BdfBcAD11e4CFC188F",
       "keeper": null
+    },
+    {
+      "label": "rehearsal998",
+      "network": "testnet",
+      "chainId": 998,
+      "role": "staged",
+      "record": "deployments/testnet-rehearsal998.json",
+      "factory": "0x67EB56Fbbb86CCc74126372f6690DD2a24dF944B",
+      "pool": "0x7A4999c02E749933af456d0Ac241a10584315812",
+      "gateway": null,
+      "deployer": "0x00d014dF2b4Ffdb0654ea079e4792fd15a350Fd4",
+      "keeper": null
     }
   ]
 }
