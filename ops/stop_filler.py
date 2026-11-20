@@ -67,6 +67,7 @@ import json
 import os
 import pathlib
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -108,6 +109,13 @@ RESEND_AFTER_S = 10.0
 REQUEST_WAIT_S = 60.0
 # Seconds of failing calls, or of no step at all, before the loop is an alarm.
 STALL_S = 30.0
+# A loop failing again and again raises its alarm at most once in this many seconds; the episodes between are lines.
+FAILING_REALARM_S = 3_600.0
+# Seconds the oldest transaction of the key may wait for its block before it is an alarm (the gas price left it behind,
+# say): every later one of the key waits behind it.
+STUCK_S = 120.0
+# Blocks a stop whose position could not be read is kept, price by price, to be judged once the position is read.
+UNJUDGED_MAX = 200
 BLIND_ALARM_BLOCKS = 30
 ALIVE_EVERY_S = 600.0
 GWEI = 10 ** 9
@@ -136,11 +144,25 @@ def host_of(url: str) -> str:
     return f"{parts.scheme}://{parts.hostname or ''}" + (f":{parts.port}" if parts.port else "")
 
 
+def scrub(text: str) -> str:
+    """`text` with every address in it cut to its scheme and host: an error of the keeper's node names its URL."""
+    return re.sub(r"[a-z][a-z0-9+.-]*://[^\s'\")]+", lambda m: host_of(m.group(0)), text)
+
+
 # ── a node, tried once ───────────────────────────────────────────────────────────────
 
 class Unsure(RuntimeError):
     """The call may have reached the node or not: a timeout, a connection broken, a server error. For a read it is a
     failure like any; for a transaction it means the transaction may be in."""
+
+
+class Unreached(RuntimeError):
+    """The connection was never made (a connect timeout): nothing reached the node, a transaction was not sent."""
+
+
+class Busy(c.NotSent):
+    """The node did not take a transaction for a reason that passes: busy, or not reached. A transaction of the keeper's
+    is tried again in a moment; a stop goes with the next block."""
 
 
 class Node:
@@ -158,6 +180,8 @@ class Node:
         try:
             resp = self.session.post(self.url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": list(params)},
                                      timeout=self.timeout)
+        except requests.ConnectTimeout:
+            raise Unreached(f"{method}: ConnectTimeout") from None
         except requests.RequestException as exc:
             raise Unsure(f"{method}: {type(exc).__name__}") from None
         if resp.status_code == 429:
@@ -196,9 +220,11 @@ class Sender:
         self.address = to_checksum_address(wallet.address)
         self.next: int | None = None
         self.lock = threading.Lock()  # the ledger and the requests' states, between the two threads
-        self.ledger: dict[int, dict] = {}  # nonce -> {"hash", "raw", "at"}
+        self.ledger: dict[int, dict] = {}  # nonce -> {"hash", "raw", "at", "since", "past", "said"}
         self.gone: set[int] = set()
         self.requests: queue.Queue = queue.Queue()
+        self.later: list[dict] = []  # the keeper's transactions the node was busy for, each with its `not_before`
+        self.alarm = lambda event, **fields: log(event, alarm="ALARM", **fields)  # the loop's, once it has one
 
     def _count(self, tag: str) -> int:
         return int(self.node.call("eth_getTransactionCount", [self.address, tag]), 16)
@@ -225,8 +251,8 @@ class Sender:
                 self.node.call("eth_sendRawTransaction", [raw])
             except Unsure as exc:
                 log("send_unsure", nonce=nonce, tx=tx_hash, error=str(exc)[:120], then="sent again as it is if no receipt")
-            except c.NodeBusy as exc:
-                raise c.NotSent(str(exc)) from None
+            except (c.NodeBusy, Unreached) as exc:
+                raise Busy(str(exc)) from None
             except RuntimeError as exc:
                 message = str(exc)
                 if "already known" not in message:
@@ -241,8 +267,10 @@ class Sender:
                         log("nonce_taken_elsewhere", nonce=nonce, next=self.next)
                         continue
                     raise c.NotSent(message) from None
+            now = time.monotonic()
             with self.lock:
-                self.ledger[nonce] = {"hash": tx_hash, "raw": raw, "at": time.monotonic()}
+                self.ledger[nonce] = {"hash": tx_hash, "raw": raw, "at": now, "since": now, "past": 0, "said": False,
+                                      "max_fee": gas_price * 2 + tip}
             self.next = nonce + 1
             return tx_hash, nonce
         raise c.NotSent("the nonce was taken twice")
@@ -258,7 +286,9 @@ class Sender:
 
     def sweep(self, now: float | None = None) -> None:
         """The stops' thread: a transaction of the key with no receipt after `RESEND_AFTER_S` is sent again with the same
-        bytes (the same hash: nothing new can land); one whose nonce the chain counted past without it is let go."""
+        bytes (the same hash: nothing new can land); one whose nonce the chain counted past without it, at two sweeps
+        running (a receipt the node had not indexed yet is found at the second), is let go. The oldest one still waiting
+        after `STUCK_S` is an alarm, once: every later transaction of the key waits behind it."""
         now = time.monotonic() if now is None else now
         with self.lock:
             old = sorted((n, dict(e)) for n, e in self.ledger.items() if now - e["at"] >= RESEND_AFTER_S)
@@ -272,10 +302,22 @@ class Sender:
                 continue
             if counted > nonce:
                 with self.lock:
-                    self.ledger.pop(nonce, None)
-                    self.gone.add(nonce)
-                log("send_gone", nonce=nonce, tx=e["hash"], why="the chain counted past its nonce without it")
+                    if nonce in self.ledger:
+                        self.ledger[nonce]["past"] += 1
+                        self.ledger[nonce]["at"] = now
+                    gone = e["past"] + 1 >= 2
+                    if gone:
+                        self.ledger.pop(nonce, None)
+                        self.gone.add(nonce)
+                if gone:
+                    log("send_gone", nonce=nonce, tx=e["hash"], why="the chain counted past its nonce without it, twice")
                 continue
+            if nonce == old[0][0] and now - e["since"] >= STUCK_S and not e["said"]:
+                with self.lock:
+                    if nonce in self.ledger:
+                        self.ledger[nonce]["said"] = True
+                self.alarm("send_stuck", nonce=nonce, tx=e["hash"], seconds=int(now - e["since"]), max_fee=e["max_fee"],
+                           why="the key's oldest transaction is not in a block; every later one waits behind it")
             try:
                 self.node.call("eth_sendRawTransaction", [e["raw"]])
                 log("send_again", nonce=nonce, tx=e["hash"])
@@ -292,39 +334,70 @@ class Sender:
         """The keeper's thread: its transaction to the stops' thread, which sends it at its next look; its hash and nonce.
         Not taken in `wait` seconds: c.NotSent, and it will not be sent."""
         req = {"to": to, "data": data, "gas": gas, "gas_price": gas_price, "state": "queued", "done": threading.Event(),
-               "result": None, "error": None}
+               "result": None, "error": None, "not_before": 0.0, "delay": 1.0}
         self.requests.put(req)
         if not req["done"].wait(wait):
             with self.lock:
                 if req["state"] == "queued":
                     req["state"] = "cancelled"
-                    raise c.NotSent("the stops' thread did not take the transaction in time; it is not sent")
+                    if req in self.later:
+                        self.later.remove(req)
+                    last = f" (last: {req['error']})" if req["error"] is not None else ""
+                    raise c.NotSent(f"the transaction was not sent in {wait:.0f} seconds; it will not be{last}")
             req["done"].wait()  # taken: its one call is under way
         if req["error"] is not None:
             raise req["error"]
         return req["result"]
 
     def handle(self, req: dict) -> None:
+        """One of the keeper's transactions sent. The node busy or not reached: tried again after 1, 2, 4, 8 and 16 seconds
+        as long as the keeper waits for it (`submit`), as c.rpc's ladder did, but with no thread held meanwhile."""
         with self.lock:
             if req["state"] != "queued":
+                return
+            if req["not_before"] > time.monotonic():
+                self.later.append(req)
                 return
             req["state"] = "taken"
         try:
             req["result"] = self.send(req["to"], req["data"], req["gas"], req["gas_price"])
+        except Busy as exc:
+            with self.lock:
+                if req["state"] == "taken":
+                    req["state"] = "queued"
+                    req["not_before"] = time.monotonic() + req["delay"]
+                    req["delay"] = min(req["delay"] * 2, 16.0)
+                    req["error"] = exc
+                    self.later.append(req)
+                    return
+            req["error"] = exc
         except c.NotSent as exc:
             req["error"] = exc
         except Exception as exc:
             req["error"] = c.NotSent(str(exc))
-        finally:
-            req["done"].set()
+        req["error"] = None if req["result"] is not None else req["error"]
+        req["done"].set()
 
     def serve(self) -> None:
+        """The keeper's transactions due now: the ones waiting for a busy node whose time has come, and the new ones."""
+        now = time.monotonic()
+        with self.lock:
+            due = [r for r in self.later if r["not_before"] <= now]
+            self.later = [r for r in self.later if r["not_before"] > now]
+        for req in due:
+            self.handle(req)
         while True:
             try:
                 req = self.requests.get_nowait()
             except queue.Empty:
                 return
             self.handle(req)
+
+    def wait_for(self, left: float) -> float:
+        """How long to wait for a new transaction of the keeper's before one waiting for a busy node is due."""
+        with self.lock:
+            soonest = min((r["not_before"] for r in self.later), default=None)
+        return left if soonest is None else max(0.0, min(left, soonest - time.monotonic()))
 
     def send_and_wait(self, to: str, data: bytes, gas: int | None = None) -> dict:
         """The keeper's own sends (a fill, a slow call): the chain checked, the gas estimated with a quarter more when not
@@ -506,7 +579,12 @@ class StopLoop:
         self.failing_since: float | None = None
         self.failing_said = False
         self.stall_said = False
+        self.failing_alarm_at = -FAILING_REALARM_S
         self.alive_at = 0.0
+        self.alarms_due: list[tuple] = []  # (event, what, reason): raised once the step's stops are out
+        self.moves: dict[tuple[str, int], list[int]] = {}  # (exam, asset) -> the blocks its position moved in
+        if sender is not None:
+            sender.alarm = self.alarm
 
     # ── what the keeper hands in ─────────────────────────────────────────────────────
 
@@ -523,7 +601,12 @@ class StopLoop:
         takes and its positions. Called by the keeper's slow pass in its thread, and by the watch alone: what was set
         while nothing read the logs (a keeper down, or behind) is known at the next pass. The loop keeps what its own
         events say after that block."""
-        call = call or c.rpc
+        try:
+            self._reread(exam, call or c.rpc)
+        except Exception as exc:  # the keeper's node answers with errors that name its address: never in a log
+            raise RuntimeError(scrub(str(exc))) from None
+
+    def _reread(self, exam: str, call) -> None:
         at = self.block or int(call("eth_blockNumber"), 16)
         tag = hex(at)
 
@@ -608,6 +691,11 @@ class StopLoop:
         if price_lo > lo:
             self._blind(lo, price_lo - 1, "the head ran ahead of the loop: the events of these blocks are read, not "
                                           "their prices")
+            standing = [k for k, t in self.triggers.items() if t["armed"] < price_lo and self.signs.get(k[:2]) != 0]
+            if standing:
+                # A reach inside these blocks would not be seen, however short: said at once, not after 30 blocks.
+                self.alarm("stop_watch_gap", from_block=lo, to=price_lo - 1, standing=len(standing),
+                           why="the head ran ahead of the loop by more than its read-back of prices, with stops armed")
         accounts, pools = self.watched()
         for exam in {k[0] for k in self.triggers} & set(self.keeper.done) - self.ended:
             # Done in the keeper's thread (released, claimed) before this loop read its last blocks: it has ended.
@@ -644,9 +732,12 @@ class StopLoop:
                     t["said"] = True
                     self._raise("stop_overdue", key, t, b, "reached and not carried out yet")
             self.block = b
+            if self.sender is not None and b < head:
+                self.sender.serve()  # the keeper's transactions between two blocks, not after the whole step
         sent += self._act(head, cache.get(head) or {}, skip=set(sent))  # the new ones first, then the receipts
         self._receipts(head)
         sent += self._act(head, cache.get(head) or {}, skip=set(sent))  # and the ones a receipt let go
+        self._raise_due()  # its reads (was the exam over?) after the stops went out, never before them
         return sent
 
     def _get_logs(self, addresses: list[str], topics: list[str], lo: int, hi: int) -> list[dict]:
@@ -718,35 +809,79 @@ class StopLoop:
     # ── the watch ────────────────────────────────────────────────────────────────────
 
     def _watch(self, block: int, prices: dict[int, int]) -> list:
-        """Each standing stop judged in `block`, by the price read. A block not judged breaks a reach: the one before it
-        ended somewhere unseen, and is said as unclear, not as a miss. The keys overdue now, decided by the caller once
-        the block's own events are in."""
+        """Each standing stop judged in `block`, by the price read. One whose position is not read yet keeps the price,
+        to be judged once it is (`_replay`). The keys overdue now, decided by the caller once the block's own events
+        are in."""
         due = []
         for key, t in list(self.triggers.items()):
             exam, asset, take = key
             s = self.signs.get((exam, asset))
-            if s is None or asset not in prices or t["armed"] > block:
+            if asset not in prices or t["armed"] > block:
                 continue
-            seen, t["seen"] = t.get("seen"), block
-            gap = seen is not None and block > seen + 1
-            if hit(take, s, prices[asset], t["px"]):
-                if gap and t["touch"] is not None:
-                    # Reached on both sides of blocks not judged: whether it held between is not known. Its count starts
-                    # again here; nothing is raised for the gap itself.
-                    log("stop_reach_unclear", **self._what(key, t, seen), why=f"blocks {seen + 1}..{block - 1} not judged")
-                    t.update(touch=None, said=False, first=None)
-                if t["touch"] is None:
-                    t["touch"], t["first"] = block, prices[asset]
-                if not t["said"] and block - t["touch"] + 1 >= self.overdue:
-                    due.append(key)
-            elif t["touch"] is not None:
-                if not gap and seen - t["touch"] + 1 < self.min_alarm_blocks:
-                    log("stop_reach_too_short", **self._what(key, t, seen),
-                        why="a transaction sent on seeing it lands after it")
-                    t.update(touch=None, said=False, first=None)
-                else:  # reached, back, and no fill read in between (events are read in every block): a miss
-                    self._missed(key, t, seen, "the price went back" + (" in blocks not judged" if gap else ""))
+            if s is None:
+                kept = t.setdefault("unjudged", [])
+                kept.append((block, prices[asset]))
+                if len(kept) > UNJUDGED_MAX:
+                    del kept[0]
+                    self._say("stop_unjudged_dropped", exam=exam, asset=asset, why=f"position unread {UNJUDGED_MAX} blocks")
+                continue
+            if self._judge(key, t, block, prices[asset], s):
+                due.append(key)
         return due
+
+    def _judge(self, key, t: dict, block: int, px: int, s: int) -> bool:
+        """One stop in one block: its reach goes on, starts or ends. A block not judged breaks a reach: one reached on
+        both sides of it starts its count again, one that ended across it is a miss (events are read in every block, so
+        no fill came). Whether it is overdue now."""
+        exam, asset, take = key
+        seen, t["seen"] = t.get("seen"), block
+        gap = seen is not None and block > seen + 1
+        if hit(take, s, px, t["px"]):
+            if gap and t["touch"] is not None:
+                # Reached on both sides of blocks not judged: whether it held between is not known. Its count starts
+                # again here; nothing is raised for the gap itself.
+                log("stop_reach_unclear", **self._what(key, t, seen), why=f"blocks {seen + 1}..{block - 1} not judged")
+                t.update(touch=None, said=False, first=None)
+            if t["touch"] is None:
+                t["touch"], t["first"] = block, px
+            return not t["said"] and block - t["touch"] + 1 >= self.overdue
+        if t["touch"] is not None:
+            if not gap and seen - t["touch"] + 1 < self.min_alarm_blocks:
+                log("stop_reach_too_short", **self._what(key, t, seen),
+                    why="a transaction sent on seeing it lands after it")
+                t.update(touch=None, said=False, first=None)
+            else:  # reached, back, and no fill read in between (events are read in every block): a miss
+                self._missed(key, t, seen, "the price went back" + (" in blocks not judged" if gap else ""))
+        return False
+
+    def _replay(self, exam: str, asset: int) -> None:
+        """The prices kept while the position of `exam`'s `asset` could not be read, judged now, each block against the
+        position as it stood before it: read at the block before, once for each stretch the position did not move in.
+        A read that fails again keeps the rest for the next time."""
+        moves = self.moves.get((exam, asset), [])
+        signs: dict[int, int] = {}
+        for take in (False, True):
+            key = (exam, asset, take)
+            t = self.triggers.get(key)
+            if t is None or not t.get("unjudged"):
+                continue
+            while t["unjudged"]:
+                block, px = t["unjudged"][0]
+                stretch = sum(1 for m in moves if m < block)
+                if stretch not in signs:
+                    try:
+                        raw = self.node.call("eth_call", [{"to": exam, "data": "0x" + c.encode_call(
+                            "positionOf(uint32)", ["uint32"], [asset]).hex()}, hex(block - 1)])
+                        signs[stretch] = sign_of(abi_decode(["int256"], bytes.fromhex(raw[2:]))[0])
+                    except Exception as exc:
+                        self._say("stop_position_unread", exam=exam, asset=asset, error=str(exc)[:120])
+                        return
+                t["unjudged"].pop(0)
+                if self._judge(key, t, block, px, signs[stretch]) and not t["said"]:
+                    t["said"] = True
+                    self._raise("stop_overdue", key, t, block, "reached and not carried out yet")
+                if key not in self.triggers:
+                    break
 
     def _missed(self, key, t: dict, last: int, reason: str) -> None:
         if not t["said"]:
@@ -756,14 +891,20 @@ class StopLoop:
         t.update(touch=None, said=False, first=None)
 
     def _raise(self, event: str, key, t: dict, last: int, reason: str) -> None:
-        """An alarm for a reach, unless the exam was over by the first block a fill could have landed in: past its deadline
-        or its idle limit `fillTrigger` refuses (`TooLate`) whoever sends it, and it is the keeper's `expire` that is due."""
-        what = self._what(key, t, last)
-        over = self._over_at(key[0], t["touch"] + 1)
-        if over:
-            log("stop_reach_after_exam_over", **what, reason=reason, over=over)
-            return
-        self.alarm(event, **what, reason=reason, **({} if over is not None else {"over": "not read"}))
+        """An alarm for a reach, raised once the step's stops are out (`_raise_due`): its reads must not hold a stop."""
+        self.alarms_due.append((event, self._what(key, t, last), reason))
+
+    def _raise_due(self) -> None:
+        """The step's alarms for reaches, each unless the exam was over by the first block a fill could have landed in:
+        past its deadline or its idle limit `fillTrigger` refuses (`TooLate`) whoever sends it, and it is the keeper's
+        `expire` that is due."""
+        due, self.alarms_due = self.alarms_due, []
+        for event, what, reason in due:
+            over = self._over_at(what["exam"], what["reached_from"] + 1)
+            if over:
+                log("stop_reach_after_exam_over", **what, reason=reason, over=over)
+                continue
+            self.alarm(event, **what, reason=reason, **({} if over is not None else {"over": "not read"}))
 
     def _over_at(self, exam: str, block: int) -> str | None:
         """Why the exam was over at `block` (`PaperExam._over`), "" when it was not, None when it could not be read."""
@@ -812,6 +953,7 @@ class StopLoop:
             asset = int(l["topics"][1], 16)
             if topic == sk.FILLED:
                 moved.add((exam, asset))
+                self.moves.setdefault((exam, asset), []).append(block)
                 continue
             take = bool(int(l["data"][2:66], 16))
             key = (exam, asset, take)
@@ -855,6 +997,8 @@ class StopLoop:
             self.unread_signs.add((exam, asset))  # read again at the next step, with no event needed
             return
         self.unread_signs.discard((exam, asset))
+        if any(t.get("unjudged") for k, t in self.triggers.items() if k[0] == exam and k[1] == asset):
+            self._replay(exam, asset)
         if s == 0:
             for take in (False, True):
                 t = self.triggers.get((exam, asset, take))
@@ -956,7 +1100,13 @@ class StopLoop:
         self._say(event, error=str(exc)[:200])
         if not self.failing_said and now - self.failing_since >= STALL_S:
             self.failing_said = True
-            self.alarm("stop_loop_failing", seconds=int(now - self.failing_since), block=self.block, error=str(exc)[:200])
+            if now - self.failing_alarm_at >= FAILING_REALARM_S:
+                self.failing_alarm_at = now
+                self.alarm("stop_loop_failing", seconds=int(now - self.failing_since), block=self.block,
+                           error=str(exc)[:200])
+            else:  # one alarm an hour at most: the flag file does not fill with the same episode
+                log("stop_loop_failing_again", seconds=int(now - self.failing_since), block=self.block,
+                    error=str(exc)[:200], note="its alarm was raised within the hour")
 
     def _served(self, until: float, stop: threading.Event) -> None:
         """Until `until`: the keeper's transactions sent as they come, the key's ledger swept."""
@@ -974,9 +1124,9 @@ class StopLoop:
                 stop.wait(left)
                 return
             try:
-                self.sender.handle(self.sender.requests.get(timeout=left))
+                self.sender.handle(self.sender.requests.get(timeout=self.sender.wait_for(left)))
             except queue.Empty:
-                return
+                self.sender.serve()  # one the node was busy for may be due now
 
     def run(self, poll: float, stop: threading.Event | None = None) -> None:
         """Forever (or until `stop`): the head every `poll` seconds, and a step for each new one; between them, the keeper's
