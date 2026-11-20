@@ -8,6 +8,7 @@ import {Rules, Units} from "../Types.sol";
 import {PaperExam, ExamTerms} from "../exam/PaperExam.sol";
 import {SimPool, SimPlan, SimSize, SimTier, MAX_PAYOUTS_A_DAY, COVER_PAYOUTS} from "./SimPool.sol";
 import {TermsBook} from "../multi/TermsBook.sol";
+import {StopBook} from "./StopBook.sol";
 
 /// @title SimPoolFactory
 /// @notice Makes simulated pools: both stages are paper exams, nobody's capital is traded, and a
@@ -83,6 +84,10 @@ contract SimPoolFactory {
     IERC20 public immutable usdc;
     address public immutable examImpl;
     address public immutable poolImpl;
+    /// The book of every stop and take of this factory's exams, made with the factory and never changed: the check
+    /// that carries a stop out in the first block whose oracle price reaches it (`StopBook`). Every exam takes it
+    /// at its start (`PaperExam.stopBook`).
+    StopBook public immutable stopBook;
 
     address public operator;
     address public filler;
@@ -132,6 +137,7 @@ contract SimPoolFactory {
         usdc = usdc_;
         examImpl = examImpl_;
         poolImpl = poolImpl_;
+        stopBook = new StopBook();
         operator = operator_;
         emit OperatorSet(operator_);
         _setCreationFee(creationFee_);

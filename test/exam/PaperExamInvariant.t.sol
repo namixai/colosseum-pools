@@ -10,6 +10,8 @@ import {PrecompileLib} from "@hyper-evm-lib/src/PrecompileLib.sol";
 import {Rules} from "../../src/Types.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {OracleFollowsMark} from "../PoolHarness.sol";
+import {BookStand} from "./BookStand.sol";
+import {StopBook} from "../../src/sim/StopBook.sol";
 
 uint32 constant BTC = 3;
 uint32 constant ETH = 4;
@@ -88,8 +90,9 @@ contract PaperExamHandler is Test {
         }
     }
 
-    /// A stop or a take at the oracle price, which with the oracle still has triggered by the time it acts, and its fill
-    /// a few blocks on: it closes at a fill's price, held to the same two bounds.
+    /// A stop or a take at the oracle price, which with the oracle still has triggered by the time it acts, and the stop
+    /// book's check a few blocks on, which carries it out: it closes at a fill's price, held to the same two bounds (past
+    /// the ceiling, at it: a stop is never refused).
     function trigger(uint256 assetSeed, bool isTake, uint256 sz, uint256 bookSeed) external {
         uint32 asset = assetSeed % 2 == 0 ? BTC : ETH;
         int256 pos = exam.positionOf(asset);
@@ -103,11 +106,9 @@ contract PaperExamHandler is Test {
         vm.roll(block.number + DELAY + (bookSeed % 3));
         if (randomBook) _drawBook(bookSeed);
         vm.recordLogs();
-        vm.prank(filler);
-        try exam.fillTrigger(asset, isTake) {
-            _checkPrice(asset, pos < 0);
-            calls["fillTrigger"] += 1;
-        } catch {}
+        StopBook(exam.stopBook()).poke();
+        if (exam.positionOf(asset) != pos) calls["fillTrigger"] += 1;
+        _checkPrice(asset, pos < 0);
     }
 
     function checkpoint(uint256 secs) external {
@@ -163,21 +164,16 @@ contract PaperExamHandler is Test {
         }
     }
 
-    /// The fill just made: never better for the trader than the oracle, and at the book never more than `maxWorseBps`
-    /// worse than it.
-    function _checkPrice(uint32 asset, bool isBuy) internal {
+    /// Every fill just made, an order's or a stop's carried out by the book's check in the same call: never better for
+    /// the trader than the oracle, and at the book never more than `maxWorseBps` worse than it. Each is read from its
+    /// own `Filled` (a stop's too), its asset and side with it.
+    function _checkPrice(uint32, bool) internal {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; ++i) {
-            if (logs[i].topics.length == 0) continue;
-            uint64 px;
-            uint8 source;
-            if (logs[i].topics[0] == PaperExam.Filled.selector) {
-                (, , px,,, source) = abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint256, uint8));
-            } else if (logs[i].topics[0] == PaperExam.TriggerFilled.selector) {
-                (, , px,,, source) = abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint64, uint8));
-            } else {
-                continue;
-            }
+            if (logs[i].topics.length < 2 || logs[i].topics[0] != PaperExam.Filled.selector) continue;
+            uint32 asset = uint32(uint256(logs[i].topics[1]));
+            (bool isBuy,, uint64 px,,, uint8 source) =
+                abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint256, uint8));
             uint256 oracle = asset == BTC ? BTC_MARK : ETH_MARK;
             uint256 worst = oracle * MAX_WORSE / 10_000;
             if (isBuy ? px < oracle : px > oracle) ghostBadPrice += 1;
@@ -190,7 +186,7 @@ contract PaperExamHandler is Test {
 
 /// The paper exam at random with the oracle standing still: no sequence of orders, fills, snapshots and passes earns
 /// anything, so none passes (CTO, 13 November: "no pass without the price moving").
-contract PaperExamStillOracleInvariantTest is Test {
+contract PaperExamStillOracleInvariantTest is Test, BookStand {
     PaperExam exam;
     PaperExamHandler handler;
 
@@ -224,6 +220,7 @@ contract PaperExamStillOracleInvariantTest is Test {
         ExamTerms memory t = ExamTerms({capital: uint64(uint256(CAPITAL)), targetsBps: targets, stepDuration: 30 days,
             maxIdle: 30 days, minTradingDays: 0, costPpm: 450, fillDelay: DELAY, fillWindow: WINDOW});
         address impl = address(new PaperExam());
+        _makeBook();
         exam = PaperExam(Clones.clone(impl));
         handler = new PaperExamHandler(exam, randomBook);
         exam.initializeWithFiller(handler.trader(), r, t, handler.filler(), true, MAX_WORSE, 0, false);

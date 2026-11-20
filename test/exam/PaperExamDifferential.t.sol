@@ -11,6 +11,8 @@ import {Rules} from "../../src/Types.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {OracleFollowsMark} from "../PoolHarness.sol";
 import {BookStub} from "./PaperExamInvariant.t.sol";
+import {BookStand} from "./BookStand.sol";
+import {StopBook} from "../../src/sim/StopBook.sol";
 
 /// The rules of an exam, written again from their text (docs/PAPER-EXAM.md, "What it does", and the first pool's
 /// terms), not from PaperExam.sol: a reading of the rules that is wrong in the contract is not wrong here the same
@@ -25,11 +27,13 @@ import {BookStub} from "./PaperExamInvariant.t.sol";
 ///   `dailyLossBps`; notional over equity above `maxLeverageX100`. The drawdown line, from the start: the starting
 ///   balance less `maxDrawdownBps` of it. Trailing to the start: the highest daily snapshot of the step less
 ///   `maxDrawdownBps` of the starting balance, and never above the starting balance.
-/// - A stop and a take for the position: set by the trader on an open position, acting `fillDelay` blocks later;
-///   once the oracle is at the price or past it (against the position for a stop, for it for a take) the filler
-///   closes the set size, or all of it, at the price of a fill in that block and with its cost. A position
-///   closed or turned round loses both; one carried out is gone. A trigger that closes the position lets the order
-///   waiting on it lapse.
+/// - A stop and a take for the position: set by the trader on an open position, acting `fillDelay` blocks later.
+///   The first block checked (the stop book, before any call of the exam in that block) whose oracle price is at the
+///   level or past it (against the position for a stop, for it for a take) closes the set size, or all of it, in
+///   that block, at that oracle price, or at the book's but never more than `maxWorseBps` worse than that oracle
+///   price (past it, at that bound), with a fill's cost. A long's stop and a short's take are checked first. On an
+///   exam ended or past its time it is only removed. A position closed or turned round loses both; one carried out
+///   is gone. A trigger that closes the position lets the order waiting on it lapse.
 /// - The day's snapshot in the first 15 minutes of the UTC day, once a day. A trading day is a UTC day with a fill
 ///   of at least 10 USDC of notional.
 /// - A pass: no rule broken, nothing open, equity at the target, the step's trading days, before the limits. Past
@@ -59,6 +63,7 @@ contract RulesModel {
 
     Trigger public stop_;
     Trigger public take_;
+    uint256 public lastPoke;
 
     /// 0 from the start, 1 trailing the daily snapshots to the start.
     uint8 public immutable kind;
@@ -121,6 +126,43 @@ contract RulesModel {
         return px;
     }
 
+    /// The price a stop or a take closes at: as a fill, but past `maxWorse` at that bound, never refused.
+    function stopPrice(bool isBuy, int256 oracle, int256 bid, int256 ask) public pure returns (int256) {
+        if (bid == 0 || ask == 0 || ask < bid) return oracle;
+        int256 px = isBuy ? (ask > oracle ? ask : oracle) : (bid < oracle ? bid : oracle);
+        int256 bound = oracle * int256(uint256(maxWorse)) / BPS;
+        if (isBuy ? px - oracle > bound : oracle - px > bound) return isBuy ? oracle + bound : oracle - bound;
+        return px;
+    }
+
+    /// The check of block `blockNo`, once a block: every armed stop and take the oracle has reached is carried out.
+    /// Returns whether one closed the position.
+    function poke(uint256 blockNo, int256 oracle, int256 bid, int256 ask, uint256 now_) external returns (bool closed) {
+        if (blockNo == lastPoke) return false;
+        lastPoke = blockNo;
+        bool first = pos < 0; // a short's take, a long's stop
+        closed = _pokeOne(first, blockNo, oracle, bid, ask, now_);
+        if (_pokeOne(!first, blockNo, oracle, bid, ask, now_)) closed = true;
+    }
+
+    function _pokeOne(bool isTake, uint256 blockNo, int256 oracle, int256 bid, int256 ask, uint256 now_)
+        internal
+        returns (bool)
+    {
+        Trigger memory t = isTake ? take_ : stop_;
+        if (t.px == 0 || blockNo < t.armedAt || pos == 0) return false;
+        bool hit = isTake == (pos > 0) ? oracle >= t.px : oracle <= t.px;
+        if (!hit) return false;
+        if (isTake) delete take_;
+        else delete stop_;
+        if (status != 1 || over(now_)) return false;
+        int256 open = pos < 0 ? -pos : pos;
+        int256 sz = t.sz == 0 || t.sz > open ? open : t.sz;
+        bool isBuy = pos < 0;
+        _make(isBuy, sz, stopPrice(isBuy, oracle, bid, ask), now_);
+        return pos == 0;
+    }
+
     /// Whether the fill goes through, and if so it is made.
     function fill(bool isBuy, int256 sz, int256 oracle, int256 bid, int256 ask, uint256 now_) external returns (bool) {
         if (status != 1 || over(now_)) return false;
@@ -129,7 +171,13 @@ contract RulesModel {
         int256 after_ = pos + (isBuy ? sz : -sz);
         int256 newCash = cash - (isBuy ? sz : -sz) * px - (sz * px * int256(uint256(costPpm)) + 1_000_000 - 1) / 1_000_000;
         if (_grows(after_) && _overLev(newCash, after_, oracle)) return false;
-        cash = newCash;
+        _make(isBuy, sz, px, now_);
+        return true;
+    }
+
+    function _make(bool isBuy, int256 sz, int256 px, uint256 now_) internal {
+        int256 after_ = pos + (isBuy ? sz : -sz);
+        cash = cash - (isBuy ? sz : -sz) * px - (sz * px * int256(uint256(costPpm)) + 1_000_000 - 1) / 1_000_000;
         if (pos != 0 && (after_ == 0 || (after_ > 0) != (pos > 0))) {
             delete stop_;
             delete take_;
@@ -143,7 +191,6 @@ contract RulesModel {
             }
             lastTrade = now_;
         }
-        return true;
     }
 
     function _grows(int256 after_) internal view returns (bool) {
@@ -160,22 +207,6 @@ contract RulesModel {
         Trigger memory t = Trigger(px, sz, blockNo + delay);
         if (isTake) take_ = t;
         else stop_ = t;
-        return true;
-    }
-
-    function fillTrigger(bool isTake, int256 oracle, int256 bid, int256 ask, uint256 blockNo, uint256 now_)
-        external
-        returns (bool)
-    {
-        Trigger memory t = isTake ? take_ : stop_;
-        if (status != 1 || over(now_) || t.px == 0 || blockNo < t.armedAt || pos == 0) return false;
-        bool hit = isTake == (pos > 0) ? oracle >= t.px : oracle <= t.px;
-        if (!hit) return false;
-        int256 open = pos < 0 ? -pos : pos;
-        int256 sz = t.sz == 0 || t.sz > open ? open : t.sz;
-        if (!this.fill(pos < 0, sz, oracle, bid, ask, now_)) return false;
-        if (isTake) delete take_;
-        else delete stop_;
         return true;
     }
 
@@ -241,6 +272,17 @@ contract DifferentialHandler is Test {
         model = model_;
     }
 
+    /// The stop book's check of this block, before the exam is called in it, on both sides.
+    function _poke() internal {
+        (int256 sx,,) = model.stop_();
+        (int256 tx,,) = model.take_();
+        if (model.poke(block.number, oracle, bid, ask, block.timestamp)) hasOrder = false;
+        (int256 sy,,) = model.stop_();
+        (int256 ty,,) = model.take_();
+        if (sx != sy || tx != ty) calls["fillTrigger"] += 1;
+        StopBook(exam.stopBook()).poke();
+    }
+
     function _differ(string memory what) internal {
         if (mismatches == 0) firstMismatch = what;
         mismatches += 1;
@@ -267,6 +309,7 @@ contract DifferentialHandler is Test {
         // One order at a time: a standing one is let lapse first, past its window and the fallback.
         if (hasOrder && block.number <= placedBlock + DELAY + WINDOW + 61) vm.roll(placedBlock + DELAY + WINDOW + 62);
         sz = bound(sz, 1, 1_500);
+        _poke();
         vm.prank(trader);
         try exam.place(BTC, isBuy, uint64(sz)) {
             (hasOrder, orderBuy, orderSz, placedBlock) = (true, isBuy, int256(sz), block.number);
@@ -281,6 +324,8 @@ contract DifferentialHandler is Test {
         if (target <= block.number) return; // its block is gone: leave it, or a new order replaces it later
         vm.roll(target);
         _drawBook(bookSeed);
+        _poke();
+        if (!hasOrder) return;
         bool expect = model.fill(orderBuy, orderSz, oracle, bid, ask, block.timestamp);
         vm.prank(filler);
         bool got;
@@ -299,6 +344,7 @@ contract DifferentialHandler is Test {
         int256 px = oracle * (9_000 + int256(pxSeed % 2_001)) / 10_000;
         uint256 sz = szSeed % 4 == 0 ? 0 : bound(szSeed, 1, 1_500);
         vm.roll(block.number + 1);
+        _poke();
         bool expect = model.setTrigger(isTake, px, int256(sz), block.number, block.timestamp);
         bool got;
         vm.prank(trader);
@@ -309,24 +355,19 @@ contract DifferentialHandler is Test {
         if (got != expect) _differ(got ? "setTrigger: the exam took it, the text refuses" : "setTrigger: the exam refused, the text takes it");
     }
 
-    function fillTrigger(bool isTake, uint256 bookSeed) external {
+    /// A block checked by the stop book alone.
+    function poke(uint256 bookSeed) external {
         vm.roll(block.number + 1);
         _drawBook(bookSeed);
-        bool expect = model.fillTrigger(isTake, oracle, bid, ask, block.number, block.timestamp);
-        bool got;
-        vm.prank(filler);
-        try exam.fillTrigger(BTC, isTake) {
-            got = true;
-            calls["fillTrigger"] += 1;
-        } catch {}
-        if (got != expect) _differ(got ? "fillTrigger: the exam filled, the text refuses" : "fillTrigger: the exam refused, the text fills");
-        if (got && model.pos() == 0) hasOrder = false;
-        _compare("fillTrigger");
+        _poke();
+        if (exam.positionOf(BTC) != model.pos()) _differ("poke: the position");
+        _compare("poke");
     }
 
     function checkpoint(uint256 secs) external {
         vm.warp((block.timestamp / 1 days + 1) * 1 days + bound(secs, 0, 20 minutes));
         vm.roll(block.number + 1);
+        _poke();
         bool expect = model.checkpoint(oracle, block.timestamp);
         bool got;
         try exam.checkpoint() {
@@ -338,6 +379,7 @@ contract DifferentialHandler is Test {
     }
 
     function breach() external {
+        _poke();
         uint8 expect = model.breach(oracle);
         vm.recordLogs();
         uint8 got;
@@ -355,6 +397,7 @@ contract DifferentialHandler is Test {
     }
 
     function graduate() external {
+        _poke();
         bool expect = model.graduate(oracle, block.timestamp);
         bool got;
         vm.prank(trader);
@@ -367,6 +410,7 @@ contract DifferentialHandler is Test {
     }
 
     function expire() external {
+        _poke();
         bool expect = model.expire(block.timestamp);
         bool got;
         try exam.expire() {
@@ -396,7 +440,7 @@ contract DifferentialHandler is Test {
     }
 }
 
-contract PaperExamDifferentialTest is Test {
+contract PaperExamDifferentialTest is Test, BookStand {
     uint32 constant BTC = 3;
 
     /// The drawdown line of the exam under test: from the start here, trailing to the start in the suite below.
@@ -428,6 +472,7 @@ contract PaperExamDifferentialTest is Test {
             assetLeverageX100: new uint32[](0)});
         ExamTerms memory t = ExamTerms({capital: 100e6, targetsBps: targets, stepDuration: 30 days, maxIdle: 10 days,
             minTradingDays: 2, costPpm: 450, fillDelay: 1, fillWindow: 10});
+        _makeBook();
         exam = PaperExam(Clones.clone(address(new PaperExam())));
         model = new RulesModel(block.timestamp, _kind());
         handler = new DifferentialHandler(exam, model);
@@ -441,7 +486,7 @@ contract PaperExamDifferentialTest is Test {
         (sel[10], sel[11], sel[12]) = (DifferentialHandler.checkpoint.selector, DifferentialHandler.breach.selector, DifferentialHandler.graduate.selector);
         (sel[13], sel[14]) = (DifferentialHandler.expire.selector, DifferentialHandler.warp.selector);
         (sel[15], sel[16]) = (DifferentialHandler.setTrigger.selector, DifferentialHandler.setTrigger.selector);
-        (sel[17], sel[18]) = (DifferentialHandler.fillTrigger.selector, DifferentialHandler.fillTrigger.selector);
+        (sel[17], sel[18]) = (DifferentialHandler.poke.selector, DifferentialHandler.poke.selector);
         targetSelector(FuzzSelector({addr: address(handler), selectors: sel}));
     }
 

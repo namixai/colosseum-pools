@@ -23,6 +23,46 @@ then the stage on the same size. Whoever passes the stage is paid out of the poo
 the prices traders paid for exams and what the pool's creator locked when opening it. Most exams
 fail, and their prices pay for the ones that pass.
 
+## The stop book
+
+`src/sim/StopBook.sol`, one a factory, made by the factory's constructor and never changed (`SimPoolFactory.stopBook`);
+every exam the factory's pools sell takes it at its start (`PaperExam.stopBook`). An exam with a filler always has
+it; an exam without one (`PaperExam.initialize`, how a `MultiPool` starts its exams) has none and keeps the rule of
+before the book (`fillTrigger`, anyone but the trader, in a block whose oracle price is at the level).
+
+- **The rule, as a market does it.** A stop or a take is carried out in the first block the book checks whose oracle
+  price is at its level or past it, never before `armedAt` (`fillDelay` blocks after it was set), in that same block:
+  at that block's oracle price, worse than the level through a gap, as a market stop fills on the exchange; at the
+  book (`fromBook`), at the book's price but never more than `maxWorseBps` worse than that oracle price (past it, at
+  that bound; a stop is never refused); a book that does not answer, at the oracle price. It fires on the oracle
+  price, not on Hyperliquid's mark price, which takes in a book the trader can push. A stop reached is carried out;
+  it cannot be taken off or moved: every function of the exam that changes anything (`place`, `fill`,
+  `setTrigger`, `clearTrigger`, `setAgent`, `checkpoint`, `breach`, `expire`, `graduate`) has the book check its
+  block first (`settle`), so the trader's own call in the block of a touch finds the stop carried out.
+- **The check.** `poke()`, anyone's, does the work once a block; a second call in the block does nothing. On each
+  asset with an armed entry it reads the oracle price once (`PriceSeen`; none, `NoPrice`, and the entries wait) and
+  takes off two heaps everything the price reached: `below` (a long's stop, a short's take) and `above` (a short's
+  stop, a long's take). An entry waits for `armedAt` in a third heap, by block, which each check empties first, so
+  one armed in this block is checked in it. Each fill is a call of at most `FIRE_GAS` (200 000) gas whose failure
+  is reported (`Fired`, `ok` false) and undoes nothing else; an exam ended or out of time only loses its stop.
+- **Its caps.** A check carries out at most `MAX_FIRES` (4) entries and latches at most `MAX_LATCHES` (8) more
+  (`Latched`): taken off the heap with the block's price and number, carried out at that price by a later check or
+  by its exam's own next call, and until then that exam refuses to act (`StopsPending`) if the gas cannot carry it
+  out. Past both, the rest stays on its heap for the next check, at that block's price (`TouchBacklog`); more than
+  `MAX_ARMS` (12) entries due at once wait a check (`ArmingBacklog`). Both backlogs are an alarm, not a rule. An
+  entry is also latched, never dropped, when the gas left would not give its call the whole `FIRE_GAS`: a caller
+  cannot starve one fill and let the check go on.
+- **What it cannot do.** A block nobody checked is invisible to the contract; the next check says so (`Gap(from,
+  to)`), and a payout's review reads the oracle back for those blocks only. Nothing in code can promise a check in
+  every block: several independent callers and every call of the exam itself are what keep gaps away.
+- **Gas** (`test/sim/StopBook.t.sol`, `test_gas_ofAChecks` and `test_gas_ofACheckAtItsCaps_underASmallBlock`, cold
+  storage, without the 21 000 of a transaction; the oracle precompile is the simulator's, its gas on HyperEVM is to
+  be measured there): a check with entries on 0 assets 34 742, on 1 asset 31 939, on 5 assets 90 976, on 16 assets
+  255 283; a second check in the block 913 (warm); 16 assets and one fill 332 663; at its caps (4 fills, 8 latches,
+  12 armed, one asset) 1 042 985, inside HyperEVM's small block of 3 000 000.
+- **Sizes** (`forge build --sizes`, 20 November): `PaperExam` 21 417 bytes, `StopBook` 8 122, `SimPoolFactory`
+  11 857.
+
 ## What it does
 
 - **Opening.** `SimPoolFactory.create(plan)` with exactly the factory's fee sent along (`creationFee`: 1 HYPE on
