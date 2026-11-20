@@ -30,7 +30,9 @@ contract StopBookHarness is StopBook {
 
 /// Three exams on two assets, at random: positions opened, turned and closed by orders, stops and takes set, moved and
 /// removed near the price, the price moved block by block, mostly checked by the book every block and now and then
-/// not, so that entries are reached many at a time, more than one check carries out.
+/// not, so that entries are reached many at a time, more than one check carries out. Under them, `BACKGROUND` other
+/// exams keep a stop and a take on each asset far from the price: every heap is some 60 entries deep, and every move
+/// in it walks a tall tree (review of cp#335: the heaps of a test were too small to show H1).
 contract StopBookHandler is Test {
     uint32 public constant BTC = 3;
     uint32 public constant ETH = 4;
@@ -144,6 +146,7 @@ contract StopBookInvariantTest is Test, BookStand {
             exams[i] = PaperExam(Clones.clone(address(impl)));
             exams[i].initializeWithFiller(trader, r, terms, filler, false, 0, 0, false);
         }
+        _background(impl, r, terms, trader, filler);
         handler = new StopBookHandler(harness, exams);
         targetContract(address(handler));
         bytes4[] memory sel = new bytes4[](8);
@@ -153,6 +156,40 @@ contract StopBookInvariantTest is Test, BookStand {
         (sel[5], sel[6]) = (StopBookHandler.move.selector, StopBookHandler.move.selector);
         sel[7] = StopBookHandler.poke.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: sel}));
+    }
+
+    uint256 constant BACKGROUND = 60;
+
+    /// `BACKGROUND` exams, each long on both assets with a stop at a half and a take at twice the price, every level
+    /// its own; armed before the run starts.
+    function _background(PaperExam impl, Rules memory r, ExamTerms memory terms, address trader, address filler)
+        internal
+    {
+        for (uint256 i = 0; i < BACKGROUND; ++i) {
+            PaperExam x = PaperExam(Clones.clone(address(impl)));
+            x.initializeWithFiller(trader, r, terms, filler, false, 0, 0, false);
+            for (uint32 a = 3; a <= 4; ++a) {
+                uint64 p = a == 3 ? 1_000_000 : 250_000;
+                vm.prank(trader);
+                x.place(a, true, a == 3 ? 10 : 40);
+                vm.roll(block.number + 2);
+                vm.prank(filler);
+                x.fill();
+                vm.startPrank(trader);
+                x.setTrigger(a, false, uint64(p / 2 - i * (p / 1_000)), 0);
+                x.setTrigger(a, true, uint64(p * 2 + i * (p / 1_000)), 0);
+                vm.stopPrank();
+            }
+        }
+        vm.roll(block.number + 2);
+        while (true) {
+            stopBook.poke();
+            (, uint256 waiting) = stopBook.watched();
+            if (waiting == 0) break;
+            vm.roll(block.number + 1);
+        }
+        (,, uint256 nb, uint256 na) = stopBook.top(3);
+        assertEq(nb + na, 2 * BACKGROUND, "the background is armed");
     }
 
     /// B1. The book's records are the exams' stops and takes: none without the other, at the same level and `armedAt`,

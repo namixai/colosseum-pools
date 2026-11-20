@@ -27,7 +27,9 @@ import {StopBook} from "../../src/sim/StopBook.sol";
 ///   `dailyLossBps`; notional over equity above `maxLeverageX100`. The drawdown line, from the start: the starting
 ///   balance less `maxDrawdownBps` of it. Trailing to the start: the highest daily snapshot of the step less
 ///   `maxDrawdownBps` of the starting balance, and never above the starting balance.
-/// - A stop and a take for the position: set by the trader on an open position, acting `fillDelay` blocks later.
+/// - A stop and a take for the position: set by the trader on an open position, acting `fillDelay` blocks later;
+///   one the oracle price of its block has already reached is refused, as an exchange refuses a stop that would
+///   trigger at once.
 ///   The first block checked (the stop book, before any call of the exam in that block) whose oracle price is at the
 ///   level or past it (against the position for a stop, for it for a take) closes the set size, or all of it, in
 ///   that block, at that oracle price, or at the book's but never more than `maxWorseBps` worse than that oracle
@@ -202,8 +204,12 @@ contract RulesModel {
         return eq <= 0 || (after_ < 0 ? -after_ : after_) * oracle * 100 > eq * int256(uint256(lev));
     }
 
-    function setTrigger(bool isTake, int256 px, int256 sz, uint256 blockNo, uint256 now_) external returns (bool) {
+    function setTrigger(bool isTake, int256 px, int256 sz, int256 oracle, uint256 blockNo, uint256 now_)
+        external
+        returns (bool)
+    {
         if (status != 1 || over(now_) || pos == 0 || px == 0) return false;
+        if (isTake == (pos > 0) ? oracle >= px : oracle <= px) return false;
         Trigger memory t = Trigger(px, sz, blockNo + delay);
         if (isTake) take_ = t;
         else stop_ = t;
@@ -345,7 +351,7 @@ contract DifferentialHandler is Test {
         uint256 sz = szSeed % 4 == 0 ? 0 : bound(szSeed, 1, 1_500);
         vm.roll(block.number + 1);
         _poke();
-        bool expect = model.setTrigger(isTake, px, int256(sz), block.number, block.timestamp);
+        bool expect = model.setTrigger(isTake, px, int256(sz), oracle, block.number, block.timestamp);
         bool got;
         vm.prank(trader);
         try exam.setTrigger(BTC, isTake, uint64(uint256(px)), uint64(sz)) {

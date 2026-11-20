@@ -70,7 +70,9 @@ with a balance, `capital`, that is a number and not money.
   price is at a stop's level or past it carries the stop out in that block, at that oracle price (worse than the
   level through a gap), or at the book's price never more than `maxWorseBps` worse than it (past it, at that bound:
   a stop is never refused), with a fill's cost; every function here that changes anything has the book check its
-  block first, so a stop reached cannot be taken off or moved. Without a filler (`initialize`, as a `MultiPool`
+  block first, so a stop reached cannot be taken off or moved. With a book, a stop or a take the oracle price has
+  already reached when it is set is refused (`WouldTrigger`), as an exchange refuses a stop that would trigger at
+  once, and an exam that ends (`breach`, `expire`) takes its stops and takes out of the book. Without a filler (`initialize`, as a `MultiPool`
   starts its exams) there is no book: a stop is carried out (`fillTrigger`) at the price a fill takes in a block
   whose oracle price is at it or past it, a stop being a market order once triggered,
   by anyone but the trader and their agent. A position closed or turned round by any fill loses its stop and its take; a take or a stop carried

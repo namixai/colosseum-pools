@@ -38,29 +38,46 @@ before the book (`fillTrigger`, anyone but the trader, in a block whose oracle p
   price, not on Hyperliquid's mark price, which takes in a book the trader can push. A stop reached is carried out;
   it cannot be taken off or moved: every function of the exam that changes anything (`place`, `fill`,
   `setTrigger`, `clearTrigger`, `setAgent`, `checkpoint`, `breach`, `expire`, `graduate`) has the book check its
-  block first (`settle`), so the trader's own call in the block of a touch finds the stop carried out.
-- **The check.** `poke()`, anyone's, does the work once a block; a second call in the block does nothing. On each
-  asset with an armed entry it reads the oracle price once (`PriceSeen`; none, `NoPrice`, and the entries wait) and
-  takes off two heaps everything the price reached: `below` (a long's stop, a short's take) and `above` (a short's
-  stop, a long's take). An entry waits for `armedAt` in a third heap, by block, which each check empties first, so
-  one armed in this block is checked in it. Each fill is a call of at most `FIRE_GAS` (200 000) gas whose failure
-  is reported (`Fired`, `ok` false) and undoes nothing else; an exam ended or out of time only loses its stop.
-- **Its caps.** A check carries out at most `MAX_FIRES` (4) entries and latches at most `MAX_LATCHES` (8) more
+  block first (`settle`), so the trader's own call in the block of a touch finds the stop carried out. A stop or a
+  take the oracle price has already reached when it is set is refused (`WouldTrigger`), as an exchange refuses a
+  stop that would trigger at once: set on the price's way, not behind it.
+- **The check.** `poke()`, anyone's, does the work once a block; a second call in the block does nothing. The first
+  needs `POKE_GAS` (1 500 000) gas left or reverts (`PokeGas`): a call too poor for the whole check does not take
+  the block from one that can. On each asset with an armed entry it reads the oracle price once (`PriceSeen`; none,
+  `NoPrice`, and the entries wait) and takes off two heaps everything the price reached: `below` (a long's stop, a
+  short's take) and `above` (a short's stop, a long's take). An entry waits for `armedAt` in a third heap, by block,
+  which each check empties first, so one armed in this block is checked in it. Each fill is a call of at most
+  `FIRE_GAS` (150 000) gas, in which the exam calls nothing in the book (`add` and `remove` refuse inside a check);
+  it answers `Fired.result`: 1 filled, 2 filled and the position closed (the book then takes the other trigger out
+  itself, with its own gas), 3 the exam had ended or ran out of time (it only loses its stop), 0 the call failed:
+  the entry is latched at the price and block of its touch, never erased, and tried again by later checks.
+- **Its caps.** A check carries out at most `MAX_FIRES` (3) entries and latches at most `MAX_LATCHES` (6) more
   (`Latched`): taken off the heap with the block's price and number, carried out at that price by a later check or
-  by its exam's own next call, and until then that exam refuses to act (`StopsPending`) if the gas cannot carry it
-  out. Past both, the rest stays on its heap for the next check, at that block's price (`TouchBacklog`); more than
-  `MAX_ARMS` (12) entries due at once wait a check (`ArmingBacklog`). Both backlogs are an alarm, not a rule. An
-  entry is also latched, never dropped, when the gas left would not give its call the whole `FIRE_GAS`: a caller
-  cannot starve one fill and let the check go on.
+  by its exam's own next call, the exam's oldest touch first, and until then that exam refuses to act
+  (`StopsPending`) if the gas cannot carry it out. An exam with a touch latched has its later touches latched behind
+  it, never carried out first. Latched exams are carried out in their order, `MAX_QUEUE_STEPS` (8) a check; one
+  whose call failed goes to the back. Past both caps, the rest stays on its heap for the next check, at that block's
+  price (`TouchBacklog`: an alarm, and a line of a payout's review, a touch carried out at a later price); more than
+  `MAX_ARMS` (8) entries due at once wait a check (`ArmingBacklog`). Both backlogs are an alarm, not a rule, and
+  neither is a `Gap`: a payout's review reads the oracle back for the blocks of either, as for a block nobody checked.
+  While its entry waits on a backlog, an exam is not held (`settle` counts latches only): that is the review's to
+  find.
+- **An ended exam.** `breach` and `expire` take its stops and takes out of the book: they would only weigh on its
+  heaps.
 - **What it cannot do.** A block nobody checked is invisible to the contract; the next check says so (`Gap(from,
   to)`), and a payout's review reads the oracle back for those blocks only. Nothing in code can promise a check in
-  every block: several independent callers and every call of the exam itself are what keep gaps away.
-- **Gas** (`test/sim/StopBook.t.sol`, `test_gas_ofAChecks` and `test_gas_ofACheckAtItsCaps_underASmallBlock`, cold
-  storage, without the 21 000 of a transaction; the oracle precompile is the simulator's, its gas on HyperEVM is to
-  be measured there): a check with entries on 0 assets 34 742, on 1 asset 31 939, on 5 assets 90 976, on 16 assets
-  255 283; a second check in the block 913 (warm); 16 assets and one fill 332 663; at its caps (4 fills, 8 latches,
-  12 armed, one asset) 1 042 985, inside HyperEVM's small block of 3 000 000.
-- **Sizes** (`forge build --sizes`, 20 November): `PaperExam` 21 417 bytes, `StopBook` 8 122, `SimPoolFactory`
+  every block: several independent callers and every call of the exam itself are what keep gaps away. Many entries
+  set ahead at levels one gap goes through can still pass the caps: each is a bought exam's, and the rest is
+  carried out at the next check's price (`TouchBacklog`).
+- **Gas** (`test/sim/StopBook.t.sol`, the `test_gas_*` tests and `test_review_H1_fireTriggerGas_underHalfItsCap`,
+  cold storage, without the 21 000 of a transaction; the oracle precompile is the simulator's, its gas on HyperEVM is
+  to be measured there): a check with entries on 0 assets 34 900, on 1 asset 32 097, on 5 assets 91 134, on 16
+  assets 255 441; a second check in the block 1 002 (warm); 16 assets and one fill 335 692; at its caps (3 fills, 6
+  latches, 8 armed, every exam cold) 1 221 788; an exam's first call in a block that pays the check at its caps, two
+  of its own latched stops and its `place` 1 379 639, inside HyperEVM's small block of 3 000 000; one
+  `fireTrigger` at the book, closing the position, 67 516 of its 150 000; `expire` of an exam with 32 entries
+  1 007 832.
+- **Sizes** (`forge build --sizes`, 20 November): `PaperExam` 21 777 bytes, `StopBook` 8 792, `SimPoolFactory`
   11 857.
 
 ## What it does
