@@ -23,12 +23,14 @@ Two loops in one process:
                    `claimPayout` for a passed stage; for each pool, `pay` while a payout is due: approved
                    and past its 72 hours, or past its 7 days unapproved.
 
-and, in a thread of its own, the stops' loop (ops/stop_filler.py, `--stops loop`, the default): every block, the
-stops and takes of the live exams against the oracle price, a stop reached sent at once, and an alarm for a reach
-that went by with no fill. Nothing in the two loops above holds it up: the slow pass, a receipt waited for and the
-node's rate limit stop only the thread they are in. The two threads send with the one filler key and take their
-nonces from one book. `--stops inline` puts the stops back into the fast loop as before; its settings
-(`--stop-rpc`, `--stop-tip-gwei`, the journal of prices, the flag of missed stops) are that module's.
+With `--stops loop` (COLOSSEUM_STOPS=loop; the default is `inline`, the fast loop's as above), the stops are a third
+loop's, in a thread of its own (ops/stop_filler.py): every block, the stops and takes of the live exams against the
+oracle price, a stop reached sent at once, and an alarm for a reach that went by with no fill. Nothing in the two loops
+above holds it up: the slow pass, a receipt waited for and the node's rate limit stop only the thread they are in.
+Every transaction of the filler key then goes out through that thread's one sender, the keeper's own handed to it and
+their receipts waited for here, so the two threads never number a transaction each. The keeper's loop checks the
+thread is there and moving. Its settings (`--stop-rpc`, `--stop-tip-gwei`, the journal of prices, the flag of missed
+stops) are that module's.
 
 The day's snapshot is what the daily loss is measured from: without it the base stays yesterday's,
 and a trader who leaves it after a good day loosens their own limit. The keeper takes it.
@@ -219,10 +221,11 @@ class SimKeeper:
         self.triggers: dict[tuple[str, int, bool], int] = {}  # (exam, asset, is_take) -> the block it acts from
         self.trigger_tried: dict[tuple[str, int, bool], int] = {}  # -> the block it was last looked at for
         self.filler: str | None = None
-        # With the stops' loop (ops/stop_filler.py) the stops and takes are its, in a thread of its own, and every send
-        # takes its nonce from the one book both threads share. Without it, as before: the fast loop tries them.
+        # With the stops' loop (ops/stop_filler.py, --stops loop) the stops and takes are its, in a thread of its own, and
+        # every transaction of the key goes out through its one sender (`outbox`). Without it, as before: the fast loop
+        # tries them and each send is c.send_tx's.
         self.stop_loop = None
-        self.nonces = None
+        self.outbox = None
         if state_path.exists():
             state = json.loads(state_path.read_text())
             if to_checksum_address(state["factory"]) != self.factory:
@@ -290,11 +293,11 @@ class SimKeeper:
         return rcpt
 
     def send_tx(self, to: str, data: bytes, gas: int | None = None) -> dict:
-        """One transaction from the keeper's wallet, its receipt waited for: on the nonces it shares with the stops'
-        loop when that runs, as c.send_tx otherwise."""
-        if self.nonces is None:
+        """One transaction from the keeper's wallet, its receipt waited for: handed to the stops' loop's one sender when
+        that runs, as c.send_tx otherwise."""
+        if self.outbox is None:
             return c.send_tx(self.wallet, to, data, gas=gas)
-        return self.nonces.send_and_wait(self.wallet, to, data, gas=gas)
+        return self.outbox.send_and_wait(to, data, gas=gas)
 
     # ── the slow pass ────────────────────────────────────────────────────────────────
 
@@ -603,13 +606,14 @@ def main(argv: list[str] | None = None) -> int:
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"sim-{args.deployment}.json"
     k = SimKeeper(record["SimPoolFactory"], wallet, sender, args.dry_run, state, int(record["block"]),
                   window=args.log_window, max_windows=args.max_windows)
+    thread = None
     if args.stops == "loop" and not args.once:
-        # The filler is known before the loop starts: its thread never waits on the keeper's node.
+        # The filler is known before the loop starts: its thread never waits on the keeper's node. A key that is not the
+        # filler sends nothing of the stops, and its own sends stay c.send_tx's.
         filler = wallet is not None and k.is_filler()
-        k.nonces = stop_filler.Nonces(wallet.address) if wallet is not None else None
-        k.stop_loop = stop_filler.build(args, k, state, wallet=wallet if filler else None,
-                                        nonces=k.nonces if filler else None)
-        stop_filler.start(k.stop_loop, args.stop_poll or args.poll)
+        k.stop_loop = stop_filler.build(args, k, state, wallet=wallet if filler else None)
+        k.outbox = k.stop_loop.sender
+        thread = stop_filler.start(k.stop_loop, args.stop_poll or args.poll)
     last_slow = 0.0
     while True:
         try:
@@ -618,6 +622,8 @@ def main(argv: list[str] | None = None) -> int:
                 last_slow = time.time()
             if args.once:
                 return 0
+            if thread is not None:
+                thread = stop_filler.keep_alive(k.stop_loop, thread, args.stop_poll or args.poll)
             latest = int(c.rpc("eth_blockNumber"), 16)
             if latest > k.fast_block:
                 k.fast_step(latest)
