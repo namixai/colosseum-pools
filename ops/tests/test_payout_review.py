@@ -1208,6 +1208,165 @@ class LateStopsAndTakes(unittest.TestCase):
         self.assertEqual(r.trigger_lates(both[addr(0x211)], oracle), {"lates": [], "atLeast": 0, "unread": 1})
 
 
+class MissedTouches(unittest.TestCase):
+    """The stops and takes of the payout's own accounts that the oracle reached while they stood and nobody carried out
+    then. The stage holds a long of 100 bought at a mark of 1 000 000 in block 1 000, with a stop at 950 000 set in block
+    1 001 that acts from 1 003; the oracle stands at the mark but where a test says it was lower."""
+
+    MARK, STOP, LOW = 1_000_000, 950_000, 940_000
+
+    @staticmethod
+    def e(name, block, index=0, **kw):
+        return {"name": name, "block": block, "index": index, "t": 1_000 * block, "tx": tx(80_000 + block), **kw}
+
+    def events(self, end="carried out", at=1_305, buy=True):
+        evs = [self.e("Started", 999, capital=100 * 10**6),
+               self.e("Filled", 1_000, asset=3, buy=buy, sz=100, px=self.MARK, cost=0, late=1, source=0),
+               self.e("TriggerSet", 1_001, asset=3, take=False, px=self.STOP if buy else 1_050_000, sz=0, armedAt=1_003)]
+        t = tx(99_000)
+        if end == "carried out":
+            evs += [{**self.e("TriggerCleared", at, 0, asset=3, take=False), "tx": t},
+                    {**self.e("Filled", at, 1, asset=3, buy=not buy, sz=100, px=self.LOW, cost=0, late=at - 1_003, source=0), "tx": t},
+                    {**self.e("TriggerFilled", at, 2, asset=3, take=False, sz=100, px=self.LOW, cost=0,
+                              trigger_px=self.STOP, source=0), "tx": t}]
+        elif end == "taken off":
+            evs.append({**self.e("TriggerCleared", at, asset=3, take=False), "tx": t})
+        elif end == "closed":
+            evs += [{**self.e("TriggerCleared", at, 0, asset=3, take=False), "tx": t},
+                    {**self.e("Filled", at, 1, asset=3, buy=not buy, sz=100, px=self.MARK, cost=0, late=1, source=0), "tx": t}]
+        elif end == "replaced":
+            evs.append(self.e("TriggerSet", at, asset=3, take=False, px=900_000, sz=0, armedAt=at + 2))
+        elif end == "ended":
+            evs.append(self.e("Stopped", at, status=3, reason=1, equity=0))
+        return evs
+
+    def prices(self, low=(), until=1_400):
+        return {b: self.LOW if b in low else self.MARK for b in range(990, until)}
+
+    def missed(self, evs, prices, every=1, latest=2_000):
+        return r.missed_touches(evs, {3: prices}, latest, every)
+
+    def world(self, low):
+        ch, t1, s1 = honest_world()
+        ch.d["latest"] = 2_000
+        ch.d["exam_events"] = {s1: self.events(), addr(0x201): [self.e("Started", 500, capital=100 * 10**6)]}
+        ch.d["oracle"] = {r.oracle_key(3, b): px for b, px in self.prices(low).items()}
+        ch.d["touchEvery"] = {s1: 60}
+        return ch, s1
+
+    def test_a_stop_the_oracle_reached_and_left_before_it_was_carried_out_is_shown_and_counted_against_nobody(self):
+        ch, s1 = self.world({*range(1_100, 1_131), *range(1_300, 1_306)})
+        got = r.review(ch.d, POOL, 0)
+        m = got["missedTouch"]
+        self.assertEqual(m["stage"], {"read": True, "every": 60, "spans": 1, "unread": 0, "missed": [
+            {"asset": 3, "take": False, "px": self.STOP, "side": 1, "armedAt": 1_003, "first": 1_100, "last": 1_130,
+             "reads": 31, "seen": False, "then": "carried out", "at": 1_305}]})
+        self.assertEqual(m["exam"], {"read": False, "every": None, "spans": 0, "unread": 0, "missed": []},
+                         "an account the review did not read along is said as not read")
+        self.assertEqual((got["verdict"], got["reasons"]), ("clean", []), "a fact shown, in no reason")
+        self.assertEqual(r.card(got, ch.d)["evidence"]["missedTouch"], m)
+        text = r.summary(got)
+        self.assertIn("  stops and takes the oracle reached and nobody carried out, stage: 1 stretches missed over 1 "
+                      "stops and takes that stood, read one block in 60\n    the stop at 950000 on asset 3 (long): the oracle at it or past it from block 1100, "
+                      "31 reads to block 1130; then carried out in block 1305", text)
+        self.assertIn("  stops and takes the oracle reached and nobody carried out, exam: not read", text)
+        # Reached only in the stretch it was carried out in, or held from `armedAt` to the close: nothing missed.
+        for low in (range(1_300, 1_306), range(990, 1_306)):
+            ch, _ = self.world(set(low))
+            self.assertEqual(r.review(ch.d, POOL, 0)["missedTouch"]["stage"]["missed"], [], low)
+
+    def test_how_a_stops_time_ended(self):
+        def ends(evs, latest=2_000):
+            return [(s["then"], s["end"], s["side"], s["armedAt"]) for s in r.trigger_spans(evs, latest)]
+        self.assertEqual(ends(self.events()), [("carried out", 1_305, 1, 1_003)])
+        self.assertEqual(ends(self.events("taken off", 1_200)), [("taken off", 1_200, 1, 1_003)])
+        self.assertEqual(ends(self.events("closed", 1_200)), [("closed", 1_200, 1, 1_003)])
+        self.assertEqual(ends(self.events("replaced", 1_200)), [("replaced", 1_200, 1, 1_003), ("standing", 2_000, 1, 1_202)])
+        self.assertEqual(ends(self.events("ended", 1_200)), [("ended", 1_200, 1, 1_003)])
+        self.assertEqual(ends(self.events("standing")), [("standing", 2_000, 1, 1_003)])
+        self.assertEqual(ends(self.events("taken off", 1_200, buy=False)), [("taken off", 1_200, -1, 1_003)], "on a short")
+        stepped = self.events("standing")[:3] + [self.e("StepPassed", 1_100, equity=0),
+                                                 self.e("TriggerSet", 1_101, asset=3, take=True, px=1, sz=0, armedAt=1_103)]
+        self.assertEqual(ends(stepped), [("ended", 1_100, 1, 1_003)], "a step starts flat: a trigger set then is on nothing")
+        # The take the stop's close closes with it is gone with the position, not carried out.
+        evs = self.events()
+        evs.insert(3, self.e("TriggerSet", 1_002, asset=3, take=True, px=1_100_000, sz=0, armedAt=1_004))
+        evs.insert(5, {**self.e("TriggerCleared", 1_305, 1, asset=3, take=True), "tx": evs[4]["tx"]})
+        self.assertEqual(ends(evs), [("carried out", 1_305, 1, 1_003), ("closed", 1_305, 1, 1_004)])
+
+    def test_a_stop_missed_and_then_taken_off_replaced_or_left_is_said_with_how_it_ended(self):
+        low = self.prices(set(range(1_100, 1_131)))
+        for end in ("taken off", "replaced", "closed", "ended", "standing"):
+            got = self.missed(self.events(end, 1_200), low)
+            at = 2_000 if end == "standing" else 1_200
+            self.assertEqual([(m["first"], m["last"], m["then"], m["at"]) for m in got["missed"]], [(1_100, 1_130, end, at)], end)
+        # Reached in the very block it was taken off in: it could still have been carried out there first.
+        got = self.missed(self.events("taken off", 1_200), self.prices({1_200}))
+        self.assertEqual([(m["first"], m["then"]) for m in got["missed"]], [(1_200, "taken off")])
+        # The stop that replaced it stands at 900 000, which the oracle never reached.
+        self.assertEqual(len(self.missed(self.events("replaced", 1_200), low)["missed"]), 1)
+        # A stop on a short is reached at its price or above; a take on a long at it or above.
+        up = {b: 1_060_000 if 1_100 <= b <= 1_110 else self.MARK for b in range(990, 2_001)}
+        self.assertEqual([m["side"] for m in self.missed(self.events("standing", buy=False), up)["missed"]], [-1])
+        take = [x if x["name"] != "TriggerSet" else {**x, "take": True, "px": 1_050_000} for x in self.events("standing")]
+        self.assertEqual([(m["take"], m["first"], m["last"]) for m in self.missed(take, up)["missed"]], [(True, 1_100, 1_110)])
+        self.assertEqual(self.missed(take, low)["missed"], [], "a take on a long is not reached by a fall")
+
+    def test_before_it_could_act_not_read_and_a_zero_price_are_no_touch(self):
+        self.assertEqual(self.missed(self.events(), self.prices({1_001, 1_002, *range(1_300, 1_306)}))["missed"], [],
+                         "before `armedAt` no trigger acts")
+        gone = {b: px for b, px in self.prices(set(range(1_100, 1_131))).items() if not 1_090 <= b <= 1_140}
+        got = self.missed(self.events(), gone)
+        self.assertEqual((got["missed"], got["unread"]), ([], 51))
+        zero = {r.oracle_key(3, b): (0 if 1_100 <= b <= 1_130 else self.MARK) for b in range(990, 1_400)}
+        got = r.missed_touches(self.events(), r.oracle_by_asset(zero), 2_000, 1)
+        self.assertEqual((got["missed"], got["unread"]), ([], 31), "a zero price is no price")
+        self.assertEqual(r.missed_touches(self.events(), {}, 2_000, None)["read"], False)
+        self.assertEqual(r.missed_touches(self.events("standing"), {}, 2_000, 60)["unread"], len(range(1_003, 2_001, 60)) + 1)
+
+    def test_a_sighting_on_chain_is_a_touch_and_two_reads_at_the_price_are_one_stretch(self):
+        evs = self.events()
+        evs.insert(3, self.e("TriggerSeen", 1_150, asset=3, take=False, oracle=self.LOW, seenAt=1_150))
+        got = self.missed(evs, {1_003: self.MARK, 1_200: self.MARK, 1_305: self.LOW}, every=60)
+        self.assertEqual([(m["first"], m["last"], m["reads"], m["seen"]) for m in got["missed"]], [(1_150, 1_150, 1, True)])
+        # Nothing read off the price between the sighting and the close: what fell between is not known, and the two
+        # are taken as the close's own stretch.
+        self.assertEqual(self.missed(evs, {1_003: self.MARK, 1_305: self.LOW}, every=60)["missed"], [])
+        self.assertEqual(self.missed(evs, {1_003: self.MARK, 1_100: self.MARK, 1_305: self.LOW}, every=60)["missed"], [])
+        # A stretch with a read off the price after it, up to the close, is not the close's own, even as the last one.
+        got = self.missed(self.events(), {**self.prices(set(range(1_100, 1_131))), 1_305: self.MARK})
+        self.assertEqual([(m["first"], m["last"]) for m in got["missed"]], [(1_100, 1_130)])
+
+    def test_the_oracle_is_read_along_each_stop_one_block_in_sixty_at_the_least(self):
+        dense = {r.oracle_key(3, b): px for b, px in self.prices({*range(1_100, 1_131), *range(1_300, 1_306)}).items()}
+        missing = r.oracle_key(3, 1_063)
+        asked = []
+
+        def oracle_at(asset, block):
+            asked.append(block)
+            return None if r.oracle_key(asset, block) == missing else dense.get(r.oracle_key(asset, block))
+
+        s1, s2 = addr(0x301), addr(0x302)
+        events = {s1: self.events(), s2: [{**x, "tx": tx(int(x["tx"], 16) + 7)} for x in self.events()], addr(0x303): self.events()}
+        oracle = {r.oracle_key(3, 1_003): self.MARK}  # what was read already, or a --prices file gave, stands
+        with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
+            every = r.read_touch_oracle([s1, s2], events, oracle, 2_000)
+        self.assertEqual(every, {s1: 60, s2: 60})
+        self.assertEqual(asked, [1_063, 1_123, 1_183, 1_243, 1_303, 1_305],
+                         "from `armedAt` one in sixty and the last block, each asked once; the price not given is not asked again")
+        self.assertNotIn(missing, oracle)
+        got = r.missed_touches(events[s1], r.oracle_by_asset(oracle), 2_000, every[s1])
+        self.assertEqual(([(m["first"], m["reads"]) for m in got["missed"]], got["unread"]), ([(1_123, 1)], 1))
+        # More blocks than the reads allow at sixty: the step grows to fit them.
+        asked.clear()
+        with mock.patch.object(r, "oracle_at", side_effect=oracle_at):
+            self.assertEqual(r.read_touch_oracle([s1], events, {}, 2_000, reads=2), {s1: 152})
+        self.assertEqual(asked, [1_003, 1_155, 1_305])
+        self.assertEqual(r.touch_every([], 1), 60)
+        self.assertEqual((r.TOUCH_EVERY, r.TOUCH_READS), (60, 3000))
+        self.assertIn("uint16 public constant FALLBACK_BLOCKS = 60;", _source("src/exam/PaperExam.sol"))
+
+
 class Unread(unittest.TestCase):
     def test_an_account_not_read_is_said(self):
         ch, _, s1 = honest_world()
@@ -1270,6 +1429,9 @@ class TheDocument(unittest.TestCase):
                 mock.patch("builtins.print"):
             self.assertEqual(r.main(["--deployment", "x", "--out", d]), 0)
             got = json.loads((pathlib.Path(d) / f"{POOL}-0.json").read_text())
+            self.assertEqual(r.read_chain.call_args.args[3], r.TOUCH_READS)
+            r.main(["--deployment", "x", "--touch-reads", "500"])
+            self.assertEqual(r.read_chain.call_args.args[3], 500)
         self.assertEqual((got["schema"], got["id"]), ("payout-review/3", 0))
 
 
@@ -1534,9 +1696,15 @@ class ReadingTheChain(unittest.TestCase):
 
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", side_effect=view), \
                 mock.patch.object(r.c, "call_view", side_effect=call_view), \
-                mock.patch.object(r, "read_trigger_oracle", wraps=r.read_trigger_oracle) as back:
-            got = r.read_chain({"SimPoolFactory": factory, "usdc": USDC, "block": 10}, prices={"9:9": 1})
+                mock.patch.object(r, "read_trigger_oracle", wraps=r.read_trigger_oracle) as back, \
+                mock.patch.object(r, "read_touch_oracle", wraps=r.read_touch_oracle) as along:
+            got = r.read_chain({"SimPoolFactory": factory, "usdc": USDC, "block": 10}, prices={"9:9": 1}, touch_reads=500)
         back.assert_called_once()
+        along.assert_called_once()
+        self.assertEqual(along.call_args.args[0], [s1, e1], "along the stops of the waiting payout's own accounts only")
+        self.assertIs(along.call_args.args[2], got["oracle"])
+        self.assertEqual(along.call_args.args[3:], (40, 500))
+        self.assertEqual(got["touchEvery"], {s1: 60, e1: 60})
         self.assertIs(back.call_args.args[1], got["oracle"], "the stops' prices go where the review reads them")
         self.assertEqual(list(back.call_args.args[0]), [e1, s1], "every account of the factory, not only the payouts'")
         self.assertEqual((got["now"], got["latest"], got["pools"]), (1_000, 40, [POOL]))
