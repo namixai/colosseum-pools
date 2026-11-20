@@ -471,6 +471,19 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     reach. The oracle is read back from each close of every account of the factory, 60 blocks at most (the
     widest window an order may have); a stop that stood reached longer is counted as at least 60, and one
     whose prices were not read is said as not read and counted on neither side;
+  - each stop and take of the stage and of the exam that the oracle reached while it stood and nobody carried
+    out then, and how its time ended: carried out later, taken off by the trader, replaced, gone with the
+    position, the account ended, or still standing. A stop missed leaves the position open, and if the price
+    comes back the trader is spared the loss; the lateness above counts from the last reach and does not see
+    it. A trigger's time runs from `armedAt` to the block it ended in. The oracle is read along it one block in
+    60 at the least (`FALLBACK_BLOCKS`, also the widest window an order may have), 3 000 requests an
+    account at the most (`--touch-reads`), the step growing to fit them with each trigger's first and last
+    block counted; past them, in the order the triggers were set, a block is said as not read. A stretch
+    held at the price 60 blocks or the step is never missed by the reading, a shorter one may be. These
+    prices are kept apart from the review's others: no other check sees them. A block it was shown to have
+    triggered in (`TriggerSeen`) counts as reached. Two reads at the price with none off it between are one
+    stretch; for a trigger carried out, its last such stretch is the close's own. This is a fact shown to
+    whoever signs: it is in no reason and changes no verdict;
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
     under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
   - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
