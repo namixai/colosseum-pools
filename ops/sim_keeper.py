@@ -23,6 +23,13 @@ Two loops in one process:
                    `claimPayout` for a passed stage; for each pool, `pay` while a payout is due: approved
                    and past its 72 hours, or past its 7 days unapproved.
 
+and, in a thread of its own, the stops' loop (ops/stop_filler.py, `--stops loop`, the default): every block, the
+stops and takes of the live exams against the oracle price, a stop reached sent at once, and an alarm for a reach
+that went by with no fill. Nothing in the two loops above holds it up: the slow pass, a receipt waited for and the
+node's rate limit stop only the thread they are in. The two threads send with the one filler key and take their
+nonces from one book. `--stops inline` puts the stops back into the fast loop as before; its settings
+(`--stop-rpc`, `--stop-tip-gwei`, the journal of prices, the flag of missed stops) are that module's.
+
 The day's snapshot is what the daily loss is measured from: without it the base stays yesterday's,
 and a trader who leaves it after a good day loosens their own limit. The keeper takes it.
 
@@ -212,6 +219,10 @@ class SimKeeper:
         self.triggers: dict[tuple[str, int, bool], int] = {}  # (exam, asset, is_take) -> the block it acts from
         self.trigger_tried: dict[tuple[str, int, bool], int] = {}  # -> the block it was last looked at for
         self.filler: str | None = None
+        # With the stops' loop (ops/stop_filler.py) the stops and takes are its, in a thread of its own, and every send
+        # takes its nonce from the one book both threads share. Without it, as before: the fast loop tries them.
+        self.stop_loop = None
+        self.nonces = None
         if state_path.exists():
             state = json.loads(state_path.read_text())
             if to_checksum_address(state["factory"]) != self.factory:
@@ -256,7 +267,7 @@ class SimKeeper:
             log("would_send", to=to, call=sig.split("(")[0])
             return True
         try:
-            rcpt = c.transact(self.wallet, to, sig, list(types), list(args))
+            rcpt = self.send_tx(to, data)
             log("sent", to=to, call=sig.split("(")[0], tx=rcpt["transactionHash"])
             return True
         except Exception as exc:  # one failed call must not stop the pass
@@ -269,7 +280,7 @@ class SimKeeper:
             log("would_fill", exam=exam)
             return None
         try:
-            rcpt = c.send_tx(self.wallet, exam, c.encode_call("fill()"), gas=FILL_GAS)
+            rcpt = self.send_tx(exam, c.encode_call("fill()"), gas=FILL_GAS)
         except Exception as exc:
             log("fill_failed", exam=exam, error=refusal(exc))
             return None
@@ -277,6 +288,13 @@ class SimKeeper:
         log("filled", exam=exam, tx=rcpt["transactionHash"], block=int(rcpt["blockNumber"], 16),
             late=late[0][0] if late else None, source=late[0][1] if late else None)
         return rcpt
+
+    def send_tx(self, to: str, data: bytes, gas: int | None = None) -> dict:
+        """One transaction from the keeper's wallet, its receipt waited for: on the nonces it shares with the stops'
+        loop when that runs, as c.send_tx otherwise."""
+        if self.nonces is None:
+            return c.send_tx(self.wallet, to, data, gas=gas)
+        return self.nonces.send_and_wait(self.wallet, to, data, gas=gas)
 
     # ── the slow pass ────────────────────────────────────────────────────────────────
 
@@ -432,7 +450,7 @@ class SimKeeper:
                 if self.fill(exam) is not None or self.dry or not self.is_filler():
                     del self.orders[exam]
                     self.tried.pop(exam, None)
-        return sent + self.trigger_step(latest)
+        return sent + (self.trigger_step(latest) if self.stop_loop is None else [])  # with the loop, the stops are its
 
     def trigger_step(self, latest: int) -> list[str]:
         """The stops and takes armed for the next block: each is tried, once a block, by a call that changes
@@ -466,7 +484,10 @@ class SimKeeper:
     def refresh_triggers(self, exam: str) -> None:
         """The exam's stops and takes as the contract holds them, read in every slow pass: a keeper started again
         knows the ones set while it was down, which the fast loop's window of logs no longer reaches (review of
-        #297)."""
+        #297). With the stops' loop, read at one block and handed to it."""
+        if self.stop_loop is not None:
+            self.stop_loop.reread(exam)
+            return
         for asset in view(exam, "rules()", RULES)[3]:
             for is_take, getter in ((False, "stopOf(uint32)"), (True, "takeOf(uint32)")):
                 px, _, armed_at, _ = view(exam, getter, TRIGGER, ["uint32"], [asset])
@@ -533,6 +554,8 @@ def measure(exam: str, trader, asset: int, size: int, orders: int, out: pathlib.
 
 
 def main(argv: list[str] | None = None) -> int:
+    from ops import stop_filler  # it reads this module's events and numbers, so after them
+
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--deployment", required=True, help="label of a record in deployments/ with a SimPoolFactory")
     p.add_argument("--wallet", default="keeper", help="the factory's filler, or any funded key on the network")
@@ -552,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--size", type=int, default=12, help="size units per --measure order (BTC: 0.00012, over 10 USDC)")
     p.add_argument("--orders", type=int, default=20)
     p.add_argument("--measure-out", default="ops/state/sim-measure.json")
+    stop_filler.add_args(p)
     sn.add_args(p, service=True)
     args = p.parse_args(argv)
 
@@ -579,6 +603,13 @@ def main(argv: list[str] | None = None) -> int:
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"sim-{args.deployment}.json"
     k = SimKeeper(record["SimPoolFactory"], wallet, sender, args.dry_run, state, int(record["block"]),
                   window=args.log_window, max_windows=args.max_windows)
+    if args.stops == "loop" and not args.once:
+        # The filler is known before the loop starts: its thread never waits on the keeper's node.
+        filler = wallet is not None and k.is_filler()
+        k.nonces = stop_filler.Nonces(wallet.address) if wallet is not None else None
+        k.stop_loop = stop_filler.build(args, k, state, wallet=wallet if filler else None,
+                                        nonces=k.nonces if filler else None)
+        stop_filler.start(k.stop_loop, args.stop_poll or args.poll)
     last_slow = 0.0
     while True:
         try:

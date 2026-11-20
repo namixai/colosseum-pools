@@ -188,7 +188,10 @@ def gas_balance(wallet) -> int | None:
 
 
 def log(event: str, **fields) -> None:
-    print(json.dumps({"t": int(time.time()), "event": event, **fields}, default=str), flush=True)
+    # One write a line: the simulated pools' keeper logs from two threads (ops/stop_filler.py), and print's two writes, the
+    # text and then its end, could let the other thread's line in between.
+    sys.stdout.write(json.dumps({"t": int(time.time()), "event": event, **fields}, default=str) + "\n")
+    sys.stdout.flush()
 
 
 def view(addr: str, sig: str, out: str, types=(), args=()):
