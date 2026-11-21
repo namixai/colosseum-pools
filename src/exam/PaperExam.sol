@@ -35,6 +35,23 @@ interface IExamPassed {
     function examPassed() external;
 }
 
+/// The factory's stop book (`src/sim/StopBook.sol`), as an exam calls it.
+interface IStopBook {
+    function add(uint32 asset, bool isTake, bool below, uint64 level, uint64 armedAt) external;
+    function remove(uint32 asset, bool isTake) external;
+    function settle(address exam) external returns (uint256 pending);
+}
+
+/// How an exam started with a filler finds its stop book: its pool's factory's (`SimPool.factory`,
+/// `SimPoolFactory.stopBook`).
+interface IHasFactory {
+    function factory() external view returns (address);
+}
+
+interface IHasStopBook {
+    function stopBook() external view returns (address);
+}
+
 /// @title PaperExam
 /// @notice An exam traded on no exchange and on nobody's money. The trader's orders are
 ///         transactions, the position is a number here, and every price is the mark the chain
@@ -68,6 +85,18 @@ interface IExamPassed {
 ///      fill a percent worse than it. A book that does not answer, is empty on a side or crossed
 ///      fills at the oracle. Equity, the day's snapshot and every rule stay on the oracle price.
 ///
+///      Stops and takes. An exam started with a filler keeps them in its factory's stop book too
+///      (`stopBook`): the first block that checks the oracle price at a stop's level or past it carries the
+///      stop out in that same block, at that block's oracle price, worse than the level through a gap, as a
+///      market stop fills on the exchange; at the book, at the book's price but never more than `maxWorseBps`
+///      worse than that oracle price: past it, at that bound, never refused. Anyone may check a block
+///      (`StopBook.poke`), and every function here that changes anything has the book check its block first
+///      (`settled`): a stop the price has reached is carried out before the trader can take it back or move
+///      it, and while one of this exam's stops is latched in the book (reached, not yet carried out) nothing
+///      here acts. That call comes back into this exam (`fireTrigger`) before the function reads anything: on
+///      purpose. An exam started without a filler (`initialize`) has no book: there anyone but the trader
+///      carries a stop out (`fillTrigger`) in a block whose oracle price is at it or past it.
+///
 ///      What this does not model: the depth of a book (a fill takes the mark at any size),
 ///      funding, and resting orders.
 contract PaperExam is Initializable {
@@ -90,13 +119,12 @@ contract PaperExam is Initializable {
     /// A stop or a take on one asset's position. Once the oracle price is at `px` or past it, against the
     /// position for a stop, for it for a take, it closes `sz` of the position (zero, or more than is open:
     /// all of it) at the price a fill takes in that block. It acts from block `armedAt`, `fillDelay` after it
-    /// was set; `seenAt` is the block in which somebody showed it had triggered, and for `FALLBACK_BLOCKS` blocks
-    /// from `FALLBACK_BLOCKS` later anyone may carry it out while it still holds. Zero `px`: none.
+    /// was set. With a stop book, the first block the book checks at that price carries it out (see the
+    /// contract's notes). Zero `px`: none.
     struct Trigger {
         uint64 px;
         uint64 sz;
         uint64 armedAt;
-        uint64 seenAt;
     }
 
     uint256 public constant MAX_STEPS = 4;
@@ -112,8 +140,7 @@ contract PaperExam is Initializable {
     /// How long after UTC midnight the day's snapshot may be taken.
     uint256 public constant CHECKPOINT_WINDOW = 15 minutes;
     /// With a filler: blocks after an order's window from which anyone may fill it, if it only
-    /// makes a position smaller, and for as many blocks again; the same from a stop or a take seen
-    /// to trigger. About a minute of HyperEVM's small blocks.
+    /// makes a position smaller, and for as many blocks again. About a minute of HyperEVM's small blocks.
     uint16 public constant FALLBACK_BLOCKS = 60;
     /// The drawdown line kinds (`drawdownKind`).
     uint8 public constant FROM_START = 0;
@@ -125,6 +152,10 @@ contract PaperExam is Initializable {
     uint8 public constant SOURCE_BOOK = 1;
     /// An exam that fills at the book, whose book did not answer, was empty on a side or crossed: the oracle.
     uint8 public constant SOURCE_ORACLE_FALLBACK = 2;
+    /// What `fireTrigger` answers the stop book (`StopBook.FILLED`, `CLOSED`, `ENDED`).
+    uint8 internal constant FIRE_FILLED = 1;
+    uint8 internal constant FIRE_CLOSED = 2;
+    uint8 internal constant FIRE_ENDED = 3;
 
     /// The account that created this exam, and reads its result.
     address public pool;
@@ -180,6 +211,9 @@ contract PaperExam is Initializable {
     /// Whether the exam tells its pool when it passes (`IExamPassed.examPassed`), so the pool keeps the payout
     /// it owes from the pass on and not only from the stage (`initializeWithFiller`).
     bool public tellsPool;
+    /// The factory's stop book, which carries out this exam's stops and takes: set for an exam started with a
+    /// filler, and only for one; zero for an exam started without (`initialize`).
+    address public stopBook;
 
     event Started(address indexed trader, address indexed pool, uint64 capital);
     event AgentSet(address indexed agent);
@@ -194,12 +228,17 @@ contract PaperExam is Initializable {
     event TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt);
     /// Removed by the trader, or because the position it was on was closed or turned round.
     event TriggerCleared(uint32 indexed asset, bool isTake);
-    /// Shown to have triggered at `oracle` in block `seenAt`: from `seenAt + FALLBACK_BLOCKS`, for as many blocks, anyone
-    /// may carry it out.
-    event TriggerSeen(uint32 indexed asset, bool isTake, uint64 oracle, uint256 seenAt);
-    /// Carried out: `sz` closed at `px`, which cost `cost`, once the oracle had reached `triggerPx`.
+    /// Carried out: `sz` closed at `px`, which cost `cost`, once the oracle had reached `triggerPx` in block
+    /// `touchBlock`, the first block checked at that price (with a stop book), or this block (without one).
     event TriggerFilled(
-        uint32 indexed asset, bool isTake, uint64 sz, uint64 px, uint256 cost, uint64 triggerPx, uint8 source
+        uint32 indexed asset,
+        bool isTake,
+        uint64 sz,
+        uint64 px,
+        uint256 cost,
+        uint64 triggerPx,
+        uint8 source,
+        uint256 touchBlock
     );
     event DaySnapshot(uint32 indexed day, int256 equity);
     event StepPassed(uint8 indexed step, int256 equity);
@@ -235,6 +274,17 @@ contract PaperExam is Initializable {
     error NoTrigger();
     error ZeroPrice();
     error NotTriggered(uint64 oracle, uint64 triggerPx);
+    error NotBook();
+    error StopsPending();
+    error WouldTrigger(uint64 oracle, uint64 px);
+
+    /// The stop book checks this block, and carries out this exam's latched stops, before anything here is read:
+    /// a stop the price has reached is carried out first. Not one latched may be left.
+    modifier settled() {
+        address b = stopBook;
+        if (b != address(0) && IStopBook(b).settle(address(this)) != 0) revert StopsPending();
+        _;
+    }
 
     modifier inStatus(Status s) {
         if (status != s) revert BadStatus(status);
@@ -255,7 +305,8 @@ contract PaperExam is Initializable {
     ///         fill takes the book's price, at most `maxWorseBps_` (1 to 500) worse than the oracle's;
     ///         without it, the oracle's, and `maxWorseBps_` is zero. `drawdownKind_` is how the
     ///         drawdown line is drawn: `FROM_START` or `TRAILING_TO_START`. With `tellsPool_` the pass
-    ///         calls the pool's `examPassed()`, and a pool that refuses it refuses the pass.
+    ///         calls the pool's `examPassed()`, and a pool that refuses it refuses the pass. The caller is a
+    ///         simulated pool: the stop book is its factory's (`stopBook`), and an exam with a filler has one.
     function initializeWithFiller(
         address trader_,
         Rules calldata rules_,
@@ -274,6 +325,9 @@ contract PaperExam is Initializable {
         fromBook = fromBook_;
         maxWorseBps = maxWorseBps_;
         tellsPool = tellsPool_;
+        address book = IHasStopBook(IHasFactory(msg.sender).factory()).stopBook();
+        if (book == address(0)) revert BadTerms();
+        stopBook = book;
         emit FillerSet(filler_, fromBook_, maxWorseBps_);
         _initialize(trader_, rules_, terms_);
     }
@@ -347,7 +401,7 @@ contract PaperExam is Initializable {
     // ── the trader ─────────────────────────────────────────────────�
 
     /// @notice Lets `agent_` place orders as well as the trader; zero takes that back.
-    function setAgent(address agent_) external {
+    function setAgent(address agent_) external settled {
         if (msg.sender != trader) revert NotTrader();
         // The filler as the trader's agent would be refused its own fills (`OwnOrder`), and the
         // trader could block it and let an order lapse at will (review of cp#258).
@@ -358,7 +412,7 @@ contract PaperExam is Initializable {
 
     /// @notice Leaves an order to buy or sell `sz` of `asset` at the mark of a later block. One
     ///         order waits at a time; an order nobody filled in its window is replaced.
-    function place(uint32 asset, bool isBuy, uint64 sz) external inStatus(Status.Active) {
+    function place(uint32 asset, bool isBuy, uint64 sz) external settled inStatus(Status.Active) {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if (_over()) revert TooLate();
         if (!_allowedAsset[asset]) revert AssetNotAllowed(asset);
@@ -383,7 +437,7 @@ contract PaperExam is Initializable {
     ///         position smaller; after them it has lapsed, as one nobody filled. An order that
     ///         would take the account over its leverage rule is refused; one that only reduces a
     ///         position never is.
-    function fill() external inStatus(Status.Active) {
+    function fill() external settled inStatus(Status.Active) {
         Order memory o = pending;
         if (o.sz == 0) revert NoOrder();
         uint256 from = _fillFrom(o);
@@ -400,7 +454,7 @@ contract PaperExam is Initializable {
         }
         if (_over()) revert TooLate();
         delete pending;
-        (uint64 px, uint256 cost, uint8 source) = _apply(o.asset, o.isBuy, o.sz, before);
+        (uint64 px, uint256 cost, uint8 source) = _apply(o.asset, o.isBuy, o.sz, before, _mark(o.asset), false);
         emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);
     }
 
@@ -409,69 +463,72 @@ contract PaperExam is Initializable {
     /// @notice Sets the stop (`isTake` false) or the take of the position in `asset`, replacing the one there:
     ///         close `sz` of it (zero: all of it) once the oracle price reaches `px`. The trader or their agent.
     ///         It acts `fillDelay` blocks after it is set, as an order fills no sooner: a stop set past the
-    ///         price is not a way round the delay.
-    function setTrigger(uint32 asset, bool isTake, uint64 px, uint64 sz) external inStatus(Status.Active) {
+    ///         price is not a way round the delay. With a stop book, the book gets it too, in place of the old one,
+    ///         and one the oracle price has already reached is refused (`WouldTrigger`), as an exchange refuses a
+    ///         stop that would trigger at once: a stop is set on the price's way, not behind it. With no oracle price
+    ///         in the block that cannot be told, and it reverts (`NoPrice`).
+    function setTrigger(uint32 asset, bool isTake, uint64 px, uint64 sz) external settled inStatus(Status.Active) {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if (_over()) revert TooLate();
-        if (positionOf[asset] == 0) revert NoPosition();
+        int256 pos = positionOf[asset];
+        if (pos == 0) revert NoPosition();
         if (px == 0) revert ZeroPrice();
         uint64 armedAt = uint64(block.number) + _terms.fillDelay;
+        // A long's stop and a short's take fire at the price or below it; the other two at it or above.
+        bool below = isTake == (pos < 0);
+        address b = stopBook;
+        if (b != address(0)) {
+            uint64 oracle = _mark(asset);
+            if (below ? oracle <= px : oracle >= px) revert WouldTrigger(oracle, px);
+            IStopBook(b).add(asset, isTake, below, px, armedAt);
+        }
         Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
-        (t.px, t.sz, t.armedAt, t.seenAt) = (px, sz, armedAt, 0);
+        (t.px, t.sz, t.armedAt) = (px, sz, armedAt);
         emit TriggerSet(asset, isTake, px, sz, armedAt);
     }
 
-    /// @notice Removes the stop or the take of the position in `asset`. The trader or their agent.
-    function clearTrigger(uint32 asset, bool isTake) external {
+    /// @notice Removes the stop or the take of the position in `asset`. The trader or their agent. With a stop book,
+    ///         one the price has reached is already carried out (`settled`): there is none left to remove.
+    function clearTrigger(uint32 asset, bool isTake) external settled {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if ((isTake ? takeOf[asset] : stopOf[asset]).px == 0) revert NoTrigger();
-        _clear(asset, isTake);
+        _clear(asset, isTake, true);
     }
 
-    /// @notice Records that the stop or the take of `asset` has triggered now: for the `FALLBACK_BLOCKS` blocks that
-    ///         start `FALLBACK_BLOCKS` after this one anyone may carry it out while it still holds, so a filler that
-    ///         stops keeps no position open. Anyone. Seen again only once those blocks are over, so nobody moves them on.
-    function seeTrigger(uint32 asset, bool isTake) external inStatus(Status.Active) {
-        Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
-        if (t.seenAt != 0 && block.number < uint256(t.seenAt) + 2 * FALLBACK_BLOCKS) return;
-        uint64 oracle = _triggered(asset, isTake, t);
-        t.seenAt = uint64(block.number);
-        emit TriggerSeen(asset, isTake, oracle, block.number);
-    }
-
-    /// @notice Carries out the stop or the take of `asset` once the oracle price in this block has reached it, at
-    ///         the price a fill takes in this block, with its cost. With a filler, the filler, or anyone in the
-    ///         `FALLBACK_BLOCKS` blocks that start `FALLBACK_BLOCKS` after it was seen; without one, anyone but the
-    ///         trader and their agent. `Filled.late` counts from `armedAt`, the first block it could act in.
+    /// @notice Without a stop book: carries out the stop or the take of `asset` once the oracle price in this block
+    ///         has reached it, at the price a fill takes in this block, with its cost. Anyone but the trader and
+    ///         their agent. `Filled.late` counts from `armedAt`, the first block it could act in.
     function fillTrigger(uint32 asset, bool isTake) external inStatus(Status.Active) {
-        Trigger memory t = isTake ? takeOf[asset] : stopOf[asset];
-        if (filler == address(0)) {
-            if (msg.sender == trader || msg.sender == agent) revert OwnOrder();
-        } else if (msg.sender != filler && (t.seenAt == 0 || !_inFallback(t.seenAt))) {
-            revert NotFiller();
-        }
+        if (stopBook != address(0)) revert NotBook();
+        if (msg.sender == trader || msg.sender == agent) revert OwnOrder();
         if (_over()) revert TooLate();
-        _triggered(asset, isTake, t);
-        int256 before = positionOf[asset];
-        uint256 open = _abs(before);
-        uint64 sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;
-        _clear(asset, isTake);
-        (uint64 px, uint256 cost, uint8 source) = _apply(asset, before < 0, sz, before);
-        // An order waiting on this asset was made for the position the trigger has just closed: it would open the
-        // other side with no stop, and the trader could not take it back inside its window (review of #297).
-        Order memory o = pending;
-        if (positionOf[asset] == 0 && o.sz != 0 && o.asset == asset) {
-            delete pending;
-            emit Lapsed(o.asset, o.isBuy, o.sz);
+        Trigger memory t = isTake ? takeOf[asset] : stopOf[asset];
+        _fire(asset, isTake, t, _triggered(asset, isTake, t), block.number);
+    }
+
+    /// @notice The stop book carries out the stop or the take of `asset`, at level `level` and armed at `armedAt`,
+    ///         reached by the oracle price `px` in block `touchBlock`: at `px`, or at the book's price, never more
+    ///         than `maxWorseBps` worse than `px` (past it, at that bound). Only the stop book. Returns `FIRE_CLOSED`
+    ///         if that closed the position (its other trigger is gone with it: the book takes it out itself),
+    ///         `FIRE_FILLED` if not, and `FIRE_ENDED`, having removed the stop, if the exam has ended or ran out of
+    ///         time. It calls nothing in the book: the book takes the entry out once this has answered.
+    function fireTrigger(uint32 asset, bool isTake, uint64 level, uint64 armedAt, uint64 px, uint64 touchBlock)
+        external
+        returns (uint8)
+    {
+        if (msg.sender != stopBook) revert NotBook();
+        Trigger memory t = isTake ? takeOf[asset] : stopOf[asset];
+        if (t.px != level || t.armedAt != armedAt) revert NoTrigger();
+        if (status != Status.Active || _over()) {
+            _clear(asset, isTake, false);
+            return FIRE_ENDED;
         }
-        // A trade like any fill for whoever reads `Filled` (the checker's pairs, the days with a fill), late by the
-        // blocks since it could first act; `TriggerFilled` right after it says it was a stop or a take (review of #297).
-        emit Filled(asset, before < 0, sz, px, cost, block.number - t.armedAt, source);
-        emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source);
+        _fire(asset, isTake, t, px, touchBlock);
+        return positionOf[asset] == 0 ? FIRE_CLOSED : FIRE_FILLED;
     }
 
     /// @notice Takes the day's snapshot, in the first minutes of the UTC day. Anyone may.
-    function checkpoint() external inStatus(Status.Active) {
+    function checkpoint() external settled inStatus(Status.Active) {
         if (block.timestamp % 1 days >= CHECKPOINT_WINDOW) revert OutsideCheckpointWindow();
         uint32 today = _today();
         if (today <= day) revert AlreadyCheckpointed();
@@ -487,7 +544,7 @@ contract PaperExam is Initializable {
     }
 
     /// @notice Ends the exam if a rule is broken right now. Anyone may call it.
-    function breach() external inStatus(Status.Active) {
+    function breach() external settled inStatus(Status.Active) {
         (int256 eq, uint256 ntl) = _book();
         Breach reason = _judge(eq, ntl);
         if (reason == Breach.None) revert NoBreach();
@@ -497,7 +554,7 @@ contract PaperExam is Initializable {
     /// @notice Ends an exam whose step ran past its deadline, or went longer without a fill than
     ///         its terms allow. Anyone may call it. It reads no price, so a price that will not
     ///         answer cannot keep an exam past its time; an expired exam records no equity.
-    function expire() external inStatus(Status.Active) {
+    function expire() external settled inStatus(Status.Active) {
         if (!_over()) revert NotOver();
         _end(Status.Expired, Breach.None, 0);
     }
@@ -506,7 +563,7 @@ contract PaperExam is Initializable {
     ///         enough days traded. The last step passes the exam; any other starts the next one
     ///         on a fresh balance. Only the trader or their agent: the pass starts the clock the
     ///         trader then has to take the account, and nobody else picks that moment for them.
-    function graduate() external inStatus(Status.Active) {
+    function graduate() external settled inStatus(Status.Active) {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if (_over()) revert TooLate();
         (int256 eq, uint256 ntl) = _book();
@@ -535,14 +592,43 @@ contract PaperExam is Initializable {
 
     // ── internals ───────────────────────────────────────────────�
 
-    /// @dev Fills `sz` of `asset` on the side `isBuy` at this block's price: the position, the balance, the cost,
-    ///      the leverage rule for a fill that grows the position, the trading day. A position closed or turned
-    ///      round loses its stop and its take.
-    function _apply(uint32 asset, bool isBuy, uint64 sz, int256 before)
+    /// @dev Closes `sz` of the position (all of it for zero or more) for the stop or the take `t` of `asset`, at the
+    ///      oracle price `oracle` or the book's from it, never refused (`_fillPrice`; only an exam with a filler, so
+    ///      with a stop book, fills at the book), as reached in block `touchBlock`.
+    function _fire(uint32 asset, bool isTake, Trigger memory t, uint64 oracle, uint256 touchBlock) internal {
+        int256 before = positionOf[asset];
+        uint256 open = _abs(before);
+        uint64 sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;
+        // The book has this one already: from it (`fireTrigger`) or without one (`fillTrigger`), nothing to tell.
+        _clear(asset, isTake, false);
+        (uint64 px, uint256 cost, uint8 source) = _apply(asset, before < 0, sz, before, oracle, true);
+        _lapseOn(asset);
+        // A trade like any fill for whoever reads `Filled` (the checker's pairs, the days with a fill), late by the
+        // blocks from when it could first act to its touch; `TriggerFilled` right after it says it was a stop or a
+        // take (review of #297).
+        emit Filled(asset, before < 0, sz, px, cost, touchBlock - t.armedAt, source);
+        emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source, touchBlock);
+    }
+
+    /// @dev An order waiting on `asset`, once a stop or a take has closed its position, was made for that position: it
+    ///      would open the other side with no stop, and the trader could not take it back inside its window (review
+    ///      of #297).
+    function _lapseOn(uint32 asset) internal {
+        Order memory o = pending;
+        if (positionOf[asset] == 0 && o.sz != 0 && o.asset == asset) {
+            delete pending;
+            emit Lapsed(o.asset, o.isBuy, o.sz);
+        }
+    }
+
+    /// @dev Fills `sz` of `asset` on the side `isBuy` at the price a fill takes from the oracle price `oracle`
+    ///      (`_fillPrice`): the position, the balance, the cost, the leverage rule for a fill that grows the
+    ///      position, the trading day. A position closed or turned round loses its stop and its take.
+    function _apply(uint32 asset, bool isBuy, uint64 sz, int256 before, uint64 oracle, bool clamp)
         internal
         returns (uint64 px, uint256 cost, uint8 source)
     {
-        (px, source) = _fillPrice(asset, isBuy);
+        (px, source) = _fillPrice(asset, isBuy, oracle, clamp);
         int256 delta = isBuy ? int256(uint256(sz)) : -int256(uint256(sz));
         uint256 ntl = uint256(sz) * px;
         cost = (ntl * _terms.costPpm + PPM - 1) / PPM;
@@ -559,8 +645,10 @@ contract PaperExam is Initializable {
             }
         }
         if (before != 0 && (afterFill == 0 || (afterFill > 0) != (before > 0))) {
-            if (stopOf[asset].px != 0) _clear(asset, false);
-            if (takeOf[asset].px != 0) _clear(asset, true);
+            // A stop's or a take's fill (`clamp`) runs inside the book's call: the book takes the other trigger out
+            // itself, after it (`StopBook._done`), with its own gas and not the call's.
+            if (stopOf[asset].px != 0) _clear(asset, false, !clamp);
+            if (takeOf[asset].px != 0) _clear(asset, true, !clamp);
         }
 
         // A fill smaller than the exchange would take is still a fill -- dust has to be closable
@@ -592,9 +680,12 @@ contract PaperExam is Initializable {
         return block.number >= after_ + FALLBACK_BLOCKS && block.number < after_ + 2 * FALLBACK_BLOCKS;
     }
 
-    function _clear(uint32 asset, bool isTake) internal {
+    /// @dev Removes the stop or the take of `asset`; from the book too with `tellBook`.
+    function _clear(uint32 asset, bool isTake, bool tellBook) internal {
         if (isTake) delete takeOf[asset];
         else delete stopOf[asset];
+        address b = stopBook;
+        if (tellBook && b != address(0)) IStopBook(b).remove(asset, isTake);
         emit TriggerCleared(asset, isTake);
     }
 
@@ -615,6 +706,15 @@ contract PaperExam is Initializable {
         status = s;
         endReason = reason;
         endEquity = eq;
+        // An ended exam's stops and takes leave the book: they would only weigh on its heaps.
+        if (stopBook != address(0)) {
+            uint256 n = _rules.assets.length;
+            for (uint256 i = 0; i < n; ++i) {
+                uint32 a = _rules.assets[i];
+                if (stopOf[a].px != 0) _clear(a, false, true);
+                if (takeOf[a].px != 0) _clear(a, true, true);
+            }
+        }
         emit Stopped(s, reason, eq);
     }
 
@@ -683,12 +783,15 @@ contract PaperExam is Initializable {
         if (px == 0) revert NoPrice(asset);
     }
 
-    /// @dev The price a fill takes: the oracle's, or, at the book, the trader's side of the best bid
-    ///      and offer, never better for the trader than the oracle's, and refused while it is more
-    ///      than `maxWorseBps` worse. A book that does not answer, is empty on a side or crossed
-    ///      leaves the oracle's.
-    function _fillPrice(uint32 asset, bool isBuy) internal view returns (uint64 px, uint8 source) {
-        uint64 oracle = _mark(asset);
+    /// @dev The price a fill takes from the oracle price `oracle`: that price, or, at the book, the trader's side of
+    ///      the best bid and offer, never better for the trader than `oracle`, and, more than `maxWorseBps` worse,
+    ///      refused (an order) or taken at that bound (`clamp`: a stop or a take, which fills as a market order
+    ///      does). A book that does not answer, is empty on a side or crossed leaves `oracle`.
+    function _fillPrice(uint32 asset, bool isBuy, uint64 oracle, bool clamp)
+        internal
+        view
+        returns (uint64 px, uint8 source)
+    {
         if (!fromBook) return (oracle, SOURCE_ORACLE);
         (bool ok, bytes memory r) =
             HLConstants.BBO_PRECOMPILE_ADDRESS.staticcall(abi.encode(uint64(CoreOps.pxIndex(asset))));
@@ -698,7 +801,11 @@ contract PaperExam is Initializable {
         if (b.bid == 0 || b.ask < b.bid) return (oracle, SOURCE_ORACLE_FALLBACK);
         px = isBuy ? (b.ask > oracle ? b.ask : oracle) : (b.bid < oracle ? b.bid : oracle);
         uint256 worse = isBuy ? px - oracle : oracle - px;
-        if (worse * Units.BPS > uint256(oracle) * maxWorseBps) revert TooFarFromOracle(px, oracle);
+        if (worse * Units.BPS > uint256(oracle) * maxWorseBps) {
+            if (!clamp) revert TooFarFromOracle(px, oracle);
+            uint64 bound = uint64(uint256(oracle) * maxWorseBps / Units.BPS);
+            px = isBuy ? oracle + bound : oracle - bound;
+        }
         source = SOURCE_BOOK;
     }
 

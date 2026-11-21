@@ -13,6 +13,7 @@ import {TermsBook} from "../../src/multi/TermsBook.sol";
 import {ACCRUAL_SCALE} from "../../src/sim/SimPoolCodes.sol";
 import {SimPool, SimPlan, SimSize, SimTier} from "../../src/sim/SimPool.sol";
 import {SimPoolFactory} from "../../src/sim/SimPoolFactory.sol";
+import {StopBook} from "../../src/sim/StopBook.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MockUsdc, OracleFollowsMark} from "../PoolHarness.sol";
 
@@ -194,6 +195,32 @@ contract SimPoolTest is Test {
     function _setMark(uint64 px) internal {
         mark = px;
         CoreSimulatorLib.setMarkPx(BTC, px);
+    }
+
+    /// The factory makes its stop book with itself and never changes it; every exam it sells takes it; nobody but its
+    /// exams adds to it, the pool neither; and a stop set on a sold exam is carried out by a check of the book in the
+    /// block of its touch.
+    function test_stopBook_isTheFactorysAndEveryExamTakesIt() public {
+        StopBook b = factory.stopBook();
+        assertTrue(address(b).code.length != 0);
+        assertEq(b.factory(), address(factory));
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        assertEq(e.stopBook(), address(b));
+        vm.prank(stranger);
+        vm.expectRevert(StopBook.NotExam.selector);
+        b.add(BTC, false, true, 1, 1);
+        vm.prank(address(pool));
+        vm.expectRevert(StopBook.NotExam.selector);
+        b.remove(BTC, false);
+        _fill(e, trader, true, 100);
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        vm.roll(block.number + 1);
+        _setMark(940_000);
+        b.poke();
+        assertEq(e.positionOf(BTC), 0);
+        _setMark(1_000_000);
     }
 
     /// Long at about 1x, the price up 20 % (the size rounds down, so more than the target), flat again,

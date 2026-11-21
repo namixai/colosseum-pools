@@ -65,22 +65,26 @@ with a balance, `capital`, that is a number and not money.
   open: all of it) once the oracle price in a block is at its price or past it: against the position for a
   stop (at or under it for a long, at or over it for a short), for it for a take. It never opens or grows a
   position. It acts `fillDelay` blocks after it is set or replaced, as an order fills no sooner, so a stop
-  set past the price is not a way round the delay. Once triggered it is carried out (`fillTrigger`) at the
-  price a fill takes in that block, by the same rule and with the same cost as an order: a stop is a market
-  order once triggered, and what it slips is real. With a filler, only the filler carries it out until
-  somebody has shown in a block that it triggered (`seeTrigger`, anyone); for `FALLBACK_BLOCKS` blocks from
-  `FALLBACK_BLOCKS` after that block anyone may, the trader too, while it still holds. After them it may be
-  shown again, which starts a new span; inside them a second showing moves nothing, so nobody holds the span
-  off. Without a filler, anyone but the trader and their agent. A position closed or turned round by any fill loses its stop and its take; a take or a stop carried
+  set past the price is not a way round the delay. With a filler, the exam's stops and takes are also in its
+  factory's stop book (`stopBook`, docs/SIM-POOL.md, "The stop book"): the first block the book checks whose oracle
+  price is at a stop's level or past it carries the stop out in that block, at that oracle price (worse than the
+  level through a gap), or at the book's price never more than `maxWorseBps` worse than it (past it, at that bound:
+  a stop is never refused), with a fill's cost; every function here that changes anything has the book check its
+  block first, so a stop reached cannot be taken off or moved. With a book, a stop or a take the oracle price has
+  already reached when it is set is refused (`WouldTrigger`), as an exchange refuses a stop that would trigger at
+  once, and an exam that ends (`breach`, `expire`) takes its stops and takes out of the book. Without a filler (`initialize`, as a `MultiPool`
+  starts its exams) there is no book: a stop is carried out (`fillTrigger`) at the price a fill takes in a block
+  whose oracle price is at it or past it, a stop being a market order once triggered,
+  by anyone but the trader and their agent. A position closed or turned round by any fill loses its stop and its take; a take or a stop carried
   out is gone, and a position it closes loses the other one too, and an order waiting on that asset lapses
   (`Lapsed`): it was made for the position just closed and would open the other side with no stop. A
-  trigger fill emits `Filled`, its lateness the blocks since `armedAt`, the first block it could act in, so
+  trigger fill emits `Filled`, its lateness the blocks from `armedAt`, the first block it could act in, to its touch, so
   whoever reads trades reads it as one, and then `TriggerFilled`, which says it was a stop or a take;
   whoever judges the filler's lateness in a window skips a `Filled` that a `TriggerFilled` follows, and
   holds a trigger's lateness to the oracle's history from `armedAt` instead (A2 of the pre-deploy check). A position never grows past a size an order can name
-  (`uint64`). The filler picks the block after the
-  trigger, as it picks the block of an order's window: the contract does not know the first block the
-  oracle crossed the price, and that is checked outside, against the oracle's history.
+  (`uint64`). Without a book, whoever carries a stop out picks the block after the trigger: the contract does not
+  know the first block the oracle crossed the price, and that is checked outside, against the oracle's history.
+  With a book there is no such choice; only a block nobody checked (`StopBook.Gap`) is read back that way.
 - **Equity** is the balance plus every position at the current oracle price. There is nothing else to
   read: no margin, no funding, no resting orders.
 - **The rules** are the four a real account has, with the same arithmetic as `RuledAccount`: a
