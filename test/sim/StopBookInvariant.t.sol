@@ -248,10 +248,9 @@ contract StopBookInvariantTest is Test, BookStand {
         }
     }
 
-    /// B2. After the check of a block, no armed entry the block's price has reached is left on a heap, unless an
-    ///     overload is being worked off on that side; then what is left is what its price reached: an overload is kept
-    ///     exactly as long as an entry its price reached is left (none is left once it is done). No entry whose
-    ///     `armedAt` has come still waits, unless the check could not arm them all, or an overload's price reaches it.
+    /// B2. After the check of a block, no armed entry the block's price has reached is left on a heap of a side in step;
+    ///     a side behind has a heap whose top a journal pair from its cursor reaches. No entry whose `armedAt` has come
+    ///     still waits, unless the check could not arm them all.
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 120
     function invariant_afterACheckNothingReachedIsLeft() public view {
@@ -259,22 +258,17 @@ contract StopBookInvariantTest is Test, BookStand {
         uint64[2] memory p = [handler.px(0), handler.px(1)];
         for (uint32 a = 3; a <= 4; ++a) {
             (uint64 b, uint64 ab, uint256 nb, uint256 na) = harness.top(a);
-            StopBook.Overload memory o = harness.overloadOf(a);
-            if (o.belowBlock != 0) assertTrue(nb != 0 && o.belowPx <= b, "an overload kept with nothing it reached left");
+            (StopBook.Lag memory lb,) = harness.lagOf(a, true);
+            (StopBook.Lag memory la,) = harness.lagOf(a, false);
+            if (lb.on) assertTrue(nb != 0, "a side behind with an empty heap");
             else if (nb != 0) assertGt(p[a - 3], b, "a below entry the price has reached");
-            if (o.aboveBlock != 0) assertTrue(na != 0 && o.abovePx >= ab, "an overload kept with nothing it reached left");
+            if (la.on) assertTrue(na != 0, "a side behind with an empty heap");
             else if (na != 0) assertLt(p[a - 3], ab, "an above entry the price has reached");
         }
         if (handler.armingBacklogAt() == block.number) return;
         uint256[] memory w = harness.waiting();
         for (uint256 i = 0; i < w.length; ++i) {
-            if (w[i] >> 193 > block.number) continue;
-            uint32 a = uint32(w[i] >> 1);
-            StopBook.Slot memory s = harness.slotOf(address(uint160(w[i] >> 33)), a, w[i] & 1 == 1);
-            StopBook.Overload memory o = harness.overloadOf(a);
-            bool deferred = s.where == 1 ? o.belowBlock != 0 && o.belowPx <= s.level
-                : o.aboveBlock != 0 && o.abovePx >= s.level;
-            assertTrue(deferred, string.concat("an entry past its armedAt still waits: armedAt ", vm.toString(w[i] >> 193), " block ", vm.toString(block.number), " backlogAt ", vm.toString(handler.armingBacklogAt()), " where ", vm.toString(s.where), " level ", vm.toString(s.level), " i ", vm.toString(i), " n ", vm.toString(w.length)));
+            assertGt(w[i] >> 193, block.number, "an entry past its armedAt still waits");
         }
     }
 

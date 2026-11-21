@@ -43,8 +43,9 @@ before the book (`fillTrigger`, anyone but the trader, in a block whose oracle p
   stop that would trigger at once: set on the price's way, not behind it; with no oracle price in the block it
   reverts (`NoPrice`).
 - **The check.** `poke()`, anyone's, does the work once a block; a second call in the block does nothing. The first
-  needs `POKE_GAS` (800 000) gas left or reverts (`PokeGas`): a call too poor for the whole check does not take the
-  block from one that can. On each asset with an armed entry it reads the oracle price once (`PriceSeen`; none,
+  needs `pokeGas()` gas left, `POKE_GAS_BASE` (800 000) plus `POKE_GAS_PER_ASSET` (40 000) for each asset with an
+  entry, or reverts (`PokeGas`): a call too poor for the whole check does not take the block from one that can. On
+  each asset with an entry (waiting, armed or parked) it reads the oracle price once (`PriceSeen`; none,
   `NoPrice`, and the entries wait) and takes off two heaps everything the price reached: `below` (a long's stop, a
   short's take) and `above` (a short's stop, a long's take). An entry waits for `armedAt` in a third heap, by block,
   which each check empties first, so one armed in this block is checked in it. Each fill is a call of at most
@@ -60,33 +61,39 @@ before the book (`fillTrigger`, anyone but the trader, in a block whose oracle p
   (`StopsPending`) if the gas cannot carry it out. An exam with a touch latched has its later touches latched behind
   it, never carried out first. Latched exams are carried out in their order, `MAX_QUEUE_STEPS` (4) a check; one
   whose call failed goes to the back.
-- **An overload.** Past both caps, the rest stays on its heap and the book remembers, for that side of the asset,
-  the price and block of the touch (`TouchBacklog(asset, below, px, touchBlock)`, `overloadOf`). The next checks
-  carry the rest out at that price and block, before they look at their own price on that side; meanwhile every
-  exam with an entry that price reached is held, as if latched (`StopsPending`). An overload delays a fill, it never
-  changes its price: a crash that reaches more stops in one block than a check carries out fills each at the price
-  of that block. An entry armed after the touch that its price would reach waits to be armed until the overload is
-  done: it was not live at that touch. More than `MAX_ARMS` (3) entries due at once wait a check
-  (`ArmingBacklog`); that one is not a `Gap`: a payout's review reads the oracle back for its blocks, as for a block
-  nobody checked, and an exam is not held while its entry waits to be armed.
+- **The touch journal.** Past both caps the rest stays on its heap, and that side of the asset falls behind
+  (`TouchBacklog(asset, below, px, touchBlock)`, `lagOf`): while anything on an asset is behind, the book keeps the
+  price and block of every check of it (`pairAt`). A side behind has a cursor: no pair before it reaches its heap's
+  top. Each check takes the top, finds the first pair from the cursor that reaches it (the last is the block's own
+  price) and carries it out, or latches it, at that pair; a heap is ordered by level, so a pair that misses the top
+  misses everything under it. A deeper price in a later block is one more pair: the stops only it reaches are
+  carried out at it, the price of their own first touch. An entry joins a heap only while its side is in step; one
+  armed while its side is behind, or armed late because more than `MAX_ARMS` (3) came due at once
+  (`ArmingBacklog`), is first compared with every pair from its `armedAt`: touched, it is carried out or latched at
+  its first touch; not, it is parked with its own cursor (`slotOf.where` 6 or 7) and joins the heap once the side
+  is in step. Pairs stay while a cursor or an entry due may need them, then the journal is emptied. An exam with a
+  touch not yet carried out (latched; on a side behind, at a level its deepest price since it fell behind reaches;
+  parked; or due and not armed past a kept check) is busy: it refuses to act (`StopsPending`), its other touches are
+  latched behind, and its latched ones are carried out the oldest first once it is not busy. A delay never changes
+  a fill's price or block: every stop fills at the price of the first checked block from its `armedAt` that reached
+  it (`test/sim/StopBookModel.t.sol`, a fuzz against a model of the market, 10 000 runs).
 - **An ended exam.** `breach` and `expire` take its stops and takes out of the book: they would only weigh on its
   heaps.
 - **What it cannot do.** A block nobody checked is invisible to the contract; the next check says so (`Gap(from,
   to)`), and a payout's review reads the oracle back for those blocks only. Nothing in code can promise a check in
-  every block: several independent callers and every call of the exam itself are what keep gaps away. A move that
-  goes on past an overload's price while it is worked off reaches its further stops at the price of the check that
-  gets to them once the overload is done.
+  every block: several independent callers and every call of the exam itself are what keep gaps away.
 - **Gas** (`test/sim/StopBook.t.sol`, the `test_gas_*` tests, `test_overflow_pastTheLatches_theRestIsCarriedOutAtTheTouch`
   and `test_review_H1_fireTriggerGas_underHalfItsCap`, cold storage, without the 21 000 of a transaction; the oracle
   precompile is the simulator's, its gas on HyperEVM is to be measured there): a check with entries on 0 assets
-  37 218, on 1 asset 37 222, on 5 assets 107 499, on 16 assets 302 717; a second check in the block 1 002 (warm); 16
-  assets and one fill 384 431; at its caps (2 fills, 2 latches, 3 armed, every exam cold) 626 557; a check working
-  off an overload at its caps 454 599; an exam's first call in a block that pays the check at its caps, two of its
-  own latched stops and its `place` 782 708, so its gas limit is `POKE_GAS` plus some 200 000, inside a small block
-  of 2 000 000; one `fireTrigger` at the book, closing the position, 67 516 of its 150 000; `expire` of an exam with
-  32 entries 1 065 624.
-- **Sizes** (`forge build --sizes`, 21 November): `PaperExam` 21 777 bytes, `StopBook` 10 364, `SimPoolFactory`
-  11 857.
+  35 752, on 1 asset 47 802, on 5 assets 165 805, on 16 assets 492 273; a second check in the block 1 024 (warm); 16
+  assets and one fill 681 804; at its caps (2 fills, 2 latches, 3 armed, every exam cold) with entries on 1 asset
+  650 103 of `pokeGas()` 840 000, on 2 assets 688 951, on 5 assets 779 731 of 1 000 000, on 16 assets 1 110 494 of
+  1 440 000 (`test_gas_atItsCaps_onOneFiveAndSixteenAssets`); a check working off a side behind at its caps 541 242;
+  an exam's first call in a block that pays the check at its caps, two of its own latched stops and its `place` stays
+  under 3 000 000 (`test_gas_aTradersFirstCall_paysTheCheckAtItsCaps_andTwoLatches`), so its gas limit is
+  `pokeGas()` plus some 200 000; one `fireTrigger` at the book, closing the position, under half its 150 000.
+- **Sizes** (`forge build --sizes`, 21 November): `PaperExam` 21 777 bytes, `StopBook` 13 884, `SimPoolFactory`
+  11 857, each under 24 576.
 
 ## What it does
 
