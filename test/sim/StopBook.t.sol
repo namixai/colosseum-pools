@@ -543,29 +543,91 @@ contract StopBookTest is Test, BookStand {
         assertEq(es[0].cash(), 94e6);
     }
 
-    /// Past the fills and the latches of one check: the rest stays on its heap, said, for the next check at its price.
-    function test_overflow_pastTheLatches_theRestWaitsForTheNextCheck() public {
-        uint256 n = stopBook.MAX_FIRES() + stopBook.MAX_LATCHES() + 1;
+    /// Past the fills and the latches of one check: the rest stays on its heap, said, its exams held as if latched,
+    /// and the next checks carry it out at the price and block of its touch, though the price came back the next block.
+    function test_overflow_pastTheLatches_theRestIsCarriedOutAtTheTouch() public {
+        PaperExam deep = _exam(); // a stop the overload's price does not reach: the heap is never empty
+        _trade(deep, BTC, true, 100);
+        _set(deep, BTC, false, 900_000, 0);
+        uint256 n = 3 * (stopBook.MAX_FIRES() + stopBook.MAX_LATCHES()) + 1;
         (PaperExam[] memory es, uint256 armedAt) = _crowd(n);
         vm.roll(armedAt);
         _mark(940_000);
         vm.expectEmit(address(stopBook));
-        emit StopBook.TouchBacklog(BTC, true);
+        emit StopBook.TouchBacklog(BTC, true, 940_000, armedAt);
         stopBook.poke();
         assertEq(es[0].positionOf(BTC), 100);
         assertEq(_where(es[0], BTC, false), 3, "still on the heap");
+        StopBook.Overload memory o = stopBook.overloadOf(BTC);
+        assertEq(o.belowPx, 940_000);
+        assertEq(o.belowBlock, armedAt);
+        vm.prank(trader);
+        vm.expectRevert(PaperExam.StopsPending.selector);
+        es[0].clearTrigger(BTC, false); // held: nobody takes back a stop the overload's price reached
+        vm.recordLogs();
         vm.roll(armedAt + 1);
-        _mark(930_000);
-        stopBook.poke(); // the latches first, then the heap at this price: latched there, the fills are spent
-        assertEq(stopBook.slotOf(address(es[0]), BTC, false).px, 930_000, "touched by the next check, at its price");
-        for (uint256 i = 2; i < 6; ++i) {
+        _mark(930_000); // lower still: the rest was first reached at 940 000, and takes that
+        vm.cool(address(stopBook));
+        for (uint256 i = 0; i < n; ++i) {
+            vm.cool(address(es[i]));
+        }
+        uint256 g = gasleft();
+        stopBook.poke();
+        uint256 used = g - gasleft();
+        emit log_named_uint("poke working off an overload at its caps, cold", used);
+        assertLt(used, stopBook.POKE_GAS(), "what POKE_GAS asks for covers it");
+        assertEq(stopBook.overloadOf(BTC).belowBlock, armedAt, "still working it off, at its price");
+        _mark(MARK); // then back over every stop
+        for (uint256 i = 2; i < 12; ++i) {
             vm.roll(armedAt + i);
             stopBook.poke();
         }
         for (uint256 i = 0; i < n; ++i) {
             assertEq(es[i].positionOf(BTC), 0);
+            assertEq(es[i].cash(), 94e6, "every one at the touch's price, not a later check's");
         }
-        assertEq(es[0].cash(), 93e6, "the next check's price");
+        assertEq(stopBook.overloadOf(BTC).belowBlock, 0, "done");
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 touch;
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].emitter == address(es[0]) && logs[i].topics[0] == PaperExam.TriggerFilled.selector) {
+                (,,,,,, touch) = abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint64, uint8, uint256));
+            }
+        }
+        assertEq(touch, armedAt, "and the block of its touch");
+        vm.roll(armedAt + 12);
+        _mark(890_000); // once it is done, the side is checked at its own price again
+        stopBook.poke();
+        assertEq(deep.cash(), 89e6);
+    }
+
+    /// While an overload is worked off, an entry its price would reach that was armed after its touch waits to be armed:
+    /// it was not live at that touch, and is never carried out at its price.
+    function test_overflow_anEntryArmedAfterTheTouch_doesNotTakeItsPrice() public {
+        uint256 n = 3 * (stopBook.MAX_FIRES() + stopBook.MAX_LATCHES()) + 1;
+        (, uint256 armedAt) = _crowd(n);
+        PaperExam late = _exam();
+        _trade(late, BTC, true, 100);
+        if (block.number < armedAt) vm.roll(armedAt);
+        stopBook.poke();
+        uint256 t = block.number + 5;
+        vm.roll(t);
+        _mark(940_000);
+        stopBook.poke(); // the overload, at 940 000
+        vm.roll(t + 1);
+        _mark(MARK);
+        stopBook.poke();
+        _set(late, BTC, false, 960_000, 0); // not reached at 1 000 000; 940 000 would reach it
+        vm.roll(t + 1 + DELAY);
+        stopBook.poke();
+        assertEq(_where(late, BTC, false), 1, "waits to be armed while the overload is worked off");
+        for (uint256 i = 2 + DELAY; i < 12; ++i) {
+            vm.roll(t + i);
+            stopBook.poke();
+        }
+        assertEq(stopBook.overloadOf(BTC).belowBlock, 0);
+        assertEq(_where(late, BTC, false), 3, "armed once it is done");
+        assertEq(late.positionOf(BTC), 100, "never filled at the overload's price");
     }
 
     /// More entries come due in one block than one check arms: the rest wait, said, and are armed by the next check.
@@ -627,7 +689,14 @@ contract StopBookTest is Test, BookStand {
         uint256 before = gasleft();
         stopBook.poke();
         assertLt(before - gasleft(), 2 * stopBook.FIRE_GAS() + 400_000, "a call that burns gas burns its cap only");
+        assertEq(stopBook.pending(address(e)), 1, "the two failures took the fills: latched at its touch");
+        vm.roll(block.number + 1);
+        _mark(MARK);
+        stopBook.poke(); // the failures take the fills again, and go to the back of the queue
+        vm.roll(block.number + 1);
+        stopBook.poke(); // the stop is first now
         assertEq(e.positionOf(BTC), 0);
+        assertEq(e.cash(), 94e6);
     }
 
     /// Whoever calls cannot starve the check and take its block: a call with less than `POKE_GAS` reverts, the block is
@@ -854,9 +923,9 @@ contract StopBookTest is Test, BookStand {
         assertEq(es[0].cash(), 94e6);
         assertEq(stopBook.pending(address(rev)), 1, "still latched");
         vm.roll(touch + 2);
-        vm.expectEmit(address(stopBook));
-        emit StopBook.Fired(address(rev), BTC, false, 940_000, touch, 0); // tried again
-        stopBook.poke();
+        vm.recordLogs();
+        stopBook.poke(); // alone in the queue, with fills to spare: tried again, once
+        assertEq(_count(vm.getRecordedLogs(), address(rev)), 1, "tried again, once a check");
     }
 
     /// H1: an exam calls nothing in the book while the book carries out its stop: `add` and `remove` refuse inside a
@@ -967,25 +1036,28 @@ contract StopBookTest is Test, BookStand {
         _trade(e, BTC, true, 100);
         _set(e, BTC, false, 950_000, 0);
         _set(e, BTC, true, 1_050_000, 0);
-        uint256 c = stopBook.MAX_FIRES() + 4;
+        uint256 c = stopBook.MAX_FIRES();
+        PaperExam[] memory q = new PaperExam[](c);
         for (uint256 i = 0; i < c; ++i) {
-            PaperExam x = _exam();
-            _trade(x, BTC, true, 100);
-            _set(x, BTC, false, uint64(960_000 + i), 0);
+            q[i] = _exam();
+            _trade(q[i], BTC, true, 100);
+            _set(q[i], BTC, false, uint64(960_000 + i), 0);
+            vm.mockCallRevert(address(q[i]), abi.encodeWithSelector(PaperExam.fireTrigger.selector), "");
         }
         vm.roll(block.number + DELAY);
         _mark(940_000);
         uint256 t = block.number;
-        stopBook.poke();
+        stopBook.poke(); // the crowd's calls fail and take the fills: both latched ahead of the stop
         assertEq(stopBook.pending(address(e)), 1, "the stop, latched in t");
         vm.roll(t + 1);
         _mark(1_060_000);
-        stopBook.poke();
+        stopBook.poke(); // the crowd fails again and takes the fills; the take is touched and latched
         assertEq(stopBook.pending(address(e)), 2, "and the take, in t+1");
+        vm.clearMockedCalls();
         vm.roll(t + 2);
         _mark(MARK);
         vm.expectEmit(address(stopBook));
-        emit StopBook.Fired(address(e), BTC, false, 940_000, t, 2);
+        emit StopBook.Fired(address(e), BTC, false, 940_000, t, 2); // the failures went to the back: the stop first
         stopBook.poke();
         assertEq(e.positionOf(BTC), 0);
         assertEq(e.cash(), 94e6, "the stop's loss, not the take's profit");
@@ -1134,7 +1206,7 @@ contract StopBookTest is Test, BookStand {
         assertEq(seen[2], 1);
         (, uint256 waiting) = stopBook.watched();
         assertEq(waiting, 0, "all armed");
-        emit log_named_uint("poke at its caps: 3 fills, 6 latches, 8 armed", used);
+        emit log_named_uint("poke at its caps: 2 fills, 2 latches, 3 armed", used);
         assertLt(used, stopBook.POKE_GAS(), "what POKE_GAS asks for covers it");
         assertLt(used + 21_000, 2_000_000, "inside a small block of 3 000 000, with room");
     }

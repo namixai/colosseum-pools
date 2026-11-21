@@ -465,7 +465,8 @@ contract PaperExam is Initializable {
     ///         It acts `fillDelay` blocks after it is set, as an order fills no sooner: a stop set past the
     ///         price is not a way round the delay. With a stop book, the book gets it too, in place of the old one,
     ///         and one the oracle price has already reached is refused (`WouldTrigger`), as an exchange refuses a
-    ///         stop that would trigger at once: a stop is set on the price's way, not behind it.
+    ///         stop that would trigger at once: a stop is set on the price's way, not behind it. With no oracle price
+    ///         in the block that cannot be told, and it reverts (`NoPrice`).
     function setTrigger(uint32 asset, bool isTake, uint64 px, uint64 sz) external settled inStatus(Status.Active) {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if (_over()) revert TooLate();

@@ -13,6 +13,9 @@ import {StopBook} from "../../src/sim/StopBook.sol";
 import {OracleFollowsMark} from "../PoolHarness.sol";
 import {BookStand} from "../exam/BookStand.sol";
 
+// Exams the handler trades: enough for more entries on one side of an asset than one check carries out and latches.
+uint256 constant N_EXAMS = 6;
+
 /// The book with its heaps open to reading.
 contract StopBookHarness is StopBook {
     function heap(uint32 asset, bool below) external view returns (uint256[] memory) {
@@ -28,7 +31,7 @@ contract StopBookHarness is StopBook {
     }
 }
 
-/// Three exams on two assets, at random: positions opened, turned and closed by orders, stops and takes set, moved and
+/// Six exams on two assets, at random: positions opened, turned and closed by orders, stops and takes set, moved and
 /// removed near the price, the price moved block by block, mostly checked by the book every block and now and then
 /// not, so that entries are reached many at a time, more than one check carries out. Under them, `BACKGROUND` other
 /// exams keep a stop and a take on each asset far from the price: every heap is some 60 entries deep, and every move
@@ -39,13 +42,31 @@ contract StopBookHandler is Test {
     uint16 constant DELAY = 2;
 
     StopBook public book;
-    PaperExam[3] public exams;
+    PaperExam[N_EXAMS] public exams;
     address public trader = makeAddr("trader");
     address public filler = makeAddr("filler");
     uint64[2] public px = [uint64(1_000_000), uint64(250_000)];
     mapping(string => uint256) public calls;
+    /// The last block whose check left entries due unarmed (`ArmingBacklog`).
+    uint256 public armingBacklogAt;
 
-    constructor(StopBook book_, PaperExam[3] memory exams_) {
+    /// Reads the book's events of whatever the call did, the checks the exams' own calls made included.
+    modifier watch() {
+        vm.recordLogs();
+        _;
+        _scan(vm.getRecordedLogs());
+    }
+
+    function _scan(Vm.Log[] memory logs) internal {
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].topics[0] == StopBook.Fired.selector) calls["fired"] += 1;
+            if (logs[i].topics[0] == StopBook.Latched.selector) calls["latched"] += 1;
+            if (logs[i].topics[0] == StopBook.TouchBacklog.selector) calls["overload"] += 1;
+            if (logs[i].topics[0] == StopBook.ArmingBacklog.selector) armingBacklogAt = block.number;
+        }
+    }
+
+    constructor(StopBook book_, PaperExam[N_EXAMS] memory exams_) {
         book = book_;
         exams = exams_;
     }
@@ -54,8 +75,8 @@ contract StopBookHandler is Test {
         return seed % 2 == 0 ? BTC : ETH;
     }
 
-    function trade(uint256 e, uint256 a, bool isBuy, uint256 sz) external {
-        PaperExam x = exams[e % 3];
+    function trade(uint256 e, uint256 a, bool isBuy, uint256 sz) external watch {
+        PaperExam x = exams[e % N_EXAMS];
         uint32 asset = _asset(a);
         vm.prank(trader);
         try x.place(asset, isBuy, uint64(bound(sz, 1, asset == BTC ? 150 : 600))) {} catch { return; }
@@ -66,8 +87,8 @@ contract StopBookHandler is Test {
         } catch {}
     }
 
-    function setTrigger(uint256 e, uint256 a, bool isTake, uint256 offset, uint256 sz) external {
-        PaperExam x = exams[e % 3];
+    function setTrigger(uint256 e, uint256 a, bool isTake, uint256 offset, uint256 sz) external watch {
+        PaperExam x = exams[e % N_EXAMS];
         uint32 asset = _asset(a);
         uint256 p = px[asset == BTC ? 0 : 1];
         // Within 2 % either side of the price, past it too.
@@ -78,9 +99,24 @@ contract StopBookHandler is Test {
         } catch {}
     }
 
-    function clearTrigger(uint256 e, uint256 a, bool isTake) external {
+    /// Every exam with a position on the asset sets an entry on its below side just under the price, a long its stop
+    /// and a short its take, each at its own level: one jump down reaches more than one check carries out and latches.
+    function crowdBelow(uint256 a) external watch {
+        uint32 asset = _asset(a);
+        uint256 p = px[asset == BTC ? 0 : 1];
+        for (uint256 i = 0; i < N_EXAMS; ++i) {
+            int256 pos = exams[i].positionOf(asset);
+            if (pos == 0) continue;
+            vm.prank(trader);
+            try exams[i].setTrigger(asset, pos < 0, uint64(p * (9_990 - i * 10) / 10_000), 0) {
+                calls["setTrigger"] += 1;
+            } catch {}
+        }
+    }
+
+    function clearTrigger(uint256 e, uint256 a, bool isTake) external watch {
         vm.prank(trader);
-        try exams[e % 3].clearTrigger(_asset(a), isTake) {
+        try exams[e % N_EXAMS].clearTrigger(_asset(a), isTake) {
             calls["clearTrigger"] += 1;
         } catch {}
     }
@@ -102,18 +138,14 @@ contract StopBookHandler is Test {
         book.poke();
         if (before - gasleft() > 2_500_000) calls["heavyPoke"] += 1;
         calls["poke"] += 1;
-        Vm.Log[] memory logs = vm.getRecordedLogs();
-        for (uint256 i = 0; i < logs.length; ++i) {
-            if (logs[i].topics[0] == StopBook.Fired.selector) calls["fired"] += 1;
-            if (logs[i].topics[0] == StopBook.Latched.selector) calls["latched"] += 1;
-        }
+        _scan(vm.getRecordedLogs());
     }
 }
 
 contract StopBookInvariantTest is Test, BookStand {
     StopBookHandler handler;
     StopBookHarness harness;
-    PaperExam[3] exams;
+    PaperExam[N_EXAMS] exams;
 
     function setUp() public {
         HyperCore hyperCore = CoreSimulatorLib.init();
@@ -142,19 +174,20 @@ contract StopBookInvariantTest is Test, BookStand {
             minTradingDays: 0, costPpm: 0, fillDelay: 2, fillWindow: 3});
         address trader = makeAddr("trader");
         address filler = makeAddr("filler");
-        for (uint256 i = 0; i < 3; ++i) {
+        for (uint256 i = 0; i < N_EXAMS; ++i) {
             exams[i] = PaperExam(Clones.clone(address(impl)));
             exams[i].initializeWithFiller(trader, r, terms, filler, false, 0, 0, false);
         }
         _background(impl, r, terms, trader, filler);
         handler = new StopBookHandler(harness, exams);
         targetContract(address(handler));
-        bytes4[] memory sel = new bytes4[](8);
+        bytes4[] memory sel = new bytes4[](9);
         (sel[0], sel[1]) = (StopBookHandler.trade.selector, StopBookHandler.trade.selector);
         (sel[2], sel[3]) = (StopBookHandler.setTrigger.selector, StopBookHandler.setTrigger.selector);
         sel[4] = StopBookHandler.clearTrigger.selector;
         (sel[5], sel[6]) = (StopBookHandler.move.selector, StopBookHandler.move.selector);
         sel[7] = StopBookHandler.poke.selector;
+        sel[8] = StopBookHandler.crowdBelow.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: sel}));
     }
 
@@ -197,7 +230,7 @@ contract StopBookInvariantTest is Test, BookStand {
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 120
     function invariant_recordsAreTheExamsStops() public view {
-        for (uint256 i = 0; i < 3; ++i) {
+        for (uint256 i = 0; i < N_EXAMS; ++i) {
             for (uint32 a = 3; a <= 4; ++a) {
                 for (uint256 k = 0; k < 2; ++k) {
                     bool isTake = k == 1;
@@ -215,8 +248,10 @@ contract StopBookInvariantTest is Test, BookStand {
         }
     }
 
-    /// B2. After the check of a block, no armed entry the block's price has reached is left on a heap, and none whose
-    ///     `armedAt` has come still waits.
+    /// B2. After the check of a block, no armed entry the block's price has reached is left on a heap, unless an
+    ///     overload is being worked off on that side; then what is left is what its price reached: an overload is kept
+    ///     exactly as long as an entry its price reached is left (none is left once it is done). No entry whose
+    ///     `armedAt` has come still waits, unless the check could not arm them all, or an overload's price reaches it.
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 120
     function invariant_afterACheckNothingReachedIsLeft() public view {
@@ -224,11 +259,23 @@ contract StopBookInvariantTest is Test, BookStand {
         uint64[2] memory p = [handler.px(0), handler.px(1)];
         for (uint32 a = 3; a <= 4; ++a) {
             (uint64 b, uint64 ab, uint256 nb, uint256 na) = harness.top(a);
-            if (nb != 0) assertGt(p[a - 3], b, "a below entry the price has reached");
-            if (na != 0) assertLt(p[a - 3], ab, "an above entry the price has reached");
+            StopBook.Overload memory o = harness.overloadOf(a);
+            if (o.belowBlock != 0) assertTrue(nb != 0 && o.belowPx <= b, "an overload kept with nothing it reached left");
+            else if (nb != 0) assertGt(p[a - 3], b, "a below entry the price has reached");
+            if (o.aboveBlock != 0) assertTrue(na != 0 && o.abovePx >= ab, "an overload kept with nothing it reached left");
+            else if (na != 0) assertLt(p[a - 3], ab, "an above entry the price has reached");
         }
+        if (handler.armingBacklogAt() == block.number) return;
         uint256[] memory w = harness.waiting();
-        if (w.length != 0) assertGt(w[0] >> 193, block.number, "an entry past its armedAt still waits");
+        for (uint256 i = 0; i < w.length; ++i) {
+            if (w[i] >> 193 > block.number) continue;
+            uint32 a = uint32(w[i] >> 1);
+            StopBook.Slot memory s = harness.slotOf(address(uint160(w[i] >> 33)), a, w[i] & 1 == 1);
+            StopBook.Overload memory o = harness.overloadOf(a);
+            bool deferred = s.where == 1 ? o.belowBlock != 0 && o.belowPx <= s.level
+                : o.aboveBlock != 0 && o.abovePx >= s.level;
+            assertTrue(deferred, string.concat("an entry past its armedAt still waits: armedAt ", vm.toString(w[i] >> 193), " block ", vm.toString(block.number), " backlogAt ", vm.toString(handler.armingBacklogAt()), " where ", vm.toString(s.where), " level ", vm.toString(s.level), " i ", vm.toString(i), " n ", vm.toString(w.length)));
+        }
     }
 
     /// B3. Every heap is a heap, and every entry's slot says where it is.
@@ -259,7 +306,7 @@ contract StopBookInvariantTest is Test, BookStand {
             assertEq(s.pos, i);
             assertEq(uint256(s.armedAt), w[i] >> 193);
         }
-        for (uint256 e = 0; e < 3; ++e) {
+        for (uint256 e = 0; e < N_EXAMS; ++e) {
             uint256[] memory l = harness.latched(address(exams[e]));
             for (uint256 i = 0; i < l.length; ++i) {
                 StopBook.Slot memory s = harness.slotOf(address(exams[e]), uint32(l[i] >> 1), l[i] & 1 == 1);
@@ -280,6 +327,6 @@ contract StopBookInvariantTest is Test, BookStand {
         emit log(string.concat("reached: fill=", vm.toString(handler.calls("fill")), " setTrigger=",
             vm.toString(handler.calls("setTrigger")), " clearTrigger=", vm.toString(handler.calls("clearTrigger")),
             " poke=", vm.toString(handler.calls("poke")), " fired=", vm.toString(handler.calls("fired")), " latched=",
-            vm.toString(handler.calls("latched"))));
+            vm.toString(handler.calls("latched")), " overload=", vm.toString(handler.calls("overload"))));
     }
 }

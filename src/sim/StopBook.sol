@@ -39,30 +39,38 @@ interface IPoolRegister {
 ///      past `MAX_FIRES`, or whose exam still has an earlier touch latched, is latched: taken off its heap with
 ///      this block's price and number, and carried out at that price by a later check or by its exam's next
 ///      `settle`, the oldest touch of the exam first; while an exam has a latched entry, `settle` tells it so
-///      and the exam refuses to act. At most `MAX_LATCHES` entries are latched a check; past them the rest stays
-///      on its heap for the next check, at that block's price (`TouchBacklog`: an alarm, a touch carried out at a
-///      later price). A check that would start with less than `POKE_GAS` gas reverts, so a call too poor to do a
-///      check's whole work cannot take the block from one that can. The caps keep a check, plus the call of the
-///      exam that paid for it, inside a small HyperEVM block of 3 000 000 gas. A block nobody checked is shown by
+///      and the exam refuses to act. At most `MAX_LATCHES` entries are latched a check; past them the rest
+///      stays on its heap, and the book remembers, for that side of the asset, the price and block of the touch
+///      (`TouchBacklog`, `overloadOf`): the next checks carry the rest out at that price and block before they look at
+///      their own price there, and meanwhile `settle` holds every exam with an entry that price reached, as if latched.
+///      An overload delays a fill; it never changes its price. An entry armed after that touch which its price would
+///      reach waits to be armed until the overload is done. A check that would start with less than `POKE_GAS` gas
+///      reverts, so a call too poor to do a check's whole work cannot take the block from one that can. The caps are
+///      small, so that a check plus the call of the exam that paid for it fits a small HyperEVM block with room.
+///
+///      No way out is built for a latched entry whose exam's call fails at every try: that exam stays held
+///      (`StopsPending`). A `PaperExam`'s `fireTrigger` has no loop and calls nothing in the book; its gas is flat.
+///      A block nobody checked is shown by
 ///      the next check (`Gap`).
 ///
 ///      Block numbers are kept in 40 bits: room for some 34 000 years of one-second blocks.
 contract StopBook {
     /// Entries moved from waiting to armed in one check.
-    uint256 public constant MAX_ARMS = 8;
+    uint256 public constant MAX_ARMS = 3;
     /// Entries carried out in one check, latched ones first.
-    uint256 public constant MAX_FIRES = 3;
+    uint256 public constant MAX_FIRES = 2;
     /// Entries latched in one check.
-    uint256 public constant MAX_LATCHES = 6;
+    uint256 public constant MAX_LATCHES = 2;
     /// Exams of the latch queue one check visits.
-    uint256 public constant MAX_QUEUE_STEPS = 8;
+    uint256 public constant MAX_QUEUE_STEPS = 4;
     /// Gas each exam's `fireTrigger` gets.
     uint256 public constant FIRE_GAS = 150_000;
     /// The gas a check keeps for itself after a `fireTrigger`: the book's own records and events.
     uint256 internal constant AFTER_FIRE = 40_000;
-    /// The least gas a check starts with: its whole work at the caps, cold, with room (some 1 220 000 measured,
+    /// The least gas a check starts with: its whole work at the caps, cold, with room (some 627 000 measured,
     /// `test_gas_ofACheckAtItsCaps_underASmallBlock`), so that a check that starts never runs short of a fill's gas.
-    uint256 public constant POKE_GAS = 1_500_000;
+    /// Small caps are safe: what they leave is carried out at the price of its touch (`overloadOf`).
+    uint256 public constant POKE_GAS = 800_000;
 
     /// What an exam's `fireTrigger` answered (`Fired.result`): its call failed (the entry stays latched), it filled,
     /// it filled and closed the position, or the exam had ended.
@@ -110,6 +118,23 @@ contract StopBook {
     mapping(address exam => uint256[]) internal _latched;
     address[] internal _latchQueue;
     uint256 internal _latchHead;
+    /// What an overload left on each side of an asset: the price and block of the touch the rest of that heap is
+    /// carried out at (block zero: none); and how many sides have one.
+    struct Overload {
+        uint64 belowPx;
+        uint40 belowBlock;
+        uint64 abovePx;
+        uint40 aboveBlock;
+    }
+
+    mapping(uint32 asset => Overload) internal _overloads;
+    uint256 internal _overloadSides;
+
+    /// What one check has left to do: fills and latches made so far.
+    struct Work {
+        uint256 fires;
+        uint256 latches;
+    }
 
     /// The oracle price of `asset` this block, read by a check with an armed entry on it.
     event PriceSeen(uint32 indexed asset, uint64 px);
@@ -119,9 +144,9 @@ contract StopBook {
     event Gap(uint256 from, uint256 to);
     /// More entries reached `armedAt` than one check arms: `waiting` still wait, the rest are armed next check.
     event ArmingBacklog(uint256 waiting);
-    /// More entries on `asset` were reached than one check carries out and latches: the rest wait for the next
-    /// check, at its price. An alarm: a touch carried out at a later block's price.
-    event TouchBacklog(uint32 indexed asset, bool below);
+    /// More entries on one side of `asset` were reached at `px` in `touchBlock` than one check carries out and latches:
+    /// the rest are carried out at that price by the next checks (`overloadOf`). An alarm: fills delayed.
+    event TouchBacklog(uint32 indexed asset, bool below, uint64 px, uint256 touchBlock);
     event Latched(address indexed exam, uint32 indexed asset, bool isTake, uint64 px, uint256 touchBlock);
     /// `result`: `FILLED`, `CLOSED`, `ENDED`, or `FAILED` (the call failed: the entry is latched, to be tried again).
     event Fired(address indexed exam, uint32 indexed asset, bool isTake, uint64 px, uint256 touchBlock, uint8 result);
@@ -172,7 +197,8 @@ contract StopBook {
     }
 
     /// @notice `poke()`, then carries out what `exam` has latched, the oldest touch first, as far as the gas goes.
-    ///         Returns how many of its entries are still latched; an exam acts only once none is.
+    ///         Returns how many of its entries still wait: latched, or on a heap an overload's price has reached and
+    ///         later checks are still working off (`overloadOf`). An exam acts only once none does.
     function settle(address exam) external returns (uint256) {
         _poke();
         if (_latched[exam].length != 0) {
@@ -180,7 +206,9 @@ contract StopBook {
             _drainExam(exam, 0, type(uint256).max);
             _locked = false;
         }
-        return _latched[exam].length;
+        uint256 n = _latched[exam].length;
+        if (_overloadSides != 0) n += _held(exam);
+        return n;
     }
 
     // ── views ────────────────────────────────────────────────────
@@ -204,6 +232,12 @@ contract StopBook {
         return _slot[exam][asset][isTake];
     }
 
+    /// @notice What an overload left on `asset`: on each side, the price and block of the touch the rest of the heap is
+    ///         carried out at; block zero, none.
+    function overloadOf(uint32 asset) external view returns (Overload memory) {
+        return _overloads[asset];
+    }
+
     /// @notice The assets with an armed entry, and how many entries wait for `armedAt`.
     function watched() external view returns (uint32[] memory assets, uint256 waiting) {
         return (_assets, _waiting.length);
@@ -219,33 +253,61 @@ contract StopBook {
         _enter();
         if (last != 0 && block.number > last + 1) emit Gap(last + 1, block.number - 1);
         lastPokeBlock = uint64(block.number);
-        _arm();
-        uint256 fires = _drainQueue();
-        uint256 latches;
+        Work memory w = Work(_drainQueue(), 0);
+        // First what overloads left, at the price and block of their touch; then the entries due are armed, those an
+        // unfinished overload's price would reach waiting; then this block's prices, on every side with none left.
         // From the end: an asset whose heaps empty leaves its place to the last one, already checked.
+        if (_overloadSides != 0) {
+            for (uint256 i = _assets.length; i > 0; --i) {
+                uint32 a = _assets[i - 1];
+                _workOff(a, true, w);
+                _workOff(a, false, w);
+                _maybeIdle(a);
+            }
+        }
+        _arm();
         for (uint256 i = _assets.length; i > 0; --i) {
             uint32 a = _assets[i - 1];
             uint64 px = _oracle(a);
             if (px == 0) {
                 emit NoPrice(a);
-                continue;
+            } else {
+                emit PriceSeen(a, px);
+                _side(a, true, px, w);
+                _side(a, false, px, w);
             }
-            emit PriceSeen(a, px);
-            (fires, latches) = _touch(a, true, px, fires, latches);
-            (fires, latches) = _touch(a, false, px, fires, latches);
             _maybeIdle(a);
         }
         _locked = false;
     }
 
-    /// Moves the entries whose `armedAt` has come from waiting to their heap.
+    /// What an overload left on one side of `asset`, carried out at the price and block of its touch; the overload is
+    /// done once nothing it reached is left.
+    function _workOff(uint32 asset, bool below, Work memory w) internal {
+        (uint64 opx, uint40 ob) = _overload(asset, below);
+        if (ob != 0 && _touch(asset, below, opx, ob, w)) _setOverload(asset, below, 0, 0);
+    }
+
+    /// What this block's price `px` reaches on one side of `asset`, if no overload is left there. What the caps leave
+    /// waits with this price and block: an overload delays a fill, it never changes its price.
+    function _side(uint32 asset, bool below, uint64 px, Work memory w) internal {
+        (, uint40 ob) = _overload(asset, below);
+        if (ob == 0 && !_touch(asset, below, px, block.number, w)) {
+            _setOverload(asset, below, px, uint40(block.number));
+        }
+    }
+
+    /// Moves the entries whose `armedAt` has come from waiting to their heap. One that an overload's price would reach
+    /// waits until that overload is done: it was not armed at its touch, and is not carried out at its price.
     function _arm() internal {
+        uint256[MAX_ARMS] memory later;
+        uint256 nLater;
         for (uint256 n = 0; _waiting.length != 0; ++n) {
             uint256 e = _waiting[0];
-            if (e >> 193 > block.number) return;
+            if (e >> 193 > block.number) break;
             if (n == MAX_ARMS) {
-                emit ArmingBacklog(_waiting.length);
-                return;
+                emit ArmingBacklog(_waiting.length + nLater);
+                break;
             }
             address exam = address(uint160(e >> 33));
             uint32 asset = uint32(e >> 1);
@@ -253,6 +315,11 @@ contract StopBook {
             _removeAt(_waiting, 0, false, 0, true);
             Slot storage s = _slot[exam][asset][isTake];
             bool below = s.where == WAIT_BELOW;
+            // An overload's price is carried out on what was armed at its touch: one it would reach, armed since, waits.
+            if (_reachedBy(asset, below, s.level)) {
+                later[nLater++] = e;
+                continue;
+            }
             s.where = below ? BELOW : ABOVE;
             if (_assetPos[asset] == 0) {
                 _assets.push(asset);
@@ -266,53 +333,75 @@ contract StopBook {
                 false
             );
         }
+        for (uint256 i = 0; i < nLater; ++i) {
+            _push(_waiting, later[i], false, 0, true);
+        }
     }
 
-    /// Takes off `asset`'s heap everything `px` has reached: carried out while the check has fires and gas left
-    /// and its exam has no earlier touch latched, latched otherwise, left for the next check past `MAX_LATCHES`.
-    function _touch(uint32 asset, bool below, uint64 px, uint256 fires, uint256 latches)
-        internal
-        returns (uint256, uint256)
-    {
+    /// Whether an overload on `asset`'s `below` side has a price that reaches `level`.
+    function _reachedBy(uint32 asset, bool below, uint64 level) internal view returns (bool) {
+        (uint64 opx, uint40 ob) = _overload(asset, below);
+        return ob != 0 && (below ? opx <= level : opx >= level);
+    }
+
+    function _overload(uint32 asset, bool below) internal view returns (uint64, uint40) {
+        Overload storage o = _overloads[asset];
+        return below ? (o.belowPx, o.belowBlock) : (o.abovePx, o.aboveBlock);
+    }
+
+    /// Sets (`b` not zero) or clears what an overload left on one side of `asset`.
+    function _setOverload(uint32 asset, bool below, uint64 px, uint40 b) internal {
+        Overload storage o = _overloads[asset];
+        uint40 was = below ? o.belowBlock : o.aboveBlock;
+        if (was == 0 && b != 0) ++_overloadSides;
+        else if (was != 0 && b == 0) --_overloadSides;
+        if (below) (o.belowPx, o.belowBlock) = (px, b);
+        else (o.abovePx, o.aboveBlock) = (px, b);
+    }
+
+    /// Takes off `asset`'s heap everything `px`, seen in block `touchBlock`, has reached: carried out while the check
+    /// has fires and gas left and its exam has no earlier touch latched, latched otherwise. Returns false if it stopped
+    /// at the caps with more reached.
+    function _touch(uint32 asset, bool below, uint64 px, uint256 touchBlock, Work memory w) internal returns (bool) {
         uint256[] storage h = below ? _below[asset] : _above[asset];
         while (h.length != 0) {
             uint256 e = h[0];
             uint64 level = uint64(e >> 161);
             if (below ? px > level : px < level) break;
             // An exam with an earlier touch latched has that one carried out first: this one waits behind it.
-            bool fire = fires < MAX_FIRES && _latched[address(uint160(e >> 1))].length == 0 && _gasForFire();
-            if (!fire && latches == MAX_LATCHES) {
-                emit TouchBacklog(asset, below);
-                break;
+            bool fire = w.fires < MAX_FIRES && _latched[address(uint160(e >> 1))].length == 0 && _gasForFire();
+            if (!fire && w.latches == MAX_LATCHES) {
+                emit TouchBacklog(asset, below, px, touchBlock);
+                return false;
             }
             _removeAt(h, 0, below, asset, false);
-            if (fire) ++fires;
-            else ++latches;
-            _reached(asset, e, px, fire);
+            if (fire) ++w.fires;
+            else ++w.latches;
+            _reached(asset, e, px, touchBlock, fire);
         }
-        return (fires, latches);
+        return true;
     }
 
-    /// The entry `e`, just taken off `asset`'s heap at `px`: carried out with `fire`, latched without, and latched
-    /// too if its call failed.
-    function _reached(uint32 asset, uint256 e, uint64 px, bool fire) internal {
+    /// The entry `e`, just taken off `asset`'s heap, reached at `px` in `touchBlock`: carried out with `fire`, latched
+    /// without, and latched too if its call failed.
+    function _reached(uint32 asset, uint256 e, uint64 px, uint256 touchBlock, bool fire) internal {
         address exam = address(uint160(e >> 1));
         bool isTake = e & 1 == 1;
         if (fire) {
-            uint8 r = _call(exam, asset, isTake, px, block.number);
+            uint8 r = _call(exam, asset, isTake, px, touchBlock);
             if (r != FAILED) return _done(exam, asset, isTake, r);
         }
-        _latch(exam, asset, isTake, px);
+        _latch(exam, asset, isTake, px, touchBlock);
     }
 
-    /// Latches `exam`'s entry, just taken off its heap, with `px` and this block.
-    function _latch(address exam, uint32 asset, bool isTake, uint64 px) internal {
+    /// Latches `exam`'s entry, just taken off its heap, with `px` and `touchBlock`.
+    function _latch(address exam, uint32 asset, bool isTake, uint64 px, uint256 touchBlock) internal {
         Slot storage s = _slot[exam][asset][isTake];
         uint256[] storage l = _latched[exam];
         if (l.length == 0) _latchQueue.push(exam);
-        (s.where, s.pos, s.px, s.touchBlock) = (LATCHED, uint32(l.length), px, uint40(block.number));
+        (s.where, s.pos, s.px, s.touchBlock) = (LATCHED, uint32(l.length), px, uint40(touchBlock));
         l.push(uint256(asset) << 1 | (isTake ? 1 : 0));
-        emit Latched(exam, asset, isTake, px, block.number);
+        emit Latched(exam, asset, isTake, px, touchBlock);
     }
 
     /// Carries out latched entries, the oldest exams first, while the check has fires left. An exam whose call
@@ -432,10 +521,24 @@ contract StopBook {
         l.pop();
     }
 
-    /// Takes `asset` off the list once both its heaps are empty.
+    /// How many of `exam`'s armed entries an overload's price has reached: later checks carry them out at it.
+    function _held(address exam) internal view returns (uint256 n) {
+        for (uint256 i = 0; i < _assets.length; ++i) {
+            uint32 a = _assets[i];
+            for (uint256 k = 0; k < 2; ++k) {
+                Slot storage s = _slot[exam][a][k == 1];
+                uint8 where = s.where;
+                if ((where == BELOW || where == ABOVE) && _reachedBy(a, where == BELOW, s.level)) ++n;
+            }
+        }
+    }
+
+    /// Takes `asset` off the list once both its heaps are empty, and with them what an overload left.
     function _maybeIdle(uint32 asset) internal {
         uint256 p = _assetPos[asset];
         if (p == 0 || _below[asset].length != 0 || _above[asset].length != 0) return;
+        _setOverload(asset, true, 0, 0);
+        _setOverload(asset, false, 0, 0);
         uint32 last = _assets[_assets.length - 1];
         _assets[p - 1] = last;
         _assetPos[last] = p;
