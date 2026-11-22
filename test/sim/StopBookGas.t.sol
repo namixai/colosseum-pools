@@ -261,4 +261,41 @@ contract StopBookGasTest is StopBookBase {
         assertLe(touched + TX, LIMIT);
         assertLe(deep + TX, LIMIT);
     }
+
+    /// The check at the factory's cap of listed assets (`SimPoolFactory.MAX_LISTED`), every one with a stop: block after
+    /// block, and in the check where each asset closes runs on eleven levels at once (into empty words: from above).
+    function test_gas_poke_atTheCap() public {
+        uint256 n = 20; // SimPoolFactory.MAX_LISTED (test_listing_atMostMaxListed_aDelistingFreesAPlace holds it)
+        uint32[] memory as_ = new uint32[](n);
+        for (uint256 k = 0; k < n; ++k) {
+            as_[k] = uint32(400 + k);
+            _asset(as_[k], 5, MARK);
+            uint32[] memory one = new uint32[](1);
+            one[0] = as_[k];
+            PaperExam e = _examOn(one, false);
+            _trade(e, as_[k], true, 20);
+            _set(e, as_[k], false, 900_000, 0);
+        }
+        uint256 most;
+        for (uint256 b = 0; b < 32; ++b) {
+            vm.roll(block.number + 1);
+            for (uint256 k = 0; k < n; ++k) {
+                CoreSimulatorLib.setMarkPx(as_[k], uint64(MARK - 5_000 + ((b * 7 + k * 3) % 11) * 1_000));
+            }
+            uint256 used = _pokeGas();
+            if (used > most) most = used;
+        }
+        uint256 deep;
+        for (uint256 k = 0; k < n; ++k) {
+            uint256 g = _deepest(as_[k], stopBook.logged());
+            _harness().skip(g - stopBook.logged());
+            vm.roll(block.number + 1);
+            uint256 used = _pokeGas();
+            if (used > deep) deep = used;
+        }
+        emit log_named_uint("assets at the cap", n);
+        emit log_named_uint("poke at the cap, most of 32 checks", most);
+        emit log_named_uint("poke at the cap, the check closing eleven levels of an asset (most)", deep);
+        assertLe(deep + TX, LIMIT);
+    }
 }

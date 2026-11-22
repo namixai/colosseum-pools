@@ -469,6 +469,26 @@ contract SimPoolTest is Test {
         factory.create{value: 1 ether}(p);
     }
 
+    /// At most `MAX_LISTED` assets listed at once, so that the stop book's check of a block fits a small block: a
+    /// cap changed on a listed asset takes no place, a delisting frees one.
+    function test_listing_atMostMaxListed_aDelistingFreesAPlace() public {
+        uint256 cap = factory.MAX_LISTED();
+        assertEq(cap, 20, "the cap whose check test_gas_poke_atTheCap measures");
+        assertEq(factory.listedAssets(), 1, "BTC");
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        vm.expectRevert(SimPoolFactory.TooManyAssets.selector);
+        factory.setAsset(9999, 500);
+        factory.setAsset(BTC, 600);
+        assertEq(factory.listedAssets(), cap);
+        factory.setAsset(BTC, 0);
+        factory.setAsset(BTC, 0);
+        assertEq(factory.listedAssets(), cap - 1, "a delisting frees a place, once");
+        factory.setAsset(9999, 500);
+        assertEq(factory.listedAssets(), cap);
+    }
+
     function test_open_eachAssetsCapIsTheListsAtMost() public {
         factory.setAsset(BTC, 400); // under the plan's 5x
         SimPlan memory p = _plan();

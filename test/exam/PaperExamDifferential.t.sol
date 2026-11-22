@@ -128,13 +128,17 @@ contract RulesModel {
         return px;
     }
 
-    /// The price a stop or a take closes at: as a fill, but past `maxWorse` at that bound, never refused.
+    /// The price a stop or a take closes at: as a fill, but past `maxWorse` at that bound, never refused; the book
+    /// as the stop book logs it, the side off the oracle in millionths of it, rounded down, at most 65 534.
     function stopPrice(bool isBuy, int256 oracle, int256 bid, int256 ask) public pure returns (int256) {
         if (bid == 0 || ask == 0 || ask < bid) return oracle;
-        int256 px = isBuy ? (ask > oracle ? ask : oracle) : (bid < oracle ? bid : oracle);
+        int256 exact = isBuy ? (ask > oracle ? ask - oracle : int256(0)) : (bid < oracle ? oracle - bid : int256(0));
+        int256 off = exact * 1e6 / oracle;
+        if (off > 65_534) off = 65_534;
+        int256 gap = oracle * off / 1e6;
         int256 bound = oracle * int256(uint256(maxWorse)) / BPS;
-        if (isBuy ? px - oracle > bound : oracle - px > bound) return isBuy ? oracle + bound : oracle - bound;
-        return px;
+        if (gap * BPS > oracle * int256(uint256(maxWorse))) gap = bound;
+        return isBuy ? oracle + gap : oracle - gap;
     }
 
     /// The check of block `blockNo`, once a block: every armed stop and take the oracle has reached is carried out.

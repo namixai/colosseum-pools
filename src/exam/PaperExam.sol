@@ -158,6 +158,11 @@ contract PaperExam is Initializable {
     uint8 internal constant FIRE_FILLED = 1;
     uint8 internal constant FIRE_CLOSED = 2;
     uint8 internal constant FIRE_ENDED = 3;
+    /// A fill's book (`_fillPrice`): `ORDER`, an order's, the live best bid and offer, refused past `maxWorseBps`;
+    /// `NO_BOOK`, none (the oracle); else a stop's or a take's, the book of its touch's block as the stop book logged
+    /// it (`askOff << 16 | bidOff`, millionths of the oracle price), taken at the bound past `maxWorseBps`.
+    uint256 internal constant ORDER = type(uint256).max;
+    uint256 internal constant NO_BOOK = type(uint32).max;
 
     /// The account that created this exam, and reads its result.
     address public pool;
@@ -459,7 +464,7 @@ contract PaperExam is Initializable {
         if (_over()) revert TooLate();
         delete pending;
         (uint64 px, uint256 cost, uint8 source) =
-            _apply(o.asset, o.isBuy, o.sz, before, _mark(o.asset), false, block.timestamp);
+            _apply(o.asset, o.isBuy, o.sz, before, _mark(o.asset), ORDER, block.timestamp);
         emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);
     }
 
@@ -508,7 +513,7 @@ contract PaperExam is Initializable {
         if (msg.sender == trader || msg.sender == agent) revert OwnOrder();
         if (_over()) revert TooLate();
         Trigger memory t = isTake ? takeOf[asset] : stopOf[asset];
-        _fire(asset, isTake, t, _triggered(asset, isTake, t), block.number, block.timestamp);
+        _fire(asset, isTake, t, NO_BOOK << 64 | _triggered(asset, isTake, t), block.number, block.timestamp);
     }
 
     /// @notice The stop book carries out the stop or the take of `asset`, at level `level` and armed at `armedAt`,
@@ -525,6 +530,7 @@ contract PaperExam is Initializable {
         uint64 level,
         uint64 armedAt,
         uint64 px,
+        uint32 book,
         uint64 touchBlock,
         uint64 touchTime
     ) external returns (uint8) {
@@ -535,7 +541,7 @@ contract PaperExam is Initializable {
             _clear(asset, isTake, false);
             return FIRE_ENDED;
         }
-        _fire(asset, isTake, t, px, touchBlock, touchTime);
+        _fire(asset, isTake, t, uint256(book) << 64 | px, touchBlock, touchTime);
         return positionOf[asset] == 0 ? FIRE_CLOSED : FIRE_FILLED;
     }
 
@@ -605,9 +611,10 @@ contract PaperExam is Initializable {
     // ── internals ───────────────────────────────────────────────�
 
     /// @dev Closes `sz` of the position (all of it for zero or more) for the stop or the take `t` of `asset`, at the
-    ///      oracle price `oracle` or the book's from it, never refused (`_fillPrice`; only an exam with a filler, so
-    ///      with a stop book, fills at the book), as reached in block `touchBlock` at time `at`.
-    function _fire(uint32 asset, bool isTake, Trigger memory t, uint64 oracle, uint256 touchBlock, uint256 at)
+    ///      oracle price `uint64(tick)` or at the book `tick >> 64` of that block from it, never refused (`_fillPrice`;
+    ///      only an exam with a filler, so with a stop book, fills at the book), as reached in block `touchBlock` at
+    ///      time `at`.
+    function _fire(uint32 asset, bool isTake, Trigger memory t, uint256 tick, uint256 touchBlock, uint256 at)
         internal
     {
         uint64 sz;
@@ -620,14 +627,14 @@ contract PaperExam is Initializable {
             sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;
             // The book has this one already: from it (`fireTrigger`) or without one (`fillTrigger`), nothing to tell.
             _clear(asset, isTake, false);
-            (px, cost, source) = _apply(asset, before < 0, sz, before, oracle, true, at);
+            (px, cost, source) = _apply(asset, before < 0, sz, before, uint64(tick), tick >> 64, at);
             _lapseOn(asset);
             // A trade like any fill for whoever reads `Filled` (the checker's pairs, the days with a fill), late by
             // the blocks from when it could first act to its touch; `TriggerFilled` right after it says it was a stop
             // or a take (review of #297).
             emit Filled(asset, before < 0, sz, px, cost, touchBlock - t.armedAt, source);
         }
-        emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source, touchBlock, oracle);
+        emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source, touchBlock, uint64(tick));
     }
 
     /// @dev An order waiting on `asset`, once a stop or a take has closed its position, was made for that position: it
@@ -644,11 +651,11 @@ contract PaperExam is Initializable {
     /// @dev Fills `sz` of `asset` on the side `isBuy` at the price a fill takes from the oracle price `oracle`
     ///      (`_fillPrice`), as a fill at time `at`: the position, the balance, the cost, the leverage rule for a fill
     ///      that grows the position, the trading day. A position closed or turned round loses its stop and its take.
-    function _apply(uint32 asset, bool isBuy, uint64 sz, int256 before, uint64 oracle, bool clamp, uint256 at)
+    function _apply(uint32 asset, bool isBuy, uint64 sz, int256 before, uint64 oracle, uint256 book, uint256 at)
         internal
         returns (uint64 px, uint256 cost, uint8 source)
     {
-        (px, source) = _fillPrice(asset, isBuy, oracle, clamp);
+        (px, source) = _fillPrice(asset, isBuy, oracle, book);
         int256 delta = isBuy ? int256(uint256(sz)) : -int256(uint256(sz));
         uint256 ntl = uint256(sz) * px;
         cost = (ntl * _terms.costPpm + PPM - 1) / PPM;
@@ -667,8 +674,8 @@ contract PaperExam is Initializable {
         if (before != 0 && (afterFill == 0 || (afterFill > 0) != (before > 0))) {
             // A stop's or a take's fill (`clamp`) runs inside the book's call: the book takes the other trigger out
             // itself, after it (`StopBook._done`), with its own gas and not the call's.
-            if (stopOf[asset].px != 0) _clear(asset, false, !clamp);
-            if (takeOf[asset].px != 0) _clear(asset, true, !clamp);
+            if (stopOf[asset].px != 0) _clear(asset, false, book == ORDER);
+            if (takeOf[asset].px != 0) _clear(asset, true, book == ORDER);
         }
 
         // A fill smaller than the exchange would take is still a fill -- dust has to be closable
@@ -812,27 +819,40 @@ contract PaperExam is Initializable {
     ///      the best bid and offer, never better for the trader than `oracle`, and, more than `maxWorseBps` worse,
     ///      refused (an order) or taken at that bound (`clamp`: a stop or a take, which fills as a market order
     ///      does). A book that does not answer, is empty on a side or crossed leaves `oracle`.
-    function _fillPrice(uint32 asset, bool isBuy, uint64 oracle, bool clamp)
+    function _fillPrice(uint32 asset, bool isBuy, uint64 oracle, uint256 book)
         internal
         view
         returns (uint64 px, uint8 source)
     {
         if (!fromBook) return (oracle, SOURCE_ORACLE);
-        (bool ok, bytes memory r) =
-            HLConstants.BBO_PRECOMPILE_ADDRESS.staticcall(abi.encode(uint64(CoreOps.pxIndex(asset))));
-        if (!ok || r.length < 64) return (oracle, SOURCE_ORACLE_FALLBACK);
-        // Read as two words, so that no answer of it can make a fill revert (a stop's fill must not).
-        (uint256 bid, uint256 ask) = abi.decode(r, (uint256, uint256));
-        // An empty ask with a bid is crossed: `ask < bid` holds it.
-        if (bid == 0 || ask < bid || ask > type(uint64).max) return (oracle, SOURCE_ORACLE_FALLBACK);
-        px = isBuy ? (ask > oracle ? uint64(ask) : oracle) : (bid < oracle ? uint64(bid) : oracle);
-        uint256 worse = isBuy ? px - oracle : oracle - px;
-        if (worse * Units.BPS > uint256(oracle) * maxWorseBps) {
-            if (!clamp) revert TooFarFromOracle(px, oracle);
+        uint256 gap;
+        if (book == ORDER) {
+            bool has;
+            (has, gap) = _liveGap(asset, isBuy, oracle);
+            if (!has) return (oracle, SOURCE_ORACLE_FALLBACK);
+        } else {
+            if (book == NO_BOOK) return (oracle, SOURCE_ORACLE_FALLBACK);
+            gap = uint256(oracle) * (isBuy ? book >> 16 : uint16(book)) / 1e6;
+        }
+        px = uint64(isBuy ? oracle + gap : oracle - gap);
+        if (gap * Units.BPS > uint256(oracle) * maxWorseBps) {
+            if (book == ORDER) revert TooFarFromOracle(px, oracle);
             uint64 bound = uint64(uint256(oracle) * maxWorseBps / Units.BPS);
             px = isBuy ? oracle + bound : oracle - bound;
         }
         source = SOURCE_BOOK;
+    }
+
+    /// @dev The live best bid and offer: whether it answered, with a bid, not crossed, and how far the trader's side
+    ///      stands worse than `oracle` (zero if better). Read as two words, so that no answer of it makes a fill revert.
+    function _liveGap(uint32 asset, bool isBuy, uint64 oracle) internal view returns (bool, uint256) {
+        (bool ok, bytes memory r) =
+            HLConstants.BBO_PRECOMPILE_ADDRESS.staticcall(abi.encode(uint64(CoreOps.pxIndex(asset))));
+        if (!ok || r.length < 64) return (false, 0);
+        (uint256 bid, uint256 ask) = abi.decode(r, (uint256, uint256));
+        // An empty ask with a bid is crossed: `ask < bid` holds it.
+        if (bid == 0 || ask < bid || ask > type(uint64).max) return (false, 0);
+        return (true, isBuy ? (ask > oracle ? ask - oracle : 0) : (bid < oracle ? oracle - bid : 0));
     }
 
     /// @dev Whether a fill of `delta` only makes the position `before` smaller, on the same side.

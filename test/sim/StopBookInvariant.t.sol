@@ -271,13 +271,13 @@ contract StopBookInvariantTest is Test, BookStand {
                     uint64 wlo;
                     uint64 whi;
                     for (uint256 q = j * size; q < (j + 1) * size; ++q) {
-                        uint64 p = harness.raw(a, q);
+                        uint64 p = uint32(harness.raw(a, q));
                         if (p == 0) continue;
                         if (whi == 0 || p < wlo) wlo = p;
                         if (p > whi) whi = p;
                     }
-                    assertEq(hi, whi == 0 ? 0 : harness.code(whi), "the code of the run's highest");
-                    assertEq(lo, whi == 0 ? 0 : harness.code(wlo), "the code of the run's lowest");
+                    assertEq(hi, whi, "the run's highest");
+                    assertEq(lo, wlo, "the run's lowest");
                 }
             }
         }

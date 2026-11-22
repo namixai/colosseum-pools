@@ -39,9 +39,6 @@ contract StopBookHarness is StopBook {
         return (uint32(r), r >> 32);
     }
 
-    function code(uint256 x) external pure returns (uint256) {
-        return _code(x);
-    }
 
     function skip(uint256 n) external {
         _len = uint64(_len + n);
@@ -66,8 +63,8 @@ contract StopBookHarness is StopBook {
         uint256 key = _key(asset, k, j >> 2);
         uint256 sh = j % 4 * 64;
         uint256 r = uint64(_tree[key] >> sh);
-        uint256 lo = _code(px);
-        uint256 hi = lo;
+        uint256 lo = px;
+        uint256 hi = px;
         if (r != 0) {
             if (uint32(r) < lo) lo = uint32(r);
             if (r >> 32 > hi) hi = r >> 32;
@@ -90,7 +87,7 @@ contract BadExam {
         b.add(asset, false, below, level, armedAt);
     }
 
-    function fireTrigger(uint32, bool, uint64, uint64, uint64, uint64, uint64) external view returns (uint8) {
+    function fireTrigger(uint32, bool, uint64, uint64, uint64, uint32, uint64, uint64) external view returns (uint8) {
         if (!burns) revert("no");
         uint256 x;
         while (gasleft() > 0) ++x;
@@ -112,7 +109,7 @@ contract GreedyExam {
         b.add(asset, false, below, level, armedAt);
     }
 
-    function fireTrigger(uint32, bool, uint64, uint64, uint64, uint64, uint64) external view returns (uint8) {
+    function fireTrigger(uint32, bool, uint64, uint64, uint64, uint32, uint64, uint64) external view returns (uint8) {
         uint256 until = gasleft() - need;
         uint256 x;
         while (gasleft() > until) ++x;
@@ -132,7 +129,7 @@ contract BackCaller {
         b.add(asset, false, below, level, armedAt);
     }
 
-    function fireTrigger(uint32 asset, bool, uint64 level, uint64 armedAt, uint64, uint64, uint64)
+    function fireTrigger(uint32 asset, bool, uint64 level, uint64 armedAt, uint64, uint32, uint64, uint64)
         external
         returns (uint8)
     {
@@ -673,7 +670,7 @@ contract StopBookTest is StopBookBase {
         emit StopBook.Fired(address(rev), BTC, false, 940_000, block.number, 0); // FAILED
         assertEq(stopBook.settle(address(rev)), 1, "its entry stays, owed");
         vm.expectEmit(address(stopBook));
-        emit StopBook.Fired(address(burn), BTC, false, 940_000, block.number, 0);
+        emit StopBook.Fired(address(burn), BTC, false, 940_000, block.number, 4); // STARVED: it spent all it got
         assertEq(stopBook.settle{gas: 1_000_000}(address(burn)), 1, "a call that burns all it gets: the same");
         assertEq(stopBook.entryOf(address(rev), BTC, false).level, 990_000, "never erased");
         assertEq(stopBook.entryOf(address(burn), BTC, false).level, 980_000);
@@ -734,13 +731,13 @@ contract StopBookTest is StopBookBase {
         (PaperExam e, uint256 armedAt) = _longWithStop();
         vm.prank(stranger);
         vm.expectRevert(PaperExam.NotBook.selector);
-        e.fireTrigger(BTC, false, 950_000, uint64(armedAt), 900_000, uint64(block.number), uint64(block.timestamp));
+        e.fireTrigger(BTC, false, 950_000, uint64(armedAt), 900_000, 0, uint64(block.number), uint64(block.timestamp));
         vm.prank(stranger);
         vm.expectRevert(PaperExam.NotBook.selector);
         e.fillTrigger(BTC, false);
         vm.prank(address(stopBook));
         vm.expectRevert(PaperExam.NoTrigger.selector);
-        e.fireTrigger(BTC, false, 950_001, uint64(armedAt), 900_000, uint64(block.number), uint64(block.timestamp));
+        e.fireTrigger(BTC, false, 950_001, uint64(armedAt), 900_000, 0, uint64(block.number), uint64(block.timestamp));
         vm.prank(stranger);
         vm.expectRevert(StopBook.NotExam.selector);
         stopBook.add(BTC, false, true, 1, 1);
@@ -1368,6 +1365,66 @@ contract StopBookTest is StopBookBase {
             }
             assertEq(_harness().first(big, len0 + s, len0 + n, level, below), len0 + want);
         }
+    }
+
+    // ── the book of the touch's block (fifth audit, H1) and the journal's prices (M3) ─────
+
+    /// A stop at the book is filled at the book of its touch's block, whoever settles it and whenever: the book that
+    /// moves after the touch changes nothing.
+    function test_P1_aStopsPriceIsItsTouchBlocksBook_whoeverSettlesWhenever() public {
+        uint32[] memory one = new uint32[](1);
+        one[0] = BTC;
+        PaperExam a = _examOn(one, true);
+        PaperExam b = _examOn(one, true);
+        BookStub(BBO).set(BTC, MARK - 10, MARK + 10);
+        _trade(a, BTC, true, 100);
+        _trade(b, BTC, true, 100);
+        _set(a, BTC, false, 950_000, 0);
+        _set(b, BTC, false, 950_000, 0);
+        vm.roll(block.number + DELAY);
+        _mark(940_000);
+        BookStub(BBO).set(BTC, 935_000, 942_000); // the touch block's bid, 0.53 % under
+        stopBook.poke();
+        uint256 touch = block.number;
+        uint256 pos = stopBook.logged() - 1;
+        vm.roll(touch + 1);
+        BookStub(BBO).set(BTC, 900_000, 990_000); // a far worse book after it
+        vm.prank(stranger);
+        stopBook.settle(address(a));
+        vm.roll(touch + 7);
+        BookStub(BBO).set(BTC, 939_999, 940_001); // and a better one
+        vm.prank(trader);
+        b.place(BTC, true, 1);
+        uint256 off = uint256(940_000 - 935_000) * 1e6 / 940_000;
+        uint256 px = 940_000 - 940_000 * off / 1e6;
+        assertEq(a.cash(), b.cash(), "one price, whoever and whenever");
+        assertEq(a.cash(), int256(100e6) - 100 * 1_000_010 + int256(100 * px), "the touch block's bid");
+        assertEq(stopBook.bookAt(BTC, pos), uint32((uint256(2_000) * 1e6 / 940_000) << 16 | off));
+    }
+
+    /// The journal takes prices under `MAX_PRICE` only: an oracle price at it or over is logged as none, a level at it
+    /// or over is refused; under it the runs hold the prices themselves, and a search goes down only where they reach.
+    function test_P4_pricesAndLevelsPastTheJournalsRange() public {
+        uint32 big = 78;
+        _asset(big, 0, 100_000_000);
+        uint32[] memory one = new uint32[](1);
+        one[0] = big;
+        PaperExam e = _examOn(one, false);
+        _trade(e, big, true, 1);
+        vm.prank(trader);
+        vm.expectRevert(abi.encodeWithSelector(StopBook.LevelTooHigh.selector, uint64(type(uint32).max)));
+        e.setTrigger(big, true, type(uint32).max, 0);
+        _set(e, big, false, 90_000_000, 0);
+        vm.roll(block.number + DELAY);
+        CoreSimulatorLib.setMarkPx(big, type(uint32).max);
+        vm.expectEmit(address(stopBook));
+        emit StopBook.NoPrice(big);
+        stopBook.poke();
+        assertEq(stopBook.priceAt(big, stopBook.logged() - 1), 0);
+        vm.roll(block.number + 1);
+        CoreSimulatorLib.setMarkPx(big, type(uint32).max - 2);
+        stopBook.poke();
+        assertEq(stopBook.priceAt(big, stopBook.logged() - 1), type(uint32).max - 2);
     }
 
     // ── the reviews before ──────────────────────────────────────

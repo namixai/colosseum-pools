@@ -95,18 +95,10 @@ contract StopBookModelTest is StopBookBase {
         }
         vm.roll(block.number + 1);
         stopBook.poke();
-        // Each asset's book for the run: empty now and then, otherwise off the price by up to 3 % either side.
         for (uint256 k = 0; k < na; ++k) {
-            if (_next(4) == 0) {
-                bbo[k] = [uint64(0), uint64(0)];
-            } else {
-                uint64 d1 = uint64(base[k] * _next(300) / 10_000);
-                uint64 d2 = uint64(base[k] * _next(300) / 10_000);
-                bbo[k] = [base[k] - d1, base[k] + d2];
-            }
-            BookStub(BBO).set(A[k], bbo[k][0], bbo[k][1]);
             (px[k], lastNZ[k]) = (base[k], base[k]);
         }
+        _drawBooks();
         lastChecked = stopBook.lastPokeBlock();
         for (uint256 i = 0; i < n; ++i) {
             for (uint256 k = 0; k < na; ++k) {
@@ -116,16 +108,31 @@ contract StopBookModelTest is StopBookBase {
         }
     }
 
-    /// The price a stop's or a take's fill takes from the oracle price `o` (`PaperExam._fillPrice`, clamped).
+    /// The price a stop's or a take's fill takes from the oracle price `o` and the book of the block of its touch, as
+    /// the journal logs it (millionths of `o`, rounded down) and the exam reads it (`PaperExam._fillPrice`, clamped).
     function _fillPx(uint256 i, uint256 k, bool sell, uint64 o) internal view returns (uint64 p) {
-        uint64 bid = bbo[k][0];
-        uint64 ask = bbo[k][1];
+        uint256 bid = bbo[k][0];
+        uint256 ask = bbo[k][1];
         if (!atBook[i] || bid == 0 || ask < bid) return o;
-        p = sell ? (bid < o ? bid : o) : (ask > o ? ask : o);
-        uint256 worse = sell ? o - p : p - o;
-        if (worse * 10_000 > uint256(o) * WORSE) {
-            uint64 b = uint64(uint256(o) * WORSE / 10_000);
-            p = sell ? o - b : o + b;
+        uint256 off = sell ? (bid < o ? (o - bid) * 1e6 / o : 0) : (ask > o ? (ask - o) * 1e6 / o : 0);
+        if (off > 65_534) off = 65_534;
+        uint256 gap = uint256(o) * off / 1e6;
+        if (gap * 10_000 > uint256(o) * WORSE) gap = uint256(o) * WORSE / 10_000;
+        p = uint64(sell ? o - gap : o + gap);
+    }
+
+    /// Each asset's book drawn again: empty now and then, otherwise off its price by up to 3 % either side.
+    function _drawBooks() internal {
+        for (uint256 k = 0; k < na; ++k) {
+            uint64 c = lastNZ[k];
+            if (_next(4) == 0) {
+                bbo[k] = [uint64(0), uint64(0)];
+            } else {
+                uint64 d1 = uint64(c * _next(300) / 10_000);
+                uint64 d2 = uint64(c * _next(300) / 10_000);
+                bbo[k] = [c - d1, c + d2];
+            }
+            BookStub(BBO).set(A[k], bbo[k][0], bbo[k][1]);
         }
     }
 
@@ -178,6 +185,8 @@ contract StopBookModelTest is StopBookBase {
             (px[k], lastNZ[k]) = (nx, nx);
             CoreSimulatorLib.setMarkPx(A[k], nx);
         }
+        // The book moves from block to block, between a touch and its settle too: the fill is the touch block's.
+        if (_next(2) == 0) _drawBooks();
     }
 
     function _idx(address e) internal view returns (uint256 i) {
