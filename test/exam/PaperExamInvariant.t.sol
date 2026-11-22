@@ -106,7 +106,7 @@ contract PaperExamHandler is Test {
         vm.roll(block.number + DELAY + (bookSeed % 3));
         if (randomBook) _drawBook(bookSeed);
         vm.recordLogs();
-        StopBook(exam.stopBook()).poke();
+        StopBook(exam.stopBook()).settle(address(exam));
         if (exam.positionOf(asset) != pos) calls["fillTrigger"] += 1;
         _checkPrice(asset, pos < 0);
     }

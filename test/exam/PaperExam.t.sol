@@ -1281,7 +1281,7 @@ contract PaperExamTest is Test, BookStand {
         vm.expectEmit(address(e));
         emit PaperExam.Filled(BTC, false, 100, 940_000, 0, 0, 0); // a trade like any, for whoever reads trades
         vm.expectEmit(address(e));
-        emit PaperExam.TriggerFilled(BTC, false, 100, 940_000, 0, 950_000, 0, block.number);
+        emit PaperExam.TriggerFilled(BTC, false, 100, 940_000, 0, 950_000, 0, block.number, 940_000);
         vm.prank(stranger);
         vm.cool(address(e));
         uint256 before = gasleft();

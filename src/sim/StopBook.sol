@@ -4,13 +4,20 @@ pragma solidity ^0.8.28;
 import {HLConstants} from "@hyper-evm-lib/src/common/HLConstants.sol";
 import {CoreOps} from "../lib/CoreOps.sol";
 
-/// What the book asks of an exam: carry out its stop or take touched at `px` in block `touchBlock`. It answers
-/// `FILLED`, `CLOSED` (filled, and the position is closed, so its other trigger is gone too) or `ENDED` (the exam
-/// had ended or ran out of time: nothing filled, the trigger removed), and calls nothing in the book while it does.
+/// What the book asks of an exam: carry out its stop or take touched at oracle price `px` in block `touchBlock`, at
+/// time `touchTime`. It answers `FILLED`, `CLOSED` (filled, and the position is closed, so its other trigger is gone
+/// too) or `ENDED` (the exam had ended, or was out of time at `touchTime`: nothing filled, the trigger removed), and
+/// calls nothing in the book while it does.
 interface IStopExam {
-    function fireTrigger(uint32 asset, bool isTake, uint64 level, uint64 armedAt, uint64 px, uint64 touchBlock)
-        external
-        returns (uint8);
+    function fireTrigger(
+        uint32 asset,
+        bool isTake,
+        uint64 level,
+        uint64 armedAt,
+        uint64 px,
+        uint64 touchBlock,
+        uint64 touchTime
+    ) external returns (uint8);
 }
 
 /// The factory's register of its pools and their exams.
@@ -19,159 +26,114 @@ interface IPoolRegister {
 }
 
 /// @title StopBook
-/// @notice Every stop and take of the exams of one simulated-pool factory, by asset, and the check that carries
-///         them out. Anyone may call `poke()`, once a block does the work: it reads each asset's oracle price
-///         once and carries out every stop and take that price has reached, at that price and in that block's name.
-///         Nobody can take a touched stop back: every exam function that changes anything calls `settle` first
-///         (`PaperExam`), which checks the block before the exam does anything else, and holds the exam while it
-///         has a touch not yet carried out.
-/// @dev On each asset two heaps of armed entries: `below`, entries that fire at a price at or under their level
-///      (a long's stop, a short's take), the highest level on top; `above`, those that fire at or over it (a short's
-///      stop, a long's take), the lowest on top. An entry set in block N acts from block `armedAt` (N plus the exam's
-///      `fillDelay`): until then it waits in a heap by `armedAt`.
+/// @notice Every stop and take of the exams of one simulated-pool factory, and the journal of oracle prices they are
+///         carried out by. Anyone may call `poke()`, once a block: it logs this block's oracle price of every asset
+///         with a stop or a take on it, and carries nothing out. Anyone may call `settle(exam)`: it carries out each
+///         of that exam's stops and takes at the first logged price, from its `armedAt`, that reached it, at that
+///         price, in that block's name and at that block's time. Every exam function that changes anything calls
+///         `settle` first (`PaperExam`), so no exam acts on a state its touches have not reached: a stop the oracle
+///         price has touched is carried out before the trader can take it back, move it or trade.
+/// @dev The journal. A check of a block logs one position: its block and time (`at`), and each watched asset's oracle
+///      price there, zero when the oracle gave none. On each asset the prices sit in a tree of four branches: level 0
+///      the prices, four to a word; level k, for each run of 4^k positions, its lowest and its highest price in a code
+///      of 32 bits that keeps their order (`_code`, rounded outward), four runs to a word, written once the run is
+///      whole. The first position from `s` whose price reached a level is found by climbing from `s`, a word a level,
+///      until a run reaches it and going down that run to the price itself: some twenty words read for a stop a month
+///      old, whatever the number of stops and exams. Each asset's positions are shifted by a number of its own (`_off`)
+///      so that the assets' runs do not all end in the same check.
 ///
-///      The touch journal. A check's work is capped (`MAX_FIRES`, `MAX_LATCHES`, `MAX_ARMS`, `MAX_SCAN`), so that it
-///      fits a small HyperEVM block; what the caps leave is never lost, it is carried out later at the price and block
-///      of its own touch. For that each asset keeps, while anything on it is behind, the price and block of every
-///      check (`pairAt`): the journal. A side of an asset is either in step (everything the prices of the checked
-///      blocks reached is carried out) or behind, with a cursor: no journal pair before the cursor reaches its heap's
-///      top. A check takes the top, finds the first pair from the cursor that reaches it (the last pair is this
-///      block's price) and carries it out at that pair; the cursor stays there for the next top. A heap is ordered by
-///      level, so a pair that does not reach the top reaches nothing under it. An entry joins a heap only while its
-///      side is in step: so every entry of a heap acts for every pair from the cursor on. An entry armed while its
-///      side is behind, or armed late (more entries due than `MAX_ARMS`), is first compared with every pair from its
-///      `armedAt`: touched, it is carried out or latched at its first touch; not touched, it joins the heap if the side
-///      is in step, or is parked with its own cursor until it is. A pair stays in the journal while some cursor or some
-///      entry due and not armed may need it; then the journal is emptied.
+///      A check's cost is its assets' prices and the runs they close; nothing in it depends on how many stops there
+///      are, nor on any exam. A settle reads the exam's own entries and the journal: no other exam can make it later or
+///      dearer. Within an exam the touches are carried out in the order of their positions, a stop before a take at the
+///      same one; a fill that closes a position takes the asset's other trigger with it. A settle that runs short of
+///      gas stops between two steps and keeps what it found (`Entry.cursor`): the next one goes on from there. A fill
+///      that fails leaves its entry as it was; a `PaperExam`'s fill has nothing that reverts but the gas, and it gets
+///      all the gas the call has but what the book keeps, so a settle sent with enough gas carries it out.
 ///
-///      A touched entry leaves the book only once its exam has answered: a call that fails, whatever the reason,
-///      leaves the entry latched at the price and block of its touch, never erased, and the exam's other trigger, once
-///      a fill has closed the position, is taken out by the book after the call, with the check's own gas. An exam
-///      with a touch not yet carried out (latched, on a side behind with its level within the side's deepest price,
-///      parked, or due and not armed) is busy: its other touches are latched, not filled, and its latched ones are
-///      carried out the oldest first once it is not busy. While it is busy or latched, `settle` tells it so and the
-///      exam refuses to act. A check that would start with less than `pokeGas()` reverts, so a call too poor to do a
-///      check's whole work cannot take the block from one that can.
+///      A block nobody checked is shown by the next check (`Gap`); its prices are not in the journal.
 ///
-///      No way out is built for a latched entry whose exam's call fails at every try: that exam stays held
-///      (`StopsPending`). A `PaperExam`'s `fireTrigger` has no loop and calls nothing in the book; its gas is flat.
-///      A block nobody checked is shown by the next check (`Gap`).
-///
-///      Block numbers are kept in 40 bits: room for some 34 000 years of one-second blocks.
+///      Block numbers and times are kept in 40 bits: some 34 000 years of one-second blocks.
 contract StopBook {
-    /// Entries a check arms, compares with the journal on arming, or takes out of parking.
-    uint256 public constant MAX_ARMS = 3;
-    /// Entries carried out in one check, latched ones first.
-    uint256 public constant MAX_FIRES = 2;
-    /// Entries latched in one check off a heap.
-    uint256 public constant MAX_LATCHES = 2;
-    /// Exams of the latch queue one check visits.
-    uint256 public constant MAX_QUEUE_STEPS = 4;
-    /// Journal pairs one check reads from storage.
-    uint256 public constant MAX_SCAN = 12;
-    /// Gas each exam's `fireTrigger` gets.
-    uint256 public constant FIRE_GAS = 150_000;
-    /// The gas a check keeps for itself after a `fireTrigger`: the book's own records and events.
-    uint256 internal constant AFTER_FIRE = 40_000;
-    /// The least gas a check starts with: its work at the caps that does not depend on the assets, cold, with room
-    /// (`test_gas_ofACheckAtItsCaps_underASmallBlock`)...
-    uint256 public constant POKE_GAS_BASE = 800_000;
-    /// ...and, for each asset with an entry, its price, its two sides and its journal pair.
-    uint256 public constant POKE_GAS_PER_ASSET = 40_000;
-
-    /// What an exam's `fireTrigger` answered (`Fired.result`): its call failed (the entry stays latched), it filled,
-    /// it filled and closed the position, or the exam had ended.
+    /// What an exam's `fireTrigger` answered (`Fired.result`): its call failed (the entry stays), it filled, it filled
+    /// and closed the position, or the exam had ended.
     uint8 public constant FAILED = 0;
     uint8 public constant FILLED = 1;
     uint8 public constant CLOSED = 2;
     uint8 public constant ENDED = 3;
 
-    // Where an entry is (`Slot.where`).
-    uint8 internal constant NONE = 0;
-    uint8 internal constant WAIT_BELOW = 1;
-    uint8 internal constant WAIT_ABOVE = 2;
-    uint8 internal constant BELOW = 3;
-    uint8 internal constant ABOVE = 4;
-    uint8 internal constant LATCHED = 5;
-    uint8 internal constant PARKED_BELOW = 6;
-    uint8 internal constant PARKED_ABOVE = 7;
+    /// The gas the oracle precompile gets for one price; a check with less left reverts (`PokeGas`).
+    uint256 public constant ORACLE_GAS = 50_000;
+    /// The least gas a search of the journal starts with, and a fill (which gets all the call has but what the book
+    /// keeps for itself). A settle with less stops there and keeps what it found.
+    uint256 public constant SEARCH_GAS = 120_000;
+    uint256 public constant FIRE_GAS = 150_000;
+    /// What the book keeps for itself after a step: its own records, and keeping what it found of each entry.
+    uint256 internal constant KEEP_BASE = 40_000;
+    uint256 internal constant KEEP_PER_ENTRY = 4_000;
+    /// The span of the assets' shifts (`_off`): 4^12 positions.
+    uint256 internal constant OFF_MASK = (1 << 24) - 1;
 
-    /// One stop or take: where it is and at which index there, its level and `armedAt`; latched, the price and block
-    /// of its touch; parked, its cursor in `touchBlock`. One word.
-    struct Slot {
-        uint8 where;
-        uint32 pos;
+    /// One stop or take: its level, the side it fires on, from which block, from which position it is searched
+    /// (`from`, the first logged after it was set), and up to which a settle that stopped short found nothing
+    /// (`cursor`; or, touched there and not yet carried out, its touch); and whether its key is on the exam's list,
+    /// which it stays on once there, and where. One word; zero `level`: none.
+    struct Entry {
         uint64 level;
         uint40 armedAt;
-        uint64 px;
-        uint40 touchBlock;
-    }
-
-    /// A side of an asset behind: from which journal pair on its heap is still to be checked, and the deepest price
-    /// of the pairs since it fell behind (its heap's entries that price reaches are touched, the others are not).
-    struct Lag {
-        bool on;
+        uint40 from;
         uint40 cursor;
-        uint64 deep;
+        bool below;
+        bool listed;
+        uint8 at;
     }
 
-    /// What one check has done so far.
-    struct Work {
-        uint256 fires;
-        uint256 latches;
-        uint256 arms;
-        uint256 scans;
+    /// A touch not yet carried out (`touches`): the entry, and the price, block, time and position of its touch.
+    struct Touch {
+        uint32 asset;
+        bool isTake;
+        uint64 level;
+        uint64 px;
+        uint256 blk;
+        uint256 time;
+        uint256 pos;
     }
 
     /// The factory whose exams alone may add and remove entries.
     address public immutable factory;
 
-    /// The last block checked, and the lock of a check: one word.
+    /// The last block checked, how many positions the journal holds, and the lock of a settle: one word.
     uint64 public lastPokeBlock;
+    uint64 internal _len;
     bool internal _locked;
 
-    mapping(address exam => mapping(uint32 asset => mapping(bool isTake => Slot))) internal _slot;
-    /// Armed entries, as `level << 161 | exam << 1 | isTake`.
-    mapping(uint32 asset => uint256[]) internal _below;
-    mapping(uint32 asset => uint256[]) internal _above;
-    /// Entries waiting for `armedAt`, as `armedAt << 193 | exam << 33 | asset << 1 | isTake`, and how many per asset.
-    uint256[] internal _waiting;
-    mapping(uint32 asset => uint256) internal _waitCount;
-    /// Entries parked while their side is behind, as `exam << 1 | isTake`.
-    mapping(uint32 asset => mapping(bool below => uint256[])) internal _parked;
-    /// The assets with an entry waiting, armed or parked, and each one's index there plus one.
+    mapping(address exam => mapping(uint32 asset => mapping(bool isTake => Entry))) internal _entry;
+    /// The keys `asset << 1 | isTake` an exam has ever had an entry on: at most two for each of its assets, so at most
+    /// 32 (`PaperExam`); an entry gone leaves its key here.
+    mapping(address exam => uint64[]) internal _keys;
+    /// For each exam, the positions under which every one of its entries has been searched.
+    mapping(address exam => uint256) internal _checked;
+    /// The assets with an entry, each one's index there plus one, and how many entries it has.
     uint32[] internal _assets;
     mapping(uint32 asset => uint256) internal _assetPos;
-    /// The journal: each asset's checks while it is needed, as `px << 40 | block`, and how many.
-    mapping(uint32 asset => mapping(uint256 => uint256)) internal _pairs;
-    mapping(uint32 asset => uint256) internal _tail;
-    mapping(uint32 asset => mapping(bool below => Lag)) internal _lag;
-    /// An exam's latched entries, as `asset << 1 | isTake`, and the exams that had one, in order.
-    mapping(address exam => uint256[]) internal _latched;
-    address[] internal _latchQueue;
-    uint256 internal _latchHead;
-    /// Every entry of an exam, as `asset << 1 | isTake`, and each one's index there plus one.
-    mapping(address exam => uint256[]) internal _keys;
-    mapping(address exam => mapping(uint256 key => uint256)) internal _keyPos;
+    mapping(uint32 asset => uint256) internal _count;
+    /// Each position's block and time, `block << 40 | time`, three to a word.
+    mapping(uint256 word => uint256) internal _at;
+    /// The trees, by `asset << 224 | level << 200 | word`: level 0 four prices a word, the others four runs a word,
+    /// each the codes `highest << 32 | lowest` of its prices (zero: none).
+    mapping(uint256 key => uint256) internal _tree;
 
-    /// The oracle price of `asset` this block, read by a check with an entry on it.
+    /// The oracle price of `asset` this block, logged by a check.
     event PriceSeen(uint32 indexed asset, uint64 px);
-    /// The oracle gave no price for `asset` this block: nothing on it is checked in this block.
+    /// The oracle gave no price for `asset` this block: nothing on it is touched in this block.
     event NoPrice(uint32 indexed asset);
     /// No check from block `from` to block `to`, both counted.
     event Gap(uint256 from, uint256 to);
-    /// More entries reached `armedAt` than one check arms: `waiting` still wait, compared with the journal when armed.
-    event ArmingBacklog(uint256 waiting);
-    /// One side of `asset` is behind: its heap's top is reached by the journal pair `px`, `touchBlock`, and the check's
-    /// caps are spent. The next checks carry it out at that pair. An alarm: fills delayed, never repriced.
-    event TouchBacklog(uint32 indexed asset, bool below, uint64 px, uint256 touchBlock);
-    event Latched(address indexed exam, uint32 indexed asset, bool isTake, uint64 px, uint256 touchBlock);
-    /// `result`: `FILLED`, `CLOSED`, `ENDED`, or `FAILED` (the call failed: the entry is latched, to be tried again).
+    /// `result`: `FILLED`, `CLOSED`, `ENDED`, or `FAILED` (the call failed: the entry stays, to be tried again).
     event Fired(address indexed exam, uint32 indexed asset, bool isTake, uint64 px, uint256 touchBlock, uint8 result);
 
     error NotExam();
     error Reentered();
-    /// A check needs at least `needed` gas to start.
+    /// A check needs at least `needed` gas left for each asset's price.
     error PokeGas(uint256 needed);
 
     constructor() {
@@ -182,100 +144,124 @@ contract StopBook {
 
     /// @notice Sets the caller's stop or take on `asset`, replacing the one there: it fires at a price at or under
     ///         `level` (`below`) or at or over it, from block `armedAt`. Only an exam of the factory, and not from
-    ///         inside a check.
+    ///         inside a settle.
     function add(uint32 asset, bool isTake, bool below, uint64 level, uint64 armedAt) external {
         _onlyExam();
-        Slot memory s = _slot[msg.sender][asset][isTake];
-        if (s.where != NONE) _drop(msg.sender, asset, isTake, s);
-        _slot[msg.sender][asset][isTake] = Slot(below ? WAIT_BELOW : WAIT_ABOVE, 0, level, uint40(armedAt), 0, 0);
-        _push(
-            _waiting,
-            uint256(armedAt) << 193 | uint256(uint160(msg.sender)) << 33 | uint256(asset) << 1 | (isTake ? 1 : 0),
-            false,
-            0,
-            true
-        );
-        ++_waitCount[asset];
-        if (_assetPos[asset] == 0) {
+        Entry memory old = _entry[msg.sender][asset][isTake];
+        if (!old.listed) {
+            old.at = uint8(_keys[msg.sender].length);
+            _keys[msg.sender].push(uint64(uint256(asset) << 1 | (isTake ? 1 : 0)));
+        }
+        if (old.level == 0 && _count[asset]++ == 0) {
             _assets.push(asset);
             _assetPos[asset] = _assets.length;
         }
-        uint256 key = uint256(asset) << 1 | (isTake ? 1 : 0);
-        _keys[msg.sender].push(key);
-        _keyPos[msg.sender][key] = _keys[msg.sender].length;
+        _entry[msg.sender][asset][isTake] = Entry(level, uint40(armedAt), uint40(_len), 0, below, true, old.at);
     }
 
     /// @notice Removes the caller's stop or take on `asset`, if it has one here. Only an exam of the factory, and
-    ///         not from inside a check.
+    ///         not from inside a settle.
     function remove(uint32 asset, bool isTake) external {
         _onlyExam();
-        Slot memory s = _slot[msg.sender][asset][isTake];
-        if (s.where != NONE) _drop(msg.sender, asset, isTake, s);
+        if (_entry[msg.sender][asset][isTake].level != 0) _drop(msg.sender, asset, isTake);
     }
 
     // ── anyone ───────────────────────────────────────────────────
 
-    /// @notice Checks this block: carries out every armed stop and take the oracle price has reached. Once a
-    ///         block; a second call in it does nothing. The first needs `pokeGas()` gas left, or reverts.
+    /// @notice Checks this block: logs the oracle price of every asset with an entry. Once a block; a second call in
+    ///         it does nothing. It logs every one of them or reverts.
     function poke() external {
         _poke();
     }
 
-    /// @notice `poke()`, then, if `exam` is not busy, carries out what it has latched, the oldest touch first, as far
-    ///         as the gas goes. Returns how many of its entries still wait: latched, or touched and not yet carried
-    ///         out (`busy`). An exam acts only once none does.
+    /// @notice `poke()`, then carries out every stop and take of `exam` that a logged price has touched, in the order
+    ///         of their touches, each at its touch. Never reverts for want of gas between its steps: it stops, keeps
+    ///         what it found, and returns how many of the exam's entries are still to be searched or carried out. An
+    ///         exam acts only once none is.
     function settle(address exam) external returns (uint256) {
         _poke();
-        uint256 held = _held(exam, type(uint256).max);
-        if (held == 0 && _latched[exam].length != 0) {
-            _enter();
-            _drainExam(exam, 0, type(uint256).max);
-            _locked = false;
-        }
-        return _latched[exam].length + held;
+        if (_locked) revert Reentered();
+        _locked = true;
+        uint256 left = _settle(exam);
+        _locked = false;
+        return left;
     }
 
     // ── views ────────────────────────────────────────────────────
 
-    /// @notice The least gas a check starts with: `POKE_GAS_BASE` plus `POKE_GAS_PER_ASSET` for each asset with an
-    ///         entry.
-    function pokeGas() public view returns (uint256) {
-        return POKE_GAS_BASE + POKE_GAS_PER_ASSET * _assets.length;
+    /// @notice `exam`'s stop or take on `asset`: its level, `armedAt`, the side it fires on, where its search starts.
+    function entryOf(address exam, uint32 asset, bool isTake) external view returns (Entry memory) {
+        return _entry[exam][asset][isTake];
     }
 
-    /// @notice How many of `exam`'s entries are latched.
-    function pending(address exam) external view returns (uint256) {
-        return _latched[exam].length;
+    /// @notice How many entries `exam` has.
+    function entries(address exam) external view returns (uint256 n) {
+        uint64[] memory keys = _keys[exam];
+        for (uint256 i = 0; i < keys.length; ++i) {
+            (uint32 a, bool tk) = _split(keys[i]);
+            if (_entry[exam][a][tk].level != 0) ++n;
+        }
     }
 
-    /// @notice The top of `asset`'s two heaps (zero if empty) and their sizes.
-    function top(uint32 asset) external view returns (uint64 below, uint64 above, uint256 nBelow, uint256 nAbove) {
-        nBelow = _below[asset].length;
-        nAbove = _above[asset].length;
-        if (nBelow != 0) below = uint64(_below[asset][0] >> 161);
-        if (nAbove != 0) above = uint64(_above[asset][0] >> 161);
+    /// @notice The positions under which every entry of `exam` has been searched.
+    function checkedTo(address exam) external view returns (uint256) {
+        return _checked[exam];
     }
 
-    /// @notice Where `exam`'s stop or take on `asset` is (0 none, 1 and 2 waiting, 3 below, 4 above, 5 latched, 6 and
-    ///         7 parked), its level and `armedAt`; latched, its price and block; parked, its cursor.
-    function slotOf(address exam, uint32 asset, bool isTake) external view returns (Slot memory) {
-        return _slot[exam][asset][isTake];
+    /// @notice How many positions the journal holds.
+    function logged() external view returns (uint256) {
+        return _len;
     }
 
-    /// @notice Whether a side of `asset` is behind, its cursor and deepest price; how many entries are parked there.
-    function lagOf(uint32 asset, bool below) external view returns (Lag memory, uint256 parked) {
-        return (_lag[asset][below], _parked[asset][below].length);
+    /// @notice The block and time of position `pos`.
+    function at(uint256 pos) external view returns (uint256 blk, uint256 time) {
+        return _atPos(pos);
     }
 
-    /// @notice How many pairs `asset`'s journal holds, and the `k`-th: price and block.
-    function pairAt(uint32 asset, uint256 k) external view returns (uint256 length, uint64 px, uint256 blk) {
-        uint256 p = _pairs[asset][k];
-        return (_tail[asset], uint64(p >> 40), uint40(p));
+    /// @notice The oracle price of `asset` logged at position `pos`; zero if none was.
+    function priceAt(uint32 asset, uint256 pos) external view returns (uint64) {
+        return _raw(asset, pos + _off(asset));
     }
 
-    /// @notice The assets with an entry, and how many entries wait for `armedAt`.
-    function watched() external view returns (uint32[] memory assets, uint256 waiting) {
-        return (_assets, _waiting.length);
+    /// @notice The assets with an entry: the ones a check logs.
+    function watched() external view returns (uint32[] memory) {
+        return _assets;
+    }
+
+    /// @notice The touches of `exam` that the journal holds and no settle has carried out yet, in the order a settle
+    ///         carries them out: what its state will be once settled. A fill that closes a position takes the asset's
+    ///         other entry with it, so a later touch of that one is not carried out.
+    function touches(address exam) external view returns (Touch[] memory list) {
+        uint256 len = _len;
+        uint64[] memory keys = _keys[exam];
+        uint256 n = keys.length;
+        uint256[] memory found = new uint256[](n);
+        uint256 m;
+        for (uint256 i = 0; i < n; ++i) {
+            found[i] = _touchOf(exam, keys[i], len);
+            if (found[i] < len) ++m;
+        }
+        list = new Touch[](m);
+        for (uint256 j = 0; j < m; ++j) {
+            uint256 i = _earliest(keys, found, len);
+            list[j] = _touch(exam, keys[i], found[i]);
+            found[i] = len;
+        }
+    }
+
+    /// The first touch of `exam`'s entry `key` from where its search starts; `len` if none, or if it has no entry.
+    function _touchOf(address exam, uint64 key, uint256 len) internal view returns (uint256) {
+        (uint32 a, bool tk) = _split(key);
+        Entry memory e = _entry[exam][a][tk];
+        return e.level == 0 ? len : _findOne(a, e, _start(e, _checked[exam], len), len);
+    }
+
+    function _touch(address exam, uint64 key, uint256 pos) internal view returns (Touch memory t) {
+        (t.asset, t.isTake) = _split(key);
+        t.level = _entry[exam][t.asset][t.isTake].level;
+        t.px = _raw(t.asset, pos + _off(t.asset));
+        (t.blk, t.time) = _atPos(pos);
+        t.pos = pos;
     }
 
     // ── the check ────────────────────────────────────────────────
@@ -283,355 +269,403 @@ contract StopBook {
     function _poke() internal {
         uint256 last = lastPokeBlock;
         if (last == block.number) return;
-        // A call that cannot pay for the whole check does not take the block: it reverts, and the next one checks.
-        uint256 need = pokeGas();
-        if (gasleft() < need) revert PokeGas(need);
-        _enter();
         if (last != 0 && block.number > last + 1) emit Gap(last + 1, block.number - 1);
         lastPokeBlock = uint64(block.number);
         uint32[] memory assets = _assets;
-        uint64[] memory pxs = new uint64[](assets.length);
+        if (assets.length == 0) return;
+        uint256 g = _len;
+        _len = uint64(g + 1);
+        _at[g / 3] |= (block.number << 40 | block.timestamp) << (g % 3 * 80);
         for (uint256 i = 0; i < assets.length; ++i) {
-            uint64 px = _oracle(assets[i]);
-            pxs[i] = px;
-            if (px == 0) emit NoPrice(assets[i]);
-            else emit PriceSeen(assets[i], px);
+            uint32 a = assets[i];
+            uint64 px = _oracle(a);
+            if (px == 0) emit NoPrice(a);
+            else emit PriceSeen(a, px);
+            _log(a, g + _off(a), px);
         }
-        Work memory w = Work(_drainQueue(), 0, 0, 0);
-        // First the entries due, each compared with the journal from its `armedAt` and this block's price; then each
-        // side of each asset, from its cursor; then what is left in the journal, kept or emptied.
-        _arm(assets, pxs, w);
-        bool backlog = _waiting.length != 0 && _waiting[0] >> 193 <= block.number;
-        for (uint256 i = assets.length; i > 0; --i) {
-            uint32 a = assets[i - 1];
-            if (_assetPos[a] == 0) continue;
-            _side(a, true, pxs[i - 1], w);
-            _side(a, false, pxs[i - 1], w);
-            _keep(a, pxs[i - 1], backlog);
-            _maybeIdle(a);
-        }
-        _locked = false;
     }
 
-    /// Moves at most `MAX_ARMS` entries whose `armedAt` has come out of waiting. Each is compared with the journal from
-    /// its `armedAt` and this block's price: touched, it is carried out (or latched) at its first touch; not, it joins
-    /// its heap if its side is in step, or is parked there with its cursor.
-    function _arm(uint32[] memory assets, uint64[] memory pxs, Work memory w) internal {
-        while (_waiting.length != 0) {
-            uint256 e = _waiting[0];
-            if (e >> 193 > block.number) break;
-            if (w.arms == MAX_ARMS) {
-                emit ArmingBacklog(_waiting.length);
-                break;
+    /// Writes `px` at position `q` of `asset`'s tree, and the run of each level that it closes: each from the word of
+    /// its four children, just written.
+    function _log(uint32 asset, uint256 q, uint64 px) internal {
+        uint256 key = _key(asset, 0, q >> 2);
+        uint256 w = _tree[key];
+        if (px != 0) {
+            w |= uint256(px) << (q % 4 * 64);
+            _tree[key] = w;
+        }
+        uint256 n = q + 1;
+        for (uint256 k = 1; n % (1 << (2 * k)) == 0; ++k) {
+            uint256 j = (n >> (2 * k)) - 1;
+            uint256 run = k == 1 ? _ofPrices(w) : _ofRuns(w);
+            key = _key(asset, k, j >> 2);
+            w = _tree[key];
+            if (run != 0) {
+                w |= run << (j % 4 * 64);
+                _tree[key] = w;
             }
-            ++w.arms;
-            _removeAt(_waiting, 0, false, 0, true);
-            _armOne(e, assets, pxs, w);
         }
     }
 
-    /// The entry `e`, just out of waiting: compared with the journal from its `armedAt` and placed.
-    function _armOne(uint256 e, uint32[] memory assets, uint64[] memory pxs, Work memory w) internal {
-        address exam = address(uint160(e >> 33));
-        uint32 asset = uint32(e >> 1);
-        bool isTake = e & 1 == 1;
-        --_waitCount[asset];
-        uint64 px;
-        for (uint256 i = 0; i < assets.length; ++i) {
-            if (assets[i] == asset) px = pxs[i];
+    /// The run of four prices (zero: none): the code of the highest over that of the lowest.
+    function _ofPrices(uint256 w) internal pure returns (uint256) {
+        uint256 lo = type(uint256).max;
+        uint256 hi;
+        for (uint256 e = 0; e < 4; ++e) {
+            uint256 x = uint64(w >> (e * 64));
+            if (x == 0) continue;
+            if (x < lo) lo = x;
+            if (x > hi) hi = x;
         }
-        _place(exam, asset, isTake, _firstFrom(asset, e >> 193), px, w);
+        return hi == 0 ? 0 : _code(hi) << 32 | _code(lo);
     }
 
-    /// An entry out of waiting or parking, not compared with the pairs before `from`: carried out or latched at its
-    /// first touch from there, or put in its heap, or (its side behind, or the scan cut short) parked with its cursor.
-    function _place(address exam, uint32 asset, bool isTake, uint256 from, uint64 px, Work memory w) internal {
-        Slot storage s = _slot[exam][asset][isTake];
-        bool below = s.where == WAIT_BELOW || s.where == PARKED_BELOW;
-        (uint256 k, bool hit, bool done) = _find(asset, below, s.level, from, px, w);
-        if (hit) return _touched(exam, asset, isTake, k, px, w);
-        if (done && !_lag[asset][below].on) {
-            (s.where, s.touchBlock) = (below ? BELOW : ABOVE, 0);
-            _push(
-                below ? _below[asset] : _above[asset],
-                uint256(s.level) << 161 | uint256(uint160(exam)) << 1 | (isTake ? 1 : 0),
-                below,
-                asset,
-                false
-            );
-        } else {
-            uint256[] storage p = _parked[asset][below];
-            (s.where, s.pos, s.touchBlock) = (below ? PARKED_BELOW : PARKED_ABOVE, uint32(p.length), uint40(k));
-            p.push(uint256(uint160(exam)) << 1 | (isTake ? 1 : 0));
+    /// The run of four runs: the highest of their highest codes over the lowest of their lowest, runs with no price
+    /// left out.
+    function _ofRuns(uint256 w) internal pure returns (uint256) {
+        uint256 lo = type(uint256).max;
+        uint256 hi;
+        for (uint256 e = 0; e < 4; ++e) {
+            uint256 r = uint64(w >> (e * 64));
+            if (r == 0) continue;
+            if (uint32(r) < lo) lo = uint32(r);
+            if (r >> 32 > hi) hi = r >> 32;
         }
+        return hi == 0 ? 0 : hi << 32 | lo;
     }
 
-    /// `exam`'s entry, out of waiting or parking, first touched at journal pair `k`: carried out if the check can and
-    /// the exam is not busy, latched otherwise.
-    function _touched(address exam, uint32 asset, bool isTake, uint256 k, uint64 px, Work memory w) internal {
-        (uint64 tpx, uint256 tb) = _pair(asset, k, px);
-        bool fire = w.fires < MAX_FIRES && !_busy(exam, asset, isTake) && _gasForFire();
-        if (fire) ++w.fires;
-        _resolve(exam, asset, isTake, tpx, tb, fire);
-    }
-
-    /// One side of `asset`: its heap, from its cursor (in step: from this block's price `px`), each top carried out
-    /// at the first journal pair that reaches it, until the top is reached by none or the caps are spent; then, in
-    /// step, what is parked there.
-    function _side(uint32 asset, bool below, uint64 px, Work memory w) internal {
-        Lag storage g = _lag[asset][below];
-        bool on = g.on;
-        if (on && px != 0 && (below ? px < g.deep : px > g.deep)) g.deep = px;
-        uint256 c = on ? g.cursor : _tail[asset];
-        uint8 st;
-        do {
-            (c, st) = _step(asset, below, c, px, w);
-        } while (st == 0);
-        if (st == 2) return _behind(g, on, c, px);
-        if (on) delete _lag[asset][below];
-        _unpark(asset, below, px, w);
-    }
-
-    /// The top of one heap, from journal pair `c`: carried out at the first pair that reaches it (0); reached by none,
-    /// the side in step (1); or the caps spent, the side behind at the returned cursor (2).
-    function _step(uint32 asset, bool below, uint256 c, uint64 px, Work memory w) internal returns (uint256, uint8) {
-        uint256[] storage h = below ? _below[asset] : _above[asset];
-        if (h.length == 0) return (c, 1);
-        uint256 e = h[0];
-        (uint256 k, bool hit, bool done) = _find(asset, below, uint64(e >> 161), c, px, w);
-        if (!done) return (k, 2);
-        if (!hit) return (k, 1);
-        return (k, _takeTop(asset, below, e, k, px, w));
-    }
-
-    /// The top `e` of one heap, reached at journal pair `k`: carried out or latched (0), or left there, the caps spent (2).
-    function _takeTop(uint32 asset, bool below, uint256 e, uint256 k, uint64 px, Work memory w)
-        internal
-        returns (uint8)
-    {
-        address exam = address(uint160(e >> 1));
-        bool isTake = e & 1 == 1;
-        bool fire = w.fires < MAX_FIRES && !_busy(exam, asset, isTake) && _gasForFire();
-        (uint64 tpx, uint256 tb) = _pair(asset, k, px);
-        if (!fire && w.latches == MAX_LATCHES) {
-            emit TouchBacklog(asset, below, tpx, tb);
-            return 2;
+    /// A price in 32 bits that keeps the order of prices (a higher price never has a lower code): under 2^24 itself;
+    /// over, its top 24 bits and how far they are shifted. A level compared with a run's codes in code is then reached
+    /// by every run that holds a price that reaches it, and, within a rounding, by some that do not: the search reads
+    /// such a run's prices and goes on past it.
+    function _code(uint256 x) internal pure returns (uint256) {
+        if (x < 1 << 24) return x;
+        uint256 e;
+        while (x >> (e + 24) != 0) {
+            ++e;
         }
-        _removeAt(below ? _below[asset] : _above[asset], 0, below, asset, false);
-        if (fire) ++w.fires;
-        else ++w.latches;
-        _resolve(exam, asset, isTake, tpx, tb, fire);
+        return e << 24 | x >> e;
+    }
+
+    // ── a settle ─────────────────────────────────────────────────
+
+    /// Searches every entry of `exam` up to the journal's end, then carries out what was touched, the earliest first.
+    /// Out of gas between two steps, it keeps what it found and returns how many entries are still owed.
+    function _settle(address exam) internal returns (uint256) {
+        uint256 len = _len;
+        uint256 done = _checked[exam];
+        if (done >= len) return 0;
+        uint64[] memory keys = _keys[exam];
+        uint256 n = keys.length;
+        if (n == 0) return 0;
+        uint256[] memory found = new uint256[](n);
+        for (uint256 i = 0; i < n; ++i) {
+            found[i] = UNSEARCHED;
+        }
+        for (uint256 i = 0; i < n; ++i) {
+            if (found[i] != UNSEARCHED) continue;
+            if (gasleft() < SEARCH_GAS + _keep(n)) return _stop(exam, keys, found, len);
+            _search(exam, keys, found, i, done, len);
+        }
+        for (uint256 i = _earliest(keys, found, len); i < n; i = _earliest(keys, found, len)) {
+            if (!_carry(exam, keys, found, i, len)) return _stop(exam, keys, found, len);
+        }
+        // Every deferred entry has met its fill above; one left would keep what it found.
+        for (uint256 i = 0; i < n; ++i) {
+            if (found[i] & DEFERRED != 0) return _stop(exam, keys, found, len);
+        }
+        _checked[exam] = len;
         return 0;
     }
 
-    /// A side left behind with its cursor at `c`; one that falls behind now starts its deepest price at `px`.
-    function _behind(Lag storage g, bool on, uint256 c, uint64 px) internal {
-        if (!on) (g.on, g.deep) = (true, px);
-        g.cursor = uint40(c);
-    }
+    /// What `found` holds of an entry: under `len` its touch; `len` none up to there; `UNSEARCHED`; or, `DEFERRED`
+    /// with a position, none before it, searched from there only if the fill of its asset's other entry, touched
+    /// first, leaves the position open.
+    uint256 internal constant DEFERRED = 1 << 255;
+    uint256 internal constant UNSEARCHED = DEFERRED - 1;
 
-    /// The entries parked on a side in step, while the check arms: each compared with the journal from its cursor.
-    function _unpark(uint32 asset, bool below, uint64 px, Work memory w) internal {
-        uint256[] storage p = _parked[asset][below];
-        while (p.length != 0 && w.arms < MAX_ARMS) {
-            ++w.arms;
-            uint256 x = p[p.length - 1];
-            address exam = address(uint160(x >> 1));
-            bool isTake = x & 1 == 1;
-            p.pop();
-            _place(exam, asset, isTake, _slot[exam][asset][isTake].touchBlock, px, w);
-        }
-    }
-
-    /// The first journal pair from `k` on that reaches `level` (the last one is this block's price `px`, unless zero):
-    /// its index and `hit`; or, none, the index past the last and `done`; or, the check's `MAX_SCAN` spent, where it
-    /// stopped, neither hit nor done.
-    function _find(uint32 asset, bool below, uint64 level, uint256 k, uint64 px, Work memory w)
+    /// Searches entry `i` of `exam`, and with it the asset's other entry: from the same position, the first position
+    /// where either is touched, the other, if not touched there, deferred past it; from different ones, the one from
+    /// earlier first, and the other deferred to its start if the first is touched before it.
+    function _search(address exam, uint64[] memory keys, uint256[] memory found, uint256 i, uint256 done, uint256 len)
         internal
         view
-        returns (uint256, bool hit, bool done)
     {
-        uint256 tail = _tail[asset];
-        for (; k < tail; ++k) {
-            if (w.scans == MAX_SCAN) return (k, false, false);
-            ++w.scans;
-            uint64 p = uint64(_pairs[asset][k] >> 40);
-            if (below ? p <= level : p >= level) return (k, true, true);
+        (uint32 a, bool tk) = _split(keys[i]);
+        Entry memory e = _entry[exam][a][tk];
+        if (e.level == 0) {
+            found[i] = len;
+            return;
         }
-        if (px != 0) {
-            if (below ? px <= level : px >= level) return (k, true, true);
-            ++k;
+        uint256 s = _start(e, done, len);
+        Entry memory o = _entry[exam][a][!tk];
+        if (o.level == 0 || found[o.at] != UNSEARCHED) {
+            found[i] = _findOne(a, e, s, len);
+            return;
         }
-        return (k, false, true);
+        uint256 so = _start(o, done, len);
+        if (so != s) {
+            // The one searched from earlier first: touched before the other's start, the other waits for its fill.
+            if (s < so) _staggered(a, found, i, e, s, o, so, len);
+            else _staggered(a, found, o.at, o, so, e, s, len);
+            return;
+        }
+        (uint64 lo, uint256 hi) = e.below ? (e.level, uint256(o.level)) : (o.level, uint256(e.level));
+        uint256 t = _find(a, s, len, lo, hi);
+        if (t == len) {
+            (found[i], found[o.at]) = (len, len);
+            return;
+        }
+        uint256 x = _raw(a, t + _off(a));
+        found[i] = _hits(e, x) ? t : DEFERRED | (t + 1);
+        found[o.at] = _hits(o, x) ? t : DEFERRED | (t + 1);
     }
 
-    /// The `k`-th journal pair of `asset`: stored, or, past them, this block's price and number.
-    function _pair(uint32 asset, uint256 k, uint64 px) internal view returns (uint64, uint256) {
-        if (k == _tail[asset]) return (px, block.number);
-        uint256 p = _pairs[asset][k];
-        return (uint64(p >> 40), uint40(p));
+    /// Entry `i1` (`e1`, from `s1`) searched; the asset's other entry `e2`, from the later `s2`, deferred to it if `e1`
+    /// is touched before it, searched otherwise.
+    function _staggered(
+        uint32 a,
+        uint256[] memory found,
+        uint256 i1,
+        Entry memory e1,
+        uint256 s1,
+        Entry memory e2,
+        uint256 s2,
+        uint256 len
+    ) internal view {
+        uint256 t = _findOne(a, e1, s1, len);
+        found[i1] = t;
+        found[e2.at] = t < s2 ? DEFERRED | s2 : _findOne(a, e2, s2, len);
     }
 
-    /// The index of `asset`'s first journal pair of block `b` or later (the stored ones are by block).
-    function _firstFrom(uint32 asset, uint256 b) internal view returns (uint256 lo) {
-        uint256 hi = _tail[asset];
+    /// The first position from `s`, under `len`, at which the price of `a` touched `e`; `len` if none.
+    function _findOne(uint32 a, Entry memory e, uint256 s, uint256 len) internal view returns (uint256) {
+        return _find(a, s, len, e.below ? e.level : 0, e.below ? NO_LEVEL : e.level);
+    }
+
+    function _hits(Entry memory e, uint256 x) internal pure returns (bool) {
+        return e.below ? x != 0 && x <= e.level : x >= e.level;
+    }
+
+    /// Where `e`'s search starts: where its last one stopped, or the exam's, at the earliest its first position, and
+    /// not before its first position of a block at or after its `armedAt`.
+    function _start(Entry memory e, uint256 done, uint256 len) internal view returns (uint256 s) {
+        s = e.from;
+        if (e.cursor > s) s = e.cursor;
+        if (done > s) s = done;
+        return _armed(s, e.armedAt, len);
+    }
+
+    /// Carries out the touch of entry `i`, the earliest, if its entry is still there; then the asset's other entry
+    /// goes with a fill that closed the position, or, deferred, is searched: false if the gas is short or the exam's
+    /// call failed, the entries left as they were.
+    function _carry(address exam, uint64[] memory keys, uint256[] memory found, uint256 i, uint256 len)
+        internal
+        returns (bool)
+    {
+        (uint32 a, bool tk) = _split(keys[i]);
+        uint256 keep = _keep(keys.length);
+        uint8 r;
+        if (_entry[exam][a][tk].level != 0) {
+            if (gasleft() < FIRE_GAS + keep) return false;
+            r = _fire(exam, keys[i], found[i], keep);
+            if (r == FAILED) return false;
+            _drop(exam, a, tk);
+        }
+        found[i] = len;
+        Entry memory o = _entry[exam][a][!tk];
+        if (o.level == 0) return true;
+        if (r == CLOSED) {
+            _drop(exam, a, !tk);
+            found[o.at] = len;
+        } else if (found[o.at] & DEFERRED != 0) {
+            if (gasleft() < SEARCH_GAS + keep) return false;
+            found[o.at] = _findOne(a, o, found[o.at] ^ DEFERRED, len);
+        }
+        return true;
+    }
+
+    /// The entry with the earliest touch in `found`: by position, a stop before a take, then by its place in `keys`.
+    function _earliest(uint64[] memory keys, uint256[] memory found, uint256 len) internal pure returns (uint256 best) {
+        best = keys.length;
+        for (uint256 i = 0; i < keys.length; ++i) {
+            if (found[i] >= len) continue;
+            if (best == keys.length || found[i] < found[best]) best = i;
+            else if (found[i] == found[best] && keys[i] & 1 < keys[best] & 1) best = i;
+        }
+    }
+
+    /// A settle out of gas: each entry left keeps where its search got (its touch, or the journal's end), and the
+    /// count of those still to be searched or carried out is returned.
+    function _stop(address exam, uint64[] memory keys, uint256[] memory found, uint256 len)
+        internal
+        returns (uint256 left)
+    {
+        for (uint256 i = 0; i < keys.length; ++i) {
+            (uint32 a, bool tk) = _split(keys[i]);
+            Entry storage e = _entry[exam][a][tk];
+            if (e.level == 0) continue;
+            uint256 f = found[i];
+            if (f == UNSEARCHED) {
+                ++left;
+                continue;
+            }
+            if (f != len) ++left;
+            if (f & DEFERRED != 0) f ^= DEFERRED;
+            if (f > e.cursor) e.cursor = uint40(f);
+        }
+    }
+
+    /// `exam`'s entry `key` carried out at its touch at position `pos`: what the exam answered, or `FAILED` if its
+    /// call failed. The call gets all the gas there is but `keep`.
+    function _fire(address exam, uint64 key, uint256 pos, uint256 keep) internal returns (uint8 r) {
+        Touch memory t = _touch(exam, key, pos);
+        try IStopExam(exam).fireTrigger{gas: gasleft() - keep}(
+            t.asset,
+            t.isTake,
+            t.level,
+            _entry[exam][t.asset][t.isTake].armedAt,
+            t.px,
+            uint64(t.blk),
+            uint64(t.time)
+        ) returns (uint8 x) {
+            if (x == FILLED || x == CLOSED || x == ENDED) r = x;
+        } catch {}
+        emit Fired(exam, t.asset, t.isTake, t.px, t.blk, r);
+    }
+
+    function _keep(uint256 n) internal pure returns (uint256) {
+        return KEEP_BASE + KEEP_PER_ENTRY * n;
+    }
+
+    // ── the journal ──────────────────────────────────────────────
+
+    /// The first position from `s` whose block is `armedAt` or later (a position's block is at least the one before's
+    /// plus one, so it is at most `armedAt` less the block at `s` positions on).
+    function _armed(uint256 s, uint256 armedAt, uint256 len) internal view returns (uint256) {
+        if (s >= len) return s;
+        (uint256 b,) = _atPos(s);
+        if (b >= armedAt) return s;
+        uint256 hi = s + (armedAt - b);
+        if (hi > len) hi = len;
+        uint256 lo = s + 1;
         while (lo < hi) {
             uint256 mid = (lo + hi) / 2;
-            if (uint40(_pairs[asset][mid]) < b) lo = mid + 1;
+            (uint256 bm,) = _atPos(mid);
+            if (bm < armedAt) lo = mid + 1;
             else hi = mid;
         }
+        return lo;
     }
 
-    /// Keeps this block's pair in `asset`'s journal if a cursor or an entry due may still need it; empties the journal
-    /// once nothing does.
-    function _keep(uint32 asset, uint64 px, bool backlog) internal {
-        bool need = _lag[asset][true].on || _lag[asset][false].on || _parked[asset][true].length != 0
-            || _parked[asset][false].length != 0 || (backlog && _waitCount[asset] != 0);
-        uint256 tail = _tail[asset];
-        if (need) {
-            if (px != 0) {
-                _pairs[asset][tail] = uint256(px) << 40 | block.number;
-                _tail[asset] = tail + 1;
+    /// A search: the asset, where its tree's logged positions end, the level a price at or under reaches (zero: none)
+    /// and the one a price at or over reaches (`NO_LEVEL`: none), and their codes.
+    struct Search {
+        uint32 asset;
+        uint256 qn;
+        uint256 lo;
+        uint256 hi;
+        uint256 loCode;
+        uint256 hiCode;
+    }
+
+    uint256 internal constant NONE = type(uint256).max;
+    uint256 internal constant NO_LEVEL = type(uint256).max;
+
+    /// The first position from `s`, under `len`, whose price of `asset` is at or under `lo` or at or over `hi`; `len`
+    /// if none. Climbs from `s`, a word of four runs a level, until a run whose codes reach a level, or the run still
+    /// being logged, and goes down it.
+    function _find(uint32 asset, uint256 s, uint256 len, uint256 lo, uint256 hi) internal view returns (uint256) {
+        if (s >= len) return len;
+        uint256 off = _off(asset);
+        uint256 q = _climb(
+            Search(asset, len + off, lo, hi, lo == 0 ? 0 : _code(lo), hi == NO_LEVEL ? NO_LEVEL : _code(hi)),
+            s + off
+        );
+        return q == NONE ? len : q - off;
+    }
+
+    /// `_find` in the tree, from tree position `p`: the tree position found, or `NONE`.
+    function _climb(Search memory f, uint256 p) internal view returns (uint256) {
+        unchecked {
+            for (uint256 k = 0;; ++k) {
+                uint256 sh = 2 * k;
+                uint256 w = _tree[uint256(f.asset) << 224 | k << 200 | p >> 2];
+                for (uint256 end = p | 3; p <= end; ++p) {
+                    if (p << sh >= f.qn) return NONE;
+                    uint256 x = uint64(w >> ((p & 3) << 6));
+                    if (k == 0) {
+                        if (x != 0 && x <= f.lo || x >= f.hi) return p;
+                        continue;
+                    }
+                    bool open = (p + 1) << sh > f.qn;
+                    if (open || x != 0 && uint32(x) <= f.loCode || x >> 32 >= f.hiCode) {
+                        uint256 q = _down(f, k, p);
+                        if (q != NONE || open) return q; // past the run still being logged, nothing
+                    }
+                }
+                p >>= 2;
             }
-        } else if (tail != 0) {
-            _tail[asset] = 0;
         }
     }
 
-    /// Whether `exam` has a touch not yet carried out other than its entry `asset`, `isTake`: latched; on a heap whose
-    /// side is behind, at a level the side's deepest price reaches; parked; or due and not armed past a kept check.
-    function _busy(address exam, uint32 asset, bool isTake) internal view returns (bool) {
-        if (_latched[exam].length != 0) return true;
-        return _held(exam, uint256(asset) << 1 | (isTake ? 1 : 0)) != 0;
-    }
-
-    /// How many of `exam`'s entries, but the one `skip`, are touched and not carried out nor latched (see `_busy`).
-    function _held(address exam, uint256 skip) internal view returns (uint256 n) {
-        uint256[] storage keys = _keys[exam];
-        for (uint256 i = 0; i < keys.length; ++i) {
-            uint256 key = keys[i];
-            if (key == skip) continue;
-            uint32 a = uint32(key >> 1);
-            Slot storage s = _slot[exam][a][key & 1 == 1];
-            uint8 where = s.where;
-            if (where == PARKED_BELOW || where == PARKED_ABOVE) {
-                ++n;
-            } else if (where == WAIT_BELOW || where == WAIT_ABOVE) {
-                // Due and not armed, with checks since its `armedAt` kept in the journal: one may have touched it.
-                if (s.armedAt <= block.number && _firstFrom(a, s.armedAt) < _tail[a]) ++n;
-            } else if (where == BELOW || where == ABOVE) {
-                Lag storage g = _lag[a][where == BELOW];
-                if (g.on && (where == BELOW ? g.deep <= s.level : g.deep >= s.level)) ++n;
+    /// The first position in run `p` of level `k` (above 0) whose price reaches the level, `NONE` if none: its four
+    /// children, one word, each gone down that its codes reach or that is still being logged.
+    function _down(Search memory f, uint256 k, uint256 p) internal view returns (uint256) {
+        unchecked {
+            --k;
+            uint256 sh = 2 * k;
+            uint256 w = _tree[uint256(f.asset) << 224 | k << 200 | p];
+            uint256 c = p << 2;
+            for (uint256 e = 0; e < 4; ++e) {
+                if (c << sh >= f.qn) return NONE;
+                uint256 x = uint64(w >> (e << 6));
+                if (k == 0) {
+                    if (x != 0 && x <= f.lo || x >= f.hi) return c;
+                } else {
+                    bool open = (c + 1) << sh > f.qn;
+                    if (open || x != 0 && uint32(x) <= f.loCode || x >> 32 >= f.hiCode) {
+                        uint256 q = _down(f, k, c);
+                        if (q != NONE || open) return q;
+                    }
+                }
+                ++c;
             }
+            return NONE;
         }
     }
 
-    /// `exam`'s entry, out of the book's heaps, touched at `px` in `touchBlock`: carried out with `fire`, latched
-    /// without, and latched too if its call failed.
-    function _resolve(address exam, uint32 asset, bool isTake, uint64 px, uint256 touchBlock, bool fire) internal {
-        if (fire) {
-            uint8 r = _call(exam, asset, isTake, px, touchBlock);
-            if (r != FAILED) return _done(exam, asset, isTake, r);
-        }
-        _latch(exam, asset, isTake, px, touchBlock);
+    function _raw(uint32 asset, uint256 q) internal view returns (uint64) {
+        return uint64(_tree[_key(asset, 0, q >> 2)] >> (q % 4 * 64));
     }
 
-    /// Latches `exam`'s entry, just taken off its heap, with `px` and `touchBlock`.
-    function _latch(address exam, uint32 asset, bool isTake, uint64 px, uint256 touchBlock) internal {
-        Slot storage s = _slot[exam][asset][isTake];
-        uint256[] storage l = _latched[exam];
-        if (l.length == 0) _latchQueue.push(exam);
-        (s.where, s.pos, s.px, s.touchBlock) = (LATCHED, uint32(l.length), px, uint40(touchBlock));
-        l.push(uint256(asset) << 1 | (isTake ? 1 : 0));
-        emit Latched(exam, asset, isTake, px, touchBlock);
+    function _key(uint32 asset, uint256 k, uint256 word) internal pure returns (uint256) {
+        return uint256(asset) << 224 | k << 200 | word;
     }
 
-    /// Carries out latched entries, the oldest exams first, while the check has fires left. An exam whose call
-    /// failed, or that is busy with a touch not yet latched, goes to the back of the queue: it does not hold up the
-    /// exams behind it, and is visited again by the next check, once a check at most.
-    function _drainQueue() internal returns (uint256 fires) {
-        uint256 end = _latchQueue.length;
-        for (uint256 n = 0; n < MAX_QUEUE_STEPS && _latchHead < end; ++n) {
-            address exam = _latchQueue[_latchHead];
-            bool failed = _latched[exam].length != 0 && _held(exam, type(uint256).max) != 0;
-            if (!failed) (fires, failed) = _drainExam(exam, fires, MAX_FIRES);
-            if (!failed && _latched[exam].length != 0) return fires;
-            delete _latchQueue[_latchHead];
-            ++_latchHead;
-            if (failed) _latchQueue.push(exam);
-        }
+    /// Where `asset`'s positions start in its tree: a shift of its own, so that the runs of different assets do not
+    /// close in the same check.
+    function _off(uint32 asset) internal pure returns (uint256) {
+        return uint256(keccak256(abi.encode(asset))) & OFF_MASK;
     }
 
-    /// Carries out `exam`'s latched entries at the price of their touch, the oldest touch first, while `fires` is
-    /// under `cap` and the gas lasts; stops at a call that fails, which stays latched.
-    function _drainExam(address exam, uint256 fires, uint256 cap) internal returns (uint256, bool) {
-        uint256[] storage l = _latched[exam];
-        while (l.length != 0 && fires < cap && _gasForFire()) {
-            uint256 i;
-            uint256 oldest = type(uint256).max;
-            for (uint256 j = 0; j < l.length; ++j) {
-                uint256 kj = l[j];
-                uint256 b = _slot[exam][uint32(kj >> 1)][kj & 1 == 1].touchBlock;
-                if (b < oldest) (i, oldest) = (j, b);
-            }
-            uint256 k = l[i];
-            uint32 asset = uint32(k >> 1);
-            bool isTake = k & 1 == 1;
-            Slot storage s = _slot[exam][asset][isTake];
-            ++fires;
-            uint8 r = _call(exam, asset, isTake, s.px, s.touchBlock);
-            if (r == FAILED) return (fires, true);
-            _unlatchAt(exam, i);
-            _done(exam, asset, isTake, r);
-        }
-        return (fires, false);
+    function _atPos(uint256 pos) internal view returns (uint256 blk, uint256 time) {
+        uint256 w = _at[pos / 3] >> (pos % 3 * 80);
+        return (uint40(w >> 40), uint40(w));
     }
 
-    /// One exam's fill, in a call of `FIRE_GAS`: what it answered, or `FAILED` if it reverted. The exam calls nothing
-    /// in the book meanwhile (`add` and `remove` refuse inside a check), so the book is as it was before the call.
-    function _call(address exam, uint32 asset, bool isTake, uint64 px, uint256 touchBlock) internal returns (uint8 r) {
-        Slot storage s = _slot[exam][asset][isTake];
-        try IStopExam(exam).fireTrigger{gas: FIRE_GAS}(
-            asset, isTake, s.level, s.armedAt, px, uint64(touchBlock)
-        ) returns (
-            uint8 x
-        ) {
-            r = x;
-        } catch {}
-        emit Fired(exam, asset, isTake, px, touchBlock, r);
-    }
-
-    /// The entry the exam has answered for leaves the book; a fill that closed the position takes its other trigger
-    /// with it, as the exam has already let go of it.
-    function _done(address exam, uint32 asset, bool isTake, uint8 r) internal {
-        delete _slot[exam][asset][isTake];
-        _unkey(exam, uint256(asset) << 1 | (isTake ? 1 : 0));
-        if (r == CLOSED) {
-            Slot memory o = _slot[exam][asset][!isTake];
-            if (o.where != NONE) _drop(exam, asset, !isTake, o);
-        }
-    }
-
-    /// Whether the gas left gives a `fireTrigger` its whole `FIRE_GAS` (a call gets 63/64 of what is left) and the
-    /// check what it needs after it: so whoever calls cannot starve one fill and keep the check going.
-    function _gasForFire() internal view returns (bool) {
-        return gasleft() > FIRE_GAS * 64 / 63 + AFTER_FIRE;
-    }
-
-    /// The oracle price of `asset` now; zero if the precompile did not answer or answered no uint64, so that no
-    /// answer of it can make a check revert.
+    /// The oracle price of `asset` now; zero if the precompile did not answer or answered no uint64. It gets its whole
+    /// `ORACLE_GAS`: a call too poor for that reverts, so that no caller can log a price as missing.
     function _oracle(uint32 asset) internal view returns (uint64) {
+        if (gasleft() < ORACLE_GAS * 64 / 63 + 10_000) revert PokeGas(ORACLE_GAS);
         (bool ok, bytes memory r) =
-            HLConstants.ORACLE_PX_PRECOMPILE_ADDRESS.staticcall(abi.encode(CoreOps.pxIndex(asset)));
+            HLConstants.ORACLE_PX_PRECOMPILE_ADDRESS.staticcall{gas: ORACLE_GAS}(abi.encode(CoreOps.pxIndex(asset)));
         if (!ok || r.length < 32) return 0;
         uint256 px = abi.decode(r, (uint256));
         return px > type(uint64).max ? 0 : uint64(px);
     }
 
-    function _enter() internal {
-        if (_locked) revert Reentered();
-        _locked = true;
-    }
+    // ── records ──────────────────────────────────────────────────
 
     function _onlyExam() internal view {
         if (_locked) revert Reentered();
@@ -639,119 +673,20 @@ contract StopBook {
         if (p == address(0) || p == msg.sender) revert NotExam();
     }
 
-    /// Takes the entry `s` of `exam` out of wherever it is.
-    function _drop(address exam, uint32 asset, bool isTake, Slot memory s) internal {
-        if (s.where == LATCHED) {
-            _unlatchAt(exam, s.pos);
-        } else if (s.where == BELOW) {
-            _removeAt(_below[asset], s.pos, true, asset, false);
-        } else if (s.where == ABOVE) {
-            _removeAt(_above[asset], s.pos, false, asset, false);
-        } else if (s.where == PARKED_BELOW || s.where == PARKED_ABOVE) {
-            uint256[] storage p = _parked[asset][s.where == PARKED_BELOW];
-            uint256 x = p[p.length - 1];
-            p[s.pos] = x;
-            _slot[address(uint160(x >> 1))][asset][x & 1 == 1].pos = s.pos;
-            p.pop();
-        } else {
-            _removeAt(_waiting, s.pos, false, 0, true);
-            --_waitCount[asset];
+    function _split(uint64 key) internal pure returns (uint32, bool) {
+        return (uint32(key >> 1), key & 1 == 1);
+    }
+
+    /// Takes `exam`'s entry out (its key stays listed), and its asset off the watched ones once it has no entry left.
+    function _drop(address exam, uint32 asset, bool isTake) internal {
+        _entry[exam][asset][isTake].level = 0;
+        if (--_count[asset] == 0) {
+            uint256 ap = _assetPos[asset];
+            uint32 lastAsset = _assets[_assets.length - 1];
+            _assets[ap - 1] = lastAsset;
+            _assetPos[lastAsset] = ap;
+            _assets.pop();
+            delete _assetPos[asset];
         }
-        delete _slot[exam][asset][isTake];
-        _unkey(exam, uint256(asset) << 1 | (isTake ? 1 : 0));
-        _maybeIdle(asset);
-    }
-
-    /// Takes `key` off `exam`'s list of entries, the last one taking its place.
-    function _unkey(address exam, uint256 key) internal {
-        uint256 p = _keyPos[exam][key];
-        if (p == 0) return;
-        uint256[] storage keys = _keys[exam];
-        uint256 last = keys[keys.length - 1];
-        keys[p - 1] = last;
-        _keyPos[exam][last] = p;
-        keys.pop();
-        delete _keyPos[exam][key];
-    }
-
-    /// Takes the `i`-th of `exam`'s latched entries off its list, the last one taking its place.
-    function _unlatchAt(address exam, uint256 i) internal {
-        uint256[] storage l = _latched[exam];
-        uint256 last = l.length - 1;
-        if (i != last) {
-            uint256 k = l[last];
-            l[i] = k;
-            _slot[exam][uint32(k >> 1)][k & 1 == 1].pos = uint32(i);
-        }
-        l.pop();
-    }
-
-    /// Takes `asset` off the list once nothing waits, is armed or parked on it, and with it its journal and lags.
-    function _maybeIdle(uint32 asset) internal {
-        uint256 p = _assetPos[asset];
-        if (
-            p == 0 || _below[asset].length != 0 || _above[asset].length != 0 || _waitCount[asset] != 0
-                || _parked[asset][true].length != 0 || _parked[asset][false].length != 0
-        ) return;
-        delete _lag[asset][true];
-        delete _lag[asset][false];
-        _tail[asset] = 0;
-        uint32 last = _assets[_assets.length - 1];
-        _assets[p - 1] = last;
-        _assetPos[last] = p;
-        _assets.pop();
-        delete _assetPos[asset];
-    }
-
-    // ── heaps ────────────────────────────────────────────────────
-    // `max`: the largest word on top (`below`); otherwise the smallest (`above`, waiting). `waiting`: the word carries
-    // its asset (the waiting heap); otherwise `asset` is the heap's. Every move writes the entry's new index.
-
-    function _push(uint256[] storage h, uint256 e, bool max, uint32 asset, bool waiting) internal {
-        h.push(e);
-        _up(h, h.length - 1, e, max, asset, waiting);
-    }
-
-    function _removeAt(uint256[] storage h, uint256 i, bool max, uint32 asset, bool waiting) internal {
-        uint256 last = h.length - 1;
-        uint256 m = h[last];
-        h.pop();
-        if (i == last) return;
-        if (i > 0 && (max ? m > h[(i - 1) / 2] : m < h[(i - 1) / 2])) _up(h, i, m, max, asset, waiting);
-        else _down(h, i, m, max, asset, waiting);
-    }
-
-    function _up(uint256[] storage h, uint256 i, uint256 e, bool max, uint32 asset, bool waiting) internal {
-        while (i > 0) {
-            uint256 p = (i - 1) / 2;
-            uint256 pe = h[p];
-            if (max ? e <= pe : e >= pe) break;
-            _set(h, i, pe, asset, waiting);
-            i = p;
-        }
-        _set(h, i, e, asset, waiting);
-    }
-
-    function _down(uint256[] storage h, uint256 i, uint256 e, bool max, uint32 asset, bool waiting) internal {
-        uint256 n = h.length;
-        while (true) {
-            uint256 c = 2 * i + 1;
-            if (c >= n) break;
-            uint256 ce = h[c];
-            if (c + 1 < n) {
-                uint256 r = h[c + 1];
-                if (max ? r > ce : r < ce) (c, ce) = (c + 1, r);
-            }
-            if (max ? ce <= e : ce >= e) break;
-            _set(h, i, ce, asset, waiting);
-            i = c;
-        }
-        _set(h, i, e, asset, waiting);
-    }
-
-    function _set(uint256[] storage h, uint256 i, uint256 e, uint32 asset, bool waiting) internal {
-        h[i] = e;
-        if (waiting) _slot[address(uint160(e >> 33))][uint32(e >> 1)][e & 1 == 1].pos = uint32(i);
-        else _slot[address(uint160(e >> 1))][asset][e & 1 == 1].pos = uint32(i);
     }
 }

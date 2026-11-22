@@ -12,30 +12,11 @@ import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {StopBook} from "../../src/sim/StopBook.sol";
 import {OracleFollowsMark} from "../PoolHarness.sol";
 import {BookStand} from "../exam/BookStand.sol";
+import {StopBookHarness} from "./StopBook.t.sol";
 
-// Exams the handler trades: enough for more entries on one side of an asset than one check carries out and latches.
+// Exams the handler trades.
 uint256 constant N_EXAMS = 6;
 
-/// The book with its heaps open to reading.
-contract StopBookHarness is StopBook {
-    function heap(uint32 asset, bool below) external view returns (uint256[] memory) {
-        return below ? _below[asset] : _above[asset];
-    }
-
-    function waiting() external view returns (uint256[] memory) {
-        return _waiting;
-    }
-
-    function latched(address exam) external view returns (uint256[] memory) {
-        return _latched[exam];
-    }
-}
-
-/// Six exams on two assets, at random: positions opened, turned and closed by orders, stops and takes set, moved and
-/// removed near the price, the price moved block by block, mostly checked by the book every block and now and then
-/// not, so that entries are reached many at a time, more than one check carries out. Under them, `BACKGROUND` other
-/// exams keep a stop and a take on each asset far from the price: every heap is some 60 entries deep, and every move
-/// in it walks a tall tree (review of cp#335: the heaps of a test were too small to show H1).
 contract StopBookHandler is Test {
     uint32 public constant BTC = 3;
     uint32 public constant ETH = 4;
@@ -47,8 +28,8 @@ contract StopBookHandler is Test {
     address public filler = makeAddr("filler");
     uint64[2] public px = [uint64(1_000_000), uint64(250_000)];
     mapping(string => uint256) public calls;
-    /// The last block whose check left entries due unarmed (`ArmingBacklog`).
-    uint256 public armingBacklogAt;
+    /// The most gas a check took.
+    uint256 public heaviestPoke;
 
     /// Reads the book's events of whatever the call did, the checks the exams' own calls made included.
     modifier watch() {
@@ -60,9 +41,6 @@ contract StopBookHandler is Test {
     function _scan(Vm.Log[] memory logs) internal {
         for (uint256 i = 0; i < logs.length; ++i) {
             if (logs[i].topics[0] == StopBook.Fired.selector) calls["fired"] += 1;
-            if (logs[i].topics[0] == StopBook.Latched.selector) calls["latched"] += 1;
-            if (logs[i].topics[0] == StopBook.TouchBacklog.selector) calls["overload"] += 1;
-            if (logs[i].topics[0] == StopBook.ArmingBacklog.selector) armingBacklogAt = block.number;
         }
     }
 
@@ -132,13 +110,24 @@ contract StopBookHandler is Test {
         if (!skip) poke();
     }
 
+    /// The check of this block, then, as an executor does, a settle of every exam.
     function poke() public {
         vm.recordLogs();
         uint256 before = gasleft();
         book.poke();
-        if (before - gasleft() > 2_500_000) calls["heavyPoke"] += 1;
+        uint256 used = before - gasleft();
+        if (used > heaviestPoke) heaviestPoke = used;
         calls["poke"] += 1;
+        for (uint256 i = 0; i < N_EXAMS; ++i) {
+            book.settle(address(exams[i]));
+        }
         _scan(vm.getRecordedLogs());
+    }
+
+    /// The check of this block and the settle of one exam only: the others' touches wait.
+    function settleOne(uint256 e) external watch {
+        book.settle(address(exams[e % N_EXAMS]));
+        calls["settleOne"] += 1;
     }
 }
 
@@ -181,13 +170,14 @@ contract StopBookInvariantTest is Test, BookStand {
         _background(impl, r, terms, trader, filler);
         handler = new StopBookHandler(harness, exams);
         targetContract(address(handler));
-        bytes4[] memory sel = new bytes4[](9);
+        bytes4[] memory sel = new bytes4[](10);
         (sel[0], sel[1]) = (StopBookHandler.trade.selector, StopBookHandler.trade.selector);
         (sel[2], sel[3]) = (StopBookHandler.setTrigger.selector, StopBookHandler.setTrigger.selector);
         sel[4] = StopBookHandler.clearTrigger.selector;
         (sel[5], sel[6]) = (StopBookHandler.move.selector, StopBookHandler.move.selector);
         sel[7] = StopBookHandler.poke.selector;
         sel[8] = StopBookHandler.crowdBelow.selector;
+        sel[9] = StopBookHandler.settleOne.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: sel}));
     }
 
@@ -215,112 +205,95 @@ contract StopBookInvariantTest is Test, BookStand {
             }
         }
         vm.roll(block.number + 2);
-        while (true) {
-            stopBook.poke();
-            (, uint256 waiting) = stopBook.watched();
-            if (waiting == 0) break;
-            vm.roll(block.number + 1);
-        }
-        (,, uint256 nb, uint256 na) = stopBook.top(3);
-        assertEq(nb + na, 2 * BACKGROUND, "the background is armed");
+        stopBook.poke();
+        assertEq(stopBook.watched().length, 2, "the background is on both assets");
     }
 
     /// B1. The book's records are the exams' stops and takes: none without the other, at the same level and `armedAt`,
-    ///     on the heap of its side.
+    ///     on the side it fires on.
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 120
     function invariant_recordsAreTheExamsStops() public view {
         for (uint256 i = 0; i < N_EXAMS; ++i) {
+            uint256 n;
             for (uint32 a = 3; a <= 4; ++a) {
                 for (uint256 k = 0; k < 2; ++k) {
                     bool isTake = k == 1;
                     (uint64 tpx,, uint64 armedAt) = isTake ? exams[i].takeOf(a) : exams[i].stopOf(a);
-                    StopBook.Slot memory s = harness.slotOf(address(exams[i]), a, isTake);
-                    assertEq(tpx != 0, s.where != 0, "a record without a stop, or a stop without one");
+                    StopBook.Entry memory s = harness.entryOf(address(exams[i]), a, isTake);
+                    assertEq(tpx != 0, s.level != 0, "a record without a stop, or a stop without one");
                     if (tpx == 0) continue;
+                    ++n;
                     assertEq(s.level, tpx);
                     assertEq(s.armedAt, armedAt);
-                    bool below = isTake == (exams[i].positionOf(a) < 0);
-                    if (s.where == 1 || s.where == 3) assertTrue(below, "on the below side");
-                    if (s.where == 2 || s.where == 4) assertFalse(below, "on the above side");
+                    assertEq(s.below, isTake == (exams[i].positionOf(a) < 0), "on its side");
                 }
+            }
+            assertEq(harness.entries(address(exams[i])), n, "its list is its records");
+        }
+    }
+
+    /// B2. An exam settled up to the journal's end has no touch left; and what `touches` lists of any exam is its own
+    ///     entries, in the order of their touches, each at a logged price that reaches its level.
+    /// forge-config: default.invariant.runs = 64
+    /// forge-config: default.invariant.depth = 120
+    function invariant_settledMeansNothingTouchedIsLeft() public view {
+        uint256 len = harness.logged();
+        for (uint256 i = 0; i < N_EXAMS; ++i) {
+            StopBook.Touch[] memory t = harness.touches(address(exams[i]));
+            if (harness.checkedTo(address(exams[i])) == len) assertEq(t.length, 0, "settled, and a touch left");
+            for (uint256 j = 0; j < t.length; ++j) {
+                StopBook.Entry memory e = harness.entryOf(address(exams[i]), t[j].asset, t[j].isTake);
+                assertEq(e.level, t[j].level);
+                assertTrue(e.below ? t[j].px <= e.level : t[j].px >= e.level, "reaches it");
+                assertGe(t[j].blk, e.armedAt, "not before armedAt");
+                assertEq(t[j].px, harness.priceAt(t[j].asset, t[j].pos));
+                if (j != 0) assertGe(t[j].pos, t[j - 1].pos, "in the order of the touches");
             }
         }
     }
 
-    /// B2. After the check of a block, no armed entry the block's price has reached is left on a heap of a side in step;
-    ///     a side behind has a heap whose top a journal pair from its cursor reaches. No entry whose `armedAt` has come
-    ///     still waits, unless the check could not arm them all.
+    /// B3. Every whole run of the trees near the journal's end holds the codes of the lowest and the highest of its prices.
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 120
-    function invariant_afterACheckNothingReachedIsLeft() public view {
-        if (harness.lastPokeBlock() != block.number) return;
-        uint64[2] memory p = [handler.px(0), handler.px(1)];
+    function invariant_runsAreTheirPrices() public view {
+        uint256 len = harness.logged();
         for (uint32 a = 3; a <= 4; ++a) {
-            (uint64 b, uint64 ab, uint256 nb, uint256 na) = harness.top(a);
-            (StopBook.Lag memory lb,) = harness.lagOf(a, true);
-            (StopBook.Lag memory la,) = harness.lagOf(a, false);
-            if (lb.on) assertTrue(nb != 0, "a side behind with an empty heap");
-            else if (nb != 0) assertGt(p[a - 3], b, "a below entry the price has reached");
-            if (la.on) assertTrue(na != 0, "a side behind with an empty heap");
-            else if (na != 0) assertLt(p[a - 3], ab, "an above entry the price has reached");
-        }
-        if (handler.armingBacklogAt() == block.number) return;
-        uint256[] memory w = harness.waiting();
-        for (uint256 i = 0; i < w.length; ++i) {
-            assertGt(w[i] >> 193, block.number, "an entry past its armedAt still waits");
-        }
-    }
-
-    /// B3. Every heap is a heap, and every entry's slot says where it is.
-    /// forge-config: default.invariant.runs = 64
-    /// forge-config: default.invariant.depth = 120
-    function invariant_heapsAndTheirIndexes() public view {
-        for (uint32 a = 3; a <= 4; ++a) {
-            for (uint256 k = 0; k < 2; ++k) {
-                bool below = k == 0;
-                uint256[] memory h = harness.heap(a, below);
-                for (uint256 i = 0; i < h.length; ++i) {
-                    if (i > 0) {
-                        uint256 parent = h[(i - 1) / 2];
-                        assertTrue(below ? parent >= h[i] : parent <= h[i], "not a heap");
+            uint256 off = harness.off(a);
+            for (uint256 k = 1; k <= 3; ++k) {
+                uint256 size = 1 << (2 * k);
+                uint256 qn = len + off;
+                for (uint256 back = 1; back <= 3; ++back) {
+                    if (qn / size < back) break;
+                    uint256 j = qn / size - back;
+                    if (j * size < off) break; // before the asset's first position
+                    (uint256 lo, uint256 hi) = harness.run(a, k, j);
+                    uint64 wlo;
+                    uint64 whi;
+                    for (uint256 q = j * size; q < (j + 1) * size; ++q) {
+                        uint64 p = harness.raw(a, q);
+                        if (p == 0) continue;
+                        if (whi == 0 || p < wlo) wlo = p;
+                        if (p > whi) whi = p;
                     }
-                    StopBook.Slot memory s = harness.slotOf(address(uint160(h[i] >> 1)), a, h[i] & 1 == 1);
-                    assertEq(s.where, below ? 3 : 4);
-                    assertEq(s.pos, i);
-                    assertEq(s.level, uint64(h[i] >> 161));
+                    assertEq(hi, whi == 0 ? 0 : harness.code(whi), "the code of the run's highest");
+                    assertEq(lo, whi == 0 ? 0 : harness.code(wlo), "the code of the run's lowest");
                 }
-            }
-        }
-        uint256[] memory w = harness.waiting();
-        for (uint256 i = 0; i < w.length; ++i) {
-            if (i > 0) assertLe(w[(i - 1) / 2], w[i], "not a heap");
-            StopBook.Slot memory s = harness.slotOf(address(uint160(w[i] >> 33)), uint32(w[i] >> 1), w[i] & 1 == 1);
-            assertTrue(s.where == 1 || s.where == 2);
-            assertEq(s.pos, i);
-            assertEq(uint256(s.armedAt), w[i] >> 193);
-        }
-        for (uint256 e = 0; e < N_EXAMS; ++e) {
-            uint256[] memory l = harness.latched(address(exams[e]));
-            for (uint256 i = 0; i < l.length; ++i) {
-                StopBook.Slot memory s = harness.slotOf(address(exams[e]), uint32(l[i] >> 1), l[i] & 1 == 1);
-                assertEq(s.where, 5);
-                assertEq(s.pos, i);
             }
         }
     }
 
-    /// B4. No check weighs more than a small block can hold, with room.
+    /// B4. A check's gas depends on its assets, not on the stops: two assets and some hundred entries stay light.
     /// forge-config: default.invariant.runs = 64
     /// forge-config: default.invariant.depth = 120
-    function invariant_noHeavyCheck() public view {
-        assertEq(handler.calls("heavyPoke"), 0);
+    function invariant_aCheckStaysLight() public view {
+        assertLt(handler.heaviestPoke(), 250_000);
     }
 
     function afterInvariant() external {
-        emit log(string.concat("reached: fill=", vm.toString(handler.calls("fill")), " setTrigger=",
-            vm.toString(handler.calls("setTrigger")), " clearTrigger=", vm.toString(handler.calls("clearTrigger")),
-            " poke=", vm.toString(handler.calls("poke")), " fired=", vm.toString(handler.calls("fired")), " latched=",
-            vm.toString(handler.calls("latched")), " overload=", vm.toString(handler.calls("overload"))));
+        emit log_named_uint("pokes", handler.calls("poke"));
+        emit log_named_uint("fired", handler.calls("fired"));
+        emit log_named_uint("setTrigger", handler.calls("setTrigger"));
+        emit log_named_uint("settleOne", handler.calls("settleOne"));
     }
 }

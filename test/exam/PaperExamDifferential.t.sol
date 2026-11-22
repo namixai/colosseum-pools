@@ -286,7 +286,7 @@ contract DifferentialHandler is Test {
         (int256 sy,,) = model.stop_();
         (int256 ty,,) = model.take_();
         if (sx != sy || tx != ty) calls["fillTrigger"] += 1;
-        StopBook(exam.stopBook()).poke();
+        StopBook(exam.stopBook()).settle(address(exam));
     }
 
     function _differ(string memory what) internal {

@@ -218,7 +218,7 @@ contract SimPoolTest is Test {
         e.setTrigger(BTC, false, 950_000, 0);
         vm.roll(block.number + 1);
         _setMark(940_000);
-        b.poke();
+        b.settle(address(e)); // the check logs the touch; the settle carries it out
         assertEq(e.positionOf(BTC), 0);
         _setMark(1_000_000);
     }
