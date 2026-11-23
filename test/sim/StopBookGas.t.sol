@@ -294,7 +294,7 @@ contract StopBookGasTest is StopBookBase {
     /// The check at the factory's cap of listed assets (`SimPoolFactory.MAX_LISTED`), every one with a stop: block after
     /// block, and in the check where each asset closes runs on eleven levels at once (into empty words: from above).
     function test_gas_poke_atTheCap() public {
-        uint256 n = 20; // SimPoolFactory.MAX_LISTED (test_listing_atMostMaxListed_aDelistingFreesAPlace holds it)
+        uint256 n = 16; // SimPoolFactory.MAX_LISTED (test_listing_atMostMaxListed_aDelistingFreesAPlace holds it)
         uint32[] memory as_ = new uint32[](n);
         for (uint256 k = 0; k < n; ++k) {
             as_[k] = uint32(400 + k);

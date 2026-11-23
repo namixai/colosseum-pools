@@ -69,10 +69,14 @@ contract StopBook {
     /// `Fired.result` of a fill that ran out of the gas it was given (the caller sent too little): the entry stays.
     uint8 public constant STARVED = 4;
 
-    /// The gas the oracle precompile gets for one price, and the book precompile for one best bid and offer; a check
-    /// with less left reverts (`PokeGas`).
-    uint256 public constant ORACLE_GAS = 50_000;
-    uint256 public constant BBO_GAS = 50_000;
+    /// The bounds of the gas a read of a precompile gets (`oracleGas`, `bboGas`, `setReadGas`), and what each gets
+    /// from the start. A read costs some 3 500 (the oracle) and 4 500 (the book) on HyperEVM, 2 600 more cold, and a
+    /// read of an asset the precompile does not know burns all it gets: 15 000 each keeps a check of `MAX_LISTED`
+    /// assets in a small block whatever the reads do, and the factory's operator can raise it, to 50 000 at most,
+    /// should the chain price the precompiles up.
+    uint256 public constant MIN_READ_GAS = 10_000;
+    uint256 public constant MAX_READ_GAS = 50_000;
+    uint256 internal constant READ_GAS = 15_000;
     /// The highest price and level the journal takes: a price at it or over is logged as none, a level refused.
     uint256 public constant MAX_PRICE = type(uint32).max - 1;
     /// A block whose book did not answer, was empty on a side or crossed (`IStopExam.fireTrigger`'s `book`).
@@ -123,10 +127,17 @@ contract StopBook {
     /// The factory whose exams alone may add and remove entries.
     address public immutable factory;
 
-    /// The last block checked, how many positions the journal holds, and the lock of a settle: one word.
+    /// The last block checked, how many positions the journal holds, the lock of a settle, and the gas the oracle
+    /// precompile gets for one price and the book precompile for one best bid and offer (a check with less left
+    /// reverts, `PokeGas`): one word.
     uint64 public lastPokeBlock;
     uint64 internal _len;
     bool internal _locked;
+    uint32 public oracleGas;
+    uint32 public bboGas;
+    /// Whether the settle being run has done anything: checked a block, carried out a fill, or kept a search's
+    /// progress (`NoProgress`).
+    bool transient internal _moved;
 
     mapping(address exam => mapping(uint32 asset => mapping(bool isTake => Entry))) internal _entry;
     /// The keys `asset << 1 | isTake` an exam has ever had an entry on: at most two for each of its assets, so at most
@@ -150,6 +161,8 @@ contract StopBook {
     event NoPrice(uint32 indexed asset);
     /// No check from block `from` to block `to`, both counted.
     event Gap(uint256 from, uint256 to);
+    /// The gas a read of the oracle and of the book precompile gets from now on.
+    event ReadGasSet(uint256 oracleGas, uint256 bboGas);
     /// `result`: `FILLED`, `CLOSED`, `ENDED`, or `FAILED` (the call failed: the entry stays, to be tried again).
     event Fired(address indexed exam, uint32 indexed asset, bool isTake, uint64 px, uint256 touchBlock, uint8 result);
 
@@ -162,9 +175,28 @@ contract StopBook {
     error NoPlaceForAsset(uint32 asset);
     /// A check needs at least `needed` gas left for each asset's price.
     error PokeGas(uint256 needed);
+    /// A settle that did nothing while `left` of the exam's entries are still owed: too little gas for one step.
+    /// Nothing is lost by it; an exam's own settle answers the count instead (`PaperExam.StopsPending`).
+    error NoProgress(uint256 left);
+    /// Only the factory, for its operator (`SimPoolFactory.setStopReadGas`).
+    error NotFactory();
+    /// Read gas out of `MIN_READ_GAS` to `MAX_READ_GAS`.
+    error BadReadGas();
 
     constructor() {
         factory = msg.sender;
+        (oracleGas, bboGas) = (uint32(READ_GAS), uint32(READ_GAS));
+    }
+
+    /// @notice Sets the gas a read of the oracle precompile and of the book precompile gets, each within
+    ///         `MIN_READ_GAS` and `MAX_READ_GAS`. Only the factory, for its operator.
+    function setReadGas(uint256 oracle, uint256 bbo) external {
+        if (msg.sender != factory) revert NotFactory();
+        if (oracle < MIN_READ_GAS || oracle > MAX_READ_GAS || bbo < MIN_READ_GAS || bbo > MAX_READ_GAS) {
+            revert BadReadGas();
+        }
+        (oracleGas, bboGas) = (uint32(oracle), uint32(bbo));
+        emit ReadGasSet(oracle, bbo);
     }
 
     // ── exams ────────────────────────────────────────────────────
@@ -216,15 +248,17 @@ contract StopBook {
     }
 
     /// @notice `poke()`, then carries out every stop and take of `exam` that a logged price has touched, in the order
-    ///         of their touches, each at its touch. Never reverts for want of gas between its steps: it stops, keeps
+    ///         of their touches, each at its touch. Does not revert for want of gas between its steps: it stops, keeps
     ///         what it found, and returns how many of the exam's entries are still to be searched or carried out. An
-    ///         exam acts only once none is.
+    ///         exam acts only once none is. A call by anyone but the exam that did nothing at all, with entries still
+    ///         owed, reverts (`NoProgress`), so that a wallet's estimate never pays for an empty call.
     function settle(address exam) external returns (uint256) {
-        _poke();
+        _moved = _poke();
         if (_locked) revert Reentered();
         _locked = true;
         uint256 left = _settle(exam);
         _locked = false;
+        if (left != 0 && !_moved && msg.sender != exam) revert NoProgress(left);
         return left;
     }
 
@@ -313,27 +347,30 @@ contract StopBook {
 
     // ── the check ────────────────────────────────────────────────
 
-    function _poke() internal {
+    /// Whether it logged a position.
+    function _poke() internal returns (bool) {
         uint256 last = lastPokeBlock;
-        if (last == block.number) return;
+        if (last == block.number) return false;
         if (last != 0 && block.number > last + 1) emit Gap(last + 1, block.number - 1);
         lastPokeBlock = uint64(block.number);
         uint32[] memory assets = _assets;
-        if (assets.length == 0) return;
+        if (assets.length == 0) return false;
         uint256 g = _len;
         _len = uint64(g + 1);
         _at[g / 3] |= (block.number << 40 | block.timestamp) << (g % 3 * 80);
+        (uint256 og, uint256 bg) = (oracleGas, bboGas);
         for (uint256 i = 0; i < assets.length; ++i) {
             uint32 a = assets[i];
-            uint64 px = _oracle(a);
+            uint64 px = _oracle(a, og);
             if (px == 0) {
                 emit NoPrice(a);
                 _log(a, g + _off(a), 0);
             } else {
                 emit PriceSeen(a, px);
-                _log(a, g + _off(a), uint256(_bbo(a, px)) << 32 | px);
+                _log(a, g + _off(a), uint256(_bbo(a, px, bg)) << 32 | px);
             }
         }
+        return true;
     }
 
     /// Writes the price and book `x` (`book << 32 | price`, zero: no price) at position `q` of `asset`'s tree, and the
@@ -558,6 +595,7 @@ contract StopBook {
             if (gasleft() < FIRE_GAS + keep) return false;
             r = _fire(exam, keys[i], found[i], keep);
             if (r == FAILED) return false;
+            _moved = true;
             _drop(exam, a, tk);
         }
         found[i] = len;
@@ -600,7 +638,10 @@ contract StopBook {
             }
             if (f != len) ++left;
             if (f & DEFERRED != 0) f ^= DEFERRED;
-            if (f > e.cursor) e.cursor = uint40(f);
+            if (f > e.cursor) {
+                e.cursor = uint40(f);
+                _moved = true;
+            }
         }
     }
 
@@ -754,11 +795,11 @@ contract StopBook {
     }
 
     /// The oracle price of `asset` now; zero if the precompile did not answer or answered no uint64. It gets its whole
-    /// `ORACLE_GAS`: a call too poor for that reverts, so that no caller can log a price as missing.
-    function _oracle(uint32 asset) internal view returns (uint64) {
-        if (gasleft() < ORACLE_GAS * 64 / 63 + 10_000) revert PokeGas(ORACLE_GAS);
+    /// `gas` (`oracleGas`): a call too poor for that reverts, so that no caller can log a price as missing.
+    function _oracle(uint32 asset, uint256 gas) internal view returns (uint64) {
+        if (gasleft() < gas * 64 / 63 + 10_000) revert PokeGas(gas);
         (bool ok, bytes memory r) =
-            HLConstants.ORACLE_PX_PRECOMPILE_ADDRESS.staticcall{gas: ORACLE_GAS}(abi.encode(CoreOps.pxIndex(asset)));
+            HLConstants.ORACLE_PX_PRECOMPILE_ADDRESS.staticcall{gas: gas}(abi.encode(CoreOps.pxIndex(asset)));
         if (!ok || r.length < 32) return 0;
         uint256 px = abi.decode(r, (uint256));
         return px > MAX_PRICE ? 0 : uint64(px);
@@ -766,11 +807,11 @@ contract StopBook {
 
     /// This block's best bid and offer of `asset`, logged as how far each side stands off the oracle price `px` on the
     /// trader's worse side, in millionths of it (`askOff << 16 | bidOff`); `NO_BOOK` for a book that does not answer,
-    /// is empty on a side or crossed. It gets its whole `BBO_GAS`, as the oracle does.
-    function _bbo(uint32 asset, uint64 px) internal view returns (uint32) {
-        if (gasleft() < BBO_GAS * 64 / 63 + 10_000) revert PokeGas(BBO_GAS);
+    /// is empty on a side or crossed. It gets its whole `gas` (`bboGas`), as the oracle does.
+    function _bbo(uint32 asset, uint64 px, uint256 gas) internal view returns (uint32) {
+        if (gasleft() < gas * 64 / 63 + 10_000) revert PokeGas(gas);
         (bool ok, bytes memory r) =
-            HLConstants.BBO_PRECOMPILE_ADDRESS.staticcall{gas: BBO_GAS}(abi.encode(uint64(CoreOps.pxIndex(asset))));
+            HLConstants.BBO_PRECOMPILE_ADDRESS.staticcall{gas: gas}(abi.encode(uint64(CoreOps.pxIndex(asset))));
         if (!ok || r.length < 64) return NO_BOOK;
         (uint256 bid, uint256 ask) = abi.decode(r, (uint256, uint256));
         if (bid == 0 || ask < bid || ask > type(uint64).max) return NO_BOOK;

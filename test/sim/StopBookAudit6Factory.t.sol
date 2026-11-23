@@ -26,7 +26,7 @@ contract StopBookAudit6FactoryTest is Test {
                 f.setAsset(a, cap);
                 continue;
             }
-            bool willRevert = !on[a] && cap != 0 && model == 20;
+            bool willRevert = !on[a] && cap != 0 && model == f.MAX_LISTED();
             if (willRevert) {
                 vm.expectRevert(SimPoolFactory.TooManyAssets.selector);
                 f.setAsset(a, cap);

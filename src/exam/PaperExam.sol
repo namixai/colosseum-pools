@@ -242,7 +242,9 @@ contract PaperExam is Initializable {
     /// one there already, a change of it: that one acts up to block `armedAt`, and this one from then; zero `px`: the
     /// trader took it back, and there is none from block `armedAt`.
     event TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt);
-    /// Removed by the trader, or because the position it was on was closed or turned round.
+    /// Taken out at once: carried out (`TriggerFilled` before it), its exam ended or out of time at its touch, the
+    /// position it was on closed or turned round, or, without a stop book, removed by the trader. With a stop book the
+    /// trader's removal is a change (`TriggerSet` with zero `px`), and none of this event marks when it is in force.
     event TriggerCleared(uint32 indexed asset, bool isTake);
     /// Carried out: `sz` closed at `px`, which cost `cost`, once the oracle price `touchPx` had reached `triggerPx`
     /// in block `touchBlock`: the first logged block at that price from its `armedAt` (with a stop book; the settle
@@ -490,8 +492,10 @@ contract PaperExam is Initializable {
     ///         stop is set on the price's way, not behind it. With no oracle price in the block that cannot be told,
     ///         and it reverts (`NoPrice`), as it does over the highest price the book logs. With a stop book and one
     ///         there, it is a change (`changeOf`) and waits as long: the one there stays, and is carried out at its
-    ///         touches, up to block `armedAt`, so moving a stop out of a wick's way a block ahead is no way round it
-    ///         either; a change asked before and not yet in force is replaced, and the delay counts again.
+    ///         touches, up to block `armedAt`; a change asked before and not yet in force is replaced, and the delay
+    ///         counts again. With a `fillDelay` of two blocks or more, as a simulated pool's plan has
+    ///         (`SimPoolFactory.MIN_FILL_DELAY`), moving a stop out of a wick's way a block ahead is no way round it
+    ///         either; with one, a change sent a block before a wick is in force in the wick's own block.
     function setTrigger(uint32 asset, bool isTake, uint64 px, uint64 sz) external settled inStatus(Status.Active) {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if (_over()) revert TooLate();
