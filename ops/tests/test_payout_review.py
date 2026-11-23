@@ -1956,11 +1956,13 @@ class TheDrawdownLine(unittest.TestCase):
         for name, sig in (("TRIGGER_SEEN", "TriggerSeen(uint32,bool,uint64,uint256)"),):
             self.assertEqual(getattr(r, name), "0x" + keccak(text=sig).hex())
         for sig in ("TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt)",
-                    "TriggerCleared(uint32 indexed asset, bool isTake)",
-                    "TriggerSeen(uint32 indexed asset, bool isTake, uint64 oracle, uint256 seenAt)"):
+                    "TriggerCleared(uint32 indexed asset, bool isTake)"):
             self.assertIn(f"event {sig};", re.sub(r"\s+", " ", src))
         self.assertIn("event TriggerFilled( uint32 indexed asset, bool isTake, uint64 sz, uint64 px, uint256 cost, "
-                      "uint64 triggerPx, uint8 source );", re.sub(r"\s+", " ", src))
+                      "uint64 triggerPx, uint8 source, uint256 touchBlock, uint64 touchPx );", re.sub(r"\s+", " ", src))
+        # `TriggerSeen` and the short `TriggerFilled` are the events of exams made before the stop book (the 998
+        # rehearsal's), read as they wrote them; the source has them no more.
+        self.assertNotIn("event TriggerSeen", src)
         self.assertIn("event Stopped(Status indexed status, Breach indexed reason, int256 equity);", src)
 
 
@@ -2223,10 +2225,17 @@ class StopsAndTheLineInTheRecount(unittest.TestCase):
         self.assertEqual((got["name"], got["asset"], got["take"]), ("TriggerCleared", 3, False))
         got = r.exam_event_of(log([r.TRIGGER_SEEN, asset], encode(["bool", "uint64", "uint256"], [False, 940_000, 510])), 7)
         self.assertEqual((got["name"], got["take"], got["oracle"], got["seenAt"]), ("TriggerSeen", False, 940_000, 510))
-        got = r.exam_event_of(log([sk.TRIGGER_FILLED, asset], encode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8"],
-                                                                      [False, 100, 940_000, 7, 950_000, 1])), 7)
+        got = r.exam_event_of(log([sk.TRIGGER_FILLED, asset], encode(
+            ["bool", "uint64", "uint64", "uint256", "uint64", "uint8", "uint256", "uint64"],
+            [False, 100, 940_000, 7, 950_000, 1, 25, 949_000])), 7)
+        self.assertEqual((got["name"], got["take"], got["sz"], got["px"], got["cost"], got["trigger_px"], got["source"],
+                          got["touch_block"], got["touch_px"]), ("TriggerFilled", False, 100, 940_000, 7, 950_000, 1, 25, 949_000))
+        self.assertEqual(r.touch_of(got), 25, "with a stop book the close counts at its touch")
+        got = r.exam_event_of(log([sk.TRIGGER_FILLED_V1, asset], encode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8"],
+                                                                         [False, 100, 940_000, 7, 950_000, 1])), 7)
         self.assertEqual((got["name"], got["take"], got["sz"], got["px"], got["cost"], got["trigger_px"], got["source"]),
                          ("TriggerFilled", False, 100, 940_000, 7, 950_000, 1))
+        self.assertEqual(r.touch_of(got), 30, "without one, at its own block")
         got = r.exam_event_of(log([r.STOPPED, "0x" + f"{3:064x}", "0x" + f"{1:064x}"], encode(["int256"], [93])), 7)
         self.assertEqual((got["name"], got["status"], got["reason"], got["equity"]), ("Stopped", 3, 1, 93))
         got = r.exam_event_of(log([r.STOPPED, "0x" + f"{3:064x}"], encode(["int256"], [93])), 7)
@@ -2244,9 +2253,9 @@ class StopsAndTheLineInTheRecount(unittest.TestCase):
         self.assertFalse(r.trigger_hit(False, -100, 1_049_999, 1_050_000))
         self.assertTrue(r.trigger_hit(True, -100, 950_000, 950_000), "a take on a short at or under")
         self.assertFalse(r.trigger_hit(True, -100, 950_001, 950_000))
-        self.assertIn("uint64 sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;", src)
-        self.assertIn("emit Filled(asset, before < 0, sz, px, cost, block.number - t.armedAt, source);", src)
-        self.assertIn("emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source);", src)
+        self.assertIn("sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;", src)
+        self.assertIn("emit Filled(asset, before < 0, sz, px, cost, touchBlock - t.armedAt, source);", src)
+        self.assertIn("emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source, touchBlock, uint64(tick));", src)
         self.assertIn("if (block.number < t.armedAt) revert TooEarly(t.armedAt);", src)
 
 

@@ -186,6 +186,25 @@ def fill_of(log_entry: dict, t: int) -> dict:
             "buy": bool(is_buy), "sz": int(sz), "t": t, "tx": log_entry["transactionHash"]}
 
 
+def fill_times(found: list[dict]) -> list[tuple[dict, int]]:
+    """Each `Filled` log of `found` with the block its time is: its own, or, for the close of a stop or a take that a
+    stop book carried out (`TriggerFilled` right after it, in its transaction, of its account and asset), the block of
+    the touch (`touchBlock`): the stop was filled then, at that block's price, whenever the settle came."""
+    found = sorted(found, key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16)))
+    out = []
+    for i, l in enumerate(found):
+        if l["topics"][0] != sk.FILLED:
+            continue
+        block = int(l["blockNumber"], 16)
+        n = found[i + 1] if i + 1 < len(found) else None
+        if (n is not None and n["topics"][0] == sk.TRIGGER_FILLED and n["transactionHash"] == l["transactionHash"]
+                and n["address"].lower() == l["address"].lower() and n["topics"][1] == l["topics"][1]):
+            block = int(abi_decode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8", "uint256", "uint64"],
+                                   bytes.fromhex(n["data"][2:]))[6])
+        out.append((l, block))
+    return out
+
+
 # ── the checker ──────────────────────────────────────────────────────────────────────
 
 class Checker:
@@ -257,13 +276,16 @@ class Checker:
         self.fills_from = latest + 1
 
     def _read_fills(self, accounts: list[str], lo: int, latest: int) -> list[dict]:
+        """The fills of `accounts` from `lo` to `latest`, each at its time: an order's at its block's, and a stop's or a
+        take's carried out by a stop book at its touch's (`fill_times`), which a settle may write much later."""
         got = []
         while accounts and lo <= latest:
             hi = min(lo + core.MAX_LOG_WINDOW - 1, latest)
             for i in range(0, len(accounts), ADDRESS_BATCH):
-                for l in c.rpc("eth_getLogs", [{"address": accounts[i:i + ADDRESS_BATCH], "topics": [sk.FILLED],
-                                                "fromBlock": hex(lo), "toBlock": hex(hi)}]):
-                    got.append(fill_of(l, self.time_of(int(l["blockNumber"], 16))))
+                found = c.rpc("eth_getLogs", [{"address": accounts[i:i + ADDRESS_BATCH], "topics": [[sk.FILLED, sk.TRIGGER_FILLED]],
+                                               "fromBlock": hex(lo), "toBlock": hex(hi)}])
+                for l, block in fill_times(found):
+                    got.append(fill_of(l, self.time_of(block)))
             lo = hi + 1
         return got
 

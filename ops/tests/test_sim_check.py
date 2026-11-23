@@ -304,7 +304,7 @@ class TheService(unittest.TestCase):
             if method == "eth_getBlockByNumber":
                 return {"timestamp": hex(45 * day if params[0] == "latest" else times[int(params[0], 16)])}
             q = params[0]
-            if q["topics"][0] != s.sk.FILLED:
+            if s.sk.FILLED not in q["topics"][0]:
                 return []
             return [{"address": a, "blockNumber": hex(b), "transactionHash": "0x%064x" % b,
                      "topics": [s.sk.FILLED, "0x%064x" % 3],
@@ -377,7 +377,7 @@ class Node:
         if method != "eth_getLogs":
             return None  # a view or a send: answered by the methods below
         q = params[0]
-        if q["topics"][0] != s.sk.FILLED:
+        if s.sk.FILLED not in q["topics"][0]:
             return []  # no USDC moved: reason 1
         return [{"address": a, "blockNumber": hex(b), "transactionHash": "0x%064x" % b,
                  "topics": [s.sk.FILLED, "0x%064x" % 3],
@@ -561,7 +561,7 @@ class TheLoop(unittest.TestCase):
         state = {"n": 0}
 
         def rpc(method, params=()):
-            if method == "eth_getLogs" and params[0]["topics"][0] == s.sk.FILLED:
+            if method == "eth_getLogs" and s.sk.FILLED in params[0]["topics"][0]:
                 state["n"] += 1
                 if state["n"] == 3:
                     raise RuntimeError("timeout")
@@ -657,3 +657,22 @@ def mock_print():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StopTimes(unittest.TestCase):
+    """A stop's close by a stop book is timed at its touch, whenever the settle wrote it."""
+
+    def test_a_stops_close_counts_at_its_touch_and_an_orders_at_its_block(self):
+        from eth_abi import encode as enc
+        exam = "0x" + "11" * 20
+
+        def lg(topic, block, index, data, tx="0x" + "aa" * 32):
+            return {"address": exam, "topics": [topic, "0x%064x" % 3], "data": "0x" + data.hex(),
+                    "blockNumber": hex(block), "logIndex": hex(index), "transactionHash": tx}
+
+        filled = enc(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"], [False, 100, 949_000, 0, 5, 0])
+        trig = enc(["bool", "uint64", "uint64", "uint256", "uint64", "uint8", "uint256", "uint64"],
+                   [False, 100, 949_000, 0, 950_000, 0, 95, 949_000])
+        found = [lg(s.sk.TRIGGER_FILLED, 120, 2, trig), lg(s.sk.FILLED, 120, 1, filled),
+                 lg(s.sk.FILLED, 121, 0, filled, tx="0x" + "bb" * 32)]
+        self.assertEqual([b for _, b in s.fill_times(found)], [95, 121])
