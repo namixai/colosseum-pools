@@ -50,9 +50,10 @@ class Repeats(unittest.TestCase):
         self.assertEqual(self.passes([0, H, 5 * H, 6 * H, 7 * H, 12 * H], ceiling_in=100 * H), [0, 6 * H, 12 * H])
 
     def test_said_again_as_its_ceiling_comes_within_24_and_6_hours(self):
-        ceiling = 30 * H
-        got = self.passes([0, 2 * H, 6 * H + 600, 7 * H, 24 * H + 600, 25 * H], ceiling_in=ceiling)
-        self.assertEqual(got, [0, 6 * H + 600, 24 * H + 600])  # 6 h after the first; 24 h before; 6 h before
+        # The ceiling 29 h after the first pass: 24 h before it comes 5 h 10 min after the first alarm, 6 h before it
+        # 5 h 10 min after the one of 18 h: each said although six hours have not passed since the last.
+        got = self.passes([0, 5 * H + 600, 12 * H, 18 * H, 23 * H + 600, 23 * H + 1_200], ceiling_in=29 * H)
+        self.assertEqual(got, [0, 5 * H + 600, 12 * H, 18 * H, 23 * H + 600])
         got = self.passes([0, 1 * H, 2 * H], ceiling_in=23 * H)
         self.assertEqual(got, [0], "within 24 h from the first: said with it, not again at once")
 

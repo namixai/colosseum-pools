@@ -775,9 +775,12 @@ The stops and takes of the exams are carried out, by default (`COLOSSEUM_STOPS=l
 `keeper-<name>.env` is the way back to the keeper's one loop), by a loop in a thread of the same process (`ops/stop_filler.py`,
 docs/SIM-POOL.md, "The stops"), on the same filler key, and every transaction of that key goes out through it. It
 writes two files beside the keeper's state, in `/var/lib/colosseum-keeper`, the one directory the unit may write:
-`prices-<label>.jsonl`, one line for each block it looked at with the oracle price of each asset with a stop
-standing, and a gap line for the blocks it did not (the file the payout review, `colosseum-payout-review@<name>`,
-judges every stop by; it grows and is not cut, about 60 bytes a block), and `stops-<label>.alarm`, one entry for each stop reached and not carried out, for a stops' loop that is dead,
+the journal of prices, one file a day by the loop's clock, `prices-<label>-YYYY-MM-DD.jsonl` (`prices-<label>.jsonl`
+itself stays empty: it is the lock that keeps a second writer out), each starting with a header line that names the
+chain, the factory and the label, then one line for each block it looked at with the oracle price of every platform
+asset (and any other asset with a stop standing), stop or no stop, and a gap line for the blocks it did not (the files
+the payout review, `colosseum-payout-review@<name>`, judges every stop by; about 90 bytes a block, some 8 MB a day;
+old day files may be moved away once no payout waits on them), and `stops-<label>.alarm`, one entry for each stop reached and not carried out, for a stops' loop that is dead,
 stalled or blind, and for a transaction of the key stuck out of a block for two minutes, which stays until a person
 removes it. An alarm also goes to the journal as an `ALARM` line
 and, when `COLOSSEUM_ALERT_CMD` is set, to that command, as the watchdogs' do. Its other settings, also in
@@ -843,7 +846,8 @@ What it does by itself, and only that:
 What it never does: lift a stop, stop for any reason but a pair (a result disputed without one, reason 3, and
 prohibited play, reason 4, need a written analysis and are sent by a person), approve a payout, or send with any
 key but the checker's. Its unit cannot read the instance's filler key, nor any other instance's keys. It runs on
-testnet alone: the unit passes no `--confirm-mainnet`, so on mainnet it would refuse to start.
+the network its instance's file names ("Mainnet", below): testnet unless `keeper-<name>.env` says
+`COLOSSEUM_NETWORK=mainnet` and `COLOSSEUM_CONFIRM_MAINNET=<label>`; one of the two alone refuses to start.
 
 `install.sh` installs the unit with the others. For an instance whose record is a simulated pool's it checks both
 wallets against the record before it switches ("A simulated pool's keeper", above), then enables the checker and
@@ -925,6 +929,90 @@ up for the first pool. A release does not touch the line; `install.sh` checks it
 anything switches, it refuses a release when `shared-keeper.env` does not name the pool on one line of its
 own, `COLOSSEUM_SHARED_DEPLOYMENT=<label>` with nothing around it (no spaces, quotes or comment), or when
 that pool's record is missing or has no `SharedPool`: the label it checks is then the one systemd passes.
+
+### The payout review
+
+`colosseum-payout-review@<name>.timer` runs `ops/review_service.py` every 10 minutes (enabled by hand: `systemctl enable
+--now colosseum-payout-review@<name>.timer`). Its folder, `/var/lib/colosseum-keeper/reviews-<name>/`, holds:
+
+- `<pool>-<id>.json`, the review of each payout still waiting (schema `payout-review/4`), what `deploy_sim approve`
+  reads and, cut to what it decides by, what the operator's page reads through the index's reviews route;
+- `scan.json`, every log the review has read, with the block it read to: each pass reads only the blocks after it
+  (a first pass over a long chain goes in parts of 5 000 blocks, each saved; a pass out of its time goes on from the
+  last part). Removing it makes the next passes read the chain from the deployment's block again;
+- `candles-<network>-YYYY-MM-DD.jsonl`, the venue's minute candles of the platform's assets, fetched from
+  Hyperliquid's info API on each pass (no key) and kept: the API gives only the last 5 000 minutes;
+- `status.json`, the end of the last pass (its time, block, payouts waiting and held), which the stops' loop in the
+  keeper's process watches (`COLOSSEUM_REVIEW_STATUS` in the keeper's unit): older than 30 minutes with payouts
+  waiting, or 2 hours whatever it saw, is the alarm `review_stale`, said again every 6 hours while it lasts;
+- `said.json` and `ALARM`: the alarms raised, each remembered only once the channel took it.
+
+Each payout held is the alarm `payout_held` with the date it goes out by itself, said again every 6 hours, and once
+more 24 and 6 hours before that date, while it is held and not stopped; a payout that pays by itself unless stopped
+is `payout_needs_a_stop`, the same way. A pass that fails is `review_failed` (once an hour); a pass killed by its
+`TimeoutStartSec` or its `MemoryMax` (1 GB) starts `colosseum-unit-failed@` (its `OnFailure=`), which says
+`unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read.
+
+Every block of each stop's time must be in at least one of two journals of prices, the keeper's and the second
+writer's (below), the two must give the same price where both have it, and the venue's candles must not contradict
+them: a minute the journal shows the oracle at the stop while the candle stayed more than 1 % (3 % on testnet,
+`COLOSSEUM_CANDLE_BPS`) short of it, or a candle more than that past the stop where the journal shows no reach.
+Anything else holds the payout. A node that answers for old blocks is an optional third check
+(`COLOSSEUM_ARCHIVE_RPC_URL`); without it nothing is held for its sake.
+
+To approve with the Ledger, the full documents go to the approver's machine, copied as they are (the reviews route
+of the index hands out only a cut of each, and `approve` refuses it):
+
+    scp -r <host>:/var/lib/colosseum-keeper/reviews-<name>/ ./reviews-<name>
+    spike/.venv/bin/python -m ops.deploy_sim approve --deployment <label> --reviews ./reviews-<name> ...
+
+A copy older than an hour is refused as the host's own would be: copy, then approve.
+
+### The second writer of prices
+
+A second machine, apart from the pools host and reading another provider's node, runs the same loop alone with no
+key (`ops/stop_filler.py`, which sends nothing) and writes its own journal; the review holds a block where either
+journal has it, so a restart or a deploy of the keeper (or of the second machine) holds nothing, and one journal's
+wrong price shows as a disagreement. Its units are in `ops/host/second-writer/`:
+
+1. On the second machine: a release of this repository at `/opt/colosseum-pools/current` with its venv, a user
+   `colosseum-prices` with `/var/lib/colosseum-prices` (and an empty `no-keys` directory in it), and rsync.
+2. `/etc/colosseum/price-watch-<name>.env`: `COLOSSEUM_DEPLOYMENT=<label>`, `COLOSSEUM_RPC_URL=<a node of another
+   provider than the keeper's>`, `COLOSSEUM_PRICE_SYNC_TO=colosseum-prices@<pools host>:`; on mainnet also
+   `COLOSSEUM_NETWORK=mainnet` and `COLOSSEUM_CONFIRM_MAINNET=<label>`.
+3. An ssh key of its own, `/var/lib/colosseum-prices/.ssh/sync`, and the host's key in its `known_hosts`.
+4. On the pools host: a user `colosseum-prices` in the group `colosseum-keeper`, the directory
+   `/var/lib/colosseum-keeper/second-prices` (owner `colosseum-prices`, group `colosseum-keeper`, mode 2750), and the
+   second machine's public key in that user's `authorized_keys` as
+   `command="rrsync -wo /var/lib/colosseum-keeper/second-prices",restrict ssh-ed25519 ...`: it can write there and
+   nothing else.
+5. On the second machine: `colosseum-price-watch@<name>.service` and `colosseum-price-sync@<name>.timer`, enabled.
+
+The sync copies the day files every minute by appending; the review reads
+`second-prices/watch-prices-<label>.jsonl` (`--prices2` in its unit) and says `second_journal_stale` when no day
+file of it has changed for 30 minutes (again every 6 hours). Without it every restart of the keeper holds the
+payouts whose stops stood through it until a person decides.
+
+### Mainnet
+
+What the host needs before a simulated pool runs on mainnet, in order:
+
+1. The record of the deployment (`deployments/<label>.json`), and the instance made with `--sim-instance <name> <label>`.
+2. The keys in the instance's secrets: the filler (with HYPE for the stops' gas) and the checker; the Safe of the
+   operator is the factory's operator, the Ledger the pools' approver. `COLOSSEUM_KEY_DIR` names a directory for
+   mainnet (`ops/sim_network.py`).
+3. `keeper-<name>.env`: `COLOSSEUM_NETWORK=mainnet`, `COLOSSEUM_CONFIRM_MAINNET=<label>`, `COLOSSEUM_RPC_URL` (a node
+   of the keeper's own), `COLOSSEUM_STOP_RPC_URL` (a node for the stops, not the gateway's), optionally
+   `COLOSSEUM_ARCHIVE_RPC_URL`. Without both network lines `colosseum-multi-keeper@`, `colosseum-sim-checker@` and
+   `colosseum-payout-review@` run on testnet, as before, and on a mainnet node they refuse to start (the chain id is
+   checked); with one of them alone they refuse to start.
+4. `/etc/colosseum/watch.env`: `COLOSSEUM_ALERT_CMD`, the channel every alarm above goes to.
+5. The second writer ("The second writer of prices"), with its own node and the two network lines.
+6. `install.sh` from the release; then `systemctl enable --now colosseum-payout-review@<name>.timer`.
+7. The index of the page (`gateway.simindex`): `colosseum-sim-index@<name>.service`, installed by `install.sh` and
+   enabled by hand, reads the review folder of its instance and nothing else of the keeper's; its settings in
+   `/etc/colosseum/sim-index-<name>.env` (`SIM_INDEX_RECORD`, `SIM_INDEX_ALLOW_ORIGIN`, `SIM_INDEX_RPC_URL`,
+   `COLOSSEUM_NETWORK=mainnet`); nginx's `/v1/simindex/` route as docs/GATEWAY.md has it.
 
 ## The host's watchdogs
 

@@ -487,7 +487,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     (`--prices prices-<deployment>.jsonl`, "The stops" below) every block of each trigger's time is judged by the
     journal instead, and no other read stands in for a block it does not hold. A reach nobody carried out (a stop
     taken off or moved by the trader while reached among them) is the reason `missed-stop`; a block of a trigger's
-    time the journal does not hold, no journal at all, or a journal not borne out (below) is `stop-unchecked`.
+    time neither journal holds, no journal at all, two prices for one block, or a journal the venue's candles
+    contradict (below) is `stop-unchecked`; a stop carried out more than 60 blocks after the oracle reached it is
+    `stop-late`.
     Either holds the payout, with the draft of a stop of reason 3 naming the transactions that set the stops;
     the review is clean only when every block of every trigger's time is checked and no reach went uncarried;
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
@@ -756,25 +758,36 @@ to the flag file `stops-<deployment>.alarm` next to the keeper's state, and the 
 `COLOSSEUM_ALERT_CMD` when the host has a channel. A miss does not mend itself: the flag stays until a person
 removes it. Blocks whose prices were not read judge nothing, and are said.
 
-Every block the loop looks at goes to `prices-<deployment>.jsonl` next to the state, one JSON line a block:
-`{"b": block, "t": its time, "w": the loop's clock, "px": {asset: price}}`, with each asset that had a stop or a
-take standing (none: an empty map) and `"unread"` for an asset whose price was not read. Blocks it did not look at
-are lines `{"gap": [from, to], "why": ...}`: not running (written from its last line when it starts again), the
-head ahead of its read-back, behind past 1 000 blocks. It is appended line by line by one process, survives a
-restart (a line cut short is cut off), grows by about 60 bytes a block and is not cut. Nothing in it is sent to
-the chain.
+Every block the loop looks at goes to its journal, one file a day by the loop's clock (UTC),
+`prices-<deployment>-YYYY-MM-DD.jsonl` next to the state, each opening with a header
+`{"journal": "colosseum-prices/2", "chain", "factory", "label"}`, then one JSON line a block:
+`{"b": block, "t": its time, "w": the loop's clock, "px": {asset: price}}`, with every platform asset of the network
+and any other asset with a stop or a take standing, a stop known or not (so the first blocks after a restart, before
+the keeper's slow pass has read the stops again, are in it), and `"unread"` for an asset whose price was not read.
+Blocks it did not look at are lines `{"gap": [from, to], "why": ...}`: not running (written from its last line when
+it starts again), the head ahead of its read-back, behind past 1 000 blocks. It is appended line by line by one
+process and survives a restart (a line cut short is cut off). Nothing in it is sent to the chain.
 
-It is the record the payout review judges every stop by (`--prices`; the review's service reads the keeper's own
-file), and it is the keeper's own, so the review believes it only where something else bears it out:
+It is the keeper's own record, so the review believes it only where something else bears it out, with no node that
+keeps old blocks:
+- a second journal: the same loop alone (`python -m ops.stop_filler`, no key, it sends nothing) on another machine
+  and another provider's node writes `watch-prices-<deployment>-…` the same way, copied to the host every minute
+  (docs/HOSTING.md, "The second writer of prices"). A block is held where either journal has it, and where both
+  have it the prices must be the same; a reach in either is a reach. A restart of one writer is covered by the other;
 - the chain's own prices: a fill at the oracle (any source but the book) is at the oracle price of its block, and
-  `TriggerSeen` names it; the journal must give the same price at every such block it holds;
-- a node calibrated on those: at the chain's prices nearest a stop's time the node must give the chain's price,
-  and at one of them a price other than its latest, so a node that answers a call at an old block with the state of
-  today calibrates nothing. Only then is it asked for a sample of the journal's blocks (each stop's first and last
-  block, every block the journal shows at the price or past it, and blocks spread over the rest, 200 an account,
-  `--journal-checks`), each to be the journal's price.
-A price that differs, a node with no state that far back, or no chain price to calibrate on is `stop-unchecked`:
-the payout is held. A node that keeps the oracle's history (an archive node) is what makes a journal checkable.
+  `TriggerSeen` names it; a journal must give the same price at every such block it holds;
+- the venue's minute candles (Hyperliquid's `candleSnapshot`, kept by the review's service, `ops/venue_candles.py`),
+  a coarse screen over every minute of a stop's time: a minute the journal shows the oracle at the stop while the
+  candle stayed more than `CANDLE_BPS` (1 %; 3 % on testnet, whose perp trades thinly) short of it all minute, or a
+  candle past the stop by more than that where the journal shows no reach, contradicts the journal. A candle is the
+  price of trades on the perp, not the oracle (a median of other venues' prices; the perp trades at a premium or a
+  discount to it, and a thin book prints wicks): 1 % is far past either for BTC, ETH and SOL in a calm market, and
+  near enough not to hide a reach by more than that. Fewer than 90 % of a stop's minutes with a candle is a doubt too;
+- optionally, a node that answers for old blocks (`COLOSSEUM_ARCHIVE_RPC_URL`): calibrated on the chain's prices and
+  asked for a sample of 200 blocks an account (`--journal-checks`, at least 1). Without one nothing is held for it.
+A block neither journal holds, two prices for one block (in one journal or between the two), a candle that
+contradicts, or a file of another chain, factory or deployment (refused whole) is `stop-unchecked`: the payout is
+held. A line of the wrong shape is a hole, never the end of the review.
 
 ### What the terms say a stop does, and what a missed one costs
 

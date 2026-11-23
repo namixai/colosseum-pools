@@ -749,13 +749,20 @@ their events, a few hundred bytes a code or a stop: well under a megabyte for a 
 shows, and offers a payout's one-signature approval only on a review of this chain, pool, payout, trader,
 amount and claim, read after the claim and at most an hour (3 600 blocks and 3 600 s) before the latest
 block, whose verdict is clean and whose action is the approval: the rules `deploy_sim approve` checks
-(`payout_review.card_problem`, and `reviewFor` in `app/lib/operator.js`). Any other payout gets a separate
-"Approve without a review" step that names what is missing or what the review said, and asks twice. The
+(`payout_review.card_problem`, and `reviewFor` in `app/lib/operator.js`). Any other payout is offered no
+approval at all, as the command offers none: the page says what is missing or what the review said, the date the
+payout goes out by itself at its ceiling, and that only a stop of reason 3 signed before then stops it. The
 route only finds files: the name is built from a pool this index knows (its factory made it), written as
 checksummed or lower case, and whole numbers; nothing of the request is a path. A symbolic link, a file
 over 512 KB, one that is not a JSON object are not handed over; the folder's other files (`said.json`,
-`ALARM`) never are; nothing is listed or written. The documents are handed over as they are: the page
-checks them.
+`ALARM`, `scan.json`, `status.json`, the candles) never are; nothing is listed or written. Each document is
+handed over cut to what the page decides by (`outward`): its schema, pool, number, trader, stage and exam, amount,
+times, verdict, action, `readAt`, `chainId`, `batchApproval` and `dailyCap`, its reasons as their kind with a few
+fixed words of it (`REASON_WORDS`), and its call as its kind and method (an approval's own arguments too, the
+payout's number). The evidence (pairs, mirrors and links that name other traders and wallets, the thresholds,
+the timing), the draft of a stop, a stop's arguments and the review's own texts stay on the host, for
+`deploy_sim approve` (which reads the full document, copied from the host: docs/HOSTING.md, "The payout review")
+and a person. The page checks what it gets as before.
 
 **Restart and a lost node.** A restart takes up the file and reads on from `scanned_to + 1`; a window read
 twice keeps each event once (block and log index). A node that fails, throttles or is unreachable is asked
@@ -786,7 +793,7 @@ not exist, short of reading the whole history itself.
         proxy_set_header Connection "";
     }
 
-    # /etc/colosseum/sim-index.env
+    # /etc/colosseum/sim-index-<name>.env
     COLOSSEUM_NETWORK=            # empty for testnet, mainnet for mainnet
     SIM_INDEX_RECORD=deployments/testnet-rehearsal998.json   # SimPoolFactory and block; or
     # SIM_INDEX_FACTORY=0x…  SIM_INDEX_FROM_BLOCK=…
@@ -794,11 +801,11 @@ not exist, short of reading the whole history itself.
     # SIM_INDEX_RPC_URL=…         a node of its own spares the gateway's and the keepers' budget
     SIM_INDEX_REVIEWS=/var/lib/colosseum-keeper/reviews-<name>   # the review service's --out; unset: no reviews route
 
-    # /etc/systemd/system/colosseum-sim-index.service
+    # ops/host/colosseum-sim-index@.service (installed by install.sh, enabled by hand), in short:
     [Service]
     DynamicUser=true
     WorkingDirectory=/opt/colosseum-pools/current
-    EnvironmentFile=/etc/colosseum/sim-index.env
+    EnvironmentFile=/etc/colosseum/sim-index-<name>.env
     Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SIM_INDEX_DIR=/var/lib/colosseum-sim-index
     StateDirectory=colosseum-sim-index
     ExecStart=/opt/colosseum-pools/venv/bin/python -m gateway.simindex
@@ -811,7 +818,7 @@ not exist, short of reading the whole history itself.
     # For the reviews route: read the review service's folder, and nothing else of the keepers'. The service
     # writes with UMask 0027, so its group reads; the folder's parent must let the group pass.
     SupplementaryGroups=colosseum-keeper
-    ReadOnlyPaths=/var/lib/colosseum-keeper/reviews-<name>
+    ReadOnlyPaths=/var/lib/colosseum-keeper/reviews-%i
     InaccessiblePaths=-/var/lib/colosseum-keeper/secrets -/var/lib/colosseum-keeper/shared -/var/lib/colosseum-keeper/instances
 
 The settings: `SIM_INDEX_WINDOW` (1000 blocks), `SIM_INDEX_PAUSE` (1.5 s between two reads while behind),

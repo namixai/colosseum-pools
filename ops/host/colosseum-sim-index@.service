@@ -1,0 +1,44 @@
+# The index of a simulated pool's events for the operator's page (gateway/simindex.py, docs/GATEWAY.md "The index of
+# a simulated pool"), instance %i: it reads the factory's logs into a file of its own and answers GET /v1/simindex/*
+# on 127.0.0.1:8789, which nginx passes on. Its reviews route reads the payout review's folder of the same instance
+# (reviews-%i, read only) and hands out each document cut to what the page decides by (`outward`): no evidence, no
+# draft of a stop. Its settings, /etc/colosseum/sim-index-%i.env: SIM_INDEX_RECORD (deployments/<label>.json),
+# SIM_INDEX_ALLOW_ORIGIN, SIM_INDEX_RPC_URL (a node of its own), and COLOSSEUM_NETWORK=mainnet on mainnet.
+# ops/host/install.sh puts it in place; it is enabled by hand: systemctl enable --now colosseum-sim-index@<name>
+[Unit]
+Description=colosseum-pools simulated pool index %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=true
+WorkingDirectory=/opt/colosseum-pools/current
+EnvironmentFile=/etc/colosseum/sim-index-%i.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SIM_INDEX_DIR=/var/lib/colosseum-sim-index-%i
+Environment=SIM_INDEX_REVIEWS=/var/lib/colosseum-keeper/reviews-%i
+StateDirectory=colosseum-sim-index-%i
+ExecStart=/opt/colosseum-pools/venv/bin/python -m gateway.simindex
+Restart=always
+RestartSec=5
+MemoryMax=512M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# For the reviews route: read the review service's folder, and nothing else of the keepers'. The service writes with
+# UMask 0027, so its group reads; the folder's parent must let the group pass.
+SupplementaryGroups=colosseum-keeper
+ReadOnlyPaths=/var/lib/colosseum-keeper/reviews-%i
+InaccessiblePaths=-/var/lib/colosseum-gw -/var/lib/colosseum-keeper/secrets -/var/lib/colosseum-keeper/shared -/var/lib/colosseum-keeper/instances
+
+[Install]
+WantedBy=multi-user.target
