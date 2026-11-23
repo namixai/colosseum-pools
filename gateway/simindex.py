@@ -277,6 +277,14 @@ class SimIndex:
             last = min(end, start + self.window - 1)
             try:
                 logs = self.rpc.logs(addresses, topics, start, last)
+            except Throttled:
+                # Hyperliquid's public node answers a window it finds too heavy as "rate limited" (23 Nov 2026: 1 000
+                # and 100 blocks both, at a time it answered eth_blockNumber): the next try, after the wait, is narrower.
+                if self.window > 1:
+                    self.window = max(1, self.window // 2)
+                    self._good = 0
+                    log_line(event="window_narrowed", window=self.window, why="throttled")
+                raise
             except WindowRefused:
                 if self.window == 1:
                     raise

@@ -118,9 +118,10 @@ export function readShare({ from, to, read }) {
 }
 
 /**
- * A failed read in words for the page. A public node that refuses logs answers in ways ethers cannot name ("could not
- * coalesce error", a bad or missing response): that is said as what it is, the node not answering this read, with the
- * way on. Anything else is `friendly`'s words.
+ * A failed read in words for the page. A public node that refuses logs answers in ways ethers cannot name: Hyperliquid's
+ * testnet node answers "rate limited" with `"id": null`, which ethers reports as "could not coalesce error" (23 Nov 2026),
+ * and others a bad or missing response. That is said as what it is, the node not answering this read, with the way on.
+ * Anything else is `friendly`'s words.
  */
 export function readFailure(err) {
   const text = `${err?.code ?? ""} ${err?.shortMessage ?? ""} ${err?.message ?? ""}`;

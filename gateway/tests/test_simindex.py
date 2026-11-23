@@ -153,6 +153,25 @@ class Reading(unittest.TestCase):
             index.step()
         self.assertEqual(index.scanned_to, 99)
 
+    def test_a_throttled_window_is_waited_out_and_asked_for_narrower(self):
+        node = Node(history(), head=3000)
+        index = make(node, self.tmp)
+        calls = {"n": 0}
+        logs = node.logs
+
+        def throttled_once(*a):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise Throttled("eth_getLogs: rate limited")
+            return logs(*a)
+
+        node.logs = throttled_once
+        with self.assertRaises(Throttled):
+            index.step()
+        self.assertEqual((index.window, index.scanned_to), (500, 99))
+        read_all(index)
+        self.assertEqual(len(index.pool(POOL)[1]["events"]), 4)
+
     def test_the_lag_leaves_the_newest_blocks_for_the_next_pass(self):
         node = Node(history(), head=3000)
         index = make(node, self.tmp)

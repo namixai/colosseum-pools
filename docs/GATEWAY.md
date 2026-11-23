@@ -717,7 +717,12 @@ holds no key, needs no signer, and runs on mainnet as on testnet.
 `PayoutStopped`, `StopLifted` and `StopFinal`, from the factory's first block to the newest less
 `SIM_INDEX_LAG`, one `eth_getLogs` per window for the factory and every pool it made. A pool made in a
 window is read again from its creation to the window's end, for itself. A window the node refuses as too
-wide is halved, down to one block, and widened again after 50 good reads.
+wide is halved, down to one block, and widened again after 50 good reads; so is one it answers "rate
+limited", after the wait. On 23 Nov 2026 Hyperliquid's public testnet node answered `eth_getLogs` of 100
+and of 1 000 blocks "rate limited" (code -32005, with `"id": null`) while it answered `eth_blockNumber`,
+and one of 50 blocks "execution aborted (timeout = 5s)"; the free plan of the backup node in the
+deployment records (`keeper_nodes.backup`) takes at most 100 blocks a request. That `"id": null` is what
+ethers in the browser reports as "could not coalesce error".
 
 **Where it keeps them.** One JSON file, `sim-index-<chain id>-<factory>.json` under `SIM_INDEX_DIR`, written
 to a file beside it and renamed over it: after each window that found something, and at least every
