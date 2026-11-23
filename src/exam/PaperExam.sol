@@ -519,9 +519,11 @@ contract PaperExam is Initializable {
     }
 
     /// @notice Removes the stop or the take of the position in `asset`. The trader or their agent. With a stop book,
-    ///         one the price has reached is already carried out (`settled`): there is none left to remove; and the
-    ///         removal is a change that waits `fillDelay` blocks as setting one does (`setTrigger`): the one there acts
-    ///         up to then.
+    ///         the removal is a change that waits `fillDelay` blocks as setting one does (`setTrigger`): the one there
+    ///         acts up to then. The call settles first (`settled`): a stop the price has reached is filled there, none
+    ///         is left to remove, and the call reverts (`NoTrigger`), which takes that fill back with it. The fill is
+    ///         not lost: the next settle, anyone's (`StopBook.settle`), carries it out at the price of its touch; a
+    ///         caller that wants it kept sends that settle on its own.
     function clearTrigger(uint32 asset, bool isTake) external settled {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if (_due(asset, isTake).px == 0) revert NoTrigger();
