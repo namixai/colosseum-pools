@@ -521,8 +521,17 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     held at the price 60 blocks or the step is never missed by the reading, a shorter one may be. These
     prices are kept apart from the review's others: no other check sees them. A block it was shown to have
     triggered in (`TriggerSeen`) counts as reached. Two reads at the price with none off it between are one
-    stretch; for a trigger carried out, its last such stretch is the close's own. This is a fact shown to
-    whoever signs: it is in no reason and changes no verdict;
+    stretch; for a trigger carried out, its last such stretch is the close's own. A stop or take reached and
+    not carried out, with a stop book or without, is a reason of the kind `missed-stop`. With a stop book, so is
+    every block of a stop's or take's time nobody is known to have checked, of the kind `stop-unchecked`, in five
+    cases: the book's gaps not read at all; gap blocks whose oracle price was not read (an old gap the node keeps
+    no state for, or past the reads; the keeper's price journal, `--prices`, can give them); the blocks from
+    `lastPokeBlock() + 1` to the latest block while `watched()` is not empty, which no `Gap` has closed yet (the
+    keeper is not checking now) and in which a stop stood; `lastPokeBlock()` or `watched()` not read; and the
+    factory's stop book not read at all, for an account with any stop. Either kind makes the verdict
+    `suspicious` with the draft of a stop of reason 3 naming the transactions that set the stops concerned; a
+    payout waiting for approval in a pool with approvals is held (`hold`: nothing to approve), unless a stop of
+    the pool's own is offered first (reasons 1 and 2). Not checked is never clean;
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
     under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
   - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
@@ -742,54 +751,85 @@ A stop the price touched is carried out only if a `poke()` logged that block, so
 everything else the loop does, and watched:
 
 - **The checks' thread.** `poke()` goes out from a thread of its own (`Poker`), with its own sessions on the node
-  (`--poke-rpc`, COLOSSEUM_POKE_RPC_URL, the stops' node when empty) and a 2-second timeout. It reads the head every
-  `--poke-poll` seconds (0.25), fresh by its block's time, and sends the check before anything else; the only read
-  before it is `watched()` while the book watches nothing, so the first check goes in the very block the first stop
-  is set. An exam holding an entry is reason enough to check. A send the node refused is tried again at the next
-  look, inside the block; the last gas price read stands in for one that cannot be read. Logs, receipts, each
-  holder's `touches`, the settles and the gaps are the other thread's: a node refusing those (429, a quota, a
-  timeout) costs them and never a check.
-- **More than one key.** `--poke-wallet a,b` (COLOSSEUM_POKE_WALLETS) names keys of the checks' own in the key
-  directory, tried in turn before the keeper's key, which is always the last. A check with no block after 2.5 seconds
-  is signed again under its nonce with a quarter more fee and tip (eight times at most, then sent again as it is). A
-  key with six checks waiting leaves the next to the next key; with none left it is an alarm (`book_pokes_queued`).
-  The keeper's own sends are never signed again: it waits for their very hash.
+  (`--poke-rpc`, COLOSSEUM_POKE_RPC_URL, the stops' node when empty) and a 2-second timeout. It looks at the head every
+  `--poke-poll` seconds (0.25) and sends the check first: for each new head, and in any case once a second. A head
+  that went back (the other node, behind), stopped, or whose block looks old (`--stale-s`, 10 s: a node that stopped,
+  or this machine's clock off) is an alarm and a reason to fail over, never a reason to stop checking. The only read
+  before the check is `watched()` while the book watches nothing, so the first check goes in the very block the first
+  stop is set; an exam holding an entry is reason enough to check, and so is a book that cannot be read. A send the
+  node refused is tried again at the next look. The check is priced on the last gas price read or the newest block's
+  base fee, whichever is higher, so a basefee that jumps does not leave it behind. After the check a look spends at
+  most half a second on the rest (the key's count once a head, a landed check's result every 5 s, the book's views,
+  late checks signed again, the price, the money); what is left goes to the next look. Logs, receipts, each holder's
+  `touches`, the settles and the gaps are the other thread's: a node refusing those costs them and never a check.
+- **Keys of the checks' own.** The checks go only from keys named in `--poke-wallet a,b` (COLOSSEUM_POKE_WALLETS),
+  never from the keeper's key: its settles and fills share its nonces, and one of them lost or under a basefee would
+  hold every check behind it. On mainnet a keeper with a stop book and no such key does not start; on testnet it starts,
+  sends no check and raises `book_poke_no_key`. A check with no block after 1.5 seconds is signed again under its
+  nonce with a quarter more fee and tip (eight times at most, more while its fee cap is under twice the price now), at
+  once when its cap is under the newest block's base fee; and the next check goes through the next key as soon as a
+  key's oldest check is that late. A sweep reads no receipt of a nonce the chain has not counted and sends at most two
+  again a look. The keeper's own transactions (settles, fills) are raised in fee the same way, 1.5 seconds late; the
+  keeper waits for any hash of their nonce.
 - **The watch of the checks.** On every new head the thread reads `lastPokeBlock()` and `watched()`. These are
   alarms, raised again every 30 seconds while their cause lasts, with a line when it is over: more than 3 blocks
-  between `lastPokeBlock()` and the head while the book watches an asset (`book_poke_lagging`); no check sent three
-  blocks in a row, or at once for a key without money (`book_poke_failing`); a key's oldest check waiting more than
-  10 seconds (`book_poke_stuck`); a head that cannot be read for 5 seconds (`book_head_unread`); a node whose newest
-  block is older than `--stale-s` (10) seconds (`book_node_stale`, the other node then used; every node old:
-  `book_head_stale`). A key whose money pays fewer hours of checks than `--poke-runway-hours` (72) at the last gas
-  price is an alarm every hour (`book_key_low`, with its runway in blocks and hours). The keeper's loop checks that
-  the checks' thread is there and moving (`book_poker_dead`, `book_poker_stalled`).
+  between `lastPokeBlock()` and the head while the book watches an asset (`book_poke_lagging`); neither view read for
+  10 seconds (`book_views_unread`); no check sent three blocks in a row, or at once for a key without money
+  (`book_poke_failing`); a key's oldest check waiting more than 10 seconds (`book_poke_stuck`); checks reverting
+  (`book_poke_reverted`); a head that cannot be read for 5 seconds (`book_head_unread`); a node whose newest block is
+  older than `--stale-s` seconds (`book_node_stale`, the other node then used, and the first tried again in the
+  background a minute on; every node old: `book_head_stale`). A key whose money pays fewer hours of checks than
+  `--poke-runway-hours` (72) at the last gas price is an alarm every hour (`book_key_low`, with its runway in blocks
+  and hours). The keeper's loop checks that the checks' thread is there and moving (`book_poker_dead`,
+  `book_poker_stalled`). With `--book-watch-address` (COLOSSEUM_BOOK_WATCH_ADDRESS, the key of the book's own watch,
+  below) it reads that key's count every 10 minutes: unmoved for two of the watch's hourly signs of life and 10
+  minutes, it is an alarm every hour (`book_watch_silent`).
+- **An asset with no price.** A check that cannot read an asset's oracle (the read gas too low for the precompile,
+  say) logs a zero and `NoPrice(asset)`: no `Gap`, no lag, and no stop or take of that asset touched in that block.
+  The checks' thread, the keeper's and the watch's, reads the book's `NoPrice` events every 5 blocks: an asset with 3
+  blocks of it in a row is an alarm, again while it lasts (`book_no_price`, with the asset and the count of blocks,
+  pointing at `ops/deploy_sim.py read-gas`), over once a later check logged its price.
 - **A touch not carried out.** A touch standing in `touches` more than 10 blocks after its block is an alarm whatever
   holds it (`book_touch_standing`), and so are an exam's touches unread for 10 blocks (`book_touches_unread`); a settle
   reverted in its block three times in a row is an alarm and waits 30 blocks (`book_settle_reverting`). A check that
-  reverted sends the next ones with 1 950 000 gas for 300 blocks, then the book's read gas again.
-- **A gap** is judged on the book as it stood in it: `watched()` and the entries of every exam that held one at the
-  block before the gap and at its last block (where the node keeps that state), and now. The transaction that wrote
-  the `Gap` may have closed the last position on the asset. `ops/payout_review.py` does not pass the payout of an
-  exam with a stop reached in a gap, gap blocks it could not read, or blocks since `lastPokeBlock()` no `Gap` has
-  closed yet: its verdict is `suspicious`, its action `hold`, with the draft of a stop of reason 3.
+  reverted sends the next ones with a quarter more gas than needed (never the most a small block holds, so that two
+  checks of two senders fit one block), for 300 blocks, with the book's read gas read again.
+- **A gap** is judged on the book as it stood in it: `watched()` and the entries of every exam that held one, or that
+  the keeper knows and has not seen end, at the block before the gap and at its last block (where the node keeps that
+  state), and now. The transaction that wrote the `Gap` may have closed the last position on the asset.
+  `ops/payout_review.py` does not pass such a payout as clean (see "The review of a payout" above).
 - **A restart.** The loop keeps its last block and the gaps still to read back in `book-<deployment>.json` next to
-  the keeper's state (`--book-state`): after a restart it reads the book's events from there, so a `Gap` written while
-  it was down is said and read back. A state that does not read is an alarm (`book_state_unread`).
+  the keeper's state (`--book-state`), written with fsync and locked to one process: after a restart it reads the
+  book's events from there, so a `Gap` written while it was down is said and read back, on the keeper's exams even
+  before its slow pass; an exam of the keeper's with an entry is a holder at once (10 a step), so its touches are
+  settled without waiting for that pass. A state that does not read is an alarm (`book_state_unread`).
+- **Calls to the node.** One checks' thread makes about 8 calls a second on a healthy chain (`CALLS_PER_S_BUDGET`,
+  9, checked by a test): the head each look, the check, the key's count and the book's two views each block, the
+  `NoPrice` events every five blocks, the price every ten. The keeper's loop adds its own (logs, touches, receipts). A public node's limit is far
+  below that: the keeper and its checks need a node of their own, with a backup at another provider.
 
 **The book's own watch**, `ops/book_watch.py`, is the same watch as a process apart: its own node (`--rpc`,
-COLOSSEUM_BOOK_WATCH_RPC_URL, with `--backup-rpc`), no state shared with the keeper, its own key if any, best on
-another machine (unit `colosseum-book-watch@<instance>`, put in place by `install.sh` and enabled by hand, settings in
-`/etc/colosseum/book-watch-<instance>.env`, extra flags in COLOSSEUM_BOOK_WATCH_ARGS):
+COLOSSEUM_BOOK_WATCH_RPC_URL, with `--backup-rpc`), no state shared with the keeper, its own key if any, its own
+user (unit `colosseum-book-watch@<instance>`: `DynamicUser`, its key only as credentials, the keeper's files, settings
+and processes out of its reach; put in place by `install.sh` and enabled by hand, settings in
+`/etc/colosseum/book-watch-<instance>.env`, extra flags in COLOSSEUM_BOOK_WATCH_ARGS). On mainnet it runs on a host of
+its own: that is a requirement.
 
     python -m ops.book_watch --deployment sim1 --rpc <its own node>                    # alarms, sends nothing
     python -m ops.book_watch --deployment sim1 --rpc <its own node> --wallet watcher   # and checks when the keeper is late
 
-It raises `book_poke_lagging` past `--lag-alarm` (3) blocks, and `book_head_unread`/`book_head_stale` when its own
-node fails; its alarms go to its flag file (`--alarm`) and to COLOSSEUM_ALERT_CMD on its own machine, so they do not
-depend on the node that failed. With `--wallet` it sends `poke()` itself while the book is `--takeover` (2) blocks
-behind or more, then every block for `--hold` (600) blocks after the last time it was (`book_poke_taken_over`), with
-the same fee raise and the same alarm on its key's money. On mainnet a watch with a key needs
-`--confirm-mainnet <label>` and mainnet's key directory.
+It raises `book_poke_lagging` past `--lag-alarm` (3) blocks, `book_views_unread` when it cannot read the book, and
+`book_head_unread`/`book_head_stale` when its own node fails; one that cannot start (its node down, its key
+unreadable) raises `book_watch_cannot_start` before it ends, once in five minutes. Its alarms go to its flag file
+(`--alarm`) and to COLOSSEUM_ALERT_CMD on its own machine, so they do not depend on the node that failed. With
+`--wallet` it sends `poke()` itself while the book is `--takeover` (2) blocks behind or more, or cannot be read, then
+every block for `--hold` (600) blocks after the last time it was (`book_poke_taken_over`), and once an hour in any
+case as its sign of life for the keeper's `book_watch_silent`; with the same fee raise, the same alarm on its key's
+money, a quarter more gas after a reverted check, and the book's read gas read every minute. On mainnet a watch with a
+key needs `--confirm-mainnet <label>` and mainnet's key directory.
+
+The alarm channel runs at most two commands at once, queues the rest (200 at most, then drops and says so), and
+tries a command that failed again after 5 and 30 seconds.
 
 **Without a stop book** (the 998 rehearsal's factory), as before:
 

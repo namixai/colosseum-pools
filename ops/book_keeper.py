@@ -12,19 +12,24 @@ unchecked. This loop is what checks them:
   every block      → `poke()` while the book watches any asset (`watched()`) or an exam holds an entry, signed and sent
                      at once with a fixed gas (never an estimate: an estimate is a block late), no wait for its receipt.
                      The checks go out from a thread of their own (`Poker`), on a node of its own when one is given: it
-                     looks at the head every `--poke-poll` seconds, sends the check first and reads nothing before it but
-                     the head (and the book's `watched()` while it watches nothing, so the first check goes in the very
-                     block it is wanted). A send the node refused is tried again at the next look, inside the block; the
-                     last gas price read stands in for one that cannot be read. Nothing else the loop reads (logs,
+                     looks at the head every `--poke-poll` seconds and sends the check first, for each new head and once
+                     a second in any case (a head that went back, stopped or looks old is an alarm, not a reason to stop
+                     checking); it reads nothing before it but the head (and the book's `watched()` while it watches
+                     nothing, so the first check goes in the very block it is wanted). A send the node refused is tried
+                     again at the next look; the check is priced on the last gas price or the newest block's base fee,
+                     whichever is higher. Nothing else the loop reads (logs,
                      receipts, `touches`, the gaps) is in its way: a node refusing those costs them, never a check;
-  a check that     → each check has the keeper's key or keys of its own (`--poke-wallet`), tried in turn; one with no
-  is late            block after `POKE_RESEND_S` is signed again under its nonce with a quarter more fee;
+  a check that     → the checks go only from keys of their own (`--poke-wallet`), tried in turn, never the keeper's (on
+  is late            mainnet the loop does not start without one); one with no block after `POKE_RESEND_S` is signed
+                     again under its nonce with a quarter more fee, and the next check goes through the next key;
   the watch of     → on every new head the thread reads `lastPokeBlock()` and `watched()`: blocks going by unchecked while
   the checks         the book watches an asset are an alarm (`book_poke_lagging`, again every `ALARM_EVERY_S` while they
                      last), and so are a node whose newest block is old (`book_node_stale`, the other node then used; both
                      old: `book_head_stale`), a head that cannot be read, checks that cannot be sent (`book_poke_failing`),
                      checks waiting for a block (`book_poke_stuck`, `book_pokes_queued`) and a key whose money pays fewer
-                     hours of checks than `--poke-runway-hours` (`book_key_low`). `ops/book_watch.py` is the same watch
+                     hours of checks than `--poke-runway-hours` (`book_key_low`), the book unreadable
+                     (`book_views_unread`), an asset logged with no price (`book_no_price`), and the book's own watch
+                     silent (`book_watch_silent`). `ops/book_watch.py` is the same watch
                      as a process of its own, on another machine and node, that checks the blocks itself when this one is
                      late;
   a touch          → `settle(exam)` for an exam whose `touches(exam)` is not empty, and for one with a change of a stop
@@ -43,13 +48,13 @@ unchecked. This loop is what checks them:
                      entries at the block before it and at its last block, and now); a stop or a take they reached is
                      an alarm of its own. `ops/payout_review.py` does not pass such an exam's payout as clean: a stop
                      reached in a gap, gap blocks whose price it could not read, or blocks since `lastPokeBlock()` not
-                     yet closed by a `Gap` make its verdict "suspicious" and its action "hold", with the draft of a
-                     stop of reason 3;
+                     yet closed by a `Gap` make its verdict "suspicious" with the draft of a stop of reason 3, and a
+                     payout waiting for approval is held ("hold");
   its state        → the last block read and the gaps still to read back, in a file of its own (`--book-state`): after a
                      restart the loop reads the book's events from there, so a `Gap` written while it was down is said;
-  the key          → every transaction of the keeper's key goes out through one sender (`stop_filler.Sender`), from this
-                     thread and the checks' thread: its own nonce, a transaction lost by the node sent again, and the
-                     keeper's own sends queued to it;
+  the key          → every transaction of the keeper's key goes out through one sender (`stop_filler.Sender`): its own
+                     nonce, a transaction late by `POKE_RESEND_S` signed again with more fee, and the keeper's own sends
+                     queued to it;
   the nodes        → `--stop-rpc` (the keeper's node when not set) and a backup (`--stop-backup-rpc`, or the keeper's
                      COLOSSEUM_RPC_BACKUP_URL): a call the first refuses, times out on, answers with HTTP 401/403/404 or a
                      limit (-32005, -32007) goes to the second; a node that failed so is asked second for
@@ -62,6 +67,7 @@ book (the 998 rehearsal), on the same code as before.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pathlib
@@ -111,10 +117,35 @@ SETTLE_GAS = 1_500_000
 # How many of a key's pokes may wait for a block at once: past this the key is stuck and its next check goes through
 # another key; with none left it is an alarm (`book_pokes_queued`), never a silence.
 MAX_POKES_IN_FLIGHT = 6
-# Seconds a poke may wait for a block before it is signed again under its nonce with a quarter more fee.
-POKE_RESEND_S = 2.5
+# Seconds a poke may wait for a block (one and a half small blocks) before it is signed again under its nonce with a
+# quarter more fee, and before the next check goes through the next key.
+POKE_RESEND_S = 1.5
+# Seconds between two reads of a landed check's receipt for its result (a revert): the count says it landed.
+POKE_STATUS_EVERY_S = 5.0
 # Seconds a key's oldest poke may wait for a block before it is an alarm (`book_poke_stuck`).
 POKE_STUCK_S = 10.0
+# Seconds between two checks when no new head is seen (a head that went back, stopped, or looks old): a check is cheap,
+# a block left unchecked is a stop not carried out.
+POKE_EVERY_S = 1.0
+# Seconds a look may spend after its check on the rest (receipts, the book's views, the sweep, the price, the money):
+# what is left goes to the next look.
+LOOK_BUDGET_S = 0.5
+# Calls a second one checks' thread makes of its node on a healthy chain (a look every quarter second): the head each
+# look, the check and the key's count each block, the book's views each head, the price every ten blocks. The keeper's
+# loop adds its own (logs, touches, receipts); a public node's limit is about 100 a minute: give the keeper a node of
+# its own (docs/SIM-POOL.md, "The stops").
+CALLS_PER_S_BUDGET = 9.0
+# Blocks between two reads of the book's NoPrice events by a checks' thread, and blocks in a row of NoPrice of one asset
+# before it is an alarm (`book_no_price`): a check that logs a zero price for an asset carries out none of its stops.
+NO_PRICE_EVERY_BLOCKS = 5
+NO_PRICE_ALARM_BLOCKS = 3
+# Seconds with no read of the book's watched() and lastPokeBlock() before it is an alarm.
+VIEWS_BLIND_S = 10.0
+# The book's own watch sends at least once in HEARTBEAT_S; the keeper reads its key's count every WATCH_READ_EVERY_S, and
+# a count unmoved for WATCH_SILENT_S is an alarm.
+HEARTBEAT_S = 3_600.0
+WATCH_READ_EVERY_S = 600.0
+WATCH_SILENT_S = 2 * HEARTBEAT_S + WATCH_READ_EVERY_S
 # Blocks in a row with no check sent before it is an alarm; a key refused for want of money is one at once.
 POKE_FAIL_BLOCKS = 3
 # Blocks between `lastPokeBlock()` and the head, while the book watches an asset, past which it is an alarm.
@@ -148,6 +179,8 @@ GAP_BLOCKS_PER_STEP = 5
 # Blocks an exam whose fill failed (or starved with the most gas) waits before its next settle: the cause is the exam's,
 # and a settle a block would only spend gas.
 FAIL_BACKOFF_BLOCKS = 30
+# The keeper's exams whose entries are read in one step after a start (`BookLoop._seed`).
+SEED_PER_STEP = 10
 # Blocks back the loop reads in any case, as the stops' loop (stop_filler.CATCHUP).
 CATCHUP = sf.CATCHUP
 POKE_DATA = c.encode_call("poke()")
@@ -190,7 +223,12 @@ def book_of(record: dict, factory: str, call=None) -> str | None:
 
 
 class NodeStale(RuntimeError):
-    """A node answers, and its newest block is older than it may be: it has stopped following the chain."""
+    """A node answers, and its newest block is older than it may be: it has stopped following the chain, or this
+    machine's clock is off. `number`: the newest block seen all the same."""
+
+    def __init__(self, message: str, number: int | None = None):
+        super().__init__(message)
+        self.number = number
 
 
 # What in an error says the node failed, not the call: its refusal of the caller (401, 403, 404, 408), a limit, a timeout.
@@ -209,13 +247,19 @@ def failover_worthy(exc: Exception) -> bool:
 NAMES = ("first", "backup")
 
 
+def spawn(fn) -> None:
+    threading.Thread(target=fn, name="node-probe", daemon=True).start()
+
+
 class Nodes:
     """A node and its backup as one: a call the first fails on (busy, a timeout, HTTP 401/403/404, a limit) goes to the
-    second. The node that failed is then asked second for `FAILOVER_BACK_S` seconds, so a dead first node does not cost
-    every call its timeout. An answer, an error in it included (a revert, `nonce too low`), is the answer: it never
-    goes on. `head()` is the newest block of a node whose newest block is fresh (`stale_s`)."""
+    second. The node that failed is then asked second; after `FAILOVER_BACK_S` seconds it is tried again in the
+    background (`spawn`), never in the way of a call, and asked first once more only when it answers a fresh block. An
+    answer, an error in it included (a revert, `nonce too low`), is the answer: it never goes on. `head()` is the newest
+    block of a node whose newest block is fresh (`stale_s`); `basefee` the last block's base fee seen."""
 
-    def __init__(self, first: sf.Node, backup: sf.Node | None = None, *, stale_s: float = STALE_S, standing=None):
+    def __init__(self, first: sf.Node, backup: sf.Node | None = None, *, stale_s: float = STALE_S, standing=None,
+                 spawn=spawn):
         self.first = first
         self.backup = backup
         self.nodes = [first] + ([backup] if backup is not None else [])
@@ -223,12 +267,30 @@ class Nodes:
         self.stale_s = stale_s
         self.prefer = 0
         self.prefer_since = 0.0
+        self.probing = False
+        self.spawn = spawn
+        self.basefee = 0
         self.standing = standing  # a Standing, for a node found stale while the other one serves
 
     def _order(self) -> list[int]:
-        if self.prefer and time.monotonic() - self.prefer_since >= FAILOVER_BACK_S:
-            self.prefer = 0
+        if self.prefer and not self.probing and time.monotonic() - self.prefer_since >= FAILOVER_BACK_S:
+            self.probing = True
+            self.spawn(self._probe)
         return [self.prefer] + [i for i in range(len(self.nodes)) if i != self.prefer]
+
+    def _probe(self) -> None:
+        """The node that failed, tried again: a fresh block, and it is asked first again; anything else, a minute more."""
+        try:
+            _number, age, _fee = block_age(self.nodes[0])
+            if age <= self.stale_s:
+                self.prefer = 0
+                log("book_node_back", node=NAMES[0])
+            else:
+                self.prefer_since = time.monotonic()
+        except Exception:
+            self.prefer_since = time.monotonic()
+        finally:
+            self.probing = False
 
     def _failed(self, i: int) -> None:
         if i == self.prefer and len(self.nodes) > 1:
@@ -248,19 +310,23 @@ class Nodes:
 
     def head(self) -> int:
         """The newest block, from the first node in turn whose newest block is no older than `stale_s` seconds. A node
-        that answers an old block is failed over like one that does not answer, and said (`book_node_stale`)."""
+        that answers an old block is failed over like one that does not answer, and said (`book_node_stale`); every node
+        old raises `NodeStale` carrying the newest block seen."""
         order = self._order()
         stale: list[tuple[str, str]] = []
+        newest: int | None = None
         last: Exception | None = None
         for i in order:
             try:
-                number, age = block_age(self.nodes[i])
+                number, age, fee = block_age(self.nodes[i])
             except Exception as exc:
                 last = exc
                 self._failed(i)
                 continue
+            self.basefee = fee or self.basefee
             if age > self.stale_s:
                 stale.append((NAMES[i], f"block {number}, {int(age)} s old"))
+                newest = number if newest is None else max(newest, number)
                 self._failed(i)
                 continue
             if self.standing is not None:
@@ -270,23 +336,23 @@ class Nodes:
                 self.standing.clear(f"node_stale:{NAMES[i]}", "book_node_fresh_again", node=NAMES[i])
             return number
         if stale:
-            raise NodeStale("every node's newest block is old: " + "; ".join(f"{n} {s}" for n, s in stale))
+            raise NodeStale("every node's newest block is old: " + "; ".join(f"{n} {s}" for n, s in stale), newest)
         raise last if last is not None else RuntimeError("no node")
 
 
-def block_age(node) -> tuple[int, float]:
-    """A node's newest block and how many seconds old it is by this machine's clock."""
+def block_age(node) -> tuple[int, float, int]:
+    """A node's newest block, how many seconds old it is by this machine's clock, and its base fee (0: none said)."""
     b = node.call("eth_getBlockByNumber", ["latest", False])
-    return int(b["number"], 16), time.time() - int(b["timestamp"], 16)
+    return int(b["number"], 16), time.time() - int(b["timestamp"], 16), int(b.get("baseFeePerGas") or "0x0", 16)
 
 
 def fresh_head(node, stale_s: float = STALE_S) -> int:
     """The newest block of `node` (a `Nodes`, or one node), raised `NodeStale` when it is older than `stale_s`."""
     if callable(getattr(node, "head", None)):
         return node.head()
-    number, age = block_age(node)
+    number, age, _fee = block_age(node)
     if age > stale_s:
-        raise NodeStale(f"the node's newest block is {int(age)} s old at block {number}")
+        raise NodeStale(f"the node's newest block is {int(age)} s old at block {number}", number)
     return number
 
 
@@ -320,6 +386,13 @@ class Standing:
         return key in self.at
 
 
+def poke_sender(wallet, node) -> sf.Sender:
+    """A sender for a stop book's key: every transaction raised in fee when late, a lean sweep (`stop_filler.Sender`)."""
+    s = sf.Sender(wallet, node)
+    s.bump_all, s.resend_after, s.lean = True, POKE_RESEND_S, True
+    return s
+
+
 class Lane:
     """One key that sends the book's checks: its sender and the checks it has waiting for a block."""
 
@@ -327,6 +400,9 @@ class Lane:
         self.name = name
         self.sender = sender
         self.in_flight: list[tuple[int, int, float, str]] = []  # (nonce, head it was sent after, time sent, first hash)
+        self.counted: int | None = None  # the chain's count of the key at this look
+        self.status_at = -1e18
+        self.counted_for = 0
         self.balance_at = -1e18
         self.runway: dict | None = None
 
@@ -334,14 +410,19 @@ class Lane:
 class Poker:
     """The book's checks, sent from a thread of their own (see the module's text), and the watch of them.
 
-    `lanes`: the keys that send, tried in turn (none: it watches and sends nothing). `gas(watched)`: the gas of a check.
-    `wants()`: a reason to check besides what `watched()` said (an exam holding an entry). `takeover`: with 0 it checks
-    every block; with N it checks only while the book is N blocks behind or more, and then every block for `hold`
-    blocks after the last time it was (the second sender, `ops/book_watch.py`). `on_revert(head)`: a check reverted."""
+    `lanes`: the keys that send, tried in turn (none: it watches and sends nothing); never the key of the keeper's other
+    transactions. `gas(watched)`: the gas of a check. `wants()`: a reason to check besides what `watched()` said (an exam
+    holding an entry). A check goes out for each new head and in any case every `POKE_EVERY_S` seconds: a head that went
+    back (another node), stopped or looks old (this machine's clock) is an alarm, never a reason to stop checking.
+    `takeover`: with 0 it checks every block; with N it checks only while the book is N blocks behind or more, then
+    every block for `hold` blocks after the last time it was (the second sender, `ops/book_watch.py`), and once every
+    `HEARTBEAT_S` in any case, so that the keeper sees it is alive (`watch_address`). `on_revert(head)`: a check
+    reverted."""
 
     def __init__(self, book: str, nodes, lanes, alarm, *, gas=None, wants=None, takeover: int = 0,
                  hold: int = 600, lag_alarm: int = LAG_ALARM_BLOCKS, tip_wei: int = 0,
-                 runway_hours: float = RUNWAY_HOURS, on_revert=None, role: str = "keeper"):
+                 runway_hours: float = RUNWAY_HOURS, on_revert=None, role: str = "keeper",
+                 watch_address: str | None = None):
         self.book = to_checksum_address(book)
         self.nodes = nodes
         self.lanes = list(lanes)
@@ -358,12 +439,20 @@ class Poker:
         self.runway_hours = runway_hours
         self.on_revert = on_revert
         self.role = role
+        self.watch_address = to_checksum_address(watch_address) if watch_address else None
+        self.watch_nonce: int | None = None
+        self.watch_seen_at = time.monotonic()
+        self.watch_read_at = -1e18
+        self.no_price_to = 0  # the last block whose NoPrice events were read
+        self.no_price_runs: dict[int, tuple[int, int]] = {}  # asset -> (first, last) block of its run of NoPrice
         self.threaded = False
         self.head = 0
         self.poked_for = 0
+        self.sent_at = -1e18
         self.watched_n = 0
         self.last_poke: int | None = None
         self.read_for = 0
+        self.views_ok_at = time.monotonic()
         self.taken_until = 0
         self.price = 0
         self.price_at = -10**9
@@ -372,43 +461,64 @@ class Poker:
         self.blind_since: float | None = None
         self.beat = time.monotonic()
         self.quiet_until: dict[str, float] = {}
+        for lane in self.lanes:
+            if lane.sender.price_hint is None:
+                lane.sender.price_hint = self.price_now
+
+    def price_now(self) -> int:
+        """The gas price as last read, or the newest block's base fee when that is higher (a basefee that jumped prices
+        the next check over it at once, not ten blocks on), or that alone when no price was ever read."""
+        return max(self.price, int(getattr(self.nodes, "basefee", 0) or 0))
 
     # ── a look ───────────────────────────────────────────────────────────────────────
 
     def tick(self, head: int | None = None) -> bool:
-        """One look: the head (fresh), the check of the next block sent if one is due, then the rest, each on its own.
-        Whether a check went out."""
-        self.beat = time.monotonic()
+        """One look: the head (an old one is an alarm and still used), the check sent if one is due, then the rest, each
+        on its own and within `LOOK_BUDGET_S`. Whether a check went out."""
+        start = time.monotonic()
+        self.beat = start
         if head is None:
             try:
                 head = fresh_head(self.nodes)
+                self._sees(head)
+            except NodeStale as exc:
+                self._blind(exc)
+                head = exc.number
             except Exception as exc:
                 self._blind(exc)
-                return False
-        self._sees(head)
-        sent = False
-        if head > self.poked_for:
-            if self.takeover or (self.watched_n == 0 and not self.wants()):
-                # Nothing known to watch: the book read first, so the first check goes in the block it is wanted. The
-                # second sender reads `lastPokeBlock` first: it checks only behind the first.
-                self._guard(self._liveness, head)
-            if self._due(head):
-                sent = self._send(head)
-        for step in (self._landed, self._liveness, self._sweep, self._price_now, self._balance):
-            self._guard(step, head)
+        else:
+            self._sees(head)
+        if head is not None:
+            self.head = max(self.head, head)
+        sent = self._due(head, start) and self._send(head if head is not None else self.head)
+        for step in (self._landed, self._liveness, self._sweep, self._no_price, self._price_now, self._balance,
+                     self._watch_alive):
+            if step is not self._landed and time.monotonic() - start > LOOK_BUDGET_S:
+                break  # the next look goes on; the check is never late for these
+            self._guard(step, head if head is not None else self.head)
         return sent
 
-    def _due(self, head: int) -> bool:
-        if not (self.watched_n or self.wants()):
+    def _due(self, head: int | None, now: float) -> bool:
+        if head is not None and self.read_for < head and (self.takeover or not (self.watched_n or self.wants())):
+            # Nothing known to watch: the book read first, so the first check goes in the block it is wanted. The second
+            # sender reads `lastPokeBlock` first: it checks only behind the first.
+            self._guard(self._liveness, head)
+        blind = now - self.views_ok_at >= VIEWS_BLIND_S  # the book cannot be read: checked all the same
+        if self.takeover and self.lanes and now - self.sent_at >= HEARTBEAT_S:
+            return True  # the watch's sign of life
+        if not (self.watched_n or self.wants() or blind):
             return False
-        if not self.takeover:
-            return True
-        behind = self.last_poke is None or head - self.last_poke >= self.takeover
+        if self.takeover and not self._behind(head if head is not None else self.head, blind):
+            return False
+        return (head is not None and head > self.poked_for) or now - self.sent_at >= POKE_EVERY_S
+
+    def _behind(self, head: int, blind: bool) -> bool:
+        behind = blind or self.last_poke is None or head - self.last_poke >= self.takeover
         if behind:
             if head > self.taken_until:
                 self.alarm("book_poke_taken_over", head=head, last_poke=self.last_poke, role=self.role,
-                           why=f"the book is {self.takeover} blocks or more behind: this watch checks every block for "
-                               f"{self.hold} blocks")
+                           why=f"the book is {self.takeover} blocks or more behind, or cannot be read: this watch checks "
+                               f"every block for {self.hold} blocks")
             self.taken_until = head + self.hold
         return head <= self.taken_until
 
@@ -429,7 +539,6 @@ class Poker:
             log("book_head_seen_again", head=head, blind_for=int(time.monotonic() - self.blind_since))
             self.blind_since = None
         self.standing.clear("blind", "book_head_fresh_again", head=head)
-        self.head = max(self.head, head)
 
     def _blind(self, exc: Exception) -> None:
         now = time.monotonic()
@@ -440,20 +549,29 @@ class Poker:
         if stale or now - self.blind_since >= BLIND_S:
             self.standing.raise_("blind", "book_head_stale" if stale else "book_head_unread",
                                  seconds=int(now - self.blind_since), error=str(exc)[:160], role=self.role,
-                                 why="no fresh block is seen: no check goes out and the book's lag is not known")
+                                 why="no fresh block is seen (a node stopped, or this machine's clock is off): checks "
+                                     "still go out every second, the book's lag may not be known")
 
     # ── the check ────────────────────────────────────────────────────────────────────
 
+    def _late(self, lane: Lane, now: float) -> bool:
+        return bool(lane.in_flight) and now - lane.in_flight[0][2] >= POKE_RESEND_S
+
     def _send(self, head: int) -> bool:
         errors: list[str] = []
-        try:
-            price = self.price or self._read_price(head)
-        except Exception as exc:
-            price = 0
-            errors.append(f"gas price: {str(exc)[:120]}")
+        now = time.monotonic()
+        price = self.price_now()
+        if not price:
+            try:
+                price = self._read_price(head)
+            except Exception as exc:
+                errors.append(f"gas price: {str(exc)[:120]}")
         if price:
             gas = self.gas(self.watched_n)
-            for lane in self.lanes:
+            # A key whose oldest check waits longer than POKE_RESEND_S leaves the check to the next key at once; with
+            # every key late, the one with room goes all the same.
+            order = [l for l in self.lanes if not self._late(l, now)] + [l for l in self.lanes if self._late(l, now)]
+            for lane in order:
                 if len(lane.in_flight) >= MAX_POKES_IN_FLIGHT:
                     errors.append(f"{lane.name}: {len(lane.in_flight)} checks wait for a block")
                     continue
@@ -463,8 +581,9 @@ class Poker:
                 except Exception as exc:
                     errors.append(f"{lane.name}: {str(exc)[:160]}")
                     continue
-                lane.in_flight.append((nonce, head, time.monotonic(), tx))
-                self.poked_for = head
+                lane.in_flight.append((nonce, head, now, tx))
+                self.poked_for = max(self.poked_for, head)
+                self.sent_at = now
                 if self.fail_from is not None:
                     log("book_poke_works_again", head=head, failed_from=self.fail_from, lane=lane.name)
                     self.fail_from = None
@@ -489,61 +608,60 @@ class Poker:
         return self.price
 
     def _price_now(self, head: int) -> None:
-        """The gas price, read again every 10 blocks after the check; a failed read keeps the last one."""
+        """The gas price, read again every 10 blocks after the check; a failed read keeps the last one (or the block's
+        base fee)."""
         if head - self.price_at >= 10:
             try:
                 self._read_price(head)
             except Exception as exc:
                 self.price_at = head  # tried again ten blocks on; the last price stands meanwhile
-                self._say("book_gas_price_unread", error=str(exc)[:120], kept=self.price)
+                self._say("book_gas_price_unread", error=str(exc)[:120], kept=self.price_now())
 
     # ── after the check ──────────────────────────────────────────────────────────────
 
     def _landed(self, head: int) -> None:
-        """Each lane's checks in a block let go: by their receipt, or, when receipts cannot be read, by the chain's count
-        of the key past their nonce. A reverted one is an alarm. A check waiting long is one too."""
+        """Each lane's checks in a block let go by the chain's count of the key, one call a lane; the newest one let go is
+        read for its result. A reverted one is an alarm. A check waiting long is one too."""
+        now = time.monotonic()
         for lane in self.lanes:
-            if not lane.in_flight:
+            lane.counted = None
+            if not lane.in_flight or lane.counted_for >= head:
+                continue  # once a head
+            lane.counted_for = head
+            try:
+                lane.counted = lane.sender.count("latest")
+            except Exception as exc:
+                self._say("book_poke_count_unread", error=str(exc)[:120])
                 continue
-            count: int | None = None
-            left = []
-            for nonce, at, sent_at, tx in lane.in_flight:
-                kept = bool(lane.sender.hashes(nonce))  # not kept: confirmed by another thread's sweep, or let go
-                try:
-                    r = lane.sender.receipt(nonce, [tx])
-                except Exception as exc:
-                    self._say("book_poke_receipt_unread", error=str(exc)[:120])
-                    if count is None:
-                        try:
-                            count = lane.sender.count("latest")
-                        except Exception:
-                            count = -1
-                    if 0 <= count and nonce < count:
-                        lane.sender.confirm(nonce)  # in a block; its receipt is not read
-                    else:
-                        left.append((nonce, at, sent_at, tx))
-                    continue
-                if r is None:
-                    if lane.sender.is_gone(nonce):
-                        log("book_poke_lost", lane=lane.name, nonce=nonce, seen=at)
-                    elif kept:
-                        left.append((nonce, at, sent_at, tx))
-                    continue
-                lane.sender.confirm(nonce)
-                if int(r["status"], 16) != 1:
-                    self.alarm("book_poke_reverted", lane=lane.name, tx=r.get("transactionHash"), seen=at,
-                               block=int(r["blockNumber"], 16), role=self.role,
-                               then=f"the next checks go with {MAX_TX_GAS} for {FLOOR_BLOCKS} blocks")
+            done = [f for f in lane.in_flight if f[0] < lane.counted]
+            left = [f for f in lane.in_flight if f[0] >= lane.counted and not lane.sender.is_gone(f[0])]
+            if done:
+                nonce, at, _sent, tx = done[-1]
+                r = None
+                if now - lane.status_at >= POKE_STATUS_EVERY_S or self.standing.on("reverted"):
+                    lane.status_at = now
+                    try:
+                        r = lane.sender.receipt(nonce, [tx])
+                    except Exception as exc:
+                        self._say("book_poke_receipt_unread", error=str(exc)[:120])
+                for f in done:
+                    lane.sender.confirm(f[0])
+                if r and int(r["status"], 16) != 1:
+                    self.standing.raise_("reverted", "book_poke_reverted", lane=lane.name, tx=r.get("transactionHash"),
+                                         seen=at, block=int(r["blockNumber"], 16), role=self.role,
+                                         then="the next checks go with a quarter more gas, the book's read gas read again")
                     if self.on_revert is not None:
                         self.on_revert(head)
-                else:
+                elif r:
                     self.gas_used = int(r.get("gasUsed", "0x0"), 16) or self.gas_used
+                    self.standing.clear("reverted", "book_poke_lands_again", lane=lane.name)
             lane.in_flight = left
             key = f"stuck:{lane.name}"
-            if left and time.monotonic() - left[0][2] >= POKE_STUCK_S:
+            if left and now - left[0][2] >= POKE_STUCK_S:
                 self.standing.raise_(key, "book_poke_stuck", lane=lane.name, nonce=left[0][0], seen=left[0][1],
-                                     waiting=len(left), seconds=int(time.monotonic() - left[0][2]), role=self.role,
-                                     why="the key's check is not in a block: it is signed again with more fee")
+                                     waiting=len(left), seconds=int(now - left[0][2]), role=self.role,
+                                     why="the key's check is not in a block: it is signed again with more fee, and the "
+                                         "next checks go through the next key")
             else:
                 self.standing.clear(key, "book_poke_unstuck", lane=lane.name)
 
@@ -553,23 +671,76 @@ class Poker:
 
     def _liveness(self, head: int) -> None:
         """Once a head: `watched()` and `lastPokeBlock()`. Blocks going by unchecked while the book watches an asset are
-        an alarm, again every `ALARM_EVERY_S` while they last."""
+        an alarm, again every `ALARM_EVERY_S` while they last; so is no read of either for `VIEWS_BLIND_S` seconds."""
         if self.read_for >= head:
             return
-        self.watched_n = len(self._view("watched()", ["uint32[]"])[0])
-        self.last_poke = int(self._view("lastPokeBlock()", ["uint64"])[0])
-        self.read_for = head
-        lag = head - self.last_poke
+        try:
+            watched = len(self._view("watched()", ["uint32[]"])[0])
+            last = int(self._view("lastPokeBlock()", ["uint64"])[0])
+        except Exception as exc:
+            blind_for = time.monotonic() - self.views_ok_at
+            if blind_for >= VIEWS_BLIND_S:
+                if self.takeover:
+                    self.last_poke = None  # not known: the watch takes it as behind
+                self.standing.raise_("views", "book_views_unread", seconds=int(blind_for), error=str(exc)[:160],
+                                     role=self.role,
+                                     why="the book's watched() and lastPokeBlock() cannot be read: its lag is not known; "
+                                         "checks go out all the same")
+            raise
+        self.views_ok_at = time.monotonic()
+        self.standing.clear("views", "book_views_read_again", head=head)
+        self.watched_n, self.last_poke, self.read_for = watched, last, head
+        lag = head - last
         if self.watched_n and lag > self.lag_alarm:
-            self.standing.raise_("lag", "book_poke_lagging", head=head, last_poke=self.last_poke, lag=lag,
+            self.standing.raise_("lag", "book_poke_lagging", head=head, last_poke=last, lag=lag,
                                  watched=self.watched_n, role=self.role,
                                  why="blocks go by and the book is not checked: a stop reached in them is not carried out")
         else:
-            self.standing.clear("lag", "book_poke_caught_up", head=head, last_poke=self.last_poke)
+            self.standing.clear("lag", "book_poke_caught_up", head=head, last_poke=last)
+
+    def _no_price(self, head: int) -> None:
+        """The book's `NoPrice` events every `NO_PRICE_EVERY_BLOCKS` blocks: a check that could not read an asset's oracle
+        logs a zero, and no stop or take of that asset is touched in that block. That is no `Gap`, the checks go on and
+        the lag is nil: so an asset with `NO_PRICE_ALARM_BLOCKS` blocks of it in a row is an alarm of its own, again while
+        it lasts (the read gas too low for the precompile, most likely: `ops/deploy_sim.py read-gas`)."""
+        if head - self.no_price_to < NO_PRICE_EVERY_BLOCKS and self.no_price_to:
+            return
+        lo = self.no_price_to + 1 if self.no_price_to else max(1, head - NO_PRICE_EVERY_BLOCKS + 1)
+        logs = self.nodes.call("eth_getLogs", [{"address": [self.book], "topics": [[NO_PRICE]], "fromBlock": hex(lo),
+                                                "toBlock": hex(head)}])
+        self.no_price_to = head
+        seen: dict[int, list[int]] = {}
+        for l in logs:
+            seen.setdefault(int(l["topics"][1], 16), []).append(int(l["blockNumber"], 16))
+        for asset in list(self.no_price_runs) + [a for a in seen if a not in self.no_price_runs]:
+            blocks = sorted(set(seen.get(asset, [])))
+            first, last = self.no_price_runs.get(asset, (None, None))
+            for b in blocks:
+                first, last = (first, b) if last is not None and b <= last + 1 else (b, b)
+            # A run ends with a later check that logged a price: `lastPokeBlock()` past its last NoPrice.
+            if last is None or (self.last_poke is not None and self.last_poke > last):
+                if asset in self.no_price_runs:
+                    del self.no_price_runs[asset]
+                    self.standing.clear(f"no_price:{asset}", "book_price_read_again", asset=asset, head=head)
+                continue
+            self.no_price_runs[asset] = (first, last)
+            if last - first + 1 >= NO_PRICE_ALARM_BLOCKS:
+                self.standing.raise_(f"no_price:{asset}", "book_no_price", asset=asset, blocks=last - first + 1,
+                                     first=first, last=last, role=self.role,
+                                     why="the book's check logs no price for this asset: its stops and takes are not "
+                                         "touched in these blocks; check the book's read gas (ops/deploy_sim.py read-gas)")
 
     def _sweep(self, head: int) -> None:
+        """Each lane's late checks signed again; the oldest at once when its fee cap is under the newest block's base
+        fee (it cannot land, and every later check of the key waits behind it)."""
+        basefee = int(getattr(self.nodes, "basefee", 0) or 0)
         for lane in self.lanes:
-            lane.sender.sweep()
+            if basefee and lane.in_flight:
+                with lane.sender.lock:
+                    e = lane.sender.ledger.get(lane.in_flight[0][0])
+                    if e is not None and e.get("tx") and int(e["tx"]["maxFeePerGas"]) < basefee:
+                        e["at"] = -1e18
+            lane.sender.sweep(counted=lane.counted)
 
     def _balance(self, head: int) -> None:
         """Each key's money every `BALANCE_EVERY_S`, and how many blocks and hours of checks it pays at the last price."""
@@ -579,7 +750,7 @@ class Poker:
                 continue
             lane.balance_at = now
             balance = int(self.nodes.call("eth_getBalance", [lane.sender.address, "latest"]), 16)
-            per = max(self.gas_used or self.gas(self.watched_n), 1) * max(self.price, 1)
+            per = max(self.gas_used or self.gas(self.watched_n), 1) * max(self.price_now(), 1)
             blocks = balance // per
             hours = round(blocks * BLOCK_S / 3600, 1)
             lane.runway = {"balance_wei": balance, "blocks": blocks, "hours": hours}
@@ -590,6 +761,25 @@ class Poker:
                                      why=f"the key pays fewer than {self.runway_hours:g} hours of checks: add money")
             else:
                 self.standing.clear(key, "book_key_funded", lane=lane.name, **lane.runway)
+
+    def _watch_alive(self, head: int) -> None:
+        """The book's own watch, when one is named (`watch_address`): its key sends at least once every `HEARTBEAT_S`, so
+        a count of its key that has not moved for `WATCH_SILENT_S` is an alarm (`book_watch_silent`)."""
+        if self.watch_address is None:
+            return
+        now = time.monotonic()
+        if now - self.watch_read_at < WATCH_READ_EVERY_S:
+            return
+        self.watch_read_at = now
+        n = int(self.nodes.call("eth_getTransactionCount", [self.watch_address, "latest"]), 16)
+        if n != self.watch_nonce:
+            if self.watch_nonce is not None:
+                self.standing.clear("watch_silent", "book_watch_alive_again", address=self.watch_address)
+            self.watch_nonce, self.watch_seen_at = n, now
+        elif now - self.watch_seen_at >= WATCH_SILENT_S:
+            self.standing.raise_("watch_silent", "book_watch_silent", every=LOW_ALARM_EVERY_S,
+                                 address=self.watch_address, seconds=int(now - self.watch_seen_at),
+                                 why="the book's own watch has sent nothing for two of its heartbeats: it may be down")
 
     # ── running ──────────────────────────────────────────────────────────────────────
 
@@ -622,7 +812,7 @@ class BookLoop(sf.StopLoop):
 
     def __init__(self, keeper, node, book: str, *, reader=None, settle_gas: int = SETTLE_GAS, poke_node=None,
                  lanes: list[Lane] | None = None, state_path: pathlib.Path | None = None,
-                 runway_hours: float = RUNWAY_HOURS, **kw):
+                 runway_hours: float = RUNWAY_HOURS, watch_address: str | None = None, **kw):
         super().__init__(keeper, node, **kw)
         self.book = to_checksum_address(book)
         self.reader = reader or node  # the keeper's thread reads through its own
@@ -648,21 +838,32 @@ class BookLoop(sf.StopLoop):
         self.failed_said: set[str] = set()  # exams whose failed fill was raised, until one of theirs fills
         self.stuck_said: int | None = None
         self.standing = Standing(self.alarm)
-        if lanes is None:
-            lanes = [Lane("keeper", self.sender)] if self.sender is not None and self.wallet is not None else []
-        self.poker = Poker(self.book, poke_node or node, lanes, self.alarm, gas=self._poke_gas,
+        # The checks go only from keys of their own: the keeper's key carries its settles and fills, and one of those
+        # lost or under a basefee would hold every check behind it in the same nonces.
+        self.poker = Poker(self.book, poke_node or node, lanes or [], self.alarm, gas=self._poke_gas,
                            wants=lambda: bool(self.holders), tip_wei=self.tip, runway_hours=runway_hours,
-                           on_revert=self._poke_reverted)
+                           on_revert=self._poke_reverted, watch_address=watch_address)
         self.poker_thread: threading.Thread | None = None
+        self.probed: set[str] = set()  # the keeper's exams whose entries were read once since the start (`_seed`)
         self.state_path = state_path
         self.saved: dict | None = None
+        self.state_lock = None
         self._load()
 
     # ── its state on disk ────────────────────────────────────────────────────────────
 
     def _load(self) -> None:
         """The last block read and the gaps still to read back, as the loop left them."""
-        if self.state_path is None or not self.state_path.exists():
+        if self.state_path is None:
+            return
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.state_lock = open(self.state_path.with_name(self.state_path.name + ".lock"), "a")
+        try:
+            fcntl.flock(self.state_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.state_lock.close()
+            raise SystemExit(f"{self.state_path} is kept by another process: give this one its own --book-state") from None
+        if not self.state_path.exists():
             return
         try:
             saved = json.loads(self.state_path.read_text())
@@ -679,6 +880,12 @@ class BookLoop(sf.StopLoop):
             return
         log("book_state_loaded", block=self.block, gap_jobs=len(self.gap_jobs))
 
+    def close(self) -> None:
+        """Lets go of the state's lock (a process that ends lets go of it by itself)."""
+        if self.state_lock is not None:
+            self.state_lock.close()
+            self.state_lock = None
+
     def _save(self) -> None:
         if self.state_path is None:
             return
@@ -689,8 +896,16 @@ class BookLoop(sf.StopLoop):
         tmp = self.state_path.with_name(self.state_path.name + ".tmp")
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(state))
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(state))
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp, self.state_path)
+            dirfd = os.open(self.state_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dirfd)
+            finally:
+                os.close(dirfd)
             self.saved = state
         except OSError as exc:
             self._say("book_state_unwritten", error=str(exc)[:200])
@@ -704,9 +919,11 @@ class BookLoop(sf.StopLoop):
         return max(self.poke_floor, poke_gas(max(watched, 1), self.precompile_gas))
 
     def _poke_reverted(self, head: int) -> None:
-        """A check reverted: the next go with the most a small block holds, for `FLOOR_BLOCKS` blocks, and the book's read
-        gas is read again."""
-        self.poke_floor = MAX_TX_GAS
+        """A check reverted: the next go with a quarter more gas than the one before (never the most a small block holds
+        at once: two checks of two senders must fit one small block), for `FLOOR_BLOCKS` blocks, and the book's read gas
+        is read again."""
+        needed = poke_gas(max(self.poker.watched_n, 1), self.precompile_gas)
+        self.poke_floor = min(MAX_TX_GAS, max(self.poke_floor, needed) * 5 // 4)
         self.poke_floor_until = head + FLOOR_BLOCKS
         try:
             self.precompile_gas = precompile_gas_of(self.poker.nodes, self.book)
@@ -758,6 +975,32 @@ class BookLoop(sf.StopLoop):
             if self.event_at.get(key, 0) <= at:
                 self.changes[key] = at_block
 
+    def _live_exams(self) -> set[str]:
+        """The keeper's exams not known to have ended: after a restart `holders` is empty until the keeper's slow pass,
+        and a gap of that time is judged on these."""
+        try:
+            accounts = list(self.keeper.accounts)
+        except Exception:
+            return set()
+        done = set(self.keeper.done)
+        return {to_checksum_address(a) for a in accounts if a not in done and a not in self.ended}
+
+    def _seed(self) -> None:
+        """The keeper's exams whose entries were not read since the start, `SEED_PER_STEP` a step: one with an entry is
+        a holder at once, so its touches are settled without waiting for the keeper's slow pass."""
+        for exam in sorted(self._live_exams() - self.probed - self.holders)[:SEED_PER_STEP]:
+            try:
+                n = int(self._call(self.book, "entries(address)", ["address"], [exam], ["uint256"])[0])
+            except c.NodeBusy:
+                raise
+            except Exception as exc:
+                self._say("book_entries_unread", exam=exam, error=str(exc)[:120])
+                continue
+            self.probed.add(exam)
+            if n:
+                self.holders.add(exam)
+                self.ever_held.add(exam)
+
     def _exam_over(self, exam: str) -> None:
         self.ended.add(exam)
         self.holders.discard(exam)
@@ -798,6 +1041,7 @@ class BookLoop(sf.StopLoop):
         for exam in set(self.keeper.done) & self.holders:
             self._exam_over(exam)
         self._read_watched(head)
+        self._seed()
         for l in self._book_logs(lo, head):
             self._book_event(l, head)
         if accounts or pools:
@@ -955,7 +1199,7 @@ class BookLoop(sf.StopLoop):
                     raise
                 unread.append(f"watched at {int(tag, 16)}: {str(exc)[:80]}")
         entries: dict[tuple[str, int, bool], list[tuple]] = {}
-        for exam in sorted(self.holders | self.ever_held):
+        for exam in sorted(self.holders | self.ever_held | self._live_exams()):
             for tag in tags:
                 try:
                     if not int(self._call(self.book, "entries(address)", ["address"], [exam], ["uint256"], tag)[0]):
@@ -1116,7 +1360,8 @@ class BookLoop(sf.StopLoop):
                 self._say(f"book_settle_refused:{exam}", exam=exam, error=str(exc)[:160], why=why)
             return False
         try:
-            tx, nonce = self.sender.send(self.book, data, gas, self._gas_price(head), self.tip)
+            tx, nonce = self.sender.send(self.book, data, gas, self._gas_price(head), self.tip, bump=True,
+                                         resend_after=POKE_RESEND_S)
         except Exception as exc:
             log("book_settle_failed", exam=exam, error=str(exc)[:200], then="sent again after the next block")
             return False
@@ -1272,20 +1517,30 @@ def build(args, keeper, state, book: str, wallet=None, prefix: str = "") -> Book
         pathlib.Path(book_state) if book_state else None)
     if args.stop_tip_gwei < 0:
         raise SystemExit("--stop-tip-gwei must not be negative")
-    # The keeper's key sends through the checks' node too: a check sent on it never waits out the keeper's timeout.
-    sender = sf.Sender(wallet, poke_node) if wallet is not None else None
+    # The keeper's key: its settles and the keeper's fills, raised in fee when late as the checks are. The checks go
+    # only from keys of their own (`--poke-wallet`): never the keeper's, whose other transactions would hold them.
+    sender = poke_sender(wallet, node) if wallet is not None else None
     lanes = []
+    names = [n.strip() for n in (getattr(args, "poke_wallet", "") or "").split(",") if n.strip()]
     if wallet is not None:
-        for name in [n.strip() for n in (getattr(args, "poke_wallet", "") or "").split(",") if n.strip()]:
+        for name in names:
             key = c.account(name)
             if to_checksum_address(key.address) == to_checksum_address(wallet.address):
-                continue  # the keeper's own key is the last lane
-            lanes.append(Lane(name, sf.Sender(key, poke_node)))
-        lanes.append(Lane("keeper", sender))
+                raise SystemExit(f"--poke-wallet {name} is the keeper's own key: the checks need keys of their own")
+            lanes.append(Lane(name, poke_sender(key, poke_node)))
+        if not lanes:
+            if c.NETWORK.name == "mainnet":
+                raise SystemExit("refusing to run on mainnet with a stop book and no key of the checks' own: name one "
+                                 "or more in --poke-wallet (COLOSSEUM_POKE_WALLETS)")
+            log("book_poke_no_key", alarm="WARNING",
+                why="no --poke-wallet: this keeper sends no check; the book's blocks are left to anyone else's poke")
     loop = BookLoop(keeper, node, book, reader=reader, wallet=wallet, sender=sender, poke_node=poke_node, lanes=lanes,
                     state_path=state_path, runway_hours=float(getattr(args, "poke_runway_hours", RUNWAY_HOURS)),
+                    watch_address=getattr(args, "book_watch_address", "") or None,
                     tip_wei=int(round(args.stop_tip_gwei * sf.GWEI)),
                     journal=sf.PriceJournal(journal_path) if journal_path else None, alarm=sf.Alarm(flag))
+    if wallet is not None and not lanes:
+        loop.alarm("book_poke_no_key", why="no key of the checks' own (--poke-wallet): this keeper sends no check")
     loop.poke_poll = float(getattr(args, "poke_poll", 0.25) or 0.25)
     loop.precompile_gas = precompile_gas_of(node, book)
     return loop

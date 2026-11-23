@@ -23,6 +23,7 @@ BOOK = to_checksum_address("0x" + "b0" * 20)
 EXAM = to_checksum_address("0x" + "11" * 20)
 POOL = to_checksum_address("0x" + "55" * 20)
 KEY = Account.from_key("0x" + "42" * 32)  # made up here; no key directory is read
+POKER = Account.from_key("0x" + "45" * 32)  # the checks' own key, made up here
 BTC = 3
 
 
@@ -66,6 +67,19 @@ class Node:
         self.time: float | None = None  # the newest block's time; now when not set
         self.balance = 10 ** 21
 
+    _senders: dict = {}
+
+    @classmethod
+    def sender_of(cls, raw: str) -> str:
+        if raw not in cls._senders:
+            cls._senders[raw] = Account.recover_transaction(raw)
+        return cls._senders[raw]
+
+    @staticmethod
+    def nonce_of(raw: str) -> int:
+        from eth_account.typed_transactions import TypedTransaction
+        return TypedTransaction.from_bytes(HexBytes(raw)).as_dict()["nonce"]
+
     @staticmethod
     def decoded_one(raw: str) -> tuple[str, int, str]:
         from eth_account.typed_transactions import TypedTransaction
@@ -101,7 +115,18 @@ class Node:
         if method == "eth_gasPrice":
             return hex(100_000_000)
         if method == "eth_getTransactionCount":
-            return hex(7)
+            if params[1] != "latest":
+                return hex(7)
+            # Past every nonce of the key's transactions that landed: a receipt, or a check while checks land.
+            addr = to_checksum_address(params[0])
+            landed = 0
+            for raw in self.raw:
+                h = "0x" + keccak(hexstr=raw).hex()
+                if self.sender_of(raw) != addr:
+                    continue
+                if h in self.receipts or (self.pokes_land and self.decoded_one(raw)[2] == sel("poke()")):
+                    landed = max(landed, self.nonce_of(raw) + 1 - 7)
+            return hex(7 + landed)
         if method == "eth_getLogs":
             q = params[0]
             lo, hi = int(q["fromBlock"], 16), int(q["toBlock"], 16)
@@ -173,7 +198,8 @@ class Base(unittest.TestCase):
         alarm = mock.Mock(side_effect=lambda e, **f: self.alarms.append((e, f)))
         alarm.flag = None
         return bk.BookLoop(Keeper(), self.node, BOOK, wallet=wallet,
-                           sender=sf.Sender(wallet, self.node) if wallet else None, alarm=alarm)
+                           sender=sf.Sender(wallet, self.node) if wallet else None, alarm=alarm,
+                           lanes=[bk.Lane("poke", sf.Sender(POKER, self.node))] if wallet else [])
 
     def run_to(self, loop, *heads):
         out = []
@@ -267,7 +293,7 @@ class TheCheck(Base):
         self.node.receipts[tx] = {"status": "0x0", "blockNumber": hex(101)}
         self.run_to(loop, 101, 102)
         self.assertTrue(self.alarm_of("book_poke_reverted"))
-        self.assertEqual(self.node.decoded()[-1][1], bk.MAX_TX_GAS)
+        self.assertEqual(self.node.decoded()[-1][1], bk.poke_gas(1) * 5 // 4, "a quarter more, not the whole block")
 
 
 class TheGaps(Base):

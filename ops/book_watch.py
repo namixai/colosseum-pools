@@ -41,23 +41,39 @@ from spike.hlspike import common as c
 log = core.log
 
 # Seconds between two reads of the book's read gas (`oracleGas`, `bboGas`), for the gas of its checks.
-READ_GAS_EVERY_S = 600.0
+READ_GAS_EVERY_S = 60.0
+# Seconds between two alarms of a watch that cannot start (systemd starts it again every ten seconds).
+START_ALARM_EVERY_S = 300.0
 
 
 class Watch:
-    """The watch's checks' gas: the book's read gas, read at the start and again every `READ_GAS_EVERY_S`."""
+    """The watch's checks' gas: the book's read gas, read at the start and again every `READ_GAS_EVERY_S` (a
+    `ReadGasSet` is seen within a minute); after a check reverted, a quarter more for `bk.FLOOR_BLOCKS` blocks, and the
+    read gas read again at once."""
 
     def __init__(self, nodes, book: str):
         self.nodes = nodes
         self.book = book
         self.read_gas = 2 * bk.PRECOMPILE_GAS
         self.read_at = -1e18
+        self.floor = 0
+        self.floor_until = 0
+        self.poker = None
 
     def gas(self, watched: int) -> int:
         if time.monotonic() - self.read_at >= READ_GAS_EVERY_S:
             self.read_at = time.monotonic()
             self.read_gas = bk.precompile_gas_of(self.nodes, self.book)
-        return bk.poke_gas(max(watched, 1), self.read_gas)
+        head = self.poker.head if self.poker is not None else 0
+        if self.floor and head > self.floor_until:
+            self.floor = 0
+        return max(self.floor, bk.poke_gas(max(watched, 1), self.read_gas))
+
+    def reverted(self, head: int) -> None:
+        self.read_at = -1e18
+        needed = bk.poke_gas(1, self.read_gas)
+        self.floor = min(bk.MAX_TX_GAS, max(self.floor, needed) * 5 // 4)
+        self.floor_until = head + bk.FLOOR_BLOCKS
 
 
 def build(args, record: dict, wallet=None, alarm=None, nodes=None) -> bk.Poker:
@@ -73,12 +89,14 @@ def build(args, record: dict, wallet=None, alarm=None, nodes=None) -> bk.Poker:
         raise SystemExit(f"deployment {args.deployment!r}: the factory has no stop book; nothing to watch")
     flag = pathlib.Path(args.alarm) if args.alarm else sk.STATE_DIR / f"book-watch-{args.deployment}.alarm"
     alarm = alarm or sf.Alarm(flag)
-    lanes = [bk.Lane(args.wallet, sf.Sender(wallet, nodes))] if wallet is not None else []
+    lanes = [bk.Lane(args.wallet, bk.poke_sender(wallet, nodes))] if wallet is not None else []
     watch = Watch(nodes, book)
     watch.gas(1)  # the book's read gas read now, not before the first check
-    return bk.Poker(book, nodes, lanes, alarm, gas=watch.gas, takeover=args.takeover, hold=args.hold,
-                    lag_alarm=args.lag_alarm, tip_wei=int(round(args.tip_gwei * sf.GWEI)),
-                    runway_hours=args.runway_hours, role="watch")
+    poker = bk.Poker(book, nodes, lanes, alarm, gas=watch.gas, takeover=args.takeover, hold=args.hold,
+                     lag_alarm=args.lag_alarm, tip_wei=int(round(args.tip_gwei * sf.GWEI)),
+                     runway_hours=args.runway_hours, role="watch", on_revert=watch.reverted)
+    watch.poker = poker
+    return poker
 
 
 def parser() -> argparse.ArgumentParser:
@@ -130,10 +148,37 @@ def main(argv: list[str] | None = None) -> int:
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
-    wallet = c.account(args.wallet) if args.wallet else None
-    poker = build(args, record, wallet)
+    flag = pathlib.Path(args.alarm) if args.alarm else sk.STATE_DIR / f"book-watch-{args.deployment}.alarm"
+    alarm = sf.Alarm(flag)
+    try:
+        wallet = c.account(args.wallet) if args.wallet else None
+        poker = build(args, record, wallet, alarm=alarm)
+    except Exception as exc:
+        # Its node down at the start, its key unreadable, the book not read: an alarm before it ends (systemd starts it
+        # again), at most once every START_ALARM_EVERY_S, not a silent restart every ten seconds.
+        start_failed(alarm, flag, exc)
+        raise
     poker.run(args.poll)
     return 0
+
+
+def start_failed(alarm, flag: pathlib.Path, exc: Exception) -> None:
+    mark = flag.with_name(flag.name + ".start-failed")
+    try:
+        last = mark.stat().st_mtime
+    except OSError:
+        last = 0.0
+    if time.time() - last < START_ALARM_EVERY_S:
+        log("book_watch_cannot_start", error=sf.host_free(str(exc))[:200], note="its alarm was raised already")
+        return
+    try:
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_text(str(int(time.time())))
+    except OSError:
+        pass
+    alarm("book_watch_cannot_start", error=sf.host_free(str(exc))[:200],
+          why="the book's own watch cannot start: nothing watches the book's checks from here")
+    alarm.drain(30.0)
 
 
 if __name__ == "__main__":
