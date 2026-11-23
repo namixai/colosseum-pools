@@ -9098,6 +9098,11 @@ MUTATIONS = [
      '    if not watched or int(last) >= latest:',
      '    if not watched:',
      ['test_the_tail_is_read_at_the_latest_block_and_only_while_the_book_watches']),
+    # Review 9 of #336 (H3): the review runs on mainnet when both switches name it.
+    ('RV206', 'ops/payout_review.py',
+     '    sn.confirm_service(args, args.deployment, c, sends=False)',
+     '    c.assert_testnet()',
+     ['test_it_runs_on_mainnet_when_both_switches_name_it_and_needs_no_key']),
     ('RV197', 'ops/payout_review.py',
      ' unread = set() if unread is None else unread\n    for a, evs in exam_events.items():',
      ' unread = set()\n    for a, evs in exam_events.items():',
