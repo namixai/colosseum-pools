@@ -87,7 +87,7 @@ log = core.log
 # PaperExam's events this loop reads besides the keeper's; the tests hold each against the Solidity source.
 STOPPED = "0x" + keccak(text="Stopped(uint8,uint8,int256)").hex()
 PASSED = "0x" + keccak(text="Passed(address,int256)").hex()
-ACCOUNT_TOPICS = [sk.TRIGGER_SET, sk.TRIGGER_CLEARED, sk.TRIGGER_FILLED, sk.FILLED, STOPPED, PASSED]
+ACCOUNT_TOPICS = [sk.TRIGGER_SET, sk.TRIGGER_CLEARED, *sk.TRIGGER_FILLS, sk.FILLED, STOPPED, PASSED]
 POOL_TOPICS = [sk.EXAM_SOLD, sk.FUNDED]
 ORACLE_PX = c.PRECOMPILE["oraclePx"]
 HIP3_BASE = 100_000  # CoreOps.HIP3_BASE: the oracle's index of an asset is pxIndex(asset)
@@ -131,9 +131,14 @@ def sign_of(position: int) -> int:
 
 
 def host_of(url: str) -> str:
-    """A node's address as a log may show it: the scheme and the host, never the path or the query a key rides in."""
+    """A node's address as a log may show it: the scheme and the host, never the path or the query a key rides in. An
+    address whose port does not read is shown without it, never raised."""
     parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.hostname or ''}" + (f":{parts.port}" if parts.port else "")
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return f"{parts.scheme}://{parts.hostname or ''}" + (f":{port}" if port else "")
 
 
 # ── a node, tried once ───────────────────────────────────────────────────────────────
@@ -242,7 +247,8 @@ class Sender:
                         continue
                     raise c.NotSent(message) from None
             with self.lock:
-                self.ledger[nonce] = {"hash": tx_hash, "raw": raw, "at": time.monotonic()}
+                now = time.monotonic()
+                self.ledger[nonce] = {"hash": tx_hash, "raw": raw, "at": now, "since": now, "past": 0}
             self.next = nonce + 1
             return tx_hash, nonce
         raise c.NotSent("the nonce was taken twice")
@@ -258,7 +264,8 @@ class Sender:
 
     def sweep(self, now: float | None = None) -> None:
         """The stops' thread: a transaction of the key with no receipt after `RESEND_AFTER_S` is sent again with the same
-        bytes (the same hash: nothing new can land); one whose nonce the chain counted past without it is let go."""
+        bytes (the same hash: nothing new can land); one whose nonce the chain counted past without it, at two sweeps in a
+        row, is let go: one count alone may be a node behind the other, or a block taken back."""
         now = time.monotonic() if now is None else now
         with self.lock:
             old = sorted((n, dict(e)) for n, e in self.ledger.items() if now - e["at"] >= RESEND_AFTER_S)
@@ -272,10 +279,19 @@ class Sender:
                 continue
             if counted > nonce:
                 with self.lock:
-                    self.ledger.pop(nonce, None)
-                    self.gone.add(nonce)
-                log("send_gone", nonce=nonce, tx=e["hash"], why="the chain counted past its nonce without it")
+                    past = self.ledger[nonce]["past"] + 1 if nonce in self.ledger else 2
+                    if past >= 2:
+                        self.ledger.pop(nonce, None)
+                        self.gone.add(nonce)
+                    elif nonce in self.ledger:
+                        self.ledger[nonce]["past"] = past
+                        self.ledger[nonce]["at"] = now
+                if past >= 2:
+                    log("send_gone", nonce=nonce, tx=e["hash"], why="the chain counted past its nonce without it, twice")
                 continue
+            with self.lock:
+                if nonce in self.ledger:
+                    self.ledger[nonce]["past"] = 0
             try:
                 self.node.call("eth_sendRawTransaction", [e["raw"]])
                 log("send_again", nonce=nonce, tx=e["hash"])
@@ -539,7 +555,7 @@ class StopLoop:
         for asset in read("rules()", [], [], [sk.RULES])[0][3]:
             asset = int(asset)
             for is_take, getter in ((False, "stopOf(uint32)"), (True, "takeOf(uint32)")):
-                px, _, armed, _ = read(getter, ["uint32"], [asset], [sk.TRIGGER])[0]
+                px, _, armed = read(getter, ["uint32"], [asset], [sk.TRIGGER])[0]
                 if px:
                     found[(exam, asset, is_take)] = (int(px), int(armed))
             if any(k[1] == asset for k in found):
@@ -799,7 +815,7 @@ class StopLoop:
 
     def _events(self, block: int, logs: list[dict]) -> None:
         filled_in_tx = {(l["transactionHash"], to_checksum_address(l["address"]), int(l["topics"][1], 16),
-                         bool(int(l["data"][2:66], 16))) for l in logs if l["topics"][0] == sk.TRIGGER_FILLED}
+                         bool(int(l["data"][2:66], 16))) for l in logs if l["topics"][0] in sk.TRIGGER_FILLS}
         moved: set[tuple[str, int]] = set()
         for l in logs:
             topic = l["topics"][0]
@@ -817,7 +833,7 @@ class StopLoop:
             key = (exam, asset, take)
             self.event_at[key] = block
             t = self.triggers.get(key)
-            if topic == sk.TRIGGER_FILLED:
+            if topic in sk.TRIGGER_FILLS:
                 if t is not None and t["touch"] is not None:
                     log("stop_caught", exam=exam, asset=asset, kind="take" if take else "stop", px=t["px"],
                         reached_from=t["touch"], filled=block, late=block - t["touch"], tx=l["transactionHash"])
@@ -942,6 +958,9 @@ class StopLoop:
 
     # ── running ──────────────────────────────────────────────────────────────────────
 
+    def alive_fields(self) -> dict:
+        return {"standing": len(self.triggers), "in_flight": len(self.pending), "blind_from": self.blind_from}
+
     def _say(self, event: str, every: float = 30.0, **fields) -> None:
         """A line that would repeat each block, said once in `every` seconds."""
         now = time.monotonic()
@@ -1001,8 +1020,7 @@ class StopLoop:
                 self._failed("stop_loop_failed", exc)
             if time.monotonic() - self.alive_at >= ALIVE_EVERY_S:
                 self.alive_at = time.monotonic()
-                log("stop_loop_alive", block=self.block, standing=len(self.triggers), in_flight=len(self.pending),
-                    blind_from=self.blind_from)
+                log("stop_loop_alive", block=self.block, **self.alive_fields())
             self._served(until, stop)
 
 
@@ -1030,13 +1048,17 @@ def check_chain(node: Node) -> None:
 
 
 def add_args(p: argparse.ArgumentParser) -> None:
-    """The settings of the stops' loop. Without `--stops loop` the keeper is as it was, and none of the rest is read."""
+    """The settings of the stops' loop, and of the stop book's (ops/book_keeper.py) for a factory with one. Without a book
+    and without `--stops loop` the keeper is as it was, and none of the rest is read."""
     p.add_argument("--stops", choices=("inline", "loop"), default=os.environ.get("COLOSSEUM_STOPS", "") or "inline",
                    help="inline (the default): the stops tried in the keeper's one loop, as before; loop: in a thread of "
                         "their own, every block, with the watch of missed stops (ops/stop_filler.py)")
     p.add_argument("--stop-rpc", default=os.environ.get("COLOSSEUM_STOP_RPC_URL", ""),
                    help="with --stops loop: the node the stops are read from and the key's transactions sent to; the "
                         "keeper's (COLOSSEUM_RPC_URL) when empty")
+    p.add_argument("--stop-backup-rpc", default=os.environ.get("COLOSSEUM_STOP_BACKUP_RPC_URL", ""),
+                   help="with a stop book: the node a call goes to when the first refuses it or may not have taken it; "
+                        "the keeper's backup (COLOSSEUM_RPC_BACKUP_URL) when empty")
     p.add_argument("--stop-tip-gwei", type=float, default=float(os.environ.get("COLOSSEUM_STOP_TIP_GWEI", "0") or 0),
                    help="with --stops loop: the priority fee of a stop's transaction, in gwei; zero, as every send of the "
                         "keeper's")
@@ -1111,7 +1133,13 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
     state = pathlib.Path(args.state) if args.state else sk.STATE_DIR / f"watch-{args.deployment}.json"
     keeper = sk.SimKeeper(record["SimPoolFactory"], None, "0x" + "00" * 20, True, state, int(record["block"]))
-    loop = build(args, keeper, state, prefix="watch-")
+    from ops import book_keeper
+
+    book = book_keeper.book_of(record, keeper.factory)
+    if book is not None:  # the book's gaps and their touches, seen from another machine and node
+        loop = book_keeper.build(args, keeper, state, book, prefix="watch-")
+    else:
+        loop = build(args, keeper, state, prefix="watch-")
     poll = args.stop_poll or args.poll
     thread = start(loop, poll)
     while True:

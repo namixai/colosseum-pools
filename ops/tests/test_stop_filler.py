@@ -316,6 +316,9 @@ class CarryingOut(Base):
         loop.sender.ledger[7]["at"] -= sf.RESEND_AFTER_S
         self.node.latest = 8  # its nonce taken on chain, by no transaction of its
         loop.sender.sweep()
+        self.assertEqual(loop.sender.gone, set(), "one count past it may be a node behind: not let go yet")
+        loop.sender.ledger[7]["at"] -= sf.RESEND_AFTER_S
+        loop.sender.sweep()
         self.run_to(loop, 130)
         self.assertTrue(self.events("trigger_fill_lost"))
         self.assertEqual([t["nonce"] for t in self.node.sent()], [7, 8], "gone: the stop goes again, on the next nonce")
@@ -542,8 +545,9 @@ class TheWatch(Base):
     def test_a_reach_after_the_exam_was_over_is_a_line_not_an_alarm(self):
         """Past its deadline or idle limit `fillTrigger` refuses (`TooLate`) whoever sends it: `expire` is due."""
         src = (ROOT / "src/exam/PaperExam.sol").read_text()
-        self.assertIn("if (deadline != 0 && block.timestamp > deadline) return true;", src)
-        self.assertIn("return _terms.maxIdle != 0 && block.timestamp > uint256(lastFillAt) + _terms.maxIdle;", src)
+        self.assertIn("return _overAt(block.timestamp);", src)
+        self.assertIn("if (deadline != 0 && t > deadline) return true;", src)
+        self.assertIn("return _terms.maxIdle != 0 && t > uint256(lastFillAt) + _terms.maxIdle;", src)
         for deadline, last_fill, idle in ((1_000_000 + 101, 0, 0), (0, 1_000_000, 50)):
             self.node = Node()
             self.said.clear()
@@ -727,10 +731,12 @@ class LostAndFound(Base):
 
 class TheWatchAlone(Base):
     def test_an_exam_that_ended_is_told_by_its_own_read_and_raises_nothing(self):
-        """`_end` clears no stop, take or position: the read of the exam's status is what tells it ended."""
+        """`_end` of an exam without a stop book (the loop's) clears no stop, take or position: the read of the exam's
+        status is what tells it ended. Only an exam with a book takes its stops out of the book at its end."""
         src = (ROOT / "src/exam/PaperExam.sol").read_text()
         end = src[src.index("function _end("):src.index("function _book(")]
-        self.assertNotIn("stopOf", end)
+        self.assertIn("if (stopBook != address(0)) {", end)
+        self.assertNotIn("positionOf", end)
         loop = self.loop(wallet=None)
         self.run_to(loop, 100)
         loop.apply_reread(EXAM, 100, {(EXAM, BTC, False): (950_000, 90)}, {BTC: 1})
@@ -1129,7 +1135,8 @@ class TheKeeperWithTheLoop(unittest.TestCase):
                 mock.patch.object(k, "slow_pass"), mock.patch.object(k, "fast_step"), \
                 mock.patch.object(sk.c, "rpc", return_value="0x1"), mock.patch.object(sk.time, "sleep", side_effect=Out), \
                 mock.patch.object(sf, "build") as build, mock.patch.object(sf, "start") as start, \
-                mock.patch.object(sf, "keep_alive") as alive:
+                mock.patch.object(sf, "keep_alive") as alive, \
+                mock.patch("ops.book_keeper.book_of", return_value=None):  # a factory without a stop book
             with self.assertRaises(Out):
                 sk.main(list(argv))
         return k, build, start, alive

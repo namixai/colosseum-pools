@@ -23,6 +23,14 @@ Two loops in one process:
                    `claimPayout` for a passed stage; for each pool, `pay` while a payout is due: approved
                    and past its 72 hours, or past its 7 days unapproved.
 
+A factory with a stop book (every one deployed from src/ as it is now: `SimPoolFactory.stopBook`) has its exams' stops
+and takes carried out by the book, and the keeper runs the book's loop in a thread of its own whatever `--stops` says
+(ops/book_keeper.py): `poke()` every block while the book watches an asset, `settle(exam)` for each exam with a touch
+not yet carried out or a change of a stop in force, an alarm for each block the book did not check while it watched
+one. Every transaction of the keeper's key then goes out through that thread's one sender, as below. Nothing sends
+`fillTrigger` to such an exam (it refuses it, `NotBook`). What follows is for a factory without a book (the 998
+rehearsal).
+
 With `--stops loop` (COLOSSEUM_STOPS=loop; the default is `inline`, the fast loop's as above), the stops are a third
 loop's, in a thread of its own (ops/stop_filler.py): every block, the stops and takes of the live exams against the
 oracle price, a stop reached sent at once, and an alarm for a reach that went by with no fill. Nothing in the two loops
@@ -79,13 +87,18 @@ FILLED = "0x" + keccak(text="Filled(uint32,bool,uint64,uint64,uint256,uint256,ui
 LAPSED = "0x" + keccak(text="Lapsed(uint32,bool,uint64)").hex()
 TRIGGER_SET = "0x" + keccak(text="TriggerSet(uint32,bool,uint64,uint64,uint256)").hex()
 TRIGGER_CLEARED = "0x" + keccak(text="TriggerCleared(uint32,bool)").hex()
-TRIGGER_FILLED = "0x" + keccak(text="TriggerFilled(uint32,bool,uint64,uint64,uint256,uint64,uint8)").hex()
-TRIGGER_TOPICS = [TRIGGER_SET, TRIGGER_CLEARED, TRIGGER_FILLED]
+TRIGGER_FILLED = "0x" + keccak(text="TriggerFilled(uint32,bool,uint64,uint64,uint256,uint64,uint8,uint256,uint64)").hex()
+# A factory made before the stop book (the 998 rehearsal): its exams' TriggerFilled had no touch block and price.
+TRIGGER_FILLED_V1 = "0x" + keccak(text="TriggerFilled(uint32,bool,uint64,uint64,uint256,uint64,uint8)").hex()
+TRIGGER_FILLS = (TRIGGER_FILLED, TRIGGER_FILLED_V1)
+TRIGGER_TOPICS = [TRIGGER_SET, TRIGGER_CLEARED, *TRIGGER_FILLS]
 EXAM_STATUS = ("None", "Active", "Passed", "Breached", "Expired")
 PAYOUT_STATE = ("None", "Due", "Stopped", "Paid", "Held", "Refused")
 EXAM_TERMS = "(uint64,uint16[],uint32,uint32,uint16,uint32,uint16,uint16)"
 RULES = "(uint16,uint16,uint32,uint32[],uint32[])"
-TRIGGER = "(uint64,uint64,uint64,uint64)"
+# PaperExam.Trigger: px, sz, armedAt. A factory made before the stop book had a fourth word (seenAt) after them, which
+# a read of these three leaves (the ABI decoder reads the words it is asked for).
+TRIGGER = "(uint64,uint64,uint64)"
 PAYOUT = "(address,address,uint64,uint64,uint8,bool,uint64,bool)"
 # SimPoolFactory's PAYOUT_DELAY and PAYOUT_HARD: a payout is due 72 hours after its claim once approved,
 # and 7 days after it whether approved or not (the test holds them to the source).
@@ -493,7 +506,7 @@ class SimKeeper:
             return
         for asset in view(exam, "rules()", RULES)[3]:
             for is_take, getter in ((False, "stopOf(uint32)"), (True, "takeOf(uint32)")):
-                px, _, armed_at, _ = view(exam, getter, TRIGGER, ["uint32"], [asset])
+                px, _, armed_at = view(exam, getter, TRIGGER, ["uint32"], [asset])
                 key = (exam, int(asset), is_take)
                 if px:
                     self.triggers[key] = int(armed_at)
@@ -607,7 +620,18 @@ def main(argv: list[str] | None = None) -> int:
     k = SimKeeper(record["SimPoolFactory"], wallet, sender, args.dry_run, state, int(record["block"]),
                   window=args.log_window, max_windows=args.max_windows)
     thread = None
-    if args.stops == "loop" and not args.once:
+    from ops import book_keeper
+
+    book = book_keeper.book_of(record, k.factory)
+    if book is not None and not args.once:
+        # The book carries the stops out; this loop checks its blocks and settles its exams. Any key may: `poke` and
+        # `settle` are open to anyone. A dry run sends nothing and still says the gaps.
+        if args.stops == "loop":
+            log("stops_by_book", book=book, why="--stops loop is for a factory without a stop book")
+        k.stop_loop = book_keeper.build(args, k, state, book, wallet=wallet)
+        k.outbox = k.stop_loop.sender
+        thread = stop_filler.start(k.stop_loop, args.stop_poll or args.poll)
+    elif args.stops == "loop" and not args.once:
         # The filler is known before the loop starts: its thread never waits on the keeper's node. A key that is not the
         # filler sends nothing of the stops, and its own sends stay c.send_tx's.
         filler = wallet is not None and k.is_filler()

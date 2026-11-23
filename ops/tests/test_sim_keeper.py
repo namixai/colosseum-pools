@@ -456,7 +456,13 @@ class TheTriggers(unittest.TestCase):
         src = (ROOT / "src/exam/PaperExam.sol").read_text()
         self.assertIn("event TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt);", src)
         self.assertIn("event TriggerCleared(uint32 indexed asset, bool isTake);", src)
-        self.assertIn("uint32 indexed asset, bool isTake, uint64 sz, uint64 px, uint256 cost, uint64 triggerPx, uint8 source", src)
+        self.assertRegex(re.sub(r"\s+", " ", src), r"event TriggerFilled\( uint32 indexed asset, bool isTake, uint64 sz, "
+                         r"uint64 px, uint256 cost, uint64 triggerPx, uint8 source, uint256 touchBlock, uint64 touchPx \);")
+        self.assertEqual(k.TRIGGER_FILLED, "0x" + keccak(text="TriggerFilled(uint32,bool,uint64,uint64,uint256,uint64,uint8,"
+                                                              "uint256,uint64)").hex())
+        # The 998 rehearsal's exams, made before the stop book, wrote it without the touch.
+        self.assertEqual(k.TRIGGER_FILLED_V1, "0x" + keccak(text="TriggerFilled(uint32,bool,uint64,uint64,uint256,uint64,"
+                                                                 "uint8)").hex())
 
     def test_set_then_cleared_or_filled_is_forgotten(self):
         sk = self.keeper()
@@ -499,8 +505,8 @@ class TheTriggers(unittest.TestCase):
 
     def test_a_keeper_started_again_reads_the_triggers_from_the_exam(self):
         sk = self.keeper()  # nothing from the logs: it was down when they were set
-        state = {("stopOf(uint32)", 3): (950_000, 0, 12, 0), ("takeOf(uint32)", 3): (0, 0, 0, 0),
-                 ("stopOf(uint32)", 4): (0, 0, 0, 0), ("takeOf(uint32)", 4): (2_600_000, 10, 15, 0)}
+        state = {("stopOf(uint32)", 3): (950_000, 0, 12), ("takeOf(uint32)", 3): (0, 0, 0),
+                 ("stopOf(uint32)", 4): (0, 0, 0), ("takeOf(uint32)", 4): (2_600_000, 10, 15)}
 
         def view(to, sig, out="uint256", types=(), args=()):
             self.assertEqual(to, self.EXAM)
@@ -511,7 +517,7 @@ class TheTriggers(unittest.TestCase):
         with mock.patch.object(k, "view", side_effect=view):
             sk.refresh_triggers(self.EXAM)
         self.assertEqual(sk.triggers, {(self.EXAM, 3, False): 12, (self.EXAM, 4, True): 15})
-        state[("stopOf(uint32)", 3)] = (0, 0, 0, 0)  # carried out by someone else meanwhile
+        state[("stopOf(uint32)", 3)] = (0, 0, 0)  # carried out by someone else meanwhile
         with mock.patch.object(k, "view", side_effect=view):
             sk.refresh_triggers(self.EXAM)
         self.assertEqual(sk.triggers, {(self.EXAM, 4, True): 15})
@@ -534,7 +540,8 @@ class TheTriggers(unittest.TestCase):
         src = (ROOT / "src/exam/PaperExam.sol").read_text()
         self.assertIn("mapping(uint32 asset => Trigger) public stopOf;", src)
         self.assertIn("mapping(uint32 asset => Trigger) public takeOf;", src)
-        self.assertIn("struct Trigger {\n        uint64 px;\n        uint64 sz;\n        uint64 armedAt;\n        uint64 seenAt;\n    }", src)
+        self.assertIn("struct Trigger {\n        uint64 px;\n        uint64 sz;\n        uint64 armedAt;\n    }", src)
+        self.assertEqual(k.TRIGGER, "(uint64,uint64,uint64)")
 
     def test_an_exam_that_is_done_drops_its_triggers(self):
         sk = self.keeper()
