@@ -216,7 +216,6 @@ class CostOfANewBuyer(unittest.TestCase):
 
 
 class PassOrder(unittest.TestCase):
-    @unittest.expectedFailure  # TODO(review 15): until its fix lands in this round
     def test_every_document_is_written_before_the_first_alarm_that_may_hang(self):
         """`one_pass` writes a payout's document and says its alarm in one loop: the channel's timeout is 30 s an alarm, so
         a hung channel and ten held payouts is 300 s of the pass's 540 before the last documents are written, and a kill
@@ -235,6 +234,30 @@ class PassOrder(unittest.TestCase):
                 mock.patch.object(rs.pr, "card", side_effect=lambda rv, c: {"pool": rv["pool"], "id": rv["id"]}), mock.patch.object(rs.core, "log"):
             rs.one_pass({}, d, None, {}, alarm)
         self.assertEqual(seen[0], ["0xP-0.json", "0xP-1.json", "0xP-2.json"], f"documents on disk at the first alarm: {seen[0]}")
+
+
+    def test_the_alarms_of_a_pass_have_one_budget_and_what_it_leaves_is_said_next_pass(self):
+        """A channel that hangs: once ALARM_BUDGET_S is spent the rest are not said, not remembered, said next pass."""
+        r = lambda i: {"pool": "0xP", "id": i, "verdict": "suspicious", "action": "hold", "approvals": True, "approved": False,
+                       "trader": "0xT", "kinds": ["stop-unchecked"], "reasons": ["x"], "dueAt": 10, "hardAt": 99_999_999}
+        chain = {"payouts": [{"state": "Due", "pool": "0xP", "id": i} for i in range(3)], "now": 100, "latest": 5}
+        clock = [0.0]
+        said, seen = {}, []
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+
+        def alarm(event, **fields):
+            seen.append(fields["id"])
+            clock[0] += rs.ALARM_BUDGET_S + 1  # each hangs past the whole budget
+            return True
+        with mock.patch.object(rs.pr, "read_chain", return_value=chain), mock.patch.object(rs.pr, "review", side_effect=lambda c, p, i: r(i)), \
+                mock.patch.object(rs.pr, "card", side_effect=lambda rv, c: {"pool": rv["pool"], "id": rv["id"]}), \
+                mock.patch.object(rs.core, "log"), mock.patch.object(rs.time, "monotonic", side_effect=lambda: clock[0]):
+            rs.one_pass({}, d, None, said, alarm)
+            self.assertEqual((seen, sorted(said)), ([0], ["0xP-0"]))
+            self.assertTrue((d / "status.json").is_file(), "the pass's end is written before its alarms")
+            rs.one_pass({}, d, None, said, alarm)
+        self.assertEqual(seen, [0, 1], "the next pass says the one left")
 
 
 class JournalMemory(unittest.TestCase):

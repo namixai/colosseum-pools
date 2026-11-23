@@ -17202,6 +17202,15 @@ MUTATIONS = [
      "    sf.require_channel(\"the payout review\")\n",
      "",
      ["test_on_mainnet_the_review_and_the_stops_loop_do_not_start_without_a_channel"]),
+    # Every document first, then the alarms with one budget.
+    ("RY9", "ops/review_service.py",
+     "            if time.monotonic() > until:",
+     "            if False:",
+     ["test_the_alarms_of_a_pass_have_one_budget_and_what_it_leaves_is_said_next_pass"]),
+    ("RY10", "ops/review_service.py",
+     "    for r in reviews:\n        write(out, pr.card(r, chain))\n",
+     "",
+     ["test_every_document_is_written_before_the_first_alarm_that_may_hang"]),
 ]
 
 RUNNERS = {

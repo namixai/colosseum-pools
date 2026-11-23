@@ -62,6 +62,10 @@ BEFORE_S = (24 * 3_600, 6 * 3_600)
 FAILED_EVERY_S = 3_600
 # Seconds a pass may read the chain before it saves what it read and ends (the unit's TimeoutStartSec is 540).
 PASS_BUDGET_S = 420
+# Seconds the alarms of one pass may take in all, once every document is written (review 15 of #338): a channel that
+# hangs (30 s an alarm at most) cannot keep the documents from the disk or run the pass past its unit's time; an alarm
+# not said in it is not remembered, and the next pass says it.
+ALARM_BUDGET_S = 60
 
 
 def alarm_of(r: dict) -> dict | None:
@@ -103,16 +107,21 @@ def write(out: pathlib.Path, doc: dict) -> pathlib.Path:
 
 def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read) -> list[dict]:
     """Reads the chain once (`read` goes to `payout_review.read_chain`: the kept logs, the candles, the archive node, the
-    time budget), writes a document for each payout still waiting, raises the alarms; returns the reviews. An alarm is
-    remembered in `said` only once the channel took it (`alarm(..., wait=True)` not False): one that did not go out is
-    said again at the next pass. The pass's end is written to status.json beside the documents, for the stops' loop's
-    watch of the review's age (`stop_filler.StopLoop`)."""
+    time budget), writes a document for each payout still waiting and the pass's end, then raises the alarms, ALARM_BUDGET_S
+    for all of them (a hung channel keeps no document from the disk); returns the reviews. An alarm is remembered in
+    `said` only once the channel took it (`alarm(..., wait=True)` not False): one that did not go out, or was not said
+    within the budget, is said again at the next pass. The pass's end is written to status.json beside the documents,
+    for the stops' loop's watch of the review's age (`stop_filler.StopLoop`)."""
     chain = pr.read_chain(record, prices, **read)
     out.mkdir(parents=True, exist_ok=True)
     reviews = [pr.review(chain, x["pool"], x["id"]) for x in chain["payouts"] if x["state"] == "Due"]
     now = int(chain["now"])
     for r in reviews:
         write(out, pr.card(r, chain))
+    write_status(out, {"at": int(time.time()), "chainNow": now, "block": chain["latest"], "due": len(reviews),
+                       "held": sum(r["action"] == "hold" for r in reviews)})
+    until = time.monotonic() + ALARM_BUDGET_S
+    for r in reviews:
         a = alarm_of(r)
         key = f"{r['pool']}-{r['id']}"
         if a is None:
@@ -120,14 +129,16 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
             continue
         mark = [a["action"], a["kinds"], a["reasons"]]
         if due_to_say(said.get(key), mark, now, a["deadline"]):
+            if time.monotonic() > until:
+                core.log("review_alarm_not_said", payout=key, why=f"the pass's {ALARM_BUDGET_S} s for alarms are spent",
+                         then="said at the next pass")
+                continue
             took = alarm("payout_held" if a["action"] == "hold" else "payout_needs_a_stop", wait=True, **a)
             if took is not False:
                 said[key] = {"mark": mark, "at": now, "before": [b for b in BEFORE_S
                                                                  if a["deadline"] is not None and a["deadline"] - now <= b]}
             else:
                 core.log("review_alarm_not_taken", payout=key, then="said again at the next pass")
-    write_status(out, {"at": int(time.time()), "chainNow": now, "block": chain["latest"], "due": len(reviews),
-                       "held": sum(r["action"] == "hold" for r in reviews)})
     core.log("review_done", payouts=len(reviews), block=chain["latest"],
              suspicious=sum(r["verdict"] == "suspicious" for r in reviews))
     return reviews

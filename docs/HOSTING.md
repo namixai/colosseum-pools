@@ -954,7 +954,8 @@ is `payout_needs_a_stop`, the same way. A pass that fails is `review_failed` (on
 `TimeoutStartSec` or its `MemoryMax` (1 GB) starts `colosseum-unit-failed@` (its `OnFailure=`), which says
 `unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read;
 an alarm is taken only when the channel took it (a line only in `ALARM` is said again), and on mainnet the units do
-not start without the channel.
+not start without the channel. A pass writes every document and `status.json` first, then says its alarms, 60 seconds for all of
+them: a channel that hangs keeps no document from the disk, and an alarm left over is said at the next pass.
 
 Every block of each stop's time must be in both journals of prices, the keeper's and the second writer's (below),
 at one price (a block only one holds is `stop-one-journal` unless the optional node bears it out; the document's
