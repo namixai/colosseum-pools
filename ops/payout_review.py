@@ -789,13 +789,14 @@ def missed_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: i
 
 class BlockPrices(Mapping):
     """{block: px} of one asset (or {block: time}), kept as three sorted arrays rather than a dict: the review's memory
-    goes with the blocks it keeps, eight bytes a price, not with a Python object for each (review 15 of #338). `seen`
-    holds, for each block, a bit for each journal that wrote it."""
+    goes with the blocks it keeps, 13 bytes a block (a block number in four, a price in eight, the journals in one), not
+    with a Python object for each (review 15 of #338). `seen` holds, for each block, a bit for each journal that wrote
+    it. A time is kept in four bytes too (`vcode` "I")."""
 
     __slots__ = ("b", "v", "seen")
 
-    def __init__(self):
-        self.b, self.v, self.seen = array("q"), array("q"), array("B")
+    def __init__(self, vcode: str = "q"):
+        self.b, self.v, self.seen = array(BLOCK_CODE), array(vcode), array("B")
 
     def _at(self, block) -> int:
         if isinstance(block, bool) or not isinstance(block, int):
@@ -853,6 +854,8 @@ class BlockPrices(Mapping):
 
 
 _MANY = [k for k in range(256) if k & (k - 1)]  # a block's `seen` with two journals or more
+BLOCK_CODE = "I" if array("I").itemsize == 4 else "q"  # a block number (or a time in seconds) below 2**32
+U32 = 1 << 32
 
 
 class Windows:
@@ -935,7 +938,7 @@ class Journal:
 
     def __init__(self, want: dict | None = None):
         self.px: dict[int, BlockPrices] = {}
-        self.times = BlockPrices()
+        self.times = BlockPrices("I" if array("I").itemsize == 4 else "q")
         self.gaps: list[tuple[int, int, str]] = []
         self.lines = 0
         self.bad = 0
@@ -985,7 +988,7 @@ class Journal:
         if not eb:
             return
         order = sorted(range(len(eb)), key=eb.__getitem__)
-        nb, nv, ns = array("q"), array("q"), array("B")
+        nb, nv, ns = array(store.b.typecode), array(store.v.typecode), array("B")
         at = 0
         prev = None
         for k in order:
@@ -1057,13 +1060,13 @@ class Journal:
                 got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, bool)}
                 if len(got) != len(px):
                     raise TypeError("px")
-                if not -(1 << 63) <= b < (1 << 63) or any(not -(1 << 63) <= v < (1 << 63) for v in got.values()):
+                if not 0 <= b < U32 or any(not -(1 << 63) <= v < (1 << 63) for v in got.values()):
                     raise ValueError("out of range")
             except (TypeError, ValueError, KeyError, IndexError):
                 self.bad += 1  # its block is a hole: no price of it is taken
                 continue
             self.lines += 1
-            if t is not None and (want is None or want.any(b)) and -(1 << 63) <= t < (1 << 63):
+            if t is not None and (want is None or want.any(b)) and 0 <= t < U32:
                 self._put(None, self.times, b, t, bit, extra_t, name)
             for asset, v in got.items():
                 if v <= 0:  # a zero price (a feed not live) is no price
@@ -2264,6 +2267,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     read = chain.get("exam_events")
     unread = [a for a in (stage, exam) if a and (a in (chain.get("unread") or []) or (read is not None and a not in read))]
     unread_accounts = list(unread)
+    links_unread = trader in (chain.get("linksUnread") or [])
+    if links_unread:
+        unread.append("the USDC sent to the trader before their first purchase (read on at each pass)")
     if times_unread:
         unread.append("the factory's delay and ceiling")
     elif disagree:
@@ -2291,7 +2297,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     out["stoppable"] = chk.stop_due(pay["state"], bool(pay.get("wasStopped")), pay["dueAt"], chain["now"], approvals is True)
     # Held back from approval, closed on failure: a result that does not count up, a stop reached and not carried out,
     # a block of a stop's time not checked, or an account's own events not read.
-    held = bool({"recount", "missed-stop", "stop-late", "stop-unchecked", "stop-one-journal"} & set(out["kinds"])) or bool(unread_accounts)
+    held = bool({"recount", "missed-stop", "stop-late", "stop-unchecked", "stop-one-journal"} & set(out["kinds"])) or bool(unread_accounts) \
+        or links_unread
     # What whoever signs is offered (review of #287): a stop where there is one the pool would take; nothing to
     # approve where the result did not count up, only the draft of a reason-3 stop, until the analysis is written
     # or the ceiling comes; the approval as a choice where something else is suspicious; the approval where all is
@@ -2979,9 +2986,14 @@ def with_approver(takes: bool | None, pool: str) -> tuple[bool | None, str | Non
 # Blocks one part of a pass reads before it saves what it read (`LogScan`): a first pass over a long chain goes in parts,
 # each saved, and a pass the timer ends early goes on from the last part saved.
 SCAN_PART = 5_000
-# How far back before a trader's first purchase their incoming USDC is read, once, when the trader is first seen: the
-# wallets that funded them (`linked`). The transfers after that are read with every new block.
-LINK_BACK = 86_400
+# The blocks read at a time within a part: the pass's time is looked at after each step, and a pass out of its time
+# saves what it read and ends (review 15 of #338), however many accounts a part has to read.
+SCAN_STEP = 500
+# A trader's incoming USDC from the deployment's block to the block they were first seen in (the wallets that funded
+# them, `linked`) is read only for a trader with a payout still waiting, LINK_CHUNK blocks a call of `logs` at a time,
+# all such traders together, the pass's time looked at between chunks and the progress saved: the next pass goes on
+# where it stopped. Until it is read to its end the trader's payout is held as not read (review 15 of #338).
+LINK_CHUNK = 1_000
 # How many blocks before the last block read each pass reads again (review 15 of #338): a node behind a load balancer
 # whose replica lagged answers an empty eth_getLogs for the newest blocks, and a pool the factory's list did not show
 # yet; the tail read again finds them, and what is read twice is kept once.
@@ -3004,7 +3016,7 @@ class LogScan:
         self.path = path
         self.key = {"schema": SCAN_SCHEMA, "factory": factory.lower(), "chain": chain_id, "start": start}
         self.d = {**self.key, "scannedTo": start - 1, "pools": [], "pool_logs": [], "account_logs": {}, "transfers": [],
-                  "traders": [], "times": {}}
+                  "traders": [], "times": {}, "links": {}}
         if path is not None:
             try:
                 got = json.loads(path.read_text())
@@ -3012,6 +3024,9 @@ class LogScan:
                     self.d = got
             except (OSError, ValueError):
                 pass
+        # Each trader's incoming USDC before they were first seen: {trader: {"at": the next block to read, "to": the
+        # last}}, read only for a trader with a payout waiting (`read_links`); done when "at" is past "to".
+        self.d.setdefault("links", {})
 
     @property
     def scanned_to(self) -> int:
@@ -3025,10 +3040,14 @@ class LogScan:
         tmp.write_text(json.dumps(self.d, separators=(",", ":")))
         os.replace(tmp, self.path)
 
-    def time_of(self, block: int) -> int:
+    def time_of(self, block: int, log: dict | None = None) -> int:
+        """The time of `block`, kept: asked of the node once a block ever, and not at all where the log it is read for
+        carries it (`blockTimestamp`, as newer nodes give it)."""
         k = str(block)
         if k not in self.d["times"]:
-            self.d["times"][k] = int(c.rpc("eth_getBlockByNumber", [hex(block), False])["timestamp"], 16)
+            given = (log or {}).get("blockTimestamp")
+            self.d["times"][k] = int(given, 16) if isinstance(given, str) and given.startswith("0x") else \
+                int(c.rpc("eth_getBlockByNumber", [hex(block), False])["timestamp"], 16)
         return self.d["times"][k]
 
     def accounts(self) -> list[str]:
@@ -3049,8 +3068,10 @@ class LogScan:
         timed = {PAYOUT_PAID, PAYOUT_HELD, PAYOUT_WAITS_LIMIT}
         cursor = max(int(self.key["start"]), self.scanned_to + 1 - SCAN_TAIL)
         seen = self._seen(cursor)
+        step = max(1, min(part, SCAN_STEP))
+        unsaved = 0
         while cursor <= latest:
-            lo, hi = cursor, min(latest, cursor + part - 1)
+            lo, hi = cursor, min(latest, cursor + step - 1)
             known_pools = set(self.d["pools"])
             for p in pools:
                 if p not in known_pools:
@@ -3058,26 +3079,62 @@ class LogScan:
             new = self._fresh(seen, "pool", logs(self.d["pools"], pool_topics, lo, hi) if self.d["pools"] else [])
             for l in new:
                 if l["topics"][0] in timed:
-                    self.time_of(int(l["blockNumber"], 16))
+                    self.time_of(int(l["blockNumber"], 16), l)
             self.d["pool_logs"] += new
             accounts = self.accounts()  # an account sold in this part did not exist before it: read from here
             for i in range(0, len(accounts), chk.ADDRESS_BATCH):
                 for l in self._fresh(seen, "account", logs(accounts[i:i + chk.ADDRESS_BATCH], [], lo, hi)):
-                    self.time_of(int(l["blockNumber"], 16))
+                    self.time_of(int(l["blockNumber"], 16), l)
                     self.d["account_logs"].setdefault(to_checksum_address(l["address"]), []).append(l)
             traders = self.traders()
-            fresh = [t for t in traders if t not in set(self.d["traders"])]
-            if fresh:  # their incoming USDC before this part, once: who funded them before they bought
-                first = min(int(l["blockNumber"], 16) for l in self.d["pool_logs"] if l["topics"][0] == sk.EXAM_SOLD
-                            and _addr(l["topics"][2]) in fresh)
-                self._transfers(usdc, fresh, max(self.key["start"], first - LINK_BACK), lo - 1)
-                self.d["traders"] += fresh
+            known = set(self.d["traders"])
+            fresh = [t for t in traders if t not in known]
+            for t in fresh:  # their USDC from here on with every block; before it, only if a payout of theirs waits
+                self.d["links"].setdefault(t, {"at": int(self.key["start"]), "to": lo - 1})
+            self.d["traders"] += fresh
             self._transfers(usdc, self.d["traders"], lo, hi, seen)
             self.d["scannedTo"] = max(self.scanned_to, hi)
-            self.save()
             cursor = hi + 1
+            unsaved += hi - lo + 1
+            if unsaved >= part or hi >= latest:
+                self.save()
+                unsaved = 0
             if until is not None and time.monotonic() > until and hi < latest:
+                self.save()
                 raise Behind(f"read to block {hi} of {latest}: the next pass goes on from there")
+
+    def links_read(self, trader: str) -> bool:
+        """Whether the trader's incoming USDC is read from the deployment's block on (`read_links`)."""
+        got = self.d["links"].get(trader)
+        return got is not None and int(got["at"]) > int(got["to"])
+
+    def read_links(self, traders: list[str], usdc: str, until: float | None = None) -> list[str]:
+        """The incoming USDC of `traders` (those with a payout waiting) from the deployment's block to the block each
+        was first seen in, all of them in one query a chunk of LINK_CHUNK blocks, in step from the lowest block left;
+        the progress saved after each chunk. `until` (a time.monotonic()) is looked at between chunks: out of time,
+        what was read is kept and the next pass goes on. Returns the traders not read to their end."""
+        links = self.d["links"]
+        for t in traders:
+            if t not in links:  # seen before links were kept: read from the deployment to their first purchase
+                first = min((int(l["blockNumber"], 16) for l in self.d["pool_logs"]
+                             if l["topics"][0] == sk.EXAM_SOLD and _addr(l["topics"][2]) == t), default=self.scanned_to + 1)
+                links[t] = {"at": int(self.key["start"]), "to": first - 1}
+        seen = {("transfer", x["tx"], x.get("index")) for x in self.d["transfers"]}
+        while True:
+            left = [t for t in dict.fromkeys(traders) if not self.links_read(t)]
+            if not left:
+                return []
+            if until is not None and time.monotonic() > until:
+                self.save()
+                return left
+            lo = min(int(links[t]["at"]) for t in left)
+            batch = [t for t in left if int(links[t]["at"]) == lo][:chk.ADDRESS_BATCH]
+            hi = min([lo + LINK_CHUNK - 1] + [int(links[t]["to"]) for t in batch]
+                     + [int(links[t]["at"]) - 1 for t in left if int(links[t]["at"]) > lo])
+            self._transfers(usdc, batch, lo, hi, seen)
+            for t in batch:
+                links[t]["at"] = hi + 1
+            self.save()
 
     def _seen(self, lo: int) -> set:
         """The logs kept from block `lo` on, by kind, transaction and index: those a tail read again finds twice."""
@@ -3155,6 +3212,9 @@ def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads
         x["trail"] = payout_trail(life.get((x["pool"], x["id"]), []))
         if x["wasStopped"]:
             x["stopReason"] = {"recorded": recorded.get((x["pool"], x["id"])), "read": stop_reason_read(x["pool"], x["id"])}
+    # The wallets that funded each trader with a payout waiting, from the deployment's block on, read lazily and kept
+    # (`LogScan.read_links`): a trader not read to the end yet is held as not read, never clean (review 15 of #338).
+    links_unread = kept.read_links(list(dict.fromkeys(x["trader"] for x in payouts if x["state"] == "Due")), usdc, until)
     books = {pool: {"balance": c.call_view(usdc, "balanceOf(address)", ["address"], [pool], ["uint256"])[0],
                     **{k: core.view(pool, f"{k}()", "uint256") for k in ("owed", "held", "reserved")},
                     "sizes": [int(m[0]) for m in c.call_view(pool, "menu()", [], [], ["(uint64,uint64)[]"])[0]],
@@ -3287,6 +3347,7 @@ def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads
         venue = venue_candles.to_venue(candles)
     return {"chainId": chain_id, "now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
             "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
+            "linksUnread": links_unread,
             "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {},
             "fillWindow": fill_window, "dailyLossBps": daily_bps, "drawdownKind": drawdown_kind,
             "maxDrawdownBps": drawdown_bps, "times": payout_times(factory),

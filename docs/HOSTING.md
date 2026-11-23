@@ -939,8 +939,12 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
   reads and, cut to what it decides by, what the operator's page reads through the index's reviews route;
 - `scan.json`, every log the review has read, with the block it read to: each pass reads only the blocks after it,
   and the last 1 000 blocks before it again (a log a lagging node left out, a pool the factory's list did not show
-  yet; what is read twice is kept once) (a first pass over a long chain goes in parts of 5 000 blocks, each saved; a pass out of its time goes on from the
-  last part). Removing it makes the next passes read the chain from the deployment's block again;
+  yet; what is read twice is kept once) (a first pass over a long chain goes in parts of 5 000 blocks, each saved; the
+  pass's time is looked at every 500 blocks, and a pass out of its time saves what it read and goes on from there).
+  The USDC sent to a trader before they were first seen is read back to the deployment's block only for a trader with
+  a payout waiting, all such traders together, 1 000 blocks a chunk, saved after each chunk and gone on with at the
+  next pass when the time runs out; until it is read to the end that payout is held as not read. Removing
+  `scan.json` makes the next passes read the chain from the deployment's block again;
 - `candles-<network>-YYYY-MM-DD.jsonl`, the venue's minute candles of the platform's assets, fetched from
   Hyperliquid's info API on each pass (no key) and kept: the API gives only the last 5 000 minutes;
 - `status.json`, the end of the last pass (its time, block, payouts waiting and held), which the stops' loop in the

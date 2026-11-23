@@ -115,6 +115,11 @@ class ScanWorld(unittest.TestCase):
             s.read(self.POOLS, self.USDC, latest, part=part)
         return s
 
+    def links(self, s, traders):
+        """The incoming USDC of `traders` (a payout of theirs waiting) read back to the deployment (`read_links`)."""
+        with mock.patch.object(pr, "logs", self.fake()):
+            return s.read_links(traders, self.USDC)
+
 
 
 class ScanFaults(ScanWorld):
@@ -130,10 +135,11 @@ class ScanFaults(ScanWorld):
         later = self.scan(80)
         self.assertEqual(later.accounts(), [exam], "the sale at block 38 is lost for good: nothing re-reads a tail")
 
-    @unittest.expectedFailure  # TODO(review 15): until its fix lands in this round
     def test_funding_of_a_new_trader_older_than_a_day_is_still_a_link(self):
         """LINK_BACK: the transfers into a new trader are read from 86 400 blocks before their first purchase only. Funding
-        wallets sent USDC to two buyers two days before they bought: invisible, so no `link`, and a pair is reason 1."""
+        wallets sent USDC to two buyers two days before they bought: invisible, so no `link`, and a pair is reason 1.
+        As decided for the fix: read back to the deployment for a trader with a payout waiting (`read_links`), so the
+        trader here is one whose payout waits."""
         a, b, funder = T.addr(0x101), T.addr(0x102), T.addr(0xF0)
         far = 300_000
         for k, who in enumerate((a, b)):
@@ -147,6 +153,9 @@ class ScanFaults(ScanWorld):
         with mock.patch.object(pr, "logs", self.fake()), \
                 mock.patch.object(pr.c, "rpc", side_effect=lambda m, p=(): {"timestamp": hex(1_000 * int(p[0], 16))}):
             s.read(self.POOLS, self.USDC, far + 5, part=100)
+        self.assertFalse(s.links_read(a), "not read back before a payout of theirs waits")
+        self.assertEqual(self.links(s, [a]), [])
+        self.assertTrue(s.links_read(a))
         got = {(t["from"].lower(), t["to"].lower()) for t in s.d["transfers"]}
         self.assertIn((funder.lower(), a.lower()), got, "the funder of two buyers, 3 days before they bought, is not read")
 
@@ -161,7 +170,36 @@ class ScanControls(ScanWorld):
         self.chain.append({"address": self.USDC, "topics": [pr.TRANSFER, self.word(funder), self.word(trader)], "blockNumber": 30})
         s = self.scan(80)
         self.assertEqual(s.accounts(), [exam])
+        self.links(s, [trader])
         self.assertEqual([(t["from"], t["block"]) for t in s.d["transfers"]], [(funder, 30)])
+
+    def test_the_links_are_read_in_chunks_out_of_time_kept_and_gone_on_with(self):
+        """H-A: the read back is chunked, the time looked at between chunks; what was read is saved, the next pass goes
+        on from it, and a trader is read once to the deployment, never again."""
+        trader, funder = T.addr(0x101), T.addr(0xF0)
+        self.chain.append({"address": T.POOL, "topics": [pr.sk.EXAM_SOLD, self.word(T.addr(0x201)), self.word(trader),
+                                                         self.word(T.addr(0xB0))], "blockNumber": 5_000})
+        for b in (20, 2_500, 4_900):
+            self.chain.append({"address": self.USDC, "topics": [pr.TRANSFER, self.word(funder), self.word(trader)], "blockNumber": b})
+        s = self.scan(5_010, part=5_010)
+        clock = iter([0.0, 0.0, 99.0, 99.0])
+        with mock.patch.object(pr, "logs", self.fake()), mock.patch.object(pr.time, "monotonic", lambda: next(clock)):
+            self.assertEqual(s.read_links([trader], self.USDC, until=1.0), [trader])
+        again = pr.LogScan(self.dir / "scan.json", T.addr(0xFA), 998, 1)
+        self.assertEqual(again.d["links"][trader]["at"], 1 + 2 * pr.LINK_CHUNK, "two chunks read and saved")
+        self.assertEqual(self.links(again, [trader]), [])
+        self.assertEqual(sorted(t["block"] for t in again.d["transfers"]), [20, 2_500, 4_900])
+        self.assertEqual(self.links(again, [trader]), [])
+        self.assertEqual(len(again.d["transfers"]), 3, "read once: nothing read twice")
+
+    def test_a_payout_whose_traders_funding_is_not_read_to_the_end_is_held(self):
+        ch, _, _ = T.honest_world()
+        pay = ch.d["payouts"][0]
+        self.assertEqual(pr.review(ch.d, pay["pool"], pay["id"])["action"], "approve")
+        ch.d["linksUnread"] = [pay["trader"]]
+        got = pr.review(ch.d, pay["pool"], pay["id"])
+        self.assertEqual((got["verdict"], got["action"]), ("suspicious", "hold"))
+        self.assertIn("the USDC sent to the trader before their first purchase", " ".join(got["reasons"]))
 
     def test_a_log_the_tail_reads_again_is_kept_once(self):
         """The tail read again each pass (M2) finds what it read before: each log is kept once."""
@@ -188,7 +226,6 @@ class AlarmChannel(unittest.TestCase):
 
 
 class CostOfANewBuyer(unittest.TestCase):
-    @unittest.expectedFailure  # TODO(review 15): until its fix lands in this round
     def test_one_new_buyer_in_a_ten_minute_pass_costs_a_bounded_number_of_calls(self):
         """A pass that reads 600 new blocks in which one new trader bought: the look-back of LINK_BACK (86 400 blocks) is
         86 400 / 50 getLogs calls of its own, in the part's one step, which `until` (checked only after a part is saved)

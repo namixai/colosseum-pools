@@ -174,7 +174,8 @@ class Scale(unittest.TestCase):
                         mock.patch.object(r.core, "view", return_value=[T.POOL]):
                     r.read_chain({"SimPoolFactory": T.addr(0xFA), "usdc": T.USDC, "block": 10}, scan=d / "s.json", until=5.0)
         saved = json.loads((d / "s.json").read_text())
-        self.assertEqual(saved["scannedTo"], 10 + r.SCAN_PART - 1, "one part read and saved, then the time ran out")
+        # The time is looked at after each step of a part (review 15 of #338): one step read and saved, then it ran out.
+        self.assertEqual(saved["scannedTo"], 10 + r.SCAN_STEP - 1, "one step read and saved, then the time ran out")
 
 
 class Alarms(unittest.TestCase):
