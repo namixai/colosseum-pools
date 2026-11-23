@@ -25,7 +25,8 @@ import { createExamChart } from "./examchart.js";
 import { positionLines } from "../lib/positionlines.js";
 import { createEntryTracker, browserStore } from "../lib/entrytrack.js";
 import { pxText } from "../lib/exam.js";
-import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, STALE_PASS_POLLS, LIST_MS } from "../lib/examreads.js";
+import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, STALE_PASS_POLLS, LIST_MS, stopBookOf,
+  settledText } from "../lib/examreads.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
@@ -87,9 +88,10 @@ export async function examView(address, page, query = "") {
   // is that chain's or nothing (dataSource), never another network's candles beside this exam.
   const chainId = await nodeChainId();
   const ds = dataSource({ chainId }, CONFIG);
-  // The stop book of the exam's factory, where it has one: an exam made before the book has no `stopBook` getter.
+  // The stop book of the exam's factory, where it has one: an exam made before the book has no `stopBook` getter, and
+  // only the contract's refusal says so; a node that fails is asked again, then the page says it (`stopBookOf`).
   const [rules, terms, trader, panelPool, bookAddress] = await Promise.all([exam.rules(), exam.terms(), exam.trader(),
-    simPoolOf(address), exam.stopBook().catch(() => null)]);
+    simPoolOf(address), stopBookOf(() => exam.stopBook())]);
   const stopBook = bookAddress && !/^0x0{40}$/i.test(bookAddress)
     ? new ethers.Contract(bookAddress, STOP_BOOK_ABI, chain.readProvider) : null;
   // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
@@ -460,6 +462,7 @@ function paintAccount(page, st) {
   const lines = [...f.lines].sort((x, y) => Number(y.near) - Number(x.near));
   const idx = new Map(account.lines.map((l, i) => [l.kind, i]));
   $("#ex-account", page).innerHTML = `
+    ${f.afterSettle ? `<p class="ex-why">${esc(f.afterSettle)}</p>` : ""}
     <dl class="ex-eq"><div><dt>Equity</dt><dd>${esc(f.equity)}</dd></div><div><dt>Balance</dt><dd>${esc(f.balance)}</dd></div>
       <div><dt>Leverage</dt><dd>${esc(f.leverage)} <small>of ${esc(f.maxLeverage)}</small></dd></div></dl>
     <div class="ex-scale">
@@ -665,8 +668,12 @@ async function sendCall(page, st, call, out) {
       chain.forgetLiveReads();
       if (!receipt || receipt.status !== 1) throw new Error(`${call.method} reverted`);
       el.className = "result ok";
+      // A settle may carry out only part of the touches (a long one stops between two steps): "Settled." only when
+      // the book holds none of this exam's any more.
+      const left = call.method === "settle" && st.stopBook
+        ? await st.stopBook.touches(st.address).then((t) => [...t], () => null) : null;
       el.textContent = call.method === "place" ? "Order sent. It is filled a few blocks later."
-        : call.method === "settle" ? SCREEN_TEXT.settled : "Done.";
+        : call.method === "settle" ? settledText(left) : "Done.";
     } catch (err) {
       el.className = "result err";
       el.textContent = sendFailure(err, (d) => refusalOf(d, keccak));

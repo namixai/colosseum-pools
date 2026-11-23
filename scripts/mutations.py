@@ -8154,6 +8154,29 @@ MUTATIONS = [
      "  \"event PayoutApproved(uint256 indexed id)\",",
      ["every line of the ABI is the pool's own, by its source"]),
     # The trader's screen of a paper exam: the account as the contract counts it, an order before it is sent.
+    # Review 9 of #336, the trading screen: the header after a touched stop's settle (M5), only the exam's refusal of
+    # stopBook() is no book (M6), "Settled." only with no touch left (L5).
+    ("EH1", "app/lib/exam.js",
+     "  const settle = afterSettle(reads, block);",
+     "  const settle = null;",
+     ["with a touched stop waiting, the header counts the account after its settle, not the position open at the mark",
+      "a touch that breaks a rule shows the breach before the settle comes"]),
+    ("EH2", "app/lib/exam.js",
+     "    if (got.refusal) continue;\n    filled += 1;",
+     "    filled += 1;",
+     ["a touch the settle would not fill (the exam over at its time) changes nothing"]),
+    ("EH3", "app/lib/examreads.js",
+     "      if (reverted(err)) return null;",
+     "      return null;",
+     ["only the exam's refusal of stopBook() means no book; a node that fails is asked again, then said"]),
+    ("EH4", "app/views/exam.js",
+     "simPoolOf(address), stopBookOf(() => exam.stopBook())]);",
+     "simPoolOf(address), exam.stopBook().catch(() => null)]);",
+     ["the screen reads the stop book through stopBookOf, with no catch that turns a failure into no book"]),
+    ("EH5", "app/lib/examreads.js",
+     "  if (n === 0) return \"Settled.",
+     "  if (true) return \"Settled.",
+     ["Settled. only when no touch is left; a settle done in part says how many are left"]),
     ("ET1", "app/lib/exam.js",
      "  if (equity < drawdownAt) return \"drawdown\";",
      "  if (equity <= drawdownAt) return \"drawdown\";",
@@ -17331,6 +17354,7 @@ RUNNERS = {
     "OP": (["node", "--test", "--test-reporter=tap", "app/tests/operator.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     # The trader's screen of a paper exam: its own test file.
     "ET": (["node", "--test", "--test-reporter=tap", "app/tests/exam.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
+    "EH": (["node", "--test", "--test-reporter=tap", "app/tests/examhardening.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     # The shared pool's keeper on the host: its own test file.
     "PO": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_host_shared_keeper"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The safety page's pointers into the code: its own test file.

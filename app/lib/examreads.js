@@ -17,6 +17,7 @@
 // No browser globals here: `io` is what the page reads with, so node's test runner loads it
 // (app/tests/examreads.test.mjs).
 import { bboOf } from "./exam.js";
+import { reverted } from "./verdict.js";
 
 /** How long the list's prices stand while it is open before they are read again. */
 export const LIST_MS = 15_000;
@@ -146,4 +147,44 @@ export function shownPrice(prices, row) {
   if (!row) return null;
   if (prices.has(row.asset)) return prices.get(row.asset);
   return row.read ? row.oracle : null;
+}
+
+/** Reads of the exam's `stopBook()` before the page says it could not tell whether the exam has a book. */
+export const BOOK_TRIES = 3;
+
+/**
+ * The exam's stop book (`read()` is `exam.stopBook()`): its address, or null for an exam made before the book, which
+ * has no such getter and whose call the contract refuses (`reverted`, as `ops/book_keeper.book_of` takes a revert).
+ * Any other failure is the node's, not the exam's answer: it is asked again, `tries` times in all, a growing wait
+ * between, and then this throws, so that the page says so and offers to try again instead of showing the exam as one
+ * without a book for the whole visit (no touches, no settle, no check of a stop set past the price). Review 9 of #336.
+ */
+export async function stopBookOf(read, { tries = BOOK_TRIES, wait = (ms) => new Promise((r) => setTimeout(r, ms)), delayMs = 700 } = {}) {
+  for (let k = 1; ; k++) {
+    try {
+      return await read();
+    } catch (err) {
+      if (reverted(err)) return null;
+      if (k >= tries) {
+        throw new Error("The node did not answer whether this exam has a stop book (it failed "
+          + `${tries} times), so the stops cannot be shown as they are. Try again in a moment.`);
+      }
+      await wait(delayMs * k);
+    }
+  }
+}
+
+/**
+ * What the page says once a settle is in a block, from the book's touches of the exam read after it (`left`, null where
+ * that read failed): "Settled." only where none is left. A long settle stops between two steps and keeps what it did
+ * (`StopsPending` for the rest): then how many are left, and that a second settle carries out the rest. Review 9 of #336.
+ */
+export function settledText(left) {
+  if (left === null || left === undefined) {
+    return "The settle is in a block, but the touches left could not be read: look at the positions below before you count on it.";
+  }
+  const n = left.length;
+  if (n === 0) return "Settled. The account now shows the stop or take filled at the price of its touch.";
+  return `Settled in part: ${n} touched stop${n === 1 ? "" : "s"} or take${n === 1 ? "" : "s"} still to carry out. `
+    + "Press Settle again to carry out the rest (anyone may).";
 }
