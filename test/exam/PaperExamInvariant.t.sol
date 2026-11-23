@@ -90,26 +90,37 @@ contract PaperExamHandler is Test {
         }
     }
 
-    /// A stop or a take at the oracle price, which with the oracle still has triggered by the time it acts, and the stop
-    /// book's check a few blocks on, which carries it out: it closes at a fill's price, held to the same two bounds (past
-    /// the ceiling, at it: a stop is never refused).
-    function trigger(uint256 assetSeed, bool isTake, uint256 sz, uint256 bookSeed) external {
+    /// A stop one unit inside the oracle price (one at the price is refused: it would trigger at once), the oracle two
+    /// units past it, against the trader, in the one block the stop book's check logs a few blocks on, and back: the
+    /// stop closes at a fill's price, held to the same two bounds from that block's oracle (past the ceiling, at it: a
+    /// stop is never refused). A take is not tried: with the oracle still it is never reached, and reaching it would
+    /// move the oracle for the trader.
+    function trigger(uint256 assetSeed, bool, uint256 sz, uint256 bookSeed) external {
         uint32 asset = assetSeed % 2 == 0 ? BTC : ETH;
         int256 pos = exam.positionOf(asset);
         if (pos == 0) return;
+        int256 mark = int256(uint256(asset == BTC ? BTC_MARK : ETH_MARK));
+        int256 side = pos > 0 ? int256(-1) : int256(1); // a long's stop under the price, a short's over it
         vm.prank(trader);
-        try exam.setTrigger(asset, isTake, uint64(asset == BTC ? BTC_MARK : ETH_MARK), uint64(sz % 3 == 0 ? 0 : bound(sz, 1, 4_800))) {
+        try exam.setTrigger(asset, false, uint64(uint256(mark + side)), uint64(sz % 3 == 0 ? 0 : bound(sz, 1, 4_800))) {
             calls["setTrigger"] += 1;
         } catch {
             return;
         }
         vm.roll(block.number + DELAY + (bookSeed % 3));
         if (randomBook) _drawBook(bookSeed);
+        touchShift = 2 * side;
+        CoreSimulatorLib.setMarkPx(asset, uint64(uint256(mark + touchShift)));
         vm.recordLogs();
         StopBook(exam.stopBook()).settle(address(exam));
         if (exam.positionOf(asset) != pos) calls["fillTrigger"] += 1;
         _checkPrice(asset, pos < 0);
+        touchShift = 0;
+        CoreSimulatorLib.setMarkPx(asset, uint64(uint256(mark)));
     }
+
+    /// How far the oracle stands off its mark in the block a stop is carried out in (`trigger`).
+    int256 internal touchShift;
 
     function checkpoint(uint256 secs) external {
         vm.warp((block.timestamp / 1 days + 1) * 1 days + bound(secs, 0, 14 minutes));
@@ -174,7 +185,7 @@ contract PaperExamHandler is Test {
             uint32 asset = uint32(uint256(logs[i].topics[1]));
             (bool isBuy,, uint64 px,,, uint8 source) =
                 abi.decode(logs[i].data, (bool, uint64, uint64, uint256, uint256, uint8));
-            uint256 oracle = asset == BTC ? BTC_MARK : ETH_MARK;
+            uint256 oracle = uint256(int256(uint256(asset == BTC ? BTC_MARK : ETH_MARK)) + touchShift);
             uint256 worst = oracle * MAX_WORSE / 10_000;
             if (isBuy ? px < oracle : px > oracle) ghostBadPrice += 1;
             if (source == exam.SOURCE_BOOK() && (isBuy ? px > oracle + worst : px + worst < oracle)) ghostBadPrice += 1;
@@ -265,6 +276,18 @@ contract PaperExamStillOracleInvariantTest is Test, BookStand {
 
     function afterInvariant() external {
         console2_log();
+    }
+
+    /// The handler's stop reaches its fill (review of cp#336: one set at the oracle price was refused, and the stop
+    /// fills of these runs had silently stopped): a long, its stop, carried out, within the bounds.
+    function test_theHandlersStopReachesItsFill() public {
+        handler.place(0, true, 100);
+        handler.fill(uint256(DELAY) << 8, 0);
+        assertTrue(exam.positionOf(BTC) > 0, "a long");
+        handler.trigger(0, false, 0, 0);
+        assertEq(handler.calls("fillTrigger"), 1, "the stop filled");
+        assertEq(handler.ghostBadPrice(), 0);
+        assertEq(exam.positionOf(BTC), 0);
     }
 
     function console2_log() internal {
