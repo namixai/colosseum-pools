@@ -483,8 +483,13 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     held at the price 60 blocks or the step is never missed by the reading, a shorter one may be. These
     prices are kept apart from the review's others: no other check sees them. A block it was shown to have
     triggered in (`TriggerSeen`) counts as reached. Two reads at the price with none off it between are one
-    stretch; for a trigger carried out, its last such stretch is the close's own. This is a fact shown to
-    whoever signs: it is in no reason and changes no verdict;
+    stretch; for a trigger carried out, its last such stretch is the close's own. With the stops' loop's journal
+    (`--prices prices-<deployment>.jsonl`, "The stops" below) every block of each trigger's time is judged by the
+    journal instead, and no other read stands in for a block it does not hold. A reach nobody carried out (a stop
+    taken off or moved by the trader while reached among them) is the reason `missed-stop`; a block of a trigger's
+    time the journal does not hold, no journal at all, or a journal not borne out (below) is `stop-unchecked`.
+    Either holds the payout, with the draft of a stop of reason 3 naming the transactions that set the stops;
+    the review is clean only when every block of every trigger's time is checked and no reach went uncarried;
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
     under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
   - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
@@ -630,7 +635,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
 
   A result that does not count up comes with a draft of a stop of reason 3, a result disputed. The
   draft names the fills and leaves out the hash of the analysis, which a person writes. Such a payout
-  is offered nothing to approve: its `action` is `hold` and its call is empty. The operator's page
+  is offered nothing to approve: its `action` is `hold` and its call is empty. So is a payout with a stop
+  reached and not carried out (`missed-stop`), a block of a stop's time not checked (`stop-unchecked`), or
+  an account's own events not read; the draft then names the transactions that set the stops. The operator's page
   shows no Approve button for it, only "Approve anyway" behind a warning the operator confirms
   (`approveAnywayCall`). Something else suspicious, with the result counting up, is `decide`: the
   approval is offered, and the choice is the signer's. The review cannot see:
@@ -749,10 +756,61 @@ to the flag file `stops-<deployment>.alarm` next to the keeper's state, and the 
 `COLOSSEUM_ALERT_CMD` when the host has a channel. A miss does not mend itself: the flag stays until a person
 removes it. Blocks whose prices were not read judge nothing, and are said.
 
-Every price the loop read goes to `prices-<deployment>.json` next to the state: one JSON object
-`{"asset:block": px}`, valid between any two writes and written by one process, the file
-`ops/payout_review.py --prices` takes. It grows with every block a stop stands and is not cut. It is the keeper's
-own record, not an independent one: check a sample of it against the node. The watch also runs alone, with no
+Every block the loop looks at goes to `prices-<deployment>.jsonl` next to the state, one JSON line a block:
+`{"b": block, "t": its time, "w": the loop's clock, "px": {asset: price}}`, with each asset that had a stop or a
+take standing (none: an empty map) and `"unread"` for an asset whose price was not read. Blocks it did not look at
+are lines `{"gap": [from, to], "why": ...}`: not running (written from its last line when it starts again), the
+head ahead of its read-back, behind past 1 000 blocks. It is appended line by line by one process, survives a
+restart (a line cut short is cut off), grows by about 60 bytes a block and is not cut. Nothing in it is sent to
+the chain.
+
+It is the record the payout review judges every stop by (`--prices`; the review's service reads the keeper's own
+file), and it is the keeper's own, so the review believes it only where something else bears it out:
+- the chain's own prices: a fill at the oracle (any source but the book) is at the oracle price of its block, and
+  `TriggerSeen` names it; the journal must give the same price at every such block it holds;
+- a node calibrated on those: at the chain's prices nearest a stop's time the node must give the chain's price,
+  and at one of them a price other than its latest, so a node that answers a call at an old block with the state of
+  today calibrates nothing. Only then is it asked for a sample of the journal's blocks (each stop's first and last
+  block, every block the journal shows at the price or past it, and blocks spread over the rest, 200 an account,
+  `--journal-checks`), each to be the journal's price.
+A price that differs, a node with no state that far back, or no chain price to calibrate on is `stop-unchecked`:
+the payout is held. A node that keeps the oracle's history (an archive node) is what makes a journal checkable.
+
+### What the terms say a stop does, and what a missed one costs
+
+As the code does it, with the reasons a payout may be stopped for that the pool already has:
+- a stop or a take is carried out by the factory's filler, `fillTrigger`, in a block where the oracle price of that
+  block is at its level or past it, at the oracle price of that block (or the book's, for an exam filled from the
+  book, within `maxWorseBps` of the oracle). The stops' loop looks at every block and sends the fill in the block
+  that sees the level reached; it does not wait for anything else;
+- if a reach of a stop goes by with no fill (the filler down, a node behind, a fill that did not land in time, the
+  trader taking the stop off while reached), the chain keeps no trace of it: the account goes on as if the stop had
+  not been reached. The loop raises an alarm at once (`stop_missed`);
+- the payout of a stage or exam with such a reach, or with a block of a stop's time the journal does not hold, is
+  held: the review offers no approval (`hold`), and a pool with approvals pays it unapproved only at its ceiling,
+  7 days after the claim. A person decides from the review and the journal whether the result is disputed; if it
+  is, the checker stops the payout for reason 3, "the result is disputed: a flaw of the exam, the oracle or the
+  filler", with a published analysis, sent with the checker's key. A stop of reason 3 is never sent by a program,
+  and only the factory's operator lifts it (`liftStop`). A pool without approvals pays by itself at 72 hours: the
+  review's service raises an alarm with the last moment a stop is still taken (`payout_needs_a_stop`).
+Nothing here moves money by itself, changes a result on chain, or pays anyone back.
+
+### What it costs
+
+Only a stop's fill is a transaction; the loop sends nothing on a timer, and its reads cost no gas. One fill,
+`fillTrigger`, measured in the contract tests (`forge test --match-path test/exam/PaperExam.t.sol --gas-report`):
+88 736 gas of execution from cold storage, 85 454 at most in the report; with the transaction's own 21 000 and its
+calldata, about 110 000 gas. The loop sends it with a limit of 400 000 and a fee cap of twice the gas price, and pays
+only the gas used. At a gas price of 0.1 gwei (HyperEVM's, read on 20 November 2026; it moves):
+
+| fills a day | gas a day | HYPE a day (0.1 gwei) | at most (every fill at its limit and four raised fees) |
+|---|---|---|---|
+| 0 | 0 | 0 | 0 |
+| 10 | 1.1 million | 0.00011 | 0.0020 |
+| 100 | 11 million | 0.0011 | 0.020 |
+
+"At most" is 400 000 gas at twice 0.1 gwei raised by a quarter four times (about 2.44 times), every fill: a bound,
+not an estimate. A fill the exam refuses (the price back by the time it lands) costs its gas too and closes nothing. The watch also runs alone, with no
 key and sending nothing, on another machine and node (`python -m ops.stop_filler --deployment <label>`), with
 files of its own (`watch-prices-…`, `watch-stops-…`): it sees what the keeper missed even while the keeper is
 down.
