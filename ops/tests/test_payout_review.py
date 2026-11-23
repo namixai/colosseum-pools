@@ -2921,3 +2921,52 @@ class WhyAPayoutWasStopped(unittest.TestCase):
             self.assertIsNone(r.stop_reason_read(POOL, 7), "a pool from before the reason is kept")
         with mock.patch.object(r.c, "call_view", side_effect=Exception("429 Too Many Requests")):
             self.assertIsNone(r.stop_reason_read(POOL, 7), "not read: not a reason")
+
+
+class NoNodeAddressInTheLog(unittest.TestCase):
+    """Review 9 of #336 (L2): a node's address may hold its key; no log line or error of the review writes it."""
+
+    URL = "https://rpc.example.org/v2/SECRETKEY123"
+
+    def test_a_refused_read_of_the_books_gaps_writes_no_address(self):
+        import requests
+        resp = requests.Response()
+        resp.status_code, resp.reason, resp.url = 403, "Forbidden", self.URL
+        said = []
+        book = to_checksum_address("0x" + "b0" * 20)
+        from ops import book_keeper
+        with mock.patch.object(r.c._session, "post", return_value=resp), \
+                mock.patch.object(r.core, "log", side_effect=lambda e, **f: said.append((e, f))), \
+                mock.patch.object(book_keeper, "book_of", return_value=book), \
+                mock.patch.object(r.c, "call_view", return_value=(book,)):
+            self.assertEqual(r.read_book({}, "0x" + "33" * 20, [addr(0x301)], 1, 5)[2], None)
+        self.assertEqual([e for e, _ in said], ["gaps_unread"])
+        self.assertNotIn("SECRETKEY123", json.dumps(said))
+        self.assertNotIn("rpc.example.org", json.dumps(said))
+        self.assertIn("403", said[0][1]["error"], "what failed is still said")
+
+    def test_quiet_takes_out_every_shape_of_address_before_it_cuts(self):
+        shapes = [f"403 Client Error: Forbidden for url: {self.URL}",
+                  "HTTPSConnectionPool(host='rpc.example.org', port=443): Max retries exceeded with url: /v2/SECRETKEY123 "
+                  "(Caused by NameResolutionError)",
+                  f"eth_call: {{'message': 'bad', 'url': '{self.URL}?key=SECRETKEY123'}}",
+                  "x" * 190 + " " + self.URL]
+        for text in shapes:
+            got = r.quiet(RuntimeError(text), 200)
+            self.assertNotIn("SECRETKEY123", got, text)
+            self.assertNotIn("SECRET", got, text)
+        with mock.patch.object(r.c, "RPC_URL", "http://node.example.net:8545/AbCdKey"):
+            self.assertEqual(r.quiet(RuntimeError("down: http://node.example.net:8545/AbCdKey"), 50), "down: <node>")
+
+    def test_a_node_that_fails_ends_the_review_in_one_line_without_its_address(self):
+        import requests
+        with mock.patch.object(r.c, "assert_testnet"), \
+                mock.patch.object(r.deployments, "load", return_value={"SimPoolFactory": addr(0xFA)}), \
+                mock.patch.object(r, "read_chain", side_effect=requests.ConnectionError(
+                    f"Max retries exceeded with url: /v2/SECRETKEY123 ({self.URL})")):
+            with self.assertRaises(SystemExit) as caught:
+                r.main(["--deployment", "x"])
+        self.assertIn("the node failed", str(caught.exception))
+        self.assertNotIn("SECRETKEY123", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__, "no traceback of the exception with the address")

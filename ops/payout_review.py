@@ -66,6 +66,7 @@ from ops import sim_network as sn
 from spike.hlspike import common as c
 
 quiet = chk.quiet  # an error's text without the node's address (its key)
+node_errors = chk.node_errors
 
 PAYOUT_DUE = "0x" + keccak(text="PayoutDue(uint256,address,address,uint64,uint64)").hex()
 # What a payout's life is written as (SimPool): each event's first topic is the payout's id. The tests hold each
@@ -2153,7 +2154,7 @@ def read_daily(account: str, into: dict[str, int]) -> None:
     try:
         into[account] = int(c.call_view(account, "rules()", [], [], [EXAM_RULES])[0][0])
     except Exception as exc:
-        core.log("rules_unread", account=account, error=str(exc)[:200])
+        core.log("rules_unread", account=account, error=quiet(exc, 200))
 
 
 def read_drawdown(account: str, kinds: dict[str, int], bps: dict[str, int]) -> None:
@@ -2163,7 +2164,7 @@ def read_drawdown(account: str, kinds: dict[str, int], bps: dict[str, int]) -> N
     try:
         bps[account] = int(c.call_view(account, "rules()", [], [], [EXAM_RULES])[0][1])
     except Exception as exc:
-        core.log("rules_unread", account=account, error=str(exc)[:200])
+        core.log("rules_unread", account=account, error=quiet(exc, 200))
         return
     try:
         kinds[account] = int(c.call_view(account, "drawdownKind()", [], [], ["uint8"])[0])
@@ -2171,7 +2172,7 @@ def read_drawdown(account: str, kinds: dict[str, int], bps: dict[str, int]) -> N
         if "revert" in str(exc).lower():
             kinds[account] = FROM_START
         else:
-            core.log("not_read", address=account, call="drawdownKind()", error=str(exc)[:120])
+            core.log("not_read", address=account, call="drawdownKind()", error=quiet(exc, 120))
             bps.pop(account, None)
 
 
@@ -2274,7 +2275,7 @@ def share_reserve(pool: str) -> int | None:
     except Exception as exc:
         if "revert" in str(exc).lower():
             return 0
-        core.log("not_read", address=pool, call="sharesDue()", error=str(exc)[:120])
+        core.log("not_read", address=pool, call="sharesDue()", error=quiet(exc, 120))
         return None
 
 
@@ -2287,7 +2288,7 @@ def answers(addr: str, sig: str, out: list[str]) -> bool | None:
     except Exception as exc:
         if "revert" in str(exc).lower():
             return False
-        core.log("not_read", address=addr, call=sig, error=str(exc)[:120])
+        core.log("not_read", address=addr, call=sig, error=quiet(exc, 120))
         return None
 
 
@@ -2329,7 +2330,7 @@ def payout_stop_reasons(events: list[dict]) -> dict[tuple[str, int], int]:
         try:
             out[(to_checksum_address(l["address"]), int(l["topics"][1], 16))] = int(abi_decode(STOPPED_DATA, bytes.fromhex(l["data"][2:]))[1])
         except Exception as exc:
-            core.log("stop_reason_unread", address=l["address"], error=str(exc)[:120])
+            core.log("stop_reason_unread", address=l["address"], error=quiet(exc, 120))
     return out
 
 
@@ -2339,7 +2340,7 @@ def stop_reason_read(pool: str, pid: int) -> int | None:
         return int(c.call_view(pool, "stopReasonOf(uint256)", ["uint256"], [pid], ["uint8"])[0])
     except Exception as exc:
         if "revert" not in str(exc).lower():
-            core.log("not_read", address=pool, call="stopReasonOf(uint256)", error=str(exc)[:120])
+            core.log("not_read", address=pool, call="stopReasonOf(uint256)", error=quiet(exc, 120))
         return None
 
 
@@ -2368,7 +2369,7 @@ def read_pay_cap(factory: str, pool: str) -> dict | bool | None:
         except Exception as exc:
             if "revert" in str(exc).lower():
                 return False
-            core.log("not_read", address=to, call=sig, error=str(exc)[:120])
+            core.log("not_read", address=to, call=sig, error=quiet(exc, 120))
             return None
     limit = read(pool, "payoutsPerDay()", "uint8")
     if limit is None:
@@ -2394,7 +2395,7 @@ def payout_times(factory: str) -> dict:
         try:
             out[key] = int(c.call_view(factory, sig, [], [], ["uint32"])[0])
         except Exception as exc:
-            core.log("not_read", address=factory, call=sig, error=str(exc)[:120])
+            core.log("not_read", address=factory, call=sig, error=quiet(exc, 120))
             out[key] = None
     return out
 
@@ -2414,7 +2415,7 @@ def approver_of(pool: str) -> str | None:
     try:
         return to_checksum_address(c.call_view(pool, "approver()", [], [], ["address"])[0])
     except Exception as exc:
-        core.log("not_read", address=pool, call="approver()", error=str(exc)[:120])
+        core.log("not_read", address=pool, call="approver()", error=quiet(exc, 120))
         return None
 
 
@@ -2465,7 +2466,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             status[a] = sk.EXAM_STATUS[c.call_view(a, "result()", [], [], ["uint8", "address", "uint64", "uint64"])[0]]
             done[a] = bool(c.call_view(pool, "accountOf(address)", ["address"], [a], ["uint8", "uint8", "bool"])[2])
         except Exception as exc:
-            core.log("account_unread", account=a, error=str(exc)[:200])
+            core.log("account_unread", account=a, error=quiet(exc, 200))
             unread.append(a)
     times: dict[int, int] = {}
 
@@ -2533,7 +2534,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                 terms = c.call_view(a, "terms()", [], [], [sk.EXAM_TERMS])[0]
                 cost_ppm[a], fill_window[a] = int(terms[5]), int(terms[7])
             except Exception as exc:
-                core.log("terms_unread", account=a, error=str(exc)[:200])
+                core.log("terms_unread", account=a, error=quiet(exc, 200))
             read_daily(a, daily_bps)
             read_drawdown(a, drawdown_kind, drawdown_bps)
             assets = {e["asset"] for e in exam_events[a] if e["name"] == "Filled"}
@@ -2602,7 +2603,7 @@ def read_book(record: dict, factory: str, accounts: list[str], start: int, lates
     try:
         book = book_keeper.book_of(record, factory)
     except Exception as exc:
-        core.log("book_unread", error=str(exc)[:200])
+        core.log("book_unread", error=quiet(exc, 200))
         return None, set(), None
     if book is None:
         return None, set(), []
@@ -2616,13 +2617,13 @@ def read_book(record: dict, factory: str, accounts: list[str], start: int, lates
                 core.log("other_book", account=a)
                 continue
         except Exception as exc:
-            core.log("not_read", address=a, call="stopBook()", error=str(exc)[:120], then="taken as the factory's book")
+            core.log("not_read", address=a, call="stopBook()", error=quiet(exc, 120), then="taken as the factory's book")
         exams.add(a)
     try:
         gaps = [tuple(int(x) for x in abi_decode(["uint256", "uint256"], bytes.fromhex(l["data"][2:])))
                 for l in logs(book, [GAP], start, latest)]
     except Exception as exc:
-        core.log("gaps_unread", error=str(exc)[:200])
+        core.log("gaps_unread", error=quiet(exc, 200))
         gaps = None
     return book, exams, gaps
 
@@ -2669,12 +2670,15 @@ def main(argv: list[str] | None = None) -> int:
     # id checked. The review reads and holds no key, so it needs no --confirm-mainnet: whatever is to be sent (a stop of
     # reason 1 or 2, by the checker's own service, `sim_check --confirm-mainnet`; reason 3 or 4, by a person) is sent
     # elsewhere.
-    sn.confirm_service(args, args.deployment, c, sends=False)
+    with node_errors():
+        sn.confirm_service(args, args.deployment, c, sends=False)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
     load = lambda path: json.loads(pathlib.Path(path).read_text()) if path else None
-    chain = read_chain(record, load(args.prices), load(args.venue_prices), args.touch_reads)
+    prices, venue = load(args.prices), load(args.venue_prices)
+    with node_errors():
+        chain = read_chain(record, prices, venue, args.touch_reads)
     p = Params(args.window, args.size_tolerance, args.wide, args.code_run)
     pool = to_checksum_address(args.pool) if args.pool else None
     todo = [x for x in chain["payouts"]

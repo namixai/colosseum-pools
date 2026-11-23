@@ -48,6 +48,7 @@ Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -99,6 +100,18 @@ def quiet(exc, limit: int = 200) -> str:
             text = text.replace(url, "<node>")
     text = _URL_PATH.sub(r"\1<path>", _URL.sub("<node>", text))
     return text[:limit]
+
+
+@contextlib.contextmanager
+def node_errors():
+    """A failure of the node ends the program in one line with no node address in it, never a traceback that prints
+    the address (and its key) with the exception."""
+    try:
+        yield
+    except SystemExit:
+        raise
+    except Exception as exc:
+        raise SystemExit(f"refusing to go on: the node failed: {quiet(exc)}") from None
 
 
 def paced(rpc, gap_s: float, clock=time.monotonic, sleep=time.sleep):
@@ -457,7 +470,8 @@ def main(argv: list[str] | None = None) -> int:
     sn.add_args(p, service=True)
     args = p.parse_args(argv)
     dry = args.dry_run or not args.wallet
-    sn.confirm_service(args, args.deployment, c, sends=not dry)
+    with node_errors():
+        sn.confirm_service(args, args.deployment, c, sends=not dry)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
