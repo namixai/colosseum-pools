@@ -1432,11 +1432,16 @@ class TheStopsJournal(unittest.TestCase):
 
     mt = MissedTouches()
 
-    def journal(self, prices, drop=(), gaps=()):
+    def journal(self, prices, drop=(), gaps=(), both=True):
+        """The keeper's journal and, as written on another machine, the second writer's of the same blocks (`both`):
+        a block one journal alone holds is no cross-check (review 15 of #338)."""
         lines = [json.dumps({"b": b, "t": 1_000 * b, "w": 0, "px": {"3": px}}) for b, px in sorted(prices.items())
                  if b not in drop and 1_002 <= b <= 1_400]
         lines += [json.dumps({"gap": list(g), "why": "the loop was not running"}) for g in gaps]
-        return r.load_prices("\n".join(lines) + "\n")
+        j = r.load_prices("\n".join(lines) + "\n")
+        if both:
+            j.add_text("\n".join(lines) + "\n", None, "second")
+        return j
 
     def node(self, truth, soft=False, deep=0):
         def at(asset, block):
@@ -1445,21 +1450,36 @@ class TheStopsJournal(unittest.TestCase):
             return truth.get(block, self.mt.MARK) if not soft else self.mt.MARK
         return at
 
-    def judged(self, low, journal_low=None, drop=(), gaps=(), node=None, events=None):
+    def judged(self, low, journal_low=None, drop=(), gaps=(), node=None, events=None, both=True, reads=r.JOURNAL_CHECKS):
         ch, s1 = self.mt.world(low)
         if events is not None:
             ch.d["exam_events"][s1] = events
         truth = self.mt.prices(low, until=2_001)
-        j = self.journal(self.mt.prices(low if journal_low is None else journal_low), drop, gaps)
+        j = self.journal(self.mt.prices(low if journal_low is None else journal_low), drop, gaps, both)
         ch.d["journal"] = j
-        ch.d["journalCheck"] = r.check_journal([s1], ch.d["exam_events"], j, 2_000, node or self.node(truth))
+        ch.d["journalCheck"] = r.check_journal([s1], ch.d["exam_events"], j, 2_000, node or self.node(truth), reads)
         return r.review(ch.d, POOL, 0)
 
     def test_a_stop_checked_in_every_block_and_borne_out_is_clean(self):
         got = self.judged(set(range(1_300, 1_306)))
         self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"), got["reasons"])
         self.assertEqual(got["missedTouch"]["stage"]["every"], 1)
-        self.assertEqual(got["stopDoubt"]["stage"], {"missed": [], "unchecked": [], "txs": [], "late": []})
+        self.assertEqual(got["stopDoubt"]["stage"], {"missed": [], "unchecked": [], "txs": [], "late": [],
+                                                     "oneJournal": [], "journals": 2})
+        self.assertEqual(r.card(got, self.mt.world(set())[0].d)["journals"], 2)
+
+    def test_a_block_only_one_journal_holds_is_held_unless_the_node_bears_it_out(self):
+        """Review 15 of #338 (M1): one journal alone is no cross-check. The node that answers for old blocks bears out
+        each such block, `reads` an account at most; past them the payout is held as resting on one journal."""
+        low = set(range(1_300, 1_306))
+        short = self.judged(low, both=False)
+        self.assertEqual((short["action"], short["journals"]), ("hold", 1))
+        self.assertIn("stop-one-journal", short["kinds"])
+        self.assertIn("are in one journal only", " ".join(short["reasons"]))
+        borne = self.judged(low, both=False, reads=400)
+        self.assertEqual((borne["verdict"], borne["action"], borne["journals"]), ("clean", "approve", 2), borne["reasons"])
+        none = self.judged(low, both=False, node=lambda asset, block: None)
+        self.assertEqual(none["action"], "hold")
 
     def test_a_reach_in_the_journal_nobody_carried_out_holds_the_payout_with_a_draft_of_reason_3(self):
         got = self.judged({1_150, *range(1_300, 1_306)})
@@ -1543,7 +1563,7 @@ class TheSummary(unittest.TestCase):
 class TheDocument(unittest.TestCase):
     """The JSON a page reads: its fields fixed by the schema's name."""
 
-    KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action",
+    KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action", "journals",
             "reasons", "evidence", "call", "stopDraft", "batchApproval", "dailyCap", "readAt", "chainId"}
 
     def test_a_clean_payout_carries_its_approval(self):

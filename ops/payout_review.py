@@ -795,6 +795,7 @@ class Journal:
         self.conflicts: dict[int, dict[int, str]] = {}  # asset -> {block: what disagrees}
         self.notes: list[str] = []
         self.sources = 0
+        self.held: dict[int, dict[int, int]] = {}  # asset -> {block: how many journals hold its price}
 
     @classmethod
     def parse(cls, text: str, expect: dict | None = None, name: str = "the journal") -> "Journal":
@@ -859,6 +860,8 @@ class Journal:
                         self.conflicts.setdefault(asset, {})[b] = f"{name} gives two prices at block {b}: {mine[key]} and {v}"
                     continue
                 mine[key] = v
+                count = self.held.setdefault(asset, {})
+                count[b] = count.get(b, 0) + 1
                 held = self.px.setdefault(asset, {})
                 if b in held and held[b] != v:  # an earlier journal's price
                     self.conflicts.setdefault(asset, {})[b] = (f"the journals disagree at block {b}: {held[b]} against "
@@ -870,6 +873,11 @@ class Journal:
 
     def conflicts_in(self, asset: int, lo: int, hi: int) -> list[str]:
         return [why for b, why in sorted(self.conflicts.get(asset, {}).items()) if lo <= b <= hi]
+
+    def single_in(self, asset: int, lo: int, hi: int) -> list[int]:
+        """The blocks from `lo` to `hi` whose price of `asset` only one journal holds: no other one bears it out."""
+        count = self.held.get(asset, {})
+        return sorted(b for b in self.px.get(asset, {}) if lo <= b <= hi and count.get(b, 0) < 2)
 
 
 JOURNAL_SCHEMA = "colosseum-prices/2"  # ops/stop_filler.py's: the first line of each day file
@@ -1013,7 +1021,7 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
         spans = [s for s in trigger_spans(exam_events.get(a) or [], latest) if s["end"] >= s["armedAt"]]
         if not spans:
             continue
-        res = {"asked": 0, "agreed": 0, "doubts": []}
+        res = {"asked": 0, "agreed": 0, "doubts": [], "borne": []}
         out[a] = res
         for asset in sorted({s["asset"] for s in spans}):
             known = journal.px.get(asset, {})
@@ -1053,6 +1061,22 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
                     res["doubts"].append(f"asset {asset}: the node gives {got} at block {b}, the journal {mine}")
                     break
                 res["agreed"] += 1
+        # A block of a stop's time only one journal holds is no cross-check of its own (review 15 of #338): the node,
+        # calibrated, bears it out block by block (`borne`), `reads` such blocks an account at most; the rest stay
+        # held by `stop_doubt` as resting on one journal.
+        singles = dict.fromkeys((s["asset"], b) for s in spans for b in journal.single_in(s["asset"], s["armedAt"], s["end"]))
+        for asset, b in list(singles)[:max(reads, 0)]:
+            if asset not in calibrated:
+                calibrated[asset] = calibrate(asset, b, b)
+            if calibrated[asset]:
+                continue
+            got, mine = node(asset, b), journal.px[asset][b]
+            res["asked"] += 1
+            if got == mine:
+                res["agreed"] += 1
+                res["borne"].append([asset, b])
+            elif got is not None:
+                res["doubts"].append(f"asset {asset}: the node gives {got} at block {b}, the one journal holding it {mine}")
     return out
 
 
@@ -1115,19 +1139,25 @@ def stop_doubt(evs: list[dict], m: dict | None, journal: Journal | None, check: 
     `unchecked`: no journal while a stop stood; blocks of a stop's time the journal does not hold (a hole: the loop was
     down, behind, or did not know the stop); the journal not borne out by the chain or a node (`check_journal`).
     `late`: each one carried out more than TRIGGER_BACK blocks after the oracle first reached it (`missed_touches`).
+    `oneJournal`: blocks of a stop's time only one journal holds and no node bore out: not cross-checked, held too.
+    `journals`: how many journals stand behind every block of the stops' time: 2 (both, or one and the node), 1 (some
+    block in one only), 0 (a block in none, or no journal); None, no stop stood.
     `candles` ({asset: {minute: (low, high, close)}}, `venue_candles.load`) holds the journal against the venue's minute
     candles (`candle_doubts`); None is no candles read, a doubt of its own; False (the default) is not asked for (a
     review made by hand from a chain read with no candles).
     `txs`: the transactions that set the stops concerned, for the draft of a stop of reason 3."""
     out: dict = {"missed": list(m["missed"]) if m else [], "unchecked": [], "txs": [],
-                 "late": list((m or {}).get("late") or [])}
+                 "late": list((m or {}).get("late") or []), "oneJournal": [], "journals": None}
     spans = [s for s in trigger_spans(evs, latest) if s["end"] >= s["armedAt"]]
     concerned = [(x["asset"], x["take"], x["armedAt"]) for x in out["missed"] + out["late"]]
     if spans and journal is None:
+        out["journals"] = 0
         out["unchecked"].append("no journal of prices from the stops' loop (--prices): the blocks of a stop's time are "
                                 "not each checked")
         concerned += [(s["asset"], s["take"], s["armedAt"]) for s in spans]
     elif spans:
+        borne = {(x[0], x[1]) for x in (check or {}).get("borne") or []}
+        out["journals"] = 2
         for s in spans:
             known = journal.px.get(s["asset"], {})
             lo, hi = s["armedAt"], s["end"]
@@ -1139,10 +1169,21 @@ def stop_doubt(evs: list[dict], m: dict | None, journal: Journal | None, check: 
                                         + "; ".join(clash[:3]) + (f" (and {len(clash) - 3} more)" if len(clash) > 3 else ""))
                 concerned.append((s["asset"], s["take"], s["armedAt"]))
             if holes:
+                out["journals"] = 0
                 gaps = journal.gaps_in(lo, hi)
                 out["unchecked"].append(
                     f"{holes} of the {hi - lo + 1} blocks {lo}..{hi} of the {'take' if s['take'] else 'stop'} at "
                     f"{s['px']} on asset {s['asset']} are not in the journal" + (f" (gaps: {'; '.join(gaps[:3])})" if gaps else ""))
+                concerned.append((s["asset"], s["take"], s["armedAt"]))
+            # "Clean" only where every block is in both journals and they agree (or the node bore it out): a block one
+            # journal alone holds is no cross-check, whatever it says (review 15 of #338: the second journal not there,
+            # refused, behind, or with a hole of its own).
+            one = [b for b in journal.single_in(s["asset"], lo, hi) if (s["asset"], b) not in borne]
+            if one:
+                out["journals"] = min(out["journals"], 1)
+                out["oneJournal"].append(
+                    f"{len(one)} of the {hi - lo + 1} blocks {lo}..{hi} of the {'take' if s['take'] else 'stop'} at "
+                    f"{s['px']} on asset {s['asset']} are in one journal only (from block {one[0]} to {one[-1]})")
                 concerned.append((s["asset"], s["take"], s["armedAt"]))
         for why in (check or {}).get("doubts", []):
             out["unchecked"].append(why)
@@ -1899,6 +1940,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
                                          chain["candles"] if "candles" in chain else False,
                                          chain.get("candleBps")) if account else None
                         for part, account in (("stage", stage), ("exam", exam))}
+    # How many journals stand behind the verdict on the stops: the fewest over the payout's parts (None: no stop stood).
+    counts = [d["journals"] for d in out["stopDoubt"].values() if d and d.get("journals") is not None]
+    out["journals"] = min(counts) if counts else None
     out["code"] = code_review(pool, sale["code"], chain, who, p) if sale else None
     out["running"] = running(pool, chain)
 
@@ -1964,6 +2008,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
                               f"{x['first']}, carried out in {x['filled']} ({x['late']} blocks late)" for x in d["late"][:3])))
         if d and d["unchecked"]:
             found.append(("stop-unchecked", f"on the {part}, stops not checked in every block: " + "; ".join(d["unchecked"][:3])))
+        if d and d.get("oneJournal"):
+            found.append(("stop-one-journal", f"on the {part}, stops resting on one journal of prices only: "
+                          + "; ".join(d["oneJournal"][:3])))
     read = chain.get("exam_events")
     unread = [a for a in (stage, exam) if a and (a in (chain.get("unread") or []) or (read is not None and a not in read))]
     unread_accounts = list(unread)
@@ -1994,7 +2041,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     out["stoppable"] = chk.stop_due(pay["state"], bool(pay.get("wasStopped")), pay["dueAt"], chain["now"], approvals is True)
     # Held back from approval, closed on failure: a result that does not count up, a stop reached and not carried out,
     # a block of a stop's time not checked, or an account's own events not read.
-    held = bool({"recount", "missed-stop", "stop-late", "stop-unchecked"} & set(out["kinds"])) or bool(unread_accounts)
+    held = bool({"recount", "missed-stop", "stop-late", "stop-unchecked", "stop-one-journal"} & set(out["kinds"])) or bool(unread_accounts)
     # What whoever signs is offered (review of #287): a stop where there is one the pool would take; nothing to
     # approve where the result did not count up, only the draft of a reason-3 stop, until the analysis is written
     # or the ceiling comes; the approval as a choice where something else is suspicious; the approval where all is
@@ -2112,6 +2159,9 @@ def card(r: dict, chain: dict) -> dict:
         "amount": str(r["amount"]),
         "claimedAt": r["claimedAt"], "dueAt": r["dueAt"], "hardAt": r["hardAt"],
         "verdict": r["verdict"], "action": r["action"],
+        # How many journals of prices stand behind the verdict on the stops (`stop_doubt`): 2 for a clean one with a
+        # stop, null where no stop stood.
+        "journals": r.get("journals"),
         "reasons": [{"kind": k, "text": t} for k, t in zip(r["kinds"], r["reasons"])],
         "evidence": {
             "pairs": r["pairs"]["stage"] + r["pairs"]["exam"],
@@ -2253,7 +2303,7 @@ def summary(r: dict) -> str:
         lines.append(f"  draft of a stop, reason 3, on {', '.join(r['stopDraft']['trades'])}: {r['stopDraft']['note']}")
     tx = r["tx"]
     if r["action"] == "hold":
-        lines.append(f"  do not sign: held ({', '.join(k for k in r['kinds'] if k in ('recount', 'missed-stop', 'stop-unchecked', 'unread'))}); "
+        lines.append(f"  do not sign: held ({', '.join(k for k in r['kinds'] if k in ('recount', 'missed-stop', 'stop-late', 'stop-unchecked', 'stop-one-journal', 'unread'))}); "
                      f"it waits for an analysis, at most until {r['hardAt']}")
     else:
         lines.append(f"  to sign ({tx['kind']}): " + (f"{tx['to']} {tx['call']} {tx['data']}" if tx["data"] else tx.get("note", "")))

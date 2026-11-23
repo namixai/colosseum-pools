@@ -17166,6 +17166,20 @@ MUTATIONS = [
      "        if candles is None:\n            out[\"unchecked\"].append(\"no candles",
      "        if False:\n            out[\"unchecked\"].append(\"no candles",
      ["test_no_candles_or_too_few_hold"]),
+    # The third round (review 15 of #338): "clean" only on two journals a block, or the node's word for it.
+    ("RY1", "ops/payout_review.py",
+     "            if one:\n                out[\"journals\"] = min(out[\"journals\"], 1)",
+     "            if False:\n                out[\"journals\"] = min(out[\"journals\"], 1)",
+     ["test_a_lie_in_one_journal_where_the_other_has_a_hole_is_not_clean", "test_no_second_journal_at_all_is_not_a_clean_review",
+      "test_a_block_only_one_journal_holds_is_held_unless_the_node_bears_it_out"]),
+    ("RY2", "ops/payout_review.py",
+     '"stop-unchecked", "stop-one-journal"} & set(out["kinds"])',
+     '"stop-unchecked"} & set(out["kinds"])',
+     ["test_a_restart_of_one_writer_leaves_its_blocks_to_one_journal_and_holds"]),
+    ("RY3", "ops/payout_review.py",
+     "                res[\"borne\"].append([asset, b])",
+     "                pass",
+     ["test_a_block_only_one_journal_holds_is_held_unless_the_node_bears_it_out"]),
 ]
 
 RUNNERS = {
@@ -17188,6 +17202,10 @@ RUNNERS = {
     "AL": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_review_alarms"], r"^(?:FAIL|ERROR): (\w+) \("),
     "RX": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.review14.test_review14", "ops.tests.review14.test_loop14"],
            r"^(?:FAIL|ERROR): (\w+) \("),
+    # The third round (review 15 of #338): its tests and the files the round changed.
+    "RY": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.review15.test_review15", "ops.tests.review15.test_loop15",
+            "ops.tests.test_payout_review", "ops.tests.test_price_journals", "ops.tests.test_review_service",
+            "ops.tests.test_review_alarms", "ops.tests.test_stop_filler"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The stops' loop of the simulated pools' keeper: its own test file.
     "SF": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_stop_filler"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The simulated pool's network switch and its mainnet gates: their own test file.

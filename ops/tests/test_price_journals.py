@@ -98,12 +98,17 @@ class TwoJournals(unittest.TestCase):
         got, _, _ = self.judged(self.truth(), self.truth())
         self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"))
 
-    def test_a_restart_of_one_writer_is_covered_by_the_other(self):
+    def test_a_restart_of_one_writer_leaves_its_blocks_to_one_journal_and_holds(self):
+        """Review 15 of #338 (M1): a block only one journal holds is no cross-check. The keeper's deploy and the second
+        machine's reboot leave no hole, but their blocks rest on one journal: held, said as such, never clean."""
         truth = self.truth()
         a = {b: px for b, px in truth.items() if not 1_100 <= b <= 1_150}   # the keeper's deploy
         b = {b: px for b, px in truth.items() if not 1_200 <= b <= 1_220}   # the second machine's reboot
         got, _, _ = self.judged(a, b)
-        self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"))
+        self.assertEqual((got["verdict"], got["action"], got["kinds"], got["journals"]),
+                         ("suspicious", "hold", ["stop-one-journal"], 1))
+        self.assertIn("72 of the 303 blocks 1003..1305 of the stop at 950000 on asset 3 are in one journal only",
+                      got["reasons"][0])
 
     def test_a_block_neither_has_is_a_hole_and_holds(self):
         truth = self.truth()
@@ -181,8 +186,10 @@ class Candles(unittest.TestCase):
     def judged(self, journal_px: dict, candles, bps=100):
         mt = T.MissedTouches()
         ch, _ = mt.world(set(range(1_300, 1_306)))
-        j = pr.Journal.parse("\n".join(json.dumps({"b": b, "t": 60 * b, "w": 0, "px": {"3": px}})
-                                       for b, px in sorted(journal_px.items()) if 1_002 <= b <= 1_400) + "\n")
+        text = "\n".join(json.dumps({"b": b, "t": 60 * b, "w": 0, "px": {"3": px}})
+                         for b, px in sorted(journal_px.items()) if 1_002 <= b <= 1_400) + "\n"
+        j = pr.Journal.parse(text, None, "keeper")
+        j.add_text(text, None, "second")
         ch.d.update(journal=j, journalCheck={}, candles=candles, candleBps=bps)
         return pr.review(ch.d, T.POOL, 0)
 

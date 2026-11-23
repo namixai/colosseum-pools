@@ -427,6 +427,7 @@ REASON_WORDS = {
     "missed-stop": "a stop the oracle reached was not carried out",
     "stop-late": "a stop carried out long after the oracle reached it",
     "stop-unchecked": "the stops were not checked over all their time",
+    "stop-one-journal": "the stops rest on one journal of prices only",
     "unread": "something the review needs was not read",
 }
 # The fields of a document the page needs to decide: what it says, when and at which block it was read, what to hold

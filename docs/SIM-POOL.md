@@ -488,8 +488,11 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     journal instead, and no other read stands in for a block it does not hold. A reach nobody carried out (a stop
     taken off or moved by the trader while reached among them) is the reason `missed-stop`; a block of a trigger's
     time neither journal holds, no journal at all, two prices for one block, or a journal the venue's candles
-    contradict (below) is `stop-unchecked`; a stop carried out more than 60 blocks after the oracle reached it is
-    `stop-late`.
+    contradict (below) is `stop-unchecked`; a block only one of the two journals holds, which the optional node did
+    not bear out, is `stop-one-journal` (no cross-check was made there: the second journal not there, refused,
+    behind, or with a hole of its own); a stop carried out more than 60 blocks after the oracle reached it is
+    `stop-late`. The document says in `journals` how many journals stand behind the verdict on the stops: 2 for a
+    clean one, null where no stop stood.
     Either holds the payout, with the draft of a stop of reason 3 naming the transactions that set the stops;
     the review is clean only when every block of every trigger's time is checked and no reach went uncarried;
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
@@ -784,10 +787,12 @@ keeps old blocks:
   discount to it, and a thin book prints wicks): 1 % is far past either for BTC, ETH and SOL in a calm market, and
   near enough not to hide a reach by more than that. Fewer than 90 % of a stop's minutes with a candle is a doubt too;
 - optionally, a node that answers for old blocks (`COLOSSEUM_ARCHIVE_RPC_URL`): calibrated on the chain's prices and
-  asked for a sample of 200 blocks an account (`--journal-checks`, at least 1). Without one nothing is held for it.
+  asked for a sample of 200 blocks an account (`--journal-checks`, at least 1), and for each block only one journal
+  holds (as many again an account at most), which it bears out. Without one nothing is held for it.
 A block neither journal holds, two prices for one block (in one journal or between the two), a candle that
-contradicts, or a file of another chain, factory or deployment (refused whole) is `stop-unchecked`: the payout is
-held. A line of the wrong shape is a hole, never the end of the review.
+contradicts, or a file of another chain, factory or deployment (refused whole) is `stop-unchecked`; a block only
+one journal holds (the other refused, missing, behind or down there) and no node bore out is `stop-one-journal`:
+either way the payout is held. "Clean" needs every block of every stop's time in both journals at one price. A line of the wrong shape is a hole, never the end of the review.
 
 ### What the terms say a stop does, and what a missed one costs
 
