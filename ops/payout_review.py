@@ -890,22 +890,29 @@ def in_gaps(lo: int, hi: int, gaps: list[tuple[int, int]]) -> list[int]:
     return sorted(set(out))
 
 
-def gap_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: int, gaps: list[tuple[int, int]] | None) -> dict:
+def gap_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: int, gaps: list[tuple[int, int]] | None,
+                no_price: dict[int, list[int]] | None = None) -> dict:
     """`missed_touches` of an exam with a stop book. The book carries out every stop and take at the first block its
     journal logged at the price or past it, however late the settle: a touch is missed only in a block the journal does
-    not hold, a gap (`Gap`), or in one it holds with no price. So each stop's time (`book_spans`) is read in the blocks
-    of the gaps inside it, every one of them; a run of those at the price or past it is a stop reached and not carried
-    out, in the same shape as `missed_touches` gives, with `gap` true. `gaps` None: the book's gaps were not read."""
+    not hold, a gap (`Gap`), or in one it holds with no price for the stop's asset (`NoPrice(asset)`: the oracle's read
+    failed or gave zero, and the book touches nothing there). So each stop's time (`book_spans`) is read in the blocks
+    of the gaps inside it and in its asset's no-price blocks inside it (`no_price`, {asset: [block]}), every one of
+    them, at the oracle's price as the node gives it; a run of those at the price or past it is a stop reached and not
+    carried out, in the same shape as `missed_touches` gives, with `gap` true (and `noPrice` true where the run holds a
+    no-price block). `gaps` None: the book's gaps were not read; `read` is then False. The no-price blocks not read are
+    said by `stop_doubt`."""
     out = {"read": gaps is not None, "every": 1, "spans": 0, "unread": 0, "missed": [], "gaps": len(gaps or [])}
     if gaps is None:
         return out
+    no_price = no_price or {}
     for s in book_spans(evs, latest):
         lo, hi = s["armedAt"], s["end"]
         if hi < lo:
             continue
         out["spans"] += 1
         known = prices.get(s["asset"], {})
-        blocks = in_gaps(lo, hi, gaps)
+        nop = {b for b in no_price.get(s["asset"], ()) if lo <= b <= hi}
+        blocks = sorted(set(in_gaps(lo, hi, gaps)) | nop)
         out["unread"] += sum(b not in known for b in blocks)
         run: list[int] = []
         runs: list[list[int]] = []
@@ -923,7 +930,7 @@ def gap_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: int,
         for r in runs:
             out["missed"].append({"asset": s["asset"], "take": s["take"], "px": s["px"], "side": s["side"],
                                   "armedAt": lo, "first": r[0], "last": r[-1], "reads": len(r), "seen": False,
-                                  "gap": True, "then": s["then"], "at": hi})
+                                  "gap": True, **({"noPrice": True} if nop & set(r) else {}), "then": s["then"], "at": hi})
     out["missed"].sort(key=lambda m: (m["first"], m["asset"], m["take"]))
     return out
 
@@ -937,7 +944,7 @@ def set_txs(evs: list[dict], spans: list[dict]) -> list[str]:
 
 
 def stop_doubt(evs: list[dict], m: dict | None, book: bool, latest: int, tail: dict | None,
-               book_read: bool = True) -> dict:
+               book_read: bool = True, no_price_read: bool = True) -> dict:
     """Why the stops of one account cannot be taken as carried out: the payout is held, never approved as clean
     (closed on failure). `missed`: the stops and takes the oracle reached and nobody carried out (`m["missed"]`, with
     or without a book). With a stop book, also every block of a stop's time that was not checked, each said in
@@ -953,8 +960,24 @@ def stop_doubt(evs: list[dict], m: dict | None, book: bool, latest: int, tail: d
             out["unchecked"].append("the factory's stop book was not read: whether this account's stops were carried "
                                     "out is not known")
             out["txs"] = list(dict.fromkeys(e["tx"] for e in sets))
+    if not book and m is not None and book_read:
+        # Without a book (another book, none, or a factory from before it), closed on failure too (review 12 of #336):
+        # a stop that stood and was not read along, or whose read blocks the node did not give, is not checked.
+        spans = [s for s in trigger_spans(evs, latest) if s["end"] >= s["armedAt"]]
+        if spans and not m["read"]:
+            out["unchecked"].append("the stops of this account were not read along: whether they were carried out is "
+                                    "not known")
+            concerned += spans
+        elif spans and m["unread"]:
+            out["unchecked"].append(f"{m['unread']} blocks of a stop's or take's time have no oracle price read: not "
+                                    "checked")
+            concerned += spans
     if book and m is not None:
         spans = [s for s in book_spans(evs, latest) if s["end"] >= s["armedAt"]]
+        if spans and not no_price_read:
+            out["unchecked"].append("the blocks the stop book logged with no price (NoPrice) were not read: a stop "
+                                    "is not carried out in them")
+            concerned += spans
         if not m["read"]:
             if spans:
                 out["unchecked"].append("the stop book's gaps were not read: the blocks nobody checked are not known")
@@ -1722,13 +1745,14 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     def missed(account: str) -> dict:
         evs = (chain.get("exam_events") or {}).get(account) or []
         if account in book_exams:
-            return gap_touches(evs, by_asset, chain["latest"], chain.get("gaps"))
+            return gap_touches(evs, by_asset, chain["latest"], chain.get("gaps"), chain.get("noPrice") or {})
         return missed_touches(evs, by_asset, chain["latest"], every_of.get(account))
 
     out["missedTouch"] = {part: missed(account) if account else None for part, account in (("stage", stage), ("exam", exam))}
     book_read = chain.get("bookRead", True)
     out["stopDoubt"] = {part: stop_doubt((chain.get("exam_events") or {}).get(account) or [], out["missedTouch"][part],
-                                         account in book_exams, chain["latest"], chain.get("tail"), book_read)
+                                         account in book_exams, chain["latest"], chain.get("tail"), book_read,
+                                         chain.get("noPrice", {}) is not None)
                         if account else None for part, account in (("stage", stage), ("exam", exam))}
     out["code"] =code_review(pool, sale["code"], chain, who, p) if sale else None
     out["running"] = running(pool, chain)
@@ -1788,7 +1812,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
         if d["missed"]:
             found.append(("missed-stop", f"a stop missed on the {part}: " + "; ".join(
                 f"the {'take' if x['take'] else 'stop'} at {x['px']} on asset {x['asset']} reached in blocks {x['first']} "
-                f"to {x['last']}" + (" (a gap of the stop book)" if x.get("gap") else "") + ", not carried out then"
+                f"to {x['last']}" + (" (a block the stop book logged with no price)" if x.get("noPrice") else
+                   " (a gap of the stop book)" if x.get("gap") else "") + ", not carried out then"
                 for x in d["missed"])))
         if d["unchecked"]:
             found.append(("stop-unchecked", f"stops not checked on the {part}: " + "; ".join(d["unchecked"])))
@@ -2256,7 +2281,8 @@ def read_trigger_oracle(exam_events: dict[str, list[dict]], oracle: dict[str, in
 
 def read_touch_oracle(accounts: list[str], exam_events: dict[str, list[dict]], oracle: dict[str, int], latest: int,
                       reads: int = TOUCH_READS, unread: set[str] | None = None, book_exams: set[str] | frozenset = frozenset(),
-                      gaps: list[tuple[int, int]] | None = None) -> tuple[dict[str, int], dict[str, int]]:
+                      gaps: list[tuple[int, int]] | None = None, no_price: dict[int, list[int]] | None = None
+                      ) -> tuple[dict[str, int], dict[str, int]]:
     """The oracle along the time each stop and take of `accounts` stood (`touch_points`), for `missed_touches`: what
     `oracle` holds already (read, or a --prices file gave) is not asked again, and `oracle` is not changed. The prices
     read here are kept apart, so that no other check of the review sees what it did not see before (review of #330).
@@ -2273,7 +2299,9 @@ def read_touch_oracle(accounts: list[str], exam_events: dict[str, list[dict]], o
         every_of[a] = every = 1 if book else touch_every(spans, reads)
         asked = 0
         for s in spans:
-            points = in_gaps(s["armedAt"], s["end"], gaps or []) if book else touch_points(s, every)
+            points = sorted(set(in_gaps(s["armedAt"], s["end"], gaps or []))
+                            | {b for b in (no_price or {}).get(s["asset"], ()) if s["armedAt"] <= b <= s["end"]}) \
+                if book else touch_points(s, every)
             for b in points:
                 key = oracle_key(s["asset"], b)
                 if key in oracle or key in touch or key in unread or asked >= reads:
@@ -2609,8 +2637,9 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     book_read = not (stop_book is None and gaps is None)
     tail = read_tail(stop_book, latest) if stop_book else None
     read_trigger_oracle(exam_events, oracle, unread_px, book_exams)
+    no_price = read_no_price(stop_book, start, latest) if stop_book else {}
     touch_every_of, touch_oracle = read_touch_oracle(touch_accounts, exam_events, oracle, latest, touch_reads, unread_px,
-                                                     book_exams, gaps)
+                                                     book_exams, gaps, no_price)
     # The day's allowed loss of every exam that passed too: the pool's count of passes in the shape of a coin flip.
     for a in passed_accounts(exam_events):
         if a not in daily_bps:
@@ -2630,7 +2659,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             "payCap": {pool: cap for pool, cap in pay_cap.items() if cap is not None}, "settled": settled,
             "waitsLimit": waits_limit, "touchEvery": touch_every_of,
             "touchOracle": touch_oracle, "stopBook": stop_book, "bookExams": sorted(book_exams), "gaps": gaps,
-            "bookRead": book_read, "tail": tail}
+            "bookRead": book_read, "tail": tail, "noPrice": no_price}
 
 
 GAP = "0x" + keccak(text="Gap(uint256,uint256)").hex()
@@ -2669,6 +2698,22 @@ def read_book(record: dict, factory: str, accounts: list[str], start: int, lates
         core.log("gaps_unread", error=quiet(exc, 200))
         gaps = None
     return book, exams, gaps
+
+
+NO_PRICE = "0x" + keccak(text="NoPrice(uint32)").hex()
+
+
+def read_no_price(book: str, start: int, latest: int) -> dict[int, list[int]] | None:
+    """The blocks the book logged with no price, by asset (`NoPrice(asset)`, the asset indexed), from `start` to
+    `latest`: a touch in such a block is not carried out, as in a gap. None where they could not be read."""
+    try:
+        out: dict[int, list[int]] = {}
+        for l in logs(book, [NO_PRICE], start, latest):
+            out.setdefault(int(l["topics"][1], 16), []).append(int(l["blockNumber"], 16))
+        return {a: sorted(set(b)) for a, b in out.items()}
+    except Exception as exc:
+        core.log("no_price_unread", error=quiet(exc, 200))
+        return None
 
 
 def read_tail(book: str, latest: int) -> dict | None:

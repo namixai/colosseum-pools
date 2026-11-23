@@ -1550,6 +1550,70 @@ class TheBookHoldsWhatItCannotClear(unittest.TestCase):
             self.assertEqual(r.read_tail(book, 2_000), {"read": False, "from": None, "to": 2_000})
 
 
+class NoPriceAndNoBook(unittest.TestCase):
+    """Review 12 of #336. H-2: a block the book logged with no price for the stop's asset (`NoPrice`) is no `Gap`, and
+    no stop is carried out in it: it is read as a gap block is. M-1: an account without a book is closed on failure
+    too."""
+
+    hold = TheBookHoldsWhatItCannotClear()
+
+    def test_a_stop_reached_in_a_block_the_book_logged_with_no_price_holds_the_payout(self):
+        ch, _ = self.hold.world([], noPrice={3: list(range(1_100, 1_111))})
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual([(m["first"], m["last"], m.get("noPrice")) for m in got["missedTouch"]["stage"]["missed"]],
+                         [(1_100, 1_110, True)])
+        self.hold.held(got, "missed-stop")
+        self.assertIn("(a block the stop book logged with no price)", got["reasons"][0])
+        # The same blocks of another asset, or with the oracle off the stop, hold nothing.
+        for no_price, low in (({4: list(range(1_100, 1_111))}, 1_100), ({3: list(range(1_100, 1_111))}, 10**9)):
+            ch, _ = self.hold.world([], noPrice=no_price, low_from=low)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"), no_price)
+
+    def test_no_price_blocks_whose_price_was_not_read_or_not_read_at_all_hold_the_payout(self):
+        ch, _ = self.hold.world([], known=range(990, 1_050), noPrice={3: [1_100, 1_101]})
+        got = r.review(ch.d, POOL, 0)
+        self.hold.held(got, "stop-unchecked")
+        self.assertIn("2 blocks of the stop book's gaps", got["reasons"][0])
+        ch, _ = self.hold.world([], noPrice=None)
+        got = r.review(ch.d, POOL, 0)
+        self.hold.held(got, "stop-unchecked")
+        self.assertIn("logged with no price (NoPrice) were not read", got["reasons"][0])
+
+    def test_the_no_price_blocks_are_read_by_asset_from_the_books_logs(self):
+        book = addr(0xB00)
+        word = lambda n: "0x" + f"{n:064x}"
+        found = [{"topics": [r.NO_PRICE, word(3)], "blockNumber": hex(1_100)}, {"topics": [r.NO_PRICE, word(3)], "blockNumber": hex(1_101)},
+                 {"topics": [r.NO_PRICE, word(4)], "blockNumber": hex(1_200)}]
+        with mock.patch.object(r, "logs", return_value=found) as asked:
+            self.assertEqual(r.read_no_price(book, 10, 2_000), {3: [1_100, 1_101], 4: [1_200]})
+        self.assertEqual(asked.call_args.args, (book, [r.NO_PRICE], 10, 2_000))
+        self.assertEqual(r.NO_PRICE, "0x" + keccak(text="NoPrice(uint32)").hex())
+        self.assertIn("event NoPrice(uint32 indexed asset);", _source("src/sim/StopBook.sol"))
+        with mock.patch.object(r, "logs", side_effect=RuntimeError("down")), mock.patch.object(r.core, "log"):
+            self.assertIsNone(r.read_no_price(book, 10, 2_000))
+        # The blocks of a stop's time that the book logged with no price are read from the node, as gap blocks are.
+        evs = {addr(0x301): MissedTouches().events(end="standing")}
+        with mock.patch.object(r, "oracle_at", side_effect=lambda a, b: 1) as at:
+            r.read_touch_oracle([addr(0x301)], evs, {}, 2_000, book_exams={addr(0x301)}, gaps=[], no_price={3: [1_100, 5]})
+        self.assertEqual([c.args for c in at.call_args_list], [(3, 1_100)], "only the ones inside the stop's time")
+
+    def test_an_account_without_a_book_whose_stop_was_not_read_is_not_checked(self):
+        for every, known in ((None, range(0)), (60, range(0))):
+            ch, s1 = self.hold.world([], known=known, bookExams=[], touchEvery={})
+            if every:
+                ch.d["touchEvery"] = {s1: every}
+            got = r.review(ch.d, POOL, 0)
+            self.hold.held(got, "stop-unchecked")
+            self.assertIn("not read along" if every is None else "have no oracle price read", got["reasons"][0])
+        # Read along with every block given and off the stop: clean.
+        ch, s1 = self.hold.world([], low_from=10**9, bookExams=[], touchEvery={})
+        ch.d["touchEvery"] = {s1: 60}
+        ch.d["oracle"] = {r.oracle_key(3, b): MissedTouches.MARK for b in range(990, 2_001)}
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"))
+
+
 class Unread(unittest.TestCase):
     def test_an_account_not_read_is_said(self):
         ch, _, s1 = honest_world()
