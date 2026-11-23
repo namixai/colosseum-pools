@@ -2385,6 +2385,46 @@ def oracle_at(asset: int, block: int) -> int | None:
         return None
 
 
+def view_at(to: str, sig: str, types: list, args: list, out: list, block: int) -> tuple:
+    """A view of `to` as it stood in `block` (the latest block the review read its logs to)."""
+    raw = c.rpc("eth_call", [{"to": to, "data": "0x" + c.encode_call(sig, types, args).hex()}, hex(block)])
+    return abi_decode(out, bytes.fromhex(raw[2:]))
+
+
+def state_doubts(accounts: list[str], exam_events: dict[str, list[dict]], status: dict[str, str], latest: int) -> dict:
+    """The stops and takes each active account of `accounts` holds by its own state at block `latest`, held against the
+    ones its events show standing (`trigger_spans`): an event the node's eth_getLogs left out would leave a stop
+    unseen by the review and the journals' check. A stop on an asset with a position, held by one and not the other or
+    at another price, is a doubt that holds the payout. A read that fails is said and holds nothing (a supplementary
+    check: the journals stand without it)."""
+    out: dict[str, list[str]] = {}
+    for a in accounts:
+        if status.get(a) != "Active":
+            continue
+        shown = {(s["asset"], s["take"]): s["px"] for s in trigger_spans(exam_events.get(a) or [], latest)
+                 if s["then"] == "standing"}
+        try:
+            held = {}
+            for asset in view_at(a, "rules()", [], [], [EXAM_RULES], latest)[0][3]:
+                asset = int(asset)
+                if not int(view_at(a, "positionOf(uint32)", ["uint32"], [asset], ["int256"], latest)[0]):
+                    continue  # a stop on no position stands on nothing, as trigger_spans has it
+                for take, sig in ((False, "stopOf(uint32)"), (True, "takeOf(uint32)")):
+                    px = int(view_at(a, sig, ["uint32"], [asset], [sk.TRIGGER], latest)[0][0])
+                    if px:
+                        held[(asset, take)] = px
+        except Exception as exc:
+            core.log("stops_state_unread", account=a, error=quiet(exc, 200))
+            continue
+        differ = sorted(set(held.items()) ^ set(shown.items()))
+        if differ:
+            def said(stops: dict) -> str:
+                return ", ".join(f"a {'take' if k[1] else 'stop'} at {px} on asset {k[0]}" for k, px in sorted(stops.items()))
+            out[a] = [f"the account holds {said(held) or 'no stop'} at block {latest}, where its events show "
+                      f"{said(shown) or 'none'}: an event of its stops may be missing from the node's logs"]
+    return out
+
+
 def archive_oracle(url: str):
     """`oracle_at` on another node than the review's own: one that answers for old blocks as they stood, the optional third
     check of the journal (`check_journal`). Its address goes to no line: the node's errors are dropped, not logged."""
@@ -2891,6 +2931,8 @@ def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads
         # calibrated node (`check_journal`): no node read along the stops' time stands in for the journal.
         touch_every_of, touch_oracle = {a: 1 for a in touch_accounts}, {}
         journal_check = check_journal(touch_accounts, exam_events, journal, latest, archive, journal_checks)
+        for a, why in state_doubts(touch_accounts, exam_events, status, latest).items():
+            journal_check.setdefault(a, {"asked": 0, "agreed": 0, "doubts": []})["doubts"] += why
     # The day's allowed loss of every exam that passed too: the pool's count of passes in the shape of a coin flip.
     for a in passed_accounts(exam_events):
         if a not in daily_bps:

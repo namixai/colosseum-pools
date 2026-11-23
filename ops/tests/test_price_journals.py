@@ -228,3 +228,41 @@ class Candles(unittest.TestCase):
         got = self.judged(truth, few)
         self.assertEqual(got["action"], "hold")
         self.assertIn("candles cover", json.dumps(got["reasons"]))
+
+
+class LostEvent(unittest.TestCase):
+    """A TriggerSet the node's eth_getLogs left out: the account's own state at the block read to shows the stop."""
+
+    def node(self, stop_px, position=100):
+        from eth_abi import encode
+        from eth_utils import keccak
+        sel = lambda s: "0x" + keccak(text=s)[:4].hex()  # noqa: E731
+
+        def rpc(method, params=()):
+            assert method == "eth_call" and params[1] == hex(2_000), params
+            data = params[0]["data"]
+            if data.startswith(sel("rules()")):
+                return "0x" + encode([pr.EXAM_RULES], [(0, 0, 0, [3], [])]).hex()
+            if data.startswith(sel("positionOf(uint32)")):
+                return "0x" + encode(["int256"], [position]).hex()
+            if data.startswith(sel("stopOf(uint32)")):
+                return "0x" + encode([pr.sk.TRIGGER], [(stop_px, 0, 0, 0)]).hex()
+            if data.startswith(sel("takeOf(uint32)")):
+                return "0x" + encode([pr.sk.TRIGGER], [(0, 0, 0, 0)]).hex()
+            raise AssertionError(data)
+        return rpc
+
+    def test_a_stop_the_account_holds_and_its_events_do_not_show_holds(self):
+        from unittest import mock
+        mt = T.MissedTouches()
+        evs = mt.events(end="none")  # a stop at 950 000 standing, by the events
+        for held, doubt in ((950_000, False), (900_000, True), (0, True)):
+            with mock.patch.object(pr.c, "rpc", side_effect=self.node(held)):
+                got = pr.state_doubts(["0xA"], {"0xA": evs}, {"0xA": "Active"}, 2_000)
+            self.assertEqual(bool(got), doubt, held)
+        lost = [e for e in evs if e["name"] != "TriggerSet"]  # the event lost: the account still holds the stop
+        with mock.patch.object(pr.c, "rpc", side_effect=self.node(950_000)):
+            got = pr.state_doubts(["0xA"], {"0xA": lost}, {"0xA": "Active"}, 2_000)
+        self.assertIn("may be missing from the node's logs", got["0xA"][0])
+        with mock.patch.object(pr.c, "rpc", side_effect=self.node(950_000)):
+            self.assertEqual(pr.state_doubts(["0xA"], {"0xA": lost}, {"0xA": "Passed"}, 2_000), {}, "an exam over holds none")
