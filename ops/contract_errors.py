@@ -54,7 +54,7 @@ ERRORS = [
     # SimPool, SimPoolFactory
     "NotFactory()", "NotChecker()", "Closing()", "NotAnExam()", "NotAStage()", "Done()", "BadPayout()", "BadReason()", "BadPaired()", "TooMuch()", "BadShare()", "NoAuthorization()", "ReserveOver()", "ReserveRunning()", "NoSuchCode()", "CodeUsed()", "NoRequest()", "RequestLapsed()", "NotApprover()", "LineOff()", "NotCovered(uint256)", "NotPool()", "BadRole()", "WrongFee()", "BadFee()", "FeeNotSent()",
     # StopBook
-    "NotExam()", "Reentered()", "LevelTooHigh(uint64)", "PokeGas(uint256)",
+    "NotExam()", "Reentered()", "LevelTooHigh(uint64)", "PokeGas(uint256)", "NoProgress(uint256)", "BadReadGas()",
 ]
 OPENZEPPELIN = [
     "SafeERC20FailedOperation(address)", "FailedDeployment()", "InvalidInitialization()", "NotInitializing()",

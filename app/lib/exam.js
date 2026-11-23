@@ -929,6 +929,7 @@ export const STOP_BOOK_REFUSALS = Object.freeze({
   "LevelTooHigh(uint64)": "That price is higher than a stop or a take can be set at.",
   "NoPlaceForAsset(uint32)": "This asset is off the list and the stop book has no room to log it now: no new stop or take on it until room is made.",
   "PokeGas(uint256)": "The call was sent with too little gas to log the prices of the block. Send it again with more gas.",
+  "NoProgress(uint256)": "The settle was sent with less gas than one of its steps needs, so it did nothing. Send it again with more gas.",
   "Reentered()": "The stop book was busy with a settle in the same call. Send it again.",
   "NotExam()": "Only an exam of this factory can do that.",
 });

@@ -70,7 +70,9 @@ MAX_TX_GAS = 1_950_000
 # 1 260 830 for 20 assets with 50 000 for each read).
 POKE_GAS_BASE = 100_000
 POKE_GAS_PER_ASSET = 40_000
-PRECOMPILE_GAS = 50_000  # StopBook.ORACLE_GAS and BBO_GAS when the book does not say
+PRECOMPILE_GAS = 50_000  # StopBook.MAX_READ_GAS: what each read may be given at most, when the book does not say
+# StopBook.NoProgress(uint256)'s selector, as a node's revert data carries it: a settle that did not make one step.
+NO_PROGRESS = "0x" + keccak(text="NoProgress(uint256)")[:4].hex()
 # A settle: a month of 32 entries with no touch is 1 291 215 in one call, every one touched 2 538 806 in one call or
 # three under 1 360 000 (the book's measures). One under this does a part, keeps it, and the next one goes on.
 SETTLE_GAS = 1_500_000
@@ -464,6 +466,11 @@ class BookLoop(sf.StopLoop):
         except c.NodeBusy:
             raise
         except Exception as exc:
+            if NO_PROGRESS in str(exc).lower() and gas < MAX_TX_GAS:
+                # Less than one step's gas (`NoProgress`): the next try goes with the most a small block holds.
+                self.settle_gas[exam] = MAX_TX_GAS
+                log("book_settle_short", exam=exam, gas=gas, then=f"sent again with {MAX_TX_GAS}")
+                return False
             if self.settle_refused.get(exam) != head:
                 self.settle_refused[exam] = head
                 self._say(f"book_settle_refused:{exam}", exam=exam, error=str(exc)[:160], why=why)
@@ -511,7 +518,10 @@ class BookLoop(sf.StopLoop):
                 if r == "gone":
                     log("book_settle_lost", exam=exam, tx=tx, seen=at)
                 elif int(r["status"], 16) != 1:
-                    log("book_settle_reverted", exam=exam, tx=tx, seen=at, gas=gas, then="tried again after the next block")
+                    # Reverted in the block though it ran in the trial: most likely `NoProgress`, the block's state
+                    # dearer than the trial's. The next one goes with the most a small block holds.
+                    self.settle_gas[exam] = MAX_TX_GAS
+                    log("book_settle_reverted", exam=exam, tx=tx, seen=at, gas=gas, then=f"tried again with {MAX_TX_GAS}")
                 else:
                     log("book_settled", exam=exam, tx=tx, seen=at, block=int(r["blockNumber"], 16),
                         gas_used=int(r.get("gasUsed", "0x0"), 16))
@@ -575,10 +585,11 @@ def build(args, keeper, state, book: str, wallet=None, prefix: str = "") -> Book
 
 
 def precompile_gas_of(node, book: str) -> int:
-    """What the book gives its two precompile reads of an asset (ORACLE_GAS and BBO_GAS); the constants' values when
-    the book does not answer them."""
+    """What the book gives its two precompile reads of an asset (`oracleGas`, `bboGas`, the operator's to change); the
+    most it may give (`MAX_READ_GAS`) when the book does not answer. Read at the start; a check that reverted for want
+    of gas raises every later one to the most (`poke_floor`)."""
     total = 0
-    for name in ("ORACLE_GAS()", "BBO_GAS()"):
+    for name in ("oracleGas()", "bboGas()"):
         try:
             raw = node.call("eth_call", [{"to": book, "data": "0x" + c.selector(name).hex()}, "latest"])
             total += int(abi_decode(["uint256"], bytes.fromhex(raw[2:]))[0])

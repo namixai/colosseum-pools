@@ -1836,6 +1836,11 @@ class TheStopBookOfTheDeploy(unittest.TestCase):
         src = (ROOT / "src/sim/SimPoolFactory.sol").read_text()
         self.assertEqual(int(re.search(r"uint256 public constant MAX_LISTED = (\d+);", src).group(1)), d.MAX_LISTED)
         self.assertIn("stopBook = new StopBook();", src)
+        self.assertEqual(int(re.search(r"uint16 public constant MIN_FILL_DELAY = (\d+);", src).group(1)), d.BOOK_MIN_FILL_DELAY)
+        book = (ROOT / "src/sim/StopBook.sol").read_text()
+        self.assertIn(f"uint256 public constant MIN_READ_GAS = {d.MIN_READ_GAS:_};", book)
+        self.assertIn(f"uint256 public constant MAX_READ_GAS = {d.MAX_READ_GAS:_};", book)
+        self.assertIn("function setStopReadGas(uint256 oracle, uint256 bbo) external onlyOperator {", src)
         with self.assertRaises(SystemExit) as e:
             d.asset_list(["BTC"] * (d.MAX_LISTED + 1))
         self.assertIn("MAX_LISTED", str(e.exception))

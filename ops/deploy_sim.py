@@ -164,10 +164,13 @@ PLATFORM_ASSETS = sn.Assets(lambda: c.NETWORK)
 
 # SimPoolFactory.MAX_LISTED: the most assets listed at once, with the delisted ones the stop book still logs; past it
 # `setAsset` reverts (TooManyAssets), the deploy half done. The test holds it to the source.
-MAX_LISTED = 20
-# The least `fill_delay` of a plan whose exams have a stop book: a stop's change waits it, and the book checks the
-# blocks between (PaperExam.setTrigger, clearTrigger). The factory will refuse less; refused here before anything is sent.
+MAX_LISTED = 16
+# SimPoolFactory.MIN_FILL_DELAY: the least `fill_delay` of a plan's stages (a stop's change waits it, and the book
+# checks the blocks between); the factory refuses less (BadPlan). Refused here before anything is sent.
 BOOK_MIN_FILL_DELAY = 2
+# StopBook.MIN_READ_GAS and MAX_READ_GAS: the bounds of the gas the book gives each precompile read (`setStopReadGas`).
+MIN_READ_GAS = 10_000
+MAX_READ_GAS = 50_000
 
 
 def asset_list(names: list[str]) -> list[tuple[str, int, int]]:
@@ -1206,6 +1209,43 @@ def fee_cmd(args) -> int:
     return 0
 
 
+def read_gas_cmd(args) -> int:
+    """setStopReadGas on a deployment's factory, from its operator: the gas the stop book gives each read of the oracle
+    and of the book, in its check of a block (StopBook.oracleGas, bboGas; 15 000 each at its birth). Reads both and the
+    operator first, and says what it would send or why it would be refused; --signer prints the call for the Safe."""
+    record = deployments.load(args.deployment)
+    factory = record.get("SimPoolFactory")
+    if not factory:
+        raise SystemExit(f"the record {args.deployment!r} names no SimPoolFactory")
+    for name, gas in (("--oracle", args.oracle), ("--bbo", args.bbo)):
+        if not MIN_READ_GAS <= gas <= MAX_READ_GAS:
+            raise SystemExit(f"{name} {gas}: the book takes {MIN_READ_GAS} to {MAX_READ_GAS} (BadReadGas)")
+    book = record.get("StopBook") or stop_book_of(factory)
+    now = [int(c.call_view(book, f"{g}()", [], [], ["uint32"])[0]) for g in ("oracleGas", "bboGas")]
+    operator, sender = operator_of(factory), signer_of(args)
+    print(f"deploy_sim read-gas: {c.NETWORK.name} (chain {c.CHAIN_ID}), factory {factory}, stop book {book}: each check "
+          f"reads the oracle with {now[0]} gas and the book with {now[1]} now; setStopReadGas({args.oracle}, {args.bbo}) "
+          f"from {args.key or 'the signer'} ({sender}) makes them {args.oracle} and {args.bbo} from the next check")
+    if sender != operator:
+        raise SystemExit(f"the factory would refuse setStopReadGas: NotOperator; its operator is {operator}")
+    if now == [args.oracle, args.bbo]:
+        raise SystemExit("the book reads with these already: nothing to send")
+    data = c.encode_call("setStopReadGas(uint256,uint256)", ["uint256", "uint256"], [args.oracle, args.bbo])
+    if getattr(args, "signer", None):
+        return print_batch(args, f"setStopReadGas on {factory}", [(factory, 0, data)])
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    sn.confirm_send(args, f"set the stop book's read gas on {factory} to {args.oracle} and {args.bbo} from the key {args.key!r}", c)
+    rcpt = c.transact(c.account(args.key), factory, "setStopReadGas(uint256,uint256)", ["uint256", "uint256"],
+                      [args.oracle, args.bbo])
+    after = [int(c.call_view(book, f"{g}()", [], [], ["uint32"])[0]) for g in ("oracleGas", "bboGas")]
+    if after != [args.oracle, args.bbo]:
+        raise SystemExit(f"after setStopReadGas the book reads with {after}, not {[args.oracle, args.bbo]}: tx {rcpt['transactionHash']}")
+    print(f"deploy_sim: the stop book reads the oracle with {after[0]} gas and the book with {after[1]}, tx {rcpt['transactionHash']}")
+    return 0
+
+
 def request(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     amount = amount_units(args.amount)
@@ -1510,6 +1550,13 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--key", help="the factory's operator")
     z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
     z.add_argument("--send", action="store_true")
+    z = sub.add_parser("read-gas", help="setStopReadGas: the gas the stop book gives each read of the oracle and the book")
+    z.add_argument("--deployment", required=True)
+    z.add_argument("--oracle", type=int, required=True, help=f"gas for a read of the oracle, {MIN_READ_GAS} to {MAX_READ_GAS}")
+    z.add_argument("--bbo", type=int, required=True, help=f"gas for a read of the book, {MIN_READ_GAS} to {MAX_READ_GAS}")
+    z.add_argument("--key", help="the factory's operator")
+    z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
+    z.add_argument("--send", action="store_true")
     for name in ("request", "withdraw", "cancel"):
         z = sub.add_parser(name)
         z.add_argument("--pool", required=True)
@@ -1553,7 +1600,7 @@ def main(argv: list[str] | None = None) -> int:
         c.assert_network()  # what a mainnet command reads is the chain's it names, sent or not (review of #300)
     return {"deploy": deploy, "pool": pool, "check": check, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
-            "approve": approve, "lift": lift_cmd, "fee": fee_cmd, "code": code_cmd, "pot": pot, "claim": claim,
+            "approve": approve, "lift": lift_cmd, "fee": fee_cmd, "read-gas": read_gas_cmd, "code": code_cmd, "pot": pot, "claim": claim,
             "pay": pay_cmd}[args.cmd](args)
 
 

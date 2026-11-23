@@ -472,3 +472,32 @@ class PayoutReviewWithABook(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheContractForward(Base):
+    def test_a_settle_short_of_one_step_goes_again_with_the_most(self):
+        src = (ROOT / "src/sim/StopBook.sol").read_text()
+        self.assertIn("error NoProgress(uint256 left);", src)
+        self.assertIn("uint32 public oracleGas;", src)
+        self.assertEqual(bk.NO_PROGRESS, sel("NoProgress(uint256)"))
+        loop = self.loop()
+        loop.holders.add(EXAM)
+        self.node.touches[EXAM] = [(BTC, False, 950_000, 949_000, 0xFFFFFFFF, 101, 1_000_101, 1)]
+        orig = self.node.call
+
+        def short(method, params=()):
+            if method == "eth_call" and params[0]["data"].startswith(sel("settle(address)")) and int(params[0]["gas"], 16) < bk.MAX_TX_GAS:
+                raise RuntimeError(f"eth_call: {{'message': 'execution reverted', 'data': '{bk.NO_PROGRESS}{'0' * 63}1'}}")
+            return orig(method, params)
+
+        self.node.call = short
+        self.assertEqual(self.run_to(loop, 101), [["poke"]])
+        self.assertEqual(self.run_to(loop, 102), [["poke", EXAM]])
+        self.assertEqual(self.node.settles()[-1][1], bk.MAX_TX_GAS)
+
+    def test_the_read_gas_is_the_books(self):
+        node = mock.Mock()
+        node.call.side_effect = lambda m, p=(): word(15_000)
+        self.assertEqual(bk.precompile_gas_of(node, BOOK), 30_000)
+        node.call.side_effect = RuntimeError("eth_call: execution reverted")
+        self.assertEqual(bk.precompile_gas_of(node, BOOK), 2 * bk.PRECOMPILE_GAS)
