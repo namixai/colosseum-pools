@@ -62,7 +62,7 @@ contract SimPoolFactory {
     /// (an exam's stop or take on it). The stop book's check of a block logs each asset with a stop or a take on it;
     /// with this many, its dearest check (the block that closes runs of its tree on many levels) stays under 1 500 000
     /// gas, a small HyperEVM block with a quarter to spare (`test_gas_poke_atTheCap`).
-    uint256 public constant MAX_LISTED = 20;
+    uint256 public constant MAX_LISTED = 16;
     /// How long a creator's request to withdraw waits before it can be carried out, and how long after
     /// closing a pool `finish` waits: the platform, the traders and the codes' partners see every
     /// withdrawal a week before the money moves.
@@ -73,6 +73,10 @@ contract SimPoolFactory {
     /// The bounds of a fill window, in blocks: about a minute of HyperEVM's small blocks at most.
     uint16 public constant MIN_FILL_WINDOW = 1;
     uint16 public constant MAX_FILL_WINDOW = 60;
+    /// The least `fillDelay` of a plan: an order, a stop, and a change of a stop act two blocks after they are sent at
+    /// the earliest, so a trader who knows the next block's price cannot move a stop out of its way (seventh audit of
+    /// cp#335, L1: with one, a change sent a block before a wick is in force in the wick's block).
+    uint16 public constant MIN_FILL_DELAY = 2;
     /// The share of a withdrawal's profit a trading group's code may give its owner (bps), when it gives one.
     uint16 public constant MIN_PARTNER_BPS = 4000;
     uint16 public constant MAX_PARTNER_BPS = 6000;
@@ -157,6 +161,12 @@ contract SimPoolFactory {
     /// @notice The fee of every pool opened from now on; a pool already open paid what it paid and is not touched.
     function setCreationFee(uint256 fee) external onlyOperator {
         _setCreationFee(fee);
+    }
+
+    /// @notice Sets the gas the stop book's check gives a read of the oracle precompile and of the book precompile
+    ///         (`StopBook.setReadGas`, within its bounds), should the chain price them otherwise.
+    function setStopReadGas(uint256 oracle, uint256 bbo) external onlyOperator {
+        stopBook.setReadGas(oracle, bbo);
     }
 
     function setOperator(address operator_) external onlyOperator {
@@ -352,5 +362,6 @@ contract SimPoolFactory {
     function _checkTerms(ExamTerms calldata t) internal pure {
         if (t.stepDuration == 0 || t.maxIdle == 0) revert BadPlan();
         if (t.fillWindow < MIN_FILL_WINDOW || t.fillWindow > MAX_FILL_WINDOW) revert BadPlan();
+        if (t.fillDelay < MIN_FILL_DELAY) revert BadPlan();
     }
 }

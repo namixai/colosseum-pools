@@ -29,7 +29,7 @@ contract A6Book is StopBook {
     }
 
     function bbo(uint32 a, uint64 px) external view returns (uint32) {
-        return _bbo(a, px);
+        return _bbo(a, px, bboGas);
     }
 
     function pxAt(uint32 a, uint256 pos) external view returns (uint256) {

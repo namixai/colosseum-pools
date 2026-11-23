@@ -690,8 +690,9 @@ contract StopBookTest is StopBookBase {
         _mark(940_000);
         uint256 last = stopBook.lastPokeBlock();
         uint256 len = stopBook.logged();
-        vm.expectRevert(abi.encodeWithSelector(StopBook.PokeGas.selector, stopBook.ORACLE_GAS()));
-        stopBook.poke{gas: 60_000}();
+        stopBook.setReadGas(30_000, 15_000); // as the factory: the oracle's read told from the book's by its gas
+        vm.expectRevert(abi.encodeWithSelector(StopBook.PokeGas.selector, uint256(30_000)));
+        stopBook.poke{gas: 45_000}();
         assertEq(stopBook.lastPokeBlock(), last, "the block is not taken");
         assertEq(stopBook.logged(), len);
         vm.prank(trader);
