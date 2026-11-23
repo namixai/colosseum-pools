@@ -3,6 +3,7 @@
 import * as chain from "../lib/chain.js";
 import { $, friendly, refusalName, esc } from "../lib/ui.js";
 import { SIM_POOL_ABI } from "../lib/simpool.js";
+import { readFailure } from "../lib/simindex.js";
 import { SIM_LINES_ABI, SIM_OWNER_ABI } from "../lib/simlines.js";
 import { SIM_OWNER_CALLS_ABI, ownerRefusal } from "../lib/simowner.js";
 
@@ -81,5 +82,5 @@ export function eventsOf(receipt, at, iface) {
 /** A section that could not be read: its box, with the reason and nothing to press but a reload. */
 export function failedBoxHtml(id, title, err) {
   return `<section class="sp-box" id="${esc(id)}"><div class="sp-bh"><b>${esc(title)}</b></div>`
-    + `<p class="so-failed" role="status">This section could not be read from the chain: ${esc(friendly(err))} Reload the page to try again.</p></section>`;
+    + `<p class="so-failed" role="status">This section could not be read from the chain: ${esc(readFailure(err))}. Reload the page to try again.</p></section>`;
 }

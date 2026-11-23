@@ -54,9 +54,13 @@ DEFAULT_BIND = "127.0.0.1:8789"
 # The public node answers a range of 1 000 blocks (measured from the site, app/views/simcodes.js); one that
 # wants less is met by halving (`_logs`), and the width found is kept for the windows after.
 DEFAULT_WINDOW = 1000
-# A pause between two reads: the public node counts requests per address, and the keepers on the same host
-# share that count. 0.2 s is five reads a second, 5 000 blocks a second at the full window.
-DEFAULT_PAUSE_S = 0.2
+# A pause between two reads while behind: the public node allows about 100 calls a minute per address, and the
+# gateway and the keepers on the same host share that count (docs/GATEWAY.md, "Secrets and where it runs").
+# 1.5 s is 40 reads a minute: 30 days of blocks, 2 600 windows of 1 000, in about 65 minutes, once.
+DEFAULT_PAUSE_S = 1.5
+# Once caught up, a pass this often: the newest block and, when there are new blocks, one read of their logs.
+# The page reads the few blocks after the index's last one itself.
+DEFAULT_EVERY_S = 15.0
 # Blocks short of the newest that are left for the next pass: HyperEVM's blocks are final when made, and the
 # two are a margin for a node that answers a block before its logs.
 DEFAULT_LAG = 2
@@ -183,7 +187,7 @@ class SimIndex:
 
     def __init__(self, rpc: Rpc, chain_id: int, factory: str, from_block: int, path: pathlib.Path,
                  window: int = DEFAULT_WINDOW, lag: int = DEFAULT_LAG, pause_s: float = DEFAULT_PAUSE_S,
-                 clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep):
+                 every_s: float = DEFAULT_EVERY_S, clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep):
         if window < 1:
             raise ValueError("the window is at least one block")
         self.rpc = rpc
@@ -195,6 +199,7 @@ class SimIndex:
         self.window = window
         self.lag = lag
         self.pause_s = pause_s
+        self.every_s = every_s
         self.clock = clock
         self.sleep = sleep
         self.lock = threading.Lock()
@@ -295,11 +300,14 @@ class SimIndex:
 
     def step(self) -> int:
         """Reads the next window up to the newest block less the lag. Returns the blocks read (0: nothing new)."""
-        head = self.rpc.block_number()
-        with self.lock:
-            self.head = head
-        top = head - self.lag
         start = self.scanned_to + 1
+        # The newest block is asked for only when the reading has reached the last one known: while behind, one
+        # read a window.
+        if self.head is None or start > self.head - self.lag:
+            head = self.rpc.block_number()
+            with self.lock:
+                self.head = head
+        top = self.head - self.lag
         if start > top:
             return 0
         addresses = [self.factory, *self.pools]
@@ -351,7 +359,7 @@ class SimIndex:
                 with self.lock:
                     self.last_error = None
                 delay = 1.0
-                stop.wait(self.pause_s if read else 2.0)
+                stop.wait(self.pause_s if read else self.every_s)
             except Exception as exc:  # the node, the network, the disk: said, waited out, read again
                 with self.lock:
                     self.errors += 1
@@ -470,12 +478,13 @@ def settings(env, root: pathlib.Path) -> dict:
     window = int(env.get("SIM_INDEX_WINDOW", DEFAULT_WINDOW))
     lag = int(env.get("SIM_INDEX_LAG", DEFAULT_LAG))
     pause = float(env.get("SIM_INDEX_PAUSE", DEFAULT_PAUSE_S))
-    if from_block < 0 or window < 1 or lag < 0 or pause < 0:
+    every = float(env.get("SIM_INDEX_EVERY", DEFAULT_EVERY_S))
+    if from_block < 0 or window < 1 or lag < 0 or pause < 0 or not every > 0:
         raise SystemExit("refusing to start: SIM_INDEX_FROM_BLOCK, SIM_INDEX_LAG and SIM_INDEX_PAUSE must not be "
-                         "negative and SIM_INDEX_WINDOW is at least 1")
+                         "negative, SIM_INDEX_EVERY must be more than 0 and SIM_INDEX_WINDOW is at least 1")
     factory = to_checksum_address(factory)
     directory = pathlib.Path(env.get("SIM_INDEX_DIR", DEFAULT_DIR))
-    return {"factory": factory, "from_block": from_block, "window": window, "lag": lag, "pause_s": pause,
+    return {"factory": factory, "from_block": from_block, "window": window, "lag": lag, "pause_s": pause, "every_s": every,
             "path": directory / f"sim-index-{NETWORK.chain_id}-{factory.lower()}.json",
             "rpc": env.get("SIM_INDEX_RPC_URL") or NETWORK.rpc_url,
             "bind": env.get("SIM_INDEX_BIND", DEFAULT_BIND), "allow_origin": env.get("SIM_INDEX_ALLOW_ORIGIN", "")}
@@ -490,7 +499,7 @@ def main() -> int:
     if chain != NETWORK.chain_id:
         raise SystemExit(f"refusing to start: RPC chain id is {chain}, expected {NETWORK.chain_id}")
     index = SimIndex(rpc, chain, cfg["factory"], cfg["from_block"], cfg["path"], window=cfg["window"],
-                     lag=cfg["lag"], pause_s=cfg["pause_s"])
+                     lag=cfg["lag"], pause_s=cfg["pause_s"], every_s=cfg["every_s"])
     took = index.load()
     log_line(event="start", factory=cfg["factory"], from_block=cfg["from_block"], file=str(cfg["path"]), file_was=took,
              scanned_to=index.scanned_to, pools=len(index.pools))

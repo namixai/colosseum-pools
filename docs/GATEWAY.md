@@ -700,6 +700,97 @@ there, the attempt comes back. Seen on 19 and 26 Oct 2026: a restart of the gate
 nothing reached Hyperliquid, and the trader lost one of four daily orders. A restart now answers the
 429 above instead, and a 502 means the gateway had the order.
 
+## The sim pools' event index
+
+Status: built and tested offline, 23 November 2026; not running on any host yet.
+
+A pool of exams (`src/sim/SimPool.sol`) keeps no list of its codes or its stops. The owner's "Codes &
+shares", the operator's stops and the partner's cabinet found them in the pool's events, read from the
+browser through the public node a window of blocks at a time. A pool runs 30 days and more and a block is
+about a second, so that is millions of blocks and thousands of `eth_getLogs`: the panels showed an empty
+list, a node's refusal, or a cabinet still reading after a minute.
+
+`gateway/simindex.py` reads them once, on the host. It is a process of its own, apart from the gateway: it
+holds no key, needs no signer, and runs on mainnet as on testnet.
+
+**What it reads.** One `SimPoolFactory`: its `PoolCreated`, and its pools' `CodeSet`, `SharePaid`,
+`PayoutStopped`, `StopLifted` and `StopFinal`, from the factory's first block to the newest less
+`SIM_INDEX_LAG`, one `eth_getLogs` per window for the factory and every pool it made. A pool made in a
+window is read again from its creation to the window's end, for itself. A window the node refuses as too
+wide is halved, down to one block, and widened again after 50 good reads.
+
+**Where it keeps them.** One JSON file, `sim-index-<chain id>-<factory>.json` under `SIM_INDEX_DIR`, written
+to a file beside it and renamed over it: after each window that found something, and at least every
+10 s while it reads. A file of another chain, factory or first block, or one that does not parse, is
+renamed aside (`.other-<time>`, `.bad-<time>`) and the reading starts afresh. The file holds the pools and
+their events, a few hundred bytes a code or a stop: well under a megabyte for a year of a busy pool.
+
+**What it answers.** GET only; any other method is `405 read_only`, with no body read.
+
+    GET /v1/simindex/health         {ok, chain_id, factory, from_block, scanned_to, head, behind_blocks,
+                                     pools, window, updated_at, last_error, errors}
+    GET /v1/simindex/pool?pool=0x…  {status: "ok", pool, created, creator, chain_id, factory, scanned_to,
+                                     head, events: [{name, block, index, tx, …fields}]}
+                                    404 unknown_pool for a pool this factory has not made by scanned_to
+
+**Restart and a lost node.** A restart takes up the file and reads on from `scanned_to + 1`; a window read
+twice keeps each event once (block and log index). A node that fails, throttles or is unreachable is asked
+again from the same block after 1 s, 2 s, 4 s… up to 60 s; `/v1/health`'s `last_error` and `behind_blocks`
+say so meanwhile, and the routes go on answering with what was read.
+
+**How the site uses it** (`app/lib/simindex.js`). The page asks the index for the pool, waits at most 6 s,
+and checks the answer: the pool and the chain are the page's, each event has its fields in shape, none is
+past `scanned_to`. What it names is a candidate: each code is read from `codeOf` and `shareDue`, each stop
+from `payout(id)` and `stopReasonOf(id)`, each send to the partner from its transaction's receipt, and only
+what the chain says is shown. The blocks after `scanned_to` the page reads itself. An index that does not
+answer, does not know the pool or answers something that does not check out is said on the page, in those
+words, and the page reads the pool's events from the chain itself, as it did before, with the blocks read
+and the share of the pool's blocks in view and a button that reads further. A node's refusal that ethers
+cannot name ("could not coalesce error") is said as the node not answering, with the way on. What the index
+can still do wrong is leave a row out: the page cannot tell a code the index never named from one that does
+not exist, short of reading the whole history itself.
+
+**On the host.** The process listens on `127.0.0.1:8789` and nginx passes `/v1/simindex/` to it:
+
+    # nginx, beside /v1/contacts in ops/host/nginx-pools-api.conf.in
+    limit_req_zone $binary_remote_addr zone=pools_simindex_ip:1m rate=60r/m;
+    location ^~ /v1/simindex/ {
+        limit_except GET { deny all; }
+        limit_req zone=pools_simindex_ip burst=20 nodelay;
+        proxy_pass http://127.0.0.1:8789;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # /etc/colosseum/sim-index.env
+    COLOSSEUM_NETWORK=            # empty for testnet, mainnet for mainnet
+    SIM_INDEX_RECORD=deployments/testnet-rehearsal998.json   # SimPoolFactory and block; or
+    # SIM_INDEX_FACTORY=0x…  SIM_INDEX_FROM_BLOCK=…
+    SIM_INDEX_ALLOW_ORIGIN=https://pools.usenami.io
+    # SIM_INDEX_RPC_URL=…         a node of its own spares the gateway's and the keepers' budget
+
+    # /etc/systemd/system/colosseum-sim-index.service
+    [Service]
+    DynamicUser=true
+    WorkingDirectory=/opt/colosseum-pools/current
+    EnvironmentFile=/etc/colosseum/sim-index.env
+    Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SIM_INDEX_DIR=/var/lib/colosseum-sim-index
+    StateDirectory=colosseum-sim-index
+    ExecStart=/opt/colosseum-pools/venv/bin/python -m gateway.simindex
+    Restart=always
+    RestartSec=5
+    NoNewPrivileges=true
+    ProtectSystem=strict
+    ProtectHome=true
+    PrivateTmp=true
+
+The settings: `SIM_INDEX_WINDOW` (1000 blocks), `SIM_INDEX_PAUSE` (1.5 s between two reads while behind),
+`SIM_INDEX_EVERY` (15 s between passes once caught up), `SIM_INDEX_LAG` (2 blocks), `SIM_INDEX_BIND`
+(`127.0.0.1:8789`). The public node allows about 100 calls a minute per address and the gateway and the
+keepers share it (below, "Secrets and where it runs"): at the defaults the index takes 40 a minute while it
+catches up, about 65 minutes for 30 days of blocks, and 4 to 8 a minute after. The site finds the index
+on the gateway's host (`CONFIG.gateway`) unless its config names `simIndex`.
+
 ## What the gateway does not prove
 
 The trader's signature is checked by the gateway, which we run, so the operator could submit

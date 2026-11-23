@@ -1,17 +1,21 @@
 // The control panel's "Codes & shares" (mockup 02): the pool's codes with what each has accrued and waiting, and the
-// form that sets one, or one for two. The pool has no list of its codes: they are found in its `CodeSet` events (read
-// newest first, a stretch at a time, as the node allows) and in the texts this browser has set or looked up, and any
-// text typed is checked against `codeOf`. Nothing here moves money: a code is written into the pool, and the shares
-// accrue at the owner's withdrawals.
+// form that sets one, or one for two. The pool has no list of its codes: they are named by the pool's index on the host
+// (app/lib/simindex.js) up to a block near the newest, found in the `CodeSet` events of the blocks after it, and in the
+// texts this browser has set or looked up; every one is read from `codeOf` and `shareDue` before it is listed. Without
+// the index the events are read from the chain itself, from the newest block back, a stretch at a time, and the page says
+// why and which blocks were read. Any text typed is checked against `codeOf`. Nothing here moves money: a code is written
+// into the pool, and the shares accrue at the owner's withdrawals.
 import * as chain from "../lib/chain.js";
+import { CONFIG } from "../config.js";
 import { $, friendly } from "../lib/ui.js";
-import { readLogs, codeHash } from "../lib/simpool.js";
-import { journalPlan } from "../lib/examscreen.js";
+import { codeHash } from "../lib/simpool.js";
+import { askIndex, indexBase, readFailure } from "../lib/simindex.js";
 import { codeRead, codeRow, codePlan, checkWords, scanNote, codesHtml, codeLink } from "../lib/simowner.js";
 import { poolAt, runOwner, mined, failedBoxHtml } from "./simowner-run.js";
 
 const { ethers } = window;
-const WINDOW = 50;
+/** The node answers a range of 1 000 blocks (app/views/simcodes.js), and a press reads this many windows each way. */
+const WINDOW = 1000;
 const CALLS = 20;
 
 /** What each pool's scan has found so far: the blocks read (one run) and the hashes of the codes in them. */
@@ -39,30 +43,62 @@ function rememberText(at, hash, text) {
   }
 }
 
+/**
+ * Reads up to CALLS windows of `[from, to]`, oldest first (`up`) or newest first, into `s.found`; a window that fails ends
+ * the reading with what was found kept. Returns the blocks read, as `[low, high]` or null, and the failure.
+ */
+async function readWindows(at, topic, pool, s, from, to, up) {
+  let low = null;
+  let high = null;
+  for (let i = 0; i < CALLS && from <= to; i++) {
+    const a = up ? from : Math.max(from, to - WINDOW + 1);
+    const b = up ? Math.min(to, from + WINDOW - 1) : to;
+    let logs;
+    try {
+      logs = await chain.readProvider.getLogs({ address: at, topics: [topic], fromBlock: a, toBlock: b });
+    } catch (err) {
+      return { low, high, failure: err };
+    }
+    for (const l of logs) {
+      const parsed = pool.interface.parseLog(l);
+      if (parsed) s.found.set(parsed.args.code, Math.max(s.found.get(parsed.args.code) ?? 0, l.blockNumber));
+    }
+    low = low === null ? a : Math.min(low, a);
+    high = high === null ? b : Math.max(high, b);
+    if (up) from = b + 1;
+    else to = a - 1;
+  }
+  return { low, high, failure: null };
+}
+
 async function scanEvents(at, pool, more) {
   const latest = await chain.readProvider.getBlockNumber();
+  const topic = pool.interface.getEvent("CodeSet").topicHash;
   let s = scans.get(at);
   if (!s) {
-    s = { from: null, top: null, found: new Map() };
+    const source = await askIndex({ base: indexBase(CONFIG), pool: at, chainId: CONFIG.chainId, fetch: (...a) => window.fetch(...a) });
+    s = { from: latest + 1, top: latest, found: new Map(), source, floor: chain.deployBlock() };
+    if (source.ok) {
+      s.from = Math.min(source.created, latest);
+      s.top = Math.max(s.from - 1, Math.min(source.scannedTo, latest));
+      s.floor = s.from;
+      for (const e of source.events) if (e.name === "CodeSet") s.found.set(e.args.code, e.block);
+    }
     scans.set(at, s);
   }
-  const topic = pool.interface.getEvent("CodeSet").topicHash;
-  const readRange = async (plan) => {
-    const { logs } = await readLogs({ from: plan.from, to: plan.to, window: WINDOW, maxCalls: CALLS,
-      getLogs: (x, y) => chain.readProvider.getLogs({ address: at, topics: [topic], fromBlock: x, toBlock: y }) });
-    for (const l of logs) s.found.set(pool.interface.parseLog(l).args.code, l.blockNumber);
-    s.from = s.from === null ? plan.from : Math.min(s.from, plan.from);
-    s.top = s.top === null ? plan.to : Math.max(s.top, plan.to);
-  };
-  const loaded = s.from === null ? null : { from: s.from, top: s.top };
-  if (!loaded) await readRange(journalPlan({ latest, loaded: null, direction: "earlier" }));
-  else {
-    const newer = journalPlan({ latest, loaded, direction: "newer" });
-    if (newer) await readRange(newer);
-    const older = more ? journalPlan({ latest, loaded: { from: s.from, top: s.top }, direction: "earlier" }) : null;
-    if (older) await readRange(older);
+  let failed = null;
+  // The blocks written since the last reading, oldest first.
+  const newer = await readWindows(at, topic, pool, s, s.top + 1, latest, true);
+  if (newer.high !== null) s.top = newer.high;
+  failed = newer.failure;
+  // Further back, newest first: at the first reading without the index, and at each press of "Load earlier blocks".
+  const first = !s.source.ok && s.from > latest;
+  if (!failed && (first || more) && s.from > s.floor) {
+    const older = await readWindows(at, topic, pool, s, s.floor, s.from - 1, false);
+    if (older.low !== null) s.from = older.low;
+    failed = older.failure;
   }
-  return { latest, from: s.from, to: s.top, found: s.found };
+  return { latest, from: s.from, to: s.top, found: s.found, source: s.source, failed: failed ? readFailure(failed) : "" };
 }
 
 /** The codes of the pool: found in its events and in this browser's texts, each read from `codeOf` and `shareDue`. */
@@ -79,8 +115,8 @@ export async function readCodes(at, { more = false } = {}) {
     });
     const real = rows.filter((r) => r.partner && !/^0x0{40}$/i.test(r.partner));
     const known = real.filter((r) => !scan.found.has(r.code)).length;
-    return { rows: real, sharesDue,
-      scan: scanNote({ from: scan.from, to: scan.to, latest: scan.latest, known }) };
+    return { rows: real, sharesDue, more: !scan.source.ok,
+      scan: scanNote({ from: scan.from, to: scan.to, latest: scan.latest, known, source: scan.source, failed: scan.failed }) };
   } catch (err) {
     return { error: err };
   }
