@@ -741,17 +741,17 @@ class StopLoop:
                     except OSError as exc:
                         self._say("stop_journal_failed", error=str(exc)[:200])
             self._events(b, by_block.get(b, []))
+            for key in due:  # after the block's own events: a stop filled in it is not overdue
+                t = self.triggers.get(key)
+                if t is not None and t["touch"] is not None and not t["said"]:
+                    t["said"] = True
+                    self._raise("stop_overdue", key, t, b, "reached and not carried out yet")
             if b < price_lo and not gap_said and any(t["armed"] < price_lo and self.signs.get(k[:2]) != 0
                                                      for k, t in self.triggers.items()):
                 # A stop set inside the blocks not read, armed in them: the same gap, said as soon as it is known.
                 gap_said = True
                 self.alarm("stop_watch_gap", from_block=lo, to=price_lo - 1, standing=len(self.triggers),
                            why="a stop was set and armed inside blocks whose prices the loop did not read")
-            for key in due:  # after the block's own events: a stop filled in it is not overdue
-                t = self.triggers.get(key)
-                if t is not None and t["touch"] is not None and not t["said"]:
-                    t["said"] = True
-                    self._raise("stop_overdue", key, t, b, "reached and not carried out yet")
             self.block = b
             if self.sender is not None and b < head:
                 self.sender.serve()  # the keeper's transactions between two blocks, not after the whole step
