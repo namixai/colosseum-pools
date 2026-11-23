@@ -23,7 +23,7 @@ Two loops in one process:
                    `claimPayout` for a passed stage; for each pool, `pay` while a payout is due: approved
                    and past its 72 hours, or past its 7 days unapproved.
 
-With `--stops loop` (COLOSSEUM_STOPS=loop; the default is `inline`, the fast loop's as above), the stops are a third
+By default (`--stops loop`, COLOSSEUM_STOPS; `inline` is the fast loop's as above), the stops are a third
 loop's, in a thread of its own (ops/stop_filler.py): every block, the stops and takes of the live exams against the
 oracle price, a stop reached sent at once, and an alarm for a reach that went by with no fill. Nothing in the two loops
 above holds it up: the slow pass, a receipt waited for and the node's rate limit stop only the thread they are in.

@@ -690,7 +690,7 @@ A stop exists for the chain only in a block whose transaction carries it out: `f
 oracle price of that very block is at the stop or past it, and inside its window only from the factory's filler.
 A reach that no transaction of the filler's lands in leaves no trace on chain. The keeper's one loop has blind
 spots there: its slow pass, a receipt it waits for, and a node's rate limit (up to 63 seconds) each hold the stops.
-With `--stops loop` (COLOSSEUM_STOPS=loop; the default is `inline`, the keeper as it was, with none of what follows)
+By default (`--stops loop`, COLOSSEUM_STOPS; `inline` is the way back to the keeper as it was, with none of what follows)
 the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a thread beside its own loops:
 
 - every block: one `eth_getLogs` of the blocks since its last look (stops and takes set, cleared and filled, the

@@ -88,6 +88,8 @@ class Node:
         self.last_fill = 0
         self.max_idle = 0
         self.senders: list[int] = []  # the thread of each eth_sendRawTransaction
+        self.stale = 0  # seconds the head's time is behind the clock of `Base.clock`
+        self.balance = 10**18
 
     def oracle(self, block: int) -> int:
         past = [b for b in self.price if b <= block]
@@ -106,7 +108,10 @@ class Node:
         if method == "eth_getTransactionCount":
             return hex(self.count if params[1] == "pending" or self.latest is None else self.latest)
         if method == "eth_getBlockByNumber":
-            return {"timestamp": hex(1_000_000 + int(params[0], 16))}
+            block = self.head if params[0] == "latest" else int(params[0], 16)
+            return {"number": hex(block), "timestamp": hex(1_000_000 + block - self.stale)}
+        if method == "eth_getBalance":
+            return hex(self.balance)
         if method == "eth_getLogs":
             q = params[0]
             lo, hi = int(q["fromBlock"], 16), int(q["toBlock"], 16)
@@ -187,6 +192,7 @@ class Base(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.alerts: list[str] = []
+        self.later = 0.0  # seconds this machine's clock is ahead of the head's block time
 
     def loop(self, wallet=FILLER, tip=0, **kw) -> sf.StopLoop:
         alarm = sf.Alarm(self.dir / "stops.alarm", "")
@@ -196,8 +202,9 @@ class Base(unittest.TestCase):
         sender = sf.Sender(FILLER, self.node) if wallet is not None else None
         if getattr(self, "journal", None) is not None:
             self.journal.close()  # one writer a journal: the loop made before this one lets it go
-        self.journal = sf.PriceJournal(self.dir / "prices.json")
+        self.journal = sf.PriceJournal(self.dir / "prices.jsonl")
         self.addCleanup(self.journal.close)
+        kw.setdefault("clock", lambda: 1_000_000 + self.node.head + self.later)
         return sf.StopLoop(self.keeper, self.node, wallet=wallet, sender=sender, tip_wei=tip, journal=self.journal,
                            alarm=alarm, **kw)
 
@@ -433,8 +440,9 @@ class NoBlindSpots(Base):
         loop.step(110)
         blind = self.events("stop_watch_blind")
         self.assertEqual((blind[0]["from_block"], blind[0]["to"]), (101, 107))
-        journal = json.loads((self.dir / "prices.json").read_text())
-        self.assertEqual(sorted(int(k.split(":")[1]) for k in journal), [108, 109, 110])
+        journal = pr.load_prices((self.dir / "prices.jsonl").read_text())
+        self.assertEqual(sorted(journal.px[3]), [108, 109, 110])
+        self.assertIn((101, 107, "the head ran ahead of the loop: their prices were not read back"), journal.gaps)
 
     def test_a_stop_set_on_an_exam_sold_in_the_same_blocks_is_known_at_once(self):
         new = to_checksum_address("0x" + "66" * 20)
@@ -760,11 +768,11 @@ class TheWatchAlone(Base):
                       stop_overdue=5, stop_alarm_min_blocks=2)
         with mock.patch.object(sf, "Node"), mock.patch.object(sf, "check_chain"):
             watch = sf.build(a, Keeper(), self.dir / "watch-sim1.json", prefix="watch-")
-            self.assertEqual((watch.journal.path.name, watch.alarm.flag.name), ("watch-prices-sim1.json", "watch-stops-sim1.alarm"))
+            self.assertEqual((watch.journal.path.name, watch.alarm.flag.name), ("watch-prices-sim1.jsonl", "watch-stops-sim1.alarm"))
             keeper = sf.build(a, Keeper(), self.dir / "multi-sim1.json")
-            self.assertEqual(keeper.journal.path.name, "prices-sim1.json")
+            self.assertEqual(keeper.journal.path.name, "prices-sim1.jsonl")
         with self.assertRaises(SystemExit):
-            sf.PriceJournal(self.dir / "prices-sim1.json")
+            sf.PriceJournal(self.dir / "prices-sim1.jsonl")
 
 
 class Alive(Base):
@@ -830,52 +838,62 @@ class NoKeyInTheLog(unittest.TestCase):
 
 
 class TheJournal(Base):
-    def test_it_is_the_file_payout_review_takes_as_prices_at_every_moment(self):
-        j = sf.PriceJournal(self.dir / "p.json")
-        self.assertEqual(json.loads((self.dir / "p.json").read_text()), {})
-        j.add(100, {3: 950_000, 100_007: 12})
-        j.add(101, {})
-        j.add(101, {3: 949_000})
-        got = json.loads((self.dir / "p.json").read_text())
-        self.assertEqual(got, {pr.oracle_key(3, 100): 950_000, pr.oracle_key(100_007, 100): 12, pr.oracle_key(3, 101): 949_000})
+    def test_it_is_the_file_payout_review_judges_by_with_time_and_gaps(self):
+        j = sf.PriceJournal(self.dir / "p.jsonl", clock=lambda: 7)
+        j.add(100, {3: 950_000, 100_007: 12}, t=1_100)
+        j.add(101, {}, unread={3})
+        j.gap(102, 104, "the loop was not running")
+        j.add(105, {3: 949_000})
+        got = pr.load_prices((self.dir / "p.jsonl").read_text())
+        self.assertEqual(got.px, {3: {100: 950_000, 105: 949_000}, 100_007: {100: 12}})
+        self.assertEqual((got.times, got.gaps, got.lines), ({100: 1_100}, [(102, 104, "the loop was not running")], 3))
+        first, second = [json.loads(x) for x in (self.dir / "p.jsonl").read_text().splitlines()[:2]]
+        self.assertEqual(first, {"b": 100, "t": 1_100, "w": 7, "px": {"3": 950_000, "100007": 12}})
+        self.assertEqual(second, {"b": 101, "t": None, "w": 7, "px": {}, "unread": [3]})
         j.close()
-        again = sf.PriceJournal(self.dir / "p.json")
-        again.add(102, {3: 1})
-        self.assertEqual(len(json.loads((self.dir / "p.json").read_text())), 4, "opened again, it goes on")
+        again = sf.PriceJournal(self.dir / "p.jsonl")
+        self.assertEqual(again.last, 105, "opened again, it knows its last block")
+        again.close()
 
-    def test_payout_review_counts_a_stops_lateness_from_it(self):
-        j = sf.PriceJournal(self.dir / "p.json")
-        for b, px in ((98, 960_000), (99, 949_000), (100, 948_000), (101, 947_000)):
-            j.add(b, {3: px})
-        oracle = json.loads((self.dir / "p.json").read_text())
-        close = {"block": 101, "asset": 3, "take": False, "side": 1, "px": 950_000, "armedAt": 90}
-        self.assertEqual(pr.trigger_reached(close, lambda b: oracle.get(pr.oracle_key(3, b)), pr.TRIGGER_BACK), (2, False))
-
-    def test_a_write_cut_short_is_mended_when_it_is_opened(self):
-        path = self.dir / "p.json"
-        for cut, want in (('{"3:1": 5, "3:2": 6, "3:3', {"3:1": 5, "3:2": 6}), ('{"3:1": 5', {}), ("{", {}),
-                          ('{"3:1": 5}\n', {"3:1": 5})):
+    def test_a_write_cut_short_is_cut_off_when_it_is_opened_and_nothing_before_it(self):
+        path = self.dir / "p.jsonl"
+        whole = "".join(json.dumps({"b": b, "px": {"3": b}}) + "\n" for b in range(1, 5001))
+        for cut, last in ((whole + '{"b": 5001, "px": {"3', 5000), ('{"b": 1', None), ("", None),
+                          (whole + json.dumps({"gap": [5001, 5009], "why": "x"}) + "\n", 5009)):
             path.write_text(cut)
-            sf.PriceJournal(path).add(9, {3: 1})
-            self.assertEqual(json.loads(path.read_text()), {**want, "3:9": 1}, cut)
+            j = sf.PriceJournal(path)
+            self.assertEqual(j.last, last, cut[-30:])
+            j.add(9_000, {3: 1})
+            j.close()
+            text = path.read_text()
+            self.assertTrue(text.endswith("\n"))
+            self.assertEqual(len(pr.load_prices(text).px[3]), (5000 if last else 0) + 1)
 
-    def test_a_cut_further_back_than_4k_keeps_every_whole_entry_before_it(self):
-        path = self.dir / "p.json"
-        entries = ", ".join(f'"3:{b}": {b}' for b in range(1, 2001))
-        path.write_text("{" + entries + ', "3:2001": ' + "9" * 9000)
-        with mock.patch.object(sf.PriceJournal, "CHUNK", 4096):  # the cut further back than one chunk
-            sf.PriceJournal(path).add(5000, {3: 1})
-        got = json.loads(path.read_text())
-        self.assertEqual(len(got), 2001, "the 2000 whole ones and the new one")
-        self.assertEqual(got["3:2000"], 2000)
-
-    def test_the_loop_writes_each_block_it_read(self):
+    def test_the_loop_writes_each_block_it_read_and_its_time(self):
         loop = self.loop(wallet=None)
         self.armed_stop(loop)
         self.node.price.update({101: 949_000, 102: 951_000})
+        loop.head_t[102] = 1_000_102
         self.run_to(loop, 101, 102)
-        got = json.loads((self.dir / "prices.json").read_text())
-        self.assertEqual((got["3:101"], got["3:102"]), (949_000, 951_000))
+        got = pr.load_prices((self.dir / "prices.jsonl").read_text())
+        self.assertEqual((got.px[3][101], got.px[3][102], got.times.get(102)), (949_000, 951_000, 1_000_102))
+
+    def test_started_again_the_blocks_it_was_not_running_in_are_a_gap(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        self.run_to(loop, 101)
+        loop = self.loop(wallet=None)  # the keeper started again, the journal opened again
+        self.run_to(loop, 120)
+        got = pr.load_prices((self.dir / "prices.jsonl").read_text())
+        self.assertIn((102, 119, "the loop was not running"), got.gaps)
+
+    def test_a_journal_that_cannot_be_written_is_an_alarm_at_once(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        with mock.patch.object(loop.journal, "add", side_effect=OSError("No space left on device")):
+            self.run_to(loop, 101, 102)
+        failed = self.events("stop_journal_failed")
+        self.assertEqual((len(failed), failed[0]["alarm"]), (1, "ALARM"), "once, at once")
 
 
 class TheSettings(unittest.TestCase):
@@ -891,17 +909,18 @@ class TheSettings(unittest.TestCase):
             p.add_argument("--deployment", default="sim1")
             return p.parse_args(argv)
 
-    def test_by_default_inline_and_with_the_loop_the_keepers_node_and_no_tip(self):
+    def test_by_default_the_loop_on_the_keepers_node_with_no_tip(self):
         a = self.parse([])
-        self.assertEqual((a.stops, a.stop_rpc, a.stop_tip_gwei), ("inline", "", 0.0))
-        self.assertEqual(self.parse([], {"COLOSSEUM_STOPS": "loop"}).stops, "loop")
+        self.assertEqual((a.stops, a.stop_rpc, a.stop_tip_gwei), ("loop", "", 0.0))
+        self.assertEqual(self.parse([], {"COLOSSEUM_STOPS": "inline"}).stops, "inline", "the way back, by hand")
         node = mock.Mock()
         with mock.patch.object(sf, "Node", return_value=node) as made, mock.patch.object(sf, "check_chain"):
             loop = sf.build(a, Keeper(), pathlib.Path(tempfile.mkdtemp()) / "multi-sim1.json")
         made.assert_called_once_with(c.RPC_URL)
         self.assertEqual(loop.tip, 0)
         self.assertIsNone(loop.sender, "no wallet, no sender")
-        self.assertEqual(loop.journal.path.name, "prices-sim1.json")
+        self.assertEqual(loop.journal.path.name, "prices-sim1.jsonl")
+        loop.journal.close()
         self.assertEqual(loop.alarm.flag.name, "stops-sim1.alarm")
 
     def test_the_documents_say_the_default(self):
@@ -1066,13 +1085,13 @@ class TheBotsReview(Base):
         self.assertEqual(self.events("stop_missed")[0]["reason"], "the keeper holds the exam done")
 
     def test_a_write_cut_short_while_running_is_mended_before_the_next(self):
-        j = sf.PriceJournal(self.dir / "p.json")
+        j = sf.PriceJournal(self.dir / "p.jsonl")
         j.add(1, {3: 5})
-        with open(self.dir / "p.json", "r+b") as fh:  # a write cut short: no closing brace
-            fh.seek(-1, 2)
-            fh.write(b', "3:2')
+        with open(self.dir / "p.jsonl", "ab") as fh:  # a write cut short: no end of line
+            fh.write(b'{"b":2,"px":{"3"')
+        j.broken = True  # the write that failed said so
         j.add(3, {3: 7})
-        self.assertEqual(json.loads((self.dir / "p.json").read_text()), {"3:1": 5, "3:3": 7})
+        self.assertEqual(pr.load_prices((self.dir / "p.jsonl").read_text()).px, {3: {1: 5, 3: 7}})
         j.close()
 
 
@@ -1358,6 +1377,84 @@ class TheThirdReview(Base):
         self.assertNotIn((EXAM, BTC), loop.moves)
 
 
+class OffTheChainsRecord(Base):
+    """What a stop needs when the journal is the record: a node that is not stale, a loop not behind, a key that can
+    pay, and a stop's transaction that does not wait ten seconds when it did not land."""
+
+    def test_an_old_head_is_an_alarm_once_and_a_fresh_one_a_line(self):
+        loop = self.loop(wallet=None)
+        self.later = sf.STALE_HEAD_S + 1
+        loop._head_fresh(100, 1_000_100)
+        loop._head_fresh(101, 1_000_101)
+        stale = self.events("stop_node_stale")
+        self.assertEqual((len(stale), stale[0]["alarm"]), (1, "ALARM"))
+        self.later = 0
+        loop._head_fresh(102, 1_000_102)
+        self.assertEqual(len(self.events("stop_node_fresh_again")), 1)
+
+    def test_a_loop_short_of_the_head_is_an_alarm_once(self):
+        loop = self.loop(wallet=None)
+        loop.block = 100
+        loop._behind(100)
+        loop.block = 90
+        self.later = sf.BEHIND_S - 1
+        loop._behind(100)
+        self.assertEqual(self.events("stop_loop_behind"), [])
+        self.later = sf.BEHIND_S + 1
+        loop._behind(100)
+        loop._behind(100)
+        self.assertEqual([f["alarm"] for f in self.events("stop_loop_behind")], ["ALARM"])
+
+    def test_a_key_that_pays_for_few_stops_is_an_alarm_once(self):
+        loop = self.loop()
+        self.node.balance = sf.STOP_GAS * (2 * 100_000_000) * (sf.MIN_RUNWAY_FILLS - 1)
+        loop._balance()
+        loop.balance_at = -sf.BALANCE_EVERY_S
+        loop._balance()
+        low = self.events("stop_key_low")
+        self.assertEqual((len(low), low[0]["fills_left"], low[0]["alarm"]), (1, sf.MIN_RUNWAY_FILLS - 1, "ALARM"))
+        self.node.balance = 10**18
+        loop.balance_at = -sf.BALANCE_EVERY_S
+        loop._balance()
+        self.assertEqual(len(self.events("stop_key_topped_up")), 1)
+
+    def test_the_run_reads_the_heads_time_and_checks_it(self):
+        loop = self.loop(wallet=None)
+        self.node.stale = int(sf.STALE_HEAD_S) + 5
+        stop = threading.Event()
+        loop._served = lambda until, s: stop.set()
+        loop.run(0.01, stop)
+        self.assertEqual(loop.head_t, {100: 1_000_100 - self.node.stale})
+        self.assertEqual(len(self.events("stop_node_stale")), 1)
+
+    def test_a_stop_that_did_not_land_is_signed_again_with_higher_fees_under_its_nonce(self):
+        loop = self.loop()
+        self.armed_stop(loop)
+        self.node.price[101] = 900_000
+        self.run_to(loop, 101)
+        first = self.node.sent()[0]
+        loop.sender.sweep(time.monotonic() + sf.BUMP_AFTER_S)
+        again = self.node.sent()
+        self.assertEqual(len(again), 2, "after two seconds, not ten")
+        self.assertEqual(again[1]["nonce"], first["nonce"], "the same nonce: only one can land")
+        self.assertEqual(again[1]["data"], first["data"])
+        self.assertEqual(self.events("send_bumped")[0]["bumps"], 1)
+        e = loop.sender.ledger[first["nonce"]]
+        self.assertEqual(len(e["hashes"]), 2)
+        self.assertGreater(e["max_fee"], 2 * 100_000_000, "the fee cap a quarter higher: a replacement the node takes")
+        # The second signing lands: the loop reads its receipt, whichever it was.
+        self.node.receipts[e["hashes"][1]] = {"status": "0x1", "blockNumber": hex(103)}
+        loop._receipts(103)
+        self.assertEqual(loop.pending, {})
+        self.assertEqual(len(self.events("trigger_filled")), 1)
+
+    def test_a_keepers_transaction_is_not_bumped(self):
+        sender = sf.Sender(FILLER, self.node)
+        sender.send(POOL, b"", 21_000, 10**8)
+        sender.sweep(time.monotonic() + sf.BUMP_AFTER_S)
+        self.assertEqual(len(self.node.raw), 1, "a keeper's waits RESEND_AFTER_S and goes again as it is")
+
+
 class TheLog(unittest.TestCase):
     def test_a_line_is_written_under_the_lock(self):
         from ops import keeper as core
@@ -1423,11 +1520,14 @@ class TheKeeperWithTheLoop(unittest.TestCase):
                 sk.main(list(argv))
         return k, build, start, alive
 
-    def test_by_default_the_keeper_is_as_it_was_even_in_a_dry_run(self):
+    def test_by_default_the_loop_starts_and_inline_is_the_keeper_as_it_was(self):
         import os
         env = {k_: v for k_, v in os.environ.items() if k_ != "COLOSSEUM_STOPS"}
         with mock.patch.dict("os.environ", env, clear=True):
             k, build, start, alive = self.main({})
+        build.assert_called_once()
+        start.assert_called_once()
+        k, build, start, alive = self.main({"COLOSSEUM_STOPS": "inline"})
         build.assert_not_called()
         start.assert_not_called()
         self.assertIsNone(k.stop_loop)

@@ -1,12 +1,12 @@
 """The stops and takes of the paper exams, looked at in every block with nothing in the way, and the watch that says at
 once when one was reached and not carried out (docs/SIM-POOL.md, "The stops").
 
-    spike/.venv/bin/python -m ops.sim_keeper --deployment sim1 --stops loop        # the keeper with this loop inside it
+    spike/.venv/bin/python -m ops.sim_keeper --deployment sim1                     # the keeper with this loop inside it
     spike/.venv/bin/python -m ops.stop_filler --deployment sim1                     # the watch alone: no key, sends nothing
 
-Off unless asked for: the keeper's default is `--stops inline` (COLOSSEUM_STOPS), the stops tried in its one loop as
-before, with no thread, no file and no load on the node beyond what it had. `--stops loop` (COLOSSEUM_STOPS=loop) turns
-on what follows.
+On by default, on testnet and mainnet alike: the keeper's `--stops loop` (COLOSSEUM_STOPS). `--stops inline`
+(COLOSSEUM_STOPS=inline) is the way back to the stops tried in the keeper's one loop, with no thread and no journal: the
+payout review then holds every payout with a stop, since none was checked in every block.
 
 A stop exists for the chain only in a block whose transaction carries it out: `fillTrigger` takes it while the oracle
 price of that very block is at the stop or past it, and inside its window only from the factory's filler. A reach that
@@ -47,13 +47,23 @@ and the line given to COLOSSEUM_ALERT_CMD when the host has a channel. A miss do
 until a person removes it. So does a loop that cannot see: a thread that ended or stopped moving, calls failing for
 `STALL_S` seconds, prices unread for `BLIND_ALARM_BLOCKS` blocks, or a gap past `CATCHUP` are alarms too.
 
-Every price read goes to a journal (`--price-journal`): one JSON object, {"asset:block": px}, kept valid as it grows,
-locked to one writer. It is the file `ops/payout_review.py --prices` takes. It is the keeper's own record, not an
-independent one: check a sample of it against the node.
+Every block it looks at goes to a journal (`--price-journal`, prices-<deployment>.jsonl beside the state), one JSON
+line a block: its number, its time, this loop's clock, and the oracle price of each asset with a stop or a take
+standing (`PriceJournal`); the blocks it did not look at are written as gaps with why (not running, the head ahead of
+its read-back, behind past `CATCHUP`). It survives a restart (a last line cut short is cut off) and has one writer.
+It is the record `ops/payout_review.py --prices` judges every block of each stop's time by, and the keeper's own:
+the review believes it only where the chain's own prices and a calibrated node bear it out.
+
+Nothing is sent on a timer: the only transaction of this loop is a stop's `fillTrigger`, in the block that saw it
+reached. One that has not landed `BUMP_AFTER_S` later is signed again under its nonce with fees a quarter higher (only
+one of them can land), up to `MAX_BUMPS` times. Alarms besides the misses: the node's head older than `STALE_HEAD_S`
+by this machine's clock (`stop_node_stale`), the loop short of the head for `BEHIND_S` (`stop_loop_behind`), the key
+able to pay for fewer than `MIN_RUNWAY_FILLS` stops (`stop_key_low`), and the journal not written
+(`stop_journal_failed`). No key and no node address goes to a line or an alarm (`scrub`).
 
 What this does not do: carry out a stop whose reach is shorter than the way from a block seen to a transaction landed
 (about one or two blocks); carry out a stop the exam refuses (its book too far from the oracle); stop a trader taking a
-stop off while it is reached; replace a transaction the gas price left behind; or go on while the filler's one key and
+stop off while it is reached; or go on while the filler's one key and
 its one machine are down. A stop also waits behind any earlier transaction of the same key in the node. Those need the
 contract (a key of its own for the stops, or anyone allowed to carry a stop out) or a second machine (the design note of
 20 November 2026).
@@ -120,6 +130,18 @@ UNJUDGED_MAX = 200
 BLIND_ALARM_BLOCKS = 30
 ALIVE_EVERY_S = 600.0
 GWEI = 10 ** 9
+# A stop's transaction with no receipt this long is signed again under its nonce with fees a quarter higher (a
+# replacement: only one of them can land), up to MAX_BUMPS times; a transaction of the keeper's waits RESEND_AFTER_S.
+BUMP_AFTER_S = 2.0
+MAX_BUMPS = 4
+# Seconds the node's head block may be older than this machine's clock before it is an alarm: a node behind or stuck.
+STALE_HEAD_S = 60.0
+# Seconds the loop may stay short of the node's head before it is an alarm.
+BEHIND_S = 30.0
+# How often the key's balance is read, and the stops' fills it must still pay for (at twice the gas price, the most a
+# stop's transaction may pay) before it is an alarm.
+BALANCE_EVERY_S = 300.0
+MIN_RUNWAY_FILLS = 200
 
 
 def px_index(asset: int) -> int:
@@ -238,9 +260,10 @@ class Sender:
     def _count(self, tag: str) -> int:
         return int(self.node.call("eth_getTransactionCount", [self.address, tag]), 16)
 
-    def send(self, to: str, data: bytes, gas: int, gas_price: int, tip: int = 0) -> tuple[str, int]:
+    def send(self, to: str, data: bytes, gas: int, gas_price: int, tip: int = 0, bump: bool = False) -> tuple[str, int]:
         """The stops' thread only. Signs and hands one transaction to the node; its hash and nonce. c.NotSent when the
-        node did not take it: its nonce is not spent."""
+        node did not take it: its nonce is not spent. `bump`: a stop's, signed again with higher fees when it does not
+        land at once (`sweep`)."""
         try:
             if self.next is None:
                 self.next = self._count("pending")
@@ -279,7 +302,8 @@ class Sender:
             now = time.monotonic()
             with self.lock:
                 self.ledger[nonce] = {"hash": tx_hash, "raw": raw, "at": now, "since": now, "past": 0, "said": False,
-                                      "max_fee": gas_price * 2 + tip}
+                                      "max_fee": gas_price * 2 + tip, "hashes": [tx_hash], "bump": bump, "bumps": 0,
+                                      "tx": tx}
             self.next = nonce + 1
             return tx_hash, nonce
         raise c.NotSent("the nonce was taken twice")
@@ -288,6 +312,45 @@ class Sender:
         """Its receipt is in: nothing more to keep."""
         with self.lock:
             self.ledger.pop(nonce, None)
+
+    def receipt(self, nonce: int, tx_hash: str):
+        """The receipt of the transaction under `nonce`, whichever of its signings landed; None while none has."""
+        with self.lock:
+            hashes = list((self.ledger.get(nonce) or {}).get("hashes") or [tx_hash])
+        for h in reversed(hashes):
+            rcpt = self.node.call("eth_getTransactionReceipt", [h])
+            if rcpt:
+                return rcpt
+        return None
+
+    def _bumped(self, nonce: int, e: dict, now: float) -> bool:
+        """A stop's transaction that has not landed, signed again under its nonce with fees a quarter higher and sent:
+        whether it was. Only one of its signings can land. Past MAX_BUMPS it is sent again as it is."""
+        if not e.get("bump") or e["bumps"] >= MAX_BUMPS:
+            return False
+        tx = dict(e["tx"])
+        tx["maxPriorityFeePerGas"] = tx["maxPriorityFeePerGas"] * 5 // 4 + 1
+        tx["maxFeePerGas"] = tx["maxFeePerGas"] * 5 // 4 + 1
+        try:
+            signed = self.wallet.sign_transaction(tx)
+        except Exception:
+            return False
+        raw = "0x" + signed.raw_transaction.hex().removeprefix("0x")
+        tx_hash = "0x" + signed.hash.hex().removeprefix("0x")
+        try:
+            self.node.call("eth_sendRawTransaction", [raw])
+        except Unsure:
+            pass  # may be in: kept as one of its signings
+        except Exception as exc:
+            log("send_bump_failed", nonce=nonce, tx=tx_hash, error=scrub(str(exc))[:120])
+            return False
+        with self.lock:
+            if nonce in self.ledger:
+                self.ledger[nonce].update(hash=tx_hash, raw=raw, at=now, tx=tx, bumps=e["bumps"] + 1,
+                                          max_fee=tx["maxFeePerGas"], hashes=e["hashes"] + [tx_hash])
+        log("send_bumped", nonce=nonce, tx=tx_hash, max_fee=tx["maxFeePerGas"], tip=tx["maxPriorityFeePerGas"],
+            bumps=e["bumps"] + 1)
+        return True
 
     def is_gone(self, nonce: int) -> bool:
         with self.lock:
@@ -300,14 +363,14 @@ class Sender:
         after `STUCK_S` is an alarm, once: every later transaction of the key waits behind it."""
         now = time.monotonic() if now is None else now
         with self.lock:
-            old = sorted((n, dict(e)) for n, e in self.ledger.items() if now - e["at"] >= RESEND_AFTER_S)
+            old = sorted((n, dict(e)) for n, e in self.ledger.items()
+                         if now - e["at"] >= (BUMP_AFTER_S if e.get("bump") and e["bumps"] < MAX_BUMPS else RESEND_AFTER_S))
             oldest = min(self.ledger, default=None)  # of the whole ledger: one just sent again is still the oldest
         if not old:
             return
         counted = self._count("latest")
         for nonce, e in old:
-            rcpt = self.node.call("eth_getTransactionReceipt", [e["hash"]])
-            if rcpt:
+            if self.receipt(nonce, e["hash"]):
                 self.confirm(nonce)
                 continue
             if counted > nonce:
@@ -331,6 +394,8 @@ class Sender:
                         self.ledger[nonce]["said"] = True
                 self.alarm("send_stuck", nonce=nonce, tx=e["hash"], seconds=int(now - e["since"]), max_fee=e["max_fee"],
                            why="the key's oldest transaction is not in a block; every later one waits behind it")
+            if self._bumped(nonce, e, now):
+                continue
             try:
                 self.node.call("eth_sendRawTransaction", [e["raw"]])
                 log("send_again", nonce=nonce, tx=e["hash"])
@@ -436,79 +501,86 @@ class Sender:
 # ── the journal of prices ────────────────────────────────────────────────────────────
 
 class PriceJournal:
-    """The oracle prices this loop read, as one JSON object {"asset:block": px}: the file `ops/payout_review.py --prices`
-    takes. Each block's prices go in at its end, before the closing brace, so the file reads as JSON between writes. A
-    write cut short (the machine stopped) is mended when the journal is opened: the entry it left half is dropped, and
-    nothing before it. One process writes it: a second one is refused at the start."""
+    """The oracle prices this loop read, one JSON line a block it looked at, in block order: the file
+    `ops/payout_review.py --prices` judges every block of each stop's time by.
 
-    CHUNK = 65_536
+        {"b": block, "t": the block's time (null where not read), "w": this loop's clock, "px": {asset: price}}
+        {"b": ..., "px": {...}, "unread": [asset]}      an asset whose price could not be read in that block
+        {"gap": [from, to], "why": ...}                 blocks the loop did not look at, and why
 
-    def __init__(self, path: pathlib.Path):
+    Every block it judged has its line, with every asset that had a stop or a take standing then (none standing: an
+    empty "px"), so a block missing is a gap of its own; the blocks it was not running in are written as a gap when it
+    starts again, from the last line it wrote. Lines are appended and flushed one by one; a last line cut short (the
+    machine stopped mid write) is cut off when the journal is opened, and nothing before it. One process writes it: a
+    second one is refused at the start. It is the keeper's own record: the review holds it against the chain's own
+    prices and a node before it believes it."""
+
+    def __init__(self, path: pathlib.Path, clock=time.time):
         self.path = path
+        self.clock = clock
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists() or path.stat().st_size == 0:
-            path.write_text("{}")
+        path.touch(exist_ok=True)
         self._held = open(path, "rb")
         try:
             fcntl.flock(self._held, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             self._held.close()
             raise SystemExit(f"{path} is written by another process: give this one its own --price-journal") from None
-        self.empty = self._mend()
+        self.broken = False
+        self.last = self._mend()
 
-    def _back(self, fh, size: int, want) -> int:
-        """The position of the last byte, from the end, for which `want` holds; -1 for none."""
-        end = size
-        while end > 0:
-            start = max(0, end - self.CHUNK)
-            fh.seek(start)
-            chunk = fh.read(end - start)
-            for i in range(len(chunk) - 1, -1, -1):
-                if want(chunk[i]):
-                    return start + i
-            end = start
-        return -1
-
-    def _mend(self) -> bool:
-        """The file ends in its closing brace; whether it holds no entry."""
+    def _mend(self) -> int | None:
+        """The file cut back to its last whole line; the last block it holds a line or a gap for, None for none."""
         with open(self.path, "r+b") as fh:
             size = fh.seek(0, os.SEEK_END)
-            last = self._back(fh, size, lambda b: b not in b" \t\r\n")
-            if last >= 0:
-                fh.seek(last)
-                if fh.read(1) == b"}":
-                    fh.truncate(last + 1)
-                    first = self._back(fh, last, lambda b: b not in b" \t\r\n")
-                    fh.seek(max(first, 0))
-                    return first >= 0 and fh.read(1) == b"{"
-            # A write cut short: back to the last whole entry, and only to an empty object when there is none at all.
-            comma = self._back(fh, size, lambda b: b == ord(","))
-            if comma >= 0:
-                fh.truncate(comma)
-                fh.seek(comma)
-                fh.write(b"}")
-                return False
-            fh.seek(0)
-            fh.truncate(0)
-            fh.write(b"{}")
-            return True
+            back = min(size, 1 << 16)
+            fh.seek(size - back)
+            tail = fh.read(back)
+            if tail and not tail.endswith(b"\n"):
+                cut = tail.rfind(b"\n")
+                fh.truncate(size - back + cut + 1 if cut >= 0 else 0)
+                tail = tail[:cut + 1] if cut >= 0 else b""
+        for line in reversed(tail.splitlines()):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and "b" in row:
+                return int(row["b"])
+            if isinstance(row, dict) and "gap" in row:
+                return int(row["gap"][1])
+        return None
 
     def close(self) -> None:
         self._held.close()
 
-    def add(self, block: int, prices: dict[int, int]) -> None:
-        if not prices:
+    def _write(self, row: dict) -> None:
+        """One line, appended. A write that failed (a full disk) may have left half a line: cut off before the next."""
+        if self.broken:
+            self._mend()
+            self.broken = False
+        try:
+            with open(self.path, "ab") as fh:
+                fh.write((json.dumps(row, separators=(",", ":")) + "\n").encode())
+                fh.flush()
+        except OSError:
+            self.broken = True
+            raise
+
+    def add(self, block: int, prices: dict[int, int], t: int | None = None, unread=()) -> None:
+        """Block `block` looked at: its prices, its time where known, the assets not read in it."""
+        row: dict = {"b": block, "t": t, "w": int(self.clock()), "px": {str(a): int(px) for a, px in sorted(prices.items())}}
+        if unread:
+            row["unread"] = sorted(unread)
+        self._write(row)
+        self.last = block
+
+    def gap(self, lo: int, hi: int, why: str) -> None:
+        """Blocks `lo` to `hi` not looked at: a gap, with why."""
+        if hi < lo:
             return
-        body = ", ".join(f'"{asset}:{block}": {int(px)}' for asset, px in sorted(prices.items()))
-        with open(self.path, "rb") as fh:
-            fh.seek(-1, os.SEEK_END)
-            whole = fh.read(1) == b"}"
-        if not whole:  # the last write was cut short (a full disk, say): mended before this one goes on
-            self.empty = self._mend()
-        with open(self.path, "r+b") as fh:
-            fh.seek(-1, os.SEEK_END)
-            fh.write(((", " if not self.empty else "") + body + "}").encode())
-        self.empty = False
+        self._write({"gap": [lo, hi], "why": why, "w": int(self.clock())})
+        self.last = max(self.last or hi, hi)
 
 
 # ── the alarm ────────────────────────────────────────────────────────────────────────
@@ -562,8 +634,18 @@ class StopLoop:
 
     def __init__(self, keeper, node: Node, *, wallet=None, sender: Sender | None = None, tip_wei: int = 0,
                  journal: PriceJournal | None = None, alarm: Alarm | None = None, backfill: int = BACKFILL,
-                 overdue: int = OVERDUE, min_alarm_blocks: int = MIN_ALARM_BLOCKS, catchup: int = CATCHUP):
+                 overdue: int = OVERDUE, min_alarm_blocks: int = MIN_ALARM_BLOCKS, catchup: int = CATCHUP,
+                 clock=time.time, min_runway: int = MIN_RUNWAY_FILLS):
         self.keeper = keeper
+        self.clock = clock  # the wall clock the head's time and the loop's lag are held against
+        self.min_runway = min_runway
+        self.head_t: dict[int, int] = {}  # a head block -> its time, as the node gave it
+        self.stale_said = False
+        self.behind_said = False
+        self.caught_up_at: float | None = None
+        self.balance_at = -BALANCE_EVERY_S
+        self.low_said = False
+        self.journal_said = False
         self.node = node
         self.wallet = wallet
         self.sender = sender
@@ -693,7 +775,11 @@ class StopLoop:
         if head <= self.block:
             return []
         lo = head if not self.block else self.block + 1
+        if not self.block and self.journal is not None and self.journal.last is not None and self.journal.last < head - 1:
+            # Started again: the blocks since the journal's last line were looked at by nobody.
+            self._gap(self.journal.last + 1, head - 1, "the loop was not running")
         if head - lo + 1 > self.catchup:
+            self._gap(lo, head - self.catchup, f"behind by more than {self.catchup} blocks: not read at all")
             self.alarm("stop_watch_lost", from_block=lo, to=head - self.catchup,
                        why=f"behind by more than {self.catchup} blocks: their events are not read; every reach is "
                            "forgotten and the stops are read again from the exams at the next pass")
@@ -705,6 +791,7 @@ class StopLoop:
         if price_lo > lo:
             self._blind(lo, price_lo - 1, "the head ran ahead of the loop: the events of these blocks are read, not "
                                           "their prices")
+            self._gap(lo, price_lo - 1, "the head ran ahead of the loop: their prices were not read back")
             standing = [k for k, t in self.triggers.items() if t["armed"] < price_lo and self.signs.get(k[:2]) != 0]
             gap_said = bool(standing)
             if standing:
@@ -737,9 +824,12 @@ class StopLoop:
                 due = self._watch(b, prices)
                 if self.journal is not None:
                     try:
-                        self.journal.add(b, prices)
+                        self.journal.add(b, prices, self.head_t.get(b), {k[1] for k in self.triggers} - set(prices))
+                        if self.journal_said:
+                            self.journal_said = False
+                            log("stop_journal_works_again", block=b)
                     except OSError as exc:
-                        self._say("stop_journal_failed", error=str(exc)[:200])
+                        self._journal_failed(exc)
             self._events(b, by_block.get(b, []))
             for key in due:  # after the block's own events: a stop filled in it is not overdue
                 t = self.triggers.get(key)
@@ -826,6 +916,23 @@ class StopLoop:
         if not self.blind_said and self.triggers and hi - self.blind_from + 1 >= BLIND_ALARM_BLOCKS:
             self.blind_said = True
             self.alarm("stop_watch_blind_long", from_block=self.blind_from, to=hi, standing=len(self.triggers), why=why)
+
+    def _journal_failed(self, exc: Exception) -> None:
+        """The journal could not be written (a full disk, say): an alarm at once, since the payout review holds every
+        stop whose blocks it lacks; once, until a line is written again."""
+        if not self.journal_said:
+            self.journal_said = True
+            self.alarm("stop_journal_failed", block=self.block, error=str(exc)[:200],
+                       why="the journal of prices is not written: every stop standing meanwhile holds its payout")
+
+    def _gap(self, lo: int, hi: int, why: str) -> None:
+        """Blocks no price was read in, written to the journal as a gap: the review holds every stop that stood in them."""
+        if self.journal is None or hi < lo:
+            return
+        try:
+            self.journal.gap(lo, hi, why)
+        except OSError as exc:
+            self._journal_failed(exc)
 
     # ── the watch ────────────────────────────────────────────────────────────────────
 
@@ -1085,7 +1192,7 @@ class StopLoop:
                     log("would_fill_trigger", exam=exam, asset=asset, take=take, block=head)
                 continue
             try:
-                tx, nonce = self.sender.send(exam, data, STOP_GAS, self._gas_price(head), self.tip)
+                tx, nonce = self.sender.send(exam, data, STOP_GAS, self._gas_price(head), self.tip, bump=True)
             except Exception as exc:
                 log("trigger_fill_failed", exam=exam, asset=asset, take=take, error=str(exc)[:200])
                 continue
@@ -1103,7 +1210,7 @@ class StopLoop:
     def _receipts(self, head: int) -> None:
         for key, (tx, nonce, at) in list(self.pending.items()):
             try:
-                rcpt = self.node.call("eth_getTransactionReceipt", [tx])
+                rcpt = self.sender.receipt(nonce, tx)
             except Exception as exc:
                 self._say("stop_receipt_unread", error=str(exc)[:120])
                 return
@@ -1167,6 +1274,55 @@ class StopLoop:
             except queue.Empty:
                 self.sender.serve()  # one the node was busy for may be due now
 
+    def _head_fresh(self, head: int, head_t: int) -> None:
+        """The node's head held against this machine's clock: older than STALE_HEAD_S, the node is behind or stuck, and
+        a stop reached now is not seen. An alarm once, a line when it is fresh again."""
+        age = self.clock() - head_t
+        if age > STALE_HEAD_S and not self.stale_said:
+            self.stale_said = True
+            self.alarm("stop_node_stale", head=head, seconds=int(age),
+                       why="the node's head block is old by this machine's clock: the node is behind or stuck")
+        elif age <= STALE_HEAD_S and self.stale_said:
+            self.stale_said = False
+            log("stop_node_fresh_again", head=head)
+
+    def _behind(self, head: int) -> None:
+        """The loop held against the node's head: short of it for BEHIND_S seconds is an alarm once."""
+        now = self.clock()
+        if self.block >= head:
+            self.caught_up_at = now
+            if self.behind_said:
+                self.behind_said = False
+                log("stop_loop_caught_up", block=self.block)
+            return
+        if self.caught_up_at is None:
+            self.caught_up_at = now
+        if now - self.caught_up_at >= BEHIND_S and not self.behind_said:
+            self.behind_said = True
+            self.alarm("stop_loop_behind", block=self.block, head=head, seconds=int(now - self.caught_up_at),
+                       why="the loop is short of the node's head: the blocks between are not judged yet")
+
+    def _balance(self) -> None:
+        """The key's balance every BALANCE_EVERY_S, as stops' fills it still pays for at twice the gas price: fewer than
+        `min_runway` is an alarm once, a line when it is back. A key with nothing left carries out no stop."""
+        if self.sender is None or self.clock() - self.balance_at < BALANCE_EVERY_S:
+            return
+        self.balance_at = self.clock()
+        try:
+            balance = int(self.node.call("eth_getBalance", [self.sender.address, "latest"]), 16)
+            price = self.gas_price or int(self.node.call("eth_gasPrice"), 16)
+        except Exception as exc:
+            self._say("stop_balance_unread", error=scrub(str(exc))[:120])
+            return
+        fills = balance // max(STOP_GAS * (2 * price + self.tip), 1)
+        if fills < self.min_runway and not self.low_said:
+            self.low_said = True
+            self.alarm("stop_key_low", balance_wei=balance, fills_left=fills, gas_price=price,
+                       why=f"the filler's key pays for fewer than {self.min_runway} stops' fills: top it up")
+        elif fills >= self.min_runway and self.low_said:
+            self.low_said = False
+            log("stop_key_topped_up", balance_wei=balance, fills_left=fills)
+
     def run(self, poll: float, stop: threading.Event | None = None) -> None:
         """Forever (or until `stop`): the head every `poll` seconds, and a step for each new one; between them, the keeper's
         transactions. Nothing here waits on the keeper's thread; a busy node costs the look it refused."""
@@ -1177,10 +1333,17 @@ class StopLoop:
         while not stop.is_set():
             until = time.monotonic() + poll
             try:
-                head = int(self.node.call("eth_blockNumber"), 16)
+                got = self.node.call("eth_getBlockByNumber", ["latest", False])
+                head, head_t = int(got["number"], 16), int(got["timestamp"], 16)
                 self.beat = time.monotonic()
+                self.head_t[head] = head_t
+                for b in [b for b in self.head_t if b < head - CATCHUP]:
+                    del self.head_t[b]
+                self._head_fresh(head, head_t)
                 if head > self.block:
                     self.step(head)
+                self._behind(head)
+                self._balance()
                 if self.failing_since is not None:
                     log("stop_loop_works_again", failed_for=int(time.monotonic() - self.failing_since))
                 self.failing_since, self.failing_said = None, False
@@ -1220,9 +1383,10 @@ def check_chain(node: Node) -> None:
 
 def add_args(p: argparse.ArgumentParser) -> None:
     """The settings of the stops' loop. Without `--stops loop` the keeper is as it was, and none of the rest is read."""
-    p.add_argument("--stops", choices=("inline", "loop"), default=os.environ.get("COLOSSEUM_STOPS", "") or "inline",
-                   help="inline (the default): the stops tried in the keeper's one loop, as before; loop: in a thread of "
-                        "their own, every block, with the watch of missed stops (ops/stop_filler.py)")
+    p.add_argument("--stops", choices=("inline", "loop"), default=os.environ.get("COLOSSEUM_STOPS", "") or "loop",
+                   help="loop (the default): the stops in a thread of their own, every block, with the journal of prices "
+                        "and the watch of missed stops (ops/stop_filler.py); inline: tried in the keeper's one loop, "
+                        "with no journal (every payout with a stop is then held by the review)")
     p.add_argument("--stop-rpc", default=os.environ.get("COLOSSEUM_STOP_RPC_URL", ""),
                    help="with --stops loop: the node the stops are read from and the key's transactions sent to; the "
                         "keeper's (COLOSSEUM_RPC_URL) when empty")
@@ -1234,7 +1398,7 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--stop-alarm-min-blocks", type=int, default=MIN_ALARM_BLOCKS,
                    help="a reach the price ended in fewer blocks is a line, not an alarm (1: every one an alarm)")
     p.add_argument("--price-journal", default=None,
-                   help="the journal of oracle prices (default prices-<deployment>.json next to the state); '' for none")
+                   help="the journal of oracle prices (default prices-<deployment>.jsonl next to the state); '' for none")
     p.add_argument("--stop-alarm", default=None,
                    help="the flag file of missed stops (default stops-<deployment>.alarm next to the state); '' for none")
 
@@ -1247,7 +1411,7 @@ def build(args, keeper, state: pathlib.Path, wallet=None, prefix: str = "") -> S
     if c.NETWORK.name == "mainnet":
         core.check_node(url, c.CHAIN_ID)
     check_chain(node)
-    journal_path = (state.parent / f"{prefix}prices-{args.deployment}.json") if args.price_journal is None else (
+    journal_path = (state.parent / f"{prefix}prices-{args.deployment}.jsonl") if args.price_journal is None else (
         pathlib.Path(args.price_journal) if args.price_journal else None)
     flag = (state.parent / f"{prefix}stops-{args.deployment}.alarm") if args.stop_alarm is None else (
         pathlib.Path(args.stop_alarm) if args.stop_alarm else None)
