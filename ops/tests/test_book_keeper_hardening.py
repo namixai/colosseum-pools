@@ -19,7 +19,7 @@ from hexbytes import HexBytes
 
 from ops import book_keeper as bk
 from ops import stop_filler as sf
-from ops.tests.test_book_keeper import BOOK, BTC, EXAM, KEY, Base, Keeper, Node, entry, ev, sel
+from ops.tests.test_book_keeper import BOOK, BTC, EXAM, KEY, POKER, Base, Keeper, Node, entry, ev, sel
 from spike.hlspike import common as c
 
 OTHER = Account.from_key("0x" + "43" * 32)  # a second key, made up here
@@ -114,7 +114,7 @@ class TheChecksLiveness(Base):
         low = self.alarm_of("book_key_low")
         self.assertEqual(len(low), 1)
         per = bk.poke_gas(1) * 100_000_000
-        self.assertEqual((low[0]["lane"], low[0]["blocks"]), ("keeper", 10 ** 18 // per))
+        self.assertEqual((low[0]["lane"], low[0]["blocks"]), ("poke", 10 ** 18 // per))
         self.assertLess(low[0]["hours"], bk.RUNWAY_HOURS)
         self.node.balance = 10 ** 21
         loop.poker.lanes[0].balance_at = -1e18
@@ -133,12 +133,12 @@ class TheChecksLiveness(Base):
 
 
 class AFrozenHead(Base):
-    def test_a_node_answering_an_old_block_is_an_alarm_no_check_and_no_heartbeat(self):
+    def test_a_node_answering_an_old_block_is_an_alarm_its_checks_go_on_and_no_heartbeat(self):
         self.node.time = time.time() - 1_000
         loop = self.loop()
         loop.beat = 0.0
         run_threads(loop, 0.4)
-        self.assertEqual(self.node.raw, [], "no check on a head nobody knows is the chain's")
+        self.assertTrue(self.node.pokes(), "an old block (a node stopped, or this machine's clock) never stops a check")
         self.assertTrue(self.alarm_of("book_head_stale"))
         self.assertEqual(loop.beat, 0.0, "an old head keeps no heartbeat alive")
         thread = mock.Mock()
@@ -293,11 +293,12 @@ class ALateCheck(Base):
         loop = self.loop()
         self.node.pokes_land = False
         self.run_to(loop, 100)
+        ps = loop.poker.lanes[0].sender
         first = self.node.raw[0]
-        nonce = next(iter(loop.sender.ledger))
-        self.assertEqual(loop.sender.ledger[nonce]["after"], bk.POKE_RESEND_S)
-        loop.sender.ledger[nonce]["at"] = -1e9
-        loop.sender.sweep()
+        nonce = next(iter(ps.ledger))
+        self.assertEqual(ps.ledger[nonce]["after"], bk.POKE_RESEND_S)
+        ps.ledger[nonce]["at"] = -1e9
+        ps.sweep()
         again = self.node.raw[-1]
         self.assertNotEqual(again, first)
         (n1, fee1, tip1), (n2, fee2, tip2) = fee_of(first), fee_of(again)
@@ -308,22 +309,15 @@ class ALateCheck(Base):
         self.run_to(loop, 101)
         self.assertNotIn(n1, [f[0] for f in loop.poker.lanes[0].in_flight], "landed under its new hash")
 
-    def test_a_check_the_other_threads_sweep_confirmed_is_let_go(self):
-        loop = self.loop()
-        self.node.pokes_land = False
-        self.run_to(loop, 100)
-        loop.sender.confirm(next(iter(loop.sender.ledger)))  # its receipt seen by the keeper's thread's sweep
-        self.run_to(loop, 101)
-        self.assertEqual([f[1] for f in loop.poker.lanes[0].in_flight], [101], "not left waiting for ever")
-
     def test_a_check_is_not_signed_again_past_the_most_bumps_but_sent_as_it_is(self):
         loop = self.loop()
         self.node.pokes_land = False
         self.run_to(loop, 100)
-        nonce = next(iter(loop.sender.ledger))
+        ps = loop.poker.lanes[0].sender
+        nonce = next(iter(ps.ledger))
         for _ in range(sf.MAX_BUMPS + 2):
-            loop.sender.ledger[nonce]["at"] = -1e9
-            loop.sender.sweep()
+            ps.ledger[nonce]["at"] = -1e9
+            ps.sweep()
         fees = [fee_of(r)[1] for r in self.node.raw]
         self.assertEqual(len(set(fees)), sf.MAX_BUMPS + 1)
         self.assertEqual(self.node.raw[-1], self.node.raw[-2])
@@ -351,7 +345,7 @@ class ALateCheck(Base):
         self.assertEqual({Account.recover_transaction(r) for r in self.node.raw}, {OTHER.address})
         self.assertEqual(self.alarm_of("book_poke_failing"), [], "the check went out")
 
-    def test_the_keeper_builds_a_lane_for_each_key_of_its_own_and_its_key_last(self):
+    def test_the_keeper_builds_a_lane_for_each_key_of_its_own_and_never_its_own_key(self):
         args = argparse.Namespace(stop_rpc="http://127.0.0.1:9", stop_backup_rpc="", poke_rpc="", poke_wallet="a, b",
                                   stale_s=10.0, poke_runway_hours=72.0, poke_poll=0.25, book_state="", price_journal="",
                                   stop_alarm="", stop_tip_gwei=0.0, deployment="sim1")
@@ -360,8 +354,25 @@ class ALateCheck(Base):
                 mock.patch.object(bk.c, "account", side_effect=lambda n: keys[n]), \
                 mock.patch.object(bk, "precompile_gas_of", return_value=30_000):
             loop = bk.build(args, Keeper(), pathlib.Path("/nonexistent/state.json"), BOOK, wallet=KEY)
-        self.assertEqual([l.name for l in loop.poker.lanes], ["a", "b", "keeper"])
-        self.assertIs(loop.poker.lanes[-1].sender, loop.sender)
+        self.assertEqual([l.name for l in loop.poker.lanes], ["a", "b"], "never the keeper's own key")
+        self.assertTrue(loop.sender.bump_all and all(l.sender.bump_all for l in loop.poker.lanes))
+        args.poke_wallet = "a, k"
+        keys["k"] = KEY
+        with mock.patch.object(bk, "checked_node", side_effect=lambda url, t=5.0: Node()), \
+                mock.patch.object(bk.c, "account", side_effect=lambda n: keys[n]), \
+                mock.patch.object(bk, "precompile_gas_of", return_value=30_000):
+            with self.assertRaisesRegex(SystemExit, "keeper's own key"):
+                bk.build(args, Keeper(), pathlib.Path("/nonexistent/state.json"), BOOK, wallet=KEY)
+            args.poke_wallet = ""
+            net = mock.Mock()
+            net.name = "mainnet"
+            with mock.patch.object(bk.c, "NETWORK", net), mock.patch.object(bk.core, "check_node"):
+                with self.assertRaisesRegex(SystemExit, "no key of the checks' own"):
+                    bk.build(args, Keeper(), pathlib.Path("/nonexistent/state.json"), BOOK, wallet=KEY)
+            alarms = []
+            with mock.patch.object(bk.sf, "Alarm", return_value=mock.Mock(side_effect=lambda e, **f: alarms.append(e))):
+                loop = bk.build(args, Keeper(), pathlib.Path("/nonexistent/state.json"), BOOK, wallet=KEY)
+        self.assertEqual((loop.poker.lanes, alarms), ([], ["book_poke_no_key"]), "testnet: an alarm, and no check")
 
 
 # ── the nodes ────────────────────────────────────────────────────────────────────────
@@ -522,12 +533,15 @@ class ARestart(Base):
         alarm = mock.Mock(side_effect=lambda e, **f: self.alarms.append((e, f)))
         alarm.flag = None
         return bk.BookLoop(Keeper(), self.node, BOOK, wallet=KEY, sender=sf.Sender(KEY, self.node), alarm=alarm,
-                           state_path=self.path)
+                           state_path=self.path, lanes=[bk.Lane("poke", sf.Sender(POKER, self.node))])
 
     def test_a_gap_written_while_the_loop_was_down_is_read_from_its_last_block(self):
         loop = self.loop_at()
         self.run_to(loop, 100)
         self.assertEqual(json.loads(self.path.read_text())["block"], 100)
+        with self.assertRaisesRegex(SystemExit, "kept by another process"):
+            self.loop_at()
+        loop.close()
         self.node.logs.append(ev(bk.GAP, BOOK, 103, encode(["uint256", "uint256"], [101, 102])))  # while it was down
         again = self.loop_at()
         self.assertEqual(again.block, 100)
@@ -544,6 +558,7 @@ class ARestart(Base):
         self.run_to(loop, 121)
         saved = json.loads(self.path.read_text())
         self.assertEqual(saved["gap_jobs"], [{"from": 101, "to": 120, "next": 101 + bk.GAP_BLOCKS_PER_STEP}])
+        loop.close()
         again = self.loop_at()
         again.holders.add(EXAM)
         self.run_to(again, 122, 123, 124)
@@ -566,7 +581,8 @@ class TheChecksGas(Base):
         self.run_to(loop, 100)
         self.node.receipts[tx_hash(self.node.raw[0])] = {"status": "0x0", "blockNumber": hex(101)}
         self.run_to(loop, 101, 102)
-        self.assertEqual(self.node.decoded()[-1][1], bk.MAX_TX_GAS)
+        self.assertEqual(self.node.decoded()[-1][1], bk.poke_gas(1, loop.precompile_gas) * 5 // 4)
+        self.assertLessEqual(2 * self.node.decoded()[-1][1], 2_000_000, "two checks still fit one small block")
         self.node.pokes_land = True
         self.run_to(loop, 102 + bk.FLOOR_BLOCKS, 103 + bk.FLOOR_BLOCKS)
         self.assertEqual(self.node.decoded()[-1][1], bk.poke_gas(1, loop.precompile_gas))

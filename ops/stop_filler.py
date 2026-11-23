@@ -106,6 +106,10 @@ MIN_ALARM_BLOCKS = 2
 RESEND_AFTER_S = 10.0
 # Times a transaction sent with `bump` is signed again with a quarter more fee: 1.25 ** 8, about six times its first.
 MAX_BUMPS = 8
+# The alarm channel: commands at once, alarms waiting for it, and the waits before a failed one is tried again.
+ALARM_WORKERS = 2
+ALARM_QUEUE = 200
+ALARM_RETRY_S = (5.0, 30.0)
 # Seconds the keeper's thread waits for this thread to take its transaction.
 REQUEST_WAIT_S = 60.0
 # Seconds of failing calls, or of no step at all, before the loop is an alarm.
@@ -141,6 +145,13 @@ def host_of(url: str) -> str:
     except ValueError:
         port = None
     return f"{parts.scheme}://{parts.hostname or ''}" + (f":{port}" if port else "")
+
+
+def host_free(text: str) -> str:
+    """A text with every address in it cut to its scheme and host: a key may ride in a node's path or query."""
+    import re
+
+    return re.sub(r"(https?://[^/\s?#'\"]+)[^\s'\"]*", r"\1", text)
 
 
 # ── a node, tried once ───────────────────────────────────────────────────────────────
@@ -208,6 +219,13 @@ class Sender:
         self.ledger: dict[int, dict] = {}  # nonce -> {"hash", "raw", "at", ...}
         self.gone: set[int] = set()
         self.requests: queue.Queue = queue.Queue()
+        # A stop book's senders (ops/book_keeper.py): every transaction goes with `bump` and `resend_after`, a sweep reads
+        # no receipt of a nonce the chain has not counted and sends at most two again, and `price_hint()` (the gas
+        # price now) keeps a raised fee over a basefee that jumped, past `MAX_BUMPS` if it must.
+        self.bump_all = False
+        self.resend_after: float | None = None
+        self.lean = False
+        self.price_hint = None
 
     def _count(self, tag: str) -> int:
         return int(self.node.call("eth_getTransactionCount", [self.address, tag]), 16)
@@ -221,6 +239,8 @@ class Sender:
         """Signs and hands one transaction to the node; its hash and nonce. c.NotSent when the node did not take it: its
         nonce is not spent. Safe from more than one thread. `bump`: one with no receipt after `resend_after` seconds is
         signed again under its nonce with a quarter more fee (`MAX_BUMPS` times at most), not sent again as it was."""
+        bump = bump or self.bump_all
+        resend_after = self.resend_after if resend_after is None else resend_after
         with self.send_lock:
             tx_hash, nonce = self._send(to, data, gas, gas_price, tip)
             if bump or resend_after is not None:
@@ -238,8 +258,9 @@ class Sender:
             return list(e.get("hashes", [e["hash"]])) if e is not None else []
 
     def receipt(self, nonce: int, known: list[str] | None = None):
-        """The receipt of whichever of the nonce's transactions landed; None for none yet."""
-        for h in self.hashes(nonce) or (known or []):
+        """The receipt of whichever of the nonce's last two transactions landed (a raised fee replaces the one before:
+        an older one landing is the rare case its count tells); None for none yet."""
+        for h in (self.hashes(nonce)[-2:] or (known or [])[-2:]):
             rcpt = self.node.call("eth_getTransactionReceipt", [h])
             if rcpt:
                 return rcpt
@@ -248,12 +269,16 @@ class Sender:
     def _bumped(self, nonce: int, e: dict) -> dict | None:
         """The transaction of `nonce` signed again with a quarter more fee (and tip), or None past `MAX_BUMPS`."""
         tx = e.get("tx")
-        if tx is None or e.get("bumps", 0) >= MAX_BUMPS:
+        try:
+            hint = int(self.price_hint() or 0) if self.price_hint is not None else 0
+        except Exception:
+            hint = 0
+        if tx is None or (e.get("bumps", 0) >= MAX_BUMPS and int(tx["maxFeePerGas"]) >= 2 * hint):
             return None
         tip = int(tx["maxPriorityFeePerGas"])
         tip2 = tip + max(tip // 4, 1)
         fee = int(tx["maxFeePerGas"])
-        fee2 = max(fee + max(fee // 4, 1), tip2)
+        fee2 = max(fee + max(fee // 4, 1), tip2, 2 * hint + tip2)
         tx2 = {**tx, "maxPriorityFeePerGas": tip2, "maxFeePerGas": fee2}
         signed = self.wallet.sign_transaction(tx2)
         raw = "0x" + signed.raw_transaction.hex().removeprefix("0x")
@@ -314,7 +339,7 @@ class Sender:
         with self.lock:
             return nonce in self.gone
 
-    def sweep(self, now: float | None = None) -> None:
+    def sweep(self, now: float | None = None, counted: int | None = None) -> None:
         """The stops' thread: a transaction of the key with no receipt after `RESEND_AFTER_S` is sent again with the same
         bytes (the same hash: nothing new can land); one whose nonce the chain counted past without it, at two sweeps in a
         row, is let go: one count alone may be a node behind the other, or a block taken back. One sent with `bump` goes
@@ -322,23 +347,25 @@ class Sender:
         if not self.sweep_lock.acquire(blocking=False):
             return
         try:
-            self._sweep(now)
+            self._sweep(now, counted)
         finally:
             self.sweep_lock.release()
 
-    def _sweep(self, now: float | None = None) -> None:
+    def _sweep(self, now: float | None = None, counted: int | None = None) -> None:
         now = time.monotonic() if now is None else now
         with self.lock:
             old = sorted((n, dict(e)) for n, e in self.ledger.items() if now - e["at"] >= e.get("after", RESEND_AFTER_S))
         if not old:
             return
-        counted = self._count("latest")
+        counted = self._count("latest") if counted is None else counted
+        resent = 0
         for nonce, e in old:
             rcpt = None
-            for h in e.get("hashes", [e["hash"]]):
-                rcpt = self.node.call("eth_getTransactionReceipt", [h])
-                if rcpt:
-                    break
+            if not (self.lean and nonce >= counted):  # lean: a nonce not counted yet has no receipt to read
+                for h in e.get("hashes", [e["hash"]])[-2:]:
+                    rcpt = self.node.call("eth_getTransactionReceipt", [h])
+                    if rcpt:
+                        break
             if rcpt:
                 self.confirm(nonce)
                 continue
@@ -354,6 +381,9 @@ class Sender:
                 if past >= 2:
                     log("send_gone", nonce=nonce, tx=e["hash"], why="the chain counted past its nonce without it, twice")
                 continue
+            if self.lean and resent >= 2:
+                continue  # the lowest ones first: each later one waits behind them anyway
+            resent += 1
             with self.lock:
                 if nonce in self.ledger:
                     self.ledger[nonce]["past"] = 0
@@ -420,6 +450,19 @@ class Sender:
                 return
             self.handle(req)
 
+    def _wait_any(self, nonce: int, tx_hash: str, timeout_s: float = 180.0) -> dict:
+        """The receipt of the nonce's transaction under any hash it went out with: one raised in fee is another hash."""
+        seen = [tx_hash]
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            seen = list(dict.fromkeys(seen + self.hashes(nonce)))
+            for h in seen[-2:] + seen[:1]:
+                rcpt = c.rpc("eth_getTransactionReceipt", [h])
+                if rcpt:
+                    return rcpt
+            time.sleep(1)
+        raise TimeoutError(f"no receipt for {tx_hash} (nonce {nonce}) after {int(timeout_s)}s")
+
     def send_and_wait(self, to: str, data: bytes, gas: int | None = None) -> dict:
         """The keeper's own sends (a fill, a slow call): the chain checked, the gas estimated with a quarter more when not
         given, handed to the stops' thread, and the receipt waited for here, as c.send_tx does. A reverted one raises
@@ -433,7 +476,7 @@ class Sender:
         except Exception as exc:  # a chain that is not the network's stops the program (SystemExit), as c.send_tx's
             raise c.NotSent(str(exc)) from None
         tx_hash, nonce = self.submit(to, data, gas, gas_price)
-        rcpt = c.wait_receipt(tx_hash)
+        rcpt = self._wait_any(nonce, tx_hash) if self.bump_all else c.wait_receipt(tx_hash)
         self.confirm(nonce)
         if int(rcpt["status"], 16) != 1:
             raise c.Reverted(f"transaction {tx_hash} reverted")
@@ -530,6 +573,11 @@ class Alarm:
         self.command = os.environ.get("COLOSSEUM_ALERT_CMD", "") if command is None else command
         self.said_no_channel = False
         self.lock = threading.Lock()  # both threads may raise one
+        # The channel: at most ALARM_WORKERS commands at once, the rest queued (ALARM_QUEUE at most, then dropped and
+        # said), and a command that failed tried again after each of `retry_s`.
+        self.queue: queue.Queue = queue.Queue(maxsize=ALARM_QUEUE)
+        self.workers: list[threading.Thread] = []
+        self.retry_s = ALARM_RETRY_S
 
     def __call__(self, event: str, **fields) -> None:
         line = json.dumps({"t": int(time.time()), "event": event, **fields}, default=str)
@@ -548,17 +596,49 @@ class Alarm:
             if no_channel:
                 self.said_no_channel = True
         if self.command:
-            threading.Thread(target=self._send, args=(line, where), daemon=True).start()
+            try:
+                self.queue.put_nowait((line, where))
+            except queue.Full:
+                log("stop_alarm_dropped", why=f"{ALARM_QUEUE} alarms wait for the channel already", where=where)
+            with self.lock:
+                self.workers = [w for w in self.workers if w.is_alive()]
+                if len(self.workers) < ALARM_WORKERS and len(self.workers) < self.queue.qsize() + len(self.workers):
+                    w = threading.Thread(target=self._work, name="alarm", daemon=True)
+                    self.workers.append(w)
+                    w.start()
         elif no_channel:
             log("stop_alarm_no_channel", why="COLOSSEUM_ALERT_CMD is not set", where=where)
 
+    def drain(self, timeout: float) -> None:
+        """Waits up to `timeout` seconds for the alarms queued to go out: a process about to end calls it."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and self.queue.unfinished_tasks:
+            time.sleep(0.05)
+
+    def _work(self) -> None:
+        while True:
+            try:
+                line, where = self.queue.get(timeout=5.0)
+            except queue.Empty:
+                return
+            try:
+                self._send(line, where)
+            finally:
+                self.queue.task_done()
+
     def _send(self, line: str, where: str) -> None:
-        try:
-            subprocess.run(["sh", "-c", self.command], input=line + "\n", text=True, timeout=30,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            log("stop_alarm_sent")
-        except Exception as exc:
-            log("stop_alarm_not_sent", error=str(exc)[:200], where=where)
+        for attempt in range(len(self.retry_s) + 1):
+            try:
+                subprocess.run(["sh", "-c", self.command], input=line + "\n", text=True, timeout=30,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                log("stop_alarm_sent")
+                return
+            except Exception as exc:
+                last = attempt == len(self.retry_s)
+                log("stop_alarm_not_sent", error=str(exc)[:200], where=where,
+                    then="given up" if last else f"tried again in {self.retry_s[attempt]:g} s")
+                if not last:
+                    time.sleep(self.retry_s[attempt])
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────────────
@@ -1148,6 +1228,9 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--poke-runway-hours", type=float,
                    default=float(os.environ.get("COLOSSEUM_POKE_RUNWAY_HOURS", "72") or 72),
                    help="with a stop book: a key whose money pays fewer hours of checks than this is an alarm")
+    p.add_argument("--book-watch-address", default=os.environ.get("COLOSSEUM_BOOK_WATCH_ADDRESS", ""),
+                   help="with a stop book: the key of the book's own watch (ops/book_watch.py --wallet); its count not "
+                        "moving for two of the watch's hourly heartbeats is an alarm")
     p.add_argument("--stale-s", type=float, default=float(os.environ.get("COLOSSEUM_STALE_S", "10") or 10),
                    help="with a stop book: a node whose newest block is older than this many seconds has stopped")
     p.add_argument("--book-state", default=None,

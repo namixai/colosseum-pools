@@ -1,6 +1,7 @@
 """The stop book's own watch (ops/book_watch.py): a process of its own that raises an alarm when the book's blocks go
 unchecked and, with a key, checks them itself while the keeper is behind. On the node made up in test_book_keeper.py."""
 import pathlib
+import time
 import unittest
 from unittest import mock
 
@@ -24,13 +25,21 @@ class TheWatch(Base):
             out.append(p.tick())
         return out
 
+    def test_a_watch_with_a_key_sends_once_an_hour_as_a_sign_of_life(self):
+        p = self.watch()
+        self.assertEqual(self.ticks(p, 100, 101), [True, False], "at the start, then not while the book is checked")
+        p.sent_at -= bk.HEARTBEAT_S
+        self.assertEqual(self.ticks(p, 102), [True])
+
     def test_a_book_checked_by_the_keeper_is_left_alone(self):
         p = self.watch()
+        p.sent_at = time.monotonic()  # its sign of life sent
         self.assertEqual(self.ticks(p, 100, 101, 102), [False] * 3)
         self.assertEqual(self.node.raw, [])
 
     def test_a_book_two_blocks_behind_is_checked_by_the_watch_every_block_for_a_while(self):
         p = self.watch()
+        p.sent_at = time.monotonic()
         self.node.last_poke = 98
         self.assertEqual(self.ticks(p, 100), [True])
         self.assertEqual([a["last_poke"] for a in self.alarm_of("book_poke_taken_over")], [98])
@@ -74,6 +83,9 @@ class TheUnit(unittest.TestCase):
         self.assertIn("-m ops.book_watch --deployment ${COLOSSEUM_DEPLOYMENT}", unit)
         self.assertIn("EnvironmentFile=/etc/colosseum/book-watch-%i.env", unit)
         self.assertIn("InaccessiblePaths=", unit)
+        self.assertIn("DynamicUser=yes", unit, "a user of its own: not the keepers', who could read its environment")
+        self.assertNotIn("User=colosseum-keeper", unit)
+        self.assertIn("Environment=COLOSSEUM_KEY_DIR=%d", unit)
         self.assertNotIn("keeper-%i.env", unit)
         self.assertIn("colosseum-book-watch@.service", (host / "install.sh").read_text())
 
