@@ -497,10 +497,16 @@ export function examAccount(reads, { now, block }) {
   const terms = termsOf(reads);
   const status = STATUS[Number(reads.status ?? 0)] ?? "none";
   const step = Number(reads.step ?? 0);
-  const cash = big(reads.cash);
-  const positions = positionsOf(reads);
+  const shown = positionsOf(reads);
+  // A touched stop or take is filled at its touch's price whenever the settle comes: until then the header counts the
+  // account as it will be after it (`afterSettle`), not as if the position were still open at the mark (review 9 of
+  // #336). The positions table keeps what stands now, each touched one said as waiting for its settle.
+  const settle = afterSettle(reads, block);
+  const cash = settle ? settle.cash : big(reads.cash);
+  const positions = settle ? settle.positions : shown;
   const { equity, notional } = book(cash, positions);
   const priced = equity !== null;
+  const marked = settle ? book(big(reads.cash), shown).equity : equity;  // what each position's row is set against
   const dayStartEquity = big(reads.dayStartEquity);
   const capital = terms.capital;
 
@@ -539,11 +545,15 @@ export function examAccount(reads, { now, block }) {
 
   return {
     status, step, capital, cash, equity, notional, priced,
-    positions: [...positions.entries()].filter(([, p]) => p.size !== 0n).map(([asset, p]) => ({
+    // With touches waiting: the figures above are after their settle; `asMarked` is the account as the exam counts
+    // it before the settle, every position still open at its mark.
+    afterSettle: settle === null ? null : { touches: settle.touches, filled: settle.filled,
+      asMarked: book(big(reads.cash), shown) },
+    positions: [...shown.entries()].filter(([, p]) => p.size !== 0n).map(([asset, p]) => ({
       asset, size: p.size, side: p.size > 0n ? "long" : "short", mark: p.mark,
       stop: triggerView(p.stop, p.stopChange, false, p, block), take: triggerView(p.take, p.takeChange, true, p, block),
       notional: p.mark === null ? null : abs(p.size) * p.mark,
-      leverageX100: p.mark === null || !priced || equity <= 0n ? null : (abs(p.size) * p.mark * 100n) / equity,
+      leverageX100: p.mark === null || marked === null || marked <= 0n ? null : (abs(p.size) * p.mark * 100n) / marked,
       capX100: rules.assetLeverageX100[rules.assets.indexOf(asset)] ?? rules.maxLeverageX100,
     })),
     leverageX100: priced && equity > 0n ? (notional * 100n) / equity : null,
@@ -557,6 +567,28 @@ export function examAccount(reads, { now, block }) {
     graduate: { can: cannot === null, refusal: cannot, text: cannot === null ? null : refusalText(cannot) },
     assets: rules.assets, costPpm: terms.costPpm, fillDelay: terms.fillDelay, fillWindow: terms.fillWindow,
   };
+}
+
+/**
+ * The account after a settle of the stop book's touches of this exam (`reads.touches`), worked out as `triggerFill`
+ * works out each one, in the book's order: the cash, and the positions with what each fill left open (at their marks;
+ * a position closed takes its other stop or take with it). A touch the settle would not fill (the exam over at its
+ * time, no position left) changes nothing. Null where no touch waits.
+ */
+function afterSettle(reads, block) {
+  const touches = (reads.touches ?? []).map(touchOf);
+  if (touches.length === 0 || (STATUS[Number(reads.status ?? 0)] ?? "none") !== "active") return null;
+  let run = { ...reads, positions: [...(reads.positions ?? [])].map((p) => ({ ...p })), touches: [] };
+  let filled = 0;
+  for (const t of touches) {
+    const got = triggerFill(run, { asset: t.asset, isTake: t.isTake, touch: t, now: t.time, block });
+    if (got.refusal) continue;
+    filled += 1;
+    const closed = got.after.position === 0n;
+    run = { ...run, cash: got.after.cash, positions: run.positions.map((p) => Number(p.asset) !== t.asset ? p
+      : { ...p, size: got.after.position, ...(closed ? { stop: null, take: null, stopChange: null, takeChange: null } : {}) }) };
+  }
+  return { cash: big(run.cash), positions: positionsOf(run), touches: touches.length, filled };
 }
 
 // ── an order, before it is sent ────────────────────────────────────

@@ -34,7 +34,6 @@ export const SCREEN_TEXT = Object.freeze({
   stopRule: "A stop or a take is filled at the oracle price of the first block that touches its level, from the block it "
     + "acts from. Taking one off or moving it acts after the same delay; until then the one there stands.",
   settle: "The oracle price touched this stop or take: it is filled at that price. Settling writes it into the account; anyone may.",
-  settled: "Settled. The account now shows the stop or take filled at the price of its touch.",
   lapsed: "Not filled. The order lapsed at no cost — place it again.",
 });
 
@@ -157,7 +156,19 @@ export function accountFigures(account) {
     })),
     days: account.days.needed > 0 ? `${account.days.traded} of ${account.days.needed}` : null,
     priced: account.priced,
+    // Touches waiting for their settle: the figures are the account after it, and this says so, with the equity as
+    // the exam counts it before the settle (every position open at its mark).
+    afterSettle: afterSettleText(account.afterSettle),
   };
+}
+
+/** The note the header shows while touched stops or takes wait for their settle; null where none waits. */
+export function afterSettleText(a) {
+  if (!a) return null;
+  const n = a.touches;
+  const marked = a.asMarked?.equity === null || a.asMarked?.equity === undefined ? SCREEN_TEXT.noPrice : usdShown(a.asMarked.equity);
+  return `After the settle of ${n} touched stop${n === 1 ? "" : "s"} or take${n === 1 ? "" : "s"}: they are filled at the `
+    + `price of their touch whenever the settle comes. Before it, at the marks: equity ${marked}.`;
 }
 
 /** A position's row: name, side, size, the oracle mark, the notional, the leverage against the asset's cap, its stop and take. */
