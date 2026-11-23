@@ -15,8 +15,11 @@ import {StopBookBase} from "./StopBook.t.sol";
 /// by the traders' own calls, at any time; a `fillDelay` of 1 to 9 blocks; a deadline that may fall in the run; exams that
 /// fill at the book. Then every exam is settled. The model fills every armed stop and take at the first checked block,
 /// from its `armedAt`, whose oracle price reached it, at that price (or the book's from it), a stop before a take, and
-/// drops it unfilled if that block's time is past the deadline. At the end the positions and the cash of every exam, the
-/// price, touch block and size of every fill and the triggers left are the model's.
+/// drops it unfilled if that block's time is past the deadline. Moving or removing a stop or a take that is there is a
+/// change that acts `fillDelay` blocks on: until that block the old one is checked and filled, from it the new one (or
+/// none); a change asked while one waits replaces it, and the old one's fill takes the change with it. At the end the
+/// positions and the cash of every exam, the price, touch block and size of every fill and the triggers and changes
+/// left are the model's.
 contract StopBookModelTest is StopBookBase {
     uint256 constant MAX_N = 16;
     uint256 constant MAX_A = 6;
@@ -51,6 +54,8 @@ contract StopBookModelTest is StopBookBase {
     }
 
     mapping(uint256 => mapping(uint256 => mapping(bool => T))) mt;
+    /// The change asked of each trigger: `level` from block `armedAt` (zero `level`: none); zero `armedAt`: none asked.
+    mapping(uint256 => mapping(uint256 => mapping(bool => T))) mc;
     mapping(uint256 => mapping(uint256 => int256)) mpos;
     mapping(uint256 => int256) mcash;
     mapping(uint256 => mapping(uint256 => mapping(bool => F[]))) mF;
@@ -145,10 +150,12 @@ contract StopBookModelTest is StopBookBase {
                 uint64 p = px[k];
                 if (p == 0) continue;
                 for (uint256 t = 0; t < 2; ++t) {
+                    _changeInForce(i, k, t == 1);
                     T memory tr = mt[i][k][t == 1];
                     if (tr.level == 0 || tr.armedAt > block.number) continue;
                     if (tr.below ? p > tr.level : p < tr.level) continue;
                     delete mt[i][k][t == 1];
+                    delete mc[i][k][t == 1]; // filled or dropped: the change goes with it
                     if (deadlineOf[i] != 0 && block.timestamp > deadlineOf[i]) continue; // over: dropped, unfilled
                     int256 pos = mpos[i][k];
                     int256 abs_ = pos < 0 ? -pos : pos;
@@ -161,10 +168,20 @@ contract StopBookModelTest is StopBookBase {
                     if (mpos[i][k] == 0) {
                         delete mt[i][k][true];
                         delete mt[i][k][false];
+                        delete mc[i][k][true];
+                        delete mc[i][k][false];
                     }
                 }
             }
         }
+    }
+
+    /// A change asked of a trigger, in force by this block, takes its place.
+    function _changeInForce(uint256 i, uint256 k, bool tk) internal {
+        T memory c = mc[i][k][tk];
+        if (c.armedAt == 0 || c.armedAt > block.number) return;
+        mt[i][k][tk] = c.level == 0 ? T(0, 0, false, 0) : T(c.level, c.armedAt, mt[i][k][tk].below, c.sz);
+        delete mc[i][k][tk];
     }
 
     function _newBlock(bool jump) internal {
@@ -246,7 +263,10 @@ contract StopBookModelTest is StopBookBase {
             _modelCheck();
             assertTrue(mpos[i][k] != 0, "a trigger set on a position the model has closed");
             assertTrue(px[k] != 0, "set while the oracle was silent");
-            mt[i][k][isTake] = T(level, uint64(block.number) + dl, below, sz);
+            _changeInForce(i, k, isTake);
+            // On a side with one, a change that waits the delay; on an empty side, set, armed after the delay.
+            if (mt[i][k][isTake].level != 0) mc[i][k][isTake] = T(level, uint64(block.number) + dl, below, sz);
+            else mt[i][k][isTake] = T(level, uint64(block.number) + dl, below, sz);
         } catch {
             _take(false);
         }
@@ -258,8 +278,9 @@ contract StopBookModelTest is StopBookBase {
         try ex[i].clearTrigger(A[k], isTake) {
             _take(true);
             _modelCheck();
+            _changeInForce(i, k, isTake);
             assertTrue(mt[i][k][isTake].level != 0, "a trigger the model has filled was removed");
-            delete mt[i][k][isTake];
+            mc[i][k][isTake] = T(0, uint64(block.number) + dl, false, 0); // removed, `fillDelay` blocks on
         } catch {
             _take(false);
         }
@@ -333,6 +354,8 @@ contract StopBookModelTest is StopBookBase {
                     }
                     StopBook.Entry memory e = stopBook.entryOf(address(ex[i]), A[k], tk);
                     assertEq(e.level, mt[i][k][tk].level, "the book holds what the model holds");
+                    assertEq(e.nextLevel, mc[i][k][tk].level, "and the change asked of it");
+                    assertEq(e.nextAt, mc[i][k][tk].armedAt, "from the same block");
                 }
                 assertEq(ex[i].positionOf(A[k]), mpos[i][k], "the position");
             }

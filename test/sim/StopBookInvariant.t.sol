@@ -218,19 +218,31 @@ contract StopBookInvariantTest is Test, BookStand {
             uint256 n;
             for (uint32 a = 3; a <= 4; ++a) {
                 for (uint256 k = 0; k < 2; ++k) {
-                    bool isTake = k == 1;
-                    (uint64 tpx,, uint64 armedAt) = isTake ? exams[i].takeOf(a) : exams[i].stopOf(a);
-                    StopBook.Entry memory s = harness.entryOf(address(exams[i]), a, isTake);
-                    assertEq(tpx != 0, s.level != 0, "a record without a stop, or a stop without one");
-                    if (tpx == 0) continue;
-                    ++n;
-                    assertEq(s.level, tpx);
-                    assertEq(s.armedAt, armedAt);
-                    assertEq(s.below, isTake == (exams[i].positionOf(a) < 0), "on its side");
+                    if (_sameRecord(exams[i], a, k == 1)) ++n;
                 }
             }
             assertEq(harness.entries(address(exams[i])), n, "its list is its records");
         }
+    }
+
+    /// The exam's stop or take on `a` and its change asked, against the book's entry: a change in force takes the
+    /// stop's place in either once it acts, so each is read as in force in this block. Whether the book has an entry.
+    function _sameRecord(PaperExam x, uint32 a, bool isTake) internal view returns (bool) {
+        (uint64 tpx,, uint64 armedAt) = isTake ? x.takeOf(a) : x.stopOf(a);
+        (uint64 cpx,, uint64 cAt) = x.changeOf(a, isTake);
+        if (cAt != 0 && cAt <= block.number) (tpx, armedAt, cpx, cAt) = (cpx, cpx == 0 ? 0 : cAt, 0, 0);
+        StopBook.Entry memory s = harness.entryOf(address(x), a, isTake);
+        uint256[4] memory b = [uint256(s.level), s.armedAt, s.nextLevel, s.nextAt];
+        if (b[3] != 0 && b[3] <= block.number) b = [b[2], b[2] == 0 ? 0 : b[3], 0, 0];
+        assertEq(tpx != 0, b[0] != 0, "a record without a stop, or a stop without one");
+        if (tpx != 0) {
+            assertEq(b[0], tpx);
+            assertEq(b[1], armedAt);
+            assertEq(b[2], cpx, "the change asked");
+            assertEq(b[3], cAt, "from the same block");
+            assertEq(s.below, isTake == (x.positionOf(a) < 0), "on its side");
+        }
+        return s.level != 0;
     }
 
     /// B2. An exam settled up to the journal's end has no touch left; and what `touches` lists of any exam is its own
@@ -244,9 +256,13 @@ contract StopBookInvariantTest is Test, BookStand {
             if (harness.checkedTo(address(exams[i])) == len) assertEq(t.length, 0, "settled, and a touch left");
             for (uint256 j = 0; j < t.length; ++j) {
                 StopBook.Entry memory e = harness.entryOf(address(exams[i]), t[j].asset, t[j].isTake);
-                assertEq(e.level, t[j].level);
-                assertTrue(e.below ? t[j].px <= e.level : t[j].px >= e.level, "reaches it");
-                assertGe(t[j].blk, e.armedAt, "not before armedAt");
+                // At or after the block of a change asked, the change's level; before it, the entry's own.
+                bool changed = e.nextAt != 0 && t[j].blk >= e.nextAt;
+                uint256 level = changed ? e.nextLevel : e.level;
+                assertEq(level, t[j].level);
+                assertTrue(level != 0, "no touch of a stop taken back");
+                assertTrue(e.below ? t[j].px <= level : t[j].px >= level, "reaches it");
+                assertGe(t[j].blk, changed ? e.nextAt : e.armedAt, "not before armedAt");
                 assertEq(t[j].px, harness.priceAt(t[j].asset, t[j].pos));
                 if (j != 0) assertGe(t[j].pos, t[j - 1].pos, "in the order of the touches");
             }

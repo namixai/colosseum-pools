@@ -489,6 +489,36 @@ contract SimPoolTest is Test {
         assertEq(factory.listedAssets(), cap);
     }
 
+    /// A delisted asset the stop book still logs (an exam's stop on it) keeps its place under `MAX_LISTED`: listing
+    /// one more counts it, relisting it takes no second place, and once no stop is left on it its place is free.
+    function test_listing_aDelistedAssetTheBookLogsKeepsItsPlace() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        _fill(e, trader, true, 100);
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        StopBook b = factory.stopBook();
+        assertEq(b.watched().length, 1);
+        uint256 cap = factory.MAX_LISTED();
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        factory.setAsset(BTC, 0); // delisted, still logged
+        assertEq(factory.listedAssets(), cap - 1);
+        vm.expectRevert(SimPoolFactory.TooManyAssets.selector);
+        factory.setAsset(9999, 500);
+        factory.setAsset(BTC, 500); // relisted: its own place
+        assertEq(factory.listedAssets(), cap);
+        factory.setAsset(BTC, 0);
+        vm.prank(trader);
+        e.clearTrigger(BTC, false);
+        vm.roll(block.number + e.terms().fillDelay);
+        b.settle(address(e)); // the removal in force: nothing left on BTC
+        assertEq(b.watched().length, 0);
+        factory.setAsset(9999, 500);
+        assertEq(factory.listedAssets(), cap);
+    }
+
     function test_open_eachAssetsCapIsTheListsAtMost() public {
         factory.setAsset(BTC, 400); // under the plan's 5x
         SimPlan memory p = _plan();

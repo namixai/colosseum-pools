@@ -34,7 +34,9 @@ interface IPoolRegister {
 ///         of that exam's stops and takes at the first logged price, from its `armedAt`, that reached it, at that
 ///         price, in that block's name and at that block's time. Every exam function that changes anything calls
 ///         `settle` first (`PaperExam`), so no exam acts on a state its touches have not reached: a stop the oracle
-///         price has touched is carried out before the trader can take it back, move it or trade.
+///         price has touched is carried out before the trader can take it back, move it or trade. Nor does taking
+///         back or moving a stop act sooner than setting one: a change waits the exam's delay as an order does, and
+///         until then the stop there is carried out at its touches (`add`).
 /// @dev The journal. A check of a block logs one position: its block and time (`at`), and each watched asset's oracle
 ///      price there, zero when the oracle gave none. On each asset the prices sit in a tree of four branches: level 0
 ///      the prices, four to a word, each with the block's best bid and offer as offsets from it; level k, for each run
@@ -88,16 +90,20 @@ contract StopBook {
 
     /// One stop or take: its level, the side it fires on, from which block, from which position it is searched
     /// (`from`, the first logged after it was set), and up to which a settle that stopped short found nothing
-    /// (`cursor`; or, touched there and not yet carried out, its touch); and whether its key is on the exam's list,
-    /// which it stays on once there, and where. One word; zero `level`: none.
+    /// (`cursor`; or, touched there and not yet carried out, its touch); whether its key is on the exam's list,
+    /// which it stays on once there, and where; and the change asked of it (`add`): from block `nextAt` its level is
+    /// `nextLevel`, zero: none from then; zero `nextAt`: no change asked. One word; zero `level`: none. A level is
+    /// under `MAX_PRICE`, so 32 bits hold it.
     struct Entry {
-        uint64 level;
+        uint32 level;
         uint40 armedAt;
         uint40 from;
         uint40 cursor;
         bool below;
         bool listed;
         uint8 at;
+        uint32 nextLevel;
+        uint40 nextAt;
     }
 
     /// A touch not yet carried out (`touches`): the entry, and the price, block, time and position of its touch.
@@ -158,13 +164,21 @@ contract StopBook {
 
     // ── exams ────────────────────────────────────────────────────
 
-    /// @notice Sets the caller's stop or take on `asset`, replacing the one there: it fires at a price at or under
-    ///         `level` (`below`) or at or over it, from block `armedAt`. Only an exam of the factory, and not from
-    ///         inside a settle.
+    /// @notice Sets the caller's stop or take on `asset`. On a side with none: one that fires at a price at or under
+    ///         `level` (`below`) or at or over it, from block `armedAt`. On a side with one, a change, as an exchange
+    ///         takes a cancel or a new price no sooner than an order: the one there stays, and is carried out at its
+    ///         touches, up to block `armedAt`, and from that block `level` takes its place (zero: none). A change asked
+    ///         before and not yet in force is replaced. Only an exam of the factory, and not from inside a settle; an
+    ///         exam calls it settled, so no change of its is due (`_due`).
     function add(uint32 asset, bool isTake, bool below, uint64 level, uint64 armedAt) external {
         _onlyExam();
         if (level > MAX_PRICE) revert LevelTooHigh(level);
-        Entry memory old = _entry[msg.sender][asset][isTake];
+        Entry storage cur = _entry[msg.sender][asset][isTake];
+        if (cur.level != 0) {
+            (cur.nextLevel, cur.nextAt) = (uint32(level), uint40(armedAt));
+            return;
+        }
+        Entry memory old = cur;
         if (!old.listed) {
             old.at = uint8(_keys[msg.sender].length);
             _keys[msg.sender].push(uint64(uint256(asset) << 1 | (isTake ? 1 : 0)));
@@ -173,11 +187,12 @@ contract StopBook {
             _assets.push(asset);
             _assetPos[asset] = _assets.length;
         }
-        _entry[msg.sender][asset][isTake] = Entry(level, uint40(armedAt), uint40(_len), 0, below, true, old.at);
+        _entry[msg.sender][asset][isTake] =
+            Entry(uint32(level), uint40(armedAt), uint40(_len), 0, below, true, old.at, 0, 0);
     }
 
-    /// @notice Removes the caller's stop or take on `asset`, if it has one here. Only an exam of the factory, and
-    ///         not from inside a settle.
+    /// @notice Removes the caller's stop or take on `asset` at once, with any change asked of it, if it has one here:
+    ///         for a position that is gone. Only an exam of the factory, and not from inside a settle.
     function remove(uint32 asset, bool isTake) external {
         _onlyExam();
         if (_entry[msg.sender][asset][isTake].level != 0) _drop(msg.sender, asset, isTake);
@@ -280,10 +295,10 @@ contract StopBook {
 
     function _touch(address exam, uint64 key, uint256 pos) internal view returns (Touch memory t) {
         (t.asset, t.isTake) = _split(key);
-        t.level = _entry[exam][t.asset][t.isTake].level;
         uint64 x = _raw(t.asset, pos + _off(t.asset));
         (t.px, t.book) = (uint32(x), uint32(x >> 32));
         (t.blk, t.time) = _atPos(pos);
+        (t.level,) = _phase(_entry[exam][t.asset][t.isTake], t.blk);
         t.pos = pos;
     }
 
@@ -378,7 +393,9 @@ contract StopBook {
         }
         for (uint256 i = 0; i < n; ++i) {
             if (found[i] != UNSEARCHED) continue;
-            if (gasleft() < SEARCH_GAS + _keep(n)) return _stop(exam, keys, found, len);
+            // An entry with a change asked is two searches (`_findOne`).
+            uint256 need = _changing(exam, keys[i]) ? 2 * SEARCH_GAS : SEARCH_GAS;
+            if (gasleft() < need + _keep(n)) return _stop(exam, keys, found, len);
             _search(exam, keys, found, i, done, len);
         }
         for (uint256 i = _earliest(keys, found, len); i < n; i = _earliest(keys, found, len)) {
@@ -389,7 +406,21 @@ contract StopBook {
             if (found[i] & DEFERRED != 0) return _stop(exam, keys, found, len);
         }
         _checked[exam] = len;
+        _due(exam, keys);
         return 0;
+    }
+
+    /// Once every entry of `exam` is searched up to this block, each change in force by it (`add`) takes its entry's
+    /// place, or, none, takes the entry out; its exam does the same (`PaperExam._due`).
+    function _due(address exam, uint64[] memory keys) internal {
+        for (uint256 i = 0; i < keys.length; ++i) {
+            (uint32 a, bool tk) = _split(keys[i]);
+            Entry storage e = _entry[exam][a][tk];
+            uint256 from = e.nextAt;
+            if (from == 0 || from > block.number) continue;
+            if (e.nextLevel == 0) _drop(exam, a, tk);
+            else (e.level, e.armedAt, e.nextLevel, e.nextAt) = (e.nextLevel, uint40(from), 0, 0);
+        }
     }
 
     /// What `found` holds of an entry: under `len` its touch; `len` none up to there; `UNSEARCHED`; or, `DEFERRED`
@@ -400,7 +431,8 @@ contract StopBook {
 
     /// Searches entry `i` of `exam`, and with it the asset's other entry: from the same position, the first position
     /// where either is touched, the other, if not touched there, deferred past it; from different ones, the one from
-    /// earlier first, and the other deferred to its start if the first is touched before it.
+    /// earlier first, and the other deferred to its start if the first is touched before it. An entry with a change
+    /// asked is searched on its own: at its level up to the change, at the change's from there (`_findOne`).
     function _search(address exam, uint64[] memory keys, uint256[] memory found, uint256 i, uint256 done, uint256 len)
         internal
         view
@@ -413,18 +445,38 @@ contract StopBook {
         }
         uint256 s = _start(e, done, len);
         Entry memory o = _entry[exam][a][!tk];
-        if (o.level == 0 || found[o.at] != UNSEARCHED) {
+        if (o.level == 0 || found[o.at] != UNSEARCHED || e.nextAt != 0 || o.nextAt != 0) {
             found[i] = _findOne(a, e, s, len);
             return;
         }
-        uint256 so = _start(o, done, len);
+        _pair(a, found, i, e, s, o, _start(o, done, len), len);
+    }
+
+    /// Whether `exam`'s entry `key` has a change asked of it.
+    function _changing(address exam, uint64 key) internal view returns (bool) {
+        (uint32 a, bool tk) = _split(key);
+        return _entry[exam][a][tk].nextAt != 0;
+    }
+
+    /// Entry `i` (`e`, from `s`) and the asset's other entry `o` (from `so`), neither with a change asked, searched
+    /// together (`_search`).
+    function _pair(
+        uint32 a,
+        uint256[] memory found,
+        uint256 i,
+        Entry memory e,
+        uint256 s,
+        Entry memory o,
+        uint256 so,
+        uint256 len
+    ) internal view {
         if (so != s) {
             // The one searched from earlier first: touched before the other's start, the other waits for its fill.
             if (s < so) _staggered(a, found, i, e, s, o, so, len);
             else _staggered(a, found, o.at, o, so, e, s, len);
             return;
         }
-        (uint64 lo, uint256 hi) = e.below ? (e.level, uint256(o.level)) : (o.level, uint256(e.level));
+        (uint64 lo, uint256 hi) = e.below ? (uint64(e.level), uint256(o.level)) : (uint64(o.level), uint256(e.level));
         uint256 t = _find(a, s, len, lo, hi);
         if (t == len) {
             (found[i], found[o.at]) = (len, len);
@@ -452,9 +504,20 @@ contract StopBook {
         found[e2.at] = t < s2 ? DEFERRED | s2 : _findOne(a, e2, s2, len);
     }
 
-    /// The first position from `s`, under `len`, at which the price of `a` touched `e`; `len` if none.
+    /// The first position from `s`, under `len`, at which the price of `a` touched `e`; `len` if none. With a change
+    /// asked: at its level before the first position of a block at or after `nextAt`, and from there at `nextLevel`
+    /// (none, for zero).
     function _findOne(uint32 a, Entry memory e, uint256 s, uint256 len) internal view returns (uint256) {
-        return _find(a, s, len, e.below ? e.level : 0, e.below ? NO_LEVEL : e.level);
+        uint256 end = e.nextAt == 0 ? len : _armed(s, e.nextAt, len);
+        uint256 t = _find(a, s, end, e.below ? e.level : 0, e.below ? NO_LEVEL : e.level);
+        if (t < end || e.nextLevel == 0) return t < end ? t : len;
+        return _find(a, end, len, e.below ? e.nextLevel : 0, e.below ? NO_LEVEL : e.nextLevel);
+    }
+
+    /// The level and the `armedAt` of `e` in block `blk`: its change's from `nextAt` on, its own before.
+    function _phase(Entry memory e, uint256 blk) internal pure returns (uint64, uint64) {
+        if (e.nextAt != 0 && blk >= e.nextAt) return (e.nextLevel, e.nextAt);
+        return (e.level, e.armedAt);
     }
 
     function _hits(Entry memory e, uint256 x) internal pure returns (bool) {
@@ -534,11 +597,12 @@ contract StopBook {
     /// call failed. The call gets all the gas there is but `keep`.
     function _fire(address exam, uint64 key, uint256 pos, uint256 keep) internal returns (uint8 r) {
         Touch memory t = _touch(exam, key, pos);
+        (, uint64 armedAt) = _phase(_entry[exam][t.asset][t.isTake], t.blk);
         try IStopExam(exam).fireTrigger{gas: gasleft() - keep}(
             t.asset,
             t.isTake,
             t.level,
-            _entry[exam][t.asset][t.isTake].armedAt,
+            armedAt,
             t.px,
             t.book,
             uint64(t.blk),
@@ -718,9 +782,11 @@ contract StopBook {
         return (uint32(key >> 1), key & 1 == 1);
     }
 
-    /// Takes `exam`'s entry out (its key stays listed), and its asset off the watched ones once it has no entry left.
+    /// Takes `exam`'s entry out with any change asked of it (its key stays listed), and its asset off the watched ones
+    /// once it has no entry left.
     function _drop(address exam, uint32 asset, bool isTake) internal {
-        _entry[exam][asset][isTake].level = 0;
+        Entry storage e = _entry[exam][asset][isTake];
+        (e.level, e.nextLevel, e.nextAt) = (0, 0, 0);
         if (--_count[asset] == 0) {
             uint256 ap = _assetPos[asset];
             uint32 lastAsset = _assets[_assets.length - 1];

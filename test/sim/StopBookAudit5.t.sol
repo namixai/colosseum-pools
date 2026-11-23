@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.28;
 
+import {Vm} from "forge-std/Test.sol";
 import {CoreSimulatorLib} from "@hyper-evm-lib/test/simulation/CoreSimulatorLib.sol";
 import {PaperExam, ExamTerms} from "../../src/exam/PaperExam.sol";
 import {StopBook} from "../../src/sim/StopBook.sol";
@@ -10,8 +11,8 @@ import {StopBookBase} from "./StopBook.t.sol";
 /// The fifth independent audit of cp#335 (22 November 2026, head fcbb5e51), its scenarios on the fixed book: the fill
 /// price of a stop is its touch block's, whoever settles and whenever (H1, turned round: on fcbb5e51 three moments gave
 /// three prices); settles with random gas carry out what one full settle does; a trader's call with any gas never acts
-/// on a touch not carried out. Its tests of a stop cleared or moved just before a wick (M1) wait for the delayed
-/// clearing, which this head does not have yet.
+/// on a touch not carried out; and its tests of a stop cleared or moved just before a wick (M1), turned round: a change
+/// waits `fillDelay` as setting one does, and the stop there is carried out at its touches until then.
 contract StopBookAudit5Test is StopBookBase {
     uint32[8] internal S;
 
@@ -86,7 +87,9 @@ contract StopBookAudit5Test is StopBookBase {
         for (uint256 k = 0; k < nAssets; ++k) {
             as_[k] = S[k];
         }
-        e = _examWith(as_, _terms(), _n(2) == 0);
+        ExamTerms memory t = _terms();
+        t.fillDelay = uint16(1 + _n(30));
+        e = _examWith(as_, t, _n(2) == 0);
         for (uint256 k = 0; k < nAssets; ++k) {
             BookStub(BBO).set(S[k], MARK - 10, MARK + 10);
             _trade(e, S[k], _n(2) == 0, 20);
@@ -98,7 +101,18 @@ contract StopBookAudit5Test is StopBookBase {
             _set(e, S[k], false, isLong ? MARK - d1 : MARK + d1, _n(3) == 0 ? 7 : 0);
             _set(e, S[k], true, isLong ? MARK + d2 : MARK - d2, _n(3) == 0 ? 5 : 0);
         }
-        vm.roll(block.number + DELAY);
+        vm.roll(block.number + t.fillDelay);
+        // Changes asked of half of them, in force `fillDelay` blocks into the run: the old ones act until then.
+        for (uint256 k = 0; k < nAssets; ++k) {
+            uint256 r = _n(4);
+            if (r >= 2) continue;
+            bool isTake = _n(2) == 0;
+            bool below = isTake != (e.positionOf(S[k]) > 0);
+            uint64 d = uint64(1 + _n(8)) * 10_000;
+            vm.prank(trader);
+            if (r == 0) e.clearTrigger(S[k], isTake);
+            else e.setTrigger(S[k], isTake, below ? MARK - d : MARK + d, _n(3) == 0 ? 6 : 0);
+        }
     }
 
     function _walk(uint256 nAssets, uint256 blocks) internal {
@@ -124,6 +138,9 @@ contract StopBookAudit5Test is StopBookBase {
             (uint64 px, uint64 sz, uint64 ar) = e.stopOf(S[k]);
             (uint64 px2, uint64 sz2, uint64 ar2) = e.takeOf(S[k]);
             h = keccak256(abi.encode(h, e.positionOf(S[k]), px, sz, ar, px2, sz2, ar2));
+            (px, sz, ar) = e.changeOf(S[k], false);
+            (px2, sz2, ar2) = e.changeOf(S[k], true);
+            h = keccak256(abi.encode(h, px, sz, ar, px2, sz2, ar2));
         }
     }
 
@@ -175,4 +192,219 @@ contract StopBookAudit5Test is StopBookBase {
         }
     }
 
+    // ── M1, turned round: a stop cleared or moved a block before a wick is still carried out ──
+
+    /// The fill a settle carried out of `e`'s stop on BTC: its price, its touch block and the level it was at.
+    function _stopFill(Vm.Log[] memory logs)
+        internal
+        pure
+        returns (uint64 px, uint256 touch, uint64 level, bool found)
+    {
+        for (uint256 j = 0; j < logs.length; ++j) {
+            if (logs[j].topics[0] != PaperExam.TriggerFilled.selector) continue;
+            (,, uint64 p,, uint64 lvl,, uint256 t,) =
+                abi.decode(logs[j].data, (bool, uint64, uint64, uint256, uint64, uint8, uint256, uint64));
+            return (p, t, lvl, true);
+        }
+    }
+
+    /// The auditor's `test_a5_wickDodge_clearBeforeTheWick`, turned round: the trader knows the next block's oracle
+    /// is under the stop and clears it a block ahead; the removal waits `fillDelay`, so the wick fills the stop.
+    function test_a5_M1_aStopClearedABlockBeforeTheWickStillFills() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        vm.roll(armedAt + 3);
+        _mark(960_000);
+        stopBook.poke();
+        vm.prank(trader);
+        e.clearTrigger(BTC, false); // a change: in force DELAY blocks on
+        (,, uint64 from) = e.changeOf(BTC, false);
+        assertEq(from, block.number + DELAY);
+        assertEq(stopBook.entryOf(address(e), BTC, false).level, 950_000, "the stop is still there");
+        vm.roll(block.number + 1);
+        _mark(940_000); // the wick
+        uint256 wick = block.number;
+        vm.recordLogs();
+        stopBook.settle(address(e));
+        (uint64 px, uint256 touch, uint64 level, bool found) = _stopFill(vm.getRecordedLogs());
+        assertTrue(found, "the wick filled the stop");
+        assertEq(e.positionOf(BTC), 0, "closed at the wick");
+        assertEq(touch, wick);
+        assertEq(px, 940_000);
+        assertEq(level, 950_000);
+        (,, from) = e.changeOf(BTC, false);
+        assertEq(from, 0, "the removal went with the fill");
+        assertEq(stopBook.entryOf(address(e), BTC, false).nextAt, 0);
+    }
+
+    /// The auditor's `test_a5_wickDodge_moveTheArmedStopFarther_nakedForTheDelay`, turned round: the stop moved
+    /// farther acts at its old level until the move is in force, so there is no block without a stop.
+    function test_a5_M1_aStopMovedFartherActsAtItsOldLevelUntilTheMove() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        vm.roll(armedAt + 3);
+        _mark(960_000);
+        stopBook.poke();
+        _set(e, BTC, false, 900_000, 0);
+        (uint64 px0,,) = e.stopOf(BTC);
+        assertEq(px0, 950_000, "the old stop stays");
+        vm.roll(block.number + 1);
+        _mark(940_000); // under the old level, over the new one
+        vm.recordLogs();
+        stopBook.settle(address(e));
+        (uint64 px,, uint64 level, bool found) = _stopFill(vm.getRecordedLogs());
+        assertTrue(found);
+        assertEq(e.positionOf(BTC), 0, "the old stop filled");
+        assertEq(px, 940_000);
+        assertEq(level, 950_000);
+    }
+
+    /// The edges of a removal: a touch in the block before it is in force fills; from that block on, nothing does.
+    function test_P2_aRemovalActsFromItsBlock_notBefore() public {
+        for (uint256 scen = 0; scen < 2; ++scen) {
+            uint256 snap = vm.snapshotState();
+            (PaperExam e, uint256 armedAt) = _longWithStop();
+            vm.roll(armedAt + 1);
+            _mark(960_000);
+            vm.prank(trader);
+            e.clearTrigger(BTC, false);
+            uint256 from = block.number + DELAY;
+            for (uint256 b = block.number + 1; b < from - 1 + scen; ++b) {
+                vm.roll(b);
+                stopBook.poke();
+            }
+            vm.roll(from - 1 + scen);
+            _mark(900_000);
+            stopBook.settle(address(e));
+            if (scen == 0) {
+                assertEq(e.positionOf(BTC), 0, "touched a block before the removal: filled");
+            } else {
+                assertEq(e.positionOf(BTC), 100, "touched in the removal's block: nothing");
+                assertEq(stopBook.watched().length, 0, "the entry went with the removal in force");
+                (uint64 px,,) = e.stopOf(BTC);
+                assertEq(px, 950_000, "the exam takes it out when it next acts");
+                vm.prank(trader);
+                vm.expectRevert(PaperExam.NoTrigger.selector);
+                e.clearTrigger(BTC, false);
+            }
+            vm.revertToState(snap);
+        }
+    }
+
+    /// The edges of a move: before its block the old level acts, from it the new one, with its own size and its
+    /// block as `armedAt`.
+    function test_P2_aMoveActsFromItsBlock_theOldOneUntilThen() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        vm.roll(armedAt + 1);
+        _mark(960_000);
+        _set(e, BTC, false, 900_000, 30);
+        uint256 from = block.number + DELAY;
+        vm.roll(from);
+        _mark(920_000); // under the old level, in the move's block: the old is gone, the new not reached
+        stopBook.settle(address(e));
+        assertEq(e.positionOf(BTC), 100);
+        assertEq(stopBook.entryOf(address(e), BTC, false).level, 900_000, "the move in force in the book");
+        vm.roll(from + 1);
+        _mark(890_000);
+        vm.recordLogs();
+        stopBook.settle(address(e));
+        (uint64 px, uint256 touch, uint64 level, bool found) = _stopFill(vm.getRecordedLogs());
+        assertTrue(found);
+        assertEq(level, 900_000);
+        assertEq(px, 890_000);
+        assertEq(touch, from + 1);
+        assertEq(e.positionOf(BTC), 70, "the new size");
+    }
+
+    /// A change asked while another waits replaces it, and its delay counts again: the old stop acts until the
+    /// second one's block, the first change never does.
+    function test_P2_aSecondChangeReplacesTheFirst_andCountsAgain() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        vm.roll(armedAt + 1);
+        _mark(960_000);
+        _set(e, BTC, false, 900_000, 0);
+        vm.roll(block.number + 1);
+        _set(e, BTC, false, 880_000, 0);
+        uint256 from = block.number + DELAY;
+        assertEq(stopBook.entryOf(address(e), BTC, false).nextLevel, 880_000);
+        assertEq(stopBook.entryOf(address(e), BTC, false).nextAt, from);
+        vm.roll(from - 1); // the first change's block: not in force, the old stop is
+        _mark(940_000);
+        stopBook.settle(address(e));
+        assertEq(e.positionOf(BTC), 0, "the old stop, until the second change's block");
+    }
+
+    /// ...and from its block, the second change's level only: the first one's is never in force.
+    function test_P2_aSecondChange_theFirstNeverActs() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        vm.roll(armedAt + 1);
+        _mark(960_000);
+        _set(e, BTC, false, 900_000, 0);
+        vm.roll(block.number + 1);
+        _set(e, BTC, false, 880_000, 0);
+        vm.roll(block.number + DELAY);
+        _mark(890_000); // reaches the first change's 900 000, not the second's 880 000
+        stopBook.settle(address(e));
+        assertEq(e.positionOf(BTC), 100);
+        vm.roll(block.number + 1);
+        _mark(870_000);
+        stopBook.settle(address(e));
+        assertEq(e.positionOf(BTC), 0, "the second change's level");
+    }
+
+    /// The old stop's fill takes a waiting change with it, as an exchange refuses to change a filled order: a
+    /// partial stop fills, and the move asked of it never acts.
+    function test_P2_theOldStopsFillTakesTheChangeWithIt() public {
+        PaperExam e = _exam();
+        _trade(e, BTC, true, 100);
+        _set(e, BTC, false, 950_000, 40);
+        vm.roll(block.number + DELAY + 1);
+        _mark(960_000);
+        _set(e, BTC, false, 900_000, 40);
+        vm.roll(block.number + 1);
+        _mark(940_000);
+        stopBook.settle(address(e));
+        assertEq(e.positionOf(BTC), 60, "40 filled at the old level");
+        (,, uint64 from) = e.changeOf(BTC, false);
+        assertEq(from, 0);
+        assertEq(stopBook.entries(address(e)), 0);
+        vm.roll(block.number + DELAY);
+        _mark(890_000);
+        stopBook.settle(address(e));
+        assertEq(e.positionOf(BTC), 60, "the move went with the fill");
+    }
+
+    /// A first stop on a side with none is set as before: armed `fillDelay` on, no change asked.
+    function test_P2_aFirstStopIsSetAsBefore() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        StopBook.Entry memory x = stopBook.entryOf(address(e), BTC, false);
+        assertEq(x.level, 950_000);
+        assertEq(x.armedAt, armedAt);
+        assertEq(x.nextAt, 0);
+        (,, uint64 from) = e.changeOf(BTC, false);
+        assertEq(from, 0);
+    }
+
+    /// A position closed by an order takes the stop and its waiting change out at once.
+    function test_P2_aCloseTakesTheChangeOutAtOnce() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        vm.roll(armedAt + 1);
+        _mark(960_000);
+        _set(e, BTC, false, 900_000, 0);
+        _trade(e, BTC, false, 100);
+        (,, uint64 from) = e.changeOf(BTC, false);
+        assertEq(from, 0);
+        assertEq(stopBook.watched().length, 0);
+    }
+
+    /// В2: a stop on an asset whose oracle price is over what the journal logs is refused, as with no price.
+    function test_P2_aStopOverTheJournalsHighestPriceIsRefused() public {
+        PaperExam e = _exam();
+        _trade(e, BTC, true, 100);
+        uint64 top = uint64(stopBook.MAX_PRICE());
+        _mark(top);
+        _set(e, BTC, false, 950_000, 0); // at the highest price the journal logs: taken
+        _mark(top + 1);
+        vm.prank(trader);
+        vm.expectRevert(abi.encodeWithSelector(PaperExam.NoPrice.selector, BTC));
+        e.setTrigger(BTC, false, 950_000, 0);
+    }
 }

@@ -58,9 +58,10 @@ contract SimPoolFactory {
     /// least 6 months" holds whatever the day it opens. Before it, its creator neither stops its sales nor
     /// takes back what it put in; only the factory's closer may close it, and the money goes where it would anyway.
     uint32 public constant MIN_TERM = 184 days;
-    /// The most assets listed at once (`setAsset`). The stop book's check of a block logs each asset with a stop or a
-    /// take on it; with this many, its dearest check (the block that closes runs of its tree on many levels) stays
-    /// under 1 500 000 gas, a small HyperEVM block with a quarter to spare (`test_gas_poke_atTheCap`).
+    /// The most assets listed at once (`setAsset`), counting with them each delisted asset the stop book still logs
+    /// (an exam's stop or take on it). The stop book's check of a block logs each asset with a stop or a take on it;
+    /// with this many, its dearest check (the block that closes runs of its tree on many levels) stays under 1 500 000
+    /// gas, a small HyperEVM block with a quarter to spare (`test_gas_poke_atTheCap`).
     uint256 public constant MAX_LISTED = 20;
     /// How long a creator's request to withdraw waits before it can be carried out, and how long after
     /// closing a pool `finish` waits: the platform, the traders and the codes' partners see every
@@ -202,15 +203,24 @@ contract SimPoolFactory {
     }
 
     /// @notice Lists `asset` for new pools with its leverage cap, or delists it with zero. Pools
-    ///         already open keep what they were checked against. At most `MAX_LISTED` listed at once: the stop book
-    ///         logs every asset with a stop on it each block, and its check must fit a small block.
+    ///         already open keep what they were checked against. At most `MAX_LISTED` listed at once, and with them
+    ///         the delisted assets the stop book still logs: it logs every asset with a stop on it each block, and its
+    ///         check must fit a small block.
     function setAsset(uint32 asset, uint32 capX100) external onlyOperator {
         if (capX100 != 0 && (capX100 < 100 || capX100 > MAX_LEVERAGE_X100)) revert BadPlan();
         uint32 was = assetCapX100[asset];
-        if (was == 0 && capX100 != 0 && ++listedAssets > MAX_LISTED) revert TooManyAssets();
+        if (was == 0 && capX100 != 0 && ++listedAssets + _loggedUnlisted(asset) > MAX_LISTED) revert TooManyAssets();
         if (was != 0 && capX100 == 0) --listedAssets;
         assetCapX100[asset] = capX100;
         emit AssetSet(asset, capX100);
+    }
+
+    /// How many assets the stop book logs that are not listed, `asset` left out.
+    function _loggedUnlisted(uint32 asset) internal view returns (uint256 n) {
+        uint32[] memory w = stopBook.watched();
+        for (uint256 i = 0; i < w.length; ++i) {
+            if (w[i] != asset && assetCapX100[w[i]] == 0) ++n;
+        }
     }
 
     // ── anyone ───────────────────────────────────────────────────

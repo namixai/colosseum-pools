@@ -587,9 +587,11 @@ contract StopBookTest is StopBookBase {
         _trade(e, BTC, true, 100);
         _set(e, BTC, false, 950_000, 0);
         _set(e, BTC, true, 1_100_000, 0);
-        _set(e, BTC, false, 960_000, 0); // a replacement: the old record goes
+        _set(e, BTC, false, 960_000, 0); // a replacement: a change, the old record acts until it is in force
         assertEq(stopBook.entries(address(e)), 2, "one stop, one take");
-        assertEq(stopBook.entryOf(address(e), BTC, false).level, 960_000);
+        assertEq(stopBook.entryOf(address(e), BTC, false).level, 950_000);
+        assertEq(stopBook.entryOf(address(e), BTC, false).nextLevel, 960_000);
+        assertEq(stopBook.entryOf(address(e), BTC, false).nextAt, block.number + DELAY);
         _trade(e, BTC, false, 160); // turned round: both go
         assertEq(_where(e, BTC, false) + _where(e, BTC, true), 0);
         assertEq(stopBook.watched().length + stopBook.entries(address(e)), 0, "nothing left in the book");
@@ -1280,10 +1282,14 @@ contract StopBookTest is StopBookBase {
         assertEq(stopBook.priceAt(ETH, len), 0, "no entry on it: not logged");
         assertEq(stopBook.watched().length, 1);
         vm.prank(trader);
-        e.clearTrigger(BTC, false);
+        e.clearTrigger(BTC, false); // a change: the stop acts DELAY blocks more, and its asset is logged
+        vm.roll(block.number + DELAY);
+        stopBook.settle(address(e)); // the removal in force: the entry goes
+        assertEq(stopBook.watched().length, 0);
+        uint256 len2 = stopBook.logged();
         vm.roll(block.number + 1);
         stopBook.poke();
-        assertEq(stopBook.logged(), len + 1, "nothing watched: nothing logged");
+        assertEq(stopBook.logged(), len2, "nothing watched: nothing logged");
     }
 
     /// The search against every price one by one: on a long run of random prices, every level, from every start, finds

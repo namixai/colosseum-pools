@@ -149,6 +149,8 @@ contract PaperExam is Initializable {
     uint8 public constant TRAILING_TO_START = 1;
     /// The most a fill at the book may be worse than the oracle price, in bps of it: 5 %.
     uint16 public constant MAX_WORSE_BPS = 500;
+    /// The highest oracle price the stop book logs (`StopBook.MAX_PRICE`): over it, a block's price is logged as none.
+    uint256 internal constant MAX_PRICE = type(uint32).max - 1;
     /// Where a fill's price came from (`Filled.source`).
     uint8 public constant SOURCE_ORACLE = 0;
     uint8 public constant SOURCE_BOOK = 1;
@@ -221,6 +223,11 @@ contract PaperExam is Initializable {
     /// The factory's stop book, which carries out this exam's stops and takes: set for an exam started with a
     /// filler, and only for one; zero for an exam started without (`initialize`).
     address public stopBook;
+    /// With a stop book, the change the trader asked of the stop or the take of `asset` there (`setTrigger`,
+    /// `clearTrigger`): from block `armedAt` it is `px` and `sz` (zero `px`: none from then), and until then the one
+    /// there stays and is carried out at its touches. Zero `armedAt`: none asked. A change in force takes the stop's
+    /// or the take's place once this exam acts (`_due`).
+    mapping(uint32 asset => mapping(bool isTake => Trigger)) public changeOf;
 
     event Started(address indexed trader, address indexed pool, uint64 capital);
     event AgentSet(address indexed agent);
@@ -231,7 +238,9 @@ contract PaperExam is Initializable {
     /// `source`: `SOURCE_ORACLE`, `SOURCE_BOOK` or `SOURCE_ORACLE_FALLBACK`.
     event Filled(uint32 indexed asset, bool isBuy, uint64 sz, uint64 px, uint256 cost, uint256 late, uint8 source);
     event FillerSet(address indexed filler, bool fromBook, uint16 maxWorseBps);
-    /// A stop (`isTake` false) or a take set on `asset`'s position: it acts from block `armedAt`.
+    /// A stop (`isTake` false) or a take set on `asset`'s position: it acts from block `armedAt`. With a stop book and
+    /// one there already, a change of it: that one acts up to block `armedAt`, and this one from then; zero `px`: the
+    /// trader took it back, and there is none from block `armedAt`.
     event TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt);
     /// Removed by the trader, or because the position it was on was closed or turned round.
     event TriggerCleared(uint32 indexed asset, bool isTake);
@@ -473,10 +482,13 @@ contract PaperExam is Initializable {
     /// @notice Sets the stop (`isTake` false) or the take of the position in `asset`, replacing the one there:
     ///         close `sz` of it (zero: all of it) once the oracle price reaches `px`. The trader or their agent.
     ///         It acts `fillDelay` blocks after it is set, as an order fills no sooner: a stop set past the
-    ///         price is not a way round the delay. With a stop book, the book gets it too, in place of the old one,
-    ///         and one the oracle price has already reached is refused (`WouldTrigger`), as an exchange refuses a
-    ///         stop that would trigger at once: a stop is set on the price's way, not behind it. With no oracle price
-    ///         in the block that cannot be told, and it reverts (`NoPrice`).
+    ///         price is not a way round the delay. With a stop book, the book gets it too, and one the oracle price has
+    ///         already reached is refused (`WouldTrigger`), as an exchange refuses a stop that would trigger at once: a
+    ///         stop is set on the price's way, not behind it. With no oracle price in the block that cannot be told,
+    ///         and it reverts (`NoPrice`), as it does over the highest price the book logs. With a stop book and one
+    ///         there, it is a change (`changeOf`) and waits as long: the one there stays, and is carried out at its
+    ///         touches, up to block `armedAt`, so moving a stop out of a wick's way a block ahead is no way round it
+    ///         either; a change asked before and not yet in force is replaced, and the delay counts again.
     function setTrigger(uint32 asset, bool isTake, uint64 px, uint64 sz) external settled inStatus(Status.Active) {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
         if (_over()) revert TooLate();
@@ -486,23 +498,32 @@ contract PaperExam is Initializable {
         uint64 armedAt = uint64(block.number) + _terms.fillDelay;
         // A long's stop and a short's take fire at the price or below it; the other two at it or above.
         bool below = isTake == (pos < 0);
+        Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
         address b = stopBook;
         if (b != address(0)) {
             uint64 oracle = _mark(asset);
+            if (oracle > MAX_PRICE) revert NoPrice(asset);
             if (below ? oracle <= px : oracle >= px) revert WouldTrigger(oracle, px);
             IStopBook(b).add(asset, isTake, below, px, armedAt);
+            if (_due(asset, isTake).px != 0) t = changeOf[asset][isTake];
         }
-        Trigger storage t = isTake ? takeOf[asset] : stopOf[asset];
         (t.px, t.sz, t.armedAt) = (px, sz, armedAt);
         emit TriggerSet(asset, isTake, px, sz, armedAt);
     }
 
     /// @notice Removes the stop or the take of the position in `asset`. The trader or their agent. With a stop book,
-    ///         one the price has reached is already carried out (`settled`): there is none left to remove.
+    ///         one the price has reached is already carried out (`settled`): there is none left to remove; and the
+    ///         removal is a change that waits `fillDelay` blocks as setting one does (`setTrigger`): the one there acts
+    ///         up to then.
     function clearTrigger(uint32 asset, bool isTake) external settled {
         if (msg.sender != trader && msg.sender != agent) revert NotTrader();
-        if ((isTake ? takeOf[asset] : stopOf[asset]).px == 0) revert NoTrigger();
-        _clear(asset, isTake, true);
+        if (_due(asset, isTake).px == 0) revert NoTrigger();
+        address b = stopBook;
+        if (b == address(0)) return _clear(asset, isTake, true);
+        uint64 from = uint64(block.number) + _terms.fillDelay;
+        IStopBook(b).add(asset, isTake, false, 0, from);
+        changeOf[asset][isTake] = Trigger(0, 0, from);
+        emit TriggerSet(asset, isTake, 0, 0, from);
     }
 
     /// @notice Without a stop book: carries out the stop or the take of `asset` once the oracle price in this block
@@ -536,7 +557,11 @@ contract PaperExam is Initializable {
     ) external returns (uint8) {
         if (msg.sender != stopBook) revert NotBook();
         Trigger memory t = isTake ? takeOf[asset] : stopOf[asset];
-        if (t.px != level || t.armedAt != armedAt) revert NoTrigger();
+        Trigger memory c = changeOf[asset][isTake];
+        // Touched at or after its change's block, a stop is carried out as changed; before it, as it was, and the
+        // change goes with it, as an exchange refuses to change an order already filled.
+        if (c.px == level && c.armedAt == armedAt) t = c;
+        else if (t.px != level || t.armedAt != armedAt) revert NoTrigger();
         if (status != Status.Active || _overAt(touchTime)) {
             _clear(asset, isTake, false);
             return FIRE_ENDED;
@@ -711,9 +736,20 @@ contract PaperExam is Initializable {
     function _clear(uint32 asset, bool isTake, bool tellBook) internal {
         if (isTake) delete takeOf[asset];
         else delete stopOf[asset];
+        delete changeOf[asset][isTake];
         address b = stopBook;
         if (tellBook && b != address(0)) IStopBook(b).remove(asset, isTake);
         emit TriggerCleared(asset, isTake);
+    }
+
+    /// @dev The stop or the take of `asset` in force in this block: a change asked of it `fillDelay` blocks ago or
+    ///      more (`changeOf`) takes its place first, or, none, takes it out, as the stop book has already done.
+    function _due(uint32 asset, bool isTake) internal returns (Trigger storage t) {
+        t = isTake ? takeOf[asset] : stopOf[asset];
+        Trigger memory c = changeOf[asset][isTake];
+        if (c.armedAt == 0 || c.armedAt > block.number) return t;
+        (t.px, t.sz, t.armedAt) = (c.px, c.sz, c.px == 0 ? 0 : c.armedAt);
+        delete changeOf[asset][isTake];
     }
 
     function _startStep() internal {
