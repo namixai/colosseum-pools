@@ -1204,10 +1204,10 @@
     },
     {
       "id": "S111",
-      "where": "src/exam/PaperExam.sol:881",
+      "where": "src/exam/PaperExam.sol:883",
       "kind": "line",
       "text": "if (gap * Units.BPS > uint256(oracle) * maxWorseBps) {",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L881"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L883"
     },
     {
       "id": "S112",
@@ -1449,10 +1449,10 @@
     },
     {
       "id": "S146",
-      "where": "src/exam/PaperExam.sol:639",
+      "where": "src/exam/PaperExam.sol:641",
       "kind": "line",
       "text": "if (tellsPool) IExamPassed(pool).examPassed();",
-      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L639"
+      "href": "https://github.com/namixai/colosseum-pools/blob/main/src/exam/PaperExam.sol#L641"
     },
     {
       "id": "S147",

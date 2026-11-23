@@ -356,7 +356,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S108 | `src/exam/PaperExam.sol:472` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
 | S109 | `src/exam/PaperExam.sol:482` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
 | S110 | `src/exam/PaperExam.sol:146` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
-| S111 | `src/exam/PaperExam.sol:881` | `if (gap * Units.BPS > uint256(oracle) * maxWorseBps) {` |
+| S111 | `src/exam/PaperExam.sol:883` | `if (gap * Units.BPS > uint256(oracle) * maxWorseBps) {` |
 | S112 | `src/sim/SimPoolFactory.sol:42` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
 | S113 | `src/sim/SimPoolStops.sol:31` | `if (p.state != SimPool.PayoutState.Due \|\| p.wasStopped) revert SimPool.BadPayout();` |
 | S114 | `src/sim/SimPool.sol:314` | `event PayoutStopped(` |
@@ -391,7 +391,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S143 | `src/sim/SimPool.sol:1006` | `uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;` |
 | S144 | `src/sim/SimPoolFactory.sol:312` | `if (p.on & (1 << i) != 0 && cover > p.locked) revert BadPlan();` |
 | S145 | `src/sim/SimPoolSetup.sol:78` | `if (l.live != 0 \|\| sells) size = s;` |
-| S146 | `src/exam/PaperExam.sol:639` | `if (tellsPool) IExamPassed(pool).examPassed();` |
+| S146 | `src/exam/PaperExam.sol:641` | `if (tellsPool) IExamPassed(pool).examPassed();` |
 | S147 | `src/sim/SimPool.sol:616` | `staged += _payoutOf(_lines[line].size);` |
 | S148 | `src/sim/SimPoolCodes.sol:96` | `setAside += _pay(heldOf, usdc, k, c.author, amount);` |
 | S149 | `src/sim/SimPool.sol:1070` | `bool sent = _send(creator, rest);` |
