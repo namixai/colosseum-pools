@@ -127,7 +127,9 @@ class TheHandOver(unittest.TestCase):
         """A testnet deploy with --send, every chain call mocked: the transactions it sends, in order, and the record.
         `reads_of_safe` overrides what the Safe answers to getThreshold() and getOwners(): a tuple, or an exception
         to raise."""
-        answers = {"getThreshold()": (2,), "getOwners()": (self.OWNERS,), **(reads_of_safe or {})}
+        # The factory is the seventh contract deployed; the stop book it makes names it back.
+        answers = {"getThreshold()": (2,), "getOwners()": (self.OWNERS,), "stopBook()": ("0x" + "b0" * 20,),
+                   "factory()": ("0x" + f"{7:040x}",), **(reads_of_safe or {})}
 
         def view(to, sig, *rest):
             if sig in answers:
@@ -281,6 +283,7 @@ class TheHandOver(unittest.TestCase):
         self.assertEqual(self.fee_reads, [sent[0][0]], "read back from the factory once, before it is configured")
         self.assertEqual((records[-1]["creation_fee_at_deploy_wei"], records[-1]["creation_fee_at_deploy_hype"]),
                          (str(10**17), "0.1"))
+        self.assertEqual(records[-1]["StopBook"], d.to_checksum_address("0x" + "b0" * 20), "the factory's own book, recorded")
         incomplete.assert_not_called()
         # A fee named for testnet is the one deployed and recorded.
         result, _, records, dc, _, _ = self.send(None, fee_read=25 * 10**16, extra=("--creation-fee", "0.25"))
@@ -1825,3 +1828,30 @@ class TheRelayer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheStopBookOfTheDeploy(unittest.TestCase):
+    def test_the_list_cap_and_the_least_delay_are_the_contracts(self):
+        import re
+        src = (ROOT / "src/sim/SimPoolFactory.sol").read_text()
+        self.assertEqual(int(re.search(r"uint256 public constant MAX_LISTED = (\d+);", src).group(1)), d.MAX_LISTED)
+        self.assertIn("stopBook = new StopBook();", src)
+        with self.assertRaises(SystemExit) as e:
+            d.asset_list(["BTC"] * (d.MAX_LISTED + 1))
+        self.assertIn("MAX_LISTED", str(e.exception))
+        plan = {"exam": {"fill_delay": 2}, "funded": {"fill_delay": 4}}
+        d.book_plan_ok(plan)
+        plan["funded"]["fill_delay"] = 1
+        with self.assertRaises(SystemExit):
+            d.book_plan_ok(plan)
+        for name in ("sim-first-pool", "sim-measure-pool", "sim-rehearsal-998"):
+            d.book_plan_ok(json.loads((ROOT / f"deployments/plans/{name}.json").read_text()))
+
+    def test_a_book_that_does_not_name_the_factory_is_refused(self):
+        from unittest import mock
+        factory, book = "0x" + "07" * 20, "0x" + "b0" * 20
+        with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: (book,) if sig == "stopBook()" else (factory,)):
+            self.assertEqual(d.stop_book_of(factory), d.to_checksum_address(book))
+        with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: (book,) if sig == "stopBook()" else ("0x" + "99" * 20,)):
+            with self.assertRaises(SystemExit):
+                d.stop_book_of(factory)

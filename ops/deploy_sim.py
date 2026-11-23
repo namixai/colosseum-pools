@@ -162,8 +162,18 @@ ZERO = "0x" + "00" * 20
 PLATFORM_ASSETS = sn.Assets(lambda: c.NETWORK)
 
 
+# SimPoolFactory.MAX_LISTED: the most assets listed at once, with the delisted ones the stop book still logs; past it
+# `setAsset` reverts (TooManyAssets), the deploy half done. The test holds it to the source.
+MAX_LISTED = 20
+# The least `fill_delay` of a plan whose exams have a stop book: a stop's change waits it, and the book checks the
+# blocks between (PaperExam.setTrigger, clearTrigger). The factory will refuse less; refused here before anything is sent.
+BOOK_MIN_FILL_DELAY = 2
+
+
 def asset_list(names: list[str]) -> list[tuple[str, int, int]]:
-    """Each named asset's id and leverage cap, for setAsset. Refuses one without a cap."""
+    """Each named asset's id and leverage cap, for setAsset. Refuses one without a cap, and more than `MAX_LISTED`."""
+    if len(names) > MAX_LISTED:
+        raise SystemExit(f"{len(names)} assets: the factory lists {MAX_LISTED} at most (SimPoolFactory.MAX_LISTED)")
     out, table = [], sn.sim(c.NETWORK)
     for name in names:
         idx = table.index(name)
@@ -398,10 +408,28 @@ def keeper_nodes_of(args) -> dict | None:
     return nodes
 
 
+def book_plan_ok(raw: dict) -> None:
+    """A plan's stages wait at least `BOOK_MIN_FILL_DELAY` blocks for a fill: with a stop book, a stop taken off or moved
+    waits as long."""
+    for stage in ("exam", "funded"):
+        delay = raw[stage]["fill_delay"]
+        if delay < BOOK_MIN_FILL_DELAY:
+            raise SystemExit(f"the plan's {stage} fill_delay is {delay}: with a stop book it is {BOOK_MIN_FILL_DELAY} "
+                             "blocks at least")
+
+
 def mainnet_plan_ok(raw: dict) -> None:
     """On mainnet a plan written for testnet is refused: its terms would tell traders the wrong network."""
     if c.NETWORK.name == "mainnet" and any("testnet" in str(raw.get(f, "")).lower() for f in ("terms_text", "about")):
         raise SystemExit("this plan is written for testnet (its terms or about say so); mainnet takes a plan of its own")
+
+
+def stop_book_of(factory: str) -> str:
+    """The stop book `factory` made in its constructor, read back and held to it: its `factory()` is this one."""
+    book = to_checksum_address(c.call_view(factory, "stopBook()", [], [], ["address"])[0])
+    if int(book, 16) == 0 or to_checksum_address(c.call_view(book, "factory()", [], [], ["address"])[0]) != to_checksum_address(factory):
+        raise SystemExit(f"the factory {factory} names the stop book {book}, which is not its own")
+    return book
 
 
 def operator_of(factory: str) -> str:
@@ -488,7 +516,8 @@ def deploy(args) -> int:
     print(f"deploy_sim deploy: {c.NETWORK.name} (chain {c.CHAIN_ID}), label {args.label}, USDC {c.USDC_ERC20} "
           "(Circle's, EIP-3009)")
     print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPoolCodes, SimPool (linked to the three), TermsBook, "
-          "SimPoolFactory(usdc, exam, pool, operator, fee)  (big blocks on, then off)")
+          "SimPoolFactory(usdc, exam, pool, operator, fee)  (big blocks on, then off); the factory makes its StopBook "
+          "in the same transaction (`stopBook()`), read back and written to the record")
     print(f"  creation fee     {hype(fee)} HYPE to open a pool on {c.NETWORK.name} ({fee} wei), set in the factory; its "
           "operator may change it after (`fee`)")
     print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
@@ -555,6 +584,9 @@ def deploy(args) -> int:
         if read_back != fee:
             raise SystemExit(f"the factory {factory} takes {read_back} wei to open a pool, not the {fee} "
                              "deployed: read it before anything else")
+        # The stop book the factory made: the keeper checks its blocks and settles its exams (ops/book_keeper.py).
+        record["StopBook"] = stop_book_of(factory)
+        save(out, record)
         record["status"] = "configuring"
         save(out, record)
         steps = [("setFiller", "setFiller(address)", ["address"], [filler]),
@@ -581,6 +613,7 @@ def pool(args) -> int:
     record = deployments.load(args.deployment)
     raw = json.loads(pathlib.Path(args.plan).read_text())
     mainnet_plan_ok(raw)
+    book_plan_ok(raw)
     text = raw["terms_text"]
     terms_hash = keccak(text=text)
     plan = plan_of(raw, terms_hash)
@@ -705,6 +738,7 @@ def check(args) -> int:
     the assets listed as `deploy` lists them and the terms as `pool` publishes them."""
     raw = json.loads(pathlib.Path(args.plan).read_text(encoding="utf-8"))
     mainnet_plan_ok(raw)
+    book_plan_ok(raw)
     text = raw["terms_text"].encode("utf-8")
     if not text or len(text) > TERMS_MAX_BYTES:
         raise SystemExit(f"deploy_sim check: the terms are {len(text)} bytes; TermsBook.publish takes 1 to "
