@@ -466,7 +466,7 @@ function paintAccount(page, st) {
     <dl class="ex-eq"><div><dt>Equity</dt><dd>${esc(f.equity)}</dd></div><div><dt>Balance</dt><dd>${esc(f.balance)}</dd></div>
       <div><dt>Leverage</dt><dd>${esc(f.leverage)} <small>of ${esc(f.maxLeverage)}</small></dd></div></dl>
     <div class="ex-scale">
-      ${f.target ? `<div class="ex-sl"><span>Target</span><b>${esc(f.target.at)}</b><em>to go ${esc(f.target.toGo)}</em></div>` : ""}
+      ${f.target ? `<div class="ex-sl"><span>Target</span><b>${esc(f.target.at)}</b><em>${esc(f.target.progress)}</em></div>` : ""}
       ${scale ? `<div class="ex-bar${scale.broken ? " broken" : ""}" role="img" aria-label="Equity between the loss limits and the target">
         ${scale.lines.map((l) => `<i class="${l.near ? "near" : ""}" style="left:${l.share / 100}%"></i>`).join("")}
         <i class="tl" style="left:${scale.target / 100}%"></i><i class="now" style="left:${scale.equity / 100}%"></i></div>` : ""}

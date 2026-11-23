@@ -97,3 +97,19 @@ test("Settled. only when no touch is left; a settle done in part says how many a
   const src = readFileSync(new URL("../views/exam.js", import.meta.url), "utf8");
   assert.match(src, /settledText\(left\)/);
 });
+
+test("the target line says reached once the equity is at the target or past it, never a negative amount to go", () => {
+  const at = (cash) => accountFigures(examAccount({ ...base([]), cash, positions: [] }, { now: DAY, block: 500 })).target;
+  const below = at(10_500n * USD), equal = at(11_000n * USD), past = at(11_250n * USD);
+  assert.equal(below.reached, false);
+  assert.match(below.progress, /^to go /);
+  assert.doesNotMatch(below.progress, /-/);
+  for (const t of [equal, past]) {
+    assert.equal(t.reached, true);
+    assert.equal(t.progress, "reached");
+    assert.doesNotMatch(t.toGo, /-/);
+  }
+  const src = readFileSync(new URL("../views/exam.js", import.meta.url), "utf8");
+  assert.match(src, /esc\(f\.target\.progress\)/);
+  assert.doesNotMatch(src, /to go \$\{esc\(f\.target\.toGo\)\}/);
+});

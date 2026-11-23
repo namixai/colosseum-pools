@@ -146,7 +146,7 @@ export function accountFigures(account) {
     balance: usd(account.cash),
     leverage: account.priced ? leverageText(account.leverageX100) : none,
     maxLeverage: leverageText(account.maxLeverageX100),
-    target: account.target ? { at: usd(account.target.at), toGo: account.priced ? usd(account.target.toGo) : none } : null,
+    target: account.target ? targetFigures(account, usd, none) : null,
     lines: account.lines.map((l) => ({
       kind: l.kind, at: usd(l.at), room: account.priced ? usd(l.room) : none, near: l === account.floor,
       label: l.kind === "drawdown"
@@ -160,6 +160,15 @@ export function accountFigures(account) {
     // the exam counts it before the settle (every position open at its mark).
     afterSettle: afterSettleText(account.afterSettle),
   };
+}
+
+/** The target's line: how far is left (`toGo`), and once the equity is at it or past it (`reached`, the contract's
+ *  `equity < targetAt` no longer true) "reached", never a negative amount to go. */
+function targetFigures(account, usd, none) {
+  const toGo = account.priced ? account.target.toGo : null;
+  const reached = toGo !== null && toGo !== undefined && toGo <= 0n;
+  return { at: usd(account.target.at), toGo: toGo === null ? none : reached ? usd(0n) : usd(toGo), reached,
+    progress: toGo === null ? `to go ${none}` : reached ? "reached" : `to go ${usd(toGo)}` };
 }
 
 /** The note the header shows while touched stops or takes wait for their settle; null where none waits. */
