@@ -1,0 +1,57 @@
+# The stop book's own watch for the deployment of instance %i (ops/book_watch.py): every quarter of a second it reads
+# the head of its own node, fresh by its block's time, and the book's watched() and lastPokeBlock(); blocks going by
+# unchecked while the book watches an asset are an alarm, and so is its own node failing. With a key of its own
+# (--wallet in COLOSSEUM_BOOK_WATCH_ARGS) it checks the blocks itself while the keeper is two blocks behind or more.
+#
+# It shares nothing with the keeper: not its state, not its node (COLOSSEUM_BOOK_WATCH_RPC_URL in book-watch-%i.env,
+# another provider than the keeper's), not its key (its own key directory, COLOSSEUM_KEY_DIR in the same file), and,
+# where it can, not its machine: install it on a second host. Its alarms go to COLOSSEUM_ALERT_CMD on this machine.
+# ops/host/install.sh puts the unit in place; it is enabled by hand, per instance (docs/SIM-POOL.md, "The stops").
+[Unit]
+Description=colosseum-pools stop book watch %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=colosseum-keeper
+Group=colosseum-keeper
+WorkingDirectory=/opt/colosseum-pools/current
+# Its own file alone, and the record's: not the keeper's, so no keeper's node and no keeper's key directory.
+EnvironmentFile=/etc/colosseum/book-watch-%i.env
+EnvironmentFile=/etc/colosseum/deployment-%i.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.book_watch --deployment ${COLOSSEUM_DEPLOYMENT} \
+    --alarm /var/lib/colosseum-keeper/book-watch/%i/book-watch.alarm $COLOSSEUM_BOOK_WATCH_ARGS
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+ProtectSystem=strict
+# Made by systemd for this user at the start, its one writable place: the flag file of its alarms.
+StateDirectory=colosseum-keeper/book-watch/%i
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+# No key but its own: not the gateway's, not the keepers', not the shared pool keeper's, not an instance's.
+InaccessiblePaths=/var/lib/colosseum-gw -/var/lib/colosseum-keeper/secrets -/var/lib/colosseum-keeper/shared
+InaccessiblePaths=-/var/lib/colosseum-keeper/instances
+ProtectProc=invisible
+ProcSubset=pid
+
+[Install]
+WantedBy=multi-user.target
