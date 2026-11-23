@@ -1254,7 +1254,7 @@ class MissedTouches(unittest.TestCase):
         ch.d["touchEvery"] = {s1: 60}
         return ch, s1
 
-    def test_a_stop_the_oracle_reached_and_left_before_it_was_carried_out_is_shown_and_counted_against_nobody(self):
+    def test_a_stop_the_oracle_reached_and_left_before_it_was_carried_out_holds_the_payout(self):
         ch, s1 = self.world({*range(1_100, 1_131), *range(1_300, 1_306)})
         got = r.review(ch.d, POOL, 0)
         m = got["missedTouch"]
@@ -1263,17 +1263,29 @@ class MissedTouches(unittest.TestCase):
              "reads": 31, "seen": False, "then": "carried out", "at": 1_305}]})
         self.assertEqual(m["exam"], {"read": False, "every": None, "spans": 0, "unread": 0, "missed": []},
                          "an account the review did not read along is said as not read")
-        self.assertEqual((got["verdict"], got["reasons"]), ("clean", []), "a fact shown, in no reason")
+        # A stop missed is a flaw of the exam's executor: a result disputed, held for a stop of reason 3 (review 9 of
+        # #336, which found it shown as a fact that changed no verdict).
+        self.assertEqual((got["verdict"], got["kinds"], got["action"], got["tx"]), ("suspicious", ["missed-stop"], "hold", None))
+        self.assertEqual(got["reasons"], ["a stop missed on the stage: the stop at 950000 on asset 3 reached in blocks 1100 "
+                                          "to 1130, not carried out then"])
+        self.assertEqual((got["stopDraft"]["reason"], got["stopDraft"]["trades"]), (3, [tx(80_000 + 1_001)]),
+                         "the draft names the transaction that set the stop")
         self.assertEqual(r.card(got, ch.d)["evidence"]["missedTouch"], m)
         text = r.summary(got)
         self.assertIn("  stops and takes the oracle reached and nobody carried out, stage: 1 stretches missed over 1 "
                       "stops and takes that stood, read one block in 60\n    the stop at 950000 on asset 3 (long): the oracle at it or past it from block 1100, "
                       "31 reads to block 1130; then carried out in block 1305", text)
         self.assertIn("  stops and takes the oracle reached and nobody carried out, exam: not read", text)
-        # Reached only in the stretch it was carried out in, or held from `armedAt` to the close: nothing missed.
+        self.assertIn("do not sign: a stop the oracle reached was not carried out", text)
+        # Reached only in the stretch it was carried out in, or held from `armedAt` to the close: nothing missed, and
+        # no stop reason (the second's low fill price is the recount's own).
         for low in (range(1_300, 1_306), range(990, 1_306)):
             ch, _ = self.world(set(low))
-            self.assertEqual(r.review(ch.d, POOL, 0)["missedTouch"]["stage"]["missed"], [], low)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual(got["missedTouch"]["stage"]["missed"], [], low)
+            self.assertNotIn("missed-stop", got["kinds"], low)
+        clean = r.review(self.world(set(range(1_300, 1_306)))[0].d, POOL, 0)
+        self.assertEqual((clean["verdict"], clean["action"], clean["stopDraft"]), ("clean", "approve", None))
 
     def test_how_a_stops_time_ended(self):
         def ends(evs, latest=2_000):
@@ -1417,6 +1429,125 @@ class MissedTouches(unittest.TestCase):
         self.assertEqual([(m["first"], m["last"]) for m in got["missedTouch"]["stage"]["missed"]], [(1_100, 1_130)])
         self.assertEqual((got["triggerLate"]["trader"]["n"], got["triggerLate"]["trader"]["unread"]), (0, 1))
         self.assertEqual(got["recount"]["stage"]["checked"]["fills"], 1, "the close's price is not the recount's")
+
+
+class TheBookHoldsWhatItCannotClear(unittest.TestCase):
+    """Review 9 of #336: with a stop book the review is closed on failure. A stop reached in a block nobody checked
+    (`Gap`), gap blocks whose price was not read, the book's gaps not read, the blocks since its last check that no Gap
+    has closed yet, or the book not read at all: each holds the payout ("suspicious", "hold") with the draft of a stop
+    of reason 3, never "clean" and "approve"."""
+
+    mt = MissedTouches()
+
+    def world(self, gaps, known=range(990, 1_400), low_from=1_100, end="standing", **extra):
+        ch, t1, s1 = honest_world()
+        ch.d["latest"] = 2_000
+        ch.d["exam_events"] = {s1: self.mt.events(end=end), addr(0x201): [self.mt.e("Started", 500, capital=100 * 10**6)]}
+        ch.d["oracle"] = {r.oracle_key(3, b): (self.mt.LOW if b >= low_from else self.mt.MARK) for b in known}
+        ch.d["touchEvery"] = {}
+        ch.d["bookExams"] = [s1]
+        ch.d["gaps"] = gaps
+        ch.d.update(extra)
+        return ch, s1
+
+    def held(self, got, kind):
+        self.assertEqual((got["verdict"], got["action"], got["tx"]), ("suspicious", "hold", None))
+        self.assertIn(kind, got["kinds"])
+        self.assertEqual((got["stopDraft"]["reason"], got["stopDraft"]["paired"]), (3, r.ZERO_ADDRESS))
+        self.assertIn(tx(80_000 + 1_001), got["stopDraft"]["trades"], "the transaction that set the stop")
+
+    def test_a_stop_reached_in_a_gap_holds_the_payout(self):
+        ch, _ = self.world([(1_100, 1_110)])
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual([(m["first"], m["last"], m["gap"]) for m in got["missedTouch"]["stage"]["missed"]], [(1_100, 1_110, True)])
+        self.held(got, "missed-stop")
+        self.assertIn("(a gap of the stop book)", got["reasons"][0])
+        k = r.card(got, ch.d)
+        self.assertEqual((k["verdict"], k["action"], k["call"]), ("suspicious", "hold", None), "nothing to approve")
+        self.assertIn("do not sign", r.summary(got))
+
+    def test_gap_blocks_whose_price_was_not_read_are_not_checked_and_hold_the_payout(self):
+        ch, _ = self.world([(1_100, 1_110)], known=range(990, 1_050))
+        got = r.review(ch.d, POOL, 0)
+        m = got["missedTouch"]["stage"]
+        self.assertEqual((m["missed"], m["unread"]), ([], 11))
+        self.held(got, "stop-unchecked")
+        self.assertIn("11 blocks of the stop book's gaps inside a stop's or take's time have no oracle price read",
+                      got["reasons"][0])
+        self.assertIn("  stops not checked, stage: 11 blocks", r.summary(got))
+        self.assertIn("do not sign: blocks of a stop's time were not checked", r.summary(got))
+
+    def test_the_books_gaps_not_read_hold_the_payout(self):
+        ch, _ = self.world(None)
+        got = r.review(ch.d, POOL, 0)
+        self.assertFalse(got["missedTouch"]["stage"]["read"])
+        self.held(got, "stop-unchecked")
+        self.assertIn("the stop book's gaps were not read", got["reasons"][0])
+
+    def test_the_blocks_since_the_last_check_with_no_gap_yet_hold_the_payout_where_a_stop_stood_in_them(self):
+        ch, _ = self.world([], tail={"read": True, "from": 1_901, "to": 2_000, "watched": 1})
+        got = r.review(ch.d, POOL, 0)
+        self.held(got, "stop-unchecked")
+        self.assertIn("blocks 1901 to 2000 since the stop book's last check, not closed by a Gap yet", got["reasons"][0])
+        # A stop carried out long before the tail stood in none of its blocks: nothing to hold for.
+        ch, _ = self.world([], end="carried out", low_from=1_300, tail={"read": True, "from": 1_901, "to": 2_000, "watched": 1})
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"))
+        # The last check not read is not taken as checked.
+        ch, _ = self.world([], tail={"read": False, "from": None, "to": 2_000})
+        got = r.review(ch.d, POOL, 0)
+        self.held(got, "stop-unchecked")
+        self.assertIn("the stop book's last check (lastPokeBlock, watched) was not read", got["reasons"][0])
+
+    def test_a_book_not_read_at_all_holds_every_account_with_a_stop(self):
+        ch, _ = self.world(None, bookExams=[], bookRead=False, stopBook=None)
+        got = r.review(ch.d, POOL, 0)
+        self.held(got, "stop-unchecked")
+        self.assertIn("the factory's stop book was not read", got["reasons"][0])
+
+    def test_a_book_exam_with_every_block_checked_is_clean(self):
+        for gaps, known in (([], range(990, 1_050)), ([(1_050, 1_060)], range(990, 1_400))):
+            ch, _ = self.world(gaps, known=known, low_from=10**9)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["verdict"], got["action"], got["stopDraft"]), ("clean", "approve", None), gaps)
+            self.assertEqual(got["stopDoubt"]["stage"], {"missed": [], "unchecked": [], "txs": []})
+
+    def test_a_held_payout_is_offered_no_approval_whatever_the_pool(self):
+        # Approved already, or on a pool without approvals: nothing to approve, and the draft of the stop stays.
+        for change in ({"approved": True}, None):
+            ch, _ = self.world([(1_100, 1_110)])
+            if change:
+                ch.d["payouts"][0].update(change)
+            else:
+                ch.d["books"][POOL]["approvals"] = False
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["verdict"], got["action"], got["stopDraft"]["reason"]), ("suspicious", "none", 3), change)
+            self.assertNotEqual(got["tx"]["kind"], "approve")
+
+    def test_the_tail_is_read_at_the_latest_block_and_only_while_the_book_watches(self):
+        book = addr(0xB00)
+        asked = []
+
+        def answer(last, watched, fail=False):
+            def eth_call(to, data, block="latest"):
+                asked.append((to, data, block))
+                if fail:
+                    raise RuntimeError("node down")
+                if data == r.c.selector("lastPokeBlock()"):
+                    return encode(["uint64"], [last])
+                return encode(["uint32[]"], [watched])
+            return eth_call
+
+        with mock.patch.object(r.c, "eth_call", side_effect=answer(1_500, [3])):
+            self.assertEqual(r.read_tail(book, 2_000), {"read": True, "from": 1_501, "to": 2_000, "watched": 1})
+        self.assertEqual({b for _, _, b in asked}, {hex(2_000)})
+        self.assertIn(r.c.selector("lastPokeBlock()"), [d for _, d, _ in asked])
+        with mock.patch.object(r.c, "eth_call", side_effect=answer(1_500, [])):
+            self.assertIsNone(r.read_tail(book, 2_000), "the book watches nothing: no stop stands")
+        with mock.patch.object(r.c, "eth_call", side_effect=answer(2_000, [3])):
+            self.assertIsNone(r.read_tail(book, 2_000), "checked in the latest block")
+        with mock.patch.object(r.c, "eth_call", side_effect=answer(0, [], fail=True)), mock.patch.object(r.core, "log"):
+            self.assertEqual(r.read_tail(book, 2_000), {"read": False, "from": None, "to": 2_000})
 
 
 class Unread(unittest.TestCase):
@@ -1793,6 +1924,8 @@ class ReadingTheChain(unittest.TestCase):
                                                "floor": None, "sharesDue": None, "approver": addr(0xAB)}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         self.assertEqual(got["times"], {"delay": 72 * 3_600, "hard": 8 * 86_400}, "what the factory answers, not 7 days by rote")
+        # This node answers no `stopBook()`: the book is not read, which holds only an account with a stop (none here).
+        self.assertEqual((got["stopBook"], got["gaps"], got["bookRead"], got["tail"]), (None, None, False, None))
         review = r.review(got, POOL, 7)
         self.assertEqual(review["hardAt"], 5_000 - 72 * 3_600 + 8 * 86_400)
         self.assertEqual((review["exam"], review["size"], review["verdict"]), (e1, SIZE, "clean"))
