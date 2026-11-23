@@ -37,7 +37,6 @@ class Restart(S.Base):
         j = self.journal_of()
         self.assertEqual(j.conflicts, {}, "a replayed block must not make the journal disagree with itself")
 
-    @unittest.expectedFailure  # TODO(review 15): until its fix lands in this round
     def test_every_row_of_a_loop_that_follows_the_head_has_the_blocks_time(self):
         """The candle screen takes the minutes of blocks that have a time: a step over several blocks writes t=null."""
         loop = self.loop()

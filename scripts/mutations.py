@@ -17260,6 +17260,15 @@ MUTATIONS = [
      "        files = journal_files(path, lo_t, hi_t, strict=k > 0, notes=j.notes)",
      "        files = journal_files(path, lo_t, hi_t, strict=False, notes=j.notes)",
      ["test_files_of_other_names_and_links_in_the_second_folder_are_not_read"]),
+    # Every line of the journal carries its block's time; a line without one is said by the candle screen.
+    ("RY22", "ops/stop_filler.py",
+     "        if t is not None or b >= head:\n            return t",
+     "        if True:\n            return t",
+     ["test_every_row_of_a_loop_that_follows_the_head_has_the_blocks_time"]),
+    ("RY23", "ops/payout_review.py",
+     "    if untimed:\n        out.append(",
+     "    if False:\n        out.append(",
+     ["test_journal_rows_without_a_time_do_not_switch_the_candle_screen_off"]),
 ]
 
 RUNNERS = {

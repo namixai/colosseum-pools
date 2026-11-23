@@ -209,9 +209,11 @@ class Base(unittest.TestCase):
                            alarm=alarm, **kw)
 
     def run_to(self, loop, *heads):
+        """Each head as the loop's `run` takes it: its time as polled, then a step to it."""
         out = []
         for h in heads:
             self.node.head = h
+            loop.head_t[h] = 1_000_000 + h - self.node.stale  # the fake node's time of a block
             out.append(loop.step(h))
         return out
 

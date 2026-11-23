@@ -822,6 +822,22 @@ class StopLoop:
 
     # ── a step ───────────────────────────────────────────────────────────────────────
 
+    def _time_of(self, b: int, head: int) -> int | None:
+        """The time of block `b` for its line of the journal: the head's as it was polled; a block before the head (a
+        step over several blocks, its stops at the head sent first) asked of the node, so every line carries it and the
+        review's candle screen sees each (review 15 of #338). A node that does not answer leaves it null, which the
+        review holds as not checked."""
+        t = self.head_t.get(b)
+        if t is not None or b >= head:
+            return t
+        try:
+            t = int(self.node.call("eth_getBlockByNumber", [hex(b), False])["timestamp"], 16)
+        except Exception as exc:
+            log("stop_block_time_unread", block=b, error=str(exc)[:200])
+            return None
+        self.head_t[b] = t
+        return t
+
     def step(self, head: int) -> list[tuple[str, int, bool]]:
         """Everything up to block `head`: the keeper's reads, the logs, each block's prices and its watch, the receipts,
         then the stops reached at `head` sent for the next block. The keys it sent for."""
@@ -882,7 +898,7 @@ class StopLoop:
                 due = self._watch(b, prices)
                 if self.journal is not None:
                     try:
-                        self.journal.add(b, prices, self.head_t.get(b), self._wanted() - set(prices))
+                        self.journal.add(b, prices, self._time_of(b, head), self._wanted() - set(prices))
                         if self.journal_said:
                             self.journal_said = False
                             log("stop_journal_works_again", block=b)

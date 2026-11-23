@@ -785,7 +785,9 @@ keeps old blocks:
   candle past the stop by more than that where the journal shows no reach, contradicts the journal. A candle is the
   price of trades on the perp, not the oracle (a median of other venues' prices; the perp trades at a premium or a
   discount to it, and a thin book prints wicks): 1 % is far past either for BTC, ETH and SOL in a calm market, and
-  near enough not to hide a reach by more than that. Fewer than 90 % of a stop's minutes with a candle is a doubt too;
+  near enough not to hide a reach by more than that. Fewer than 90 % of a stop's minutes with a candle is a doubt too,
+  and so is a block whose journal line carries no time (it falls in no minute: not screened). The stops' loop writes
+  each block's time on its line, a block before the head of a step over several asked of the node;
 - optionally, a node that answers for old blocks (`COLOSSEUM_ARCHIVE_RPC_URL`): calibrated on the chain's prices and
   asked for a sample of 200 blocks an account (`--journal-checks`, at least 1), and for each block only one journal
   holds (as many again an account at most), which it bears out. Without one nothing is held for it.

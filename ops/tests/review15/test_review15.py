@@ -61,7 +61,6 @@ class CandleScreenSilence(unittest.TestCase):
     def candles(self, px, wick=0):
         return {3: {60 * b: (p * (10_000 - wick) // 10_000, p * (10_000 + wick) // 10_000, p) for b, p in px.items()}}
 
-    @unittest.expectedFailure  # TODO(review 15): until its fix lands in this round
     def test_journal_rows_without_a_time_do_not_switch_the_candle_screen_off(self):
         """`candle_doubts` builds its minutes only from blocks that have a time (`head_t` is set for polled heads only;
         a step over several blocks writes t=null for the rest). With no times there are no minutes: no doubt at all,
@@ -70,6 +69,9 @@ class CandleScreenSilence(unittest.TestCase):
         far = {3: {60 * b: (900_000, 1_000_000, 920_000) for b in tr}}
         got, _ = world(tr, tr, times=False, candles=far)
         self.assertEqual(got["action"], "hold", "the venue contradicts the journal in every minute and nothing is held")
+        self.assertIn("carry no time: the venue's candles do not screen them", " ".join(got["reasons"]))
+        timed, _ = world(tr, tr, times=True, candles=self.candles(tr, wick=30))
+        self.assertEqual(timed["action"], "approve", timed["reasons"])
 
 
 class ScanWorld(unittest.TestCase):

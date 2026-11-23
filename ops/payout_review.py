@@ -1374,7 +1374,9 @@ def candle_doubts(span: dict, journal: Journal, candles: dict, bps: int) -> list
                                             candle stayed more than `bps` short of the stop all minute;
       a reach the journal does not show   → no block of the minute at the stop or past it, and the candle went past the
                                             stop by more than `bps`;
-      too few candles                     → fewer than CANDLE_COVER of the minutes have one.
+      too few candles                     → fewer than CANDLE_COVER of the minutes have one;
+      blocks with no time                 → a block of the journal whose line carries no time falls in no minute: not
+                                            screened, said (review 15 of #338), never left out in silence.
     Each is a doubt that holds the payout: the journal or the candles are wrong, and a person looks."""
     px, take, side = span["px"], span["take"], span["side"]
     below = trigger_hit(take, side, px - 1, px)  # reached from above (a long's stop, a short's take)
@@ -1382,14 +1384,21 @@ def candle_doubts(span: dict, journal: Journal, candles: dict, bps: int) -> list
     known = journal.px.get(span["asset"], {})
     minutes: dict[int, bool] = {}  # the minute -> whether a block of it shows the stop reached
     times = journal.times
+    untimed = 0
     for b, o in items_in(known, span["armedAt"], span["end"]):
         t = times.get(b)
-        if t is not None:
-            m = t // 60 * 60
-            minutes[m] = minutes.get(m, False) or trigger_hit(take, side, o, px)
+        if t is None:
+            untimed += 1
+            continue
+        m = t // 60 * 60
+        minutes[m] = minutes.get(m, False) or trigger_hit(take, side, o, px)
+    out: list[str] = []
+    if untimed:
+        out.append(f"{untimed} blocks of the journal in the {'take' if take else 'stop'} at {px} on asset {span['asset']} "
+                   "carry no time: the venue's candles do not screen them")
     if not minutes:
-        return []
-    out, have = [], 0
+        return out
+    have = 0
     far = touch = None
     for m, reached in sorted(minutes.items()):
         c = mine.get(m)
