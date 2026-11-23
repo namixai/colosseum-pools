@@ -1170,8 +1170,12 @@ class TheSecondReview(Base):
             except c.NotSent as exc:
                 done.append(str(exc))
 
+        queued = threading.Event()
+        put = sender.requests.put
+        sender.requests.put = lambda req, *a, **k: (put(req, *a, **k), queued.set())  # served only once it is queued
         thread = threading.Thread(target=keeper, daemon=True)
         thread.start()
+        self.assertTrue(queued.wait(2))
         sender.serve()
         thread.join(2)
         self.assertIn("HTTP 429", done[0])
@@ -1253,6 +1257,105 @@ class TheSecondReview(Base):
             sender.send(POOL, b"", 21_000, 10**8)
         self.assertEqual((sender.next, sender.ledger), (7, {}), "the nonce is the next one's")
         self.assertEqual(sender.send(POOL, b"", 21_000, 10**8)[1], 7)
+
+
+class TheThirdReview(Base):
+    """The bots' review of #334."""
+
+    def test_the_oldest_of_the_whole_ledger_is_the_one_stuck(self):
+        sender = sf.Sender(FILLER, self.node)
+        raised = []
+        sender.alarm = lambda event, **f: raised.append((event, f))
+        sender.send(POOL, b"", 21_000, 10**8)
+        sender.send(POOL, b"", 21_000, 10**8)
+        sender.ledger[7]["at"] -= 1  # just sent again: not due now, still the oldest
+        sender.ledger[8]["at"] -= sf.RESEND_AFTER_S
+        sender.ledger[8]["since"] -= sf.STUCK_S
+        sender.sweep()
+        self.assertEqual(raised, [], "nonce 8 waits behind nonce 7: no alarm for it")
+
+    def test_the_chain_counted_past_twice_running_not_twice_in_all(self):
+        sender = sf.Sender(FILLER, self.node)
+        sender.send(POOL, b"", 21_000, 10**8)
+        for latest in (8, 7, 8):
+            self.node.latest = latest
+            sender.ledger[7]["at"] -= sf.RESEND_AFTER_S
+            sender.sweep()
+        self.assertFalse(sender.is_gone(7), "8, 7, 8 is not two sweeps running")
+        sender.ledger[7]["at"] -= sf.RESEND_AFTER_S
+        sender.sweep()
+        self.assertTrue(sender.is_gone(7))
+
+    def test_a_keeper_send_refused_after_its_wait_is_not_sent_late(self):
+        sender = sf.Sender(FILLER, self.node)
+        self.node.send_answers = [c.NodeBusy("eth_sendRawTransaction: HTTP 429")]
+        req = {"to": POOL, "data": b"", "gas": 21_000, "gas_price": 10**8, "state": "queued", "done": threading.Event(),
+               "result": None, "error": None, "not_before": 0.0, "delay": 1.0, "until": time.monotonic() - 1}
+        sender.handle(req)
+        self.assertTrue(req["done"].is_set())
+        self.assertIsInstance(req["error"], c.NotSent)
+        self.assertEqual(sender.later, [], "not tried again past the keeper's wait")
+
+    def test_scrub_takes_out_a_bad_address_and_a_bare_path(self):
+        self.assertNotIn("SECRET", sf.scrub("bad http://SECRET:port/x"))
+        said = sf.scrub("Max retries exceeded with url: /v2/SECRET?k=SECRET (Caused by ConnectTimeout)")
+        self.assertNotIn("SECRET", said)
+        self.assertIn("url: <path>", said)
+
+    def test_a_stop_set_and_armed_inside_the_blocks_not_read_is_a_gap_alarm(self):
+        loop = self.loop(wallet=None, backfill=3)
+        self.run_to(loop, 100)
+        self.node.logs.append(set_log(101, 950_000, 102))
+        self.run_to(loop, 106)
+        gap = self.events("stop_watch_gap")
+        self.assertEqual((gap[0]["from_block"], gap[0]["to"], gap[0]["alarm"]), (101, 103, "ALARM"))
+
+    def test_a_stop_gone_before_its_kept_prices_were_judged_is_an_alarm(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 99)
+        self.node.logs += [set_log(100, 950_000, 101), cleared_log(102)]
+        self.node.price.update({101: 900_000})
+        with TheSecondReview.fails(self, 10):
+            self.run_to(loop, 102)
+        lost = self.events("stop_unjudged")
+        self.assertEqual((lost[0]["from_block"], lost[0]["alarm"]), (101, "ALARM"))
+
+    def test_an_alarm_says_the_side_it_was_judged_on(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        t = loop.triggers[(EXAM, BTC, False)]
+        loop._judge((EXAM, BTC, False), t, 101, 900_000, 1)
+        loop.signs[(EXAM, BTC)] = None
+        self.assertEqual(loop._what((EXAM, BTC, False), t, 101)["side"], "long")
+
+    def test_a_failed_read_of_the_past_keeps_the_kept_prices_first(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 99)
+        self.node.logs.append(set_log(100, 950_000, 101))
+        real = self.node.call
+
+        def call(method, params=()):
+            if method == "eth_call" and params[0]["data"].startswith(SEL["positionOf(uint32)"]) and int(params[1], 16) < 101:
+                raise RuntimeError("eth_call: HTTP 403")
+            return real(method, params)
+
+        with TheSecondReview.fails(self, 2):
+            self.run_to(loop, 101)  # the position's reads fail: block 101's price is kept
+        with mock.patch.object(self.node, "call", side_effect=call):
+            self.run_to(loop, 102)  # the read now works, the read of the past does not
+        self.assertIn((EXAM, BTC), loop.unread_signs, "read again at the next step")
+        self.assertIsNone(loop.signs[(EXAM, BTC)])
+        self.assertEqual([b for b, _ in loop.triggers[(EXAM, BTC, False)]["unjudged"]], [101, 102],
+                         "the newer block kept behind the older one")
+
+    def test_an_exam_that_ended_keeps_no_moves(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        self.node.logs.append(filled_log(101))
+        self.run_to(loop, 101)
+        self.assertIn((EXAM, BTC), loop.moves)
+        loop._ended(EXAM, 101, "the exam ended")
+        self.assertNotIn((EXAM, BTC), loop.moves)
 
 
 class TheLog(unittest.TestCase):

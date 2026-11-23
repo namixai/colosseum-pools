@@ -62,6 +62,7 @@ contract (a key of its own for the stops, or anyone allowed to carry a stop out)
 from __future__ import annotations
 
 import argparse
+import bisect
 import fcntl
 import json
 import os
@@ -145,8 +146,16 @@ def host_of(url: str) -> str:
 
 
 def scrub(text: str) -> str:
-    """`text` with every address in it cut to its scheme and host: an error of the keeper's node names its URL."""
-    return re.sub(r"[a-z][a-z0-9+.-]*://[^\s'\")]+", lambda m: host_of(m.group(0)), text)
+    """`text` with every address in it cut to its scheme and host, and a bare request path (urllib3's "url: /v2/…")
+    taken out: an error of the keeper's node names its URL, and a key may ride in its path. An address that does not
+    parse (a port that is no number) is taken out whole."""
+    def host(url: str) -> str:
+        try:
+            return host_of(url)
+        except ValueError:
+            return "<node>"
+    text = re.sub(r"[a-z][a-z0-9+.-]*://[^\s'\")]+", lambda m: host(m.group(0)), text)
+    return re.sub(r"(url: ?)/[^\s'\"<>()]*", r"\1<path>", text)
 
 
 # ── a node, tried once ───────────────────────────────────────────────────────────────
@@ -292,6 +301,7 @@ class Sender:
         now = time.monotonic() if now is None else now
         with self.lock:
             old = sorted((n, dict(e)) for n, e in self.ledger.items() if now - e["at"] >= RESEND_AFTER_S)
+            oldest = min(self.ledger, default=None)  # of the whole ledger: one just sent again is still the oldest
         if not old:
             return
         counted = self._count("latest")
@@ -312,7 +322,10 @@ class Sender:
                 if gone:
                     log("send_gone", nonce=nonce, tx=e["hash"], why="the chain counted past its nonce without it, twice")
                 continue
-            if nonce == old[0][0] and now - e["since"] >= STUCK_S and not e["said"]:
+            with self.lock:  # two sweeps running, not two in all: a count that fell back starts it again
+                if nonce in self.ledger:
+                    self.ledger[nonce]["past"] = 0
+            if nonce == oldest and now - e["since"] >= STUCK_S and not e["said"]:
                 with self.lock:
                     if nonce in self.ledger:
                         self.ledger[nonce]["said"] = True
@@ -334,7 +347,7 @@ class Sender:
         """The keeper's thread: its transaction to the stops' thread, which sends it at its next look; its hash and nonce.
         Not taken in `wait` seconds: c.NotSent, and it will not be sent."""
         req = {"to": to, "data": data, "gas": gas, "gas_price": gas_price, "state": "queued", "done": threading.Event(),
-               "result": None, "error": None, "not_before": 0.0, "delay": 1.0}
+               "result": None, "error": None, "not_before": 0.0, "delay": 1.0, "until": time.monotonic() + wait}
         self.requests.put(req)
         if not req["done"].wait(wait):
             with self.lock:
@@ -363,7 +376,8 @@ class Sender:
             req["result"] = self.send(req["to"], req["data"], req["gas"], req["gas_price"])
         except Busy as exc:
             with self.lock:
-                if req["state"] == "taken":
+                # Tried again only inside the keeper's wait: one refused after it is not sent, never sent late.
+                if req["state"] == "taken" and time.monotonic() < req.get("until", float("inf")):
                     req["state"] = "queued"
                     req["not_before"] = time.monotonic() + req["delay"]
                     req["delay"] = min(req["delay"] * 2, 16.0)
@@ -692,6 +706,7 @@ class StopLoop:
             self._blind(lo, price_lo - 1, "the head ran ahead of the loop: the events of these blocks are read, not "
                                           "their prices")
             standing = [k for k, t in self.triggers.items() if t["armed"] < price_lo and self.signs.get(k[:2]) != 0]
+            gap_said = bool(standing)
             if standing:
                 # A reach inside these blocks would not be seen, however short: said at once, not after 30 blocks.
                 self.alarm("stop_watch_gap", from_block=lo, to=price_lo - 1, standing=len(standing),
@@ -726,6 +741,12 @@ class StopLoop:
                     except OSError as exc:
                         self._say("stop_journal_failed", error=str(exc)[:200])
             self._events(b, by_block.get(b, []))
+            if b < price_lo and not gap_said and any(t["armed"] < price_lo and self.signs.get(k[:2]) != 0
+                                                     for k, t in self.triggers.items()):
+                # A stop set inside the blocks not read, armed in them: the same gap, said as soon as it is known.
+                gap_said = True
+                self.alarm("stop_watch_gap", from_block=lo, to=price_lo - 1, standing=len(self.triggers),
+                           why="a stop was set and armed inside blocks whose prices the loop did not read")
             for key in due:  # after the block's own events: a stop filled in it is not overdue
                 t = self.triggers.get(key)
                 if t is not None and t["touch"] is not None and not t["said"]:
@@ -834,6 +855,7 @@ class StopLoop:
         both sides of it starts its count again, one that ended across it is a miss (events are read in every block, so
         no fill came). Whether it is overdue now."""
         exam, asset, take = key
+        t["side"] = s  # the side it is judged on: an alarm says this one, not the one read since
         seen, t["seen"] = t.get("seen"), block
         gap = seen is not None and block > seen + 1
         if hit(take, s, px, t["px"]):
@@ -867,7 +889,7 @@ class StopLoop:
                 continue
             while t["unjudged"]:
                 block, px = t["unjudged"][0]
-                stretch = sum(1 for m in moves if m < block)
+                stretch = bisect.bisect_left(moves, block)  # moves are added in block order
                 if stretch not in signs:
                     try:
                         raw = self.node.call("eth_call", [{"to": exam, "data": "0x" + c.encode_call(
@@ -929,13 +951,16 @@ class StopLoop:
         exam, asset, take = key
         return {"exam": exam, "asset": asset, "kind": "take" if take else "stop", "px": t["px"],
                 "reached_from": t["touch"], "reached_to": last, "oracle_first": t["first"],
-                "side": "long" if (self.signs.get((exam, asset)) or 0) > 0 else "short"}
+                "side": "long" if (t.get("side") if t.get("side") is not None else self.signs.get((exam, asset)) or 0) > 0
+                else "short"}
 
     def _ended(self, exam: str, block: int, reason: str) -> None:
         for key in [k for k in self.triggers if k[0] == exam]:
             if self.triggers[key]["touch"] is not None:
                 self._missed(key, self.triggers[key], block, reason)
             self._drop(key)
+        for k in [k for k in self.moves if k[0] == exam]:
+            del self.moves[k]
         self.ended.add(exam)
 
     def _events(self, block: int, logs: list[dict]) -> None:
@@ -999,6 +1024,12 @@ class StopLoop:
         self.unread_signs.discard((exam, asset))
         if any(t.get("unjudged") for k, t in self.triggers.items() if k[0] == exam and k[1] == asset):
             self._replay(exam, asset)
+            if any(t.get("unjudged") for k, t in self.triggers.items() if k[0] == exam and k[1] == asset):
+                # A read of the past failed: the kept prices are judged first, at the next step, and the newer ones are
+                # kept behind them meanwhile, never judged ahead of them.
+                self.signs[(exam, asset)] = None
+                self.unread_signs.add((exam, asset))
+                return
         if s == 0:
             for take in (False, True):
                 t = self.triggers.get((exam, asset, take))
@@ -1015,8 +1046,16 @@ class StopLoop:
                 self._read_sign(exam, asset, block)
 
     def _drop(self, key) -> None:
-        self.triggers.pop(key, None)
+        t = self.triggers.pop(key, None)
         self.probe.discard(key)
+        if t is not None and t.get("unjudged"):
+            # Prices kept while its position could not be read, and the stop gone before they were judged: this loop
+            # cannot say whether it was reached in them. Said as an alarm, never dropped in silence; the payout review
+            # judges those blocks by the journal, which holds them.
+            blocks = [b for b, _ in t["unjudged"]]
+            self.alarm("stop_unjudged", exam=key[0], asset=key[1], kind="take" if key[2] else "stop", px=t["px"],
+                       from_block=blocks[0], to=blocks[-1], blocks=len(blocks),
+                       why="the stop ended before its kept prices were judged (its position was not read)")
 
     # ── carrying out ─────────────────────────────────────────────────────────────────
 

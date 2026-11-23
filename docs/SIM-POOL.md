@@ -714,13 +714,16 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
 - the slow pass, a receipt the keeper's own thread waits for, and that thread's retry ladder hold only that
   thread. Every call of the loop is tried once: a busy node costs it that look. The blocks it missed are read back
   the next time, their events always (1 000 blocks at most) and their prices for the last 20; the head's stops go
-  out before the blocks behind it are read. Blocks with no prices are said (`stop_watch_blind`), and an alarm at once
-  when a stop stood armed in them (`stop_watch_gap`); past 1 000 the
+  out before the blocks behind it are read. Blocks with no prices are said (`stop_watch_blind`). Blocks skipped by
+  the read-back of prices are an alarm at once when a stop stood armed in them or was set and armed in them
+  (`stop_watch_gap`); a price read that fails block by block is an alarm only once 30 blocks in a row have no price
+  with a stop standing (`stop_watch_blind_long`); past 1 000 the
   loop says it lost the thread (an alarm), forgets its reaches and takes the stops again from the next read of
   the exams;
 - a stop whose position could not be read keeps each block's price; once the position is read, those blocks are
   judged one by one against the position as it stood before each (read by its block), so failed reads in a row do
-  not hide a reach;
+  not hide a reach; a read of the past that fails keeps them first in line for the next step, and a stop that ends
+  before they are judged is an alarm (`stop_unjudged`);
 - a stop set while the keeper was down or behind its logs is read back from the exam by the slow pass at one
   block and handed to the loop (`stop_found_by_read`); a stop set on an exam sold in the same blocks is known in
   the step that sees the sale;
