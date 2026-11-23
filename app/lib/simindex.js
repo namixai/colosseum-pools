@@ -150,12 +150,36 @@ export function sendInReceipt(receipt, ev, { pool, topic }) {
 export const indexBase = (config) => config.simIndex || config.gateway;
 
 /**
- * The transactions whose receipts to read next, for the sends to `account` that the index named and that are not checked
- * yet (`checked`: tx → receipt): the newest first, at most `limit`, so the sends a partner looks for first are checked
- * first, and the rest at the next pass.
+ * The transactions whose receipts to read next, for the sends to `account` that the index named and whose receipt has not
+ * been read (`checked`: tx → receipt). A transaction whose receipt failed (`tries`: tx → failures) goes behind those not
+ * asked for yet, fewest failures first, so one that keeps failing never holds the place of the next; among equals, the
+ * newest first. At most `limit`.
  */
-export function receiptsToAsk(events, account, checked, limit = 40) {
+export function receiptsToAsk(events, account, checked, limit = 40, tries = new Map()) {
   const pending = events.filter((e) => e.fromIndex && e.name === "SharePaid" && same(e.args.to, account) && !checked.has(e.tx))
-    .sort((a, b) => b.block - a.block || b.index - a.index);
+    .sort((a, b) => (tries.get(a.tx) ?? 0) - (tries.get(b.tx) ?? 0) || b.block - a.block || b.index - a.index);
   return [...new Set(pending.map((e) => e.tx))].slice(0, limit);
+}
+
+/**
+ * The sends to `account` the index named, each in one of three states. Confirmed: its receipt was read and has the pool's
+ * `SharePaid` with the same fields, so it is shown. Rejected: its receipt was read and has no such log; the index was
+ * wrong, so it is neither shown nor offered again. Not checked: its receipt has not been read yet, so it is left out
+ * and can be asked for again. Events the page read from the chain itself pass as they are. Returns the events to show
+ * and the counts of the rejected and the not checked.
+ */
+export function sortSends(events, account, checked, { pool, topic }) {
+  let rejected = 0;
+  let unchecked = 0;
+  const shown = events.filter((e) => {
+    if (!(e.fromIndex && e.name === "SharePaid" && same(e.args.to, account))) return true;
+    if (!checked.has(e.tx)) {
+      unchecked += 1;
+      return false;
+    }
+    if (sendInReceipt(checked.get(e.tx), e, { pool, topic })) return true;
+    rejected += 1;
+    return false;
+  });
+  return { events: shown, rejected, unchecked };
 }

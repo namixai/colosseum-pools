@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { indexUrl, eventOf, checkAnswer, askIndex, sourceNote, readShare, readFailure, sendInReceipt, indexBase, receiptsToAsk }
+import { indexUrl, eventOf, checkAnswer, askIndex, sourceNote, readShare, readFailure, sendInReceipt, indexBase, receiptsToAsk, sortSends }
   from "../lib/simindex.js";
 import { scanNote, codesHtml } from "../lib/simowner.js";
 import { stopScanNote } from "../lib/simoperator.js";
@@ -161,4 +161,35 @@ test("the sends the index named are checked newest first, a few at a time, and t
 test("the cabinet offers to go on while a send is left unchecked, even with every block read", () => {
   const src = readFileSync(join(here, "../views/simpartner.js"), "utf8");
   assert.match(src, /if \(!finished\(st\) \|\| leftOut > 0\)/);
+});
+
+test("a receipt that fails again and again goes to the back: the older sends are checked all the same", () => {
+  const ev = (block, tx) => ({ fromIndex: true, name: "SharePaid", block, index: 0, tx, args: { to: PARTNER } });
+  const events = [ev(1, "0x01"), ev(2, "0x02"), ev(3, "0x03")];
+  // The two newest failed once: the oldest, never asked, comes first; then the failed ones, fewest failures first.
+  const tries = new Map([["0x03", 1], ["0x02", 2]]);
+  assert.deepEqual(receiptsToAsk(events, PARTNER, new Map(), 2, tries), ["0x01", "0x03"]);
+});
+
+test("a send the index named is confirmed, rejected or not checked, and only the last is offered again", () => {
+  const word = (hex) => `0x${hex.slice(2).toLowerCase().padStart(64, "0")}`;
+  const ev = (block, tx, amount) => ({ fromIndex: true, name: "SharePaid", block, index: 0, tx,
+    args: { code: CODE, to: PARTNER, amount: BigInt(amount), sent: true } });
+  const log = (amount) => ({ address: POOL, topics: [SHARE_PAID, CODE, word(PARTNER)],
+    data: `0x${amount.toString(16).padStart(64, "0")}${"1".padStart(64, "0")}` });
+  const chainSend = { name: "SharePaid", block: 9, index: 0, tx: "0x09", args: { code: CODE, to: PARTNER, amount: 1n, sent: true } };
+  const events = [ev(1, "0x01", 5), ev(2, "0x02", 6), ev(3, "0x03", 7), chainSend];
+  const checked = new Map([["0x01", { status: 1, logs: [log(5)] }], ["0x02", { status: 1, logs: [log(999)] }]]);
+  const out = sortSends(events, PARTNER, checked, { pool: POOL, topic: SHARE_PAID });
+  assert.deepEqual(out.events.map((e) => e.tx), ["0x01", "0x09"]);
+  assert.equal(out.rejected, 1);
+  assert.equal(out.unchecked, 1);
+  // A rejected send is not asked for again: its receipt was read.
+  assert.deepEqual(receiptsToAsk(events, PARTNER, checked, 40, new Map()), ["0x03"]);
+});
+
+test("the cabinet keeps a count of failed receipts and offers more only for sends not checked", () => {
+  const src = readFileSync(join(here, "../views/simcodes.js"), "utf8");
+  assert.match(src, /st\.tries\.set\(tx, \(st\.tries\.get\(tx\) \?\? 0\) \+ 1\)/);
+  assert.match(src, /left: sorted\.unchecked/);
 });

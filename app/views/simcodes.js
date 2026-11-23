@@ -12,7 +12,7 @@ import * as chain from "../lib/chain.js";
 import { CONFIG } from "../config.js";
 import { SIM_POOL_ABI, MIN_TERM, firstBlockAt, readLogs, normalizeEvent } from "../lib/simpool.js";
 import { codesNamingAccount, confirmedCodes, partnerHref } from "../lib/simpartner.js";
-import { askIndex, indexBase, sourceNote, readShare, sendInReceipt, receiptsToAsk } from "../lib/simindex.js";
+import { askIndex, indexBase, sourceNote, readShare, receiptsToAsk, sortSends } from "../lib/simindex.js";
 
 const { ethers } = window;
 /** The node's limit on a range of blocks (measured: 1 000), and the windows a page reads at once. */
@@ -46,7 +46,7 @@ export async function scanOf(address) {
     start = await firstBlockAt(created, { low: chain.deployBlock(), high: latest, timeOf }) ?? latest;
   }
   const st = { iface, topics: [iface.getEvent("CodeSet").topicHash, iface.getEvent("SharePaid").topicHash], start, latest,
-    head: latest, fwd: start, back: latest, events: new Map(), times: new Map(), checked: new Map(), source: index };
+    head: latest, fwd: start, back: latest, events: new Map(), times: new Map(), checked: new Map(), tries: new Map(), source: index };
   if (index.ok) {
     // The index's blocks are read: the page goes on from the block after its last one.
     for (const e of index.events) if (e.name === "CodeSet" || e.name === "SharePaid") st.events.set(`${e.block}:${e.index}`, e);
@@ -70,27 +70,29 @@ export function note(st) {
 }
 
 /**
- * The pool's events with the sends to `account` the chain does not confirm left out. A send the page read from the chain
- * itself is the chain's; one the index named stays only when its transaction's receipt has the pool's `SharePaid` with the
- * same fields, the newest first and 40 transactions a pass. A send not checked yet, or whose receipt could not be read,
- * is left out this time, and the page offers another pass (simpartner.js). Returns
- * the events and how many sends were left out.
+ * The pool's events with the sends to `account` the chain does not confirm left out (app/lib/simindex.js, sortSends). A
+ * send the page read from the chain itself is the chain's; one the index named is shown only when its transaction's
+ * receipt has the pool's `SharePaid` with the same fields. Up to 40 receipts a pass, those not asked for first and then
+ * those that failed fewest times, the newest first (receiptsToAsk): a receipt that keeps failing does not hold the place
+ * of the others. A receipt read without the log rejects the send for good; one not read leaves it unchecked, and the page
+ * offers another pass (simpartner.js). Returns the events, how many sends are unchecked (`left`) and how many rejected.
  */
 export async function confirmedEvents(address, st, account) {
   const topic = st.iface.getEvent("SharePaid").topicHash;
-  const mine = (e) => e.fromIndex && e.name === "SharePaid" && String(e.args.to).toLowerCase() === String(account).toLowerCase();
   const all = eventList(st);
-  const ask = receiptsToAsk(all, account, st.checked, 40);
+  const ask = receiptsToAsk(all, account, st.checked, 40, st.tries);
   await Promise.all(ask.map(async (tx) => {
     try {
       const receipt = await chain.readProvider.getTransactionReceipt(tx);
       if (receipt) st.checked.set(tx, receipt);
+      else st.tries.set(tx, (st.tries.get(tx) ?? 0) + 1);
     } catch {
-      // not read this time: the send is left out and asked for again
+      // not read this time: the send stays unchecked, behind the others at the next pass
+      st.tries.set(tx, (st.tries.get(tx) ?? 0) + 1);
     }
   }));
-  const events = all.filter((e) => !mine(e) || (st.checked.has(e.tx) && sendInReceipt(st.checked.get(e.tx), e, { pool: address, topic })));
-  return { events, left: all.length - events.length };
+  const sorted = sortSends(all, account, st.checked, { pool: address, topic });
+  return { events: sorted.events, left: sorted.unchecked, rejected: sorted.rejected };
 }
 
 async function readWindow(address, st, from, to) {
