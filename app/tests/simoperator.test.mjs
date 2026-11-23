@@ -58,9 +58,20 @@ function reads(over = {}) {
     payout({ n: 6, state: 5, wasStopped: true, stoppedAt: NOW - 15 * D, amount: 400n * U }),
     payout({ n: 7, state: 3 }),
   ];
-  return { now: NOW, approver: APPROVER, payouts, firstId: 0, menu: MENU, tiers: TIERS,
+  const r = { now: NOW, latest: LATEST, chainId: CHAIN, approver: APPROVER, payouts, firstId: 0, menu: MENU, tiers: TIERS,
     accountLines: new Map(payouts.map((p, i) => [p.account.toLowerCase(), i % 2])),
     reasons: new Map([[4, 1], [5, 3]]), payoutsPerDay: 2, payRoom: 1, nextPayAt: 0, requested: 300n * U, readyAt: NOW + 2 * D, ...over };
+  // Each payout waiting has a fresh clean review, as the review service writes it, unless the test hands its own.
+  if (!("reviews" in over)) r.reviews = Object.fromEntries(r.payouts.map((p, i) => [r.firstId + i, p]).filter(([, p]) => p && p.state === 1)
+    .map(([id, p]) => [id, cleanReview(id, p)]));
+  return r;
+}
+const CHAIN = 998;
+const LATEST = 5_000_000;
+function cleanReview(id, p, over = {}) {
+  return { schema: "payout-review/3", chainId: CHAIN, pool: POOL, id, trader: p.trader, amount: String(p.amount),
+    claimedAt: Number(p.dueAt) - 72 * H, dueAt: Number(p.dueAt), verdict: "clean", action: "approve", reasons: [],
+    call: { kind: "approve" }, readAt: { block: LATEST - 10, time: NOW - 60 }, ...over };
 }
 const model = (roles, over) => operatorModel({ pool: POOL, roles, reads: reads(over), keccak256 });
 const page = (roles, over) => operatorHtml(model(roles, over), { name: "Pool 0xa1…", role: roleWords(roles) });

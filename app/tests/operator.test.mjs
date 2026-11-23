@@ -7,7 +7,8 @@ import { readFileSync } from "node:fs";
 import {
   OPERATOR_ABI, PAYOUT_DELAY, PAYOUT_HARD, WITHDRAW_DELAY, WITHDRAW_WINDOW, REVIEW_SCHEMA, SIGNERS,
   encodeCall, approveCall, stopCall, requestWithdrawCall, withdrawCall, cancelWithdrawCall, closeCall,
-  awaitingApproval, reviewFor, withdrawRequest, poolState, approveAnywayCall, HOLD_WARNING, approveSelectedCall,
+  awaitingApproval, reviewFor, withdrawRequest, poolState, approveWithoutCall, approveSelectedCall, holdWarning, reasonsText,
+  HOLD_WORDS, REVIEW_MAX_BLOCKS, REVIEW_MAX_S,
 } from "../lib/operator.js";
 import { keccak256 } from "./keccak.mjs";
 
@@ -103,15 +104,29 @@ function payout(id, { claimedAt, state = 1, approved } = {}) {
   return p;
 }
 
-function reviewDoc(id, over = {}) {
+const CHAIN = 998;
+const LATEST = 4_000_000;
+const AT = { chainId: CHAIN, latest: LATEST, now: NOW };
+
+/** A fresh clean review of payout `id` claimed at `claimedAt` (a day ago unless said), as the review service writes it. */
+function reviewDoc(id, over = {}, claimedAt = NOW - D) {
   return {
-    schema: REVIEW_SCHEMA, pool: POOL, id, trader: T1, stage: S1, exam: OTHER, amount: "800000000",
-    claimedAt: 0, dueAt: 0, hardAt: 0, verdict: "clean", reasons: [], evidence: { pairs: [] },
+    schema: REVIEW_SCHEMA, chainId: CHAIN, pool: POOL, id, trader: T1, stage: S1, exam: OTHER, amount: "800000000",
+    claimedAt, dueAt: claimedAt + PAYOUT_DELAY, hardAt: claimedAt + PAYOUT_HARD, verdict: "clean", action: "approve",
+    reasons: [], evidence: { pairs: [] },
     call: { kind: "approve", to: POOL, method: "approvePayouts", signature: "approvePayouts(uint256[])", args: [[id]],
       data: approveCall({ pool: POOL, ids: [id], keccak256 }).data },
-    readAt: { block: 1, time: NOW },
+    readAt: { block: LATEST - 1, time: NOW },
     ...over,
   };
+}
+
+/** The queue as the page reads it: on this chain at LATEST, every payout with its fresh clean review unless the test
+ *  hands its own. */
+function rowsOf(args) {
+  const reviews = args.reviews ?? Object.fromEntries([...args.structs].map((p, i) => [p?.id ?? i, p])
+    .filter(([, p]) => p && !Array.isArray(p)).map(([id, p]) => [Number(id), reviewDoc(Number(id), {}, Number(p.dueAt) - PAYOUT_DELAY)]));
+  return awaitingApproval({ chainId: CHAIN, latest: LATEST, ...args, reviews });
 }
 
 test("each payout waiting has its claim, its 72 hours and its ceiling, and the most urgent comes first", () => {
@@ -123,7 +138,7 @@ test("each payout waiting has its claim, its 72 hours and its ceiling, and the m
     payout(4, { claimedAt: NOW - 2 * D, approved: true }),    // approved, its 72 hours not over
     payout(5, { claimedAt: NOW - 5 * D, state: 3 }),          // paid: not waiting
   ];
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256 });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, keccak256 });
   assert.deepEqual(rows.map((r) => [r.id, r.status]), [
     [0, "past-ceiling"], [3, "approved-payable"], [4, "approved"], [2, "awaiting-approval"], [1, "in-72-hours"],
   ]);
@@ -139,15 +154,15 @@ test("a hole in the list of payouts is skipped, and a payout's own id is kept", 
   const structs = [];
   structs[2] = { ...payout(2, { claimedAt: NOW - D }) };
   structs[5] = { ...payout(5, { claimedAt: NOW - D }), id: 9n };
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256 });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, keccak256 });
   assert.deepEqual(rows.map((r) => r.id), [2, 9]);
 });
 
 test("a pool without approvals pays at 72 hours by itself: no ceiling, nothing to approve", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - 4 * D })];
-  const none = { ...reviewDoc(0), call: { kind: "none", to: POOL, method: null, signature: null, args: [], data: null,
+  const none = { ...reviewDoc(0), action: "none", call: { kind: "none", to: POOL, method: null, signature: null, args: [], data: null,
     note: "in this pool a payout goes by itself 72 hours after its claim" } };
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, approvals: false, reviews: { 0: none } });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, keccak256, approvals: false, reviews: { 0: none } });
   assert.deepEqual(rows.map((r) => [r.id, r.status, r.hardAt, r.payAt, r.approvable]),
     [[1, "payable", null, NOW - D, false], [0, "in-72-hours", null, NOW + 2 * D, false]]);
   const r0 = rows.find((r) => r.id === 0);
@@ -158,7 +173,7 @@ test("a pool without approvals pays at 72 hours by itself: no ceiling, nothing t
 
 test("a pool without the field says approved by its events", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
-  const rows = awaitingApproval({ pool: POOL, structs, events: [{ name: "PayoutApproved", args: { id: 1n, approver: OTHER } }],
+  const rows = rowsOf({ pool: POOL, structs, events: [{ name: "PayoutApproved", args: { id: 1n, approver: OTHER } }],
     now: NOW, keccak256 });
   assert.deepEqual(rows.map((r) => [r.id, r.approved]), [[1, true], [0, false]]);
 });
@@ -166,7 +181,7 @@ test("a pool without the field says approved by its events", () => {
 test("a payout read by position says approved by its eighth field", () => {
   const due = BigInt(NOW - 4 * D + PAYOUT_DELAY);
   const structs = [[S1, T1, 800_000_000n, due, 1, false, 0n, true], [S1, T1, 800_000_000n, due, 1, false, 0n, false]];
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256 });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, keccak256 });
   assert.deepEqual(rows.map((r) => [r.id, r.approved, r.status]), [[0, true, "approved-payable"], [1, false, "awaiting-approval"]]);
 });
 
@@ -176,13 +191,13 @@ test("only a payout the pool would take an approval of is approvable: not one ap
     payout(1, { claimedAt: NOW - 4 * D, approved: true }),    // approved already: a second approval reverts
     payout(2, { claimedAt: NOW - 1 * D, approved: false }),   // in its 72 hours: can be approved ahead
   ];
-  const named = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, approver: OTHER });
+  const named = rowsOf({ pool: POOL, structs, now: NOW, keccak256, approver: OTHER });
   assert.deepEqual(named.map((r) => [r.id, r.status, r.approvable]),
     [[1, "approved-payable", false], [0, "awaiting-approval", true], [2, "in-72-hours", true]]);
-  const nobody = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, approver: ZERO });
+  const nobody = rowsOf({ pool: POOL, structs, now: NOW, keccak256, approver: ZERO });
   assert.deepEqual(nobody.map((r) => [r.id, r.status, r.approvable, r.payAt]),
     [[1, "approved-payable", false, NOW - D], [0, "no-approver", false, NOW + 3 * D], [2, "in-72-hours", false, NOW + 6 * D]]);
-  assert.equal(awaitingApproval({ pool: POOL, structs, now: NOW, keccak256 })[2].approvable, true, "no approver handed in: as named");
+  assert.equal(rowsOf({ pool: POOL, structs, now: NOW, keccak256 })[2].approvable, true, "no approver handed in: as named");
   assert.deepEqual(named.map((r) => r.approve?.method ?? null), [null, "approvePayouts", "approvePayouts"],
     "no Approve button on a payout approved already");
   assert.deepEqual(nobody.map((r) => r.approve), [null, null, null], "nor where nobody approves");
@@ -190,7 +205,7 @@ test("only a payout the pool would take an approval of is approvable: not one ap
 
 test("a review is shown only where it is of this very payout and names the call the page would build", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: { 0: reviewDoc(0) }, keccak256 });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, reviews: { 0: reviewDoc(0) }, keccak256 });
   const r0 = rows.find((r) => r.id === 0);
   assert.equal(r0.reviewProblem, null);
   assert.equal(r0.review.verdict, "clean");
@@ -204,7 +219,7 @@ test("a review is shown only where it is of this very payout and names the call 
     [{ trader: OTHER }, /another trader/],
     [{ amount: "1" }, /another amount/],
     [{ readAt: { block: 1, time: NOW - 2 * D } }, /before the claim/],
-    [{ readAt: { block: 1 } }, /before the claim/],
+    [{ readAt: { block: 1 } }, /not read whole/],
     [{ call: { kind: "approve", data: "0xd6532c4d00" } }, /call data is not its call/],
     [{ call: { kind: "stop", args: [0, 1, OTHER, [A], []] } }, /would refuse: a pair needs both trades/],
     [{ call: {} }, /no call/],
@@ -212,47 +227,52 @@ test("a review is shown only where it is of this very payout and names the call 
     [{ action: "hold" }, /holds a payout yet names a call/],
   ];
   for (const [over, msg] of cases) {
-    const got = reviewFor({ ...reviewDoc(0), ...over }, row, { pool: POOL, keccak256 });
+    const got = reviewFor({ ...reviewDoc(0), ...over }, row, { pool: POOL, keccak256, ...AT });
     assert.equal(got.review, null);
     assert.match(got.problem, msg);
   }
   const stop = reviewFor({ ...reviewDoc(0), verdict: "suspicious", action: "stop",
-    call: { kind: "stop", args: [0, 1, OTHER, [A, B], []], data: null } }, row, { pool: POOL, keccak256 });
+    call: { kind: "stop", args: [0, 1, OTHER, [A, B], []], data: null } }, row, { pool: POOL, keccak256, ...AT });
   assert.equal(stop.review.call.method, "stopPayout");
   assert.equal(stop.review.call.signer, "checker");
 });
 
-test("a payout whose result did not count up is offered no approval, only a deliberate second step", () => {
+test("a held payout is offered no approval, only the step without a review, which says why and asks twice", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
   const held = { ...reviewDoc(0), verdict: "suspicious", action: "hold", call: null,
     reasons: [{ kind: "recount", text: "recount on the stage: result" }],
     stopDraft: { kind: "stop-draft", reason: 3, paired: ZERO, trades: [A], links: ["<keccak256 of the published analysis>"], data: null } };
   const decide = { ...reviewDoc(1), verdict: "suspicious", action: "decide", reasons: [{ kind: "late", text: "fills later" }] };
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: { 0: held, 1: decide }, keccak256 });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, reviews: { 0: held, 1: decide }, keccak256 });
   const r0 = rows.find((r) => r.id === 0);
   assert.equal(r0.reviewProblem, null);
   assert.deepEqual([r0.review.action, r0.review.call, r0.approve], ["hold", null, null], "no Approve button");
   assert.equal(r0.review.stopDraft.reason, 3);
-  assert.deepEqual(r0.approveAnyway, { warning: HOLD_WARNING });
-  assert.throws(() => approveAnywayCall({ pool: POOL, row: r0, confirm: "yes", keccak256 }), /warning confirmed/);
-  assert.equal(approveAnywayCall({ pool: POOL, row: r0, confirm: HOLD_WARNING, keccak256 }).method, "approvePayouts");
+  assert.match(r0.approveWithout.why, /says hold \(suspicious\): recount on the stage: result\./);
+  assert.match(r0.approveWithout.warning, new RegExp(HOLD_WORDS.recount.slice(0, 30)));
+  assert.throws(() => approveWithoutCall({ pool: POOL, row: r0, confirm: "yes", again: r0.approveWithout.again, keccak256 }), /warning confirmed/);
+  assert.throws(() => approveWithoutCall({ pool: POOL, row: r0, confirm: r0.approveWithout.warning, again: "", keccak256 }), /confirmed twice/);
+  assert.equal(approveWithoutCall({ pool: POOL, row: r0, confirm: r0.approveWithout.warning, again: r0.approveWithout.again, keccak256 }).method,
+    "approvePayouts");
   const r1 = rows.find((r) => r.id === 1);
   assert.equal(r1.review.action, "decide");
-  assert.equal(r1.approve.method, "approvePayouts", "suspicious but counted up: the approval is there, the choice the signer's");
-  assert.equal(r1.approveAnyway, null);
-  assert.throws(() => approveAnywayCall({ pool: POOL, row: r1, confirm: HOLD_WARNING, keccak256 }), /not held/);
+  assert.equal(r1.approve, null, "suspicious, even counted up: no review that says approve, no one-signature approval");
+  assert.match(r1.approveWithout.why, /says decide \(suspicious\): fills later/);
+  const clean = rowsOf({ pool: POOL, structs, now: NOW, keccak256 })[0];
+  assert.equal(clean.approveWithout, null);
+  assert.throws(() => approveWithoutCall({ pool: POOL, row: clean, confirm: "", again: "", keccak256 }), /its approval is row.approve/);
 });
 
 test("a red pool is approved one payout at a time, never in a batch", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
   const green = { 0: reviewDoc(0), 1: reviewDoc(1) };
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: green, keccak256 });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, reviews: green, keccak256 });
   assert.deepEqual(approveSelectedCall({ pool: POOL, rows, keccak256 }).args, [[0n, 1n]]);
   const red = { 0: { ...reviewDoc(0), batchApproval: false }, 1: { ...reviewDoc(1), batchApproval: false } };
-  const redRows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews: red, keccak256 });
+  const redRows = rowsOf({ pool: POOL, structs, now: NOW, reviews: red, keccak256 });
   assert.throws(() => approveSelectedCall({ pool: POOL, rows: redRows, keccak256 }), /approve each payout on its own/);
   assert.equal(redRows[0].approve.method, "approvePayouts", "one at a time is still offered");
-  const held = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256,
+  const held = rowsOf({ pool: POOL, structs, now: NOW, keccak256,
     reviews: { 0: reviewDoc(0), 1: { ...reviewDoc(1), action: "hold", call: null } } });
   assert.throws(() => approveSelectedCall({ pool: POOL, rows: held, keccak256 }), /offered no approval/);
 });
@@ -261,20 +281,21 @@ test("a review with an amount missing or unreadable rejects that document, not t
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D }), payout(2, { claimedAt: NOW - D })];
   const { amount: _gone, ...noAmount } = reviewDoc(1);
   const reviews = { 0: reviewDoc(0), 1: noAmount, 2: { ...reviewDoc(2), amount: "invalid" } };
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, reviews, keccak256 });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, reviews, keccak256 });
   assert.deepEqual(rows.map((r) => [r.id, r.reviewProblem, r.review === null]),
     [[0, null, false], [1, "a review with no readable amount", true], [2, "a review with no readable amount", true]]);
-  assert.equal(reviewFor({ ...reviewDoc(0), amount: "1.5" }, rows[0], { pool: POOL, keccak256 }).problem, "a review with no readable amount");
+  assert.equal(reviewFor({ ...reviewDoc(0), amount: "1.5" }, rows[0], { pool: POOL, keccak256, ...AT }).problem, "a review with no readable amount");
 });
 
 test("a red pool restricts every selection from it, also of payouts whose own review was not loaded", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D }), payout(2, { claimedAt: NOW - D })];
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: { ...reviewDoc(0), batchApproval: false } } });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: { ...reviewDoc(0), batchApproval: false }, 1: reviewDoc(1) } });
   assert.deepEqual(rows.map((r) => r.poolRed), [true, true, true]);
   const rest = rows.filter((r) => r.id !== 0);
   assert.throws(() => approveSelectedCall({ pool: POOL, rows: rest, keccak256 }), /approve each payout on its own/);
   assert.equal(rest[0].approve.method, "approvePayouts", "one at a time is still offered, as the row's own approval");
-  const green = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: reviewDoc(0) } });
+  assert.equal(rest[1].approve, null, "no review loaded: no approval");
+  const green = rowsOf({ pool: POOL, structs, now: NOW, keccak256 });
   assert.deepEqual([green.map((r) => r.poolRed), approveSelectedCall({ pool: POOL, rows: green, keccak256 }).args],
     [[false, false, false], [[0n, 1n, 2n]]]);
 });
@@ -282,7 +303,7 @@ test("a red pool restricts every selection from it, also of payouts whose own re
 test("a red pool whose only loaded review holds a payout still forbids a batch of the others", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D }), payout(2, { claimedAt: NOW - D })];
   const hold = { ...reviewDoc(0), action: "hold", call: null, batchApproval: false };
-  const rows = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: hold } });
+  const rows = rowsOf({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: hold, 1: reviewDoc(1), 2: reviewDoc(2) } });
   assert.equal(rows[0].review.batchApproval, false, "kept through the hold branch");
   assert.equal(rows[0].approve, null, "the held payout itself is offered no approval");
   assert.deepEqual(rows.map((r) => r.poolRed), [true, true, true]);
@@ -290,11 +311,11 @@ test("a red pool whose only loaded review holds a payout still forbids a batch o
   assert.throws(() => approveSelectedCall({ pool: POOL, rows: others, keccak256 }), /approve each payout on its own/);
   assert.equal(others[0].approve.method, "approvePayouts", "each of the others one at a time");
   // A hold in a green pool restricts nothing, and a document that says nothing of it is green.
-  const green = awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: { ...hold, batchApproval: true } } });
+  const green = rowsOf({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: { ...hold, batchApproval: true } } });
   assert.deepEqual(green.map((r) => r.poolRed), [false, false, false]);
   const silent = { ...hold };
   delete silent.batchApproval;
-  assert.equal(awaitingApproval({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: silent } })[0].review.batchApproval, true);
+  assert.equal(rowsOf({ pool: POOL, structs, now: NOW, keccak256, reviews: { 0: silent } })[0].review.batchApproval, true);
 });
 
 test("a withdrawal request half read is unread, never lapsed and never none", () => {

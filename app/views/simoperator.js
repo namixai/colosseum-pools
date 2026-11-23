@@ -7,14 +7,15 @@ import * as chain from "../lib/chain.js";
 import { render, $, friendly, refusalName, ZERO_ADDRESS } from "../lib/ui.js";
 import { createConfirm, createPending } from "../lib/simconfirm.js";
 import { lookForStops, MORE_CALLS } from "./simstopscan.js";
-import { readFailure } from "../lib/simindex.js";
+import { readFailure, indexBase } from "../lib/simindex.js";
+import { CONFIG } from "../config.js";
 import { SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, SIM_POOL_APPROVAL_ABI } from "../lib/simpool.js";
 import { SIM_LINES_ABI } from "../lib/simlines.js";
 import { OPERATOR_ABI } from "../lib/operator.js";
 import { footerHtml } from "../lib/simpanel.js";
 import {
   SIM_OPERATOR_ABI, SIM_OPERATOR_FACTORY_ABI, PAYOUT_WINDOW, payoutRange, mergeAbis, operatorRoles, operatorModel, operatorHeaderHtml,
-  operatorHtml, messageHtml, selectionCall, approveAnywayCall, HOLD_WARNING, stopFromForm, stopWords, liftWords,
+  operatorHtml, messageHtml, selectionCall, approveWithoutCall, askReviews, stopFromForm, stopWords, liftWords,
   finalizeWords, cancelWords, operatorRefusal, approveWords, STOP_FORM,
 } from "../lib/simoperator.js";
 import { accountLabel, wireShell } from "./simshell.js";
@@ -42,8 +43,11 @@ async function approverOf(pool) {
 /** What the operator's page reads of the pool, for the roles the wallet has. */
 export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, stopCalls = null) {
   const pool = new ethers.Contract(address, ABI, chain.readProvider);
-  const now = await chain.blockTime();
-  const out = { now };
+  // The latest block, its number and its time: a payout's review is fresh only within an hour of both.
+  const top = await chain.readProvider.getBlock("latest");
+  if (!top) throw new Error("The chain's latest block could not be read.");
+  const now = top.timestamp;
+  const out = { now, latest: top.number, chainId: CONFIG.chainId };
   // The payouts are read for the stops too: the factory's operator, who lifts them, sees the stops and not the queue.
   const queue = roles.includes("approver") || roles.includes("checker") || roles.includes("operator");
   if (queue) {
@@ -77,7 +81,18 @@ export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, st
     const stoppedIds = [...range.ids.filter((id, i) => payouts[i] && [2, 5].includes(Number(payouts[i].state))),
       ...extra.filter((x) => x.payout && [2, 5].includes(Number(x.payout.state))).map((x) => x.id)];
     const why = await chain.readAll(stoppedIds, (id) => pool.stopReasonOf(id));
-    Object.assign(out, { payouts, extra, stopScan, firstId: range.first, unread: range.unread, payoutsPerDay: perDay, payRoom: room, nextPayAt, menu, tiers,
+    // Each payout waiting gets the review the review service wrote of it, from the index's reviews route; the page checks
+    // each one itself (operator.js, reviewFor). Without one, no payout is offered its one-signature approval.
+    const due = range.ids.filter((id, i) => payouts[i] && Number(payouts[i].state) === 1);
+    let reviews = {};
+    let reviewNotes = {};
+    let reviewsFailed = null;
+    if (due.length && (roles.includes("approver") || roles.includes("checker"))) {
+      const got = await askReviews({ base: indexBase(CONFIG), pool: address, ids: due, chainId: CONFIG.chainId,
+        fetch: (...a) => window.fetch(...a) });
+      ({ docs: reviews, notes: reviewNotes, failed: reviewsFailed } = got);
+    }
+    Object.assign(out, { reviews, reviewNotes, reviewsFailed, payouts, extra, stopScan, firstId: range.first, unread: range.unread, payoutsPerDay: perDay, payRoom: room, nextPayAt, menu, tiers,
       accountLines: new Map(accounts.map((a, i) => [a, Number(lines[i])])),
       reasons: new Map(stoppedIds.map((id, i) => [id, Number(why[i])])) });
   } else {
@@ -216,9 +231,32 @@ function wire(page, at, model) {
     const one = e.target.closest("button[data-approve]");
     if (one && !one.disabled) {
       const row = byId.get(Number(one.dataset.approve));
-      if (one.dataset.anyway) {
-        const call = (() => { try { return approveAnywayCall({ pool: at, row, confirm: window.confirm(HOLD_WARNING) ? HOLD_WARNING : "", keccak256 }); } catch (err) { say(boxOf("queue"), err.message); return null; } })();
-        if (call) send((c) => c.approvePayouts(call.args[0]), "Approved");
+      if (one.dataset.without) {
+        // A separate step: the first press says what is missing or what the review said; the second asks for the
+        // warning, then for the question, each confirmed on its own.
+        const w = row.approveWithout;
+        if (!w) return;
+        if (one.dataset.armed !== "1") {
+          page.querySelectorAll("[data-armed]").forEach((b) => { b.removeAttribute("data-armed"); if (b.dataset.was) b.textContent = b.dataset.was; });
+          confirm.reset();
+          one.dataset.was = one.textContent;
+          one.dataset.armed = "1";
+          one.textContent = `Confirm: approve #${row.id} without a review`;
+          say(boxOf("queue"), w.warning);
+          return;
+        }
+        const call = (() => {
+          try {
+            const first = window.confirm(w.warning) ? w.warning : "";
+            const second = first && window.confirm(w.again) ? w.again : "";
+            return approveWithoutCall({ pool: at, row, confirm: first, again: second, keccak256 });
+          } catch (err) {
+            say(boxOf("queue"), err.message);
+            return null;
+          }
+        })();
+        disarm();
+        if (call) send((c) => c.approvePayouts(call.args[0]), "Approved without a review");
         return;
       }
       const rows = [row];
