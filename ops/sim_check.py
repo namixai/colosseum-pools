@@ -48,8 +48,11 @@ Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import pathlib
+import re
 import sys
 import time
 
@@ -80,6 +83,35 @@ ADDRESS_BATCH = 100
 # while it reads, on a node the keeper (its fills, every block) shares.
 DEFAULT_EVERY_S = 600
 RPC_GAP_S = 1.0
+
+
+# A URL in an error's text (requests writes the node's whole address, path and key with it), and urllib3's path after
+# "url: ": neither reaches a log line or a reason (review 9 of #336).
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>()]+")
+_URL_PATH = re.compile(r"(url: ?)/[^\s'\"<>()]*")
+
+
+def quiet(exc, limit: int = 200) -> str:
+    """An exception's text with no node address in it, cut to `limit` after the address is gone: a node's URL may hold
+    its key. The configured nodes' addresses are taken out as they are, then any other URL, then a bare path."""
+    text = str(exc)
+    for url in (getattr(c, "RPC_URL", None), os.environ.get("COLOSSEUM_RPC_URL"), os.environ.get("COLOSSEUM_RPC_BACKUP_URL")):
+        if url:
+            text = text.replace(url, "<node>")
+    text = _URL_PATH.sub(r"\1<path>", _URL.sub("<node>", text))
+    return text[:limit]
+
+
+@contextlib.contextmanager
+def node_errors():
+    """A failure of the node ends the program in one line with no node address in it, never a traceback that prints
+    the address (and its key) with the exception."""
+    try:
+        yield
+    except SystemExit:
+        raise
+    except Exception as exc:
+        raise SystemExit(f"refusing to go on: the node failed: {quiet(exc)}") from None
 
 
 def paced(rpc, gap_s: float, clock=time.monotonic, sleep=time.sleep):
@@ -175,7 +207,7 @@ def takes_approvals(pool: str) -> bool | None:
     except Exception as exc:
         if "revert" in str(exc).lower():
             return False
-        log("not_read", address=pool, call="approver()", error=str(exc)[:120])
+        log("not_read", address=pool, call="approver()", error=quiet(exc, 120))
         return None
 
 
@@ -381,7 +413,7 @@ class Checker:
             log("sent", to=to, call=sig.split("(")[0], **fields, tx=rcpt["transactionHash"])
             return True
         except Exception as exc:
-            log("send_failed", to=to, call=sig.split("(")[0], **fields, error=refusal(exc))
+            log("send_failed", to=to, call=sig.split("(")[0], **fields, error=quiet(refusal(exc)))
             return False
 
 
@@ -394,7 +426,7 @@ def run(ch: Checker, every: float, once: bool, sleep=time.sleep) -> int:
             if once:
                 print(json.dumps(stops))
         except Exception as exc:
-            log("pass_failed", error=str(exc)[:200])
+            log("pass_failed", error=quiet(exc, 200))
             if once:
                 return 1
         if once:
@@ -416,7 +448,8 @@ def main(argv: list[str] | None = None) -> int:
     sn.add_args(p, service=True)
     args = p.parse_args(argv)
     dry = args.dry_run or not args.wallet
-    sn.confirm_service(args, args.deployment, c, sends=not dry)
+    with node_errors():
+        sn.confirm_service(args, args.deployment, c, sends=not dry)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
