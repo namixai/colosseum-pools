@@ -209,7 +209,13 @@ contract StopBookAudit6Test is StopBookBase {
         uint256 snap = vm.snapshotState();
         stopBook.poke();
         uint32 want = StopBookBookAt(stopBook, BTC, stopBook.logged() - 1);
+        // The reference logs the book itself, not "no book": 20 000 millionths under, 3 over (review of cp#336).
+        assertEq(want, uint32(3 << 16 | 20_000), "the reference check logs the quote");
         vm.revertToState(snap);
+        uint256 snap2 = vm.snapshotState();
+        stopBook.poke{gas: 700_000}(); // a gas that always does: the comparison below is never skipped in every run
+        assertEq(StopBookBookAt(stopBook, BTC, stopBook.logged() - 1), want);
+        vm.revertToState(snap2);
         try stopBook.poke{gas: g}() {
             uint32 got = StopBookBookAt(stopBook, BTC, stopBook.logged() - 1);
             assertEq(got, want, "tuned gas changed the logged book");
@@ -262,13 +268,18 @@ contract StopBookAudit6Test is StopBookBase {
     }
 
     function _worst(uint256 n, uint256 px) internal returns (uint256 gas, uint256 r) {
+        return _worst(n, px, type(uint256).max);
+    }
+
+    /// The flat journal of `n` prices `px`, searched for a price at or under `px - 1` (never) or at or over `hi`.
+    function _worst(uint256 n, uint256 px, uint256 hi) internal returns (uint256 gas, uint256 r) {
         vm.pauseGasMetering();
         A6Book b = new A6Book();
         b.bulk(7, n, px, 0);
         vm.cool(address(b));
         vm.resumeGasMetering();
         uint256 g0 = gasleft();
-        r = b.find(7, 0, n, px - 1, type(uint256).max); // a stop level hugging the flat price, never touched
+        r = b.find(7, 0, n, px - 1, hi); // a stop level hugging the flat price, never touched; a take at `hi`
         gas = g0 - gasleft();
         vm.pauseGasMetering();
         r = r == n ? n : r;
@@ -285,9 +296,11 @@ contract StopBookAudit6Test is StopBookBase {
         assertEq(r1, 1000);
         assertEq(r2, 8000);
         assertEq(r3, 40000);
-        // and the hit case: take level == price
-        (uint256 g4,) = _worst(40000, ab.MAX_PRICE());
-        emit log_named_uint("gas n=40000 at MAX_PRICE", g4);
+        // and the hit case: a take at the price, MAX_PRICE, reached at the first position (review of cp#336: it
+        // measured a miss)
+        (uint256 g4, uint256 r4) = _worst(40000, ab.MAX_PRICE(), ab.MAX_PRICE());
+        emit log_named_uint("gas n=40000, a take at MAX_PRICE, hit", g4);
+        assertEq(r4, 0, "the take at the price is hit at once");
     }
 
     function test_a6_levelBounds() public {

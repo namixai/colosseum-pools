@@ -88,6 +88,8 @@ contract StopBook {
     /// keeps for itself). A settle with less stops there and keeps what it found.
     uint256 public constant SEARCH_GAS = 120_000;
     uint256 public constant FIRE_GAS = 150_000;
+    /// The least gas a settle puts a change in force with (`_due`), the dearest one taking an asset off the journal.
+    uint256 internal constant DUE_GAS = 40_000;
     /// What the book keeps for itself after a step: its own records, and keeping what it found of each entry.
     uint256 internal constant KEEP_BASE = 40_000;
     uint256 internal constant KEEP_PER_ENTRY = 4_000;
@@ -453,22 +455,28 @@ contract StopBook {
         for (uint256 i = 0; i < n; ++i) {
             if (found[i] & DEFERRED != 0) return _stop(exam, keys, found, len);
         }
+        // The changes in force, each with gas of its own: short of it, what is done stays and the next settle goes on.
+        if (changes && !_due(exam, keys)) return _stop(exam, keys, found, len);
         _checked[exam] = len;
-        if (changes) _due(exam, keys);
         return 0;
     }
 
     /// Once every entry of `exam` is searched up to this block, each change in force by it (`add`) takes its entry's
-    /// place, or, none, takes the entry out; its exam does the same (`PaperExam._due`).
-    function _due(address exam, uint64[] memory keys) internal {
+    /// place, or, none, takes the entry out; its exam does the same (`PaperExam._due`). Each with `DUE_GAS` and what
+    /// the book keeps: false, the rest left for the next settle, if there is less.
+    function _due(address exam, uint64[] memory keys) internal returns (bool) {
+        uint256 keep = DUE_GAS + _keep(keys.length);
         for (uint256 i = 0; i < keys.length; ++i) {
             (uint32 a, bool tk) = _split(keys[i]);
             Entry storage e = _entry[exam][a][tk];
             uint256 from = e.nextAt;
             if (from == 0 || from > block.number) continue;
+            if (gasleft() < keep) return false;
+            _moved = true;
             if (e.nextLevel == 0) _drop(exam, a, tk);
             else (e.level, e.armedAt, e.nextLevel, e.nextAt) = (e.nextLevel, uint40(from), 0, 0);
         }
+        return true;
     }
 
     /// What `found` holds of an entry: under `len` its touch; `len` none up to there; `UNSEARCHED`; or, `DEFERRED`
@@ -622,7 +630,8 @@ contract StopBook {
     }
 
     /// A settle out of gas: each entry left keeps where its search got (its touch, or the journal's end), and the
-    /// count of those still to be searched or carried out is returned.
+    /// count of those still to be searched or carried out is returned; one at least, as the settle is not done (a key
+    /// left unsearched may have no entry, a change in force may not be in place yet), and only a zero says it is.
     function _stop(address exam, uint64[] memory keys, uint256[] memory found, uint256 len)
         internal
         returns (uint256 left)
@@ -643,6 +652,7 @@ contract StopBook {
                 _moved = true;
             }
         }
+        if (left == 0) left = 1;
     }
 
     /// `exam`'s entry `key` carried out at its touch at position `pos`: what the exam answered, or `FAILED` if its

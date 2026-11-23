@@ -57,9 +57,14 @@ contract StopBookAudit5Test is StopBookBase {
                     BookStub(BBO).set(BTC, 700_000, 941_000); // a thin book at the moment somebody else picks
                 }
             }
+            vm.recordLogs();
             stopBook.settle(address(e));
-            (bool ok,) = (true, 0);
-            ok;
+            // The touch block's bid, 939 000 under an oracle of 940 000, logged in whole millionths (1 063) and taken
+            // as a gap of 999: 939 001, whoever settles and whenever (review of cp#336: equal cash alone did not
+            // tell a fill at the touch's oracle from one at its bid).
+            (uint64 fillPx,,, bool filled) = _stopFill(vm.getRecordedLogs());
+            assertTrue(filled);
+            assertEq(fillPx, 939_001, "the touch block's bid");
             emit log_named_uint("scenario", scen);
             emit log_named_int("cash after the one stop (100 units sold; bought at 1 000 010)", e.cash());
             cashOf[scen] = uint256(e.cash());

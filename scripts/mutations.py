@@ -16906,10 +16906,15 @@ MUTATIONS = [
      '            lastFillAt = uint64(at);',
      '            lastFillAt = uint64(block.timestamp);',
      ['test_I4_aTouchBeforeTheDeadline_settledAfter_isFilled']),
-    ('SB100', 'src/exam/PaperExam.sol',
-     'if (bid == 0 || ask < bid || ask > type(uint64).max) return',
-     'if (bid == 0 || ask < bid) return',
+    ('SB100', 'src/sim/StopBook.sol',
+     'if (bid == 0 || ask < bid || ask > type(uint64).max) return NO_BOOK;',
+     'if (bid == 0 || ask < bid) return NO_BOOK;',
      ['test_I8_aGarbageBook_fillsAtTheOracle']),
+    # The order's own read of the book (SB100 reads the journal's, which the stop's fill uses; review of cp#336).
+    ('SB139', 'src/exam/PaperExam.sol',
+     'if (bid == 0 || ask < bid || ask > type(uint64).max) return (false, 0);',
+     'if (bid == 0 || ask < bid) return (false, 0);',
+     ['test_t4_aGarbageBook_anOrderFillsAtTheOracle']),
     ('SB101', 'src/exam/PaperExam.sol',
      'emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source, touchBlock, uint64(tick));',
      'emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source, touchBlock, px);',
@@ -17083,6 +17088,16 @@ MUTATIONS = [
      'uint256 public constant MAX_LISTED = 16;',
      'uint256 public constant MAX_LISTED = 17;',
      ['test_listing_atMostMaxListed_aDelistingFreesAPlace']),
+    # The review of cp#336: a settle stopped short never answers zero; the changes in force put in place with gas of
+    # their own, so that they never take a fill back.
+    ('SB140', 'src/sim/StopBook.sol',
+     '        if (left == 0) left = 1;\n',
+     '',
+     ['test_t1_aSettleThatStopsShortNeverAnswersZero']),
+    ('SB141', 'src/sim/StopBook.sol',
+     '            if (gasleft() < keep) return false;\n',
+     '',
+     ['test_t2_theChangesInForceNeverTakeAFillBack']),
     # The listed count, with the delisted assets the stop book still logs (SimPoolFactory.setAsset): the factory's
     # tests are under test/sim, so the "SM" suite runs them (were SB110, SB111).
     ('SM309', 'src/sim/SimPoolFactory.sol',

@@ -73,11 +73,13 @@ contract StopBookAudit4Test is StopBookBase {
         PaperExam victim = _exam();
         _trade(victim, BTC, true, 100);
         _set(victim, BTC, false, 950_000, 0);
+        // The first thirty are touched; the other thirty, their stops far under every price here, set takes meanwhile
+        // (a touched exam's own call settles it first and finds its position closed: review of cp#336).
         PaperExam[] memory crowd = new PaperExam[](60);
         for (uint256 i = 0; i < 60; ++i) {
             crowd[i] = _exam();
             _trade(crowd[i], BTC, true, 10);
-            _set(crowd[i], BTC, false, uint64(960_000 + i * 100), 0);
+            _set(crowd[i], BTC, false, i < 30 ? uint64(960_000 + i * 100) : 900_000, 0);
         }
         vm.roll(block.number + DELAY);
         uint256 len = stopBook.logged();
@@ -85,12 +87,14 @@ contract StopBookAudit4Test is StopBookBase {
             vm.roll(block.number + 1);
             _mark(uint64(955_000 - b * 100)); // the crowd touched, not yet the victim
             stopBook.poke();
-            // Each block, more of the crowd moves a take in: all armed in the same later block.
+            // Each block, two more of the crowd move a take in, all armed in the same later block; each is taken.
             for (uint256 i = 0; i < 2; ++i) {
-                PaperExam c = crowd[(b * 2 + i) % 60];
-                if (c.positionOf(BTC) == 0) continue;
+                PaperExam c = crowd[30 + (b * 2 + i) % 30];
                 vm.prank(trader);
-                try c.setTrigger(BTC, true, 1_200_000, 0) {} catch {}
+                c.setTrigger(BTC, true, uint64(1_200_000 + b * 100), 0);
+                (uint64 tpx,,) = c.takeOf(BTC);
+                (uint64 cpx,,) = c.changeOf(BTC, true);
+                assertEq(b < 15 ? tpx : cpx, uint64(1_200_000 + b * 100), "the take set (a change, the second time)");
             }
         }
         vm.roll(block.number + 1);
@@ -103,7 +107,7 @@ contract StopBookAudit4Test is StopBookBase {
         assertEq(victim.cash(), 94e6, "at its touch");
         for (uint256 i = 0; i < 60; ++i) {
             assertEq(stopBook.settle(address(crowd[i])), 0);
-            assertEq(crowd[i].positionOf(BTC), 0);
+            assertEq(crowd[i].positionOf(BTC), i < 30 ? int256(0) : int256(10), "the touched closed, the others kept");
         }
     }
 
