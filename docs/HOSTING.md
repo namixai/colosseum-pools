@@ -937,8 +937,9 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
 
 - `<pool>-<id>.json`, the review of each payout still waiting (schema `payout-review/4`), what `deploy_sim approve`
   reads and, cut to what it decides by, what the operator's page reads through the index's reviews route;
-- `scan.json`, every log the review has read, with the block it read to: each pass reads only the blocks after it
-  (a first pass over a long chain goes in parts of 5 000 blocks, each saved; a pass out of its time goes on from the
+- `scan.json`, every log the review has read, with the block it read to: each pass reads only the blocks after it,
+  and the last 1 000 blocks before it again (a log a lagging node left out, a pool the factory's list did not show
+  yet; what is read twice is kept once) (a first pass over a long chain goes in parts of 5 000 blocks, each saved; a pass out of its time goes on from the
   last part). Removing it makes the next passes read the chain from the deployment's block again;
 - `candles-<network>-YYYY-MM-DD.jsonl`, the venue's minute candles of the platform's assets, fetched from
   Hyperliquid's info API on each pass (no key) and kept: the API gives only the last 5 000 minutes;
@@ -953,9 +954,9 @@ is `payout_needs_a_stop`, the same way. A pass that fails is `review_failed` (on
 `TimeoutStartSec` or its `MemoryMax` (1 GB) starts `colosseum-unit-failed@` (its `OnFailure=`), which says
 `unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read.
 
-Every block of each stop's time must be in at least one of two journals of prices, the keeper's and the second
-writer's (below), the two must give the same price where both have it, and the venue's candles must not contradict
-them: a minute the journal shows the oracle at the stop while the candle stayed more than 1 % (3 % on testnet,
+Every block of each stop's time must be in both journals of prices, the keeper's and the second writer's (below),
+at one price (a block only one holds is `stop-one-journal` unless the optional node bears it out; the document's
+`journals` says how many stand behind the verdict), and the venue's candles must not contradict them: a minute the journal shows the oracle at the stop while the candle stayed more than 1 % (3 % on testnet,
 `COLOSSEUM_CANDLE_BPS`) short of it, or a candle more than that past the stop where the journal shows no reach.
 Anything else holds the payout. A node that answers for old blocks is an optional third check
 (`COLOSSEUM_ARCHIVE_RPC_URL`); without it nothing is held for its sake.
@@ -971,9 +972,10 @@ A copy older than an hour is refused as the host's own would be: copy, then appr
 ### The second writer of prices
 
 A second machine, apart from the pools host and reading another provider's node, runs the same loop alone with no
-key (`ops/stop_filler.py`, which sends nothing) and writes its own journal; the review holds a block where either
-journal has it, so a restart or a deploy of the keeper (or of the second machine) holds nothing, and one journal's
-wrong price shows as a disagreement. Its units are in `ops/host/second-writer/`:
+key (`ops/stop_filler.py`, which sends nothing) and writes its own journal; the review takes a block as checked only
+where both journals hold it at one price, so one journal's wrong price shows as a disagreement, and a block only one
+holds (a restart or a deploy of the keeper or of the second machine while a stop stood) holds the payout as
+`stop-one-journal` until a person decides. Its units are in `ops/host/second-writer/`:
 
 1. On the second machine: a release of this repository at `/opt/colosseum-pools/current` with its venv, a user
    `colosseum-prices` with `/var/lib/colosseum-prices` (and an empty `no-keys` directory in it), and rsync.
@@ -990,8 +992,7 @@ wrong price shows as a disagreement. Its units are in `ops/host/second-writer/`:
 
 The sync copies the day files every minute by appending; the review reads
 `second-prices/watch-prices-<label>.jsonl` (`--prices2` in its unit) and says `second_journal_stale` when no day
-file of it has changed for 30 minutes (again every 6 hours). Without it every restart of the keeper holds the
-payouts whose stops stood through it until a person decides.
+file of it has changed for 30 minutes (again every 6 hours). Without it every payout with a stop is held.
 
 ### Mainnet
 

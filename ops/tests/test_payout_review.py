@@ -1941,7 +1941,7 @@ class ReadingTheChain(unittest.TestCase):
                          "how the line is drawn and the drawdown allowed: the second of each account's rules")
         self.assertEqual({a for a, _ in asked}, {3})
         self.assertEqual((got["oracle"]["3:25"], got["oracle"]["3:28"], got["oracle"]["9:9"]), (7, 8, 1), "the file stands in too")
-        self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "block": 5}])
+        self.assertEqual(got["transfers"], [{"from": EXCHANGE, "to": t1, "tx": tx(5), "index": "0x0", "block": 5}])
         self.assertEqual(got["books"], {POOL: {"balance": 9_000, "owed": 800, "held": 0, "reserved": 0, "sizes": [SIZE // 2, SIZE],
                                                "approvals": True, "largestPayout": 800, "staged": 1_600,
                                                "floor": None, "sharesDue": None, "approver": addr(0xAB)}})

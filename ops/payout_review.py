@@ -2732,7 +2732,11 @@ SCAN_PART = 5_000
 # How far back before a trader's first purchase their incoming USDC is read, once, when the trader is first seen: the
 # wallets that funded them (`linked`). The transfers after that are read with every new block.
 LINK_BACK = 86_400
-SCAN_SCHEMA = "payout-review-scan/1"
+# How many blocks before the last block read each pass reads again (review 15 of #338): a node behind a load balancer
+# whose replica lagged answers an empty eth_getLogs for the newest blocks, and a pool the factory's list did not show
+# yet; the tail read again finds them, and what is read twice is kept once.
+SCAN_TAIL = 1_000
+SCAN_SCHEMA = "payout-review-scan/2"  # /2: each transfer keeps its log's index, for a tail read twice
 
 
 class Behind(RuntimeError):
@@ -2788,24 +2792,27 @@ class LogScan:
         return list(dict.fromkeys(_addr(l["topics"][2]) for l in self.d["pool_logs"] if l["topics"][0] == sk.EXAM_SOLD))
 
     def read(self, pools: list[str], usdc: str, latest: int, part: int = SCAN_PART, until: float | None = None) -> None:
-        """The blocks from `scanned_to` + 1 to `latest`, a part of `part` blocks at a time, each part saved. `until` (a
+        """The blocks from SCAN_TAIL before `scanned_to` + 1 to `latest` (the tail read again: a log a lagging node left
+        out), a part of `part` blocks at a time, each part saved; a log read twice is kept once. `until` (a
         time.monotonic()) ends it early with `Behind`, once a part is saved."""
         pool_topics = [[sk.EXAM_SOLD, sk.FUNDED, *PAYOUT_TRAIL, PAYOUT_WAITS_LIMIT]]
         timed = {PAYOUT_PAID, PAYOUT_HELD, PAYOUT_WAITS_LIMIT}
-        while self.scanned_to < latest:
-            lo, hi = self.scanned_to + 1, min(latest, self.scanned_to + part)
+        cursor = max(int(self.key["start"]), self.scanned_to + 1 - SCAN_TAIL)
+        seen = self._seen(cursor)
+        while cursor <= latest:
+            lo, hi = cursor, min(latest, cursor + part - 1)
             known_pools = set(self.d["pools"])
             for p in pools:
                 if p not in known_pools:
                     self.d["pools"].append(p)  # a pool new since the last part: created after it, so read from here
-            new = logs(self.d["pools"], pool_topics, lo, hi) if self.d["pools"] else []
+            new = self._fresh(seen, "pool", logs(self.d["pools"], pool_topics, lo, hi) if self.d["pools"] else [])
             for l in new:
                 if l["topics"][0] in timed:
                     self.time_of(int(l["blockNumber"], 16))
             self.d["pool_logs"] += new
             accounts = self.accounts()  # an account sold in this part did not exist before it: read from here
             for i in range(0, len(accounts), chk.ADDRESS_BATCH):
-                for l in logs(accounts[i:i + chk.ADDRESS_BATCH], [], lo, hi):
+                for l in self._fresh(seen, "account", logs(accounts[i:i + chk.ADDRESS_BATCH], [], lo, hi)):
                     self.time_of(int(l["blockNumber"], 16))
                     self.d["account_logs"].setdefault(to_checksum_address(l["address"]), []).append(l)
             traders = self.traders()
@@ -2815,20 +2822,40 @@ class LogScan:
                             and _addr(l["topics"][2]) in fresh)
                 self._transfers(usdc, fresh, max(self.key["start"], first - LINK_BACK), lo - 1)
                 self.d["traders"] += fresh
-            self._transfers(usdc, self.d["traders"], lo, hi)
-            self.d["scannedTo"] = hi
+            self._transfers(usdc, self.d["traders"], lo, hi, seen)
+            self.d["scannedTo"] = max(self.scanned_to, hi)
             self.save()
+            cursor = hi + 1
             if until is not None and time.monotonic() > until and hi < latest:
                 raise Behind(f"read to block {hi} of {latest}: the next pass goes on from there")
 
-    def _transfers(self, usdc: str, traders: list[str], lo: int, hi: int) -> None:
+    def _seen(self, lo: int) -> set:
+        """The logs kept from block `lo` on, by kind, transaction and index: those a tail read again finds twice."""
+        out = {("pool", l["transactionHash"], l.get("logIndex")) for l in self.d["pool_logs"] if int(l["blockNumber"], 16) >= lo}
+        out |= {("account", l["transactionHash"], l.get("logIndex")) for ls in self.d["account_logs"].values() for l in ls
+                if int(l["blockNumber"], 16) >= lo}
+        out |= {("transfer", t["tx"], t.get("index")) for t in self.d["transfers"] if t["block"] >= lo}
+        return out
+
+    @staticmethod
+    def _fresh(seen: set, kind: str, got: list[dict]) -> list[dict]:
+        out = []
+        for l in got:
+            key = (kind, l["transactionHash"], l.get("logIndex"))
+            if key not in seen:
+                seen.add(key)
+                out.append(l)
+        return out
+
+    def _transfers(self, usdc: str, traders: list[str], lo: int, hi: int, seen: set | None = None) -> None:
         if hi < lo:
             return
+        seen = set() if seen is None else seen
         for i in range(0, len(traders), chk.ADDRESS_BATCH):
             words = ["0x" + "00" * 12 + t[2:].lower() for t in traders[i:i + chk.ADDRESS_BATCH]]
-            self.d["transfers"] += [{"from": _addr(l["topics"][1]), "to": _addr(l["topics"][2]),
-                                     "tx": l["transactionHash"], "block": int(l["blockNumber"], 16)}
-                                    for l in logs(usdc, [TRANSFER, None, words], lo, hi)]
+            got = self._fresh(seen, "transfer", logs(usdc, [TRANSFER, None, words], lo, hi))
+            self.d["transfers"] += [{"from": _addr(l["topics"][1]), "to": _addr(l["topics"][2]), "tx": l["transactionHash"],
+                                     "index": l.get("logIndex"), "block": int(l["blockNumber"], 16)} for l in got]
 
 
 def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads: int = TOUCH_READS,

@@ -160,8 +160,9 @@ class Scale(unittest.TestCase):
         _, two_days, _, _ = self.chain(2 * 86_400, 600, d / "b.json")
         self.assertEqual(len(first["sales"]), 3)
         self.assertEqual(again["sales"], first["sales"], "what was read before is kept")
-        # 600 new blocks: 12 windows each for the pools, the three accounts (one batch) and the three traders (one batch)
-        self.assertLessEqual(one_day, 36, f"{one_day} getLogs ten minutes after one day of blocks")
+        # 600 new blocks and the tail of SCAN_TAIL (1 000) read again (review 15 of #338, M2): 32 windows each for the
+        # pools, the three accounts (one batch) and the three traders (one batch)
+        self.assertLessEqual(one_day, 96, f"{one_day} getLogs ten minutes after one day of blocks")
         self.assertEqual(one_day, two_days, "the same after two days as after one: not growing with the chain")
 
     def test_the_first_pass_goes_in_parts_and_a_pass_cut_short_goes_on_from_the_last(self):

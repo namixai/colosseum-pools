@@ -118,7 +118,6 @@ class ScanWorld(unittest.TestCase):
 
 
 class ScanFaults(ScanWorld):
-    @unittest.expectedFailure  # TODO(review 15): until its fix lands in this round
     def test_a_log_a_lagging_node_left_out_is_read_again_by_a_later_pass(self):
         """A pass reads to `latest` and keeps it for good. A load-balanced provider whose replica is a few blocks behind
         answers an empty getLogs for the newest blocks: the event is never read again (the old whole re-read healed it)."""
@@ -163,6 +162,17 @@ class ScanControls(ScanWorld):
         s = self.scan(80)
         self.assertEqual(s.accounts(), [exam])
         self.assertEqual([(t["from"], t["block"]) for t in s.d["transfers"]], [(funder, 30)])
+
+    def test_a_log_the_tail_reads_again_is_kept_once(self):
+        """The tail read again each pass (M2) finds what it read before: each log is kept once."""
+        exam, trader, funder = T.addr(0x201), T.addr(0x101), T.addr(0xF0)
+        self.chain.append({"address": T.POOL, "topics": [pr.sk.EXAM_SOLD, self.word(exam), self.word(trader), self.word(T.addr(0xB0))],
+                           "blockNumber": 38})
+        self.chain.append({"address": self.USDC, "topics": [pr.TRANSFER, self.word(funder), self.word(trader)], "blockNumber": 39})
+        self.chain.append({"address": exam, "topics": ["0x" + "11" * 32], "blockNumber": 39})
+        self.scan(40)
+        s = self.scan(80)
+        self.assertEqual((len(s.d["pool_logs"]), len(s.d["transfers"]), len(s.d["account_logs"][exam])), (1, 1, 1))
 
 
 class AlarmChannel(unittest.TestCase):

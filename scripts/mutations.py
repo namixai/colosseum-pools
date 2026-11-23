@@ -17135,8 +17135,8 @@ MUTATIONS = [
      "        return {k[1] for k in self.triggers}",
      ["test_a_stop_standing_across_a_restart_has_a_price_in_every_block_once_the_loop_runs_again"]),
     ("RX3", "ops/payout_review.py",
-     "            lo, hi = self.scanned_to + 1, min(latest, self.scanned_to + part)",
-     "            lo, hi = self.key[\"start\"], min(latest, self.scanned_to + part)",
+     "        cursor = max(int(self.key[\"start\"]), self.scanned_to + 1 - SCAN_TAIL)",
+     "        cursor = int(self.key[\"start\"])",
      ["test_a_pass_after_one_day_of_chain_asks_for_a_bounded_number_of_logs"]),
     ("G414", "gateway/simindex.py",
      "            return outward(doc)",
@@ -17180,6 +17180,15 @@ MUTATIONS = [
      "                res[\"borne\"].append([asset, b])",
      "                pass",
      ["test_a_block_only_one_journal_holds_is_held_unless_the_node_bears_it_out"]),
+    # The tail read again each pass, a log read twice kept once.
+    ("RY4", "ops/payout_review.py",
+     "        cursor = max(int(self.key[\"start\"]), self.scanned_to + 1 - SCAN_TAIL)",
+     "        cursor = self.scanned_to + 1",
+     ["test_a_log_a_lagging_node_left_out_is_read_again_by_a_later_pass"]),
+    ("RY5", "ops/payout_review.py",
+     "            if key not in seen:\n                seen.add(key)",
+     "            if True:\n                seen.add(key)",
+     ["test_a_log_the_tail_reads_again_is_kept_once"]),
 ]
 
 RUNNERS = {
@@ -17205,7 +17214,8 @@ RUNNERS = {
     # The third round (review 15 of #338): its tests and the files the round changed.
     "RY": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.review15.test_review15", "ops.tests.review15.test_loop15",
             "ops.tests.test_payout_review", "ops.tests.test_price_journals", "ops.tests.test_review_service",
-            "ops.tests.test_review_alarms", "ops.tests.test_stop_filler"], r"^(?:FAIL|ERROR): (\w+) \("),
+            "ops.tests.test_review_alarms", "ops.tests.test_stop_filler", "ops.tests.review14.test_review14"],
+           r"^(?:FAIL|ERROR): (\w+) \("),
     # The stops' loop of the simulated pools' keeper: its own test file.
     "SF": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_stop_filler"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The simulated pool's network switch and its mainnet gates: their own test file.
