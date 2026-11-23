@@ -206,7 +206,9 @@ def phase(entry: tuple, block: int) -> tuple[int, int]:
 
 def book_of(record: dict, factory: str, call=None) -> str | None:
     """The factory's stop book: the record's, or the factory's own `stopBook()`. None for a factory made before the book,
-    which has no such function (the call reverts); any other failure of the call is raised, never read as no book."""
+    which has no such function (the call reverts); any other failure of the call is raised, never read as no book. So
+    is an empty answer (`0x`): a contract without the function reverts, so an empty one comes from an address with no
+    code or from a proxy that swallowed the call, and is not read as no book (review 12 of #336, L-4)."""
     if record.get("StopBook"):
         return to_checksum_address(record["StopBook"])
     call = call or c.rpc
@@ -217,7 +219,7 @@ def book_of(record: dict, factory: str, call=None) -> str | None:
             return None
         raise
     if not raw or raw == "0x":
-        return None
+        raise RuntimeError("stopBook(): an empty answer, not read")
     book = abi_decode(["address"], bytes.fromhex(raw[2:]))[0]
     return None if int(book, 16) == 0 else to_checksum_address(book)
 

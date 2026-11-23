@@ -24,9 +24,11 @@ It reads the chain and nothing else, sends nothing and holds no key. For each pa
   missed stops     → each stop or take of the stage and the exam that the oracle reached while it stood
                      and nobody carried out then, and how its time ended: a result disputed, so the payout is
                      held with the draft of a stop of reason 3. With a stop book, so is every block of a
-                     stop's time not checked: the book's gaps not read, gap blocks whose price the node did
-                     not give, and the blocks since the book's last check that no Gap has closed yet (the
-                     keeper is down now). Not checked is never clean;
+                     stop's time not checked: the book's gaps not read, gap blocks with no price that the
+                     book's own prices next to them (PriceSeen, on both sides) bear out, from the node at the
+                     old block or from --prices, the blocks of a stop's time in neither the book's journal, a
+                     Gap nor the tail, and the blocks since the book's last check that no Gap has closed yet
+                     (the keeper is down now). Not checked is never clean;
   the group's code → whose code the exam was bought under, its sales, from how many wallets, the
                      longest run of sales in a row under it each from a new wallet, and how many of its
                      buyers never traded or stand in a pair;
@@ -897,7 +899,7 @@ def gap_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: int,
     not hold, a gap (`Gap`), or in one it holds with no price for the stop's asset (`NoPrice(asset)`: the oracle's read
     failed or gave zero, and the book touches nothing there). So each stop's time (`book_spans`) is read in the blocks
     of the gaps inside it and in its asset's no-price blocks inside it (`no_price`, {asset: [block]}), every one of
-    them, at the oracle's price as the node gives it; a run of those at the price or past it is a stop reached and not
+    them, at the prices believed against the book's own (`read_stop_prices`); a run of those at the price or past it is a stop reached and not
     carried out, in the same shape as `missed_touches` gives, with `gap` true (and `noPrice` true where the run holds a
     no-price block). `gaps` None: the book's gaps were not read; `read` is then False. The no-price blocks not read are
     said by `stop_doubt`."""
@@ -944,14 +946,18 @@ def set_txs(evs: list[dict], spans: list[dict]) -> list[str]:
 
 
 def stop_doubt(evs: list[dict], m: dict | None, book: bool, latest: int, tail: dict | None,
-               book_read: bool = True, no_price_read: bool = True) -> dict:
+               book_read: bool = True, no_price_read: bool = True, price_doubts: list[dict] | None = None,
+               coverage: list[dict] | None = None) -> dict:
     """Why the stops of one account cannot be taken as carried out: the payout is held, never approved as clean
     (closed on failure). `missed`: the stops and takes the oracle reached and nobody carried out (`m["missed"]`, with
     or without a book). With a stop book, also every block of a stop's time that was not checked, each said in
     `unchecked`: the book's gaps not read at all; gap blocks with no price read (an old gap the node keeps no state
     for, or past the reads); the blocks since the book's last check that no `Gap` has closed yet (`tail`: the keeper
     is not checking now), or that last check not read; and, for a factory whose book could not be read, any stop at
-    all. `txs`: the transactions that set the stops concerned, for the draft of a stop of reason 3."""
+    all. Also (review 12 of #336): each run of those blocks whose prices could not be believed against the book's own
+    (`price_doubts`, from `read_stop_prices`), with why; and the blocks of a stop's time in neither the book's journal,
+    a Gap nor the tail (`coverage`, from `read_coverage`; None: the journal not read). `txs`: the transactions that set
+    the stops concerned, for the draft of a stop of reason 3."""
     out: dict = {"missed": list(m["missed"]) if m else [], "unchecked": [], "txs": []}
     concerned: list[dict] = [{"asset": x["asset"], "take": x["take"], "armedAt": x["armedAt"]} for x in out["missed"]]
     if not book_read:
@@ -987,6 +993,26 @@ def stop_doubt(evs: list[dict], m: dict | None, book: bool, latest: int, tail: d
                                     "oracle price read: not checked (the keeper's price journal, --prices, or a node "
                                     "that keeps the state that far back can give them)")
             concerned += spans
+        for d in price_doubts or []:
+            hit = [s for s in spans if s["asset"] == d["asset"] and s["armedAt"] <= d["to"] and s["end"] >= d["from"]]
+            if hit:
+                out["unchecked"].append(f"{d['blocks']} blocks of asset {d['asset']} from {d['from']} to {d['to']} that "
+                                        f"the stop book did not check have no price it agrees with: {d['why']}")
+                concerned += hit
+        if coverage is None:
+            if spans:
+                out["unchecked"].append("the stop book's journal (logged, at) was not read: whether every block of a "
+                                        "stop's time was checked or lies in a Gap is not known")
+                concerned += spans
+        else:
+            for row in coverage:
+                hit = [s for s in spans if s["armedAt"] <= row["to"] and s["end"] >= row["from"]]
+                if hit:
+                    out["unchecked"].append(
+                        f"blocks {row['from']} to {row['to']} of a stop's time: the stop book logged {row['logged']} of "
+                        f"them, its Gaps hold {row['gaps']} and the blocks since its last check {row['tail']}, not the "
+                        f"{row['to'] - row['from'] + 1} there are (the node's index of logs behind?): not checked")
+                    concerned += hit
         if tail is not None and not tail.get("read", True):
             if spans:
                 out["unchecked"].append("the stop book's last check (lastPokeBlock, watched) was not read: the blocks "
@@ -1741,18 +1767,22 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     # With a stop book a touch is missed only in a block its journal does not hold (`gap_touches`): the same fact, in
     # the same place.
     book_exams = chain.get("bookExams") or ()
+    stop_by_asset = oracle_by_asset(chain.get("stopOracle") or {})
 
     def missed(account: str) -> dict:
         evs = (chain.get("exam_events") or {}).get(account) or []
         if account in book_exams:
-            return gap_touches(evs, by_asset, chain["latest"], chain.get("gaps"), chain.get("noPrice") or {})
+            # Only the prices believed against the book's own (`read_stop_prices`): never the journal's or the node's
+            # other reads on trust (review 12 of #336, M-3).
+            return gap_touches(evs, stop_by_asset, chain["latest"], chain.get("gaps"), chain.get("noPrice") or {})
         return missed_touches(evs, by_asset, chain["latest"], every_of.get(account))
 
     out["missedTouch"] = {part: missed(account) if account else None for part, account in (("stage", stage), ("exam", exam))}
     book_read = chain.get("bookRead", True)
     out["stopDoubt"] = {part: stop_doubt((chain.get("exam_events") or {}).get(account) or [], out["missedTouch"][part],
                                          account in book_exams, chain["latest"], chain.get("tail"), book_read,
-                                         chain.get("noPrice", {}) is not None)
+                                         chain.get("noPrice", {}) is not None, chain.get("stopPriceDoubt") or [],
+                                         chain.get("coverage", []))
                         if account else None for part, account in (("stage", stage), ("exam", exam))}
     out["code"] =code_review(pool, sale["code"], chain, who, p) if sale else None
     out["running"] = running(pool, chain)
@@ -2293,15 +2323,16 @@ def read_touch_oracle(accounts: list[str], exam_events: dict[str, list[dict]], o
     touch: dict[str, int] = {}
     unread = set() if unread is None else unread
     for a in accounts:
-        book = a in book_exams
-        spans = book_spans(exam_events.get(a) or [], latest) if book else trigger_spans(exam_events.get(a) or [], latest)
-        # With a stop book, every block of the gaps inside each stop's time (`gap_touches`); without, the samples.
-        every_of[a] = every = 1 if book else touch_every(spans, reads)
+        if a in book_exams:
+            # With a stop book, every block of the gaps inside each stop's time (`gap_touches`), read apart and checked
+            # against the book's own prices (`stop_blocks`, `read_stop_prices`): none of them is read here.
+            every_of[a] = 1
+            continue
+        spans = trigger_spans(exam_events.get(a) or [], latest)
+        every_of[a] = every = touch_every(spans, reads)
         asked = 0
         for s in spans:
-            points = sorted(set(in_gaps(s["armedAt"], s["end"], gaps or []))
-                            | {b for b in (no_price or {}).get(s["asset"], ()) if s["armedAt"] <= b <= s["end"]}) \
-                if book else touch_points(s, every)
+            points = touch_points(s, every)
             for b in points:
                 key = oracle_key(s["asset"], b)
                 if key in oracle or key in touch or key in unread or asked >= reads:
@@ -2313,6 +2344,162 @@ def read_touch_oracle(accounts: list[str], exam_events: dict[str, list[dict]], o
                 else:
                     touch[key] = got
     return every_of, touch
+
+
+def stop_blocks(accounts: list[str], exam_events: dict[str, list[dict]], latest: int, book_exams: set[str] | frozenset,
+                gaps: list[tuple[int, int]] | None, no_price: dict[int, list[int]] | None, reads: int = TOUCH_READS
+                ) -> dict[int, list[int]]:
+    """The blocks the oracle is to be read in for the stops of the accounts of `accounts` that the stop book carries
+    out: each block of a gap of its journal inside a stop's time, and each block of it the book logged with no price
+    for the stop's asset (`gap_touches`), as {asset: [block]}. At most `reads` of them an account, in the order the
+    stops were set: past them a block is left not read, and `gap_touches` says it."""
+    out: dict[int, set[int]] = {}
+    for a in accounts:
+        if a not in book_exams:
+            continue
+        asked: set[tuple[int, int]] = set()
+        for s in book_spans(exam_events.get(a) or [], latest):
+            for b in sorted(set(in_gaps(s["armedAt"], s["end"], gaps or []))
+                            | {b for b in (no_price or {}).get(s["asset"], ()) if s["armedAt"] <= b <= s["end"]}):
+                if (s["asset"], b) not in asked and len(asked) >= reads:
+                    continue
+                asked.add((s["asset"], b))
+                out.setdefault(s["asset"], set()).add(b)
+    return {asset: sorted(bs) for asset, bs in sorted(out.items())}
+
+
+# The stop book's own record of the oracle (`PriceSeen(asset, px)`, one an asset a block it checked): what a price of a
+# block it did not check is believed against. A node that answers a call at an old block with the state of today, or
+# a journal of prices (--prices) that says what the chain did not, would show a gap as empty (review 12 of #336, M-3).
+PRICE_SEEN = "0x" + keccak(text="PriceSeen(uint32,uint64)").hex()
+# How far on each side of the blocks to be checked the book's prices are looked for: one eth_getLogs a side
+# (keeper.MAX_LOG_WINDOW). Runs of such blocks closer than this are checked as one.
+CAL_WINDOW = 50
+
+
+def read_seen(book: str, asset: int, lo: int, hi: int) -> dict[int, int]:
+    """The prices the stop book logged for `asset` from `lo` to `hi` (`PriceSeen`, the asset indexed), {block: px}."""
+    out: dict[int, int] = {}
+    for l in logs(book, [PRICE_SEEN, "0x" + f"{asset:064x}"], lo, hi):
+        out[int(l["blockNumber"], 16)] = int(abi_decode(["uint64"], bytes.fromhex(l["data"][2:]))[0])
+    return out
+
+
+def runs_of(blocks: list[int], apart: int = 1) -> list[tuple[int, int]]:
+    """`blocks` (sorted) as runs (first, last), a block joining the run before it when at most `apart` after its last."""
+    out: list[list[int]] = []
+    for b in blocks:
+        if out and b - out[-1][1] <= apart:
+            out[-1][1] = b
+        else:
+            out.append([b, b])
+    return [(a, b) for a, b in out]
+
+
+def journal_check(asset: int, lo: int, hi: int, seen: dict[int, int], journal: dict | None) -> tuple[bool, str | None]:
+    """Whether the journal of prices (--prices) may stand for the blocks from `lo` to `hi` of `asset`: it gives the
+    price the stop book logged (`seen`) at every logged block near them where it has one, and does so on both sides,
+    before `lo` and after `hi`. Else it is not used there, and why (None for no journal at all): a journal that says
+    what the chain did not never makes a verdict softer than none would."""
+    if not journal:
+        return False, None
+    sides = {"before": False, "after": False}
+    for b in sorted(seen):
+        got = journal.get(oracle_key(asset, b))
+        if got is None:
+            continue
+        if int(got) != seen[b]:
+            return False, (f"the price journal (--prices) gives {int(got)} at block {b}, where the stop book logged "
+                           f"{seen[b]}: the journal is not used there")
+        if b < lo:
+            sides["before"] = True
+        elif b > hi:
+            sides["after"] = True
+    missing = [k for k, ok in sides.items() if not ok]
+    if missing:
+        return False, (f"the price journal (--prices) has no price at a block the stop book logged {' or '.join(missing)} "
+                       "them: the journal is not used there")
+    return True, None
+
+
+def node_check(asset: int, lo: int, hi: int, seen: dict[int, int], node, latest: int) -> str | None:
+    """Why the node's prices at old blocks (`oracle_at`) cannot be believed for the blocks from `lo` to `hi` of
+    `asset`, or None where they can: at the stop book's logged blocks nearest on each side of them, and the farthest
+    within CAL_WINDOW, the node must give the price the book logged (`seen`). A node that keeps no state that far back
+    gives none; one that answers with the state of today gives today's price. Where the book's prices there are all one
+    and the same, the node's latest price must differ from it, else the match shows nothing."""
+    before = sorted((b for b in seen if b < lo), reverse=True)
+    after = sorted(b for b in seen if b > hi)
+    if not before or not after:
+        return (f"the stop book logged no price (PriceSeen) of the asset within {CAL_WINDOW} blocks "
+                f"{'before' if not before else 'after'} them to check the node against")
+    points = list(dict.fromkeys([before[0], before[-1], after[0], after[-1]]))
+    for b in points:
+        got = node(asset, b)
+        if got is None:
+            return f"the node gave no price at block {b} next to them: it keeps no state that far back"
+        if got != seen[b]:
+            return (f"the node gave {got} at block {b}, where the stop book logged {seen[b]}: it does not answer for old "
+                    "blocks as they stood")
+    if len({seen[b] for b in points}) < 2:
+        now = node(asset, latest)
+        if now is None or now == seen[points[0]]:
+            return ("the stop book's prices next to them are all the node's latest one: whether the node answers for old "
+                    "blocks as they stood is not shown")
+    return None
+
+
+def read_stop_prices(book: str, wanted: dict[int, list[int]], journal: dict | None, latest: int
+                     ) -> tuple[dict[str, int], list[dict]]:
+    """The oracle's prices in the blocks `stop_blocks` gives, each one believed only where the stop book's own prices
+    next to it agree (`PriceSeen`): the journal of prices (--prices) where `journal_check` lets it stand, else the
+    node where `node_check` does. Returns the prices ({"asset:block": px}) and, for each run of blocks left without one,
+    why ({asset, from, to, blocks, why}): `stop_doubt` says each, and the payout is held."""
+    prices: dict[str, int] = {}
+    doubts: list[dict] = []
+    asked: dict[str, int | None] = {}
+
+    def node(asset: int, block: int) -> int | None:
+        key = oracle_key(asset, block)
+        if key not in asked:
+            asked[key] = oracle_at(asset, block)
+        return asked[key]
+
+    for asset, blocks in sorted(wanted.items()):
+        for lo, hi in runs_of(blocks, CAL_WINDOW):
+            mine = [b for b in blocks if lo <= b <= hi]
+            whys: list[str] = []
+            j_ok = n_ok = False
+            try:
+                # The book's prices on each side of every run of them, CAL_WINDOW blocks deep: the windows that meet, one.
+                seen: dict[int, int] = {}
+                ends = [x for r_lo, r_hi in runs_of(mine) for x in (max(r_lo - CAL_WINDOW, 0), min(r_hi + CAL_WINDOW, latest))]
+                for k in range(0, len(ends), 2):
+                    seen.update(read_seen(book, asset, ends[k], ends[k + 1]))
+            except Exception as exc:
+                core.log("not_read", address=book, call="PriceSeen", error=quiet(exc, 120))
+                whys.append("the stop book's own prices (PriceSeen) next to them were not read")
+            else:
+                j_ok, j_why = journal_check(asset, lo, hi, seen, journal)
+                if j_why:
+                    core.log("price_journal_refused", asset=asset, first=lo, last=hi, why=j_why)
+                    whys.append(j_why)
+                n_why = node_check(asset, lo, hi, seen, node, latest)
+                n_ok = n_why is None
+                if n_why:
+                    whys.append(n_why)
+            for b in mine:
+                key = oracle_key(asset, b)
+                if j_ok and int((journal or {}).get(key) or 0) > 0:
+                    prices[key] = int(journal[key])
+                elif n_ok:
+                    got = node(asset, b)
+                    if got:
+                        prices[key] = got
+            left = [b for b in mine if oracle_key(asset, b) not in prices]
+            if left and whys:
+                doubts.append({"asset": asset, "from": lo, "to": hi, "blocks": len(left), "why": "; ".join(whys)})
+    return prices, doubts
 
 
 def _addr(topic: str) -> str:
@@ -2640,6 +2827,13 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     no_price = read_no_price(stop_book, start, latest) if stop_book else {}
     touch_every_of, touch_oracle = read_touch_oracle(touch_accounts, exam_events, oracle, latest, touch_reads, unread_px,
                                                      book_exams, gaps, no_price)
+    # With a stop book, the blocks of a stop's time it did not check, each price believed only against the book's own
+    # (`read_stop_prices`); and every block of a stop's time found in the book's journal, a Gap or the tail
+    # (`read_coverage`). Neither the journal of prices nor the node's other reads (`oracle`) reach these on trust.
+    wanted = stop_blocks(touch_accounts, exam_events, latest, book_exams, gaps, no_price, touch_reads)
+    stop_oracle, stop_doubts = read_stop_prices(stop_book, wanted, prices, latest) if stop_book and wanted else ({}, [])
+    coverage = read_coverage(stop_book, stop_intervals(touch_accounts, exam_events, latest, book_exams), gaps, tail,
+                             latest) if stop_book else []
     # The day's allowed loss of every exam that passed too: the pool's count of passes in the shape of a coin flip.
     for a in passed_accounts(exam_events):
         if a not in daily_bps:
@@ -2659,7 +2853,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             "payCap": {pool: cap for pool, cap in pay_cap.items() if cap is not None}, "settled": settled,
             "waitsLimit": waits_limit, "touchEvery": touch_every_of,
             "touchOracle": touch_oracle, "stopBook": stop_book, "bookExams": sorted(book_exams), "gaps": gaps,
-            "bookRead": book_read, "tail": tail, "noPrice": no_price}
+            "bookRead": book_read, "tail": tail, "noPrice": no_price, "stopOracle": stop_oracle,
+            "stopPriceDoubt": stop_doubts, "coverage": coverage}
 
 
 GAP = "0x" + keccak(text="Gap(uint256,uint256)").hex()
@@ -2731,6 +2926,70 @@ def read_tail(book: str, latest: int) -> dict | None:
     if not watched or int(last) >= latest:
         return None
     return {"read": True, "from": int(last) + 1, "to": latest, "watched": len(watched)}
+
+
+def stop_intervals(accounts: list[str], exam_events: dict[str, list[dict]], latest: int,
+                   book_exams: set[str] | frozenset) -> list[tuple[int, int]]:
+    """The blocks some stop of `accounts` stood in while the stop book carried it out (`book_spans`), as runs."""
+    blocks: list[tuple[int, int]] = sorted((s["armedAt"], s["end"]) for a in accounts if a in book_exams
+                                           for s in book_spans(exam_events.get(a) or [], latest) if s["end"] >= s["armedAt"])
+    out: list[list[int]] = []
+    for lo, hi in blocks:
+        if out and lo <= out[-1][1] + 1:
+            out[-1][1] = max(out[-1][1], hi)
+        else:
+            out.append([lo, hi])
+    return [(lo, hi) for lo, hi in out]
+
+
+def overlap(lo: int, hi: int, a: int, b: int) -> int:
+    return max(0, min(hi, b) - max(lo, a) + 1)
+
+
+def read_coverage(book: str, intervals: list[tuple[int, int]], gaps: list[tuple[int, int]] | None, tail: dict | None,
+                  latest: int) -> list[dict] | None:
+    """The blocks of a stop's time that are neither in the stop book's journal, nor in a Gap it logged, nor in the tail
+    since its last check (review 12 of #336, Info-1): a block its check logged is one position of the journal
+    (`logged()`, `at(pos)`, read at `latest`), and while a stop stands its asset is watched, so each check logs it. The
+    Gaps come from the node's index of logs; one that is behind leaves blocks in none of the three, and those are not
+    checked. Returns, for each run of `intervals` whose count does not come out, {from, to, logged, gaps, tail}; [] where
+    each does, or where the Gaps or the tail were not read (`stop_doubt` holds for that already); None where the journal
+    could not be read."""
+    if not intervals or gaps is None or (tail is not None and not tail.get("read", True)):
+        return []
+    at_ = hex(latest)
+    found: dict[int, int] = {}
+    try:
+        n = int(abi_decode(["uint256"], c.eth_call(book, c.selector("logged()"), at_))[0])
+
+        def blk(pos: int) -> int:
+            if pos not in found:
+                data = c.selector("at(uint256)") + abi_encode(["uint256"], [pos])
+                found[pos] = int(abi_decode(["uint256", "uint256"], c.eth_call(book, data, at_))[0])
+            return found[pos]
+
+        def first(block: int) -> int:
+            """The first position of the journal at `block` or after it; `n` for none."""
+            lo, hi = 0, n
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if blk(mid) < block:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            return lo
+
+        out: list[dict] = []
+        for lo, hi in intervals:
+            row = {"from": lo, "to": hi, "logged": first(hi + 1) - first(lo),
+                   "gaps": sum(overlap(lo, hi, a, b) for a, b in gaps),
+                   "tail": overlap(lo, hi, tail["from"], tail["to"]) if tail else 0}
+            if row["logged"] + row["gaps"] + row["tail"] != hi - lo + 1:
+                out.append(row)
+        return out
+    except Exception as exc:
+        core.log("not_read", address=book, call="logged()", error=quiet(exc, 120))
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
