@@ -428,7 +428,6 @@ def check_libraries() -> tuple[list[str], int]:
     for rel, contracts in LIB_CALLS.items():
         declared = {f"{e['name']}({','.join(canonical(i) for i in e['inputs'])})" for contract in contracts
                     for e in abi(contract) if e.get("type") == "function" and mutability(e) != "view"}
-        contract = " or ".join(contracts)
         # The whole file, not a line at a time: a call whose signature sits on the line after `call(pool,` counts too.
         source = read(rel)
         for m in re.finditer(r"""\bcall\(\s*\w+\s*,\s*["'`](\w+\([^"'`]*\))["'`]""", source):
@@ -436,7 +435,8 @@ def check_libraries() -> tuple[list[str], int]:
             sig = m.group(1)
             if re.sub(r"\s+", "", sig) not in declared:
                 n = source.count("\n", 0, m.start()) + 1
-                problems.append(f"{rel}:{n} call {sig}: {contract} declares no such function that sends")
+                problems.append(f"{rel}:{n} call {sig}: {contracts[0]} declares no such function that sends"
+                                + (f" (nor {', '.join(contracts[1:])})" if len(contracts) > 1 else ""))
     return problems, count
 
 
