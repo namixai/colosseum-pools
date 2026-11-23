@@ -519,6 +519,71 @@ contract SimPoolTest is Test {
         assertEq(factory.listedAssets(), cap);
     }
 
+    /// The hole a check of the listing alone leaves: an asset delisted with no stop on it, the list full again, then
+    /// an exam bought while it was listed sets a stop on it. The book takes no new asset off the list with no place
+    /// left (as a market takes no new orders on an instrument off its list), and the exam passes the reason on; a
+    /// place freed, the stop is set.
+    function test_listing_aDelistedAssetNotLoggedYet_takesNoStopWithTheListFull() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        _fill(e, trader, true, 100); // a position on BTC, no stop on it: the book does not log BTC
+        StopBook b = factory.stopBook();
+        assertEq(b.watched().length, 0);
+        uint256 cap = factory.MAX_LISTED();
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        factory.setAsset(BTC, 0);
+        factory.setAsset(9999, 500); // the list full again, BTC off it and not logged
+        assertEq(factory.listedAssets(), cap);
+        assertFalse(factory.watchable(BTC));
+        vm.prank(trader);
+        vm.expectRevert(abi.encodeWithSelector(StopBook.NoPlaceForAsset.selector, BTC));
+        e.setTrigger(BTC, false, 950_000, 0);
+        assertEq(b.watched().length, 0, "never more than MAX_LISTED logged");
+        factory.setAsset(9999, 0); // a place freed
+        assertTrue(factory.watchable(BTC));
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        assertEq(b.watched().length, 1);
+        vm.expectRevert(SimPoolFactory.TooManyAssets.selector); // BTC logged holds its place
+        factory.setAsset(9999, 500);
+    }
+
+    /// A delisted asset the book logs already takes more stops with the list full: it holds its place.
+    function test_listing_aDelistedAssetLoggedAlready_takesStopsWithTheListFull() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        _fill(e, trader, true, 100);
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        uint256 cap = factory.MAX_LISTED();
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        factory.setAsset(BTC, 0); // delisted, logged: 19 listed and BTC
+        assertFalse(factory.watchable(7777), "no place for a new one");
+        assertTrue(factory.watchable(BTC), "BTC holds its own");
+        vm.prank(trader);
+        e.setTrigger(BTC, true, 1_100_000, 0); // a take on BTC, logged already
+        assertEq(factory.stopBook().entries(address(e)), 2);
+    }
+
+    /// A listed asset takes its first stop with the list full.
+    function test_listing_aListedAssetTakesItsFirstStopWithTheListFull() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        _fill(e, trader, true, 100);
+        uint256 cap = factory.MAX_LISTED();
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        assertTrue(factory.watchable(BTC));
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        assertEq(factory.stopBook().watched().length, 1);
+    }
+
     function test_open_eachAssetsCapIsTheListsAtMost() public {
         factory.setAsset(BTC, 400); // under the plan's 5x
         SimPlan memory p = _plan();

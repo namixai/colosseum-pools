@@ -295,6 +295,9 @@ contract PaperExam is Initializable {
     error NotBook();
     error StopsPending();
     error WouldTrigger(uint64 oracle, uint64 px);
+    /// The stop book's (`StopBook.NoPlaceForAsset`), passed on by `setTrigger`: a first stop on an asset the factory
+    /// has delisted, while the assets the book logs are at the factory's most.
+    error NoPlaceForAsset(uint32 asset);
 
     /// The stop book checks this block, and carries out every touch of this exam's stops and takes, before anything
     /// here is read: a stop the price has reached is carried out first. Not one may be left.

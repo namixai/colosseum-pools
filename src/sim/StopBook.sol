@@ -22,9 +22,11 @@ interface IStopExam {
     ) external returns (uint8);
 }
 
-/// The factory's register of its pools and their exams.
+/// The factory's register of its pools and their exams, and whether its list leaves room for the book to log an
+/// asset (`SimPoolFactory.watchable`).
 interface IPoolRegister {
     function poolOf(address account) external view returns (address);
+    function watchable(uint32 asset) external view returns (bool);
 }
 
 /// @title StopBook
@@ -155,6 +157,9 @@ contract StopBook {
     error Reentered();
     /// A level the journal cannot hold (`MAX_PRICE`).
     error LevelTooHigh(uint64 level);
+    /// A first entry on `asset`, which the factory has delisted, while the assets logged are at the factory's most
+    /// (`SimPoolFactory.MAX_LISTED`, `watchable`): as a market takes no new orders on an instrument off its list.
+    error NoPlaceForAsset(uint32 asset);
     /// A check needs at least `needed` gas left for each asset's price.
     error PokeGas(uint256 needed);
 
@@ -169,7 +174,8 @@ contract StopBook {
     ///         takes a cancel or a new price no sooner than an order: the one there stays, and is carried out at its
     ///         touches, up to block `armedAt`, and from that block `level` takes its place (zero: none). A change asked
     ///         before and not yet in force is replaced. Only an exam of the factory, and not from inside a settle; an
-    ///         exam calls it settled, so no change of its is due (`_due`).
+    ///         exam calls it settled, so no change of its is due (`_due`). A first entry on an asset the book does not
+    ///         log yet and the factory has delisted waits for room under the factory's most (`NoPlaceForAsset`).
     function add(uint32 asset, bool isTake, bool below, uint64 level, uint64 armedAt) external {
         _onlyExam();
         if (level > MAX_PRICE) revert LevelTooHigh(level);
@@ -184,6 +190,9 @@ contract StopBook {
             _keys[msg.sender].push(uint64(uint256(asset) << 1 | (isTake ? 1 : 0)));
         }
         if (old.level == 0 && _count[asset]++ == 0) {
+            // A new asset to log: one off the factory's list only while the list leaves room, so that a check always
+            // fits a small block.
+            if (!IPoolRegister(factory).watchable(asset)) revert NoPlaceForAsset(asset);
             _assets.push(asset);
             _assetPos[asset] = _assets.length;
         }

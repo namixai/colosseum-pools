@@ -215,6 +215,13 @@ contract SimPoolFactory {
         emit AssetSet(asset, capX100);
     }
 
+    /// @notice Whether the stop book may start logging `asset` (its first stop or take on it): listed, or, delisted,
+    ///         while the listed assets and the delisted ones it logs already leave a place under `MAX_LISTED`
+    ///         (`StopBook.NoPlaceForAsset`). An asset it logs already, or a listed one, it always takes.
+    function watchable(uint32 asset) external view returns (bool) {
+        return assetCapX100[asset] != 0 || listedAssets + _loggedUnlisted(asset) < MAX_LISTED;
+    }
+
     /// How many assets the stop book logs that are not listed, `asset` left out.
     function _loggedUnlisted(uint32 asset) internal view returns (uint256 n) {
         uint32[] memory w = stopBook.watched();

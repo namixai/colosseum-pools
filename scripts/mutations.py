@@ -16889,6 +16889,20 @@ MUTATIONS = [
      '            if (changing) changes = true;\n',
      '',
      ['test_journal_logsWatchedAssets_onceABlock', 'test_P2_aRemovalActsFromItsBlock_notBefore']),
+    # A first entry on a delisted asset waits for room under the factory's most (StopBook.add, SimPoolFactory.watchable):
+    # the book never logs more than MAX_LISTED assets. Its tests are under test/sim/SimPool.t.sol, so "SM".
+    ('SM313', 'src/sim/StopBook.sol',
+     '            if (!IPoolRegister(factory).watchable(asset)) revert NoPlaceForAsset(asset);\n',
+     '',
+     ['test_listing_aDelistedAssetNotLoggedYet_takesNoStopWithTheListFull']),
+    ('SM314', 'src/sim/SimPoolFactory.sol',
+     'return assetCapX100[asset] != 0 || listedAssets + _loggedUnlisted(asset) < MAX_LISTED;',
+     'return assetCapX100[asset] != 0 || listedAssets + _loggedUnlisted(asset) <= MAX_LISTED;',
+     ['test_listing_aDelistedAssetNotLoggedYet_takesNoStopWithTheListFull']),
+    ('SM315', 'src/sim/SimPoolFactory.sol',
+     'return assetCapX100[asset] != 0 || listedAssets + _loggedUnlisted(asset) < MAX_LISTED;',
+     'return listedAssets + _loggedUnlisted(asset) < MAX_LISTED;',
+     ['test_listing_aListedAssetTakesItsFirstStopWithTheListFull']),
     # The listed count, with the delisted assets the stop book still logs (SimPoolFactory.setAsset): the factory's
     # tests are under test/sim, so the "SM" suite runs them (were SB110, SB111).
     ('SM309', 'src/sim/SimPoolFactory.sol',

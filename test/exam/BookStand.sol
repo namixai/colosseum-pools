@@ -21,4 +21,9 @@ abstract contract BookStand {
     function poolOf(address account) external view returns (address) {
         return account.code.length != 0 ? address(this) : address(0);
     }
+
+    /// Every asset listed: the book logs any (the factory's own list: `test/sim/SimPool.t.sol`).
+    function watchable(uint32) external pure returns (bool) {
+        return true;
+    }
 }
