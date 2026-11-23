@@ -151,12 +151,12 @@ def write_status(out: pathlib.Path, status: dict) -> None:
 
 
 def read_prices(path: pathlib.Path, expect: dict | None = None, second: pathlib.Path | None = None,
-                lo_t: int | None = None, hi_t: int | None = None):
+                lo_t: int | None = None, hi_t: int | None = None, want: dict | None = None):
     """The stops' loop's journal and the second writer's (`payout_review.read_journals`: their day files of the stops'
     time, each of this deployment), or None where there is none to read: then no stop is checked in every block, and
     each payout with a stop is held (`payout_review.stop_doubt`), never passed as clean."""
     try:
-        got = pr.read_journals([path] + ([second] if second else []), expect, lo_t, hi_t)
+        got = pr.read_journals([path] + ([second] if second else []), expect, lo_t, hi_t, want)
         if got is None:
             raise FileNotFoundError(path.name)
         return got
@@ -253,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     second = pathlib.Path(args.prices2) if args.prices2 else None
     prices = None
     if args.prices:
-        prices = lambda lo, hi: read_prices(pathlib.Path(args.prices), expect, second, lo, hi)  # noqa: E731
+        prices = lambda lo, hi, want: read_prices(pathlib.Path(args.prices), expect, second, lo, hi, want)  # noqa: E731
     bps = args.candle_bps
     if bps is None:
         bps = int(os.environ.get("COLOSSEUM_CANDLE_BPS", "") or

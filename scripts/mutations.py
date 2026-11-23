@@ -17211,6 +17211,25 @@ MUTATIONS = [
      "    for r in reviews:\n        write(out, pr.card(r, chain))\n",
      "",
      ["test_every_document_is_written_before_the_first_alarm_that_may_hang"]),
+    # The journals read line by line, only the stops' time kept, in arrays.
+    ("RY11", "ops/payout_review.py",
+     "                if want is not None and not want.has(asset, b):\n                    continue",
+     "                pass",
+     ["test_only_the_blocks_of_each_assets_windows_are_kept"]),
+    ("RY12", "ops/payout_review.py",
+     "        for asset, ex in extra.items():\n            self._merge(asset, self.px[asset], ex, bit, name)",
+     "        pass",
+     ["test_blocks_out_of_order_twice_and_a_hole_filled_by_the_other_are_put_in_place"]),
+    ("RY13", "ops/payout_review.py",
+     "            want.setdefault(sp[\"asset\"], []).append((sp[\"armedAt\"], sp[\"end\"]))",
+     "            pass",
+     ["test_the_windows_are_each_stops_time_and_the_chains_own_prices"]),
+    ("RY14", "ops/payout_review.py",
+     "        if every == 1 and isinstance(known, BlockPrices):  # every block: counted, not listed (a stop of 30 days)\n"
+     "            out[\"unread\"] += (hi - lo + 1) - known.count_in(lo, hi)",
+     "        if every == 1 and isinstance(known, BlockPrices):  # every block: counted, not listed (a stop of 30 days)\n"
+     "            out[\"unread\"] += 0",
+     ["test_a_hole_in_the_journal_inside_a_stops_time_holds_the_payout"]),
 ]
 
 RUNNERS = {

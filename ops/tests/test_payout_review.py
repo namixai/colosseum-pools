@@ -1503,6 +1503,7 @@ class TheStopsJournal(unittest.TestCase):
         self.assertEqual((got["kinds"], got["action"]), (["stop-unchecked"], "hold"))
         self.assertIn("2 of the 303 blocks 1003..1305 of the stop at 950000 on asset 3 are not in the journal", got["reasons"][0])
         self.assertIn("1100..1101 (the loop was not running)", got["reasons"][0])
+        self.assertEqual(got["missedTouch"]["stage"]["unread"], 2, "the blocks of the hole counted, never listed")
         self.assertEqual(got["stopDraft"]["trades"], [tx(80_000 + 1_001)])
 
     def test_a_journal_the_chain_does_not_bear_out_holds_the_payout(self):

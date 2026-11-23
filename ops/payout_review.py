@@ -51,12 +51,18 @@ It sends nothing on either network, so it needs no key and no --confirm-mainnet 
 from __future__ import annotations
 
 import argparse
+import heapq
+import inspect
 import json
 import math
 import os
 import pathlib
+import re
 import sys
 import time
+from array import array
+from bisect import bisect_left, bisect_right
+from collections.abc import Mapping
 
 from eth_abi import decode as abi_decode
 from eth_abi import encode as abi_encode
@@ -714,6 +720,13 @@ def oracle_by_asset(oracle: dict[str, int]) -> dict[int, dict[int, int]]:
     return out
 
 
+def items_in(known, lo: int, hi: int):
+    """The (block, px) of `known` from `lo` to `hi`, in block order: from the arrays of a journal, or a dict filtered."""
+    if isinstance(known, BlockPrices):
+        return known.items_in(lo, hi)
+    return sorted((b, o) for b, o in known.items() if lo <= b <= hi)
+
+
 def missed_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: int, every: int | None) -> dict:
     """The stops and takes of an account the oracle reached while they stood and nobody carried out then: a missed stop
     leaves the position open, and if the price comes back the trader is spared the loss.
@@ -738,21 +751,25 @@ def missed_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: i
             continue  # gone before it could act
         out["spans"] += 1
         known = prices.get(s["asset"], {})
-        out["unread"] += sum(b not in known for b in touch_points(s, every))
-        points = {b: trigger_hit(s["take"], s["side"], o, s["px"]) for b, o in known.items() if lo <= b <= hi}
-        for b in s["seen"]:
-            if lo <= b <= hi:
-                points[b] = True
-        runs: list[list[int]] = []
+        if every == 1 and isinstance(known, BlockPrices):  # every block: counted, not listed (a stop of 30 days)
+            out["unread"] += (hi - lo + 1) - known.count_in(lo, hi)
+        else:
+            out["unread"] += sum(b not in known for b in touch_points(s, every))
+        seen = {b for b in s["seen"] if lo <= b <= hi}
+        read = ((b, b in seen or trigger_hit(s["take"], s["side"], o, s["px"])) for b, o in items_in(known, lo, hi))
+        only_seen = sorted(b for b in seen if b not in known)
+        # Each stretch as [first, last, reads, seen]: a stop of 30 days keeps no list of its blocks.
+        runs: list[list] = []
         broken = True  # whether the latest stretch was ended by a read block off the price
-        for b in sorted(points):
-            if not points[b]:
+        for b, hit in heapq.merge(read, ((b, True) for b in only_seen)):
+            if not hit:
                 broken = True
             elif broken:
-                runs.append([b])
+                runs.append([b, b, 1, b in seen])
                 broken = False
             else:
-                runs[-1].append(b)
+                run = runs[-1]
+                run[1], run[2], run[3] = b, run[2] + 1, run[3] or b in seen
         if s["then"] == "carried out" and runs and not broken:
             own = runs.pop()  # the close's own stretch
             if hi - own[0] > TRIGGER_BACK:
@@ -760,16 +777,141 @@ def missed_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: i
                 # price: late, whatever the others' lateness (one trader's own stops are enough to hold it).
                 out["late"].append({"asset": s["asset"], "take": s["take"], "px": s["px"], "side": s["side"],
                                     "armedAt": lo, "first": own[0], "filled": hi, "late": hi - own[0]})
-        seen = set(s["seen"])
         for run in runs:
             out["missed"].append({"asset": s["asset"], "take": s["take"], "px": s["px"], "side": s["side"],
-                                  "armedAt": lo, "first": run[0], "last": run[-1], "reads": len(run),
-                                  "seen": any(b in seen for b in run), "then": s["then"], "at": hi})
+                                  "armedAt": lo, "first": run[0], "last": run[1], "reads": run[2],
+                                  "seen": run[3], "then": s["then"], "at": hi})
     out["missed"].sort(key=lambda m: (m["first"], m["asset"], m["take"]))
     return out
 
 
 # ── the stops' journal of prices, and its check ─────────────────────────────────────
+
+class BlockPrices(Mapping):
+    """{block: px} of one asset (or {block: time}), kept as three sorted arrays rather than a dict: the review's memory
+    goes with the blocks it keeps, eight bytes a price, not with a Python object for each (review 15 of #338). `seen`
+    holds, for each block, a bit for each journal that wrote it."""
+
+    __slots__ = ("b", "v", "seen")
+
+    def __init__(self):
+        self.b, self.v, self.seen = array("q"), array("q"), array("B")
+
+    def _at(self, block) -> int:
+        if isinstance(block, bool) or not isinstance(block, int):
+            return -1
+        i = bisect_left(self.b, block)
+        return i if i < len(self.b) and self.b[i] == block else -1
+
+    def __getitem__(self, block) -> int:
+        i = self._at(block)
+        if i < 0:
+            raise KeyError(block)
+        return self.v[i]
+
+    def __contains__(self, block) -> bool:
+        return self._at(block) >= 0
+
+    def __iter__(self):
+        return iter(self.b)
+
+    def __len__(self) -> int:
+        return len(self.b)
+
+    def items(self):
+        return zip(self.b, self.v)
+
+    def span(self, lo: int, hi: int) -> tuple[int, int]:
+        return bisect_left(self.b, lo), bisect_right(self.b, hi)
+
+    def items_in(self, lo: int, hi: int):
+        i, j = self.span(lo, hi)
+        return zip(self.b[i:j], self.v[i:j])
+
+    def count_in(self, lo: int, hi: int) -> int:
+        i, j = self.span(lo, hi)
+        return j - i
+
+    def single_count(self, lo: int, hi: int) -> int:
+        """How many blocks from `lo` to `hi` one journal alone wrote."""
+        i, j = self.span(lo, hi)
+        seen = self.seen[i:j]
+        return (j - i) - sum(seen.count(k) for k in _MANY)
+
+    def single_in(self, lo: int, hi: int, limit: int | None = None) -> list[int]:
+        """The blocks from `lo` to `hi` that one journal alone wrote, the first `limit` of them (None: all)."""
+        if not self.single_count(lo, hi):
+            return []
+        i, j = self.span(lo, hi)
+        out = []
+        for b, k in zip(self.b[i:j], self.seen[i:j]):
+            if k & (k - 1) == 0:
+                out.append(b)
+                if limit is not None and len(out) >= limit:
+                    break
+        return out
+
+
+_MANY = [k for k in range(256) if k & (k - 1)]  # a block's `seen` with two journals or more
+
+
+class Windows:
+    """The blocks a review keeps of the journals: for each asset, the time each stop of a payout still waiting stood
+    (and the blocks the chain wrote a price of its own in); nothing else of a journal is held in memory."""
+
+    def __init__(self, want: dict[int, list[tuple[int, int]]]):
+        self.lo: dict[int, list[int]] = {}
+        self.hi: dict[int, list[int]] = {}
+        for asset, spans in want.items():
+            merged: list[list[int]] = []
+            for lo, hi in sorted((int(a), int(b)) for a, b in spans if b >= a):
+                if merged and lo <= merged[-1][1] + 1:
+                    merged[-1][1] = max(merged[-1][1], hi)
+                else:
+                    merged.append([lo, hi])
+            if merged:
+                key = None if asset is None else int(asset)
+                self.lo[key] = [m[0] for m in merged]
+                self.hi[key] = [m[1] for m in merged]
+        self.first = min((v[0] for v in self.lo.values() if v), default=0)
+        self.last = max((v[-1] for v in self.hi.values() if v), default=-1)
+        self.cur: dict = {}  # asset -> the window the last block asked fell in (a journal comes in block order)
+        if want and None not in want:  # the blocks any asset keeps: those whose time is kept
+            every = Windows({None: [(lo, hi) for a in self.lo for lo, hi in zip(self.lo[a], self.hi[a])]})
+            self.lo[None], self.hi[None] = every.lo.get(None, []), every.hi.get(None, [])
+
+    def has(self, asset, block: int) -> bool:
+        cur = self.cur.get(asset)
+        if cur is not None and cur[0] <= block <= cur[1]:
+            return True
+        los = self.lo.get(asset)
+        if not los:
+            return False
+        i = bisect_right(los, block) - 1
+        if i >= 0 and block <= self.hi[asset][i]:
+            self.cur[asset] = (los[i], self.hi[asset][i])
+            return True
+        return False
+
+    def any(self, block: int) -> bool:
+        return self.has(None, block)
+
+
+_ROW_BLOCK = re.compile(r'\{\s*"b"\s*:\s*(\d+)\s*[,}]')
+CONFLICT_TEXTS = 50  # the words of a conflict kept a journal asset; every block of one is kept, as a number
+
+
+def text_lines(text: str):
+    """The lines of `text`, one at a time: no list of them, no copy of the whole."""
+    at = 0
+    while at < len(text):
+        nl = text.find("\n", at)
+        if nl < 0:
+            yield text[at:]
+            return
+        yield text[at:nl]
+        at = nl + 1
+
 
 class Journal:
     """The journal of oracle prices the stops' loop writes (`ops/stop_filler.py`, `PriceJournal`), one JSON line a
@@ -781,21 +923,27 @@ class Journal:
     is a line of the wrong shape (`bad` counts them): its block is a hole, never the end of the review.
 
     One Journal may hold two journals, the keeper's and the second writer's on another machine and node (`add_text`
-    once each): a block is held where either has it, and where both have it they must give the same price. A block one
-    journal gives two prices for, or the two journals give different prices for, is in `conflicts` and holds every stop
-    standing in it. A file of another chain, factory or deployment than `expect` is refused whole and said in `notes`:
-    its blocks are holes, which the other journal may fill."""
+    or `add_lines` once each): a block is held where either has it, and where both have it they must give the same
+    price; `single_in` names the blocks only one of them holds, no cross-check. A block one journal gives two prices
+    for, or the two journals give different prices for, is a conflict (`conflicts_in`) and holds every stop standing
+    in it. A file of another chain, factory or deployment than `expect` is refused whole and said in `notes`: its
+    blocks are holes, which the other journal may fill.
 
-    def __init__(self):
-        self.px: dict[int, dict[int, int]] = {}
-        self.times: dict[int, int] = {}
+    `want` ({asset: [(lo, hi)]}, `Windows`): only those blocks of each asset are kept, read line by line, so the
+    memory of a review goes with the time its stops stood, not with the age of the oldest (review 15 of #338). None
+    keeps every block (a journal read by hand)."""
+
+    def __init__(self, want: dict | None = None):
+        self.px: dict[int, BlockPrices] = {}
+        self.times = BlockPrices()
         self.gaps: list[tuple[int, int, str]] = []
         self.lines = 0
         self.bad = 0
-        self.conflicts: dict[int, dict[int, str]] = {}  # asset -> {block: what disagrees}
+        self.conflicts: dict[int, dict[int, str]] = {}  # asset -> {block: what disagrees}, the first CONFLICT_TEXTS
+        self._clash: dict[int, array] = {}  # asset -> every block that disagrees
         self.notes: list[str] = []
         self.sources = 0
-        self.held: dict[int, dict[int, int]] = {}  # asset -> {block: how many journals hold its price}
+        self.want = Windows(want) if want is not None else None
 
     @classmethod
     def parse(cls, text: str, expect: dict | None = None, name: str = "the journal") -> "Journal":
@@ -805,13 +953,77 @@ class Journal:
 
     def add_text(self, text: str, expect: dict | None = None, name: str = "the journal") -> None:
         """The lines of one journal (one or more of its day files, one after the other) added to this one."""
+        self.add_lines(text_lines(text), expect, name)
+
+    def _clash_at(self, asset: int, block: int, why: str) -> None:
+        self._clash.setdefault(asset, array("q")).append(block)
+        texts = self.conflicts.setdefault(asset, {})
+        if block in texts or len(texts) < CONFLICT_TEXTS:
+            texts[block] = why
+
+    def _put(self, asset, store: BlockPrices, block: int, v: int, bit: int, extra: tuple, name: str) -> None:
+        b = store.b
+        if not b or block > b[-1]:  # the journal's own order: in block order, one after the other
+            b.append(block)
+            store.v.append(v)
+            store.seen.append(bit)
+            return
+        i = bisect_left(b, block)
+        if i < len(b) and b[i] == block:
+            held = store.v[i]
+            if asset is not None and held != v:
+                self._clash_at(asset, block, f"{name} gives two prices at block {block}: {held} and {v}"
+                               if store.seen[i] & bit else
+                               f"the journals disagree at block {block}: {held} against {v} in {name}")
+            store.seen[i] |= bit
+            return
+        extra[0].append(block)  # inside what is held and not in it: put in place once this journal is read
+        extra[1].append(v)
+
+    def _merge(self, asset, store: BlockPrices, extra: tuple, bit: int, name: str) -> None:
+        eb, ev = extra
+        if not eb:
+            return
+        order = sorted(range(len(eb)), key=eb.__getitem__)
+        nb, nv, ns = array("q"), array("q"), array("B")
+        at = 0
+        prev = None
+        for k in order:
+            block, v = eb[k], ev[k]
+            if block == prev:  # written twice by this journal, both outside its order
+                if asset is not None and nv[-1] != v:
+                    self._clash_at(asset, block, f"{name} gives two prices at block {block}: {nv[-1]} and {v}")
+                continue
+            i = bisect_left(store.b, block, at)
+            nb.extend(store.b[at:i])
+            nv.extend(store.v[at:i])
+            ns.extend(store.seen[at:i])
+            at = i
+            nb.append(block)
+            nv.append(v)
+            ns.append(bit)
+            prev = block
+        nb.extend(store.b[at:])
+        nv.extend(store.v[at:])
+        ns.extend(store.seen[at:])
+        store.b, store.v, store.seen = nb, nv, ns
+
+    def add_lines(self, lines, expect: dict | None = None, name: str = "the journal") -> None:
+        """The lines of one journal, read one at a time (`lines` any iterable of them), added to this one."""
         self.sources += 1
-        mine: dict[tuple[int, int], int] = {}  # this journal's own prices, for a block it writes twice
+        bit = 1 << min(self.sources - 1, 7)
+        want = self.want
+        extra: dict = {}
+        extra_t = (array("q"), array("q"))
         refused = False
-        for line in text.splitlines():
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
+            if want is not None:
+                m = _ROW_BLOCK.match(line)
+                if m and not want.first <= int(m.group(1)) <= want.last:
+                    continue  # a row outside every stop's time: not even parsed
             try:
                 row = json.loads(line)
             except ValueError:
@@ -845,39 +1057,62 @@ class Journal:
                 got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, bool)}
                 if len(got) != len(px):
                     raise TypeError("px")
+                if not -(1 << 63) <= b < (1 << 63) or any(not -(1 << 63) <= v < (1 << 63) for v in got.values()):
+                    raise ValueError("out of range")
             except (TypeError, ValueError, KeyError, IndexError):
                 self.bad += 1  # its block is a hole: no price of it is taken
                 continue
             self.lines += 1
-            if t is not None:
-                self.times.setdefault(b, t)
+            if t is not None and (want is None or want.any(b)) and -(1 << 63) <= t < (1 << 63):
+                self._put(None, self.times, b, t, bit, extra_t, name)
             for asset, v in got.items():
                 if v <= 0:  # a zero price (a feed not live) is no price
                     continue
-                key = (asset, b)
-                if key in mine:
-                    if mine[key] != v:
-                        self.conflicts.setdefault(asset, {})[b] = f"{name} gives two prices at block {b}: {mine[key]} and {v}"
+                if want is not None and not want.has(asset, b):
                     continue
-                mine[key] = v
-                count = self.held.setdefault(asset, {})
-                count[b] = count.get(b, 0) + 1
-                held = self.px.setdefault(asset, {})
-                if b in held and held[b] != v:  # an earlier journal's price
-                    self.conflicts.setdefault(asset, {})[b] = (f"the journals disagree at block {b}: {held[b]} against "
-                                                               f"{v} in {name}")
-                held.setdefault(b, v)
+                store = self.px.get(asset)
+                if store is None:
+                    store = self.px[asset] = BlockPrices()
+                sb = store.b
+                if not sb or b > sb[-1]:  # the common case, inline: the journal's own order
+                    sb.append(b)
+                    store.v.append(v)
+                    store.seen.append(bit)
+                else:
+                    ex = extra.get(asset)
+                    if ex is None:
+                        ex = extra[asset] = (array("q"), array("q"))
+                    self._put(asset, store, b, v, bit, ex, name)
+        for asset, ex in extra.items():
+            self._merge(asset, self.px[asset], ex, bit, name)
+        self._merge(None, self.times, extra_t, bit, name)
 
     def gaps_in(self, lo: int, hi: int) -> list[str]:
         return [f"{a}..{b} ({why})" for a, b, why in self.gaps if a <= hi and b >= lo]
 
-    def conflicts_in(self, asset: int, lo: int, hi: int) -> list[str]:
-        return [why for b, why in sorted(self.conflicts.get(asset, {}).items()) if lo <= b <= hi]
+    def clash_in(self, asset: int, lo: int, hi: int, words: int = 3) -> tuple[int, list[str]]:
+        """How many blocks from `lo` to `hi` the journals disagree at for `asset`, and the words of the first `words`."""
+        blocks = sorted({b for b in self._clash.get(asset, ()) if lo <= b <= hi})
+        texts = self.conflicts.get(asset, {})
+        return len(blocks), [texts.get(b) or f"the journals disagree at block {b}" for b in blocks[:words]]
 
-    def single_in(self, asset: int, lo: int, hi: int) -> list[int]:
-        """The blocks from `lo` to `hi` whose price of `asset` only one journal holds: no other one bears it out."""
-        count = self.held.get(asset, {})
-        return sorted(b for b in self.px.get(asset, {}) if lo <= b <= hi and count.get(b, 0) < 2)
+    def conflicts_in(self, asset: int, lo: int, hi: int) -> list[str]:
+        n, _ = self.clash_in(asset, lo, hi, 0)
+        return self.clash_in(asset, lo, hi, n)[1]
+
+    def single_in(self, asset: int, lo: int, hi: int, limit: int | None = None) -> list[int]:
+        """The blocks from `lo` to `hi` whose price of `asset` only one journal holds, no other bearing it out: the first
+        `limit` of them (None: all)."""
+        got = self.px.get(asset)
+        return got.single_in(lo, hi, limit) if got is not None else []
+
+    def single_count(self, asset: int, lo: int, hi: int) -> int:
+        got = self.px.get(asset)
+        return got.single_count(lo, hi) if got is not None else 0
+
+    def count_in(self, asset: int, lo: int, hi: int) -> int:
+        got = self.px.get(asset)
+        return got.count_in(lo, hi) if got is not None else 0
 
 
 JOURNAL_SCHEMA = "colosseum-prices/2"  # ops/stop_filler.py's: the first line of each day file
@@ -897,38 +1132,48 @@ def journal_foreign(header: dict, expect: dict | None) -> str | None:
     return None
 
 
-def journal_text(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None = None) -> str:
-    """The text of the journal `path` names (ops/stop_filler.py writes one file a day beside it, prices-<label>-
+def journal_files(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None = None) -> list[pathlib.Path]:
+    """The files of the journal `path` names (ops/stop_filler.py writes one file a day beside it, prices-<label>-
     YYYY-MM-DD.jsonl): the day files from the day before `lo_t` to the day after `hi_t` (all of them when not given),
     oldest first, and `path` itself first when it holds lines (a journal written before the day files, or a single
     file given by hand). Each day file starts with its header, so the files of another deployment are known."""
-    parts = []
-    if path.is_file() and path.stat().st_size:
-        parts.append(path.read_text(errors="replace"))
+    out = [path] if path.is_file() and path.stat().st_size else []
     lo_day = time.strftime("%Y-%m-%d", time.gmtime(lo_t - 86_400)) if lo_t is not None else ""
     hi_day = time.strftime("%Y-%m-%d", time.gmtime(hi_t + 86_400)) if hi_t is not None else "9999"
     for f in sorted(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}")):
         day = f.name[len(path.stem) + 1:len(path.stem) + 11]
         if lo_day <= day <= hi_day:
-            text = f.read_text(errors="replace")
-            parts.append(text if text.endswith("\n") or not text else text + "\n")
+            out.append(f)
+    return out
+
+
+def file_lines(files: list[pathlib.Path]):
+    """The lines of `files`, one after the other, read one at a time: a journal is never in memory whole."""
+    for f in files:
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            yield from fh
+
+
+def journal_text(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None = None) -> str:
+    """The text of the journal's files (`journal_files`), each ending in a new line: for a journal read by hand."""
+    parts = [f.read_text(errors="replace") for f in journal_files(path, lo_t, hi_t)]
     return "".join(p if p.endswith("\n") else p + "\n" for p in parts if p)
 
 
 def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: int | None = None,
-                  hi_t: int | None = None) -> "Journal | None":
-    """The journals `paths` name, one Journal (`Journal.add_text` each): the keeper's and the second writer's. A path
-    with no file of its own and no day file is said in `notes` and adds nothing (its blocks are the other's to hold); None when none of them exists."""
-    j = Journal()
+                  hi_t: int | None = None, want: dict | None = None) -> "Journal | None":
+    """The journals `paths` name, one Journal (`Journal.add_lines` each, line by line): the keeper's and the second
+    writer's, of the blocks `want` names only (`Windows`; None, every block). A path with no file of its own and no day
+    file is said in `notes` and adds nothing (its blocks rest on the other alone); None when none of them exists."""
+    j = Journal(want)
     found = False
     for path in paths:
-        text = journal_text(path, lo_t, hi_t)
         exists = path.is_file() or any(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}"))
         if not exists:
             j.notes.append(f"the journal {path.name} is not there")
             continue
         found = True
-        j.add_text(text, expect, path.name)
+        j.add_lines(file_lines(journal_files(path, lo_t, hi_t)), expect, path.name)
     return j if found else None
 
 
@@ -1039,7 +1284,7 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
             known = journal.px.get(s["asset"], {})
             lo, hi = s["armedAt"], s["end"]
             want += [(s["asset"], lo), (s["asset"], hi)]
-            want += [(s["asset"], b) for b, px in known.items() if lo <= b <= hi and trigger_hit(s["take"], s["side"], px, s["px"])]
+            want += [(s["asset"], b) for b, px in items_in(known, lo, hi) if trigger_hit(s["take"], s["side"], px, s["px"])]
         each = max(1, (reads - len(want)) // len(spans))
         for s in spans:
             want += [(s["asset"], b) for b in spread(s["armedAt"], s["end"], each)]
@@ -1064,7 +1309,8 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
         # A block of a stop's time only one journal holds is no cross-check of its own (review 15 of #338): the node,
         # calibrated, bears it out block by block (`borne`), `reads` such blocks an account at most; the rest stay
         # held by `stop_doubt` as resting on one journal.
-        singles = dict.fromkeys((s["asset"], b) for s in spans for b in journal.single_in(s["asset"], s["armedAt"], s["end"]))
+        singles = dict.fromkeys((s["asset"], b) for s in spans
+                                for b in journal.single_in(s["asset"], s["armedAt"], s["end"], max(reads, 0)))
         for asset, b in list(singles)[:max(reads, 0)]:
             if asset not in calibrated:
                 calibrated[asset] = calibrate(asset, b, b)
@@ -1102,15 +1348,18 @@ def candle_doubts(span: dict, journal: Journal, candles: dict, bps: int) -> list
     below = trigger_hit(take, side, px - 1, px)  # reached from above (a long's stop, a short's take)
     mine = candles.get(span["asset"]) or {}
     known = journal.px.get(span["asset"], {})
-    minutes: dict[int, list[bool]] = {}
-    for b in range(span["armedAt"], span["end"] + 1):
-        if b in known and b in journal.times:
-            minutes.setdefault(journal.times[b] // 60 * 60, []).append(trigger_hit(take, side, known[b], px))
+    minutes: dict[int, bool] = {}  # the minute -> whether a block of it shows the stop reached
+    times = journal.times
+    for b, o in items_in(known, span["armedAt"], span["end"]):
+        t = times.get(b)
+        if t is not None:
+            m = t // 60 * 60
+            minutes[m] = minutes.get(m, False) or trigger_hit(take, side, o, px)
     if not minutes:
         return []
     out, have = [], 0
     far = touch = None
-    for m, hits in sorted(minutes.items()):
+    for m, reached in sorted(minutes.items()):
         c = mine.get(m)
         if c is None:
             continue
@@ -1118,10 +1367,10 @@ def candle_doubts(span: dict, journal: Journal, candles: dict, bps: int) -> list
         low, high = c[0], c[1]
         edge = low if below else high
         gap = (edge - px) if below else (px - edge)  # > 0: short of the stop; < 0: past it
-        if any(hits) and gap * BPS > bps * px and far is None:
+        if reached and gap * BPS > bps * px and far is None:
             far = (f"the journal shows the {'take' if take else 'stop'} at {px} on asset {span['asset']} reached in the "
                    f"minute {m}, where the venue's candle stayed at {edge}, more than {bps} bps short of it")
-        if not any(hits) and -gap * BPS > bps * px and touch is None:
+        if not reached and -gap * BPS > bps * px and touch is None:
             touch = (f"the venue's candle went to {edge} in the minute {m}, more than {bps} bps past the "
                      f"{'take' if take else 'stop'} at {px} on asset {span['asset']}, and the journal shows no reach")
     out += [x for x in (far, touch) if x]
@@ -1159,14 +1408,13 @@ def stop_doubt(evs: list[dict], m: dict | None, journal: Journal | None, check: 
         borne = {(x[0], x[1]) for x in (check or {}).get("borne") or []}
         out["journals"] = 2
         for s in spans:
-            known = journal.px.get(s["asset"], {})
             lo, hi = s["armedAt"], s["end"]
-            holes = (hi - lo + 1) - sum(1 for b in known if lo <= b <= hi)
-            clash = journal.conflicts_in(s["asset"], lo, hi)
-            if clash:
+            holes = (hi - lo + 1) - journal.count_in(s["asset"], lo, hi)
+            n_clash, clash = journal.clash_in(s["asset"], lo, hi)
+            if n_clash:
                 out["unchecked"].append(f"the journals do not agree with themselves or each other in the "
                                         f"{'take' if s['take'] else 'stop'} at {s['px']} on asset {s['asset']}: "
-                                        + "; ".join(clash[:3]) + (f" (and {len(clash) - 3} more)" if len(clash) > 3 else ""))
+                                        + "; ".join(clash) + (f" (and {n_clash - 3} more)" if n_clash > 3 else ""))
                 concerned.append((s["asset"], s["take"], s["armedAt"]))
             if holes:
                 out["journals"] = 0
@@ -1178,12 +1426,14 @@ def stop_doubt(evs: list[dict], m: dict | None, journal: Journal | None, check: 
             # "Clean" only where every block is in both journals and they agree (or the node bore it out): a block one
             # journal alone holds is no cross-check, whatever it says (review 15 of #338: the second journal not there,
             # refused, behind, or with a hole of its own).
-            one = [b for b in journal.single_in(s["asset"], lo, hi) if (s["asset"], b) not in borne]
+            mine = {b for a, b in borne if a == s["asset"] and lo <= b <= hi}
+            one = journal.single_count(s["asset"], lo, hi) - len(mine)
             if one:
                 out["journals"] = min(out["journals"], 1)
+                first = next(b for b in journal.single_in(s["asset"], lo, hi, len(mine) + 1) if b not in mine)
                 out["oneJournal"].append(
-                    f"{len(one)} of the {hi - lo + 1} blocks {lo}..{hi} of the {'take' if s['take'] else 'stop'} at "
-                    f"{s['px']} on asset {s['asset']} are in one journal only (from block {one[0]} to {one[-1]})")
+                    f"{one} of the {hi - lo + 1} blocks {lo}..{hi} of the {'take' if s['take'] else 'stop'} at "
+                    f"{s['px']} on asset {s['asset']} are in one journal only (the first at block {first})")
                 concerned.append((s["asset"], s["take"], s["armedAt"]))
         for why in (check or {}).get("doubts", []):
             out["unchecked"].append(why)
@@ -2858,6 +3108,19 @@ class LogScan:
                                      "index": l.get("logIndex"), "block": int(l["blockNumber"], 16)} for l in got]
 
 
+def journal_windows(accounts, exam_events: dict[str, list[dict]], latest: int) -> dict[int, list[tuple[int, int]]]:
+    """The blocks of the journals a review keeps (`Windows`), {asset: [(lo, hi)]}: each stop's time of `accounts` and,
+    for those assets, each block the chain wrote a price of its own in (`check_journal` holds the journal to them)."""
+    want: dict[int, list[tuple[int, int]]] = {}
+    for a in accounts:
+        for sp in trigger_spans(exam_events.get(a) or [], latest):
+            want.setdefault(sp["asset"], []).append((sp["armedAt"], sp["end"]))
+    for asset, at in chain_prices(exam_events).items():
+        if asset in want:
+            want[asset] += [(b, b) for b in at]
+    return want
+
+
 def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads: int = TOUCH_READS,
                journal_checks: int = JOURNAL_CHECKS, scan: pathlib.Path | None = None, candles=False, archive=None,
                until: float | None = None, candle_bps: int | None = None) -> dict:
@@ -2952,7 +3215,11 @@ def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads
     set_at = [e["t"] for a in due_accounts for e in exam_events.get(a, []) if e["name"] == "TriggerSet"]
     lo_t = min(set_at) if set_at else now
     if callable(prices):
-        prices = prices(lo_t, now)
+        # Only the blocks each stop of those accounts stood in, and the blocks the chain wrote a price of its own in
+        # for their assets, are kept of the journals (`Windows`): the memory of a pass goes with the stops' time, not
+        # with the age of the oldest (review 15 of #338).
+        want = journal_windows(due_accounts, exam_events, latest)
+        prices = prices(lo_t, now, want) if len(inspect.signature(prices).parameters) >= 3 else prices(lo_t, now)
     if callable(candles):
         candles = candles(lo_t, now)
     journal = prices if isinstance(prices, Journal) else None

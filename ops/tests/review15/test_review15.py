@@ -261,7 +261,6 @@ class PassOrder(unittest.TestCase):
 
 
 class JournalMemory(unittest.TestCase):
-    @unittest.expectedFailure  # TODO(review 15): until its fix lands in this round
     def test_a_day_of_two_journals_of_three_assets_fits_a_stop_age_of_ten_days_in_the_units_memory(self):
         """The review reads every day file from the day before the OLDEST stop of any waiting payout's exam or stage (lo_t
         in `read_chain`), for both journals, into dicts. The unit's MemoryMax is 1 GB: ten days of stop age may take at most

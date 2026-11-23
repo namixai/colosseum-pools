@@ -273,3 +273,53 @@ class LostEvent(unittest.TestCase):
         self.assertIn("may be missing from the node's logs", got["0xA"][0])
         with mock.patch.object(pr.c, "rpc", side_effect=self.node(950_000)):
             self.assertEqual(pr.state_doubts(["0xA"], {"0xA": lost}, {"0xA": "Passed"}, 2_000), {}, "an exam over holds none")
+
+
+class StopsTimeOnly(unittest.TestCase):
+    """Review 15 of #338 (H-B): the journals are read line by line, and only the blocks of the stops' time (`want`)
+    are kept, in arrays: the memory of a pass goes with the time the stops stood, not with the oldest stop's age."""
+
+    def setUp(self):
+        self.dir = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def test_only_the_blocks_of_each_assets_windows_are_kept(self):
+        lines = [json.dumps({"b": b, "t": 10 * b, "w": 0, "px": {"3": 1_000 + b, "5": 2_000 + b}}) for b in range(1, 201)]
+        (self.dir / "a-1970-01-01.jsonl").write_text("\n".join(lines) + "\n")
+        (self.dir / "b-1970-01-01.jsonl").write_text("\n".join(lines) + "\n")
+        got = pr.read_journals([self.dir / "a.jsonl", self.dir / "b.jsonl"], want={3: [(50, 60), (55, 70), (150, 150)]})
+        self.assertEqual(sorted(got.px), [3], "an asset with no stop keeps nothing")
+        self.assertEqual(list(got.px[3]), list(range(50, 71)) + [150])
+        self.assertEqual((got.px[3][60], got.times[60], got.single_in(3, 1, 200), got.count_in(3, 1, 200)), (1_060, 600, [], 22))
+        self.assertNotIn(100, got.times)
+
+    def test_blocks_out_of_order_twice_and_a_hole_filled_by_the_other_are_put_in_place(self):
+        a = [row(1, 10), row(2, 20), row(5, 50), row(3, 30), row(3, 31), row(6, 60)]
+        b = [row(4, 40), row(5, 50), row(1, 10), row(7, 70)]
+        j = pr.Journal()
+        j.add_text("\n".join(a) + "\n", None, "keeper")
+        j.add_text("\n".join(b) + "\n", None, "second")
+        self.assertEqual(dict(j.px[3]), {1: 10, 2: 20, 3: 30, 4: 40, 5: 50, 6: 60, 7: 70})
+        self.assertEqual(list(j.px[3].b), sorted(j.px[3].b))
+        self.assertEqual(j.single_in(3, 1, 7), [2, 3, 4, 6, 7])
+        self.assertEqual((j.single_count(3, 1, 7), j.single_in(3, 1, 7, 2)), (5, [2, 3]))
+        self.assertEqual(j.conflicts_in(3, 1, 7), ["keeper gives two prices at block 3: 30 and 31"])
+
+    def test_a_journal_that_disagrees_everywhere_keeps_every_block_but_few_words(self):
+        j = pr.Journal()
+        j.add_text("\n".join(row(b, 10) for b in range(1, 1_001)) + "\n", None, "keeper")
+        j.add_text("\n".join(row(b, 11) for b in range(1, 1_001)) + "\n", None, "second")
+        n, words = j.clash_in(3, 900, 1_000)
+        self.assertEqual((n, len(words), len(j.conflicts[3])), (101, 3, pr.CONFLICT_TEXTS))
+        self.assertEqual(words[0], "the journals disagree at block 900")
+
+    def test_the_windows_are_each_stops_time_and_the_chains_own_prices(self):
+        mt = T.MissedTouches()
+        ch, s1 = mt.world(set(range(1_300, 1_306)))
+        evs = ch.d["exam_events"]
+        got = pr.journal_windows([s1], evs, 2_000)
+        spans = [(x["armedAt"], x["end"]) for x in pr.trigger_spans(evs[s1], 2_000)]
+        self.assertEqual(sorted(got), [3])
+        self.assertTrue(set(spans) <= set(got[3]) and spans, got)
+        self.assertTrue({(b, b) for b in pr.chain_prices(evs)[3]} <= set(got[3]))
+        self.assertEqual(pr.journal_windows([], evs, 2_000), {}, "no account waiting, no block kept")

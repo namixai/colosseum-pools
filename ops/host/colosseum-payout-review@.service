@@ -36,8 +36,9 @@ ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.review_service --deploymen
     --prices2 /var/lib/colosseum-keeper/second-prices/watch-prices-${COLOSSEUM_DEPLOYMENT}.jsonl \
     --network ${COLOSSEUM_NETWORK} --confirm-mainnet ${COLOSSEUM_CONFIRM_MAINNET}
 TimeoutStartSec=540
-# The journal is read a day file at a time, only the days of the stops' time: a pass that still grows past this is
-# killed and said (OnFailure), never left to take the host's memory.
+# The journals are read line by line and only the blocks of the stops' time are kept, in arrays (about 6 MB a day of
+# two journals of three assets): a pass that still grows past this is killed and said (OnFailure), never left to take
+# the host's memory.
 MemoryMax=1G
 
 NoNewPrivileges=true
