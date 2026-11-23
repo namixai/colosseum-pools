@@ -326,7 +326,7 @@ class Lane:
     def __init__(self, name: str, sender: sf.Sender):
         self.name = name
         self.sender = sender
-        self.in_flight: list[tuple[int, int, float]] = []  # (nonce, head it was sent after, monotonic time sent)
+        self.in_flight: list[tuple[int, int, float, str]] = []  # (nonce, head it was sent after, time sent, first hash)
         self.balance_at = -1e18
         self.runway: dict | None = None
 
@@ -458,12 +458,12 @@ class Poker:
                     errors.append(f"{lane.name}: {len(lane.in_flight)} checks wait for a block")
                     continue
                 try:
-                    _tx, nonce = lane.sender.send(self.book, POKE_DATA, gas, price, self.tip, bump=True,
-                                                  resend_after=POKE_RESEND_S)
+                    tx, nonce = lane.sender.send(self.book, POKE_DATA, gas, price, self.tip, bump=True,
+                                                 resend_after=POKE_RESEND_S)
                 except Exception as exc:
                     errors.append(f"{lane.name}: {str(exc)[:160]}")
                     continue
-                lane.in_flight.append((nonce, head, time.monotonic()))
+                lane.in_flight.append((nonce, head, time.monotonic(), tx))
                 self.poked_for = head
                 if self.fail_from is not None:
                     log("book_poke_works_again", head=head, failed_from=self.fail_from, lane=lane.name)
@@ -507,9 +507,10 @@ class Poker:
                 continue
             count: int | None = None
             left = []
-            for nonce, at, sent_at in lane.in_flight:
+            for nonce, at, sent_at, tx in lane.in_flight:
+                kept = bool(lane.sender.hashes(nonce))  # not kept: confirmed by another thread's sweep, or let go
                 try:
-                    r = lane.sender.receipt(nonce)
+                    r = lane.sender.receipt(nonce, [tx])
                 except Exception as exc:
                     self._say("book_poke_receipt_unread", error=str(exc)[:120])
                     if count is None:
@@ -520,13 +521,13 @@ class Poker:
                     if 0 <= count and nonce < count:
                         lane.sender.confirm(nonce)  # in a block; its receipt is not read
                     else:
-                        left.append((nonce, at, sent_at))
+                        left.append((nonce, at, sent_at, tx))
                     continue
                 if r is None:
                     if lane.sender.is_gone(nonce):
                         log("book_poke_lost", lane=lane.name, nonce=nonce, seen=at)
-                    else:
-                        left.append((nonce, at, sent_at))
+                    elif kept:
+                        left.append((nonce, at, sent_at, tx))
                     continue
                 lane.sender.confirm(nonce)
                 if int(r["status"], 16) != 1:

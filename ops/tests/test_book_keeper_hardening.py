@@ -127,7 +127,7 @@ class TheChecksLiveness(Base):
         self.node.pokes_land = False
         self.run_to(loop, 100)
         lane = loop.poker.lanes[0]
-        lane.in_flight = [(n, h, t - bk.POKE_STUCK_S - 1) for n, h, t in lane.in_flight]
+        lane.in_flight = [(n, h, t - bk.POKE_STUCK_S - 1, tx) for n, h, t, tx in lane.in_flight]
         self.run_to(loop, 101)
         self.assertEqual([a["nonce"] for a in self.alarm_of("book_poke_stuck")], [7])
 
@@ -306,7 +306,15 @@ class ALateCheck(Base):
         self.assertGreater(tip2, tip1)
         self.node.receipts[tx_hash(again)] = {"status": "0x1", "blockNumber": hex(101)}
         self.run_to(loop, 101)
-        self.assertNotIn(n1, [n for n, _, _ in loop.poker.lanes[0].in_flight], "landed under its new hash")
+        self.assertNotIn(n1, [f[0] for f in loop.poker.lanes[0].in_flight], "landed under its new hash")
+
+    def test_a_check_the_other_threads_sweep_confirmed_is_let_go(self):
+        loop = self.loop()
+        self.node.pokes_land = False
+        self.run_to(loop, 100)
+        loop.sender.confirm(next(iter(loop.sender.ledger)))  # its receipt seen by the keeper's thread's sweep
+        self.run_to(loop, 101)
+        self.assertEqual([f[1] for f in loop.poker.lanes[0].in_flight], [101], "not left waiting for ever")
 
     def test_a_check_is_not_signed_again_past_the_most_bumps_but_sent_as_it_is(self):
         loop = self.loop()

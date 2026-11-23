@@ -17315,6 +17315,10 @@ MUTATIONS = [
      '                head = fresh_head(self.nodes)',
      '                head = int(self.nodes.call("eth_blockNumber"), 16)',
      ['test_a_node_answering_an_old_block_is_an_alarm_no_check_and_no_heartbeat']),
+    ('BK19', 'ops/book_keeper.py',
+     '                    elif kept:\n                        left.append((nonce, at, sent_at, tx))',
+     '                    else:\n                        left.append((nonce, at, sent_at, tx))',
+     ['test_a_check_the_other_threads_sweep_confirmed_is_let_go']),
 ]
 
 RUNNERS = {
