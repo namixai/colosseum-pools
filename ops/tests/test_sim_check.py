@@ -552,6 +552,46 @@ class TheLoop(unittest.TestCase):
         self.assertIn("connection refused", self.events("pass_failed")[0]["error"])
         self.assertEqual(len(node.sent), 1, "the second pass stopped it")
 
+    def test_no_line_of_the_service_writes_the_nodes_address(self):
+        """Review 9 of #336 (L2): a node's address may hold its key. A pass the node fails and a stop it refuses are
+        said without it, and a node that fails before the first pass ends the program without it too."""
+        from unittest import mock
+        url = "https://rpc.example.org/v2/SECRETKEY123"
+        node = Node()
+        ch = self.checker(node)
+        real, down = node.rpc, [True]
+
+        def rpc(method, params=()):
+            if down:
+                raise RuntimeError(f"403 Client Error: Forbidden for url: {url}")
+            return real(method, params)
+
+        node.rpc = rpc
+        failures = [RuntimeError(f"Max retries exceeded with url: /v2/SECRETKEY123 ({url})")]
+
+        def transact(*a):
+            if failures:
+                raise failures.pop()
+            return node.sent.append(a) or {"transactionHash": "0x" + "ee" * 32}
+
+        node.transact = transact
+        with self.on(node), mock_print():
+            self.assertEqual(s.run(ch, 600, once=True, sleep=lambda t: None), 1)
+            down.clear()
+            ch.one_pass()
+        said = json.dumps(self.lines)
+        self.assertEqual([len(self.events(e)) for e in ("pass_failed", "send_failed")], [1, 1])
+        self.assertNotIn("SECRETKEY123", said)
+        self.assertNotIn("rpc.example.org", said)
+        self.assertIn("403", self.events("pass_failed")[0]["error"])
+        with mock.patch.object(s.sn, "confirm_service", side_effect=RuntimeError(f"down: {url}")), \
+                mock.patch.object(s.deployments, "load") as load:
+            with self.assertRaises(SystemExit) as caught:
+                s.main(["--deployment", "sim1", "--once"])
+        self.assertNotIn("SECRETKEY123", str(caught.exception))
+        self.assertIn("the node failed", str(caught.exception))
+        load.assert_not_called()
+
     def test_a_read_the_node_breaks_off_is_read_again_whole_and_nothing_is_counted_twice(self):
         node = Node()
         ch = self.checker(node)
