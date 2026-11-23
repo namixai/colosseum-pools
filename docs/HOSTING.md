@@ -1002,6 +1002,28 @@ The sync copies the day files every minute by appending; the review reads
 `second-prices/watch-prices-<label>.jsonl` (`--prices2` in its unit) and says `second_journal_stale` when no day
 file of it has changed for 30 minutes (again every 6 hours). Without it every payout with a stop is held.
 
+The review reads of that folder only regular files named `watch-prices-<label>-YYYY-MM-DD.jsonl`, of the days of the
+stops' time, each at most 64 MB (a day is about 7.5 MB: a line of about 85 bytes a block, a block a second, three
+assets). A file past the limit, of another name or a link is not read and said in the review's text: the blocks it
+held rest on the keeper's journal alone, `stop-one-journal`, held; the pass goes on.
+
+The folder takes what the second machine's key writes, so it gets a file system of its own, 2 GB (about 9 months of
+day files; old day files can be removed, the review reads only the days of stops still waiting), and the keeper's
+state and journal never share its disk. Once, by hand, on the pools host (nothing of this is installed by
+`install.sh`):
+
+    sudo fallocate -l 2G /var/lib/colosseum-second-prices.img
+    sudo mkfs.ext4 -q -m 0 /var/lib/colosseum-second-prices.img
+    sudo mkdir -p /var/lib/colosseum-keeper/second-prices
+    echo '/var/lib/colosseum-second-prices.img /var/lib/colosseum-keeper/second-prices ext4 loop,nodev,nosuid,noexec 0 2' \
+        | sudo tee -a /etc/fstab
+    sudo mount /var/lib/colosseum-keeper/second-prices
+    sudo chown colosseum-prices:colosseum-keeper /var/lib/colosseum-keeper/second-prices
+    sudo chmod 2750 /var/lib/colosseum-keeper/second-prices
+    df -h /var/lib/colosseum-keeper/second-prices    # 2.0G, its own
+
+A full folder makes the sync fail; the review then says `second_journal_stale`, and the keeper is not touched.
+
 ### Mainnet
 
 What the host needs before a simulated pool runs on mainnet, in order:

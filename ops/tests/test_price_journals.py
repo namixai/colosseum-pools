@@ -323,3 +323,45 @@ class StopsTimeOnly(unittest.TestCase):
         self.assertTrue(set(spans) <= set(got[3]) and spans, got)
         self.assertTrue({(b, b) for b in pr.chain_prices(evs)[3]} <= set(got[3]))
         self.assertEqual(pr.journal_windows([], evs, 2_000), {}, "no account waiting, no block kept")
+
+
+class SecondFolder(unittest.TestCase):
+    """Review 15 of #338 (M5): the second writer's folder is filled from another machine. Only its day files by name are
+    read, none past JOURNAL_FILE_MAX: a file too large or of another name is not read (its blocks rest on one journal,
+    held), never the end of the pass."""
+
+    def setUp(self):
+        self.dir = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.keeper, self.second = self.dir / "prices-sim1.jsonl", self.dir / "watch-prices-sim1.jsonl"
+        text = json.dumps(HEAD) + "\n" + "\n".join(row(b, 10) for b in range(1, 11)) + "\n"
+        (self.dir / "prices-sim1-1970-01-01.jsonl").write_text(text)
+        (self.dir / "watch-prices-sim1-1970-01-01.jsonl").write_text(text)
+
+    def read(self):
+        return pr.read_journals([self.keeper, self.second], HEAD)
+
+    def test_two_whole_journals_are_read(self):
+        self.assertEqual(self.read().single_in(3, 1, 10), [])
+
+    def test_a_file_past_the_limit_is_not_read_and_its_blocks_rest_on_one_journal(self):
+        from unittest import mock
+        big = self.dir / "watch-prices-sim1-1970-01-01.jsonl"
+        big.write_text(big.read_text() + json.dumps({"gap": [0, 0], "why": "x" * 500}) + "\n")
+        limit = (self.dir / "prices-sim1-1970-01-01.jsonl").stat().st_size
+        with mock.patch.object(pr, "JOURNAL_FILE_MAX", limit):
+            got = self.read()
+        self.assertEqual(got.single_in(3, 1, 10), list(range(1, 11)))
+        self.assertTrue(any(f"past the {limit} a journal file may be" in n for n in got.notes), got.notes)
+
+    def test_files_of_other_names_and_links_in_the_second_folder_are_not_read(self):
+        (self.dir / "watch-prices-sim1-1970-01-01.jsonl").unlink()
+        bad = json.dumps(HEAD) + "\n" + row(5, 99) + "\n"
+        (self.dir / "watch-prices-sim1-19x0-01-01.jsonl").write_text(bad)
+        (self.dir / "watch-prices-sim1.jsonl").write_text(bad)
+        (self.dir / "elsewhere.jsonl").write_text(bad)
+        (self.dir / "watch-prices-sim1-1970-01-02.jsonl").symlink_to(self.dir / "elsewhere.jsonl")
+        got = self.read()
+        self.assertEqual((got.conflicts, got.px[3][5]), ({}, 10), "nothing of those files is taken")
+        self.assertEqual(len(got.single_in(3, 1, 10)), 10)
+        self.assertEqual(sum("is not a day file" in n for n in got.notes), 2, got.notes)

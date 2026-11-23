@@ -17247,6 +17247,19 @@ MUTATIONS = [
      "            if until is not None and time.monotonic() > until and hi < latest:\n                self.save()\n                raise Behind(",
      "            if False:\n                self.save()\n                raise Behind(",
      ["test_the_first_pass_goes_in_parts_and_a_pass_cut_short_goes_on_from_the_last"]),
+    # The second writer's folder: its day files by name only, none past the limit.
+    ("RY19", "ops/payout_review.py",
+     "        if size > JOURNAL_FILE_MAX:",
+     "        if False:",
+     ["test_a_file_past_the_limit_is_not_read_and_its_blocks_rest_on_one_journal"]),
+    ("RY20", "ops/payout_review.py",
+     "        if strict and (m is None or f.is_symlink() or not f.is_file()):",
+     "        if False:",
+     ["test_files_of_other_names_and_links_in_the_second_folder_are_not_read"]),
+    ("RY21", "ops/payout_review.py",
+     "        files = journal_files(path, lo_t, hi_t, strict=k > 0, notes=j.notes)",
+     "        files = journal_files(path, lo_t, hi_t, strict=False, notes=j.notes)",
+     ["test_files_of_other_names_and_links_in_the_second_folder_are_not_read"]),
 ]
 
 RUNNERS = {

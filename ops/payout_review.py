@@ -1135,19 +1135,46 @@ def journal_foreign(header: dict, expect: dict | None) -> str | None:
     return None
 
 
-def journal_files(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None = None) -> list[pathlib.Path]:
+# The largest journal file a review reads: a day of the loop's lines is about 7.5 MB (a line of about 85 bytes a block,
+# HyperEVM's small blocks one a second, the platform's three assets); eight times that leaves room for faster blocks
+# and more assets. A file past it (the second machine's folder filled by whoever holds its key) is not read, and its
+# blocks rest on the other journal alone: held, never the end of the pass (review 15 of #338).
+JOURNAL_FILE_MAX = 64 * 1024 * 1024
+
+
+def journal_files(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None = None, strict: bool = False,
+                  notes: list | None = None) -> list[pathlib.Path]:
     """The files of the journal `path` names (ops/stop_filler.py writes one file a day beside it, prices-<label>-
     YYYY-MM-DD.jsonl): the day files from the day before `lo_t` to the day after `hi_t` (all of them when not given),
     oldest first, and `path` itself first when it holds lines (a journal written before the day files, or a single
-    file given by hand). Each day file starts with its header, so the files of another deployment are known."""
-    out = [path] if path.is_file() and path.stat().st_size else []
+    file given by hand). Each day file starts with its header, so the files of another deployment are known.
+
+    `strict` (the second writer's folder, which another machine fills): only regular files named exactly
+    <stem>-YYYY-MM-DD<suffix>, not `path` itself. Any file past JOURNAL_FILE_MAX is left out; what is left out is said in
+    `notes`."""
+    said = notes if notes is not None else []
+    out = []
+    if not strict and path.is_file() and path.stat().st_size:
+        out.append(path)
     lo_day = time.strftime("%Y-%m-%d", time.gmtime(lo_t - 86_400)) if lo_t is not None else ""
     hi_day = time.strftime("%Y-%m-%d", time.gmtime(hi_t + 86_400)) if hi_t is not None else "9999"
+    named = re.compile(re.escape(path.stem) + r"-(\d{4}-\d{2}-\d{2})" + re.escape(path.suffix))
     for f in sorted(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}")):
-        day = f.name[len(path.stem) + 1:len(path.stem) + 11]
+        m = named.fullmatch(f.name)
+        if strict and (m is None or f.is_symlink() or not f.is_file()):
+            said.append(f"{f.name[:80]!r} is not a day file of {path.name}: not read")
+            continue
+        day = m.group(1) if m else f.name[len(path.stem) + 1:len(path.stem) + 11]
         if lo_day <= day <= hi_day:
             out.append(f)
-    return out
+    kept = []
+    for f in out:
+        size = f.stat().st_size
+        if size > JOURNAL_FILE_MAX:
+            said.append(f"{f.name} is {size} bytes, past the {JOURNAL_FILE_MAX} a journal file may be: not read")
+            continue
+        kept.append(f)
+    return kept
 
 
 def file_lines(files: list[pathlib.Path]):
@@ -1170,13 +1197,15 @@ def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: i
     file is said in `notes` and adds nothing (its blocks rest on the other alone); None when none of them exists."""
     j = Journal(want)
     found = False
-    for path in paths:
+    for k, path in enumerate(paths):
         exists = path.is_file() or any(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}"))
         if not exists:
             j.notes.append(f"the journal {path.name} is not there")
             continue
         found = True
-        j.add_lines(file_lines(journal_files(path, lo_t, hi_t)), expect, path.name)
+        # The second writer's folder is filled from another machine: only its day files by name, none past the limit.
+        files = journal_files(path, lo_t, hi_t, strict=k > 0, notes=j.notes)
+        j.add_lines(file_lines(files), expect, path.name)
     return j if found else None
 
 
@@ -1436,7 +1465,8 @@ def stop_doubt(evs: list[dict], m: dict | None, journal: Journal | None, check: 
                 first = next(b for b in journal.single_in(s["asset"], lo, hi, len(mine) + 1) if b not in mine)
                 out["oneJournal"].append(
                     f"{one} of the {hi - lo + 1} blocks {lo}..{hi} of the {'take' if s['take'] else 'stop'} at "
-                    f"{s['px']} on asset {s['asset']} are in one journal only (the first at block {first})")
+                    f"{s['px']} on asset {s['asset']} are in one journal only (the first at block {first})"
+                    + (f"; {'; '.join(n[:160] for n in journal.notes[:2])}" if journal.notes else ""))
                 concerned.append((s["asset"], s["take"], s["armedAt"]))
         for why in (check or {}).get("doubts", []):
             out["unchecked"].append(why)
