@@ -55,6 +55,7 @@ import pathlib
 import re
 import sys
 import time
+import urllib.parse
 
 from eth_abi import decode as abi_decode
 from eth_utils import keccak, to_checksum_address
@@ -88,6 +89,7 @@ RPC_GAP_S = 1.0
 # A URL in an error's text (requests writes the node's whole address, path and key with it), and urllib3's path after
 # "url: ": neither reaches a log line or a reason (review 9 of #336).
 _URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>()]+")
+_HOST = re.compile(r"(host=['\"])[^'\"]*(['\"])")
 _URL_PATH = re.compile(r"(url: ?)/[^\s'\"<>()]*")
 
 
@@ -95,10 +97,18 @@ def quiet(exc, limit: int = 200) -> str:
     """An exception's text with no node address in it, cut to `limit` after the address is gone: a node's URL may hold
     its key. The configured nodes' addresses are taken out as they are, then any other URL, then a bare path."""
     text = str(exc)
-    for url in (getattr(c, "RPC_URL", None), os.environ.get("COLOSSEUM_RPC_URL"), os.environ.get("COLOSSEUM_RPC_BACKUP_URL")):
-        if url:
-            text = text.replace(url, "<node>")
+    urls = [u for u in (getattr(c, "RPC_URL", None), os.environ.get("COLOSSEUM_RPC_URL"),
+                        os.environ.get("COLOSSEUM_RPC_BACKUP_URL")) if u]
+    for url in urls:
+        text = text.replace(url, "<node>")
     text = _URL_PATH.sub(r"\1<path>", _URL.sub("<node>", text))
+    # A key may be the node's host name itself (KEY.provider.example): urllib3 writes it as host='…' and in its
+    # resolver's words; the configured nodes' host names go wherever they stand (review 12 of #336).
+    text = _HOST.sub(r"\1<host>\2", text)
+    for url in urls:
+        host = urllib.parse.urlparse(url).hostname
+        if host and host not in ("127.0.0.1", "localhost"):
+            text = re.sub(re.escape(host), "<host>", text, flags=re.I)
     return text[:limit]
 
 
