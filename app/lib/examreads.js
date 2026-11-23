@@ -35,7 +35,10 @@ export function oracleOf(hex) {
  * `take(asset)`, `oracle(asset)` and `bbo(asset)` (the last two the precompiles' raw answers). A price, a stop or a
  * take that could not be read is null, as before; the account, the block and a position that cannot be read fail the pass.
  *
- * Returns `{ block, got, perAsset, fresh }`: the block, the account's answers, a row for every asset of the exam
+ * `change(asset, isTake)` and `touches()`, where given, read an exam with a stop book: the change asked of a stop or a
+ * take (`changeOf`) and the book's touches of the exam not yet carried out (`StopBook.touches`).
+ *
+ * Returns `{ block, got, perAsset, touches, fresh }`: the block, the account's answers, a row for every asset of the exam
  * (`read` is true for the ones whose stop, take, prices and book were read on this pass; the others carry the price
  * `prices` kept for them), and `fresh`, a Map asset -> oracle price of the assets read on this pass. The kept prices
  * are not handed back whole: a reading of the list may have changed them while this pass was out, so whoever keeps
@@ -44,15 +47,19 @@ export function oracleOf(hex) {
 export async function readPass(io, { assets, selected, prices = new Map() }) {
   // The market on screen is read at once, beside the account and the sizes: it is wanted whatever the sizes are.
   const details = async (asset) => {
-    const [stop, take, oracleHex, bboHex] = await Promise.all([
+    // A change asked of the stop or the take (`changeOf`), where the reader has it: an exam with a stop book.
+    const change = (isTake) => (io.change ? attempt(() => io.change(asset, isTake)) : null);
+    const [stop, take, oracleHex, bboHex, stopChange, takeChange] = await Promise.all([
       attempt(() => io.stop(asset)), attempt(() => io.take(asset)), attempt(() => io.oracle(asset)), attempt(() => io.bbo(asset)),
+      change(false), change(true),
     ]);
     const bbo = bboOf(bboHex);
-    return { stop, take, oracle: oracleOf(oracleHex), bid: bbo?.bid ?? null, ask: bbo?.ask ?? null };
+    return { stop, take, ...(io.change ? { stopChange, takeChange } : {}), oracle: oracleOf(oracleHex), bid: bbo?.bid ?? null, ask: bbo?.ask ?? null };
   };
-  const [block, got, sizes, first] = await Promise.all([
+  // The stop book's touches of this exam not yet carried out, where the reader has them: one read for every asset.
+  const [block, got, sizes, first, touches] = await Promise.all([
     io.block(), io.account(), Promise.all(assets.map((a) => io.position(a))),
-    assets.includes(selected) ? details(selected) : null,
+    assets.includes(selected) ? details(selected) : null, io.touches ? attempt(() => io.touches()) : null,
   ]);
   const size = new Map(assets.map((a, i) => [a, sizes[i]]));
   const held = assets.filter((a) => a !== selected && BigInt(size.get(a) ?? 0) !== 0n);
@@ -63,9 +70,10 @@ export async function readPass(io, { assets, selected, prices = new Map() }) {
     const d = read.get(asset);
     return d
       ? { asset, size: size.get(asset), ...d, read: true }
-      : { asset, size: size.get(asset), stop: null, take: null, oracle: prices.get(asset) ?? null, bid: null, ask: null, read: false };
+      : { asset, size: size.get(asset), stop: null, take: null, ...(io.change ? { stopChange: null, takeChange: null } : {}),
+        oracle: prices.get(asset) ?? null, bid: null, ask: null, read: false };
   });
-  return { block, got, perAsset, fresh: new Map([...read].map(([a, d]) => [a, d.oracle])) };
+  return { block, got, perAsset, touches: touches ?? [], fresh: new Map([...read].map(([a, d]) => [a, d.oracle])) };
 }
 
 /** `prices` (a Map asset -> price) with `fresh` put over it: a new Map, nothing changed in place. */

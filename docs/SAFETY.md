@@ -353,15 +353,15 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S105 | `src/KeyBinder.sol:297` | `if (block.timestamp < r.activatesAt) revert TooEarly(r.activatesAt);` |
 | S106 | `src/Pool.sol:334` | `emit ChallengeFeePaid(challengeTrader, heldFeeTo, fee);` |
 | S107 | `src/KeyBinder.sol:212` | `function pause() external onlyGuardianOrOwner` |
-| S108 | `src/exam/PaperExam.sol:444` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
-| S109 | `src/exam/PaperExam.sol:453` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
-| S110 | `src/exam/PaperExam.sol:144` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
-| S111 | `src/exam/PaperExam.sol:776` | `if (worse * Units.BPS > uint256(oracle) * maxWorseBps) {` |
+| S108 | `src/exam/PaperExam.sol:470` | `if (filler != address(0) && msg.sender != filler) revert NotFiller();` |
+| S109 | `src/exam/PaperExam.sol:480` | `emit Filled(o.asset, o.isBuy, o.sz, px, cost, block.number - from, source);` |
+| S110 | `src/exam/PaperExam.sol:146` | `uint16 public constant FALLBACK_BLOCKS = 60;` |
+| S111 | `src/exam/PaperExam.sol:877` | `if (gap * Units.BPS > uint256(oracle) * maxWorseBps) {` |
 | S112 | `src/sim/SimPoolFactory.sol:42` | `uint32 public constant PAYOUT_DELAY = 72 hours;` |
 | S113 | `src/sim/SimPoolStops.sol:31` | `if (p.state != SimPool.PayoutState.Due \|\| p.wasStopped) revert SimPool.BadPayout();` |
 | S114 | `src/sim/SimPool.sol:314` | `event PayoutStopped(` |
 | S115 | `src/sim/SimPool.sol:799` | `if (msg.sender != factory.operator()) revert SimPoolFactory.NotOperator();` |
-| S116 | `src/sim/SimPoolFactory.sol:214` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
+| S116 | `src/sim/SimPoolFactory.sol:243` | `if (msg.sender == filler \|\| msg.sender == checker \|\| msg.sender == closer) revert BadRole();` |
 | S117 | `src/sim/SimPool.sol:513` | `uint256 keep = owed + held + reserved + sharesDue + (finished ? 0 : floor());` |
 | S118 | `src/sim/SimPoolFactory.sol:56` | `uint32 public constant STOP_RESERVE = 14 days;` |
 | S119 | `src/sim/SimPool.sol:698` | `uint256 kept = held + reserved + sharesDue;` |
@@ -372,7 +372,7 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S124 | `src/sim/SimPoolFactory.sol:60` | `uint32 public constant MIN_TERM = 184 days;` |
 | S125 | `src/sim/SimPool.sol:956` | `revert Locked();` |
 | S126 | `src/sim/SimPool.sol:517` | `if (w > p) w = p;` |
-| S127 | `src/sim/SimPoolFactory.sol:64` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
+| S127 | `src/sim/SimPoolFactory.sol:69` | `uint32 public constant WITHDRAW_DELAY = 7 days;` |
 | S128 | `src/sim/SimPool.sol:876` | `if (block.timestamp < readyAt) revert NotReady();` |
 | S129 | `src/sim/SimPool.sol:971` | `if (block.timestamp < uint256(closedAt) + factory.WITHDRAW_DELAY()) revert NotReady();` |
 | S130 | `src/sim/SimPool.sol:877` | `if (block.timestamp >= uint256(readyAt) + factory.WITHDRAW_WINDOW()) revert RequestLapsed();` |
@@ -383,15 +383,15 @@ HyperEVM testnet (chain 998), read with the call in the last column on 6 Nov 202
 | S135 | `src/sim/SimPool.sol:700` | `if (bal < ahead + p.amount) {` |
 | S136 | `src/sim/SimPool.sol:815` | `if (msg.sender != approver \|\| msg.sender == address(0)) revert NotApprover();` |
 | S137 | `src/sim/SimPoolStops.sol:33` | `if (paired != address(0) \|\| trades.length == 0 \|\| links.length != 1) revert SimPool.BadReason();` |
-| S138 | `src/sim/SimPoolFactory.sol:287` | `if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY \|\| p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();` |
+| S138 | `src/sim/SimPoolFactory.sol:316` | `if (p.payoutsPerDay < MIN_PAYOUTS_PER_DAY \|\| p.payoutsPerDay > MAX_PAYOUTS_PER_DAY) revert BadPlan();` |
 | S139 | `src/sim/SimPool.sol:690` | `if (block.timestamp < freeAt) {` |
-| S140 | `src/sim/SimPoolFactory.sol:278` | `if (k.maxDrawdownBps == 0 \|\| k.maxDrawdownBps >= Units.BPS) revert BadPlan();` |
+| S140 | `src/sim/SimPoolFactory.sol:307` | `if (k.maxDrawdownBps == 0 \|\| k.maxDrawdownBps >= Units.BPS) revert BadPlan();` |
 | S141 | `src/sim/SimPoolStops.sol:38` | `if (trades.length < 2 \|\| links.length != 1) revert SimPool.BadReason();` |
 | S142 | `src/sim/SimPool.sol:986` | `if (!_isOn(line)) revert LineOff();` |
 | S143 | `src/sim/SimPool.sol:1006` | `uint256 need = uint256(_payoutOf(size)) * COVER_PAYOUTS;` |
-| S144 | `src/sim/SimPoolFactory.sol:273` | `if (p.on & (1 << i) != 0 && cover > p.locked) revert BadPlan();` |
+| S144 | `src/sim/SimPoolFactory.sol:302` | `if (p.on & (1 << i) != 0 && cover > p.locked) revert BadPlan();` |
 | S145 | `src/sim/SimPoolSetup.sol:78` | `if (l.live != 0 \|\| sells) size = s;` |
-| S146 | `src/exam/PaperExam.sol:574` | `if (tellsPool) IExamPassed(pool).examPassed();` |
+| S146 | `src/exam/PaperExam.sol:635` | `if (tellsPool) IExamPassed(pool).examPassed();` |
 | S147 | `src/sim/SimPool.sol:616` | `staged += _payoutOf(_lines[line].size);` |
 | S148 | `src/sim/SimPoolCodes.sol:96` | `setAside += _pay(heldOf, usdc, k, c.author, amount);` |
 | S149 | `src/sim/SimPool.sol:1070` | `bool sent = _send(creator, rest);` |

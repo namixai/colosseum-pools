@@ -30,6 +30,11 @@ export const SCREEN_TEXT = Object.freeze({
   oneAtATime: "one order at a time: a new one is accepted once this one is filled or lapsed",
   noAsset: "This asset's data was not read from Hyperliquid, so no size or price can be taken for it.",
   closeDrops: "An order that closes or turns a position round takes its stop and take off.",
+  // The stop book's rules, as the contract carries them out (src/sim/StopBook.sol, docs/SIM-POOL.md).
+  stopRule: "A stop or a take is filled at the oracle price of the first block that touches its level, from the block it "
+    + "acts from. Taking one off or moving it acts after the same delay; until then the one there stands.",
+  settle: "The oracle price touched this stop or take: it is filled at that price. Settling writes it into the account; anyone may.",
+  settled: "Settled. The account now shows the stop or take filled at the price of its touch.",
   lapsed: "Not filled. The order lapsed at no cost — place it again.",
 });
 
@@ -86,7 +91,7 @@ function plain(tuple, names) {
  * position and its stop and take. A price that was not read is null, and the library then says the account is
  * unpriced rather than count it at nothing.
  */
-export function readsFrom(got, perAsset) {
+export function readsFrom(got, perAsset, touches = []) {
   const rules = plain(got.rules, ["dailyLossBps", "maxDrawdownBps", "maxLeverageX100", "assets", "assetLeverageX100"]);
   const terms = plain(got.terms, ["capital", "targetsBps", "stepDuration", "maxIdle", "minTradingDays", "costPpm", "fillDelay", "fillWindow"]);
   const pending = plain(got.pending, ["asset", "isBuy", "sz", "placedBlock"]);
@@ -94,10 +99,11 @@ export function readsFrom(got, perAsset) {
     status: num(got.status), step: num(got.step), cash: got.cash, dayStartEquity: got.dayStartEquity,
     tradingDays: num(got.tradingDays), deadline: got.deadline, lastFillAt: got.lastFillAt, pending,
     filler: got.filler, fromBook: Boolean(got.fromBook), maxWorseBps: num(got.maxWorseBps),
-    drawdownKind: got.drawdownKind, peakSnapshot: got.peakSnapshot,
+    drawdownKind: got.drawdownKind, peakSnapshot: got.peakSnapshot, stopBook: got.stopBook ?? null,
     rules, terms,
     positions: perAsset.map((a) => ({ asset: a.asset, size: a.size, mark: a.oracle ?? null,
-      stop: a.stop ?? null, take: a.take ?? null })),
+      stop: a.stop ?? null, take: a.take ?? null, stopChange: a.stopChange ?? null, takeChange: a.takeChange ?? null })),
+    touches: touches ?? [],
   };
 }
 
@@ -172,23 +178,32 @@ export function positionRow(p, perps) {
     leverage: p.leverageX100 === null ? SCREEN_TEXT.noPrice : `${leverageText(p.leverageX100)} / ${leverageText(p.capX100)}`,
     stop: p.stop ? triggerText(p.stop, dec) : null,
     take: p.take ? triggerText(p.take, dec) : null,
+    touched: p.stop?.state === "touched" || p.take?.state === "touched",
     closeIsBuy: p.size < 0n,
     closeSize: p.size < 0n ? -p.size : p.size,
   };
 }
 
-/** "Stop 950000 · closes all · armed", or "Take 76000 · closes 0.01 · armed in 3 blocks". */
+/**
+ * "Stop 950000 · closes all · armed", "Take 76000 · closes 0.01 · armed in 3 blocks", "Stop 950000 · closes all ·
+ * filled at 949000 in block 1201, waiting for its settle", and a change asked: "… · moves to 960000 from block 1210" or
+ * "… · taken off from block 1210" (until then this one acts).
+ */
 export function triggerText(t, szDecimals) {
   const name = t.kind === "take" ? "Take" : "Stop";
   const closes = t.whole ? "closes all" : `closes ${sizeText(t.closes, szDecimals)}`;
-  const state = {
-    waiting: `armed in ${t.blocksToArm} block${t.blocksToArm === 1 ? "" : "s"}`,
-    armed: "armed",
-    triggered: "reached",
-    seen: "reached, shown on chain",
-    unpriced: "price not read",
-  }[t.state] ?? t.state;
-  return `${name} ${pxText(t.px, szDecimals)} · ${closes} · ${state}`;
+  const state = t.state === "touched" && t.touch
+    ? `filled at ${pxText(t.touch.px, szDecimals)} in block ${t.touch.blk}, waiting for its settle`
+    : {
+      waiting: `armed in ${t.blocksToArm} block${t.blocksToArm === 1 ? "" : "s"}`,
+      armed: "armed",
+      reached: "reached: filled at the price of the block that logs it",
+      unpriced: "price not read",
+    }[t.state] ?? t.state;
+  const change = !t.change ? "" : t.change.removes
+    ? ` · taken off from block ${t.change.armedAt}`
+    : ` · moves to ${pxText(t.change.px, szDecimals)} from block ${t.change.armedAt}`;
+  return `${name} ${pxText(t.px, szDecimals)} · ${closes} · ${state}${change}`;
 }
 
 /** The waiting order's line (brief, part 5). Null where none waits. */
@@ -294,7 +309,12 @@ export function triggerPreviewView(preview, perp) {
   if (preview.refusal !== null) return { blocked: true, lines: [{ tone: "bad", text: preview.text }] };
   const lines = [{ tone: "", text: `${preview.kind === "take" ? "Take" : "Stop"} ${pxText(preview.px, perp.szDecimals)} · closes `
     + `${preview.whole ? "all" : sizeText(preview.closes, perp.szDecimals)} · acts from block ${preview.armedAt}` }];
-  if (preview.replaces) lines.push({ tone: "", text: `Replaces the ${preview.kind} at ${pxText(preview.replaces.px, perp.szDecimals)}.` });
+  if (preview.replaces && preview.isChange) {
+    lines.push({ tone: "", text: `Moves the ${preview.kind} at ${pxText(preview.replaces.px, perp.szDecimals)}: that one acts `
+      + `until block ${preview.armedAt}, and is filled if the price touches it before then.` });
+  } else if (preview.replaces) {
+    lines.push({ tone: "", text: `Replaces the ${preview.kind} at ${pxText(preview.replaces.px, perp.szDecimals)}.` });
+  }
   if (preview.reached) lines.push({ tone: "warn", text: SCREEN_TEXT.triggerReached });
   return { blocked: false, lines };
 }
@@ -349,9 +369,12 @@ export function journalRows(events, perps) {
       rows.push(lastFilled);
     } else if (e.name === "TriggerFilled") {
       if (lastFilled) {
-        lastFilled.text = `${a.isTake ? "Take" : "Stop"} filled: ${lastFilled.head} · it was set at ${P(a.triggerPx)}`;
+        // With a stop book the close counts at its touch: the oracle reached the level in that block.
+        const touch = a.touchBlock === undefined || a.touchBlock === null ? ""
+          : ` · touched in block ${a.touchBlock} at ${P(a.touchPx)}`;
+        lastFilled.text = `${a.isTake ? "Take" : "Stop"} filled: ${lastFilled.head} · it was set at ${P(a.triggerPx)}${touch}`;
         lastFilled.cells.event = a.isTake ? "Take filled" : "Stop filled";
-        lastFilled.cells.note = `set at ${P(a.triggerPx)}`;
+        lastFilled.cells.note = `set at ${P(a.triggerPx)}${touch}`;
       }
     } else if (e.name === "Lapsed") {
       rows.push({ ...at, text: `Order lapsed at no cost: ${sideWord(a.isBuy)} ${S(a.sz)} ${perp.name}`,
@@ -361,13 +384,16 @@ export function journalRows(events, perps) {
         cells: cells({ event: "DaySnapshot", asset: dash, note: `equity ${usdShown(a.equity)}` }) });
     } else if (e.name === "TriggerSet") {
       const closes = BigInt(a.sz) === 0n ? "all" : S(a.sz);
-      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} set on ${perp.name} at ${P(a.px)} · closes ${closes} · acts from block ${a.armedAt}`,
-        cells: cells({ event: a.isTake ? "Take set" : "Stop set", size: closes, price: P(a.px), note: `acts from block ${a.armedAt}` }) });
+      if (BigInt(a.px) === 0n) {
+        // With a stop book, taking one off is a change too: it acts until that block.
+        rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} taken off from block ${a.armedAt}`,
+          cells: cells({ event: a.isTake ? "Take off" : "Stop off", note: `from block ${a.armedAt}` }) });
+      } else {
+        rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} set on ${perp.name} at ${P(a.px)} · closes ${closes} · acts from block ${a.armedAt}`,
+          cells: cells({ event: a.isTake ? "Take set" : "Stop set", size: closes, price: P(a.px), note: `acts from block ${a.armedAt}` }) });
+      }
     } else if (e.name === "TriggerCleared") {
       rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} removed`, cells: cells({ event: a.isTake ? "Take removed" : "Stop removed" }) });
-    } else if (e.name === "TriggerSeen") {
-      rows.push({ ...at, text: `${a.isTake ? "Take" : "Stop"} on ${perp.name} reached: oracle at ${P(a.oracle)}`,
-        cells: cells({ event: a.isTake ? "Take reached" : "Stop reached", price: P(a.oracle) }) });
     }
     if (e.name !== "Filled") lastFilled = null;
   }

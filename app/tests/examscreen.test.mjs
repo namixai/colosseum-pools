@@ -88,8 +88,8 @@ test("the figures are the library's, said with its formatters; the loss line is 
 // ── words ──────────────────────────────────────────────────────────
 
 test("a position's row names the asset, side and size, and says its stop and take as the brief does", () => {
-  const stop = { px: 550_000n, sz: 0n, armedAt: 900, seenAt: 0 };
-  const take = { px: 700_000n, sz: 4_000n, armedAt: 1_003, seenAt: 0 };
+  const stop = { px: 550_000n, sz: 0n, armedAt: 900 };
+  const take = { px: 700_000n, sz: 4_000n, armedAt: 1_003 };
   const a = examAccount(reads({ cash: 4_000n * USD }, () => long({ stop, take })), AT);
   const row = positionRow(a.positions[0], PERPS);
   assert.deepEqual([row.name, row.side, row.size, row.mark, row.notional], ["BTC", "Long", "0.1 BTC", "60000", "$6,000.00"]);
@@ -100,7 +100,12 @@ test("a position's row names the asset, side and size, and says its stop and tak
   const short = examAccount(reads({ cash: 16_000n * USD }, () => [{ asset: BTC, size: -10_000n, oracle: PX }, ...flat().slice(1)]), AT);
   const s = positionRow(short.positions[0], PERPS);
   assert.deepEqual([s.side, s.size, s.closeIsBuy], ["Short", "0.1 BTC", true]);
-  assert.equal(triggerText({ kind: "stop", px: 1n, whole: true, blocksToArm: 0, state: "seen", closes: 1n }, 5), "Stop 0.1 · closes all · reached, shown on chain");
+  assert.equal(triggerText({ kind: "stop", px: 1n, whole: true, blocksToArm: 0, state: "touched", touch: { px: 2n, blk: 1_201 }, closes: 1n }, 5),
+    "Stop 0.1 · closes all · filled at 0.2 in block 1201, waiting for its settle");
+  assert.equal(triggerText({ kind: "stop", px: 1n, whole: true, blocksToArm: 0, state: "armed", closes: 1n,
+    change: { px: 0n, removes: true, armedAt: 1_210 } }, 5), "Stop 0.1 · closes all · armed · taken off from block 1210");
+  assert.equal(triggerText({ kind: "take", px: 1n, whole: true, blocksToArm: 0, state: "armed", closes: 1n,
+    change: { px: 3n, removes: false, armedAt: 1_210 } }, 5), "Take 0.1 · closes all · armed · moves to 0.3 from block 1210");
 });
 
 test("the waiting order is said in the brief's three ways", () => {

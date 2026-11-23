@@ -13,7 +13,7 @@ import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
 import {
   PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, placeCall, graduateCall, setAgentCall,
-  setTriggerCall, clearTriggerCall, refusalOf,
+  setTriggerCall, clearTriggerCall, refusalOf, settleCall, STOP_BOOK_ABI,
 } from "../lib/exam.js";
 import {
   SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, BOOK_DEPTH, readsFrom, accountFigures, positionRow,
@@ -87,7 +87,11 @@ export async function examView(address, page, query = "") {
   // is that chain's or nothing (dataSource), never another network's candles beside this exam.
   const chainId = await nodeChainId();
   const ds = dataSource({ chainId }, CONFIG);
-  const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(), simPoolOf(address)]);
+  // The stop book of the exam's factory, where it has one: an exam made before the book has no `stopBook` getter.
+  const [rules, terms, trader, panelPool, bookAddress] = await Promise.all([exam.rules(), exam.terms(), exam.trader(),
+    simPoolOf(address), exam.stopBook().catch(() => null)]);
+  const stopBook = bookAddress && !/^0x0{40}$/i.test(bookAddress)
+    ? new ethers.Contract(bookAddress, STOP_BOOK_ABI, chain.readProvider) : null;
   // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
   // This continuation may have been left behind by a page change: only the page on screen touches the page-wide marker.
   if (!page.isConnected) return;
@@ -96,7 +100,7 @@ export async function examView(address, page, query = "") {
   const perps = new Map();
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
-    exam, address, ds, perps, assets, trader, panelPool, asset: assetFromQuery(query, assets), query,
+    exam, address, ds, perps, assets, trader, panelPool, stopBook, bookAddress: stopBook ? bookAddress : null, asset: assetFromQuery(query, assets), query,
     unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listSession: 0, listReading: null, passes: createPasses({ staleMs: STALE_PASS_POLLS * POLL_MS }), chart: null,
     book: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
@@ -267,6 +271,8 @@ function readerOf(st) {
     position: (asset) => exam.positionOf(asset),
     stop: (asset) => exam.stopOf(asset),
     take: (asset) => exam.takeOf(asset),
+    // With a stop book: a change asked of a stop or a take, and the book's touches of this exam not yet settled.
+    ...(st.stopBook ? { change: (asset, isTake) => exam.changeOf(asset, isTake), touches: () => st.stopBook.touches(st.address) } : {}),
     oracle: (asset) => chain.readProvider.call(oraclePxCall(asset)),
     bbo: (asset) => chain.readProvider.call(bboCall(asset)),
   };
@@ -274,11 +280,11 @@ function readerOf(st) {
 
 /** Everything the account needs, read from the chain at its latest block. A price that could not be read is null. */
 async function readExam(st, selected) {
-  const { block, got, perAsset, fresh } = await readPass(readerOf(st), { assets: st.assets, selected, prices: st.prices });
+  const { block, got, perAsset, touches, fresh } = await readPass(readerOf(st), { assets: st.assets, selected, prices: st.prices });
   const [status, step, cash, dayStartEquity, tradingDays, deadline, lastFillAt, pending, filler, fromBook, maxWorseBps,
     drawdownKind, peakSnapshot, agent, rules, terms] = got;
   const reads = readsFrom({ status, step, cash, dayStartEquity, tradingDays, deadline, lastFillAt, pending, filler, fromBook,
-    maxWorseBps, drawdownKind, peakSnapshot, rules, terms }, perAsset);
+    maxWorseBps, drawdownKind, peakSnapshot, rules, terms, stopBook: st.bookAddress }, perAsset, touches);
   const now = block.timestamp;
   const account = examAccount(reads, { now, block: block.number });
   return { reads, account, perAsset, fresh, agent, block: block.number, now, selected };
@@ -487,9 +493,11 @@ function paintPositions(page, st) {
     ${rows.map((r) => `<tr><td data-l="Asset"><b>${esc(r.name)}</b></td><td data-l="Side" class="${r.side === "Long" ? "lg" : "sh"}">${esc(r.side)}</td><td data-l="Size">${esc(r.size)}</td><td data-l="Mark">${esc(r.mark)}</td>
       <td data-l="Notional">${esc(r.notional)}</td><td data-l="Leverage">${esc(r.leverage)}</td>
       <td data-l="Stop / take" class="ex-trig">${[r.stop && [r.stop, "stop"], r.take && [r.take, "take"]].filter(Boolean).map(([t, k]) =>
-        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}"${st.flight.busy ? " disabled" : ""} aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}</td>
+        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}"${st.flight.busy ? " disabled" : ""} aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}${
+        r.touched && st.bookAddress ? ` <button type="button" class="ex-cl" data-settle="1"${st.flight.busy ? " disabled" : ""} title="${esc(SCREEN_TEXT.settle)}">Settle</button>` : ""}</td>
       <td data-l=""><button type="button" class="ex-cl" data-close="${r.asset}"${st.flight.busy ? " disabled" : ""}>Close</button></td></tr>`).join("")}</tbody></table>`
-    : `<p class="ex-pad ex-muted">No open positions.</p>`) + `<p class="ex-exit">${esc(SCREEN_TEXT.exit)}</p>`;
+    : `<p class="ex-pad ex-muted">No open positions.</p>`) + `<p class="ex-exit">${esc(SCREEN_TEXT.exit)}</p>`
+    + (st.bookAddress ? `<p class="ex-exit">${esc(SCREEN_TEXT.stopRule)}</p>` : "");
 }
 
 function paintTicket(page, st) {
@@ -650,13 +658,15 @@ async function sendCall(page, st, call, out) {
     el.textContent = "Waiting for the signature…";
     try {
       const signer = await signerFor(st, call.signer);
-      const tx = await signer.sendTransaction({ to: call.to, data: call.data });
+      // A settle goes with its fixed gas (`SETTLE_GAS`): an estimate would find the gas of doing nothing.
+      const tx = await signer.sendTransaction({ to: call.to, data: call.data, ...(call.gas ? { gasLimit: call.gas } : {}) });
       el.textContent = "Sent. Waiting for the block…";
       const receipt = await tx.wait();
       chain.forgetLiveReads();
       if (!receipt || receipt.status !== 1) throw new Error(`${call.method} reverted`);
       el.className = "result ok";
-      el.textContent = call.method === "place" ? "Order sent. It is filled a few blocks later." : "Done.";
+      el.textContent = call.method === "place" ? "Order sent. It is filled a few blocks later."
+        : call.method === "settle" ? SCREEN_TEXT.settled : "Done.";
     } catch (err) {
       el.className = "result err";
       el.textContent = sendFailure(err, (d) => refusalOf(d, keccak));
@@ -773,6 +783,9 @@ function wire(page, st) {
       const call = setTriggerCall({ exam: st.address, asset: st.asset, isTake: b.dataset.set === "take", px: t.px, size: t.size,
         by: agentActive(st) ? "agent" : "trader", keccak256: keccak });
       sendCall(page, st, call, "#ex-send-out");
+    } else if (b.dataset.settle) {
+      if (!st.bookAddress) return;
+      sendCall(page, st, settleCall({ book: st.bookAddress, exam: st.address, by: agentActive(st) ? "agent" : "trader", keccak256: keccak }), "#ex-send-out");
     } else if (b.dataset.clear) {
       const [asset, kind] = b.dataset.clear.split(":");
       sendCall(page, st, clearTriggerCall({ exam: st.address, asset: Number(asset), isTake: kind === "take", by: agentActive(st) ? "agent" : "trader", keccak256: keccak }), "#ex-send-out");
