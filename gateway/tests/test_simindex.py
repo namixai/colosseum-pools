@@ -291,6 +291,78 @@ class Routes(unittest.TestCase):
             self.assertEqual((status, body["code"]), (405, "read_only"), method)
 
 
+class ReviewRoute(unittest.TestCase):
+    """GET /v1/simindex/reviews: the review service's documents, found by a pool this index knows and whole numbers."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.index = make(Node(history(), head=3000), cls.tmp)
+        read_all(cls.index)
+        cls.folder = pathlib.Path(tempfile.mkdtemp())
+        (cls.folder / f"{POOL}-3.json").write_text(json.dumps({"schema": "payout-review/3", "id": 3}))
+        (cls.folder / f"{POOL.lower()}-4.json").write_text(json.dumps({"schema": "payout-review/3", "id": 4}))
+        (cls.folder / f"{POOL}-5.json").write_text("{not json")
+        (cls.folder / f"{POOL}-6.json").write_text("[1]")
+        (cls.folder / "said.json").write_text(json.dumps({"secret": True}))
+        outside = pathlib.Path(tempfile.mkdtemp()) / "x.json"
+        outside.write_text(json.dumps({"outside": True}))
+        (cls.folder / f"{POOL}-7.json").symlink_to(outside)
+        cls.server = BoundedServer(("127.0.0.1", 0), simindex.make_handler(
+            cls.index, "https://site.example", reviews=simindex.Reviews(cls.folder)))
+        cls.bare = BoundedServer(("127.0.0.1", 0), simindex.make_handler(cls.index, "https://site.example"))
+        for s in (cls.server, cls.bare):
+            threading.Thread(target=s.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
+        cls.bare_base = f"http://127.0.0.1:{cls.bare.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        for s in (cls.server, cls.bare):
+            s.shutdown()
+            s.server_close()
+
+    get = Routes.get
+
+    def test_the_documents_of_the_ids_asked_as_written(self):
+        status, headers, body = self.get(f"/v1/simindex/reviews?pool={POOL.lower()}&ids=3,4,8")
+        self.assertEqual(status, 200)
+        self.assertEqual((body["pool"], body["chain_id"]), (POOL, self.index.chain_id))
+        self.assertEqual(body["reviews"], {"3": {"schema": "payout-review/3", "id": 3},
+                                           "4": {"schema": "payout-review/3", "id": 4}})
+        self.assertEqual(body["missing"], [8])
+        self.assertEqual(headers["Cache-Control"], "no-store")
+
+    def test_a_broken_file_or_a_link_out_of_the_folder_is_not_handed_over(self):
+        _, _, body = self.get(f"/v1/simindex/reviews?pool={POOL}&ids=5,6,7")
+        self.assertEqual(body["reviews"], {})
+        self.assertEqual(sorted(body["unreadable"]), ["5", "6"])
+        self.assertEqual(body["missing"], [7], "a symbolic link is no review")
+
+    def test_only_a_known_pool_and_whole_numbers(self):
+        for q in ("pool=nope&ids=1", f"pool={POOL}&ids=", f"pool={POOL}&ids=../said", f"pool={POOL}&ids=1%0A",
+                  f"pool={POOL}&ids=-1", f"pool={POOL}&ids=" + ",".join(str(i) for i in range(101))):
+            self.assertEqual(self.get(f"/v1/simindex/reviews?{q}")[0], 400, q)
+        status, _, body = self.get(f"/v1/simindex/reviews?pool={OTHER}&ids=3")
+        self.assertEqual((status, body["code"]), (404, "unknown_pool"))
+
+    def test_without_a_folder_there_is_no_route_and_nothing_is_written(self):
+        self.assertEqual(self.get(f"/v1/simindex/reviews?pool={POOL}&ids=3")[0], 200)
+        req = urllib.request.Request(f"{self.bare_base}/v1/simindex/reviews?pool={POOL}&ids=3")
+        with self.assertRaises(urllib.error.HTTPError) as got:
+            urllib.request.urlopen(req, timeout=5)
+        with got.exception as err:
+            self.assertEqual((err.code, json.loads(err.read())["code"]), (404, "reviews_off"))
+        status, _, body = self.get("/v1/simindex/reviews", method="POST", body=b"{}")
+        self.assertEqual((status, body["code"]), (405, "read_only"))
+
+    def test_the_folder_comes_from_the_settings(self):
+        base = {"SIM_INDEX_FACTORY": FACTORY, "SIM_INDEX_FROM_BLOCK": "1"}
+        self.assertIsNone(simindex.settings(base, pathlib.Path("."))["reviews"])
+        cfg = simindex.settings({**base, "SIM_INDEX_REVIEWS": "/var/lib/colosseum-keeper/reviews-sim1"}, pathlib.Path("."))
+        self.assertEqual(cfg["reviews"], pathlib.Path("/var/lib/colosseum-keeper/reviews-sim1"))
+
+
 class Settings(unittest.TestCase):
     def test_the_record_names_the_factory_and_its_first_block(self):
         root = pathlib.Path(__file__).resolve().parents[2]

@@ -13,7 +13,7 @@ import { esc, ZERO_ADDRESS, sameAddress } from "./ui.js";
 import { dollars, tierOf, isSet } from "./simlines.js";
 import { utc, STOP_RESERVE, stopReasonText } from "./simpool.js";
 import {
-  awaitingApproval, approveSelectedCall, approveAnywayCall, stopCall, withdrawRequest, PAYOUT_DELAY, PAYOUT_HARD, HOLD_WARNING,
+  awaitingApproval, approveSelectedCall, approveWithoutCall, stopCall, withdrawRequest, reasonsText, PAYOUT_DELAY, PAYOUT_HARD,
 } from "./operator.js";
 
 /** What this page reads and sends beyond the libraries' ABIs (SimPool.sol): the daily limit, the reason of a stop, the
@@ -267,7 +267,8 @@ export function stopScanNote({ floor, back, latest, head, done, sinceCreation = 
 /**
  * The operator's model: what the page draws, from what it read.
  * `reads`: `{ now, approver, payouts (the last of payout(id), ids from firstId), firstId, accountLines (account → line),
- * menu, tiers, reasons (id → stopReasonOf), payoutsPerDay, payRoom, nextPayAt, requested, readyAt, reviews,
+ * menu, tiers, reasons (id → stopReasonOf), payoutsPerDay, payRoom, nextPayAt, requested, readyAt, reviews (id → the review
+ * service's document), reviewNotes (id → why it has none), reviewsFailed, chainId, latest (the block `now` is of),
  * extra (`[{ id, payout }]`: payouts read by id that the window does not hold, the stops found in the events), stopScan
  * (`{ done, note }`) }`. The queue is the payouts from the pool's head; the stops are the stopped ones of the window and
  * of `extra`, whatever their number.
@@ -291,7 +292,8 @@ export function operatorModel({ pool, roles, reads, keccak256 }) {
   const byId = new Map(structs.map((p) => [p.id, p]));
   const lineOf = (account) => lineLabel(reads.menu, reads.tiers, reads.accountLines?.get?.(String(account).toLowerCase()));
 
-  const queue = awaitingApproval({ pool, structs, now, reviews: reads.reviews ?? {}, keccak256, approver: reads.approver })
+  const queue = awaitingApproval({ pool, structs, now, reviews: reads.reviews ?? {}, reviewNotes: reads.reviewNotes ?? {}, keccak256,
+    approver: reads.approver, chainId: reads.chainId ?? null, latest: reads.latest ?? null })
     .sort((a, b) => a.id - b.id)
     .map((r) => {
       const was = byId.get(r.id)?.wasStopped;
@@ -328,7 +330,7 @@ export function operatorModel({ pool, roles, reads, keccak256 }) {
     requests: request && (request.status === "waiting" || request.status === "ready") ? 1 : 0,
   };
   return { now, roles, may, queue, stops, request, summary, perDay, nobody, unread: Number(reads.unread || 0), unreadPayouts: unread,
-    stopScan: reads.stopScan ?? null };
+    stopScan: reads.stopScan ?? null, reviewsFailed: reads.reviewsFailed ?? null };
 }
 
 /** What a selection of waiting payouts does as one call, or why it cannot be one: the pool's rules (a pool red in the
@@ -341,7 +343,78 @@ export function selectionCall({ pool, rows, keccak256 }) {
   }
 }
 
-export { approveAnywayCall, HOLD_WARNING, PAYOUT_DELAY, PAYOUT_HARD };
+export { approveWithoutCall, PAYOUT_DELAY, PAYOUT_HARD };
+
+// ── the reviews, from the index's route ────────────────────────────
+
+/** How long the page waits for the reviews before it draws the queue without them (each then offered no approval). */
+export const REVIEWS_TIMEOUT_MS = 6000;
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+/** The address of the reviews of `ids` of `pool` on the index's host (gateway/simindex.py, GET /v1/simindex/reviews).
+ *  Over https, or http to this machine only, as the index's other route. */
+export function reviewsUrl(base, pool, ids) {
+  const url = new URL(base);
+  const local = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new Error(`the reviews must be reached over https, not ${url.protocol}//${url.host}`);
+  }
+  if (!ADDRESS.test(String(pool))) throw new Error(`${pool} is not a pool's address`);
+  const list = [...new Set([...ids].map((id) => Number(id)))];
+  if (list.some((id) => !Number.isSafeInteger(id) || id < 0)) throw new Error("a payout number is not a whole number");
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/simindex/reviews`;
+  url.search = `?pool=${encodeURIComponent(pool)}&ids=${list.join(",")}`;
+  url.hash = "";
+  return url.toString();
+}
+
+/**
+ * The review documents of the payouts `ids`, asked of the index (at most 100 in one request). Never throws: `{ docs, notes,
+ * failed }`, where `docs` maps an id to the document as the service wrote it (checked later, `reviewFor`), `notes` maps an id
+ * to why it has none (no file, a file not read), and `failed` says in words why none could be had at all.
+ */
+export async function askReviews({ base, pool, ids, chainId, fetch, timeoutMs = REVIEWS_TIMEOUT_MS }) {
+  const docs = {};
+  const notes = {};
+  const list = [...new Set([...ids].map(Number))];
+  if (list.length === 0) return { docs, notes, failed: null };
+  const fail = (why) => {
+    for (const id of list) notes[id] = `the reviews could not be loaded (${why})`;
+    return { docs: {}, notes, failed: why };
+  };
+  for (let i = 0; i < list.length; i += 100) {
+    const part = list.slice(i, i + 100);
+    let url;
+    try {
+      url = reviewsUrl(base, pool, part);
+    } catch (err) {
+      return fail(err.message);
+    }
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+    try {
+      const res = await fetch(url, { method: "GET", signal: ctl?.signal, cache: "no-store", headers: { Accept: "application/json" } });
+      const body = await res.json().catch(() => null);
+      if (res.status === 404 && body?.code === "reviews_off") return fail("the host is given no folder of reviews");
+      if (res.status === 404 && body?.code === "unknown_pool") return fail("the index does not know this pool yet");
+      if (!res.ok) return fail(`the index answered HTTP ${res.status}`);
+      if (!body || body.status !== "ok" || typeof body.reviews !== "object" || body.reviews === null) return fail("the index answered something this page cannot read");
+      if (String(body.pool).toLowerCase() !== String(pool).toLowerCase()) return fail("the index answered for another pool");
+      if (Number(body.chain_id) !== Number(chainId)) return fail(`the index reads chain ${body.chain_id}, not this site's ${chainId}`);
+      for (const id of part) {
+        const doc = body.reviews[String(id)];
+        if (doc && typeof doc === "object") docs[id] = doc;
+        else if (body.unreadable && typeof body.unreadable[String(id)] === "string") notes[id] = `its file could not be read: ${body.unreadable[String(id)]}`;
+        else notes[id] = "the review service has written none for it";
+      }
+    } catch (err) {
+      return fail(err?.name === "AbortError" ? `the index did not answer in ${Math.round(timeoutMs / 1000)} seconds` : "the index could not be reached");
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  return { docs, notes, failed: null };
+}
 
 // ── markup (mockup 04; classes prefixed so-, app/simops.css; the panel's own are sp-) ─────────────────────────────
 
@@ -383,24 +456,32 @@ export function summaryHtml(s, may) {
 
 const pill = (tone, text) => `<span class="so-pill ${esc(tone)}">${esc(text)}</span>`;
 
-function reviewHtml(r) {
-  if (r.review) return `<div class="so-sm">review: ${esc(r.review.verdict ?? r.review.action)}${r.review.reasons ? ` · ${esc([].concat(r.review.reasons).join("; "))}` : ""}</div>`;
-  return `<div class="so-sm">review: none loaded</div>`;
+/** What the page says of a payout's review: what it said, or why there is none to rest an approval on. */
+export function reviewHtml(r) {
+  const rv = r.review;
+  if (rv) {
+    const text = reasonsText(rv.reasons);
+    const age = r.reviewStale ? ` · <b>too old</b>: ${esc(r.reviewProblem)}` : "";
+    return `<div class="so-sm" data-review="${esc(rv.action ?? "")}">review: ${esc(rv.verdict ?? "no verdict")}, ${esc(rv.action ?? "no action")}`
+      + `${rv.readAt?.block != null ? ` · block ${esc(rv.readAt.block)}` : ""}${text ? ` · ${esc(text)}` : ""}${age}</div>`;
+  }
+  return `<div class="so-sm" data-review="none">review: ${esc(r.reviewProblem ?? "no review")}</div>`;
 }
 
 function queueRowHtml(r, may) {
   const w = r.words;
-  const pick = may.approve && r.approvable
-    ? `<input type="checkbox" class="so-pick" data-id="${r.id}" aria-label="Select payout ${esc(idText(r.id))}"${r.approveAnyway ? " disabled" : ""}>`
+  // Only a payout a fresh clean review carries goes into "Approve selected".
+  const pick = may.approve && r.approve
+    ? `<input type="checkbox" class="so-pick" data-id="${r.id}" aria-label="Select payout ${esc(idText(r.id))}">`
     : "";
   const actions = [];
-  if (may.approve && r.approvable) {
-    actions.push(r.approveAnyway
-      ? `<button type="button" class="so-btn" data-approve="${r.id}" data-anyway="1">Approve anyway</button>`
-      : `<button type="button" class="so-btn" data-approve="${r.id}">Approve</button>`);
+  if (may.approve && r.approve) actions.push(`<button type="button" class="so-btn" data-approve="${r.id}">Approve</button>`);
+  else if (may.approve && r.approveWithout) {
+    actions.push(`<button type="button" class="so-btn hatched" data-approve="${r.id}" data-without="1">Approve without a review</button>`);
   }
   if (r.stoppable) actions.push(`<button type="button" class="so-btn sun" data-stop-for="${r.id}">Stop with reason</button>`);
   const approval = r.approved ? "approved" : r.status === "no-approver" ? "nobody approves" : "not yet";
+  const without = may.approve && r.approveWithout ? `<div class="so-sm so-warn" data-without-why="${r.id}">${esc(r.approveWithout.why)}</div>` : "";
   return `<div class="so-row so-q ${esc(w.tone)}" data-payout="${r.id}" data-status="${esc(r.status)}">`
     + `<div class="so-c id">${pick}<span>${esc(idText(r.id))}</span></div>`
     + `<div class="so-c" data-l="Line">${esc(r.line)}</div>`
@@ -408,7 +489,7 @@ function queueRowHtml(r, may) {
     + `<div class="so-c" data-l="Claimed">${esc(w.claimed)}</div>`
     + `<div class="so-c" data-l="Approval">${esc(approval)}</div>`
     + `<div class="so-c" data-l="Paid no sooner than">${w.lines.map((l) => `<div>${esc(l)}</div>`).join("")}</div>`
-    + `<div class="so-c st" data-l="State">${pill(w.tone, w.text)}${reviewHtml(r)}</div>`
+    + `<div class="so-c st" data-l="State">${pill(w.tone, w.text)}${reviewHtml(r)}${without}</div>`
     + `<div class="so-c act">${actions.join("")}</div></div>`;
 }
 
@@ -426,8 +507,15 @@ export function queueHtml(model) {
   const body = queue.length ? queue.map((r) => queueRowHtml(r, may)).join("")
     : `<p class="so-empty">${model.unreadPayouts?.length ? "No payout is waiting among those read." : "No payout is waiting."}</p>`;
   return `<section class="sp-box so-box" id="queue"><div class="sp-bh"><b>Payout checks · queue in claim order</b>`
-    + `<span>72 h with approval · 7 days at the latest without it</span></div>${bar}${unreadHtml(model)}${head}${body}${more}`
+    + `<span>72 h with approval · 7 days at the latest without it</span></div>${bar}${reviewsFailedHtml(model)}${unreadHtml(model)}${head}${body}${more}`
     + `<div class="so-do" id="so-do-queue" role="status"></div></section>`;
+}
+
+/** What the page says when no review could be had at all: every payout is then offered no one-signature approval. */
+export function reviewsFailedHtml(model) {
+  if (!model.reviewsFailed) return "";
+  return `<p class="so-why so-warn" id="so-reviews-failed">The payout reviews could not be loaded (${esc(model.reviewsFailed)}). `
+    + "No payout is offered its approval without one; reload the page to ask again.</p>";
 }
 
 /** What the page says of payouts the node gave no answer for: they are named, never dropped. */

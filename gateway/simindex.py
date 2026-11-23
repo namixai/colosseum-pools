@@ -12,10 +12,13 @@ list, a node's refusal, or a cabinet still reading after a minute (site deploy, 
 What it is. One process per factory. It reads the factory's `PoolCreated` and its pools' `CodeSet`,
 `SharePaid`, `PayoutStopped`, `StopLifted` and `StopFinal` from the factory's first block to the newest
 block less `SIM_INDEX_LAG`, a window at a time, keeps them in one JSON file under `SIM_INDEX_DIR`, and
-answers two GET routes:
+answers three GET routes:
 
     GET /v1/simindex/health          how far it has read, how far behind the chain, its last error
     GET /v1/simindex/pool?pool=0x…   one pool's events and the blocks they were read from
+    GET /v1/simindex/reviews?pool=0x…&ids=3,4
+                                     the payout reviews the review service wrote for those payouts of that pool
+                                     (SIM_INDEX_REVIEWS, its folder), as they are, for the operator's page (`Reviews`)
 
 It holds no key and takes nothing from outside: no POST, no route that writes, no request that changes
 what it reads. The site does not take its word either: each code, stop and send it lists is a candidate,
@@ -409,19 +412,88 @@ class SimIndex:
                          **common, "events": [dict(e) for e in events]}
 
 
-def make_handler(index: SimIndex, allow_origin: str = "", request_timeout: float = REQUEST_TIMEOUT_S):
+class Reviews:
+    """The payout reviews the review service wrote (ops/review_service.py, `<pool>-<id>.json` under its --out), handed
+    to the operator's page as they are, read only. The page checks each one itself, by the rules `deploy_sim approve`
+    checks it with (app/lib/operator.js, `reviewFor`): this only finds the file. A file's name is built here from a pool
+    this index knows (its factory made it) and whole numbers; nothing of the request is a path. No listing, no other
+    file of the folder (the service's `said.json`, its `ALARM`), nothing written."""
+
+    def __init__(self, directory: pathlib.Path | None):
+        self.directory = directory
+
+    def answer(self, index: SimIndex, pool: str, ids: str) -> tuple[int, dict]:
+        if self.directory is None:
+            return 404, {"status": "not_found", "code": "reviews_off",
+                         "detail": "this index is given no folder of payout reviews (SIM_INDEX_REVIEWS)"}
+        if not isinstance(pool, str) or not ADDRESS.match(pool):
+            return 400, {"status": "bad_request", "code": "bad_pool", "detail": "pool must be a 0x address"}
+        if not isinstance(ids, str) or not IDS.match(ids):
+            return 400, {"status": "bad_request", "code": "bad_ids",
+                         "detail": f"ids must be up to {REVIEWS_MAX_IDS} payout numbers, separated by commas"}
+        numbers = sorted({int(x) for x in ids.split(",")})
+        if len(numbers) > REVIEWS_MAX_IDS:
+            return 400, {"status": "bad_request", "code": "bad_ids",
+                         "detail": f"ids must be up to {REVIEWS_MAX_IDS} payout numbers, separated by commas"}
+        at = to_checksum_address(pool)
+        with index.lock:
+            known = at in index.pools
+            chain_id = index.chain_id
+        if not known:
+            return 404, {"status": "not_found", "code": "unknown_pool", "chain_id": chain_id,
+                         "detail": "this index has not seen the pool made by its factory"}
+        reviews, missing, unreadable = {}, [], {}
+        for n in numbers:
+            got = self._read(at, n)
+            if got is None:
+                missing.append(n)
+            elif isinstance(got, str):
+                unreadable[str(n)] = got
+            else:
+                reviews[str(n)] = got
+        return 200, {"status": "ok", "chain_id": chain_id, "pool": at, "reviews": reviews, "missing": missing,
+                     "unreadable": unreadable}
+
+    def _read(self, pool: str, n: int):
+        """The document of payout `n`, None for no file, or why it cannot be handed over."""
+        for name in (f"{pool}-{n}.json", f"{pool.lower()}-{n}.json"):
+            path = self.directory / name
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if path.stat().st_size > REVIEW_MAX_BYTES:
+                    return "the review file is larger than a review"
+                doc = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeDecodeError):
+                return "the review file could not be read as JSON"
+            if not isinstance(doc, dict):
+                return "the review file is not a JSON object"
+            return doc
+        return None
+
+
+# Payout numbers: whole, at most 20 digits each, at most REVIEWS_MAX_IDS of them; a review is a few kilobytes.
+REVIEWS_MAX_IDS = 100
+IDS = re.compile(r"\d{1,20}(,\d{1,20}){0,99}\Z")
+REVIEW_MAX_BYTES = 512 * 1024
+
+
+def make_handler(index: SimIndex, allow_origin: str = "", request_timeout: float = REQUEST_TIMEOUT_S,
+                 reviews: Reviews | None = None):
+    reviews = reviews or Reviews(None)
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "colosseum-pools-sim-index"
         timeout = request_timeout
 
-        def _send(self, status: int, payload: dict) -> None:
+        def _send(self, status: int, payload: dict, cache: str = "public, max-age=5") -> None:
             data = json.dumps(payload, default=str).encode()
             try:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 # What it answers changes with each window read: a CDN keeps it a few seconds at most.
-                self.send_header("Cache-Control", "public, max-age=5")
+                self.send_header("Cache-Control", cache)
                 if allow_origin:
                     self.send_header("Access-Control-Allow-Origin", allow_origin)
                     self.send_header("Vary", "Origin")
@@ -437,6 +509,11 @@ def make_handler(index: SimIndex, allow_origin: str = "", request_timeout: float
                 return
             if url.path == "/v1/simindex/pool":
                 self._send(*index.pool(parse_qs(url.query).get("pool", [""])[0]))
+                return
+            if url.path == "/v1/simindex/reviews":
+                q = parse_qs(url.query)
+                # A review's age is what an approval rests on: no cache keeps an old one.
+                self._send(*reviews.answer(index, q.get("pool", [""])[0], q.get("ids", [""])[0]), cache="no-store")
                 return
             self._send(404, {"status": "not_found"})
 
@@ -496,7 +573,9 @@ def settings(env, root: pathlib.Path) -> dict:
     return {"factory": factory, "from_block": from_block, "window": window, "lag": lag, "pause_s": pause, "every_s": every,
             "path": directory / f"sim-index-{NETWORK.chain_id}-{factory.lower()}.json",
             "rpc": env.get("SIM_INDEX_RPC_URL") or NETWORK.rpc_url,
-            "bind": env.get("SIM_INDEX_BIND", DEFAULT_BIND), "allow_origin": env.get("SIM_INDEX_ALLOW_ORIGIN", "")}
+            "bind": env.get("SIM_INDEX_BIND", DEFAULT_BIND), "allow_origin": env.get("SIM_INDEX_ALLOW_ORIGIN", ""),
+            # The review service's folder (ops/host/colosseum-payout-review@.service --out); unset: no reviews route.
+            "reviews": pathlib.Path(env["SIM_INDEX_REVIEWS"]) if env.get("SIM_INDEX_REVIEWS") else None}
 
 
 def main() -> int:
@@ -513,7 +592,8 @@ def main() -> int:
     log_line(event="start", factory=cfg["factory"], from_block=cfg["from_block"], file=str(cfg["path"]), file_was=took,
              scanned_to=index.scanned_to, pools=len(index.pools))
     host, _, port = cfg["bind"].partition(":")
-    server = BoundedServer((host, int(port)), make_handler(index, cfg["allow_origin"]))
+    server = BoundedServer((host, int(port)), make_handler(index, cfg["allow_origin"],
+                                                                  reviews=Reviews(cfg["reviews"])))
     threading.Thread(target=index.run, name="sim-index-read", daemon=True).start()
     print(f"sim index listening on {host}:{port}, factory {cfg['factory']} from block {cfg['from_block']}", flush=True)
     server.serve_forever()

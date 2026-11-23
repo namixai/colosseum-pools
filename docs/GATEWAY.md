@@ -737,6 +737,25 @@ their events, a few hundred bytes a code or a stop: well under a megabyte for a 
     GET /v1/simindex/pool?pool=0x…  {status: "ok", pool, created, creator, chain_id, factory, scanned_to,
                                      head, events: [{name, block, index, tx, …fields}]}
                                     404 unknown_pool for a pool this factory has not made by scanned_to
+    GET /v1/simindex/reviews?pool=0x…&ids=3,4
+                                    {status: "ok", chain_id, pool, reviews: {"3": <document>}, missing: [4],
+                                     unreadable: {"5": "why"}}   Cache-Control: no-store
+                                    400 bad_pool, 400 bad_ids (up to 100 whole numbers, commas between),
+                                    404 unknown_pool, 404 reviews_off (no SIM_INDEX_REVIEWS)
+
+**The payout reviews** (`Reviews` in `gateway/simindex.py`). The review service
+(`ops/review_service.py`, `colosseum-payout-review@<name>.timer`) writes each waiting payout's review to
+`<pool>-<id>.json` in its folder. The operator's page asks this route for the reviews of the payouts it
+shows, and offers a payout's one-signature approval only on a review of this chain, pool, payout, trader,
+amount and claim, read after the claim and at most an hour (3 600 blocks and 3 600 s) before the latest
+block, whose verdict is clean and whose action is the approval: the rules `deploy_sim approve` checks
+(`payout_review.card_problem`, and `reviewFor` in `app/lib/operator.js`). Any other payout gets a separate
+"Approve without a review" step that names what is missing or what the review said, and asks twice. The
+route only finds files: the name is built from a pool this index knows (its factory made it), written as
+checksummed or lower case, and whole numbers; nothing of the request is a path. A symbolic link, a file
+over 512 KB, one that is not a JSON object are not handed over; the folder's other files (`said.json`,
+`ALARM`) never are; nothing is listed or written. The documents are handed over as they are: the page
+checks them.
 
 **Restart and a lost node.** A restart takes up the file and reads on from `scanned_to + 1`; a window read
 twice keeps each event once (block and log index). A node that fails, throttles or is unreachable is asked
@@ -773,6 +792,7 @@ not exist, short of reading the whole history itself.
     # SIM_INDEX_FACTORY=0x…  SIM_INDEX_FROM_BLOCK=…
     SIM_INDEX_ALLOW_ORIGIN=https://pools.usenami.io
     # SIM_INDEX_RPC_URL=…         a node of its own spares the gateway's and the keepers' budget
+    SIM_INDEX_REVIEWS=/var/lib/colosseum-keeper/reviews-<name>   # the review service's --out; unset: no reviews route
 
     # /etc/systemd/system/colosseum-sim-index.service
     [Service]
@@ -788,6 +808,11 @@ not exist, short of reading the whole history itself.
     ProtectSystem=strict
     ProtectHome=true
     PrivateTmp=true
+    # For the reviews route: read the review service's folder, and nothing else of the keepers'. The service
+    # writes with UMask 0027, so its group reads; the folder's parent must let the group pass.
+    SupplementaryGroups=colosseum-keeper
+    ReadOnlyPaths=/var/lib/colosseum-keeper/reviews-<name>
+    InaccessiblePaths=-/var/lib/colosseum-keeper/secrets -/var/lib/colosseum-keeper/shared -/var/lib/colosseum-keeper/instances
 
 The settings: `SIM_INDEX_WINDOW` (1000 blocks), `SIM_INDEX_PAUSE` (1.5 s between two reads while behind),
 `SIM_INDEX_EVERY` (15 s between passes once caught up), `SIM_INDEX_LAG` (2 blocks), `SIM_INDEX_BIND`
