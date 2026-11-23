@@ -316,6 +316,9 @@ class CarryingOut(Base):
         loop.sender.ledger[7]["at"] -= sf.RESEND_AFTER_S
         self.node.latest = 8  # its nonce taken on chain, by no transaction of its
         loop.sender.sweep()
+        self.assertFalse(loop.sender.is_gone(7), "once is not enough: its receipt may not be indexed yet")
+        loop.sender.ledger[7]["at"] -= sf.RESEND_AFTER_S
+        loop.sender.sweep()
         self.run_to(loop, 130)
         self.assertTrue(self.events("trigger_fill_lost"))
         self.assertEqual([t["nonce"] for t in self.node.sent()], [7, 8], "gone: the stop goes again, on the next nonce")
@@ -397,9 +400,12 @@ class NoBlindSpots(Base):
         loop = self.loop()
         self.node.send_answers = [c.NodeBusy("eth_sendRawTransaction: HTTP 429")]
         loop.sender.requests.put(req := {"to": POOL, "data": b"", "gas": 21_000, "gas_price": 10**8, "state": "queued",
-                                          "done": threading.Event(), "result": None, "error": None})
+                                          "done": threading.Event(), "result": None, "error": None,
+                                          "not_before": 0.0, "delay": 1.0})
         loop.sender.serve()
-        self.assertIsInstance(req["error"], c.NotSent)
+        self.assertIsInstance(req["error"], sf.Busy)
+        self.assertIn(req, loop.sender.later, "kept to be tried again in a moment")
+        loop.sender.later.clear()
         self.armed_stop(loop)
         self.node.price[101] = 900_000
         self.run_to(loop, 101)
@@ -721,7 +727,8 @@ class LostAndFound(Base):
             self.armed_stop(loop, armed=90)
             self.node.price[101] = 900_000
             self.run_to(loop, 101)
-            loop.apply_reread(EXAM, 101, found, {BTC: 1})
+            loop.inbox.put(("state", EXAM, 101, found, {BTC: 1}))  # as the keeper's slow pass hands it over
+            self.run_to(loop, 102)
             self.assertEqual(self.events("stop_missed")[0]["reason"], reason)
 
 
@@ -1067,6 +1074,185 @@ class TheBotsReview(Base):
         j.add(3, {3: 7})
         self.assertEqual(json.loads((self.dir / "p.json").read_text()), {"3:1": 5, "3:3": 7})
         j.close()
+
+
+class TheSecondReview(Base):
+    """The second review of #333 (А–Е, the rest of 10, a connect timeout) and the bot's three failed reads in a row."""
+
+    def fails(self, n: int):
+        """The node, with the next `n` reads of a position failing."""
+        real = self.node.call
+        left = {"n": n}
+
+        def call(method, params=()):
+            if method == "eth_call" and params[0]["data"].startswith(SEL["positionOf(uint32)"]) and left["n"]:
+                left["n"] -= 1
+                raise RuntimeError("eth_call: HTTP 403")
+            return real(method, params)
+        return mock.patch.object(self.node, "call", side_effect=call)
+
+    def test_three_failed_position_reads_in_a_row_still_judge_the_reach(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 99)
+        self.node.logs.append(set_log(100, 950_000, 101))
+        self.node.price.update({101: 900_000, 103: 960_000})
+        with self.fails(3):
+            self.run_to(loop, 103)
+        missed = self.events("stop_missed")
+        self.assertEqual((missed[0]["reached_from"], missed[0]["reached_to"]), (101, 102),
+                         "judged when the position was read at last, block by block")
+        reads = [int(p[1], 16) for m, p in self.node.calls if m == "eth_call" and p[0]["data"].startswith(SEL["positionOf(uint32)"])]
+        self.assertIn(100, reads, "each kept block judged against the position before it, read by its block")
+
+    def test_a_kept_block_is_judged_against_the_position_as_it_stood_then(self):
+        """Reads fail until after the position was closed in block 103: the kept blocks 101-103 are judged against the
+        position before each (long), not against the closed one the late read finds."""
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 99)
+        self.node.logs += [set_log(100, 950_000, 101), filled_log(103)]
+        self.node.price.update({101: 900_000, 103: 960_000})
+        real = self.node.call
+        left = {"n": 5}
+
+        def call(method, params=()):
+            if method == "eth_call" and params[0]["data"].startswith(SEL["positionOf(uint32)"]):
+                if left["n"]:
+                    left["n"] -= 1
+                    raise RuntimeError("eth_call: HTTP 403")
+                return "0x" + encode(["int256"], [10 if int(params[1], 16) <= 102 else 0]).hex()
+            return real(method, params)
+
+        with mock.patch.object(self.node, "call", side_effect=call):
+            self.run_to(loop, 104)
+        missed = self.events("stop_missed")
+        self.assertEqual((missed[0]["reached_from"], missed[0]["reached_to"], missed[0]["reason"]),
+                         (101, 102, "the price went back"))
+
+    def test_alarms_read_whether_the_exam_was_over_only_after_the_stops_went_out(self):
+        """Block 103: EXAM's reach (101-102) ends, an alarm; OTHER's stop, armed for 104, is reached and goes out first."""
+        self.keeper.accounts[OTHER] = {"pool": POOL, "kind": "exam"}
+        self.node.positions[(OTHER, BTC)] = 4
+        loop = self.loop()
+        self.node.logs += [set_log(100, 950_000, 101), set_log(100, 952_000, 104, exam=OTHER)]
+        self.run_to(loop, 100)
+        self.node.price.update({101: 949_000, 103: 951_000})
+        loop.keeper.filler = False  # EXAM's reach is watched, not carried out
+        self.run_to(loop, 101, 102)
+        loop.keeper.filler = True
+        before = len(self.node.calls)
+        self.assertEqual(self.run_to(loop, 103), [[(OTHER, BTC, False)]])
+        methods = [m for m, _ in self.node.calls[before:]]
+        self.assertEqual(self.events("stop_missed")[0]["exam"], EXAM)
+        self.assertLess(methods.index("eth_sendRawTransaction"), methods.index("eth_getBlockByNumber"))
+
+    def test_a_keeper_send_the_node_was_busy_for_goes_out_in_a_moment(self):
+        sender = sf.Sender(FILLER, self.node)
+        self.node.send_answers = [c.NodeBusy("eth_sendRawTransaction: HTTP 429")]
+        got = []
+        keeper = threading.Thread(target=lambda: got.append(sender.submit(POOL, b"", 21_000, 10**8, wait=10)), daemon=True)
+        keeper.start()
+        end = time.monotonic() + 5
+        while not got and time.monotonic() < end:
+            sender.serve()
+            time.sleep(0.05)
+        keeper.join(2)
+        self.assertEqual(got[0][1], 7, "sent after a second, on the nonce the busy node did not take")
+        self.assertEqual(len(self.node.raw), 1)
+
+    def test_a_keeper_send_not_sent_in_time_says_why(self):
+        sender = sf.Sender(FILLER, self.node)
+        self.node.send_answers = [c.NodeBusy("eth_sendRawTransaction: HTTP 429")] * 3
+        done = []
+
+        def keeper():
+            try:
+                sender.submit(POOL, b"", 21_000, 10**8, wait=0.3)
+            except c.NotSent as exc:
+                done.append(str(exc))
+
+        thread = threading.Thread(target=keeper, daemon=True)
+        thread.start()
+        sender.serve()
+        thread.join(2)
+        self.assertIn("HTTP 429", done[0])
+        self.assertEqual(sender.later, [], "cancelled: never sent after")
+
+    def test_the_keepers_sends_go_out_between_the_blocks_of_a_long_step(self):
+        loop = self.loop()
+        self.armed_stop(loop)
+        loop.sender.requests.put({"to": POOL, "data": b"", "gas": 21_000, "gas_price": 10**8, "state": "queued",
+                                  "done": threading.Event(), "result": None, "error": None, "not_before": 0.0, "delay": 1.0})
+        self.node.price[101] = 960_000
+        before = len(self.node.calls)
+        self.run_to(loop, 106)
+        calls = self.node.calls[before:]
+        sent_at = [i for i, (m, _) in enumerate(calls) if m == "eth_sendRawTransaction"][0]
+        last_price = [i for i, (m, p) in enumerate(calls) if m == "eth_call" and p[0]["to"] == sf.ORACLE_PX][-1]
+        self.assertLess(sent_at, last_price, "not held to the end of the step")
+
+    def test_the_oldest_transaction_waiting_long_is_an_alarm_once(self):
+        sender = sf.Sender(FILLER, self.node)
+        raised = []
+        sender.alarm = lambda event, **f: raised.append((event, f))
+        sender.send(POOL, b"", 21_000, 10**8)
+        sender.send(POOL, b"", 21_000, 10**8)
+        for e in sender.ledger.values():
+            e["at"] -= sf.RESEND_AFTER_S
+            e["since"] -= sf.STUCK_S
+        sender.sweep()
+        for e in sender.ledger.values():
+            e["at"] -= sf.RESEND_AFTER_S
+        sender.sweep()
+        self.assertEqual([(e, f["nonce"]) for e, f in raised], [("send_stuck", 7)], "the oldest, once")
+
+    def test_a_read_error_of_the_keepers_node_names_no_path(self):
+        loop = self.loop(wallet=None)
+        url = "https://node.example:8545/v2/SECRETKEY?k=SECRETKEY"
+        with self.assertRaises(RuntimeError) as caught:
+            loop.reread(EXAM, call=lambda m, p=(): (_ for _ in ()).throw(
+                RuntimeError(f"403 Client Error: Forbidden for url: {url}")))
+        self.assertNotIn("SECRETKEY", str(caught.exception))
+        self.assertIn("node.example", str(caught.exception))
+
+    def test_failing_episodes_raise_one_alarm_an_hour(self):
+        loop = self.loop(wallet=None)
+        for _ in range(3):  # three episodes of a busy node, each over 30 seconds
+            loop._failed("stop_node_busy", c.NodeBusy("x"))
+            loop.failing_since -= sf.STALL_S
+            loop._failed("stop_node_busy", c.NodeBusy("x"))
+            loop.failing_since, loop.failing_said = None, False
+        self.assertEqual(len(self.events("stop_loop_failing")), 1)
+        self.assertEqual(len(self.events("stop_loop_failing_again")), 2)
+        loop.failing_alarm_at -= sf.FAILING_REALARM_S
+        loop._failed("stop_node_busy", c.NodeBusy("x"))
+        loop.failing_since -= sf.STALL_S
+        loop._failed("stop_node_busy", c.NodeBusy("x"))
+        self.assertEqual(len(self.events("stop_loop_failing")), 2, "an hour later, again")
+
+    def test_a_gap_past_the_read_back_with_stops_armed_is_an_alarm_at_once(self):
+        loop = self.loop(wallet=None, backfill=3)
+        self.armed_stop(loop)
+        self.run_to(loop, 106)
+        gap = self.events("stop_watch_gap")
+        self.assertEqual((gap[0]["from_block"], gap[0]["to"], gap[0]["alarm"]), (101, 103, "ALARM"))
+        self.node = Node()
+        self.said.clear()
+        loop = self.loop(wallet=None, backfill=3)
+        self.run_to(loop, 100, 106)
+        self.assertEqual(self.events("stop_watch_gap"), [], "nothing standing: a line, not an alarm")
+
+    def test_a_connect_timeout_is_not_sent_and_spends_no_nonce(self):
+        import requests
+        node = sf.Node("http://127.0.0.1:9")
+        with mock.patch.object(node.session, "post", side_effect=requests.ConnectTimeout("x")):
+            with self.assertRaises(sf.Unreached):
+                node.call("eth_blockNumber")
+        sender = sf.Sender(FILLER, self.node)
+        self.node.send_answers = [sf.Unreached("eth_sendRawTransaction: ConnectTimeout")]
+        with self.assertRaises(sf.Busy):
+            sender.send(POOL, b"", 21_000, 10**8)
+        self.assertEqual((sender.next, sender.ledger), (7, {}), "the nonce is the next one's")
+        self.assertEqual(sender.send(POOL, b"", 21_000, 10**8)[1], 7)
 
 
 class TheLog(unittest.TestCase):

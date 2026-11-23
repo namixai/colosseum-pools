@@ -776,8 +776,9 @@ The stops and takes of the exams are tried in the keeper's one loop, as before, 
 docs/SIM-POOL.md, "The stops"), on the same filler key, and every transaction of that key goes out through it. It
 writes two files beside the keeper's state, in `/var/lib/colosseum-keeper`, the one directory the unit may write:
 `prices-<label>.json`, the oracle prices it read (the file `ops/payout_review.py --prices` takes; it grows and is not
-cut), and `stops-<label>.alarm`, one entry for each stop reached and not carried out and for a stops' loop that is
-dead, stalled or blind, which stays until a person removes it. An alarm also goes to the journal as an `ALARM` line
+cut), and `stops-<label>.alarm`, one entry for each stop reached and not carried out, for a stops' loop that is dead,
+stalled or blind, and for a transaction of the key stuck out of a block for two minutes, which stays until a person
+removes it. An alarm also goes to the journal as an `ALARM` line
 and, when `COLOSSEUM_ALERT_CMD` is set, to that command, as the watchdogs' do. Its other settings, also in
 `keeper-<name>.env` and each the old behaviour when not set: `COLOSSEUM_STOP_RPC_URL`, a node for the stops and the
 key's transactions (the keeper's node when empty; on mainnet not the gateway's); `COLOSSEUM_STOP_TIP_GWEI`, the

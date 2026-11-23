@@ -706,20 +706,28 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   thread. A nonce is spent only once the node took the transaction; one whose answer was lost on the way is sent
   again with the same bytes after 10 seconds without a receipt, never with other bytes under that nonce. The count
   is read from the node at the start and again only if the node says a nonce is taken by something else, and the
-  next nonce never goes below one handed out. A stop still waits behind any earlier transaction of the key that is
-  in the node and not yet in a block;
+  next nonce never goes below one handed out. A transaction of the keeper's the node was busy for (or never reached)
+  is tried again after 1, 2, 4, 8 and 16 seconds while the keeper waits for it, 60 seconds at most, with no thread
+  held; the keeper's transactions go out between the blocks of a long step, not after it. A stop still waits behind
+  any earlier transaction of the key that is in the node and not yet in a block, and the key's oldest transaction
+  still out of a block after two minutes (the gas price left it behind, say) is an alarm (`send_stuck`);
 - the slow pass, a receipt the keeper's own thread waits for, and that thread's retry ladder hold only that
   thread. Every call of the loop is tried once: a busy node costs it that look. The blocks it missed are read back
   the next time, their events always (1 000 blocks at most) and their prices for the last 20; the head's stops go
-  out before the blocks behind it are read. Blocks with no prices are said (`stop_watch_blind`); past 1 000 the
+  out before the blocks behind it are read. Blocks with no prices are said (`stop_watch_blind`), and an alarm at once
+  when a stop stood armed in them (`stop_watch_gap`); past 1 000 the
   loop says it lost the thread (an alarm), forgets its reaches and takes the stops again from the next read of
   the exams;
+- a stop whose position could not be read keeps each block's price; once the position is read, those blocks are
+  judged one by one against the position as it stood before each (read by its block), so failed reads in a row do
+  not hide a reach;
 - a stop set while the keeper was down or behind its logs is read back from the exam by the slow pass at one
   block and handed to the loop (`stop_found_by_read`); a stop set on an exam sold in the same blocks is known in
   the step that sees the sale;
 - the keeper's loop checks that the thread is there and moving: one that ended is an alarm and is started again,
-  one that has not heard the node for 30 seconds is an alarm, and so are calls failing for 30 seconds and 30 blocks
-  without prices while a stop stands. A line `stop_loop_alive` every ten minutes says it works.
+  one that has not heard the node for 30 seconds is an alarm, and so are calls failing for 30 seconds (one alarm an
+  hour at most, the episodes between said as lines) and 30 blocks without prices while a stop stands. An alarm's own
+  reads (whether the exam was over) are made after the step's stops went out. A line `stop_loop_alive` every ten minutes says it works.
 
 Two settings, each the keeper's old behaviour by default: `--stop-rpc` (COLOSSEUM_STOP_RPC_URL), the node the
 loop reads through and the key's transactions go to, the keeper's own when empty; and `--stop-tip-gwei`
