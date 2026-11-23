@@ -1607,6 +1607,46 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
 
 
 SCHEMA = "payout-review/3"
+# How old a review may be, in blocks of the chain it was read on, and in seconds, for an approval to rest on it: an hour.
+# HyperEVM's small blocks come about one a second; the time is checked too, whatever the blocks' pace.
+REVIEW_MAX_BLOCKS = 3_600
+REVIEW_MAX_S = 3_600
+# Where the review's service writes its documents, one `<pool>-<id>.json` a payout, and where an approval reads them.
+REVIEWS_DIR = sk.STATE_DIR / "reviews"
+
+
+def card_problem(doc, pool: str, pid: int, payout: dict, chain_id: int, latest: int, now: int) -> str | None:
+    """Why a review document cannot carry the approval of payout `pid` of `pool` now, or None where it can. It must be
+    this schema, of this chain, pool, payout, trader, amount and due time, read after the claim and at most
+    REVIEW_MAX_BLOCKS blocks and REVIEW_MAX_S seconds before `latest` and `now`, and say "approve" with a clean verdict
+    and the approval as its call. Anything else, a "hold", a "decide", a "stop", a "none", a document not read whole:
+    no approval rests on it (review 12 of #336). `payout`: {trader, amount, dueAt} as the pool answers them."""
+    if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
+        return f"not a {SCHEMA} document"
+    try:
+        if doc.get("chainId") is None or int(doc["chainId"]) != int(chain_id):
+            return f"a review of another chain ({doc.get('chainId')}, this one is {chain_id})"
+        if str(doc.get("pool", "")).lower() != pool.lower() or int(doc.get("id", -1)) != int(pid):
+            return "a review of another payout"
+        if str(doc.get("trader", "")).lower() != str(payout["trader"]).lower() or int(doc.get("amount", -1)) != int(payout["amount"]):
+            return "a review naming another trader or amount"
+        if int(doc.get("dueAt", -1)) != int(payout["dueAt"]):
+            return "a review of another claim"
+        read_at = doc.get("readAt") or {}
+        block, t = int(read_at["block"]), int(read_at["time"])
+    except (KeyError, TypeError, ValueError):
+        return "a review not read whole"
+    if doc.get("claimedAt") is None or t < int(doc["claimedAt"]):
+        return "a review read before the claim"
+    if block > latest or latest - block > REVIEW_MAX_BLOCKS or now - t > REVIEW_MAX_S or t > now + 60:
+        return f"a review read at block {block}, more than an hour from block {latest}: review it again"
+    if doc.get("action") != "approve" or doc.get("verdict") != "clean":
+        why = "; ".join(str(x.get("text", x)) if isinstance(x, dict) else str(x) for x in doc.get("reasons") or [])
+        return f"the review says {doc.get('action')!r} ({doc.get('verdict')})" + (f": {why}" if why else "")
+    call = doc.get("call") or {}
+    if call.get("kind") != "approve":
+        return "a review whose call is not the approval"
+    return None
 
 
 def card(r: dict, chain: dict) -> dict:
@@ -1657,6 +1697,8 @@ def card(r: dict, chain: dict) -> dict:
         # may be settled from; null for a chain read without it.
         "dailyCap": r["dailyCap"],
         "readAt": {"block": chain["latest"], "time": chain["now"]},
+        # The chain the review read (its node's eth_chainId): an approval checks it is its own (`card_problem`).
+        "chainId": chain.get("chainId"),
     }
 
 
@@ -2138,6 +2180,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     stands in for those the node cannot give, and `venue` ({asset: {minute: px}}) is the venue's own prices,
     from a file, never fetched here."""
     factory, usdc, start = record["SimPoolFactory"], record["usdc"], int(record["block"])
+    chain_id = int(c.rpc("eth_chainId"), 16)
     latest = int(c.rpc("eth_blockNumber"), 16)
     now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
     pools = [to_checksum_address(p) for p in core.view(factory, "pools()", "address[]")]
@@ -2269,7 +2312,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             transfers.append({"from": _addr(l["topics"][1]), "to": _addr(l["topics"][2]), "tx": l["transactionHash"],
                               "block": int(l["blockNumber"], 16)})
     transfers.sort(key=lambda t: t["block"])
-    return {"now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
+    return {"chainId": chain_id, "now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
             "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
             "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {},
             "fillWindow": fill_window, "dailyLossBps": daily_bps, "drawdownKind": drawdown_kind,

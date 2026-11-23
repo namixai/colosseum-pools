@@ -62,7 +62,10 @@ cancels it, from the creator's key or the closer's.
 `approver` names the pool's approver of payouts (from the creator's key; zero for none) and `approve`
 approves waiting payouts from it: an approved payout goes out 72 hours after its claim, one not
 approved 7 days after. Without --send `approve` reads each payout and says whose it is, how much,
-from when it goes out with the approval and from when without, or why the pool would refuse it. Like `close` and `finish`, without --send each reads
+from when it goes out with the approval and from when without, or why the pool would refuse it. Each payout is approved
+only on a fresh review that says approve (the review service's `<pool>-<id>.json` in --reviews, ops/state/reviews by
+default, of this chain, pool and payout, read within the hour); without one the command refuses and says why, and there
+is no flag around it: a payout not approved goes out by itself at its ceiling. Like `close` and `finish`, without --send each reads
 the pool and says what it would send, from which key, or why the pool would refuse.
 
 `lift` lifts the stop of payout --id (liftStop, from the factory's operator: our Safe with --signer, or the deployer's
@@ -988,6 +991,41 @@ def approve_check(approver: str, sender: str, payouts: dict, ids: list[int], har
     return lines
 
 
+def sk_state() -> pathlib.Path:
+    """ops/state, where the services keep what they write (`keeper.STATE_DIR`)."""
+    from ops import keeper as core
+    return pathlib.Path(core.STATE_DIR)
+
+
+def review_check(reviews: pathlib.Path, pool_: str, payouts: dict, ids: list[int], chain_id: int, latest: int,
+                 now: int) -> list[str]:
+    """Each payout of `ids` approved only on a fresh review that says "approve": the document the review's service
+    wrote (`<reviews>/<pool>-<id>.json`, `ops/payout_review.py --out`), of this chain, pool and payout, read at most an
+    hour before (`payout_review.card_problem`). A payout without one is refused, with why, and nothing is approved:
+    there is no way round it here, and none is needed, since a payout not approved goes out by itself at its ceiling
+    (review 12 of #336). `payouts`: id → the pool's payout(id)."""
+    from ops import payout_review as pr
+
+    problems, lines = [], []
+    for i in ids:
+        p = payouts[i]
+        path = reviews / f"{pool_}-{i}.json"
+        try:
+            doc = json.loads(path.read_text())
+        except (OSError, ValueError):
+            problems.append(f"payout {i}: no review at {path}")
+            continue
+        why = pr.card_problem(doc, pool_, i, {"trader": p[1], "amount": p[2], "dueAt": p[3]}, chain_id, latest, now)
+        if why:
+            problems.append(f"payout {i}: {why}")
+        else:
+            lines.append(f"payout {i}: reviewed at block {doc['readAt']['block']}, clean")
+    if problems:
+        raise SystemExit("NoReview: approving rests on a fresh review that says approve, and these have none; nothing "
+                         "was approved (an unapproved payout goes out by itself at its ceiling):\n  " + "\n  ".join(problems))
+    return lines
+
+
 def approver_cmd(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     creator = to_checksum_address(c.call_view(pool_, "creator()", [], [], ["address"])[0])
@@ -1009,6 +1047,9 @@ def approve(args) -> int:
         int(c.call_view(factory, "PAYOUT_DELAY()", [], [], ["uint32"])[0])
     approver = to_checksum_address(c.call_view(pool_, "approver()", [], [], ["address"])[0])
     lines = approve_check(approver, sender, payouts, ids, hard)
+    latest = int(c.rpc("eth_blockNumber"), 16)
+    now = int(c.rpc("eth_getBlockByNumber", [hex(latest), False])["timestamp"], 16)
+    lines += review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc("eth_chainId"), 16), latest, now)
     print(f"deploy_sim approve: pool {pool_}, approvePayouts({ids}) from {args.key or 'the signer'} ({sender})")
     for line in lines:
         print("  " + line)
@@ -1461,6 +1502,9 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--key", help="the pool's approver")
     z.add_argument("--signer", help="an address that signs elsewhere (the Ledger's): print the call, send nothing")
     z.add_argument("--ids", required=True, help="payout numbers, as 3,4,7")
+    z.add_argument("--reviews", default=str(sk_state() / "reviews"),
+                   help="the review service's documents, <pool>-<id>.json (ops/payout_review.py --out): each payout needs a "
+                   "fresh one that says approve")
     z.add_argument("--send", action="store_true")
     z = sub.add_parser("lift")
     z.add_argument("--pool", required=True)
