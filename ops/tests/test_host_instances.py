@@ -672,7 +672,10 @@ class MultiPoolKeeper(unittest.TestCase):
         multi = Units.directives(HOST / "colosseum-multi-keeper@.service")
         differ = sorted(set(keeper) ^ set(multi))
         self.assertEqual([l.split("=", 1)[0] for l in differ],
-                         ["Description", "Description", "Environment", "Environment", "ExecStart", "ExecStart"], differ)
+                         ["Description", "Description", "Environment", "Environment", "EnvironmentFile", "ExecStart",
+                          "ExecStart"], differ)
+        # The alarm channel of its stops' loop (review 15 of #338): on mainnet the loop refuses to start without it.
+        self.assertIn("EnvironmentFile=-/etc/colosseum/watch.env", multi)
         # The network and its confirmation from the instance's file, testnet by default; the review's status watched.
         self.assertIn("Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=", multi)
         self.assertIn("Environment=COLOSSEUM_REVIEW_STATUS=/var/lib/colosseum-keeper/reviews-%i/status.json", multi)
@@ -844,7 +847,8 @@ class SimulatedPoolChecker(unittest.TestCase):
         only_keeper = sorted(set(multi) - set(checker))
         only_checker = sorted(set(checker) - set(multi))
         self.assertEqual([l.split("=", 1)[0] for l in only_keeper],
-                         ["BindPaths", "Description", "Environment", "Environment", "ExecStart", "RestartSec"], only_keeper)
+                         ["BindPaths", "Description", "Environment", "Environment", "EnvironmentFile", "ExecStart",
+                          "RestartSec"], only_keeper)
         self.assertEqual([l.split("=", 1)[0] for l in only_checker],
                          ["Description", "ExecStart", "InaccessiblePaths", "RestartSec"], only_checker)
         for line in ("User=colosseum-keeper", "Restart=always", "ProtectSystem=strict", "NoNewPrivileges=true",

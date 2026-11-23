@@ -952,7 +952,9 @@ Each payout held is the alarm `payout_held` with the date it goes out by itself,
 more 24 and 6 hours before that date, while it is held and not stopped; a payout that pays by itself unless stopped
 is `payout_needs_a_stop`, the same way. A pass that fails is `review_failed` (once an hour); a pass killed by its
 `TimeoutStartSec` or its `MemoryMax` (1 GB) starts `colosseum-unit-failed@` (its `OnFailure=`), which says
-`unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read.
+`unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read;
+an alarm is taken only when the channel took it (a line only in `ALARM` is said again), and on mainnet the units do
+not start without the channel.
 
 Every block of each stop's time must be in both journals of prices, the keeper's and the second writer's (below),
 at one price (a block only one holds is `stop-one-journal` unless the optional node bears it out; the document's
@@ -1007,7 +1009,10 @@ What the host needs before a simulated pool runs on mainnet, in order:
    `COLOSSEUM_ARCHIVE_RPC_URL`. Without both network lines `colosseum-multi-keeper@`, `colosseum-sim-checker@` and
    `colosseum-payout-review@` run on testnet, as before, and on a mainnet node they refuse to start (the chain id is
    checked); with one of them alone they refuse to start.
-4. `/etc/colosseum/watch.env`: `COLOSSEUM_ALERT_CMD`, the channel every alarm above goes to.
+4. `/etc/colosseum/watch.env`: `COLOSSEUM_ALERT_CMD`, the channel every alarm above goes to. On mainnet the stops'
+   loop (in the keeper's process), the second writer and `colosseum-payout-review@` refuse to start without it, and
+   an alarm only written to the flag file is never taken as delivered (it is said again at the next pass). Try the
+   channel by hand once: `echo test | sh -c "$COLOSSEUM_ALERT_CMD"` reaches a person.
 5. The second writer ("The second writer of prices"), with its own node and the two network lines.
 6. `install.sh` from the release; then `systemctl enable --now colosseum-payout-review@<name>.timer`.
 7. The index of the page (`gateway.simindex`): `colosseum-sim-index@<name>.service`, installed by `install.sh` and

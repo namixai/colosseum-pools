@@ -632,9 +632,10 @@ class Alarm:
         self.lock = threading.Lock()  # both threads may raise one
 
     def __call__(self, event: str, wait: bool = False, **fields) -> bool | None:
-        """The alarm raised. With `wait` the channel is run here and its outcome returned: True once it took the line
-        (or, with no channel on the host, once the flag holds it), False when it did not; a caller that remembers what
-        it said remembers only what was taken. Without, the channel runs in a thread and None is returned."""
+        """The alarm raised. With `wait` the channel is run here and its outcome returned: True once it took the line,
+        False when it did not or there is no channel on the host (a line only in the flag file and the journal reaches
+        nobody: review 15 of #338); a caller that remembers what it said remembers only what was taken. Without, the
+        channel runs in a thread and None is returned."""
         line = json.dumps({"t": int(time.time()), "event": event, **fields}, default=str)
         log(event, alarm="ALARM", **fields)
         where = "the journal"
@@ -661,7 +662,7 @@ class Alarm:
         elif no_channel:
             log("stop_alarm_no_channel", why="COLOSSEUM_ALERT_CMD is not set", where=where)
         if wait:
-            return where.startswith("the flag")
+            return False  # no channel: written down, not delivered
         return None
 
     def _send(self, line: str, where: str) -> bool:
@@ -1502,9 +1503,19 @@ def review_status_of(args) -> pathlib.Path | None:
     return pathlib.Path(got) if isinstance(got, str) and got else None
 
 
+def require_channel(who: str) -> None:
+    """On mainnet a service whose alarms a person must hear does not start without its channel (review 15 of #338): an
+    alarm only in the flag file and the journal reaches nobody, and a held payout goes out by itself at its ceiling.
+    Testnet starts as before."""
+    if c.NETWORK.name == "mainnet" and not os.environ.get("COLOSSEUM_ALERT_CMD", "").strip():
+        raise SystemExit(f"refusing to run {who} on mainnet: COLOSSEUM_ALERT_CMD is not set (the alarm channel, in "
+                         "/etc/colosseum/watch.env)")
+
+
 def build(args, keeper, state: pathlib.Path, wallet=None, prefix: str = "") -> StopLoop:
     """The loop from the settings, its node checked against the network; a sender for the key when there is a wallet.
-    `prefix` keeps the default files of a watch alone apart from the keeper's."""
+    `prefix` keeps the default files of a watch alone apart from the keeper's. On mainnet, not without an alarm channel."""
+    require_channel("the stops' loop")
     url = args.stop_rpc or c.RPC_URL
     node = Node(url)
     if c.NETWORK.name == "mainnet":

@@ -27,8 +27,31 @@ class Channel(unittest.TestCase):
         with mock.patch.object(sf, "log"):
             self.assertTrue(sf.Alarm(self.dir / "f", "cat >/dev/null")("x", wait=True))
             self.assertFalse(sf.Alarm(self.dir / "f", "exit 1")("x", wait=True))
-            self.assertTrue(sf.Alarm(self.dir / "f", "")("x", wait=True), "no channel: the flag holds it")
+            # Review 15 of #338 (M4): the flag file holds it, and nobody reads it: not taken, said again.
+            self.assertFalse(sf.Alarm(self.dir / "f", "")("x", wait=True), "no channel: written down, not delivered")
+            self.assertIn('"x"', (self.dir / "f").read_text())
             self.assertFalse(sf.Alarm(None, "")("x", wait=True), "no channel and no flag: nobody has it")
+
+    def test_on_mainnet_the_review_and_the_stops_loop_do_not_start_without_a_channel(self):
+        """Review 15 of #338 (M4): on mainnet, no COLOSSEUM_ALERT_CMD is a refusal at the start, loud; testnet as before."""
+        from ops.tests.test_sim_network import on
+        from spike.hlspike import network as networks
+        loud = mock.patch.object(rs.deployments, "load", side_effect=AssertionError("started"))
+        for env in ({"COLOSSEUM_ALERT_CMD": ""}, {"COLOSSEUM_ALERT_CMD": "  "}):
+            with on(networks.MAINNET), mock.patch.dict(os.environ, env), loud:
+                with self.assertRaises(SystemExit) as caught:
+                    sf.require_channel("the stops' loop")
+                self.assertIn("COLOSSEUM_ALERT_CMD is not set", str(caught.exception))
+                with mock.patch.object(rs.sn, "confirm_service"), self.assertRaises(SystemExit) as caught:
+                    rs.main(["--deployment", "sim1", "--out", str(self.dir), "--network", "mainnet",
+                             "--confirm-mainnet", "sim1"])
+                self.assertIn("refusing to run the payout review on mainnet", str(caught.exception))
+                with self.assertRaises(SystemExit):
+                    sf.build(mock.Mock(), None, self.dir / "s.json")
+        with on(networks.MAINNET), mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": "cat >/dev/null"}):
+            sf.require_channel("the stops' loop")
+        with on(networks.TESTNET), mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": ""}):
+            sf.require_channel("the stops' loop")
 
 
 class Repeats(unittest.TestCase):

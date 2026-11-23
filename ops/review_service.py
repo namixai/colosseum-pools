@@ -228,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     with chk.node_errors():
         sn.confirm_service(args, args.deployment, c, sends=False)
     confirmed(args, args.deployment)
+    sf.require_channel("the payout review")
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")

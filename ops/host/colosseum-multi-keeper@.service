@@ -17,6 +17,9 @@ Wants=network-online.target
 User=colosseum-keeper
 Group=colosseum-keeper
 WorkingDirectory=/opt/colosseum-pools/current
+# The alarm channel (COLOSSEUM_ALERT_CMD) of the stops' loop in this process: on mainnet the loop does not start
+# without it (ops/stop_filler.py, require_channel); on testnet an alarm goes to the journal and the flag file as before.
+EnvironmentFile=-/etc/colosseum/watch.env
 # The record's file last, as the gateway's: it wins over a line by hand in keeper-%i.env.
 EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env

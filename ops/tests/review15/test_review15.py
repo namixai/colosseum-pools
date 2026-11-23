@@ -176,7 +176,6 @@ class ScanControls(ScanWorld):
 
 
 class AlarmChannel(unittest.TestCase):
-    @unittest.expectedFailure  # TODO(review 15): until its fix lands in this round
     def test_an_alarm_with_no_channel_on_the_host_is_not_taken(self):
         """`EnvironmentFile=-/etc/colosseum/watch.env` (optional) and `Alarm.__call__(wait=True)` returns True once a flag
         file holds the line: with COLOSSEUM_ALERT_CMD unset, every held-payout alarm is 'said' into a file nobody reads

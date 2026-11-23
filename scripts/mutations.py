@@ -17189,6 +17189,19 @@ MUTATIONS = [
      "            if key not in seen:\n                seen.add(key)",
      "            if True:\n                seen.add(key)",
      ["test_a_log_the_tail_reads_again_is_kept_once"]),
+    # No channel: written down, not delivered; on mainnet, no start.
+    ("RY6", "ops/stop_filler.py",
+     "            return False  # no channel: written down, not delivered",
+     "            return where.startswith(\"the flag\")",
+     ["test_an_alarm_with_no_channel_on_the_host_is_not_taken", "test_waited_for_the_channels_own_answer_is_returned"]),
+    ("RY7", "ops/stop_filler.py",
+     "    if c.NETWORK.name == \"mainnet\" and not os.environ.get(\"COLOSSEUM_ALERT_CMD\", \"\").strip():",
+     "    if False:",
+     ["test_on_mainnet_the_review_and_the_stops_loop_do_not_start_without_a_channel"]),
+    ("RY8", "ops/review_service.py",
+     "    sf.require_channel(\"the payout review\")\n",
+     "",
+     ["test_on_mainnet_the_review_and_the_stops_loop_do_not_start_without_a_channel"]),
 ]
 
 RUNNERS = {
