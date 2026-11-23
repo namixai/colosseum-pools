@@ -1,0 +1,19 @@
+# The second writer's journal (colosseum-price-watch@%i) copied to the pools host every minute, over ssh with a key
+# that can do nothing there but write into one directory (the host's authorized_keys pins it to
+# `rrsync -wo /var/lib/colosseum-keeper/second-prices`). Only the day files are sent, appended as they grow; the host
+# never connects here, and this machine holds no key of the pools. COLOSSEUM_PRICE_SYNC_TO in
+# /etc/colosseum/price-watch-%i.env is the host's address as user@host: (docs/HOSTING.md, "The second writer of prices").
+[Unit]
+Description=colosseum-pools second writer's journal to the pools host %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=colosseum-prices
+Group=colosseum-prices
+EnvironmentFile=/etc/colosseum/price-watch-%i.env
+ExecStart=/bin/sh -c 'exec rsync --append-verify --times --timeout=40 \
+    -e "ssh -i /var/lib/colosseum-prices/.ssh/sync -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+    /var/lib/colosseum-prices/watch-prices-"$COLOSSEUM_DEPLOYMENT"-*.jsonl "$COLOSSEUM_PRICE_SYNC_TO"'
+TimeoutStartSec=55

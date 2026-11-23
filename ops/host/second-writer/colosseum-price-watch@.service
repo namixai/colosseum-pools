@@ -1,0 +1,47 @@
+# The second writer of oracle prices, for instance %i: on ANOTHER machine than the pools host, reading ANOTHER node
+# (another provider) than the keeper's. It is ops/stop_filler.py alone: no key, it sends nothing; every block it writes
+# the oracle price of every platform asset to its own journal, watch-prices-<deployment>-YYYY-MM-DD.jsonl, which
+# colosseum-price-sync@ copies to the pools host for the payout review. The review holds a block where either journal
+# has it and wants the two to agree where both do: a restart of either writer is covered by the other.
+# Its file, /etc/colosseum/price-watch-%i.env, names the deployment (COLOSSEUM_DEPLOYMENT), the node
+# (COLOSSEUM_RPC_URL, not the keeper's provider), and on mainnet COLOSSEUM_NETWORK=mainnet with
+# COLOSSEUM_CONFIRM_MAINNET=<the deployment's label>; docs/HOSTING.md, "The second writer of prices".
+[Unit]
+Description=colosseum-pools second writer of prices %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=colosseum-prices
+Group=colosseum-prices
+WorkingDirectory=/opt/colosseum-pools/current
+Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=
+EnvironmentFile=/etc/colosseum/price-watch-%i.env
+# No key: an empty directory of its own, so that nothing could sign if anything tried.
+Environment=COLOSSEUM_KEY_DIR=/var/lib/colosseum-prices/no-keys
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.stop_filler --deployment ${COLOSSEUM_DEPLOYMENT} \
+    --state /var/lib/colosseum-prices/watch-${COLOSSEUM_DEPLOYMENT}.json --review-status '' \
+    --network ${COLOSSEUM_NETWORK} --confirm-mainnet ${COLOSSEUM_CONFIRM_MAINNET}
+Restart=always
+RestartSec=10
+MemoryMax=512M
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/colosseum-prices
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

@@ -68,6 +68,7 @@ install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.path" /etc/sy
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-multi-keeper@.service" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-payout-review@.service" "$rel/ops/host/colosseum-payout-review@.timer" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-unit-failed@.service" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-checker@.service" /etc/systemd/system/
 systemctl daemon-reload
 

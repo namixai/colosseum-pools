@@ -1260,8 +1260,8 @@ class MissedTouches(unittest.TestCase):
         m = got["missedTouch"]
         self.assertEqual(m["stage"], {"read": True, "every": 60, "spans": 1, "unread": 0, "missed": [
             {"asset": 3, "take": False, "px": self.STOP, "side": 1, "armedAt": 1_003, "first": 1_100, "last": 1_130,
-             "reads": 31, "seen": False, "then": "carried out", "at": 1_305}]})
-        self.assertEqual(m["exam"], {"read": False, "every": None, "spans": 0, "unread": 0, "missed": []},
+             "reads": 31, "seen": False, "then": "carried out", "at": 1_305}], "late": []})
+        self.assertEqual(m["exam"], {"read": False, "every": None, "spans": 0, "unread": 0, "missed": [], "late": []},
                          "an account the review did not read along is said as not read")
         # A reach nobody carried out holds the payout (closed on failure), and so does a stop not checked in every
         # block: without the stops' loop's journal, none is.
@@ -1459,7 +1459,7 @@ class TheStopsJournal(unittest.TestCase):
         got = self.judged(set(range(1_300, 1_306)))
         self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"), got["reasons"])
         self.assertEqual(got["missedTouch"]["stage"]["every"], 1)
-        self.assertEqual(got["stopDoubt"]["stage"], {"missed": [], "unchecked": [], "txs": []})
+        self.assertEqual(got["stopDoubt"]["stage"], {"missed": [], "unchecked": [], "txs": [], "late": []})
 
     def test_a_reach_in_the_journal_nobody_carried_out_holds_the_payout_with_a_draft_of_reason_3(self):
         got = self.judged({1_150, *range(1_300, 1_306)})

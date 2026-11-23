@@ -1,0 +1,11 @@
+# colosseum-price-sync@%i every minute: the review reads the second journal at most a minute and its pass behind.
+[Unit]
+Description=colosseum-pools second writer's journal to the pools host %i, every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

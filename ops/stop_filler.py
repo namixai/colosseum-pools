@@ -136,6 +136,11 @@ BUMP_AFTER_S = 2.0
 MAX_BUMPS = 4
 # Seconds the node's head block may be older than this machine's clock before it is an alarm: a node behind or stuck.
 STALE_HEAD_S = 60.0
+# The payout review's age, watched from this loop (`StopLoop._review_age`).
+REVIEW_EVERY_S = 300.0
+REVIEW_STALE_S = 1_800.0
+REVIEW_DEAD_S = 7_200.0
+REVIEW_AGAIN_S = 6 * 3_600.0
 # The first line of each day file of the journal of prices: what it is, so a review refuses another kind of file.
 JOURNAL_SCHEMA = "colosseum-prices/2"
 # Seconds the loop may stay short of the node's head before it is an alarm.
@@ -623,7 +628,10 @@ class Alarm:
         self.said_no_channel = False
         self.lock = threading.Lock()  # both threads may raise one
 
-    def __call__(self, event: str, **fields) -> None:
+    def __call__(self, event: str, wait: bool = False, **fields) -> bool | None:
+        """The alarm raised. With `wait` the channel is run here and its outcome returned: True once it took the line
+        (or, with no channel on the host, once the flag holds it), False when it did not; a caller that remembers what
+        it said remembers only what was taken. Without, the channel runs in a thread and None is returned."""
         line = json.dumps({"t": int(time.time()), "event": event, **fields}, default=str)
         log(event, alarm="ALARM", **fields)
         where = "the journal"
@@ -639,18 +647,29 @@ class Alarm:
             no_channel = not self.command and not self.said_no_channel
             if no_channel:
                 self.said_no_channel = True
+        if self.command and wait:
+            try:
+                return bool(self._send(line, where))
+            except Exception as exc:  # the channel's own failure: not taken
+                log("stop_alarm_not_sent", error=str(exc)[:200], where=where)
+                return False
         if self.command:
             threading.Thread(target=self._send, args=(line, where), daemon=True).start()
         elif no_channel:
             log("stop_alarm_no_channel", why="COLOSSEUM_ALERT_CMD is not set", where=where)
+        if wait:
+            return where.startswith("the flag")
+        return None
 
-    def _send(self, line: str, where: str) -> None:
+    def _send(self, line: str, where: str) -> bool:
         try:
             subprocess.run(["sh", "-c", self.command], input=line + "\n", text=True, timeout=30,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             log("stop_alarm_sent")
+            return True
         except Exception as exc:
             log("stop_alarm_not_sent", error=str(exc)[:200], where=where)
+            return False
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────────────
@@ -662,8 +681,12 @@ class StopLoop:
     def __init__(self, keeper, node: Node, *, wallet=None, sender: Sender | None = None, tip_wei: int = 0,
                  journal: PriceJournal | None = None, alarm: Alarm | None = None, backfill: int = BACKFILL,
                  overdue: int = OVERDUE, min_alarm_blocks: int = MIN_ALARM_BLOCKS, catchup: int = CATCHUP,
-                 clock=time.time, min_runway: int = MIN_RUNWAY_FILLS, assets=None):
+                 clock=time.time, min_runway: int = MIN_RUNWAY_FILLS, assets=None,
+                 review_status: pathlib.Path | None = None):
         self.keeper = keeper
+        self.review_status = review_status  # the payout review's status.json, whose age this loop watches
+        self.review_at = -REVIEW_EVERY_S
+        self.review_said_at: float | None = None
         if assets is None:  # the platform's assets on this network: their prices go to the journal in every block
             from ops import sim_network as sn
             assets = sn.sim(c.NETWORK).assets.values()
@@ -1360,6 +1383,32 @@ class StopLoop:
             self.low_said = False
             log("stop_key_topped_up", balance_wei=balance, fills_left=fills)
 
+    def _review_age(self) -> None:
+        """The payout review's last pass (its status.json) looked at every REVIEW_EVERY_S, from this process, apart from
+        the review's own timer: older than REVIEW_STALE_S while payouts were waiting at its last pass, or older than
+        REVIEW_DEAD_S whatever it saw, is an alarm, said again every REVIEW_AGAIN_S while it lasts. A review that does
+        not run leaves no document fresh: approve refuses every payout, and a held payout is not said again."""
+        if self.review_status is None or self.clock() - self.review_at < REVIEW_EVERY_S:
+            return
+        now = self.review_at = self.clock()
+        try:
+            status = json.loads(self.review_status.read_text())
+            age, due = now - float(status["at"]), int(status.get("due", 0))
+        except (OSError, ValueError, KeyError, TypeError):
+            age, due = None, None
+        stale = age is None or age > REVIEW_DEAD_S or (age > REVIEW_STALE_S and due)
+        if not stale:
+            if self.review_said_at is not None:
+                log("review_fresh_again", age=int(age))
+            self.review_said_at = None
+            return
+        if self.review_said_at is not None and now - self.review_said_at < REVIEW_AGAIN_S:
+            return
+        self.review_said_at = now
+        self.alarm("review_stale", status=self.review_status.name, age=None if age is None else int(age), due=due,
+                   why="the payout review has not finished a pass for too long: no document is fresh, approve refuses "
+                       "every payout, a held payout is not said again (see colosseum-payout-review@ on the host)")
+
     def run(self, poll: float, stop: threading.Event | None = None) -> None:
         """Forever (or until `stop`): the head every `poll` seconds, and a step for each new one; between them, the keeper's
         transactions. Nothing here waits on the keeper's thread; a busy node costs the look it refused."""
@@ -1381,6 +1430,7 @@ class StopLoop:
                     self.step(head)
                 self._behind(head)
                 self._balance()
+                self._review_age()
                 if self.failing_since is not None:
                     log("stop_loop_works_again", failed_for=int(time.monotonic() - self.failing_since))
                 self.failing_since, self.failing_said = None, False
@@ -1436,8 +1486,17 @@ def add_args(p: argparse.ArgumentParser) -> None:
                    help="a reach the price ended in fewer blocks is a line, not an alarm (1: every one an alarm)")
     p.add_argument("--price-journal", default=None,
                    help="the journal of oracle prices (default prices-<deployment>.jsonl next to the state); '' for none")
+    p.add_argument("--review-status", default=os.environ.get("COLOSSEUM_REVIEW_STATUS", ""),
+                   help="the payout review's status.json (reviews-<name>/status.json on the host): this loop says when "
+                        "the review has not finished a pass for 30 minutes with payouts waiting; '' for none")
     p.add_argument("--stop-alarm", default=None,
                    help="the flag file of missed stops (default stops-<deployment>.alarm next to the state); '' for none")
+
+
+def review_status_of(args) -> pathlib.Path | None:
+    """--review-status as a path; empty (or not a setting of this caller's), none."""
+    got = getattr(args, "review_status", "")
+    return pathlib.Path(got) if isinstance(got, str) and got else None
 
 
 def build(args, keeper, state: pathlib.Path, wallet=None, prefix: str = "") -> StopLoop:
@@ -1459,7 +1518,8 @@ def build(args, keeper, state: pathlib.Path, wallet=None, prefix: str = "") -> S
                     journal=PriceJournal(journal_path, header={"chain": c.CHAIN_ID, "factory": getattr(keeper, "factory", None),
                                                                "label": args.deployment}) if journal_path else None,
                     alarm=Alarm(flag),
-                    overdue=args.stop_overdue, min_alarm_blocks=args.stop_alarm_min_blocks)
+                    overdue=args.stop_overdue, min_alarm_blocks=args.stop_alarm_min_blocks,
+                    review_status=review_status_of(args))
 
 
 def start(loop: StopLoop, poll: float) -> threading.Thread:
@@ -1495,9 +1555,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--poll", type=float, default=0.5)
     p.add_argument("--state", help="the watch's own state file (default ops/state/watch-<deployment>.json)")
     add_args(p)
-    sn.add_args(p)
+    sn.add_args(p, service=True)
     args = p.parse_args(argv)
-    sn.selected(args, c.NETWORK)
+    sn.confirm_service(args, args.deployment, c, sends=False)
+    if c.NETWORK.name == "mainnet" and args.confirm_mainnet != args.deployment:
+        # It sends nothing, but its journal is what the review holds the keeper's against on that network's money.
+        raise SystemExit(f"refusing to run on mainnet: --confirm-mainnet {args.deployment} is needed")
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")

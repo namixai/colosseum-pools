@@ -671,9 +671,13 @@ class MultiPoolKeeper(unittest.TestCase):
         keeper = Units.directives(HOST / "colosseum-keeper@.service")
         multi = Units.directives(HOST / "colosseum-multi-keeper@.service")
         differ = sorted(set(keeper) ^ set(multi))
-        self.assertEqual([l.split("=", 1)[0] for l in differ], ["Description", "Description", "ExecStart", "ExecStart"],
-                         differ)
+        self.assertEqual([l.split("=", 1)[0] for l in differ],
+                         ["Description", "Description", "Environment", "Environment", "ExecStart", "ExecStart"], differ)
+        # The network and its confirmation from the instance's file, testnet by default; the review's status watched.
+        self.assertIn("Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=", multi)
+        self.assertIn("Environment=COLOSSEUM_REVIEW_STATUS=/var/lib/colosseum-keeper/reviews-%i/status.json", multi)
         start = next(l for l in multi if l.startswith("ExecStart="))
+        self.assertIn("--network ${COLOSSEUM_NETWORK} --confirm-mainnet ${COLOSSEUM_CONFIRM_MAINNET}", start)
         self.assertIn("-m ops.multi_keeper --deployment ${COLOSSEUM_DEPLOYMENT}", start)
         # The wallet is the deployment's (deployment-<name>.env): a MultiPool's own, or a simulated pool's filler.
         self.assertIn("--wallet ${COLOSSEUM_MULTI_WALLET} ", start)
@@ -840,7 +844,7 @@ class SimulatedPoolChecker(unittest.TestCase):
         only_keeper = sorted(set(multi) - set(checker))
         only_checker = sorted(set(checker) - set(multi))
         self.assertEqual([l.split("=", 1)[0] for l in only_keeper],
-                         ["BindPaths", "Description", "Environment", "ExecStart", "RestartSec"], only_keeper)
+                         ["BindPaths", "Description", "Environment", "Environment", "ExecStart", "RestartSec"], only_keeper)
         self.assertEqual([l.split("=", 1)[0] for l in only_checker],
                          ["Description", "ExecStart", "InaccessiblePaths", "RestartSec"], only_checker)
         for line in ("User=colosseum-keeper", "Restart=always", "ProtectSystem=strict", "NoNewPrivileges=true",
@@ -861,11 +865,15 @@ class SimulatedPoolChecker(unittest.TestCase):
         self.assertIn("--state /var/lib/colosseum-keeper/check-${COLOSSEUM_DEPLOYMENT}.json", start)
         multi = next(l for l in Units.directives(HOST / "colosseum-multi-keeper@.service") if l.startswith("ExecStart="))
         self.assertNotIn("check-", multi, "one state file a process")
-        for never in ("--once", "--lift", "--dry-run", f"--wallet {hi.FILLER_WALLET}", "--confirm-mainnet"):
+        for never in ("--once", "--lift", "--dry-run", f"--wallet {hi.FILLER_WALLET}"):
             self.assertNotIn(never, start)
-        # Only flags the service loop has read since before this unit: a release rolled back to still starts it.
+        # Mainnet's confirmation only from the instance's file, never a label written into the unit.
+        self.assertIn("--network ${COLOSSEUM_NETWORK} --confirm-mainnet ${COLOSSEUM_CONFIRM_MAINNET}", start)
+        self.assertIn("Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=", Units.directives(self.UNIT))
+        # Only flags the service loop has read since before this unit (the network's since the network switch): a
+        # release rolled back to still starts it.
         flags = re.findall(r" (--[a-z-]+)", start)
-        self.assertEqual(flags, ["--deployment", "--wallet", "--state", "--every"])
+        self.assertEqual(flags, ["--deployment", "--wallet", "--state", "--every", "--network", "--confirm-mainnet"])
         self.assertEqual(re.findall(r" --every (\S+)", start), ["600"])
         from ops import sim_check
         self.assertEqual(sim_check.DEFAULT_EVERY_S, 600)

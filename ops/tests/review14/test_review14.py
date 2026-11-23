@@ -112,9 +112,13 @@ class LateButCarriedOut(unittest.TestCase):
 
 
 class Scale(unittest.TestCase):
-    def test_a_pass_after_one_day_of_chain_asks_for_a_bounded_number_of_logs(self):
-        """`read_chain` reads every log from the deployment's block, in windows of keeper.MAX_LOG_WINDOW (50) blocks, for the
-        pools, for each 100 accounts and for each trader's USDC: all again every 10 minutes (the unit's timeout is 540 s)."""
+    """`read_chain` read every log from the deployment's block, in windows of keeper.MAX_LOG_WINDOW (50) blocks, for the
+    pools, for each 100 accounts and for each trader's USDC: all again every 10 minutes (the unit's timeout is 540 s).
+
+    Carried over to the fix chosen (the logs kept between passes, `LogScan`): after a day of chain and three traders,
+    a pass ten minutes later asks the node for a bounded number of logs, the same after two days as after one."""
+
+    def chain(self, age: int, head_extra: int, scan: pathlib.Path):
         windows = []
         traders = [T.addr(0x100 + k) for k in range(3)]
         word = lambda a: "0x" + "00" * 12 + a[2:].lower()
@@ -122,32 +126,54 @@ class Scale(unittest.TestCase):
                  "data": "0x" + r.abi_encode(["uint256", "uint64", "uint64", "uint256", "bool", "bytes32"],
                                              [2, 1, 1_000, 0, False, b"\x11" * 32]).hex(),
                  "blockNumber": hex(11), "transactionHash": T.tx(k), "logIndex": "0x0"} for k, t in enumerate(traders)]
+        head = [10 + age]
 
         def rpc(method, params=()):
             if method == "eth_chainId":
                 return hex(998)
             if method == "eth_blockNumber":
-                return hex(10 + 86_400)
+                return hex(head[0])
             if method == "eth_getBlockByNumber":
                 return {"timestamp": hex(1)}
             if method == "eth_getLogs":
                 q = params[0]
                 windows.append(1)
-                return sold if q["address"] == [T.POOL] and q["topics"] and len(q["topics"][0]) > 3 else []
+                lo, hi = int(q["fromBlock"], 16), int(q["toBlock"], 16)
+                return [l for l in sold if lo <= 11 <= hi] if q["address"] == [T.POOL] and q["topics"] and len(q["topics"][0]) > 3 else []
             raise AssertionError(method)
+        views = {"balanceOf(address)": (0,), "menu()": ([(1, 1)],), "result()": (2, T.addr(1), 0, 0), "accountOf(address)": (2, 0, True),
+                 "payoutsPerDay()": (3,), "PAYOUT_DAY()": (86_400,), "payRoom()": (3,), "nextPayAt()": (0,), "approver()": (T.addr(0xAB),),
+                 "PAYOUT_HARD()": (8 * 86_400,), "PAYOUT_DELAY()": (72 * 3_600,)}
+        record = {"SimPoolFactory": T.addr(0xFA), "usdc": T.USDC, "block": 10}
         with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", return_value=[T.POOL]), \
-                mock.patch.object(r.c, "call_view", side_effect=lambda to, sig, types, args, out: {
-                    "balanceOf(address)": (0,), "menu()": ([(1, 1)],), "result()": (2, T.addr(1), 0, 0), "accountOf(address)": (2, 0, True),
-                    "payoutsPerDay()": (3,), "PAYOUT_DAY()": (86_400,), "payRoom()": (3,), "nextPayAt()": (0,), "approver()": (T.addr(0xAB),),
-                    "PAYOUT_HARD()": (8 * 86_400,), "PAYOUT_DELAY()": (72 * 3_600,)}.get(sig, (0,))):
-            try:
-                r.read_chain({"SimPoolFactory": T.addr(0xFA), "usdc": T.USDC, "block": 10})
-            except Exception as exc:  # noqa: BLE001
-                print("read_chain stopped:", type(exc).__name__, str(exc)[:80], "after", len(windows), "getLogs")
-        # each trader's USDC history alone is 1 728 getLogs for one day; the unit allows 540 s: 5 400 calls at 0.1 s
-        self.assertGreaterEqual(len(windows), 1_728, "the harness did not reach the transfers loop")
-        self.assertLessEqual(len(windows), 5_400, f"{len(windows)} getLogs after ONE day of blocks (3 traders), growing "
-                             "linearly: the pass cannot finish in 540 s")
+                mock.patch.object(r.c, "call_view", side_effect=lambda to, sig, types, args, out: views.get(sig, (0,))):
+            first = r.read_chain(record, scan=scan)
+            n_first = len(windows)
+            head[0] += head_extra
+            windows.clear()
+            again = r.read_chain(record, scan=scan)
+        return n_first, len(windows), first, again
+
+    def test_a_pass_after_one_day_of_chain_asks_for_a_bounded_number_of_logs(self):
+        d = pathlib.Path(tempfile.mkdtemp())
+        _, one_day, first, again = self.chain(86_400, 600, d / "a.json")
+        _, two_days, _, _ = self.chain(2 * 86_400, 600, d / "b.json")
+        self.assertEqual(len(first["sales"]), 3)
+        self.assertEqual(again["sales"], first["sales"], "what was read before is kept")
+        # 600 new blocks: 12 windows each for the pools, the three accounts (one batch) and the three traders (one batch)
+        self.assertLessEqual(one_day, 36, f"{one_day} getLogs ten minutes after one day of blocks")
+        self.assertEqual(one_day, two_days, "the same after two days as after one: not growing with the chain")
+
+    def test_the_first_pass_goes_in_parts_and_a_pass_cut_short_goes_on_from_the_last(self):
+        d = pathlib.Path(tempfile.mkdtemp())
+        with mock.patch.object(r.time, "monotonic", side_effect=[10.0] * 1_000):
+            with self.assertRaises(r.Behind):
+                with mock.patch.object(r.c, "rpc", side_effect=lambda m, p=(): {"eth_chainId": hex(998), "eth_blockNumber": hex(30_010),
+                                                                     "eth_getBlockByNumber": {"timestamp": "0x1"}}.get(m, [])), \
+                        mock.patch.object(r.core, "view", return_value=[T.POOL]):
+                    r.read_chain({"SimPoolFactory": T.addr(0xFA), "usdc": T.USDC, "block": 10}, scan=d / "s.json", until=5.0)
+        saved = json.loads((d / "s.json").read_text())
+        self.assertEqual(saved["scannedTo"], 10 + r.SCAN_PART - 1, "one part read and saved, then the time ran out")
 
 
 class Alarms(unittest.TestCase):
@@ -172,6 +198,8 @@ class Alarms(unittest.TestCase):
         self.assertGreaterEqual(len(sent), 2, "three passes, the channel down each time: the held payout was said once and never again")
 
     def test_a_held_payout_is_reminded_before_its_ceiling(self):
+        """Carried over to the rule chosen: said again every 6 hours while held, and 24 and 6 hours before its ceiling.
+        Five passes two hours apart (the chain's clock): said at the first and again past six hours."""
         mt = T.MissedTouches()
         ch, s1 = mt.world({1_150, *range(1_300, 1_306)})
         said, got = {}, []
@@ -179,6 +207,7 @@ class Alarms(unittest.TestCase):
         with mock.patch.object(rs.pr, "read_chain", return_value=ch.d):
             for _ in range(5):
                 rs.one_pass({"x": 1}, out, None, said, lambda event, **kw: got.append(event))
+                ch.d["now"] += 2 * 3_600
         self.assertGreaterEqual(len(got), 2, "five passes over a payout still held, with its ceiling nearer each time: one alarm in all")
 
 
@@ -209,7 +238,9 @@ class TheServiceItselfFails(unittest.TestCase):
                         "the review service failed: no alarm, no flag, and the unit has no OnFailure=")
 
     def test_the_review_has_a_watchdog_on_its_documents_age(self):
-        names = " ".join(p.name for p in (self.ROOT / "ops/host/watchdogs").iterdir())
-        text = " ".join(p.read_text() for p in (self.ROOT / "ops/host/watchdogs").glob("*.py"))
-        self.assertTrue("review" in names or "reviews-" in text,
+        """Carried over to the place chosen: the stops' loop, in the keeper's process apart from the review's timer,
+        watches the review's status.json (ops/stop_filler.py `_review_age`); the keeper's unit names the file."""
+        unit = (self.ROOT / "ops/host/colosseum-multi-keeper@.service").read_text()
+        self.assertIn("COLOSSEUM_REVIEW_STATUS=/var/lib/colosseum-keeper/reviews-%i/status.json", unit)
+        self.assertTrue(hasattr(sf.StopLoop, "_review_age"),
                         "no watchdog looks at the review documents' age (or the journal's), so a dead review service is silent")

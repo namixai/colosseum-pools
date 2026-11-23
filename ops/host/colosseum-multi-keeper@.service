@@ -20,9 +20,16 @@ WorkingDirectory=/opt/colosseum-pools/current
 # The record's file last, as the gateway's: it wins over a line by hand in keeper-%i.env.
 EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env
+# The network and its confirmation from the instance's own file (keeper-%i.env): testnet when it names none, as before.
+# Mainnet only with both lines written there by hand, COLOSSEUM_NETWORK=mainnet and COLOSSEUM_CONFIRM_MAINNET=<the
+# deployment's label>; one without the other is refused at the start (ops/sim_network.py), never run on the wrong chain.
+Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=
+# The payout review's last pass, whose age the stops' loop watches (ops/stop_filler.py, review_stale).
+Environment=COLOSSEUM_REVIEW_STATUS=/var/lib/colosseum-keeper/reviews-%i/status.json
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.multi_keeper --deployment ${COLOSSEUM_DEPLOYMENT} \
-    --wallet ${COLOSSEUM_MULTI_WALLET} --state /var/lib/colosseum-keeper/multi-${COLOSSEUM_DEPLOYMENT}.json --every 30 --max-windows 5
+    --wallet ${COLOSSEUM_MULTI_WALLET} --state /var/lib/colosseum-keeper/multi-${COLOSSEUM_DEPLOYMENT}.json --every 30 --max-windows 5 \
+    --network ${COLOSSEUM_NETWORK} --confirm-mainnet ${COLOSSEUM_CONFIRM_MAINNET}
 Restart=always
 RestartSec=10
 

@@ -2,27 +2,39 @@
 # the chain, writes each payout's review to /var/lib/colosseum-keeper/reviews-%i/<pool>-<id>.json (what
 # `deploy_sim approve` and the operator's page read: no approval without a fresh review that says approve), and raises
 # an alarm (COLOSSEUM_ALERT_CMD) for each payout a person has to act on: held, or paid by itself unless a person stops
-# it for reason 3 before its deadline. Every block of each stop's time is judged by the stops' loop's journal of prices
-# (--prices, the keeper's, held against the chain and a node); without it every payout with a stop is held. It sends
-# nothing and holds no key.
+# it for reason 3 before its deadline, said again every 6 hours and 24 and 6 hours before it. Every block of each stop's
+# time is judged by the journals of prices: the keeper's (--prices) and the second writer's (COLOSSEUM_PRICES2, from
+# another machine and node, docs/HOSTING.md), held against each other, the chain and the venue's minute candles; a
+# block neither holds holds the payout. It keeps the logs it read (scan.json) and reads only the new blocks each pass.
+# A pass that fails, runs past its time or past its memory is said by colosseum-unit-failed@ (OnFailure); a review
+# that stops running is said by the stops' loop (status.json). It sends nothing and holds no key.
 # ops/host/install.sh puts it in place with its timer; it is enabled by hand, per instance: systemctl enable --now
 # colosseum-payout-review@<name>.timer
 [Unit]
 Description=colosseum-pools payout review %i
 After=network-online.target
 Wants=network-online.target
+OnFailure=colosseum-unit-failed@%n.service
 
 [Service]
 Type=oneshot
 User=colosseum-keeper
 Group=colosseum-keeper
 WorkingDirectory=/opt/colosseum-pools/current
+# The alert channel (COLOSSEUM_ALERT_CMD) the watchdogs use, when the host has one.
+EnvironmentFile=-/etc/colosseum/watch.env
 EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env
+# The network and its confirmation from the instance's own file (keeper-%i.env): testnet when it names none, as before.
+# Mainnet only with both lines written there by hand, COLOSSEUM_NETWORK=mainnet and COLOSSEUM_CONFIRM_MAINNET=<the
+# deployment's label>; one without the other is refused at the start (ops/sim_network.py), never run on the wrong chain.
+Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.review_service --deployment ${COLOSSEUM_DEPLOYMENT} \
     --out /var/lib/colosseum-keeper/reviews-%i --flag /var/lib/colosseum-keeper/reviews-%i/ALARM \
-    --prices /var/lib/colosseum-keeper/prices-${COLOSSEUM_DEPLOYMENT}.jsonl
+    --prices /var/lib/colosseum-keeper/prices-${COLOSSEUM_DEPLOYMENT}.jsonl \
+    --prices2 /var/lib/colosseum-keeper/second-prices/watch-prices-${COLOSSEUM_DEPLOYMENT}.jsonl \
+    --network ${COLOSSEUM_NETWORK} --confirm-mainnet ${COLOSSEUM_CONFIRM_MAINNET}
 TimeoutStartSec=540
 # The journal is read a day file at a time, only the days of the stops' time: a pass that still grows past this is
 # killed and said (OnFailure), never left to take the host's memory.

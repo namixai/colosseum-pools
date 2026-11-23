@@ -133,3 +133,98 @@ class TwoJournals(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Candles(unittest.TestCase):
+    """The venue's minute candles (ops/venue_candles.py) and the screen the journal is held against
+    (`payout_review.candle_doubts`). The samples are the info API's own answers, saved as files."""
+
+    FIX = pathlib.Path(__file__).resolve().parent / "fixtures"
+
+    def post(self, net):
+        meta = json.loads((self.FIX / f"hl-meta-{net}.json").read_text())
+        candles = json.loads((self.FIX / f"hl-candles-btc-1m-{net}.json").read_text())
+
+        def post(body):
+            if body["type"] == "meta":
+                return meta
+            q = body["req"]
+            return [k for k in candles if k["s"] == q["coin"] and q["startTime"] <= k["t"] <= q["endTime"]]
+        return post, candles
+
+    def test_the_info_apis_candles_in_the_oracles_units_whole_minutes_only(self):
+        from ops import venue_candles as vc
+        post, candles = self.post("mainnet")
+        self.assertEqual(vc.decimals({0: "BTC"}, post), {0: 5})
+        until = candles[-1]["t"] // 1000  # the last candle's minute is still running
+        rows = vc.rows_of(0, 5, candles, until)
+        self.assertEqual(len(rows), len(candles) - 1)
+        self.assertEqual(rows[0]["l"], vc.units(candles[0]["l"], 5))
+        self.assertEqual(vc.units("61391.0", 5), 613_910, "6 - szDecimals decimals, as the price precompile gives it")
+        with self.assertRaises(RuntimeError):
+            vc.decimals({0: "BTC"}, self.post("testnet")[0])  # testnet's index 0 is SOL
+
+    def test_kept_on_disk_and_brought_up_to_date_from_the_last_minute_held(self):
+        from ops import venue_candles as vc
+        post, candles = self.post("mainnet")
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        store = vc.Store(d, "mainnet")
+        now = candles[-1]["t"] // 1000 + 30
+        half = candles[len(candles) // 2]["t"] // 1000
+        self.assertEqual(vc.update(store, {0: "BTC"}, half, post), len(candles) // 2)
+        self.assertEqual(vc.update(store, {0: "BTC"}, now, post), len(candles) - 1 - len(candles) // 2, "only what is new")
+        got = store.load()
+        self.assertEqual(sorted(got[0]), [k["t"] // 1000 for k in candles[:-1]])
+        self.assertEqual(vc.to_venue(got)["0"][str(candles[0]["t"] // 1000)], vc.units(candles[0]["c"], 5))
+
+    def judged(self, journal_px: dict, candles, bps=100):
+        mt = T.MissedTouches()
+        ch, _ = mt.world(set(range(1_300, 1_306)))
+        j = pr.Journal.parse("\n".join(json.dumps({"b": b, "t": 60 * b, "w": 0, "px": {"3": px}})
+                                       for b, px in sorted(journal_px.items()) if 1_002 <= b <= 1_400) + "\n")
+        ch.d.update(journal=j, journalCheck={}, candles=candles, candleBps=bps)
+        return pr.review(ch.d, T.POOL, 0)
+
+    def candles_of(self, px: dict, wick=0):
+        """A candle a minute (a block a minute here) around the journal's price; `wick` bps more each way."""
+        return {3: {60 * b: (p * (10_000 - wick) // 10_000, p * (10_000 + wick) // 10_000, p) for b, p in px.items()}}
+
+    def test_candles_that_agree_with_the_journal_are_clean(self):
+        truth = T.MissedTouches().prices(set(range(1_300, 1_306)), until=2_001)
+        got = self.judged(truth, self.candles_of(truth, wick=30))
+        self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"), got["reasons"])
+
+    def test_a_candle_through_the_stop_where_the_journal_shows_no_reach_holds(self):
+        mt = T.MissedTouches()
+        truth = mt.prices(set(range(1_300, 1_306)), until=2_001)
+        candles = self.candles_of(truth)
+        candles[3][60 * 1_150] = (930_000, 1_000_000, 990_000)  # 2 % past the stop at 950 000
+        got = self.judged(truth, candles)
+        self.assertEqual(got["action"], "hold")
+        self.assertIn("past the stop at 950000", json.dumps(got["reasons"]))
+
+    def test_a_reach_in_the_journal_the_candles_never_came_near_holds(self):
+        mt = T.MissedTouches()
+        truth = mt.prices(set(range(1_300, 1_306)), until=2_001)
+        candles = self.candles_of(truth)
+        for b in range(1_300, 1_306):
+            candles[3][60 * b] = (990_000, 1_000_000, 995_000)  # the venue 4 % above the stop all those minutes
+        got = self.judged(truth, candles)
+        self.assertEqual(got["action"], "hold")
+        self.assertIn("short of it", json.dumps(got["reasons"]))
+
+    def test_a_wick_inside_the_allowance_is_no_doubt(self):
+        mt = T.MissedTouches()
+        truth = mt.prices(set(range(1_300, 1_306)), until=2_001)
+        candles = self.candles_of(truth)
+        candles[3][60 * 1_150] = (945_000, 1_000_000, 990_000)  # past the stop by about 0.5 %: inside 1 %
+        self.assertEqual(self.judged(truth, candles)["action"], "approve")
+
+    def test_no_candles_or_too_few_hold(self):
+        truth = T.MissedTouches().prices(set(range(1_300, 1_306)), until=2_001)
+        self.assertEqual(self.judged(truth, None)["action"], "hold")
+        few = {3: {m: k for m, k in self.candles_of(truth)[3].items() if m % 120 == 0}}
+        got = self.judged(truth, few)
+        self.assertEqual(got["action"], "hold")
+        self.assertIn("candles cover", json.dumps(got["reasons"]))

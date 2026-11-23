@@ -1,0 +1,32 @@
+# Said when a host service fails: the OnFailure= of colosseum-payout-review@ (a pass that raised, ran past its
+# TimeoutStartSec or past its MemoryMax) starts this with the failed unit's name. It raises the alarm as the services do
+# (the journal marked ALARM, a flag file, COLOSSEUM_ALERT_CMD from /etc/colosseum/watch.env when the host has a
+# channel), at most once an hour a unit (ops/review_service.py --unit-failed). It reads nothing of the chain.
+[Unit]
+Description=colosseum-pools: the unit %i failed
+
+[Service]
+Type=oneshot
+User=colosseum-keeper
+Group=colosseum-keeper
+WorkingDirectory=/opt/colosseum-pools/current
+EnvironmentFile=-/etc/colosseum/watch.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.review_service --unit-failed %i \
+    --out /var/lib/colosseum-keeper/unit-failed --flag /var/lib/colosseum-keeper/unit-failed/ALARM
+TimeoutStartSec=60
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/colosseum-keeper
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+UMask=0027
+InaccessiblePaths=/var/lib/colosseum-gw -/var/lib/colosseum-keeper/secrets -/var/lib/colosseum-keeper/shared

@@ -19,10 +19,15 @@ WorkingDirectory=/opt/colosseum-pools/current
 # The record's file last, as the keeper's: it wins over a line by hand in keeper-%i.env. The node is the keeper's.
 EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env
+# The network and its confirmation from the instance's own file (keeper-%i.env): testnet when it names none, as before.
+# Mainnet only with both lines written there by hand, COLOSSEUM_NETWORK=mainnet and COLOSSEUM_CONFIRM_MAINNET=<the
+# deployment's label>; one without the other is refused at the start (ops/sim_network.py), never run on the wrong chain.
+Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 # Only flags every release with the service loop reads, so a release rolled back to still starts it.
 ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.sim_check --deployment ${COLOSSEUM_DEPLOYMENT} \
-    --wallet checker --state /var/lib/colosseum-keeper/check-${COLOSSEUM_DEPLOYMENT}.json --every 600
+    --wallet checker --state /var/lib/colosseum-keeper/check-${COLOSSEUM_DEPLOYMENT}.json --every 600 \
+    --network ${COLOSSEUM_NETWORK} --confirm-mainnet ${COLOSSEUM_CONFIRM_MAINNET}
 Restart=always
 # A start that fails (the node at its first read, mostly) is tried again a minute on, not every few seconds.
 RestartSec=60

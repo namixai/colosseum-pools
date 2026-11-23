@@ -37,7 +37,7 @@ class TheService(unittest.TestCase):
                 mock.patch.object(svc.core, "log"):
             reviews = svc.one_pass({}, pathlib.Path(out), None, {} if said is None else said,
                                    lambda event, **f: alarms.append((event, f)))
-            docs = {p.name: json.loads(p.read_text()) for p in pathlib.Path(out).glob("*.json")}
+            docs = {p.name: json.loads(p.read_text()) for p in pathlib.Path(out).glob("0x*.json")}
         return reviews, docs, alarms
 
     def test_a_clean_payout_is_written_and_no_alarm_is_raised(self):
