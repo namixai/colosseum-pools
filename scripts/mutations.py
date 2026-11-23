@@ -9074,6 +9074,11 @@ MUTATIONS = [
      '    read_trigger_oracle(exam_events, oracle, unread_px)\n',
      '    read_trigger_oracle(exam_events, oracle)\n',
      ['test_it_reads_sales_stages_payouts_the_accounts_events_the_oracle_and_transfers']),
+    # The review runs on mainnet when both switches name it.
+    ('RV206', 'ops/payout_review.py',
+     '    sn.confirm_service(args, args.deployment, c, sends=False)',
+     '    c.assert_testnet()',
+     ['test_it_runs_on_mainnet_when_both_switches_name_it_and_needs_no_key']),
     ("RV197", "ops/payout_review.py",
      '    unread = set() if unread is None else unread\n    for evs in exam_events.values():',
      '    unread = set()\n    for evs in exam_events.values():',

@@ -35,7 +35,11 @@ It reads the chain and nothing else, sends nothing and holds no key. For each pa
 
 What it does not see, by its nature: a pair on another factory or another venue, accounts the
 trader holds under wallets nothing links, and USDC that came from before the deployment's block.
-Testnet only.
+Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet (ops/sim_network.py):
+
+    COLOSSEUM_NETWORK=mainnet spike/.venv/bin/python -m ops.payout_review --deployment <label> --network mainnet
+
+It sends nothing on either network, so it needs no key and no --confirm-mainnet there.
 """
 
 from __future__ import annotations
@@ -54,6 +58,7 @@ from ops import deployments
 from ops import keeper as core
 from ops import sim_check as chk
 from ops import sim_keeper as sk
+from ops import sim_network as sn
 from spike.hlspike import common as c
 
 PAYOUT_DUE = "0x" + keccak(text="PayoutDue(uint256,address,address,uint64,uint64)").hex()
@@ -2290,8 +2295,13 @@ def main(argv: list[str] | None = None) -> int:
                     "{...}, payoutsToIncome: {days, yellow, red}, minFinished}; without it, the CFO's of 13 November")
     ap.add_argument("--json", action="store_true", help=f"one {SCHEMA} document a payout, as a list")
     ap.add_argument("--out", help=f"a directory to write each payout's {SCHEMA} document to, as <pool>-<id>.json")
+    sn.add_args(ap)
     args = ap.parse_args(argv)
-    c.assert_testnet()
+    # Testnet as before; mainnet when both COLOSSEUM_NETWORK and --network name it (ops/sim_network.py), its node's chain
+    # id checked. The review reads and holds no key, so it needs no --confirm-mainnet: whatever is to be sent (a stop of
+    # reason 1 or 2, by the checker's own service, `sim_check --confirm-mainnet`; reason 3 or 4, by a person) is sent
+    # elsewhere.
+    sn.confirm_service(args, args.deployment, c, sends=False)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")

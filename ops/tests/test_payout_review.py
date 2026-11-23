@@ -1486,6 +1486,36 @@ class TheDocument(unittest.TestCase):
             self.assertEqual(r.read_chain.call_args.args[3], 500)
         self.assertEqual((got["schema"], got["id"]), ("payout-review/3", 0))
 
+    def test_it_runs_on_mainnet_when_both_switches_name_it_and_needs_no_key(self):
+        """Review 9 of #336 (H3): the second line of defence must run where the money is. Mainnet is chosen as for every
+        simulated-pool script (ops/sim_network.py): COLOSSEUM_NETWORK and --network both; the node's chain id is checked.
+        The review sends nothing, so no --confirm-mainnet and no key directory."""
+        from spike.hlspike import network as networks
+        ch, _, _ = honest_world()
+
+        def on(net):
+            return mock.patch.multiple(r.c, NETWORK=net, CHAIN_ID=net.chain_id, assert_testnet=mock.DEFAULT,
+                                       assert_network=mock.DEFAULT)
+
+        with on(networks.MAINNET) as plumbing, mock.patch.dict("os.environ", {"COLOSSEUM_KEY_DIR": ""}), \
+                mock.patch.object(r.deployments, "load", return_value={"SimPoolFactory": addr(0xFA)}) as load, \
+                mock.patch.object(r, "read_chain", return_value=ch.d), mock.patch("builtins.print"):
+            self.assertEqual(r.main(["--deployment", "x", "--network", "mainnet"]), 0)
+            plumbing["assert_network"].assert_called_once()
+            plumbing["assert_testnet"].assert_not_called()
+            load.reset_mock()
+            with self.assertRaises(SystemExit) as caught:
+                r.main(["--deployment", "x"])  # COLOSSEUM_NETWORK=mainnet alone is not enough
+            self.assertIn("--network testnet, but", str(caught.exception))
+            load.assert_not_called()
+        with on(networks.TESTNET) as plumbing, \
+                mock.patch.object(r.deployments, "load", return_value={"SimPoolFactory": addr(0xFA)}), \
+                mock.patch.object(r, "read_chain", return_value=ch.d), mock.patch("builtins.print"):
+            self.assertEqual(r.main(["--deployment", "x"]), 0)
+            plumbing["assert_testnet"].assert_called_once()
+            with self.assertRaises(SystemExit):
+                r.main(["--deployment", "x", "--network", "mainnet"])  # --network mainnet alone neither
+
 
 class WhatThePoolWouldTake(unittest.TestCase):
     """Review of #283: no call the pool would refuse."""
