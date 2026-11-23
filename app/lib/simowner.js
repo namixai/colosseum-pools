@@ -6,6 +6,7 @@
 // refuses it all the same if a page lets it through. No money is worked out here: sums are the pool's own reads
 // (`withdrawable`, `shareDue`, `sharesDue`, the figures of `codeOf`), shown as they are.
 import { esc } from "./ui.js";
+import { sourceNote } from "./simindex.js";
 import { dollars, isSet, poolRefusal } from "./simlines.js";
 import {
   utc, withdrawalOf, WITHDRAW_DELAY, WITHDRAW_WINDOW, MIN_TERM, FEE_BPS, PAYOUT_DELAY, PAYOUT_HARD,
@@ -200,14 +201,20 @@ function rowHtml(r) {
 }
 
 /** Where the list of codes was read from, in words: the pool lists no codes, they are found in its `CodeSet` events. */
-export function scanNote({ from, to, latest, known = 0 }) {
+export function scanNote({ from, to, latest, known = 0, source = null, failed = "" }) {
+  const lead = source ? `${sourceNote(source)} ` : "";
+  const failure = failed ? ` The last blocks asked for could not be read: ${failed}. What was found before is kept; press the button to ask again.` : "";
+  const typed = known ? `, and ${known} typed or set from this browser` : "";
+  if (from > to) return `${lead}No blocks could be read yet${typed}.${failure}`;
   const range = `Codes found in the events of blocks ${from} to ${to}${to < latest ? ` (the chain is at ${latest})` : ""}`;
-  const older = from > 0 ? " Older ones are not listed: load earlier blocks, or type a code's text in the form to look it up." : " That is the start of the chain.";
-  return `${range}${known ? `, and ${known} typed or set from this browser` : ""}.${older}`;
+  // The index read the pool's events from the block it was made in: there is nothing older to load.
+  const older = source?.ok ? " That is the pool's first block."
+    : from > 0 ? " Older ones are not listed: load earlier blocks, or type a code's text in the form to look it up." : " That is the start of the chain.";
+  return `${lead}${range}${typed}.${older}${failure}`;
 }
 
 /** The section "Codes & shares": the table of codes, the form, what the partners are owed in all. */
-export function codesHtml({ rows, sharesDue, scan, open = false }) {
+export function codesHtml({ rows, sharesDue, scan, open = false, more = true }) {
   const body = rows.length ? rows.map(rowHtml).join("")
     : '<tr class="so-empty"><td colspan="8">No codes in the blocks read yet. Set one below: a code is what your group\'s traders type, or follow a link with, to buy.</td></tr>';
   return `<section class="sp-box so-codes" id="codes"><div class="sp-bh"><b>Codes &amp; shares</b><span>share 0 or 40–60% · fixed after the first sale, can only rise</span></div>`
@@ -215,7 +222,7 @@ export function codesHtml({ rows, sharesDue, scan, open = false }) {
     + `<div class="so-total" data-money="partners"><span>Owed to partners in all (sharesDue)</span><b>${esc(sharesDue === null ? "not read" : dollars(sharesDue))}</b>`
     + `<span class="sp-why">Accrued when you withdraw, sent by anyone's claim, only to each code's partner and author. Not yours and not for payouts.</span></div>`
     + `<div class="so-act"><button type="button" class="so-btn" id="so-new-code">+ Set a new code</button>`
-    + `<button type="button" class="so-btn ghost" id="so-more-codes">Load earlier blocks</button>`
+    + `<button type="button" class="so-btn ghost" id="so-more-codes">${more ? "Load earlier blocks" : "Read the newest blocks"}</button>`
     + `<span class="sp-why" id="so-scan">${esc(scan)}</span></div>`
     + codeFormHtml(open)
     + `<p id="so-codes-status" class="sp-status" role="status"></p></section>`;

@@ -7,6 +7,7 @@ import * as chain from "../lib/chain.js";
 import { render, $, friendly, refusalName, ZERO_ADDRESS } from "../lib/ui.js";
 import { createConfirm, createPending } from "../lib/simconfirm.js";
 import { lookForStops, MORE_CALLS } from "./simstopscan.js";
+import { readFailure } from "../lib/simindex.js";
 import { SIM_POOL_ABI, SIM_POOL_STOP_RESERVE_ABI, SIM_POOL_APPROVAL_ABI } from "../lib/simpool.js";
 import { SIM_LINES_ABI } from "../lib/simlines.js";
 import { OPERATOR_ABI } from "../lib/operator.js";
@@ -64,7 +65,7 @@ export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, st
         extraIds = found.ids.filter((id) => !inWindow.has(id));
       } catch (err) {
         // The queue and the stops of its window still draw; the page says the search failed, and the button tries again.
-        stopScan = { done: false, note: `Stops could not be looked for in the events (${friendly(err)}).` };
+        stopScan = { done: false, note: `Stops could not be looked for in the events: ${readFailure(err)}. Press the button to ask again.` };
       }
     }
     const extraPayouts = await chain.readAll(extraIds, (id) => pool.payout(id).catch(() => null));
@@ -302,7 +303,7 @@ function wire(page, at, model) {
     // One search at a time: the button is off until the page is drawn again, and the readings of a pool go one at a time.
     more.disabled = true;
     moreStops.set(at, MORE_CALLS);
-    simOperatorView(at, page).catch((err) => { more.disabled = false; say(boxOf("stops"), `Could not read more: ${friendly(err)}`); });
+    simOperatorView(at, page).catch((err) => { more.disabled = false; say(boxOf("stops"), `Could not read more: ${readFailure(err)}`); });
   });
   $("#requests", page)?.addEventListener("click", (e) => {
     const button = e.target.closest("button[data-cancel]");

@@ -9,7 +9,8 @@ import { createConfirm, createPending } from "../lib/simconfirm.js";
 import { SIM_POOL_ABI } from "../lib/simpool.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { cabinetRows, claimCall, partnerHtml, partnerNoteHtml, noCodeHtml, sendsTo } from "../lib/simpartner.js";
-import { scanOf, finished, note, read, catchUp, eventList, currentCodes, revealPartnerTab, PAGE_CALLS, MORE_CALLS } from "./simcodes.js";
+import { scanOf, finished, note, read, catchUp, confirmedEvents, currentCodes, revealPartnerTab, PAGE_CALLS, MORE_CALLS } from "./simcodes.js";
+import { readFailure } from "../lib/simindex.js";
 import { accountLabel, wireShell } from "./simshell.js";
 
 const { ethers } = window;
@@ -156,17 +157,20 @@ export async function simPartnerView(address, page, opts = {}) {
       finish();
       return;
     }
-    const sends = sendsTo(eventList(st), account);
-    await timesOf(st, sends);
-    const timed = sendsTo(eventList(st), account, st.times);
-    render(page, shell(`${partnerNoteHtml(chain.short(account), name)}${partnerHtml({ rows: state.rows, sends: timed, scanNote: note(st), poolName: name.toUpperCase() })}`));
+    // A send the index named is shown once its receipt confirms it (simcodes.js, confirmedEvents).
+    const { events, left: leftOut } = await confirmedEvents(at, st, account);
+    await timesOf(st, sendsTo(events, account));
+    const timed = sendsTo(events, account, st.times);
+    const unchecked = leftOut ? ` ${leftOut} send${leftOut === 1 ? "" : "s"} the index named could not be checked against the chain yet and ${leftOut === 1 ? "is" : "are"} not shown; "Read further" checks more.` : "";
+    render(page, shell(`${partnerNoteHtml(chain.short(account), name)}${partnerHtml({ rows: state.rows, sends: timed, scanNote: `${note(st)}${unchecked}`, poolName: name.toUpperCase() })}`));
     wireShell(page);
     await revealPartnerTab(page, at, { current: true });
-    if (!finished(st)) $("#sq-scan", page)?.insertAdjacentHTML("beforeend", ` ${READ_FURTHER}`);
+    // Another pass reads further blocks, and checks the sends left unchecked.
+    if (!finished(st) || leftOut > 0) $("#sq-scan", page)?.insertAdjacentHTML("beforeend", ` ${READ_FURTHER}`);
     finish();
   } catch (err) {
     // Said on the page that is showing, not on one that is gone; what the scan has read stays read.
-    render(page, shell(`<section class="sp-msg"><h2>Partner cabinet</h2><p>Could not read the pool: ${esc(friendly(err))}</p>`
+    render(page, shell(`<section class="sp-msg"><h2>Partner cabinet</h2><p>Could not read the pool: ${esc(readFailure(err))}.</p>`
       + `<p><button type="button" class="so-btn" id="sq-retry">Try again</button></p></section>${statusLine}`));
     wireShell(page);
     finish();

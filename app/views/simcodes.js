@@ -3,9 +3,16 @@
 // 1 000 blocks), from the pool's creation forward and, for the sends, from the newest block back. What was read is said,
 // and a button reads further. Kept apart from the cabinet's page: the user panel's menu asks it too, to show the Partner
 // tab to a wallet that is written in a code.
+//
+// The pool's index on the host (app/lib/simindex.js) is asked first: it has the events from the pool's creation to a block
+// near the newest, and the page reads only the blocks after it. What it names is a candidate: a code is held to `codeOf`
+// (`currentCodes`), a send to its transaction's receipt (`confirmSends`). Without the index the page reads the chain
+// itself, as before, and says why.
 import * as chain from "../lib/chain.js";
+import { CONFIG } from "../config.js";
 import { SIM_POOL_ABI, MIN_TERM, firstBlockAt, readLogs, normalizeEvent } from "../lib/simpool.js";
 import { codesNamingAccount, confirmedCodes, partnerHref } from "../lib/simpartner.js";
+import { askIndex, indexBase, sourceNote, readShare, receiptsToAsk, sortSends } from "../lib/simindex.js";
 
 const { ethers } = window;
 /** The node's limit on a range of blocks (measured: 1 000), and the windows a page reads at once. */
@@ -27,12 +34,24 @@ export async function scanOf(address) {
   if (scans.has(key)) return scans.get(key);
   const iface = new ethers.Interface(SIM_POOL_ABI);
   const pool = new ethers.Contract(address, SIM_POOL_ABI, chain.readProvider);
-  const [lockedUntil, latest] = await Promise.all([pool.lockedUntil(), chain.readProvider.getBlockNumber()]);
-  const created = Number(lockedUntil) - MIN_TERM;
-  const timeOf = async (n) => (await chain.readProvider.getBlock(n)).timestamp;
-  const start = await firstBlockAt(created, { low: chain.deployBlock(), high: latest, timeOf }) ?? latest;
+  const [index, latest] = await Promise.all([
+    askIndex({ base: indexBase(CONFIG), pool: address, chainId: CONFIG.chainId, fetch: (...a) => window.fetch(...a) }),
+    chain.readProvider.getBlockNumber(),
+  ]);
+  let start;
+  if (index.ok) start = Math.min(index.created, latest);
+  else {
+    const created = Number(await pool.lockedUntil()) - MIN_TERM;
+    const timeOf = async (n) => (await chain.readProvider.getBlock(n)).timestamp;
+    start = await firstBlockAt(created, { low: chain.deployBlock(), high: latest, timeOf }) ?? latest;
+  }
   const st = { iface, topics: [iface.getEvent("CodeSet").topicHash, iface.getEvent("SharePaid").topicHash], start, latest,
-    head: latest, fwd: start, back: latest, events: new Map(), times: new Map() };
+    head: latest, fwd: start, back: latest, events: new Map(), times: new Map(), checked: new Map(), tries: new Map(), source: index };
+  if (index.ok) {
+    // The index's blocks are read: the page goes on from the block after its last one.
+    for (const e of index.events) if (e.name === "CodeSet" || e.name === "SharePaid") st.events.set(`${e.block}:${e.index}`, e);
+    st.fwd = Math.max(start, Math.min(index.scannedTo, latest) + 1);
+  }
   scans.set(key, st);
   return st;
 }
@@ -40,10 +59,40 @@ export async function scanOf(address) {
 export const complete = (st) => st.fwd > st.back;
 
 export function note(st) {
-  if (finished(st)) return "All of the pool's events were read.";
+  const source = sourceNote(st.source);
+  const lead = source ? `${source} ` : "";
+  if (finished(st)) return `${lead}All of the pool's events were read.`;
   const newest = st.latest < st.head ? ` Blocks after ${st.latest} (the newest is ${st.head}) are not read.` : "";
-  return `Read blocks ${st.start}–${st.fwd - 1} from the pool's creation and ${st.back + 1}–${st.latest} from the newest.${newest} `
-    + "A code set, or a send made, in the blocks between is not shown until you read further.";
+  const read = (st.fwd - st.start) + (st.latest - st.back);
+  const share = readShare({ from: st.start, to: st.head, read });
+  return `${lead}Read blocks ${st.start}–${st.fwd - 1} from the pool's creation and ${st.back + 1}–${st.latest} from the newest `
+    + `(${share}% of the pool's blocks).${newest} A code set, or a send made, in the blocks between is not shown until you read further.`;
+}
+
+/**
+ * The pool's events with the sends to `account` the chain does not confirm left out (app/lib/simindex.js, sortSends). A
+ * send the page read from the chain itself is the chain's; one the index named is shown only when its transaction's
+ * receipt has the pool's `SharePaid` with the same fields. Up to 40 receipts a pass, those not asked for first and then
+ * those that failed fewest times, the newest first (receiptsToAsk): a receipt that keeps failing does not hold the place
+ * of the others. A receipt read without the log rejects the send for good; one not read leaves it unchecked, and the page
+ * offers another pass (simpartner.js). Returns the events, how many sends are unchecked (`left`) and how many rejected.
+ */
+export async function confirmedEvents(address, st, account) {
+  const topic = st.iface.getEvent("SharePaid").topicHash;
+  const all = eventList(st);
+  const ask = receiptsToAsk(all, account, st.checked, 40, st.tries);
+  await Promise.all(ask.map(async (tx) => {
+    try {
+      const receipt = await chain.readProvider.getTransactionReceipt(tx);
+      if (receipt) st.checked.set(tx, receipt);
+      else st.tries.set(tx, (st.tries.get(tx) ?? 0) + 1);
+    } catch {
+      // not read this time: the send stays unchecked, behind the others at the next pass
+      st.tries.set(tx, (st.tries.get(tx) ?? 0) + 1);
+    }
+  }));
+  const sorted = sortSends(all, account, st.checked, { pool: address, topic });
+  return { events: sorted.events, left: sorted.unchecked, rejected: sorted.rejected };
 }
 
 async function readWindow(address, st, from, to) {

@@ -256,9 +256,10 @@ export function stopIdsFromEvents(events) {
   return [...ids].sort((a, b) => a - b);
 }
 
-/** Which blocks the search for stops has covered, in words. `floor` is the oldest block a stop can still be open in. */
-export function stopScanNote({ floor, back, latest, head, done }) {
-  if (done) return "Every stop of the last 14 days was looked for in the pool's events.";
+/** Which blocks the search for stops has covered, in words. `floor` is the oldest block a stop can still be open in, or
+ *  the pool's first block when `sinceCreation` (the index named every stop from it). */
+export function stopScanNote({ floor, back, latest, head, done, sinceCreation = false }) {
+  if (done) return sinceCreation ? "Every stop since the pool was made was looked for in its events." : "Every stop of the last 14 days was looked for in the pool's events.";
   const newer = latest < head ? ` Blocks after ${latest} are not read.` : "";
   return `Stops were looked for in blocks ${back + 1}–${latest}; the 14 days reach back to block ${floor}.${newer}`;
 }
