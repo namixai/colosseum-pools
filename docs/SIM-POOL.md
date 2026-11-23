@@ -794,6 +794,12 @@ everything else the loop does, and watched:
   reverted in its block three times in a row is an alarm and waits 30 blocks (`book_settle_reverting`). A check that
   reverted sends the next ones with a quarter more gas than needed (never the most a small block holds, so that two
   checks of two senders fit one block), for 300 blocks, with the book's read gas read again.
+- **For the operator: the gas of a settle and of a check.** A whole settle of an exam with 32 touches in one call
+  does not fit a small block (2.36 to 2.6 million gas): the loop settles it in parts, each sent with 1 500 000, then
+  1 950 000. One step of a settle with 32 entries on 16 assets needs up to about 724 000 gas; a settle by anyone but
+  the exam with less than that answers `NoProgress`. The read gas of the oracle and of the best bid and offer
+  (`ops/deploy_sim.py read-gas`) may be raised only with the gas of `poke()` counted again: each asset's two reads get
+  their whole allowance, and a check short of it reverts (`book_poke_reverted`).
 - **A gap** is judged on the book as it stood in it: `watched()` and the entries of every exam that held one, or that
   the keeper knows and has not seen end, at the block before the gap and at its last block (where the node keeps that
   state), and now. The transaction that wrote the `Gap` may have closed the last position on the asset.
