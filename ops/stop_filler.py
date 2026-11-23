@@ -104,6 +104,8 @@ OVERDUE = 5
 MIN_ALARM_BLOCKS = 2
 # Seconds a transaction of the key may go without a receipt before its same bytes are sent again.
 RESEND_AFTER_S = 10.0
+# Times a transaction sent with `bump` is signed again with a quarter more fee: 1.25 ** 8, about six times its first.
+MAX_BUMPS = 8
 # Seconds the keeper's thread waits for this thread to take its transaction.
 REQUEST_WAIT_S = 60.0
 # Seconds of failing calls, or of no step at all, before the loop is an alarm.
@@ -201,16 +203,65 @@ class Sender:
         self.address = to_checksum_address(wallet.address)
         self.next: int | None = None
         self.lock = threading.Lock()  # the ledger and the requests' states, between the two threads
-        self.ledger: dict[int, dict] = {}  # nonce -> {"hash", "raw", "at"}
+        self.send_lock = threading.RLock()  # the nonce: a stop book's checks go out from a thread of their own
+        self.sweep_lock = threading.Lock()  # one sweep at a time; a second thread's is skipped, not queued
+        self.ledger: dict[int, dict] = {}  # nonce -> {"hash", "raw", "at", ...}
         self.gone: set[int] = set()
         self.requests: queue.Queue = queue.Queue()
 
     def _count(self, tag: str) -> int:
         return int(self.node.call("eth_getTransactionCount", [self.address, tag]), 16)
 
-    def send(self, to: str, data: bytes, gas: int, gas_price: int, tip: int = 0) -> tuple[str, int]:
-        """The stops' thread only. Signs and hands one transaction to the node; its hash and nonce. c.NotSent when the
-        node did not take it: its nonce is not spent."""
+    def count(self, tag: str = "latest") -> int:
+        """The chain's count of the key's transactions."""
+        return self._count(tag)
+
+    def send(self, to: str, data: bytes, gas: int, gas_price: int, tip: int = 0, *, bump: bool = False,
+             resend_after: float | None = None) -> tuple[str, int]:
+        """Signs and hands one transaction to the node; its hash and nonce. c.NotSent when the node did not take it: its
+        nonce is not spent. Safe from more than one thread. `bump`: one with no receipt after `resend_after` seconds is
+        signed again under its nonce with a quarter more fee (`MAX_BUMPS` times at most), not sent again as it was."""
+        with self.send_lock:
+            tx_hash, nonce = self._send(to, data, gas, gas_price, tip)
+            if bump or resend_after is not None:
+                with self.lock:
+                    e = self.ledger.get(nonce)
+                    if e is not None:
+                        e["bump"] = bump
+                        e["after"] = RESEND_AFTER_S if resend_after is None else resend_after
+            return tx_hash, nonce
+
+    def hashes(self, nonce: int) -> list[str]:
+        """Every hash the transaction of `nonce` went out under (a fee raised signs it again under another)."""
+        with self.lock:
+            e = self.ledger.get(nonce)
+            return list(e.get("hashes", [e["hash"]])) if e is not None else []
+
+    def receipt(self, nonce: int, known: list[str] | None = None):
+        """The receipt of whichever of the nonce's transactions landed; None for none yet."""
+        for h in self.hashes(nonce) or (known or []):
+            rcpt = self.node.call("eth_getTransactionReceipt", [h])
+            if rcpt:
+                return rcpt
+        return None
+
+    def _bumped(self, nonce: int, e: dict) -> dict | None:
+        """The transaction of `nonce` signed again with a quarter more fee (and tip), or None past `MAX_BUMPS`."""
+        tx = e.get("tx")
+        if tx is None or e.get("bumps", 0) >= MAX_BUMPS:
+            return None
+        tip = int(tx["maxPriorityFeePerGas"])
+        tip2 = tip + max(tip // 4, 1)
+        fee = int(tx["maxFeePerGas"])
+        fee2 = max(fee + max(fee // 4, 1), tip2)
+        tx2 = {**tx, "maxPriorityFeePerGas": tip2, "maxFeePerGas": fee2}
+        signed = self.wallet.sign_transaction(tx2)
+        raw = "0x" + signed.raw_transaction.hex().removeprefix("0x")
+        tx_hash = "0x" + signed.hash.hex().removeprefix("0x")
+        return {"tx": tx2, "raw": raw, "hash": tx_hash, "bumps": e.get("bumps", 0) + 1}
+
+    def _send(self, to: str, data: bytes, gas: int, gas_price: int, tip: int = 0) -> tuple[str, int]:
+        """`send` under its lock."""
         try:
             if self.next is None:
                 self.next = self._count("pending")
@@ -248,7 +299,8 @@ class Sender:
                     raise c.NotSent(message) from None
             with self.lock:
                 now = time.monotonic()
-                self.ledger[nonce] = {"hash": tx_hash, "raw": raw, "at": now, "since": now, "past": 0}
+                self.ledger[nonce] = {"hash": tx_hash, "raw": raw, "at": now, "since": now, "past": 0, "tx": tx,
+                                      "hashes": [tx_hash]}
             self.next = nonce + 1
             return tx_hash, nonce
         raise c.NotSent("the nonce was taken twice")
@@ -265,15 +317,28 @@ class Sender:
     def sweep(self, now: float | None = None) -> None:
         """The stops' thread: a transaction of the key with no receipt after `RESEND_AFTER_S` is sent again with the same
         bytes (the same hash: nothing new can land); one whose nonce the chain counted past without it, at two sweeps in a
-        row, is let go: one count alone may be a node behind the other, or a block taken back."""
+        row, is let go: one count alone may be a node behind the other, or a block taken back. One sent with `bump` goes
+        again signed with a quarter more fee. A sweep another thread is running already is not run twice."""
+        if not self.sweep_lock.acquire(blocking=False):
+            return
+        try:
+            self._sweep(now)
+        finally:
+            self.sweep_lock.release()
+
+    def _sweep(self, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
         with self.lock:
-            old = sorted((n, dict(e)) for n, e in self.ledger.items() if now - e["at"] >= RESEND_AFTER_S)
+            old = sorted((n, dict(e)) for n, e in self.ledger.items() if now - e["at"] >= e.get("after", RESEND_AFTER_S))
         if not old:
             return
         counted = self._count("latest")
         for nonce, e in old:
-            rcpt = self.node.call("eth_getTransactionReceipt", [e["hash"]])
+            rcpt = None
+            for h in e.get("hashes", [e["hash"]]):
+                rcpt = self.node.call("eth_getTransactionReceipt", [h])
+                if rcpt:
+                    break
             if rcpt:
                 self.confirm(nonce)
                 continue
@@ -292,6 +357,19 @@ class Sender:
             with self.lock:
                 if nonce in self.ledger:
                     self.ledger[nonce]["past"] = 0
+            if e.get("bump"):
+                try:
+                    up = self._bumped(nonce, e)
+                except Exception as exc:
+                    up = None
+                    log("send_bump_failed", nonce=nonce, error=str(exc)[:120])
+                if up is not None:
+                    with self.lock:
+                        if nonce in self.ledger:
+                            self.ledger[nonce].update(up, hashes=self.ledger[nonce].get("hashes", [e["hash"]]) + [up["hash"]])
+                    log("send_bumped", nonce=nonce, tx=up["hash"], was=e["hash"], fee=up["tx"]["maxFeePerGas"],
+                        tip=up["tx"]["maxPriorityFeePerGas"], bumps=up["bumps"])
+                    e = {**e, **up}
             try:
                 self.node.call("eth_sendRawTransaction", [e["raw"]])
                 log("send_again", nonce=nonce, tx=e["hash"])
@@ -1059,6 +1137,22 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--stop-backup-rpc", default=os.environ.get("COLOSSEUM_STOP_BACKUP_RPC_URL", ""),
                    help="with a stop book: the node a call goes to when the first refuses it or may not have taken it; "
                         "the keeper's backup (COLOSSEUM_RPC_BACKUP_URL) when empty")
+    p.add_argument("--poke-wallet", default=os.environ.get("COLOSSEUM_POKE_WALLETS", ""),
+                   help="with a stop book: keys of their own for the book's checks, comma-separated names in the key "
+                        "directory, tried before the keeper's key (which stays the last one); none when empty")
+    p.add_argument("--poke-rpc", default=os.environ.get("COLOSSEUM_POKE_RPC_URL", ""),
+                   help="with a stop book: the node the checks' thread reads the head from and sends through; the stops' "
+                        "node when empty (with the same backup)")
+    p.add_argument("--poke-poll", type=float, default=float(os.environ.get("COLOSSEUM_POKE_POLL", "0.25") or 0.25),
+                   help="with a stop book: seconds between the checks' thread's looks at the head")
+    p.add_argument("--poke-runway-hours", type=float,
+                   default=float(os.environ.get("COLOSSEUM_POKE_RUNWAY_HOURS", "72") or 72),
+                   help="with a stop book: a key whose money pays fewer hours of checks than this is an alarm")
+    p.add_argument("--stale-s", type=float, default=float(os.environ.get("COLOSSEUM_STALE_S", "10") or 10),
+                   help="with a stop book: a node whose newest block is older than this many seconds has stopped")
+    p.add_argument("--book-state", default=None,
+                   help="with a stop book: the loop's own state, its last block and the gaps still to read back "
+                        "(default book-<deployment>.json next to the state); '' for none")
     p.add_argument("--stop-tip-gwei", type=float, default=float(os.environ.get("COLOSSEUM_STOP_TIP_GWEI", "0") or 0),
                    help="with --stops loop: the priority fee of a stop's transaction, in gwei; zero, as every send of the "
                         "keeper's")

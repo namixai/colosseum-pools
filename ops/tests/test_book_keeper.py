@@ -61,6 +61,10 @@ class Node:
         self.refuse_settle = False
         self.pokes_land = True  # every check gets its receipt at the next look, unless a test says otherwise
         self.calls: list = []
+        self.entries_at: dict[int, dict] = {}  # block -> the entries then, where a test says
+        self.last_poke: int | None = None  # lastPokeBlock(); the head when not set
+        self.time: float | None = None  # the newest block's time; now when not set
+        self.balance = 10 ** 21
 
     @staticmethod
     def decoded_one(raw: str) -> tuple[str, int, str]:
@@ -75,10 +79,23 @@ class Node:
     def settles(self) -> list[tuple[str, int, str]]:
         return [d for d in self.decoded() if d[2] == sel("settle(address)")]
 
+    def pokes(self) -> list[tuple[str, int, str]]:
+        return [d for d in self.decoded() if d[2] == sel("poke()")]
+
+    def entries_now(self, tag) -> dict:
+        if tag != "latest" and int(tag, 16) in self.entries_at:
+            return self.entries_at[int(tag, 16)]
+        return self.entries
+
     def call(self, method, params=()):
         self.calls.append((method, params))
         if method == "eth_blockNumber":
             return hex(self.head)
+        if method == "eth_getBlockByNumber":
+            import time as _t
+            return {"number": hex(self.head), "timestamp": hex(int(_t.time() if self.time is None else self.time))}
+        if method == "eth_getBalance":
+            return hex(self.balance)
         if method == "eth_chainId":
             return hex(c.CHAIN_ID)
         if method == "eth_gasPrice":
@@ -112,10 +129,15 @@ class Node:
             if data.startswith(sel("touches(address)")):
                 exam = to_checksum_address(decode(["address"], bytes.fromhex(data[10:]))[0])
                 return "0x" + encode([f"{bk.TOUCH}[]"], [self.touches.get(exam, [])]).hex()
+            if data.startswith(sel("lastPokeBlock()")):
+                return word(self.head if self.last_poke is None else self.last_poke)
             if data.startswith(sel("entryOf(address,uint32,bool)")):
                 exam, asset, take = decode(["address", "uint32", "bool"], bytes.fromhex(data[10:]))
-                e = self.entries.get((to_checksum_address(exam), asset, take), (0, 0, 0, 0, False, False, 0, 0, 0))
+                e = self.entries_now(tag).get((to_checksum_address(exam), asset, take), (0, 0, 0, 0, False, False, 0, 0, 0))
                 return "0x" + encode([bk.ENTRY], [e]).hex()
+            if data.startswith(sel("entries(address)")):
+                exam = to_checksum_address(decode(["address"], bytes.fromhex(data[10:]))[0])
+                return word(len([k for k in self.entries_now(tag) if k[0] == exam]))
             if data.startswith(sel("settle(address)")):
                 if self.refuse_settle:
                     raise RuntimeError("eth_call: execution reverted")
@@ -235,7 +257,7 @@ class TheCheck(Base):
         self.node.pokes_land = False
         self.run_to(loop, *range(100, 110))
         self.assertEqual(len(self.node.raw), bk.MAX_POKES_IN_FLIGHT)
-        self.assertTrue(self.events("book_pokes_queued"))
+        self.assertTrue(self.alarm_of("book_pokes_queued"), "a key whose checks all wait is an alarm, never a silence")
 
     def test_a_check_that_reverted_raises_the_gas_of_the_next_and_is_an_alarm(self):
         loop = self.loop()
