@@ -48,10 +48,14 @@ Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import pathlib
+import re
 import sys
 import time
+import urllib.parse
 
 from eth_abi import decode as abi_decode
 from eth_utils import keccak, to_checksum_address
@@ -80,6 +84,44 @@ ADDRESS_BATCH = 100
 # while it reads, on a node the keeper (its fills, every block) shares.
 DEFAULT_EVERY_S = 600
 RPC_GAP_S = 1.0
+
+
+# A URL in an error's text (requests writes the node's whole address, path and key with it), and urllib3's path after
+# "url: ": neither reaches a log line or a reason (review 9 of #336).
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>()]+")
+_HOST = re.compile(r"(host=['\"])[^'\"]*(['\"])")
+_URL_PATH = re.compile(r"(url: ?)/[^\s'\"<>()]*")
+
+
+def quiet(exc, limit: int = 200) -> str:
+    """An exception's text with no node address in it, cut to `limit` after the address is gone: a node's URL may hold
+    its key. The configured nodes' addresses are taken out as they are, then any other URL, then a bare path."""
+    text = str(exc)
+    urls = [u for u in (getattr(c, "RPC_URL", None), os.environ.get("COLOSSEUM_RPC_URL"),
+                        os.environ.get("COLOSSEUM_RPC_BACKUP_URL")) if u]
+    for url in urls:
+        text = text.replace(url, "<node>")
+    text = _URL_PATH.sub(r"\1<path>", _URL.sub("<node>", text))
+    # A key may be the node's host name itself (KEY.provider.example): urllib3 writes it as host='…' and in its
+    # resolver's words; the configured nodes' host names go wherever they stand (review 12 of #336).
+    text = _HOST.sub(r"\1<host>\2", text)
+    for url in urls:
+        host = urllib.parse.urlparse(url).hostname
+        if host and host not in ("127.0.0.1", "localhost"):
+            text = re.sub(re.escape(host), "<host>", text, flags=re.I)
+    return text[:limit]
+
+
+@contextlib.contextmanager
+def node_errors():
+    """A failure of the node ends the program in one line with no node address in it, never a traceback that prints
+    the address (and its key) with the exception."""
+    try:
+        yield
+    except SystemExit:
+        raise
+    except Exception as exc:
+        raise SystemExit(f"refusing to go on: the node failed: {quiet(exc)}") from None
 
 
 def paced(rpc, gap_s: float, clock=time.monotonic, sleep=time.sleep):
@@ -175,7 +217,7 @@ def takes_approvals(pool: str) -> bool | None:
     except Exception as exc:
         if "revert" in str(exc).lower():
             return False
-        log("not_read", address=pool, call="approver()", error=str(exc)[:120])
+        log("not_read", address=pool, call="approver()", error=quiet(exc, 120))
         return None
 
 
@@ -184,6 +226,25 @@ def fill_of(log_entry: dict, t: int) -> dict:
                                         bytes.fromhex(log_entry["data"][2:]))
     return {"account": to_checksum_address(log_entry["address"]), "asset": int(log_entry["topics"][1], 16),
             "buy": bool(is_buy), "sz": int(sz), "t": t, "tx": log_entry["transactionHash"]}
+
+
+def fill_times(found: list[dict]) -> list[tuple[dict, int]]:
+    """Each `Filled` log of `found` with the block its time is: its own, or, for the close of a stop or a take that a
+    stop book carried out (`TriggerFilled` right after it, in its transaction, of its account and asset), the block of
+    the touch (`touchBlock`): the stop was filled then, at that block's price, whenever the settle came."""
+    found = sorted(found, key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16)))
+    out = []
+    for i, l in enumerate(found):
+        if l["topics"][0] != sk.FILLED:
+            continue
+        block = int(l["blockNumber"], 16)
+        n = found[i + 1] if i + 1 < len(found) else None
+        if (n is not None and n["topics"][0] == sk.TRIGGER_FILLED and n["transactionHash"] == l["transactionHash"]
+                and n["address"].lower() == l["address"].lower() and n["topics"][1] == l["topics"][1]):
+            block = int(abi_decode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8", "uint256", "uint64"],
+                                   bytes.fromhex(n["data"][2:]))[6])
+        out.append((l, block))
+    return out
 
 
 # ── the checker ──────────────────────────────────────────────────────────────────────
@@ -257,13 +318,16 @@ class Checker:
         self.fills_from = latest + 1
 
     def _read_fills(self, accounts: list[str], lo: int, latest: int) -> list[dict]:
+        """The fills of `accounts` from `lo` to `latest`, each at its time: an order's at its block's, and a stop's or a
+        take's carried out by a stop book at its touch's (`fill_times`), which a settle may write much later."""
         got = []
         while accounts and lo <= latest:
             hi = min(lo + core.MAX_LOG_WINDOW - 1, latest)
             for i in range(0, len(accounts), ADDRESS_BATCH):
-                for l in c.rpc("eth_getLogs", [{"address": accounts[i:i + ADDRESS_BATCH], "topics": [sk.FILLED],
-                                                "fromBlock": hex(lo), "toBlock": hex(hi)}]):
-                    got.append(fill_of(l, self.time_of(int(l["blockNumber"], 16))))
+                found = c.rpc("eth_getLogs", [{"address": accounts[i:i + ADDRESS_BATCH], "topics": [[sk.FILLED, sk.TRIGGER_FILLED]],
+                                               "fromBlock": hex(lo), "toBlock": hex(hi)}])
+                for l, block in fill_times(found):
+                    got.append(fill_of(l, self.time_of(block)))
             lo = hi + 1
         return got
 
@@ -381,7 +445,7 @@ class Checker:
             log("sent", to=to, call=sig.split("(")[0], **fields, tx=rcpt["transactionHash"])
             return True
         except Exception as exc:
-            log("send_failed", to=to, call=sig.split("(")[0], **fields, error=refusal(exc))
+            log("send_failed", to=to, call=sig.split("(")[0], **fields, error=quiet(refusal(exc)))
             return False
 
 
@@ -394,7 +458,7 @@ def run(ch: Checker, every: float, once: bool, sleep=time.sleep) -> int:
             if once:
                 print(json.dumps(stops))
         except Exception as exc:
-            log("pass_failed", error=str(exc)[:200])
+            log("pass_failed", error=quiet(exc, 200))
             if once:
                 return 1
         if once:
@@ -416,7 +480,8 @@ def main(argv: list[str] | None = None) -> int:
     sn.add_args(p, service=True)
     args = p.parse_args(argv)
     dry = args.dry_run or not args.wallet
-    sn.confirm_service(args, args.deployment, c, sends=not dry)
+    with node_errors():
+        sn.confirm_service(args, args.deployment, c, sends=not dry)
     record = deployments.load(args.deployment)
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")

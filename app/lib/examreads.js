@@ -17,10 +17,13 @@
 // No browser globals here: `io` is what the page reads with, so node's test runner loads it
 // (app/tests/examreads.test.mjs).
 import { bboOf } from "./exam.js";
+import { reverted } from "./verdict.js";
 
 /** How long the list's prices stand while it is open before they are read again. */
 export const LIST_MS = 15_000;
 
+// A read of the touches that failed: not an empty list.
+const UNREAD = Symbol("touches not read");
 const attempt = (fn) => Promise.resolve().then(fn).catch(() => null);
 const big = (hex) => (hex && hex !== "0x" ? BigInt(hex) : null);
 
@@ -35,24 +38,35 @@ export function oracleOf(hex) {
  * `take(asset)`, `oracle(asset)` and `bbo(asset)` (the last two the precompiles' raw answers). A price, a stop or a
  * take that could not be read is null, as before; the account, the block and a position that cannot be read fail the pass.
  *
- * Returns `{ block, got, perAsset, fresh }`: the block, the account's answers, a row for every asset of the exam
+ * `change(asset, isTake)` and `touches()`, where given, read an exam with a stop book: the change asked of a stop or a
+ * take (`changeOf`) and the book's touches of the exam not yet carried out (`StopBook.touches`).
+ *
+ * Returns `{ block, got, perAsset, touches, touchesUnread, fresh }`: the block, the account's answers, a row for every asset of the exam
  * (`read` is true for the ones whose stop, take, prices and book were read on this pass; the others carry the price
  * `prices` kept for them), and `fresh`, a Map asset -> oracle price of the assets read on this pass. The kept prices
  * are not handed back whole: a reading of the list may have changed them while this pass was out, so whoever keeps
- * them puts `fresh` over what they hold now (`withPrices`).
+ * them puts `fresh` over what they hold now (`withPrices`). `touchesUnread` is true where the reader has a stop book and
+ * its touches could not be read: then `touches` is empty, and that is not "none waiting" — the account may be another
+ * once they are carried out, and the page says so and holds the trade buttons until a pass reads them (review 12 of
+ * #336, M-4).
  */
 export async function readPass(io, { assets, selected, prices = new Map() }) {
   // The market on screen is read at once, beside the account and the sizes: it is wanted whatever the sizes are.
   const details = async (asset) => {
-    const [stop, take, oracleHex, bboHex] = await Promise.all([
+    // A change asked of the stop or the take (`changeOf`), where the reader has it: an exam with a stop book.
+    const change = (isTake) => (io.change ? attempt(() => io.change(asset, isTake)) : null);
+    const [stop, take, oracleHex, bboHex, stopChange, takeChange] = await Promise.all([
       attempt(() => io.stop(asset)), attempt(() => io.take(asset)), attempt(() => io.oracle(asset)), attempt(() => io.bbo(asset)),
+      change(false), change(true),
     ]);
     const bbo = bboOf(bboHex);
-    return { stop, take, oracle: oracleOf(oracleHex), bid: bbo?.bid ?? null, ask: bbo?.ask ?? null };
+    return { stop, take, ...(io.change ? { stopChange, takeChange } : {}), oracle: oracleOf(oracleHex), bid: bbo?.bid ?? null, ask: bbo?.ask ?? null };
   };
-  const [block, got, sizes, first] = await Promise.all([
+  // The stop book's touches of this exam not yet carried out, where the reader has them: one read for every asset.
+  const [block, got, sizes, first, touches] = await Promise.all([
     io.block(), io.account(), Promise.all(assets.map((a) => io.position(a))),
     assets.includes(selected) ? details(selected) : null,
+    io.touches ? Promise.resolve().then(() => io.touches()).then((t) => (Array.isArray(t) || (t && typeof t[Symbol.iterator] === "function") ? [...t] : UNREAD), () => UNREAD) : null,
   ]);
   const size = new Map(assets.map((a, i) => [a, sizes[i]]));
   const held = assets.filter((a) => a !== selected && BigInt(size.get(a) ?? 0) !== 0n);
@@ -63,9 +77,12 @@ export async function readPass(io, { assets, selected, prices = new Map() }) {
     const d = read.get(asset);
     return d
       ? { asset, size: size.get(asset), ...d, read: true }
-      : { asset, size: size.get(asset), stop: null, take: null, oracle: prices.get(asset) ?? null, bid: null, ask: null, read: false };
+      : { asset, size: size.get(asset), stop: null, take: null, ...(io.change ? { stopChange: null, takeChange: null } : {}),
+        oracle: prices.get(asset) ?? null, bid: null, ask: null, read: false };
   });
-  return { block, got, perAsset, fresh: new Map([...read].map(([a, d]) => [a, d.oracle])) };
+  const touchesUnread = touches === UNREAD;
+  return { block, got, perAsset, touches: touchesUnread ? [] : touches ?? [], touchesUnread,
+    fresh: new Map([...read].map(([a, d]) => [a, d.oracle])) };
 }
 
 /** `prices` (a Map asset -> price) with `fresh` put over it: a new Map, nothing changed in place. */
@@ -138,4 +155,51 @@ export function shownPrice(prices, row) {
   if (!row) return null;
   if (prices.has(row.asset)) return prices.get(row.asset);
   return row.read ? row.oracle : null;
+}
+
+/** Reads of the exam's `stopBook()` before the page says it could not tell whether the exam has a book. */
+export const BOOK_TRIES = 3;
+
+/**
+ * The exam's stop book (`read()` is `exam.stopBook()`): its address, or null for an exam made before the book, which
+ * has no such getter and whose call the contract refuses. A refusal is taken for "no book" only where `control()`, a
+ * read every exam answers (`exam.status()`), goes through on the same node right after it: HyperEVM answers a function
+ * that is not there with code 3 "execution reverted" and no data, so the refusal alone cannot be told from a gateway or
+ * an upstream node that failed with a revert in its words (review 12 of #336, L-3). A refusal whose control read fails
+ * too, and any other failure, is the node's, not the exam's answer: it is asked again, `tries` times in all, a growing
+ * wait between, and then this throws, so that the page says so and offers to try again instead of showing the exam as
+ * one without a book for the whole visit (no touches, no settle, no check of a stop set past the price). Without a
+ * `control` no refusal is taken for "no book". Review 9 of #336.
+ */
+export async function stopBookOf(read, { control = null, tries = BOOK_TRIES, wait = (ms) => new Promise((r) => setTimeout(r, ms)), delayMs = 700 } = {}) {
+  for (let k = 1; ; k++) {
+    try {
+      return await read();
+    } catch (err) {
+      if (reverted(err) && control) {
+        const answered = await Promise.resolve().then(control).then(() => true, () => false);
+        if (answered) return null;
+      }
+      if (k >= tries) {
+        throw new Error("The node did not answer whether this exam has a stop book (it failed "
+          + `${tries} times), so the stops cannot be shown as they are. Try again in a moment.`);
+      }
+      await wait(delayMs * k);
+    }
+  }
+}
+
+/**
+ * What the page says once a settle is in a block, from the book's touches of the exam read after it (`left`, null where
+ * that read failed): "Settled." only where none is left. A long settle stops between two steps and keeps what it did
+ * (`StopsPending` for the rest): then how many are left, and that a second settle carries out the rest. Review 9 of #336.
+ */
+export function settledText(left) {
+  if (left === null || left === undefined) {
+    return "The settle is in a block, but the touches left could not be read: look at the positions below before you count on it.";
+  }
+  const n = left.length;
+  if (n === 0) return "Settled. The account now shows the stop or take filled at the price of its touch.";
+  return `Settled in part: ${n} touched stop${n === 1 ? "" : "s"} or take${n === 1 ? "" : "s"} still to carry out. `
+    + "Press Settle again to carry out the rest (anyone may).";
 }

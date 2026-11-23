@@ -1488,7 +1488,11 @@ def check_node(own: str, chain_id: int, gateway_env: pathlib.Path = GATEWAY_ENV)
     if chain_id == MAINNET_CHAIN_ID:
         raise SystemExit("the keeper's node is the gateway's: on mainnet the keeper needs a node of its own "
                          "(audit M-1); set COLOSSEUM_RPC_URL in keeper.env to another")
-    log("node_shared_with_gateway", rpc=own.split("?")[0], why="one IP budget for orders and stops (audit M-1)")
+    from urllib.parse import urlsplit  # the scheme and the host alone: a key may ride in the path or the query
+
+    parts = urlsplit(own)
+    log("node_shared_with_gateway", rpc=f"{parts.scheme}://{parts.hostname or ''}",
+        why="one IP budget for orders and stops (audit M-1)")
 
 
 def main() -> int:

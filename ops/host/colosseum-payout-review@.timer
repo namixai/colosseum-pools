@@ -1,0 +1,11 @@
+# Runs colosseum-payout-review@%i.service every 10 minutes (a review stands an hour for an approval: six passes).
+[Unit]
+Description=colosseum-pools payout review %i, every 10 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -13,19 +13,20 @@ import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
 import {
   PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, placeCall, graduateCall, setAgentCall,
-  setTriggerCall, clearTriggerCall, refusalOf,
+  setTriggerCall, clearTriggerCall, refusalOf, settleCall, STOP_BOOK_ABI,
 } from "../lib/exam.js";
 import {
   SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, BOOK_DEPTH, readsFrom, accountFigures, positionRow,
   pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView,
   journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange, canLoadEarlier,
-  assetFromQuery, queryWithAsset, marketRows, stepIndex, sizeUnitOf, sizeEntry,
+  assetFromQuery, queryWithAsset, marketRows, stepIndex, sizeUnitOf, sizeEntry, tradeHold,
 } from "../lib/examscreen.js";
 import { createExamChart } from "./examchart.js";
 import { positionLines } from "../lib/positionlines.js";
 import { createEntryTracker, browserStore } from "../lib/entrytrack.js";
 import { pxText } from "../lib/exam.js";
-import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, STALE_PASS_POLLS, LIST_MS } from "../lib/examreads.js";
+import { readPass, readList, fullyRead, listPrices, withPrices, createPasses, shownPrice, STALE_PASS_POLLS, LIST_MS, stopBookOf,
+  settledText } from "../lib/examreads.js";
 
 const { ethers } = window;
 const POLL_MS = 5000;
@@ -87,7 +88,12 @@ export async function examView(address, page, query = "") {
   // is that chain's or nothing (dataSource), never another network's candles beside this exam.
   const chainId = await nodeChainId();
   const ds = dataSource({ chainId }, CONFIG);
-  const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(), simPoolOf(address)]);
+  // The stop book of the exam's factory, where it has one: an exam made before the book has no `stopBook` getter, and
+  // only the contract's refusal says so; a node that fails is asked again, then the page says it (`stopBookOf`).
+  const [rules, terms, trader, panelPool, bookAddress] = await Promise.all([exam.rules(), exam.terms(), exam.trader(),
+    simPoolOf(address), stopBookOf(() => exam.stopBook(), { control: () => exam.status() })]);
+  const stopBook = bookAddress && !/^0x0{40}$/i.test(bookAddress)
+    ? new ethers.Contract(bookAddress, STOP_BOOK_ABI, chain.readProvider) : null;
   // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
   // This continuation may have been left behind by a page change: only the page on screen touches the page-wide marker.
   if (!page.isConnected) return;
@@ -96,7 +102,7 @@ export async function examView(address, page, query = "") {
   const perps = new Map();
   if (ds.ok) for (const a of assets) perps.set(a, markUnknown(await hl.perp(a), a));
   const st = {
-    exam, address, ds, perps, assets, trader, panelPool, asset: assetFromQuery(query, assets), query,
+    exam, address, ds, perps, assets, trader, panelPool, stopBook, bookAddress: stopBook ? bookAddress : null, asset: assetFromQuery(query, assets), query,
     unit: sizeUnitOf(store(UNIT_KEY)), market: { open: false, q: "", at: -1 }, isBuy: true, snap: null, prices: new Map(), listSession: 0, listReading: null, passes: createPasses({ staleMs: STALE_PASS_POLLS * POLL_MS }), chart: null,
     book: null, journal: [], timers: [],
     times: new Map(), tab: "pos", triggers: {}, flight: singleFlight(), loaded: null,
@@ -267,6 +273,8 @@ function readerOf(st) {
     position: (asset) => exam.positionOf(asset),
     stop: (asset) => exam.stopOf(asset),
     take: (asset) => exam.takeOf(asset),
+    // With a stop book: a change asked of a stop or a take, and the book's touches of this exam not yet settled.
+    ...(st.stopBook ? { change: (asset, isTake) => exam.changeOf(asset, isTake), touches: () => st.stopBook.touches(st.address) } : {}),
     oracle: (asset) => chain.readProvider.call(oraclePxCall(asset)),
     bbo: (asset) => chain.readProvider.call(bboCall(asset)),
   };
@@ -274,11 +282,11 @@ function readerOf(st) {
 
 /** Everything the account needs, read from the chain at its latest block. A price that could not be read is null. */
 async function readExam(st, selected) {
-  const { block, got, perAsset, fresh } = await readPass(readerOf(st), { assets: st.assets, selected, prices: st.prices });
+  const { block, got, perAsset, touches, touchesUnread, fresh } = await readPass(readerOf(st), { assets: st.assets, selected, prices: st.prices });
   const [status, step, cash, dayStartEquity, tradingDays, deadline, lastFillAt, pending, filler, fromBook, maxWorseBps,
     drawdownKind, peakSnapshot, agent, rules, terms] = got;
   const reads = readsFrom({ status, step, cash, dayStartEquity, tradingDays, deadline, lastFillAt, pending, filler, fromBook,
-    maxWorseBps, drawdownKind, peakSnapshot, rules, terms }, perAsset);
+    maxWorseBps, drawdownKind, peakSnapshot, rules, terms, stopBook: st.bookAddress }, perAsset, touches, touchesUnread);
   const now = block.timestamp;
   const account = examAccount(reads, { now, block: block.number });
   return { reads, account, perAsset, fresh, agent, block: block.number, now, selected };
@@ -453,11 +461,14 @@ function paintAccount(page, st) {
   const scale = accountScale(account);
   const lines = [...f.lines].sort((x, y) => Number(y.near) - Number(x.near));
   const idx = new Map(account.lines.map((l, i) => [l.kind, i]));
+  const hold = tradeHold(st.snap.reads);
   $("#ex-account", page).innerHTML = `
+    ${hold ? `<p class="ex-warn bad" id="ex-touches-unread">${esc(hold)} <button type="button" class="ex-cl" id="ex-touches-retry">Try again</button></p>` : ""}
+    ${f.afterSettle ? `<p class="ex-why">${esc(f.afterSettle)}</p>` : ""}
     <dl class="ex-eq"><div><dt>Equity</dt><dd>${esc(f.equity)}</dd></div><div><dt>Balance</dt><dd>${esc(f.balance)}</dd></div>
       <div><dt>Leverage</dt><dd>${esc(f.leverage)} <small>of ${esc(f.maxLeverage)}</small></dd></div></dl>
     <div class="ex-scale">
-      ${f.target ? `<div class="ex-sl"><span>Target</span><b>${esc(f.target.at)}</b><em>to go ${esc(f.target.toGo)}</em></div>` : ""}
+      ${f.target ? `<div class="ex-sl"><span>Target</span><b>${esc(f.target.at)}</b><em>${esc(f.target.progress)}</em></div>` : ""}
       ${scale ? `<div class="ex-bar${scale.broken ? " broken" : ""}" role="img" aria-label="Equity between the loss limits and the target">
         ${scale.lines.map((l) => `<i class="${l.near ? "near" : ""}" style="left:${l.share / 100}%"></i>`).join("")}
         <i class="tl" style="left:${scale.target / 100}%"></i><i class="now" style="left:${scale.equity / 100}%"></i></div>` : ""}
@@ -465,8 +476,12 @@ function paintAccount(page, st) {
       <div class="ex-sl"><span>Time left</span><b>${esc(account.time.endsAt === null ? "—" : timeLeft(account.time.endsAt, now))}</b>${f.days ? `<em>trading days ${esc(f.days)}</em>` : ""}</div>
     </div>`;
   void idx;
+  $("#ex-touches-retry", page)?.addEventListener("click", (e) => {
+    e.currentTarget.disabled = true;
+    tick(page, st).catch((err) => note(page, `The touches could not be read again: ${friendly(err)}`));
+  });
   const g = $("#ex-graduate", page);
-  g.disabled = !account.graduate.can || st.flight.busy;
+  g.disabled = !account.graduate.can || st.flight.busy || Boolean(hold);
   $("#ex-graduate-text", page).textContent = account.graduate.can ? "" : account.graduate.text;
 }
 
@@ -478,6 +493,8 @@ function paintPositions(page, st) {
     return;
   }
   const rows = account.positions.map((p) => positionRow(p, st.perps));
+  // While the touches are not read, no button here sends: a close or a change of a stop meets the account after them.
+  const off = st.flight.busy || Boolean(tradeHold(st.snap.reads));
   const pending = pendingText(account.pending, st.perps);
   const pend = $("#ex-pending", page);
   pend.hidden = !pending;
@@ -487,9 +504,11 @@ function paintPositions(page, st) {
     ${rows.map((r) => `<tr><td data-l="Asset"><b>${esc(r.name)}</b></td><td data-l="Side" class="${r.side === "Long" ? "lg" : "sh"}">${esc(r.side)}</td><td data-l="Size">${esc(r.size)}</td><td data-l="Mark">${esc(r.mark)}</td>
       <td data-l="Notional">${esc(r.notional)}</td><td data-l="Leverage">${esc(r.leverage)}</td>
       <td data-l="Stop / take" class="ex-trig">${[r.stop && [r.stop, "stop"], r.take && [r.take, "take"]].filter(Boolean).map(([t, k]) =>
-        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}"${st.flight.busy ? " disabled" : ""} aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}</td>
-      <td data-l=""><button type="button" class="ex-cl" data-close="${r.asset}"${st.flight.busy ? " disabled" : ""}>Close</button></td></tr>`).join("")}</tbody></table>`
-    : `<p class="ex-pad ex-muted">No open positions.</p>`) + `<p class="ex-exit">${esc(SCREEN_TEXT.exit)}</p>`;
+        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}"${off ? " disabled" : ""} aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}${
+        r.touched && st.bookAddress ? ` <button type="button" class="ex-cl" data-settle="1"${off ? " disabled" : ""} title="${esc(SCREEN_TEXT.settle)}">Settle</button>` : ""}</td>
+      <td data-l=""><button type="button" class="ex-cl" data-close="${r.asset}"${off ? " disabled" : ""}>Close</button></td></tr>`).join("")}</tbody></table>`
+    : `<p class="ex-pad ex-muted">No open positions.</p>`) + `<p class="ex-exit">${esc(SCREEN_TEXT.exit)}</p>`
+    + (st.bookAddress ? `<p class="ex-exit">${esc(SCREEN_TEXT.stopRule)}</p>` : "");
 }
 
 function paintTicket(page, st) {
@@ -543,9 +562,11 @@ function paintTicket(page, st) {
   } else if (!form.error) {
     parts.push(`<p class="ex-note">${esc(ESTIMATE_NOTE)}</p>`);
   }
-  $("#ex-preview", page).innerHTML = parts.join("");
   st.order = form;
-  send.disabled = st.flight.busy || !account.canPlace || form.size === null || !view || view.blocked;
+  const hold = tradeHold(reads);
+  if (hold) parts.unshift(`<p class="ex-warn bad">${esc(hold)}</p>`);
+  $("#ex-preview", page).innerHTML = parts.join("");
+  send.disabled = Boolean(hold) || st.flight.busy || !account.canPlace || form.size === null || !view || view.blocked;
   const by = agentActive(st) ? "agent" : "trader";
   $("#ex-signs", page).textContent = `Signed by ${placeSigns(st, by)}. ${SCREEN_TEXT.fillsLater}`;
 
@@ -556,7 +577,7 @@ function paintTicket(page, st) {
     $(`#ex-${kind}-prev`, page).innerHTML = (tf.error ? `<p class="ex-warn bad">${esc(tf.error)}</p>` : "")
       + (tv ? tv.lines.map((l) => `<p class="ex-warn ${l.tone}">${esc(l.text)}</p>`).join("") : "");
     st.triggers[kind] = tf;
-    $(`#ex-${kind}-set`, page).disabled = st.flight.busy || tf.px === null || !tv || tv.blocked;
+    $(`#ex-${kind}-set`, page).disabled = Boolean(hold) || st.flight.busy || tf.px === null || !tv || tv.blocked;
   }
 }
 
@@ -650,13 +671,19 @@ async function sendCall(page, st, call, out) {
     el.textContent = "Waiting for the signature…";
     try {
       const signer = await signerFor(st, call.signer);
-      const tx = await signer.sendTransaction({ to: call.to, data: call.data });
+      // A settle goes with its fixed gas (`SETTLE_GAS`): an estimate would find the gas of doing nothing.
+      const tx = await signer.sendTransaction({ to: call.to, data: call.data, ...(call.gas ? { gasLimit: call.gas } : {}) });
       el.textContent = "Sent. Waiting for the block…";
       const receipt = await tx.wait();
       chain.forgetLiveReads();
       if (!receipt || receipt.status !== 1) throw new Error(`${call.method} reverted`);
       el.className = "result ok";
-      el.textContent = call.method === "place" ? "Order sent. It is filled a few blocks later." : "Done.";
+      // A settle may carry out only part of the touches (a long one stops between two steps): "Settled." only when
+      // the book holds none of this exam's any more.
+      const left = call.method === "settle" && st.stopBook
+        ? await st.stopBook.touches(st.address).then((t) => [...t], () => null) : null;
+      el.textContent = call.method === "place" ? "Order sent. It is filled a few blocks later."
+        : call.method === "settle" ? settledText(left) : "Done.";
     } catch (err) {
       el.className = "result err";
       el.textContent = sendFailure(err, (d) => refusalOf(d, keccak));
@@ -732,6 +759,14 @@ function wire(page, st) {
   page.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || !page.contains(b)) return;
+    // No call that trades while the stop book's touches are not read (review 12 of #336, M-4): the buttons are off, and
+    // a press that comes anyway is refused here.
+    const trades = b.id === "ex-send" || b.id === "ex-graduate" || /^ex-(stop|take)-set$/.test(b.id)
+      || b.dataset.close !== undefined || Boolean(b.dataset.clear) || Boolean(b.dataset.settle);
+    if (trades && tradeHold(st.snap?.reads)) {
+      note(page, SCREEN_TEXT.touchesUnread);
+      return;
+    }
     if (b.id === "ex-market") {
       setMarketOpen(page, st, !st.market.open);
     } else if (b.id === "ex-mclose") {
@@ -773,6 +808,9 @@ function wire(page, st) {
       const call = setTriggerCall({ exam: st.address, asset: st.asset, isTake: b.dataset.set === "take", px: t.px, size: t.size,
         by: agentActive(st) ? "agent" : "trader", keccak256: keccak });
       sendCall(page, st, call, "#ex-send-out");
+    } else if (b.dataset.settle) {
+      if (!st.bookAddress) return;
+      sendCall(page, st, settleCall({ book: st.bookAddress, exam: st.address, by: agentActive(st) ? "agent" : "trader", keccak256: keccak }), "#ex-send-out");
     } else if (b.dataset.clear) {
       const [asset, kind] = b.dataset.clear.split(":");
       sendCall(page, st, clearTriggerCall({ exam: st.address, asset: Number(asset), isTake: kind === "take", by: agentActive(st) ? "agent" : "trader", keccak256: keccak }), "#ex-send-out");

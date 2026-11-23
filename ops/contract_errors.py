@@ -16,7 +16,8 @@ from eth_utils import keccak
 # Where each group is declared, in the order the test reads them.
 SOURCES = ("src/multi/MultiPool.sol", "src/multi/FreeExams.sol", "src/exam/PaperExam.sol", "src/Pool.sol",
            "src/RuledAccount.sol", "src/KeyRegistry.sol", "src/KeyBinder.sol", "src/lib/CoreOps.sol", "src/multi/PoolShares.sol",
-           "src/multi/ShareTicket.sol", "src/lib/CodeStore.sol", "src/sim/SimPool.sol", "src/sim/SimPoolFactory.sol")
+           "src/multi/ShareTicket.sol", "src/lib/CodeStore.sol", "src/sim/SimPool.sol", "src/sim/SimPoolFactory.sol",
+           "src/sim/StopBook.sol")
 
 ERRORS = [
     # MultiPool
@@ -33,7 +34,8 @@ ERRORS = [
     "ZeroSize()", "OrderPending()", "NoOrder()", "TooEarly(uint256)", "OrderLapsed()", "NoPrice(uint32)",
     "OverLeverage()", "OutsideCheckpointWindow()", "AlreadyCheckpointed()", "NoBreach()", "NotOver()",
     "NotEnoughDays(uint16,uint16)",
-    "NoPosition()", "NoTrigger()", "ZeroPrice()", "NotTriggered(uint64,uint64)",
+    "NoPosition()", "NoTrigger()", "ZeroPrice()", "NotTriggered(uint64,uint64)", "NotBook()", "StopsPending()",
+    "WouldTrigger(uint64,uint64)", "NoPlaceForAsset(uint32)",
     # Pool, RuledAccount, KeyRegistry, KeyBinder
     "NotChallenge()", "BadStage(uint8)", "NotReady()", "NotEnoughCapital(uint64,uint64)", "NotAllowed()", "TooEarly()",
     "KeyAvailable()", "WithdrawnThisBlock()", "SalesClosed()", "NotOwnerRun()", "SeatNotOpened()", "TooManyAssets()", "NotRenewable(uint64)", "KeyWorks()", "RekeyClosed()", "TooManyCancels()",
@@ -51,6 +53,8 @@ ERRORS = [
     "TooLong()",
     # SimPool, SimPoolFactory
     "NotFactory()", "NotChecker()", "Closing()", "NotAnExam()", "NotAStage()", "Done()", "BadPayout()", "BadReason()", "BadPaired()", "TooMuch()", "BadShare()", "NoAuthorization()", "ReserveOver()", "ReserveRunning()", "NoSuchCode()", "CodeUsed()", "NoRequest()", "RequestLapsed()", "NotApprover()", "LineOff()", "NotCovered(uint256)", "NotPool()", "BadRole()", "WrongFee()", "BadFee()", "FeeNotSent()",
+    # StopBook
+    "NotExam()", "Reentered()", "LevelTooHigh(uint64)", "PokeGas(uint256)", "NoProgress(uint256)", "BadReadGas()",
 ]
 OPENZEPPELIN = [
     "SafeERC20FailedOperation(address)", "FailedDeployment()", "InvalidInitialization()", "NotInitializing()",

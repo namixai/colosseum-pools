@@ -245,14 +245,15 @@ LIB_ABIS = {
     "app/lib/simpool.js": {"SIM_POOL_ABI": ("SimPool",), "SIM_POOL_STOP_RESERVE_ABI": ("SimPool",),
                            "SIM_POOL_APPROVAL_ABI": ("SimPool",), "SIM_FACTORY_ABI": ("SimPoolFactory",),
                            "PAPER_EXAM_EVENTS_ABI": ("PaperExam",)},
-    "app/lib/exam.js": {"PAPER_EXAM_ABI": ("PaperExam",)},
+    "app/lib/exam.js": {"PAPER_EXAM_ABI": ("PaperExam",), "STOP_BOOK_ABI": ("StopBook",)},
     "app/lib/operator.js": {"OPERATOR_ABI": ("SimPool",)},
     "app/lib/simoperator.js": {"SIM_OPERATOR_ABI": ("SimPool",), "SIM_OPERATOR_FACTORY_ABI": ("SimPoolFactory",)},
     "app/lib/simlines.js": {"SIM_LINES_ABI": ("SimPool",), "SIM_OWNER_ABI": ("SimPool",), "TERMS_BOOK_ABI": ("TermsBook",)},
     "app/lib/simowner.js": {"SIM_OWNER_CALLS_ABI": ("SimPool",)},
 }
-# The contract each library's `call(target, "name(types)", ...)` sends to.
-LIB_CALLS = {"app/lib/exam.js": "PaperExam", "app/lib/operator.js": "SimPool"}
+# The contracts each library's `call(target, "name(types)", ...)` sends to: the exam's calls, and the stop book's
+# `settle` (app/lib/exam.js `settleCall`).
+LIB_CALLS = {"app/lib/exam.js": ("PaperExam", "StopBook"), "app/lib/operator.js": ("SimPool",)}
 HUMAN_ITEM = re.compile(r"^(function|event|error)\s+(\w+)\s*\((.*)$")
 
 
@@ -424,9 +425,9 @@ def check_libraries() -> tuple[list[str], int]:
                         item["mutability"] = "view"
                     if item["mutability"] != mutability(want):
                         problems.append(f"{label}: {item['mutability']}, the contract says {mutability(want)}")
-    for rel, contract in LIB_CALLS.items():
-        declared = {f"{e['name']}({','.join(canonical(i) for i in e['inputs'])})" for e in abi(contract)
-                    if e.get("type") == "function" and mutability(e) != "view"}
+    for rel, contracts in LIB_CALLS.items():
+        declared = {f"{e['name']}({','.join(canonical(i) for i in e['inputs'])})" for contract in contracts
+                    for e in abi(contract) if e.get("type") == "function" and mutability(e) != "view"}
         # The whole file, not a line at a time: a call whose signature sits on the line after `call(pool,` counts too.
         source = read(rel)
         for m in re.finditer(r"""\bcall\(\s*\w+\s*,\s*["'`](\w+\([^"'`]*\))["'`]""", source):
@@ -434,7 +435,8 @@ def check_libraries() -> tuple[list[str], int]:
             sig = m.group(1)
             if re.sub(r"\s+", "", sig) not in declared:
                 n = source.count("\n", 0, m.start()) + 1
-                problems.append(f"{rel}:{n} call {sig}: {contract} declares no such function that sends")
+                problems.append(f"{rel}:{n} call {sig}: {contracts[0]} declares no such function that sends"
+                                + (f" (nor {', '.join(contracts[1:])})" if len(contracts) > 1 else ""))
     return problems, count
 
 

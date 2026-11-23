@@ -23,6 +23,43 @@ then the stage on the same size. Whoever passes the stage is paid out of the poo
 the prices traders paid for exams and what the pool's creator locked when opening it. Most exams
 fail, and their prices pay for the ones that pass.
 
+## The stop book
+
+`src/sim/StopBook.sol`, one a factory, made by the factory's constructor and never changed (`SimPoolFactory.stopBook`);
+every exam the factory's pools sell takes it at its start (`PaperExam.stopBook`). An exam with a filler always has
+it; an exam without one (`PaperExam.initialize`, how a `MultiPool` starts its exams) has none and keeps the rule of
+before the book (`fillTrigger`, anyone but the trader, in a block whose oracle price is at the level).
+
+- **The rule.** The oracle price touched the level: the stop or the take is filled, at the oracle price of the block of
+  the touch. It counts from `armedAt` (`fillDelay` blocks after it was set, at least `MIN_FILL_DELAY`, 2) and fires on
+  the first block the book logged at the level or past it, at that block's oracle price, worse than the level through
+  a gap; with `fromBook`, at the trader's side of the book logged in that block, never more than `maxWorseBps` worse
+  than that oracle price (past it, at that bound: a stop is never refused); with no book logged, at the oracle price.
+  It fires on the oracle price, not on Hyperliquid's mark price. A stop already reached when it is set is refused
+  (`WouldTrigger`); with no oracle price, or one over `MAX_PRICE`, it reverts (`NoPrice`); a level over `MAX_PRICE`
+  is refused by the book (`LevelTooHigh`).
+- **Taking one off or moving it.** Waits the same `fillDelay` blocks (`changeOf`, `TriggerSet` with the block it acts
+  from; a zero price takes it off). Until then the one there stands and is filled at its touches; a second change
+  replaces the first and the delay counts again. A stop filled before its change takes the change with it. An order
+  that closes or turns the position round takes both off at once.
+- **The journal.** `poke()`, anyone's, once a block: it logs the oracle price and the best bid and offer of every asset
+  with a stop or a take (`watched()`), and carries nothing out. Each read gets `oracleGas()` and `bboGas()` gas (15 000
+  each, the operator may set 10 000 to 50 000 through `SimPoolFactory.setStopReadGas`); a call too poor for them
+  reverts (`PokeGas`), so no caller can log a price as missing.
+- **The settle.** `settle(exam)`, anyone's: carries out each of the exam's touched stops and takes, the earliest touch
+  first, each at its touch, however late the settle comes. A settle short of gas stops between two steps and keeps
+  what it found; the next one goes on, and `touches(exam)` says what is still owed. A settle from outside that makes
+  no step while work is left reverts (`NoProgress`). Every exam function that changes anything (`place`, `fill`,
+  `setTrigger`, `clearTrigger`, `setAgent`, `checkpoint`, `breach`, `expire`, `graduate`) settles first, and acts only
+  once nothing is owed (`StopsPending`). `equity()`, `notional()` and `violation()` show the state at the last settle.
+- **The list.** The book logs at most `MAX_LISTED` (16) assets: the listed ones and the delisted ones that still carry
+  a stop (`setAsset` refuses more, `TooManyAssets`; a first stop on a delisted asset waits for room, `NoPlaceForAsset`).
+- **An ended exam.** `breach` and `expire` take its stops and takes out of the book.
+- **What it cannot do.** A block nobody checked is not in the journal; the next check says so (`Gap(from, to)`), and a
+  stop reached only in it is not filled. The keeper checks every block while the book watches an asset and settles
+  the exams with a touch (`ops/book_keeper.py`); every gap it leaves is an alarm, and a payout's review reads the
+  oracle back for the gap blocks (`ops/payout_review.py`). Nothing in code can promise a check in every block.
+
 ## What it does
 
 - **Opening.** `SimPoolFactory.create(plan)` with exactly the factory's fee sent along (`creationFee`: 1 HYPE on
@@ -343,7 +380,8 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   so two orders in one block go one after the other. The same loop keeps every running exam's stops and
   takes from their events and tries each armed one once a block by a call that changes nothing, sending
   `fillTrigger` when the exam would take it; with `--stops loop` they are a loop's of their own instead,
-  in a thread beside this one ("The stops", below). A slow pass
+  in a thread beside this one ("The stops", below). That is for a factory without a stop book: with one, the
+  keeper runs the book's loop instead, whatever `--stops` says ("The stops", below). A slow pass
   every 30 seconds finds pools, exams and stages and makes their calls: the day's snapshot, `breach`,
   `expire`, `release`, `claimPayout`, `pay`. It reads the pool's `payRoom()` and sends `pay` only for
   as many payouts as the daily limit has room for: none while the day's two are settled (it logs
@@ -483,8 +521,17 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
     held at the price 60 blocks or the step is never missed by the reading, a shorter one may be. These
     prices are kept apart from the review's others: no other check sees them. A block it was shown to have
     triggered in (`TriggerSeen`) counts as reached. Two reads at the price with none off it between are one
-    stretch; for a trigger carried out, its last such stretch is the close's own. This is a fact shown to
-    whoever signs: it is in no reason and changes no verdict;
+    stretch; for a trigger carried out, its last such stretch is the close's own. A stop or take reached and
+    not carried out, with a stop book or without, is a reason of the kind `missed-stop`. With a stop book, so is
+    every block of a stop's or take's time nobody is known to have checked, of the kind `stop-unchecked`, in five
+    cases: the book's gaps not read at all; gap blocks whose oracle price was not read (an old gap the node keeps
+    no state for, or past the reads; the keeper's price journal, `--prices`, can give them); the blocks from
+    `lastPokeBlock() + 1` to the latest block while `watched()` is not empty, which no `Gap` has closed yet (the
+    keeper is not checking now) and in which a stop stood; `lastPokeBlock()` or `watched()` not read; and the
+    factory's stop book not read at all, for an account with any stop. Either kind makes the verdict
+    `suspicious` with the draft of a stop of reason 3 naming the transactions that set the stops concerned; a
+    payout waiting for approval in a pool with approvals is held (`hold`: nothing to approve), unless a stop of
+    the pool's own is offered first (reasons 1 and 2). Not checked is never clean;
   - the code the exam was bought under: its sales, its wallets, the longest run of sales in a row
     under it each from a new wallet, and how many of its buyers never traded or stand in a pair;
   - the pool's exams and stages still able to pass, the payouts they would be if all passed, and
@@ -685,6 +732,112 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   (`reviewFor`). It never signs what a review hands it.
 
 ## The stops
+
+**With a stop book** (every factory deployed from `src/` as it is now) the keeper runs `ops/book_keeper.py` in a thread
+of its own, whatever `--stops` says: `poke()` every block while the book watches an asset, sent at once with a fixed
+gas; `settle(exam)` for each exam whose `touches(exam)` is not empty, or with a change of a stop that has come into
+force, with a fixed gas (1 500 000; one that made no step, `NoProgress`, or whose fill ran out of gas, `Fired` with
+`STARVED`, goes again with 1 950 000), never through an estimate; and every `Gap` the book writes while it watched an
+asset as a line, a count and an alarm, with the oracle prices of those blocks read back into the journal of prices
+and a stop they reached raised as an alarm of its own (`book_gap_touch`). Every transaction of the key goes out
+through one sender; a call the node refuses, times out on, or answers with HTTP 401/403/404 or a limit (-32005,
+-32007) goes to a backup node (`--stop-backup-rpc`, else COLOSSEUM_RPC_BACKUP_URL), and the node that failed is asked
+second for a minute. `ops/stop_filler.py --deployment X` alone runs the same loop with no key: the gaps seen from
+another machine. Nothing sends `fillTrigger` to an exam with a book (`NotBook`). The read gas of the book's check is
+the operator's (`ops/deploy_sim.py read-gas --oracle N --bbo N`, `--signer` prints the call for the Safe); the loop
+takes a change from the book's `ReadGasSet` at once.
+
+A stop the price touched is carried out only if a `poke()` logged that block, so the checks are kept apart from
+everything else the loop does, and watched:
+
+- **The checks' thread.** `poke()` goes out from a thread of its own (`Poker`), with its own sessions on the node
+  (`--poke-rpc`, COLOSSEUM_POKE_RPC_URL, the stops' node when empty) and a 2-second timeout. It looks at the head every
+  `--poke-poll` seconds (0.25) and sends the check first: for each new head, and in any case once a second. A head
+  that went back (the other node, behind), stopped, or whose block looks old (`--stale-s`, 10 s: a node that stopped,
+  or this machine's clock off) is an alarm and a reason to fail over, never a reason to stop checking. The only read
+  before the check is `watched()` while the book watches nothing, so the first check goes in the very block the first
+  stop is set; an exam holding an entry is reason enough to check, and so is a book that cannot be read. A send the
+  node refused is tried again at the next look. The check is priced on the last gas price read or the newest block's
+  base fee, whichever is higher, so a basefee that jumps does not leave it behind. After the check a look spends at
+  most half a second on the rest (the key's count once a head, a landed check's result every 5 s, the book's views,
+  late checks signed again, the price, the money); what is left goes to the next look. Logs, receipts, each holder's
+  `touches`, the settles and the gaps are the other thread's: a node refusing those costs them and never a check.
+- **Keys of the checks' own.** The checks go only from keys named in `--poke-wallet a,b` (COLOSSEUM_POKE_WALLETS),
+  never from the keeper's key: its settles and fills share its nonces, and one of them lost or under a basefee would
+  hold every check behind it. On mainnet a keeper with a stop book and no such key does not start; on testnet it starts,
+  sends no check and raises `book_poke_no_key`. A check with no block after 1.5 seconds is signed again under its
+  nonce with a quarter more fee and tip (eight times at most, more while its fee cap is under twice the price now), at
+  once when its cap is under the newest block's base fee; and the next check goes through the next key as soon as a
+  key's oldest check is that late. A sweep reads no receipt of a nonce the chain has not counted and sends at most two
+  again a look. The keeper's own transactions (settles, fills) are raised in fee the same way, 1.5 seconds late; the
+  keeper waits for any hash of their nonce.
+- **The watch of the checks.** On every new head the thread reads `lastPokeBlock()` and `watched()`. These are
+  alarms, raised again every 30 seconds while their cause lasts, with a line when it is over: more than 3 blocks
+  between `lastPokeBlock()` and the head while the book watches an asset (`book_poke_lagging`); neither view read for
+  10 seconds (`book_views_unread`); no check sent three blocks in a row, or at once for a key without money
+  (`book_poke_failing`); a key's oldest check waiting more than 10 seconds (`book_poke_stuck`); checks reverting
+  (`book_poke_reverted`); a head that cannot be read for 5 seconds (`book_head_unread`); a node whose newest block is
+  older than `--stale-s` seconds (`book_node_stale`, the other node then used, and the first tried again in the
+  background a minute on; every node old: `book_head_stale`). A key whose money pays fewer hours of checks than
+  `--poke-runway-hours` (72) at the last gas price is an alarm every hour (`book_key_low`, with its runway in blocks
+  and hours). The keeper's loop checks that the checks' thread is there and moving (`book_poker_dead`,
+  `book_poker_stalled`). With `--book-watch-address` (COLOSSEUM_BOOK_WATCH_ADDRESS, the key of the book's own watch,
+  below) it reads that key's count every 10 minutes: unmoved for two of the watch's hourly signs of life and 10
+  minutes, it is an alarm every hour (`book_watch_silent`).
+- **An asset with no price.** A check that cannot read an asset's oracle (the read gas too low for the precompile,
+  say) logs a zero and `NoPrice(asset)`: no `Gap`, no lag, and no stop or take of that asset touched in that block.
+  The checks' thread, the keeper's and the watch's, reads the book's `NoPrice` events every 5 blocks: an asset with 3
+  blocks of it in a row is an alarm, again while it lasts (`book_no_price`, with the asset and the count of blocks,
+  pointing at `ops/deploy_sim.py read-gas`), over once a later check logged its price.
+- **A touch not carried out.** A touch standing in `touches` more than 10 blocks after its block is an alarm whatever
+  holds it (`book_touch_standing`), and so are an exam's touches unread for 10 blocks (`book_touches_unread`); a settle
+  reverted in its block three times in a row is an alarm and waits 30 blocks (`book_settle_reverting`). A check that
+  reverted sends the next ones with a quarter more gas than needed (never the most a small block holds, so that two
+  checks of two senders fit one block), for 300 blocks, with the book's read gas read again.
+- **For the operator: the gas of a settle and of a check.** A whole settle of an exam with 32 touches in one call
+  does not fit a small block (2.36 to 2.6 million gas): the loop settles it in parts, each sent with 1 500 000, then
+  1 950 000. One step of a settle with 32 entries on 16 assets needs up to about 724 000 gas; a settle by anyone but
+  the exam with less than that answers `NoProgress`. The read gas of the oracle and of the best bid and offer
+  (`ops/deploy_sim.py read-gas`) may be raised only with the gas of `poke()` counted again: each asset's two reads get
+  their whole allowance, and a check short of it reverts (`book_poke_reverted`).
+- **A gap** is judged on the book as it stood in it: `watched()` and the entries of every exam that held one, or that
+  the keeper knows and has not seen end, at the block before the gap and at its last block (where the node keeps that
+  state), and now. The transaction that wrote the `Gap` may have closed the last position on the asset.
+  `ops/payout_review.py` does not pass such a payout as clean (see "The review of a payout" above).
+- **A restart.** The loop keeps its last block and the gaps still to read back in `book-<deployment>.json` next to
+  the keeper's state (`--book-state`), written with fsync and locked to one process: after a restart it reads the
+  book's events from there, so a `Gap` written while it was down is said and read back, on the keeper's exams even
+  before its slow pass; an exam of the keeper's with an entry is a holder at once (10 a step), so its touches are
+  settled without waiting for that pass. A state that does not read is an alarm (`book_state_unread`).
+- **Calls to the node.** One checks' thread makes about 8 calls a second on a healthy chain (`CALLS_PER_S_BUDGET`,
+  9, checked by a test): the head each look, the check, the key's count and the book's two views each block, the
+  `NoPrice` events every five blocks, the price every ten. The keeper's loop adds its own (logs, touches, receipts). A public node's limit is far
+  below that: the keeper and its checks need a node of their own, with a backup at another provider.
+
+**The book's own watch**, `ops/book_watch.py`, is the same watch as a process apart: its own node (`--rpc`,
+COLOSSEUM_BOOK_WATCH_RPC_URL, with `--backup-rpc`), no state shared with the keeper, its own key if any, its own
+user (unit `colosseum-book-watch@<instance>`: `DynamicUser`, its key only as credentials, the keeper's files, settings
+and processes out of its reach; put in place by `install.sh` and enabled by hand, settings in
+`/etc/colosseum/book-watch-<instance>.env`, extra flags in COLOSSEUM_BOOK_WATCH_ARGS). On mainnet it runs on a host of
+its own: that is a requirement.
+
+    python -m ops.book_watch --deployment sim1 --rpc <its own node>                    # alarms, sends nothing
+    python -m ops.book_watch --deployment sim1 --rpc <its own node> --wallet watcher   # and checks when the keeper is late
+
+It raises `book_poke_lagging` past `--lag-alarm` (3) blocks, `book_views_unread` when it cannot read the book, and
+`book_head_unread`/`book_head_stale` when its own node fails; one that cannot start (its node down, its key
+unreadable) raises `book_watch_cannot_start` before it ends, once in five minutes. Its alarms go to its flag file
+(`--alarm`) and to COLOSSEUM_ALERT_CMD on its own machine, so they do not depend on the node that failed. With
+`--wallet` it sends `poke()` itself while the book is `--takeover` (2) blocks behind or more, or cannot be read, then
+every block for `--hold` (600) blocks after the last time it was (`book_poke_taken_over`), and once an hour in any
+case as its sign of life for the keeper's `book_watch_silent`; with the same fee raise, the same alarm on its key's
+money, a quarter more gas after a reverted check, and the book's read gas read every minute. On mainnet a watch with a
+key needs `--confirm-mainnet <label>` and mainnet's key directory.
+
+The alarm channel runs at most two commands at once, queues the rest (200 at most, then drops and says so), and
+tries a command that failed again after 5 and 30 seconds.
+
+**Without a stop book** (the 998 rehearsal's factory), as before:
 
 A stop exists for the chain only in a block whose transaction carries it out: `fillTrigger` takes it while the
 oracle price of that very block is at the stop or past it, and inside its window only from the factory's filler.

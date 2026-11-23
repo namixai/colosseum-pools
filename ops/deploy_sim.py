@@ -62,7 +62,10 @@ cancels it, from the creator's key or the closer's.
 `approver` names the pool's approver of payouts (from the creator's key; zero for none) and `approve`
 approves waiting payouts from it: an approved payout goes out 72 hours after its claim, one not
 approved 7 days after. Without --send `approve` reads each payout and says whose it is, how much,
-from when it goes out with the approval and from when without, or why the pool would refuse it. Like `close` and `finish`, without --send each reads
+from when it goes out with the approval and from when without, or why the pool would refuse it. Each payout is approved
+only on a fresh review that says approve (the review service's `<pool>-<id>.json` in --reviews, ops/state/reviews by
+default, of this chain, pool and payout, read within the hour); without one the command refuses and says why, and there
+is no flag around it: a payout not approved goes out by itself at its ceiling. Like `close` and `finish`, without --send each reads
 the pool and says what it would send, from which key, or why the pool would refuse.
 
 `lift` lifts the stop of payout --id (liftStop, from the factory's operator: our Safe with --signer, or the deployer's
@@ -162,8 +165,21 @@ ZERO = "0x" + "00" * 20
 PLATFORM_ASSETS = sn.Assets(lambda: c.NETWORK)
 
 
+# SimPoolFactory.MAX_LISTED: the most assets listed at once, with the delisted ones the stop book still logs; past it
+# `setAsset` reverts (TooManyAssets), the deploy half done. The test holds it to the source.
+MAX_LISTED = 16
+# SimPoolFactory.MIN_FILL_DELAY: the least `fill_delay` of a plan's stages (a stop's change waits it, and the book
+# checks the blocks between); the factory refuses less (BadPlan). Refused here before anything is sent.
+BOOK_MIN_FILL_DELAY = 2
+# StopBook.MIN_READ_GAS and MAX_READ_GAS: the bounds of the gas the book gives each precompile read (`setStopReadGas`).
+MIN_READ_GAS = 10_000
+MAX_READ_GAS = 50_000
+
+
 def asset_list(names: list[str]) -> list[tuple[str, int, int]]:
-    """Each named asset's id and leverage cap, for setAsset. Refuses one without a cap."""
+    """Each named asset's id and leverage cap, for setAsset. Refuses one without a cap, and more than `MAX_LISTED`."""
+    if len(names) > MAX_LISTED:
+        raise SystemExit(f"{len(names)} assets: the factory lists {MAX_LISTED} at most (SimPoolFactory.MAX_LISTED)")
     out, table = [], sn.sim(c.NETWORK)
     for name in names:
         idx = table.index(name)
@@ -398,10 +414,28 @@ def keeper_nodes_of(args) -> dict | None:
     return nodes
 
 
+def book_plan_ok(raw: dict) -> None:
+    """A plan's stages wait at least `BOOK_MIN_FILL_DELAY` blocks for a fill: with a stop book, a stop taken off or moved
+    waits as long."""
+    for stage in ("exam", "funded"):
+        delay = raw[stage]["fill_delay"]
+        if delay < BOOK_MIN_FILL_DELAY:
+            raise SystemExit(f"the plan's {stage} fill_delay is {delay}: with a stop book it is {BOOK_MIN_FILL_DELAY} "
+                             "blocks at least")
+
+
 def mainnet_plan_ok(raw: dict) -> None:
     """On mainnet a plan written for testnet is refused: its terms would tell traders the wrong network."""
     if c.NETWORK.name == "mainnet" and any("testnet" in str(raw.get(f, "")).lower() for f in ("terms_text", "about")):
         raise SystemExit("this plan is written for testnet (its terms or about say so); mainnet takes a plan of its own")
+
+
+def stop_book_of(factory: str) -> str:
+    """The stop book `factory` made in its constructor, read back and held to it: its `factory()` is this one."""
+    book = to_checksum_address(c.call_view(factory, "stopBook()", [], [], ["address"])[0])
+    if int(book, 16) == 0 or to_checksum_address(c.call_view(book, "factory()", [], [], ["address"])[0]) != to_checksum_address(factory):
+        raise SystemExit(f"the factory {factory} names the stop book {book}, which is not its own")
+    return book
 
 
 def operator_of(factory: str) -> str:
@@ -488,7 +522,8 @@ def deploy(args) -> int:
     print(f"deploy_sim deploy: {c.NETWORK.name} (chain {c.CHAIN_ID}), label {args.label}, USDC {c.USDC_ERC20} "
           "(Circle's, EIP-3009)")
     print("  would deploy     PaperExam, SimPoolStops, SimPoolSetup, SimPoolCodes, SimPool (linked to the three), TermsBook, "
-          "SimPoolFactory(usdc, exam, pool, operator, fee)  (big blocks on, then off)")
+          "SimPoolFactory(usdc, exam, pool, operator, fee)  (big blocks on, then off); the factory makes its StopBook "
+          "in the same transaction (`stopBook()`), read back and written to the record")
     print(f"  creation fee     {hype(fee)} HYPE to open a pool on {c.NETWORK.name} ({fee} wei), set in the factory; its "
           "operator may change it after (`fee`)")
     print(f"  would configure  setFiller {filler}, setChecker {checker}, setCloser {closer}, setFeeRecipient {args.fee_recipient or 'the operator'}, "
@@ -555,6 +590,9 @@ def deploy(args) -> int:
         if read_back != fee:
             raise SystemExit(f"the factory {factory} takes {read_back} wei to open a pool, not the {fee} "
                              "deployed: read it before anything else")
+        # The stop book the factory made: the keeper checks its blocks and settles its exams (ops/book_keeper.py).
+        record["StopBook"] = stop_book_of(factory)
+        save(out, record)
         record["status"] = "configuring"
         save(out, record)
         steps = [("setFiller", "setFiller(address)", ["address"], [filler]),
@@ -581,6 +619,7 @@ def pool(args) -> int:
     record = deployments.load(args.deployment)
     raw = json.loads(pathlib.Path(args.plan).read_text())
     mainnet_plan_ok(raw)
+    book_plan_ok(raw)
     text = raw["terms_text"]
     terms_hash = keccak(text=text)
     plan = plan_of(raw, terms_hash)
@@ -705,6 +744,7 @@ def check(args) -> int:
     the assets listed as `deploy` lists them and the terms as `pool` publishes them."""
     raw = json.loads(pathlib.Path(args.plan).read_text(encoding="utf-8"))
     mainnet_plan_ok(raw)
+    book_plan_ok(raw)
     text = raw["terms_text"].encode("utf-8")
     if not text or len(text) > TERMS_MAX_BYTES:
         raise SystemExit(f"deploy_sim check: the terms are {len(text)} bytes; TermsBook.publish takes 1 to "
@@ -988,6 +1028,41 @@ def approve_check(approver: str, sender: str, payouts: dict, ids: list[int], har
     return lines
 
 
+def sk_state() -> pathlib.Path:
+    """ops/state, where the services keep what they write (`keeper.STATE_DIR`)."""
+    from ops import keeper as core
+    return pathlib.Path(core.STATE_DIR)
+
+
+def review_check(reviews: pathlib.Path, pool_: str, payouts: dict, ids: list[int], chain_id: int, latest: int,
+                 now: int) -> list[str]:
+    """Each payout of `ids` approved only on a fresh review that says "approve": the document the review's service
+    wrote (`<reviews>/<pool>-<id>.json`, `ops/payout_review.py --out`), of this chain, pool and payout, read at most an
+    hour before (`payout_review.card_problem`). A payout without one is refused, with why, and nothing is approved:
+    there is no way round it here, and none is needed, since a payout not approved goes out by itself at its ceiling
+    (review 12 of #336). `payouts`: id → the pool's payout(id)."""
+    from ops import payout_review as pr
+
+    problems, lines = [], []
+    for i in ids:
+        p = payouts[i]
+        path = reviews / f"{pool_}-{i}.json"
+        try:
+            doc = json.loads(path.read_text())
+        except (OSError, ValueError):
+            problems.append(f"payout {i}: no review at {path}")
+            continue
+        why = pr.card_problem(doc, pool_, i, {"trader": p[1], "amount": p[2], "dueAt": p[3]}, chain_id, latest, now)
+        if why:
+            problems.append(f"payout {i}: {why}")
+        else:
+            lines.append(f"payout {i}: reviewed at block {doc['readAt']['block']}, clean")
+    if problems:
+        raise SystemExit("NoReview: approving rests on a fresh review that says approve, and these have none; nothing "
+                         "was approved (an unapproved payout goes out by itself at its ceiling):\n  " + "\n  ".join(problems))
+    return lines
+
+
 def approver_cmd(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     creator = to_checksum_address(c.call_view(pool_, "creator()", [], [], ["address"])[0])
@@ -1009,6 +1084,9 @@ def approve(args) -> int:
         int(c.call_view(factory, "PAYOUT_DELAY()", [], [], ["uint32"])[0])
     approver = to_checksum_address(c.call_view(pool_, "approver()", [], [], ["address"])[0])
     lines = approve_check(approver, sender, payouts, ids, hard)
+    latest = int(c.rpc("eth_blockNumber"), 16)
+    now = int(c.rpc("eth_getBlockByNumber", [hex(latest), False])["timestamp"], 16)
+    lines += review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc("eth_chainId"), 16), latest, now)
     print(f"deploy_sim approve: pool {pool_}, approvePayouts({ids}) from {args.key or 'the signer'} ({sender})")
     for line in lines:
         print("  " + line)
@@ -1169,6 +1247,43 @@ def fee_cmd(args) -> int:
         raise SystemExit(f"after setCreationFee the factory's fee reads {hype(after)} HYPE, not {hype(new)}: "
                          f"tx {rcpt['transactionHash']}")
     print(f"deploy_sim: the fee to open a pool is {hype(after)} HYPE, tx {rcpt['transactionHash']}")
+    return 0
+
+
+def read_gas_cmd(args) -> int:
+    """setStopReadGas on a deployment's factory, from its operator: the gas the stop book gives each read of the oracle
+    and of the book, in its check of a block (StopBook.oracleGas, bboGas; 15 000 each at its birth). Reads both and the
+    operator first, and says what it would send or why it would be refused; --signer prints the call for the Safe."""
+    record = deployments.load(args.deployment)
+    factory = record.get("SimPoolFactory")
+    if not factory:
+        raise SystemExit(f"the record {args.deployment!r} names no SimPoolFactory")
+    for name, gas in (("--oracle", args.oracle), ("--bbo", args.bbo)):
+        if not MIN_READ_GAS <= gas <= MAX_READ_GAS:
+            raise SystemExit(f"{name} {gas}: the book takes {MIN_READ_GAS} to {MAX_READ_GAS} (BadReadGas)")
+    book = record.get("StopBook") or stop_book_of(factory)
+    now = [int(c.call_view(book, f"{g}()", [], [], ["uint32"])[0]) for g in ("oracleGas", "bboGas")]
+    operator, sender = operator_of(factory), signer_of(args)
+    print(f"deploy_sim read-gas: {c.NETWORK.name} (chain {c.CHAIN_ID}), factory {factory}, stop book {book}: each check "
+          f"reads the oracle with {now[0]} gas and the book with {now[1]} now; setStopReadGas({args.oracle}, {args.bbo}) "
+          f"from {args.key or 'the signer'} ({sender}) makes them {args.oracle} and {args.bbo} from the next check")
+    if sender != operator:
+        raise SystemExit(f"the factory would refuse setStopReadGas: NotOperator; its operator is {operator}")
+    if now == [args.oracle, args.bbo]:
+        raise SystemExit("the book reads with these already: nothing to send")
+    data = c.encode_call("setStopReadGas(uint256,uint256)", ["uint256", "uint256"], [args.oracle, args.bbo])
+    if getattr(args, "signer", None):
+        return print_batch(args, f"setStopReadGas on {factory}", [(factory, 0, data)])
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    sn.confirm_send(args, f"set the stop book's read gas on {factory} to {args.oracle} and {args.bbo} from the key {args.key!r}", c)
+    rcpt = c.transact(c.account(args.key), factory, "setStopReadGas(uint256,uint256)", ["uint256", "uint256"],
+                      [args.oracle, args.bbo])
+    after = [int(c.call_view(book, f"{g}()", [], [], ["uint32"])[0]) for g in ("oracleGas", "bboGas")]
+    if after != [args.oracle, args.bbo]:
+        raise SystemExit(f"after setStopReadGas the book reads with {after}, not {[args.oracle, args.bbo]}: tx {rcpt['transactionHash']}")
+    print(f"deploy_sim: the stop book reads the oracle with {after[0]} gas and the book with {after[1]}, tx {rcpt['transactionHash']}")
     return 0
 
 
@@ -1461,6 +1576,9 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--key", help="the pool's approver")
     z.add_argument("--signer", help="an address that signs elsewhere (the Ledger's): print the call, send nothing")
     z.add_argument("--ids", required=True, help="payout numbers, as 3,4,7")
+    z.add_argument("--reviews", default=str(sk_state() / "reviews"),
+                   help="the review service's documents, <pool>-<id>.json (ops/payout_review.py --out): each payout needs a "
+                   "fresh one that says approve")
     z.add_argument("--send", action="store_true")
     z = sub.add_parser("lift")
     z.add_argument("--pool", required=True)
@@ -1473,6 +1591,13 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--amount", required=True, help='the new fee to open a pool, in HYPE, as "0.5"')
     z.add_argument("--confirm-large-fee", action="store_true",
                    help="on mainnet, send a fee above 10 HYPE: refused without it")
+    z.add_argument("--key", help="the factory's operator")
+    z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
+    z.add_argument("--send", action="store_true")
+    z = sub.add_parser("read-gas", help="setStopReadGas: the gas the stop book gives each read of the oracle and the book")
+    z.add_argument("--deployment", required=True)
+    z.add_argument("--oracle", type=int, required=True, help=f"gas for a read of the oracle, {MIN_READ_GAS} to {MAX_READ_GAS}")
+    z.add_argument("--bbo", type=int, required=True, help=f"gas for a read of the book, {MIN_READ_GAS} to {MAX_READ_GAS}")
     z.add_argument("--key", help="the factory's operator")
     z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
     z.add_argument("--send", action="store_true")
@@ -1519,7 +1644,7 @@ def main(argv: list[str] | None = None) -> int:
         c.assert_network()  # what a mainnet command reads is the chain's it names, sent or not (review of #300)
     return {"deploy": deploy, "pool": pool, "check": check, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
-            "approve": approve, "lift": lift_cmd, "fee": fee_cmd, "code": code_cmd, "pot": pot, "claim": claim,
+            "approve": approve, "lift": lift_cmd, "fee": fee_cmd, "read-gas": read_gas_cmd, "code": code_cmd, "pot": pot, "claim": claim,
             "pay": pay_cmd}[args.cmd](args)
 
 

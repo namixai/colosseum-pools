@@ -1254,7 +1254,7 @@ class MissedTouches(unittest.TestCase):
         ch.d["touchEvery"] = {s1: 60}
         return ch, s1
 
-    def test_a_stop_the_oracle_reached_and_left_before_it_was_carried_out_is_shown_and_counted_against_nobody(self):
+    def test_a_stop_the_oracle_reached_and_left_before_it_was_carried_out_holds_the_payout(self):
         ch, s1 = self.world({*range(1_100, 1_131), *range(1_300, 1_306)})
         got = r.review(ch.d, POOL, 0)
         m = got["missedTouch"]
@@ -1263,17 +1263,29 @@ class MissedTouches(unittest.TestCase):
              "reads": 31, "seen": False, "then": "carried out", "at": 1_305}]})
         self.assertEqual(m["exam"], {"read": False, "every": None, "spans": 0, "unread": 0, "missed": []},
                          "an account the review did not read along is said as not read")
-        self.assertEqual((got["verdict"], got["reasons"]), ("clean", []), "a fact shown, in no reason")
+        # A stop missed is a flaw of the exam's executor: a result disputed, held for a stop of reason 3 (review 9 of
+        # #336, which found it shown as a fact that changed no verdict).
+        self.assertEqual((got["verdict"], got["kinds"], got["action"], got["tx"]), ("suspicious", ["missed-stop"], "hold", None))
+        self.assertEqual(got["reasons"], ["a stop missed on the stage: the stop at 950000 on asset 3 reached in blocks 1100 "
+                                          "to 1130, not carried out then"])
+        self.assertEqual((got["stopDraft"]["reason"], got["stopDraft"]["trades"]), (3, [tx(80_000 + 1_001)]),
+                         "the draft names the transaction that set the stop")
         self.assertEqual(r.card(got, ch.d)["evidence"]["missedTouch"], m)
         text = r.summary(got)
         self.assertIn("  stops and takes the oracle reached and nobody carried out, stage: 1 stretches missed over 1 "
                       "stops and takes that stood, read one block in 60\n    the stop at 950000 on asset 3 (long): the oracle at it or past it from block 1100, "
                       "31 reads to block 1130; then carried out in block 1305", text)
         self.assertIn("  stops and takes the oracle reached and nobody carried out, exam: not read", text)
-        # Reached only in the stretch it was carried out in, or held from `armedAt` to the close: nothing missed.
+        self.assertIn("do not sign: a stop the oracle reached was not carried out", text)
+        # Reached only in the stretch it was carried out in, or held from `armedAt` to the close: nothing missed, and
+        # no stop reason (the second's low fill price is the recount's own).
         for low in (range(1_300, 1_306), range(990, 1_306)):
             ch, _ = self.world(set(low))
-            self.assertEqual(r.review(ch.d, POOL, 0)["missedTouch"]["stage"]["missed"], [], low)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual(got["missedTouch"]["stage"]["missed"], [], low)
+            self.assertNotIn("missed-stop", got["kinds"], low)
+        clean = r.review(self.world(set(range(1_300, 1_306)))[0].d, POOL, 0)
+        self.assertEqual((clean["verdict"], clean["action"], clean["stopDraft"]), ("clean", "approve", None))
 
     def test_how_a_stops_time_ended(self):
         def ends(evs, latest=2_000):
@@ -1419,6 +1431,430 @@ class MissedTouches(unittest.TestCase):
         self.assertEqual(got["recount"]["stage"]["checked"]["fills"], 1, "the close's price is not the recount's")
 
 
+class TheBookHoldsWhatItCannotClear(unittest.TestCase):
+    """Review 9 of #336: with a stop book the review is closed on failure. A stop reached in a block nobody checked
+    (`Gap`), gap blocks whose price was not read, the book's gaps not read, the blocks since its last check that no Gap
+    has closed yet, or the book not read at all: each holds the payout ("suspicious", "hold") with the draft of a stop
+    of reason 3, never "clean" and "approve"."""
+
+    mt = MissedTouches()
+
+    def world(self, gaps, known=range(990, 1_400), low_from=1_100, end="standing", **extra):
+        ch, t1, s1 = honest_world()
+        ch.d["latest"] = 2_000
+        ch.d["exam_events"] = {s1: self.mt.events(end=end), addr(0x201): [self.mt.e("Started", 500, capital=100 * 10**6)]}
+        ch.d["oracle"] = {r.oracle_key(3, b): (self.mt.LOW if b >= low_from else self.mt.MARK) for b in known}
+        ch.d["touchEvery"] = {}
+        ch.d["bookExams"] = [s1]
+        ch.d["gaps"] = gaps
+        # The same prices, believed against the book's own (`read_stop_prices`): the only ones a book's gaps are read at.
+        ch.d["stopOracle"] = dict(ch.d["oracle"])
+        ch.d.update(extra)
+        return ch, s1
+
+    def held(self, got, kind):
+        self.assertEqual((got["verdict"], got["action"], got["tx"]), ("suspicious", "hold", None))
+        self.assertIn(kind, got["kinds"])
+        self.assertEqual((got["stopDraft"]["reason"], got["stopDraft"]["paired"]), (3, r.ZERO_ADDRESS))
+        self.assertIn(tx(80_000 + 1_001), got["stopDraft"]["trades"], "the transaction that set the stop")
+
+    def test_a_stop_reached_in_a_gap_holds_the_payout(self):
+        ch, _ = self.world([(1_100, 1_110)])
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual([(m["first"], m["last"], m["gap"]) for m in got["missedTouch"]["stage"]["missed"]], [(1_100, 1_110, True)])
+        self.held(got, "missed-stop")
+        self.assertIn("(a gap of the stop book)", got["reasons"][0])
+        k = r.card(got, ch.d)
+        self.assertEqual((k["verdict"], k["action"], k["call"]), ("suspicious", "hold", None), "nothing to approve")
+        self.assertIn("do not sign", r.summary(got))
+
+    def test_gap_blocks_whose_price_was_not_read_are_not_checked_and_hold_the_payout(self):
+        ch, _ = self.world([(1_100, 1_110)], known=range(990, 1_050))
+        got = r.review(ch.d, POOL, 0)
+        m = got["missedTouch"]["stage"]
+        self.assertEqual((m["missed"], m["unread"]), ([], 11))
+        self.held(got, "stop-unchecked")
+        self.assertIn("11 blocks of the stop book's gaps inside a stop's or take's time have no oracle price read",
+                      got["reasons"][0])
+        self.assertIn("  stops not checked, stage: 11 blocks", r.summary(got))
+        self.assertIn("do not sign: blocks of a stop's time were not checked", r.summary(got))
+
+    def test_the_books_gaps_not_read_hold_the_payout(self):
+        ch, _ = self.world(None)
+        got = r.review(ch.d, POOL, 0)
+        self.assertFalse(got["missedTouch"]["stage"]["read"])
+        self.held(got, "stop-unchecked")
+        self.assertIn("the stop book's gaps were not read", got["reasons"][0])
+
+    def test_the_blocks_since_the_last_check_with_no_gap_yet_hold_the_payout_where_a_stop_stood_in_them(self):
+        ch, _ = self.world([], tail={"read": True, "from": 1_901, "to": 2_000, "watched": 1})
+        got = r.review(ch.d, POOL, 0)
+        self.held(got, "stop-unchecked")
+        self.assertIn("blocks 1901 to 2000 since the stop book's last check, not closed by a Gap yet", got["reasons"][0])
+        # A stop carried out long before the tail stood in none of its blocks: nothing to hold for.
+        ch, _ = self.world([], end="carried out", low_from=1_300, tail={"read": True, "from": 1_901, "to": 2_000, "watched": 1})
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"))
+        # The last check not read is not taken as checked.
+        ch, _ = self.world([], tail={"read": False, "from": None, "to": 2_000})
+        got = r.review(ch.d, POOL, 0)
+        self.held(got, "stop-unchecked")
+        self.assertIn("the stop book's last check (lastPokeBlock, watched) was not read", got["reasons"][0])
+
+    def test_a_book_not_read_at_all_holds_every_account_with_a_stop(self):
+        ch, _ = self.world(None, bookExams=[], bookRead=False, stopBook=None)
+        got = r.review(ch.d, POOL, 0)
+        self.held(got, "stop-unchecked")
+        self.assertIn("the factory's stop book was not read", got["reasons"][0])
+
+    def test_a_book_exam_with_every_block_checked_is_clean(self):
+        for gaps, known in (([], range(990, 1_050)), ([(1_050, 1_060)], range(990, 1_400))):
+            ch, _ = self.world(gaps, known=known, low_from=10**9)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["verdict"], got["action"], got["stopDraft"]), ("clean", "approve", None), gaps)
+            self.assertEqual(got["stopDoubt"]["stage"], {"missed": [], "unchecked": [], "txs": []})
+
+    def test_a_held_payout_is_offered_no_approval_whatever_the_pool(self):
+        # Approved already, or on a pool without approvals: nothing to approve, and the draft of the stop stays.
+        for change in ({"approved": True}, None):
+            ch, _ = self.world([(1_100, 1_110)])
+            if change:
+                ch.d["payouts"][0].update(change)
+            else:
+                ch.d["books"][POOL]["approvals"] = False
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["verdict"], got["action"], got["stopDraft"]["reason"]), ("suspicious", "none", 3), change)
+            self.assertNotEqual(got["tx"]["kind"], "approve")
+
+    def test_the_tail_is_read_at_the_latest_block_and_only_while_the_book_watches(self):
+        book = addr(0xB00)
+        asked = []
+
+        def answer(last, watched, fail=False):
+            def eth_call(to, data, block="latest"):
+                asked.append((to, data, block))
+                if fail:
+                    raise RuntimeError("node down")
+                if data == r.c.selector("lastPokeBlock()"):
+                    return encode(["uint64"], [last])
+                return encode(["uint32[]"], [watched])
+            return eth_call
+
+        with mock.patch.object(r.c, "eth_call", side_effect=answer(1_500, [3])):
+            self.assertEqual(r.read_tail(book, 2_000), {"read": True, "from": 1_501, "to": 2_000, "watched": 1})
+        self.assertEqual({b for _, _, b in asked}, {hex(2_000)})
+        self.assertIn(r.c.selector("lastPokeBlock()"), [d for _, d, _ in asked])
+        with mock.patch.object(r.c, "eth_call", side_effect=answer(1_500, [])):
+            self.assertIsNone(r.read_tail(book, 2_000), "the book watches nothing: no stop stands")
+        with mock.patch.object(r.c, "eth_call", side_effect=answer(2_000, [3])):
+            self.assertIsNone(r.read_tail(book, 2_000), "checked in the latest block")
+        with mock.patch.object(r.c, "eth_call", side_effect=answer(0, [], fail=True)), mock.patch.object(r.core, "log"):
+            self.assertEqual(r.read_tail(book, 2_000), {"read": False, "from": None, "to": 2_000})
+
+
+class NoPriceAndNoBook(unittest.TestCase):
+    """Review 12 of #336. H-2: a block the book logged with no price for the stop's asset (`NoPrice`) is no `Gap`, and
+    no stop is carried out in it: it is read as a gap block is. M-1: an account without a book is closed on failure
+    too."""
+
+    hold = TheBookHoldsWhatItCannotClear()
+
+    def test_a_stop_reached_in_a_block_the_book_logged_with_no_price_holds_the_payout(self):
+        ch, _ = self.hold.world([], noPrice={3: list(range(1_100, 1_111))})
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual([(m["first"], m["last"], m.get("noPrice")) for m in got["missedTouch"]["stage"]["missed"]],
+                         [(1_100, 1_110, True)])
+        self.hold.held(got, "missed-stop")
+        self.assertIn("(a block the stop book logged with no price)", got["reasons"][0])
+        # The same blocks of another asset, or with the oracle off the stop, hold nothing.
+        for no_price, low in (({4: list(range(1_100, 1_111))}, 1_100), ({3: list(range(1_100, 1_111))}, 10**9)):
+            ch, _ = self.hold.world([], noPrice=no_price, low_from=low)
+            got = r.review(ch.d, POOL, 0)
+            self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"), no_price)
+
+    def test_no_price_blocks_whose_price_was_not_read_or_not_read_at_all_hold_the_payout(self):
+        ch, _ = self.hold.world([], known=range(990, 1_050), noPrice={3: [1_100, 1_101]})
+        got = r.review(ch.d, POOL, 0)
+        self.hold.held(got, "stop-unchecked")
+        self.assertIn("2 blocks of the stop book's gaps", got["reasons"][0])
+        ch, _ = self.hold.world([], noPrice=None)
+        got = r.review(ch.d, POOL, 0)
+        self.hold.held(got, "stop-unchecked")
+        self.assertIn("logged with no price (NoPrice) were not read", got["reasons"][0])
+
+    def test_the_no_price_blocks_are_read_by_asset_from_the_books_logs(self):
+        book = addr(0xB00)
+        word = lambda n: "0x" + f"{n:064x}"
+        found = [{"topics": [r.NO_PRICE, word(3)], "blockNumber": hex(1_100)}, {"topics": [r.NO_PRICE, word(3)], "blockNumber": hex(1_101)},
+                 {"topics": [r.NO_PRICE, word(4)], "blockNumber": hex(1_200)}]
+        with mock.patch.object(r, "logs", return_value=found) as asked:
+            self.assertEqual(r.read_no_price(book, 10, 2_000), {3: [1_100, 1_101], 4: [1_200]})
+        self.assertEqual(asked.call_args.args, (book, [r.NO_PRICE], 10, 2_000))
+        self.assertEqual(r.NO_PRICE, "0x" + keccak(text="NoPrice(uint32)").hex())
+        self.assertIn("event NoPrice(uint32 indexed asset);", _source("src/sim/StopBook.sol"))
+        with mock.patch.object(r, "logs", side_effect=RuntimeError("down")), mock.patch.object(r.core, "log"):
+            self.assertIsNone(r.read_no_price(book, 10, 2_000))
+        # The blocks of a stop's time that the book logged with no price are to be read, as gap blocks are
+        # (`stop_blocks`, then `read_stop_prices`); `read_touch_oracle` reads none of a book's.
+        evs = {addr(0x301): MissedTouches().events(end="standing")}
+        self.assertEqual(r.stop_blocks([addr(0x301)], evs, 2_000, {addr(0x301)}, [], {3: [1_100, 5]}), {3: [1_100]},
+                         "only the ones inside the stop's time")
+        self.assertEqual(r.stop_blocks([addr(0x301)], evs, 2_000, {addr(0x301)}, [(1_100, 1_110)], {}, reads=3),
+                         {3: [1_100, 1_101, 1_102]}, "at most `reads` of them an account")
+        with mock.patch.object(r, "oracle_at", side_effect=lambda a, b: 1) as at:
+            r.read_touch_oracle([addr(0x301)], evs, {}, 2_000, book_exams={addr(0x301)}, gaps=[], no_price={3: [1_100, 5]})
+        at.assert_not_called()
+
+    def test_an_account_without_a_book_whose_stop_was_not_read_is_not_checked(self):
+        for every, known in ((None, range(0)), (60, range(0))):
+            ch, s1 = self.hold.world([], known=known, bookExams=[], touchEvery={})
+            if every:
+                ch.d["touchEvery"] = {s1: every}
+            got = r.review(ch.d, POOL, 0)
+            self.hold.held(got, "stop-unchecked")
+            self.assertIn("not read along" if every is None else "have no oracle price read", got["reasons"][0])
+        # Read along with every block given and off the stop: clean.
+        ch, s1 = self.hold.world([], low_from=10**9, bookExams=[], touchEvery={})
+        ch.d["touchEvery"] = {s1: 60}
+        ch.d["oracle"] = {r.oracle_key(3, b): MissedTouches.MARK for b in range(990, 2_001)}
+        got = r.review(ch.d, POOL, 0)
+        self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"))
+
+
+BOOK = addr(0xB00)
+
+
+class PricesBelievedAgainstTheBook(unittest.TestCase):
+    """Review 12 of #336, M-3: a price of a block the stop book did not check (a gap, or a block it logged with no price)
+    is believed only where the book's own prices next to it (`PriceSeen`) agree, on both sides: the node's at an old
+    block, or the journal of prices (--prices). The stage's stop (950 000) stands from block 1 003 to 2 000; the book
+    did not check blocks 1 100 to 1 110, where the oracle stood at 940 000, under the stop; elsewhere it stood a little
+    over the mark, a different price each block."""
+
+    hold = TheBookHoldsWhatItCannotClear()
+    GAP = range(1_100, 1_111)
+    LATEST = 2_000
+
+    def truth(self, b):
+        return MissedTouches.LOW if b in self.GAP else MissedTouches.MARK + (b % 5) * 10
+
+    def seen_logs(self, asked=None, before=True, fail=False):
+        """The book's `PriceSeen` of asset 3 in every block it checked, as the node's logs give them."""
+        def logs(address, topics, lo, hi):
+            if asked is not None:
+                asked.append((address, topics, lo, hi))
+            if fail:
+                raise RuntimeError("logs down")
+            self.assertEqual(topics, [r.PRICE_SEEN, "0x" + f"{3:064x}"])
+            return [{"blockNumber": hex(b), "data": "0x" + encode(["uint64"], [self.truth(b)]).hex(),
+                     "topics": topics} for b in range(lo, hi + 1)
+                    if b not in self.GAP and (before or b > self.GAP[-1])]
+        return logs
+
+    def history(self, asset, block):  # a node that keeps the state of old blocks
+        return self.truth(block)
+
+    def soft(self, asset, block):  # a node that answers any block with the state of today
+        return self.truth(self.LATEST)
+
+    def shallow(self, asset, block):  # a node that keeps no state past the last hundred blocks
+        return self.truth(block) if block > self.LATEST - 100 else None
+
+    def read(self, node, journal=None, **logs):
+        with mock.patch.object(r, "logs", side_effect=self.seen_logs(**logs)), \
+                mock.patch.object(r, "oracle_at", side_effect=node), mock.patch.object(r.core, "log"):
+            return r.read_stop_prices(BOOK, {3: list(self.GAP)}, journal, self.LATEST)
+
+    def review(self, node, journal=None, **logs):
+        ch, _ = self.hold.world([(1_100, 1_110)], low_from=10**9)
+        ch.d["stopOracle"], ch.d["stopPriceDoubt"] = self.read(node, journal, **logs)
+        return r.review(ch.d, POOL, 0)
+
+    def test_a_node_with_old_state_gives_the_gap_and_the_stop_reached_in_it_holds_the_payout(self):
+        prices, doubts = self.read(self.history)
+        self.assertEqual((prices, doubts), ({r.oracle_key(3, b): MissedTouches.LOW for b in self.GAP}, []))
+        got = self.review(self.history)
+        self.hold.held(got, "missed-stop")
+        self.assertIn("reached in blocks 1100 to 1110 (a gap of the stop book)", got["reasons"][0])
+
+    def test_a_node_that_answers_old_blocks_with_todays_price_is_not_believed(self):
+        prices, doubts = self.read(self.soft)
+        self.assertEqual(prices, {}, "today's price stands for none of the gap's blocks")
+        self.assertEqual([(d["asset"], d["from"], d["to"], d["blocks"]) for d in doubts], [(3, 1_100, 1_110, 11)])
+        got = self.review(self.soft)
+        self.hold.held(got, "stop-unchecked")
+        self.assertNotIn("missed-stop", got["kinds"])
+        # The review's other prices of those blocks (the mark, as a fill's read or the journal gave it) reach no gap.
+        self.assertEqual(got["missedTouch"]["stage"]["unread"], 11)
+        self.assertIn("11 blocks of asset 3 from 1100 to 1110 that the stop book did not check have no price it agrees "
+                      "with: the node gave 1000000 at block 1099, where the stop book logged 1000040: it does not answer "
+                      "for old blocks as they stood", got["reasons"][0])
+
+    def test_a_node_without_the_state_of_old_blocks_leaves_them_not_checked(self):
+        prices, doubts = self.read(self.shallow)
+        self.assertEqual(prices, {})
+        self.assertIn("the node gave no price at block 1099 next to them: it keeps no state that far back", doubts[0]["why"])
+        self.hold.held(self.review(self.shallow), "stop-unchecked")
+
+    def test_a_journal_that_hides_the_touch_and_disagrees_with_the_book_is_not_used(self):
+        journal = {r.oracle_key(3, b): MissedTouches.MARK for b in range(990, 2_001)}  # the mark, never the touch
+        prices, doubts = self.read(self.shallow, journal)
+        self.assertEqual(prices, {})
+        self.assertIn("the price journal (--prices) gives 1000000 at block 1051, where the stop book logged 1000010: the "
+                      "journal is not used there", doubts[0]["why"])
+        got = self.review(self.shallow, journal)
+        self.hold.held(got, "stop-unchecked")
+        # With a node that keeps the state, the touch is found all the same: the journal makes nothing softer.
+        got = self.review(self.history, journal)
+        self.hold.held(got, "missed-stop")
+
+    def test_a_journal_that_agrees_with_the_book_on_both_sides_stands_in_for_the_node(self):
+        journal = {r.oracle_key(3, b): self.truth(b) for b in range(1_050, 1_161)}
+        prices, doubts = self.read(self.shallow, journal)
+        self.assertEqual((prices, doubts), ({r.oracle_key(3, b): MissedTouches.LOW for b in self.GAP}, []))
+        self.hold.held(self.review(self.shallow, journal), "missed-stop")
+        # A journal that agrees and says the gap stood over the stop: taken, and the payout is clean.
+        calm = {**journal, **{r.oracle_key(3, b): MissedTouches.MARK for b in self.GAP}}
+        got = self.review(self.shallow, calm)
+        self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"))
+        # A journal with no price the book logged after the gap is not taken.
+        one_side = {k: v for k, v in calm.items() if int(k.split(":")[1]) <= 1_110}
+        prices, doubts = self.read(self.shallow, one_side)
+        self.assertEqual(prices, {})
+        self.assertIn("the price journal (--prices) has no price at a block the stop book logged after them",
+                      doubts[0]["why"])
+
+    def test_without_the_books_prices_on_each_side_nothing_is_believed(self):
+        prices, doubts = self.read(self.history, before=False)
+        self.assertEqual(prices, {})
+        self.assertIn(f"the stop book logged no price (PriceSeen) of the asset within {r.CAL_WINDOW} blocks before them",
+                      doubts[0]["why"])
+        prices, doubts = self.read(self.history, fail=True)
+        self.assertEqual((prices, doubts[0]["why"]), ({}, "the stop book's own prices (PriceSeen) next to them were not read"))
+
+    def test_a_match_on_prices_all_equal_to_the_latest_shows_nothing(self):
+        flat = {b: 7 for b in range(1_000, 1_200)}
+        same = lambda a, b: 7
+        self.assertIn("whether the node answers for old blocks as they stood is not shown",
+                      r.node_check(3, 1_100, 1_110, flat, same, self.LATEST))
+        moved = lambda a, b: 9 if b == self.LATEST else 7
+        self.assertIsNone(r.node_check(3, 1_100, 1_110, flat, moved, self.LATEST))
+
+    def test_the_books_prices_are_read_next_to_the_gap_on_each_side_and_checked_nearest_and_farthest(self):
+        asked, read_at = [], []
+        with mock.patch.object(r, "logs", side_effect=self.seen_logs(asked)), mock.patch.object(r.core, "log"), \
+                mock.patch.object(r, "oracle_at", side_effect=lambda a, b: read_at.append(b) or self.truth(b)):
+            r.read_stop_prices(BOOK, {3: list(self.GAP)}, None, self.LATEST)
+        self.assertEqual([(lo, hi) for _, _, lo, hi in asked], [(1_050, 1_160)])
+        self.assertEqual(read_at[:4], [1_099, 1_050, 1_111, 1_160], "nearest and farthest on each side")
+        self.assertEqual(read_at[4:], list(self.GAP))
+        self.assertEqual(r.PRICE_SEEN, "0x" + keccak(text="PriceSeen(uint32,uint64)").hex())
+        self.assertIn("event PriceSeen(uint32 indexed asset, uint64 px);", _source("src/sim/StopBook.sol"))
+        # Two runs further apart than the window are each checked on their own sides.
+        with mock.patch.object(r, "logs", return_value=[]) as lg, mock.patch.object(r.core, "log"), \
+                mock.patch.object(r, "oracle_at", return_value=None):
+            _, doubts = r.read_stop_prices(BOOK, {3: [500, 501, 900]}, None, self.LATEST)
+        self.assertEqual([(d["from"], d["to"], d["blocks"]) for d in doubts], [(500, 501, 2), (900, 900, 1)])
+        self.assertEqual([c.args[2:] for c in lg.call_args_list], [(450, 551), (850, 950)])
+
+
+class EveryBlockOfAStopsTime(unittest.TestCase):
+    """Review 12 of #336, Info-1: each block of a stop's time is in the stop book's journal, in a Gap it logged, or in
+    the tail since its last check. The node's index of logs behind leaves a Gap out: its blocks are in none."""
+
+    hold = TheBookHoldsWhatItCannotClear()
+
+    def journal(self, blocks, fail=False):
+        blocks = sorted(blocks)
+        asked = []
+
+        def eth_call(to, data, block="latest"):
+            asked.append(data)
+            self.assertEqual((to, block), (BOOK, hex(2_000)), "read at the latest block, as the gaps and the tail")
+            if fail:
+                raise RuntimeError("node down")
+            if data == r.c.selector("logged()"):
+                return encode(["uint256"], [len(blocks)])
+            self.assertEqual(data[:4], r.c.selector("at(uint256)"))
+            pos = decode(["uint256"], data[4:])[0]
+            return encode(["uint256", "uint256"], [blocks[pos], 1_000 * blocks[pos]])
+        return eth_call, asked
+
+    def test_a_gap_the_node_did_not_index_is_not_checked(self):
+        checked = [b for b in range(990, 2_001) if b not in range(1_100, 1_111)]
+        eth_call, asked = self.journal(checked)
+        with mock.patch.object(r.c, "eth_call", side_effect=eth_call):
+            self.assertEqual(r.read_coverage(BOOK, [(1_003, 2_000)], [(1_100, 1_110)], None, 2_000), [])
+            got = r.read_coverage(BOOK, [(1_003, 2_000)], [], None, 2_000)
+        self.assertEqual(got, [{"from": 1_003, "to": 2_000, "logged": 987, "gaps": 0, "tail": 0}])
+        self.assertLess(len(asked), 50, "a search of the journal, not a read of every position")
+        ch, _ = self.hold.world([], low_from=10**9, coverage=got)
+        res = r.review(ch.d, POOL, 0)
+        self.hold.held(res, "stop-unchecked")
+        self.assertIn("blocks 1003 to 2000 of a stop's time: the stop book logged 987 of them, its Gaps hold 0 and the "
+                      "blocks since its last check 0, not the 998 there are (the node's index of logs behind?): not "
+                      "checked", res["reasons"][0])
+
+    def test_the_tail_counts_and_a_journal_not_read_holds(self):
+        eth_call, _ = self.journal(range(990, 1_901))
+        with mock.patch.object(r.c, "eth_call", side_effect=eth_call):
+            self.assertEqual(r.read_coverage(BOOK, [(1_003, 2_000)], [], {"read": True, "from": 1_901, "to": 2_000}, 2_000), [])
+        eth_call, _ = self.journal([], fail=True)
+        with mock.patch.object(r.c, "eth_call", side_effect=eth_call), mock.patch.object(r.core, "log"):
+            self.assertIsNone(r.read_coverage(BOOK, [(1_003, 2_000)], [], None, 2_000))
+        ch, _ = self.hold.world([], low_from=10**9, coverage=None)
+        res = r.review(ch.d, POOL, 0)
+        self.hold.held(res, "stop-unchecked")
+        self.assertIn("the stop book's journal (logged, at) was not read", res["reasons"][0])
+        # Gaps or tail not read: held for that already, nothing counted here.
+        self.assertEqual(r.read_coverage(BOOK, [(1_003, 2_000)], None, None, 2_000), [])
+        self.assertEqual(r.read_coverage(BOOK, [(1_003, 2_000)], [], {"read": False, "from": None, "to": 2_000}, 2_000), [])
+
+    def test_the_stops_times_are_read_as_runs(self):
+        evs = {addr(0x301): MissedTouches().events(end="carried out", at=1_305),
+               addr(0x302): MissedTouches().events(end="standing"), addr(0x303): MissedTouches().events(end="standing")}
+        self.assertEqual(r.stop_intervals([addr(0x301), addr(0x302)], evs, 2_000, {addr(0x301), addr(0x302)}), [(1_003, 2_000)])
+        self.assertEqual(r.stop_intervals([addr(0x301), addr(0x303)], evs, 2_000, {addr(0x301)}), [(1_003, 1_304)])
+
+
+class TheChainReadsTheStopPricesApart(unittest.TestCase):
+    """`read_chain` gives the stop book's blocks to `read_stop_prices` with the journal of prices as it came, never the
+    review's other reads, and puts what it believed, why the rest was not, and the count of every block of a stop's
+    time where the review reads them."""
+
+    def test_wiring(self):
+        doubt = {"asset": 3, "from": 22, "to": 22, "blocks": 1, "why": "x"}
+        rpc = lambda m, p=(): {"eth_chainId": hex(998), "eth_blockNumber": hex(40)}.get(m) or {"timestamp": hex(1_000)}
+        with mock.patch.object(r.c, "rpc", side_effect=rpc), mock.patch.object(r.core, "view", return_value=[]), \
+                mock.patch.object(r, "payout_times", return_value={}), \
+                mock.patch.object(r, "read_book", return_value=(BOOK, set(), [(22, 22)])), \
+                mock.patch.object(r, "read_tail", return_value=None), mock.patch.object(r, "read_no_price", return_value={}), \
+                mock.patch.object(r, "stop_blocks", return_value={3: [22]}), \
+                mock.patch.object(r, "read_stop_prices", return_value=({"3:22": 5}, [doubt])) as stop, \
+                mock.patch.object(r, "read_coverage", return_value=[{"from": 1}]) as cover:
+            journal = {"3:22": 9}
+            got = r.read_chain({"SimPoolFactory": addr(0xFA), "usdc": USDC, "block": 10}, prices=journal)
+        self.assertEqual(stop.call_args.args, (BOOK, {3: [22]}, journal, 40))
+        self.assertIs(stop.call_args.args[2], journal)
+        self.assertEqual((got["stopOracle"], got["stopPriceDoubt"], got["coverage"]), ({"3:22": 5}, [doubt], [{"from": 1}]))
+        self.assertEqual(cover.call_args.args[0], BOOK)
+
+
+class TheBookOfAFactory(unittest.TestCase):
+    """Review 12 of #336, L-4: an empty answer to `stopBook()` is no book read, not "no book"."""
+
+    def test_an_empty_answer_is_not_read_as_no_book(self):
+        from ops import book_keeper
+        with mock.patch.object(book_keeper.c, "rpc", return_value="0x"):
+            with self.assertRaises(RuntimeError):
+                book_keeper.book_of({}, addr(0xFA))
+            with mock.patch.object(r.core, "log"):
+                self.assertEqual(r.read_book({}, addr(0xFA), [addr(0x301)], 1, 5), (None, set(), None))
+        with mock.patch.object(book_keeper.c, "rpc", side_effect=RuntimeError("eth_call: execution reverted")):
+            self.assertIsNone(book_keeper.book_of({}, addr(0xFA)), "a factory before the book: none")
+        self.assertEqual(book_keeper.book_of({"StopBook": BOOK}, addr(0xFA)), BOOK)
+
+
 class Unread(unittest.TestCase):
     def test_an_account_not_read_is_said(self):
         ch, _, s1 = honest_world()
@@ -1442,7 +1878,7 @@ class TheDocument(unittest.TestCase):
     """The JSON a page reads: its fields fixed by the schema's name."""
 
     KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action",
-            "reasons", "evidence", "call", "stopDraft", "batchApproval", "dailyCap", "readAt"}
+            "reasons", "evidence", "call", "stopDraft", "batchApproval", "dailyCap", "readAt", "chainId"}
 
     def test_a_clean_payout_carries_its_approval(self):
         ch, t1, s1 = honest_world()
@@ -1485,6 +1921,36 @@ class TheDocument(unittest.TestCase):
             r.main(["--deployment", "x", "--touch-reads", "500"])
             self.assertEqual(r.read_chain.call_args.args[3], 500)
         self.assertEqual((got["schema"], got["id"]), ("payout-review/3", 0))
+
+    def test_it_runs_on_mainnet_when_both_switches_name_it_and_needs_no_key(self):
+        """Review 9 of #336 (H3): the second line of defence must run where the money is. Mainnet is chosen as for every
+        simulated-pool script (ops/sim_network.py): COLOSSEUM_NETWORK and --network both; the node's chain id is checked.
+        The review sends nothing, so no --confirm-mainnet and no key directory."""
+        from spike.hlspike import network as networks
+        ch, _, _ = honest_world()
+
+        def on(net):
+            return mock.patch.multiple(r.c, NETWORK=net, CHAIN_ID=net.chain_id, assert_testnet=mock.DEFAULT,
+                                       assert_network=mock.DEFAULT)
+
+        with on(networks.MAINNET) as plumbing, mock.patch.dict("os.environ", {"COLOSSEUM_KEY_DIR": ""}), \
+                mock.patch.object(r.deployments, "load", return_value={"SimPoolFactory": addr(0xFA)}) as load, \
+                mock.patch.object(r, "read_chain", return_value=ch.d), mock.patch("builtins.print"):
+            self.assertEqual(r.main(["--deployment", "x", "--network", "mainnet"]), 0)
+            plumbing["assert_network"].assert_called_once()
+            plumbing["assert_testnet"].assert_not_called()
+            load.reset_mock()
+            with self.assertRaises(SystemExit) as caught:
+                r.main(["--deployment", "x"])  # COLOSSEUM_NETWORK=mainnet alone is not enough
+            self.assertIn("--network testnet, but", str(caught.exception))
+            load.assert_not_called()
+        with on(networks.TESTNET) as plumbing, \
+                mock.patch.object(r.deployments, "load", return_value={"SimPoolFactory": addr(0xFA)}), \
+                mock.patch.object(r, "read_chain", return_value=ch.d), mock.patch("builtins.print"):
+            self.assertEqual(r.main(["--deployment", "x"]), 0)
+            plumbing["assert_testnet"].assert_called_once()
+            with self.assertRaises(SystemExit):
+                r.main(["--deployment", "x", "--network", "mainnet"])  # --network mainnet alone neither
 
 
 class WhatThePoolWouldTake(unittest.TestCase):
@@ -1715,6 +2181,8 @@ class ReadingTheChain(unittest.TestCase):
         asked = []
 
         def rpc(method, params=()):
+            if method == "eth_chainId":
+                return hex(998)
             if method == "eth_blockNumber":
                 return hex(40)
             if method == "eth_getBlockByNumber":
@@ -1793,6 +2261,8 @@ class ReadingTheChain(unittest.TestCase):
                                                "floor": None, "sharesDue": None, "approver": addr(0xAB)}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
         self.assertEqual(got["times"], {"delay": 72 * 3_600, "hard": 8 * 86_400}, "what the factory answers, not 7 days by rote")
+        # This node answers no `stopBook()`: the book is not read, which holds only an account with a stop (none here).
+        self.assertEqual((got["stopBook"], got["gaps"], got["bookRead"], got["tail"]), (None, None, False, None))
         review = r.review(got, POOL, 7)
         self.assertEqual(review["hardAt"], 5_000 - 72 * 3_600 + 8 * 86_400)
         self.assertEqual((review["exam"], review["size"], review["verdict"]), (e1, SIZE, "clean"))
@@ -1956,11 +2426,13 @@ class TheDrawdownLine(unittest.TestCase):
         for name, sig in (("TRIGGER_SEEN", "TriggerSeen(uint32,bool,uint64,uint256)"),):
             self.assertEqual(getattr(r, name), "0x" + keccak(text=sig).hex())
         for sig in ("TriggerSet(uint32 indexed asset, bool isTake, uint64 px, uint64 sz, uint256 armedAt)",
-                    "TriggerCleared(uint32 indexed asset, bool isTake)",
-                    "TriggerSeen(uint32 indexed asset, bool isTake, uint64 oracle, uint256 seenAt)"):
+                    "TriggerCleared(uint32 indexed asset, bool isTake)"):
             self.assertIn(f"event {sig};", re.sub(r"\s+", " ", src))
         self.assertIn("event TriggerFilled( uint32 indexed asset, bool isTake, uint64 sz, uint64 px, uint256 cost, "
-                      "uint64 triggerPx, uint8 source );", re.sub(r"\s+", " ", src))
+                      "uint64 triggerPx, uint8 source, uint256 touchBlock, uint64 touchPx );", re.sub(r"\s+", " ", src))
+        # `TriggerSeen` and the short `TriggerFilled` are the events of exams made before the stop book (the 998
+        # rehearsal's), read as they wrote them; the source has them no more.
+        self.assertNotIn("event TriggerSeen", src)
         self.assertIn("event Stopped(Status indexed status, Breach indexed reason, int256 equity);", src)
 
 
@@ -2223,10 +2695,17 @@ class StopsAndTheLineInTheRecount(unittest.TestCase):
         self.assertEqual((got["name"], got["asset"], got["take"]), ("TriggerCleared", 3, False))
         got = r.exam_event_of(log([r.TRIGGER_SEEN, asset], encode(["bool", "uint64", "uint256"], [False, 940_000, 510])), 7)
         self.assertEqual((got["name"], got["take"], got["oracle"], got["seenAt"]), ("TriggerSeen", False, 940_000, 510))
-        got = r.exam_event_of(log([sk.TRIGGER_FILLED, asset], encode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8"],
-                                                                      [False, 100, 940_000, 7, 950_000, 1])), 7)
+        got = r.exam_event_of(log([sk.TRIGGER_FILLED, asset], encode(
+            ["bool", "uint64", "uint64", "uint256", "uint64", "uint8", "uint256", "uint64"],
+            [False, 100, 940_000, 7, 950_000, 1, 25, 949_000])), 7)
+        self.assertEqual((got["name"], got["take"], got["sz"], got["px"], got["cost"], got["trigger_px"], got["source"],
+                          got["touch_block"], got["touch_px"]), ("TriggerFilled", False, 100, 940_000, 7, 950_000, 1, 25, 949_000))
+        self.assertEqual(r.touch_of(got), 25, "with a stop book the close counts at its touch")
+        got = r.exam_event_of(log([sk.TRIGGER_FILLED_V1, asset], encode(["bool", "uint64", "uint64", "uint256", "uint64", "uint8"],
+                                                                         [False, 100, 940_000, 7, 950_000, 1])), 7)
         self.assertEqual((got["name"], got["take"], got["sz"], got["px"], got["cost"], got["trigger_px"], got["source"]),
                          ("TriggerFilled", False, 100, 940_000, 7, 950_000, 1))
+        self.assertEqual(r.touch_of(got), 30, "without one, at its own block")
         got = r.exam_event_of(log([r.STOPPED, "0x" + f"{3:064x}", "0x" + f"{1:064x}"], encode(["int256"], [93])), 7)
         self.assertEqual((got["name"], got["status"], got["reason"], got["equity"]), ("Stopped", 3, 1, 93))
         got = r.exam_event_of(log([r.STOPPED, "0x" + f"{3:064x}"], encode(["int256"], [93])), 7)
@@ -2244,9 +2723,9 @@ class StopsAndTheLineInTheRecount(unittest.TestCase):
         self.assertFalse(r.trigger_hit(False, -100, 1_049_999, 1_050_000))
         self.assertTrue(r.trigger_hit(True, -100, 950_000, 950_000), "a take on a short at or under")
         self.assertFalse(r.trigger_hit(True, -100, 950_001, 950_000))
-        self.assertIn("uint64 sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;", src)
-        self.assertIn("emit Filled(asset, before < 0, sz, px, cost, block.number - t.armedAt, source);", src)
-        self.assertIn("emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source);", src)
+        self.assertIn("sz = t.sz == 0 || t.sz > open ? uint64(open) : t.sz;", src)
+        self.assertIn("emit Filled(asset, before < 0, sz, px, cost, touchBlock - t.armedAt, source);", src)
+        self.assertIn("emit TriggerFilled(asset, isTake, sz, px, cost, t.px, source, touchBlock, uint64(tick));", src)
         self.assertIn("if (block.number < t.armedAt) revert TooEarly(t.armedAt);", src)
 
 
@@ -2749,3 +3228,64 @@ class WhyAPayoutWasStopped(unittest.TestCase):
             self.assertIsNone(r.stop_reason_read(POOL, 7), "a pool from before the reason is kept")
         with mock.patch.object(r.c, "call_view", side_effect=Exception("429 Too Many Requests")):
             self.assertIsNone(r.stop_reason_read(POOL, 7), "not read: not a reason")
+
+
+class NoNodeAddressInTheLog(unittest.TestCase):
+    """Review 9 of #336 (L2): a node's address may hold its key; no log line or error of the review writes it."""
+
+    URL = "https://rpc.example.org/v2/SECRETKEY123"
+
+    def test_a_refused_read_of_the_books_gaps_writes_no_address(self):
+        import requests
+        resp = requests.Response()
+        resp.status_code, resp.reason, resp.url = 403, "Forbidden", self.URL
+        said = []
+        book = to_checksum_address("0x" + "b0" * 20)
+        from ops import book_keeper
+        with mock.patch.object(r.c._session, "post", return_value=resp), \
+                mock.patch.object(r.core, "log", side_effect=lambda e, **f: said.append((e, f))), \
+                mock.patch.object(book_keeper, "book_of", return_value=book), \
+                mock.patch.object(r.c, "call_view", return_value=(book,)):
+            self.assertEqual(r.read_book({}, "0x" + "33" * 20, [addr(0x301)], 1, 5)[2], None)
+        self.assertEqual([e for e, _ in said], ["gaps_unread"])
+        self.assertNotIn("SECRETKEY123", json.dumps(said))
+        self.assertNotIn("rpc.example.org", json.dumps(said))
+        self.assertIn("403", said[0][1]["error"], "what failed is still said")
+
+    def test_quiet_takes_out_every_shape_of_address_before_it_cuts(self):
+        shapes = [f"403 Client Error: Forbidden for url: {self.URL}",
+                  "HTTPSConnectionPool(host='rpc.example.org', port=443): Max retries exceeded with url: /v2/SECRETKEY123 "
+                  "(Caused by NameResolutionError)",
+                  f"eth_call: {{'message': 'bad', 'url': '{self.URL}?key=SECRETKEY123'}}",
+                  "x" * 190 + " " + self.URL]
+        for text in shapes:
+            got = r.quiet(RuntimeError(text), 200)
+            self.assertNotIn("SECRETKEY123", got, text)
+            self.assertNotIn("SECRET", got, text)
+        with mock.patch.object(r.c, "RPC_URL", "http://node.example.net:8545/AbCdKey"):
+            self.assertEqual(r.quiet(RuntimeError("down: http://node.example.net:8545/AbCdKey"), 50), "down: <node>")
+
+    def test_a_key_in_the_nodes_host_name_is_taken_out_too(self):
+        """Review 12 of #336 (L-1): urllib3 writes the host as host='…' and in its resolver's words."""
+        text = ("HTTPSConnectionPool(host='SECRETKEY123.quiknode.pro', port=443): Max retries exceeded with url: /v2/abc "
+                "(Caused by NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x1>: Failed to resolve "
+                "'SECRETKEY123.quiknode.pro' ([Errno 8] nodename nor servname provided)\"))")
+        with mock.patch.object(r.c, "RPC_URL", "https://SECRETKEY123.quiknode.pro/v2/abc"):
+            out = r.quiet(RuntimeError(text), 400)
+        self.assertNotIn("SECRETKEY123", out)
+        self.assertIn("host='<host>'", out)
+        self.assertNotIn("SECRETKEY123", r.quiet(RuntimeError("HTTPSConnectionPool(host='SECRETKEY123.example.org', port=443)"), 400),
+                         "host='…' is taken out even for a node not configured here")
+
+    def test_a_node_that_fails_ends_the_review_in_one_line_without_its_address(self):
+        import requests
+        with mock.patch.object(r.c, "assert_testnet"), \
+                mock.patch.object(r.deployments, "load", return_value={"SimPoolFactory": addr(0xFA)}), \
+                mock.patch.object(r, "read_chain", side_effect=requests.ConnectionError(
+                    f"Max retries exceeded with url: /v2/SECRETKEY123 ({self.URL})")):
+            with self.assertRaises(SystemExit) as caught:
+                r.main(["--deployment", "x"])
+        self.assertIn("the node failed", str(caught.exception))
+        self.assertNotIn("SECRETKEY123", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(caught.exception.__suppress_context__, "no traceback of the exception with the address")

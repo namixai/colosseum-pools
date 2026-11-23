@@ -52,9 +52,9 @@ class Copies(unittest.TestCase):
                     "address public immutable owner;"):
             self.assertIn(sig, MULTI)
         self.assertRegex(MULTI, r"mapping\(address seat => uint64\) public activeSince;")
-        for sig in ("function checkpoint() external inStatus(Status.Active) {",
-                    "function breach() external inStatus(Status.Active) {",
-                    "function expire() external inStatus(Status.Active) {",
+        for sig in ("function checkpoint() external settled inStatus(Status.Active) {",
+                    "function breach() external settled inStatus(Status.Active) {",
+                    "function expire() external settled inStatus(Status.Active) {",
                     "function violation() public view returns (Breach)", "uint64 public deadline;",
                     "uint64 public lastFillAt;", "uint32 public day;"):
             self.assertIn(sig, EXAM)

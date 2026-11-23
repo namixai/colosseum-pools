@@ -13,6 +13,7 @@ import {TermsBook} from "../../src/multi/TermsBook.sol";
 import {ACCRUAL_SCALE} from "../../src/sim/SimPoolCodes.sol";
 import {SimPool, SimPlan, SimSize, SimTier} from "../../src/sim/SimPool.sol";
 import {SimPoolFactory} from "../../src/sim/SimPoolFactory.sol";
+import {StopBook} from "../../src/sim/StopBook.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {MockUsdc, OracleFollowsMark} from "../PoolHarness.sol";
 
@@ -98,7 +99,7 @@ contract SimPoolTest is Test {
             maxIdle: 30 days,
             minTradingDays: 0,
             costPpm: 0,
-            fillDelay: 1,
+            fillDelay: 2,
             fillWindow: 5
         });
     }
@@ -186,7 +187,7 @@ contract SimPoolTest is Test {
     function _fill(PaperExam e, address who, bool isBuy, uint64 sz) internal {
         vm.prank(who);
         e.place(BTC, isBuy, sz);
-        vm.roll(block.number + 1);
+        vm.roll(block.number + e.terms().fillDelay);
         vm.prank(filler);
         e.fill();
     }
@@ -194,6 +195,32 @@ contract SimPoolTest is Test {
     function _setMark(uint64 px) internal {
         mark = px;
         CoreSimulatorLib.setMarkPx(BTC, px);
+    }
+
+    /// The factory makes its stop book with itself and never changes it; every exam it sells takes it; nobody but its
+    /// exams adds to it, the pool neither; and a stop set on a sold exam is carried out by a check of the book in the
+    /// block of its touch.
+    function test_stopBook_isTheFactorysAndEveryExamTakesIt() public {
+        StopBook b = factory.stopBook();
+        assertTrue(address(b).code.length != 0);
+        assertEq(b.factory(), address(factory));
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        assertEq(e.stopBook(), address(b));
+        vm.prank(stranger);
+        vm.expectRevert(StopBook.NotExam.selector);
+        b.add(BTC, false, true, 1, 1);
+        vm.prank(address(pool));
+        vm.expectRevert(StopBook.NotExam.selector);
+        b.remove(BTC, false);
+        _fill(e, trader, true, 100);
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        vm.roll(block.number + e.terms().fillDelay);
+        _setMark(940_000);
+        b.settle(address(e)); // the check logs the touch; the settle carries it out
+        assertEq(e.positionOf(BTC), 0);
+        _setMark(1_000_000);
     }
 
     /// Long at about 1x, the price up 20 % (the size rounds down, so more than the target), flat again,
@@ -440,6 +467,162 @@ contract SimPoolTest is Test {
         vm.prank(creator);
         vm.expectRevert(SimPoolFactory.Unpublished.selector);
         factory.create{value: 1 ether}(p);
+    }
+
+    /// At most `MAX_LISTED` assets listed at once, so that the stop book's check of a block fits a small block: a
+    /// cap changed on a listed asset takes no place, a delisting frees one.
+    function test_listing_atMostMaxListed_aDelistingFreesAPlace() public {
+        uint256 cap = factory.MAX_LISTED();
+        assertEq(cap, 16, "the cap whose check test_gas_poke_atTheCap and test_a7_poke_atTheCap_bookReadBurnsItsGas measure");
+        assertEq(factory.listedAssets(), 1, "BTC");
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        vm.expectRevert(SimPoolFactory.TooManyAssets.selector);
+        factory.setAsset(9999, 500);
+        factory.setAsset(BTC, 600);
+        assertEq(factory.listedAssets(), cap);
+        factory.setAsset(BTC, 0);
+        factory.setAsset(BTC, 0);
+        assertEq(factory.listedAssets(), cap - 1, "a delisting frees a place, once");
+        factory.setAsset(9999, 500);
+        assertEq(factory.listedAssets(), cap);
+    }
+
+    /// A delisted asset the stop book still logs (an exam's stop on it) keeps its place under `MAX_LISTED`: listing
+    /// one more counts it, relisting it takes no second place, and once no stop is left on it its place is free.
+    function test_listing_aDelistedAssetTheBookLogsKeepsItsPlace() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        _fill(e, trader, true, 100);
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        StopBook b = factory.stopBook();
+        assertEq(b.watched().length, 1);
+        uint256 cap = factory.MAX_LISTED();
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        factory.setAsset(BTC, 0); // delisted, still logged
+        assertEq(factory.listedAssets(), cap - 1);
+        vm.expectRevert(SimPoolFactory.TooManyAssets.selector);
+        factory.setAsset(9999, 500);
+        factory.setAsset(BTC, 500); // relisted: its own place
+        assertEq(factory.listedAssets(), cap);
+        factory.setAsset(BTC, 0);
+        vm.prank(trader);
+        e.clearTrigger(BTC, false);
+        vm.roll(block.number + e.terms().fillDelay);
+        b.settle(address(e)); // the removal in force: nothing left on BTC
+        assertEq(b.watched().length, 0);
+        factory.setAsset(9999, 500);
+        assertEq(factory.listedAssets(), cap);
+    }
+
+    /// The hole a check of the listing alone leaves: an asset delisted with no stop on it, the list full again, then
+    /// an exam bought while it was listed sets a stop on it. The book takes no new asset off the list with no place
+    /// left (as a market takes no new orders on an instrument off its list), and the exam passes the reason on; a
+    /// place freed, the stop is set.
+    function test_listing_aDelistedAssetNotLoggedYet_takesNoStopWithTheListFull() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        _fill(e, trader, true, 100); // a position on BTC, no stop on it: the book does not log BTC
+        StopBook b = factory.stopBook();
+        assertEq(b.watched().length, 0);
+        uint256 cap = factory.MAX_LISTED();
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        factory.setAsset(BTC, 0);
+        factory.setAsset(9999, 500); // the list full again, BTC off it and not logged
+        assertEq(factory.listedAssets(), cap);
+        assertFalse(factory.watchable(BTC));
+        vm.prank(trader);
+        vm.expectRevert(abi.encodeWithSelector(StopBook.NoPlaceForAsset.selector, BTC));
+        e.setTrigger(BTC, false, 950_000, 0);
+        assertEq(b.watched().length, 0, "never more than MAX_LISTED logged");
+        factory.setAsset(9999, 0); // a place freed
+        assertTrue(factory.watchable(BTC));
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        assertEq(b.watched().length, 1);
+        vm.expectRevert(SimPoolFactory.TooManyAssets.selector); // BTC logged holds its place
+        factory.setAsset(9999, 500);
+    }
+
+    /// A delisted asset the book logs already takes more stops with the list full: it holds its place.
+    function test_listing_aDelistedAssetLoggedAlready_takesStopsWithTheListFull() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        _fill(e, trader, true, 100);
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        uint256 cap = factory.MAX_LISTED();
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        factory.setAsset(BTC, 0); // delisted, logged: 19 listed and BTC
+        assertFalse(factory.watchable(7777), "no place for a new one");
+        assertTrue(factory.watchable(BTC), "BTC holds its own");
+        vm.prank(trader);
+        e.setTrigger(BTC, true, 1_100_000, 0); // a take on BTC, logged already
+        assertEq(factory.stopBook().entries(address(e)), 2);
+    }
+
+    /// A listed asset takes its first stop with the list full.
+    function test_listing_aListedAssetTakesItsFirstStopWithTheListFull() public {
+        SimPool pool = _pool();
+        PaperExam e = _buy(pool, trader, 0);
+        _fill(e, trader, true, 100);
+        uint256 cap = factory.MAX_LISTED();
+        for (uint32 a = 1000; factory.listedAssets() < cap; ++a) {
+            factory.setAsset(a, 500);
+        }
+        assertTrue(factory.watchable(BTC));
+        vm.prank(trader);
+        e.setTrigger(BTC, false, 950_000, 0);
+        assertEq(factory.stopBook().watched().length, 1);
+    }
+
+    /// The seventh audit's L1, turned round (its `test_a7_change_aBlockBeforeTheWick_delay1_escapes`): with a delay of
+    /// one block a change sent a block before a wick is in force in the wick's own block, so a plan, of the exam or of
+    /// the funded stage, takes a `fillDelay` of 2 at least; 2 is taken.
+    function test_a7_planWithFillDelay1_isRefused() public {
+        assertEq(factory.MIN_FILL_DELAY(), 2);
+        SimPlan memory p = _plan();
+        p.exam.fillDelay = 1;
+        vm.prank(creator);
+        vm.expectRevert(SimPoolFactory.BadPlan.selector);
+        factory.create{value: 1 ether}(p);
+        p = _plan();
+        p.funded.fillDelay = 1;
+        vm.prank(creator);
+        vm.expectRevert(SimPoolFactory.BadPlan.selector);
+        factory.create{value: 1 ether}(p);
+        p = _plan();
+        assertEq(p.exam.fillDelay, 2);
+        _open(p);
+    }
+
+    /// The seventh audit's M1: the gas the stop book gives a read of each precompile is 15 000 from the start, and
+    /// only the factory's operator changes it, within 10 000 and 50 000, through the factory.
+    function test_a7_readGas_onlyTheOperator_withinItsBounds() public {
+        StopBook b = factory.stopBook();
+        assertEq(b.oracleGas(), 15_000);
+        assertEq(b.bboGas(), 15_000);
+        vm.prank(stranger);
+        vm.expectRevert(SimPoolFactory.NotOperator.selector);
+        factory.setStopReadGas(20_000, 20_000);
+        vm.prank(stranger);
+        vm.expectRevert(StopBook.NotFactory.selector);
+        b.setReadGas(20_000, 20_000);
+        vm.expectRevert(StopBook.BadReadGas.selector);
+        factory.setStopReadGas(9_999, 20_000);
+        vm.expectRevert(StopBook.BadReadGas.selector);
+        factory.setStopReadGas(20_000, 50_001);
+        factory.setStopReadGas(10_000, 50_000);
+        assertEq(b.oracleGas(), 10_000);
+        assertEq(b.bboGas(), 50_000);
     }
 
     function test_open_eachAssetsCapIsTheListsAtMost() public {
