@@ -9185,6 +9185,20 @@ MUTATIONS = [
      '                            | {b for b in (no_price or {}).get(s["asset"], ()) if s["armedAt"] <= b <= s["end"]}) \\',
      '                            | set()) \\',
      ['test_the_no_price_blocks_are_read_by_asset_from_the_books_logs']),
+    # Review 12 of #336 (M-2): the review's service and its alarms.
+    ("RW1", "ops/review_service.py",
+     '    if r["verdict"] != "suspicious" or r["action"] == "stop":',
+     '    if True:',
+     ["test_a_held_payout_is_an_alarm_once_while_it_stays_as_it_is",
+      "test_a_suspicious_payout_the_pool_pays_by_itself_is_an_alarm_with_its_deadline"]),
+    ("RW2", "ops/review_service.py",
+     '        if a is not None and said.get(key) != mark:',
+     '        if a is not None:',
+     ["test_a_held_payout_is_an_alarm_once_while_it_stays_as_it_is"]),
+    ("RW3", "ops/review_service.py",
+     '        return r["dueAt"] if r["approved"] else r["hardAt"]',
+     '        return r["hardAt"]',
+     ["test_a_suspicious_payout_the_pool_pays_by_itself_is_an_alarm_with_its_deadline"]),
     ('RV197', 'ops/payout_review.py',
      ' unread = set() if unread is None else unread\n    for a, evs in exam_events.items():',
      ' unread = set()\n    for a, evs in exam_events.items():',
@@ -17396,6 +17410,7 @@ RUNNERS = {
     "SC": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_sim_check"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The review of a payout: its own test file.
     "RV": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_payout_review"], r"^(?:FAIL|ERROR): (\w+) \("),
+    "RW": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_review_service"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The simulated pool's keeper, deploy script and relayer: their own two test files.
     "SK": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_sim_keeper", "ops.tests.test_sim_ops"],
            r"^(?:FAIL|ERROR): (\w+) \("),

@@ -69,6 +69,7 @@ install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/s
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-multi-keeper@.service" /etc/systemd/system/
 # The stop book's own watch: put in place, never enabled here (by hand, per instance, best on a second host).
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-book-watch@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-payout-review@.service" "$rel/ops/host/colosseum-payout-review@.timer" /etc/systemd/system/
 install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-checker@.service" /etc/systemd/system/
 systemctl daemon-reload
 
