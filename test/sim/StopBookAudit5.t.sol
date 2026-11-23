@@ -314,6 +314,66 @@ contract StopBookAudit5Test is StopBookBase {
         assertEq(e.positionOf(BTC), 70, "the new size");
     }
 
+    /// A touch in the very block a move is in force fills the new stop: its level, its size, late by nothing.
+    function test_P2_aTouchInTheMovesBlockFillsTheNewOne() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        vm.roll(armedAt + 1);
+        _mark(960_000);
+        _set(e, BTC, false, 900_000, 30);
+        uint256 from = block.number + DELAY;
+        vm.roll(from);
+        _mark(890_000); // under both levels, in the move's block
+        vm.recordLogs();
+        stopBook.settle(address(e));
+        (uint64 px, uint256 touch, uint64 level, bool found) = _stopFill(vm.getRecordedLogs());
+        assertTrue(found);
+        assertEq(level, 900_000, "the new level");
+        assertEq(touch, from);
+        assertEq(px, 890_000);
+        assertEq(e.positionOf(BTC), 70, "the new size");
+    }
+
+    /// One settle across a move: the old level is searched up to the move's block and no further, the new one from
+    /// there, and the fill is the new one's, at its touch, with its level and size.
+    function test_P2_oneSettleAcrossAMove_theOldUpToItsBlock_theNewFromIt() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        vm.roll(armedAt + 1);
+        _mark(960_000);
+        _set(e, BTC, false, 900_000, 30);
+        uint256 from = block.number + DELAY;
+        vm.roll(from);
+        _mark(920_000); // past the old level, in the move's block: not the old one's any more
+        stopBook.poke();
+        vm.roll(from + 1);
+        _mark(890_000);
+        vm.recordLogs();
+        stopBook.settle(address(e)); // one settle over both
+        (uint64 px, uint256 touch, uint64 level, bool found) = _stopFill(vm.getRecordedLogs());
+        assertTrue(found);
+        assertEq(touch, from + 1, "the new level's touch, not the old one's");
+        assertEq(px, 890_000);
+        assertEq(level, 900_000);
+        assertEq(e.positionOf(BTC), 70, "the new size");
+    }
+
+    /// A stop with a change asked is searched on its own, not with the take on its asset at their old levels: once
+    /// its move is in force, a price between the old level and the new one fills nothing.
+    function test_P2_aStopsChangeWithATakeOnTheAsset() public {
+        (PaperExam e, uint256 armedAt) = _longWithStop();
+        _set(e, BTC, true, 1_100_000, 0);
+        vm.roll(armedAt + 1);
+        _mark(960_000);
+        _set(e, BTC, false, 900_000, 0);
+        vm.roll(block.number + DELAY + 1);
+        _mark(920_000); // past the old stop, short of the new one
+        stopBook.settle(address(e));
+        assertEq(e.positionOf(BTC), 100, "the old stop is not in force");
+        vm.roll(block.number + 1);
+        _mark(1_150_000);
+        stopBook.settle(address(e));
+        assertEq(e.positionOf(BTC), 0, "the take");
+    }
+
     /// A change asked while another waits replaces it, and its delay counts again: the old stop acts until the
     /// second one's block, the first change never does.
     function test_P2_aSecondChangeReplacesTheFirst_andCountsAgain() public {

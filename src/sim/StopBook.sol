@@ -391,11 +391,13 @@ contract StopBook {
         for (uint256 i = 0; i < n; ++i) {
             found[i] = UNSEARCHED;
         }
+        bool changes;
         for (uint256 i = 0; i < n; ++i) {
             if (found[i] != UNSEARCHED) continue;
-            // An entry with a change asked is two searches (`_findOne`).
-            uint256 need = _changing(exam, keys[i]) ? 2 * SEARCH_GAS : SEARCH_GAS;
-            if (gasleft() < need + _keep(n)) return _stop(exam, keys, found, len);
+            // An entry with a change asked is two searches (`_findOne`); one searched with another has none.
+            bool changing = _changing(exam, keys[i]);
+            if (changing) changes = true;
+            if (gasleft() < (changing ? 2 * SEARCH_GAS : SEARCH_GAS) + _keep(n)) return _stop(exam, keys, found, len);
             _search(exam, keys, found, i, done, len);
         }
         for (uint256 i = _earliest(keys, found, len); i < n; i = _earliest(keys, found, len)) {
@@ -406,7 +408,7 @@ contract StopBook {
             if (found[i] & DEFERRED != 0) return _stop(exam, keys, found, len);
         }
         _checked[exam] = len;
-        _due(exam, keys);
+        if (changes) _due(exam, keys);
         return 0;
     }
 

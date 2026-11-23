@@ -174,6 +174,35 @@ contract StopBookGasTest is StopBookBase {
         assertLe(used + TX, LIMIT);
     }
 
+    /// The same 32 entries, each moved at the start of the month (a change asked, in force `fillDelay` blocks on):
+    /// every search is two, the old level up to the change and the new one across the month, none touched.
+    function test_gas_settle_32Entries_aMonthOld_everyOneMovedAtItsStart() public {
+        PaperExam e = _wide(0);
+        vm.roll(block.number + DELAY);
+        stopBook.poke();
+        for (uint256 k = 0; k < 16; ++k) {
+            _set(e, S[k], false, 890_000, 0);
+            _set(e, S[k], true, 1_110_000, 0);
+        }
+        assertEq(stopBook.entryOf(address(e), S[0], false).nextLevel, 890_000);
+        for (uint256 b = 0; b < DELAY; ++b) {
+            vm.roll(block.number + 1);
+            stopBook.poke(); // the change's block is logged
+        }
+        _harness().skip(MONTH);
+        vm.roll(block.number + MONTH);
+        vm.warp(block.timestamp + MONTH);
+        stopBook.poke();
+        uint256 snap = vm.snapshotState();
+        (uint256 used, uint256 left) = _settleGas(e);
+        emit log_named_uint("settle, 32 entries, a month old, each moved at its start, one call", used);
+        assertEq(left, 0);
+        vm.revertToState(snap);
+        uint256 calls = _settleInSmallBlocks(e);
+        emit log_named_uint("settle, the same in small blocks: calls", calls);
+        assertEq(stopBook.entryOf(address(e), S[0], false).level, 890_000, "the moves in force");
+    }
+
     /// Each asset's stop touched a few blocks before the end of the month, its take never: every search climbs the
     /// whole month and goes down it, and sixteen fills close sixteen positions.
     function test_gas_settle_32Entries_aMonthOld_everyStopTouchedAtTheEnd() public {
