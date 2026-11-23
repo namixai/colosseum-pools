@@ -740,7 +740,7 @@ their events, a few hundred bytes a code or a stop: well under a megabyte for a 
 
 **Restart and a lost node.** A restart takes up the file and reads on from `scanned_to + 1`; a window read
 twice keeps each event once (block and log index). A node that fails, throttles or is unreachable is asked
-again from the same block after 1 s, 2 s, 4 s… up to 60 s; `/v1/health`'s `last_error` and `behind_blocks`
+again from the same block after 1 s, 2 s, 4 s… up to 60 s; `/v1/simindex/health`'s `last_error` and `behind_blocks`
 say so meanwhile, and the routes go on answering with what was read.
 
 **How the site uses it** (`app/lib/simindex.js`). The page asks the index for the pool, waits at most 6 s,

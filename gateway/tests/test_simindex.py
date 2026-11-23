@@ -278,6 +278,9 @@ class Routes(unittest.TestCase):
 
     def test_bad_and_unknown_pools(self):
         self.assertEqual(self.get("/v1/simindex/pool?pool=nope")[0], 400)
+        # `$` would let a trailing newline through; the address is matched whole.
+        self.assertEqual(self.get(f"/v1/simindex/pool?pool={POOL}%0A")[0], 400)
+        self.assertEqual(self.index.pool(POOL + "\n")[0], 400)
         status, _, body = self.get(f"/v1/simindex/pool?pool={OTHER}")
         self.assertEqual((status, body["code"]), (404, "unknown_pool"))
         self.assertEqual(self.get("/v1/simindex/other")[0], 404)

@@ -66,7 +66,7 @@ export function lookForStops(address, now, calls = null) {
       scan = await scanOf(address, now);
     } catch (err) {
       // Not even the newest block or the 14 days' first block could be read: said in words, and the button asks again.
-      return { ids: [], done: false, failed: true, note: `Stops could not be looked for yet: ${readFailure(err)}.` };
+      return { ids: [], done: false, failed: true, note: `Stops could not be looked for yet: ${readFailure(err)}. Press the button to ask again.` };
     }
     const { st, fresh } = scan;
     let failure = null;
@@ -83,6 +83,6 @@ export function lookForStops(address, now, calls = null) {
     const scanned = stopScanNote({ floor: st.floor, back: st.back, latest: st.latest, head: st.head, done, sinceCreation: Boolean(st.source?.ok) });
     const note = `${sourceNote(st.source)} ${scanned}`.trim();
     return { ids: stopIdsFromEvents([...st.events.values()]), done, failed: Boolean(failure),
-      note: failure ? `${note} The last batch of blocks could not be read (${readFailure(failure)}).` : note };
+      note: failure ? `${note} The last batch of blocks could not be read (${readFailure(failure)}); nothing found before it is lost, press the button to ask for it again.` : note };
   });
 }

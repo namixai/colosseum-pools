@@ -9,7 +9,7 @@
 // answer, or answers something this file cannot read, is said on the page, which then reads the chain itself, a window at
 // a time, with what it has read in view and a button to read further. No browser globals: node's test runner loads it
 // (app/tests/simindex.test.mjs); the views give it `fetch`.
-import { friendly } from "./ui.js";
+import { friendly, rateLimited } from "./ui.js";
 
 /** How long the page waits for the index before it reads the chain itself. */
 export const INDEX_TIMEOUT_MS = 6000;
@@ -120,14 +120,15 @@ export function readShare({ from, to, read }) {
 /**
  * A failed read in words for the page. A public node that refuses logs answers in ways ethers cannot name: Hyperliquid's
  * testnet node answers "rate limited" with `"id": null`, which ethers reports as "could not coalesce error" (23 Nov 2026),
- * and others a bad or missing response. That is said as what it is, the node not answering this read, with the way on.
- * Anything else is `friendly`'s words.
+ * and others a bad or missing response. A rate limit is `friendly`'s words first, which say to wait: asking again at once
+ * only keeps the limit on. Any other refusal of that kind is said as the node not answering this read; the caller says
+ * what can be done next (a button, a reload), since not every caller has a button. Anything else is `friendly`'s words.
  */
 export function readFailure(err) {
+  if (rateLimited(err)) return friendly(err);
   const text = `${err?.code ?? ""} ${err?.shortMessage ?? ""} ${err?.message ?? ""}`;
   if (/coalesce|missing response|bad response|SERVER_ERROR|UNKNOWN_ERROR|TIMEOUT|timeout|Failed to fetch|NetworkError|block range|too many|exceed/i.test(text)) {
-    return "the chain node did not answer this read (a public node limits the logs it serves); nothing found so far is lost, "
-      + "press the button to ask again";
+    return "the chain node did not answer this read (a public node limits the logs it serves)";
   }
   return friendly(err);
 }
@@ -147,3 +148,14 @@ export function sendInReceipt(receipt, ev, { pool, topic }) {
 
 /** Where the index answers: the site's `simIndex` when it names one, else the pool gateway's host. */
 export const indexBase = (config) => config.simIndex || config.gateway;
+
+/**
+ * The transactions whose receipts to read next, for the sends to `account` that the index named and that are not checked
+ * yet (`checked`: tx → receipt): the newest first, at most `limit`, so the sends a partner looks for first are checked
+ * first, and the rest at the next pass.
+ */
+export function receiptsToAsk(events, account, checked, limit = 40) {
+  const pending = events.filter((e) => e.fromIndex && e.name === "SharePaid" && same(e.args.to, account) && !checked.has(e.tx))
+    .sort((a, b) => b.block - a.block || b.index - a.index);
+  return [...new Set(pending.map((e) => e.tx))].slice(0, limit);
+}

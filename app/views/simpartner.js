@@ -161,15 +161,16 @@ export async function simPartnerView(address, page, opts = {}) {
     const { events, left: leftOut } = await confirmedEvents(at, st, account);
     await timesOf(st, sendsTo(events, account));
     const timed = sendsTo(events, account, st.times);
-    const unchecked = leftOut ? ` ${leftOut} send${leftOut === 1 ? "" : "s"} the index named could not be checked against the chain yet and ${leftOut === 1 ? "is" : "are"} not shown.` : "";
+    const unchecked = leftOut ? ` ${leftOut} send${leftOut === 1 ? "" : "s"} the index named could not be checked against the chain yet and ${leftOut === 1 ? "is" : "are"} not shown; "Read further" checks more.` : "";
     render(page, shell(`${partnerNoteHtml(chain.short(account), name)}${partnerHtml({ rows: state.rows, sends: timed, scanNote: `${note(st)}${unchecked}`, poolName: name.toUpperCase() })}`));
     wireShell(page);
     await revealPartnerTab(page, at, { current: true });
-    if (!finished(st)) $("#sq-scan", page)?.insertAdjacentHTML("beforeend", ` ${READ_FURTHER}`);
+    // Another pass reads further blocks, and checks the sends left unchecked.
+    if (!finished(st) || leftOut > 0) $("#sq-scan", page)?.insertAdjacentHTML("beforeend", ` ${READ_FURTHER}`);
     finish();
   } catch (err) {
     // Said on the page that is showing, not on one that is gone; what the scan has read stays read.
-    render(page, shell(`<section class="sp-msg"><h2>Partner cabinet</h2><p>Could not read the pool: ${esc(readFailure(err))}</p>`
+    render(page, shell(`<section class="sp-msg"><h2>Partner cabinet</h2><p>Could not read the pool: ${esc(readFailure(err))}.</p>`
       + `<p><button type="button" class="so-btn" id="sq-retry">Try again</button></p></section>${statusLine}`));
     wireShell(page);
     finish();

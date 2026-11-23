@@ -84,8 +84,9 @@ TOPICS = {name: "0x" + keccak(text=sig).hex() for name, sig in SIGNATURES.items(
 NAMES = {topic: name for name, topic in TOPICS.items()}
 POOL_TOPICS = [TOPICS[n] for n in ("CodeSet", "SharePaid", "PayoutStopped", "StopLifted", "StopFinal")]
 
-ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
-WORD = re.compile(r"^0x[0-9a-fA-F]{64}$")
+# `\Z` and not `$`: `$` also matches before a trailing newline, which would let "0x…\n" through.
+ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
+WORD = re.compile(r"0x[0-9a-fA-F]{64}\Z")
 
 
 def log_line(**fields) -> None:

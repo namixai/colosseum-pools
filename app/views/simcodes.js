@@ -12,7 +12,7 @@ import * as chain from "../lib/chain.js";
 import { CONFIG } from "../config.js";
 import { SIM_POOL_ABI, MIN_TERM, firstBlockAt, readLogs, normalizeEvent } from "../lib/simpool.js";
 import { codesNamingAccount, confirmedCodes, partnerHref } from "../lib/simpartner.js";
-import { askIndex, indexBase, sourceNote, readShare, sendInReceipt } from "../lib/simindex.js";
+import { askIndex, indexBase, sourceNote, readShare, sendInReceipt, receiptsToAsk } from "../lib/simindex.js";
 
 const { ethers } = window;
 /** The node's limit on a range of blocks (measured: 1 000), and the windows a page reads at once. */
@@ -72,14 +72,15 @@ export function note(st) {
 /**
  * The pool's events with the sends to `account` the chain does not confirm left out. A send the page read from the chain
  * itself is the chain's; one the index named stays only when its transaction's receipt has the pool's `SharePaid` with the
- * same fields. A receipt that cannot be read leaves the send out this time, and it is asked for again next time. Returns
+ * same fields, the newest first and 40 transactions a pass. A send not checked yet, or whose receipt could not be read,
+ * is left out this time, and the page offers another pass (simpartner.js). Returns
  * the events and how many sends were left out.
  */
 export async function confirmedEvents(address, st, account) {
   const topic = st.iface.getEvent("SharePaid").topicHash;
   const mine = (e) => e.fromIndex && e.name === "SharePaid" && String(e.args.to).toLowerCase() === String(account).toLowerCase();
   const all = eventList(st);
-  const ask = [...new Set(all.filter((e) => mine(e) && !st.checked.has(e.tx)).map((e) => e.tx))].slice(0, 40);
+  const ask = receiptsToAsk(all, account, st.checked, 40);
   await Promise.all(ask.map(async (tx) => {
     try {
       const receipt = await chain.readProvider.getTransactionReceipt(tx);

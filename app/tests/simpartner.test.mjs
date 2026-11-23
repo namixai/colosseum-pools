@@ -299,7 +299,7 @@ test("the cabinet's page keeps a failed read on the page and offers more reading
   assert.match(view, /id="sq-retry">Try again/, "a failed read says so, with a retry, on the current page");
   assert.match(view, /Could not read the pool: /);
   assert.match(view, /const left = finished\(st\) \? "" :/, "the empty cabinet offers more reading until the whole is read");
-  assert.match(view, /if \(!finished\(st\)\) \$\("#sq-scan", page\)/, "so does the cabinet with codes");
+  assert.match(view, /if \(!finished\(st\) \|\| leftOut > 0\) \$\("#sq-scan", page\)/, "so does the cabinet with codes, and while a send is unchecked");
   assert.match(view, /simPartnerView\(at, page, \{ more: 0, notice \}\)/, "the claim's answer is drawn after the redraw, even a failed one");
   const codes = read("app", "views", "simcodes.js");
   assert.match(codes, /export const finished = \(st\) => complete\(st\) && st\.latest >= st\.head;/);

@@ -203,7 +203,7 @@ function rowHtml(r) {
 /** Where the list of codes was read from, in words: the pool lists no codes, they are found in its `CodeSet` events. */
 export function scanNote({ from, to, latest, known = 0, source = null, failed = "" }) {
   const lead = source ? `${sourceNote(source)} ` : "";
-  const failure = failed ? ` The last blocks asked for could not be read: ${failed}.` : "";
+  const failure = failed ? ` The last blocks asked for could not be read: ${failed}. What was found before is kept; press the button to ask again.` : "";
   const typed = known ? `, and ${known} typed or set from this browser` : "";
   if (from > to) return `${lead}No blocks could be read yet${typed}.${failure}`;
   const range = `Codes found in the events of blocks ${from} to ${to}${to < latest ? ` (the chain is at ${latest})` : ""}`;

@@ -65,7 +65,7 @@ export async function readOperatorPool(address, roles, limit = PAYOUT_WINDOW, st
         extraIds = found.ids.filter((id) => !inWindow.has(id));
       } catch (err) {
         // The queue and the stops of its window still draw; the page says the search failed, and the button tries again.
-        stopScan = { done: false, note: `Stops could not be looked for in the events: ${readFailure(err)}.` };
+        stopScan = { done: false, note: `Stops could not be looked for in the events: ${readFailure(err)}. Press the button to ask again.` };
       }
     }
     const extraPayouts = await chain.readAll(extraIds, (id) => pool.payout(id).catch(() => null));

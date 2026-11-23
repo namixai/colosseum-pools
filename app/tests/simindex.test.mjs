@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { indexUrl, eventOf, checkAnswer, askIndex, sourceNote, readShare, readFailure, sendInReceipt, indexBase }
+import { indexUrl, eventOf, checkAnswer, askIndex, sourceNote, readShare, readFailure, sendInReceipt, indexBase, receiptsToAsk }
   from "../lib/simindex.js";
 import { scanNote, codesHtml } from "../lib/simowner.js";
 import { stopScanNote } from "../lib/simoperator.js";
@@ -95,7 +95,9 @@ test("a node's refusal ethers cannot name is said in words, never as the raw err
   const raw = Object.assign(new Error("could not coalesce error (error={ \"code\": -32603 })"), { code: "UNKNOWN_ERROR", shortMessage: "could not coalesce error" });
   const words = readFailure(raw);
   assert.doesNotMatch(words, /coalesce/);
-  assert.match(words, /did not answer this read.*press the button/);
+  assert.match(words, /did not answer this read/);
+  // Said for every caller alike: a section with no button must not be told to press one.
+  assert.doesNotMatch(words, /button|nothing found so far is lost/);
   assert.match(readFailure({ shortMessage: "missing response" }), /did not answer/);
   assert.equal(readFailure({ code: "ACTION_REJECTED" }), "Cancelled in the wallet.");
 });
@@ -139,4 +141,24 @@ test("the panels ask the index, and keep reading the chain without it", () => {
   assert.match(readFileSync(join(here, "../views/simcodes.js"), "utf8"), /getTransactionReceipt/);
   assert.match(readFileSync(join(here, "../views/simoperator.js"), "utf8"), /pool\.payout\(id\)/);
   assert.match(readFileSync(join(here, "../views/simowner-codes.js"), "utf8"), /pool\.codeOf\(h\)/);
+});
+
+test("a node's rate limit gets the advice to wait, not to ask again at once", () => {
+  const limited = { code: "UNKNOWN_ERROR", shortMessage: "could not coalesce error",
+    message: 'could not coalesce error (error={ "code": -32005, "message": "rate limited" })' };
+  assert.match(readFailure(limited), /rate limited.*wait a minute/i);
+  assert.doesNotMatch(readFailure(limited), /did not answer this read/);
+});
+
+test("the sends the index named are checked newest first, a few at a time, and the rest wait for the next pass", () => {
+  const ev = (block, tx, to = PARTNER) => ({ fromIndex: true, name: "SharePaid", block, index: 0, tx, args: { to } });
+  const events = [ev(1, "0x01"), ev(2, "0x02"), ev(3, "0x03"), ev(3, "0x03"), ev(4, "0x04", AUTHOR),
+    { ...ev(5, "0x05"), fromIndex: false }];
+  assert.deepEqual(receiptsToAsk(events, PARTNER.toLowerCase(), new Map(), 2), ["0x03", "0x02"]);
+  assert.deepEqual(receiptsToAsk(events, PARTNER, new Map([["0x03", {}], ["0x02", {}]]), 2), ["0x01"]);
+});
+
+test("the cabinet offers to go on while a send is left unchecked, even with every block read", () => {
+  const src = readFileSync(join(here, "../views/simpartner.js"), "utf8");
+  assert.match(src, /if \(!finished\(st\) \|\| leftOut > 0\)/);
 });
