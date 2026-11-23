@@ -66,11 +66,13 @@ with a balance, `capital`, that is a number and not money.
   stop (at or under it for a long, at or over it for a short), for it for a take. It never opens or grows a
   position. It acts `fillDelay` blocks after it is set or replaced, as an order fills no sooner, so a stop
   set past the price is not a way round the delay. With a filler, the exam's stops and takes are also in its
-  factory's stop book (`stopBook`, docs/SIM-POOL.md, "The stop book"): the first block the book checks whose oracle
-  price is at a stop's level or past it carries the stop out in that block, at that oracle price (worse than the
-  level through a gap), or at the book's price never more than `maxWorseBps` worse than it (past it, at that bound:
-  a stop is never refused), with a fill's cost; every function here that changes anything has the book check its
-  block first, so a stop reached cannot be taken off or moved. With a book, a stop or a take the oracle price has
+  factory's stop book (`stopBook`, docs/SIM-POOL.md, "The stop book"): the first block the book logged whose oracle
+  price is at a stop's level or past it is the stop's touch, and the stop is filled at that block's oracle price
+  (worse than the level through a gap), or at the book logged in that block never more than `maxWorseBps` worse than
+  it (past it, at that bound: a stop is never refused), with a fill's cost. The fill is written by a later settle
+  (`StopBook.settle`, anyone's, or this exam's next act), in that block's name and at that price whenever it comes;
+  every function here that changes anything settles first, so a stop touched cannot be taken off or moved, and
+  taking one off or moving it waits `fillDelay` blocks, the one there standing until then. With a book, a stop or a take the oracle price has
   already reached when it is set is refused (`WouldTrigger`), as an exchange refuses a stop that would trigger at
   once, and an exam that ends (`breach`, `expire`) takes its stops and takes out of the book. Without a filler (`initialize`, as a `MultiPool`
   starts its exams) there is no book: a stop is carried out (`fillTrigger`) at the price a fill takes in a block

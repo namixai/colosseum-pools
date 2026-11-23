@@ -844,6 +844,10 @@ def book_spans(evs: list[dict], latest: int) -> list[dict]:
                     meta[key] = {"side": 1 if pos.get(e["asset"], 0) > 0 else -1}
                     t = ch
                 close(key, t, touch - 1, "carried out")
+            elif sibling := next((x for x in same if x["name"] == "TriggerFilled" and x["asset"] == e["asset"]), None):
+                # The other one of the asset closed the whole position at its touch: this one stood up to the block
+                # before it (a stop goes before a take at the same touch), not up to the settle.
+                close(key, t, touch_of(sibling) - 1, "closed")
             elif any(x["name"] == "Filled" for x in same):
                 close(key, t, e["block"], "closed")
             else:
@@ -1035,7 +1039,9 @@ def recount(account: str, chain: dict, p: "Params", size: int | None = None, lar
                     mid = (before_px + after_px) / 2
                     if abs(o - mid) * BPS > p.outlier_bps * mid and abs(before_px - after_px) * BPS <= p.outlier_bps * mid:
                         flag("oracle-outlier", e, f"oracle {o} against {before_px} and {after_px} in the blocks around it")
-                v = venue.get(str(e["asset"]), {}).get(str(e["t"] // 60 * 60))
+                # A stop's close is held to the venue's minute of its touch, not of the settle (`touch_t`, read_chain).
+                when = ev[i + 1].get("touch_t", e["t"]) if i in by_trigger else e["t"]
+                v = venue.get(str(e["asset"]), {}).get(str(when // 60 * 60))
                 if v is not None and abs(o - v) * BPS > p.venue_bps * v:
                     flag("oracle-off-venue", e, f"oracle {o}, the venue {v} that minute")
                 at_order = px(e["asset"], placed) if placed is not None and i not in by_trigger else None
@@ -2399,6 +2405,9 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
     fills, ended = [], {}
     for a, evs in exam_events.items():
         evs.sort(key=lambda e: (e["block"], e["index"]))
+        for e in evs:
+            if e["name"] == "TriggerFilled" and "touch_block" in e:
+                e["touch_t"] = time_of(e["touch_block"])  # the time of the touch, which the fill counts at
         closes = trigger_fills(evs)
         for k, e in enumerate(evs):
             if e["name"] == "Filled":
@@ -2458,7 +2467,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                         unread_px.add(key)
     # The stop book: which of these accounts it carries the stops of (an exam started with one names it, `stopBook()`;
     # one made before the book has no such getter), and the blocks its journal does not hold (`Gap`).
-    stop_book, book_exams, gaps = read_book(record, factory, touch_accounts, start, latest)
+    stop_book, book_exams, gaps = read_book(record, factory, list(exam_events), start, latest)
     read_trigger_oracle(exam_events, oracle, unread_px, book_exams)
     touch_every_of, touch_oracle = read_touch_oracle(touch_accounts, exam_events, oracle, latest, touch_reads, unread_px,
                                                      book_exams, gaps)
@@ -2500,14 +2509,18 @@ def read_book(record: dict, factory: str, accounts: list[str], start: int, lates
         return None, set(), None
     if book is None:
         return None, set(), []
+    # Every exam of a factory with a book has it (a pool starts each with the factory's filler, and with it the book):
+    # an account leaves the set only on a read that names another book. A read that fails keeps it in, never sends it
+    # to the rules of before the book, which would read a change of a stop as a stop replaced at once.
     exams: set[str] = set()
     for a in accounts:
         try:
-            if to_checksum_address(c.call_view(a, "stopBook()", [], [], ["address"])[0]) == book:
-                exams.add(a)
+            if to_checksum_address(c.call_view(a, "stopBook()", [], [], ["address"])[0]) != book:
+                core.log("other_book", account=a)
+                continue
         except Exception as exc:
-            if "revert" not in str(exc).lower():
-                core.log("not_read", address=a, call="stopBook()", error=str(exc)[:120])
+            core.log("not_read", address=a, call="stopBook()", error=str(exc)[:120], then="taken as the factory's book")
+        exams.add(a)
     try:
         gaps = [tuple(int(x) for x in abi_decode(["uint256", "uint256"], bytes.fromhex(l["data"][2:])))
                 for l in logs(book, [GAP], start, latest)]

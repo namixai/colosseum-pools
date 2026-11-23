@@ -35,6 +35,8 @@ book (the 998 rehearsal), on the same code as before.
 
 from __future__ import annotations
 
+import os
+import pathlib
 import queue
 import time
 
@@ -82,6 +84,11 @@ MAX_POKES_IN_FLIGHT = 3
 STUCK_S = 60.0
 # Blocks of a gap whose prices are read back, the latest first: each costs a read an asset.
 GAP_READ_BLOCKS = 60
+# Blocks of gaps read back in one step, after its check went out: a long read never holds up the next check.
+GAP_BLOCKS_PER_STEP = 5
+# Blocks an exam whose fill failed (or starved with the most gas) waits before its next settle: the cause is the exam's,
+# and a settle a block would only spend gas.
+FAIL_BACKOFF_BLOCKS = 30
 # Blocks back the loop reads in any case, as the stops' loop (stop_filler.CATCHUP).
 CATCHUP = sf.CATCHUP
 
@@ -164,6 +171,9 @@ class BookLoop(sf.StopLoop):
         self.precompile_gas = 2 * PRECOMPILE_GAS
         self.gaps = 0
         self.gap_blocks = 0
+        self.gap_jobs: list[dict] = []  # gaps whose blocks are still to be read back (`_judge_gaps`)
+        self.backoff: dict[str, int] = {}  # exam -> the block before which no settle goes (`FAIL_BACKOFF_BLOCKS`)
+        self.failed_said: set[str] = set()  # exams whose failed fill was raised, until one of theirs fills
         self.stuck_said: int | None = None
 
     # ── what the keeper hands in ─────────────────────────────────────────────────────
@@ -213,6 +223,9 @@ class BookLoop(sf.StopLoop):
     def _exam_over(self, exam: str) -> None:
         self.ended.add(exam)
         self.holders.discard(exam)
+        for kept in (self.settle_gas, self.settle_refused, self.backoff):
+            kept.pop(exam, None)
+        self.failed_said.discard(exam)
         for key in [k for k in self.changes if k[0] == exam]:
             del self.changes[key]
 
@@ -254,6 +267,7 @@ class BookLoop(sf.StopLoop):
         self._receipts(head)
         sent += self._settle_due(head)
         self._check_stuck()
+        self._judge_gaps()
         return sent
 
     def _call(self, to: str, sig: str, types, args, out, tag="latest"):
@@ -308,15 +322,27 @@ class BookLoop(sf.StopLoop):
                 was = self.settle_gas.get(exam, self.settle_gas_default)
                 self.settle_gas[exam] = MAX_TX_GAS
                 if was >= MAX_TX_GAS:
-                    self.alarm("book_settle_starved", **fields, gas=was,
-                               why="a fill ran out of gas with the most a small block holds; the stop waits")
+                    self._failed_fill(exam, block, "book_settle_starved", fields, gas=was,
+                                      why="a fill ran out of gas with the most a small block holds; the stop waits")
                 else:
                     log("book_settle_starved", **fields, gas=was, then=f"the next settle goes with {MAX_TX_GAS}")
             elif result == FAILED:
-                self.alarm("book_fill_failed", **fields,
-                           why="the exam refused the fill; the entry stays and the exam can do nothing until it fills")
+                self._failed_fill(exam, block, "book_fill_failed", fields,
+                                  why="the exam refused the fill; the entry stays and the exam can do nothing until it fills")
             else:
+                self.backoff.pop(exam, None)
+                self.failed_said.discard(exam)
                 log("book_fired", **fields, result=RESULT_NAME[result])
+
+    def _failed_fill(self, exam: str, block: int, event: str, fields: dict, **more) -> None:
+        """A fill that will fail again if sent again as it was: an alarm once for the exam, a line after, and its next
+        settle `FAIL_BACKOFF_BLOCKS` later, not in every block."""
+        self.backoff[exam] = block + FAIL_BACKOFF_BLOCKS
+        if exam in self.failed_said:
+            log(event, **fields, **more, note="its alarm was raised already", next_from=self.backoff[exam])
+            return
+        self.failed_said.add(exam)
+        self.alarm(event, **fields, **more, next_from=self.backoff[exam])
 
     def _gap(self, frm: int, to: int, block: int) -> None:
         """A run of blocks the book did not check. One while it watched nothing is no loss; one while it watched an
@@ -330,64 +356,82 @@ class BookLoop(sf.StopLoop):
         self.alarm("book_gap", from_block=frm, to=to, blocks=to - frm + 1, seen=block, gaps=self.gaps,
                    gap_blocks=self.gap_blocks, watched=watched if watched is not None else "not read",
                    why="blocks the book did not check: a stop reached only in them is not carried out")
-        self._gap_touches(frm, to)
+        lo = max(frm, to - GAP_READ_BLOCKS + 1)
+        if lo > frm:
+            log("book_gap_unread", from_block=frm, to=lo - 1, why=f"only the last {GAP_READ_BLOCKS} blocks are read back")
+        # Read back later in the step, a few blocks a step (`_judge_gaps`): this one is counted and said once, here.
+        self.gap_jobs.append({"from": frm, "to": to, "next": lo, "entries": None, "assets": None})
 
     def _watched_before(self, frm: int) -> int | None:
         """How many assets the book watched after block `frm - 1`: read at that block where the node keeps it, else as
         this loop last saw it. None: not known (taken as some)."""
         try:
             return len(self._call(self.book, "watched()", [], [], ["uint32[]"], hex(frm - 1))[0])
-        except c.NodeBusy:
-            raise
-        except Exception:
+        except Exception:  # a busy node too: the gap is said now, as some, not read again in a later step
             seen = [b for b in self.watched_at if b <= frm - 1]
             return self.watched_at[max(seen)] if seen else None
 
-    def _gap_touches(self, frm: int, to: int) -> None:
-        """The oracle prices of a gap's blocks (its last `GAP_READ_BLOCKS`), to the journal, and every entry of the
-        exams with one judged against them: a touch there is an alarm."""
-        lo = max(frm, to - GAP_READ_BLOCKS + 1)
-        if lo > frm:
-            log("book_gap_unread", from_block=frm, to=lo - 1, why=f"only the last {GAP_READ_BLOCKS} blocks are read back")
+    def _judge_gaps(self) -> None:
+        """The gaps said and not yet read back, `GAP_BLOCKS_PER_STEP` blocks a step, after the step's check went out:
+        each block's oracle prices to the journal, and every entry of the exams with one (read once a gap) judged
+        against them; a touch there is an alarm. A busy node leaves the rest for the next step."""
+        budget = GAP_BLOCKS_PER_STEP
+        while self.gap_jobs and budget > 0:
+            job = self.gap_jobs[0]
+            try:
+                if job["entries"] is None:
+                    job["assets"], job["entries"] = self._gap_entries()
+                while job["next"] <= job["to"] and budget > 0:
+                    self._gap_block(job, job["next"])
+                    job["next"] += 1
+                    budget -= 1
+            except c.NodeBusy as exc:
+                self._say("book_gap_read_later", from_block=job["from"], to=job["to"], at=job["next"], error=str(exc)[:120])
+                return
+            except Exception as exc:
+                self.alarm("book_gap_unjudged", from_block=job["from"], to=job["to"], error=str(exc)[:200],
+                           why="the entries could not be read: payout_review judges the gap from the journal of prices")
+                self.gap_jobs.pop(0)
+                continue
+            if job["next"] > job["to"]:
+                self.gap_jobs.pop(0)
+
+    def _gap_entries(self) -> tuple[list[int], dict]:
+        """The assets the book watches and every entry of the exams with one, as they stand now."""
+        assets = sorted(int(a) for a in self._call(self.book, "watched()", [], [], ["uint32[]"])[0])
         entries: dict[tuple[str, int, bool], tuple] = {}
-        assets: set[int] = set()
-        try:
-            for asset in self._call(self.book, "watched()", [], [], ["uint32[]"])[0]:
-                assets.add(int(asset))
-            for exam in sorted(self.holders):
-                for asset in assets:
-                    for take in (False, True):
-                        e = self._call(self.book, "entryOf(address,uint32,bool)", ["address", "uint32", "bool"],
-                                       [exam, asset, take], [ENTRY])[0]
-                        if e[0]:
-                            entries[(exam, asset, take)] = e
-        except Exception as exc:
-            self.alarm("book_gap_unjudged", from_block=frm, to=to, error=str(exc)[:200],
-                       why="the entries could not be read: payout_review judges the gap from the journal of prices")
-            return
-        for b in range(lo, to + 1):
-            prices: dict[int, int] = {}
-            for asset in sorted(assets):
-                try:
-                    raw = self.node.call("eth_call", [{"to": sf.ORACLE_PX, "data": "0x" + abi_encode(
-                        ["uint32"], [sf.px_index(asset)]).hex()}, hex(b)])
-                    prices[asset] = int(abi_decode(["uint64"], bytes.fromhex(raw[2:]))[0])
-                except c.NodeBusy:
-                    raise
-                except Exception as exc:
-                    self._say("book_gap_price_unread", block=b, asset=asset, error=str(exc)[:120])
-            if self.journal is not None and prices:
-                try:
-                    self.journal.add(b, prices)
-                except OSError as exc:
-                    self._say("stop_journal_failed", error=str(exc)[:200])
-            for (exam, asset, take), e in entries.items():
-                level, armed = phase(e, b)
-                if level and b >= armed and asset in prices and reached(bool(e[4]), level, prices[asset]):
-                    self.alarm("book_gap_touch", exam=exam, asset=asset, kind="take" if take else "stop", level=level,
-                               block=b, oracle=prices[asset],
-                               why="reached in a block the book did not check: not carried out; the payout is held")
-                    entries[(exam, asset, take)] = (0,) * 9  # said once: its first touch is the one that counts
+        for exam in sorted(self.holders):
+            for asset in assets:
+                for take in (False, True):
+                    e = self._call(self.book, "entryOf(address,uint32,bool)", ["address", "uint32", "bool"],
+                                   [exam, asset, take], [ENTRY])[0]
+                    if e[0]:
+                        entries[(exam, asset, take)] = e
+        return assets, entries
+
+    def _gap_block(self, job: dict, b: int) -> None:
+        prices: dict[int, int] = {}
+        for asset in job["assets"]:
+            try:
+                raw = self.node.call("eth_call", [{"to": sf.ORACLE_PX, "data": "0x" + abi_encode(
+                    ["uint32"], [sf.px_index(asset)]).hex()}, hex(b)])
+                prices[asset] = int(abi_decode(["uint64"], bytes.fromhex(raw[2:]))[0])
+            except c.NodeBusy:
+                raise
+            except Exception as exc:
+                self._say("book_gap_price_unread", block=b, asset=asset, error=str(exc)[:120])
+        if self.journal is not None and prices:
+            try:
+                self.journal.add(b, prices)
+            except OSError as exc:
+                self._say("stop_journal_failed", error=str(exc)[:200])
+        for (exam, asset, take), e in list(job["entries"].items()):
+            level, armed = phase(e, b)
+            if level and b >= armed and asset in prices and reached(bool(e[4]), level, prices[asset]):
+                self.alarm("book_gap_touch", exam=exam, asset=asset, kind="take" if take else "stop", level=level,
+                           block=b, oracle=prices[asset],
+                           why="reached in a block the book did not check: not carried out; the payout is held")
+                del job["entries"][(exam, asset, take)]  # said once: its first touch is the one that counts
 
     def _exam_event(self, block: int, l: dict) -> None:
         topic = l["topics"][0]
@@ -446,7 +490,7 @@ class BookLoop(sf.StopLoop):
                 due[exam] = f"{len(touches)} touched, the first in block {int(touches[0][5])}"
         sent = []
         for exam, why in sorted(due.items()):
-            if exam in self.settles or exam in self.keeper.done:
+            if exam in self.settles or exam in self.keeper.done or self.backoff.get(exam, 0) > head:
                 continue
             if self._settle(exam, head, why):
                 sent.append(exam)
@@ -553,9 +597,6 @@ class BookLoop(sf.StopLoop):
 
 def build(args, keeper, state, book: str, wallet=None, prefix: str = "") -> BookLoop:
     """The loop from the stops' settings (stop_filler.add_args), its nodes checked against the network."""
-    import os
-    import pathlib
-
     url = args.stop_rpc or c.RPC_URL
     backup_url = getattr(args, "stop_backup_rpc", "") or os.environ.get("COLOSSEUM_RPC_BACKUP_URL", "")
     first = sf.Node(url)

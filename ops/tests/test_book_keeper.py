@@ -501,3 +501,121 @@ class TheContractForward(Base):
         self.assertEqual(bk.precompile_gas_of(node, BOOK), 30_000)
         node.call.side_effect = RuntimeError("eth_call: execution reverted")
         self.assertEqual(bk.precompile_gas_of(node, BOOK), 2 * bk.PRECOMPILE_GAS)
+
+
+class TheReviewOfTheLoop(Base):
+    """The bot review of cp#336: an ended exam keeps nothing, a busy node never says a gap twice, a gap's read-back
+    never holds up the next check, and a fill that keeps failing is not sent again every block."""
+
+    def gap(self, frm, to, at):
+        self.node.logs.append(ev(bk.GAP, BOOK, at, encode(["uint256", "uint256"], [frm, to])))
+
+    def test_an_ended_exam_leaves_nothing_behind(self):
+        loop = self.loop()
+        loop.holders.add(EXAM)
+        loop.settle_gas[EXAM] = bk.MAX_TX_GAS
+        loop.settle_refused[EXAM] = 100
+        loop.backoff[EXAM] = 130
+        loop.failed_said.add(EXAM)
+        loop._exam_over(EXAM)
+        self.assertEqual((loop.settle_gas, loop.settle_refused, loop.backoff, loop.failed_said),
+                         ({}, {}, {}, set()))
+
+    def test_a_long_gap_is_read_back_a_few_blocks_a_step_after_the_check_and_said_once(self):
+        loop = self.loop()
+        loop.holders.add(EXAM)
+        self.node.entries[(EXAM, BTC, False)] = entry(950_000, 90, True)
+        self.run_to(loop, 100)
+        self.gap(101, 120, 121)
+        self.node.price[118] = 949_000
+        oracle = lambda: len([p for m, p in self.node.calls if m == "eth_call" and p[0]["to"] == to_checksum_address(sf.ORACLE_PX)])
+        steps = self.run_to(loop, 121)
+        self.assertEqual(oracle(), bk.GAP_BLOCKS_PER_STEP, "a few blocks a step, so the next check is not held up")
+        steps += self.run_to(loop, 122, 123, 124)
+        self.assertTrue(all(s[:1] == ["poke"] for s in steps), "every step's check goes out first")
+        self.assertEqual(len(self.alarm_of("book_gap")), 1)
+        self.assertEqual([t["block"] for t in self.alarm_of("book_gap_touch")], [118], "read by the fourth step")
+        oracle_reads = [p for m, p in self.node.calls if m == "eth_call" and p[0]["to"] == to_checksum_address(sf.ORACLE_PX)]
+        self.assertEqual(len(oracle_reads), 20)
+
+    def test_a_busy_node_in_the_read_back_leaves_it_for_the_next_step_and_says_the_gap_once(self):
+        loop = self.loop()
+        loop.holders.add(EXAM)
+        self.node.entries[(EXAM, BTC, False)] = entry(950_000, 90, True)
+        self.run_to(loop, 100)
+        self.gap(101, 103, 104)
+        self.node.price[102] = 949_000
+        orig = self.node.call
+        busy = {"on": True}
+
+        def call(method, params=()):
+            if busy["on"] and method == "eth_call" and params[0]["data"].startswith(sel("entryOf(address,uint32,bool)")):
+                raise c.NodeBusy("eth_call: HTTP 429")
+            return orig(method, params)
+
+        self.node.call = call
+        self.run_to(loop, 104)
+        self.assertEqual((len(self.alarm_of("book_gap")), self.alarm_of("book_gap_unjudged"), loop.gaps), (1, [], 1))
+        busy["on"] = False
+        self.run_to(loop, 105)
+        self.assertEqual(len(self.alarm_of("book_gap")), 1, "the gap is not said again")
+        self.assertEqual([t["block"] for t in self.alarm_of("book_gap_touch")], [102])
+
+    def test_a_fill_that_fails_is_raised_once_and_settled_again_only_after_a_wait(self):
+        loop = self.loop()
+        loop.holders.add(EXAM)
+        self.node.touches[EXAM] = [(BTC, False, 950_000, 949_000, 0xFFFFFFFF, 101, 1_000_101, 1)]
+        self.run_to(loop, 101)
+        tx = "0x" + keccak(hexstr=self.node.raw[1]).hex()
+        self.node.receipts[tx] = {"status": "0x1", "blockNumber": hex(102)}
+        failed = encode(["bool", "uint64", "uint256", "uint8"], [False, 949_000, 101, bk.FAILED])
+        self.node.logs.append(ev(bk.FIRED, BOOK, 102, failed, word(int(EXAM, 16)), word(BTC)))
+        steps = self.run_to(loop, 102, *range(103, 102 + bk.FAIL_BACKOFF_BLOCKS))
+        self.assertTrue(all(EXAM not in s for s in steps), "no settle while it waits")
+        self.assertEqual(self.run_to(loop, 102 + bk.FAIL_BACKOFF_BLOCKS), [["poke", EXAM]])
+        tx = "0x" + keccak(hexstr=self.node.raw[-1]).hex()
+        self.node.receipts[tx] = {"status": "0x1", "blockNumber": hex(133)}
+        self.node.logs.append(ev(bk.FIRED, BOOK, 133, failed, word(int(EXAM, 16)), word(BTC)))
+        self.run_to(loop, 133)
+        self.assertEqual(len(self.alarm_of("book_fill_failed")), 1, "raised once for the exam")
+
+
+class PayoutReviewTheReview(PayoutReviewWithABook):
+    """The bot review of cp#336 on the payout review with a book."""
+
+    def closed_by_the_stop(self):
+        fill_tx = "0x" + "ff" * 32
+        return [self.e("Filled", 10, asset=BTC, buy=True, sz=100, px=1_000_000, cost=0, late=0, source=0),
+                self.e("TriggerSet", 11, asset=BTC, take=False, px=950_000, sz=0, armedAt=13),
+                self.e("TriggerSet", 11, asset=BTC, take=True, px=1_100_000, sz=0, armedAt=13),
+                self.e("TriggerCleared", 120, tx=fill_tx, asset=BTC, take=False),
+                self.e("TriggerCleared", 120, tx=fill_tx, asset=BTC, take=True),
+                self.e("Filled", 120, tx=fill_tx, asset=BTC, buy=False, sz=100, px=949_000, cost=0, late=92, source=0),
+                self.e("TriggerFilled", 120, tx=fill_tx, asset=BTC, take=False, sz=100, px=949_000, cost=0,
+                       trigger_px=950_000, source=0, touch_block=105, touch_px=949_000, touch_t=999_900)]
+
+    def test_the_take_a_stop_closed_with_the_position_stood_up_to_the_touch_not_the_settle(self):
+        spans = {s["take"]: s for s in pr.book_spans(self.closed_by_the_stop(), 200)}
+        self.assertEqual((spans[True]["end"], spans[True]["then"]), (104, "closed"))
+        self.assertEqual(pr.gap_touches(self.closed_by_the_stop(), {BTC: {110: 1_200_000}}, 200, [(110, 110)])["missed"], [],
+                         "a gap after the touch is no missed take: the position was closed")
+
+    def test_a_stops_close_is_held_to_the_venue_minute_of_its_touch(self):
+        evs = self.closed_by_the_stop()
+        chain = {"exam_events": {EXAM: evs}, "oracle": {pr.oracle_key(BTC, 105): 949_000}, "bookExams": [EXAM],
+                 "venue": {str(BTC): {str(999_900 // 60 * 60): 949_100, str(1_000_120 // 60 * 60): 990_000}}}
+        flags = [f["what"] for f in pr.recount(EXAM, chain, pr.Params())["flags"]]
+        self.assertNotIn("oracle-off-venue", flags)
+
+    def test_an_account_whose_book_read_fails_keeps_the_factorys_book(self):
+        from unittest import mock as m
+        book = BOOK
+        with m.patch.object(bk, "book_of", return_value=book), \
+                m.patch.object(pr.c, "call_view", side_effect=RuntimeError("eth_call: header not found")), \
+                m.patch.object(pr, "logs", return_value=[]):
+            got, exams, gaps = pr.read_book({}, "0x" + "33" * 20, [EXAM], 1, 2)
+        self.assertEqual((got, exams, gaps), (book, {EXAM}, []))
+        other = to_checksum_address("0x" + "99" * 20)
+        with m.patch.object(bk, "book_of", return_value=book), \
+                m.patch.object(pr.c, "call_view", return_value=(other,)), m.patch.object(pr, "logs", return_value=[]):
+            self.assertEqual(pr.read_book({}, "0x" + "33" * 20, [EXAM], 1, 2)[1], set(), "another book: not this one's")
