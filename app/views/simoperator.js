@@ -15,7 +15,7 @@ import { OPERATOR_ABI } from "../lib/operator.js";
 import { footerHtml } from "../lib/simpanel.js";
 import {
   SIM_OPERATOR_ABI, SIM_OPERATOR_FACTORY_ABI, PAYOUT_WINDOW, payoutRange, mergeAbis, operatorRoles, operatorModel, operatorHeaderHtml,
-  operatorHtml, messageHtml, selectionCall, approveWithoutCall, askReviews, stopFromForm, stopWords, liftWords,
+  operatorHtml, messageHtml, selectionCall, askReviews, stopFromForm, stopWords, liftWords,
   finalizeWords, cancelWords, operatorRefusal, approveWords, STOP_FORM,
 } from "../lib/simoperator.js";
 import { accountLabel, wireShell } from "./simshell.js";
@@ -231,34 +231,6 @@ function wire(page, at, model) {
     const one = e.target.closest("button[data-approve]");
     if (one && !one.disabled) {
       const row = byId.get(Number(one.dataset.approve));
-      if (one.dataset.without) {
-        // A separate step: the first press says what is missing or what the review said; the second asks for the
-        // warning, then for the question, each confirmed on its own.
-        const w = row.approveWithout;
-        if (!w) return;
-        if (one.dataset.armed !== "1") {
-          page.querySelectorAll("[data-armed]").forEach((b) => { b.removeAttribute("data-armed"); if (b.dataset.was) b.textContent = b.dataset.was; });
-          confirm.reset();
-          one.dataset.was = one.textContent;
-          one.dataset.armed = "1";
-          one.textContent = `Confirm: approve #${row.id} without a review`;
-          say(boxOf("queue"), w.warning);
-          return;
-        }
-        const call = (() => {
-          try {
-            const first = window.confirm(w.warning) ? w.warning : "";
-            const second = first && window.confirm(w.again) ? w.again : "";
-            return approveWithoutCall({ pool: at, row, confirm: first, again: second, keccak256 });
-          } catch (err) {
-            say(boxOf("queue"), err.message);
-            return null;
-          }
-        })();
-        disarm();
-        if (call) send((c) => c.approvePayouts(call.args[0]), "Approved without a review");
-        return;
-      }
       const rows = [row];
       const got = selectionCall({ pool: at, rows, keccak256 });
       if (!got.ok) return say(boxOf("queue"), got.problem);

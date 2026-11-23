@@ -1531,7 +1531,7 @@ class TheClosing(unittest.TestCase):
 
     def review(self, pid, **change):
         pool = d.to_checksum_address(self.OTHER)
-        doc = {"schema": "payout-review/3", "chainId": 998, "pool": pool, "id": pid, "trader": self.WAITING[1],
+        doc = {"schema": "payout-review/4", "chainId": 998, "pool": pool, "id": pid, "trader": self.WAITING[1],
                "amount": str(self.WAITING[2]), "claimedAt": 1_000 - 3 * self.DAY, "dueAt": 1_000, "verdict": "clean",
                "action": "approve", "reasons": [], "call": {"kind": "approve"}, "readAt": {"block": 5_000, "time": 9_000}}
         doc.update(change)
@@ -1580,7 +1580,7 @@ class TheClosing(unittest.TestCase):
                  "another chain": {3: self.review(3, chainId=999)},
                  "another payout": {3: self.review(4)},
                  "another trader or amount": {3: self.review(3, amount="1")},
-                 "not a payout-review/3": {3: {**self.review(3), "schema": "payout-review/2"}},
+                 "not a payout-review/4": {3: {**self.review(3), "schema": "payout-review/3"}},
                  "not read whole": {3: self.review(3, readAt={"block": 5_000})}}
         for word, docs in cases.items():
             with self.assertRaises(SystemExit) as caught:

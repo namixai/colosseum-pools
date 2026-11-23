@@ -1550,7 +1550,7 @@ class TheDocument(unittest.TestCase):
         ch, t1, s1 = honest_world()
         k = r.card(r.review(ch.d, POOL, 0), ch.d)
         self.assertEqual(set(k), self.KEYS)
-        self.assertEqual((k["schema"], k["pool"], k["id"], k["trader"], k["stage"]), ("payout-review/3", POOL, 0, t1, s1))
+        self.assertEqual((k["schema"], k["pool"], k["id"], k["trader"], k["stage"]), ("payout-review/4", POOL, 0, t1, s1))
         self.assertEqual(k["amount"], str(800 * 10**6), "a string: a JSON number loses digits past 2**53")
         self.assertEqual((k["verdict"], k["reasons"]), ("clean", []))
         self.assertEqual((k["call"]["kind"], k["call"]["method"], k["call"]["args"]), ("approve", "approvePayouts", [[0]]))
@@ -1586,7 +1586,7 @@ class TheDocument(unittest.TestCase):
             self.assertEqual(r.read_chain.call_args.args[3], r.TOUCH_READS)
             r.main(["--deployment", "x", "--touch-reads", "500"])
             self.assertEqual(r.read_chain.call_args.args[3], 500)
-        self.assertEqual((got["schema"], got["id"]), ("payout-review/3", 0))
+        self.assertEqual((got["schema"], got["id"]), ("payout-review/4", 0))
 
     def test_it_runs_on_mainnet_when_both_switches_name_it_and_needs_no_key(self):
         """Review 9 of #336 (H3): the second line of defence must run where the money is. Mainnet is chosen as for every

@@ -9,7 +9,7 @@
 // signatures, in the Safe's own app, which takes the call's `to` and `data` from here. A stop, the cancelling of a
 // request and an early close are the platform's keys (the factory's checker and closer).
 //
-// The review of a payout (ops/payout_review.py, schema "payout-review/3") is the document the review service wrote,
+// The review of a payout (ops/payout_review.py, schema "payout-review/4") is the document the review service wrote,
 // handed over by the index's reviews route (gateway/simindex.py). The page builds every call itself; the one-signature
 // approval is offered only on a fresh review of this very payout that says approve (`reviewFor`, `awaitingApproval`). The names of the approval and of the withdrawal are the contract's (a test holds each line
 // of OPERATOR_ABI to src/sim/SimPool.sol); a pool from before them answers none of their reads.
@@ -40,16 +40,17 @@ export const OPERATOR_ABI = [
   "event WithdrawCancelled(address indexed by, uint256 amount)",
 ];
 
-export const REVIEW_SCHEMA = "payout-review/3";
+export const REVIEW_SCHEMA = "payout-review/4";
 /** How old a review may be and still carry an approval, in blocks and in seconds of the chain's clock: the same hour
  *  as `ops/payout_review.py` (REVIEW_MAX_BLOCKS, REVIEW_MAX_S), which `deploy_sim approve` checks it by. */
 export const REVIEW_MAX_BLOCKS = 3600;
 export const REVIEW_MAX_S = 3600;
 
-/** What a hold means, by the kind of its reason (`reasons[].kind` of the review): said before an approval without a
- *  review, never one sentence for all of them (review 12 of #336). */
+/** What a hold means, by the kind of its reason (`reasons[].kind` of the review): said beside a payout offered no
+ *  approval, never one sentence for all of them (review 12 of #336). */
 export const HOLD_WORDS = Object.freeze({
   "missed-stop": "A stop the oracle reached was not carried out: the account's result may be higher than the exam would have left it.",
+  "stop-late": "A stop was carried out long after the oracle reached it, at a later and better price for the account.",
   "stop-unchecked": "The stops of this account were not checked over all their time: a stop the price reached cannot be ruled out.",
   recount: "The result did not count up: the review's own count of the trades does not reach the result the account claims.",
 });
@@ -63,7 +64,7 @@ export function reasonsText(reasons) {
 /** What a held payout's approval would pass over, by the kinds of its reasons, the stop's first. */
 export function holdWarning(reasons) {
   const kinds = new Set([].concat(reasons ?? []).map((x) => (x && typeof x === "object" ? x.kind : null)));
-  const said = ["missed-stop", "stop-unchecked", "recount"].filter((k) => kinds.has(k)).map((k) => HOLD_WORDS[k]);
+  const said = ["missed-stop", "stop-late", "stop-unchecked", "recount"].filter((k) => kinds.has(k)).map((k) => HOLD_WORDS[k]);
   return said.length ? said.join(" ") : "The review holds this payout.";
 }
 
@@ -225,7 +226,9 @@ function eventsNamed(events, name) {
  * only on a review of this very payout, of this chain, read after the claim and at most an hour ago, whose verdict is
  * clean and whose action is the approval: the rules `deploy_sim approve` checks it by (`reviewFor`). Any other payout
  * the pool would take an approval of (no document, a broken one, an old one, a hold, a "decide", a "stop", a "none")
- * is offered only `approveWithout`: a separate step that says what is missing or what the review said, and asks twice.
+ * is offered no approval at all (`deploy_sim approve` has no way round the review either): `noApproval` says what is
+ * missing or what the review said, the date it goes out by itself at its ceiling, and that only a stop of reason 3
+ * signed before then stops it.
  */
 export function awaitingApproval({ pool, structs, events = [], now, reviews = {}, reviewNotes = {}, keccak256, approvals = true,
   approver, chainId = null, latest = null }) {
@@ -265,7 +268,7 @@ export function awaitingApproval({ pool, structs, events = [], now, reviews = {}
     row.reviewClear = cleared(got);
     // No call the pool would revert: none for a payout approved already, nor where nobody approves.
     row.approve = row.reviewClear && row.approvable ? approveCall({ pool, ids: [id], keccak256 }) : null;
-    row.approveWithout = !row.reviewClear && row.approvable ? withoutReview(row, got) : null;
+    row.noApproval = !row.reviewClear && row.approvable ? noApproval(row, got) : null;
     out.push(row);
   });
   // A red pool is red for every payout of it, whether or not that payout's own review was loaded: one validated
@@ -281,9 +284,14 @@ function cleared(got) {
   return Boolean(r) && got.problem === null && r.verdict === "clean" && r.action === "approve" && r.call?.method === "approvePayouts";
 }
 
-/** The step of an approval without a review that carries it: what is missing, or what the review said, in words; the
- *  warning confirmed first and the question confirmed second (`approveWithoutCall`). */
-function withoutReview(row, got) {
+/** The time `t` (seconds) as the page writes a deadline: the day and minute, UTC. */
+export function utcText(t) {
+  return `${new Date(Number(t) * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+/** Why a payout the pool would take an approval of is offered none: what is missing, or what the review said, in
+ *  words; then when it goes out by itself, and what alone can stop it. No approval is built for it here. */
+function noApproval(row, got) {
   let why;
   if (got.review && !got.stale && got.problem === null) {
     const r = got.review;
@@ -297,9 +305,10 @@ function withoutReview(row, got) {
   } else {
     why = `The review document of payout ${row.id} cannot be used: ${got.problem}.`;
   }
-  const warning = `${why} Approving without a review that says approve pays it at 72 hours; without approval it waits `
-    + "for its ceiling (7 days from the claim), and a stop of reason 3 can still be signed before then.";
-  return { why, warning, again: `Approve payout ${row.id} without a review that says approve?` };
+  const ceiling = row.hardAt != null
+    ? ` Not approved, it goes out by itself at its ceiling, ${utcText(row.hardAt)}; only a stop of reason 3 signed before then stops it.`
+    : "";
+  return { why: `${why}${ceiling}` };
 }
 
 /**
@@ -348,6 +357,7 @@ export function reviewFor(doc, payout, { pool, keccak256, chainId = null, latest
       // would refuse, or something not read.
       if (c.kind === "none") built = null;
       else if (c.kind === "approve") built = approveCall({ pool, ids: [payout.id], keccak256 });
+      else if (c.kind === "stop" && !Array.isArray(c.args)) built = null; // the stop's arguments stay on the host
       else if (c.kind === "stop") {
         const [, reason, paired, trades, links] = c.args;
         built = stopCall({ pool, id: payout.id, reason, paired, trades, links, keccak256 });
@@ -382,17 +392,6 @@ export function approveSelectedCall({ pool, rows, keccak256 }) {
   return approveCall({ pool, ids: list.map((r) => r.id), keccak256 });
 }
 
-/**
- * The approval of a payout no fresh clean review carries, only with the operator's two confirmations: the warning
- * (`row.approveWithout.warning`, what is missing or what the review said) word for word, and then the question
- * (`row.approveWithout.again`). One payout at a time.
- */
-export function approveWithoutCall({ pool, row, confirm, again, keccak256 }) {
-  if (!row.approveWithout) throw new Error("this payout needs no approval without a review: its approval is row.approve");
-  if (confirm !== row.approveWithout.warning) throw new Error("an approval without a review needs its warning confirmed as it is written");
-  if (again !== row.approveWithout.again) throw new Error("an approval without a review is confirmed twice");
-  return approveCall({ pool, ids: [row.id], keccak256 });
-}
 
 /**
  * The creator's standing request to withdraw, if any: how much, when it was made, from when it can be carried out

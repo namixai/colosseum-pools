@@ -3,7 +3,7 @@
     spike/.venv/bin/python -m ops.review_service --deployment sim1 [--prices journal.json] [--out ops/state/reviews]
 
 One pass reads the chain once (`ops/payout_review.py`, `read_chain`), reviews each payout still waiting and writes its
-document, `<pool>-<id>.json` (schema payout-review/3), into --out: what `deploy_sim approve` reads before it approves
+document, `<pool>-<id>.json` (schema payout-review/4), into --out: what `deploy_sim approve` reads before it approves
 (each payout only on a fresh review that says approve, `payout_review.card_problem`), and what the operator's page
 shows. A document is written whole or not at all (a file beside it, then renamed).
 

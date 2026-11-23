@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import {
   OPERATOR_ABI, PAYOUT_DELAY, PAYOUT_HARD, WITHDRAW_DELAY, WITHDRAW_WINDOW, REVIEW_SCHEMA, SIGNERS,
   encodeCall, approveCall, stopCall, requestWithdrawCall, withdrawCall, cancelWithdrawCall, closeCall,
-  awaitingApproval, reviewFor, withdrawRequest, poolState, approveWithoutCall, approveSelectedCall, holdWarning, reasonsText,
+  awaitingApproval, reviewFor, withdrawRequest, poolState, approveSelectedCall, holdWarning, reasonsText,
   HOLD_WORDS, REVIEW_MAX_BLOCKS, REVIEW_MAX_S,
 } from "../lib/operator.js";
 import { keccak256 } from "./keccak.mjs";
@@ -213,7 +213,7 @@ test("a review is shown only where it is of this very payout and names the call 
   assert.equal(rows.find((r) => r.id === 1).reviewProblem, "no review");
   const row = rows.find((r) => r.id === 0);
   const cases = [
-    [{ schema: "payout-review/2" }, /not a payout-review\/3/],
+    [{ schema: "payout-review/3" }, /not a payout-review\/4/],
     [{ pool: OTHER }, /another pool/],
     [{ id: 1 }, /another payout/],
     [{ trader: OTHER }, /another trader/],
@@ -237,7 +237,7 @@ test("a review is shown only where it is of this very payout and names the call 
   assert.equal(stop.review.call.signer, "checker");
 });
 
-test("a held payout is offered no approval, only the step without a review, which says why and asks twice", () => {
+test("a held payout is offered no approval at all: the page says why, when it goes by itself, and what alone stops it", () => {
   const structs = [payout(0, { claimedAt: NOW - D }), payout(1, { claimedAt: NOW - D })];
   const held = { ...reviewDoc(0), verdict: "suspicious", action: "hold", call: null,
     reasons: [{ kind: "recount", text: "recount on the stage: result" }],
@@ -248,19 +248,16 @@ test("a held payout is offered no approval, only the step without a review, whic
   assert.equal(r0.reviewProblem, null);
   assert.deepEqual([r0.review.action, r0.review.call, r0.approve], ["hold", null, null], "no Approve button");
   assert.equal(r0.review.stopDraft.reason, 3);
-  assert.match(r0.approveWithout.why, /says hold \(suspicious\): recount on the stage: result\./);
-  assert.match(r0.approveWithout.warning, new RegExp(HOLD_WORDS.recount.slice(0, 30)));
-  assert.throws(() => approveWithoutCall({ pool: POOL, row: r0, confirm: "yes", again: r0.approveWithout.again, keccak256 }), /warning confirmed/);
-  assert.throws(() => approveWithoutCall({ pool: POOL, row: r0, confirm: r0.approveWithout.warning, again: "", keccak256 }), /confirmed twice/);
-  assert.equal(approveWithoutCall({ pool: POOL, row: r0, confirm: r0.approveWithout.warning, again: r0.approveWithout.again, keccak256 }).method,
-    "approvePayouts");
+  assert.match(r0.noApproval.why, /says hold \(suspicious\): recount on the stage: result\./);
+  assert.match(r0.noApproval.why, new RegExp(HOLD_WORDS.recount.slice(0, 30)));
+  assert.match(r0.noApproval.why, /goes out by itself at its ceiling, \d{4}-\d\d-\d\d \d\d:\d\d UTC; only a stop of reason 3/);
+  assert.equal(r0.approveWithout, undefined, "no approval without a review: the command has none either");
   const r1 = rows.find((r) => r.id === 1);
   assert.equal(r1.review.action, "decide");
   assert.equal(r1.approve, null, "suspicious, even counted up: no review that says approve, no one-signature approval");
-  assert.match(r1.approveWithout.why, /says decide \(suspicious\): fills later/);
+  assert.match(r1.noApproval.why, /says decide \(suspicious\): fills later/);
   const clean = rowsOf({ pool: POOL, structs, now: NOW, keccak256 })[0];
-  assert.equal(clean.approveWithout, null);
-  assert.throws(() => approveWithoutCall({ pool: POOL, row: clean, confirm: "", again: "", keccak256 }), /its approval is row.approve/);
+  assert.equal(clean.noApproval, null);
 });
 
 test("a red pool is approved one payout at a time, never in a batch", () => {

@@ -13,7 +13,7 @@ import { esc, ZERO_ADDRESS, sameAddress } from "./ui.js";
 import { dollars, tierOf, isSet } from "./simlines.js";
 import { utc, STOP_RESERVE, stopReasonText } from "./simpool.js";
 import {
-  awaitingApproval, approveSelectedCall, approveWithoutCall, stopCall, withdrawRequest, reasonsText, PAYOUT_DELAY, PAYOUT_HARD,
+  awaitingApproval, approveSelectedCall, stopCall, withdrawRequest, reasonsText, PAYOUT_DELAY, PAYOUT_HARD,
 } from "./operator.js";
 
 /** What this page reads and sends beyond the libraries' ABIs (SimPool.sol): the daily limit, the reason of a stop, the
@@ -343,7 +343,7 @@ export function selectionCall({ pool, rows, keccak256 }) {
   }
 }
 
-export { approveWithoutCall, PAYOUT_DELAY, PAYOUT_HARD };
+export { PAYOUT_DELAY, PAYOUT_HARD };
 
 // ── the reviews, from the index's route ────────────────────────────
 
@@ -476,12 +476,9 @@ function queueRowHtml(r, may) {
     : "";
   const actions = [];
   if (may.approve && r.approve) actions.push(`<button type="button" class="so-btn" data-approve="${r.id}">Approve</button>`);
-  else if (may.approve && r.approveWithout) {
-    actions.push(`<button type="button" class="so-btn hatched" data-approve="${r.id}" data-without="1">Approve without a review</button>`);
-  }
   if (r.stoppable) actions.push(`<button type="button" class="so-btn sun" data-stop-for="${r.id}">Stop with reason</button>`);
   const approval = r.approved ? "approved" : r.status === "no-approver" ? "nobody approves" : "not yet";
-  const without = may.approve && r.approveWithout ? `<div class="so-sm so-warn" data-without-why="${r.id}">${esc(r.approveWithout.why)}</div>` : "";
+  const without = may.approve && r.noApproval ? `<div class="so-sm so-warn" data-no-approval="${r.id}">${esc(r.noApproval.why)}</div>` : "";
   return `<div class="so-row so-q ${esc(w.tone)}" data-payout="${r.id}" data-status="${esc(r.status)}">`
     + `<div class="so-c id">${pick}<span>${esc(idText(r.id))}</span></div>`
     + `<div class="so-c" data-l="Line">${esc(r.line)}</div>`

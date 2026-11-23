@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   REVIEW_SCHEMA, REVIEW_MAX_BLOCKS, REVIEW_MAX_S, PAYOUT_DELAY, HOLD_WORDS, awaitingApproval, approveCall, approveSelectedCall,
-  approveWithoutCall, holdWarning, reasonsText,
+  holdWarning, reasonsText, reviewFor,
 } from "../lib/operator.js";
 import { askReviews, reviewsUrl, reviewHtml, queueHtml, operatorModel } from "../lib/simoperator.js";
 import { keccak256 } from "./keccak.mjs";
@@ -32,11 +32,12 @@ const row = (reviews, extra = {}) => awaitingApproval({ pool: POOL, structs: [pa
   latest: LATEST, ...extra })[0];
 const offeredNone = (r, why) => {
   assert.equal(r.approve, null, "no one-signature approval");
-  assert.ok(r.approveWithout, "the step without a review");
-  if (why) assert.match(r.approveWithout.why, why);
+  assert.equal(r.approveWithout, undefined, "no approval without a review");
+  assert.ok(r.noApproval, "the page says why none");
+  if (why) assert.match(r.noApproval.why, why);
 };
 
-test("R12-P1 no review loaded: no approval, the step without a review says none was loaded", () => {
+test("R12-P1 no review loaded: no approval, the page says none was loaded", () => {
   offeredNone(row({}), /No review of payout 0 was loaded\./);
   offeredNone(row({}, { reviewNotes: { 0: "the index could not be reached" } }), /was loaded \(the index could not be reached\)/);
 });
@@ -48,7 +49,7 @@ test("R12-P2 a hold document that names a call is thrown out, and no approval is
 });
 
 test("R12-P3 another schema, a read time missing, another chain, another claim: thrown out, no approval", () => {
-  for (const [over, why] of [[{ schema: "payout-review/4" }, /not a payout-review\/3/], [{ readAt: {} }, /not read whole/],
+  for (const [over, why] of [[{ schema: "payout-review/3" }, /not a payout-review\/4/], [{ readAt: {} }, /not read whole/],
     [{ readAt: { block: LATEST } }, /not read whole/], [{ chainId: 998 }, /another chain/], [{ chainId: undefined }, /another chain/],
     [{ dueAt: CLAIM + PAYOUT_DELAY + 1 }, /another claim/], [{ claimedAt: undefined }, /before the claim/],
     [{ amount: 800_000_001 }, /another amount/], [{ trader: S1 }, /another trader/], [{ id: 1 }, /another payout/]]) {
@@ -79,7 +80,7 @@ test("R12-P6 a clean review older than an hour, in blocks or in seconds, or from
   const fresh = row({ 0: clean() });
   assert.equal(fresh.reviewProblem, null);
   assert.equal(fresh.approve.method, "approvePayouts");
-  assert.equal(fresh.approveWithout, null);
+  assert.equal(fresh.noApproval, null);
   for (const readAt of [{ block: LATEST - REVIEW_MAX_BLOCKS - 1, time: NOW - 60 }, { block: LATEST - 5, time: NOW - REVIEW_MAX_S - 1 },
     { block: LATEST + 1, time: NOW - 60 }, { block: LATEST - 5, time: NOW + 61 }, { block: LATEST - 5, time: CLAIM + 5 }]) {
     const r = row({ 0: clean({ readAt }) });
@@ -92,19 +93,19 @@ test("R12-P6 a clean review older than an hour, in blocks or in seconds, or from
   offeredNone(row({ 0: clean() }, { latest: null }), /age is unknown/);
 });
 
-test("R12-P7 held: the warning is by the kind of the reasons, and the approval asks twice", () => {
+test("R12-P7 held: the words are by the kind of the reasons, with the ceiling's date and the stop of reason 3", () => {
   const unchecked = row({ 0: hold() });
   offeredNone(unchecked);
-  assert.match(unchecked.approveWithout.warning, /stops of this account were not checked/);
-  assert.doesNotMatch(unchecked.approveWithout.warning, /did not count up/);
+  assert.match(unchecked.noApproval.why, /stops of this account were not checked/);
+  assert.doesNotMatch(unchecked.noApproval.why, /did not count up/);
+  assert.match(unchecked.noApproval.why, /goes out by itself at its ceiling, .* UTC; only a stop of reason 3 signed before then stops it\./);
   const missed = row({ 0: hold({ reasons: [{ kind: "missed-stop", text: "a stop missed on the exam: BTC" }] }) });
-  assert.match(missed.approveWithout.warning, /A stop the oracle reached was not carried out/);
+  assert.match(missed.noApproval.why, /A stop the oracle reached was not carried out/);
   const recount = row({ 0: hold({ reasons: [{ kind: "recount", text: "recount on the stage: result" }] }) });
-  assert.match(recount.approveWithout.warning, /did not count up/);
+  assert.match(recount.noApproval.why, /did not count up/);
+  const late = row({ 0: hold({ reasons: [{ kind: "stop-late", text: "late" }] }) });
+  assert.match(late.noApproval.why, /long after the oracle reached it/);
   assert.equal(holdWarning([{ kind: "recount" }, { kind: "missed-stop" }]), `${HOLD_WORDS["missed-stop"]} ${HOLD_WORDS.recount}`);
-  const w = unchecked.approveWithout;
-  assert.throws(() => approveWithoutCall({ pool: POOL, row: unchecked, confirm: w.warning, keccak256 }), /confirmed twice/);
-  assert.equal(approveWithoutCall({ pool: POOL, row: unchecked, confirm: w.warning, again: w.again, keccak256 }).args[0][0], 0n);
   assert.throws(() => approveSelectedCall({ pool: POOL, rows: [unchecked], keccak256 }), /no fresh review that says approve/);
 });
 
@@ -116,18 +117,19 @@ test("L-2 the reasons are said by their text, never as [object Object]", () => {
   assert.doesNotMatch(html, /object Object/);
 });
 
-test("the page draws Approve only on a clean fresh review, else the step without one with its words", () => {
+test("the page draws Approve only on a clean fresh review, else no button and its words", () => {
   const reads = (reviews) => ({ now: NOW, latest: LATEST, chainId: CHAIN, approver: "0x00000000000000000000000000000000000000b1",
     payouts: [payout()], firstId: 0, menu: [], tiers: [], reasons: new Map(), payoutsPerDay: 1, payRoom: 1, nextPayAt: 0, reviews });
   const draw = (reviews, extra = {}) => queueHtml(operatorModel({ pool: POOL, roles: ["approver"], reads: { ...reads(reviews), ...extra }, keccak256 }));
   const ok = draw({ 0: clean() });
   assert.match(ok, /data-approve="0">Approve</);
   assert.match(ok, /class="so-pick"/);
-  assert.doesNotMatch(ok, /data-without/);
+  assert.doesNotMatch(ok, /data-no-approval/);
   for (const [reviews, words] of [[{}, /No review of payout 0 was loaded/], [{ 0: hold() }, /says hold/],
     [{ 0: clean({ schema: "x" }) }, /cannot be used/], [{ 0: clean({ readAt: { block: 1, time: NOW - 60 } }) }, /too old/]]) {
     const html = draw(reviews);
-    assert.match(html, /data-without="1">Approve without a review</);
+    assert.doesNotMatch(html, /without a review|data-without|data-approve=/);
+    assert.match(html, /data-no-approval="0"/);
     assert.doesNotMatch(html, /class="so-pick"/, "never in a batch");
     assert.match(html, words);
   }
@@ -162,4 +164,16 @@ test("the page's hour is the review's hour, and its rules are card_problem's", (
   assert.match(src, new RegExp(`REVIEW_MAX_BLOCKS = ${REVIEW_MAX_BLOCKS.toLocaleString("en").replace(",", "_")}`));
   assert.match(src, new RegExp(`REVIEW_MAX_S = ${REVIEW_MAX_S.toLocaleString("en").replace(",", "_")}`));
   for (const kind of Object.keys(HOLD_WORDS)) assert.match(src, new RegExp(`"${kind}"`), kind);
+});
+
+test("M4 a document as the reviews route hands it out (no evidence, a stop's call without its arguments) is read", () => {
+  const out = clean({ verdict: "suspicious", action: "stop", evidence: undefined, stopDraft: undefined,
+    reasons: [{ kind: "pair", text: "paired with another account" }],
+    call: { kind: "stop", to: POOL, method: "stopPayout", signature: "stopPayout(uint256,uint8,address,bytes32[],bytes32[])" } });
+  delete out.evidence;
+  delete out.stopDraft;
+  const got = reviewFor(out, { id: 0, trader: T1, amount: 800_000_000n, dueAt: CLAIM + PAYOUT_DELAY, claimedAt: CLAIM },
+    { pool: POOL, keccak256, chainId: CHAIN, latest: LATEST, now: NOW });
+  assert.equal(got.problem, null);
+  assert.deepEqual([got.review.action, got.review.call, got.review.stopDraft], ["stop", null, null]);
 });

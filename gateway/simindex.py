@@ -412,10 +412,52 @@ class SimIndex:
                          **common, "events": [dict(e) for e in events]}
 
 
+# What a reason of each kind is called outside the host: the review's own text names other traders, wallets and the
+# thresholds it caught them by, and stays in the full document on the host (`deploy_sim approve` and a person read it).
+REASON_WORDS = {
+    "pass-rate": "the pool passes more often than the model",
+    "pair": "paired with another account",
+    "mirror": "mirrored positions with another account",
+    "mirror-sum": "the opposite side spread over other accounts",
+    "timing": "fills timed against the trader's own orders",
+    "link": "wallet linked to another buyer",
+    "late": "fills or stops later than everyone else's",
+    "code": "a code sold to a run of new wallets",
+    "recount": "the result does not count up from the account's own events",
+    "missed-stop": "a stop the oracle reached was not carried out",
+    "stop-late": "a stop carried out long after the oracle reached it",
+    "stop-unchecked": "the stops were not checked over all their time",
+    "unread": "something the review needs was not read",
+}
+# The fields of a document the page needs to decide: what it says, when and at which block it was read, what to hold
+# it against (the payout's pool, number, trader, amount and times, the chain), and the call it names without the
+# evidence. Everything else (`evidence`, `stopDraft`, a stop's arguments) stays on the host.
+OUTWARD = ("schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict",
+           "action", "readAt", "chainId", "batchApproval", "dailyCap")
+
+
+def outward(doc: dict) -> dict:
+    """A review document as the reviews route hands it out (`OUTWARD`): reasons as their kind and a few words of it,
+    the call as its kind, its method and, for an approval, its calldata (the payout's own number, nothing more)."""
+    out = {k: doc[k] for k in OUTWARD if k in doc}
+    reasons = doc.get("reasons") if isinstance(doc.get("reasons"), list) else []
+    out["reasons"] = [{"kind": str(r.get("kind")), "text": REASON_WORDS.get(str(r.get("kind")), "a reason of the review")}
+                      for r in reasons if isinstance(r, dict)]
+    call = doc.get("call")
+    if isinstance(call, dict):
+        out["call"] = {k: call.get(k) for k in ("kind", "to", "method", "signature")}
+        if call.get("kind") == "approve":
+            out["call"].update(args=call.get("args"), data=call.get("data"))
+    else:
+        out["call"] = None
+    return out
+
+
 class Reviews:
     """The payout reviews the review service wrote (ops/review_service.py, `<pool>-<id>.json` under its --out), handed
-    to the operator's page as they are, read only. The page checks each one itself, by the rules `deploy_sim approve`
-    checks it with (app/lib/operator.js, `reviewFor`): this only finds the file. A file's name is built here from a pool
+    to the operator's page cut to what it needs to decide (`outward`), read only: no evidence, no draft of a stop. The
+    page checks each one itself, by the rules `deploy_sim approve` checks the full document with (app/lib/operator.js,
+    `reviewFor`): this only finds the file. A file's name is built here from a pool
     this index knows (its factory made it) and whole numbers; nothing of the request is a path. No listing, no other
     file of the folder (the service's `said.json`, its `ALARM`), nothing written."""
 
@@ -468,7 +510,7 @@ class Reviews:
                 return "the review file could not be read as JSON"
             if not isinstance(doc, dict):
                 return "the review file is not a JSON object"
-            return doc
+            return outward(doc)
         return None
 
 

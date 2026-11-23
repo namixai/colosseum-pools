@@ -300,8 +300,8 @@ class ReviewRoute(unittest.TestCase):
         cls.index = make(Node(history(), head=3000), cls.tmp)
         read_all(cls.index)
         cls.folder = pathlib.Path(tempfile.mkdtemp())
-        (cls.folder / f"{POOL}-3.json").write_text(json.dumps({"schema": "payout-review/3", "id": 3}))
-        (cls.folder / f"{POOL.lower()}-4.json").write_text(json.dumps({"schema": "payout-review/3", "id": 4}))
+        (cls.folder / f"{POOL}-3.json").write_text(json.dumps({"schema": "payout-review/4", "id": 3}))
+        (cls.folder / f"{POOL.lower()}-4.json").write_text(json.dumps({"schema": "payout-review/4", "id": 4}))
         (cls.folder / f"{POOL}-5.json").write_text("{not json")
         (cls.folder / f"{POOL}-6.json").write_text("[1]")
         (cls.folder / "said.json").write_text(json.dumps({"secret": True}))
@@ -328,10 +328,37 @@ class ReviewRoute(unittest.TestCase):
         status, headers, body = self.get(f"/v1/simindex/reviews?pool={POOL.lower()}&ids=3,4,8")
         self.assertEqual(status, 200)
         self.assertEqual((body["pool"], body["chain_id"]), (POOL, self.index.chain_id))
-        self.assertEqual(body["reviews"], {"3": {"schema": "payout-review/3", "id": 3},
-                                           "4": {"schema": "payout-review/3", "id": 4}})
+        self.assertEqual(body["reviews"], {"3": {"schema": "payout-review/4", "id": 3, "reasons": [], "call": None},
+                                           "4": {"schema": "payout-review/4", "id": 4, "reasons": [], "call": None}})
         self.assertEqual(body["missing"], [8])
         self.assertEqual(headers["Cache-Control"], "no-store")
+
+    def test_outside_the_host_only_what_the_page_decides_by_no_evidence_no_draft_no_other_trader(self):
+        other, wallet = "0x" + "ab" * 20, "0x" + "cd" * 20
+        doc = {"schema": "payout-review/4", "pool": POOL, "id": 9, "trader": "0x" + "11" * 20, "amount": "5",
+               "claimedAt": 1, "dueAt": 2, "hardAt": 3, "verdict": "suspicious", "action": "stop", "chainId": 998,
+               "readAt": {"block": 5, "time": 6}, "batchApproval": False,
+               "reasons": [{"kind": "pair", "text": f"pair on the stage with {other}"},
+                           {"kind": "link", "text": f"wallet linked to {wallet}"}],
+               "evidence": {"pairs": [{"account": other}], "links": [{"trader": wallet}],
+                            "passRates": {"passes": {"yellow": 24}}},
+               "stopDraft": {"reason": 2, "paired": other},
+               "call": {"kind": "stop", "to": POOL, "method": "stopPayout", "signature": "stopPayout(...)",
+                        "args": [9, 2, other, [], []], "data": "0x" + other[2:]}}
+        got = simindex.outward(doc)
+        text = json.dumps(got)
+        self.assertNotIn(other[2:], text)
+        self.assertNotIn(wallet[2:], text)
+        for gone in ("evidence", "stopDraft", "passRates", "yellow"):
+            self.assertNotIn(gone, text)
+        self.assertEqual(got["reasons"], [{"kind": "pair", "text": simindex.REASON_WORDS["pair"]},
+                                          {"kind": "link", "text": simindex.REASON_WORDS["link"]}])
+        self.assertEqual(got["call"], {"kind": "stop", "to": POOL, "method": "stopPayout", "signature": "stopPayout(...)"})
+        for k in ("pool", "id", "trader", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action", "readAt", "chainId"):
+            self.assertEqual(got[k], doc[k], k)
+        approve = {**doc, "action": "approve", "call": {"kind": "approve", "to": POOL, "method": "approvePayouts",
+                                                         "signature": "approvePayouts(uint256[])", "args": [[9]], "data": "0x01"}}
+        self.assertEqual(simindex.outward(approve)["call"]["args"], [[9]], "an approval's own call, the payout's number")
 
     def test_a_broken_file_or_a_link_out_of_the_folder_is_not_handed_over(self):
         _, _, body = self.get(f"/v1/simindex/reviews?pool={POOL}&ids=5,6,7")

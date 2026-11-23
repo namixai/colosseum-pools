@@ -687,7 +687,7 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   The operator's section of the control panel (`app/lib/simoperator.js`) draws the stops to the checker and to the
   factory's operator, and the button that lifts one (`liftStop`) to the operator alone, our Safe.
 
-  A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/3`, one file per payout.
+  A payout's review is the JSON `ops/payout_review.py --out` writes, schema `payout-review/4`, one file per payout.
   The page shows a review only where it is of this very payout and names the call the page itself would build
   (`reviewFor`). It never signs what a review hands it.
 

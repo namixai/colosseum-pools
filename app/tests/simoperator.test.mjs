@@ -69,7 +69,7 @@ function reads(over = {}) {
 const CHAIN = 998;
 const LATEST = 5_000_000;
 function cleanReview(id, p, over = {}) {
-  return { schema: "payout-review/3", chainId: CHAIN, pool: POOL, id, trader: p.trader, amount: String(p.amount),
+  return { schema: "payout-review/4", chainId: CHAIN, pool: POOL, id, trader: p.trader, amount: String(p.amount),
     claimedAt: Number(p.dueAt) - 72 * H, dueAt: Number(p.dueAt), verdict: "clean", action: "approve", reasons: [],
     call: { kind: "approve" }, readAt: { block: LATEST - 10, time: NOW - 60 }, ...over };
 }

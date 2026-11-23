@@ -2045,7 +2045,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     return out
 
 
-SCHEMA = "payout-review/3"
+SCHEMA = "payout-review/4"
 # How old a review may be, in blocks of the chain it was read on, and in seconds, for an approval to rest on it: an hour.
 # HyperEVM's small blocks come about one a second; the time is checked too, whatever the blocks' pace.
 REVIEW_MAX_BLOCKS = 3_600
@@ -2098,7 +2098,10 @@ def card(r: dict, chain: dict) -> dict:
     `.drawdown`, `evidence.triggerLate` (the lateness of stops and takes, said as a reason of the kind `late`), and
     `evidence.missedTouch.<part>` (the stops and takes the oracle reached and nobody carried out: a fact, in no reason
     and changing no colour), and `evidence.stopDoubt.<part>` with the reason kinds `missed-stop` and `stop-unchecked`
-    (a stop reached and not carried out, or a block of a stop's time not checked: the payout is held). Amounts
+    (a stop reached and not carried out, or a block of a stop's time not checked: the payout is held). /4 (the same
+    fields; what "clean" means changed): every block of a stop's time judged by one or two journals of prices and the
+    venue's candles, `evidence.stopDoubt.<part>.late` with the reason kind `stop-late`; a /3 document carries no
+    approval. Amounts
     are strings of USDC units (6 decimals), since a JSON number loses digits past 2**53; times are seconds on
     the chain's clock."""
     tx = r["tx"] or {}
