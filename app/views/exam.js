@@ -19,7 +19,7 @@ import {
   SCREEN_TEXT, WHAT_THIS_IS, ESTIMATE_NOTE, BOOK_DEPTH, readsFrom, accountFigures, positionRow,
   pendingText, accountScale, orderForm, previewView, triggerForm, triggerPreviewView, bookView,
   journalRows, sendFailure, timeLeft, networkMarks, lifeSteps, timeText, markUnknown, isKnown, singleFlight, journalPlan, journalRange, canLoadEarlier,
-  assetFromQuery, queryWithAsset, marketRows, stepIndex, sizeUnitOf, sizeEntry,
+  assetFromQuery, queryWithAsset, marketRows, stepIndex, sizeUnitOf, sizeEntry, tradeHold,
 } from "../lib/examscreen.js";
 import { createExamChart } from "./examchart.js";
 import { positionLines } from "../lib/positionlines.js";
@@ -91,7 +91,7 @@ export async function examView(address, page, query = "") {
   // The stop book of the exam's factory, where it has one: an exam made before the book has no `stopBook` getter, and
   // only the contract's refusal says so; a node that fails is asked again, then the page says it (`stopBookOf`).
   const [rules, terms, trader, panelPool, bookAddress] = await Promise.all([exam.rules(), exam.terms(), exam.trader(),
-    simPoolOf(address), stopBookOf(() => exam.stopBook())]);
+    simPoolOf(address), stopBookOf(() => exam.stopBook(), { control: () => exam.status() })]);
   const stopBook = bookAddress && !/^0x0{40}$/i.test(bookAddress)
     ? new ethers.Contract(bookAddress, STOP_BOOK_ABI, chain.readProvider) : null;
   // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
@@ -282,11 +282,11 @@ function readerOf(st) {
 
 /** Everything the account needs, read from the chain at its latest block. A price that could not be read is null. */
 async function readExam(st, selected) {
-  const { block, got, perAsset, touches, fresh } = await readPass(readerOf(st), { assets: st.assets, selected, prices: st.prices });
+  const { block, got, perAsset, touches, touchesUnread, fresh } = await readPass(readerOf(st), { assets: st.assets, selected, prices: st.prices });
   const [status, step, cash, dayStartEquity, tradingDays, deadline, lastFillAt, pending, filler, fromBook, maxWorseBps,
     drawdownKind, peakSnapshot, agent, rules, terms] = got;
   const reads = readsFrom({ status, step, cash, dayStartEquity, tradingDays, deadline, lastFillAt, pending, filler, fromBook,
-    maxWorseBps, drawdownKind, peakSnapshot, rules, terms, stopBook: st.bookAddress }, perAsset, touches);
+    maxWorseBps, drawdownKind, peakSnapshot, rules, terms, stopBook: st.bookAddress }, perAsset, touches, touchesUnread);
   const now = block.timestamp;
   const account = examAccount(reads, { now, block: block.number });
   return { reads, account, perAsset, fresh, agent, block: block.number, now, selected };
@@ -461,7 +461,9 @@ function paintAccount(page, st) {
   const scale = accountScale(account);
   const lines = [...f.lines].sort((x, y) => Number(y.near) - Number(x.near));
   const idx = new Map(account.lines.map((l, i) => [l.kind, i]));
+  const hold = tradeHold(st.snap.reads);
   $("#ex-account", page).innerHTML = `
+    ${hold ? `<p class="ex-warn bad" id="ex-touches-unread">${esc(hold)} <button type="button" class="ex-cl" id="ex-touches-retry">Try again</button></p>` : ""}
     ${f.afterSettle ? `<p class="ex-why">${esc(f.afterSettle)}</p>` : ""}
     <dl class="ex-eq"><div><dt>Equity</dt><dd>${esc(f.equity)}</dd></div><div><dt>Balance</dt><dd>${esc(f.balance)}</dd></div>
       <div><dt>Leverage</dt><dd>${esc(f.leverage)} <small>of ${esc(f.maxLeverage)}</small></dd></div></dl>
@@ -474,8 +476,12 @@ function paintAccount(page, st) {
       <div class="ex-sl"><span>Time left</span><b>${esc(account.time.endsAt === null ? "—" : timeLeft(account.time.endsAt, now))}</b>${f.days ? `<em>trading days ${esc(f.days)}</em>` : ""}</div>
     </div>`;
   void idx;
+  $("#ex-touches-retry", page)?.addEventListener("click", (e) => {
+    e.currentTarget.disabled = true;
+    tick(page, st).catch((err) => note(page, `The touches could not be read again: ${friendly(err)}`));
+  });
   const g = $("#ex-graduate", page);
-  g.disabled = !account.graduate.can || st.flight.busy;
+  g.disabled = !account.graduate.can || st.flight.busy || Boolean(hold);
   $("#ex-graduate-text", page).textContent = account.graduate.can ? "" : account.graduate.text;
 }
 
@@ -487,6 +493,8 @@ function paintPositions(page, st) {
     return;
   }
   const rows = account.positions.map((p) => positionRow(p, st.perps));
+  // While the touches are not read, no button here sends: a close or a change of a stop meets the account after them.
+  const off = st.flight.busy || Boolean(tradeHold(st.snap.reads));
   const pending = pendingText(account.pending, st.perps);
   const pend = $("#ex-pending", page);
   pend.hidden = !pending;
@@ -496,9 +504,9 @@ function paintPositions(page, st) {
     ${rows.map((r) => `<tr><td data-l="Asset"><b>${esc(r.name)}</b></td><td data-l="Side" class="${r.side === "Long" ? "lg" : "sh"}">${esc(r.side)}</td><td data-l="Size">${esc(r.size)}</td><td data-l="Mark">${esc(r.mark)}</td>
       <td data-l="Notional">${esc(r.notional)}</td><td data-l="Leverage">${esc(r.leverage)}</td>
       <td data-l="Stop / take" class="ex-trig">${[r.stop && [r.stop, "stop"], r.take && [r.take, "take"]].filter(Boolean).map(([t, k]) =>
-        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}"${st.flight.busy ? " disabled" : ""} aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}${
-        r.touched && st.bookAddress ? ` <button type="button" class="ex-cl" data-settle="1"${st.flight.busy ? " disabled" : ""} title="${esc(SCREEN_TEXT.settle)}">Settle</button>` : ""}</td>
-      <td data-l=""><button type="button" class="ex-cl" data-close="${r.asset}"${st.flight.busy ? " disabled" : ""}>Close</button></td></tr>`).join("")}</tbody></table>`
+        `<span>${esc(t)} <button type="button" class="ex-x" data-clear="${r.asset}:${k}"${off ? " disabled" : ""} aria-label="Remove ${k}" title="Remove ${k}">×</button></span>`).join("") || "—"}${
+        r.touched && st.bookAddress ? ` <button type="button" class="ex-cl" data-settle="1"${off ? " disabled" : ""} title="${esc(SCREEN_TEXT.settle)}">Settle</button>` : ""}</td>
+      <td data-l=""><button type="button" class="ex-cl" data-close="${r.asset}"${off ? " disabled" : ""}>Close</button></td></tr>`).join("")}</tbody></table>`
     : `<p class="ex-pad ex-muted">No open positions.</p>`) + `<p class="ex-exit">${esc(SCREEN_TEXT.exit)}</p>`
     + (st.bookAddress ? `<p class="ex-exit">${esc(SCREEN_TEXT.stopRule)}</p>` : "");
 }
@@ -554,9 +562,11 @@ function paintTicket(page, st) {
   } else if (!form.error) {
     parts.push(`<p class="ex-note">${esc(ESTIMATE_NOTE)}</p>`);
   }
-  $("#ex-preview", page).innerHTML = parts.join("");
   st.order = form;
-  send.disabled = st.flight.busy || !account.canPlace || form.size === null || !view || view.blocked;
+  const hold = tradeHold(reads);
+  if (hold) parts.unshift(`<p class="ex-warn bad">${esc(hold)}</p>`);
+  $("#ex-preview", page).innerHTML = parts.join("");
+  send.disabled = Boolean(hold) || st.flight.busy || !account.canPlace || form.size === null || !view || view.blocked;
   const by = agentActive(st) ? "agent" : "trader";
   $("#ex-signs", page).textContent = `Signed by ${placeSigns(st, by)}. ${SCREEN_TEXT.fillsLater}`;
 
@@ -567,7 +577,7 @@ function paintTicket(page, st) {
     $(`#ex-${kind}-prev`, page).innerHTML = (tf.error ? `<p class="ex-warn bad">${esc(tf.error)}</p>` : "")
       + (tv ? tv.lines.map((l) => `<p class="ex-warn ${l.tone}">${esc(l.text)}</p>`).join("") : "");
     st.triggers[kind] = tf;
-    $(`#ex-${kind}-set`, page).disabled = st.flight.busy || tf.px === null || !tv || tv.blocked;
+    $(`#ex-${kind}-set`, page).disabled = Boolean(hold) || st.flight.busy || tf.px === null || !tv || tv.blocked;
   }
 }
 
@@ -749,6 +759,14 @@ function wire(page, st) {
   page.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (!b || !page.contains(b)) return;
+    // No call that trades while the stop book's touches are not read (review 12 of #336, M-4): the buttons are off, and
+    // a press that comes anyway is refused here.
+    const trades = b.id === "ex-send" || b.id === "ex-graduate" || /^ex-(stop|take)-set$/.test(b.id)
+      || b.dataset.close !== undefined || Boolean(b.dataset.clear) || Boolean(b.dataset.settle);
+    if (trades && tradeHold(st.snap?.reads)) {
+      note(page, SCREEN_TEXT.touchesUnread);
+      return;
+    }
     if (b.id === "ex-market") {
       setMarketOpen(page, st, !st.market.open);
     } else if (b.id === "ex-mclose") {

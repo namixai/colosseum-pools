@@ -71,7 +71,7 @@ test("only the exam's refusal of stopBook() means no book; a node that fails is 
   const wait = async (ms) => { waits.push(ms); };
   const book = "0x" + "b0".repeat(20);
   assert.equal(await stopBookOf(async () => book, { wait }), book);
-  assert.equal(await stopBookOf(async () => { throw reverted(); }, { wait }), null, "an exam made before the book");
+  assert.equal(await stopBookOf(async () => { throw reverted(); }, { wait, control: async () => 1n }), null, "an exam made before the book");
   assert.deepEqual(waits, []);
   // Failed twice, then answered: the book, not a session without one.
   let n = 0;
@@ -85,7 +85,7 @@ test("only the exam's refusal of stopBook() means no book; a node that fails is 
 
 test("the screen reads the stop book through stopBookOf, with no catch that turns a failure into no book", () => {
   const src = readFileSync(new URL("../views/exam.js", import.meta.url), "utf8");
-  assert.match(src, /stopBookOf\(\(\) => exam\.stopBook\(\)\)/);
+  assert.match(src, /stopBookOf\(\(\) => exam\.stopBook\(\), \{ control: \(\) => exam\.status\(\) \}\)/);
   assert.doesNotMatch(src, /stopBook\(\)\.catch\(/);
 });
 

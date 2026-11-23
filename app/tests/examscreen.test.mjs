@@ -414,8 +414,9 @@ test("the page reads the flag in its handlers and paints the sending buttons off
   const view = read("../views/exam.js");
   assert.match(view, /st\.flight\.run\(async/);
   assert.doesNotMatch(view, /st\.busy/);
-  assert.match(view, /data-close="\$\{r\.asset\}"\$\{st\.flight\.busy \? " disabled" : ""\}/);
-  assert.match(view, /data-clear="\$\{r\.asset\}:\$\{k\}"\$\{st\.flight\.busy/);
+  assert.match(view, /const off = st\.flight\.busy \|\| Boolean\(tradeHold\(st\.snap\.reads\)\);/);
+  assert.match(view, /data-close="\$\{r\.asset\}"\$\{off \? " disabled" : ""\}/);
+  assert.match(view, /data-clear="\$\{r\.asset\}:\$\{k\}"\$\{off/);
   assert.match(view, /g\.disabled = !account\.graduate\.can \|\| st\.flight\.busy/);
   const poll = view.slice(view.indexOf("function paintPositions"), view.indexOf("function paintTicket"));
   assert.doesNotMatch(poll, /paintJournal/, "the poll does not repaint the journal (its scroll is the reader's)");

@@ -31,6 +31,9 @@ export const SCREEN_TEXT = Object.freeze({
   noAsset: "This asset's data was not read from Hyperliquid, so no size or price can be taken for it.",
   closeDrops: "An order that closes or turns a position round takes its stop and take off.",
   // The stop book's rules, as the contract carries them out (src/sim/StopBook.sol, docs/SIM-POOL.md).
+  touchesUnread: "The stop book's touches of this exam could not be read, so a stop or take the price has touched may not "
+    + "be counted here: the account may be different from what this shows, and the next trade carries those touches out first. "
+    + "Trading is held until they are read.",
   stopRule: "A stop or a take is filled at the oracle price of the first block that touches its level, from the block it "
     + "acts from. Taking one off or moving it acts after the same delay; until then the one there stands.",
   settle: "The oracle price touched this stop or take: it is filled at that price. Settling writes it into the account; anyone may.",
@@ -90,7 +93,7 @@ function plain(tuple, names) {
  * position and its stop and take. A price that was not read is null, and the library then says the account is
  * unpriced rather than count it at nothing.
  */
-export function readsFrom(got, perAsset, touches = []) {
+export function readsFrom(got, perAsset, touches = [], touchesUnread = false) {
   const rules = plain(got.rules, ["dailyLossBps", "maxDrawdownBps", "maxLeverageX100", "assets", "assetLeverageX100"]);
   const terms = plain(got.terms, ["capital", "targetsBps", "stepDuration", "maxIdle", "minTradingDays", "costPpm", "fillDelay", "fillWindow"]);
   const pending = plain(got.pending, ["asset", "isBuy", "sz", "placedBlock"]);
@@ -103,7 +106,15 @@ export function readsFrom(got, perAsset, touches = []) {
     positions: perAsset.map((a) => ({ asset: a.asset, size: a.size, mark: a.oracle ?? null,
       stop: a.stop ?? null, take: a.take ?? null, stopChange: a.stopChange ?? null, takeChange: a.takeChange ?? null })),
     touches: touches ?? [],
+    // The stop book's touches were not read on this pass: the figures are the account as marked, and may not be the
+    // one the next trade meets (it carries the touches out first). Review 12 of #336, M-4.
+    touchesUnread: Boolean(touchesUnread),
   };
+}
+
+/** Why the trade buttons are held, or null: the stop book's touches were not read on the latest pass. */
+export function tradeHold(reads) {
+  return reads?.touchesUnread ? SCREEN_TEXT.touchesUnread : null;
 }
 
 // ── words ──────────────────────────────────────────────────────
