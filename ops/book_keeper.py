@@ -41,9 +41,10 @@ unchecked. This loop is what checks them:
                      and an alarm. The prices of those blocks are read back from the node where it keeps them, written
                      to the journal of prices, and judged against the book as it stood in the gap (`watched()` and the
                      entries at the block before it and at its last block, and now); a stop or a take they reached is
-                     an alarm of its own. `ops/payout_review.py` does not pass such an exam's payout as clean: a touch
-                     in a gap, gap blocks it could not read, or blocks since the last check not yet closed by a `Gap`
-                     make its verdict not clean, with a stop of the payout drafted for the checker (reason 3);
+                     an alarm of its own. `ops/payout_review.py` does not pass such an exam's payout as clean: a stop
+                     reached in a gap, gap blocks whose price it could not read, or blocks since `lastPokeBlock()` not
+                     yet closed by a `Gap` make its verdict "suspicious" and its action "hold", with the draft of a
+                     stop of reason 3;
   its state        → the last block read and the gaps still to read back, in a file of its own (`--book-state`): after a
                      restart the loop reads the book's events from there, so a `Gap` written while it was down is said;
   the key          → every transaction of the keeper's key goes out through one sender (`stop_filler.Sender`), from this
