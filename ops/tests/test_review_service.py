@@ -1,5 +1,5 @@
 """The review's service (ops/review_service.py) on the made-up chains of ops/tests/test_payout_review.py: it writes a
-document a payout and raises an alarm for each payout a person has to act on (review 12 of #336, M-2)."""
+document a payout and raises an alarm for each payout a person has to act on."""
 import json
 import pathlib
 import tempfile
@@ -9,13 +9,27 @@ from unittest import mock
 from ops import payout_review as r
 from ops import review_service as svc
 from ops import sim_check as chk
-from ops.tests.test_payout_review import POOL, TheBookHoldsWhatItCannotClear, honest_world
+from ops.tests import test_payout_review as tpr
+from ops.tests.test_payout_review import POOL, honest_world
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
+class Held:
+    """A payout whose stop the journal shows reached in block 1 150 and nobody carried out (`TheStopsJournal`)."""
+    sj = tpr.TheStopsJournal()
+
+    def world(self):
+        ch, s1 = self.sj.mt.world({1_150, *range(1_300, 1_306)})
+        j = self.sj.journal(self.sj.mt.prices({1_150, *range(1_300, 1_306)}))
+        ch.d["journal"] = j
+        truth = self.sj.mt.prices({1_150, *range(1_300, 1_306)}, until=2_001)
+        ch.d["journalCheck"] = r.check_journal([s1], ch.d["exam_events"], j, 2_000, self.sj.node(truth))
+        return ch, s1
+
+
 class TheService(unittest.TestCase):
-    hold = TheBookHoldsWhatItCannotClear()
+    hold = Held()
 
     def run_pass(self, ch, said=None):
         alarms = []
@@ -34,7 +48,7 @@ class TheService(unittest.TestCase):
         self.assertEqual(alarms, [])
 
     def test_a_held_payout_is_an_alarm_once_while_it_stays_as_it_is(self):
-        ch, _ = self.hold.world([(1_100, 1_110)])
+        ch, _ = self.hold.world()
         said = {}
         _, docs, alarms = self.run_pass(ch, said)
         self.assertEqual(docs[f"{POOL}-0.json"]["action"], "hold")
@@ -48,13 +62,24 @@ class TheService(unittest.TestCase):
         for change, deadline in ((("books", "approvals", False), lambda d: d["dueAt"] - chk.MARGIN_S),
                                  (("payouts", "approved", True), lambda d: d["dueAt"]),
                                  (("books", "approvals", None), lambda d: d["dueAt"] - chk.MARGIN_S)):
-            ch, _ = self.hold.world([(1_100, 1_110)])
+            ch, _ = self.hold.world()
             where, key, value = change
             (ch.d["books"][POOL] if where == "books" else ch.d["payouts"][0])[key] = value
             _, docs, alarms = self.run_pass(ch)
             self.assertEqual([e for e, _ in alarms], ["payout_needs_a_stop"], change)
             self.assertEqual(alarms[0][1]["deadline"], deadline(ch.d["payouts"][0]), change)
             self.assertIn("stops it for reason 3", alarms[0][1]["do"])
+
+    def test_no_journal_to_read_is_no_journal_and_the_payout_with_a_stop_is_held(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(svc.core, "log") as said:
+            self.assertIsNone(svc.read_prices(pathlib.Path(d) / "none.jsonl"))
+            self.assertEqual(said.call_args[0][0], "prices_unread")
+            (pathlib.Path(d) / "j.jsonl").write_text('{"b": 1, "px": {"3": 5}}\n')
+            self.assertEqual(svc.read_prices(pathlib.Path(d) / "j.jsonl").px, {3: {1: 5}})
+        ch, _ = self.hold.sj.mt.world(set(range(1_300, 1_306)))  # no journal at all
+        _, docs, alarms = self.run_pass(ch)
+        self.assertEqual(docs[f"{POOL}-0.json"]["action"], "hold")
+        self.assertEqual(alarms[0][1]["kinds"], ["stop-unchecked"])
 
     def test_a_stop_the_checker_sends_itself_is_no_alarm(self):
         self.assertIsNone(svc.alarm_of({"verdict": "suspicious", "action": "stop"}))
@@ -67,6 +92,8 @@ class TheService(unittest.TestCase):
         self.assertIn("--out /var/lib/colosseum-keeper/reviews-%i", unit)
         self.assertIn("Type=oneshot", unit)
         self.assertIn("OnUnitActiveSec=10min", timer)
+        self.assertIn("--prices /var/lib/colosseum-keeper/prices-${COLOSSEUM_DEPLOYMENT}.jsonl", unit,
+                      "the stops' loop's journal, by the keeper's own default name")
         install = (ROOT / "ops/host/install.sh").read_text()
         self.assertIn('"$rel/ops/host/colosseum-payout-review@.service" "$rel/ops/host/colosseum-payout-review@.timer"', install)
 

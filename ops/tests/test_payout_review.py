@@ -1254,7 +1254,7 @@ class MissedTouches(unittest.TestCase):
         ch.d["touchEvery"] = {s1: 60}
         return ch, s1
 
-    def test_a_stop_the_oracle_reached_and_left_before_it_was_carried_out_is_shown_and_counted_against_nobody(self):
+    def test_a_stop_the_oracle_reached_and_left_before_it_was_carried_out_holds_the_payout(self):
         ch, s1 = self.world({*range(1_100, 1_131), *range(1_300, 1_306)})
         got = r.review(ch.d, POOL, 0)
         m = got["missedTouch"]
@@ -1263,7 +1263,12 @@ class MissedTouches(unittest.TestCase):
              "reads": 31, "seen": False, "then": "carried out", "at": 1_305}]})
         self.assertEqual(m["exam"], {"read": False, "every": None, "spans": 0, "unread": 0, "missed": []},
                          "an account the review did not read along is said as not read")
-        self.assertEqual((got["verdict"], got["reasons"]), ("clean", []), "a fact shown, in no reason")
+        # A reach nobody carried out holds the payout (closed on failure), and so does a stop not checked in every
+        # block: without the stops' loop's journal, none is.
+        self.assertEqual((got["verdict"], got["kinds"], got["action"]), ("suspicious", ["missed-stop", "stop-unchecked"], "hold"))
+        self.assertIn("the stop at 950000 on asset 3 from block 1100 to 1130, then carried out", got["reasons"][0])
+        self.assertEqual(got["stopDraft"]["reason"], 3)
+        self.assertEqual(got["stopDraft"]["trades"], [tx(80_000 + 1_001)], "the transaction that set the stop")
         self.assertEqual(r.card(got, ch.d)["evidence"]["missedTouch"], m)
         text = r.summary(got)
         self.assertIn("  stops and takes the oracle reached and nobody carried out, stage: 1 stretches missed over 1 "
@@ -1417,6 +1422,103 @@ class MissedTouches(unittest.TestCase):
         self.assertEqual([(m["first"], m["last"]) for m in got["missedTouch"]["stage"]["missed"]], [(1_100, 1_130)])
         self.assertEqual((got["triggerLate"]["trader"]["n"], got["triggerLate"]["trader"]["unread"]), (0, 1))
         self.assertEqual(got["recount"]["stage"]["checked"]["fills"], 1, "the close's price is not the recount's")
+
+
+class TheStopsJournal(unittest.TestCase):
+    """A payout's stops judged in every block by the stops' loop's journal of prices (--prices), the journal held against
+    the chain's own prices and a calibrated node (`check_journal`). The world of `MissedTouches`: a long bought at the
+    mark in block 1 000 (an oracle fill: the chain's own price), a stop at 950 000 acting from 1 003 and carried out in
+    block 1 305 at 940 000 (the chain's own price again); the node's latest price is the mark."""
+
+    mt = MissedTouches()
+
+    def journal(self, prices, drop=(), gaps=()):
+        lines = [json.dumps({"b": b, "t": 1_000 * b, "w": 0, "px": {"3": px}}) for b, px in sorted(prices.items())
+                 if b not in drop and 1_002 <= b <= 1_400]
+        lines += [json.dumps({"gap": list(g), "why": "the loop was not running"}) for g in gaps]
+        return r.load_prices("\n".join(lines) + "\n")
+
+    def node(self, truth, soft=False, deep=0):
+        def at(asset, block):
+            if block < deep:
+                return None
+            return truth.get(block, self.mt.MARK) if not soft else self.mt.MARK
+        return at
+
+    def judged(self, low, journal_low=None, drop=(), gaps=(), node=None, events=None):
+        ch, s1 = self.mt.world(low)
+        if events is not None:
+            ch.d["exam_events"][s1] = events
+        truth = self.mt.prices(low, until=2_001)
+        j = self.journal(self.mt.prices(low if journal_low is None else journal_low), drop, gaps)
+        ch.d["journal"] = j
+        ch.d["journalCheck"] = r.check_journal([s1], ch.d["exam_events"], j, 2_000, node or self.node(truth))
+        return r.review(ch.d, POOL, 0)
+
+    def test_a_stop_checked_in_every_block_and_borne_out_is_clean(self):
+        got = self.judged(set(range(1_300, 1_306)))
+        self.assertEqual((got["verdict"], got["action"]), ("clean", "approve"), got["reasons"])
+        self.assertEqual(got["missedTouch"]["stage"]["every"], 1)
+        self.assertEqual(got["stopDoubt"]["stage"], {"missed": [], "unchecked": [], "txs": []})
+
+    def test_a_reach_in_the_journal_nobody_carried_out_holds_the_payout_with_a_draft_of_reason_3(self):
+        got = self.judged({1_150, *range(1_300, 1_306)})
+        self.assertEqual((got["verdict"], got["kinds"], got["action"]), ("suspicious", ["missed-stop"], "hold"))
+        self.assertIn("from block 1150 to 1150", got["reasons"][0], "a touch of one block is a touch")
+        self.assertEqual((got["stopDraft"]["reason"], got["stopDraft"]["trades"]), (3, [tx(80_000 + 1_001)]))
+        self.assertIn("do not sign: held (missed-stop)", r.summary(got))
+
+    def test_a_stop_taken_off_while_reached_holds_the_payout(self):
+        evs = self.mt.events("taken off", 1_201)
+        truth = self.mt.prices({1_200, 1_201}, until=2_001)
+        truth[2_000] = 1_010_000  # the node's latest price is another than the mark the chain wrote at the fill
+        got = self.judged({1_200, 1_201}, events=evs, node=self.node(truth))
+        self.assertEqual((got["kinds"], got["action"]), (["missed-stop"], "hold"))
+        # With the node's latest price at the mark, the chain's one price shows nothing about the node: not checked too.
+        self.assertIn("stop-unchecked", self.judged({1_200, 1_201}, events=evs)["kinds"])
+        self.assertIn("then taken off by the trader", got["reasons"][0])
+
+    def test_a_hole_in_the_journal_inside_a_stops_time_holds_the_payout(self):
+        got = self.judged(set(range(1_300, 1_306)), drop={1_100, 1_101}, gaps=[(1_100, 1_101)])
+        self.assertEqual((got["kinds"], got["action"]), (["stop-unchecked"], "hold"))
+        self.assertIn("2 of the 303 blocks 1003..1305 of the stop at 950000 on asset 3 are not in the journal", got["reasons"][0])
+        self.assertIn("1100..1101 (the loop was not running)", got["reasons"][0])
+        self.assertEqual(got["stopDraft"]["trades"], [tx(80_000 + 1_001)])
+
+    def test_a_journal_the_chain_does_not_bear_out_holds_the_payout(self):
+        # The journal says the price stood at the mark through the close, where the chain wrote 940 000 at 1 305.
+        got = self.judged(set(range(1_300, 1_306)), journal_low=set())
+        self.assertEqual(got["action"], "hold")
+        self.assertIn("the journal gives 1000000 at block 1305, where the chain wrote 940000", " ".join(got["reasons"]))
+
+    def test_a_node_that_answers_old_blocks_with_todays_price_checks_nothing(self):
+        got = self.judged(set(range(1_300, 1_306)), node=self.node({}, soft=True))
+        self.assertEqual(got["action"], "hold")
+        self.assertIn("does not answer for old blocks as they stood", " ".join(got["reasons"]))
+
+    def test_a_node_without_history_checks_nothing(self):
+        got = self.judged(set(range(1_300, 1_306)), node=self.node({}, deep=1_900))
+        self.assertEqual(got["action"], "hold")
+        self.assertIn("keeps no state that far back", " ".join(got["reasons"]))
+
+    def test_a_node_that_disagrees_with_the_journal_holds_the_payout(self):
+        truth = self.mt.prices({*range(1_300, 1_306)}, until=2_001)
+        truth[1_003] = 999_999
+        got = self.judged(set(range(1_300, 1_306)), node=self.node(truth))
+        self.assertEqual(got["action"], "hold")
+        self.assertIn("the node gives 999999 at block 1003, the journal 1000000", " ".join(got["reasons"]))
+
+    def test_no_chain_price_to_calibrate_on_checks_nothing(self):
+        evs = [dict(e, source=r.SOURCE_BOOK) if e["name"] == "Filled" else e for e in self.mt.events()]
+        got = self.judged(set(range(1_300, 1_306)), events=evs)
+        self.assertEqual(got["action"], "hold")
+        self.assertIn("the chain wrote no price of its own", " ".join(got["reasons"]))
+
+    def test_the_journal_reads_lines_gaps_and_a_last_line_cut_short_and_the_old_map_still_stands(self):
+        j = r.load_prices('{"b": 5, "t": 50, "px": {"3": 7, "4": 0}, "unread": [9]}\n{"gap": [6, 8], "why": "x"}\n{"b": 9, "px": {"3"')
+        self.assertIsInstance(j, r.Journal)
+        self.assertEqual((j.px, j.times, j.gaps, j.lines), ({3: {5: 7}}, {5: 50}, [(6, 8, "x")], 1))
+        self.assertEqual(r.load_prices('{"3:5": 7}'), {"3:5": 7}, "a map of prices, as before")
 
 
 class Unread(unittest.TestCase):

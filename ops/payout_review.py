@@ -22,7 +22,13 @@ It reads the chain and nothing else, sends nothing and holds no key. For each pa
                      carried out (`TriggerFilled`), a series of its own against everyone else's, by
                      the same rule as the fills';
   missed stops     → each stop or take of the stage and the exam that the oracle reached while it stood
-                     and nobody carried out then, and how its time ended: a fact shown, in no reason;
+                     and nobody carried out then, and how its time ended, judged in every block of its time
+                     by the stops' loop's journal of prices (--prices, ops/stop_filler.py), the journal held
+                     against the chain's own prices and a node calibrated on them (`check_journal`). A
+                     reach nobody carried out (a stop taken off or moved while reached among them), a
+                     block of a stop's time the journal does not hold, or a journal not borne out, holds
+                     the payout with the draft of a stop of reason 3: clean only when every block of every
+                     stop's time is checked and no reach went uncarried;
   the group's code → whose code the exam was bought under, its sales, from how many wallets, the
                      longest run of sales in a row under it each from a new wallet, and how many of its
                      buyers never traded or stand in a pair;
@@ -756,6 +762,214 @@ def missed_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: i
     return out
 
 
+# ── the stops' journal of prices, and its check ─────────────────────────────────────
+
+class Journal:
+    """The journal of oracle prices the stops' loop writes (`ops/stop_filler.py`, `PriceJournal`), one JSON line a
+    block it looked at: {"b": block, "t": the block's time or null, "w": the loop's clock, "px": {asset: px}} with
+    "unread": [asset] for an asset whose price it could not read there, and {"gap": [from, to], "why": ...} for blocks
+    it did not look at (it was not running, the head ran ahead of it, a node that failed). `px[asset][block]` is what it
+    read; a block of an asset not in it is a hole, whatever the reason. A last line cut short (the machine stopped mid
+    write) is left out. The journal is the loop's own record, never the chain's: `check_journal` holds it against the
+    chain's own prices and a node that answers for old blocks as they stood."""
+
+    def __init__(self):
+        self.px: dict[int, dict[int, int]] = {}
+        self.times: dict[int, int] = {}
+        self.gaps: list[tuple[int, int, str]] = []
+        self.lines = 0
+
+    @classmethod
+    def parse(cls, text: str) -> "Journal":
+        j = cls()
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue  # a write cut short
+            if not isinstance(row, dict):
+                continue
+            if "gap" in row:
+                a, b = row["gap"]
+                j.gaps.append((int(a), int(b), str(row.get("why", ""))))
+                continue
+            if "b" not in row:
+                continue
+            b = int(row["b"])
+            j.lines += 1
+            if row.get("t") is not None:
+                j.times[b] = int(row["t"])
+            for asset, px in (row.get("px") or {}).items():
+                if int(px) > 0:  # a zero price (a feed not live) is no price
+                    j.px.setdefault(int(asset), {})[b] = int(px)
+        return j
+
+    def gaps_in(self, lo: int, hi: int) -> list[str]:
+        return [f"{a}..{b} ({why})" for a, b, why in self.gaps if a <= hi and b >= lo]
+
+
+def load_prices(text: str) -> dict | Journal:
+    """What --prices gives: the stops' loop's journal (JSON lines), or, as before, one JSON object {"asset:block": px}
+    that stands in for prices the node cannot give."""
+    try:
+        whole = json.loads(text)
+    except ValueError:
+        return Journal.parse(text)
+    if isinstance(whole, dict) and all(":" in str(k) for k in whole):
+        return whole
+    return Journal.parse(text)
+
+
+# How many blocks of each account's stops a review asks a node for, to check the journal against it (--journal-checks):
+# the first and last block of each stop's time, every block of each reach, then blocks spread evenly over the rest.
+JOURNAL_CHECKS = 200
+# How many of the chain's own prices next to a stop's time the node is calibrated on, an asset.
+CALIBRATE_ON = 3
+SOURCE_BOOK = 1  # PaperExam.SOURCE_BOOK: a fill at the book's price, not the oracle's
+
+
+def chain_prices(exam_events: dict[str, list[dict]]) -> dict[int, dict[int, int]]:
+    """The oracle's prices the chain itself wrote, {asset: {block: px}}: a fill at the oracle (`Filled`, any source but
+    the book) is at the oracle price of its block, and a stop shown to have triggered (`TriggerSeen`) names the oracle
+    of its block. Neither the journal nor a node can change them."""
+    out: dict[int, dict[int, int]] = {}
+    for evs in exam_events.values():
+        for e in evs:
+            if e["name"] == "Filled" and e["source"] != SOURCE_BOOK and e["px"]:
+                out.setdefault(e["asset"], {})[e["block"]] = e["px"]
+            elif e["name"] == "TriggerSeen" and e["oracle"]:
+                out.setdefault(e["asset"], {})[e["seenAt"]] = e["oracle"]
+    return out
+
+
+def spread(lo: int, hi: int, n: int) -> list[int]:
+    """`n` blocks spread evenly from `lo` to `hi`, both ends among them."""
+    if hi < lo or n <= 0:
+        return []
+    if hi - lo + 1 <= n:
+        return list(range(lo, hi + 1))
+    return sorted({lo + (hi - lo) * k // max(n - 1, 1) for k in range(n)})
+
+
+def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journal: Journal, latest: int, node,
+                  reads: int = JOURNAL_CHECKS) -> dict[str, dict]:
+    """The journal of prices held against what it cannot write itself, for the stops of each account of `accounts`:
+
+      the chain   → every price the chain wrote (`chain_prices`) at a block of the journal must be the journal's;
+      a node      → calibrated first, an asset: at the chain's prices nearest the stops' time the node must give the
+                    chain's price, and at one of them a price other than its latest (a node that answers a call at an
+                    old block with the state of today shows nothing). Only then are the sample's blocks asked: the
+                    ends of each stop's time, each block the journal shows at the price or past it, and blocks spread
+                    over the rest, `reads` an account at most, each to be the journal's price.
+
+    `node(asset, block)` is the oracle price at that block or None (`oracle_at`). Returns, for each account with a stop,
+    {"asked", "agreed", "doubts"}: a doubt is why the journal is not borne out (a price that differs, a node that keeps
+    no state that far back or answers with today's, no chain price to calibrate on), and any doubt holds the payout."""
+    out: dict[str, dict] = {}
+    truth = chain_prices(exam_events)
+    calibrated: dict[int, str | None] = {}
+    now_px: dict[int, int | None] = {}
+
+    def calibrate(asset: int, lo: int, hi: int) -> str | None:
+        mine = truth.get(asset, {})
+        if not mine:
+            return f"asset {asset}: the chain wrote no price of its own (an oracle fill, a TriggerSeen) to calibrate a node on"
+        near = sorted(mine, key=lambda b: (0 if lo <= b <= hi else min(abs(b - lo), abs(b - hi)), b))[:CALIBRATE_ON]
+        if asset not in now_px:
+            now_px[asset] = node(asset, latest)
+        shown = False
+        for b in near:
+            got = node(asset, b)
+            if got is None:
+                return f"asset {asset}: the node gave no price at block {b}: it keeps no state that far back"
+            if got != mine[b]:
+                return (f"asset {asset}: the node gave {got} at block {b}, where the chain wrote {mine[b]}: it does not "
+                        "answer for old blocks as they stood")
+            shown = shown or got != now_px[asset]
+        if not shown:
+            return (f"asset {asset}: the chain's prices the node was calibrated on are all its latest one: whether it "
+                    "answers for old blocks as they stood is not shown")
+        return None
+
+    for a in accounts:
+        spans = [s for s in trigger_spans(exam_events.get(a) or [], latest) if s["end"] >= s["armedAt"]]
+        if not spans:
+            continue
+        res = {"asked": 0, "agreed": 0, "doubts": []}
+        out[a] = res
+        for asset in sorted({s["asset"] for s in spans}):
+            known = journal.px.get(asset, {})
+            for b, px in sorted(truth.get(asset, {}).items()):
+                if b in known and known[b] != px:
+                    res["doubts"].append(f"asset {asset}: the journal gives {known[b]} at block {b}, where the chain "
+                                         f"wrote {px}")
+        want: list[tuple[int, int]] = []
+        for s in spans:
+            known = journal.px.get(s["asset"], {})
+            lo, hi = s["armedAt"], s["end"]
+            want += [(s["asset"], lo), (s["asset"], hi)]
+            want += [(s["asset"], b) for b, px in known.items() if lo <= b <= hi and trigger_hit(s["take"], s["side"], px, s["px"])]
+        each = max(1, (reads - len(want)) // len(spans))
+        for s in spans:
+            want += [(s["asset"], b) for b in spread(s["armedAt"], s["end"], each)]
+        want = [w for w in dict.fromkeys(want) if w[1] in journal.px.get(w[0], {})][:max(reads, 0)]
+        for asset in sorted({w[0] for w in want}):
+            if asset not in calibrated:
+                bs = [b for x, b in want if x == asset]
+                calibrated[asset] = calibrate(asset, min(bs), max(bs))
+            if calibrated[asset]:
+                res["doubts"].append(calibrated[asset] + ": the journal is not checked")
+                continue
+            for _, b in [w for w in want if w[0] == asset]:
+                res["asked"] += 1
+                got, mine = node(asset, b), journal.px[asset][b]
+                if got is None:
+                    res["doubts"].append(f"asset {asset}: the node gave no price at block {b}: the journal is not checked there")
+                    break
+                if got != mine:
+                    res["doubts"].append(f"asset {asset}: the node gives {got} at block {b}, the journal {mine}")
+                    break
+                res["agreed"] += 1
+    return out
+
+
+def stop_doubt(evs: list[dict], m: dict | None, journal: Journal | None, check: dict | None, latest: int) -> dict:
+    """Why the stops and takes of one account cannot be taken as carried out: the payout is held, never approved as
+    clean (closed on failure). `missed`: each reach of the oracle at a stop or past it that no `fillTrigger` closed
+    (`missed_touches`, on every block of the journal), a stop the trader took off or moved while reached among them.
+    `unchecked`: no journal while a stop stood; blocks of a stop's time the journal does not hold (a hole: the loop was
+    down, behind, or did not know the stop); the journal not borne out by the chain or a node (`check_journal`).
+    `txs`: the transactions that set the stops concerned, for the draft of a stop of reason 3."""
+    out: dict = {"missed": list(m["missed"]) if m else [], "unchecked": [], "txs": []}
+    spans = [s for s in trigger_spans(evs, latest) if s["end"] >= s["armedAt"]]
+    concerned = [(x["asset"], x["take"], x["armedAt"]) for x in out["missed"]]
+    if spans and journal is None:
+        out["unchecked"].append("no journal of prices from the stops' loop (--prices): the blocks of a stop's time are "
+                                "not each checked")
+        concerned += [(s["asset"], s["take"], s["armedAt"]) for s in spans]
+    elif spans:
+        for s in spans:
+            known = journal.px.get(s["asset"], {})
+            lo, hi = s["armedAt"], s["end"]
+            holes = (hi - lo + 1) - sum(1 for b in known if lo <= b <= hi)
+            if holes:
+                gaps = journal.gaps_in(lo, hi)
+                out["unchecked"].append(
+                    f"{holes} of the {hi - lo + 1} blocks {lo}..{hi} of the {'take' if s['take'] else 'stop'} at "
+                    f"{s['px']} on asset {s['asset']} are not in the journal" + (f" (gaps: {'; '.join(gaps[:3])})" if gaps else ""))
+                concerned.append((s["asset"], s["take"], s["armedAt"]))
+        for why in (check or {}).get("doubts", []):
+            out["unchecked"].append(why)
+            concerned += [(s["asset"], s["take"], s["armedAt"]) for s in spans]
+    want = set(concerned)
+    out["txs"] = list(dict.fromkeys(e["tx"] for e in evs if e["name"] == "TriggerSet"
+                                    and (e["asset"], e["take"], e["armedAt"]) in want))
+    return out
+
+
 def recount(account: str, chain: dict, p: "Params", size: int | None = None, largest: int | None = None) -> dict:
     """The exam's or stage's result counted again from its own events, as PaperExam counts it, and each fill
     against the chain's oracle price.
@@ -1473,13 +1687,24 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
                           "readBack": TRIGGER_BACK,
                           "outlier": late_outlier(mine_t["lates"], others_t["lates"], p.min_fills)}
     # The stops and takes of the payout's own accounts that the oracle reached and nobody carried out then
-    # (`missed_touches`): a fact shown to whoever signs, in no reason and changing no verdict.
-    # Its prices are kept apart (`touchOracle`): read for this alone, they reach no other check (review of #330).
-    by_asset = oracle_by_asset({**oracle, **(chain.get("touchOracle") or {})})
-    every_of = chain.get("touchEvery") or {}
+    # (`missed_touches`). With the stops' loop's journal (--prices) every block of each stop's time is judged by the
+    # journal's own prices, and nothing else: no node read of the review stands in for a block the journal does not
+    # hold. Without it, the oracle read one block in `every` as before, kept apart (`touchOracle`, review of #330).
+    journal = chain.get("journal")
+    if journal is not None:
+        by_asset, every_of = journal.px, {a: 1 for a in (stage, exam) if a}
+    else:
+        by_asset = oracle_by_asset({**oracle, **(chain.get("touchOracle") or {})})
+        every_of = chain.get("touchEvery") or {}
     out["missedTouch"] = {part: missed_touches((chain.get("exam_events") or {}).get(account) or [], by_asset,
                                                chain["latest"], every_of.get(account)) if account else None
                           for part, account in (("stage", stage), ("exam", exam))}
+    # A stop reached and not carried out, or a block of a stop's time not checked, holds the payout: the trader's
+    # result would have been another with the stop carried out at its touch, as a venue carries it out.
+    checks = chain.get("journalCheck") or {}
+    out["stopDoubt"] = {part: stop_doubt((chain.get("exam_events") or {}).get(account) or [], out["missedTouch"][part],
+                                         journal, checks.get(account), chain["latest"]) if account else None
+                        for part, account in (("stage", stage), ("exam", exam))}
     out["code"] = code_review(pool, sale["code"], chain, who, p) if sale else None
     out["running"] = running(pool, chain)
 
@@ -1531,8 +1756,18 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
         rc = out["recount"][part]
         if rc and rc["flags"]:
             found.append(("recount", f"recount on the {part}: " + ", ".join(sorted({f['what'] for f in rc['flags']}))))
+    for part in ("stage", "exam"):
+        d = out["stopDoubt"][part]
+        if d and d["missed"]:
+            found.append(("missed-stop", f"on the {part}, {len(d['missed'])} reach(es) of a stop or a take by the oracle "
+                          "that nobody carried out: " + "; ".join(
+                              f"the {'take' if x['take'] else 'stop'} at {x['px']} on asset {x['asset']} from block "
+                              f"{x['first']} to {x['last']}, then {MISSED_THEN[x['then']]}" for x in d["missed"][:3])))
+        if d and d["unchecked"]:
+            found.append(("stop-unchecked", f"on the {part}, stops not checked in every block: " + "; ".join(d["unchecked"][:3])))
     read = chain.get("exam_events")
     unread = [a for a in (stage, exam) if a and (a in (chain.get("unread") or []) or (read is not None and a not in read))]
+    unread_accounts = list(unread)
     if times_unread:
         unread.append("the factory's delay and ceiling")
     elif disagree:
@@ -1558,6 +1793,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     # by the pool's own rule. A pool with approvals stops until it is paid; one without, until 5 minutes before
     # `dueAt`. The rule is the checker's own (`stop_due`): the review offers what the checker would send.
     out["stoppable"] = chk.stop_due(pay["state"], bool(pay.get("wasStopped")), pay["dueAt"], chain["now"], approvals is True)
+    # Held back from approval, closed on failure: a result that does not count up, a stop reached and not carried out,
+    # a block of a stop's time not checked, or an account's own events not read.
+    held = bool({"recount", "missed-stop", "stop-unchecked"} & set(out["kinds"])) or bool(unread_accounts)
     # What whoever signs is offered (review of #287): a stop where there is one the pool would take; nothing to
     # approve where the result did not count up, only the draft of a reason-3 stop, until the analysis is written
     # or the ceiling comes; the approval as a choice where something else is suspicious; the approval where all is
@@ -1580,7 +1818,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     elif stop:
         out["action"] = "stop"
         out["tx"] = stop_call(pool, pid, stop["reason"], stop["paired"], stop["trades"], stop["links"])
-    elif "recount" in out["kinds"] and out["waitingApproval"]:
+    elif held and out["waitingApproval"]:
         # Held back from approval: only an unapproved payout of a pool with approvals has one to be held back. An
         # approved payout is payable from its due time whatever the recount says, a pool without approvals pays by
         # itself, and a payout no longer waiting has nothing to hold back (review of #290); the stop draft stays.
@@ -1597,6 +1835,8 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     # A result that does not count up is a stop of reason 3, a result disputed, only with a published analysis:
     # the draft names the fills and leaves the analysis's hash to whoever writes it.
     flagged = [f["tx"] for part in ("stage", "exam") if out["recount"][part] for f in out["recount"][part]["flags"]]
+    # So is a stop reached and not carried out, or not checked: the draft names the transactions that set it.
+    flagged += [tx for part in ("stage", "exam") if out["stopDoubt"][part] for tx in out["stopDoubt"][part]["txs"]]
     out["stopDraft"] = None
     if not stop and flagged:
         out["stopDraft"] = {"kind": "stop-draft", "to": pool, "call": chk.STOP, "reason": 3, "paired": ZERO_ADDRESS,
@@ -1658,7 +1898,8 @@ def card(r: dict, chain: dict) -> dict:
     later, fields a page shows as they come and need not know: `dailyCap`, `evidence.recount.<part>.triggers` and
     `.drawdown`, `evidence.triggerLate` (the lateness of stops and takes, said as a reason of the kind `late`), and
     `evidence.missedTouch.<part>` (the stops and takes the oracle reached and nobody carried out: a fact, in no reason
-    and changing no colour). Amounts
+    and changing no colour), and `evidence.stopDoubt.<part>` with the reason kinds `missed-stop` and `stop-unchecked`
+    (a stop reached and not carried out, or a block of a stop's time not checked: the payout is held). Amounts
     are strings of USDC units (6 decimals), since a JSON number loses digits past 2**53; times are seconds on
     the chain's clock."""
     tx = r["tx"] or {}
@@ -1682,6 +1923,7 @@ def card(r: dict, chain: dict) -> dict:
             "late": r["late"],
             "triggerLate": r["triggerLate"],
             "missedTouch": r["missedTouch"],
+            "stopDoubt": r["stopDoubt"],
             "code": r["code"],
             "running": {"exams": g["exams"], "stages": g["stages"], "worst": str(g["worst"]),
                         # Unknown when what the codes keep was not read: null, never the text "None".
@@ -1809,7 +2051,8 @@ def summary(r: dict) -> str:
         lines.append(f"  draft of a stop, reason 3, on {', '.join(r['stopDraft']['trades'])}: {r['stopDraft']['note']}")
     tx = r["tx"]
     if r["action"] == "hold":
-        lines.append(f"  do not sign: the result did not count up; it waits for an analysis, at most until {r['hardAt']}")
+        lines.append(f"  do not sign: held ({', '.join(k for k in r['kinds'] if k in ('recount', 'missed-stop', 'stop-unchecked', 'unread'))}); "
+                     f"it waits for an analysis, at most until {r['hardAt']}")
     else:
         lines.append(f"  to sign ({tx['kind']}): " + (f"{tx['to']} {tx['call']} {tx['data']}" if tx["data"] else tx.get("note", "")))
     return "\n".join(lines)
@@ -2173,7 +2416,8 @@ def with_approver(takes: bool | None, pool: str) -> tuple[bool | None, str | Non
     return (None, None) if takes is True and approver is None else (takes, approver)
 
 
-def read_chain(record: dict, prices: dict | None = None, venue: dict | None = None, touch_reads: int = TOUCH_READS) -> dict:
+def read_chain(record: dict, prices: "dict | Journal | None" = None, venue: dict | None = None, touch_reads: int = TOUCH_READS,
+               journal_checks: int = JOURNAL_CHECKS) -> dict:
     """Everything the review reads, from the deployment's block to the latest one. The oracle's prices around the
     fills of each payout still waiting, and along the time their stops and takes stood (about `touch_reads` blocks an
     account, `read_touch_oracle`), are read from the chain at their blocks; `prices` ({"asset:block": px})
@@ -2256,7 +2500,8 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                 ended[a] = e["t"]
     # The oracle around each fill of the payouts still waiting (its block, the ones on each side, its order's) and
     # at each day's snapshot, and each such account's cost.
-    oracle: dict[str, int] = dict(prices or {})
+    journal = prices if isinstance(prices, Journal) else None
+    oracle: dict[str, int] = dict(prices or {}) if journal is None else {}
     unread_px: set[str] = set()  # prices the node did not give: each asked once in all of the reads below (review of #330)
     cost_ppm: dict[str, int] = {}
     fill_window: dict[str, int] = {}
@@ -2300,7 +2545,14 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
                     else:
                         unread_px.add(key)
     read_trigger_oracle(exam_events, oracle, unread_px)
-    touch_every_of, touch_oracle = read_touch_oracle(touch_accounts, exam_events, oracle, latest, touch_reads, unread_px)
+    if journal is None:
+        touch_every_of, touch_oracle = read_touch_oracle(touch_accounts, exam_events, oracle, latest, touch_reads, unread_px)
+        journal_check = {}
+    else:
+        # Every block of each stop's time from the journal, the journal held against the chain's own prices and a
+        # calibrated node (`check_journal`): no node read along the stops' time stands in for the journal.
+        touch_every_of, touch_oracle = {a: 1 for a in touch_accounts}, {}
+        journal_check = check_journal(touch_accounts, exam_events, journal, latest, oracle_at, journal_checks)
     # The day's allowed loss of every exam that passed too: the pool's count of passes in the shape of a coin flip.
     for a in passed_accounts(exam_events):
         if a not in daily_bps:
@@ -2319,7 +2571,7 @@ def read_chain(record: dict, prices: dict | None = None, venue: dict | None = No
             "maxDrawdownBps": drawdown_bps, "times": payout_times(factory),
             "payCap": {pool: cap for pool, cap in pay_cap.items() if cap is not None}, "settled": settled,
             "waitsLimit": waits_limit, "touchEvery": touch_every_of,
-            "touchOracle": touch_oracle}
+            "touchOracle": touch_oracle, "journal": journal, "journalCheck": journal_check}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2331,7 +2583,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--size-tolerance", type=float, default=0.2)
     ap.add_argument("--wide", type=int, default=5, help="a sender that funded more buyers than this is not a link")
     ap.add_argument("--code-run", type=int, default=10, help="sales in a row from new wallets that make a code suspicious")
-    ap.add_argument("--prices", help='a JSON file of oracle prices the node cannot give, {"asset:block": px}')
+    ap.add_argument("--prices", help="the stops' loop's journal of prices (ops/stop_filler.py, JSON lines): every block of "
+                    "each stop's time is judged by it, held against the chain and a node; or, as before, a JSON file of "
+                    'oracle prices the node cannot give, {"asset:block": px}')
+    ap.add_argument("--journal-checks", type=int, default=JOURNAL_CHECKS,
+                    help="how many blocks of each account's stops a node is asked for, to check the journal against it")
     ap.add_argument("--venue-prices", help="a JSON file of the venue's prices, {asset: {minute: px}}: Hyperliquid's "
                     "candleSnapshot (info API, interval 1m), each minute's close; read from the file, never fetched")
     ap.add_argument("--touch-reads", type=int, default=TOUCH_READS,
@@ -2353,9 +2609,10 @@ def main(argv: list[str] | None = None) -> int:
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
     load = lambda path: json.loads(pathlib.Path(path).read_text()) if path else None
-    prices, venue = load(args.prices), load(args.venue_prices)
+    prices = load_prices(pathlib.Path(args.prices).read_text()) if args.prices else None
+    venue = load(args.venue_prices)
     with node_errors():
-        chain = read_chain(record, prices, venue, args.touch_reads)
+        chain = read_chain(record, prices, venue, args.touch_reads, args.journal_checks)
     p = Params(args.window, args.size_tolerance, args.wide, args.code_run)
     pool = to_checksum_address(args.pool) if args.pool else None
     todo = [x for x in chain["payouts"]

@@ -83,11 +83,22 @@ def one_pass(record: dict, out: pathlib.Path, prices: dict | None, said: dict, a
     return reviews
 
 
+def read_prices(path: pathlib.Path):
+    """The stops' loop's journal (`payout_review.load_prices`), or None where there is none to read: then no stop is
+    checked in every block, and each payout with a stop is held (`payout_review.stop_doubt`), never passed as clean."""
+    try:
+        return pr.load_prices(path.read_text())
+    except OSError as exc:
+        core.log("prices_unread", path=str(path), error=type(exc).__name__, then="every payout with a stop is held")
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--deployment", required=True)
     ap.add_argument("--out", default=str(pr.REVIEWS_DIR), help="where each payout's document is written")
-    ap.add_argument("--prices", help="the keeper's journal of prices (stop_filler.PriceJournal), {\"asset:block\": px}")
+    ap.add_argument("--prices", help="the stops' loop's journal of prices (stop_filler.PriceJournal): every block of each "
+                    "stop's time is judged by it; missing, every payout with a stop is held")
     ap.add_argument("--said", help="the file that remembers the alarms raised (default <out>/said.json)")
     ap.add_argument("--flag", help="the flag file each alarm is added to")
     sn.add_args(ap)
@@ -103,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         said = json.loads(said_path.read_text())
     except (OSError, ValueError):
         said = {}
-    prices = json.loads(pathlib.Path(args.prices).read_text()) if args.prices else None
+    prices = read_prices(pathlib.Path(args.prices)) if args.prices else None
     alarm = sf.Alarm(pathlib.Path(args.flag) if args.flag else None)
     with chk.node_errors():
         one_pass(record, out, prices, said, alarm)
