@@ -83,11 +83,15 @@ def one_pass(record: dict, out: pathlib.Path, prices: dict | None, said: dict, a
     return reviews
 
 
-def read_prices(path: pathlib.Path):
-    """The stops' loop's journal (`payout_review.load_prices`), or None where there is none to read: then no stop is
-    checked in every block, and each payout with a stop is held (`payout_review.stop_doubt`), never passed as clean."""
+def read_prices(path: pathlib.Path, expect: dict | None = None):
+    """The stops' loop's journal (`payout_review.read_journals`: its day files, each of this deployment), or None where
+    there is none to read: then no stop is checked in every block, and each payout with a stop is held
+    (`payout_review.stop_doubt`), never passed as clean."""
     try:
-        return pr.load_prices(path.read_text())
+        got = pr.read_journals([path], expect)
+        if got is None:
+            raise FileNotFoundError(path.name)
+        return got
     except OSError as exc:
         core.log("prices_unread", path=str(path), error=type(exc).__name__, then="every payout with a stop is held")
         return None
@@ -114,7 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         said = json.loads(said_path.read_text())
     except (OSError, ValueError):
         said = {}
-    prices = read_prices(pathlib.Path(args.prices)) if args.prices else None
+    expect = {"chain": c.CHAIN_ID, "factory": record["SimPoolFactory"], "label": args.deployment}
+    prices = read_prices(pathlib.Path(args.prices), expect) if args.prices else None
     alarm = sf.Alarm(pathlib.Path(args.flag) if args.flag else None)
     with chk.node_errors():
         one_pass(record, out, prices, said, alarm)

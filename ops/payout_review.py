@@ -55,6 +55,7 @@ import json
 import math
 import pathlib
 import sys
+import time
 
 from eth_abi import decode as abi_decode
 from eth_abi import encode as abi_encode
@@ -767,21 +768,39 @@ def missed_touches(evs: list[dict], prices: dict[int, dict[int, int]], latest: i
 class Journal:
     """The journal of oracle prices the stops' loop writes (`ops/stop_filler.py`, `PriceJournal`), one JSON line a
     block it looked at: {"b": block, "t": the block's time or null, "w": the loop's clock, "px": {asset: px}} with
-    "unread": [asset] for an asset whose price it could not read there, and {"gap": [from, to], "why": ...} for blocks
-    it did not look at (it was not running, the head ran ahead of it, a node that failed). `px[asset][block]` is what it
-    read; a block of an asset not in it is a hole, whatever the reason. A last line cut short (the machine stopped mid
-    write) is left out. The journal is the loop's own record, never the chain's: `check_journal` holds it against the
-    chain's own prices and a node that answers for old blocks as they stood."""
+    "unread": [asset] for an asset whose price it could not read there, {"gap": [from, to], "why": ...} for blocks it
+    did not look at (it was not running, the head ran ahead of it, a node that failed), and a header {"journal": ...,
+    "chain", "factory", "label"} at the top of each day's file. `px[asset][block]` is what it read; a block of an asset
+    not in it is a hole, whatever the reason. A last line cut short (the machine stopped mid write) is left out, and so
+    is a line of the wrong shape (`bad` counts them): its block is a hole, never the end of the review.
+
+    One Journal may hold two journals, the keeper's and the second writer's on another machine and node (`add_text`
+    once each): a block is held where either has it, and where both have it they must give the same price. A block one
+    journal gives two prices for, or the two journals give different prices for, is in `conflicts` and holds every stop
+    standing in it. A file of another chain, factory or deployment than `expect` is refused whole and said in `notes`:
+    its blocks are holes, which the other journal may fill."""
 
     def __init__(self):
         self.px: dict[int, dict[int, int]] = {}
         self.times: dict[int, int] = {}
         self.gaps: list[tuple[int, int, str]] = []
         self.lines = 0
+        self.bad = 0
+        self.conflicts: dict[int, dict[int, str]] = {}  # asset -> {block: what disagrees}
+        self.notes: list[str] = []
+        self.sources = 0
 
     @classmethod
-    def parse(cls, text: str) -> "Journal":
+    def parse(cls, text: str, expect: dict | None = None, name: str = "the journal") -> "Journal":
         j = cls()
+        j.add_text(text, expect, name)
+        return j
+
+    def add_text(self, text: str, expect: dict | None = None, name: str = "the journal") -> None:
+        """The lines of one journal (one or more of its day files, one after the other) added to this one."""
+        self.sources += 1
+        mine: dict[tuple[int, int], int] = {}  # this journal's own prices, for a block it writes twice
+        refused = False
         for line in text.splitlines():
             line = line.strip()
             if not line:
@@ -791,24 +810,112 @@ class Journal:
             except ValueError:
                 continue  # a write cut short
             if not isinstance(row, dict):
+                self.bad += 1
                 continue
-            if "gap" in row:
-                a, b = row["gap"]
-                j.gaps.append((int(a), int(b), str(row.get("why", ""))))
+            if "journal" in row:  # a day file's header: the files after it are of this deployment, or refused
+                why = journal_foreign(row, expect)
+                refused = why is not None
+                if refused:
+                    self.notes.append(f"{name}: {why}: its lines are not read")
                 continue
-            if "b" not in row:
+            if refused:
                 continue
-            b = int(row["b"])
-            j.lines += 1
-            if row.get("t") is not None:
-                j.times[b] = int(row["t"])
-            for asset, px in (row.get("px") or {}).items():
-                if int(px) > 0:  # a zero price (a feed not live) is no price
-                    j.px.setdefault(int(asset), {})[b] = int(px)
-        return j
+            try:
+                if "gap" in row:
+                    a, b = row["gap"]
+                    self.gaps.append((int(a), int(b), str(row.get("why", ""))))
+                    continue
+                if "b" not in row:
+                    continue
+                b = row["b"]
+                if isinstance(b, bool) or not isinstance(b, int):
+                    raise TypeError("block")
+                t = row.get("t")
+                t = None if t is None else int(t)
+                px = row.get("px") or {}
+                if not isinstance(px, dict):
+                    raise TypeError("px")
+                got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, bool)}
+                if len(got) != len(px):
+                    raise TypeError("px")
+            except (TypeError, ValueError, KeyError, IndexError):
+                self.bad += 1  # its block is a hole: no price of it is taken
+                continue
+            self.lines += 1
+            if t is not None:
+                self.times.setdefault(b, t)
+            for asset, v in got.items():
+                if v <= 0:  # a zero price (a feed not live) is no price
+                    continue
+                key = (asset, b)
+                if key in mine:
+                    if mine[key] != v:
+                        self.conflicts.setdefault(asset, {})[b] = f"{name} gives two prices at block {b}: {mine[key]} and {v}"
+                    continue
+                mine[key] = v
+                held = self.px.setdefault(asset, {})
+                if b in held and held[b] != v:  # an earlier journal's price
+                    self.conflicts.setdefault(asset, {})[b] = (f"the journals disagree at block {b}: {held[b]} against "
+                                                               f"{v} in {name}")
+                held.setdefault(b, v)
 
     def gaps_in(self, lo: int, hi: int) -> list[str]:
         return [f"{a}..{b} ({why})" for a, b, why in self.gaps if a <= hi and b >= lo]
+
+    def conflicts_in(self, asset: int, lo: int, hi: int) -> list[str]:
+        return [why for b, why in sorted(self.conflicts.get(asset, {}).items()) if lo <= b <= hi]
+
+
+JOURNAL_SCHEMA = "colosseum-prices/2"  # ops/stop_filler.py's: the first line of each day file
+
+
+def journal_foreign(header: dict, expect: dict | None) -> str | None:
+    """Why a journal file whose header is `header` is not of the deployment `expect` names (its chain, factory, label);
+    None when it is, or when there is nothing to hold it against."""
+    if header.get("journal") != JOURNAL_SCHEMA:
+        return f"a file of kind {str(header.get('journal'))[:40]!r}, not {JOURNAL_SCHEMA}"
+    for key, want in (expect or {}).items():
+        got = header.get(key)
+        if want is None:
+            continue
+        if str(got).lower() != str(want).lower():
+            return f"a journal of {key} {str(got)[:66]}, not {want}"
+    return None
+
+
+def journal_text(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None = None) -> str:
+    """The text of the journal `path` names (ops/stop_filler.py writes one file a day beside it, prices-<label>-
+    YYYY-MM-DD.jsonl): the day files from the day before `lo_t` to the day after `hi_t` (all of them when not given),
+    oldest first, and `path` itself first when it holds lines (a journal written before the day files, or a single
+    file given by hand). Each day file starts with its header, so the files of another deployment are known."""
+    parts = []
+    if path.is_file() and path.stat().st_size:
+        parts.append(path.read_text(errors="replace"))
+    lo_day = time.strftime("%Y-%m-%d", time.gmtime(lo_t - 86_400)) if lo_t is not None else ""
+    hi_day = time.strftime("%Y-%m-%d", time.gmtime(hi_t + 86_400)) if hi_t is not None else "9999"
+    for f in sorted(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}")):
+        day = f.name[len(path.stem) + 1:len(path.stem) + 11]
+        if lo_day <= day <= hi_day:
+            text = f.read_text(errors="replace")
+            parts.append(text if text.endswith("\n") or not text else text + "\n")
+    return "".join(p if p.endswith("\n") else p + "\n" for p in parts if p)
+
+
+def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: int | None = None,
+                  hi_t: int | None = None) -> "Journal | None":
+    """The journals `paths` name, one Journal (`Journal.add_text` each): the keeper's and the second writer's. A path
+    with no file of its own and no day file is said in `notes` and adds nothing (its blocks are the other's to hold); None when none of them exists."""
+    j = Journal()
+    found = False
+    for path in paths:
+        text = journal_text(path, lo_t, hi_t)
+        exists = path.is_file() or any(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}"))
+        if not exists:
+            j.notes.append(f"the journal {path.name} is not there")
+            continue
+        found = True
+        j.add_text(text, expect, path.name)
+    return j if found else None
 
 
 def load_prices(text: str) -> dict | Journal:
@@ -865,7 +972,9 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
                     ends of each stop's time, each block the journal shows at the price or past it, and blocks spread
                     over the rest, `reads` an account at most, each to be the journal's price.
 
-    `node(asset, block)` is the oracle price at that block or None (`oracle_at`). Returns, for each account with a stop,
+    `node(asset, block)` is the oracle price at that block or None (`oracle_at`), and `node` None is no such node: the
+    third line is optional (a node that keeps old blocks, COLOSSEUM_ARCHIVE_RPC_URL), and without it only the chain's own
+    prices are held against the journal. Returns, for each account with a stop,
     {"asked", "agreed", "doubts"}: a doubt is why the journal is not borne out (a price that differs, a node that keeps
     no state that far back or answers with today's, no chain price to calibrate on), and any doubt holds the payout."""
     out: dict[str, dict] = {}
@@ -906,6 +1015,11 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
                 if b in known and known[b] != px:
                     res["doubts"].append(f"asset {asset}: the journal gives {known[b]} at block {b}, where the chain "
                                          f"wrote {px}")
+        if node is None:
+            continue  # no node that answers for old blocks: the third line is not there, and that holds nothing
+        if reads < 1:
+            res["doubts"].append(f"a check of {reads} reads asks the node nothing: the journal is not checked by it")
+            continue
         want: list[tuple[int, int]] = []
         for s in spans:
             known = journal.px.get(s["asset"], {})
@@ -955,6 +1069,12 @@ def stop_doubt(evs: list[dict], m: dict | None, journal: Journal | None, check: 
             known = journal.px.get(s["asset"], {})
             lo, hi = s["armedAt"], s["end"]
             holes = (hi - lo + 1) - sum(1 for b in known if lo <= b <= hi)
+            clash = journal.conflicts_in(s["asset"], lo, hi)
+            if clash:
+                out["unchecked"].append(f"the journals do not agree with themselves or each other in the "
+                                        f"{'take' if s['take'] else 'stop'} at {s['px']} on asset {s['asset']}: "
+                                        + "; ".join(clash[:3]) + (f" (and {len(clash) - 3} more)" if len(clash) > 3 else ""))
+                concerned.append((s["asset"], s["take"], s["armedAt"]))
             if holes:
                 gaps = journal.gaps_in(lo, hi)
                 out["unchecked"].append(

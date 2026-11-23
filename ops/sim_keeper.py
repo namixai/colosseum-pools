@@ -612,6 +612,11 @@ def main(argv: list[str] | None = None) -> int:
         # filler sends nothing of the stops, and its own sends stay c.send_tx's.
         filler = wallet is not None and k.is_filler()
         k.stop_loop = stop_filler.build(args, k, state, wallet=wallet if filler else None)
+        if wallet is not None and not filler:
+            # Said at the start, not after the first stop reached and not carried out: this key carries out no stop.
+            k.stop_loop.alarm("stop_key_not_filler", key=wallet.address, filler=k.filler,
+                              why="the keeper's key is not the factory's filler: it sends no stop, every stop reached "
+                                  "goes uncarried until the filler's key runs a keeper")
         k.outbox = k.stop_loop.sender
         thread = stop_filler.start(k.stop_loop, args.stop_poll or args.poll)
     last_slow = 0.0

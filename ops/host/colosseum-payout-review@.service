@@ -24,6 +24,9 @@ ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.review_service --deploymen
     --out /var/lib/colosseum-keeper/reviews-%i --flag /var/lib/colosseum-keeper/reviews-%i/ALARM \
     --prices /var/lib/colosseum-keeper/prices-${COLOSSEUM_DEPLOYMENT}.jsonl
 TimeoutStartSec=540
+# The journal is read a day file at a time, only the days of the stops' time: a pass that still grows past this is
+# killed and said (OnFailure), never left to take the host's memory.
+MemoryMax=1G
 
 NoNewPrivileges=true
 ProtectSystem=strict

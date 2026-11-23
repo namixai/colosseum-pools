@@ -425,8 +425,9 @@ class NoBlindSpots(Base):
         self.node.head = 103
         sent = loop.step(103)
         self.assertEqual(sent, [(EXAM, BTC, False)])
-        oracle_blocks = [int(p[1], 16) for m, p in self.node.calls if m == "eth_call" and p[0]["to"] == sf.ORACLE_PX]
-        self.assertEqual(oracle_blocks, [103, 101, 102], "the head's price first, then the blocks between")
+        oracle_blocks = [int(p[1], 16) for m, p in self.node.calls if m == "eth_call" and p[0]["to"] == sf.ORACLE_PX
+                         and p[0]["data"].endswith(encode(["uint32"], [BTC]).hex())]
+        self.assertEqual(oracle_blocks, [100, 103, 101, 102], "the head's price first, then the blocks between")
         self.assertLess([m for m, _ in self.node.calls].index("eth_sendRawTransaction"),
                         [m for m, _ in self.node.calls].index("eth_getLogs", 2), "sent before the read back")
         short = self.events("stop_reach_too_short")
@@ -440,8 +441,8 @@ class NoBlindSpots(Base):
         loop.step(110)
         blind = self.events("stop_watch_blind")
         self.assertEqual((blind[0]["from_block"], blind[0]["to"]), (101, 107))
-        journal = pr.load_prices((self.dir / "prices.jsonl").read_text())
-        self.assertEqual(sorted(journal.px[3]), [108, 109, 110])
+        journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+        self.assertEqual(sorted(journal.px[3]), [100, 108, 109, 110])
         self.assertIn((101, 107, "the head ran ahead of the loop: their prices were not read back"), journal.gaps)
 
     def test_a_stop_set_on_an_exam_sold_in_the_same_blocks_is_known_at_once(self):
@@ -452,9 +453,11 @@ class NoBlindSpots(Base):
         sold = ev(sk.EXAM_SOLD, POOL, 100, b"", word(int(new, 16)))
         self.node.logs += [sold, set_log(100, 950_000, 101, exam=new)]
         self.node.price[100] = 900_000
-        self.run_to(loop, 100)
-        self.assertIn((new, BTC, False), loop.triggers, "no slow pass waited for")
-        self.assertEqual(self.run_to(loop, 101), [[(new, BTC, False)]])
+        # The platform's prices are read in every block, a stop known or not: the stop set in 100, armed for 101 and
+        # reached at 100's price, goes out at the end of the step that read it.
+        self.assertEqual(self.run_to(loop, 100), [[(new, BTC, False)]], "no slow pass waited for")
+        self.assertIn((new, BTC, False), loop.triggers)
+        self.assertEqual(self.run_to(loop, 101), [[]], "in flight: not sent twice")
 
     def test_nothing_watched_reads_nothing_but_the_head(self):
         self.keeper.accounts, self.keeper.pools = {}, []
@@ -844,10 +847,13 @@ class TheJournal(Base):
         j.add(101, {}, unread={3})
         j.gap(102, 104, "the loop was not running")
         j.add(105, {3: 949_000})
-        got = pr.load_prices((self.dir / "p.jsonl").read_text())
+        day = self.dir / "p-1970-01-01.jsonl"  # one file a day by the loop's clock; p.jsonl itself is the lock
+        self.assertEqual((self.dir / "p.jsonl").read_text(), "")
+        got = pr.load_prices(day.read_text())
         self.assertEqual(got.px, {3: {100: 950_000, 105: 949_000}, 100_007: {100: 12}})
         self.assertEqual((got.times, got.gaps, got.lines), ({100: 1_100}, [(102, 104, "the loop was not running")], 3))
-        first, second = [json.loads(x) for x in (self.dir / "p.jsonl").read_text().splitlines()[:2]]
+        header, first, second = [json.loads(x) for x in day.read_text().splitlines()[:3]]
+        self.assertEqual(header, {"journal": sf.JOURNAL_SCHEMA})
         self.assertEqual(first, {"b": 100, "t": 1_100, "w": 7, "px": {"3": 950_000, "100007": 12}})
         self.assertEqual(second, {"b": 101, "t": None, "w": 7, "px": {}, "unread": [3]})
         j.close()
@@ -856,12 +862,12 @@ class TheJournal(Base):
         again.close()
 
     def test_a_write_cut_short_is_cut_off_when_it_is_opened_and_nothing_before_it(self):
-        path = self.dir / "p.jsonl"
+        path = self.dir / "p-1970-01-01.jsonl"
         whole = "".join(json.dumps({"b": b, "px": {"3": b}}) + "\n" for b in range(1, 5001))
         for cut, last in ((whole + '{"b": 5001, "px": {"3', 5000), ('{"b": 1', None), ("", None),
                           (whole + json.dumps({"gap": [5001, 5009], "why": "x"}) + "\n", 5009)):
             path.write_text(cut)
-            j = sf.PriceJournal(path)
+            j = sf.PriceJournal(self.dir / "p.jsonl", clock=lambda: 7)
             self.assertEqual(j.last, last, cut[-30:])
             j.add(9_000, {3: 1})
             j.close()
@@ -875,7 +881,7 @@ class TheJournal(Base):
         self.node.price.update({101: 949_000, 102: 951_000})
         loop.head_t[102] = 1_000_102
         self.run_to(loop, 101, 102)
-        got = pr.load_prices((self.dir / "prices.jsonl").read_text())
+        got = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
         self.assertEqual((got.px[3][101], got.px[3][102], got.times.get(102)), (949_000, 951_000, 1_000_102))
 
     def test_started_again_the_blocks_it_was_not_running_in_are_a_gap(self):
@@ -884,7 +890,7 @@ class TheJournal(Base):
         self.run_to(loop, 101)
         loop = self.loop(wallet=None)  # the keeper started again, the journal opened again
         self.run_to(loop, 120)
-        got = pr.load_prices((self.dir / "prices.jsonl").read_text())
+        got = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
         self.assertIn((102, 119, "the loop was not running"), got.gaps)
 
     def test_a_journal_that_cannot_be_written_is_an_alarm_at_once(self):
@@ -1085,13 +1091,13 @@ class TheBotsReview(Base):
         self.assertEqual(self.events("stop_missed")[0]["reason"], "the keeper holds the exam done")
 
     def test_a_write_cut_short_while_running_is_mended_before_the_next(self):
-        j = sf.PriceJournal(self.dir / "p.jsonl")
+        j = sf.PriceJournal(self.dir / "p.jsonl", clock=lambda: 7)
         j.add(1, {3: 5})
-        with open(self.dir / "p.jsonl", "ab") as fh:  # a write cut short: no end of line
+        with open(self.dir / "p-1970-01-01.jsonl", "ab") as fh:  # a write cut short: no end of line
             fh.write(b'{"b":2,"px":{"3"')
         j.broken = True  # the write that failed said so
         j.add(3, {3: 7})
-        self.assertEqual(pr.load_prices((self.dir / "p.jsonl").read_text()).px, {3: {1: 5, 3: 7}})
+        self.assertEqual(pr.load_prices(pr.journal_text(self.dir / "p.jsonl")).px, {3: {1: 5, 3: 7}})
         j.close()
 
 

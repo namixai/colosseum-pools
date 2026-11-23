@@ -136,6 +136,8 @@ BUMP_AFTER_S = 2.0
 MAX_BUMPS = 4
 # Seconds the node's head block may be older than this machine's clock before it is an alarm: a node behind or stuck.
 STALE_HEAD_S = 60.0
+# The first line of each day file of the journal of prices: what it is, so a review refuses another kind of file.
+JOURNAL_SCHEMA = "colosseum-prices/2"
 # Seconds the loop may stay short of the node's head before it is an alarm.
 BEHIND_S = 30.0
 # How often the key's balance is read, and the stops' fills it must still pay for (at twice the gas price, the most a
@@ -501,23 +503,27 @@ class Sender:
 # ── the journal of prices ────────────────────────────────────────────────────────────
 
 class PriceJournal:
-    """The oracle prices this loop read, one JSON line a block it looked at, in block order: the file
+    """The oracle prices this loop read, one JSON line a block it looked at, in block order: the files
     `ops/payout_review.py --prices` judges every block of each stop's time by.
 
+        {"journal": JOURNAL_SCHEMA, "chain": id, "factory": address, "label": deployment}   the first line of each file
         {"b": block, "t": the block's time (null where not read), "w": this loop's clock, "px": {asset: price}}
         {"b": ..., "px": {...}, "unread": [asset]}      an asset whose price could not be read in that block
         {"gap": [from, to], "why": ...}                 blocks the loop did not look at, and why
 
-    Every block it judged has its line, with every asset that had a stop or a take standing then (none standing: an
-    empty "px"), so a block missing is a gap of its own; the blocks it was not running in are written as a gap when it
-    starts again, from the last line it wrote. Lines are appended and flushed one by one; a last line cut short (the
-    machine stopped mid write) is cut off when the journal is opened, and nothing before it. One process writes it: a
-    second one is refused at the start. It is the keeper's own record: the review holds it against the chain's own
-    prices and a node before it believes it."""
+    `path` names the journal (prices-<deployment>.jsonl); its lines go to one file a day by this loop's clock (UTC),
+    prices-<deployment>-YYYY-MM-DD.jsonl beside it, so a review reads only the days it needs and no file grows without
+    end. The file `path` itself holds nothing: it is the lock that keeps a second writer out. Every block it judged has
+    its line, with the price of every platform asset (`assets`) and of every asset with a stop or a take standing, so a
+    block missing is a gap of its own, and the first lines after a restart are not empty; the blocks it was not running in
+    are written as a gap when it starts again, from the last line it wrote. Lines are appended and flushed one by one; a
+    last line cut short (the machine stopped mid write) is cut off when the journal is opened, and nothing before it. The
+    header names the chain, the factory and the deployment: a review refuses a file of another one."""
 
-    def __init__(self, path: pathlib.Path, clock=time.time):
+    def __init__(self, path: pathlib.Path, clock=time.time, header: dict | None = None):
         self.path = path
         self.clock = clock
+        self.header = {"journal": JOURNAL_SCHEMA, **(header or {})}
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(exist_ok=True)
         self._held = open(path, "rb")
@@ -527,11 +533,21 @@ class PriceJournal:
             self._held.close()
             raise SystemExit(f"{path} is written by another process: give this one its own --price-journal") from None
         self.broken = False
-        self.last = self._mend()
+        self.last = None
+        for f in reversed(journal_files(path)):
+            self.last = self._mend(f)
+            if self.last is not None:
+                break
 
-    def _mend(self) -> int | None:
+    def file_of(self, now: float | None = None) -> pathlib.Path:
+        """The file of the day `now` (this loop's clock) falls in."""
+        day = time.strftime("%Y-%m-%d", time.gmtime(self.clock() if now is None else now))
+        return self.path.with_name(f"{self.path.stem}-{day}{self.path.suffix}")
+
+    @staticmethod
+    def _mend(f: pathlib.Path) -> int | None:
         """The file cut back to its last whole line; the last block it holds a line or a gap for, None for none."""
-        with open(self.path, "r+b") as fh:
+        with open(f, "r+b") as fh:
             size = fh.seek(0, os.SEEK_END)
             back = min(size, 1 << 16)
             fh.seek(size - back)
@@ -543,25 +559,31 @@ class PriceJournal:
         for line in reversed(tail.splitlines()):
             try:
                 row = json.loads(line)
-            except ValueError:
+                if isinstance(row, dict) and "b" in row:
+                    return int(row["b"])
+                if isinstance(row, dict) and "gap" in row:
+                    return int(row["gap"][1])
+            except (ValueError, TypeError, IndexError, KeyError):
                 continue
-            if isinstance(row, dict) and "b" in row:
-                return int(row["b"])
-            if isinstance(row, dict) and "gap" in row:
-                return int(row["gap"][1])
         return None
 
     def close(self) -> None:
         self._held.close()
 
     def _write(self, row: dict) -> None:
-        """One line, appended. A write that failed (a full disk) may have left half a line: cut off before the next."""
+        """One line, appended to the day's file (its header first when new). A write that failed (a full disk) may have
+        left half a line: cut off before the next."""
+        f = self.file_of()
         if self.broken:
-            self._mend()
+            if f.exists():
+                self._mend(f)
             self.broken = False
         try:
-            with open(self.path, "ab") as fh:
-                fh.write((json.dumps(row, separators=(",", ":")) + "\n").encode())
+            text = json.dumps(row, separators=(",", ":")) + "\n"
+            if not f.exists() or f.stat().st_size == 0:
+                text = json.dumps(self.header, separators=(",", ":")) + "\n" + text
+            with open(f, "ab") as fh:
+                fh.write(text.encode())
                 fh.flush()
         except OSError:
             self.broken = True
@@ -581,6 +603,11 @@ class PriceJournal:
             return
         self._write({"gap": [lo, hi], "why": why, "w": int(self.clock())})
         self.last = max(self.last or hi, hi)
+
+
+def journal_files(path: pathlib.Path) -> list[pathlib.Path]:
+    """The day files of the journal `path` names, oldest first (the names sort by day)."""
+    return sorted(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}"))
 
 
 # ── the alarm ────────────────────────────────────────────────────────────────────────
@@ -635,8 +662,12 @@ class StopLoop:
     def __init__(self, keeper, node: Node, *, wallet=None, sender: Sender | None = None, tip_wei: int = 0,
                  journal: PriceJournal | None = None, alarm: Alarm | None = None, backfill: int = BACKFILL,
                  overdue: int = OVERDUE, min_alarm_blocks: int = MIN_ALARM_BLOCKS, catchup: int = CATCHUP,
-                 clock=time.time, min_runway: int = MIN_RUNWAY_FILLS):
+                 clock=time.time, min_runway: int = MIN_RUNWAY_FILLS, assets=None):
         self.keeper = keeper
+        if assets is None:  # the platform's assets on this network: their prices go to the journal in every block
+            from ops import sim_network as sn
+            assets = sn.sim(c.NETWORK).assets.values()
+        self.assets = frozenset(int(a) for a in assets)
         self.clock = clock  # the wall clock the head's time and the loop's lag are held against
         self.min_runway = min_runway
         self.head_t: dict[int, int] = {}  # a head block -> its time, as the node gave it
@@ -818,13 +849,13 @@ class StopLoop:
             due: list = []
             if b >= price_lo:
                 prices = cache.get(b)
-                if prices is None or set(prices) != {k[1] for k in self.triggers}:
+                if prices is None or set(prices) != self._wanted():
                     prices = self._prices(b)  # a busy node ends the step here; the next one starts at this block
                 cache[b] = prices
                 due = self._watch(b, prices)
                 if self.journal is not None:
                     try:
-                        self.journal.add(b, prices, self.head_t.get(b), {k[1] for k in self.triggers} - set(prices))
+                        self.journal.add(b, prices, self.head_t.get(b), self._wanted() - set(prices))
                         if self.journal_said:
                             self.journal_said = False
                             log("stop_journal_works_again", block=b)
@@ -881,10 +912,16 @@ class StopLoop:
             logs.sort(key=lambda l: int(l.get("logIndex", "0x0"), 16))
         return by_block
 
+    def _wanted(self) -> set[int]:
+        """The assets whose price is read in every block: the platform's, and any other with a stop or a take standing."""
+        return set(self.assets) | {k[1] for k in self.triggers}
+
     def _prices(self, block: int) -> dict[int, int]:
-        """The oracle price, at `block`, of each asset with a stop or a take standing that was read: one that was not
-        leaves its stops unjudged in this block and the others as they are."""
-        assets = sorted({k[1] for k in self.triggers})
+        """The oracle price, at `block`, of each platform asset and each asset with a stop or a take standing that was
+        read: one that was not leaves its stops unjudged in this block and the others as they are. Every one goes to the
+        journal, a stop known or not: after a restart the loop knows no stop until the keeper's slow pass rereads the
+        exams, and the journal must hold their blocks all the same."""
+        assets = sorted(self._wanted())
         prices: dict[int, int] = {}
         unread: list[int] = []
         why = ""
@@ -898,10 +935,10 @@ class StopLoop:
             except Exception as exc:  # a block the node keeps no state of, an answer that did not parse
                 unread.append(asset)
                 why = str(exc)[:120]
-        if unread:
+        if set(unread) & {k[1] for k in self.triggers}:
             self._blind(block, block, f"assets {unread}: {why}")
             return prices
-        if self.blind_from is not None and assets:
+        if self.blind_from is not None and assets and not unread:
             log("stop_watch_sees_again", blind_from=self.blind_from, to=block - 1)
             self.blind_from, self.blind_said = None, False
         return prices
@@ -1419,7 +1456,9 @@ def build(args, keeper, state: pathlib.Path, wallet=None, prefix: str = "") -> S
         raise SystemExit("--stop-tip-gwei must not be negative")
     return StopLoop(keeper, node, wallet=wallet, sender=Sender(wallet, node) if wallet is not None else None,
                     tip_wei=int(round(args.stop_tip_gwei * GWEI)),
-                    journal=PriceJournal(journal_path) if journal_path else None, alarm=Alarm(flag),
+                    journal=PriceJournal(journal_path, header={"chain": c.CHAIN_ID, "factory": getattr(keeper, "factory", None),
+                                                               "label": args.deployment}) if journal_path else None,
+                    alarm=Alarm(flag),
                     overdue=args.stop_overdue, min_alarm_blocks=args.stop_alarm_min_blocks)
 
 
