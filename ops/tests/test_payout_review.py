@@ -1573,7 +1573,7 @@ class TheDocument(unittest.TestCase):
     """The JSON a page reads: its fields fixed by the schema's name."""
 
     KEYS = {"schema", "pool", "id", "trader", "stage", "exam", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action",
-            "reasons", "evidence", "call", "stopDraft", "batchApproval", "dailyCap", "readAt"}
+            "reasons", "evidence", "call", "stopDraft", "batchApproval", "dailyCap", "readAt", "chainId"}
 
     def test_a_clean_payout_carries_its_approval(self):
         ch, t1, s1 = honest_world()
@@ -1876,6 +1876,8 @@ class ReadingTheChain(unittest.TestCase):
         asked = []
 
         def rpc(method, params=()):
+            if method == "eth_chainId":
+                return hex(998)
             if method == "eth_blockNumber":
                 return hex(40)
             if method == "eth_getBlockByNumber":

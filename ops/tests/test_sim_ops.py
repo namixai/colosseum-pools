@@ -1530,21 +1530,75 @@ class TheClosing(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 d.ids_of(bad)
 
-    def test_approve_sends_only_with_send(self):
+    WAITING = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 1, False, 0, False)
+
+    def review(self, pid, **change):
+        pool = d.to_checksum_address(self.OTHER)
+        doc = {"schema": "payout-review/3", "chainId": 998, "pool": pool, "id": pid, "trader": self.WAITING[1],
+               "amount": str(self.WAITING[2]), "claimedAt": 1_000 - 3 * self.DAY, "dueAt": 1_000, "verdict": "clean",
+               "action": "approve", "reasons": [], "call": {"kind": "approve"}, "readAt": {"block": 5_000, "time": 9_000}}
+        doc.update(change)
+        return doc
+
+    def approve_main(self, argv, docs, node=None):
+        import tempfile
         from unittest import mock
         approver = d.to_checksum_address(self.CLOSER)
-        waiting = ("0x" + "11" * 20, "0x" + "77" * 20, 800_000_000, 1_000, 1, False, 0, False)
-        answers = {"payoutCount()": [5], "payout(uint256)": [waiting], "factory()": ["0x" + "99" * 20],
+        node = node or {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_100)}}
+        answers = {"payoutCount()": [5], "payout(uint256)": [self.WAITING], "factory()": ["0x" + "99" * 20],
                    "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "approver()": [approver]}
-        with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
-                mock.patch.object(d.c, "address_of", return_value=approver), mock.patch.object(d.c, "assert_testnet"), \
-                mock.patch.object(d.c, "account") as key, \
-                mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
-            self.assertEqual(d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--ids", "3,4"]), 0)
-            sent.assert_not_called()
-            key.assert_not_called()
-            self.assertEqual(d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--ids", "3,4", "--send"]), 0)
-            self.assertEqual(sent.call_args[0][2:], ("approvePayouts(uint256[])", ["uint256[]"], [[3, 4]]))
+        with tempfile.TemporaryDirectory() as folder:
+            for pid, doc in docs.items():
+                (pathlib.Path(folder) / f"{d.to_checksum_address(self.OTHER)}-{pid}.json").write_text(json.dumps(doc))
+            with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
+                    mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): node[m]), \
+                    mock.patch.object(d.c, "address_of", return_value=approver), mock.patch.object(d.c, "assert_testnet"), \
+                    mock.patch.object(d.c, "account") as key, mock.patch("builtins.print"), \
+                    mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+                got = d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--reviews", folder, *argv])
+                return got, sent, key
+
+    def test_approve_sends_only_with_send(self):
+        docs = {3: self.review(3), 4: self.review(4)}
+        got, sent, key = self.approve_main(["--ids", "3,4"], docs)
+        self.assertEqual(got, 0)
+        sent.assert_not_called()
+        key.assert_not_called()
+        got, sent, _ = self.approve_main(["--ids", "3,4", "--send"], docs)
+        self.assertEqual(got, 0)
+        self.assertEqual(sent.call_args[0][2:], ("approvePayouts(uint256[])", ["uint256[]"], [[3, 4]]))
+
+    def test_approve_refuses_a_payout_without_a_fresh_review_that_says_approve(self):
+        """Review 12 of #336 (H-1): a held payout must not be approved from the command. Each payout needs the review
+        service's document, fresh, of this chain and payout, saying approve; otherwise nothing is approved and the
+        command says why. No flag gets round it."""
+        cases = {"no review at": {}, "says 'hold'": {3: self.review(3, action="hold", verdict="suspicious", call=None,
+                                                        reasons=[{"kind": "missed-stop", "text": "a stop missed on the stage"}])},
+                 "a stop missed on the stage": {3: self.review(3, action="hold", verdict="suspicious", call=None,
+                                                              reasons=[{"kind": "missed-stop", "text": "a stop missed on the stage"}])},
+                 "says 'decide'": {3: self.review(3, action="decide", verdict="suspicious")},
+                 "says 'none'": {3: self.review(3, action="none", call={"kind": "none"})},
+                 "says 'stop'": {3: self.review(3, action="stop", verdict="suspicious", call={"kind": "stop"})},
+                 "more than an hour": {3: self.review(3, readAt={"block": 5_100 - 3_601, "time": 9_000})},
+                 "another chain": {3: self.review(3, chainId=999)},
+                 "another payout": {3: self.review(4)},
+                 "another trader or amount": {3: self.review(3, amount="1")},
+                 "not a payout-review/3": {3: {**self.review(3), "schema": "payout-review/2"}},
+                 "not read whole": {3: self.review(3, readAt={"block": 5_000})}}
+        for word, docs in cases.items():
+            with self.assertRaises(SystemExit) as caught:
+                self.approve_main(["--ids", "3", "--send"], docs)
+            self.assertIn("NoReview", str(caught.exception), word)
+            self.assertIn(word, str(caught.exception))
+        # One of two without a review: neither is approved.
+        with self.assertRaises(SystemExit):
+            self.approve_main(["--ids", "3,4", "--send"], {3: self.review(3)})
+        # An hour old by the clock, though few blocks: refused too.
+        with self.assertRaises(SystemExit):
+            self.approve_main(["--ids", "3"], {3: self.review(3)},
+                              {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_000 + 3_601)}})
+        src = pathlib.Path(d.__file__).read_text()
+        self.assertNotIn("--no-review", src)
 
     def test_lift_only_the_factorys_operator_a_stopped_payout_within_its_14_days(self):
         """The pool's order of refusals (SimPool.liftStop, SimPoolStops.lift): the factory's operator alone, not on a
@@ -1627,10 +1681,15 @@ class TheClosing(unittest.TestCase):
         answers = {"payoutCount()": [5], "payout(uint256)": [waiting], "factory()": ["0x" + "99" * 20],
                    "PAYOUT_HARD()": [7 * self.DAY], "PAYOUT_DELAY()": [3 * self.DAY], "approver()": [ledger],
                    "creator()": [safe]}
-        for argv, who in ((["approve", "--pool", self.OTHER, "--signer", ledger, "--ids", "3"], ledger),
+        folder = tempfile.mkdtemp()
+        doc = self.review(3)
+        pathlib.Path(folder, f"{d.to_checksum_address(self.OTHER)}-3.json").write_text(json.dumps(doc))
+        node = {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_100)}}
+        for argv, who in ((["approve", "--pool", self.OTHER, "--signer", ledger, "--ids", "3", "--reviews", folder], ledger),
                           (["approver", "--pool", self.OTHER, "--signer", safe, "--address", self.CLOSER], safe)):
             out = io.StringIO()
             with mock.patch.object(d.c, "call_view", side_effect=lambda to, sig, *a: answers[sig]), \
+                    mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): node[m]), \
                     mock.patch.object(d.c, "account") as key, mock.patch.object(d.c, "transact") as sent, \
                     redirect_stdout(out):
                 self.assertEqual(d.main(argv), 0)
