@@ -9109,6 +9109,20 @@ MUTATIONS = [
      "        if doc.get(\"chainId\") is None or int(doc[\"chainId\"]) != int(chain_id):",
      "        if False:",
      ["test_approve_refuses_a_payout_without_a_fresh_review_that_says_approve"]),
+    # The review's service and its alarms.
+    ("RW1", "ops/review_service.py",
+     '    if r["verdict"] != "suspicious" or r["action"] == "stop":',
+     '    if True:',
+     ["test_a_held_payout_is_an_alarm_once_while_it_stays_as_it_is",
+      "test_a_suspicious_payout_the_pool_pays_by_itself_is_an_alarm_with_its_deadline"]),
+    ("RW2", "ops/review_service.py",
+     '        if a is not None and said.get(key) != mark:',
+     '        if a is not None:',
+     ["test_a_held_payout_is_an_alarm_once_while_it_stays_as_it_is"]),
+    ("RW3", "ops/review_service.py",
+     '        return r["dueAt"] if r["approved"] else r["hardAt"]',
+     '        return r["hardAt"]',
+     ["test_a_suspicious_payout_the_pool_pays_by_itself_is_an_alarm_with_its_deadline"]),
     ('RV215', 'ops/sim_check.py',
      '    text = _HOST.sub(r"\\1<host>\\2", text)',
      '    pass',
@@ -16854,6 +16868,7 @@ RUNNERS = {
     "SC": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_sim_check"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The review of a payout: its own test file.
     "RV": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_payout_review"], r"^(?:FAIL|ERROR): (\w+) \("),
+    "RW": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_review_service"], r"^(?:FAIL|ERROR): (\w+) \("),
     # The simulated pool's keeper, deploy script and relayer: their own two test files.
     "SK": (["spike/.venv/bin/python", "-m", "unittest", "ops.tests.test_sim_keeper", "ops.tests.test_sim_ops"],
            r"^(?:FAIL|ERROR): (\w+) \("),

@@ -1,0 +1,50 @@
+# The review of instance %i's payouts still waiting (ops/review_service.py), run by its timer every 10 minutes: it reads
+# the chain, writes each payout's review to /var/lib/colosseum-keeper/reviews-%i/<pool>-<id>.json (what
+# `deploy_sim approve` and the operator's page read: no approval without a fresh review that says approve), and raises
+# an alarm (COLOSSEUM_ALERT_CMD) for each payout a person has to act on: held, or paid by itself unless a person stops
+# it for reason 3 before its deadline. It sends nothing and holds no key.
+# ops/host/install.sh puts it in place with its timer; it is enabled by hand, per instance: systemctl enable --now
+# colosseum-payout-review@<name>.timer
+[Unit]
+Description=colosseum-pools payout review %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=colosseum-keeper
+Group=colosseum-keeper
+WorkingDirectory=/opt/colosseum-pools/current
+EnvironmentFile=/etc/colosseum/keeper-%i.env
+EnvironmentFile=/etc/colosseum/deployment-%i.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/colosseum-pools/venv/bin/python -m ops.review_service --deployment ${COLOSSEUM_DEPLOYMENT} \
+    --out /var/lib/colosseum-keeper/reviews-%i --flag /var/lib/colosseum-keeper/reviews-%i/ALARM
+TimeoutStartSec=540
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/colosseum-keeper
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0027
+# No key of any kind: the review reads.
+InaccessiblePaths=/var/lib/colosseum-gw -/var/lib/colosseum-keeper/secrets -/var/lib/colosseum-keeper/shared
+TemporaryFileSystem=/var/lib/colosseum-keeper/instances:ro
+ProtectProc=invisible
+ProcSubset=pid
