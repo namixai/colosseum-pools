@@ -3024,6 +3024,18 @@ class NoNodeAddressInTheLog(unittest.TestCase):
         with mock.patch.object(r.c, "RPC_URL", "http://node.example.net:8545/AbCdKey"):
             self.assertEqual(r.quiet(RuntimeError("down: http://node.example.net:8545/AbCdKey"), 50), "down: <node>")
 
+    def test_a_key_in_the_nodes_host_name_is_taken_out_too(self):
+        """Review 12 of #336 (L-1): urllib3 writes the host as host='…' and in its resolver's words."""
+        text = ("HTTPSConnectionPool(host='SECRETKEY123.quiknode.pro', port=443): Max retries exceeded with url: /v2/abc "
+                "(Caused by NameResolutionError(\"<urllib3.connection.HTTPSConnection object at 0x1>: Failed to resolve "
+                "'SECRETKEY123.quiknode.pro' ([Errno 8] nodename nor servname provided)\"))")
+        with mock.patch.object(r.c, "RPC_URL", "https://SECRETKEY123.quiknode.pro/v2/abc"):
+            out = r.quiet(RuntimeError(text), 400)
+        self.assertNotIn("SECRETKEY123", out)
+        self.assertIn("host='<host>'", out)
+        self.assertNotIn("SECRETKEY123", r.quiet(RuntimeError("HTTPSConnectionPool(host='SECRETKEY123.example.org', port=443)"), 400),
+                         "host='…' is taken out even for a node not configured here")
+
     def test_a_node_that_fails_ends_the_review_in_one_line_without_its_address(self):
         import requests
         with mock.patch.object(r.c, "assert_testnet"), \
