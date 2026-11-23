@@ -47,12 +47,15 @@ and the line given to COLOSSEUM_ALERT_CMD when the host has a channel. A miss do
 until a person removes it. So does a loop that cannot see: a thread that ended or stopped moving, calls failing for
 `STALL_S` seconds, prices unread for `BLIND_ALARM_BLOCKS` blocks, or a gap past `CATCHUP` are alarms too.
 
-Every block it looks at goes to a journal (`--price-journal`, prices-<deployment>.jsonl beside the state), one JSON
-line a block: its number, its time, this loop's clock, and the oracle price of each asset with a stop or a take
-standing (`PriceJournal`); the blocks it did not look at are written as gaps with why (not running, the head ahead of
-its read-back, behind past `CATCHUP`). It survives a restart (a last line cut short is cut off) and has one writer.
-It is the record `ops/payout_review.py --prices` judges every block of each stop's time by, and the keeper's own:
-the review believes it only where the chain's own prices and a calibrated node bear it out.
+Every block it looks at goes to a journal (`--price-journal`, prices-<deployment>.jsonl beside the state, written as
+one file a day with a header naming the chain, the factory and the deployment), one JSON line a block: its number, its
+time, this loop's clock, and the oracle price of every platform asset and every asset with a stop or a take standing
+(`PriceJournal`), so the first blocks after a restart are in it before the stops are read again; the blocks it did not
+look at are written as gaps with why (not running, the head ahead of its read-back, behind past `CATCHUP`). It
+survives a restart (a last line cut short is cut off) and has one writer. It is the record `ops/payout_review.py
+--prices` judges every block of each stop's time by, and the keeper's own: the review holds it against the second
+writer's journal (this module run alone on another machine and node), the chain's own prices and the venue's
+candles. The loop also watches the payout review's last pass (`--review-status`) and says when it is too old.
 
 Nothing is sent on a timer: the only transaction of this loop is a stop's `fillTrigger`, in the block that saw it
 reached. One that has not landed `BUMP_AFTER_S` later is signed again under its nonce with fees a quarter higher (only

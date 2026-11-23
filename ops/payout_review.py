@@ -2964,6 +2964,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--prices", help="the stops' loop's journal of prices (ops/stop_filler.py, JSON lines): every block of "
                     "each stop's time is judged by it, held against the chain and a node; or, as before, a JSON file of "
                     'oracle prices the node cannot give, {"asset:block": px}')
+    ap.add_argument("--prices2", help="the second writer's journal (its name; the day files beside it are read)")
     ap.add_argument("--journal-checks", type=int, default=JOURNAL_CHECKS,
                     help="how many blocks of each account's stops a node is asked for, to check the journal against it")
     ap.add_argument("--venue-prices", help="a JSON file of the venue's prices, {asset: {minute: px}}: Hyperliquid's "
@@ -2987,7 +2988,16 @@ def main(argv: list[str] | None = None) -> int:
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
     load = lambda path: json.loads(pathlib.Path(path).read_text()) if path else None
-    prices = load_prices(pathlib.Path(args.prices).read_text()) if args.prices else None
+    prices = None
+    if args.prices:
+        path = pathlib.Path(args.prices)
+        try:  # the old single object {"asset:block": px}, or the journal's day files (and the second writer's)
+            whole = json.loads(path.read_text()) if path.is_file() and path.stat().st_size else None
+        except ValueError:
+            whole = None
+        prices = whole if isinstance(whole, dict) and whole and all(":" in str(k) for k in whole) else read_journals(
+            [path] + ([pathlib.Path(args.prices2)] if args.prices2 else []),
+            {"factory": record["SimPoolFactory"], "label": args.deployment})
     venue = load(args.venue_prices)
     with node_errors():
         chain = read_chain(record, prices, venue, args.touch_reads, args.journal_checks)

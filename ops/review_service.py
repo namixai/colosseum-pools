@@ -9,11 +9,19 @@ shows. A document is written whole or not at all (a file beside it, then renamed
 
 An alarm (the journal marked ALARM, the flag file, COLOSSEUM_ALERT_CMD when the host has a channel) for each payout
 that is suspicious and that nothing on chain will settle by itself: a stop of reason 1 or 2 the checker sends itself
-(action "stop") is no alarm; a payout held ("hold") waits for a person (a stop of reason 3, or its ceiling). A payout
-the pool will pay by itself without anyone's approval (a pool without approvals, a payout approved already, or one
-whose approvals were not read) is an alarm at once with its deadline: the last moment a person can still stop it for
-reason 3 (`payout_review.stop_deadline`). Each payout is said once while it stays as it is: a payout whose verdict,
-action or reasons change is said again.
+(action "stop") is no alarm; a payout held ("hold") waits for a person (a stop of reason 3, or its ceiling, whose date
+the alarm says). A payout the pool will pay by itself without anyone's approval (a pool without approvals, a payout
+approved already, or one whose approvals were not read) is an alarm at once with its deadline: the last moment a
+person can still stop it for reason 3 (`stop_deadline`). Each is said again every 6 hours while it stays so, and once
+more 24 and 6 hours before its deadline; one whose verdict, action or reasons change is said again at once; and an
+alarm is remembered only once the channel took it, so one that did not go out is said at the next pass. A pass that
+fails is an alarm too (once an hour), and so is a unit that failed (`--unit-failed`, its OnFailure=).
+
+Every block of each stop's time is judged by the journals of prices (--prices, the keeper's; --prices2, the second
+writer's from another machine), the venue's minute candles kept in --out (`ops/venue_candles.py`, fetched each pass),
+and, when there is one, a node that answers for old blocks (--archive-rpc). The logs read are kept in --out/scan.json:
+each pass reads only the new blocks. The end of each pass goes to --out/status.json, whose age the stops' loop
+watches.
 
 It sends nothing and holds no key. On the host: colosseum-payout-review@<name>.service run by its .timer every 10
 minutes (ops/host). Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet.
