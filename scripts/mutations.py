@@ -9809,8 +9809,8 @@ MUTATIONS = [
      '',
      ['test_an_amount_is_usdc_of_at_most_six_decimals']),
     ('SK64', 'ops/deploy_sim.py',
-     '    if not args.send:\n        print("deploy_sim: nothing was sent (--send sends).")\n        return 0\n    sn.confirm_send(args, f"{sig} on {pool_} from the key {args.key!r}", c)\n    rcpt = c.transact(c.account(args.key), pool_, sig',
-     '    sn.confirm_send(args, f"{sig} on {pool_} from the key {args.key!r}", c)\n    rcpt = c.transact(c.account(args.key), pool_, sig',
+     '    if not args.send:\n        print("deploy_sim: nothing was sent (--send sends).")\n        return 0\n    sn.confirm_send(args, f"{sig} on {pool_} from the key {args.key!r}", c)\n    if before is not None:',
+     '    sn.confirm_send(args, f"{sig} on {pool_} from the key {args.key!r}", c)\n    if before is not None:',
      ['test_the_withdrawal_sends_only_with_send']),
     # The simulated pool's network: testnet unless named twice; mainnet sends only when confirmed (ops/sim_network.py).
     ("SN1", "ops/sim_network.py",
@@ -17294,6 +17294,15 @@ MUTATIONS = [
      "        sf.require_channel(\"the host's watch\")\n",
      "",
      ["test_on_mainnet_it_does_not_run_without_a_channel"]),
+    # `approve` reads its reviews again once the send is confirmed (the confirmation waits for a person, with no limit).
+    ("SK240", "ops/deploy_sim.py",
+     "    if before is not None:\n        before()\n",
+     "    if False:\n        before()\n",
+     ["test_approve_reads_its_reviews_again_after_the_confirmation_and_before_it_sends"]),
+    ("SK241", "ops/deploy_sim.py",
+     "        review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), head, head_time)",
+     "        review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc(\"eth_chainId\"), 16), latest, now)",
+     ["test_approve_reads_its_reviews_again_after_the_confirmation_and_before_it_sends"]),
 ]
 
 RUNNERS = {

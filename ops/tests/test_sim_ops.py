@@ -1537,7 +1537,9 @@ class TheClosing(unittest.TestCase):
         doc.update(change)
         return doc
 
-    def approve_main(self, argv, docs, node=None):
+    def approve_main(self, argv, docs, node=None, confirm=None):
+        """`confirm(folder)`: what happens while the person confirms the send (the wait of `confirm_send` on mainnet)."""
+        import contextlib
         import tempfile
         from unittest import mock
         approver = d.to_checksum_address(self.CLOSER)
@@ -1551,7 +1553,10 @@ class TheClosing(unittest.TestCase):
                     mock.patch.object(d.c, "rpc", side_effect=lambda m, p=(): node[m]), \
                     mock.patch.object(d.c, "address_of", return_value=approver), mock.patch.object(d.c, "assert_testnet"), \
                     mock.patch.object(d.c, "account") as key, mock.patch("builtins.print"), \
-                    mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent:
+                    mock.patch.object(d.c, "transact", return_value={"transactionHash": "0x01"}) as sent, \
+                    (mock.patch.object(d.sn, "confirm_send", side_effect=lambda *a, **kw: confirm(pathlib.Path(folder)))
+                     if confirm else contextlib.nullcontext()):
+                self.sent = sent
                 got = d.main(["approve", "--pool", self.OTHER, "--key", "approver", "--reviews", folder, *argv])
                 return got, sent, key
 
@@ -1596,6 +1601,33 @@ class TheClosing(unittest.TestCase):
                               {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_000 + 3_601)}})
         src = pathlib.Path(d.__file__).read_text()
         self.assertNotIn("--no-review", src)
+
+    def test_approve_reads_its_reviews_again_after_the_confirmation_and_before_it_sends(self):
+        """On mainnet the confirmation waits for a person, with no limit: a review fresh before the wait can be past
+        its hour after it, or written again as a hold meanwhile. Once the send is confirmed the reviews are read again
+        against the head as it stands then; one that no longer carries the approval stops the send."""
+        def node():
+            return {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_100)}}
+        pool = d.to_checksum_address(self.OTHER)
+        late = node()
+        cases = {
+            # The person took more than the hour: the chain's clock is past the review's.
+            "more than an hour": (late, lambda folder: late.update({"eth_getBlockByNumber": {"timestamp": hex(9_000 + 3_601)}})),
+            # The review's service ran again during the wait and now holds the payout.
+            "says 'hold'": (node(), lambda folder: (folder / f"{pool}-3.json").write_text(json.dumps(
+                self.review(3, action="hold", verdict="suspicious", call=None)))),
+            # The document is gone.
+            "no review at": (node(), lambda folder: (folder / f"{pool}-3.json").unlink()),
+        }
+        for word, (chain, during) in cases.items():
+            with self.assertRaises(SystemExit) as caught:
+                self.approve_main(["--ids", "3", "--send"], {3: self.review(3)}, chain, confirm=during)
+            self.assertIn("NoReview", str(caught.exception), word)
+            self.assertIn(word, str(caught.exception))
+            self.sent.assert_not_called()
+        # Confirmed in time, the reviews as they were: sent, once.
+        got, sent, _ = self.approve_main(["--ids", "3", "--send"], {3: self.review(3)}, node(), confirm=lambda folder: None)
+        self.assertEqual((got, sent.call_count), (0, 1))
 
     def test_lift_only_the_factorys_operator_a_stopped_payout_within_its_14_days(self):
         """The pool's order of refusals (SimPool.liftStop, SimPoolStops.lift): the factory's operator alone, not on a

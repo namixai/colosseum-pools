@@ -65,7 +65,9 @@ approved 7 days after. Without --send `approve` reads each payout and says whose
 from when it goes out with the approval and from when without, or why the pool would refuse it. Each payout is approved
 only on a fresh review that says approve (the review service's `<pool>-<id>.json` in --reviews, ops/state/reviews by
 default, of this chain, pool and payout, read within the hour); without one the command refuses and says why, and there
-is no flag around it: a payout not approved goes out by itself at its ceiling. Like `close` and `finish`, without --send each reads
+is no flag around it: a payout not approved goes out by itself at its ceiling. With --send the reviews are read again
+once the send is confirmed, against the head as it stands then: on mainnet the confirmation waits for a person, for as
+long as they take. Like `close` and `finish`, without --send each reads
 the pool and says what it would send, from which key, or why the pool would refuse.
 
 `lift` lifts the stop of payout --id (liftStop, from the factory's operator: our Safe with --signer, or the deployer's
@@ -1054,7 +1056,13 @@ def approve(args) -> int:
     for line in lines:
         print("  " + line)
     print("  approving sets neither the amount nor the trader; the checker can still stop each until it is paid")
-    return send_or_say(args, pool_, "approvePayouts(uint256[])", ["uint256[]"], [ids])
+
+    def still_fresh() -> None:
+        # The person's confirmation has no time limit: the reviews are held to the head as it stands after it.
+        head = int(c.rpc("eth_blockNumber"), 16)
+        head_time = int(c.rpc("eth_getBlockByNumber", [hex(head), False])["timestamp"], 16)
+        review_check(pathlib.Path(args.reviews), pool_, payouts, ids, int(c.rpc("eth_chainId"), 16), head, head_time)
+    return send_or_say(args, pool_, "approvePayouts(uint256[])", ["uint256[]"], [ids], before=still_fresh)
 
 
 def lift_check(operator: str, sender: str, finished: bool, p: tuple | None, i: int, now: int, reserve: int) -> str:
@@ -1167,13 +1175,17 @@ def print_batch(args, name: str, txs: list[tuple[str, int, bytes]]) -> int:
     return 0
 
 
-def send_or_say(args, pool_: str, sig: str, types: list | None = None, values: list | None = None) -> int:
+def send_or_say(args, pool_: str, sig: str, types: list | None = None, values: list | None = None, before=None) -> int:
+    """`before`: called once the send is confirmed and before it goes out; what it raises stops the send (`approve`
+    reads its reviews again there: on mainnet the confirmation waits for a person, for as long as they take)."""
     if getattr(args, "signer", None):
         return print_batch(args, f"{sig} on {pool_}", [(pool_, 0, c.encode_call(sig, types or [], values or []))])
     if not args.send:
         print("deploy_sim: nothing was sent (--send sends).")
         return 0
     sn.confirm_send(args, f"{sig} on {pool_} from the key {args.key!r}", c)
+    if before is not None:
+        before()
     rcpt = c.transact(c.account(args.key), pool_, sig, types or [], values or [])
     print(f"deploy_sim: sent, tx {rcpt['transactionHash']}")
     return 0
