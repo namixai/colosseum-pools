@@ -1212,11 +1212,12 @@ on chain 999, with mainnet's own page. Nothing is written into `app/` for it; th
    `null` while there is none: the panels then read the chain themselves, and the operator's page offers no
    one-signature approval, which needs a review from the index. The index answers one origin
    (`SIM_INDEX_ALLOW_ORIGIN`, docs/GATEWAY.md): the mainnet site's.
-2. Pack: `./scripts/pack-site.sh --network mainnet <commit> [out-dir]`. The folder is the commit's `app/` with
-   `config.js` and `index.html` written for mainnet by that commit's own `scripts/app_config.py`, in place of
-   testnet's; `build.json` is `{"commit": "<the full hash>", "network": "mainnet"}`, and the list goes beside the
-   folder as for testnet. The last line must say `differ=0 extra=0`. The packer stops with the reason, and writes
-   nothing, when the commit has nothing on mainnet for a site to read.
+2. Pack: `./scripts/pack-site.sh --network mainnet <commit> [out-dir]`. The folder, by default
+   `~/Downloads/pools-app-mainnet-<first 8 of the commit>`, is the commit's `app/` with `config.js` and `index.html`
+   written for mainnet by that commit's own `scripts/app_config.py`, in place of testnet's; `build.json` is
+   `{"commit": "<the full hash>", "network": "mainnet"}`, and the list goes beside the folder as for testnet. The
+   last line must say `differ=0 extra=0`. The packer stops with the reason, and writes nothing, when the commit has
+   nothing on mainnet for a site to read.
 3. Read the folder's two written files before uploading. `config.js` names chain 999,
    `https://rpc.hyperliquid.xyz/evm`, the factory under `sim` and no other deployment. `index.html` says "Mainnet.
    Real USDC. Unaudited." where testnet's page has its notice and its entry question, and has "Pools" alone in its

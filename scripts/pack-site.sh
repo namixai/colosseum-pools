@@ -21,7 +21,9 @@
 # every other file against its blob, as for testnet. The script stops when the commit has nothing for a mainnet site
 # to read (no live deployment and no staged simulation-pool deployment on mainnet), or when the page's words have
 # moved from where the script replaces them, and the packer with it, writing nothing. Testnet, the default, packs as
-# it always has: the commit's own config.js and index.html, and build.json with the commit alone.
+# it always has: the commit's own config.js and index.html, and build.json with the commit alone. A mainnet pack's
+# default folder says so, ~/Downloads/pools-app-mainnet-<first 8 of the commit>: the two packs of one commit go up to
+# different sites and must not be taken for each other.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
@@ -29,7 +31,8 @@ NETWORK=testnet
 if [ "${1:-}" = "--network" ]; then NETWORK="${2:?testnet or mainnet}"; shift 2; fi
 case "$NETWORK" in testnet|mainnet) ;; *) echo "no network $NETWORK: testnet or mainnet"; exit 1 ;; esac
 SHA="$(git rev-parse --verify "${1:?a commit}^{commit}")"
-OUT="${2:-$HOME/Downloads/pools-app-${SHA:0:8}}"
+NAME="pools-app-${SHA:0:8}"; [ "$NETWORK" = testnet ] || NAME="pools-app-$NETWORK-${SHA:0:8}"
+OUT="${2:-$HOME/Downloads/$NAME}"
 OUT="${OUT%/}"
 SUMS="$OUT.sha256"
 [ -e "$OUT" ] && { echo "exists: $OUT"; exit 1; }

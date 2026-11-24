@@ -17885,6 +17885,10 @@ MUTATIONS = [
      '    read_only = [] if sim is not None else read_only_entries(network, entries, files)',
      '    read_only = read_only_entries(network, entries, files)',
      ["a site of simulation pools shows one factory, on the network's own USDC; a live deployment keeps the settings it had"]),
+    ("NP5", "scripts/pack-site.sh",
+     '[ "$NETWORK" = testnet ] || NAME="pools-app-$NETWORK-${SHA:0:8}"',
+     ': "$NETWORK"',
+     ["mainnet sim pack"]),
 ]
 
 RUNNERS = {

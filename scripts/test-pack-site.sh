@@ -123,6 +123,18 @@ if grep -qi 'testnet\|mock\|#/new\|#/shared\|#/economics\|#/verify\|#/evidence\|
 fi
 (cd "$TMP/sim" && "${SUM[@]}" -c --status "$TMP/sim.sha256") || { echo "FAIL mainnet sim pack: the list does not check the pack"; exit 1; }
 echo "ok   packs a mainnet site of simulation pools: the one factory in config.js, mainnet's page, every other file its blob"
+# With no folder named, a mainnet pack goes to a folder that says mainnet, and testnet's keeps the name it had: the two
+# packs of one commit are not taken for each other at the upload.
+HOME="$TMP/home" ./scripts/pack-site.sh --network mainnet "$simc" >/dev/null 2>&1 \
+  || { echo "FAIL mainnet sim pack: not packed into a default folder"; exit 1; }
+HOME="$TMP/home" ./scripts/pack-site.sh "$simc" >/dev/null 2>&1 \
+  || { echo "FAIL mainnet sim pack: testnet's pack of the same commit found its default folder taken"; exit 1; }
+[ -f "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}/build.json" ] && [ -f "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}.sha256" ] \
+  && grep -q '"network":"mainnet"' "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}/build.json" \
+  || { echo "FAIL mainnet sim pack: its default folder does not say mainnet"; exit 1; }
+[ "$(cat "$TMP/home/Downloads/pools-app-${simc:0:8}/build.json")" = "{\"commit\":\"$simc\"}" ] \
+  || { echo "FAIL the default folder of a testnet pack is not pools-app-<first 8>"; exit 1; }
+echo "ok   names a mainnet pack's default folder for mainnet, and testnet's as before"
 # A commit whose page no longer reads as the script expects is not packed for mainnet: its words would be a guess.
 pageblob="$(git show HEAD:app/index.html | sed 's/and mock USDC\./with mock USDC./' | git hash-object -w --stdin)"
 GIT_INDEX_FILE="$TMP/simindex" git update-index --add --cacheinfo "100644,$pageblob,app/index.html"
