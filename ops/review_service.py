@@ -69,17 +69,29 @@ ALARM_BUDGET_S = 60
 
 
 def alarm_of(r: dict) -> dict | None:
-    """The alarm a review calls for, or None: suspicious and not settled by a stop the checker sends itself."""
+    """The alarm a review calls for, or None: suspicious and not settled by a stop the checker sends itself. What it
+    tells the person to do is what can still be done: a stop only where the pool would take one (`stoppable`; a payout
+    stopped once already, its stop lifted, takes no second, and then there is no deadline for one), and the draft of a
+    stop of reason 3 only where the review made one (`stopDraft`)."""
     if r["verdict"] != "suspicious" or r["action"] == "stop":
         return None
     by_itself = r["action"] != "hold" and (r["approvals"] is not True or r["approved"])
     pays = r["dueAt"] if by_itself else r["hardAt"]
+    stoppable = r.get("stoppable") is not False
+    if stoppable:
+        stop = ("a person stops it for reason 3 (the draft is in the review)" if r.get("stopDraft") else
+                "a person stops it for reason 3 (the review made no draft of one: its reasons are what there is)")
+        do = (f"it pays by itself: {stop} before the deadline" if by_itself else
+              f"held: it is not approved, and it goes out by itself at its ceiling ({utc(pays)}) unless {stop} before "
+              "then; do not approve it")
+    else:
+        none = ("the pool would refuse a stop of it now (it was stopped once already, or its time to stop is over): "
+                "there is none to send")
+        do = (f"it pays by itself ({utc(pays)}), and {none}" if by_itself else
+              f"held: it is not approved, and it goes out by itself at its ceiling ({utc(pays)}); {none}; do not "
+              "approve it")
     return {"pool": r["pool"], "id": r["id"], "trader": r["trader"], "action": r["action"], "kinds": r["kinds"],
-            "reasons": r["reasons"], "deadline": stop_deadline(r), "paysAt": pays,
-            "do": ("it pays by itself: a person stops it for reason 3 (the draft is in the review) before the deadline"
-                   if by_itself else
-                   f"held: it is not approved, and it goes out by itself at its ceiling ({utc(pays)}) unless a person "
-                   "stops it for reason 3 (the draft is in the review) before then; do not approve it")}
+            "reasons": r["reasons"], "deadline": stop_deadline(r) if stoppable else None, "paysAt": pays, "do": do}
 
 
 def utc(t: int | None) -> str:

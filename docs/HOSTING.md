@@ -954,7 +954,9 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
 
 Each payout held is the alarm `payout_held` with the date it goes out by itself, said again every 6 hours, and once
 more 24 and 6 hours before that date, while it is held and not stopped; a payout that pays by itself unless stopped
-is `payout_needs_a_stop`, the same way. A pass that fails is `review_failed` (once an hour); a pass killed by its
+is `payout_needs_a_stop`, the same way. Each says what can still be done: where the pool would refuse a stop (the
+payout was stopped once already and the stop lifted, or its time to stop is over) the alarm says so and names no
+deadline for one, and it points at the draft of a stop of reason 3 only where the review made one. A pass that fails is `review_failed` (once an hour); a pass killed by its
 `TimeoutStartSec` or its `MemoryMax` (1 GB; the journals are read line by line and only the blocks of the stops'
 time are kept, about 6 MB a day of two journals of three assets) starts `colosseum-unit-failed@` (its `OnFailure=`), which says
 `unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read;

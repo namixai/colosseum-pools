@@ -17373,6 +17373,19 @@ MUTATIONS = [
      "    now = int(c.rpc(\"eth_getBlockByNumber\", [hex(latest), False])[\"timestamp\"], 16)\n    pools = [",
      "    now = int(c.rpc(\"eth_getBlockByNumber\", [\"latest\", False])[\"timestamp\"], 16)\n    pools = [",
      ["test_it_reads_sales_stages_payouts_the_accounts_events_the_oracle_and_transfers"]),
+    # The alarm's advice: a stop only where the pool would take one, a draft only where the review made one.
+    ("RW5", "ops/review_service.py",
+     "    stoppable = r.get(\"stoppable\") is not False",
+     "    stoppable = True",
+     ["test_a_payout_the_pool_would_not_stop_again_is_an_alarm_that_names_no_stop_and_no_deadline"]),
+    ("RW6", "ops/review_service.py",
+     "\"deadline\": stop_deadline(r) if stoppable else None,",
+     "\"deadline\": stop_deadline(r),",
+     ["test_a_payout_the_pool_would_not_stop_again_is_an_alarm_that_names_no_stop_and_no_deadline"]),
+    ("RW7", "ops/review_service.py",
+     "        stop = (\"a person stops it for reason 3 (the draft is in the review)\" if r.get(\"stopDraft\") else",
+     "        stop = (\"a person stops it for reason 3 (the draft is in the review)\" if True else",
+     ["test_the_alarm_names_a_draft_of_a_stop_only_where_the_review_made_one"]),
 ]
 
 RUNNERS = {

@@ -70,6 +70,50 @@ class TheService(unittest.TestCase):
             self.assertEqual(alarms[0][1]["deadline"], deadline(ch.d["payouts"][0]), change)
             self.assertIn("stops it for reason 3", alarms[0][1]["do"])
 
+    def test_a_payout_the_pool_would_not_stop_again_is_an_alarm_that_names_no_stop_and_no_deadline(self):
+        """A payout stopped once and its stop lifted is due again, and the pool takes no second stop of it
+        (`wasStopped`). The alarm stays; it does not send a person to a stop the pool refuses, with a deadline for it."""
+        ch, _ = self.hold.world()
+        ch.d["payouts"][0].update(approved=True, wasStopped=True)
+        reviews, _, alarms = self.run_pass(ch)
+        self.assertIs(reviews[0]["stoppable"], False)
+        self.assertEqual([e for e, _ in alarms], ["payout_needs_a_stop"])
+        said = alarms[0][1]
+        self.assertIsNone(said["deadline"], "no deadline for a stop that cannot be sent")
+        self.assertIn("the pool would refuse a stop of it now", said["do"])
+        self.assertIn("it pays by itself (" + svc.utc(ch.d["payouts"][0]["dueAt"]) + ")", said["do"])
+        self.assertNotIn("a person stops it", said["do"])
+        # Held, not approved, and stopped once already: not approved, and no stop to send either.
+        ch, _ = self.hold.world()
+        ch.d["payouts"][0]["wasStopped"] = True
+        reviews, _, alarms = self.run_pass(ch)
+        self.assertEqual(([e for e, _ in alarms], reviews[0]["stoppable"]), (["payout_held"], False))
+        self.assertIn("do not approve it", alarms[0][1]["do"])
+        self.assertIn("the pool would refuse a stop of it now", alarms[0][1]["do"])
+        self.assertNotIn("a person stops it", alarms[0][1]["do"])
+        self.assertIsNone(alarms[0][1]["deadline"])
+        # One the pool would still stop: told to stop it, with the deadline, as before.
+        ch, _ = self.hold.world()
+        reviews, _, alarms = self.run_pass(ch)
+        self.assertIs(reviews[0]["stoppable"], True)
+        self.assertIn("unless a person stops it for reason 3", alarms[0][1]["do"])
+        self.assertEqual(alarms[0][1]["deadline"], svc.stop_deadline(reviews[0]))
+
+    def test_the_alarm_names_a_draft_of_a_stop_only_where_the_review_made_one(self):
+        """A draft of a stop of reason 3 is made for a result that does not count up or a stop in doubt. A payout
+        suspicious for another reason (here: an account not read) has none, and the alarm does not point at one."""
+        ch, _, s1 = honest_world()
+        ch.d["unread"].append(s1)
+        reviews, _, alarms = self.run_pass(ch)
+        self.assertEqual((reviews[0]["verdict"], reviews[0]["stopDraft"]), ("suspicious", None))
+        self.assertEqual(len(alarms), 1)
+        self.assertNotIn("the draft is in the review", alarms[0][1]["do"])
+        self.assertIn("the review made no draft of one", alarms[0][1]["do"])
+        ch, _ = self.hold.world()
+        reviews, _, alarms = self.run_pass(ch)
+        self.assertIsNotNone(reviews[0]["stopDraft"])
+        self.assertIn("(the draft is in the review)", alarms[0][1]["do"])
+
     def test_no_journal_to_read_is_no_journal_and_the_payout_with_a_stop_is_held(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(svc.core, "log") as said:
             self.assertIsNone(svc.read_prices(pathlib.Path(d) / "none.jsonl"))
