@@ -9,6 +9,7 @@ import json
 import pathlib
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -443,3 +444,52 @@ class RpcAnswers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostPulse(unittest.TestCase):
+    """Review 15 of #338: the health route says the host's pulse for a watch on another machine, numbers only: the time
+    of the stops' journal's last write (today's or yesterday's day file, by name) and of the review's last pass."""
+
+    def setUp(self):
+        self.dir = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.dir, ignore_errors=True)
+        self.reviews = self.dir / "reviews-sim1"
+        self.reviews.mkdir()
+        self.now = 1_800_000_000
+
+    def pulse(self):
+        return simindex.Pulse(self.dir / "prices-sim1.jsonl", self.reviews, clock=lambda: self.now)
+
+    def test_the_journals_newest_day_file_and_the_reviews_last_pass(self):
+        import os
+        day = time.strftime("%Y-%m-%d", time.gmtime(self.now))
+        yesterday = time.strftime("%Y-%m-%d", time.gmtime(self.now - 86_400))
+        for name, at in ((f"prices-sim1-{day}.jsonl", self.now - 3), (f"prices-sim1-{yesterday}.jsonl", self.now - 90_000),
+                         ("prices-sim1-2099-01-01.jsonl", self.now + 999)):
+            (self.dir / name).write_text("x\n")
+            os.utime(self.dir / name, (at, at))
+        (self.reviews / "status.json").write_text(json.dumps({"at": self.now - 400, "due": 2}))
+        self.assertEqual(self.pulse().answer(), {"now": self.now, "prices_at": self.now - 3, "review_at": self.now - 400})
+
+    def test_nothing_there_or_not_numbers_is_null(self):
+        self.assertEqual(self.pulse().answer(), {"now": self.now, "prices_at": None, "review_at": None})
+        (self.reviews / "status.json").write_text(json.dumps({"at": "soon"}))
+        self.assertIsNone(self.pulse().review_at())
+        (self.reviews / "status.json").write_text("x" * 5_000)
+        self.assertIsNone(self.pulse().review_at())
+        self.assertEqual(simindex.Pulse(None, None).answer()["prices_at"], None)
+
+    def test_the_health_route_carries_it_uncached_and_the_settings_name_the_journal(self):
+        index = make(Node(history(), head=3000), tempfile.mkdtemp())
+        read_all(index)
+        server = BoundedServer(("127.0.0.1", 0), simindex.make_handler(index, pulse=self.pulse()))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/v1/simindex/health", timeout=5) as resp:
+            body, cache = json.loads(resp.read()), resp.headers["Cache-Control"]
+        self.assertEqual((body["now"], body["prices_at"], body["review_at"], body["scanned_to"], cache),
+                         (self.now, None, None, 3000, "no-store"))
+        self.assertEqual(simindex.prices_path({"SIM_INDEX_KEEPER_DIR": "/k"}, "deployments/sim1.json"),
+                         pathlib.Path("/k/prices-sim1.jsonl"))
+        self.assertIsNone(simindex.prices_path({}, "deployments/sim1.json"))

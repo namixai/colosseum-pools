@@ -988,15 +988,26 @@ holds (a restart or a deploy of the keeper or of the second machine while a stop
 1. On the second machine: a release of this repository at `/opt/colosseum-pools/current` with its venv, a user
    `colosseum-prices` with `/var/lib/colosseum-prices` (and an empty `no-keys` directory in it), and rsync.
 2. `/etc/colosseum/price-watch-<name>.env`: `COLOSSEUM_DEPLOYMENT=<label>`, `COLOSSEUM_RPC_URL=<a node of another
-   provider than the keeper's>`, `COLOSSEUM_PRICE_SYNC_TO=colosseum-prices@<pools host>:`; on mainnet also
-   `COLOSSEUM_NETWORK=mainnet` and `COLOSSEUM_CONFIRM_MAINNET=<label>`.
+   provider than the keeper's>`, `COLOSSEUM_PRICE_SYNC_TO=colosseum-prices@<pools host>:`,
+   `COLOSSEUM_HOST_HEALTH_URL=https://<the pools API's domain>/v1/simindex/health` and `COLOSSEUM_ALERT_CMD`, this
+   machine's own alarm channel (its writer's failures, and the host watch below); on mainnet also
+   `COLOSSEUM_NETWORK=mainnet` and `COLOSSEUM_CONFIRM_MAINNET=<label>`. On mainnet the writer and the watch refuse to
+   start without `COLOSSEUM_ALERT_CMD`.
 3. An ssh key of its own, `/var/lib/colosseum-prices/.ssh/sync`, and the host's key in its `known_hosts`.
 4. On the pools host: a user `colosseum-prices` in the group `colosseum-keeper`, the directory
    `/var/lib/colosseum-keeper/second-prices` (owner `colosseum-prices`, group `colosseum-keeper`, mode 2750), and the
    second machine's public key in that user's `authorized_keys` as
    `command="rrsync -wo /var/lib/colosseum-keeper/second-prices",restrict ssh-ed25519 ...`: it can write there and
    nothing else.
-5. On the second machine: `colosseum-price-watch@<name>.service` and `colosseum-price-sync@<name>.timer`, enabled.
+5. On the second machine: `colosseum-price-watch@<name>.service`, `colosseum-price-sync@<name>.timer` and
+   `colosseum-host-watch@<name>.timer`, enabled.
+
+The host watch (`colosseum-host-watch@`, once a minute, `ops/review_service.py --watch-host`) reads the pools host's
+health route (docs/GATEWAY.md, the index's pulse) and says `host_not_alive` on the second machine's channel when the
+host does not answer, its stops' journal has not been written for 3 minutes, or the review has not finished a pass
+for 30; again every hour while it lasts. No third-party service: the host itself can say nothing once it is down. The
+index needs to pass through `/var/lib/colosseum-keeper` as its group (the same as for the reviews route) to see the
+journal's day file by name; it reads nothing of it.
 
 The sync copies the day files every minute by appending; the review reads
 `second-prices/watch-prices-<label>.jsonl` (`--prices2` in its unit) and says `second_journal_stale` when no day
@@ -1041,7 +1052,8 @@ What the host needs before a simulated pool runs on mainnet, in order:
    loop (in the keeper's process), the second writer and `colosseum-payout-review@` refuse to start without it, and
    an alarm only written to the flag file is never taken as delivered (it is said again at the next pass). Try the
    channel by hand once: `echo test | sh -c "$COLOSSEUM_ALERT_CMD"` reaches a person.
-5. The second writer ("The second writer of prices"), with its own node and the two network lines.
+5. The second writer ("The second writer of prices"), with its own node, the two network lines, its own
+   `COLOSSEUM_ALERT_CMD` and `COLOSSEUM_HOST_HEALTH_URL`, and its host watch timer enabled.
 6. `install.sh` from the release; then `systemctl enable --now colosseum-payout-review@<name>.timer`.
 7. The index of the page (`gateway.simindex`): `colosseum-sim-index@<name>.service`, installed by `install.sh` and
    enabled by hand, reads the review folder of its instance and nothing else of the keeper's; its settings in

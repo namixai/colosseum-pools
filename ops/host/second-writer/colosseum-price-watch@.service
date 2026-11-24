@@ -1,11 +1,12 @@
 # The second writer of oracle prices, for instance %i: on ANOTHER machine than the pools host, reading ANOTHER node
 # (another provider) than the keeper's. It is ops/stop_filler.py alone: no key, it sends nothing; every block it writes
 # the oracle price of every platform asset to its own journal, watch-prices-<deployment>-YYYY-MM-DD.jsonl, which
-# colosseum-price-sync@ copies to the pools host for the payout review. The review holds a block where either journal
-# has it and wants the two to agree where both do: a restart of either writer is covered by the other.
+# colosseum-price-sync@ copies to the pools host for the payout review. The review takes a block as checked only where
+# both journals hold it at one price (a block only one holds is held as resting on one journal).
 # Its file, /etc/colosseum/price-watch-%i.env, names the deployment (COLOSSEUM_DEPLOYMENT), the node
-# (COLOSSEUM_RPC_URL, not the keeper's provider), and on mainnet COLOSSEUM_NETWORK=mainnet with
-# COLOSSEUM_CONFIRM_MAINNET=<the deployment's label>; docs/HOSTING.md, "The second writer of prices".
+# (COLOSSEUM_RPC_URL, not the keeper's provider), this machine's alarm channel (COLOSSEUM_ALERT_CMD: its own failures,
+# and colosseum-host-watch@'s), and on mainnet COLOSSEUM_NETWORK=mainnet with COLOSSEUM_CONFIRM_MAINNET=<the deployment's
+# label>; on mainnet it refuses to start without the channel. docs/HOSTING.md, "The second writer of prices".
 [Unit]
 Description=colosseum-pools second writer of prices %i
 After=network-online.target

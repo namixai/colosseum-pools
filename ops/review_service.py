@@ -185,6 +185,70 @@ def second_stale(path: pathlib.Path | None, now: float, said: dict, alarm, limit
         said["_second"] = now
 
 
+# The watch of the host from the second machine (`watch_host`, review 15 of #338): the stops' journal is written every
+# block, so three minutes without a line is the loop or the host down; the review runs every 10 minutes, so 30 without
+# a pass is the review down (the stops' loop's own `review_stale` says the same, from the host, while it runs). A host
+# not answering, or numbers older than these, is the alarm `host_not_alive`, said again every hour while it lasts.
+HOST_PRICES_STALE_S = 180
+HOST_REVIEW_STALE_S = 1_800
+HOST_REPEAT_S = 3_600
+HEALTH_MAX_BYTES = 64 * 1024
+
+
+def fetch_health(url: str, timeout: float = 10.0) -> dict:
+    """The host's health route (gateway/simindex.py: its pulse, `prices_at` and `review_at`), as JSON."""
+    import urllib.request
+    if not url.startswith(("https://", "http://")):
+        raise ValueError("the health route must be an http(s) address")
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Cache-Control": "no-cache"}), timeout=timeout) as resp:
+        got = json.loads(resp.read(HEALTH_MAX_BYTES + 1)[:HEALTH_MAX_BYTES])
+    if not isinstance(got, dict):
+        raise ValueError("not a JSON object")
+    return got
+
+
+def host_problem(body: dict, now: float) -> tuple[str, str] | None:
+    """What is wrong with the host by its pulse, (kind, words), or None: the ages are counted on the host's own clock
+    (`now` of the answer) where it gives one, so two machines' clocks apart do not raise an alarm."""
+    at = body.get("now")
+    clock = at if isinstance(at, int) and not isinstance(at, bool) else int(now)
+    prices, review = body.get("prices_at"), body.get("review_at")
+    if not isinstance(prices, int) or isinstance(prices, bool):
+        return "prices", "the host says no time of the stops' journal: the stops' loop is not writing it"
+    if clock - prices > HOST_PRICES_STALE_S:
+        return "prices", (f"the stops' journal on the host has not been written for {clock - prices} s: the stops' loop "
+                          "or the keeper is down, and no stop is carried out")
+    if not isinstance(review, int) or isinstance(review, bool):
+        return "review", "the host says no pass of the payout review: no document is fresh, approve refuses every payout"
+    if clock - review > HOST_REVIEW_STALE_S:
+        return "review", (f"the payout review on the host has not finished a pass for {clock - review} s: no document "
+                          "is fresh, and a held payout is not said again")
+    return None
+
+
+def watch_host(url: str, state: dict, alarm, now: float, fetch=None) -> str | None:
+    """One look at the host from the second machine: its health route read, an alarm on its own channel when it does
+    not answer or its pulse is old (`host_problem`), said again every HOST_REPEAT_S while the same, at once when it
+    changes; remembered in `state` only once the channel took it. Returns what is wrong, or None. The address of the
+    route goes to no alarm and no log line."""
+    try:
+        found = host_problem((fetch or fetch_health)(url), now)
+    except Exception as exc:
+        found = ("silent", f"the host's health route did not answer ({type(exc).__name__}): the host, its index or its "
+                           "network is down")
+    if found is None:
+        if state.get("kind"):
+            core.log("host_alive_again", was=state.get("kind"))
+        state.clear()
+        return None
+    kind, why = found
+    if state.get("kind") == kind and now - float(state.get("at", 0)) < HOST_REPEAT_S:
+        return why
+    if alarm("host_not_alive", wait=True, kind=kind, why=why) is not False:
+        state.update(kind=kind, at=now)
+    return why
+
+
 def confirmed(args, label: str) -> None:
     """On mainnet, the deployment's label in --confirm-mainnet even though nothing is sent: what this decides (approve
     refuses without its document) is on that network's money, and a unit copied from testnet must not start there
@@ -228,12 +292,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--said", help="the file that remembers the alarms raised (default <out>/said.json)")
     ap.add_argument("--flag", help="the flag file each alarm is added to")
     ap.add_argument("--unit-failed", metavar="UNIT", help="say that UNIT failed (its OnFailure=) and end")
+    ap.add_argument("--watch-host", metavar="URL", default=None,
+                    help="on the second machine: read the host's health route once (COLOSSEUM_HOST_HEALTH_URL), raise "
+                         "host_not_alive on this machine's channel if it does not answer or its pulse is old, and end")
+    ap.add_argument("--state", help="with --watch-host: the file that remembers what was said")
     sn.add_args(ap, service=True)
     args = ap.parse_args(argv)
     out = pathlib.Path(args.out)
     flag = pathlib.Path(args.flag) if args.flag else None
     if args.unit_failed:
         return unit_failed(args.unit_failed, flag, out / f"failed-{args.unit_failed}.at")
+    if args.watch_host is not None:
+        url = args.watch_host or os.environ.get("COLOSSEUM_HOST_HEALTH_URL", "")
+        if not url:
+            ap.error("--watch-host needs the host's health route (or COLOSSEUM_HOST_HEALTH_URL)")
+        sf.require_channel("the host's watch")
+        state_path = pathlib.Path(args.state) if args.state else out / "host-watch.json"
+        try:
+            state = json.loads(state_path.read_text())
+        except (OSError, ValueError):
+            state = {}
+        watch_host(url, state if isinstance(state, dict) else {}, sf.Alarm(flag), time.time())
+        save_said(state_path, state if isinstance(state, dict) else {})
+        return 0
     if not args.deployment:
         ap.error("--deployment is required")
     with chk.node_errors():

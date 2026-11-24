@@ -732,8 +732,16 @@ their events, a few hundred bytes a code or a stop: well under a megabyte for a 
 
 **What it answers.** GET only; any other method is `405 read_only`, with no body read.
 
+The health route carries the host's pulse, numbers only (`Pulse`): `now` (the host's clock), `prices_at` (the time
+the stops' loop last wrote its journal of prices: the newest modification time of today's and yesterday's day file,
+`prices-<label>-YYYY-MM-DD.jsonl` in `SIM_INDEX_KEEPER_DIR`, found by name and never read) and `review_at` (`at` of
+the payout review's `status.json`, the end of its last pass), null where there is none. A watch on the second machine
+reads it every minute (`colosseum-host-watch@`, docs/HOSTING.md) and raises its own alarm when the host does not
+answer or either time is old: the host's own channel cannot say that the host is down.
+
     GET /v1/simindex/health         {ok, chain_id, factory, from_block, scanned_to, head, behind_blocks,
-                                     pools, window, updated_at, last_error, errors}
+                                     pools, window, updated_at, last_error, errors, now, prices_at, review_at}
+                                    Cache-Control: no-store
     GET /v1/simindex/pool?pool=0x…  {status: "ok", pool, created, creator, chain_id, factory, scanned_to,
                                      head, events: [{name, block, index, tx, …fields}]}
                                     404 unknown_pool for a pool this factory has not made by scanned_to

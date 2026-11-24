@@ -14,7 +14,9 @@ What it is. One process per factory. It reads the factory's `PoolCreated` and it
 block less `SIM_INDEX_LAG`, a window at a time, keeps them in one JSON file under `SIM_INDEX_DIR`, and
 answers three GET routes:
 
-    GET /v1/simindex/health          how far it has read, how far behind the chain, its last error
+    GET /v1/simindex/health          how far it has read, how far behind the chain, its last error; and the host's
+                                     pulse (`Pulse`): the time of the stops' journal's last line and of the payout
+                                     review's last pass, two numbers a second machine watches
     GET /v1/simindex/pool?pool=0x…   one pool's events and the blocks they were read from
     GET /v1/simindex/reviews?pool=0x…&ids=3,4
                                      the payout reviews the review service wrote for those payouts of that pool
@@ -521,9 +523,48 @@ IDS = re.compile(r"\d{1,20}(,\d{1,20}){0,99}\Z")
 REVIEW_MAX_BYTES = 512 * 1024
 
 
+class Pulse:
+    """The host's pulse in the health route, for a watch on another machine (ops/review_service.py `watch_host`): the
+    time the stops' loop last wrote its journal of prices (the newest of today's and yesterday's day file, by name: a
+    stat, no listing, nothing read) and the time the payout review last finished a pass (`at` of its status.json).
+    Numbers only, null where there is none: no path, no price, no address."""
+
+    def __init__(self, prices: pathlib.Path | None, reviews: pathlib.Path | None, clock=time.time):
+        self.prices, self.reviews, self.clock = prices, reviews, clock
+
+    def prices_at(self) -> int | None:
+        if self.prices is None:
+            return None
+        now = self.clock()
+        got = []
+        for back in (0, 86_400):
+            day = time.strftime("%Y-%m-%d", time.gmtime(now - back))
+            try:
+                got.append(int((self.prices.parent / f"{self.prices.stem}-{day}{self.prices.suffix}").stat().st_mtime))
+            except OSError:
+                pass
+        return max(got, default=None)
+
+    def review_at(self) -> int | None:
+        if self.reviews is None:
+            return None
+        try:
+            path = self.reviews / "status.json"
+            if path.is_symlink() or path.stat().st_size > 4_096:
+                return None
+            at = json.loads(path.read_text(encoding="utf-8")).get("at")
+            return int(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else None
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def answer(self) -> dict:
+        return {"now": int(self.clock()), "prices_at": self.prices_at(), "review_at": self.review_at()}
+
+
 def make_handler(index: SimIndex, allow_origin: str = "", request_timeout: float = REQUEST_TIMEOUT_S,
-                 reviews: Reviews | None = None):
+                 reviews: Reviews | None = None, pulse: Pulse | None = None):
     reviews = reviews or Reviews(None)
+    pulse = pulse or Pulse(None, None)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "colosseum-pools-sim-index"
@@ -548,7 +589,8 @@ def make_handler(index: SimIndex, allow_origin: str = "", request_timeout: float
         def do_GET(self):  # noqa: N802
             url = urlsplit(self.path)
             if url.path == "/v1/simindex/health":
-                self._send(200, index.health())
+                # The pulse is read anew each time: a watch's question is "now", no cache keeps an old answer.
+                self._send(200, {**index.health(), **pulse.answer()}, cache="no-store")
                 return
             if url.path == "/v1/simindex/pool":
                 self._send(*index.pool(parse_qs(url.query).get("pool", [""])[0]))
@@ -618,7 +660,18 @@ def settings(env, root: pathlib.Path) -> dict:
             "rpc": env.get("SIM_INDEX_RPC_URL") or NETWORK.rpc_url,
             "bind": env.get("SIM_INDEX_BIND", DEFAULT_BIND), "allow_origin": env.get("SIM_INDEX_ALLOW_ORIGIN", ""),
             # The review service's folder (ops/host/colosseum-payout-review@.service --out); unset: no reviews route.
-            "reviews": pathlib.Path(env["SIM_INDEX_REVIEWS"]) if env.get("SIM_INDEX_REVIEWS") else None}
+            "reviews": pathlib.Path(env["SIM_INDEX_REVIEWS"]) if env.get("SIM_INDEX_REVIEWS") else None,
+            # The stops' journal of the deployment (prices-<label>.jsonl in SIM_INDEX_KEEPER_DIR, the label the record's
+            # name), whose day files' times the health route says; SIM_INDEX_PRICES names it outright.
+            "prices": prices_path(env, record)}
+
+
+def prices_path(env, record: str) -> pathlib.Path | None:
+    if env.get("SIM_INDEX_PRICES"):
+        return pathlib.Path(env["SIM_INDEX_PRICES"])
+    if env.get("SIM_INDEX_KEEPER_DIR") and record:
+        return pathlib.Path(env["SIM_INDEX_KEEPER_DIR"]) / f"prices-{pathlib.Path(record).stem}.jsonl"
+    return None
 
 
 def main() -> int:
@@ -636,7 +689,8 @@ def main() -> int:
              scanned_to=index.scanned_to, pools=len(index.pools))
     host, _, port = cfg["bind"].partition(":")
     server = BoundedServer((host, int(port)), make_handler(index, cfg["allow_origin"],
-                                                                  reviews=Reviews(cfg["reviews"])))
+                                                                  reviews=Reviews(cfg["reviews"]),
+                                                                  pulse=Pulse(cfg["prices"], cfg["reviews"])))
     threading.Thread(target=index.run, name="sim-index-read", daemon=True).start()
     print(f"sim index listening on {host}:{port}, factory {cfg['factory']} from block {cfg['from_block']}", flush=True)
     server.serve_forever()

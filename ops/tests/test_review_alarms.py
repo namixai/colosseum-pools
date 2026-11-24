@@ -191,6 +191,71 @@ class Units(unittest.TestCase):
         self.assertIn("rsync --append-verify", sync)
         self.assertIn("StrictHostKeyChecking=yes", sync)
         self.assertIn("OnUnitActiveSec=1min", (d / "colosseum-price-sync@.timer").read_text())
+        host = (d / "colosseum-host-watch@.service").read_text()
+        self.assertIn("-m ops.review_service --watch-host ${COLOSSEUM_HOST_HEALTH_URL}", host)
+        self.assertIn("EnvironmentFile=/etc/colosseum/price-watch-%i.env", host)
+        self.assertIn("OnUnitActiveSec=1min", (d / "colosseum-host-watch@.timer").read_text())
+        self.assertIn("Environment=SIM_INDEX_KEEPER_DIR=/var/lib/colosseum-keeper",
+                      (ROOT / "ops/host/colosseum-sim-index@.service").read_text())
+
+
+class HostWatch(unittest.TestCase):
+    """Review 15 of #338: the second machine reads the host's pulse once a minute and says on its own channel that the
+    host does not answer, or its stops' journal or its review stopped; again every hour while the same."""
+
+    NOW = 1_800_000_000
+
+    def look(self, body, state, took=True, now=None):
+        said = []
+        fetch = (lambda url: body) if not isinstance(body, Exception) else (lambda url: (_ for _ in ()).throw(body))
+        with mock.patch.object(rs.core, "log"):
+            got = rs.watch_host("https://pools.example/v1/simindex/health", state,
+                                lambda event, **f: (said.append((event, f)), took)[1], now or self.NOW, fetch)
+        return got, said
+
+    def pulse(self, prices=-5, review=-300):
+        return {"now": self.NOW, "prices_at": self.NOW + prices, "review_at": self.NOW + review, "scanned_to": 9}
+
+    def test_a_live_host_is_no_alarm(self):
+        state = {}
+        self.assertEqual(self.look(self.pulse(), state), (None, []))
+        self.assertEqual(state, {})
+
+    def test_silence_an_old_journal_or_an_old_review_is_an_alarm_said_again_every_hour(self):
+        for body, kind in ((OSError("refused"), "silent"), (self.pulse(prices=-181), "prices"),
+                           (self.pulse(review=-1_801), "review"), ({"now": self.NOW}, "prices")):
+            state = {}
+            why, said = self.look(body, state)
+            self.assertEqual([(e, f["kind"]) for e, f in said], [("host_not_alive", kind)], body)
+            self.assertNotIn("pools.example", json.dumps(said), "the route's address goes to no alarm")
+            self.assertEqual(self.look(body, state, now=self.NOW + 60)[1], [], "not every minute")
+            self.assertEqual(len(self.look(body, state, now=self.NOW + rs.HOST_REPEAT_S)[1]), 1, "again after an hour")
+        state = {}
+        self.look(self.pulse(prices=-181), state)
+        self.assertEqual(len(self.look(OSError("x"), state, now=self.NOW + 60)[1]), 1, "another fault is said at once")
+        self.assertEqual(self.look(self.pulse(), state, now=self.NOW + 120), (None, []))
+        self.assertEqual(state, {}, "alive again: forgotten")
+
+    def test_the_hosts_clock_counts_the_ages_and_one_not_taken_is_said_again(self):
+        skewed = {"now": self.NOW - 10_000, "prices_at": self.NOW - 10_005, "review_at": self.NOW - 10_300}
+        self.assertEqual(self.look(skewed, {})[1], [], "two machines' clocks apart are no alarm")
+        state = {}
+        self.look(OSError("x"), state, took=False)
+        self.assertEqual(state, {})
+        self.assertEqual(len(self.look(OSError("x"), state, now=self.NOW + 60)[1]), 1)
+
+    def test_on_mainnet_it_does_not_run_without_a_channel(self):
+        from ops.tests.test_sim_network import on
+        from spike.hlspike import network as networks
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        with on(networks.MAINNET), mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": ""}), \
+                mock.patch.object(rs, "watch_host") as watched, self.assertRaises(SystemExit):
+            rs.main(["--watch-host", "https://pools.example/v1/simindex/health", "--out", str(d)])
+        watched.assert_not_called()
+        with on(networks.TESTNET), mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": ""}), \
+                mock.patch.object(rs, "fetch_health", return_value=self.pulse()):
+            self.assertEqual(rs.main(["--watch-host", "https://pools.example/v1/simindex/health", "--out", str(d)]), 0)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,10 @@ WorkingDirectory=/opt/colosseum-pools/current
 EnvironmentFile=/etc/colosseum/sim-index-%i.env
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SIM_INDEX_DIR=/var/lib/colosseum-sim-index-%i
 Environment=SIM_INDEX_REVIEWS=/var/lib/colosseum-keeper/reviews-%i
+# The health route's pulse: the time of the stops' journal's day file (prices-<label>-YYYY-MM-DD.jsonl here, the label
+# the record's name; a stat by name, nothing read) and of the review's last pass (status.json in its folder), watched
+# from the second machine (colosseum-host-watch@).
+Environment=SIM_INDEX_KEEPER_DIR=/var/lib/colosseum-keeper
 StateDirectory=colosseum-sim-index-%i
 ExecStart=/opt/colosseum-pools/venv/bin/python -m gateway.simindex
 Restart=always
