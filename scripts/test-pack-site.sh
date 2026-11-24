@@ -115,9 +115,14 @@ grep -q '^  chainId: 999,$' "$TMP/sim/config.js" && grep -q '^    factory: "0x00
   || { echo "FAIL mainnet pack: its config.js is not the one factory's, on mainnet"; exit 1; }
 grep -q '<div class="notice">Mainnet. Real USDC. Unaudited.</div>' "$TMP/sim/index.html" \
   || { echo "FAIL mainnet pack: its index.html does not carry mainnet's plaque"; exit 1; }
-if grep -qi 'testnet\|mock\|#/new\|#/shared\|#/economics\|#/verify\|#/evidence\|#/terms' "$TMP/sim/index.html"; then
+if grep -qi 'testnet\|mock\|#/new\|#/shared\|#/economics\|#/verify\|#/evidence\|>Terms<' "$TMP/sim/index.html"; then
   echo "FAIL mainnet pack: its index.html says testnet or links the other pools' pages"; exit 1
 fi
+# Its Terms of Use go with it, linked from the page, and so does the picture the page names for a shared link.
+grep -q '<a href="#/terms">Terms of Use</a>' "$TMP/sim/index.html" && cmp -s "$TMP/sim/data/terms-mainnet.md" <(git cat-file blob "$termsblob") \
+  && grep -q '<meta property="og:image" content="https://pools.usenami.io/brand/og-mainnet-1200x630.png">' "$TMP/sim/index.html" \
+  && [ -f "$TMP/sim/brand/og-mainnet-1200x630.png" ] \
+  || { echo "FAIL mainnet pack: its Terms of Use or its picture are not in it, or not named by its page"; exit 1; }
 (cd "$TMP/sim" && "${SUM[@]}" -c --status "$TMP/sim.sha256") || { echo "FAIL mainnet pack: the list does not check the pack"; exit 1; }
 echo "ok   packs a mainnet site of simulation pools: the one factory in config.js, mainnet's page, every other file its blob"
 # With no folder named, a mainnet pack goes to a folder that says mainnet, and testnet's keeps the name it had: the two
