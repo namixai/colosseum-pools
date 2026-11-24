@@ -318,7 +318,8 @@ class Checker:
         The pools are read in the same calls, for their `Funded` alone (`grew_from`: which exam each stage was started
         from; the keeper's scan keeps the stage and not its exam). A pool is read from the deployment's block with the
         first accounts read from there after it is known, and with the others from then on: a stage is such an account
-        itself, so its pool's `Funded` is read no later than its own fills, and a pool costs no call of its own."""
+        itself, so its pool's `Funded` is read no later than its own fills. A pool is one more address in the accounts'
+        calls and is read by none of its own (one more call a window only where it starts a new batch of ADDRESS_BATCH)."""
         if latest < self.fills_from - 1:
             # A node behind the head already read (another node behind a balancer, or one catching up): nothing is read
             # from it, and the cursor stays where it is; moved back, it would read kept fills a second time.
