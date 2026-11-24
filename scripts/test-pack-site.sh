@@ -109,7 +109,7 @@ cmp -s "$TMP/sim-index.html" "$TMP/sim/index.html" || { echo "FAIL mainnet pack:
 grep -q '^  chainId: 999,$' "$TMP/sim/config.js" && grep -q '^    factory: "0x00000000000000000000000000000000000000F5",$' "$TMP/sim/config.js" \
   && grep -q '^  deployments: \[$' "$TMP/sim/config.js" && ! grep -qi 'testnet' "$TMP/sim/config.js" \
   || { echo "FAIL mainnet pack: its config.js is not the one factory's, on mainnet"; exit 1; }
-grep -q '<div class="notice">Mainnet. Real USDC. Unaudited.</div>' "$TMP/sim/index.html" \
+grep -q '<div class="notice">Mainnet. Real USDC.</div>' "$TMP/sim/index.html" \
   || { echo "FAIL mainnet pack: its index.html does not carry mainnet's plaque"; exit 1; }
 if grep -qi 'testnet\|mock\|#/new\|#/shared\|#/economics\|#/verify\|#/evidence\|#/terms' "$TMP/sim/index.html"; then
   echo "FAIL mainnet pack: its index.html says testnet or links the other pools' pages"; exit 1

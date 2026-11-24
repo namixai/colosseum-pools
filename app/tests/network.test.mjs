@@ -58,10 +58,10 @@ test("a mainnet site's settings are mainnet's, and its panels carry mainnet's pl
   const footer = panel.footerHtml();
   const manage = panel.manageHeaderHtml({ address: POOL, account: "", role: "no-wallet", poolName: "Pool" });
   assert.doesNotMatch(header, /sp-tag/);
-  assert.match(footer, /<span class="sp-disc">Mainnet\. Real USDC\. Unaudited\.<\/span>/);
-  for (const html of [header, footer, manage, panel.notOwnerHtml(), panel.noWalletHtml()]) assert.doesNotMatch(html, /testnet|mock/i);
+  assert.match(footer, /<span class="sp-disc">Mainnet\. Real USDC\.<\/span>/);
+  for (const html of [header, footer, manage, panel.notOwnerHtml(), panel.noWalletHtml()]) assert.doesNotMatch(html, /testnet|mock|unaudited/i);
   // The trading screen's footer in the panel says the same plaque, with its own source line.
-  assert.match(panel.footerHtml({ source: "x" }), /Mainnet\. Real USDC\. Unaudited\./);
+  assert.match(panel.footerHtml({ source: "x" }), /Mainnet\. Real USDC\./);
 });
 
 test("a mainnet site names its services without testnet: Hyperliquid's API, the HyperEVM RPC", async () => {
@@ -75,7 +75,7 @@ test("a mainnet site names its services without testnet: Hyperliquid's API, the 
 });
 
 test("the plaque of a mainnet page is one text: the panels' and index.html's are the same", () => {
-  assert.equal(SCREEN_TEXT.mainnetPlaque, "Mainnet. Real USDC. Unaudited.");
+  assert.equal(SCREEN_TEXT.mainnetPlaque, "Mainnet. Real USDC.");
   assert.deepEqual(networkMarks(MAINNET), { plaque: SCREEN_TEXT.mainnetPlaque, tag: null });
   assert.ok(built.index.includes(`<div class="notice">${SCREEN_TEXT.mainnetPlaque}</div>`));
   assert.ok(built.index.includes(`<p>${SCREEN_TEXT.mainnetPlaque}</p>`));
@@ -98,7 +98,7 @@ test("no page of the simulation pools names a network in its own words: each tak
   // (examscreen.js) and the word before a service (network.js).
   const allowed = {
     "../lib/examscreen.js": [/^  testnetPlaque: "Testnet\. Mock USDC\. Unaudited\.",$/, /^  testnetTag: "Testnet app",$/,
-      /^  mainnetPlaque: "Mainnet\. Real USDC\. Unaudited\.",$/, /^  if \(config\?\.hyperliquidChain === "Mainnet"\) return \{ plaque: SCREEN_TEXT\.mainnetPlaque, tag: null \};$/,
+      /^  mainnetPlaque: "Mainnet\. Real USDC\.",$/, /^  if \(config\?\.hyperliquidChain === "Mainnet"\) return \{ plaque: SCREEN_TEXT\.mainnetPlaque, tag: null \};$/,
       /^  return \{ plaque: SCREEN_TEXT\.testnetPlaque, tag: SCREEN_TEXT\.testnetTag \};$/],
     "../lib/network.js": [/^export const isMainnet = \(config = CONFIG\) => config\?\.hyperliquidChain === "Mainnet";$/,
       /^export const networkWord = \(config = CONFIG\) => \(isMainnet\(config\) \? "" : "testnet "\);$/],

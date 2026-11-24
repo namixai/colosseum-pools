@@ -15,7 +15,7 @@ export const SCREEN_TEXT = Object.freeze({
   strip: "Exam",
   testnetPlaque: "Testnet. Mock USDC. Unaudited.",
   testnetTag: "Testnet app",
-  mainnetPlaque: "Mainnet. Real USDC. Unaudited.",
+  mainnetPlaque: "Mainnet. Real USDC.",
   usdcNoPrice: "The price of this asset was not read, so an amount in USDC is off.",
   fillsLater: "Orders fill a few seconds after you send them, at the price of that moment.",
   exit: "To exit a position, send an order yourself, or set a stop or a take on it.",

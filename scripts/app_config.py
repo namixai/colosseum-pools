@@ -67,9 +67,9 @@ INDEX_WORDS = {
          '  <meta property="og:image:alt" content="Upools, pools.usenami.io">\n'
          '  <meta name="twitter:card" content="summary_large_image">\n', "", 1),
         ('<div class="notice">Hyperliquid <strong>testnet</strong> and mock USDC.</div>',
-         '<div class="notice">Mainnet. Real USDC. Unaudited.</div>', 1),
+         '<div class="notice">Mainnet. Real USDC.</div>', 1),
         ("<p>This is a hackathon demo on Hyperliquid <strong>testnet</strong>, with mock funds that have no value.</p>",
-         "<p>Mainnet. Real USDC. Unaudited.</p>", 1),
+         "<p>Mainnet. Real USDC.</p>", 1),
         ("I understand this is a testnet demo.", "I understand.", 1),
     ],
 }

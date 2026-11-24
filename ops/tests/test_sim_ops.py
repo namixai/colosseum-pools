@@ -899,8 +899,8 @@ class TheFirstPool(unittest.TestCase):
         self.assertIn("the payout of a trader who has passed the exam stays in the pool from the pass, and for as long "
                       "as the stage runs", text)
         self.assertIn("before then its creator can neither close it nor take back what it put in", text)
-        self.assertIn("is paid a fixed 8 % of the size, once, which is not a share of any profit", text)
-        self.assertIn("nothing here promises a profit", text)
+        self.assertIn("is paid a fixed 8 % of the size, once, which is not a share of any trading result", text)
+        self.assertIn("an exam's price buys the exam and nothing else, and nothing here promises any gain", text)
         self.assertIn("may stop it, once, with one of four reasons written on chain", text)
         # The CFO's words for reason 4 (14 November): a person's decision on a written analysis, with the 14 days.
         self.assertIn("4, prohibited play: a series of exams bought to trade each at the edge of its risk, or one "
@@ -908,6 +908,24 @@ class TheFirstPool(unittest.TestCase):
                       "the trader to object.", text)
         self.assertNotIn("testnet", json.dumps(FIRST).lower(), "one plan for both networks")
         self.assertLessEqual(len(text.encode("utf-8")), d.TERMS_MAX_BYTES)
+
+    def test_its_terms_promise_nothing_name_the_network_once_and_one_window_for_both_snapshots(self):
+        """The words of 24 November: no investment and no profit in the text written on chain, the target and the
+        daily loss as two rules, the snapshot's window the contracts' 15 minutes for both rules, and the network."""
+        text = FIRST["terms_text"]
+        self.assertIsNone(re.search(r"invest|profit", text, re.IGNORECASE))
+        self.assertIn("Each stage also has: a target of the line's percent of the size; a daily loss of no more than "
+                      "3 % below the day's first snapshot (equity including open positions, taken in the first 15 "
+                      "minutes of the UTC day); leverage at most 10x on BTC and ETH and 5x on SOL;", text)
+        self.assertEqual({r["daily_loss_bps"] for r in (FIRST["exam_rules"], FIRST["funded_rules"])}, {300})
+        self.assertIn("It is measured from the highest equity recorded at the start of a UTC day (in the first 15 "
+                      "minutes of the UTC day)", text)
+        self.assertEqual(text.count("in the first 15 minutes of the UTC day"), 2)
+        self.assertNotIn("first minutes", text)
+        for sol in ("src/exam/PaperExam.sol", "src/RuledAccount.sol"):
+            self.assertIn("uint256 public constant CHECKPOINT_WINDOW = 15 minutes;", (ROOT / sol).read_text(), sol)
+        self.assertEqual(text.count("Hyperliquid mainnet (HyperEVM)"), 1)
+        self.assertEqual(text.count("mainnet"), 1, "the network named once")
 
     def test_a_line_names_its_own_tier_and_a_plan_its_payouts_a_day(self):
         raw = json.loads(json.dumps(FIRST))
@@ -950,10 +968,13 @@ class TheFirstPool(unittest.TestCase):
                               "takes profit only above it", text)
             self.assertIn("A share credited to a code is never taken back", text)
             # What `_profit` and `_withdraw` do, not more: only the profit a withdrawal takes is shared (review of #286).
+            # The first pool's terms call it the surplus, as the site's Terms do (24 November); the measuring pool's
+            # keep the word they had.
+            gain = "surplus" if name == "sim-first-pool" else "profit"
             self.assertIn("USDC sent to the pool other than by the creator's addToPot is not counted as put in by the "
-                          "creator: it covers payouts as any money of the pool does, and what of it is profit when the "
+                          f"creator: it covers payouts as any money of the pool does, and what of it is {gain} when the "
                           "creator takes money out (above the payouts owed, held and kept, and above what the creator "
-                          "put in) is shared with the codes' owners as any profit taken.", text)
+                          f"put in) is shared with the codes' owners as any {gain} taken.", text)
             self.assertNotIn("counts as profit and is shared", text)
             # `pay` is a call of its own, walks in the order of the claims, and passes a payout waiting for its
             # approval only with the money for it kept (review of #286).

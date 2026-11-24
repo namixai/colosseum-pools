@@ -199,7 +199,7 @@ in its own words (`app/tests/network.test.mjs`): the chain a wallet is offered (
 `usdc`, and `networkName`, the name the pages write beside a pool: "Hyperliquid testnet", "Hyperliquid". The
 simulation pools' pages take the tag and the plaque of their panels from the same settings
 (`app/lib/examscreen.js`, `networkMarks`): "Testnet. Mock USDC. Unaudited." with the tag "Testnet app" on testnet,
-"Mainnet. Real USDC. Unaudited." and no tag on mainnet. A simulation pool's token is the pool's own `usdc()`, and
+"Mainnet. Real USDC." and no tag on mainnet. A simulation pool's token is the pool's own `usdc()`, and
 the script holds the record's to the network's. The app links no block explorer, offers a wallet none, and has no
 faucet, on either network, so the settings carry neither.
 
