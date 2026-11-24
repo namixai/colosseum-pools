@@ -6,6 +6,7 @@ import os
 import pathlib
 import shutil
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -288,18 +289,31 @@ class HostWatch(unittest.TestCase):
         from gateway import simindex as si
         self.assertIn('{**index.health(), **pulse.answer()}, cache="no-store")', pathlib.Path(si.__file__).read_text())
 
-    def test_on_mainnet_it_does_not_run_without_a_channel(self):
+    def test_it_does_not_run_without_a_channel_on_any_network(self):
+        """Review 16 of #338: the watch is nothing but its alarm. Its unit is testnet's unless its file says mainnet, so
+        a channel asked for on mainnet alone let a line forgotten in that file pass: the watch ran and told nobody."""
         from ops.tests.test_sim_network import on
         from spike.hlspike import network as networks
         d = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
-        with on(networks.MAINNET), mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": ""}), \
+        argv = ["--watch-host", "https://pools.example/v1/simindex/health", "--out", str(d)]
+        for net in (networks.MAINNET, networks.TESTNET):
+            for blank in ("", "  ", "\t\n"):
+                with on(net), mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": blank}), \
+                        mock.patch.object(rs, "watch_host") as watched, self.assertRaises(SystemExit) as caught:
+                    rs.main(argv)
+                watched.assert_not_called()
+                self.assertIn("COLOSSEUM_ALERT_CMD is not set", str(caught.exception))
+            with on(net), mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": "true"}), \
+                    mock.patch.object(rs, "fetch_health", return_value={**self.pulse(), "now": int(time.time()),
+                                                                        "prices_at": int(time.time()) - 5,
+                                                                        "review_at": int(time.time()) - 300}):
+                self.assertEqual(rs.main(argv), 0)
+        with on(networks.TESTNET), mock.patch.dict(os.environ, clear=False) as env, \
                 mock.patch.object(rs, "watch_host") as watched, self.assertRaises(SystemExit):
-            rs.main(["--watch-host", "https://pools.example/v1/simindex/health", "--out", str(d)])
+            env.pop("COLOSSEUM_ALERT_CMD", None)
+            rs.main(argv)
         watched.assert_not_called()
-        with on(networks.TESTNET), mock.patch.dict(os.environ, {"COLOSSEUM_ALERT_CMD": ""}), \
-                mock.patch.object(rs, "fetch_health", return_value=self.pulse()):
-            self.assertEqual(rs.main(["--watch-host", "https://pools.example/v1/simindex/health", "--out", str(d)]), 0)
 
 
 if __name__ == "__main__":

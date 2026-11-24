@@ -4,7 +4,7 @@
 # journal has not been written for 3 minutes, or the payout review has not finished a pass for 30 (ops/review_service.py
 # --watch-host). Said again every hour while it lasts. Without a third-party service: the host's own channel cannot say
 # that the host is down. Its file, /etc/colosseum/price-watch-%i.env, is the second writer's: COLOSSEUM_HOST_HEALTH_URL
-# and COLOSSEUM_ALERT_CMD there; on mainnet it refuses to run without the channel. docs/HOSTING.md, "The second writer".
+# and COLOSSEUM_ALERT_CMD there; it refuses to run without the channel, on any network. docs/HOSTING.md, "The second writer".
 [Unit]
 Description=colosseum-pools watch of the pools host %i from the second machine
 

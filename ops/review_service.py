@@ -356,7 +356,10 @@ def main(argv: list[str] | None = None) -> int:
         url = args.watch_host or os.environ.get("COLOSSEUM_HOST_HEALTH_URL", "")
         if not url:
             ap.error("--watch-host needs the host's health route (or COLOSSEUM_HOST_HEALTH_URL)")
-        sf.require_channel("the host's watch")
+        # The watch is nothing but its alarm: with no channel it tells nobody, on any network (review 16 of #338).
+        if not os.environ.get("COLOSSEUM_ALERT_CMD", "").strip():
+            raise SystemExit("refusing to run the host's watch: COLOSSEUM_ALERT_CMD is not set (the alarm channel of this "
+                             "machine): a watch with no channel tells nobody")
         state_path = pathlib.Path(args.state) if args.state else out / "host-watch.json"
         try:
             state = json.loads(state_path.read_text())
