@@ -118,7 +118,7 @@ test("a page of a pool is drawn only for a pool of the site's factory; on a site
   for (const hash of ["#/", `#/exam/${POOL}`, "#/exam", `#/pool/${POOL}`, "#/sim", "#/manage"]) assert.equal(PANEL_POOL.exec(hash), null);
   const view = read("../views/simsite.js");
   const check = view.slice(view.indexOf("export async function sitePool("));
-  assert.match(check, /^export async function sitePool\(pool, page\) \{\s+if \(!simSite\(\)\) return true;\s+if \(isSitePool\(named, pool\) \|\| isSitePool\(await sitePools\(\), pool\)\) return true;/);
+  assert.match(check, /^export async function sitePool\(pool, page\) \{\s+if \(!simSite\(\)\) return true;\s+if \(pool && \(isSitePool\(named, pool\) \|\| isSitePool\(await sitePools\(\), pool\)\)\) return true;/);
   // A pool the factory named once is not asked for again (its list only grows); the list kept is the chain's own, as last
   // read, and an address it does not name is read for afresh, never taken from anything but the factory.
   assert.match(view, /^let named = \[\];$/m);

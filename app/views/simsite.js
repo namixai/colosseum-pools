@@ -37,7 +37,7 @@ export async function simListView(page) {
  */
 export async function sitePool(pool, page) {
   if (!simSite()) return true;
-  if (isSitePool(named, pool) || isSitePool(await sitePools(), pool)) return true;
+  if (pool && (isSitePool(named, pool) || isSitePool(await sitePools(), pool))) return true;
   // The router set the panel's marker for the address: this is no panel's page.
   if (page.isConnected) delete document.body.dataset.panel;
   render(page, NOT_FOUND);
