@@ -11,6 +11,8 @@ import { readLogs, SIM_POOL_ABI } from "../lib/simpool.js";
 import { ACCOUNT_ABI, KIND } from "../lib/simtrader.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
+import { sitePool } from "./simsite.js";
+import { simSite } from "../lib/simsite.js";
 import {
   PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, placeCall, graduateCall, setAgentCall,
   setTriggerCall, clearTriggerCall, refusalOf,
@@ -82,12 +84,17 @@ export async function examView(address, page, query = "") {
       <p><a href="#/exam">Back</a></p></section>`);
     return;
   }
+  // On a site of simulation pools the screen opens only for an exam or a stage of one of the site's pools: any other
+  // contract, an exam of another factory's pool among them, is "Not found" before anything of it is read.
+  const ofSite = simSite() ? await simPoolOf(address) : null;
+  if (simSite() && !(await sitePool(ofSite, page))) return;
   const exam = new ethers.Contract(address, PAPER_EXAM_ABI, chain.readProvider);
   // The chain the exam is on is the one the node that answers its getters says (eth_chainId): the page's data source
   // is that chain's or nothing (dataSource), never another network's candles beside this exam.
   const chainId = await nodeChainId();
   const ds = dataSource({ chainId }, CONFIG);
-  const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(), simPoolOf(address)]);
+  const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(),
+    simSite() ? ofSite : simPoolOf(address)]);
   // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
   // This continuation may have been left behind by a page change: only the page on screen touches the page-wide marker.
   if (!page.isConnected) return;
@@ -177,7 +184,7 @@ function skeleton(st) {
       <div class="ex-prev" id="ex-${k}-prev"></div>`;
   return `
     <div class="ex-strip">
-      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks && !st.panelPool ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
+      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks.tag && !st.panelPool ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
       <p class="ex-line">${esc(WHAT_THIS_IS)}</p>
       <div class="ex-kv" id="ex-kv"></div>
       <div class="ex-steps" id="ex-steps"></div>
@@ -249,7 +256,7 @@ function skeleton(st) {
         </div>
       </section>
     </div>
-    ${marks && !st.panelPool ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
+    ${marks.plaque && !st.panelPool ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
 }
 
 // ── readings ────────────────────────────────────────────────────

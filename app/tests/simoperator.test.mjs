@@ -387,6 +387,14 @@ test("a merged ABI names each function once and keeps the widest payout()", () =
   assert.equal(abi.filter((s) => /^function approver\(/.test(s)).length, 1);
 });
 
+test("the hero names the network the site's settings name, and none of its own", () => {
+  const m = model(["checker"]);
+  assert.match(operatorHtml(m, { name: "Pool 0xa1…" }), /<div class="sp-kick">Operator panel · Pool 0xa1… · Hyperliquid testnet<\/div>/);
+  const main = operatorHtml(m, { name: "Pool 0xa1…", network: "Hyperliquid" });
+  assert.match(main, /<div class="sp-kick">Operator panel · Pool 0xa1… · Hyperliquid<\/div>/);
+  assert.doesNotMatch(main, /testnet|mock/i);
+});
+
 test("the page is wired into the app's routes", () => {
   const app = read("app", "app.js");
   assert.match(app, /\^#\\\/manage\\\/\(0x\[0-9a-fA-F\]\{40\}\)\\\/operator\$/);

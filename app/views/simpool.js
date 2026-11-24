@@ -12,6 +12,7 @@ import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
 import { keepFromReceipt } from "./simtrader.js";
 import { networkMarks } from "../lib/examscreen.js";
+import { networkName } from "../lib/network.js";
 import { CONFIG } from "../config.js";
 
 const { ethers } = window;
@@ -49,7 +50,7 @@ export async function simPoolView(address, query, page) {
   render(page, `<div class="sp sp-user">
     ${userHeaderHtml({ address: at, account: accountLabel(), marks })}
     <section class="sp-hero">
-      <div class="sp-kick">Pool ${esc(chain.short(at))} · Hyperliquid testnet</div>
+      <div class="sp-kick">Pool ${esc(chain.short(at))} · ${esc(networkName())}</div>
       <h1>How deep<br>is <em>the pool?</em></h1>
       <p class="sp-lede"><b>Depth = money the pool has free for payouts.</b> Each line is an exam: pass it, then pass the stage on the same size,
         and the pool pays out. A line sells only while the pool holds <span class="sp-mk">two of its payouts</span> free.</p>

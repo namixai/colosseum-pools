@@ -11,6 +11,7 @@ import {
 import { SIM_LINES_ABI } from "../lib/simlines.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { networkMarks } from "../lib/examscreen.js";
+import { networkName } from "../lib/network.js";
 import {
   ACCOUNT_ABI, SIM_TRADER_ABI, HELD_ABI, KIND, SCAN_WINDOW, SCAN_CALLS, scanPlan, canLookBack, scanNote, candidatesOf, accountRows, lineInfo,
   tradeTarget, payoutRows, requestable, traderRefusal, claimTarget, remembered, remember, examsHtml, payoutsHtml, noteHtml,
@@ -140,7 +141,7 @@ function shell(page, at, current, path, body) {
   wireShell(page);
 }
 
-const hero = (at, kick, title, lede) => `<section class="sp-hero"><div class="sp-kick">${esc(kick)} · Pool ${esc(chain.short(at))} · Hyperliquid testnet</div>`
+const hero = (at, kick, title, lede) => `<section class="sp-hero"><div class="sp-kick">${esc(kick)} · Pool ${esc(chain.short(at))} · ${esc(networkName())}</div>`
   + `<h1>${title}</h1><p class="sp-lede">${lede}</p></section>`;
 
 /** A page for a visitor with no wallet: the panel opens by wallet, and the header's button connects. */

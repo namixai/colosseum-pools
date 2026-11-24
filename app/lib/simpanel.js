@@ -3,6 +3,8 @@
 // panel (the owner's section). No browser globals, so node's test runner loads it. The site's own header and footer
 // are hidden on these pages (app/style.css, body[data-panel]): each panel draws its own, and neither links to the other.
 import { esc } from "./ui.js";
+import { networkMarks } from "./examscreen.js";
+import { CONFIG } from "../config.js";
 
 /** The panel a route belongs to: "user" for #/sim/<pool> (and its Trade, My exams and My payouts) and for an exam's
  *  trading screen #/exam/<exam>, "manage" for #/manage/<pool>, null for any other page. */
@@ -43,15 +45,15 @@ function navHtml(items, current, href) {
 /** What the wallet button says: the address, shortened by the caller, or the call to connect. */
 const walletHtml = (account) => `<button type="button" class="sp-wallet" id="sp-wallet"><span class="sp-wdot"></span>${esc(account || "Connect wallet")}</button>`;
 
-/** What a testnet page carries: the tag by the brand and the badge in the footer. A page built for the main network
- *  passes `null` (app/lib/examscreen.js, networkMarks) and carries neither. */
-const TESTNET_MARKS = Object.freeze({ plaque: "Testnet. Mock USDC. Unaudited.", tag: "Testnet app" });
+/** What a page of the network the site is built for carries (app/lib/examscreen.js, networkMarks): the badge in the
+ *  footer, and on testnet the tag by the brand. No panel words them itself; `null` draws neither. */
+const SITE_MARKS = Object.freeze(networkMarks(CONFIG));
 
 /** The user panel's header: the strip that says which panel it is, the brand, the menu and the wallet. `current` is
  *  the menu's key of the page, `route` what the strip shows (the pool's route unless the page has its own). */
-export function userHeaderHtml({ address, account, current = "pool", route = `#/sim/${address}`, marks = TESTNET_MARKS }) {
+export function userHeaderHtml({ address, account, current = "pool", route = `#/sim/${address}`, marks = SITE_MARKS }) {
   return `<div class="sp-strip"><span class="sp-route">${esc(route)}</span><span class="sp-pill u">User panel</span></div>`
-    + `<header class="sp-top"><div class="sp-brand">${BRAND}${marks ? `<span class="sp-tag">${esc(marks.tag)}</span>` : ""}</div>`
+    + `<header class="sp-top"><div class="sp-brand">${BRAND}${marks?.tag ? `<span class="sp-tag">${esc(marks.tag)}</span>` : ""}</div>`
     + `${navHtml(USER_NAV, current, `#/sim/${address}`)}${walletHtml(account)}</header>`;
 }
 
@@ -66,9 +68,9 @@ export function manageHeaderHtml({ address, account, role, poolName }) {
     + `<div class="sp-mnote">Separate route. Not linked from the trader's pages. No buy buttons here. The contract holds the rights; this panel only shows them.</div>`;
 }
 
-/** The footer both panels share: the testnet badge stays while the page is built for the test network. */
-export function footerHtml({ marks = TESTNET_MARKS, source = "Everything on this page is read from the pool's contract." } = {}) {
-  return `<div class="sp-foot">${marks ? `<span class="sp-disc">${esc(marks.plaque)}</span>` : ""}`
+/** The footer both panels share, with the badge of the network the page is built for. */
+export function footerHtml({ marks = SITE_MARKS, source = "Everything on this page is read from the pool's contract." } = {}) {
+  return `<div class="sp-foot">${marks?.plaque ? `<span class="sp-disc">${esc(marks.plaque)}</span>` : ""}`
     + `<span class="sp-src">${esc(source)}</span>`
     + `<span class="sp-sig"><img src="brand/mark-small.svg" alt="" width="34" height="34">pools.usenami.io</span></div>`;
 }

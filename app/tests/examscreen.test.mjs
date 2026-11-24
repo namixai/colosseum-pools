@@ -316,10 +316,12 @@ test("a dollar amount keeps the library's digits: thousands grouped, two decimal
   assert.equal(usdShown(1_234_567n * USD), "$1,234,567.00");
 });
 
-test("a testnet page carries the plaque and the tag, a mainnet page neither", () => {
+test("a testnet page carries the plaque and the tag, a mainnet page its own plaque and no tag", () => {
   assert.deepEqual(networkMarks({ hyperliquidChain: "Testnet" }), { plaque: "Testnet. Mock USDC. Unaudited.", tag: "Testnet app" });
-  assert.equal(networkMarks({ hyperliquidChain: "Mainnet" }), null);
-  assert.equal(networkMarks({ hyperliquidChain: "Mainnet", chainId: 998 }), null, "by the network the page is built for, nothing else");
+  const mainnet = { plaque: "Mainnet. Real USDC. Unaudited.", tag: null };
+  assert.deepEqual(networkMarks({ hyperliquidChain: "Mainnet" }), mainnet);
+  assert.deepEqual(networkMarks({ hyperliquidChain: "Mainnet", chainId: 998 }), mainnet, "by the network the page is built for, nothing else");
+  assert.equal(SCREEN_TEXT.mainnetPlaque, "Mainnet. Real USDC. Unaudited.");
   assert.match(read("../config.js"), /hyperliquidChain: "Testnet"/);
 });
 
@@ -452,8 +454,8 @@ test("the trading screen stands in the user panel's header for an exam of a pool
   assert.match(read("../app.js"), /function failed\(page, err\) \{[^}]*delete document\.body\.dataset\.panel;/, "a page that did not load gets the site's navigation back");
   assert.match(view, /accountOf\(address\)/);
   // the panel's header and footer carry the testnet tag and badge, so the screen's own are drawn only outside the panel
-  assert.match(view, /marks && !st\.panelPool \? `<span class="ex-tag">/);
-  assert.match(view, /marks && !st\.panelPool \? `<div class="ex-foot">/);
+  assert.match(view, /marks\.tag && !st\.panelPool \? `<span class="ex-tag">/);
+  assert.match(view, /marks\.plaque && !st\.panelPool \? `<div class="ex-foot">/);
 });
 
 // ── the market list ────────────────────────────────────────────────
