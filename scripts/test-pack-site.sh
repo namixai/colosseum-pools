@@ -55,8 +55,9 @@ if [ -z "$(git show HEAD:deployments/LIVE.json | python3 -c 'import json,sys; pr
   if ./scripts/pack-site.sh --network mainnet HEAD "$TMP/nomain" >/dev/null 2>&1 || [ -e "$TMP/nomain" ]; then echo "FAIL mainnet pack: packed a commit with nothing on mainnet for a site to read"; exit 1; fi
   echo "ok   refuses mainnet for a commit with nothing on mainnet for a site to read, and writes nothing"
 fi
-# A commit with one: HEAD's tree, with an example mainnet entry in LIVE.json and its record beside testnet's. The
-# examples stand beside testnet's entries only: a mainnet deployment that is really listed is left out of them.
+# A commit with a live PoolFactory deployment on mainnet: HEAD's tree, with an example mainnet entry in LIVE.json and
+# its record beside testnet's. The examples stand beside testnet's entries only: a mainnet deployment that is really
+# listed is left out of them.
 liveblob="$(git show HEAD:deployments/LIVE.json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
@@ -73,21 +74,13 @@ GIT_INDEX_FILE="$TMP/index" git read-tree HEAD
 GIT_INDEX_FILE="$TMP/index" git update-index --add --cacheinfo "100644,$liveblob,deployments/LIVE.json" \
   --cacheinfo "100644,$recblob,deployments/mainnet-v3-net.json"
 netc="$(git commit-tree "$(GIT_INDEX_FILE="$TMP/index" git write-tree)" -p HEAD -m "a mainnet deployment")"
-line3="$(./scripts/pack-site.sh --network mainnet "$netc" "$TMP/net" 2>&1 | tail -1)" || { echo "FAIL mainnet pack: refused: $line3"; exit 1; }
-want3="files=$n match=$n differ=0 extra=0 build={\"commit\":\"$netc\",\"network\":\"mainnet\"} "
-case "$line3" in "$want3"*) ;; *) echo "FAIL mainnet pack: the packer said: $line3"; exit 1 ;; esac
-python3 scripts/app_config.py --network mainnet --commit "$netc" > "$TMP/net-config.js"
-cmp -s "$TMP/net-config.js" "$TMP/net/config.js" || { echo "FAIL mainnet pack: its config.js is not the script's mainnet output"; exit 1; }
-grep -q '^  chainId: 999,$' "$TMP/net/config.js" && grep -q '^  hyperliquidChain: "Mainnet",$' "$TMP/net/config.js" \
-  || { echo "FAIL mainnet pack: its config.js is not mainnet's"; exit 1; }
-python3 scripts/app_config.py --network mainnet --index --commit "$netc" > "$TMP/net-index.html"
-cmp -s "$TMP/net-index.html" "$TMP/net/index.html" || { echo "FAIL mainnet pack: its index.html is not the script's mainnet output"; exit 1; }
-if grep -qi 'testnet\|mock' "$TMP/net/index.html"; then echo "FAIL mainnet pack: its index.html still says testnet"; exit 1; fi
-for f in app.js lib/hlsend.js style.css; do
-  cmp -s <(git show "$netc:app/$f") "$TMP/net/$f" || { echo "FAIL mainnet pack: app/$f is not its blob"; exit 1; }
-done
-(cd "$TMP/net" && "${SUM[@]}" -c --status "$TMP/net.sha256") || { echo "FAIL mainnet pack: the list does not check the pack"; exit 1; }
-echo "ok   packs mainnet with that commit's mainnet settings in config.js and mainnet's words in index.html, and every other file its blob"
+# A live deployment on mainnet gets no pack: a mainnet site is its simulation pools' alone, and settings written from
+# a live deployment would name no factory to hold a pool's address to.
+if ./scripts/pack-site.sh --network mainnet "$netc" "$TMP/net" >/dev/null 2>&1 || [ -e "$TMP/net" ] || [ -e "$TMP/net.sha256" ]; then
+  echo "FAIL mainnet live: packed a mainnet site for a live deployment, with no factory of simulation pools in its settings"; exit 1
+fi
+./scripts/pack-site.sh "$netc" "$TMP/net-testnet" >/dev/null || { echo "FAIL mainnet live: the same commit does not pack for testnet"; exit 1; }
+echo "ok   refuses mainnet for a commit with a live deployment on mainnet, writes nothing, and still packs it for testnet"
 # A mainnet site of simulation pools: HEAD's tree with an example staged simulation-pool deployment on mainnet and its
 # record, shaped like deployments/testnet-rehearsal998.json. No live deployment on mainnet: the pack is the one
 # factory's site, and its page has none of the other pools' lines.
@@ -106,32 +99,32 @@ GIT_INDEX_FILE="$TMP/simindex" git read-tree HEAD
 GIT_INDEX_FILE="$TMP/simindex" git update-index --add --cacheinfo "100644,$simblob,deployments/LIVE.json" \
   --cacheinfo "100644,$simrec,deployments/mainnet-sim-net.json"
 simc="$(git commit-tree "$(GIT_INDEX_FILE="$TMP/simindex" git write-tree)" -p HEAD -m "a mainnet simulation-pool deployment")"
-line4="$(./scripts/pack-site.sh --network mainnet "$simc" "$TMP/sim" 2>&1 | tail -1)" || { echo "FAIL mainnet sim pack: refused: $line4"; exit 1; }
+line4="$(./scripts/pack-site.sh --network mainnet "$simc" "$TMP/sim" 2>&1 | tail -1)" || { echo "FAIL mainnet pack: refused: $line4"; exit 1; }
 want4="files=$n match=$n differ=0 extra=0 build={\"commit\":\"$simc\",\"network\":\"mainnet\"} "
-case "$line4" in "$want4"*) ;; *) echo "FAIL mainnet sim pack: the packer said: $line4"; exit 1 ;; esac
+case "$line4" in "$want4"*) ;; *) echo "FAIL mainnet pack: the packer said: $line4"; exit 1 ;; esac
 python3 scripts/app_config.py --network mainnet --commit "$simc" > "$TMP/sim-config.js"
 python3 scripts/app_config.py --network mainnet --index --commit "$simc" > "$TMP/sim-index.html"
-cmp -s "$TMP/sim-config.js" "$TMP/sim/config.js" || { echo "FAIL mainnet sim pack: its config.js is not the script's mainnet output"; exit 1; }
-cmp -s "$TMP/sim-index.html" "$TMP/sim/index.html" || { echo "FAIL mainnet sim pack: its index.html is not the script's mainnet output"; exit 1; }
+cmp -s "$TMP/sim-config.js" "$TMP/sim/config.js" || { echo "FAIL mainnet pack: its config.js is not the script's mainnet output"; exit 1; }
+cmp -s "$TMP/sim-index.html" "$TMP/sim/index.html" || { echo "FAIL mainnet pack: its index.html is not the script's mainnet output"; exit 1; }
 grep -q '^  chainId: 999,$' "$TMP/sim/config.js" && grep -q '^    factory: "0x00000000000000000000000000000000000000F5",$' "$TMP/sim/config.js" \
   && grep -q '^  deployments: \[$' "$TMP/sim/config.js" && ! grep -qi 'testnet' "$TMP/sim/config.js" \
-  || { echo "FAIL mainnet sim pack: its config.js is not the one factory's, on mainnet"; exit 1; }
+  || { echo "FAIL mainnet pack: its config.js is not the one factory's, on mainnet"; exit 1; }
 grep -q '<div class="notice">Mainnet. Real USDC. Unaudited.</div>' "$TMP/sim/index.html" \
-  || { echo "FAIL mainnet sim pack: its index.html does not carry mainnet's plaque"; exit 1; }
+  || { echo "FAIL mainnet pack: its index.html does not carry mainnet's plaque"; exit 1; }
 if grep -qi 'testnet\|mock\|#/new\|#/shared\|#/economics\|#/verify\|#/evidence\|#/terms' "$TMP/sim/index.html"; then
-  echo "FAIL mainnet sim pack: its index.html says testnet or links the other pools' pages"; exit 1
+  echo "FAIL mainnet pack: its index.html says testnet or links the other pools' pages"; exit 1
 fi
-(cd "$TMP/sim" && "${SUM[@]}" -c --status "$TMP/sim.sha256") || { echo "FAIL mainnet sim pack: the list does not check the pack"; exit 1; }
+(cd "$TMP/sim" && "${SUM[@]}" -c --status "$TMP/sim.sha256") || { echo "FAIL mainnet pack: the list does not check the pack"; exit 1; }
 echo "ok   packs a mainnet site of simulation pools: the one factory in config.js, mainnet's page, every other file its blob"
 # With no folder named, a mainnet pack goes to a folder that says mainnet, and testnet's keeps the name it had: the two
 # packs of one commit are not taken for each other at the upload.
 HOME="$TMP/home" ./scripts/pack-site.sh --network mainnet "$simc" >/dev/null 2>&1 \
-  || { echo "FAIL mainnet sim pack: not packed into a default folder"; exit 1; }
+  || { echo "FAIL mainnet pack: not packed into a default folder"; exit 1; }
 HOME="$TMP/home" ./scripts/pack-site.sh "$simc" >/dev/null 2>&1 \
-  || { echo "FAIL mainnet sim pack: testnet's pack of the same commit found its default folder taken"; exit 1; }
+  || { echo "FAIL mainnet pack: testnet's pack of the same commit found its default folder taken"; exit 1; }
 [ -f "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}/build.json" ] && [ -f "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}.sha256" ] \
   && grep -q '"network":"mainnet"' "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}/build.json" \
-  || { echo "FAIL mainnet sim pack: its default folder does not say mainnet"; exit 1; }
+  || { echo "FAIL mainnet pack: its default folder does not say mainnet"; exit 1; }
 [ "$(cat "$TMP/home/Downloads/pools-app-${simc:0:8}/build.json")" = "{\"commit\":\"$simc\"}" ] \
   || { echo "FAIL the default folder of a testnet pack is not pools-app-<first 8>"; exit 1; }
 echo "ok   names a mainnet pack's default folder for mainnet, and testnet's as before"
@@ -139,7 +132,7 @@ echo "ok   names a mainnet pack's default folder for mainnet, and testnet's as b
 pageblob="$(git show HEAD:app/index.html | sed 's/and mock USDC\./with mock USDC./' | git hash-object -w --stdin)"
 GIT_INDEX_FILE="$TMP/simindex" git update-index --add --cacheinfo "100644,$pageblob,app/index.html"
 movedc="$(git commit-tree "$(GIT_INDEX_FILE="$TMP/simindex" git write-tree)" -p HEAD -m "the notice reworded")"
-if ./scripts/pack-site.sh --network mainnet "$movedc" "$TMP/moved" >/dev/null 2>&1 || [ -e "$TMP/moved" ]; then echo "FAIL mainnet sim pack: packed a page whose words the script cannot place"; exit 1; fi
+if ./scripts/pack-site.sh --network mainnet "$movedc" "$TMP/moved" >/dev/null 2>&1 || [ -e "$TMP/moved" ]; then echo "FAIL mainnet pack: packed a page whose words the script cannot place"; exit 1; fi
 ./scripts/pack-site.sh "$movedc" "$TMP/moved-testnet" >/dev/null || { echo "FAIL the same commit does not pack for testnet"; exit 1; }
 echo "ok   refuses mainnet for a commit whose page moved its words, writes nothing, and still packs it for testnet"
 echo "test-pack-site: the packer behaves"

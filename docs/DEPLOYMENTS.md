@@ -77,6 +77,12 @@ deployments are `staged` on it (set the one the site should no longer show to `r
 is not the record's `SimPoolFactory`; and when the record's `usdc` is not the network's USDC in
 `spike/hlspike/network.py`: the pages call the token USDC, and mainnet's plaque calls it real.
 
+Mainnet's settings are never written without `sim`. A `live` entry listed on mainnet, alone or beside the staged
+simulation-pool deployment, stops the script: settings written from a live deployment name no factory of simulation
+pools, and a site without one has no list to hold a pool's address to, so its pages would open for any contract a
+link names. The pages hold the same line themselves (`app/lib/simsite.js`, `poolPages`): on mainnet settings that
+name no factory, no page of a pool, no panel and no exam's screen is drawn, whoever wrote the settings.
+
 Why not a role of its own, or `live`: the weekly watch reads `live` and `testers` entries as `PoolFactory`
 deployments with a gateway and a keeper, so a simulation-pool deployment listed under either would be read as one,
 and a new role would have to be taught to every reader of this file. Reading the `staged` entry where there is no
@@ -219,6 +225,7 @@ was deployed; the script keeps it by network and label. `assetLeverage` is set w
 What a mainnet site does not have. The pages of the pools a `PoolFactory` makes still say testnet in their own
 words: the about text in `app/app.js`, "Testnet. Mock USDC. Unaudited." in `app/views/pools.js`, the shared pool,
 verify, economics and evidence pages, and the safety and evidence data in `app/data/`. They are no routes of a
-site of simulation pools (`app/app.js`, `poolRoutes`; their addresses answer "Not found"), and each needs mainnet
-wording before a `PoolFactory` deployment is listed `live` on mainnet. And three things the script does not write:
-a picture for a shared link, terms for a mainnet site, and a description of it beyond its title.
+site of simulation pools (`app/app.js`, `poolRoutes`; their addresses answer "Not found"), and the script writes
+mainnet no settings from a `live` entry: showing a `PoolFactory`'s pools on mainnet would take mainnet wording for
+each of those pages and a decision about what the site lists, neither of which is here. And three things the script
+does not write: a picture for a shared link, terms for a mainnet site, and a description of it beyond its title.

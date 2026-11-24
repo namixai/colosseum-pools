@@ -7,9 +7,22 @@
 // (app/tests/simsite.test.mjs): the view reads the factory (app/views/simsite.js) and hands the answer in.
 import { CONFIG } from "../config.js";
 import { esc, sameAddress, rateLimited } from "./ui.js";
+import { isMainnet } from "./network.js";
 
 /** The factory whose pools the site shows (`{ label, factory }`), or null on a site whose settings name none. */
 export const simSite = (config = CONFIG) => config?.sim ?? null;
+
+/**
+ * Which pool a page of the panels, or an exam's screen, may be drawn for, by the settings. "listed": a site of
+ * simulation pools, a pool its factory's list names. "any": a site that names no factory and is not mainnet's
+ * (testnet's pages open by a pool's address, as they did). "none": mainnet settings that name no factory. The script
+ * writes no such settings (scripts/app_config.py stops on them); were some written by hand or by an older script,
+ * the pages would otherwise draw whatever contract a link names, with real USDC behind its Buy button.
+ */
+export function poolPages(config = CONFIG) {
+  if (simSite(config)) return "listed";
+  return isMainnet(config) ? "none" : "any";
+}
 
 /** Whether `address` is one of `pools`, the factory's own list, case aside. A list that was not read (null: no
  *  contract stands at the factory's address) names no pool. */

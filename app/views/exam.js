@@ -12,7 +12,7 @@ import { ACCOUNT_ABI, KIND } from "../lib/simtrader.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
 import { sitePool } from "./simsite.js";
-import { simSite, readFailed } from "../lib/simsite.js";
+import { poolPages, readFailed } from "../lib/simsite.js";
 import {
   PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, placeCall, graduateCall, setAgentCall,
   setTriggerCall, clearTriggerCall, refusalOf,
@@ -88,16 +88,18 @@ export async function examView(address, page, query = "") {
     return;
   }
   // On a site of simulation pools the screen opens only for an exam or a stage of one of the site's pools: any other
-  // contract, an exam of another factory's pool among them, is "Not found" before anything of it is read.
-  const ofSite = simSite() ? await simPoolOf(address, true) : null;
-  if (simSite() && !(await sitePool(ofSite, page))) return;
+  // contract, an exam of another factory's pool among them, is "Not found" before anything of it is read. Mainnet
+  // settings that name no factory open no exam at all (app/lib/simsite.js, poolPages).
+  const pages = poolPages();
+  const ofSite = pages === "listed" ? await simPoolOf(address, true) : null;
+  if (pages !== "any" && !(await sitePool(ofSite, page))) return;
   const exam = new ethers.Contract(address, PAPER_EXAM_ABI, chain.readProvider);
   // The chain the exam is on is the one the node that answers its getters says (eth_chainId): the page's data source
   // is that chain's or nothing (dataSource), never another network's candles beside this exam.
   const chainId = await nodeChainId();
   const ds = dataSource({ chainId }, CONFIG);
   const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(),
-    simSite() ? ofSite : simPoolOf(address)]);
+    pages === "listed" ? ofSite : simPoolOf(address)]);
   // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
   // This continuation may have been left behind by a page change: only the page on screen touches the page-wide marker.
   if (!page.isConnected) return;

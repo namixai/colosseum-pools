@@ -104,6 +104,8 @@ test("no page of the simulation pools names a network in its own words: each tak
       /^export const networkWord = \(config = CONFIG\) => \(isMainnet\(config\) \? "" : "testnet "\);$/],
     // Which network's data an exam is shown beside, by the settings' own chain name.
     "../lib/exam.js": [/^    rehearsal: config\.hyperliquidChain !== "Mainnet" \};$/],
+    // What mainnet's settings must carry for a pool's page to open at all: asked of the settings, not said by a page.
+    "../lib/simsite.js": [/^import \{ isMainnet \} from "\.\/network\.js";$/, /^  return isMainnet\(config\) \? "none" : "any";$/],
   };
   for (const path of DRAWN) {
     const named = code(read(path)).split("\n").filter((line) => /testnet|mainnet|mock/i.test(line))

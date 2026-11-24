@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CONFIG } from "../config.js";
-import { simSite, isSitePool, noContract, readFailed, simListHtml, NOT_FOUND } from "../lib/simsite.js";
+import { simSite, poolPages, isSitePool, noContract, readFailed, simListHtml, NOT_FOUND } from "../lib/simsite.js";
 import { indexUrl, askIndex, sourceNote, indexBase } from "../lib/simindex.js";
 import { reviewsUrl, askReviews } from "../lib/simoperator.js";
 import { needsGate } from "../lib/nav.js";
@@ -118,7 +118,7 @@ test("a page of a pool is drawn only for a pool of the site's factory; on a site
   for (const hash of ["#/", `#/exam/${POOL}`, "#/exam", `#/pool/${POOL}`, "#/sim", "#/manage"]) assert.equal(PANEL_POOL.exec(hash), null);
   const view = read("../views/simsite.js");
   const check = view.slice(view.indexOf("export async function sitePool("));
-  assert.match(check, /^export async function sitePool\(pool, page\) \{\s+if \(!simSite\(\)\) return true;\s+if \(pool && \(isSitePool\(named, pool\) \|\| isSitePool\(await sitePools\(\), pool\)\)\) return true;/);
+  assert.match(check, /^export async function sitePool\(pool, page\) \{\s+const pages = poolPages\(\);\s+if \(pages === "any"\) return true;\s+if \(pages === "listed" && pool && \(isSitePool\(named, pool\) \|\| isSitePool\(await sitePools\(\), pool\)\)\) return true;/);
   // A pool the factory named once is not asked for again (its list only grows); the list kept is the chain's own, as last
   // read, and an address it does not name is read for afresh, never taken from anything but the factory.
   assert.match(view, /^let named = \[\];$/m);
@@ -129,8 +129,27 @@ test("a page of a pool is drawn only for a pool of the site's factory; on a site
   assert.match(check, /if \(page\.isConnected\) delete document\.body\.dataset\.panel;\s+render\(page, NOT_FOUND\);\s+return false;/, "the page is the site's own, not a panel's");
   // An exam's screen: its pool is asked of the exam and held to the factory's list before anything of the exam is read.
   const exam = read("../views/exam.js");
-  assert.match(exam, /const ofSite = simSite\(\) \? await simPoolOf\(address, true\) : null;\s+if \(simSite\(\) && !\(await sitePool\(ofSite, page\)\)\) return;\s+const exam = new ethers\.Contract\(address, PAPER_EXAM_ABI, chain\.readProvider\);/);
-  assert.match(exam, /simSite\(\) \? ofSite : simPoolOf\(address\)\]\);/);
+  assert.match(exam, /const pages = poolPages\(\);\s+const ofSite = pages === "listed" \? await simPoolOf\(address, true\) : null;\s+if \(pages !== "any" && !\(await sitePool\(ofSite, page\)\)\) return;\s+const exam = new ethers\.Contract\(address, PAPER_EXAM_ABI, chain\.readProvider\);/);
+  assert.match(exam, /pages === "listed" \? ofSite : simPoolOf\(address\)\]\);/);
+});
+
+test("mainnet settings that name no factory open no pool's page at all; testnet's open any, as they did", async () => {
+  // Testnet: no factory named, and a pool's page opens by its address.
+  assert.equal(poolPages(), "any");
+  assert.equal(poolPages(CONFIG), "any");
+  assert.equal(poolPages({ hyperliquidChain: "Testnet" }), "any");
+  // A site of simulation pools, on either network: the pools its factory's list names.
+  const { CONFIG: main } = await import(pathToFileURL(join(built.site, "config.js")).href);
+  assert.equal(poolPages(main), "listed");
+  assert.equal(poolPages({ hyperliquidChain: "Testnet", sim: { label: "x", factory: SIM_FACTORY } }), "listed");
+  // Mainnet with no factory in the settings: the script writes none such, and the pages would have no list to hold an
+  // address to. No page of a pool, no panel and no exam's screen is drawn.
+  const { sim, ...bare } = main;
+  assert.ok(sim);
+  assert.equal(poolPages(bare), "none");
+  assert.equal(poolPages({ hyperliquidChain: "Mainnet" }), "none");
+  assert.equal(poolPages({ hyperliquidChain: "Mainnet", sim: null }), "none");
+  assert.equal(poolPages({ hyperliquidChain: "Mainnet", deployments: [{ label: "v3", role: "live" }] }), "none", "a live deployment in the settings is no list of simulation pools");
 });
 
 test("\"Not found\" is the contract's answer, never a read that failed on its way", () => {

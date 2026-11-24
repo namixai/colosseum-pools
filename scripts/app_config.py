@@ -21,7 +21,8 @@ A network with no live entry gets a site of simulation pools: its one `staged` s
 that names a SimPoolFactory) goes into `sim`, the settings name no other deployment, and the pages show that
 factory's pools and nothing else (docs/DEPLOYMENTS.md). A network with neither has nothing for a site to read, and
 the script stops rather than write settings for one. Testnet has a live entry, so its staged simulation-pool
-deployment is not in its settings: its simulation pages open by a pool's address, as they did.
+deployment is not in its settings: its simulation pages open by a pool's address, as they did. Mainnet's settings
+are never written without `sim`: a live deployment listed on mainnet stops the script.
 
 Everything a page says of the network comes from here: the chain a wallet is offered, the public node, the name the
 pages write (`networkName`), and index.html's own words (--index): the committed app/index.html is testnet's, and
@@ -243,6 +244,13 @@ def sim_entry(network, entries: list[dict], files: Files) -> dict | None:
     network with neither, or with two such entries, gets no settings: the site shows the pools of one factory."""
     here = [e for e in entries if e["network"] == network.name]
     if any(e["role"] == "live" for e in here):
+        # Mainnet's site is its simulation pools' and no other. Settings written from a live deployment name no
+        # factory of simulation pools, and without one the pages have no list to hold a pool's address to: a link
+        # could name any contract, with real USDC behind its Buy button. Such settings are not written.
+        if network.is_mainnet:
+            raise SystemExit(f"a live deployment on {network.name} in {LIVE}: a {network.name} site is written from its "
+                             "staged simulation-pool deployment alone, and settings with a live deployment would "
+                             "name no such factory. Nothing is written")
         return None
     staged = [(e, record_of(e, network, files)) for e in here if e["role"] == "staged"]
     sims = [(e, r) for e, r in staged if "SimPoolFactory" in r]

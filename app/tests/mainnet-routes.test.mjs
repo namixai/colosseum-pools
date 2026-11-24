@@ -8,6 +8,7 @@
 // the router does. This file has the stand-ins to itself: node runs each test file apart.
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { mainnetSite, SIM_FACTORY } from "./mainnet-site.mjs";
@@ -191,4 +192,34 @@ test("an exam's screen opens for an exam of a listed pool that the pool owns, an
   assert.deepEqual(page.reads.slice(0, 2), [`${EXAM}.pool`, `${LISTED}.accountOf`], "the pool is asked of the exam, and the exam of the pool, first");
   assert.ok(page.reads.some((r) => r === `${EXAM}.rules`), `the screen went on to the exam's own reads: ${page.reads}`);
   assert.doesNotMatch(page.html, NOT_FOUND);
+});
+
+// Last, since it loads a second site over the first: mainnet settings with no factory in them. scripts/app_config.py
+// writes none such; here they are the build's own with `sim` taken out, as a hand or an older script might leave them.
+test("mainnet settings that name no factory: no page of a pool, no panel and no exam's screen opens, and nothing is read", async () => {
+  const bare = mainnetSite();
+  try {
+    const file = join(bare.site, "config.js");
+    const settings = readFileSync(file, "utf8");
+    const stripped = settings.replace(/^  sim: \{\n(?:    .*\n)*  \},\n/m, "");
+    assert.notEqual(stripped, settings, "the build's settings name the factory under `sim`");
+    writeFileSync(file, stripped);
+    const { CONFIG: none } = await import(pathToFileURL(file).href);
+    assert.equal(none.chainId, 999);
+    assert.equal(none.hyperliquidChain, "Mainnet");
+    assert.equal("sim" in none, false);
+    await import(pathToFileURL(join(bare.site, "app.js")).href);
+    chain.pools = [LISTED];
+    chain.exams = new Map([[EXAM.toLowerCase(), LISTED]]);
+    // Even the pool the factory would list, and its own exam: with no list in the settings there is nothing to hold them to.
+    for (const hash of [...PANELS(LISTED), ...PANELS(OTHER), `#/exam/${EXAM}`]) {
+      const page = await open(hash);
+      assert.ok(refused(page), `${hash}: drew ${page.html.slice(0, 80)}, built ${page.built}`);
+      assert.deepEqual(page.reads, [], `${hash}: nothing is read, of the address or of any factory`);
+      assert.equal(page.panel, null, hash);
+    }
+  } finally {
+    chain.exams = new Map();
+    bare.remove();
+  }
 });

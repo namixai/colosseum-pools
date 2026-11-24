@@ -3,7 +3,7 @@
 import * as chain from "../lib/chain.js";
 import { render } from "../lib/ui.js";
 import { SIM_FACTORY_ABI } from "../lib/simpool.js";
-import { simSite, isSitePool, noContract, simListHtml, NOT_FOUND } from "../lib/simsite.js";
+import { simSite, poolPages, isSitePool, noContract, simListHtml, NOT_FOUND } from "../lib/simsite.js";
 import { networkName } from "../lib/network.js";
 
 const { ethers } = window;
@@ -31,13 +31,15 @@ export async function simListView(page) {
 }
 
 /**
- * Whether a page of `pool` may be drawn. On a site whose settings name no factory, always. On a site of simulation
- * pools, only for a pool its factory made: for any other address "Not found" is drawn here, under the site's own
- * header, and the caller draws nothing.
+ * Whether a page of `pool` may be drawn (app/lib/simsite.js, poolPages). On testnet's site, whose settings name no
+ * factory, always. On a site of simulation pools, only for a pool its factory made. On mainnet settings that name no
+ * factory, never. Where it may not, "Not found" is drawn here, under the site's own header, and the caller draws
+ * nothing.
  */
 export async function sitePool(pool, page) {
-  if (!simSite()) return true;
-  if (pool && (isSitePool(named, pool) || isSitePool(await sitePools(), pool))) return true;
+  const pages = poolPages();
+  if (pages === "any") return true;
+  if (pages === "listed" && pool && (isSitePool(named, pool) || isSitePool(await sitePools(), pool))) return true;
   // The router set the panel's marker for the address: this is no panel's page.
   if (page.isConnected) delete document.body.dataset.panel;
   render(page, NOT_FOUND);
