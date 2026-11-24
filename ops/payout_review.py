@@ -3256,7 +3256,9 @@ def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads
     factory, usdc, start = record["SimPoolFactory"], record["usdc"], int(record["block"])
     chain_id = int(c.rpc("eth_chainId"), 16)
     latest = int(c.rpc("eth_blockNumber"), 16)
-    now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
+    # The time of that block, by its number: "latest" asked a moment later may be the next one, and the document's
+    # `readAt` would name one block and carry another's time.
+    now = int(c.rpc("eth_getBlockByNumber", [hex(latest), False])["timestamp"], 16)
     pools = [to_checksum_address(p) for p in core.view(factory, "pools()", "address[]")]
     kept = LogScan(scan, factory, chain_id, start)
     kept.read(pools, usdc, latest, until=until)

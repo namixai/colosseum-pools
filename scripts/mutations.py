@@ -17368,6 +17368,11 @@ MUTATIONS = [
      "        claimed = None if doc.get(\"claimedAt\") is None else int(doc[\"claimedAt\"])\n    except",
      "    except",
      ["test_a_review_with_a_field_of_the_wrong_shape_is_refused_for_its_payout_like_any_other"]),
+    # The review's `readAt`: the time of the block its number names.
+    ("RV231", "ops/payout_review.py",
+     "    now = int(c.rpc(\"eth_getBlockByNumber\", [hex(latest), False])[\"timestamp\"], 16)\n    pools = [",
+     "    now = int(c.rpc(\"eth_getBlockByNumber\", [\"latest\", False])[\"timestamp\"], 16)\n    pools = [",
+     ["test_it_reads_sales_stages_payouts_the_accounts_events_the_oracle_and_transfers"]),
 ]
 
 RUNNERS = {

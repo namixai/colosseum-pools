@@ -1919,7 +1919,8 @@ class ReadingTheChain(unittest.TestCase):
             if method == "eth_blockNumber":
                 return hex(40)
             if method == "eth_getBlockByNumber":
-                return {"timestamp": hex(1_000 if params[0] == "latest" else 100 * int(params[0], 16))}
+                # "latest" is by now the block after the head read: another time than block 40's.
+                return {"timestamp": hex(4_001 if params[0] == "latest" else 100 * int(params[0], 16))}
             if method == "eth_call":
                 block = int(params[1], 16)
                 asked.append((int(params[0]["data"], 16), block))
@@ -1965,7 +1966,8 @@ class ReadingTheChain(unittest.TestCase):
         self.assertEqual((got["touchEvery"], got["touchOracle"]), ({s1: 60, e1: 60}, {}))
         self.assertIs(back.call_args.args[1], got["oracle"], "the stops' prices go where the review reads them")
         self.assertEqual(list(back.call_args.args[0]), [e1, s1], "every account of the factory, not only the payouts'")
-        self.assertEqual((got["now"], got["latest"], got["pools"]), (1_000, 40, [POOL]))
+        self.assertEqual((got["now"], got["latest"], got["pools"]), (4_000, 40, [POOL]),
+                         "the time is the head block's own, read by its number, not that of a `latest` that moved on")
         self.assertEqual(got["sales"], [{"pool": POOL, "exam": e1, "trader": t1, "partner": partner, "line": 2,
                                          "size": SIZE, "price": 1_000, "fee": 0, "code": "0x" + code.hex(), "block": 11, "tx": tx(1)}])
         self.assertEqual(got["funded"], [{"pool": POOL, "stage": s1, "exam": e1, "trader": t1, "block": 20}])
