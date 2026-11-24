@@ -661,7 +661,6 @@ class Alarms16(unittest.TestCase):
                 mock.patch.object(rs.core, "log"):
             return rs.one_pass({}, d, None, said, alarm)
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_one_alarm_that_raises_does_not_keep_the_others_from_being_said(self):
         d = tmp(self)
         seen, said = [], {}

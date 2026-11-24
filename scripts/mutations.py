@@ -17427,6 +17427,15 @@ MUTATIONS = [
      "            batch = [t for t in left if int(links[t][\"at\"]) == lo][:chk.ADDRESS_BATCH]",
      "            batch = [t for t in left if int(links[t][\"at\"]) == lo][:1]",
      ["test_buyers_go_a_hundred_to_a_call"]),
+    # Review 16: each alarm in its own guard; one that raised is not taken.
+    ("RZ5", "ops/review_service.py",
+     "            except Exception as exc:  # this alarm's own failure: not taken, and the alarms after it still go",
+     "            except KeyError as exc:",
+     ["test_one_alarm_that_raises_does_not_keep_the_others_from_being_said"]),
+    ("RZ6", "ops/review_service.py",
+     "                core.log(\"review_alarm_raised\", payout=key, error=type(exc).__name__)\n                took = False",
+     "                core.log(\"review_alarm_raised\", payout=key, error=type(exc).__name__)\n                took = True",
+     ["test_an_alarm_that_raised_is_not_remembered_and_the_others_are"]),
 ]
 
 RUNNERS = {

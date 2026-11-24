@@ -78,5 +78,31 @@ class EveryBuyersFunding(ScanWorld):
         self.assertEqual(max(n for _, _, n in calls), pr.chk.ADDRESS_BATCH)
 
 
+class EachAlarmAlone(unittest.TestCase):
+    """An alarm that raises is that alarm's failure: the ones after it are said, and it is said again at the next pass."""
+
+    def test_an_alarm_that_raised_is_not_remembered_and_the_others_are(self):
+        import pathlib
+        import tempfile
+        from ops.tests.review16.test_review16 import Alarms16
+        d = pathlib.Path(tempfile.mkdtemp())
+        seen, said, broken = [], {}, [True]
+
+        def alarm(event, **fields):
+            seen.append(fields["id"])
+            if fields["id"] == 0 and broken:
+                raise RuntimeError("the channel's own fault")
+            return True
+        Alarms16().run_pass(d, alarm, said)
+        self.assertEqual(seen, [0, 1, 2])
+        self.assertEqual(sorted(k for k, v in said.items() if isinstance(v, dict)), ["0xP-1", "0xP-2"],
+                         "the one that raised is not remembered as said")
+        self.assertEqual(sorted(p.name for p in d.glob("0xP-*.json")), ["0xP-0.json", "0xP-1.json", "0xP-2.json"])
+        broken.clear()
+        del seen[:]
+        Alarms16().run_pass(d, alarm, said)
+        self.assertEqual(seen, [0], "said again at the next pass, the others not twice")
+
+
 if __name__ == "__main__":
     unittest.main()

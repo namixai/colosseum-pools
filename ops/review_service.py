@@ -121,8 +121,8 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
     """Reads the chain once (`read` goes to `payout_review.read_chain`: the kept logs, the candles, the archive node, the
     time budget), writes a document for each payout still waiting and the pass's end, then raises the alarms, ALARM_BUDGET_S
     for all of them (a hung channel keeps no document from the disk); returns the reviews. An alarm is remembered in
-    `said` only once the channel took it (`alarm(..., wait=True)` not False): one that did not go out, or was not said
-    within the budget, is said again at the next pass. The pass's end is written to status.json beside the documents,
+    `said` only once the channel took it (`alarm(..., wait=True)` not False): one that did not go out, raised, or was
+    not said within the budget, is said again at the next pass, and keeps none of the others from being said. The pass's end is written to status.json beside the documents,
     for the stops' loop's watch of the review's age (`stop_filler.StopLoop`)."""
     chain = pr.read_chain(record, prices, **read)
     out.mkdir(parents=True, exist_ok=True)
@@ -145,7 +145,11 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
                 core.log("review_alarm_not_said", payout=key, why=f"the pass's {ALARM_BUDGET_S} s for alarms are spent",
                          then="said at the next pass")
                 continue
-            took = alarm("payout_held" if a["action"] == "hold" else "payout_needs_a_stop", wait=True, **a)
+            try:
+                took = alarm("payout_held" if a["action"] == "hold" else "payout_needs_a_stop", wait=True, **a)
+            except Exception as exc:  # this alarm's own failure: not taken, and the alarms after it still go
+                core.log("review_alarm_raised", payout=key, error=type(exc).__name__)
+                took = False
             if took is not False:
                 said[key] = {"mark": mark, "at": now, "before": [b for b in BEFORE_S
                                                                  if a["deadline"] is not None and a["deadline"] - now <= b]}
