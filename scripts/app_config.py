@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import types
@@ -49,6 +50,7 @@ NATIVE = '{ name: "HYPE", symbol: "HYPE", decimals: 18 }'  # HYPE, 18 decimals, 
 # page writes beside a pool, and no page writes one of its own (app/lib/network.js).
 NETWORK_NAME = {"testnet": "Hyperliquid testnet", "mainnet": "Hyperliquid"}
 INDEX = "app/index.html"
+ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 # index.html's lines that name the network, and what a site built for mainnet says in their place: (the committed
 # text, mainnet's, how many times the committed file has it). The plaque is the panels' own (app/lib/examscreen.js,
 # SCREEN_TEXT.mainnetPlaque; app/tests/config.test.mjs holds the two equal). The picture of a shared link has testnet's
@@ -261,6 +263,20 @@ def sim_entry(network, entries: list[dict], files: Files) -> dict | None:
         raise SystemExit(f"{len(sims)} staged simulation-pool deployments on {network.name} in {LIVE}: the site shows "
                          "the pools of one; retire the others")
     entry, record = sims[0]
+    label = entry.get("label", "?")
+    # The site is written from this entry alone, so what the list's own test holds of it (app/tests/deployments.test.mjs)
+    # is asked for here by name: every field there, the chain the network's, the factory an address a contract can
+    # stand at. Otherwise a missing field is a KeyError, and a factory that is no address a site that lists nothing.
+    for key, what in (("chainId", "the network's chain id"), ("factory", "its SimPoolFactory"),
+                      ("gateway", "null, or the https address its pools' index answers at")):
+        if key not in entry:
+            raise SystemExit(f"{label}: the entry has no `{key}`: {what}")
+    if entry["chainId"] != network.chain_id:
+        raise SystemExit(f"{label}: chainId {entry['chainId']!r}, not {network.name}'s {network.chain_id}")
+    factory = str(entry["factory"])
+    if not ADDRESS.fullmatch(factory) or int(factory, 16) == 0:
+        raise SystemExit(f"{label}: factory {entry['factory']!r} is not an address a factory stands at: 0x and 40 "
+                         "hexadecimal characters, not all zeros")
     if record["SimPoolFactory"] != entry["factory"]:
         raise SystemExit(f"{entry['label']}: the entry's factory is not the record's SimPoolFactory")
     # The pages call the pools' token USDC, and on mainnet real USDC: a factory on another token is not shown as one.

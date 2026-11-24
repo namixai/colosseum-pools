@@ -17941,6 +17941,23 @@ MUTATIONS = [
      "printf '{\"commit\":\"%s\",\"network\":\"%s\"}\\n' \"$SHA\" \"$NETWORK\" > \"$OUT/build.json\"",
      "printf '{\"commit\":\"%s\"}\\n' \"$SHA\" > \"$OUT/build.json\"",
      ["a testnet pack names testnet in build.json"]),
+    # The entry a mainnet site is written from, held to the list's own shape before anything is written from it.
+    ("NC22", "scripts/app_config.py",
+     '    if entry["chainId"] != network.chain_id:',
+     '    if False:',
+     ["the entry a site of simulation pools is written from is held to the list's shape: its factory an address, its chain the network's, its gateway named"]),
+    ("NC23", "scripts/app_config.py",
+     '    if not ADDRESS.fullmatch(factory) or int(factory, 16) == 0:',
+     '    if not ADDRESS.fullmatch(factory):',
+     ["the entry a site of simulation pools is written from is held to the list's shape: its factory an address, its chain the network's, its gateway named"]),
+    ("NC24", "scripts/app_config.py",
+     '    if not ADDRESS.fullmatch(factory) or int(factory, 16) == 0:',
+     '    if int(factory, 16) == 0:',
+     ["the entry a site of simulation pools is written from is held to the list's shape: its factory an address, its chain the network's, its gateway named"]),
+    ("NC25", "scripts/app_config.py",
+     '        if key not in entry:',
+     '        if False:',
+     ["the entry a site of simulation pools is written from is held to the list's shape: its factory an address, its chain the network's, its gateway named"]),
 ]
 
 RUNNERS = {

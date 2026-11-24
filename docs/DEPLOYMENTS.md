@@ -73,9 +73,11 @@ written from (`scripts/app_config.py`).
   listed `staged` under `"network": "mainnet"` is its site.
 
 The script stops, and nothing is packed, when the network has neither kind of entry; when two simulation-pool
-deployments are `staged` on it (set the one the site should no longer show to `retired`); when the entry's `factory`
-is not the record's `SimPoolFactory`; and when the record's `usdc` is not the network's USDC in
-`spike/hlspike/network.py`: the pages call the token USDC, and mainnet's plaque calls it real.
+deployments are `staged` on it (set the one the site should no longer show to `retired`); when the entry lacks its
+`chainId`, `factory` or `gateway`, its `chainId` is not the network's, or its `factory` is not an address a contract
+can stand at (0x and 40 hexadecimal characters, not all zeros); when the entry's `factory` is not the record's
+`SimPoolFactory`; and when the record's `usdc` is not the network's USDC in `spike/hlspike/network.py`: the pages
+call the token USDC, and mainnet's plaque calls it real.
 
 Mainnet's settings are never written without `sim`. A `live` entry listed on mainnet, alone or beside the staged
 simulation-pool deployment, stops the script: settings written from a live deployment name no factory of simulation

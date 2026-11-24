@@ -343,6 +343,52 @@ test("a site of simulation pools shows one factory, on the network's own USDC, a
   }
 });
 
+test("the entry a site of simulation pools is written from is held to the list's shape: its factory an address, its chain the network's, its gateway named", () => {
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  const withFactory = (factory) => [[{ ...SIM, factory }], { "deployments/mainnet-sim-main.json": { ...SIM_RECORD, SimPoolFactory: factory } }];
+  const { gateway, ...noGateway } = SIM;
+  const { chainId, ...noChain } = SIM;
+  const { factory: named, ...noFactory } = SIM;
+  assert.deepEqual([gateway, chainId, named], [null, 999, SIM_FACTORY]);
+  const cases = [
+    // A factory that is no address a contract stands at: in the entry and in the record alike, so nothing else catches it.
+    [...withFactory("nonsense"), /sim-main: factory 'nonsense' is not an address a factory stands at: 0x and 40 hexadecimal characters, not all zeros/],
+    [...withFactory(ZERO), /sim-main: factory '0x0{40}' is not an address a factory stands at/],
+    [...withFactory(SIM_FACTORY.slice(0, 41)), /is not an address a factory stands at/],
+    [...withFactory(`${SIM_FACTORY}00`), /is not an address a factory stands at/],
+    [...withFactory(` ${SIM_FACTORY}`), /is not an address a factory stands at/],
+    [...withFactory(SIM_FACTORY.slice(2)), /is not an address a factory stands at/],
+    // The entry's own chain id: the record's is held to the network already, the entry's was not read at all.
+    [[{ ...SIM, chainId: 998 }], simRecords, /sim-main: chainId 998, not mainnet's 999/],
+    [[{ ...SIM, chainId: "999" }], simRecords, /sim-main: chainId '999', not mainnet's 999/],
+    [[{ ...SIM, chainId: null }], simRecords, /sim-main: chainId None, not mainnet's 999/],
+    // A field the entry lacks is said by name, not met as a missing key.
+    [[noGateway], simRecords, /sim-main: the entry has no `gateway`: null, or the https address its pools' index answers at/],
+    [[noChain], simRecords, /sim-main: the entry has no `chainId`: the network's chain id/],
+    [[noFactory], simRecords, /sim-main: the entry has no `factory`: its SimPoolFactory/],
+    // An address in lower case is the same address: the settings carry it as the entry writes it.
+    [...withFactory(SIM_FACTORY.toLowerCase()), null],
+    [[SIM], simRecords, null],
+  ];
+  for (const [entries, recs, why] of cases) {
+    const dir = example(entries, recs);
+    try {
+      for (const answer of [run("--network", "mainnet", "--root", dir), index("--network", "mainnet", "--root", dir)]) {
+        if (why) {
+          assert.notEqual(answer.status, 0, `written: ${why}`);
+          assert.match(answer.stderr, why);
+          assert.doesNotMatch(answer.stderr, /Traceback|KeyError/, "a refusal in words, not a crash");
+          assert.equal(answer.stdout, "");
+        } else {
+          assert.equal(answer.status, 0, answer.stderr);
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test("testnet's settings name no simulation pool: its live deployment is its site, and the pages write its name", async () => {
   const { CONFIG } = await import(pathToFileURL(join(ROOT, "app/config.js")).href);
   assert.equal("sim" in CONFIG, false);
