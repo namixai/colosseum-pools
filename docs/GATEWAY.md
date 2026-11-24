@@ -777,7 +777,7 @@ twice keeps each event once (block and log index). A node that fails, throttles 
 again from the same block after 1 s, 2 s, 4 s… up to 60 s; `/v1/simindex/health`'s `last_error` and `behind_blocks`
 say so meanwhile, and the routes go on answering with what was read. `last_error` is the error's name alone
 (`HTTPError`): its words can carry the node's address, which for a provider holds its key, and the route is public;
-the words stay in the service's own log.
+the words stay in the service's own log (`read_failed`), the address taken out of them there too.
 
 **How the site uses it** (`app/lib/simindex.js`). The page asks the index for the pool, waits at most 6 s,
 and checks the answer: the pool and the chain are the page's, each event has its fields in shape, none is

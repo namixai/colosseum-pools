@@ -17638,6 +17638,11 @@ MUTATIONS = [
      "                log(\"trigger_fill_failed\", exam=exam, asset=asset, take=is_take, error=refused(exc))",
      "                log(\"trigger_fill_failed\", exam=exam, asset=asset, take=is_take, error=refusal(exc))",
      ["test_a_call_refused_or_failed_is_said_without_the_nodes_address"]),
+    # The index's log of a read that failed: the error's words with the node's address out of them.
+    ("G426", "gateway/simindex.py",
+     "log_line(event=\"read_failed\", error=f\"{type(exc).__name__}: {quiet(exc)}\", wait_s=delay,",
+     "log_line(event=\"read_failed\", error=f\"{type(exc).__name__}: {str(exc)[:200]}\", wait_s=delay,",
+     ["test_the_log_of_a_read_that_failed_carries_no_address_of_the_node"]),
 ]
 
 RUNNERS = {
