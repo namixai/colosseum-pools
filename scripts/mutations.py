@@ -3551,8 +3551,8 @@ MUTATIONS = [
      '',
      ["the page shows the link only when its copy carries a commit, and the repository's own copy carries none"]),
     ('J97', 'scripts/pack-site.sh',
-     'printf \'{"commit":"%s"}\\n\' "$SHA" > "$OUT/build.json"',
-     'printf \'{"commit":"%s"}\\n\' "${SHA:0:8}" > "$OUT/build.json"',
+     'printf \'{"commit":"%s","network":"%s"}\\n\' "$SHA" "$NETWORK" > "$OUT/build.json"',
+     'printf \'{"commit":"%s","network":"%s"}\\n\' "${SHA:0:8}" "$NETWORK" > "$OUT/build.json"',
      ["the page shows the link only when its copy carries a commit, and the repository's own copy carries none"]),
     ("J75", "app/lib/gateway.js",
      "  if (res.detail) return res.detail;",
@@ -6629,9 +6629,9 @@ MUTATIONS = [
      '  : "$CONFIG"',
      ["mainnet pack"]),
     ("NP2", "scripts/pack-site.sh",
-     "  printf '{\"commit\":\"%s\",\"network\":\"%s\"}\\n' \"$SHA\" \"$NETWORK\" > \"$OUT/build.json\"",
-     "  printf '{\"commit\":\"%s\"}\\n' \"$SHA\" > \"$OUT/build.json\"",
-     ["mainnet pack"]),
+     "printf '{\"commit\":\"%s\",\"network\":\"%s\"}\\n' \"$SHA\" \"$NETWORK\" > \"$OUT/build.json\"",
+     "printf '{\"commit\":\"%s\"}\\n' \"$SHA\" > \"$OUT/build.json\"",
+     ["the packer said"]),
     # Deployment records by network (ops/deployments.py), and the scripts that read the network from network.py.
     ("K449", "ops/deployments.py",
      '    return ROOT / "deployments" / f"{net.name}-{label}.json"',
@@ -17924,6 +17924,23 @@ MUTATIONS = [
      "      const usdc = new ethers.Contract(payToken(await poolAt(ctx.at).usdc()), ERC20, chain.currentSigner());",
      "      const usdc = new ethers.Contract(await poolAt(ctx.at).usdc(), ERC20, chain.currentSigner());",
      ["every page that asks a wallet for an allowance takes the token through that check first"]),
+    # The check of the site holds the network its pack names to the site it is asked about.
+    ("VL1", "scripts/verify-live.py",
+     '    if got != want:',
+     '    if False:',
+     ["a mainnet pack is refused as the testnet site, though every file matches its list"]),
+    ("VL2", "scripts/verify-live.py",
+     '    return build.get("network", "testnet")',
+     '    return build.get("network", "mainnet")',
+     ["a pack from before the packer named a network passes as testnet's"]),
+    ("VL3", "scripts/verify-live.py",
+     '    args, want = argv[1:], "testnet"',
+     '    args, want = argv[1:], "mainnet"',
+     ["the pack itself passes"]),
+    ("VL4", "scripts/pack-site.sh",
+     "printf '{\"commit\":\"%s\",\"network\":\"%s\"}\\n' \"$SHA\" \"$NETWORK\" > \"$OUT/build.json\"",
+     "printf '{\"commit\":\"%s\"}\\n' \"$SHA\" > \"$OUT/build.json\"",
+     ["a testnet pack names testnet in build.json"]),
 ]
 
 RUNNERS = {
@@ -18006,6 +18023,8 @@ RUNNERS = {
     # app/config.js from network.py and LIVE.json: the script's own test file, and the packer's test.
     "NC": (["node", "--test", "--test-reporter=tap", "app/tests/config.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     "NP": (["bash", "scripts/test-pack-site.sh"], r"^FAIL (.+?)(?::|$)"),
+    # The check of the live site against its pack: its own test, on a copy of the site on disk.
+    "VL": (["bash", "scripts/test-verify-live.sh"], r"^FAIL (.+?)(?::|$)"),
     # The deployments the site only reads, and a v3 account's trading key: their own test file.
     "RO": (["node", "--test", "--test-reporter=tap", "app/tests/readonly.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),
     "PD": (["node", "--test", "--test-reporter=tap", "app/tests/lending.test.mjs"], r"^\s*not ok \d+ - (.+?)\s*$"),

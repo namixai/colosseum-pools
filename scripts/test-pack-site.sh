@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The packer still does what it says: every file of app/ equal to its blob, build.json with the commit
+# The packer still does what it says: every file of app/ equal to its blob, build.json with the commit and the network
 # and nothing else beside them, and the sha256 list of all of it beside the folder. Packs this checkout's
 # HEAD into a directory of its own and removes it.
 set -euo pipefail
@@ -8,12 +8,12 @@ TMP="$(mktemp -d -t packsite.XXXXXX)"; trap 'rm -rf "$TMP"' EXIT
 HEAD="$(git rev-parse HEAD)"
 n="$(git ls-tree -r HEAD -- app/ | wc -l | tr -d ' ')"
 line="$(./scripts/pack-site.sh HEAD "$TMP/out" | tail -1)"
-want="files=$n match=$n differ=0 extra=0 build={\"commit\":\"$HEAD\"} "
+want="files=$n match=$n differ=0 extra=0 build={\"commit\":\"$HEAD\",\"network\":\"testnet\"} "
 case "$line" in
   "$want"*) echo "ok   packed $n files and build.json for $HEAD" ;;
   *) echo "FAIL the packer said: $line"; echo "     expected it to start: $want"; exit 1 ;;
 esac
-[ "$(cat "$TMP/out/build.json")" = "{\"commit\":\"$HEAD\"}" ] || { echo "FAIL build.json"; exit 1; }
+[ "$(cat "$TMP/out/build.json")" = "{\"commit\":\"$HEAD\",\"network\":\"testnet\"}" ] || { echo "FAIL build.json: a testnet pack names its commit and testnet"; exit 1; }
 # The list scripts/verify-live.py reads: beside the pack, every file of it and build.json, and it checks the pack.
 SUMS="$TMP/out.sha256"
 case "$line" in *" sums=$SUMS") ;; *) echo "FAIL the last line does not name the list: $line"; exit 1 ;; esac
@@ -125,7 +125,7 @@ HOME="$TMP/home" ./scripts/pack-site.sh "$simc" >/dev/null 2>&1 \
 [ -f "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}/build.json" ] && [ -f "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}.sha256" ] \
   && grep -q '"network":"mainnet"' "$TMP/home/Downloads/pools-app-mainnet-${simc:0:8}/build.json" \
   || { echo "FAIL mainnet pack: its default folder does not say mainnet"; exit 1; }
-[ "$(cat "$TMP/home/Downloads/pools-app-${simc:0:8}/build.json")" = "{\"commit\":\"$simc\"}" ] \
+[ "$(cat "$TMP/home/Downloads/pools-app-${simc:0:8}/build.json")" = "{\"commit\":\"$simc\",\"network\":\"testnet\"}" ] \
   || { echo "FAIL the default folder of a testnet pack is not pools-app-<first 8>"; exit 1; }
 echo "ok   names a mainnet pack's default folder for mainnet, and testnet's as before"
 # A commit whose page no longer reads as the script expects is not packed for mainnet: its words would be a guess.

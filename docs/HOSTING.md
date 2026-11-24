@@ -1176,8 +1176,9 @@ in the Cloudflare dashboard:
 
 1. Pack `app/` of a commit on `origin/main`: `./scripts/pack-site.sh <commit>`. It copies the
    folder file by file from the commit's blobs into `~/Downloads/pools-app-<first 8 of the commit>`,
-   checks every file against its blob, adds `build.json` with the commit, and writes beside the
-   folder, not into it, `pools-app-<first 8>.sha256`: a sha256 for every file of the pack.
+   checks every file against its blob, adds `build.json` with the commit and the network
+   (`"network": "testnet"`), and writes beside the folder, not into it, `pools-app-<first 8>.sha256`:
+   a sha256 for every file of the pack.
 2. If the contracts were deployed again, first give the new record its entry in
    `deployments/LIVE.json`, write `app/config.js` again with `python3 scripts/app_config.py --out
    app/config.js` (docs/DEPLOYMENTS.md) and merge that. An
@@ -1193,7 +1194,10 @@ in the Cloudflare dashboard:
 5. Check the site against the pack:
    `python3 scripts/verify-live.py ~/Downloads/pools-app-<first 8>.sha256 https://pools.usenami.io`.
    It reads every file of the list from the site and exits 0 only if all of them match. A file
-   that differs or cannot be read is named, and the exit is 1. Cloudflare inserts two tags into
+   that differs or cannot be read is named, and the exit is 1. It first reads the site's `build.json`
+   for the network the pack was made for: this is the check of the testnet site unless `--network
+   mainnet` says otherwise, and a pack made for the other network is refused before a file is
+   compared, since every file of it would match its own list. Cloudflare inserts two tags into
    `index.html` before `</body>`, its challenge script and its Web Analytics beacon. The check cuts
    those two, each only in the exact form Cloudflare serves it, where the ids and tokens are the only
    parts that vary, and nothing else: anything more on the page is a mismatch, and so is a new form of
@@ -1233,7 +1237,10 @@ on chain 999, with mainnet's own page. Nothing is written into `app/` for it; th
 5. Open `/` (the factory's pools, or "Not deployed yet" before the factory is on chain), `#/sim/<a pool>`,
    `#/manage/<a pool>`, `#/manage/<a pool>/operator` and `#/exam/<an exam>` on the site. `#/new`, `#/economics`
    and an address that is not one of the factory's pools answer "Not found".
-6. Check the site against the pack: `python3 scripts/verify-live.py <out-dir>.sha256 https://<the mainnet site>`.
+6. Check the site against the pack:
+   `python3 scripts/verify-live.py --network mainnet <out-dir>.sha256 https://<the mainnet site>`. Without
+   `--network mainnet` the check is of the testnet site and refuses a mainnet pack; with it, it refuses a testnet
+   pack. So a pack that went up to the wrong site is not confirmed there, though every file matches its list.
 
 The page of a mainnet site names no picture for a shared link and has no terms page: the picture in `app/brand/`
 has testnet's plaque drawn into it, and the terms are the testnet demo's (docs/DEPLOYMENTS.md, "The app on either

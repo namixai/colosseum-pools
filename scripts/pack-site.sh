@@ -5,8 +5,10 @@
 #
 # Copies app/ of that commit file by file from its blobs into out-dir (default
 # ~/Downloads/pools-app-<first 8 of the commit>), checks every file against its blob, and writes
-# build.json beside index.html: {"commit": "<the full hash>"}. The site shows that commit in its
-# footer, so anyone can check the copy they are looking at against the code it came from.
+# build.json beside index.html: {"commit": "<the full hash>", "network": "<testnet|mainnet>"}. The site
+# shows that commit in its footer, so anyone can check the copy they are looking at against the code it
+# came from, and scripts/verify-live.py holds the network to the site it is asked about, so a pack of one
+# network is not confirmed as the other's site.
 # build.json is the one file that is not in the commit; the last line says it apart from the rest.
 #
 # Beside out-dir, not in it, goes <out-dir>.sha256: a sha256 for every file of the pack, build.json
@@ -17,11 +19,11 @@
 # --network mainnet packs the same commit for mainnet. Its config.js and its index.html are then not the commit's,
 # which are testnet's: they are what that commit's scripts/app_config.py writes for mainnet (the settings, and with
 # --index the page), from the same commit's spike/hlspike/network.py, deployments/LIVE.json and app/index.html, and
-# build.json says so: {"commit": "<hash>", "network": "mainnet"}. Those two files are checked against that output and
+# build.json names mainnet. Those two files are checked against that output and
 # every other file against its blob, as for testnet. The script stops when the commit has nothing for a mainnet site
 # to read (no live deployment and no staged simulation-pool deployment on mainnet), or when the page's words have
 # moved from where the script replaces them, and the packer with it, writing nothing. Testnet, the default, packs as
-# it always has: the commit's own config.js and index.html, and build.json with the commit alone. A mainnet pack's
+# it always has: the commit's own config.js and index.html, and build.json names testnet. A mainnet pack's
 # default folder says so, ~/Downloads/pools-app-mainnet-<first 8 of the commit>: the two packs of one commit go up to
 # different sites and must not be taken for each other.
 set -euo pipefail
@@ -66,10 +68,9 @@ done < <(git ls-tree -r "$SHA" -- app/)
 if [ -n "$CONFIG" ]; then
   cp "$CONFIG" "$OUT/config.js"
   cp "$INDEX" "$OUT/index.html"
-  printf '{"commit":"%s","network":"%s"}\n' "$SHA" "$NETWORK" > "$OUT/build.json"
-else
-  printf '{"commit":"%s"}\n' "$SHA" > "$OUT/build.json"
 fi
+# Every pack names its network, testnet's too: the check of the site reads it from there.
+printf '{"commit":"%s","network":"%s"}\n' "$SHA" "$NETWORK" > "$OUT/build.json"
 ok=0; bad=0
 while IFS=$'\t' read -r meta path; do
   blob=$(echo "$meta" | awk '{print $3}'); rel="${path#app/}"

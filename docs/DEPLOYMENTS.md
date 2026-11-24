@@ -213,7 +213,8 @@ script stops and names it, and mainnet's words are moved by hand.
 `scripts/pack-site.sh --network mainnet <commit>` packs the same commit for mainnet. Its `config.js` and its
 `index.html` are the script's mainnet output, written from that commit's files, and its `build.json` carries
 `"network": "mainnet"`. Every other file is checked against its blob, as for testnet, and `scripts/verify-live.py`
-checks the site against the pack's own list as before. The settings and the page go into the pack instead of being
+checks the site against the pack's own list as before, and holds the network the pack names in `build.json` (every
+pack names one, testnet's too) to the site it is asked about (`--network mainnet` for the mainnet site). The settings and the page go into the pack instead of being
 fetched or rewritten when the page loads, so a mainnet site cannot fall back to testnet's values or words because
 a file failed to arrive. While this file has no mainnet entry a site can be written from, neither a `live` one nor
 a `staged` simulation-pool one, which is the case today, the script stops and nothing is packed.
