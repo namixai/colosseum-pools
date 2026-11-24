@@ -70,11 +70,18 @@ class TheHostsNetwork(unittest.TestCase):
 
     GOOD = {"COLOSSEUM_NETWORK=mainnet\n": "mainnet", "COLOSSEUM_NETWORK=testnet\n": "testnet",
             "# the one network this host serves\nCOLOSSEUM_NETWORK=mainnet\n\n": "mainnet",
-            "COLOSSEUM_NETWORK=mainnet": "mainnet"}
+            "COLOSSEUM_NETWORK=mainnet": "mainnet",
+            # A file written on another system: one carriage return before a newline is the line's end.
+            "COLOSSEUM_NETWORK=mainnet\r\n": "mainnet", "# the host\r\n\r\nCOLOSSEUM_NETWORK=testnet\r\n": "testnet",
+            "\t# a comment after a tab\n  \nCOLOSSEUM_NETWORK=mainnet\r": "mainnet"}
     BAD = ["COLOSSEUM_NETWORK=mainnet\nCOLOSSEUM_NETWORK=testnet\n", "COLOSSEUM_NETWORK=main\n", "COLOSSEUM_NETWORK=\n",
            "COLOSSEUM_NETWORK=\"mainnet\"\n", "COLOSSEUM_NETWORK = mainnet\n", " COLOSSEUM_NETWORK=mainnet\n",
            "COLOSSEUM_NETWORK=mainnet # the host\n", "COLOSSEUM_NETWORK=mainnet\nCOLOSSEUM_RPC_URL=https://x\n",
-           "NETWORK=mainnet\n", "", "# nothing\n", "COLOSSEUM_NETWORK=MAINNET\n"]
+           "NETWORK=mainnet\n", "", "# nothing\n", "COLOSSEUM_NETWORK=MAINNET\n",
+           # Nothing else ends a line: not a form feed, not a carriage return alone, not two of them.
+           "COLOSSEUM_NETWORK=mainnet\x0c\n", "COLOSSEUM_NETWORK=mainnet\x0cCOLOSSEUM_NETWORK=mainnet\n",
+           "COLOSSEUM_NETWORK=mainnet\rCOLOSSEUM_NETWORK=testnet\n", "COLOSSEUM_NETWORK=mainnet\r\r\n",
+           "COLOSSEUM_NETWORK=main\rnet\n", "COLOSSEUM_NETWORK=mainnet\u2028\n"]
 
     def test_a_host_without_the_file_is_a_testnet_host(self):
         self.assertEqual(hi.host_network(etc_with({})).name, "testnet")
@@ -203,6 +210,20 @@ class AMainnetHost(unittest.TestCase):
                 self.assertIn("COLOSSEUM_NETWORK=mainnet and, written by hand, COLOSSEUM_CONFIRM_MAINNET=sim1", said)
                 self.assertNotIn("A-KEY", said, "the file's other lines hold a node's key: none is said")
         self.assertIn("keeper-sim1.env", self.refused({k: v for k, v in MAINNET_HOST.items() if k != "keeper-sim1.env"}))
+
+    def test_its_indexs_file_names_the_network_too(self):
+        # The index takes the network from its own file: without the line it would start as testnet's.
+        for what, text in {"no network line": "SIM_INDEX_RECORD=deployments/mainnet-sim1.json\n",
+                           "said twice": "COLOSSEUM_NETWORK=mainnet\nCOLOSSEUM_NETWORK=mainnet\n",
+                           "commented out": "#COLOSSEUM_NETWORK=mainnet\n"}.items():
+            with self.subTest(what):
+                self.assertIn("the index's own file says COLOSSEUM_NETWORK=mainnet, once",
+                              self.refused({**MAINNET_HOST, "sim-index-sim1.env": text}))
+        with mainnet():
+            for files in ({**MAINNET_HOST, "sim-index-sim1.env": "COLOSSEUM_NETWORK=mainnet\nSIM_INDEX_RECORD=x\n"}, MAINNET_HOST,
+                          # Files no unit takes a network from name none, as before: the channel's, the record's.
+                          {**MAINNET_HOST, "watch.env": "COLOSSEUM_ALERT_CMD=true\n", "deployment-sim1.env": "COLOSSEUM_DEPLOYMENT=sim1\n"}):
+                self.assertEqual(len(hi.instances(etc_with(files))), 1)
         # systemd drops a value's quotes, and so does the reading.
         with mainnet():
             quoted = KEEPER_ENV.replace("=sim1\n", "='sim1'\n").replace("=mainnet\n", '="mainnet"\n')
@@ -276,14 +297,70 @@ class Install(unittest.TestCase):
         # The block as install.sh has it, with a systemctl that says which units are enabled.
         for enabled, code in (("", 0), ("colosseum-keeper", 1), ("colosseum-shared-keeper", 1)):
             for network, expect in (("mainnet", code), ("testnet", 0)):
-                script = ('fail() { printf "install: %s\\n" "$*" >&2; exit 1; }\n'
-                          'systemctl() { [ "$1" = is-enabled ] && [ "$3" = "$ENABLED" ]; }\n'
-                          f'network={network}\n{block}\nfi\n')
-                out = subprocess.run(["bash", "-c", script], env={**os.environ, "ENABLED": enabled},
-                                     capture_output=True, text=True)
+                out = self.guard(block, network, is_enabled=enabled)
                 self.assertEqual(out.returncode, expect, (enabled, network, out.stderr))
                 if expect:
                     self.assertIn(f"this is a mainnet host and {enabled} is enabled", out.stderr)
+
+    def guard(self, block: str, network: str, is_enabled: str = "", wants: tuple = (), running: tuple = (),
+              instances: str = "sim1 sim1 -"):
+        """install.sh's own block on a directory standing for systemd's, with a systemctl that answers as the test says:
+        `wants` are the units enabled (their links under a .wants directory), `running` the ones list-units names."""
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        for i, unit in enumerate(wants):
+            d = tmp / ("timers.target.wants" if unit.endswith(".timer") else "multi-user.target.wants")
+            d.mkdir(exist_ok=True)
+            (d / unit).symlink_to("/dev/null")
+        self.assertIn("  unit_dir=/etc/systemd/system\n", block)
+        script = ('fail() { printf "install: %s\\n" "$*" >&2; exit 1; }\n'
+                  'systemctl() {\n'
+                  '  case "$1" in\n'
+                  '    is-enabled) [ "$3" = "$ENABLED" ] ;;\n'
+                  '    list-units) [ "$*" = "list-units --plain --no-legend --state=active,activating,reloading colosseum-*" ] || exit 9\n'
+                  '                for u in $RUNNING; do echo "$u loaded active running a unit of ours"; done ;;\n'
+                  '    *) return 1 ;;\n'
+                  '  esac\n'
+                  '}\n'
+                  f'network={network}\ninstances="{instances}"\n'
+                  + block.replace("  unit_dir=/etc/systemd/system\n", f'  unit_dir="{tmp}"\n') + "\nfi\n")
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                              env={**os.environ, "ENABLED": is_enabled, "RUNNING": " ".join(running)})
+
+    def test_a_mainnet_host_runs_its_one_instances_units_and_nothing_else_systemd_has(self):
+        at = self.install.index('if [ "$network" = mainnet ]; then\n  for unit in colosseum-gateway colosseum-keeper colosseum-shared-keeper; do')
+        block = self.install[at:self.install.index("\nfi\n", at)]
+        sim1 = "@" + "sim1"
+        own = (f"colosseum-multi-keeper{sim1}.service", f"colosseum-sim-checker{sim1}.service",
+               f"colosseum-sim-index{sim1}.service", f"colosseum-payout-review{sim1}.timer")
+        # Its own four enabled, and running with a pass of the review and the line said when it fails: as it should be.
+        busy = own + (f"colosseum-payout-review{sim1}.service", f"colosseum-unit-failed@colosseum-payout-review{sim1}.service.service")
+        ok = self.guard(block, "mainnet", wants=own, running=busy)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(self.guard(block, "mainnet", instances="").returncode, 0, "a new host: nothing of ours yet")
+        demo3 = "@" + "demo3"
+        left_over = {
+            "an exchange's instance whose file was moved away, still enabled": dict(wants=own + (f"colosseum-gateway{demo3}.service",)),
+            "its keeper, disabled and never stopped": dict(wants=own, running=own + (f"colosseum-keeper{demo3}.service",)),
+            "the first keeper, disabled and never stopped": dict(running=("colosseum-keeper.service",)),
+            "the first gateway's watchdog": dict(wants=own + ("colosseum-watch-keys.timer",)),
+            "an instance's watchdog": dict(wants=("colosseum-watch-keeper-demo3.timer",)),
+            "a key copier": dict(running=(f"colosseum-key-copy{demo3}.path",)),
+            "a simulated pool's keeper of another name": dict(wants=own + (f"colosseum-multi-keeper{demo3}.service",)),
+            "an exchange's gateway under the host's own instance's name": dict(wants=own + (f"colosseum-gateway{sim1}.service",)),
+            "its own instance's units before the instance is named": dict(wants=own, instances=""),
+        }
+        for what, state in left_over.items():
+            with self.subTest(what):
+                out = self.guard(block, "mainnet", **state)
+                self.assertEqual(out.returncode, 1, what)
+                named = [u for u in state.get("wants", ()) + state.get("running", ()) if u not in own or not state.get("instances", "x")]
+                self.assertIn("these units are enabled or running, none of them its one instance's: ", out.stderr)
+                for unit in named:
+                    self.assertIn(unit, out.stderr, what)
+                self.assertIn("nothing switched", out.stderr)
+                # A testnet host is as before: nothing of this is looked at.
+                self.assertEqual(self.guard(block, "testnet", **state).returncode, 0, what)
+        self.assertLess(at, self.install.index("site=/etc/nginx/conf.d/pools-api.conf"), "before nginx or a unit")
 
 
 class Bootstrap(unittest.TestCase):

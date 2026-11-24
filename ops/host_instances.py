@@ -100,14 +100,17 @@ def host_network(etc: pathlib.Path) -> networks.Network:
     """The one network this host serves, from <etc>/host.env: one line of its own, COLOSSEUM_NETWORK=testnet or
     COLOSSEUM_NETWORK=mainnet (comment lines apart), written by `bootstrap.sh --network`. No file: testnet, as every
     host set up before the file. Anything else in it stops the release: a network read out of half a line would be a
-    network chosen for the operator."""
+    network chosen for the operator. A line ends at a newline, one carriage return before it dropped (a file
+    written on another system), and at nothing else: read the way bootstrap.sh's own reader reads it."""
     f = etc / HOST_ENV
     if not f.exists():
         return networks.NETWORKS[networks.DEFAULT]
     try:
-        lines = [l for l in f.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+        text = f.read_bytes().decode("utf-8", "replace")
     except OSError as exc:
         raise SystemExit(f"{f}: {exc.strerror}; it names the host's network") from None
+    lines = [l[:-1] if l.endswith("\r") else l for l in text.split("\n")]
+    lines = [l for l in lines if l.strip(" \t") and not l.lstrip(" \t").startswith("#")]
     named = HOST_NETWORK_LINE.fullmatch(lines[0]) if len(lines) == 1 else None
     if not named:
         raise SystemExit(f"{f} names the host's network on one line of its own, {networks.ENV}=testnet or "
@@ -203,6 +206,13 @@ def mainnet_host(etc: pathlib.Path, found: list[Instance], first: str) -> None:
                              f"{networks.ENV}=mainnet and, written by hand, {CONFIRM}={i.label} (its deployment's "
                              "label): without both its services send nothing on mainnet, and would start, refuse and "
                              "restart for ever (docs/HOSTING.md, \"Mainnet\")")
+        # Its index takes the network from its own file too (colosseum-sim-index@, enabled by hand): a file without
+        # the line would start the index as testnet's, which refuses mainnet's record and restarts for ever.
+        index = etc / f"sim-index-{i.name}.env"
+        if index.exists() and env_values(index, networks.ENV) != ["mainnet"]:
+            raise SystemExit(f"{index}: on a mainnet host the index's own file says {networks.ENV}=mainnet, once on a "
+                             "line of its own: without it the index starts as testnet's and refuses the record "
+                             "(docs/HOSTING.md, \"Mainnet\")")
 
 
 def first_label(etc: pathlib.Path) -> str:

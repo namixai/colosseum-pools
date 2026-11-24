@@ -1118,7 +1118,9 @@ to the other network stops a release before anything is switched: a label whose 
 a settings file whose `COLOSSEUM_NETWORK` names the other one. A mainnet host serves **one** simulated pool's
 instance, as `colosseum-keeper`, and nothing else: every instance of a host runs as that one user, which testnet
 accepts and mainnet does not. No first deployment, no exchange's instance, no second instance, no shared pools'
-keeper; `install.sh` refuses each, and refuses while one of testnet's services is still enabled.
+keeper; `install.sh` refuses each. It also looks at what systemd itself has: any unit of ours that is still enabled
+or running and is not one of the instance's own four (its keeper, its checker, its index, its review) is named, and
+nothing is switched: a service disabled and never stopped, an instance whose file was moved away, a watchdog's timer.
 
 A host that served testnet is taken off it first (its testnet keys stay on its disk, of no value, and no unit of a
 mainnet host reads them). Each unit the host has, then every file that names a testnet deployment:
@@ -1127,7 +1129,8 @@ mainnet host reads them). Each unit the host has, then every file that names a t
         colosseum-watch-keys.timer colosseum-watch-keeper.timer
     # and for each further instance <name>, those of these it has:
     sudo systemctl disable --now colosseum-gateway@<name> colosseum-keeper@<name> colosseum-multi-keeper@<name> \
-        colosseum-sim-checker@<name> colosseum-key-copy@<name>.path colosseum-key-copy@<name>.timer \
+        colosseum-sim-checker@<name> colosseum-sim-index@<name> colosseum-payout-review@<name>.timer \
+        colosseum-key-copy@<name>.path colosseum-key-copy@<name>.timer \
         colosseum-watch-keys-<name>.timer colosseum-watch-keeper-<name>.timer colosseum-watch-multi@<name>.timer
     sudo mkdir /etc/colosseum/testnet-off
     sudo mv /etc/colosseum/deployment /etc/colosseum/deployment.env /etc/colosseum/deployment-* \

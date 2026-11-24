@@ -117,6 +117,31 @@ if [ "$network" = mainnet ]; then
     ! systemctl is-enabled --quiet "$unit" 2>/dev/null \
       || fail "this is a mainnet host and $unit is enabled: testnet's services are taken off the host first (docs/HOSTING.md, \"Mainnet\"); nothing switched"
   done
+  # And by what systemd itself has, whether /etc/colosseum still names it or not: a unit of ours that is enabled (its
+  # link under a .wants directory) or running, and is not one of the host's one instance's own four, is testnet's left
+  # over: one disabled and never stopped, an instance whose file was moved away, a watchdog's timer. Nothing below
+  # would stop it, and it would go on beside mainnet's keys.
+  unit_dir=/etc/systemd/system
+  own_names="$(awk '{print $1}' <<< "$instances")"
+  ours() {  # <unit>: the host's one instance's keeper, checker, index or review, or the line said when one of them fails
+    local n
+    for n in $own_names; do
+      case "$1" in
+        "colosseum-multi-keeper@$n.service" | "colosseum-sim-checker@$n.service" | "colosseum-sim-index@$n.service" \
+          | "colosseum-payout-review@$n.timer" | "colosseum-payout-review@$n.service") return 0 ;;
+      esac
+    done
+    case "$1" in colosseum-unit-failed@*) return 0 ;; esac
+    return 1
+  }
+  enabled="$(ls "$unit_dir"/*.wants/ 2>/dev/null | grep -E '^colosseum-.+\.(service|timer|path)$' || true)"
+  running="$(systemctl list-units --plain --no-legend --state=active,activating,reloading 'colosseum-*' 2>/dev/null | awk '{print $1}' || true)"
+  left=""
+  for unit in $enabled $running; do
+    ours "$unit" || case " $left " in *" $unit "*) ;; *) left+="$unit " ;; esac
+  done
+  [ -z "$left" ] \
+    || fail "this is a mainnet host and these units are enabled or running, none of them its one instance's: ${left}: testnet's services are taken off the host first, each with systemctl disable --now (docs/HOSTING.md, \"Mainnet\"); nothing switched"
 fi
 
 # A deployment whose record names a test publisher, a key in a file before the enclave (ops/key_relay.py), is

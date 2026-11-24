@@ -41,12 +41,13 @@ say() { printf 'bootstrap: %s\n' "$*"; }
 
 # The host's network as ops/host_instances.py reads it (`host_network`; a test holds the two to the same files): one
 # line of its own in host.env, COLOSSEUM_NETWORK=testnet or COLOSSEUM_NETWORK=mainnet, comment lines apart; no file,
-# testnet.
+# testnet. A line ends at a newline, one carriage return before it dropped, and at nothing else.
 host_env=/etc/colosseum/host.env
 host_network() {
-  local lines
+  local lines cr
   [ -e "$host_env" ] || { echo testnet; return 0; }
-  lines="$(grep -v '^[[:space:]]*#' "$host_env" | grep -v '^[[:space:]]*$' || true)"
+  cr="$(printf '\r')"
+  lines="$(sed "s/$cr\$//" "$host_env" | grep -v '^[[:blank:]]*#' | grep -v '^[[:blank:]]*$' || true)"
   case "$lines" in
     COLOSSEUM_NETWORK=testnet) echo testnet ;;
     COLOSSEUM_NETWORK=mainnet) echo mainnet ;;
