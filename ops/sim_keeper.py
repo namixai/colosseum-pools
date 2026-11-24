@@ -16,12 +16,18 @@ Two loops in one process:
                    `fill` sent for each order of ours as soon as its first block (`placedBlock +
                    fillDelay`) is next. The fill goes out with a fixed gas and no estimate first: an
                    estimate is a block late. Only the filler's wallet fills; any other only logs.
+                   With the stops' loop (below) it asks the node for neither: that loop hands it
+                   each step's head and logs, the orders among them (`fed_step`).
   the slow pass  → every --every seconds: new pools (the factory's `pools()`), their exams and
                    stages (`ExamSold`, `Funded`, read in windows of --log-window blocks); for each
                    live one, `checkpoint` in the first minutes of a UTC day, `breach` when a rule is
                    broken now, `expire` past its time, `release` once it can do nothing more,
                    `claimPayout` for a passed stage; for each pool, `pay` while a payout is due: approved
-                   and past its 72 hours, or past its 7 days unapproved.
+                   and past its 72 hours, or past its 7 days unapproved. Its reads go in batches of at
+                   most a hundred in one eth_call (Multicall3, `Reads`), each allowed to fail alone and
+                   then asked alone, an account never cut in two: a pass costs requests by the hundred
+                   reads, not by the account. Once a minute the keeper says the requests it made, by
+                   method (`keeper_alive`).
 
 By default (`--stops loop`, COLOSSEUM_STOPS; `inline` is the fast loop's as above), the stops are a third
 loop's, in a thread of its own (ops/stop_filler.py): every block, the stops and takes of the live exams against the
@@ -355,12 +361,23 @@ class Reads:
             for (to, data), answer in zip(reads, answers):
                 if answer is not None:
                     self.got[(to.lower(), data)] = answer
+                else:
+                    # Asked for again here and not answered: an answer an earlier call gave is of another block.
+                    self.got.pop((to.lower(), data), None)
             if whole:
                 for owner, _, _ in chunk:
                     self.block_of[owner] = number - ahead
 
     def raw(self, to: str, sig: str, types=(), args=()) -> bytes | None:
         return self.got.get((to.lower(), c.encode_call(sig, list(types), list(args))))
+
+    def whole(self, exam: str, assets) -> bool:
+        """Whether the exam's status and the stop, the take and the position of each of `assets` were all answered, in
+        the one call its block is of: what the stops' loop is handed. With one missing, nothing of it is handed over:
+        the exam is read again alone, as before."""
+        return exam in self.block_of and self.raw(exam, "result()") is not None and all(
+            self.raw(exam, sig, ["uint32"], [asset]) is not None
+            for asset in assets for sig in ("stopOf(uint32)", "takeOf(uint32)", "positionOf(uint32)"))
 
     def read(self, to: str, sig: str, types, args, out) -> tuple:
         """A read of the batch, decoded; one that is not in it raises: nothing is asked in its place."""
@@ -694,7 +711,8 @@ class SimKeeper:
             log("numbering_changed", head=latest, call=reads.block, then="measured again; this pass's stops read alone")
             self.ahead = None
             reads.block_of.clear()
-        reads.assets = {a: self.rule_assets[a] for a in live if a in self.rule_assets and a in reads.block_of}
+        reads.assets = {a: self.rule_assets[a] for a in live
+                        if a in self.rule_assets and reads.whole(a, self.rule_assets[a])}
         for a in [a for a in self.rule_assets if a in self.done]:
             del self.rule_assets[a]
         return reads
@@ -736,8 +754,9 @@ class SimKeeper:
                     self.accounts[a] = {"pool": to_checksum_address(l["address"]), "kind": kind}
                     new.append(a)
             if new:  # their orders in the same blocks, which the read above could not name
+                # Up to the head, the blocks handed in too: the stops' loop read those without knowing the account.
                 for l in c.rpc("eth_getLogs", [{"address": new, "topics": [[PLACED, *TRIGGER_TOPICS]],
-                                                "fromBlock": hex(lo), "toBlock": hex(own)}]):
+                                                "fromBlock": hex(lo), "toBlock": hex(latest)}]):
                     self._trigger(l) if l["topics"][0] in TRIGGER_TOPICS else self._order(l)
             for l in sorted((l for l in (fed[1] if fed is not None else []) if lo <= int(l["blockNumber"], 16) <= latest),
                             key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16))):
@@ -777,14 +796,16 @@ class SimKeeper:
                 steps.append(feed.get_nowait())
             except queue.Empty:
                 break
-        lo, head = steps[-1][0], steps[-1][1]
+        lo, head, logs = steps[-1][0], steps[-1][1], list(steps[-1][2])
         if head <= self.fast_block:
             return []
-        for first, last, _ in reversed(steps[:-1]):
+        for first, last, more in reversed(steps[:-1]):
             if last + 1 < lo:
-                break  # the loop skipped blocks here (it was far behind): the ones before are not handed in
-            lo = min(lo, first)
-        return self.fast_step(head, fed=(lo, [l for _, _, logs in steps for l in logs]))
+                # The loop skipped blocks here (it was far behind). The steps before are left out, their logs too: this
+                # loop reads those blocks itself, and an older order taken after them would replace a newer one.
+                break
+            lo, logs = min(lo, first), list(more) + logs
+        return self.fast_step(head, fed=(lo, logs))
 
     def trigger_step(self, latest: int) -> list[str]:
         """The stops and takes armed for the next block: each is tried, once a block, by a call that changes
@@ -868,30 +889,38 @@ def measure(exam: str, trader, asset: int, size: int, orders: int, out: pathlib.
         rcpt = c.transact(trader, exam, "place(uint32,bool,uint64)", ["uint32", "bool", "uint64"], [asset, is_buy, size])
         placed_block = int(rcpt["blockNumber"], 16)
         row = {"order": i, "buy": is_buy, "placed_block": placed_block, "late": None, "source": None, "lapsed": False}
-        started = time.time()
-        gone = False
-        while time.time() - started < timeout_s:
-            logs = c.rpc("eth_getLogs", [{"address": exam, "topics": [[FILLED, LAPSED]],
+
+        def ended() -> bool:
+            """The order's end as the chain's events after its block say it, written to its row: its own fill, or its
+            lapse. A fill of a stop or a take (a `Filled` beside a `TriggerFilled` in one transaction) is not the
+            order's, nor is anything of another asset."""
+            logs = c.rpc("eth_getLogs", [{"address": exam, "topics": [[FILLED, LAPSED, TRIGGER_FILLED]],
                                           "fromBlock": hex(placed_block), "toBlock": "latest"}])
-            after = [l for l in logs if int(l["blockNumber"], 16) > placed_block]
-            filled = [l for l in after if l["topics"][0] == FILLED]
+            after = [l for l in logs if int(l["blockNumber"], 16) > placed_block and int(l["topics"][1], 16) == asset]
+            stops = {l.get("transactionHash") for l in after if l["topics"][0] == TRIGGER_FILLED}
+            filled = [l for l in after if l["topics"][0] == FILLED and l.get("transactionHash") not in stops]
             if filled:
                 row["late"], row["source"] = filled_of(filled[0])
                 row["filled_block"] = int(filled[0]["blockNumber"], 16)
                 late.append(row["late"])
-                break
+                return True
             if any(l["topics"][0] == LAPSED for l in after):
                 row["lapsed"] = True
-                break
-            if gone:
-                break  # no order waits and the chain's events, read after that, name neither a fill nor a lapse
+                return True
+            return False
+
+        started = time.time()
+        while not ended():
             # The order is judged by the chain's events, never by `pending()` alone: a fill that lands between the
-            # read of the events above and this read leaves no order waiting, and is in the events read next.
-            gone = c.call_view(exam, "pending()", [], [], ["uint32", "bool", "uint64", "uint64"])[2] == 0
-            if not gone:
-                time.sleep(1)
-        else:
-            row["lapsed"] = True
+            # read of the events above and this read leaves no order waiting, and is in the events read next, at
+            # once and whatever the time left. With neither a fill nor a lapse in them it is written as neither.
+            if c.call_view(exam, "pending()", [], [], ["uint32", "bool", "uint64", "uint64"])[2] == 0:
+                ended()
+                break
+            if time.time() - started >= timeout_s:
+                row["lapsed"] = True  # still waiting when the measure's time ran out, the events just read
+                break
+            time.sleep(1)
         rows.append(row)
         log("measured", **row)
     summary = {"exam": exam, "orders": orders, "filled": len(late), **quantiles(late), "rows": rows}

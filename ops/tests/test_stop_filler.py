@@ -104,6 +104,7 @@ class Node:
         self.no_past = False  # a batch asked for a block that is no longer the head is not answered
         self.unread_assets: set[int] = set()  # assets whose oracle read fails, in any block
         self.batch_fails = 0  # the next batches at `latest` that fail whole
+        self.batch_unread: set[tuple[str, str]] = set()  # (to, selector) of reads that fail inside a batch, not alone
         self.stops: dict[tuple[str, int, bool], tuple[int, int]] = {}  # (exam, asset, take) -> (px, armed), as the exam holds them
         self.exam_assets = [BTC]
         # Every read of the chain's state, alone or inside a batch: (to, data, the block it was answered at).
@@ -144,6 +145,8 @@ class Node:
             try:
                 if to.lower() == sk.MULTICALL3.lower():
                     answer = encode(["uint256"], [block + self.ahead if inner == SEL["getBlockNumber()"] else self.time_of(block)])
+                elif (to_checksum_address(to), inner[:10]) in self.batch_unread:
+                    raise RuntimeError("execution reverted")
                 else:
                     answer = bytes.fromhex(self.read(to_checksum_address(to), inner, block)[2:])
                 out.append((True, answer))
@@ -1950,6 +1953,42 @@ class TheNodesNumbering(Base):
         self.assertEqual(sorted(pr.load_prices(pr.journal_text(self.dir / "prices.jsonl")).px[BTC]), [100, 101],
                          "the loop goes on as it was without Multicall3")
 
+    def test_with_the_numbering_not_measured_the_look_is_made_the_old_way_and_measured_again_at_the_next(self):
+        """The measure cannot be made (its call fails, or the head moves at each try). The loop does not stand still
+        for it, nor the keeper's fast loop behind it: the look is the head and a call a price, a block missed
+        meanwhile is a gap, and the measure is tried again at the next look."""
+        self.node.ahead = 1
+        loop = self.loop(wallet=None)
+        loop.ahead = None
+        feed = loop.share()
+        self.node.price.update({100: 4_242, 102: 4_343})
+        with mock.patch.object(sk, "numbering", side_effect=RuntimeError("eth_call: {'code': -32000, 'message': 'x'}")):
+            self.run_to(loop, 100)
+            self.assertEqual([m for m, _ in self.node.calls], ["eth_getBlockByNumber", "eth_call", "eth_call", "eth_call",
+                                                               "eth_getLogs"], "the head, a call a price, the logs")
+            self.assertEqual(self.node.batches(), [])
+            self.run_to(loop, 102)
+        journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+        self.assertEqual(journal.px[BTC], {100: 4_242, 102: 4_343}, "the head's own number, not the call's next one")
+        self.assertEqual([(lo, hi) for lo, hi, _ in journal.gaps], [(101, 101)])
+        self.assertIn("not measured", journal.gaps[0][2])
+        self.assertEqual([feed.get_nowait()[:2], feed.get_nowait()[:2]], [(100, 100), (101, 102)], "the steps go on")
+        self.assertEqual(len(self.events("stop_numbering_unread")), 1, "said once in a while, not at every look")
+        self.assertIsNone(loop.ahead)
+        before = len(self.node.calls)
+        self.run_to(loop, 103)
+        self.assertEqual(loop.ahead, 1, "measured at the next look")
+        self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_blockNumber", "eth_call", "eth_blockNumber", "eth_call",
+                                                                    "eth_getLogs"])
+
+    def test_a_busy_node_at_the_measure_costs_the_look_and_is_not_asked_the_old_way(self):
+        loop = self.loop(wallet=None)
+        loop.ahead = None
+        self.node.busy = {"eth_call"}
+        with self.assertRaises(c.NodeBusy):
+            loop._head()
+        self.assertEqual([m for m, _ in self.node.calls], ["eth_blockNumber", "eth_call"])
+
     def test_it_is_measured_again_and_a_change_is_an_alarm(self):
         loop = self.loop(wallet=None)
         self.run_to(loop, 100)
@@ -2073,6 +2112,18 @@ class LinesWithNoPrice(Base):
         self.run_to(loop, *range(320, 330))
         self.assertEqual([(a["blocks"], a["without"]) for a in self.events("stop_prices_unread")], [(30, 10)])
 
+    def test_blocks_the_read_back_skipped_are_blocks_with_no_price_and_the_ones_it_was_not_running_in_are_not(self):
+        loop = self.loop(wallet=None, backfill=3)
+        self.run_to(loop, *range(100, 130))
+        self.run_to(loop, 170)  # the head ran ahead: blocks 130 to 167 are a gap, the last three are read back
+        said = self.events("stop_prices_unread")
+        self.assertEqual([(a["blocks"], a["without"]) for a in said], [(68, 38)], "said as the gap is written")
+        # Started again after 200 blocks: the gap of the blocks it was not running in is no line of this count.
+        self.said.clear()
+        loop = self.loop(wallet=None, backfill=3)
+        self.run_to(loop, *range(370, 410))
+        self.assertEqual(self.events("stop_prices_unread"), [])
+
     def test_one_asset_read_is_a_line_with_a_price(self):
         loop = self.loop(wallet=None)
         self.node.unread_assets = {0, 4}
@@ -2117,6 +2168,19 @@ class HeldForItsBlock(Base):
         self.node.price[100] = 900_000
         self.run_to(loop, 100)
         self.assertEqual(loop.triggers[(EXAM, BTC, False)]["touch"], 100, "known from the first block looked at")
+
+    def test_at_the_first_step_a_read_of_a_later_block_waits_for_it_too(self):
+        """Two reads wait before the loop's first step, of block 100: the exam's stop as it stood at 100, and the exam
+        ended at 101. The second is of a block the step does not read: taken at once, it would drop the stop a block
+        before the chain did."""
+        loop = self.loop(wallet=None)
+        loop.inbox.put(("state", EXAM, 100, {(EXAM, BTC, False): (950_000, 90)}, {BTC: 1}))
+        loop.inbox.put(("ended", EXAM, 101))
+        self.run_to(loop, 100)
+        self.assertIn((EXAM, BTC, False), loop.triggers)
+        self.assertNotIn(EXAM, loop.ended)
+        self.run_to(loop, 101)
+        self.assertIn(EXAM, loop.ended, "taken once block 101's events are in")
 
 
 class TheKeepersBatch(Base):
@@ -2191,6 +2255,49 @@ class TheWatchAlonesBatch(Base):
                     self.assertEqual(asked, ["eth_call"], "the rules are written once: one call from then on")
         self.run_to(loop, 101)
         self.assertEqual(sorted(k[0] for k in loop.triggers), sorted(exams))
+
+    def test_an_exam_with_a_read_missing_in_the_batch_is_read_again_alone(self):
+        exams = [to_checksum_address("0x" + f"{i:040x}") for i in range(0x7101, 0x7104)]
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        keeper = sk.SimKeeper("0x" + "33" * 20, None, "0x" + "44" * 20, True, self.dir / "watch.json", 1)
+        keeper.multicall = self.MULTICALL
+        keeper.ahead, keeper.ahead_at = 0, time.monotonic()
+        keeper.rule_assets = {e: [BTC] for e in exams}
+        for e in exams:
+            self.node.stops[(e, BTC, False)] = (950_000, 95)
+        self.node.batch_unread = {(exams[1], SEL["stopOf(uint32)"])}
+        said = []
+        with mock.patch.object(c, "rpc", side_effect=self.node.call), \
+                mock.patch.object(sf, "log", side_effect=lambda e, **f: said.append(e)):
+            loop.reread_all(exams, keeper)
+        alone = [to for to, data, _ in self.node.reads if data == SEL["rules()"]]
+        self.assertEqual(alone, [exams[1]] if self.MULTICALL else exams, "only the one the batch did not read whole")
+        self.assertNotIn("stops_unread", said)
+        self.run_to(loop, 101)
+        self.assertEqual(sorted(k[0] for k in loop.triggers), sorted(exams), "its stop is known all the same")
+
+    def test_the_watchs_own_pass_asks_its_own_node_for_multicall3(self):
+        """The loop reads through its node (--stop-rpc), the pass through the plumbing's: each is asked for itself."""
+        class Out(Exception):
+            pass
+        made = mock.Mock(multicall=True)
+        seen = {}
+
+        def a_pass(keeper, loop):
+            seen["multicall"] = keeper.multicall
+
+        with mock.patch.object(sk.deployments, "load", return_value={"SimPoolFactory": "0x" + "33" * 20, "block": 1}), \
+                mock.patch.object(sk.sn, "confirm_service"), mock.patch.object(sf, "build", return_value=made), \
+                mock.patch.object(sf, "start"), mock.patch.object(sf, "keep_alive"), \
+                mock.patch.object(sf, "watch_pass", side_effect=a_pass), \
+                mock.patch.object(sk, "multicall_or_not", return_value=False) as asked, \
+                mock.patch.object(c, "rpc", return_value="0x1"), mock.patch.object(sf.time, "sleep", side_effect=Out):
+            with self.assertRaises(Out):
+                sf.main(["--deployment", "sim1", "--state", str(self.dir / "watch-sim1.json")])
+            asked.assert_called_once()
+            self.assertIs(asked.call_args.args[0], c.rpc)
+        self.assertEqual(seen, {"multicall": False}, "the pass's node has none, whatever the loop's has")
 
 
 class OneReadOfTheLogs(Base):
@@ -2288,7 +2395,13 @@ class TheStart(Base):
                 return p.parse_args(argv)
 
         self.assertIsNone(parse([], {}).stop_poll, "not set: the keeper's --poll, twice a second")
+        self.assertIsNone(parse([], {"COLOSSEUM_STOP_POLL": " "}).stop_poll, "empty is not set")
         self.assertEqual(parse([], {"COLOSSEUM_STOP_POLL": "1"}).stop_poll, 1.0)
+        zero = parse([], {"COLOSSEUM_STOP_POLL": "0"})
+        self.assertEqual(zero.stop_poll, 0.0, "a zero in the variable is a zero, refused as the flag's is")
+        with mock.patch.object(sf, "Node", return_value=self.node):
+            with self.assertRaises(SystemExit):
+                sf.build(self.args(stop_poll=zero.stop_poll), Keeper(), self.dir / "multi-sim1.json")
         self.assertEqual(parse(["--stop-poll", "0.25"], {"COLOSSEUM_STOP_POLL": "1"}).stop_poll, 0.25, "the flag over the variable")
         with mock.patch.object(sf, "Node", return_value=self.node):
             with self.assertRaises(SystemExit):

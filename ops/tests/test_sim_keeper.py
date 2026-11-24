@@ -639,6 +639,8 @@ class Chain:
         self.alone: list[tuple[str, str]] = []   # (to, selector) of each read asked alone
         self.batches: list[list[tuple[str, str]]] = []  # the reads of each batch, the block's two left out
         self.fails: set[tuple[str, str]] = set()  # (exam, signature) whose read fails, alone or in a batch
+        self.fails_in_batch: dict[tuple[str, str], int] = {}  # (exam, signature) -> the batch read it fails from (1: the first)
+        self.asked_in_batch: dict[tuple[str, str], int] = {}
         self.burns = False  # a failing read takes the whole batch with it (it burned the call's gas)
         self.moves = False  # the head goes on by one after each batch
         self.logs: list[dict] = []
@@ -708,6 +710,11 @@ class Chain:
         out = [(True, encode(["uint256"], [self.head + self.ahead])), (True, encode(["uint256"], [self.now()]))]
         for to, may_fail, data in inner[2:]:
             try:
+                for (exam, sig), nth in self.fails_in_batch.items():
+                    if k.to_checksum_address(to) == exam and "0x" + data.hex()[:8] == sel(sig):
+                        self.asked_in_batch[(exam, sig)] = self.asked_in_batch.get((exam, sig), 0) + 1
+                        if self.asked_in_batch[(exam, sig)] >= nth:
+                            raise RuntimeError("eth_call: execution reverted")
                 out.append((True, bytes.fromhex(self.read(to, "0x" + data.hex())[2:])))
             except RuntimeError:
                 if self.burns:
@@ -858,6 +865,37 @@ class TheBatchedPass(unittest.TestCase):
         self.assertEqual([f["account"] for e, f in said if e == "violation_unread"], [bad])
         self.assertEqual([e for e, _ in said if e == "batch_failed"], [], "the second call answered: nothing more is said")
 
+    def test_an_exam_with_a_read_missing_in_the_batch_is_read_again_alone_and_the_others_from_the_batch(self):
+        chain = Chain(3)
+        bad = list(chain.exams)[1]
+        loop = mock.Mock()
+        sk = self.keeper(chain, loop=loop)
+        self.passes(sk, chain)
+        loop.reset_mock()
+        chain.fails_in_batch = {(bad, "stopOf(uint32)"): 2}  # the stop of its second asset, inside a batch only
+        self.passes(sk, chain)
+        how = {call.args[0]: "batch" in call.kwargs for call in loop.reread.call_args_list}
+        self.assertEqual(how, {e: e != bad for e in chain.exams}, "the one with a read missing alone, as before; the "
+                         "others from the batch")
+
+    def test_a_new_exam_whose_status_fails_in_its_second_call_is_not_handed_over_from_two_blocks(self):
+        """An exam met for the first time is read in two calls: its rules with its status, then its stops with its
+        status again. If the status fails in the second, the first call's answer is of another block: it is not
+        kept beside the second call's stops, and the exam is read again alone."""
+        chain = Chain(2)
+        chain.moves = True
+        bad = list(chain.exams)[0]
+        chain.fails_in_batch = {(bad, "result()"): 2}
+        loop = mock.Mock()
+        sk = self.keeper(chain, loop=loop)
+        self.passes(sk, chain)
+        how = {call.args[0]: call.kwargs.get("batch") for call in loop.reread.call_args_list}
+        self.assertIsNone(how[bad], "read again alone: nothing of two blocks is handed over as one")
+        other = list(chain.exams)[1]
+        self.assertTrue(how[other].whole(other, [3, 4, 0]))
+        self.assertFalse(how[other].whole(bad, [3, 4, 0]))
+        self.assertIsNone(how[other].raw(bad, "result()"), "the first call's status is not kept: it is of an older block")
+
     def test_the_nodes_numbering_is_measured_once_and_again_after_ten_minutes(self):
         chain = Chain(2, ahead=1)
         sk = self.keeper(chain)
@@ -989,6 +1027,43 @@ class OneLookForBothLoops(unittest.TestCase):
         rpc.assert_not_called()
         self.assertEqual(sk.accounts[new], {"pool": self.POOL, "kind": "exam"})
 
+    def test_an_account_sold_in_the_blocks_read_here_has_its_orders_read_up_to_the_head(self):
+        """Just started: the stops' loop hands in its head alone, block 500, read without the exam sold in block 499,
+        which this loop finds in the blocks it reads itself. The exam's order of block 500 is asked for too."""
+        sk = self.keeper()
+        new = k.to_checksum_address("0x" + "66" * 20)
+        sold = {"address": self.POOL, "topics": [k.EXAM_SOLD, "0x" + "00" * 12 + "66" * 20], "data": "0x", "blockNumber": hex(499)}
+        sk.stop_loop.feed.put((500, 500, []))
+        asked = []
+
+        def rpc(method, params):
+            q = params[0]
+            asked.append((q["address"], q["fromBlock"], q["toBlock"]))
+            return [sold] if q["address"] != [new] else [placed_log(new, 501, 505, 500)]
+
+        with mock.patch.object(k.c, "rpc", side_effect=rpc), mock.patch.object(sk, "fill", return_value={"transactionHash": "0x01"}):
+            self.assertEqual(sk.fed_step(0.01), [new], "its order of block 500, due for 501")
+        self.assertEqual(asked[1], ([new], hex(500 - k.MAX_LOG_WINDOW + 1), hex(500)), "to the head, not only to block 499")
+
+    def test_steps_that_do_not_follow_one_another_leave_the_older_ones_logs_out(self):
+        """The loop skipped blocks 102 and 103. This loop reads them itself, with the block before them; the older
+        step's order of block 101 is not taken after the newer one of block 103."""
+        sk = self.keeper()
+        sk.fast_block = 100
+        feed = sk.stop_loop.feed
+        feed.put((101, 101, [placed_log(self.EXAM, 102, 103, 101)]))
+        feed.put((104, 104, []))
+        asked = []
+
+        def rpc(method, params):
+            asked.append((params[0]["fromBlock"], params[0]["toBlock"]))
+            return [placed_log(self.EXAM, 102, 103, 101), placed_log(self.EXAM, 106, 110, 103)]
+
+        with mock.patch.object(k.c, "rpc", side_effect=rpc):
+            sk.fed_step(0.01)
+        self.assertEqual(asked, [(hex(101), hex(103))])
+        self.assertEqual(sk.orders, {self.EXAM: (106, 110)}, "the order of block 103 waits, not the one of 101 again")
+
     def test_the_blocks_before_the_first_step_handed_in_are_read_here_once(self):
         sk = self.keeper()  # just started: the loop hands in its head alone, and an order may wait from before
         sk.stop_loop.feed.put((500, 500, []))
@@ -1028,24 +1103,34 @@ class TheMeasure(unittest.TestCase):
         out = pathlib.Path(tempfile.mkdtemp()) / "m.json"
         self.addCleanup(shutil.rmtree, out.parent, ignore_errors=True)
         reads = {"logs": 0, "pending": 0}
+        clock = {"now": 0.0}
 
         def rpc(method, params=()):
             self.assertEqual(method, "eth_getLogs")
+            self.assertEqual(params[0]["topics"], [[k.FILLED, k.LAPSED, k.TRIGGER_FILLED]])
             reads["logs"] += 1
             return events_by_read[min(reads["logs"], len(events_by_read)) - 1]
 
         def call_view(to, sig, *a):
             reads["pending"] += 1
+            clock["now"] += self.pending_takes  # the seconds the read of `pending()` took
             return (3, True, pending_by_read[min(reads["pending"], len(pending_by_read)) - 1], 0)
+
+        def sleep(seconds):
+            clock["now"] += seconds
 
         with mock.patch.object(k.c, "transact", return_value={"blockNumber": hex(100)}), \
                 mock.patch.object(k.c, "rpc", side_effect=rpc), mock.patch.object(k.c, "call_view", side_effect=call_view), \
-                mock.patch.object(k.time, "sleep"), mock.patch.object(k, "log"):
-            return k.measure(self.EXAM, object(), 3, 12, 1, out), reads
+                mock.patch.object(k.time, "sleep", side_effect=sleep), mock.patch.object(k.time, "time", side_effect=lambda: clock["now"]), \
+                mock.patch.object(k, "log"):
+            return k.measure(self.EXAM, object(), 3, 12, 1, out, timeout_s=120), reads
 
-    def event(self, topic, block, late=2):
+    pending_takes = 0.0
+
+    def event(self, topic, block, late=2, asset=3, tx=None):
         data = encode(["bool", "uint64", "uint64", "uint256", "uint256", "uint8"], [True, 12, 7, 0, late, 1])
-        return {"address": self.EXAM, "topics": [topic, "0x" + "00" * 32], "data": "0x" + data.hex(), "blockNumber": hex(block)}
+        return {"address": self.EXAM, "topics": [topic, "0x" + asset.to_bytes(32, "big").hex()], "data": "0x" + data.hex(),
+                "blockNumber": hex(block), "transactionHash": tx or f"0x{block:064x}"}
 
     def test_a_fill_that_landed_between_the_two_reads_is_counted_filled(self):
         summary, reads = self.run_measure([[], [self.event(k.FILLED, 103)]], [0])
@@ -1062,6 +1147,26 @@ class TheMeasure(unittest.TestCase):
     def test_events_of_the_block_it_was_placed_in_are_not_its_own(self):
         summary, _ = self.run_measure([[self.event(k.LAPSED, 100)], [self.event(k.LAPSED, 100), self.event(k.FILLED, 102, late=0)]], [12])
         self.assertEqual((summary["filled"], summary["rows"][0]["lapsed"], summary["rows"][0]["late"]), (1, False, 0))
+
+    def test_a_stops_fill_and_another_assets_fill_are_not_the_orders(self):
+        """`fillTrigger` writes a `Filled` of its own, beside its `TriggerFilled` in one transaction, and leaves the
+        order waiting unless it closed the whole position: its lateness is the stop's, not the order's."""
+        stop = [self.event(k.FILLED, 102, late=9, tx="0xaa"), self.event(k.TRIGGER_FILLED, 102, tx="0xaa")]
+        other = [self.event(k.FILLED, 102, late=8, asset=4, tx="0xcc")]
+        own = [self.event(k.FILLED, 104, late=1, tx="0xbb")]
+        summary, _ = self.run_measure([stop + other, stop + other + own], [12])
+        self.assertEqual((summary["filled"], summary["rows"][0]["late"], summary["rows"][0]["filled_block"]), (1, 1, 104))
+
+    def test_no_order_waiting_when_the_time_runs_out_is_still_judged_by_the_events(self):
+        self.pending_takes = 500.0  # the read of `pending()` comes back past the measure's two minutes
+        summary, reads = self.run_measure([[], [self.event(k.FILLED, 103)]], [0])
+        self.assertEqual((summary["filled"], summary["rows"][0]["lapsed"]), (1, False), "filled, not lapsed for want of a last read")
+        self.assertEqual(reads, {"logs": 2, "pending": 1})
+
+    def test_an_order_still_waiting_when_the_time_runs_out_is_written_lapsed(self):
+        summary, reads = self.run_measure([[]], [12])
+        self.assertEqual((summary["filled"], summary["rows"][0]["lapsed"]), (0, True))
+        self.assertEqual(reads["logs"], 121, "the events read each second of the two minutes, the last time just before")
 
 
 class TheRequestsCounted(unittest.TestCase):
