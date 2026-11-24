@@ -211,7 +211,6 @@ class Files16(unittest.TestCase):
         # The message as first written asked for max() of an empty list (the file refused whole): it asks with a default.
         self.assertTrue(not got or max(got) <= 100_000, f"a line of {max(got, default=0)} bytes in memory")
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_the_same_journal_given_twice_is_not_two_journals(self):
         """--prices2 (COLOSSEUM_PRICES2) pointed at the keeper's own journal: every block is 'in both'."""
         d = tmp(self)
@@ -619,7 +618,6 @@ class Pulse16(unittest.TestCase):
         self.assertEqual(set(ans), {"now", "prices_at", "review_at"})
         self.assertTrue(all(v is None or isinstance(v, int) for v in ans.values()))
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_status_json_as_a_symlink_or_too_big_or_not_json_is_null_not_a_crash(self):
         from gateway import simindex as si
         d = tmp(self)

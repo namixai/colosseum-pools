@@ -1284,18 +1284,41 @@ def journal_text(path: pathlib.Path, lo_t: int | None = None, hi_t: int | None =
     return "".join(p if p.endswith("\n") else p + "\n" for p in parts if p)
 
 
+def same_journal(a: pathlib.Path, b: pathlib.Path) -> bool:
+    """Whether two journals named are one: one path once links are followed, or files that are one file (the same
+    device and inode, for the name or any day file of each). The keeper's journal given again as the second writer's
+    would stand "in both" at every block (review 16 of #338): it is one journal, and no cross-check."""
+    if os.path.realpath(a) == os.path.realpath(b):
+        return True
+
+    def files(p: pathlib.Path) -> set:
+        out = set()
+        for f in [p, *p.parent.glob(f"{p.stem}-????-??-??{p.suffix}")]:
+            try:
+                st = os.stat(f)
+            except OSError:
+                continue
+            out.add((st.st_dev, st.st_ino))
+        return out
+    return bool(files(a) & files(b))
+
+
 def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: int | None = None,
                   hi_t: int | None = None, want: dict | None = None) -> "Journal | None":
     """The journals `paths` name, one Journal (`Journal.add_lines` each, line by line): the keeper's and the second
     writer's, of the blocks `want` names only (`Windows`; None, every block). A path with no file of its own and no day
     file is said in `notes` and adds nothing (its blocks rest on the other alone); None when none of them exists. A
-    second journal whose reading raised is said in `unread` and `notes`, and what it gave before that is kept."""
+    second journal whose reading raised is said in `unread` and `notes`, and what it gave before that is kept; one
+    that is the first journal again (`same_journal`) adds nothing: every block rests on one journal."""
     j = Journal(want)
     found = False
     for k, path in enumerate(paths):
         exists = path.is_file() or any(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}"))
         if not exists:
             j.note(f"the journal {path.name} is not there")
+            continue
+        if k > 0 and same_journal(paths[0], path):
+            j.note(f"the second journal named ({path.name}) is the first one again: one journal, no cross-check", first=True)
             continue
         found = True
         try:

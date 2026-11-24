@@ -568,7 +568,7 @@ class Pulse:
                 return None
             at = json.loads(path.read_text(encoding="utf-8")).get("at")
             return int(at) if isinstance(at, (int, float)) and not isinstance(at, bool) else None
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError, OverflowError):  # OverflowError: a time like 1e999
             return None
 
     def answer(self) -> dict:

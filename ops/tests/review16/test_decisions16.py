@@ -376,8 +376,10 @@ class TheSecondJournalStands(unittest.TestCase):
             if str(f) == str(old):
                 raise FileNotFoundError(f)
             return real(f, *a, **kw)
+        self.day("2026-11-21", 9_000)
         with mock.patch.object(rs.os, "lstat", lstat):
-            self.assertEqual(self.look(), [("second_journal_stale", "none")])
+            self.assertEqual(self.look(), [("second_journal_stale", rs.utc(self.NOW - 9_000))],
+                             "the file gone is left out, the others are still looked at")
         self.path = self.d / "no-such-folder" / "watch-prices-sim1.jsonl"
         self.assertEqual(self.look(), [("second_journal_stale", "none")])
 
@@ -393,6 +395,67 @@ class TheSecondJournalStands(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 rs.main(["--deployment", "x", "--out", str(self.d), "--no-candles"])
         self.assertIn(f"{POOL}-0", json.loads((pathlib.Path(self.d) / "said.json").read_text()))
+
+
+class OneJournalNamedTwice(unittest.TestCase):
+    """--prices2 naming the keeper's own journal is no second journal: one journal, every stop held; mainnet does not
+    start so."""
+
+    def setUp(self):
+        import pathlib
+        import shutil
+        import tempfile
+        from ops.tests.test_price_journals import HEAD
+        self.d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.head = HEAD
+        self.text = json.dumps(HEAD) + "\n" + "".join(row(b, 7) + "\n" for b in (4, 5, 6))
+        (self.d / "prices-sim1-1970-01-01.jsonl").write_text(self.text)
+        self.keeper = self.d / "prices-sim1.jsonl"
+
+    def test_by_its_path_by_a_link_and_by_the_file_itself(self):
+        import os
+        (self.d / "linked").symlink_to(self.d)
+        (self.d / "copy").mkdir()
+        os.link(self.d / "prices-sim1-1970-01-01.jsonl", self.d / "copy" / "watch-prices-sim1-1970-01-01.jsonl")
+        for second in (self.keeper, self.d / "." / "prices-sim1.jsonl", self.d / "linked" / "prices-sim1.jsonl",
+                       self.d / "copy" / "watch-prices-sim1.jsonl"):
+            self.assertTrue(pr.same_journal(self.keeper, second), second)
+            got = pr.read_journals([self.keeper, second], self.head)
+            self.assertEqual((got.single_in(3, 4, 6), got.sources), ([4, 5, 6], 1), second)
+            self.assertIn("is the first one again", got.notes[0])
+        (self.d / "second").mkdir()
+        (self.d / "second" / "watch-prices-sim1-1970-01-01.jsonl").write_text(self.text)
+        other = self.d / "second" / "watch-prices-sim1.jsonl"
+        self.assertFalse(pr.same_journal(self.keeper, other), "another file with the same lines is another journal")
+        self.assertEqual(pr.read_journals([self.keeper, other], self.head).single_in(3, 4, 6), [])
+
+    def test_mainnet_does_not_start_with_one_journal_named_twice(self):
+        from ops import review_service as rs
+        from ops.tests.test_sim_network import on
+        from spike.hlspike import network as networks
+        argv = ["--deployment", "x", "--out", str(self.d / "out"), "--no-candles", "--prices", str(self.keeper), "--prices2", str(self.keeper)]
+        common = (mock.patch.object(rs.deployments, "load", return_value={"SimPoolFactory": "0x" + "11" * 20, "block": 1}),
+                  mock.patch.object(rs.sn, "confirm_service"), mock.patch.object(rs, "confirmed"),
+                  mock.patch.object(rs.sf, "require_channel"), mock.patch.object(rs.core, "log"))
+        for patch in common:
+            patch.start()
+            self.addCleanup(patch.stop)
+        with on(networks.MAINNET), mock.patch.object(rs, "one_pass") as passed, self.assertRaises(SystemExit) as caught:
+            rs.main(argv)
+        passed.assert_not_called()
+        self.assertIn("--prices2 names the same journal as --prices", str(caught.exception))
+        with on(networks.TESTNET), mock.patch.object(rs, "one_pass") as passed:
+            self.assertEqual(rs.main(argv), 0)
+        passed.assert_called_once()
+        self.assertIn("second_journal_is_the_first", [call.args[0] for call in rs.core.log.call_args_list])
+
+    def test_the_pulse_gives_no_time_for_one_no_number_can_be(self):
+        from gateway import simindex as si
+        (self.d / "status.json").write_text('{"at": 1e999}')
+        self.assertIsNone(si.Pulse(None, self.d).review_at())
+        (self.d / "status.json").write_text('{"at": 1800000000.7}')
+        self.assertEqual(si.Pulse(None, self.d).review_at(), 1_800_000_000)
 
 
 if __name__ == "__main__":

@@ -17564,6 +17564,23 @@ MUTATIONS = [
      "    finally:\n        save_said(said_path, said)  # whatever these two do, the alarms the pass said stay said",
      "    finally:\n        pass",
      ["test_the_alarms_said_stay_said_whatever_the_last_looks_do"]),
+    # Review 16: one journal named twice is one journal; the pulse gives no time for a number that is none.
+    ("RZ31", "ops/payout_review.py",
+     "        if k > 0 and same_journal(paths[0], path):",
+     "        if False:",
+     ["test_the_same_journal_given_twice_is_not_two_journals", "test_by_its_path_by_a_link_and_by_the_file_itself"]),
+    ("RZ32", "ops/payout_review.py",
+     "    return bool(files(a) & files(b))",
+     "    return False",
+     ["test_by_its_path_by_a_link_and_by_the_file_itself"]),
+    ("RZ33", "ops/review_service.py",
+     "        if c.NETWORK.name == \"mainnet\":\n            raise SystemExit(\"refusing to run on mainnet: --prices2 names",
+     "        if False:\n            raise SystemExit(\"refusing to run on mainnet: --prices2 names",
+     ["test_mainnet_does_not_start_with_one_journal_named_twice"]),
+    ("RZ34", "gateway/simindex.py",
+     "        except (OSError, ValueError, AttributeError, OverflowError):  # OverflowError: a time like 1e999",
+     "        except (OSError, ValueError, AttributeError):",
+     ["test_status_json_as_a_symlink_or_too_big_or_not_json_is_null_not_a_crash", "test_the_pulse_gives_no_time_for_one_no_number_can_be"]),
 ]
 
 RUNNERS = {

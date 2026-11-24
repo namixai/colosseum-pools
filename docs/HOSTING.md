@@ -1033,7 +1033,9 @@ assets). A file past the limit, of another name or a link is not read and said i
 held rest on the keeper's journal alone, `stop-one-journal`, held; the pass goes on. Each file is opened once,
 without following a link or waiting on a pipe, and held on that descriptor to what the listing found (a plain file
 within the limit); no more than the limit is read of one that grows meanwhile, and no line past 64 KB is kept in
-memory. A file refused there, or not read to its end, is `second_journal_unread`.
+memory. A file refused there, or not read to its end, is `second_journal_unread`. `--prices2` naming the keeper's
+own journal (the same path once links are followed, or the same file) is one journal, not two: every stop is held
+as resting on one, and on mainnet the review does not start so.
 
 The folder takes what the second machine's key writes, so it gets a file system of its own, 2 GB (about 9 months of
 day files; old day files can be removed, the review reads only the days of stops still waiting), and the keeper's

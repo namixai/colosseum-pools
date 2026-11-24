@@ -396,6 +396,13 @@ def main(argv: list[str] | None = None) -> int:
     alarm = sf.Alarm(flag)
     expect = {"chain": c.CHAIN_ID, "factory": record["SimPoolFactory"], "label": args.deployment}
     second = pathlib.Path(args.prices2) if args.prices2 else None
+    if second is not None and args.prices and pr.same_journal(pathlib.Path(args.prices), second):
+        # One journal named twice is no second journal: every stop would be held as resting on one. Testnet says it at
+        # each pass (the review's text); on mainnet the service does not start so.
+        if c.NETWORK.name == "mainnet":
+            raise SystemExit("refusing to run on mainnet: --prices2 names the same journal as --prices; the second "
+                             "writer's journal is another machine's (docs/HOSTING.md)")
+        core.log("second_journal_is_the_first", then="every payout with a stop is held as resting on one journal")
     prices = None
     unread: list = []
     if args.prices:
