@@ -257,7 +257,7 @@ class APairInTheFactory(unittest.TestCase):
         ch.fill(addr(0x201), buy=False, sz=100, t=1_200, asset=5)  # trader 1's exam, against trader 9's exam
         ch.fill(e9, buy=True, sz=100, t=1_250, asset=5)
         got = r.review(ch.d, POOL, 0)
-        self.assertEqual(got["stop"]["on"], "exam")
+        self.assertEqual((got["stop"]["on"], got["stop"]["by"]), ("exam", "pair"), "by the pair, not by the positions held after it")
         self.assertEqual(got["stop"]["paired"], e9)
         self.assertEqual(got["tx"]["kind"], "stop")
 
