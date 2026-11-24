@@ -4,9 +4,12 @@
 # colosseum-price-sync@ copies to the pools host for the payout review. The review takes a block as checked only where
 # both journals hold it at one price (a block only one holds is held as resting on one journal).
 # Its file, /etc/colosseum/price-watch-%i.env, names the deployment (COLOSSEUM_DEPLOYMENT), the node
-# (COLOSSEUM_RPC_URL, not the keeper's provider), this machine's alarm channel (COLOSSEUM_ALERT_CMD: its own failures,
-# and colosseum-host-watch@'s), and on mainnet COLOSSEUM_NETWORK=mainnet with COLOSSEUM_CONFIRM_MAINNET=<the deployment's
-# label>; on mainnet it refuses to start without the channel. docs/HOSTING.md, "The second writer of prices".
+# (COLOSSEUM_HOST_RPC_URL, this machine's own, not the keeper's provider: its address stays out of the journal;
+# COLOSSEUM_RPC_URL is read too), this machine's alarm channel (COLOSSEUM_ALERT_CMD: its own failures, and
+# colosseum-host-watch@'s), and on mainnet COLOSSEUM_NETWORK=mainnet with COLOSSEUM_CONFIRM_MAINNET=<the deployment's
+# label>; on mainnet it refuses to start without the channel. ops/host/second-writer/install.sh writes the file with the
+# deployment and the network, names the rest for a person, and enables this unit once they are there.
+# docs/HOSTING.md, "The second writer of prices".
 [Unit]
 Description=colosseum-pools second writer of prices %i
 After=network-online.target

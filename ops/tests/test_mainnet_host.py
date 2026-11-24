@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -671,6 +672,427 @@ class TheHostsOwnNode(unittest.TestCase):
         from spike.hlspike import common as c
         self.assertEqual(c.OWN_NODE_ENV, "COLOSSEUM_HOST_RPC_URL")
         self.assertIn(c.OWN_NODE_ENV, (HOST / "colosseum-multi-keeper@.service").read_text())
+
+
+SHA = "ab" * 20
+NODE_KEY = "https://second.example/evm/THE-SECOND-NODES-KEY"
+CHANNEL = "curl -s -d @- https://alerts.example/THE-CHANNELS-TOKEN"
+FILLED = (f"COLOSSEUM_CONFIRM_MAINNET=sim1\nCOLOSSEUM_HOST_RPC_URL={NODE_KEY}\n"
+          "COLOSSEUM_PRICE_SYNC_TO=colosseum-prices" + "@" + "pools-host.example:\n"
+          "COLOSSEUM_HOST_HEALTH_URL=https://pools-api.example/v1/simindex/health\n"
+          f"COLOSSEUM_ALERT_CMD='{CHANNEL}'\n")
+
+
+class Stand(unittest.TestCase):
+    """A directory standing for a machine, and commands that write down what they were asked instead of doing it: the
+    way the watchdogs' installer is tried (ops/tests/test_host_watchdogs.py). Nobody is root, nothing is installed."""
+
+    FAKES = {
+        "systemctl": '#!/bin/sh\necho "systemctl $*" >> "$FAKE_LOG"\n',
+        "id": '#!/bin/sh\necho "id $*" >> "$FAKE_LOG"\ncase " $FAKE_NO_USER " in *" $1 "*) exit 1 ;; esac\n',
+        "useradd": '#!/bin/sh\necho "useradd $*" >> "$FAKE_LOG"\n',
+        "chown": '#!/bin/sh\necho "chown $*" >> "$FAKE_LOG"\n',
+        "rsync": "#!/bin/sh\nexit 0\n",
+        "rrsync": "#!/bin/sh\nexit 0\n",
+        # `python3.12 -m venv DIR` makes a DIR/bin/python that writes down what it is asked to install.
+        "python3.12": '#!/bin/sh\necho "python3.12 $*" >> "$FAKE_LOG"\n[ "$1 $2" = "-m venv" ] || exit 0\nmkdir -p "$3/bin"\n'
+                      'printf \'#!/bin/sh\\necho "venv-python $*" >> "$FAKE_LOG"\\n\' > "$3/bin/python"\nchmod +x "$3/bin/python"\n',
+        # A file system of its own is a mark in the folder: `mount` leaves it, `mountpoint` looks for it.
+        "mountpoint": '#!/bin/sh\n[ -e "$2/.mounted" ]\n',
+        "mount": '#!/bin/sh\necho "mount $*" >> "$FAKE_LOG"\n[ -n "$FAKE_MOUNT_FAILS" ] || touch "$1/.mounted"\n',
+        "fallocate": '#!/bin/sh\necho "fallocate $*" >> "$FAKE_LOG"\n: > "$3"\n',
+        "mkfs.ext4": '#!/bin/sh\necho "mkfs.ext4 $*" >> "$FAKE_LOG"\n',
+        "ssh-keygen": '#!/bin/sh\necho "ssh-keygen $*" >> "$FAKE_LOG"\necho "256 SHA256:the-hosts-fingerprint host (ED25519)"\n',
+    }
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = pathlib.Path(tmp.name).resolve()
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        for name, body in self.FAKES.items():
+            (self.bin / name).write_text(body)
+            (self.bin / name).chmod(0o755)
+        self.log = self.tmp / "calls.log"
+        self.log.write_text("")
+
+    def calls(self, start: str = "") -> list[str]:
+        return [c for c in self.log.read_text().splitlines() if c.startswith(start)]
+
+    def bash(self, script: str, env: dict | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                              env={**os.environ, "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
+                                   "FAKE_LOG": str(self.log), "FAKE_NO_USER": "", "FAKE_MOUNT_FAILS": "", **(env or {})})
+
+
+class TheSecondMachine(Stand):
+    """ops/host/second-writer/install.sh on a directory standing for the second machine: the release, the user, the
+    units and the settings' template; nothing starts before a person has written the lines that are theirs, and no
+    value of them is ever said."""
+
+    SCRIPT = HOST / "second-writer" / "install.sh"
+
+    def setUp(self):
+        super().setUp()
+        self.dirs = {name: self.tmp / name for name in ("opt", "etc", "units", "home")}
+        for name in ("opt", "units"):
+            self.dirs[name].mkdir()
+        self.upload(SHA)
+
+    def upload(self, sha: str, record: str = "mainnet-sim1") -> pathlib.Path:
+        """What ops/host/deploy.sh leaves on the machine: the commit's files, in the upload's folder."""
+        up = self.dirs["opt"] / "releases" / f".{sha}.upload"
+        (up / "ops" / "host").mkdir(parents=True)
+        shutil.copytree(HOST / "second-writer", up / "ops" / "host" / "second-writer")
+        (up / "spike").mkdir()
+        shutil.copy(ROOT / "spike" / "requirements.txt", up / "spike" / "requirements.txt")
+        (up / "deployments").mkdir()
+        if record:
+            (up / "deployments" / f"{record}.json").write_text(json.dumps(SIM))
+        return up
+
+    def install(self, *args, env=None, sha=SHA):
+        args = args or (sha, "sim1", "sim1", "mainnet")
+        d = self.dirs
+        script = f'''. "{self.SCRIPT}"
+base="{d['opt']}"; etc_dir="{d['etc']}"; unit_dir="{d['units']}"; prices_home="{d['home']}"; root_own=""; prices_own=""
+second_install {" ".join(f'"{a}"' for a in args)}
+'''
+        return self.bash(script, env)
+
+    @property
+    def settings(self) -> pathlib.Path:
+        return self.dirs["etc"] / "price-watch-sim1.env"
+
+    def test_a_first_run_puts_everything_in_place_and_starts_nothing(self):
+        out = self.install(env={"FAKE_NO_USER": "colosseum-prices"})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        opt = self.dirs["opt"]
+        # The release, named, with its venv; `current` and `venv` point at them.
+        self.assertEqual((opt / "releases" / SHA / "REVISION").read_text(), SHA + "\n")
+        self.assertEqual(os.readlink(opt / "current"), f"releases/{SHA}")
+        venv = os.readlink(opt / "venv")
+        self.assertRegex(venv, r"^venv-[0-9a-f]{12}$")
+        self.assertTrue((opt / venv / ".complete").exists())
+        self.assertIn(f"python3.12 -m venv {opt / venv}", self.calls())
+        self.assertTrue(any(c.startswith("venv-python -m pip install") and c.endswith(f"-r {opt}/releases/{SHA}/spike/requirements.txt")
+                            for c in self.calls()), self.calls())
+        self.assertFalse((opt / "releases" / f".{SHA}.upload").exists(), "the upload is gone once it is a release")
+        # The user, with no shell, and its directories: the journal's, an empty one for keys, one for its ssh key.
+        (added,) = self.calls("useradd")
+        self.assertIn(f"--system --create-home --home-dir {self.dirs['home']} --shell ", added)
+        self.assertTrue(added.endswith(" colosseum-prices"))
+        self.assertIn("nologin", added)
+        for name, mode in (("", 0o750), ("no-keys", 0o700), (".ssh", 0o700)):
+            self.assertEqual((self.dirs["home"] / name).stat().st_mode & 0o777, mode, name)
+        self.assertEqual(list((self.dirs["home"] / "no-keys").iterdir()), [], "the writer holds no key")
+        # The five units, as the release has them.
+        self.assertEqual({u.name for u in self.dirs["units"].iterdir()},
+                         {u.name for u in (HOST / "second-writer").iterdir() if u.suffix in (".service", ".timer")})
+        self.assertIn("systemctl daemon-reload", self.calls())
+        # The settings: the deployment and the network written, the rest named for a person, root's alone.
+        text = self.settings.read_text()
+        self.assertEqual(text.splitlines()[:2], ["COLOSSEUM_DEPLOYMENT=sim1", "COLOSSEUM_NETWORK=mainnet"])
+        self.assertEqual(self.settings.stat().st_mode & 0o777, 0o600)
+        by_hand = [l for l in text.splitlines()[2:]]
+        self.assertTrue(all(l.startswith("#") for l in by_hand), "nothing but comments: a person writes the lines")
+        for name in ("COLOSSEUM_CONFIRM_MAINNET=sim1", "COLOSSEUM_HOST_RPC_URL=", "COLOSSEUM_PRICE_SYNC_TO=colosseum-prices",
+                     "COLOSSEUM_HOST_HEALTH_URL=https://", "COLOSSEUM_ALERT_CMD="):
+            self.assertIn(name, text)
+        # Nothing starts: the lines that are a person's are named, each by its name.
+        self.assertIn("NOT STARTED: " + str(self.settings) + " still lacks: COLOSSEUM_HOST_RPC_URL COLOSSEUM_PRICE_SYNC_TO "
+                      "COLOSSEUM_HOST_HEALTH_URL COLOSSEUM_ALERT_CMD COLOSSEUM_CONFIRM_MAINNET", out.stdout)
+        self.assertEqual([c for c in self.calls("systemctl") if "enable" in c or "restart" in c], [])
+
+    def test_with_the_persons_lines_the_writer_and_the_watch_start_and_no_value_is_said(self):
+        self.assertEqual(self.install().returncode, 0)
+        template = self.settings.read_text()
+        self.settings.write_text(template + FILLED)
+        self.log.write_text("")
+        out = self.install()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.settings.read_text(), template + FILLED, "what a person wrote is never rewritten")
+        self.assertEqual(self.calls("useradd"), [], "the user is there: nothing is made twice")
+        self.assertIn("release " + SHA + " is already here", out.stdout)
+        started = [c for c in self.calls("systemctl") if "enable" in c or "restart" in c]
+        writer, watch = "colosseum-price-watch@" + "sim1.service", "colosseum-host-watch@" + "sim1.timer"
+        self.assertEqual(started, [f"systemctl enable --quiet {writer} {watch}", f"systemctl restart {writer} {watch}"])
+        # The journal's sync waits for its key: said, with what a person does, and no key is made here.
+        self.assertIn("NOT SENT YET: the journal's sync waits for its key and the pools host's", out.stdout)
+        self.assertIn(f"sudo -u colosseum-prices ssh-keygen -t ed25519 -N '' -f {self.dirs['home']}/.ssh/sync", out.stdout)
+        self.assertIn("sudo bash /opt/colosseum-pools/current/ops/host/second-prices.sh <that .pub file>", out.stdout)
+        self.assertEqual(self.calls("ssh-keygen"), [], "it says how; it makes no key")
+        self.assertEqual(list((self.dirs["home"] / ".ssh").iterdir()), [])
+        for secret in ("THE-SECOND-NODES-KEY", "THE-CHANNELS-TOKEN", "second.example", "alerts.example", "pools-host.example"):
+            self.assertNotIn(secret, out.stdout + out.stderr)
+        # With the key and the pools host's key in place, the sync's timer starts too.
+        (self.dirs["home"] / ".ssh" / "sync").write_text("a key a person made\n")
+        (self.dirs["home"] / ".ssh" / "known_hosts").write_text("pools-host.example ssh-ed25519 AAAA\n")
+        self.log.write_text("")
+        out = self.install()
+        sync = "colosseum-price-sync@" + "sim1.timer"
+        self.assertIn(f"systemctl enable --quiet {sync}", self.calls())
+        self.assertIn(f"systemctl restart {sync}", self.calls())
+        self.assertNotIn("NOT SENT YET", out.stdout)
+
+    def test_what_is_missing_is_said_by_name_one_by_one(self):
+        self.install()
+        template = self.settings.read_text()
+        lines = FILLED.splitlines()
+        for at, name in enumerate(("COLOSSEUM_CONFIRM_MAINNET", "COLOSSEUM_HOST_RPC_URL", "COLOSSEUM_PRICE_SYNC_TO",
+                                   "COLOSSEUM_HOST_HEALTH_URL", "COLOSSEUM_ALERT_CMD")):
+            self.settings.write_text(template + "\n".join(l for i, l in enumerate(lines) if i != at) + "\n")
+            self.log.write_text("")
+            out = self.install()
+            self.assertIn(f"still lacks: {name}\n", out.stdout, name)
+            self.assertEqual([c for c in self.calls("systemctl") if "enable" in c], [], name)
+        # Another label's confirmation is none; a channel of spaces alone is none; the address the journal goes to
+        # ends with its colon; the node may be named the old way.
+        for change, lacks in ((("CONFIRM_MAINNET=sim1", "CONFIRM_MAINNET=sim2"), "COLOSSEUM_CONFIRM_MAINNET"),
+                              ((f"ALERT_CMD='{CHANNEL}'", "ALERT_CMD='  '"), "COLOSSEUM_ALERT_CMD"),
+                              (("pools-host.example:", "pools-host.example"), "COLOSSEUM_PRICE_SYNC_TO(the-colon-at-its-end)")):
+            self.settings.write_text(template + FILLED.replace(*change))
+            self.assertIn(f"still lacks: {lacks}\n", self.install().stdout, lacks)
+        self.settings.write_text(template + FILLED.replace("COLOSSEUM_HOST_RPC_URL", "COLOSSEUM_RPC_URL"))
+        self.assertNotIn("NOT STARTED", self.install().stdout)
+
+    def test_a_testnet_instance_needs_no_confirmation(self):
+        self.upload("cd" * 20, record="testnet-sim1")
+        out = self.install("cd" * 20, "sim1", "sim1", "testnet")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("COLOSSEUM_NETWORK=testnet", self.settings.read_text())
+        self.assertNotIn("COLOSSEUM_CONFIRM_MAINNET ", out.stdout + " ")
+        self.assertIn("still lacks: COLOSSEUM_HOST_RPC_URL COLOSSEUM_PRICE_SYNC_TO COLOSSEUM_HOST_HEALTH_URL COLOSSEUM_ALERT_CMD\n",
+                      out.stdout)
+
+    def test_settings_of_another_deployment_or_network_switch_nothing(self):
+        self.assertEqual(self.install().returncode, 0)
+        first = os.readlink(self.dirs["opt"] / "current")
+        for sha, args, record, why in (("cd" * 20, ("sim1", "sim2", "mainnet"), "mainnet-sim2", "names another deployment than sim2"),
+                                       ("ef" * 20, ("sim1", "sim1", "testnet"), "testnet-sim1", "names another network than testnet")):
+            self.upload(sha, record=record)
+            out = self.install(sha, *args)
+            self.assertEqual(out.returncode, 1, out.stdout)
+            self.assertIn(why, out.stderr)
+            self.assertIn("nothing switched", out.stderr)
+            self.assertEqual(os.readlink(self.dirs["opt"] / "current"), first)
+
+    def test_a_release_without_the_record_or_a_machine_without_python_switches_nothing(self):
+        self.upload("cd" * 20, record="")
+        out = self.install("cd" * 20, "sim1", "sim1", "mainnet")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("carries no record deployments/mainnet-sim1.json", out.stderr)
+        self.assertFalse((self.dirs["opt"] / "current").exists())
+        (self.bin / "python3.12").unlink()
+        out = self.bash(f'. "{self.SCRIPT}"; python=python3.12-not-here; base="{self.dirs["opt"]}"; second_install {SHA} sim1 sim1 mainnet')
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("is not on this machine", out.stderr)
+        self.assertEqual(self.calls("useradd"), [])
+
+    def test_arguments_out_of_their_shapes_are_refused_before_anything_is_done(self):
+        for args in ((SHA, "sim1", "sim1"), ("abc", "sim1", "sim1", "mainnet"), (SHA, "Sim1", "sim1", "mainnet"),
+                     (SHA, "v1", "sim1", "mainnet"), (SHA, "sim1", "sim 1", "mainnet"), (SHA, "sim1", "sim1", "main"),
+                     (SHA, "sim1", "sim1", "mainnet", "more")):
+            out = self.install(*args)
+            self.assertEqual(out.returncode, 2, args)
+            self.assertEqual(self.log.read_text(), "", args)
+        out = subprocess.run(["bash", str(self.SCRIPT)], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("usage: install.sh <full commit sha> <name> <label> <testnet|mainnet>", out.stderr)
+
+    def test_it_makes_no_key_and_keeps_the_three_newest_releases(self):
+        text = self.SCRIPT.read_text()
+        for line in text.splitlines():
+            if "ssh-keygen" in line or "ssh-keyscan" in line:
+                self.assertTrue(line.strip().startswith(('say "', "#")), line)
+        subprocess.run(["bash", "-n", str(self.SCRIPT)], check=True)
+        shas = [f"{i:040x}" for i in range(1, 6)]
+        for i, sha in enumerate(shas):
+            self.upload(sha)
+            self.assertEqual(self.install(sha=sha).returncode, 0)
+            os.utime(self.dirs["opt"] / "releases" / sha, (1_000 + i, 1_000 + i))
+        kept = sorted(p.name for p in (self.dirs["opt"] / "releases").iterdir() if re.fullmatch(r"[0-9a-f]{40}", p.name))
+        self.assertEqual(kept, shas[-3:], "the three newest, the one that runs among them")
+
+    def test_the_units_read_the_file_this_writes(self):
+        for unit in ("colosseum-price-watch@.service", "colosseum-price-sync@.service", "colosseum-host-watch@.service"):
+            self.assertIn("EnvironmentFile=/etc/colosseum/price-watch-%i.env", (HOST / "second-writer" / unit).read_text(), unit)
+        text = self.SCRIPT.read_text()
+        self.assertIn('settings="$etc_dir/price-watch-$name.env"', text)
+        self.assertIn("etc_dir=/etc/colosseum\n", text)
+        self.assertIn("prices_home=/var/lib/colosseum-prices\n", text)
+        sync = (HOST / "second-writer" / "colosseum-price-sync@.service").read_text()
+        self.assertIn("-i /var/lib/colosseum-prices/.ssh/sync ", sync)
+        self.assertIn('"$prices_home/.ssh/sync"', text)
+
+
+class TheSecondMachinesRelease(unittest.TestCase):
+    """ops/host/deploy.sh sends the same archive to the second machine and has its own installer finish it there."""
+
+    def setUp(self):
+        from ops.tests import test_host_deploy
+        self.stand = test_host_deploy.Deploy("test_a_commit_on_origin_main_is_sent")
+        self.stand.setUp()
+        self.addCleanup(self.stand.doCleanups)
+
+    def deploy(self, *more):
+        s = self.stand
+        return subprocess.run(["bash", "ops/host/deploy.sh", s.merged, "ops" + "@" + "second", *more], cwd=s.repo, env=s.env,
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+    def test_second_writer_runs_the_second_machines_installer_with_its_instance(self):
+        out = self.deploy("second-writer", "sim1", "sim1", "mainnet")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        upload, install = self.stand.sent()
+        self.assertIn(f"/opt/colosseum-pools/releases/.{self.stand.merged}.upload", upload)
+        self.assertTrue(install.endswith(f"sudo bash /opt/colosseum-pools/releases/.{self.stand.merged}.upload/"
+                                         f"ops/host/second-writer/install.sh {self.stand.merged} sim1 sim1 mainnet"), install)
+        self.assertNotIn("ops/host/install.sh", install)
+
+    def test_without_it_the_pools_hosts_installer_runs_as_before(self):
+        self.assertEqual(self.deploy().returncode, 0)
+        self.assertTrue(self.stand.sent()[1].endswith(f"ops/host/install.sh {self.stand.merged}"))
+
+    def test_anything_a_shell_would_read_otherwise_is_refused_and_nothing_is_sent(self):
+        for more in (("second-writer",), ("second-writer", "sim1", "sim1"), ("second-writer", "sim1", "sim1", "mainnet", "x"),
+                     ("second-writer", "sim1; id", "sim1", "mainnet"), ("second-writer", "sim1", "$(id)", "mainnet"),
+                     ("second-writer", "sim1", "sim1", "mainnet && id"), ("other", "sim1", "sim1", "mainnet"),
+                     ("second-writer", "Sim1", "sim1", "mainnet")):
+            out = self.deploy(*more)
+            self.assertEqual(out.returncode, 2, more)
+            self.assertIn("usage: ops/host/deploy.sh <commit> <user@host> [second-writer", out.stderr)
+            self.assertEqual(self.stand.sent(), [], more)
+
+
+PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIThePublicHalfOfTheSecondMachinesKey colosseum-prices" + "@" + "second"
+
+
+class TheSecondJournalsFolder(Stand):
+    """ops/host/second-prices.sh on a directory standing for the pools host: the user the journal arrives as, the folder
+    on a file system of its own, and the second machine's key held to writing into it."""
+
+    SCRIPT = HOST / "second-prices.sh"
+
+    def setUp(self):
+        super().setUp()
+        self.keeper = self.tmp / "keeper"
+        self.keeper.mkdir(mode=0o700)
+        self.home = self.tmp / "prices-home"
+        self.home.mkdir()
+        self.fstab = self.tmp / "fstab"
+        self.fstab.write_text("/dev/root / ext4 defaults 0 1\n")
+        self.key = self.tmp / "sync.pub"
+        self.key.write_text(PUBLIC_KEY + "\n")
+
+    @property
+    def folder(self) -> pathlib.Path:
+        return self.keeper / "second-prices"
+
+    def run_it(self, *args, env=None, before=""):
+        script = f'''. "{self.SCRIPT}"
+keeper_home="{self.keeper}"; folder="{self.folder}"; image="{self.tmp}/second-prices.img"; fstab="{self.fstab}"
+prices_home="{self.home}"; ssh_own=""; host_key="{self.key}"
+{before}
+second_prices {" ".join(f'"{a}"' for a in args)}
+'''
+        return self.bash(script, env)
+
+    def test_the_user_the_pass_the_folder_of_its_own_and_the_key_held_to_it(self):
+        out = self.run_it(str(self.key), env={"FAKE_NO_USER": "colosseum-prices"})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        (added,) = self.calls("useradd")
+        self.assertEqual(added, f"useradd --system --create-home --home-dir {self.home} --shell /bin/sh -g colosseum-keeper colosseum-prices")
+        self.assertEqual(self.keeper.stat().st_mode & 0o777, 0o710, "the group passes and lists nothing")
+        # A file system of its own, 2 GB in one file, mounted at the folder and named in fstab once.
+        image = self.tmp / "second-prices.img"
+        self.assertTrue(image.exists())
+        self.assertIn(f"fallocate -l 2G {image}.next", self.calls())
+        self.assertIn(f"mkfs.ext4 -q -m 0 {image}.next", self.calls())
+        self.assertIn(f"mount {self.folder}", self.calls())
+        self.assertEqual(self.fstab.read_text().splitlines()[1:], [f"{image} {self.folder} ext4 loop,nodev,nosuid,noexec 0 2"])
+        self.assertEqual(self.folder.stat().st_mode & 0o7777, 0o2750)
+        self.assertIn(f"chown colosseum-prices:colosseum-keeper {self.folder}", self.calls())
+        # The key: one line, the restriction before it; the folder is the one the review's unit reads.
+        keys = self.home / ".ssh" / "authorized_keys"
+        self.assertEqual(keys.read_text(), f'command="rrsync -wo {self.folder}",restrict {PUBLIC_KEY}\n')
+        self.assertEqual(keys.stat().st_mode & 0o777, 0o600)
+        self.assertEqual((self.home / ".ssh").stat().st_mode & 0o777, 0o700)
+        self.assertIn("this host's own key, to hold the second machine's known_hosts against: 256 SHA256:the-hosts-fingerprint", out.stdout)
+        text = self.SCRIPT.read_text()
+        self.assertIn("folder=/var/lib/colosseum-keeper/second-prices\n", text)
+        review = (HOST / "colosseum-payout-review@.service").read_text()
+        self.assertIn("--prices2 /var/lib/colosseum-keeper/second-prices/watch-prices-${COLOSSEUM_DEPLOYMENT}.jsonl", review)
+        sync = (HOST / "second-writer" / "colosseum-price-sync@.service").read_text()
+        self.assertIn("rrsync -wo /var/lib/colosseum-keeper/second-prices", sync)
+
+    def test_run_again_it_changes_nothing_that_is_there(self):
+        self.assertEqual(self.run_it(str(self.key), env={"FAKE_NO_USER": "colosseum-prices"}).returncode, 0)
+        fstab, keys = self.fstab.read_text(), (self.home / ".ssh" / "authorized_keys").read_text()
+        self.log.write_text("")
+        out = self.run_it(str(self.key))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("is a file system of its own already", out.stdout)
+        self.assertEqual((self.fstab.read_text(), (self.home / ".ssh" / "authorized_keys").read_text()), (fstab, keys))
+        for never in ("useradd", "fallocate", "mkfs.ext4", "mount "):
+            self.assertEqual(self.calls(never), [], never)
+        # Not mounted (a start of the host that did not mount it): mounted again from the same file, named in fstab once.
+        (self.folder / ".mounted").unlink()
+        out = self.run_it(str(self.key))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(self.calls("mount "), [f"mount {self.folder}"])
+        self.assertEqual(self.calls("fallocate"), [], "the file that is there is the file system: never made anew")
+        self.assertEqual(self.fstab.read_text(), fstab)
+
+    def test_without_a_key_it_sets_up_the_folder_and_says_what_is_next(self):
+        out = self.run_it()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertFalse((self.home / ".ssh").exists())
+        self.assertIn("no key given yet: the second machine's PUBLIC key file", out.stdout)
+        self.assertTrue((self.folder / ".mounted").exists())
+
+    def test_only_one_public_key_on_one_line_is_taken_and_nothing_is_made_otherwise(self):
+        bad = {"an option before the key": 'command="id" ' + PUBLIC_KEY + "\n",
+               "two keys": PUBLIC_KEY + "\n" + PUBLIC_KEY + "\n",
+               "a private key": "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nAAAA\n",
+               "nothing": "\n", "a key and a quote": PUBLIC_KEY + ' "\n'}
+        for what, text in bad.items():
+            self.key.write_text(text)
+            out = self.run_it(str(self.key))
+            self.assertEqual(out.returncode, 2, what)
+            self.assertIn("is not one public key on one line", out.stderr)
+            self.assertEqual(self.log.read_text(), "", what)
+            self.assertFalse(self.folder.exists(), what)
+        self.assertEqual(self.run_it(str(self.tmp / "no-such.pub")).returncode, 2)
+        self.assertEqual(self.run_it(str(self.key), "more").returncode, 2)
+
+    def test_without_rrsync_or_with_files_in_the_way_nothing_is_set_up(self):
+        no_rrsync = 'command() { if [ "$1 $2" = "-v rrsync" ]; then return 1; fi; builtin command "$@"; }'
+        out = self.run_it(str(self.key), before=no_rrsync)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("rrsync is not on this host", out.stderr)
+        self.assertEqual(self.calls("useradd") + self.calls("mount"), [])
+        self.assertEqual(self.keeper.stat().st_mode & 0o777, 0o700)
+        # A folder that already holds files and is no file system of its own: mounting over it would hide them.
+        self.folder.mkdir()
+        (self.folder / "watch-prices-sim1-2026-11-24.jsonl").write_text("{}\n")
+        out = self.run_it(str(self.key))
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("holds files and is no file system of its own", out.stderr)
+        self.assertEqual(self.calls("mount"), [])
+        # A mount that did not take is said, and no key is let in.
+        (self.folder / "watch-prices-sim1-2026-11-24.jsonl").unlink()
+        out = self.run_it(str(self.key), env={"FAKE_MOUNT_FAILS": "1"})
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("is still no file system of its own after mount", out.stderr)
+        self.assertFalse((self.home / ".ssh").exists())
+
+    def test_it_makes_no_key_and_bootstrap_keeps_the_pass_it_sets(self):
+        text = self.SCRIPT.read_text()
+        self.assertNotIn("ssh-keygen -t", text)
+        self.assertIn('chmod 0710 "$keeper_home"', text)
+        self.assertIn("!= 710 ] || keeper_mode=0710", (HOST / "bootstrap.sh").read_text())
+        subprocess.run(["bash", "-n", str(self.SCRIPT)], check=True)
 
 
 if __name__ == "__main__":
