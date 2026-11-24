@@ -236,13 +236,57 @@ class HostWatch(unittest.TestCase):
         self.assertEqual(self.look(self.pulse(), state, now=self.NOW + 120), (None, []))
         self.assertEqual(state, {}, "alive again: forgotten")
 
-    def test_the_hosts_clock_counts_the_ages_and_one_not_taken_is_said_again(self):
-        skewed = {"now": self.NOW - 10_000, "prices_at": self.NOW - 10_005, "review_at": self.NOW - 10_300}
-        self.assertEqual(self.look(skewed, {})[1], [], "two machines' clocks apart are no alarm")
+    def test_an_answer_stamped_far_from_this_machines_clock_is_an_alarm_and_one_not_taken_is_said_again(self):
+        """Review 16 of #338: the answer's own time is held to this machine's clock. More than 120 s apart, either way,
+        is an old answer (a cache, a replay) or a clock gone wrong: `host_not_alive`, kind clock, whatever ages it
+        carries. Within it the ages are counted on the host's clock."""
+        def stamped(apart, prices=-5, review=-300):
+            return {"now": self.NOW + apart, "prices_at": self.NOW + apart + prices, "review_at": self.NOW + apart + review}
+        for apart in (-10_000, 10_000, -86_400, -(rs.HOST_CLOCK_APART_S + 1), rs.HOST_CLOCK_APART_S + 1):
+            why, said = self.look(stamped(apart), {})
+            self.assertEqual([(e, f["kind"]) for e, f in said], [("host_not_alive", "clock")], apart)
+            self.assertIn("before" if apart < 0 else "after", why)
+        for apart in (-rs.HOST_CLOCK_APART_S, rs.HOST_CLOCK_APART_S, 0):
+            self.assertEqual(self.look(stamped(apart), {})[1], [], apart)
+        # The host 100 s behind this machine, its journal written 150 s before its own clock: by the host's clock 150 s
+        # (no alarm), not the 250 s this machine's would count.
+        self.assertEqual(self.look(stamped(-100, prices=-150), {})[1], [])
+        self.assertEqual(self.look(stamped(100, prices=-181), {})[1][0][1]["kind"], "prices")
+        for body in ({"prices_at": self.NOW - 5, "review_at": self.NOW - 300}, {**stamped(0), "now": True},
+                     {**stamped(0), "now": float(self.NOW)}, {**stamped(0), "now": str(self.NOW)}):
+            self.assertEqual(self.look(body, {})[1][0][1]["kind"], "clock", "no time of its own: not told from an old one")
         state = {}
         self.look(OSError("x"), state, took=False)
         self.assertEqual(state, {})
         self.assertEqual(len(self.look(OSError("x"), state, now=self.NOW + 60)[1]), 1)
+
+    def test_each_question_carries_a_parameter_no_question_before_had(self):
+        asked = []
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n):
+                return json.dumps({"now": 1}).encode()
+
+        def urlopen(request, timeout=None):
+            asked.append((request.full_url, request.get_header("Cache-control")))
+            return Answer()
+        with mock.patch("urllib.request.urlopen", urlopen):
+            rs.fetch_health("https://pools.example/v1/simindex/health")
+            rs.fetch_health("https://pools.example/v1/simindex/health")
+            rs.fetch_health("https://pools.example/v1/simindex/health?x=1")
+        urls = [u for u, _ in asked]
+        self.assertRegex(urls[0], r"^https://pools\.example/v1/simindex/health\?r=[0-9a-f]{16}$")
+        self.assertNotEqual(urls[0], urls[1], "a cache between the machines has no answer kept for it")
+        self.assertRegex(urls[2], r"\?x=1&r=[0-9a-f]{16}$")
+        self.assertEqual({h for _, h in asked}, {"no-cache"})
+        from gateway import simindex as si
+        self.assertIn('{**index.health(), **pulse.answer()}, cache="no-store")', pathlib.Path(si.__file__).read_text())
 
     def test_on_mainnet_it_does_not_run_without_a_channel(self):
         from ops.tests.test_sim_network import on

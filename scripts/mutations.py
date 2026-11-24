@@ -17495,6 +17495,19 @@ MUTATIONS = [
      "                        self.gaps.append((a, b, str(row.get(\"why\", \"\"))[:WHY_MAX]))",
      "                        self.gaps.append((a, b, str(row.get(\"why\", \"\"))))",
      ["test_a_gap_is_kept_where_it_touches_a_stops_time_and_counted_where_it_does_not"]),
+    # Review 16: the host's answer is held to the second machine's clock, and each question is one no cache has kept.
+    ("AL4", "ops/review_service.py",
+     "    if abs(at - now) > HOST_CLOCK_APART_S:",
+     "    if False:",
+     ["test_an_answer_stamped_far_from_this_machines_clock_is_an_alarm_and_one_not_taken_is_said_again"]),
+    ("AL5", "ops/review_service.py",
+     "    if not isinstance(at, int) or isinstance(at, bool):\n        return \"clock\"",
+     "    if at is None:\n        return \"clock\"",
+     ["test_an_answer_stamped_far_from_this_machines_clock_is_an_alarm_and_one_not_taken_is_said_again"]),
+    ("AL6", "ops/review_service.py",
+     "    fresh = f\"{url}{'&' if '?' in url else '?'}r={secrets.token_hex(8)}\"",
+     "    fresh = url",
+     ["test_each_question_carries_a_parameter_no_question_before_had"]),
 ]
 
 RUNNERS = {

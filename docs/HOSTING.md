@@ -1015,7 +1015,10 @@ holds (a restart or a deploy of the keeper or of the second machine while a stop
 The host watch (`colosseum-host-watch@`, once a minute, `ops/review_service.py --watch-host`) reads the pools host's
 health route (docs/GATEWAY.md, the index's pulse) and says `host_not_alive` on the second machine's channel when the
 host does not answer, its stops' journal has not been written for 3 minutes, or the review has not finished a pass
-for 30; again every hour while it lasts. No third-party service: the host itself can say nothing once it is down. The
+for 30; again every hour while it lasts. The answer's own time must stand within 2 minutes of the second machine's
+clock: one further off, or with no time, is an old answer (a cache, a replay) or a clock gone wrong and is said the
+same way (kind `clock`); each question carries a parameter no question before had, and the route answers `no-store`.
+No third-party service: the host itself can say nothing once it is down. The
 index needs to pass through `/var/lib/colosseum-keeper` as its group (the same as for the reviews route) to see the
 journal's day file by name; it reads nothing of it.
 

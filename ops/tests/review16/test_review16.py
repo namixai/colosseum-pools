@@ -528,16 +528,13 @@ class Watch16(unittest.TestCase):
     def test_a_fresh_body_on_a_close_clock_is_fine(self):
         self.assertIsNone(rs.host_problem(self.body(), self.NOW + 3))
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_a_second_machines_clock_far_off_does_not_say_the_host_is_down_but_says_something(self):
         got = rs.host_problem(self.body(), self.NOW + 6 * 3_600)
         self.assertIsNotNone(got, "an answer the host stamped six hours before this machine's clock: a cached or replayed answer, or a broken clock")
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_an_answer_replayed_from_a_cache_a_day_later_is_not_taken_as_alive(self):
         self.assertIsNotNone(rs.host_problem(self.body(), self.NOW + DAY))
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_a_host_stamp_in_the_future_is_not_taken_as_alive_either(self):
         self.assertIsNotNone(rs.host_problem(self.body(now=self.NOW + 10 * DAY, prices_at=self.NOW + 10 * DAY - 1,
                                                       review_at=self.NOW + 10 * DAY - 1), self.NOW))

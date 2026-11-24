@@ -227,15 +227,22 @@ def second_stale(path: pathlib.Path | None, now: float, said: dict, alarm, limit
 HOST_PRICES_STALE_S = 180
 HOST_REVIEW_STALE_S = 1_800
 HOST_REPEAT_S = 3_600
+# How far the answer's own time may stand from this machine's clock (review 16 of #338): an answer stamped further off
+# is an old one (a cache between the two machines, a replay) or a clock gone wrong, and says nothing of the host now.
+HOST_CLOCK_APART_S = 120
 HEALTH_MAX_BYTES = 64 * 1024
 
 
 def fetch_health(url: str, timeout: float = 10.0) -> dict:
     """The host's health route (gateway/simindex.py: its pulse, `prices_at` and `review_at`), as JSON."""
+    import secrets
     import urllib.request
     if not url.startswith(("https://", "http://")):
         raise ValueError("the health route must be an http(s) address")
-    with urllib.request.urlopen(urllib.request.Request(url, headers={"Cache-Control": "no-cache"}), timeout=timeout) as resp:
+    # A parameter no request before had: a cache between the two machines has no answer kept for it (the route itself
+    # says no-store, and the answer's own time is held to this machine's clock, `host_problem`).
+    fresh = f"{url}{'&' if '?' in url else '?'}r={secrets.token_hex(8)}"
+    with urllib.request.urlopen(urllib.request.Request(fresh, headers={"Cache-Control": "no-cache"}), timeout=timeout) as resp:
         got = json.loads(resp.read(HEALTH_MAX_BYTES + 1)[:HEALTH_MAX_BYTES])
     if not isinstance(got, dict):
         raise ValueError("not a JSON object")
@@ -243,10 +250,18 @@ def fetch_health(url: str, timeout: float = 10.0) -> dict:
 
 
 def host_problem(body: dict, now: float) -> tuple[str, str] | None:
-    """What is wrong with the host by its pulse, (kind, words), or None: the ages are counted on the host's own clock
-    (`now` of the answer) where it gives one, so two machines' clocks apart do not raise an alarm."""
+    """What is wrong with the host by its pulse, (kind, words), or None. The answer's own time (`now`) must stand
+    within HOST_CLOCK_APART_S of this machine's clock: one further off, or with no time, is not known to be the host
+    as it is now (kind "clock"). Within it, the ages are counted on the host's clock, so the seconds the two machines
+    stand apart are no age of a journal."""
     at = body.get("now")
-    clock = at if isinstance(at, int) and not isinstance(at, bool) else int(now)
+    if not isinstance(at, int) or isinstance(at, bool):
+        return "clock", "the host's answer carries no time of its own: it cannot be told from an old one"
+    if abs(at - now) > HOST_CLOCK_APART_S:
+        return "clock", (f"the host's answer is stamped {int(abs(at - now))} s {'before' if at < now else 'after'} this "
+                         "machine's clock: an old answer (a cache, a replay) or a clock gone wrong, and no word of the "
+                         "host as it is now")
+    clock = at
     prices, review = body.get("prices_at"), body.get("review_at")
     if not isinstance(prices, int) or isinstance(prices, bool):
         return "prices", "the host says no time of the stops' journal: the stops' loop is not writing it"
