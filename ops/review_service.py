@@ -172,6 +172,10 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
                          then=f"said if it is still so after {utc(since + LINKS_WAIT_S)}")
             if now - since <= LINKS_WAIT_S:
                 continue
+        elif isinstance(said.get(key), dict):
+            # Held by something else now, or near its time: the hour of the funding alone is broken, whether or not
+            # this pass's alarm goes out, and starts anew if the funding is the only reason again.
+            said[key].pop("linksSince", None)
         if due_to_say(said.get(key), mark, now, a["deadline"]):
             if time.monotonic() > until:
                 core.log("review_alarm_not_said", payout=key, why=f"the pass's {ALARM_BUDGET_S} s for alarms are spent",

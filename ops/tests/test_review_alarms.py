@@ -227,6 +227,24 @@ class FundingStillRead(unittest.TestCase):
         self.at(110)
         self.assertEqual(self.alarms()[2:], [(110, "payout_held")])
 
+    def test_another_reason_whose_own_alarm_did_not_go_out_ends_the_hour_all_the_same(self):
+        """The hour is of the hold by the funding alone, without a break. Another reason breaks it whether or not the
+        channel took that reason's alarm: the minutes before it are not counted when the funding is alone again."""
+        self.at(0)
+        self.ch.d["unread"].append(self.stage)
+        self.took = False
+        self.at(30)
+        self.assertEqual(self.alarms(), [(30, "payout_held")], "said at once; the channel did not take it")
+        self.assertNotIn("linksSince", self.said[self.KEY])
+        self.ch.d["unread"].remove(self.stage)
+        self.took = True
+        for minutes in range(70, 140, 10):  # the funding alone again from minute 70: an hour of it at minute 130
+            self.at(minutes)
+        self.assertEqual(self.alarms(), [(30, "payout_held")], "counted from minute 70, not from minute 0")
+        self.assertEqual(self.said[self.KEY], {"linksSince": self.start + 70 * 60})
+        self.at(140)
+        self.assertEqual(self.alarms()[1:], [(140, "payout_held")])
+
     def test_from_24_hours_before_it_goes_out_by_itself_nothing_waits(self):
         day_before = (self.hard - self.start - 24 * H) // 60  # the minute at which 24 hours are left
         self.at(day_before)
