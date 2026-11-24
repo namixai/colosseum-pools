@@ -11,6 +11,7 @@ import {
   withdrawHtml,
 } from "../lib/simowner.js";
 import { poolAt, runOwner, mined, eventsOf, failedBoxHtml } from "./simowner-run.js";
+import { payToken } from "../lib/simsite.js";
 
 const { ethers } = window;
 const ERC20 = [
@@ -118,7 +119,8 @@ export function wireWithdraw(page, ctx, data) {
     const plan = addPlan({ text: addForm.elements.amount.value, principal: data.money.principal });
     if (!plan.ok) return;
     run(async (signed, _iface, say) => {
-      const usdc = new ethers.Contract(await poolAt(ctx.at).usdc(), ERC20, chain.currentSigner());
+      // The token is the pool's own answer, held to the settings' USDC on mainnet before any allowance is asked for.
+      const usdc = new ethers.Contract(payToken(await poolAt(ctx.at).usdc()), ERC20, chain.currentSigner());
       if ((await usdc.allowance(chain.currentAddress(), ctx.at)) < plan.amount) {
         say("Step 1 of 2: allow the pool to take the money. Sign it in your wallet.");
         await mined(usdc.approve(ctx.at, plan.amount), "the allowance");

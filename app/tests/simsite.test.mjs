@@ -7,15 +7,15 @@
 // (app/tests/mainnet-site.mjs).
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CONFIG } from "../config.js";
-import { simSite, poolPages, isSitePool, noContract, readFailed, simListHtml, NOT_FOUND } from "../lib/simsite.js";
+import { simSite, poolPages, payToken, isSitePool, noContract, readFailed, simListHtml, NOT_FOUND } from "../lib/simsite.js";
 import { indexUrl, askIndex, sourceNote, indexBase } from "../lib/simindex.js";
 import { reviewsUrl, askReviews } from "../lib/simoperator.js";
 import { needsGate } from "../lib/nav.js";
-import { mainnetSite, SIM_FACTORY } from "./mainnet-site.mjs";
+import { mainnetSite, SIM_FACTORY, MAINNET_USDC } from "./mainnet-site.mjs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const POOL = "0x7A4999c02E749933af456d0Ac241a10584315812";
@@ -202,4 +202,52 @@ test("a site that names no index says so, and its panels read the chain themselv
   } finally {
     indexed.remove();
   }
+});
+
+test("on mainnet a wallet is asked to allow or pay with the settings' USDC and no other token; on testnet with the pool's own", async () => {
+  const TESTNET_USDC = "0x2B3370eE501B4a559b57D449569354196457D8Ab";
+  const other = "0x00000000000000000000000000000000000000aa";
+  // Testnet: a pool's token is its own, whatever it is, as it was.
+  assert.equal(payToken(TESTNET_USDC), TESTNET_USDC);
+  assert.equal(payToken(other), other);
+  assert.equal(payToken(other, { hyperliquidChain: "Testnet", usdc: TESTNET_USDC }), other);
+  // Mainnet: the pool's answer is the settings' USDC, case aside, or the page says so and nothing is offered.
+  const main = { hyperliquidChain: "Mainnet", usdc: MAINNET_USDC };
+  assert.equal(payToken(MAINNET_USDC, main), MAINNET_USDC);
+  assert.equal(payToken(MAINNET_USDC.toLowerCase(), main), MAINNET_USDC.toLowerCase());
+  const words = { message: "This pool takes its money in a token that is not this site's USDC. Nothing was sent." };
+  for (const token of [other, TESTNET_USDC, "0x0000000000000000000000000000000000000000", "", null, undefined, `${MAINNET_USDC}00`]) {
+    assert.throws(() => payToken(token, main), words, `${token} was taken for USDC`);
+  }
+  // Settings that name no USDC vouch for no token.
+  assert.throws(() => payToken(MAINNET_USDC, { hyperliquidChain: "Mainnet" }), words);
+  // The same from a mainnet build's own library, beside its own settings.
+  const lib = await built.lib("simsite.js");
+  assert.equal(lib.payToken(MAINNET_USDC), MAINNET_USDC);
+  assert.throws(() => lib.payToken(TESTNET_USDC), words);
+  assert.throws(() => lib.payToken(other), words);
+});
+
+test("every page that asks a wallet for an allowance takes the token through that check first", () => {
+  // The purchase of an exam and the owner's adding to the pool: the two places a page builds a token's contract.
+  assert.match(read("../views/simpool.js"),
+    /const usdc = new ethers\.Contract\(payToken\(await pool\.usdc\(\)\), ERC20_ABI, signer\);\s+if \(\(await usdc\.allowance\(signer\.address, address\)\) < price\) await \(await usdc\.approve\(address, price\)\)\.wait\(\);\s+const receipt = await \(await pool\.buy\(\.\.\.args\)\)\.wait\(\);/);
+  assert.match(read("../views/simowner-withdraw.js"),
+    /const usdc = new ethers\.Contract\(payToken\(await poolAt\(ctx\.at\)\.usdc\(\)\), ERC20, chain\.currentSigner\(\)\);\s+if \(\(await usdc\.allowance\(chain\.currentAddress\(\), ctx\.at\)\) < plan\.amount\) \{/);
+  // No page of the simulation pools or of an exam builds a token's contract, asks for an allowance or sends a token
+  // any other way: a new one has to come through here.
+  const views = readdirSync(new URL("../views/", import.meta.url)).filter((f) => /^(sim|exam)/.test(f));
+  assert.ok(views.length >= 12, `${views.length} views`);
+  const asking = [];
+  for (const file of views) {
+    const lines = read(`../views/${file}`).split("\n");
+    lines.forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+      const token = /\.usdc\(\)/.test(line);
+      const moves = /\.(approve|transfer|transferFrom|permit|increaseAllowance)\(/.test(line);
+      if (token && !/payToken\(await [^;]*\.usdc\(\)\)/.test(line)) asking.push(`${file}:${i + 1} reads a pool's token past the check`);
+      if (moves && !["simpool.js", "simowner-withdraw.js"].includes(file)) asking.push(`${file}:${i + 1} moves a token`);
+    });
+  }
+  assert.deepEqual(asking, []);
 });

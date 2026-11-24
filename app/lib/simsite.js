@@ -24,6 +24,20 @@ export function poolPages(config = CONFIG) {
   return isMainnet(config) ? "none" : "any";
 }
 
+/**
+ * The token a pool takes money in, as the pool's own `usdc()` answers it, before a page asks a wallet to allow it or
+ * to pay with it. On mainnet it must be the settings' USDC: scripts/app_config.py holds the deployment's record to the
+ * network's USDC, and this holds what the pool on the chain answers to the same, so that the plaque's "Real USDC" is
+ * true of what the wallet is asked to sign. For any other token the page says so and offers no transaction. On
+ * testnet a pool's token is its own, as it was: a deployment there may take a test dollar.
+ */
+export function payToken(token, config = CONFIG) {
+  if (isMainnet(config) && !sameAddress(token, config.usdc)) {
+    throw new Error("This pool takes its money in a token that is not this site's USDC. Nothing was sent.");
+  }
+  return token;
+}
+
 /** Whether `address` is one of `pools`, the factory's own list, case aside. A list that was not read (null: no
  *  contract stands at the factory's address) names no pool. */
 export function isSitePool(pools, address) {

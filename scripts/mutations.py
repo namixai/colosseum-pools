@@ -17911,6 +17911,19 @@ MUTATIONS = [
      '  if (pages !== "any" && !(await sitePool(ofSite, page))) return;',
      '  if (pages === "listed" && !(await sitePool(ofSite, page))) return;',
      ["mainnet settings that name no factory: no page of a pool, no panel and no exam's screen opens, and nothing is read"]),
+    # The token a mainnet page asks a wallet to allow is the settings' USDC, in both places a page asks.
+    ("J256", "app/lib/simsite.js",
+     '  if (isMainnet(config) && !sameAddress(token, config.usdc)) {',
+     '  if (false) {',
+     ["on mainnet a wallet is asked to allow or pay with the settings' USDC and no other token; on testnet with the pool's own"]),
+    ("J257", "app/views/simpool.js",
+     "  const usdc = new ethers.Contract(payToken(await pool.usdc()), ERC20_ABI, signer);",
+     "  const usdc = new ethers.Contract(await pool.usdc(), ERC20_ABI, signer);",
+     ["every page that asks a wallet for an allowance takes the token through that check first"]),
+    ("J258", "app/views/simowner-withdraw.js",
+     "      const usdc = new ethers.Contract(payToken(await poolAt(ctx.at).usdc()), ERC20, chain.currentSigner());",
+     "      const usdc = new ethers.Contract(await poolAt(ctx.at).usdc(), ERC20, chain.currentSigner());",
+     ["every page that asks a wallet for an allowance takes the token through that check first"]),
 ]
 
 RUNNERS = {
