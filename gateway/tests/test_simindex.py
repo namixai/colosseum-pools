@@ -424,6 +424,11 @@ class ReviewRoute(unittest.TestCase):
         self.assertEqual(got["call"], {"kind": "stop", "to": POOL, "method": "stopPayout", "signature": "stopPayout(...)"})
         for k in ("pool", "id", "trader", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action", "readAt", "chainId"):
             self.assertEqual(got[k], doc[k], k)
+        # A hold while the buyers' funding is read (the review's kind `links-unread`) is said as that, in words of its own.
+        reading = simindex.outward({**doc, "action": "hold", "call": None, "reasons": [
+            {"kind": "links-unread", "text": f"not read: the USDC sent to the trader, or to another buyer ({other})"}]})
+        self.assertEqual(reading["reasons"], [{"kind": "links-unread",
+                                               "text": "the funding of the factory's buyers is still being read"}])
         approve = {**doc, "action": "approve", "call": {"kind": "approve", "to": POOL, "method": "approvePayouts",
                                                          "signature": "approvePayouts(uint256[])", "args": [[9]], "data": "0x01"}}
         self.assertEqual(simindex.outward(approve)["call"]["args"], [[9]], "an approval's own call, the payout's number")

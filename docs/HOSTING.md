@@ -945,7 +945,8 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
   and then for every buyer of the factory (two buyers funded by one wallet are a pair, and the second has no payout
   of its own): 1 000 blocks a chunk, up to 100 buyers in one call, saved after each chunk and gone on with at the
   next pass when the time runs out; a buyer first seen later is read back the same way. Until every buyer is read to
-  the end each payout waiting is held as not read; with no payout waiting none of it is read. Removing
+  the end each payout waiting is held as not read (a reason of its own kind, `links-unread`); with no payout waiting
+  none of it is read. Removing
   `scan.json` makes the next passes read the chain from the deployment's block again;
 - `candles-<network>-YYYY-MM-DD.jsonl`, the venue's minute candles of the platform's assets, fetched from
   Hyperliquid's info API on each pass (no key) and kept: the API gives only the last 5 000 minutes;
@@ -956,7 +957,12 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
 
 Each payout held is the alarm `payout_held` with the date it goes out by itself, said again every 6 hours, and once
 more 24 and 6 hours before that date, while it is held and not stopped; a payout that pays by itself unless stopped
-is `payout_needs_a_stop`, the same way. Each says what can still be done: where the pool would refuse a stop (the
+is `payout_needs_a_stop`, the same way. One hold waits with its alarm: a payout held by nothing but the buyers'
+funding still being read (`links-unread` its only reason; each new buyer starts that reading again for every payout
+waiting, and a person can do nothing about it) is said only once that has lasted over an hour without a break, the
+pass that first saw it kept in `said.json`; another reason beside it or in its place is said at once, and so is any
+hold from 24 hours before the payout goes out by itself. Its document says the hold from the first pass, and no
+approval rests on it. Each says what can still be done: where the pool would refuse a stop (the
 payout was stopped once already and the stop lifted, or its time to stop is over) the alarm says so and names no
 deadline for one, and it points at the draft of a stop of reason 3 only where the review made one. A line of a
 journal longer than 64 KB, nested past the parser's depth, with `Infinity` or `NaN` for a number, or with a number

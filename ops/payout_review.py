@@ -116,6 +116,12 @@ TRIGGER_BACK = 60
 TOUCH_EVERY = 60
 TOUCH_READS = 3000
 ZERO_ADDRESS = "0x" + "00" * 20
+# The kind of the reason a payout is held by while the funding of the factory's buyers is still being read
+# (`LogScan.read_links`). A kind of its own, apart from the other things not read (`unread`): this one ends by itself
+# as the passes read on, each new buyer starts it again for every payout waiting, and a person can do nothing about it
+# meanwhile, so the service's alarm for a hold of this kind alone waits (ops/review_service.py, LINKS_WAIT_S). The
+# hold itself does not wait: the document says it from the first pass, and no approval rests on it.
+LINKS_UNREAD = "links-unread"
 NO_APPROVER = ("the pool names no approver: the payout goes out unapproved from its ceiling on, unless it is stopped; "
                "there is nobody to sign an approval")
 APPROVED = "approved already: it is paid from its due time, unless it is stopped; nothing more to sign"
@@ -2463,9 +2469,6 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     unread = [a for a in (stage, exam) if a and (a in (chain.get("unread") or []) or (read is not None and a not in read))]
     unread_accounts = list(unread)
     links_unread = trader in (chain.get("linksUnread") or [])
-    if links_unread:
-        unread.append("the USDC sent to the trader before their first purchase, or to another buyer of the factory "
-                      "before theirs (read on at each pass)")
     if times_unread:
         unread.append("the factory's delay and ceiling")
     elif disagree:
@@ -2476,6 +2479,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
         unread.append("whether the pool takes approvals")
     if unread:
         found.append(("unread", "not read: " + ", ".join(unread)))
+    if links_unread:
+        found.append((LINKS_UNREAD, "not read: the USDC sent to the trader before their first purchase, or to another "
+                      "buyer of the factory before theirs (read on at each pass)"))
     # The daily limit on payouts: where it leaves this payout. Said beside the verdict, never a reason in it: a payout the
     # limit holds is waiting its turn, not suspicious.
     out["dailyCap"] = payout_cap(chain, pool, {**pay, "id": pid}, approvals, delay, hard)
@@ -2605,7 +2611,8 @@ def card(r: dict, chain: dict) -> dict:
     (a stop reached and not carried out, or a block of a stop's time not checked: the payout is held). /4 (the same
     fields; what "clean" means changed): every block of a stop's time judged by one or two journals of prices and the
     venue's candles, `evidence.stopDoubt.<part>.late` with the reason kind `stop-late`; a /3 document carries no
-    approval. Amounts
+    approval. Under /4, later, the reason kind `links-unread` (LINKS_UNREAD): the buyers' funding still being read, said
+    until then inside the one reason of the kind `unread`; the payout is held as before. Amounts
     are strings of USDC units (6 decimals), since a JSON number loses digits past 2**53; times are seconds on
     the chain's clock."""
     tx = r["tx"] or {}
@@ -2760,7 +2767,7 @@ def summary(r: dict) -> str:
         lines.append(f"  draft of a stop, reason 3, on {', '.join(r['stopDraft']['trades'])}: {r['stopDraft']['note']}")
     tx = r["tx"]
     if r["action"] == "hold":
-        lines.append(f"  do not sign: held ({', '.join(k for k in r['kinds'] if k in ('recount', 'missed-stop', 'stop-late', 'stop-unchecked', 'stop-one-journal', 'unread'))}); "
+        lines.append(f"  do not sign: held ({', '.join(k for k in r['kinds'] if k in ('recount', 'missed-stop', 'stop-late', 'stop-unchecked', 'stop-one-journal', 'unread', LINKS_UNREAD))}); "
                      f"it waits for an analysis, at most until {r['hardAt']}")
     else:
         lines.append(f"  to sign ({tx['kind']}): " + (f"{tx['to']} {tx['call']} {tx['data']}" if tx["data"] else tx.get("note", "")))

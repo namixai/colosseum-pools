@@ -15,7 +15,10 @@ approved already, or one whose approvals were not read) is an alarm at once with
 person can still stop it for reason 3 (`stop_deadline`). Each is said again every 6 hours while it stays so, and once
 more 24 and 6 hours before its deadline; one whose verdict, action or reasons change is said again at once; and an
 alarm is remembered only once the channel took it, so one that did not go out is said at the next pass. A pass that
-fails is an alarm too (once an hour), and so is a unit that failed (`--unit-failed`, its OnFailure=).
+fails is an alarm too (once an hour), and so is a unit that failed (`--unit-failed`, its OnFailure=). One hold waits
+with its alarm: a payout held by nothing but the buyers' funding still being read (each new buyer starts that reading
+again, for every payout waiting) is said only once that has lasted over an hour without a break, or at once from 24
+hours before the payout goes out by itself (`links_only`); its document says the hold from the first pass.
 
 Every block of each stop's time is judged by the journals of prices (--prices, the keeper's; --prices2, the second
 writer's from another machine), the venue's minute candles kept in --out (`ops/venue_candles.py`, fetched each pass),
@@ -67,6 +70,22 @@ PASS_BUDGET_S = 420
 # hangs (30 s an alarm at most) cannot keep the documents from the disk or run the pass past its unit's time; an alarm
 # not said in it is not remembered, and the next pass says it.
 ALARM_BUDGET_S = 60
+# A payout held by nothing but the buyers' funding still being read (`payout_review.LINKS_UNREAD`) asks nothing of a
+# person: the passes read on by themselves, and each new buyer starts that reading again for every payout waiting. Its
+# alarm waits until such a hold has lasted longer than this without a break (the pass that first saw it is kept in
+# `said`, `linksSince`); the hold itself is in the document at once.
+LINKS_WAIT_S = 3_600
+
+
+def links_only(a: dict, now: int) -> bool:
+    """Whether the alarm `a` is one that may wait LINKS_WAIT_S: of a payout held, with no reason but the buyers' funding
+    still being read, and further than the first of BEFORE_S from the moment it goes out by itself and from its last
+    moment for a stop. Nearer than that nothing waits: it is said at once, and again as each of BEFORE_S comes. A
+    payout whose time of going out is not known is taken as near."""
+    if a["action"] != "hold" or not a["kinds"] or set(a["kinds"]) != {pr.LINKS_UNREAD}:
+        return False
+    near = [t for t in (a["paysAt"], a["deadline"]) if t is not None]
+    return a["paysAt"] is not None and min(near) - now > BEFORE_S[0]
 
 
 def alarm_of(r: dict) -> dict | None:
@@ -124,7 +143,8 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
     for all of them (a hung channel keeps no document from the disk); returns the reviews. An alarm is remembered in
     `said` only once the channel took it (`alarm(..., wait=True)` not False): one that did not go out, raised, or was
     not said within the budget, is said again at the next pass, and keeps none of the others from being said. The pass's end is written to status.json beside the documents,
-    for the stops' loop's watch of the review's age (`stop_filler.StopLoop`)."""
+    for the stops' loop's watch of the review's age (`stop_filler.StopLoop`). The alarm of a payout held only while the
+    buyers' funding is read waits LINKS_WAIT_S of that (`links_only`); every other is said in the pass that finds it."""
     chain = pr.read_chain(record, prices, **read)
     out.mkdir(parents=True, exist_ok=True)
     reviews = [pr.review(chain, x["pool"], x["id"]) for x in chain["payouts"] if x["state"] == "Due"]
@@ -141,6 +161,17 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
             said[key] = None
             continue
         mark = [a["action"], a["kinds"], a["reasons"]]
+        since = None
+        if links_only(a, now):
+            prev = said.get(key)
+            since = prev.get("linksSince") if isinstance(prev, dict) else None
+            if isinstance(since, bool) or not isinstance(since, int):
+                since = now  # the first pass that finds it held so: what was said of it before was of another hold
+                said[key] = {"linksSince": since}
+                core.log("review_alarm_waits", payout=key, why="held only while the buyers' funding is read",
+                         then=f"said if it is still so after {utc(since + LINKS_WAIT_S)}")
+            if now - since <= LINKS_WAIT_S:
+                continue
         if due_to_say(said.get(key), mark, now, a["deadline"]):
             if time.monotonic() > until:
                 core.log("review_alarm_not_said", payout=key, why=f"the pass's {ALARM_BUDGET_S} s for alarms are spent",
@@ -153,7 +184,8 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
                 took = False
             if took is not False:
                 said[key] = {"mark": mark, "at": now, "before": [b for b in BEFORE_S
-                                                                 if a["deadline"] is not None and a["deadline"] - now <= b]}
+                                                                 if a["deadline"] is not None and a["deadline"] - now <= b],
+                             **({} if since is None else {"linksSince": since})}
             else:
                 core.log("review_alarm_not_taken", payout=key, then="said again at the next pass")
     core.log("review_done", payouts=len(reviews), block=chain["latest"],

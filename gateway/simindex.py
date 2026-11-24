@@ -445,6 +445,7 @@ REASON_WORDS = {
     "stop-unchecked": "the stops were not checked over all their time",
     "stop-one-journal": "the stops rest on one journal of prices only",
     "unread": "something the review needs was not read",
+    "links-unread": "the funding of the factory's buyers is still being read",
 }
 # The fields of a document the page needs to decide: what it says, when and at which block it was read, what to hold
 # it against (the payout's pool, number, trader, amount and times, the chain), and the call it names without the

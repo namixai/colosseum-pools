@@ -10,9 +10,11 @@ import time
 import unittest
 from unittest import mock
 
+from ops import payout_review as pr
 from ops import review_service as rs
 from ops import stop_filler as sf
 from ops.tests import test_stop_filler as S
+from ops.tests.test_payout_review import POOL, honest_world
 from ops.tests.test_review_service import Held
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -117,6 +119,133 @@ class Repeats(unittest.TestCase):
         self.assertIn("goes out by itself at its ceiling", got[0]["do"])
         self.assertIn("UTC", got[0]["do"])
         self.assertEqual((status["due"], status["held"]), (1, 1))
+
+
+class FundingStillRead(unittest.TestCase):
+    """Each new buyer has the funding of every buyer read again, and until it is read to the end every payout waiting is
+    held as not read (`payout_review.LINKS_UNREAD`). A person can do nothing about that hold: its alarm waits until it
+    has lasted over an hour without a break. The hold itself does not wait, and nothing waits near the ceiling."""
+    KEY = f"{POOL}-0"
+
+    def setUp(self):
+        self.out = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.out, ignore_errors=True)
+        self.ch, self.trader, self.stage = honest_world()
+        self.ch.d["chainId"] = 998
+        self.start = self.ch.d["now"]
+        self.hard = self.ch.d["payouts"][0]["dueAt"] - pr.PAYOUT_DELAY + pr.PAYOUT_HARD  # when it goes out by itself
+        self.said, self.got, self.took = {}, [], True
+
+    def at(self, minutes, links=True) -> dict:
+        """One pass `minutes` after the first, the alarms' memory read from said.json and written back, as the service
+        does; the review of the payout."""
+        self.ch.d["now"] = self.start + minutes * 60
+        self.ch.d["linksUnread"] = [self.trader] if links else []
+        with mock.patch.object(rs.pr, "read_chain", return_value=self.ch.d), mock.patch.object(rs.core, "log"):
+            reviews = rs.one_pass({}, self.out, None, self.said,
+                                  lambda event, **f: (self.got.append((minutes, event, f)), self.took)[1])
+        rs.save_said(self.out / "said.json", self.said)
+        self.said = rs.load_said(self.out / "said.json")
+        return reviews[0]
+
+    def alarms(self) -> list:
+        return [(minutes, event) for minutes, event, _ in self.got]
+
+    def test_the_hold_is_in_the_document_at_once_and_its_alarm_comes_once_it_has_lasted_over_an_hour(self):
+        for minutes in range(0, 70, 10):
+            r = self.at(minutes)
+            self.assertEqual((r["verdict"], r["action"], r["kinds"]), ("suspicious", "hold", [pr.LINKS_UNREAD]), minutes)
+            doc = json.loads((self.out / f"{self.KEY}.json").read_text())
+            self.assertEqual((doc["action"], doc["reasons"][0]["kind"], len(doc["reasons"])), ("hold", "links-unread", 1))
+            pay = self.ch.d["payouts"][0]
+            why = pr.card_problem(doc, POOL, 0, pay, 998, self.ch.d["latest"], self.ch.d["now"])
+            self.assertIn("the review says 'hold'", why, "no approval rests on it, from the first pass")
+        self.assertEqual(self.alarms(), [], "an hour of it: nothing a person could do")
+        self.assertEqual(self.said[self.KEY], {"linksSince": self.start}, "the pass that first saw it, kept in said.json")
+        self.at(70)
+        self.assertEqual(self.alarms(), [(70, "payout_held")])
+        self.assertEqual((self.got[0][2]["kinds"], self.got[0][2]["paysAt"]), ([pr.LINKS_UNREAD], self.hard))
+        self.assertEqual(self.said[self.KEY]["linksSince"], self.start)
+        # Said, it is repeated as any other held payout: every six hours, not at every pass and not after another hour.
+        for minutes in (80, 150, 70 + 6 * 60 - 10):
+            self.at(minutes)
+        self.assertEqual(self.alarms(), [(70, "payout_held")])
+        self.at(70 + 6 * 60)
+        self.assertEqual(self.alarms(), [(70, "payout_held"), (430, "payout_held")])
+
+    def test_the_kind_has_words_of_its_own_on_the_route_the_page_reads(self):
+        from gateway import simindex
+        self.assertIn(pr.LINKS_UNREAD, simindex.REASON_WORDS)
+        self.assertNotEqual(simindex.REASON_WORDS[pr.LINKS_UNREAD], simindex.REASON_WORDS["unread"])
+
+    def test_read_to_the_end_within_the_hour_it_is_no_alarm_and_a_later_hold_starts_its_own_hour(self):
+        for minutes in (0, 10, 20):
+            self.at(minutes)
+        self.assertEqual(self.at(30, links=False)["action"], "approve")
+        self.assertIsNone(self.said[self.KEY])
+        for minutes in range(40, 110, 10):  # the next buyer: held again from minute 40, an hour of it at minute 100
+            self.at(minutes)
+        self.assertEqual(self.alarms(), [], "the first hold's half hour is not counted into the second")
+        self.at(110)
+        self.assertEqual(self.alarms(), [(110, "payout_held")])
+
+    def test_another_reason_beside_it_is_said_at_once(self):
+        self.ch.d["unread"].append(self.stage)  # the account's own events not read: a reason a person looks at
+        r = self.at(0)
+        self.assertEqual((r["action"], r["kinds"]), ("hold", ["unread", pr.LINKS_UNREAD]))
+        self.assertEqual(self.alarms(), [(0, "payout_held")])
+
+    def test_another_reason_that_joins_or_takes_its_place_is_said_at_once_and_the_hour_starts_anew_after_it(self):
+        self.at(0)
+        self.at(10)
+        self.ch.d["unread"].append(self.stage)
+        self.at(20)
+        self.assertEqual(self.alarms(), [(20, "payout_held")], "another reason joined: said in that pass")
+        self.at(30, links=False)
+        self.assertEqual(self.alarms(), [(20, "payout_held"), (30, "payout_held")], "the reasons changed: said again")
+        self.ch.d["unread"].remove(self.stage)
+        for minutes in range(40, 110, 10):  # held by the funding alone again from minute 40
+            self.at(minutes)
+        self.assertEqual(len(self.alarms()), 2, "an hour of it alone, counted from minute 40")
+        self.at(110)
+        self.assertEqual(self.alarms()[2:], [(110, "payout_held")])
+
+    def test_from_24_hours_before_it_goes_out_by_itself_nothing_waits(self):
+        day_before = (self.hard - self.start - 24 * H) // 60  # the minute at which 24 hours are left
+        self.at(day_before)
+        self.assertEqual(self.alarms(), [(day_before, "payout_held")], "first seen with 24 hours left: said at once")
+
+    def test_a_wait_ends_as_24_hours_are_left_and_the_alarm_six_hours_before_is_said_too(self):
+        day_before = (self.hard - self.start - 24 * H) // 60
+        for minutes in (day_before - 30, day_before - 20, day_before - 10):
+            self.at(minutes)
+        self.assertEqual(self.alarms(), [], "half an hour of it, more than 24 hours left")
+        self.at(day_before)
+        self.assertEqual(self.alarms(), [(day_before, "payout_held")], "24 hours left: said, the hour not waited out")
+        self.at(day_before + 10)
+        self.at(day_before + 17 * 60)       # more than six hours after the last: said again
+        self.at(day_before + 18 * 60 - 10)  # fifty minutes later: nothing new
+        self.at(day_before + 18 * 60)       # six hours left: said, an hour after the last
+        self.assertEqual([m - day_before for m, _ in self.alarms()], [0, 17 * 60, 18 * 60])
+
+    def test_a_payout_that_pays_by_itself_is_said_at_once_whatever_is_still_being_read(self):
+        self.ch.d["books"][POOL]["approvals"] = False  # no approvals: it goes out at its due time unless stopped
+        self.ch.d["payouts"][0]["dueAt"] = self.start + 48 * H  # two days away: it is not its nearness that says it
+        r = self.at(0)
+        self.assertEqual((r["verdict"], r["kinds"]), ("suspicious", [pr.LINKS_UNREAD]))
+        self.assertNotEqual(r["action"], "hold")
+        self.assertEqual(self.alarms(), [(0, "payout_needs_a_stop")])
+        self.assertEqual(self.got[0][2]["paysAt"], self.start + 48 * H)
+
+    def test_one_the_channel_did_not_take_after_the_hour_is_said_at_the_next_pass(self):
+        self.at(0)
+        self.took = False
+        self.at(70)
+        self.at(80)
+        self.took = True
+        self.at(90)
+        self.at(100)
+        self.assertEqual(self.alarms(), [(70, "payout_held"), (80, "payout_held"), (90, "payout_held")])
 
 
 class ReviewAge(S.Base):
