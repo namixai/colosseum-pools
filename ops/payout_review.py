@@ -12,6 +12,7 @@ It reads the chain and nothing else, sends nothing and holds no key. For each pa
   pairs            → every fill of the stage and of the exam against every fill of every other account
                      of the factory's pools: the same asset, the other side, close in time and size
                      (`ops/sim_check.py`'s rule, the same parameters), with both fills' transactions;
+                     the stage and the exam it was started from are never matched with each other;
   linked wallets   → senders of USDC to this trader who sent USDC to another buyer of the factory too,
                      and USDC sent between the two. The pools themselves pay every trader and are not
                      counted; a sender that funded more than --wide buyers is named but not counted,
@@ -2081,11 +2082,17 @@ def owners(chain: dict) -> dict[str, str]:
     return out
 
 
+def grew_from(chain: dict) -> dict[str, str]:
+    """Each stage of the factory, to the exam it was started from (the pools' `Funded`): what `sim_check.pairs` takes,
+    so that a stage and its own exam are never matched, here as in the checker."""
+    return {f["stage"]: f["exam"] for f in chain["funded"]}
+
+
 def pairs_of(account: str, chain: dict, who: dict[str, str], p: Params) -> list[dict]:
     mine = [f for f in chain["fills"] if f["account"] == account]
     return [{"mine": a["tx"], "other": b["tx"], "account": b["account"], "trader": who.get(b["account"]),
              "asset": a["asset"], "buy": a["buy"], "sz": [a["sz"], b["sz"]], "t": [a["t"], b["t"]]}
-            for a, b in chk.pairs(mine, chain["fills"], p.window_s, p.tolerance)]
+            for a, b in chk.pairs(mine, chain["fills"], p.window_s, p.tolerance, grew_from(chain))]
 
 
 def linked(trader: str, chain: dict, p: Params) -> list[dict]:
@@ -2310,7 +2317,7 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
         if pairs[part]:
             account = stage if part == "stage" else exam
             mine = [f for f in chain["fills"] if f["account"] == account]
-            found = chk.pairs(mine, chain["fills"], p.window_s, p.tolerance)
+            found = chk.pairs(mine, chain["fills"], p.window_s, p.tolerance, grew_from(chain))
             paired = chk.finding(found, [])[1]
             links = link_txs(trader, who.get(paired), chain, p)
             reason, paired, trades, links = chk.finding(found, links)
@@ -3211,7 +3218,12 @@ SCAN_SCHEMA = "payout-review-scan/2"  # /2: each transfer keeps its log's index,
 
 
 class Behind(RuntimeError):
-    """The pass read and saved part of the chain and ran out of its time: the next one goes on from there."""
+    """The pass read and saved part of the chain and ran out of its time: the next one goes on from there. No failure
+    of the node or of the pass: `read_to` is the last block read and saved, `head` the chain's when the pass began."""
+
+    def __init__(self, read_to: int, head: int):
+        super().__init__(f"read to block {read_to} of {head}: the next pass goes on from there")
+        self.read_to, self.head = read_to, head
 
 
 class LogScan:
@@ -3310,7 +3322,7 @@ class LogScan:
                 unsaved = 0
             if until is not None and time.monotonic() > until and hi < latest:
                 self.save()
-                raise Behind(f"read to block {hi} of {latest}: the next pass goes on from there")
+                raise Behind(hi, latest)
 
     def links_read(self, trader: str) -> bool:
         """Whether the trader's incoming USDC is read from the deployment's block on (`read_links`)."""

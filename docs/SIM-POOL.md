@@ -449,7 +449,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
   waiting it matches every fill of the paid stage with the fills of every other exam and stage of the
   factory: the same asset, opposite sides, at most 10 minutes apart, sizes within 20 %. A match is
   reason 1; with the two traders funded by one address, or one paying the other (USDC transfers since
-  the deployment), reason 2. It stops a payout once, from the factory's checker key, and until when
+  the deployment), reason 2. A stage and the exam it was started from (the pool's `Funded`) are never
+  matched with each other: one trader's one line, the exam flat and over before its stage begins. Another
+  exam of the same trader is matched as any other account. It stops a payout once, from the factory's checker key, and until when
   is the pool's own rule: on a pool with payout approval until the payout is paid, approved or not (an
   unapproved one waits up to 7 days, and a pair found on the fourth still stops it); on a pool from
   before approvals at least 5 minutes before it is due. It never lifts a stop: lifting is the factory's operator's
