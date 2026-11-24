@@ -95,9 +95,13 @@ print(json.dumps(d, indent=2))' | git hash-object -w --stdin)"
 simrec="$(printf '%s\n' '{"label": "sim-net", "network": "mainnet", "chain_id": 999, "status": "complete", "block": 1,
  "SimPoolFactory": "0x00000000000000000000000000000000000000F5", "usdc": "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
  "deployer": "0x00000000000000000000000000000000000000D1", "platform_assets": {"BTC": 0, "ETH": 1, "SOL": 5}}' | git hash-object -w --stdin)"
+# Its Terms of Use with every "[TO CONFIRM: ...]" place filled in, as they will be before the site goes up: a commit
+# whose Terms or page still hold one is not packed for mainnet (the cases further down).
+termsblob="$(git show HEAD:app/data/terms-mainnet.md | sed 's/\[TO CONFIRM: [^]]*\]/Filled in for the test./g' | git hash-object -w --stdin)"
+git cat-file blob "$termsblob" | grep -qF '[TO CONFIRM' && { echo "FAIL mainnet terms: the test's Terms still hold a [TO CONFIRM place"; exit 1; }
 GIT_INDEX_FILE="$TMP/simindex" git read-tree HEAD
 GIT_INDEX_FILE="$TMP/simindex" git update-index --add --cacheinfo "100644,$simblob,deployments/LIVE.json" \
-  --cacheinfo "100644,$simrec,deployments/mainnet-sim-net.json"
+  --cacheinfo "100644,$simrec,deployments/mainnet-sim-net.json" --cacheinfo "100644,$termsblob,app/data/terms-mainnet.md"
 simc="$(git commit-tree "$(GIT_INDEX_FILE="$TMP/simindex" git write-tree)" -p HEAD -m "a mainnet simulation-pool deployment")"
 line4="$(./scripts/pack-site.sh --network mainnet "$simc" "$TMP/sim" 2>&1 | tail -1)" || { echo "FAIL mainnet pack: refused: $line4"; exit 1; }
 want4="files=$n match=$n differ=0 extra=0 build={\"commit\":\"$simc\",\"network\":\"mainnet\"} "
@@ -128,6 +132,29 @@ HOME="$TMP/home" ./scripts/pack-site.sh "$simc" >/dev/null 2>&1 \
 [ "$(cat "$TMP/home/Downloads/pools-app-${simc:0:8}/build.json")" = "{\"commit\":\"$simc\",\"network\":\"testnet\"}" ] \
   || { echo "FAIL the default folder of a testnet pack is not pools-app-<first 8>"; exit 1; }
 echo "ok   names a mainnet pack's default folder for mainnet, and testnet's as before"
+# The same commit with the Terms of Use as committed, ten places still marked "[TO CONFIRM": no mainnet pack, nothing
+# written, and the places named; testnet packs it as before. Then the Terms filled in and a page's text with a place
+# open (its description, from app_config.py): refused the same way.
+GIT_INDEX_FILE="$TMP/openindex" git read-tree "$simc"
+GIT_INDEX_FILE="$TMP/openindex" git update-index --add --cacheinfo "100644,$(git rev-parse HEAD:app/data/terms-mainnet.md),app/data/terms-mainnet.md"
+openc="$(git commit-tree "$(GIT_INDEX_FILE="$TMP/openindex" git write-tree)" -p HEAD -m "the Terms of Use not filled in")"
+if said="$(./scripts/pack-site.sh --network mainnet "$openc" "$TMP/open" 2>&1)" || [ -e "$TMP/open" ] || [ -e "$TMP/open.sha256" ]; then
+  echo "FAIL mainnet terms: packed a mainnet site whose Terms of Use hold [TO CONFIRM places"; exit 1
+fi
+case "$said" in *"[TO CONFIRM places still open in $openc"*) ;; *) echo "FAIL mainnet terms: refused for another reason: $said"; exit 1 ;; esac
+[ "$(printf '%s\n' "$said" | grep -c '^  app/data/terms-mainnet.md:[0-9]*:.*\[TO CONFIRM')" -eq "$(git show HEAD:app/data/terms-mainnet.md | grep -c '\[TO CONFIRM')" ] \
+  || { echo "FAIL mainnet terms: the refusal does not name every open place: $said"; exit 1; }
+./scripts/pack-site.sh "$openc" "$TMP/open-testnet" >/dev/null || { echo "FAIL mainnet terms: the same commit does not pack for testnet"; exit 1; }
+cfgblob="$(git show HEAD:scripts/app_config.py | sed 's/No real money is traded in the exam\./No real money is traded in the exam. [TO CONFIRM: wording]/' | git hash-object -w --stdin)"
+git cat-file blob "$cfgblob" | grep -qF '[TO CONFIRM: wording]' || { echo "FAIL mainnet terms: the test found no description to open a place in"; exit 1; }
+GIT_INDEX_FILE="$TMP/metaindex" git read-tree "$simc"
+GIT_INDEX_FILE="$TMP/metaindex" git update-index --add --cacheinfo "100644,$cfgblob,scripts/app_config.py"
+metac="$(git commit-tree "$(GIT_INDEX_FILE="$TMP/metaindex" git write-tree)" -p HEAD -m "a page text not filled in")"
+if said="$(./scripts/pack-site.sh --network mainnet "$metac" "$TMP/meta" 2>&1)" || [ -e "$TMP/meta" ] || [ -e "$TMP/meta.sha256" ]; then
+  echo "FAIL mainnet terms: packed a mainnet site whose page's texts hold a [TO CONFIRM place"; exit 1
+fi
+case "$said" in *"  index.html:"*"[TO CONFIRM: wording]"*) ;; *) echo "FAIL mainnet terms: refused for another reason: $said"; exit 1 ;; esac
+echo "ok   refuses mainnet while its Terms of Use or its page's texts hold [TO CONFIRM places, writes nothing, and still packs it for testnet"
 # A commit whose page no longer reads as the script expects is not packed for mainnet: its words would be a guess.
 pageblob="$(git show HEAD:app/index.html | sed 's/and mock USDC\./with mock USDC./' | git hash-object -w --stdin)"
 GIT_INDEX_FILE="$TMP/simindex" git update-index --add --cacheinfo "100644,$pageblob,app/index.html"

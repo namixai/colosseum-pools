@@ -1426,7 +1426,8 @@ on chain 999, with mainnet's own page. Nothing is written into `app/` for it; th
    written for mainnet by that commit's own `scripts/app_config.py`, in place of testnet's; `build.json` is
    `{"commit": "<the full hash>", "network": "mainnet"}`, and the list goes beside the folder as for testnet. The
    last line must say `differ=0 extra=0`. The packer stops with the reason, and writes nothing, when the commit has
-   nothing on mainnet for a site to read.
+   nothing on mainnet for a site to read, or while its Terms of Use (`app/data/terms-mainnet.md`) or the page's texts
+   still hold a place marked `[TO CONFIRM`, each of which it lists.
 3. Read the folder's two written files before uploading. `config.js` names chain 999,
    `https://rpc.hyperliquid.xyz/evm`, the factory under `sim` and no other deployment. `index.html` says "Mainnet.
    Real USDC. Unaudited." where testnet's page has its notice and its entry question, and has "Pools" alone in its
@@ -1440,16 +1441,16 @@ on chain 999, with mainnet's own page. Nothing is written into `app/` for it; th
    that serves the mainnet site. A mainnet pack uploaded over the testnet site replaces it, and the other way
    round: check the folder's `build.json` before dragging it.
 5. Open `/` (the factory's pools, or "Not deployed yet" before the factory is on chain), `#/sim/<a pool>`,
-   `#/manage/<a pool>`, `#/manage/<a pool>/operator` and `#/exam/<an exam>` on the site. `#/new`, `#/economics`
-   and an address that is not one of the factory's pools answer "Not found".
+   `#/manage/<a pool>`, `#/manage/<a pool>/operator`, `#/exam/<an exam>` and `#/terms` (the Terms of Use) on the
+   site. `#/new`, `#/economics` and an address that is not one of the factory's pools answer "Not found".
 6. Check the site against the pack:
    `python3 scripts/verify-live.py --network mainnet <out-dir>.sha256 https://<the mainnet site>`. Without
    `--network mainnet` the check is of the testnet site and refuses a mainnet pack; with it, it refuses a testnet
    pack. So a pack that went up to the wrong site is not confirmed there, though every file matches its list.
 
-The page of a mainnet site names no picture for a shared link and has no terms page: the picture in `app/brand/`
-has testnet's plaque drawn into it, and the terms are the testnet demo's (docs/DEPLOYMENTS.md, "The app on either
-network").
+The page of a mainnet site names its own picture for a shared link, `app/brand/og-mainnet-1200x630.png`, and links
+its Terms of Use in the footer; testnet's picture and the demo's terms are not on it (docs/DEPLOYMENTS.md, "The app
+on either network").
 
 ## Checking
 

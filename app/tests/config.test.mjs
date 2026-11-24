@@ -415,24 +415,30 @@ test("mainnet's index.html says mainnet in every place the committed one says te
     assert.equal(written.status, 0, written.stderr);
     const page = written.stdout;
     assert.doesNotMatch(page, /testnet|mock|hackathon|demo|no value/i);
-    assert.match(page, /<title>Pools on Hyperliquid<\/title>/);
-    assert.match(page, /<meta name="description" content="Pools on Hyperliquid\.">/);
-    assert.match(page, /<meta property="og:title" content="Pools on Hyperliquid">/);
-    assert.match(page, /<meta property="og:description" content="Pools on Hyperliquid\.">/);
+    // The title, the description and the picture's words as Marketing wrote them (24 November 2026).
+    const title = "Upools: trading exams on Hyperliquid";
+    const description = "Trading exams on BTC, ETH and SOL on Hyperliquid mainnet. The price is paid in USDC. No real money is traded in the exam.";
+    assert.ok(page.includes(`<title>${title}</title>`));
+    assert.ok(page.includes(`<meta name="description" content="${description}">`));
+    assert.ok(page.includes(`<meta property="og:title" content="${title}">`));
+    assert.ok(page.includes(`<meta property="og:description" content="${description}">`));
     // The plaque stands where testnet's notice and the entry question stood, and the question is still asked.
     assert.match(page, /<div class="notice">Mainnet\. Real USDC\. Unaudited\.<\/div>/);
     assert.match(page, /<dialog id="gate">\s*<h2>Before you continue<\/h2>\s*<p>Mainnet\. Real USDC\. Unaudited\.<\/p>\s*<label class="check"><input type="checkbox" id="gate-agree"> I understand\.<\/label>/);
     assert.equal(page.match(/Mainnet\. Real USDC\. Unaudited\./g).length, 2);
-    // The picture of a shared link has testnet's plaque drawn into it: mainnet's page names no picture.
-    assert.doesNotMatch(page, /og:image|twitter:card/);
-    // The menu is the pools alone; no page of a PoolFactory's pools, no sentence about their keys, no terms of their demo.
-    assert.deepEqual([...page.matchAll(/<a href="(#[^"]*)"/g)].map((m) => m[1]), ["#/"]);
-    assert.doesNotMatch(page, /holds a key|pool gateway|#\/terms|#\/new|#\/shared|#\/economics|#\/verify|#\/evidence/);
+    // The picture of a shared link is mainnet's own: testnet's has testnet's plaque drawn into it.
+    assert.match(page, /  <meta property="og:image" content="https:\/\/pools\.usenami\.io\/brand\/og-mainnet-1200x630\.png">\n  <meta property="og:image:width" content="1200">\n  <meta property="og:image:height" content="630">\n  <meta property="og:image:alt" content="Upools on Hyperliquid mainnet\. BTC, ETH, SOL\. USDC\.">\n  <meta name="twitter:card" content="summary_large_image">\n/);
+    assert.doesNotMatch(page, /og-image-1200x630/);
+    // The menu is the pools alone; no page of a PoolFactory's pools, no sentence about their keys, no terms of their
+    // demo: the footer links the site's own Terms of Use instead, where the demo's terms stood.
+    assert.deepEqual([...page.matchAll(/<a href="(#[^"]*)"/g)].map((m) => m[1]), ["#/", "#/terms"]);
+    assert.match(page, /<a id="gateway-commit" hidden target="_blank" rel="noopener"><\/a>\n    <a href="#\/terms">Terms of Use<\/a>\n  <\/footer>/);
+    assert.doesNotMatch(page, /holds a key|pool gateway|>Terms<|#\/new|#\/shared|#\/economics|#\/verify|#\/evidence/);
     // Everything else is the committed page: the same lines in the same order, less the ones that went.
     const kept = new Set(page.split("\n"));
     const changed = PAGE.split("\n").filter((line) => !kept.has(line));
-    assert.equal(changed.length, 19, changed.join("\n"));
-    assert.ok(changed.every((line) => /testnet|og:image|twitter:card|href="#\/(new|shared|economics|verify|evidence|terms)"|holds a key/.test(line)), changed.join("\n"));
+    assert.equal(changed.length, 16, changed.join("\n"));
+    assert.ok(changed.every((line) => /testnet|og:image|href="#\/(new|shared|economics|verify|evidence|terms)"|holds a key/.test(line)), changed.join("\n"));
     for (const id of ["wallet", "rpc-wait", "view", "build", "gateway-commit", "gate", "gate-agree", "gate-ok"]) {
       assert.ok(page.includes(`id="${id}"`), `the page lost #${id}, which app.js reads`);
     }

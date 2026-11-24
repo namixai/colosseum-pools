@@ -26,6 +26,9 @@
 # it always has: the commit's own config.js and index.html, and build.json names testnet. A mainnet pack's
 # default folder says so, ~/Downloads/pools-app-mainnet-<first 8 of the commit>: the two packs of one commit go up to
 # different sites and must not be taken for each other.
+# A mainnet pack also carries the site's Terms of Use, app/data/terms-mainnet.md, and is refused, writing nothing, while
+# that text or the page's own texts (its title, description and the picture's words, from app_config.py) still hold a
+# place marked "[TO CONFIRM": those places are filled in by hand, and the site does not go up with any of them open.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
@@ -56,6 +59,15 @@ if [ "$NETWORK" != testnet ]; then
   python3 "$WORK/app_config.py" --network "$NETWORK" --index --commit "$SHA" --root "$REPO" --out "$WORK/index.html" \
     || { echo "no $NETWORK index.html in $SHA: nothing packed"; exit 1; }
   CONFIG="$WORK/config.js"; INDEX="$WORK/index.html"
+  TERMS=app/data/terms-mainnet.md
+  git show "$SHA:$TERMS" > "$WORK/terms.md" 2>/dev/null \
+    || { echo "no $TERMS in $SHA: a $NETWORK site has its Terms of Use; nothing packed"; exit 1; }
+  if grep -qF '[TO CONFIRM' "$WORK/terms.md" "$INDEX"; then
+    echo "[TO CONFIRM places still open in $SHA, in $TERMS or the page's texts: nothing packed for $NETWORK"
+    grep -nF '[TO CONFIRM' "$WORK/terms.md" | sed "s|^|  $TERMS:|" || true
+    grep -nF '[TO CONFIRM' "$INDEX" | sed 's|^|  index.html:|' || true
+    exit 1
+  fi
 fi
 mkdir -p "$OUT"
 n=0

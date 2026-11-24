@@ -88,7 +88,9 @@ test("the first page lists the factory's pools, a link each; with none it says s
 
 test("a site of simulation pools routes its first page to the list and has none of the other pools' pages", () => {
   const app = read("../app.js");
-  assert.match(app, /const routes = simSite\(\) \? \[\[\/\^#\?\\\/\?\$\/, \(m, page\) => simListView\(page\)\], \.\.\.simRoutes\] : \[\.\.\.poolRoutes, \.\.\.simRoutes\];/);
+  assert.match(app, /const routes = simSite\(\) \? \[\[\/\^#\?\\\/\?\$\/, \(m, page\) => simListView\(page\)\], \.\.\.siteRoutes, \.\.\.simRoutes\] : \[\.\.\.poolRoutes, \.\.\.simRoutes\];/);
+  // Beside them a mainnet site has its own Terms of Use, and no other site has a page there but the pools' demo terms.
+  assert.match(app, /const siteRoutes = isMainnet\(\) \? \[\[\/\^#\\\/terms\$\/, \(m, page\) => mainnetTermsView\(page\)\]\] : \[\];/);
   const [pools, sims] = [app.slice(app.indexOf("const poolRoutes = ["), app.indexOf("const simRoutes = [")),
     app.slice(app.indexOf("const simRoutes = ["), app.indexOf("const routes = simSite()"))];
   // Every page of a PoolFactory's pools, and the terms of their demo, is in the one list a site of simulation pools leaves out.

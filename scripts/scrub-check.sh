@@ -40,12 +40,17 @@ fi
 SELF="scripts/$(basename "$0")"
 hits=0
 
-scan() { # label  extended-regex  [regex of lines to ignore]
-  label="$1"; re="$2"; drop="${3:-}"
+scan() { # label  extended-regex  [regex of lines to ignore]  [one address that may stand, as a regex]
+  label="$1"; re="$2"; drop="${3:-}"; known="${4:-}"
   out=$(xargs -0 grep -InE "$re" <"$LIST" 2>/dev/null || true)
   out=$(printf '%s\n' "$out" | grep -v "^\.\{0,2\}/\{0,1\}${SELF}:" || true)
   if [ -n "$drop" ]; then
     out=$(printf '%s\n' "$out" | grep -vE "$drop" || true)
+  fi
+  if [ -n "$known" ]; then
+    # The known address is cut out of each line, whole (nothing of an address before it, nothing but a full stop
+    # ending a sentence after it), and the line is looked at again: any other address on it is still reported.
+    out=$(printf '%s\n' "$out" | sed -E "s/(^|[^A-Za-z0-9._%+-])${known}(\.?([^A-Za-z0-9.-]|$))/\1\2/g" | grep -E "$re" || true)
   fi
   out=$(printf '%s' "$out" | sed '/^$/d')
   if [ -n "$out" ]; then
@@ -79,8 +84,11 @@ scan "slack/github/telegram token" \
 scan "private key literal" '[Pp][Rr][Ii][Vv][Aa][Tt][Ee].{0,60}(0x)?[0-9a-fA-F]{64}'
 
 # Any e-mail address. No allowlist by design: if one belongs here, add it deliberately and
-# say why, rather than teaching the gate to stay quiet.
-scan "e-mail address" '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+# say why, rather than teaching the gate to stay quiet. One does, and only it: the business
+# contact the mainnet site's Terms of Use publish for objections and questions
+# (app/data/terms-mainnet.md, Marketing's text of 24 November 2026). Any other address, of
+# that domain too, and any other address on the same line, is still reported.
+scan "e-mail address" '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' '' 'business@usenami\.io'
 
 echo
 if [ "$hits" -ne 0 ]; then

@@ -66,10 +66,17 @@ globalThis.location = { hash: "#/" };
 globalThis.history = { state: null, replaceState() {} };
 globalThis.localStorage = { getItem: () => "ok", setItem() {} };  // the entry question is answered
 globalThis.alert = () => {};
-// The node says which chain it is (the exam's screen asks it directly); nothing else on the network answers.
-globalThis.fetch = async (url, init) => (/eth_chainId/.test(init?.body ?? "")
-  ? { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result: "0x3e7" }) }
-  : { ok: false, status: 500, json: async () => null });
+// The node says which chain it is (the exam's screen asks it directly), and the site serves its Terms of Use from its
+// own folder unless a test takes them away (`terms.down`); nothing else on the network answers.
+const terms = { asked: [], down: false };
+globalThis.fetch = async (url, init) => {
+  if (/eth_chainId/.test(init?.body ?? "")) return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result: "0x3e7" }) };
+  if (String(url) === "./data/terms-mainnet.md") {
+    terms.asked.push(String(url));
+    if (!terms.down) return { ok: true, status: 200, text: async () => readFileSync(join(built.site, "data/terms-mainnet.md"), "utf8") };
+  }
+  return { ok: false, status: 500, json: async () => null };
+};
 // A wait of the reader (a retry, a poll) is not sat out: only the few milliseconds reads are gathered in.
 const timeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms, ...args) => (ms > 100 ? 0 : timeout(fn, ms, ...args));
@@ -124,10 +131,31 @@ test("a pool the list names opens, in whichever case its address is written, and
 test("an address with a space, a character more, or in a route of the other pools is Not found", async () => {
   for (const hash of [`#/sim/${LISTED}%20`, `#/sim/${LISTED} `, `#/sim/ ${LISTED}`, `#/sim/${LISTED}0`, `#/sim/${LISTED}/trade/`,
     `#/sim/${LISTED}\n`, `#/sim/${LISTED}//partner`, `#/manage/${LISTED}/exams`, `#/pool/${LISTED}`, `#/challenge/${LISTED}`,
-    `#/shared/${LISTED}`, "#/shared", "#/new", "#/terms", "#/verify", "#/economics", "#/evidence"]) {
+    `#/shared/${LISTED}`, "#/shared", "#/new", "#/verify", "#/economics", "#/evidence"]) {
     const page = await open(hash);
     assert.ok(refused(page), `${JSON.stringify(hash)}: drew ${page.html.slice(0, 60)}, built ${page.built}`);
     assert.deepEqual(page.reads, [], `${JSON.stringify(hash)}: no page of the site, so nothing is read`);
+  }
+});
+
+test("the terms page of a mainnet site is its own Terms of Use, read from its folder and drawn whole; a text that did not arrive is a failure", async () => {
+  terms.asked = [];
+  const page = await open("#/terms");
+  assert.deepEqual(terms.asked, ["./data/terms-mainnet.md"]);
+  assert.match(page.html, /^<section class="card narrow terms"><h2>Terms of Use<\/h2>/);
+  assert.equal([...page.html.matchAll(/<h3>/g)].length, 15, "the fifteen sections");
+  assert.match(page.html, /<h3>15\. Contact<\/h3>\n<p>business@usenami\.io<\/p>\n<p>https:\/\/pools\.usenami\.io\/<\/p><\/section>$/);
+  assert.equal([...page.html.matchAll(/\[TO CONFIRM/g)].length, 10, "the ten places to fill in are shown as they are");
+  assert.deepEqual(page.reads, [], "nothing of the chain is read for the terms");
+  assert.equal(page.panel, null);
+  terms.down = true;
+  try {
+    const down = await open("#/terms");
+    assert.match(down.html, /<h2>Could not load this page<\/h2>/);
+    assert.match(down.html, /the Terms of Use could not be read \(500\)/);
+    assert.match(down.html, /<button id="try-again">Try again<\/button>/);
+  } finally {
+    terms.down = false;
   }
 });
 

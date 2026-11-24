@@ -21,6 +21,7 @@ import { simTradeView, simExamsView, simPayoutsView } from "./views/simtrader.js
 import { panelOf } from "./lib/simpanel.js";
 import { examView } from "./views/exam.js";
 import { simListView, sitePool } from "./views/simsite.js";
+import { mainnetTermsView } from "./views/terms.js";
 import { simSite, NOT_FOUND } from "./lib/simsite.js";
 import { isMainnet } from "./lib/network.js";
 
@@ -68,9 +69,13 @@ const simRoutes = [
   [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?(?:\?(.*))?$/, (m, page) => examView(m[1], page, m[2])],
 ];
 
+// A mainnet site has its Terms of Use (app/data/terms-mainnet.md, views/terms.js); the terms of the pools' demo are no
+// page of it.
+const siteRoutes = isMainnet() ? [[/^#\/terms$/, (m, page) => mainnetTermsView(page)]] : [];
+
 // A site of simulation pools (app/config.js, `sim`) opens on the list of its factory's pools and has none of the other
 // pools' pages: their addresses draw "Not found", as any address the site has no page for.
-const routes = simSite() ? [[/^#?\/?$/, (m, page) => simListView(page)], ...simRoutes] : [...poolRoutes, ...simRoutes];
+const routes = simSite() ? [[/^#?\/?$/, (m, page) => simListView(page)], ...siteRoutes, ...simRoutes] : [...poolRoutes, ...simRoutes];
 // The pool a page of the panels names. On a site of simulation pools the page opens only for a pool of the site's
 // factory (views/simsite.js); on any other site, for any address, as before.
 const PANEL_POOL = /^#\/(?:sim|manage)\/(0x[0-9a-fA-F]{40})/;

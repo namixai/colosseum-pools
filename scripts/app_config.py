@@ -51,26 +51,36 @@ NATIVE = '{ name: "HYPE", symbol: "HYPE", decimals: 18 }'  # HYPE, 18 decimals, 
 NETWORK_NAME = {"testnet": "Hyperliquid testnet", "mainnet": "Hyperliquid"}
 INDEX = "app/index.html"
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
+# Mainnet's title, description and picture of a shared link, as Marketing wrote them (24 November 2026). The picture is
+# mainnet's own, app/brand/og-mainnet-1200x630.png: testnet's has testnet's plaque drawn into it.
+MAINNET_TITLE = "Upools: trading exams on Hyperliquid"
+MAINNET_DESCRIPTION = ("Trading exams on BTC, ETH and SOL on Hyperliquid mainnet. The price is paid in USDC. "
+                       "No real money is traded in the exam.")
+MAINNET_OG_IMAGE = "https://pools.usenami.io/brand/og-mainnet-1200x630.png"
+MAINNET_OG_ALT = "Upools on Hyperliquid mainnet. BTC, ETH, SOL. USDC."
 # index.html's lines that name the network, and what a site built for mainnet says in their place: (the committed
-# text, mainnet's, how many times the committed file has it). The plaque is the panels' own (app/lib/examscreen.js,
-# SCREEN_TEXT.mainnetPlaque; app/tests/config.test.mjs holds the two equal). The picture of a shared link has testnet's
-# plaque drawn into it, so a mainnet page names no picture until there is one of its own.
+# text, mainnet's, how many times the committed file has it). They are replaced after a site of simulation pools has
+# lost the other pools' lines (INDEX_SIM_ONLY), which a mainnet site always has: its description is then "Pools on
+# Hyperliquid testnet.", and its footer has no link to the terms of the pools' demo but one to its own Terms of Use
+# (app/data/terms-mainnet.md). The plaque is the panels' own (app/lib/examscreen.js, SCREEN_TEXT.mainnetPlaque;
+# app/tests/config.test.mjs holds the two equal).
 INDEX_WORDS = {
     "mainnet": [
-        ("<title>Pools on Hyperliquid · testnet</title>", "<title>Pools on Hyperliquid</title>", 1),
+        ("<title>Pools on Hyperliquid · testnet</title>", f"<title>{MAINNET_TITLE}</title>", 1),
         ('<meta property="og:title" content="Pools on Hyperliquid · testnet">',
-         '<meta property="og:title" content="Pools on Hyperliquid">', 1),
-        (' Hyperliquid testnet.">', ' Hyperliquid.">', 2),
-        ('  <meta property="og:image" content="https://pools.usenami.io/brand/og-image-1200x630.png">\n'
-         '  <meta property="og:image:width" content="1200">\n'
-         '  <meta property="og:image:height" content="630">\n'
-         '  <meta property="og:image:alt" content="Upools, pools.usenami.io">\n'
-         '  <meta name="twitter:card" content="summary_large_image">\n', "", 1),
+         f'<meta property="og:title" content="{MAINNET_TITLE}">', 1),
+        ('content="Pools on Hyperliquid testnet.">', f'content="{MAINNET_DESCRIPTION}">', 2),
+        ('  <meta property="og:image" content="https://pools.usenami.io/brand/og-image-1200x630.png">\n',
+         f'  <meta property="og:image" content="{MAINNET_OG_IMAGE}">\n', 1),
+        ('  <meta property="og:image:alt" content="Upools, pools.usenami.io">\n',
+         f'  <meta property="og:image:alt" content="{MAINNET_OG_ALT}">\n', 1),
         ('<div class="notice">Hyperliquid <strong>testnet</strong> and mock USDC.</div>',
          '<div class="notice">Mainnet. Real USDC. Unaudited.</div>', 1),
         ("<p>This is a hackathon demo on Hyperliquid <strong>testnet</strong>, with mock funds that have no value.</p>",
          "<p>Mainnet. Real USDC. Unaudited.</p>", 1),
         ("I understand this is a testnet demo.", "I understand.", 1),
+        ('    <a id="gateway-commit" hidden target="_blank" rel="noopener"></a>\n',
+         '    <a id="gateway-commit" hidden target="_blank" rel="noopener"></a>\n    <a href="#/terms">Terms of Use</a>\n', 1),
     ],
 }
 # The same file's lines that belong to the pools of a PoolFactory deployment: their landing line, their pages in the
@@ -396,9 +406,10 @@ def index(network, entries: list[dict], files: Files) -> str:
     to follow it by hand, not by a guess."""
     network_name(network)
     text = files.text(INDEX)
-    words = list(INDEX_WORDS.get(network.name, []))
+    words = []
     if sim_entry(network, entries, files) is not None:
         words += INDEX_SIM_ONLY
+    words += INDEX_WORDS.get(network.name, [])
     for old, new, times in words:
         found = text.count(old)
         if found != times:

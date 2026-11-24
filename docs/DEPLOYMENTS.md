@@ -205,12 +205,14 @@ faucet, on either network, so the settings carry neither.
 
 `app/index.html` is static, so its words cannot follow the settings as the page loads; the script writes them
 instead (`--index`). The committed page is testnet's. Mainnet's is that page with each line that names the network
-replaced (`INDEX_WORDS` in the script): the title and the description, testnet's notice and the entry question by
-mainnet's plaque, and no picture for a shared link, since `brand/og-image-1200x630.png` has testnet's plaque drawn
-into it. A site of simulation pools also loses the lines of the other pools (`INDEX_SIM_ONLY`): their landing line,
-their pages in the menu, the footer's sentence about their keys and the link to the terms of their demo. Each line
-must be in the committed page exactly as many times as the script expects; after an edit that moves one, the
-script stops and names it, and mainnet's words are moved by hand.
+replaced (`INDEX_WORDS` in the script): the title and the description by Marketing's (24 November 2026), testnet's
+notice and the entry question by mainnet's plaque, and the picture of a shared link by mainnet's own,
+`brand/og-mainnet-1200x630.png` with its words, since `brand/og-image-1200x630.png` has testnet's plaque drawn into
+it. A site of simulation pools also loses the lines of the other pools (`INDEX_SIM_ONLY`, replaced first): their
+landing line, their pages in the menu, the footer's sentence about their keys and the link to the terms of their
+demo, where a mainnet site links its own Terms of Use (`#/terms`, the text `app/data/terms-mainnet.md` drawn by
+`app/views/terms.js`). Each line must be in the committed page exactly as many times as the script expects; after an
+edit that moves one, the script stops and names it, and mainnet's words are moved by hand.
 
 `scripts/pack-site.sh --network mainnet <commit>` packs the same commit for mainnet. Its `config.js` and its
 `index.html` are the script's mainnet output, written from that commit's files, and its `build.json` carries
@@ -219,7 +221,10 @@ checks the site against the pack's own list as before, and holds the network the
 pack names one, testnet's too) to the site it is asked about (`--network mainnet` for the mainnet site). The settings and the page go into the pack instead of being
 fetched or rewritten when the page loads, so a mainnet site cannot fall back to testnet's values or words because
 a file failed to arrive. While this file has no mainnet entry a site can be written from, neither a `live` one nor
-a `staged` simulation-pool one, which is the case today, the script stops and nothing is packed.
+a `staged` simulation-pool one, which is the case today, the script stops and nothing is packed. The packer also
+refuses mainnet, writing nothing and listing each place, while `app/data/terms-mainnet.md` or the page's own texts
+still hold a place marked `[TO CONFIRM` (the effective date, the operator's name and address, the law and the rest
+that only the owner or counsel fill in), or when the commit has no Terms of Use at all.
 
 Two of the app's values are not in this file. `liveRunPool` is a pool opened on testnet's live deployment after it
 was deployed; the script keeps it by network and label. `assetLeverage` is set when the record names a
@@ -230,5 +235,4 @@ words: the about text in `app/app.js`, "Testnet. Mock USDC. Unaudited." in `app/
 verify, economics and evidence pages, and the safety and evidence data in `app/data/`. They are no routes of a
 site of simulation pools (`app/app.js`, `poolRoutes`; their addresses answer "Not found"), and the script writes
 mainnet no settings from a `live` entry: showing a `PoolFactory`'s pools on mainnet would take mainnet wording for
-each of those pages and a decision about what the site lists, neither of which is here. And three things the script
-does not write: a picture for a shared link, terms for a mainnet site, and a description of it beyond its title.
+each of those pages and a decision about what the site lists, neither of which is here.

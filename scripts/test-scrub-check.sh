@@ -55,9 +55,16 @@ expect_hit "key file reference"  "ssh -i ~/.ssh/box-key${dot}pem"
 expect_hit "internal tree path"  "see _hu""b/INBOX for details"
 expect_hit "private key literal" "PRIVATE_KEY=0x${hex64}"
 expect_hit "e-mail address"      "contact someone${at}example${dot}org"
+# The one address the gate lets stand (the Terms of Use's contact), and only it, whole.
+expect_hit "e-mail address"      "sales${at}usenami${dot}io"
+expect_hit "e-mail address"      "write to business${at}usenami${dot}io or someone${at}example${dot}org"
+expect_hit "e-mail address"      "xbusiness${at}usenami${dot}io"
+expect_hit "e-mail address"      "business${at}usenami${dot}io${dot}example${dot}org"
 
 expect_clean "enclave module id" "module i-""0abc1234def567890-enc0123456789abcdef"
 expect_clean "a version number"  "solc 0${dot}8${dot}28 and forge 1${dot}7${dot}1"
+expect_clean "the Terms' contact" "To object, write to business${at}usenami${dot}io. [TO CONFIRM: who decides]"
+expect_clean "the Terms' contact, alone on its line" "business${at}usenami${dot}io"
 
 if [ "$fail" -ne 0 ]; then
   echo "test-scrub-check: FAILED"

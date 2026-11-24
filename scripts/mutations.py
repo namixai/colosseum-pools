@@ -19039,7 +19039,7 @@ MUTATIONS = [
      ["a page of a pool is drawn only for a pool of the site's factory; on a site that names none, for any address",
       "a pool the factory's list does not name: every page of the panels is Not found, and nothing of it is read"]),
     ("J237", "app/app.js",
-     "const routes = simSite() ? [[/^#?\\/?$/, (m, page) => simListView(page)], ...simRoutes] : [...poolRoutes, ...simRoutes];",
+     "const routes = simSite() ? [[/^#?\\/?$/, (m, page) => simListView(page)], ...siteRoutes, ...simRoutes] : [...poolRoutes, ...simRoutes];",
      "const routes = [...poolRoutes, ...simRoutes];",
      ["a site of simulation pools routes its first page to the list and has none of the other pools' pages"]),
     ("J238", "app/app.js",
@@ -19178,6 +19178,24 @@ MUTATIONS = [
      '        if key not in entry:',
      '        if False:',
      ["the entry a site of simulation pools is written from is held to the list's shape: its factory an address, its chain the network's, its gateway named"]),
+    # A mainnet site's Terms of Use (Marketing, 24 November 2026): its page, its link, its picture, and no pack while a
+    # place of the text or the page's texts is still marked "[TO CONFIRM".
+    ("J259", "app/app.js",
+     "const siteRoutes = isMainnet() ? [[/^#\\/terms$/, (m, page) => mainnetTermsView(page)]] : [];",
+     "const siteRoutes = [];",
+     ["the terms page of a mainnet site is its own Terms of Use, read from its folder and drawn whole; a text that did not arrive is a failure"]),
+    ("J260", "app/lib/terms.js",
+     "const inline = (text) => esc(text).replace(/\\*\\*(.+?)\\*\\*/g, \"<strong>$1</strong>\");",
+     "const inline = (text) => text.replace(/\\*\\*(.+?)\\*\\*/g, \"<strong>$1</strong>\");",
+     ["the text is never taken as markup: anything but its own forms is escaped"]),
+    ("NC26", "scripts/app_config.py",
+     "         f'  <meta property=\"og:image\" content=\"{MAINNET_OG_IMAGE}\">\\n', 1),",
+     "         '  <meta property=\"og:image\" content=\"https://pools.usenami.io/brand/og-image-1200x630.png\">\\n', 1),",
+     ["mainnet's index.html says mainnet in every place the committed one says testnet, and has none of the other pools' lines"]),
+    ("NP6", "scripts/pack-site.sh",
+     "  if grep -qF '[TO CONFIRM' \"$WORK/terms.md\" \"$INDEX\"; then",
+     "  if false; then",
+     ["mainnet terms"]),
 ]
 
 RUNNERS = {
