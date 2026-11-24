@@ -48,6 +48,24 @@ class EveryBuyersFunding(ScanWorld):
         self.assertTrue(s.links_read(b))
         self.assertIn((funder, b, 4_500), {(t["from"], t["to"], t["block"]) for t in s.d["transfers"]})
 
+    def test_how_far_the_reading_is_is_said_in_two_numbers_the_buyers_not_read_and_the_blocks_left(self):
+        """For status.json (ops/review_service.py): a person looking at payouts held while the funding is read sees how
+        much of it is left, and that it moves. Numbers only: no buyer is named."""
+        a, b = T.addr(0x101), T.addr(0x102)
+        self.buyer(a, 2_000, T.addr(0x201))  # first seen in the scan's step from block 1 501: blocks 1 to 1 500 to read
+        self.buyer(b, 5_000, T.addr(0x202))  # from block 4 501: blocks 1 to 4 500
+        s = self.scan(5_010, part=5_010)
+        self.assertEqual(s.links_left(), {"buyers": 2, "blocks": 1_500 + 4_500})
+        clock = iter([0.0, 0.0, 99.0, 99.0])  # two chunks, and the time is out: a's blocks read, b's to block 1 500
+        with mock.patch.object(pr, "logs", self.fake()), mock.patch.object(pr.time, "monotonic", lambda: next(clock)):
+            self.assertEqual(s.read_links([a], self.USDC, until=1.0), [a])
+        self.assertEqual(s.links_left(), {"buyers": 1, "blocks": 3_000})
+        self.assertNotIn("0x", json.dumps(s.links_left()))
+        self.assertEqual(self.links(s, [a]), [])
+        self.assertEqual(s.links_left(), {"buyers": 0, "blocks": 0})
+        del s.d["links"][b]  # a file from before the spans were kept: the buyer is counted, its blocks once it has a span
+        self.assertEqual(s.links_left(), {"buyers": 1, "blocks": 0})
+
     def test_a_buyer_first_seen_after_the_others_were_read_is_read_from_the_deployment_too(self):
         a, c, funder = T.addr(0x101), T.addr(0x103), T.addr(0xF0)
         self.buyer(a, 2_000, T.addr(0x201))

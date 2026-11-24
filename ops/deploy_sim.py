@@ -1059,15 +1059,21 @@ def approver_cmd(args) -> int:
     return send_or_say(args, pool_, "setApprover(address)", ["address"], [who])
 
 
+def approval_state(pool_: str, ids: list[int]) -> tuple[str, dict]:
+    """The pool's approver and its payout(id) for each of `ids` (absent: no such payout), as the pool answers now: what
+    `approve_check` judges, read before the approval is offered and again once its send is confirmed."""
+    count = int(c.call_view(pool_, "payoutCount()", [], [], ["uint256"])[0])
+    payouts = {i: c.call_view(pool_, "payout(uint256)", ["uint256"], [i], [PAYOUT_T])[0] for i in ids if i < count}
+    return to_checksum_address(c.call_view(pool_, "approver()", [], [], ["address"])[0]), payouts
+
+
 def approve(args) -> int:
     pool_, sender = to_checksum_address(args.pool), signer_of(args)
     ids = ids_of(args.ids)
-    count = int(c.call_view(pool_, "payoutCount()", [], [], ["uint256"])[0])
-    payouts = {i: c.call_view(pool_, "payout(uint256)", ["uint256"], [i], [PAYOUT_T])[0] for i in ids if i < count}
+    approver, payouts = approval_state(pool_, ids)
     factory = c.call_view(pool_, "factory()", [], [], ["address"])[0]
     hard = int(c.call_view(factory, "PAYOUT_HARD()", [], [], ["uint32"])[0]) - \
         int(c.call_view(factory, "PAYOUT_DELAY()", [], [], ["uint32"])[0])
-    approver = to_checksum_address(c.call_view(pool_, "approver()", [], [], ["address"])[0])
     lines = approve_check(approver, sender, payouts, ids, hard)
     latest = int(c.rpc("eth_blockNumber"), 16)
     now = int(c.rpc("eth_getBlockByNumber", [hex(latest), False])["timestamp"], 16)
@@ -1081,10 +1087,18 @@ def approve(args) -> int:
     print("  approving sets neither the amount nor the trader; the checker can still stop each until it is paid")
 
     def still_fresh() -> None:
-        # The person's confirmation has no time limit: the reviews are held to the head as it stands after it.
+        # The person's confirmation has no time limit: the payouts and their reviews are held to the chain as it stands
+        # after it. A payout paid, stopped or approved meanwhile, or a pool with another approver by then, stops the
+        # send as it would have stopped the offer; and each review is held to the payout as the pool answers it now.
+        approver_now, payouts_now = approval_state(pool_, ids)
+        try:
+            approve_check(approver_now, sender, payouts_now, ids, hard)
+        except SystemExit as exc:
+            raise SystemExit(f"{exc} (read again once the send was confirmed: nothing was sent)") from None
+        # The head last: a review's hour is held to the chain's clock as it stands after the pool's answers, not before.
         head = int(c.rpc("eth_blockNumber"), 16)
         head_time = int(c.rpc("eth_getBlockByNumber", [hex(head), False])["timestamp"], 16)
-        review_check(reviews, pool_, payouts, ids, int(c.rpc("eth_chainId"), 16), head, head_time, hint)
+        review_check(reviews, pool_, payouts_now, ids, int(c.rpc("eth_chainId"), 16), head, head_time, hint)
     return send_or_say(args, pool_, "approvePayouts(uint256[])", ["uint256[]"], [ids], before=still_fresh)
 
 
@@ -1200,7 +1214,8 @@ def print_batch(args, name: str, txs: list[tuple[str, int, bytes]]) -> int:
 
 def send_or_say(args, pool_: str, sig: str, types: list | None = None, values: list | None = None, before=None) -> int:
     """`before`: called once the send is confirmed and before it goes out; what it raises stops the send (`approve`
-    reads its reviews again there: on mainnet the confirmation waits for a person, for as long as they take)."""
+    reads its payouts and their reviews again there: on mainnet the confirmation waits for a person, for as long as
+    they take)."""
     if getattr(args, "signer", None):
         return print_batch(args, f"{sig} on {pool_}", [(pool_, 0, c.encode_call(sig, types or [], values or []))])
     if not args.send:

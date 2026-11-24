@@ -85,6 +85,26 @@ class Shapes(unittest.TestCase):
         kept.add_text(row(4, 7) + "\n" + row(4_000_000_000, 7) + "\n")
         self.assertEqual(sorted(kept.px[3]), [4], "a block of ten digits is still read ahead, and left out as outside")
 
+    def test_a_number_with_a_fraction_where_a_block_a_time_or_a_price_stands_is_a_bad_line(self):
+        """`int(7.9)` is 7: a price with a fraction was taken as its whole part, silently, and the review judged a stop
+        by a price no line gave. The loop writes whole numbers only (`PriceJournal.add`), so a number that is not
+        one, in the place of the block, of its time or of a price, is a bad line like the others: counted, and its
+        block is not in that journal, whatever else the line holds. One written with a point, 7.0, alike."""
+        bads = ['{"b": 5, "t": 50, "px": {"3": 7.9}}', '{"b": 5, "t": 50, "px": {"3": 7.0}}',
+                '{"b": 5, "t": 50, "px": {"3": 7, "4": 8.25}}', '{"b": 5, "t": 50.5, "px": {"3": 7}}',
+                '{"b": 5, "t": 5e1, "px": {"3": 7}}', '{"b": 5.5, "t": 50, "px": {"3": 7}}',
+                '{"b": 5.0, "t": 50, "px": {"3": 7}}']
+        for bad in bads:
+            for want in (None, {3: [(1, 10)], 4: [(1, 10)]}):
+                j = pr.Journal(want)
+                j.add_text(row(4, 7, t=40) + "\n" + bad + "\n" + row(6, 7, t=60) + "\n")
+                self.assertEqual((sorted(j.px[3]), j.bad, j.lines), ([4, 6], 1, 2), (bad, want))
+                self.assertEqual((sorted(j.times), 4 in j.px), ([4, 6], False), (bad, want))
+        # The same line with whole numbers is read: block 5, its time and both prices.
+        whole = pr.load_prices('{"b": 5, "t": 50, "px": {"3": 7, "4": 8}}\n')
+        self.assertEqual((dict(whole.px[3].items()), dict(whole.px[4].items()), dict(whole.times.items()), whole.bad),
+                         ({5: 7}, {5: 8}, {5: 50}, 0))
+
     def test_a_block_written_twice_alike_is_one_block_and_with_two_prices_a_conflict(self):
         got = pr.load_prices(row(4, 7) + "\n" + row(4, 7) + "\n")
         self.assertEqual(got.conflicts, {})

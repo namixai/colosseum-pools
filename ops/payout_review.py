@@ -116,6 +116,12 @@ TRIGGER_BACK = 60
 TOUCH_EVERY = 60
 TOUCH_READS = 3000
 ZERO_ADDRESS = "0x" + "00" * 20
+# The kind of the reason a payout is held by while the funding of the factory's buyers is still being read
+# (`LogScan.read_links`). A kind of its own, apart from the other things not read (`unread`): this one ends by itself
+# as the passes read on, each new buyer starts it again for every payout waiting, and a person can do nothing about it
+# meanwhile, so the service's alarm for a hold of this kind alone waits (ops/review_service.py, LINKS_WAIT_S). The
+# hold itself does not wait: the document says it from the first pass, and no approval rests on it.
+LINKS_UNREAD = "links-unread"
 NO_APPROVER = ("the pool names no approver: the payout goes out unapproved from its ceiling on, unless it is stopped; "
                "there is nobody to sign an approval")
 APPROVED = "approved already: it is paid from its due time, unless it is stopped; nothing more to sign"
@@ -951,7 +957,9 @@ class Journal:
     did not look at (it was not running, the head ran ahead of it, a node that failed), and a header {"journal": ...,
     "chain", "factory", "label"} at the top of each day's file. `px[asset][block]` is what it read; a block of an asset
     not in it is a hole, whatever the reason. A last line cut short (the machine stopped mid write) is left out, and so
-    is a line of the wrong shape (`bad` counts them): its block is a hole, never the end of the review.
+    is a line of the wrong shape (`bad` counts them): its block is a hole, never the end of the review. The loop writes
+    whole numbers only, so a number with a fraction (or written as one, 7.0) where the block, its time or a price
+    stands is the wrong shape too: 7.9 is no price, and is not taken as 7.
 
     One Journal may hold two journals, the keeper's and the second writer's on another machine and node (`add_text`
     or `add_lines` once each): a block is held where either has it, and where both have it they must give the same
@@ -1094,11 +1102,13 @@ class Journal:
                 if isinstance(b, bool) or not isinstance(b, int):
                     raise TypeError("block")
                 t = row.get("t")
+                if isinstance(t, float):
+                    raise TypeError("t")  # 50.5 is no time of a block, and is not taken as 50
                 t = None if t is None else int(t)
                 px = row.get("px") or {}
                 if not isinstance(px, dict):
                     raise TypeError("px")
-                got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, bool)}
+                got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, (bool, float))}
                 if len(got) != len(px):
                     raise TypeError("px")
                 if not 0 <= b < U32 or any(not -(1 << 63) <= v < (1 << 63) for v in got.values()):
@@ -2459,9 +2469,6 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
     unread = [a for a in (stage, exam) if a and (a in (chain.get("unread") or []) or (read is not None and a not in read))]
     unread_accounts = list(unread)
     links_unread = trader in (chain.get("linksUnread") or [])
-    if links_unread:
-        unread.append("the USDC sent to the trader before their first purchase, or to another buyer of the factory "
-                      "before theirs (read on at each pass)")
     if times_unread:
         unread.append("the factory's delay and ceiling")
     elif disagree:
@@ -2472,6 +2479,9 @@ def review(chain: dict, pool: str, pid: int, p: Params | None = None, thresholds
         unread.append("whether the pool takes approvals")
     if unread:
         found.append(("unread", "not read: " + ", ".join(unread)))
+    if links_unread:
+        found.append((LINKS_UNREAD, "not read: the USDC sent to the trader before their first purchase, or to another "
+                      "buyer of the factory before theirs (read on at each pass)"))
     # The daily limit on payouts: where it leaves this payout. Said beside the verdict, never a reason in it: a payout the
     # limit holds is waiting its turn, not suspicious.
     out["dailyCap"] = payout_cap(chain, pool, {**pay, "id": pid}, approvals, delay, hard)
@@ -2601,7 +2611,8 @@ def card(r: dict, chain: dict) -> dict:
     (a stop reached and not carried out, or a block of a stop's time not checked: the payout is held). /4 (the same
     fields; what "clean" means changed): every block of a stop's time judged by one or two journals of prices and the
     venue's candles, `evidence.stopDoubt.<part>.late` with the reason kind `stop-late`; a /3 document carries no
-    approval. Amounts
+    approval. Under /4, later, the reason kind `links-unread` (LINKS_UNREAD): the buyers' funding still being read, said
+    until then inside the one reason of the kind `unread`; the payout is held as before. Amounts
     are strings of USDC units (6 decimals), since a JSON number loses digits past 2**53; times are seconds on
     the chain's clock."""
     tx = r["tx"] or {}
@@ -2756,7 +2767,7 @@ def summary(r: dict) -> str:
         lines.append(f"  draft of a stop, reason 3, on {', '.join(r['stopDraft']['trades'])}: {r['stopDraft']['note']}")
     tx = r["tx"]
     if r["action"] == "hold":
-        lines.append(f"  do not sign: held ({', '.join(k for k in r['kinds'] if k in ('recount', 'missed-stop', 'stop-late', 'stop-unchecked', 'stop-one-journal', 'unread'))}); "
+        lines.append(f"  do not sign: held ({', '.join(k for k in r['kinds'] if k in ('recount', 'missed-stop', 'stop-late', 'stop-unchecked', 'stop-one-journal', 'unread', LINKS_UNREAD))}); "
                      f"it waits for an analysis, at most until {r['hardAt']}")
     else:
         lines.append(f"  to sign ({tx['kind']}): " + (f"{tx['to']} {tx['call']} {tx['data']}" if tx["data"] else tx.get("note", "")))
@@ -3306,6 +3317,15 @@ class LogScan:
         got = self.d["links"].get(trader)
         return got is not None and int(got["at"]) > int(got["to"])
 
+    def links_left(self) -> dict:
+        """How far the reading of the buyers' funding is (`read_links`), as two numbers and no address: the buyers not
+        read to the end, and the blocks still to read for them, each buyer's own (buyers at the same block go in one
+        call, so the calls left are fewer). A buyer with no span kept yet (seen before the spans were kept: `read_links`
+        makes it once a payout waits) is counted as not read, its blocks from then on."""
+        spans = self.d["links"]
+        left = [int(g["to"]) - int(g["at"]) + 1 for g in spans.values() if int(g["at"]) <= int(g["to"])]
+        return {"buyers": len(left) + sum(t not in spans for t in self.traders()), "blocks": sum(left)}
+
     def read_links(self, traders: list[str], usdc: str, until: float | None = None) -> list[str]:
         """The incoming USDC of every buyer of the factory from the deployment's block to the block each was first seen
         in, once a payout waits (`traders`: those with one; none, nothing is read). Buyers at the same block go in one
@@ -3555,7 +3575,7 @@ def read_chain(record: dict, prices=None, venue: dict | None = None, touch_reads
         venue = venue_candles.to_venue(candles)
     return {"chainId": chain_id, "now": now, "latest": latest, "pools": pools, "books": books, "sales": sales, "funded": funded,
             "payouts": payouts, "status": status, "done": done, "fills": fills, "transfers": transfers, "unread": unread,
-            "linksUnread": links_unread,
+            "linksUnread": links_unread, "linksLeft": kept.links_left(),
             "exam_events": exam_events, "ended": ended, "oracle": oracle, "costPpm": cost_ppm, "venue": venue or {},
             "fillWindow": fill_window, "dailyLossBps": daily_bps, "drawdownKind": drawdown_kind,
             "maxDrawdownBps": drawdown_bps, "times": payout_times(factory),

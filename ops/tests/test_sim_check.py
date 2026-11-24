@@ -671,6 +671,19 @@ class NoKeyOfTheNodeInALine(unittest.TestCase):
                     self.assertIn("<node>", got)
                 self.assertEqual(s.quiet(RuntimeError(f"down: {long}"), 400), "down: <node>")
 
+    def test_an_address_that_goes_on_past_a_configured_one_goes_whole(self):
+        """The address an error names may begin with a configured one and go on: the same node at a longer path, a
+        redirect, another node of the provider that is not among those configured. Taken out only as far as the
+        configured one reaches, it would leave "<node>/KEY", a text no later rule knows for an address."""
+        import os
+        from unittest import mock
+        base = "https://rpc.example.org/v2"
+        with mock.patch.object(s.c, "RPC_URL", base), mock.patch.dict(os.environ, {"COLOSSEUM_RPC_URL": base}):
+            for text, said in ((f"403 Client Error: Forbidden for url: {base}/SECRETKEY123", "403 Client Error: Forbidden for url: <node>"),
+                               (f"sent on to {base}/SECRETKEY123?id=1 (twice)", "sent on to <node> (twice)"),
+                               (f"down: {base}", "down: <node>")):
+                self.assertEqual(s.quiet(RuntimeError(text), None), said)
+
     def test_a_stop_the_node_refused_is_said_with_no_host_name_cut_in_two(self):
         """The refusal's text is cut to 200. Cut first, a host name that is the node's key stands there in part,
         `host='KEY.prov`, with no end for any rule to know it by: the address goes out of the whole text, then the cut."""

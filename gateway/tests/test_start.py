@@ -16,6 +16,8 @@ import threading
 import unittest
 from contextlib import redirect_stdout
 
+import requests
+
 from gateway import server
 from gateway.protect import Protector
 from gateway.server import BoundedServer, Starting, make_handler, take_on_at_start
@@ -50,6 +52,9 @@ class Served:
     def close(self):
         self.srv.shutdown()
         self.srv.server_close()
+
+
+NODE = "https://rpc.example.com/v2/SECRETKEY123"  # a provider's address: its key is in it
 
 
 class Clock:
@@ -90,7 +95,16 @@ class WhileStarting(unittest.TestCase):
         self.starting.failed(RuntimeError("eth_call: rate limited 7 times in a row"))
         _, said, _ = self.served.ask("GET", "/v1/health")
         self.assertEqual((said["ready"], said["start_failed_attempts"]), (False, 1))
-        self.assertIn("rate limited", said["start_last_error"])
+        self.assertEqual(said["start_last_error"], "RuntimeError")
+
+    def test_health_says_which_error_the_reading_failed_with_and_none_of_its_words(self):
+        """The words of a read that failed can carry the node's address, and with it a provider's key (requests writes
+        the whole URL); /v1/health is public. It says the error's name, as /v1/simindex/health does."""
+        self.starting.failed(requests.HTTPError(f"500 Server Error: Internal Server Error for url: {NODE}"))
+        _, said, _ = self.served.ask("GET", "/v1/health")
+        self.assertEqual((said["start_failed_attempts"], said["start_last_error"]), (1, "HTTPError"))
+        self.assertNotIn("SECRETKEY123", json.dumps(said))
+        self.assertNotIn("rpc.example.com", json.dumps(said))
 
     def test_only_the_order_waits_for_the_keys(self):
         # No contacts and no faucet here: each answers as it would at any time, not `gateway_starting`.
@@ -185,6 +199,27 @@ class TheReadingAfterTheStart(unittest.TestCase):
         self.assertTrue(p.swept.wait(5))
         self.assertTrue(starting.ready())
         self.assertEqual(starting.summary(), {"ready": True})
+
+    def test_the_log_keeps_the_words_of_a_failed_reading_without_the_nodes_address(self):
+        """The gateway's own log says what the reading failed with, in the error's words; the node's address is taken
+        out of them first, for the log is read and copied by more hands than the key is meant for."""
+        class Refused(Signer):
+            def addresses(self):
+                if self.fails:
+                    self.fails -= 1
+                    raise requests.HTTPError(f"500 Server Error: Internal Server Error for url: {NODE}")
+                return super().addresses()
+
+        starting = Starting()
+        p = FakeProtector(starting)
+        logged = quiet(take_on_at_start, FakeGateway(p), Reader(), Refused(fails=1), starting, 30.0, 15.0,
+                       wait=lambda s: None)
+        self.assertTrue(p.swept.wait(5))
+        tried = [e for e in logged if e["event"] == "protect_take_on_retry"]
+        self.assertEqual([e["error"] for e in tried], ["HTTPError: 500 Server Error: Internal Server Error for url: <node>"])
+        self.assertNotIn("SECRETKEY123", json.dumps(logged))
+        self.assertNotIn("rpc.example.com", json.dumps(logged))
+        self.assertEqual(starting.last_error, "HTTPError")
 
     def test_no_sweep_and_no_ready_while_the_reading_fails(self):
         starting = Starting()

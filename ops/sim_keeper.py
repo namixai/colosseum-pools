@@ -196,6 +196,15 @@ def filled_of(log_entry: dict) -> tuple[int, int]:
     return int(late), int(source)
 
 
+def refused(exc) -> str:
+    """A call the chain refused, or one that failed on the way, as one line for the log with no node address in it:
+    the node's URL may hold its key, and requests writes the whole of it into its errors. The address goes out of the
+    whole text first (ops/sim_check.py, `quiet`), then `refusal` names the contract's error or cuts the node's words
+    to 200: cut first, a host name that is the key stands there in part, known to no rule."""
+    from ops import sim_check  # it imports this module, so here and not at the top
+    return refusal(Exception(sim_check.quiet(exc, None)))
+
+
 # ── the keeper ───────────────────────────────────────────────────────────────────────
 
 class SimKeeper:
@@ -264,7 +273,7 @@ class SimKeeper:
         try:
             c.rpc("eth_estimateGas", [{"from": self.sender, "to": to, "data": "0x" + data.hex()}])
         except RuntimeError as exc:
-            log("not_due", to=to, call=sig.split("(")[0], reason=refusal(exc))
+            log("not_due", to=to, call=sig.split("(")[0], reason=refused(exc))
             return False
         if self.dry:
             log("would_send", to=to, call=sig.split("(")[0])
@@ -274,7 +283,7 @@ class SimKeeper:
             log("sent", to=to, call=sig.split("(")[0], tx=rcpt["transactionHash"])
             return True
         except Exception as exc:  # one failed call must not stop the pass
-            log("send_failed", to=to, call=sig.split("(")[0], error=refusal(exc))
+            log("send_failed", to=to, call=sig.split("(")[0], error=refused(exc))
             return False
 
     def fill(self, exam: str) -> dict | None:
@@ -285,7 +294,7 @@ class SimKeeper:
         try:
             rcpt = self.send_tx(exam, c.encode_call("fill()"), gas=FILL_GAS)
         except Exception as exc:
-            log("fill_failed", exam=exam, error=refusal(exc))
+            log("fill_failed", exam=exam, error=refused(exc))
             return None
         late = [filled_of(l) for l in rcpt.get("logs", []) if l["topics"] and l["topics"][0] == FILLED]
         log("filled", exam=exam, tx=rcpt["transactionHash"], block=int(rcpt["blockNumber"], 16),
@@ -481,7 +490,7 @@ class SimKeeper:
                 log("trigger_filled", exam=exam, asset=asset, take=is_take, tx=rcpt["transactionHash"],
                     block=int(rcpt["blockNumber"], 16))
             except Exception as exc:  # the next block's price may not hold it; tried again next block
-                log("trigger_fill_failed", exam=exam, asset=asset, take=is_take, error=refusal(exc))
+                log("trigger_fill_failed", exam=exam, asset=asset, take=is_take, error=refused(exc))
         return sent
 
     def refresh_triggers(self, exam: str) -> None:
