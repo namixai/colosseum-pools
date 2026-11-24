@@ -1347,6 +1347,34 @@ class TheThirdReview(Base):
         lost = self.events("stop_unjudged")
         self.assertEqual((lost[0]["from_block"], lost[0]["alarm"]), (101, "ALARM"))
 
+    def test_a_stop_replaced_before_its_kept_prices_were_judged_is_an_alarm_too(self):
+        """setTrigger sets a stop over the one standing with no TriggerCleared, and a reread of the exam can find it
+        moved. Either way the stop replaced is gone: prices kept for it while its position was not read are said
+        (`stop_unjudged`), as for one taken off, never lost with it."""
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 99)
+        self.node.logs += [set_log(100, 950_000, 101), set_log(102, 940_000, 103)]
+        self.node.price.update({101: 900_000})
+        with TheSecondReview.fails(self, 10):
+            self.run_to(loop, 102)
+        lost = self.events("stop_unjudged")
+        self.assertEqual([(e["from_block"], e["px"], e["alarm"]) for e in lost], [(101, 950_000, "ALARM")])
+        self.assertEqual(loop.triggers[(EXAM, BTC, False)]["px"], 940_000, "the new stop stands")
+        self.assertFalse(loop.triggers[(EXAM, BTC, False)].get("unjudged"))
+
+    def test_a_stop_a_reread_finds_moved_before_its_kept_prices_were_judged_is_an_alarm_too(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 99)
+        self.node.logs.append(set_log(100, 950_000, 101))
+        self.node.price.update({101: 900_000})
+        with TheSecondReview.fails(self, 10):
+            self.run_to(loop, 101)
+        self.assertEqual([b for b, _ in loop.triggers[(EXAM, BTC, False)]["unjudged"]], [101])
+        loop.apply_reread(EXAM, 101, {(EXAM, BTC, False): (940_000, 103)}, {})
+        lost = self.events("stop_unjudged")
+        self.assertEqual([(e["from_block"], e["px"], e["alarm"]) for e in lost], [(101, 950_000, "ALARM")])
+        self.assertEqual(loop.triggers[(EXAM, BTC, False)]["px"], 940_000)
+
     def test_an_alarm_says_the_side_it_was_judged_on(self):
         loop = self.loop(wallet=None)
         self.armed_stop(loop)

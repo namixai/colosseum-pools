@@ -811,6 +811,8 @@ class StopLoop:
             elif (t["px"], t["armed"]) != (px, armed):
                 if t["touch"] is not None:
                     self._missed(key, t, at, "moved while reached (read from the exam)")
+                # The one it replaces goes the way of any stop gone: prices kept unjudged for it are an alarm.
+                self._drop(key)
                 self.triggers[key] = self._fresh(px, armed)
         for asset, s in signs.items():
             if self.event_at.get((exam, asset), 0) <= at:
@@ -1189,6 +1191,9 @@ class StopLoop:
                 _, px, _, armed = abi_decode(["bool", "uint64", "uint64", "uint256"], bytes.fromhex(l["data"][2:]))
                 if t is not None and t["touch"] is not None:
                     self._missed(key, t, block, "moved by the trader while reached")
+                # setTrigger replaces a stop with no TriggerCleared: the one replaced goes the way of any stop gone
+                # (`_drop`), so prices kept unjudged for it are an alarm, never lost with it.
+                self._drop(key)
                 self.triggers[key] = self._fresh(int(px), int(armed))
                 self.probe.discard(key)
                 moved.add((exam, asset))

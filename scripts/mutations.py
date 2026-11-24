@@ -17400,6 +17400,15 @@ MUTATIONS = [
      "    journal_path = (state.parent / f\"{prefix}prices-{args.deployment}.jsonl\") if args.price_journal is None else (",
      "    journal_path = (state.parent / f\"{prefix}prices-{args.deployment}.json\") if args.price_journal is None else (",
      ["test_the_units_name_one_journal_for_its_writer_and_for_the_review"]),
+    # A stop replaced (a second TriggerSet, or found moved by a reread) goes the way of any stop gone: its kept prices said.
+    ("SF88", "ops/stop_filler.py",
+     "                self._drop(key)\n                self.triggers[key] = self._fresh(int(px), int(armed))",
+     "                self.triggers[key] = self._fresh(int(px), int(armed))",
+     ["test_a_stop_replaced_before_its_kept_prices_were_judged_is_an_alarm_too"]),
+    ("SF89", "ops/stop_filler.py",
+     "                self._drop(key)\n                self.triggers[key] = self._fresh(px, armed)",
+     "                self.triggers[key] = self._fresh(px, armed)",
+     ["test_a_stop_a_reread_finds_moved_before_its_kept_prices_were_judged_is_an_alarm_too"]),
 ]
 
 RUNNERS = {
