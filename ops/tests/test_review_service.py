@@ -166,6 +166,41 @@ class TheService(unittest.TestCase):
         install = (ROOT / "ops/host/install.sh").read_text()
         self.assertIn('"$rel/ops/host/colosseum-payout-review@.service" "$rel/ops/host/colosseum-payout-review@.timer"', install)
 
+    def test_the_units_name_one_journal_for_its_writer_and_for_the_review(self):
+        """Neither writer's unit names its journal: the stops' loop writes prices-<deployment>.jsonl beside its --state
+        (`stop_filler.build`; the watch alone, watch-prices-…), one file a day beside that name. The review's unit must
+        name the same file in the same folder, or it reads no journal and holds every payout with a stop."""
+        import re
+        from ops import stop_filler as sf
+        units = {name: (ROOT / "ops/host" / name).read_text() for name in (
+            "colosseum-multi-keeper@.service", "colosseum-payout-review@.service",
+            "second-writer/colosseum-price-watch@.service", "second-writer/colosseum-price-sync@.service")}
+        keeper, review, second, sync = units.values()
+        state = lambda unit: pathlib.PurePosixPath(re.search(r"--state (\S+)", unit).group(1))  # noqa: E731
+        a = mock.Mock(stop_rpc="", price_journal=None, stop_alarm=None, deployment="${COLOSSEUM_DEPLOYMENT}",
+                      stop_tip_gwei=0, stop_overdue=5, stop_alarm_min_blocks=2)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(sf, "Node"), mock.patch.object(sf, "check_chain"):
+            loops = [sf.build(a, mock.Mock(factory=None), pathlib.Path(d) / state(keeper).name),
+                     sf.build(a, mock.Mock(factory=None), pathlib.Path(d) / state(second).name, prefix="watch-")]
+            written, watched = (loop.journal.path.name for loop in loops)
+            day = loops[0].journal.file_of(0).name
+            for loop in loops:
+                loop.journal.close()
+        for unit in (keeper, second):
+            self.assertNotIn("--price-journal", unit, "the writer's default name is the one the review's unit must match")
+        self.assertIn(f"--prices {state(keeper).parent / written} ", review)
+        self.assertIn(f"--prices2 /var/lib/colosseum-keeper/second-prices/{watched} ", review)
+        self.assertEqual((written, watched, day), ("prices-${COLOSSEUM_DEPLOYMENT}.jsonl", "watch-prices-${COLOSSEUM_DEPLOYMENT}.jsonl",
+                                                   "prices-${COLOSSEUM_DEPLOYMENT}-1970-01-01.jsonl"))
+        # The second machine sends its day files by the same name, and the review reads a day file by that pattern.
+        self.assertIn(f'{state(second).parent}/watch-prices-"$COLOSSEUM_DEPLOYMENT"-*.jsonl', sync)
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "prices-sim1.jsonl"
+            j = sf.PriceJournal(path, clock=lambda: 0.0)
+            (path.parent / j.file_of(0).name).write_text('{"b": 1, "px": {"3": 5}}\n')
+            j.close()
+            self.assertEqual([f.name for f in r.journal_files(path)], ["prices-sim1-1970-01-01.jsonl"])
+
 
 if __name__ == "__main__":
     unittest.main()

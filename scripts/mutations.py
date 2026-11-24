@@ -17395,6 +17395,11 @@ MUTATIONS = [
      "        if key in said and (isinstance(said[key], bool) or not isinstance(said[key], (int, float))):",
      "        if False:",
      ["test_a_memory_of_alarms_that_is_not_an_object_is_no_memory_and_the_pass_goes_on"]),
+    # The journal's name: the one its writer's unit leaves to the default and the review's unit reads.
+    ("RW10", "ops/stop_filler.py",
+     "    journal_path = (state.parent / f\"{prefix}prices-{args.deployment}.jsonl\") if args.price_journal is None else (",
+     "    journal_path = (state.parent / f\"{prefix}prices-{args.deployment}.json\") if args.price_journal is None else (",
+     ["test_the_units_name_one_journal_for_its_writer_and_for_the_review"]),
 ]
 
 RUNNERS = {
