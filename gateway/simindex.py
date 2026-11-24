@@ -51,7 +51,7 @@ import requests
 from eth_utils import keccak, to_checksum_address
 
 from . import NETWORK
-from .chain import RATE_LIMITED, Throttled
+from .chain import RATE_LIMITED, Throttled, quiet
 
 FILE_VERSION = 1
 DEFAULT_DIR = "/var/lib/colosseum-sim-index"
@@ -100,7 +100,7 @@ _ERROR_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_.]{0,79})(?:: |$)")
 def error_name(text) -> str | None:
     """Of an error kept as "Name: its words", the name alone, for the health route. The words of a read that failed can
     carry the node's address (requests writes the whole URL), which for a provider holds its key, and the route is
-    public: it says which kind of error, the service's own log says the rest."""
+    public: it says which kind of error, the service's own log says the rest, the address taken out (`chain.quiet`)."""
     if text is None:
         return None
     named = _ERROR_NAME.match(str(text))
@@ -391,7 +391,7 @@ class SimIndex:
                 with self.lock:
                     self.errors += 1
                     self.last_error = type(exc).__name__  # the name alone: it is handed out by the health route
-                log_line(event="read_failed", error=f"{type(exc).__name__}: {str(exc)[:200]}", wait_s=delay,
+                log_line(event="read_failed", error=f"{type(exc).__name__}: {quiet(exc)}", wait_s=delay,
                          at=self.scanned_to + 1)
                 if self._dirty:
                     try:
@@ -445,6 +445,7 @@ REASON_WORDS = {
     "stop-unchecked": "the stops were not checked over all their time",
     "stop-one-journal": "the stops rest on one journal of prices only",
     "unread": "something the review needs was not read",
+    "links-unread": "the funding of the factory's buyers is still being read",
 }
 # The fields of a document the page needs to decide: what it says, when and at which block it was read, what to hold
 # it against (the payout's pool, number, trader, amount and times, the chain), and the call it names without the

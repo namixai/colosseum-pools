@@ -47,7 +47,7 @@ from spike.hlspike import network
 
 from . import NETWORK, hl
 from .weight import METER
-from .chain import CHAIN_ID, JsonRpcReader, Throttled
+from .chain import CHAIN_ID, JsonRpcReader, Throttled, quiet
 from .contacts import Contacts, contacts_from_env
 from .faucet import Faucet, faucet_from_env
 from .checks import ChainReader, GatewayError, NonceBook, Request, check
@@ -561,6 +561,10 @@ class Starting:
     not tell a gateway starting from one that was gone. Until the reading is done, /v1/health says so with
     `ready: false` and how long the start has taken, and an order is refused with `gateway_starting` and
     `sent: false`. Nothing else waits for it: the faucet and the contacts have nothing to do with the keys.
+
+    Of a reading that failed, /v1/health says which error and none of its words (`start_last_error`): the words can
+    carry the node's address, which for a provider holds its key, and the route is public. The words go to the
+    gateway's own log, the address taken out of them (`chain.quiet`).
     """
 
     def __init__(self, clock=time.time):
@@ -577,7 +581,7 @@ class Starting:
     def failed(self, exc: Exception) -> None:
         with self._lock:
             self.failed_attempts += 1
-            self.last_error = str(exc)[:200]
+            self.last_error = type(exc).__name__  # the name alone: /v1/health hands it out
 
     def done(self) -> None:
         self._done.set()
@@ -618,7 +622,7 @@ def take_on_at_start(gateway: Gateway, reader: Any, signer: Any, starting: Start
             break
         except Exception as exc:
             starting.failed(exc)
-            log_line(event="protect_take_on_retry", error=str(exc)[:200], wait_s=delay)
+            log_line(event="protect_take_on_retry", error=f"{type(exc).__name__}: {quiet(exc)}", wait_s=delay)
             wait(delay)
             delay = min(delay * 2, retry_max_s)
     log_line(event="protect_took_on", accounts=taken, keys_listed=addresses is not None)

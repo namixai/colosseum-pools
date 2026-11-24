@@ -623,11 +623,13 @@ def journal_files(path: pathlib.Path) -> list[pathlib.Path]:
 class Alarm:
     """What the host's watchdogs do with a finding (ops/host/watchdogs/watchdog-run.sh), done from a running loop: the
     line in the journal marked ALARM, added to a flag file, and handed to COLOSSEUM_ALERT_CMD when there is one. The
-    channel runs in a thread of its own, so a slow one does not stop the loop. No other channel is opened here."""
+    channel runs in a thread of its own, so a slow one does not stop the loop. No other channel is opened here. A
+    command of spaces alone is no channel, here as at the start (`require_channel`): a shell runs it and says nothing
+    failed, and the alarm would be taken as delivered to nobody."""
 
     def __init__(self, flag: pathlib.Path | None, command: str | None = None):
         self.flag = flag
-        self.command = os.environ.get("COLOSSEUM_ALERT_CMD", "") if command is None else command
+        self.command = (os.environ.get("COLOSSEUM_ALERT_CMD", "") if command is None else command).strip()
         self.said_no_channel = False
         self.lock = threading.Lock()  # both threads may raise one
 

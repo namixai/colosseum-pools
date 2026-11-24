@@ -15,13 +15,16 @@ approved already, or one whose approvals were not read) is an alarm at once with
 person can still stop it for reason 3 (`stop_deadline`). Each is said again every 6 hours while it stays so, and once
 more 24 and 6 hours before its deadline; one whose verdict, action or reasons change is said again at once; and an
 alarm is remembered only once the channel took it, so one that did not go out is said at the next pass. A pass that
-fails is an alarm too (once an hour), and so is a unit that failed (`--unit-failed`, its OnFailure=).
+fails is an alarm too (once an hour), and so is a unit that failed (`--unit-failed`, its OnFailure=). One hold waits
+with its alarm: a payout held by nothing but the buyers' funding still being read (each new buyer starts that reading
+again, for every payout waiting) is said only once that has lasted over an hour without a break, or at once from 24
+hours before the payout goes out by itself (`links_only`); its document says the hold from the first pass.
 
 Every block of each stop's time is judged by the journals of prices (--prices, the keeper's; --prices2, the second
 writer's from another machine), the venue's minute candles kept in --out (`ops/venue_candles.py`, fetched each pass),
 and, when there is one, a node that answers for old blocks (--archive-rpc). The logs read are kept in --out/scan.json:
 each pass reads only the new blocks. The end of each pass goes to --out/status.json, whose age the stops' loop
-watches.
+watches; it says too how far the reading of the buyers' funding is (`linksLeft`: buyers not read, blocks left).
 
 It sends nothing and holds no key. On the host: colosseum-payout-review@<name>.service run by its .timer every 10
 minutes (ops/host). Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet.
@@ -67,6 +70,22 @@ PASS_BUDGET_S = 420
 # hangs (30 s an alarm at most) cannot keep the documents from the disk or run the pass past its unit's time; an alarm
 # not said in it is not remembered, and the next pass says it.
 ALARM_BUDGET_S = 60
+# A payout held by nothing but the buyers' funding still being read (`payout_review.LINKS_UNREAD`) asks nothing of a
+# person: the passes read on by themselves, and each new buyer starts that reading again for every payout waiting. Its
+# alarm waits until such a hold has lasted longer than this without a break (the pass that first saw it is kept in
+# `said`, `linksSince`); the hold itself is in the document at once.
+LINKS_WAIT_S = 3_600
+
+
+def links_only(a: dict, now: int) -> bool:
+    """Whether the alarm `a` is one that may wait LINKS_WAIT_S: of a payout held, with no reason but the buyers' funding
+    still being read, and further than the first of BEFORE_S from the moment it goes out by itself and from its last
+    moment for a stop. Nearer than that nothing waits: it is said at once, and again as each of BEFORE_S comes. A
+    payout whose time of going out is not known is taken as near."""
+    if a["action"] != "hold" or not a["kinds"] or set(a["kinds"]) != {pr.LINKS_UNREAD}:
+        return False
+    near = [t for t in (a["paysAt"], a["deadline"]) if t is not None]
+    return a["paysAt"] is not None and min(near) - now > BEFORE_S[0]
 
 
 def alarm_of(r: dict) -> dict | None:
@@ -124,7 +143,8 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
     for all of them (a hung channel keeps no document from the disk); returns the reviews. An alarm is remembered in
     `said` only once the channel took it (`alarm(..., wait=True)` not False): one that did not go out, raised, or was
     not said within the budget, is said again at the next pass, and keeps none of the others from being said. The pass's end is written to status.json beside the documents,
-    for the stops' loop's watch of the review's age (`stop_filler.StopLoop`)."""
+    for the stops' loop's watch of the review's age (`stop_filler.StopLoop`). The alarm of a payout held only while the
+    buyers' funding is read waits LINKS_WAIT_S of that (`links_only`); every other is said in the pass that finds it."""
     chain = pr.read_chain(record, prices, **read)
     out.mkdir(parents=True, exist_ok=True)
     reviews = [pr.review(chain, x["pool"], x["id"]) for x in chain["payouts"] if x["state"] == "Due"]
@@ -132,7 +152,7 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
     for r in reviews:
         write(out, pr.card(r, chain))
     write_status(out, {"at": int(time.time()), "chainNow": now, "block": chain["latest"], "due": len(reviews),
-                       "held": sum(r["action"] == "hold" for r in reviews)})
+                       "held": sum(r["action"] == "hold" for r in reviews), "linksLeft": links_left(chain)})
     until = time.monotonic() + ALARM_BUDGET_S
     for r in reviews:
         a = alarm_of(r)
@@ -141,6 +161,21 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
             said[key] = None
             continue
         mark = [a["action"], a["kinds"], a["reasons"]]
+        since = None
+        if links_only(a, now):
+            prev = said.get(key)
+            since = prev.get("linksSince") if isinstance(prev, dict) else None
+            if isinstance(since, bool) or not isinstance(since, int):
+                since = now  # the first pass that finds it held so: what was said of it before was of another hold
+                said[key] = {"linksSince": since}
+                core.log("review_alarm_waits", payout=key, why="held only while the buyers' funding is read",
+                         then=f"said if it is still so after {utc(since + LINKS_WAIT_S)}")
+            if now - since <= LINKS_WAIT_S:
+                continue
+        elif isinstance(said.get(key), dict):
+            # Held by something else now, or near its time: the hour of the funding alone is broken, whether or not
+            # this pass's alarm goes out, and starts anew if the funding is the only reason again.
+            said[key].pop("linksSince", None)
         if due_to_say(said.get(key), mark, now, a["deadline"]):
             if time.monotonic() > until:
                 core.log("review_alarm_not_said", payout=key, why=f"the pass's {ALARM_BUDGET_S} s for alarms are spent",
@@ -153,12 +188,25 @@ def one_pass(record: dict, out: pathlib.Path, prices, said: dict, alarm, **read)
                 took = False
             if took is not False:
                 said[key] = {"mark": mark, "at": now, "before": [b for b in BEFORE_S
-                                                                 if a["deadline"] is not None and a["deadline"] - now <= b]}
+                                                                 if a["deadline"] is not None and a["deadline"] - now <= b],
+                             **({} if since is None else {"linksSince": since})}
             else:
                 core.log("review_alarm_not_taken", payout=key, then="said again at the next pass")
     core.log("review_done", payouts=len(reviews), block=chain["latest"],
              suspicious=sum(r["verdict"] == "suspicious" for r in reviews))
     return reviews
+
+
+def links_left(chain: dict) -> dict | None:
+    """What status.json says of the reading of the buyers' funding (`payout_review.LogScan.links_left`): how many
+    buyers are not read to the end and how many blocks are left for them, so that a person looking at payouts held as
+    `links-unread` sees it move. Two whole numbers and nothing else of what the chain's reading holds; None where the
+    reading gave none."""
+    left = chain.get("linksLeft")
+    try:
+        return {"buyers": int(left["buyers"]), "blocks": int(left["blocks"])}
+    except (TypeError, KeyError, ValueError):
+        return None
 
 
 def write_status(out: pathlib.Path, status: dict) -> None:

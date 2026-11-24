@@ -1995,6 +1995,8 @@ class ReadingTheChain(unittest.TestCase):
                                                "approvals": True, "largestPayout": 800, "staged": 1_600,
                                                "floor": None, "sharesDue": None, "approver": addr(0xAB)}})
         self.assertEqual((got["status"][s1], got["done"][s1], got["unread"]), ("Passed", True, []))
+        self.assertEqual((got["linksUnread"], got["linksLeft"]), ([], {"buyers": 0, "blocks": 0}),
+                         "the one buyer's funding read to the end in this pass, and how far that reading is")
         self.assertEqual(got["times"], {"delay": 72 * 3_600, "hard": 8 * 86_400}, "what the factory answers, not 7 days by rote")
         review = r.review(got, POOL, 7)
         self.assertEqual(review["hardAt"], 5_000 - 72 * 3_600 + 8 * 86_400)

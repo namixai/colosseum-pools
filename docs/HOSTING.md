@@ -945,21 +945,30 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
   and then for every buyer of the factory (two buyers funded by one wallet are a pair, and the second has no payout
   of its own): 1 000 blocks a chunk, up to 100 buyers in one call, saved after each chunk and gone on with at the
   next pass when the time runs out; a buyer first seen later is read back the same way. Until every buyer is read to
-  the end each payout waiting is held as not read; with no payout waiting none of it is read. Removing
+  the end each payout waiting is held as not read (a reason of its own kind, `links-unread`); with no payout waiting
+  none of it is read. Removing
   `scan.json` makes the next passes read the chain from the deployment's block again;
 - `candles-<network>-YYYY-MM-DD.jsonl`, the venue's minute candles of the platform's assets, fetched from
   Hyperliquid's info API on each pass (no key) and kept: the API gives only the last 5 000 minutes;
-- `status.json`, the end of the last pass (its time, block, payouts waiting and held), which the stops' loop in the
+- `status.json`, the end of the last pass (its time, block, payouts waiting and held, and `linksLeft`: how many
+  buyers' funding is not read to the end and how many blocks are left for them, numbers only; the index's public
+  health route takes the time of the pass from this file and nothing else), which the stops' loop in the
   keeper's process watches (`COLOSSEUM_REVIEW_STATUS` in the keeper's unit): older than 30 minutes with payouts
   waiting, or 2 hours whatever it saw, is the alarm `review_stale`, said again every 6 hours while it lasts;
 - `said.json` and `ALARM`: the alarms raised, each remembered only once the channel took it.
 
 Each payout held is the alarm `payout_held` with the date it goes out by itself, said again every 6 hours, and once
 more 24 and 6 hours before that date, while it is held and not stopped; a payout that pays by itself unless stopped
-is `payout_needs_a_stop`, the same way. Each says what can still be done: where the pool would refuse a stop (the
+is `payout_needs_a_stop`, the same way. One hold waits with its alarm: a payout held by nothing but the buyers'
+funding still being read (`links-unread` its only reason; each new buyer starts that reading again for every payout
+waiting, and a person can do nothing about it) is said only once that has lasted over an hour without a break, the
+pass that first saw it kept in `said.json`; another reason beside it or in its place is said at once, and so is any
+hold from 24 hours before the payout goes out by itself. Its document says the hold from the first pass, and no
+approval rests on it. Each says what can still be done: where the pool would refuse a stop (the
 payout was stopped once already and the stop lifted, or its time to stop is over) the alarm says so and names no
 deadline for one, and it points at the draft of a stop of reason 3 only where the review made one. A line of a
-journal longer than 64 KB, nested past the parser's depth or with `Infinity` or `NaN` for a number is a bad line: its
+journal longer than 64 KB, nested past the parser's depth, with `Infinity` or `NaN` for a number, or with a number
+that is not whole where the block, its time or a price stands (`7.9` is not taken as 7) is a bad line: its
 block is not in that journal. A second journal whose reading fails in any other way is `second_journal_unread`
 (every 6 hours while it lasts): the pass goes on and writes its documents, and the stops standing in the blocks that
 journal did not give are held as resting on one journal. A pass that fails is `review_failed` (once an hour); a pass killed by its
@@ -969,7 +978,8 @@ time are kept, about 6 MB a day of two journals of three assets) starts `colosse
 (tried by hand when it is set up or changed, with that variable in the environment:
 `/opt/colosseum-pools/venv/bin/python -m ops.review_service --say-test` says one test alarm, `alarm_test`, and exits 0
 only once the channel's command took it);
-an alarm is taken only when the channel took it (a line only in `ALARM` is said again), and on mainnet the units do
+an alarm is taken only when the channel took it (a line only in `ALARM` is said again; a command of spaces alone is
+no channel, at the start and at each alarm), and on mainnet the units do
 not start without the channel. A pass writes every document and `status.json` first, then says its alarms, 60 seconds for all of
 them: a channel that hangs keeps no document from the disk, and an alarm left over is said at the next pass.
 
@@ -986,7 +996,10 @@ of the index hands out only a cut of each, and `approve` refuses it):
     scp -r <host>:/var/lib/colosseum-keeper/reviews-<name>/ ./reviews-<name>
     spike/.venv/bin/python -m ops.deploy_sim approve --pool <pool> --signer <the Ledger's address> --ids <ids> --reviews ./reviews-<name>
 
-A copy older than an hour is refused as the host's own would be: copy, then approve. Without `--reviews` the command
+A copy older than an hour is refused as the host's own would be: copy, then approve. Sent from a key (`--key`,
+`--send`), the approval is checked once more after the send is confirmed, which waits for a person: the pool is asked
+again for its approver and for each payout, and the reviews are read again against them; a payout paid, stopped or
+approved meanwhile, another approver, or a review past its hour stops the send. Without `--reviews` the command
 reads `ops/state/reviews` of its own checkout (what a review run there writes), never the host's folder: it says which
 folder it read, and where a payout has no document there it says where the host's are.
 

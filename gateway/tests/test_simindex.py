@@ -245,7 +245,8 @@ class Reading(unittest.TestCase):
 
     def test_the_health_route_says_which_error_and_none_of_its_words(self):
         """The words of a read that failed can carry the node's address, and with it a provider's key (requests writes
-        the whole URL); the health route is public. It says the error's name; the service's log keeps the words."""
+        the whole URL); the health route is public. It says the error's name; the service's log keeps the words,
+        the address taken out of them."""
         url = "https://rpc.example.com/v2/SECRETKEY123"
         node = Node(history(), head=3000)
         node.fail = [requests.HTTPError(f"500 Server Error: Internal Server Error for url: {url}")]
@@ -265,13 +266,46 @@ class Reading(unittest.TestCase):
         self.assertEqual((index.last_error, json.loads(seen[0])["last_error"]), ("HTTPError", "HTTPError"))
         self.assertNotIn("SECRETKEY123", seen[0])
         self.assertNotIn("rpc.example.com", seen[0])
-        self.assertIn("SECRETKEY123", logged[0]["error"], "the log, which is the service's own, keeps the words")
+        self.assertEqual(logged[0]["error"], "HTTPError: 500 Server Error: Internal Server Error for url: <node>",
+                         "the log, which is the service's own, keeps the words and not the address")
         # Whatever is kept there, the route hands out a name or nothing.
         for kept, said in ((f"HTTPError: 500 for url: {url}", "HTTPError"), (url, "error"), ("requests.exceptions.HTTPError", "requests.exceptions.HTTPError"),
                            ("two words: x", "error"), (None, None)):
             index.last_error = kept
             self.assertEqual(index.health()["last_error"], said, kept)
             self.assertNotIn("SECRETKEY123", json.dumps(index.health()))
+
+
+    def test_the_log_of_a_read_that_failed_carries_no_address_of_the_node(self):
+        """The service's log is read and copied by more hands than a provider's key is meant for: `read_failed` says the
+        error in its own words with the node's address out of them, in its path or in its host name, and the words
+        are cut after that, never before."""
+        import os
+        keyed = "https://SECRETKEY123.provider.example/v2"
+        fails = [requests.HTTPError("500 Server Error: Internal Server Error for url: https://rpc.example.com/v2/SECRETKEY123"),
+                 requests.ConnectionError("x" * 160 + " HTTPSConnectionPool(host='SECRETKEY123.provider.example', port=443): "
+                                          "Max retries exceeded with url: /v2 (Caused by NameResolutionError)")]
+        node = Node(history(), head=3000)
+        node.fail = list(fails)
+        index = make(node, self.tmp)
+        stop = threading.Event()
+
+        def wait(s):
+            if not node.fail:
+                stop.set()
+            return stop.is_set()
+
+        stop.wait = wait
+        logged = []
+        with mock.patch.dict(os.environ, {"SIM_INDEX_RPC_URL": keyed}), \
+                mock.patch.object(simindex, "log_line", side_effect=lambda **f: logged.append(f)):
+            index.run(stop)
+        failed = [f["error"] for f in logged if f["event"] == "read_failed"]
+        self.assertEqual(failed[0], "HTTPError: 500 Server Error: Internal Server Error for url: <node>")
+        self.assertTrue(failed[1].startswith("ConnectionError: " + "x" * 160 + " HTTPSConnectionPool(host='<host>'"), failed[1])
+        self.assertEqual(len(failed), 2)
+        self.assertNotIn("SECRETKEY123", json.dumps(logged))
+        self.assertNotIn("rpc.example.com", json.dumps(logged))
 
 
 class Routes(unittest.TestCase):
@@ -390,6 +424,11 @@ class ReviewRoute(unittest.TestCase):
         self.assertEqual(got["call"], {"kind": "stop", "to": POOL, "method": "stopPayout", "signature": "stopPayout(...)"})
         for k in ("pool", "id", "trader", "amount", "claimedAt", "dueAt", "hardAt", "verdict", "action", "readAt", "chainId"):
             self.assertEqual(got[k], doc[k], k)
+        # A hold while the buyers' funding is read (the review's kind `links-unread`) is said as that, in words of its own.
+        reading = simindex.outward({**doc, "action": "hold", "call": None, "reasons": [
+            {"kind": "links-unread", "text": f"not read: the USDC sent to the trader, or to another buyer ({other})"}]})
+        self.assertEqual(reading["reasons"], [{"kind": "links-unread",
+                                               "text": "the funding of the factory's buyers is still being read"}])
         approve = {**doc, "action": "approve", "call": {"kind": "approve", "to": POOL, "method": "approvePayouts",
                                                          "signature": "approvePayouts(uint256[])", "args": [[9]], "data": "0x01"}}
         self.assertEqual(simindex.outward(approve)["call"]["args"], [[9]], "an approval's own call, the payout's number")
@@ -511,6 +550,19 @@ class HostPulse(unittest.TestCase):
         (self.reviews / "status.json").write_text("x" * 5_000)
         self.assertIsNone(self.pulse().review_at())
         self.assertEqual(simindex.Pulse(None, None).answer()["prices_at"], None)
+
+    def test_of_the_reviews_status_the_route_takes_the_time_of_its_last_pass_and_nothing_more(self):
+        """status.json also says, for a person on the host, how many payouts wait and are held and how far the review's
+        reading of the buyers' funding is (`linksLeft`). The public route is not widened by any of it."""
+        (self.reviews / "status.json").write_text(json.dumps({
+            "at": self.now - 400, "chainNow": self.now - 401, "block": 77, "due": 2, "held": 1,
+            "linksLeft": {"buyers": 3, "blocks": 12_500}}))
+        self.assertEqual(self.pulse().answer(), {"now": self.now, "prices_at": None, "review_at": self.now - 400})
+        index = make(Node(history(), head=3000), tempfile.mkdtemp())
+        read_all(index)
+        self.assertEqual(sorted({**index.health(), **self.pulse().answer()}),
+                         sorted(["ok", "chain_id", "factory", "from_block", "scanned_to", "head", "behind_blocks", "pools",
+                                 "window", "updated_at", "last_error", "errors", "now", "prices_at", "review_at"]))
 
     def test_the_health_route_carries_it_uncached_and_the_settings_name_the_journal(self):
         index = make(Node(history(), head=3000), tempfile.mkdtemp())

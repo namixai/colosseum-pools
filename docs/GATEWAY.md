@@ -779,7 +779,7 @@ twice keeps each event once (block and log index). A node that fails, throttles 
 again from the same block after 1 s, 2 s, 4 s… up to 60 s; `/v1/simindex/health`'s `last_error` and `behind_blocks`
 say so meanwhile, and the routes go on answering with what was read. `last_error` is the error's name alone
 (`HTTPError`): its words can carry the node's address, which for a provider holds its key, and the route is public;
-the words stay in the service's own log.
+the words stay in the service's own log (`read_failed`), the address taken out of them there too.
 
 **How the site uses it** (`app/lib/simindex.js`). The page asks the index for the pool, waits at most 6 s,
 and checks the answer: the pool and the chain are the page's, each event has its fields in shape, none is
@@ -886,7 +886,9 @@ the address comes from the key. In `signer` mode it reads one bearer token per k
 the RPC's chain with them, and reads the accounts its keys trade after that, in a thread of its own
 (`take_on_at_start` in `gateway/server.py`). Until it has, `/v1/health` says `"ready": false`, with
 `starting_for_s` and, if the reading failed as a whole and is being tried again, `start_failed_attempts` and
-`start_last_error`; an order gets `429 busy` (`gateway_starting`) and nothing is sent. Then the names of
+`start_last_error` (the error's name alone, `HTTPError`: its words can carry the node's address, which for a
+provider holds its key, and the route is public; the words go to the gateway's own log, the address taken out of
+them); an order gets `429 busy` (`gateway_starting`) and nothing is sent. Then the names of
 those accounts' markets are checked, the sweep starts, and `/v1/health` says `"ready": true`. A key whose
 own read the node refused is not waited for: `keys_unread` counts those, and every sweep tries them again.
 Before 11 Nov 2026 the reading came before the port: on 10 Nov 2026 the host's demo2 gateway, 92 keys on
