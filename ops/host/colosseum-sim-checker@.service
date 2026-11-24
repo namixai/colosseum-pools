@@ -16,7 +16,8 @@ Wants=network-online.target
 User=colosseum-keeper
 Group=colosseum-keeper
 WorkingDirectory=/opt/colosseum-pools/current
-# The record's file last, as the keeper's: it wins over a line by hand in keeper-%i.env. The node is the keeper's.
+# The record's file last, as the keeper's: it wins over a line by hand in keeper-%i.env. The node is the keeper's: the
+# host's own (COLOSSEUM_HOST_RPC_URL in keeper-%i.env) where the host names one, else the record's.
 EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env
 # The network and its confirmation from the instance's own file (keeper-%i.env): testnet when it names none, as before.

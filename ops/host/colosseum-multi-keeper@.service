@@ -21,7 +21,10 @@ WorkingDirectory=/opt/colosseum-pools/current
 # The alarm channel (COLOSSEUM_ALERT_CMD) of the stops' loop in this process: on mainnet the loop does not start
 # without it (ops/stop_filler.py, require_channel); on testnet an alarm goes to the journal and the flag file as before.
 EnvironmentFile=-/etc/colosseum/watch.env
-# The record's file last, as the gateway's: it wins over a line by hand in keeper-%i.env.
+# The record's file last, as the gateway's: it wins over a line by hand in keeper-%i.env. Not over the host's own node:
+# COLOSSEUM_HOST_RPC_URL in keeper-%i.env, which no record names (a record is public, and that address may hold a key),
+# is the keeper's node whatever the record's COLOSSEUM_RPC_URL says, and the stops' loop's when COLOSSEUM_STOP_RPC_URL
+# names none (spike/hlspike/common.py). No log line and no alarm carries its address.
 EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env
 # The network and its confirmation from the instance's own file (keeper-%i.env): testnet when it names none, as before.

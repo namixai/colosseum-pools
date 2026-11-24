@@ -35,8 +35,9 @@ opens our pools) and the platform's recipient, and lists the assets with their l
 the platform's decision of 11 November 2026), each at its perp index on the network (ops/sim_network.py). It
 hands the factory to our Safe last (--safe; setOperator, read before and after, the Safe's threshold and owners read and shown first; needed on mainnet, where the
 deployer's key must not stay its operator), and writes deployments/<network>-<label>.json; on testnet with the same keeper nodes as demo3, on mainnet with the
-ones --keeper-nodes names (a JSON file, as a record's `keeper_nodes`: a node of the keeper's own, not the
-gateway's), so the host's keeper unit can run on it.
+ones --keeper-nodes names (a JSON file, as a record's `keeper_nodes`: a public node, with no key in its address, since
+the record is public; the host's own node is named on the host alone, COLOSSEUM_HOST_RPC_URL in its keeper-<name>.env,
+and wins there), so the host's keeper unit can run on it.
 
 `buy` approves a line's price and buys an exam with a code from the trader's key, for --measure in
 ops/sim_keeper.py; it prints the exam.
@@ -395,10 +396,13 @@ def on_of(raw: dict) -> int:
 
 def keeper_nodes_of(args) -> dict | None:
     """The keeper's nodes for the record: --keeper-nodes's file, checked as the host checks a record's; on testnet
-    without it, demo3's (read at --send). Mainnet has no default: its keeper needs a node of its own (audit M-1)."""
+    without it, demo3's (read at --send). Mainnet has no default: the record names a public node, said outright, and
+    the keeper's own node (audit M-1) is named on its host, where it wins over the record's (COLOSSEUM_HOST_RPC_URL)."""
     if not args.keeper_nodes:
         if c.NETWORK.name == "mainnet":
-            raise SystemExit("--keeper-nodes is needed on mainnet: the keeper's own node, not the gateway's (audit M-1)")
+            raise SystemExit("--keeper-nodes is needed on mainnet: the node the record names, a public one with no key "
+                             "in its address (the record is public); the host's own node is named on the host alone, "
+                             "COLOSSEUM_HOST_RPC_URL in its keeper-<name>.env, and wins there (audit M-1)")
         return None
     nodes = json.loads(pathlib.Path(args.keeper_nodes).read_text())
     from ops.host_instances import keeper_nodes
@@ -1493,7 +1497,8 @@ def main(argv: list[str] | None = None) -> int:
                                           "mainnet 1 unless named")
     d.add_argument("--confirm-large-fee", action="store_true",
                    help="on mainnet, send a --creation-fee above 10 HYPE: refused without it")
-    d.add_argument("--keeper-nodes", help="a JSON file of the keeper's nodes, as a record's keeper_nodes; needed on mainnet")
+    d.add_argument("--keeper-nodes", help="a JSON file of the keeper's nodes, as a record's keeper_nodes; needed on mainnet. "
+                                          "Public nodes: the host's own node goes in its keeper-<name>.env, never here")
     d.add_argument("--send", action="store_true")
     q = sub.add_parser("pool")
     q.add_argument("--deployment", required=True)

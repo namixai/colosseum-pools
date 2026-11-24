@@ -192,6 +192,10 @@ _LOG_LOCK = threading.Lock()
 
 
 def log(event: str, **fields) -> None:
+    # While the host's own node is named (COLOSSEUM_HOST_RPC_URL, spike/hlspike/common.py) no line carries a node's
+    # address: a provider's key may be its host name, which a line of the start names (ops/stop_filler.py).
+    if c.OWN_NODE:
+        fields = {k: c.hush(v) if isinstance(v, str) else v for k, v in fields.items()}
     # One write a line, under a lock: the simulated pools' keeper logs from two threads (ops/stop_filler.py), and
     # sys.stdout is not safe to write from two at once (print's two writes, the text and its end, the less so).
     line = json.dumps({"t": int(time.time()), "event": event, **fields}, default=str) + "\n"
@@ -1487,8 +1491,9 @@ def check_node(own: str, chain_id: int, gateway_env: pathlib.Path = GATEWAY_ENV)
         return
     if chain_id == MAINNET_CHAIN_ID:
         raise SystemExit("the keeper's node is the gateway's: on mainnet the keeper needs a node of its own "
-                         "(audit M-1); set COLOSSEUM_RPC_URL in keeper.env to another")
-    log("node_shared_with_gateway", rpc=own.split("?")[0], why="one IP budget for orders and stops (audit M-1)")
+                         "(audit M-1); set COLOSSEUM_RPC_URL in keeper.env to another (on a host, the host's own node: "
+                         "COLOSSEUM_HOST_RPC_URL in the instance's keeper-<name>.env)")
+    log("node_shared_with_gateway", rpc=c.node_shown(own), why="one IP budget for orders and stops (audit M-1)")
 
 
 def main() -> int:

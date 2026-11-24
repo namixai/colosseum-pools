@@ -470,5 +470,198 @@ class TheJournalThePulseLooksAt(unittest.TestCase):
                          pathlib.Path("/k/prices-sim1.jsonl"))
 
 
+OWN = "https://KEY-IN-THE-HOST.node.example/evm/KEY-IN-THE-PATH?k=KEY-IN-THE-QUERY"
+SECRETS = ("KEY-IN-THE-HOST", "KEY-IN-THE-PATH", "KEY-IN-THE-QUERY", "node.example")
+
+
+class TheHostsOwnNode(unittest.TestCase):
+    """The record is public, so the node it names is one without a key. The node the host pays for is named on the host
+    alone, COLOSSEUM_HOST_RPC_URL in the instance's keeper-<name>.env, and it is the keeper's node whatever the record
+    says; its address is in no error's text and in no line for a person."""
+
+    def start(self, env: dict[str, str], code: str) -> str:
+        """`code` in a process started with `env`, as a unit starts the keeper with its files' lines."""
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("COLOSSEUM_")}
+        out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True,
+                             env={**clean, "COLOSSEUM_KEY_DIR": "", **env})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return out.stdout.strip()
+
+    def unit_env(self, unit: str, files: dict[str, str]) -> dict[str, str]:
+        """What a unit's process is given: its EnvironmentFile= lines in order, a later file over an earlier one."""
+        env: dict[str, str] = {}
+        for line in (HOST / unit).read_text().splitlines():
+            if line.startswith("EnvironmentFile="):
+                name = line.split("=", 1)[1].lstrip("-").rsplit("/", 1)[1].replace("%i", "sim1")
+                for setting in files.get(name, "").splitlines():
+                    if "=" in setting and not setting.startswith("#"):
+                        key, value = setting.split("=", 1)
+                        env[key] = value
+        return env
+
+    def test_the_hosts_own_node_wins_over_the_records_for_the_keeper_and_the_stops(self):
+        with mainnet():
+            record_file = hi.deployment_env("sim1")
+        self.assertIn("COLOSSEUM_RPC_URL=https://rpc.hyperliquid.xyz/evm\n", record_file, "the record's: a public node")
+        by_hand = KEEPER_ENV + f"COLOSSEUM_RPC_URL=https://by-hand.example/evm\nCOLOSSEUM_HOST_RPC_URL={OWN}\n"
+        files = {"keeper-sim1.env": by_hand, "deployment-sim1.env": record_file}
+        said = "from spike.hlspike import common as c; import os; print(c.RPC_URL); print(os.environ.get('COLOSSEUM_STOP_RPC_URL', '') or c.RPC_URL)"
+        for unit in ("colosseum-multi-keeper@.service", "colosseum-sim-checker@.service", "colosseum-payout-review@.service"):
+            env = self.unit_env(unit, files)
+            # The record's file is read last, as before: its COLOSSEUM_RPC_URL replaces the line by hand...
+            self.assertEqual(env["COLOSSEUM_RPC_URL"], "https://rpc.hyperliquid.xyz/evm", unit)
+            # ...and the host's own node is the node all the same, the stops' loop's too while it names none of its own.
+            self.assertEqual(self.start(env, said).splitlines(), [OWN, OWN], unit)
+        env = self.unit_env("colosseum-multi-keeper@.service", {**files, "keeper-sim1.env": by_hand + "COLOSSEUM_STOP_RPC_URL=https://stops.example/evm\n"})
+        self.assertEqual(self.start(env, said).splitlines(), [OWN, "https://stops.example/evm"])
+        # Without it everything is as it was: the record's node, and with no record's line the one by hand.
+        no_own = {"keeper-sim1.env": KEEPER_ENV + "COLOSSEUM_RPC_URL=https://by-hand.example/evm\n", "deployment-sim1.env": record_file}
+        self.assertEqual(self.start(self.unit_env("colosseum-multi-keeper@.service", no_own), said).splitlines()[0],
+                         "https://rpc.hyperliquid.xyz/evm")
+        self.assertEqual(self.start({"COLOSSEUM_RPC_URL": "https://by-hand.example/evm", "COLOSSEUM_HOST_RPC_URL": " "},
+                                    said).splitlines()[0], "https://by-hand.example/evm", "one of spaces alone is none")
+
+    def test_the_stops_loop_reads_the_hosts_own_node(self):
+        from ops import stop_filler as sf
+        from spike.hlspike import common as c
+        args = mock.Mock(stop_rpc="", price_journal="", stop_alarm="", deployment="sim1", stop_tip_gwei=0,
+                         stop_overdue=5, stop_alarm_min_blocks=2)
+        with mock.patch.object(c, "RPC_URL", OWN), mock.patch.object(c, "OWN_NODE", OWN), \
+                mock.patch.object(sf, "Node") as node, mock.patch.object(sf, "check_chain"):
+            sf.build(args, mock.Mock(factory=None), pathlib.Path(tempfile.mkdtemp()) / "sim-sim1.json")
+        node.assert_called_once_with(OWN)
+
+    def failing(self, error: Exception):
+        """c's session, whose every call fails with `error`, raised as the HTTP library raises: on top of its own."""
+        def post(*args, **kwargs):
+            try:
+                raise OSError(f"under it: {OWN}")
+            except OSError:
+                raise error
+        return mock.Mock(post=post)
+
+    ERRORS = {
+        "refused": lambda r: r.ConnectionError(
+            "HTTPSConnectionPool(host='KEY-IN-THE-HOST.node.example', port=443): Max retries exceeded with url: "
+            "/evm/KEY-IN-THE-PATH?k=KEY-IN-THE-QUERY (Caused by NewConnectionError('Failed to establish a new connection'))"),
+        "a status": lambda r: r.HTTPError(f"503 Server Error: Service Unavailable for url: {OWN}"),
+        "a name not found": lambda r: r.ConnectionError("Failed to resolve 'key-in-the-host.NODE.example' ([Errno 8] nodename)"),
+        "an address not taken": lambda r: r.exceptions.InvalidURL(f"Invalid URL {OWN!r}: No host supplied"),
+        "a timeout": lambda r: r.ReadTimeout(f"HTTPSConnectionPool(host='KEY-IN-THE-HOST.node.example', port=443): Read timed out. (read timeout=30)"),
+    }
+
+    def test_no_failure_of_a_call_says_the_nodes_address_while_the_hosts_own_is_named(self):
+        import traceback
+
+        import requests
+        from spike.hlspike import common as c
+        for what, make in self.ERRORS.items():
+            for call in (lambda: c.rpc("eth_blockNumber"), lambda: c.rpc_once(OWN, "eth_getLogs", [{}])):
+                with self.subTest(what), mock.patch.object(c, "OWN_NODE", OWN), mock.patch.object(c, "RPC_URL", OWN), \
+                        mock.patch.object(c, "_session", self.failing(make(requests))):
+                    with self.assertRaises(requests.RequestException) as caught:
+                        call()
+                    exc = caught.exception
+                    self.assertIs(type(exc), type(make(requests)), "the same error, by its type, for whoever tells them apart")
+                    # What a keeper logs (`error=str(exc)[:200]`), an alarm carries and a start's traceback prints.
+                    for said in (str(exc), repr(exc), "".join(traceback.format_exception(exc))):
+                        for secret in SECRETS:
+                            self.assertNotIn(secret.lower(), said.lower(), (what, said))
+                    self.assertTrue(str(exc), "it still says what failed")
+
+    def test_without_it_an_error_is_as_it_was(self):
+        import requests
+        from spike.hlspike import common as c
+        error = self.ERRORS["refused"](requests)
+        with mock.patch.object(c, "OWN_NODE", ""), mock.patch.object(c, "_session", self.failing(error)):
+            with self.assertRaises(requests.ConnectionError) as caught:
+                c.rpc("eth_blockNumber")
+        self.assertIs(caught.exception, error)
+        self.assertIn("/evm/KEY-IN-THE-PATH", str(caught.exception))
+        self.assertIsNotNone(caught.exception.__context__)
+        self.assertFalse(caught.exception.__suppress_context__)
+
+    def test_an_error_of_the_node_itself_is_said_whole(self):
+        # The node's own answer ("execution reverted", a refused range) is what the keepers decide by: never touched.
+        from spike.hlspike import common as c
+        answer = mock.Mock(status_code=200, json=lambda: {"error": {"code": 3, "message": "execution reverted: NotFiller()"}})
+        with mock.patch.object(c, "OWN_NODE", OWN), mock.patch.object(c, "_session", mock.Mock(post=lambda *a, **k: answer)):
+            with self.assertRaisesRegex(RuntimeError, r"eth_call: \{'code': 3, 'message': 'execution reverted: NotFiller\(\)'\}"):
+                c.rpc("eth_call", [])
+
+    def test_hush_takes_out_every_address_and_the_own_nodes_name(self):
+        from spike.hlspike import common as c
+        with mock.patch.object(c, "OWN_NODE", OWN):
+            self.assertEqual(c.hush(f"for url: {OWN} and {OWN[:40]}"), "for url: <node> and <node>")
+            self.assertEqual(c.hush("Max retries exceeded with url: /evm/KEY-IN-THE-PATH (Caused by x)"),
+                             "Max retries exceeded with url: <path> (Caused by x)")
+            self.assertEqual(c.hush("host='KEY-IN-THE-HOST.node.example', port=443"), "host='<host>', port=443")
+            self.assertEqual(c.hush("Failed to resolve 'Key-In-The-Host.node.example'"), "Failed to resolve '<host>'")
+            self.assertEqual(c.hush("execution reverted: NotFiller()"), "execution reverted: NotFiller()")
+        with mock.patch.object(c, "OWN_NODE", ""):
+            self.assertEqual(c.hush("see https://other.example/x?k=1 now"), "see <node> now")
+
+    def test_a_person_is_shown_which_node_and_never_the_hosts_own_address(self):
+        import contextlib
+        import io
+
+        from ops import sim_network as sn
+        from spike.hlspike import common as c
+        with mock.patch.object(c, "OWN_NODE", OWN), mock.patch.object(c, "RPC_URL", OWN):
+            self.assertEqual(c.node_shown(), "the host's own node (its address is not shown)")
+            self.assertEqual(c.node_shown(OWN + "/"), "the host's own node (its address is not shown)")
+            self.assertEqual(c.node_shown("https://public.example/evm?x=1"), "https://public.example/evm")
+            # The line a person confirms a send on mainnet by (ops/sim_network.py).
+            import types
+
+            from spike.hlspike import network as networks
+            args = mock.Mock(network="mainnet")
+            fake = types.SimpleNamespace(NETWORK=networks.MAINNET, RPC_URL=OWN, node_shown=c.node_shown,
+                                         assert_network=lambda: None)
+            out = io.StringIO()
+            with mock.patch.object(sn, "key_dir_ok"), contextlib.redirect_stdout(out):
+                sn.confirm_send(args, "a send", fake, ask=lambda q: sn.CONFIRM_PHRASE, tty=True)
+            self.assertIn("RPC the host's own node (its address is not shown): a send", out.getvalue())
+            for secret in SECRETS:
+                self.assertNotIn(secret, out.getvalue())
+        with mock.patch.object(c, "OWN_NODE", ""), mock.patch.object(c, "RPC_URL", "https://public.example/evm?x=1"):
+            self.assertEqual(c.node_shown(), "https://public.example/evm")
+
+    def test_no_line_of_the_journal_names_a_node_while_the_hosts_own_is_named(self):
+        import contextlib
+        import io
+
+        from ops import keeper as core
+        from ops import sim_keeper, stop_filler
+        from spike.hlspike import common as c
+        # The stops' loop says its node's scheme and host at its start, through the keepers' one `log`.
+        self.assertIn('log("stop_loop_started", node=host_of(self.node.url)', (ROOT / "ops" / "stop_filler.py").read_text())
+        self.assertIs(stop_filler.log, core.log)
+        self.assertIs(sim_keeper.log, core.log)
+        started = dict(node=stop_filler.host_of(OWN), tip_wei=0, sends=True, block=7)
+        out = io.StringIO()
+        with mock.patch.object(c, "OWN_NODE", OWN), contextlib.redirect_stdout(out):
+            core.log("stop_loop_started", **started)
+            core.log("loop_failed", error=f"HTTPSConnectionPool(host='KEY-IN-THE-HOST.node.example'): url: /evm/KEY-IN-THE-PATH")
+        lines = [json.loads(l) for l in out.getvalue().splitlines()]
+        self.assertEqual((lines[0]["event"], lines[0]["node"], lines[0]["block"], lines[0]["sends"]),
+                         ("stop_loop_started", "<node>", 7, True))
+        for secret in SECRETS:
+            self.assertNotIn(secret, out.getvalue())
+        out = io.StringIO()
+        with mock.patch.object(c, "OWN_NODE", ""), contextlib.redirect_stdout(out):
+            core.log("stop_loop_started", **started)
+        self.assertEqual(json.loads(out.getvalue())["node"], "https://key-in-the-host.node.example", "as before without it")
+
+    def test_the_record_keeps_a_public_node_and_the_host_is_told_where_its_own_goes(self):
+        # The record refuses an address with a key in it, as before; the host's file is where bootstrap says it goes.
+        with self.assertRaises(SystemExit):
+            hi.keeper_nodes({"keeper_nodes": {"primary": {"url": OWN, "log_window": 50}}})
+        self.assertIn("COLOSSEUM_HOST_RPC_URL=<this host's own node>", (HOST / "bootstrap.sh").read_text())
+        from spike.hlspike import common as c
+        self.assertEqual(c.OWN_NODE_ENV, "COLOSSEUM_HOST_RPC_URL")
+        self.assertIn(c.OWN_NODE_ENV, (HOST / "colosseum-multi-keeper@.service").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

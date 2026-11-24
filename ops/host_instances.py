@@ -376,7 +376,9 @@ def keeper_nodes(record: dict) -> str:
     the second node its scan takes a window to when the first refuses it, with that node's own window
     (COLOSSEUM_RPC_BACKUP_URL, COLOSSEUM_BACKUP_LOG_WINDOW). A record without it gives none: keeper.env still says
     the node, as before. With it, keeper.env's COLOSSEUM_RPC_URL is overridden, since systemd reads this file
-    after it."""
+    after it. The record is public, so its node is one without a key; the host's own node, which may hold one, is named
+    on the host alone, COLOSSEUM_HOST_RPC_URL in the instance's keeper-<name>.env, which no record's line overrides:
+    the keeper reads it whatever this file says (spike/hlspike/common.py)."""
     nodes = record.get("keeper_nodes")
     if nodes is None:
         return ""
