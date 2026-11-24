@@ -17648,6 +17648,15 @@ MUTATIONS = [
      "        self.command = (os.environ.get(\"COLOSSEUM_ALERT_CMD\", \"\") if command is None else command).strip()",
      "        self.command = os.environ.get(\"COLOSSEUM_ALERT_CMD\", \"\") if command is None else command",
      ["test_a_channel_of_spaces_alone_is_no_channel"]),
+    # A journal line with a fraction where a time or a price stands: a bad line, not its whole part.
+    ("JR11", "ops/payout_review.py",
+     "                got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, (bool, float))}",
+     "                got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, bool)}",
+     ["test_a_number_with_a_fraction_where_a_block_a_time_or_a_price_stands_is_a_bad_line"]),
+    ("JR12", "ops/payout_review.py",
+     "                if isinstance(t, float):\n                    raise TypeError(\"t\")",
+     "                if False:\n                    raise TypeError(\"t\")",
+     ["test_a_number_with_a_fraction_where_a_block_a_time_or_a_price_stands_is_a_bad_line"]),
 ]
 
 RUNNERS = {

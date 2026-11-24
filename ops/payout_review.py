@@ -951,7 +951,9 @@ class Journal:
     did not look at (it was not running, the head ran ahead of it, a node that failed), and a header {"journal": ...,
     "chain", "factory", "label"} at the top of each day's file. `px[asset][block]` is what it read; a block of an asset
     not in it is a hole, whatever the reason. A last line cut short (the machine stopped mid write) is left out, and so
-    is a line of the wrong shape (`bad` counts them): its block is a hole, never the end of the review.
+    is a line of the wrong shape (`bad` counts them): its block is a hole, never the end of the review. The loop writes
+    whole numbers only, so a number with a fraction (or written as one, 7.0) where the block, its time or a price
+    stands is the wrong shape too: 7.9 is no price, and is not taken as 7.
 
     One Journal may hold two journals, the keeper's and the second writer's on another machine and node (`add_text`
     or `add_lines` once each): a block is held where either has it, and where both have it they must give the same
@@ -1094,11 +1096,13 @@ class Journal:
                 if isinstance(b, bool) or not isinstance(b, int):
                     raise TypeError("block")
                 t = row.get("t")
+                if isinstance(t, float):
+                    raise TypeError("t")  # 50.5 is no time of a block, and is not taken as 50
                 t = None if t is None else int(t)
                 px = row.get("px") or {}
                 if not isinstance(px, dict):
                     raise TypeError("px")
-                got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, bool)}
+                got = {int(asset): int(v) for asset, v in px.items() if not isinstance(v, (bool, float))}
                 if len(got) != len(px):
                     raise TypeError("px")
                 if not 0 <= b < U32 or any(not -(1 << 63) <= v < (1 << 63) for v in got.values()):

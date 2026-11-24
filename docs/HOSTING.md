@@ -959,7 +959,8 @@ more 24 and 6 hours before that date, while it is held and not stopped; a payout
 is `payout_needs_a_stop`, the same way. Each says what can still be done: where the pool would refuse a stop (the
 payout was stopped once already and the stop lifted, or its time to stop is over) the alarm says so and names no
 deadline for one, and it points at the draft of a stop of reason 3 only where the review made one. A line of a
-journal longer than 64 KB, nested past the parser's depth or with `Infinity` or `NaN` for a number is a bad line: its
+journal longer than 64 KB, nested past the parser's depth, with `Infinity` or `NaN` for a number, or with a number
+that is not whole where the block, its time or a price stands (`7.9` is not taken as 7) is a bad line: its
 block is not in that journal. A second journal whose reading fails in any other way is `second_journal_unread`
 (every 6 hours while it lasts): the pass goes on and writes its documents, and the stops standing in the blocks that
 journal did not give are held as resting on one journal. A pass that fails is `review_failed` (once an hour); a pass killed by its
