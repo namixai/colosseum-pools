@@ -1212,20 +1212,23 @@ on chain 999, with mainnet's own page. Nothing is written into `app/` for it; th
    `null` while there is none: the panels then read the chain themselves, and the operator's page offers no
    one-signature approval, which needs a review from the index. The index answers one origin
    (`SIM_INDEX_ALLOW_ORIGIN`, docs/GATEWAY.md): the mainnet site's.
-2. Read what the pack will carry before making it:
+2. Pack: `./scripts/pack-site.sh --network mainnet <commit> [out-dir]`. The folder is the commit's `app/` with
+   `config.js` and `index.html` written for mainnet by that commit's own `scripts/app_config.py`, in place of
+   testnet's; `build.json` is `{"commit": "<the full hash>", "network": "mainnet"}`, and the list goes beside the
+   folder as for testnet. The last line must say `differ=0 extra=0`. The packer stops with the reason, and writes
+   nothing, when the commit has nothing on mainnet for a site to read.
+3. Read the folder's two written files before uploading. `config.js` names chain 999,
+   `https://rpc.hyperliquid.xyz/evm`, the factory under `sim` and no other deployment. `index.html` says "Mainnet.
+   Real USDC. Unaudited." where testnet's page has its notice and its entry question, and has "Pools" alone in its
+   menu. To look without packing, the packer's two commands can be run in a checkout of that commit, where the
+   script is the commit's own:
 
-       python3 scripts/app_config.py --network mainnet --commit <commit>            # config.js
-       python3 scripts/app_config.py --network mainnet --index --commit <commit>    # index.html
+       python3 scripts/app_config.py --network mainnet            # config.js
+       python3 scripts/app_config.py --network mainnet --index    # index.html
 
-   The first names chain 999, `https://rpc.hyperliquid.xyz/evm`, the factory under `sim` and no other deployment;
-   the second says "Mainnet. Real USDC. Unaudited." where testnet's page has its notice and its entry question, and
-   has "Pools" alone in its menu. Either stops with the reason when the commit has nothing on mainnet for a site
-   to read.
-3. Pack: `./scripts/pack-site.sh --network mainnet <commit> [out-dir]`. The folder is the commit's `app/` with those
-   two files in place of testnet's, `build.json` is `{"commit": "<the full hash>", "network": "mainnet"}`, and the
-   list goes beside the folder as for testnet. The last line must say `differ=0 extra=0`.
-4. Upload the folder as in step 3 above, to the Worker that serves the mainnet site. A mainnet pack uploaded over
-   the testnet site replaces it, and the other way round: check the folder's `build.json` before dragging it.
+4. Upload the folder the way a testnet pack goes up (drag the folder itself, not the files inside it), to the Worker
+   that serves the mainnet site. A mainnet pack uploaded over the testnet site replaces it, and the other way
+   round: check the folder's `build.json` before dragging it.
 5. Open `/` (the factory's pools, or "Not deployed yet" before the factory is on chain), `#/sim/<a pool>`,
    `#/manage/<a pool>`, `#/manage/<a pool>/operator` and `#/exam/<an exam>` on the site. `#/new`, `#/economics`
    and an address that is not one of the factory's pools answer "Not found".

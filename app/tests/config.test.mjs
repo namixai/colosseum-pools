@@ -14,6 +14,9 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCRIPT = join(ROOT, "scripts/app_config.py");
 const run = (...args) => spawnSync("python3", [SCRIPT, ...args], { cwd: ROOT, encoding: "utf8" });
 const LIVE = JSON.parse(readFileSync(join(ROOT, "deployments/LIVE.json"), "utf8")).deployments;
+// The examples stand beside testnet's entries only: a mainnet deployment that is really listed must not make an
+// example a second one of its network, nor an example of "no mainnet deployment" false.
+const TESTNET = LIVE.filter((e) => e.network === "testnet");
 
 const FACTORY = "0x00000000000000000000000000000000000000F1";
 const MAIN_RECORD = {
@@ -38,7 +41,7 @@ function example(entries, records) {
   cpSync(join(ROOT, "spike/hlspike/network.py"), join(dir, "spike/hlspike/network.py"));
   cpSync(join(ROOT, "app/index.html"), join(dir, "app/index.html"));
   cpSync(join(ROOT, "deployments"), join(dir, "deployments"), { recursive: true });
-  writeFileSync(join(dir, "deployments/LIVE.json"), JSON.stringify({ deployments: [...LIVE, ...entries] }, null, 2));
+  writeFileSync(join(dir, "deployments/LIVE.json"), JSON.stringify({ deployments: [...TESTNET, ...entries] }, null, 2));
   for (const [path, record] of Object.entries(records)) writeFileSync(join(dir, path), JSON.stringify(record, null, 2));
   return dir;
 }
@@ -79,7 +82,7 @@ test("a mainnet site's settings hold mainnet's values and mainnet's deployments 
     // Nothing of testnet's is left in it: not the word, not its USDC, not one of its deployments' addresses.
     assert.doesNotMatch(text, /testnet/i);
     for (const address of ["0x2B3370eE501B4a559b57D449569354196457D8Ab",
-      ...LIVE.flatMap((e) => [e.factory, e.pool, e.deployer, e.keeper]).filter(Boolean)]) {
+      ...TESTNET.flatMap((e) => [e.factory, e.pool, e.deployer, e.keeper]).filter(Boolean)]) {
       assert.ok(!text.toLowerCase().includes(address.toLowerCase()), `testnet's ${address} is in mainnet's settings`);
     }
   } finally {
@@ -88,9 +91,14 @@ test("a mainnet site's settings hold mainnet's values and mainnet's deployments 
 });
 
 test("no settings for a network without exactly one live deployment, or with a record of another chain", () => {
-  const none = run("--network", "mainnet");
-  assert.notEqual(none.status, 0);
-  assert.match(none.stderr, /0 live deployments on mainnet/);
+  const empty = example([], {});
+  try {
+    const none = run("--network", "mainnet", "--root", empty);
+    assert.notEqual(none.status, 0);
+    assert.match(none.stderr, /0 live deployments on mainnet/);
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
   for (const [entries, recs, why] of [
     [[MAIN, { ...MAIN, label: "v3-main2", record: "deployments/mainnet-v3-main2.json" }],
       { ...records, "deployments/mainnet-v3-main2.json": { ...MAIN_RECORD, label: "v3-main2" } }, /2 live deployments on mainnet/],
@@ -201,7 +209,7 @@ test("a network with no live deployment gets a site of simulation pools: its one
     // Nothing of testnet's is left in it: not the word, not its USDC, not one of its deployments' addresses.
     assert.doesNotMatch(text, /testnet/i);
     for (const address of ["0x2B3370eE501B4a559b57D449569354196457D8Ab",
-      ...LIVE.flatMap((e) => [e.factory, e.pool, e.deployer, e.keeper]).filter(Boolean)]) {
+      ...TESTNET.flatMap((e) => [e.factory, e.pool, e.deployer, e.keeper]).filter(Boolean)]) {
       assert.ok(!text.toLowerCase().includes(address.toLowerCase()), `testnet's ${address} is in mainnet's settings`);
     }
   } finally {
@@ -343,10 +351,15 @@ test("a mainnet site of a live PoolFactory deployment keeps those pools' menu, i
 });
 
 test("no index.html for a network with no site, or when the page's words have moved from where the script replaces them", () => {
-  const none = index("--network", "mainnet");
-  assert.notEqual(none.status, 0);
-  assert.match(none.stderr, /0 live deployments on mainnet/);
-  assert.equal(none.stdout, "");
+  const empty = example([], {});
+  try {
+    const none = index("--network", "mainnet", "--root", empty);
+    assert.notEqual(none.status, 0);
+    assert.match(none.stderr, /0 live deployments on mainnet/);
+    assert.equal(none.stdout, "");
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
   for (const [from, to, why] of [
     ["Hyperliquid <strong>testnet</strong> and mock USDC.", "Hyperliquid <strong>testnet</strong>, mock USDC.", /0 places read '<div class="notice">Hyperliquid <strong>testnet<\/strong> and mock USDC\.<\/div>', not 1/],
     ["<title>Pools on Hyperliquid · testnet</title>", "<title>Pools on Hyperliquid · testnet</title><title>Pools on Hyperliquid · testnet</title>", /2 places read '<title>Pools on Hyperliquid · testnet<\/title>', not 1/],
@@ -375,4 +388,34 @@ test("no index.html for a network with no site, or when the page's words have mo
   const refused = index("--gateway", "http://127.0.0.1:8787");
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /--gateway is a setting: index\.html has none/);
+});
+
+// The repository's own mainnet entries, whatever they are on the day: none, and the script stops; or a staged
+// simulation-pool deployment, and the settings and the page are that deployment's, on chain 999.
+test("the repository's own mainnet site is what deployments/LIVE.json lists for mainnet today", async () => {
+  const listed = LIVE.filter((e) => e.network === "mainnet" && ["live", "staged"].includes(e.role));
+  const settings = run("--network", "mainnet");
+  const page = index("--network", "mainnet");
+  if (listed.length === 0) {
+    for (const answer of [settings, page]) {
+      assert.notEqual(answer.status, 0);
+      assert.match(answer.stderr, /0 live deployments on mainnet/);
+      assert.equal(answer.stdout, "");
+    }
+    return;
+  }
+  assert.equal(settings.status, 0, settings.stderr);
+  assert.equal(page.status, 0, page.stderr);
+  assert.match(settings.stdout, /^  chainId: 999,$/m);
+  assert.match(settings.stdout, /^  rpc: "https:\/\/rpc\.hyperliquid\.xyz\/evm",$/m);
+  assert.doesNotMatch(settings.stdout, /testnet/i);
+  assert.doesNotMatch(page.stdout, /testnet|mock/i);
+  const live = listed.find((e) => e.role === "live");
+  if (!live) {
+    // A site of simulation pools: the one staged factory, held to its entry.
+    const sims = listed.filter((e) => "SimPoolFactory" in JSON.parse(readFileSync(join(ROOT, e.record), "utf8")));
+    assert.equal(sims.length, 1, "the mainnet site shows the pools of one staged simulation-pool deployment");
+    assert.match(settings.stdout, new RegExp(`^  sim: \\{\\n    label: "${sims[0].label}",\\n    factory: "${sims[0].factory}",\\n  \\},$`, "m"));
+    assert.match(settings.stdout, /^  deployments: \[\n  \],$/m);
+  }
 });

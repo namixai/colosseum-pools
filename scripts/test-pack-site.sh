@@ -55,10 +55,12 @@ if [ -z "$(git show HEAD:deployments/LIVE.json | python3 -c 'import json,sys; pr
   if ./scripts/pack-site.sh --network mainnet HEAD "$TMP/nomain" >/dev/null 2>&1 || [ -e "$TMP/nomain" ]; then echo "FAIL mainnet pack: packed a commit with nothing on mainnet for a site to read"; exit 1; fi
   echo "ok   refuses mainnet for a commit with nothing on mainnet for a site to read, and writes nothing"
 fi
-# A commit with one: HEAD's tree, with an example mainnet entry in LIVE.json and its record beside testnet's.
+# A commit with one: HEAD's tree, with an example mainnet entry in LIVE.json and its record beside testnet's. The
+# examples stand beside testnet's entries only: a mainnet deployment that is really listed is left out of them.
 liveblob="$(git show HEAD:deployments/LIVE.json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
+d["deployments"] = [e for e in d["deployments"] if e["network"] == "testnet"]
 d["deployments"].append({"label": "v3-net", "network": "mainnet", "chainId": 999, "role": "live",
   "record": "deployments/mainnet-v3-net.json", "factory": "0x00000000000000000000000000000000000000F1", "pool": None,
   "gateway": "https://pools-api.usenami.io/net", "deployer": "0x00000000000000000000000000000000000000D1",
@@ -92,6 +94,7 @@ echo "ok   packs mainnet with that commit's mainnet settings in config.js and ma
 simblob="$(git show HEAD:deployments/LIVE.json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
+d["deployments"] = [e for e in d["deployments"] if e["network"] == "testnet"]
 d["deployments"].append({"label": "sim-net", "network": "mainnet", "chainId": 999, "role": "staged",
   "record": "deployments/mainnet-sim-net.json", "factory": "0x00000000000000000000000000000000000000F5", "pool": None,
   "gateway": None, "deployer": "0x00000000000000000000000000000000000000D1", "keeper": None})

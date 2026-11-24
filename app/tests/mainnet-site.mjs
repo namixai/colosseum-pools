@@ -32,7 +32,8 @@ export const SIM_ENTRY = {
  */
 export function mainnetSite(entry = {}) {
   const dir = mkdtempSync(join(tmpdir(), "app-mainnet-"));
-  const live = JSON.parse(readFileSync(join(ROOT, "deployments/LIVE.json"), "utf8")).deployments;
+  // Beside testnet's entries only: a mainnet deployment that is really listed must not make the example a second one.
+  const live = JSON.parse(readFileSync(join(ROOT, "deployments/LIVE.json"), "utf8")).deployments.filter((e) => e.network === "testnet");
   cpSync(join(ROOT, "spike/hlspike/network.py"), join(dir, "spike/hlspike/network.py"));
   cpSync(join(ROOT, "deployments"), join(dir, "deployments"), { recursive: true });
   writeFileSync(join(dir, "deployments/LIVE.json"), JSON.stringify({ deployments: [...live, { ...SIM_ENTRY, ...entry }] }, null, 2));
