@@ -131,10 +131,17 @@ def confirm_send(args, what: str | Callable[[], str], c, ask: Callable[[str], st
         raise SystemExit("refusing to send on mainnet without a terminal: the phrase is typed by a person")
     ask = ask or input
     what = what() if callable(what) else what
-    print(f"MAINNET, chain id {net.chain_id}, RPC {c.RPC_URL.split('?')[0]}: {what}")
+    print(f"MAINNET, chain id {net.chain_id}, RPC {node_shown(c)}: {what}")
     if ask(f"type '{CONFIRM_PHRASE}' to send, anything else to stop: ").strip() != CONFIRM_PHRASE:
         raise SystemExit("not confirmed; nothing was sent")
     c.assert_network()
+
+
+def node_shown(c) -> str:
+    """The node a person is shown before they confirm: its address without the query; the host's own node
+    (COLOSSEUM_HOST_RPC_URL, whose address may hold its key) is named and not shown."""
+    shown = getattr(c, "node_shown", None)
+    return shown() if callable(shown) else c.RPC_URL.split("?")[0]
 
 
 def confirm_service(args, label: str, c, sends: bool) -> None:

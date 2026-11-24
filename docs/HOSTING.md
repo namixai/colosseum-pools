@@ -219,6 +219,7 @@ after Chainlink's went down and both keepers missed a day's snapshot. Both units
 | `/opt/colosseum-pools/current` | link to the release that runs | root |
 | `/opt/colosseum-pools/venv` | link to `venv-<hash of spike/requirements.txt>`, Python 3.12 | root |
 | `/etc/colosseum/gateway.env`, `keeper.env` | paths, URLs, the app's origin; no secret | root, 644 |
+| `/etc/colosseum/host.env` | the one network the host serves, `COLOSSEUM_NETWORK=testnet` or `mainnet`; written once by `bootstrap.sh --network`; no file is testnet | root, 644 |
 | `/etc/colosseum/deployment` | the label of the deployment the services use | root, 644 |
 | `/etc/colosseum/deployment.env` | written by `install.sh` from that label's record: label, factory, registry, and the gateway's limits where the record has them; read after `gateway.env` and `keeper.env`, so it wins | root, 644 |
 | `/etc/colosseum/tls/origin.key` | TLS key for `pools-api.usenami.io`, made on the host | root, 600 |
@@ -231,7 +232,7 @@ after Chainlink's went down and both keepers missed a day's snapshot. Both units
 | `/opt/colosseum-watch/releases/<sha>` | the watchdogs of one release, copied by `install.sh` from `ops/host/watchdogs` | root, read-only to the watchdogs |
 | `/opt/colosseum-watch/current` | link to the newest of them; the watchdogs' units run from it, never from a pools release | root |
 | `/var/lib/colosseum-watch` | one `<name>.alarm` file for each check that has a finding standing | `colosseum-watch`, 700 |
-| `/etc/colosseum/watch.env` | optional: the alert command and node overrides for the watchdogs; written by hand if at all | root, 644 |
+| `/etc/colosseum/watch.env` | optional: the alert command and node overrides for the watchdogs; written by hand if at all | root, 644; on a mainnet host root, 600 (`install.sh` refuses otherwise) |
 
 Each service can't read the other's `/var/lib` directory, by owner and again by its unit
 (`InaccessiblePaths`). The units are in `ops/host/` and run with `ProtectSystem=strict`,
@@ -769,7 +770,9 @@ A simulated pool (docs/SIM-POOL.md) trades nothing on an exchange: its record na
 `PoolFactory`. So its instance has **no gateway, no instance keeper and no route on nginx**. Its one unit is
 `colosseum-multi-keeper@<name>`, which hands the record to `ops/sim_keeper.py`: the fills of the exams' orders,
 the day's snapshots, `breach`, `expire`, `release`, `claimPayout` and `pay`. Its node is the record's
-(`keeper_nodes`), and `deployment-<name>.env` has no gateway line.
+(`keeper_nodes`), a public one, since the record is public; where the host names a node of its own,
+`COLOSSEUM_HOST_RPC_URL` in `keeper-<name>.env`, that is the keeper's node whatever the record says ("Mainnet",
+below). `deployment-<name>.env` has no gateway line.
 
 The stops and takes of the exams are carried out, by default (`COLOSSEUM_STOPS=loop`; `COLOSSEUM_STOPS=inline` in
 `keeper-<name>.env` is the way back to the keeper's one loop), by a loop in a thread of the same process (`ops/stop_filler.py`,
@@ -894,8 +897,8 @@ What it does by itself, and only that:
   node it shares with the keeper.
 
 What it never does: lift a stop, stop for any reason but a pair (a result disputed without one, reason 3, and
-prohibited play, reason 4, need a written analysis and are sent by a person), approve a payout, or send with any
-key but the checker's. Its unit cannot read the instance's filler key, nor any other instance's keys. It runs on
+prohibited play, reason 4, need a written analysis and are sent by a person; for reason 3 with `deploy_sim stop`,
+"Mainnet" below), approve a payout, or send with any key but the checker's. Its unit cannot read the instance's filler key, nor any other instance's keys. It runs on
 the network its instance's file names ("Mainnet", below): testnet unless `keeper-<name>.env` says
 `COLOSSEUM_NETWORK=mainnet` and `COLOSSEUM_CONFIRM_MAINNET=<label>`; one of the two alone refuses to start.
 
@@ -1073,22 +1076,67 @@ where both journals hold it at one price, so one journal's wrong price shows as 
 holds (a restart or a deploy of the keeper or of the second machine while a stop stood) holds the payout as
 `stop-one-journal` until a person decides. Its units are in `ops/host/second-writer/`:
 
-1. On the second machine: a release of this repository at `/opt/colosseum-pools/current` with its venv, a user
-   `colosseum-prices` with `/var/lib/colosseum-prices` (and an empty `no-keys` directory in it), and rsync.
-2. `/etc/colosseum/price-watch-<name>.env`: `COLOSSEUM_DEPLOYMENT=<label>`, `COLOSSEUM_RPC_URL=<a node of another
-   provider than the keeper's>`, `COLOSSEUM_PRICE_SYNC_TO=colosseum-prices@<pools host>:`,
-   `COLOSSEUM_HOST_HEALTH_URL=https://<the pools API's domain>/v1/simindex/health` and `COLOSSEUM_ALERT_CMD`, this
-   machine's own alarm channel (its writer's failures, and the host watch below); on mainnet also
-   `COLOSSEUM_NETWORK=mainnet` and `COLOSSEUM_CONFIRM_MAINNET=<label>`. On mainnet the writer and the watch refuse to
-   start without `COLOSSEUM_ALERT_CMD`.
-3. An ssh key of its own, `/var/lib/colosseum-prices/.ssh/sync`, and the host's key in its `known_hosts`.
-4. On the pools host: a user `colosseum-prices` in the group `colosseum-keeper`, the directory
-   `/var/lib/colosseum-keeper/second-prices` (owner `colosseum-prices`, group `colosseum-keeper`, mode 2750), and the
-   second machine's public key in that user's `authorized_keys` as
-   `command="rrsync -wo /var/lib/colosseum-keeper/second-prices",restrict ssh-ed25519 ...`: it can write there and
-   nothing else.
-5. On the second machine: `colosseum-price-watch@<name>.service`, `colosseum-price-sync@<name>.timer` and
-   `colosseum-host-watch@<name>.timer`, enabled.
+It is installed by `ops/host/second-writer/install.sh`, which `ops/host/deploy.sh` runs on the second machine from the
+commit it sends there, and on the pools host by `ops/host/second-prices.sh`. Neither makes a key or writes a secret:
+each says by name what a person still has to write. In order:
+
+1. The second machine needs Python 3.12 and rsync from its distribution, and a user who may `sudo`. From the
+   operator's machine, the same commit as on the pools host:
+
+       COLOSSEUM_SSH_KEY=<key file> ops/host/deploy.sh <commit> <user@second machine> second-writer <name> <label> <network>
+
+   It puts the release at `/opt/colosseum-pools/current` with its venv, makes the user `colosseum-prices` with
+   `/var/lib/colosseum-prices` (an empty `no-keys` directory in it, and `.ssh`), installs the three units and writes
+   `/etc/colosseum/price-watch-<name>.env` (root's, mode 600) with `COLOSSEUM_DEPLOYMENT=<label>` and
+   `COLOSSEUM_NETWORK=<network>`. It starts nothing yet and says `NOT STARTED`, with the names of the lines missing.
+2. A person writes those lines, each on a line of its own (`sudoedit /etc/colosseum/price-watch-<name>.env`):
+   - `COLOSSEUM_HOST_RPC_URL=<this machine's own node>`, of another provider than the keeper's (its address stays out
+     of the journal; `COLOSSEUM_RPC_URL` is read too, as before);
+   - `COLOSSEUM_PRICE_SYNC_TO=colosseum-prices@<pools host>:`, the colon at its end;
+   - `COLOSSEUM_HOST_HEALTH_URL=https://<the pools API's domain>/v1/simindex/health`;
+   - `COLOSSEUM_ALERT_CMD=<this machine's own alarm channel>` (its writer's failures, and the host watch below);
+   - on mainnet `COLOSSEUM_CONFIRM_MAINNET=<label>`.
+
+   The channel is tried once, read as the units read it (the line `alarm_test` must reach a person: a command that
+   takes the line and delivers it to nobody answers the same):
+
+       sudo systemd-run --wait --pipe --quiet --uid=colosseum-prices -p EnvironmentFile=/etc/colosseum/price-watch-<name>.env \
+           --working-directory=/opt/colosseum-pools/current -E PYTHONDONTWRITEBYTECODE=1 \
+           /opt/colosseum-pools/venv/bin/python -m ops.review_service --say-test
+
+3. The key the journal is sent with, made on the second machine by a person and never copied anywhere:
+
+       sudo -u colosseum-prices ssh-keygen -t ed25519 -N '' -f /var/lib/colosseum-prices/.ssh/sync
+
+4. On the pools host, with the PUBLIC half of that key (`sync.pub`) copied there:
+
+       sudo bash /opt/colosseum-pools/current/ops/host/second-prices.sh <that .pub file>
+
+   It makes the user `colosseum-prices` in the group `colosseum-keeper`, lets that group pass through
+   `/var/lib/colosseum-keeper` (mode 0710: it lists nothing there, and every key directory stays 0700), puts
+   `/var/lib/colosseum-keeper/second-prices` (owner `colosseum-prices`, group `colosseum-keeper`, mode 2750) on a file
+   system of its own (below), and writes the key into that user's `authorized_keys` as
+   `command="mountpoint -q /var/lib/colosseum-keeper/second-prices && exec rrsync -wo -munge -no-del /var/lib/colosseum-keeper/second-prices",restrict ssh-ed25519 ...`:
+   it can write there while the folder is mounted, deletes nothing (`-no-del`), makes no link that leads out of the
+   folder (`-munge`), and does nothing else. `authorized_keys` and its `.ssh` folder are root's (0644 and 0755): the
+   key's user cannot rewrite the line that holds it. It needs `rrsync` of rsync 3.2.4 or later on the host (the one
+   that takes `-munge` and `-no-del`) and refuses without it. It prints the host's own key's fingerprint.
+   The pools host must take ssh from the second machine's address (its security group's rule for port 22).
+5. Back on the second machine, the pools host's key, its fingerprint held against the one step 4 printed, and the
+   proof that the key does nothing but write (rrsync must refuse this, not answer it):
+
+       sudo -u colosseum-prices sh -c 'ssh-keyscan -t ed25519 <pools host> >> /var/lib/colosseum-prices/.ssh/known_hosts'
+       sudo -u colosseum-prices ssh-keygen -lf /var/lib/colosseum-prices/.ssh/known_hosts
+       sudo -u colosseum-prices ssh -i /var/lib/colosseum-prices/.ssh/sync -o BatchMode=yes colosseum-prices@<pools host> id
+
+6. The installer once more, the same line as in step 1 (or, on the machine,
+   `sudo bash /opt/colosseum-pools/current/ops/host/second-writer/install.sh <full commit sha> <name> <label> <network>`).
+   With the settings whole it enables and restarts `colosseum-price-watch@<name>.service` and
+   `colosseum-host-watch@<name>.timer`; with the key and `known_hosts` there, `colosseum-price-sync@<name>.timer`
+   too. What is still missing it says, by name. A later release goes out with the same line and restarts the
+   writer: a stop standing meanwhile rests on one journal for those blocks.
+
+On mainnet the writer and the watch refuse to start without `COLOSSEUM_ALERT_CMD`.
 
 The host watch (`colosseum-host-watch@`, once a minute, `ops/review_service.py --watch-host`) reads the pools host's
 health route (docs/GATEWAY.md, the index's pulse) and says `host_not_alive` on the second machine's channel when the
@@ -1117,45 +1165,140 @@ as resting on one, and on mainnet the review does not start so.
 
 The folder takes what the second machine's key writes, so it gets a file system of its own, 2 GB (about 9 months of
 day files; old day files can be removed, the review reads only the days of stops still waiting), and the keeper's
-state and journal never share its disk. Once, by hand, on the pools host (nothing of this is installed by
-`install.sh`):
+state and journal never share its disk. `ops/host/second-prices.sh` makes it (step 4 above; `install.sh` does not):
+a file of 2 GB, `/var/lib/colosseum-second-prices.img`, made into an ext4 file system, named in `/etc/fstab`
+(`loop,nodev,nosuid,noexec,nofail`: an image that does not mount leaves the folder unmounted and the host starts all
+the same) and mounted at the folder. Not mounted, the key writes nothing: its command runs rrsync only on a mounted
+folder, never into the bare one on the root disk, and the review says `second_journal_stale`. A folder already mounted
+so is left as it is; one that holds files and is no file system of its own stops the script, since mounting over it
+would hide them. Afterwards:
 
-    sudo fallocate -l 2G /var/lib/colosseum-second-prices.img
-    sudo mkfs.ext4 -q -m 0 /var/lib/colosseum-second-prices.img
-    sudo mkdir -p /var/lib/colosseum-keeper/second-prices
-    echo '/var/lib/colosseum-second-prices.img /var/lib/colosseum-keeper/second-prices ext4 loop,nodev,nosuid,noexec 0 2' \
-        | sudo tee -a /etc/fstab
-    sudo mount /var/lib/colosseum-keeper/second-prices
-    sudo chown colosseum-prices:colosseum-keeper /var/lib/colosseum-keeper/second-prices
-    sudo chmod 2750 /var/lib/colosseum-keeper/second-prices
-    df -h /var/lib/colosseum-keeper/second-prices    # 2.0G, its own
+    df -h /var/lib/colosseum-keeper/second-prices    # 2.0G, its own, and not the root disk
 
 A full folder makes the sync fail; the review then says `second_journal_stale`, and the keeper is not touched.
 
 ### Mainnet
 
-What the host needs before a simulated pool runs on mainnet, in order:
+**One host serves one network.** `/etc/colosseum/host.env` names it, one line, `COLOSSEUM_NETWORK=mainnet` (or
+`testnet`), written once by `bootstrap.sh --network` and read by `install.sh` at every release
+(`ops/host_instances.py`); a host with no such file is a testnet host, as every host was. Whatever on a host belongs
+to the other network stops a release before anything is switched: a label whose only record is the other network's,
+a settings file whose `COLOSSEUM_NETWORK` names the other one. A mainnet host serves **one** simulated pool's
+instance, as `colosseum-keeper`, and nothing else: every instance of a host runs as that one user, which testnet
+accepts and mainnet does not. No first deployment, no exchange's instance, no second instance, no shared pools'
+keeper; `install.sh` refuses each. It also looks at what systemd itself has: any unit of ours that is still enabled
+or running and is not one of the instance's own four (its keeper, its checker, its index, its review) is named, and
+nothing is switched: a service disabled and never stopped, an instance whose file was moved away, a watchdog's timer.
 
-1. The record of the deployment (`deployments/<label>.json`), and the instance made with `--sim-instance <name> <label>`.
-2. The keys in the instance's secrets: the filler (with HYPE for the stops' gas) and the checker; the Safe of the
-   operator is the factory's operator, the Ledger the pools' approver. `COLOSSEUM_KEY_DIR` names a directory for
-   mainnet (`ops/sim_network.py`).
-3. `keeper-<name>.env`: `COLOSSEUM_NETWORK=mainnet`, `COLOSSEUM_CONFIRM_MAINNET=<label>`, `COLOSSEUM_RPC_URL` (a node
-   of the keeper's own), `COLOSSEUM_STOP_RPC_URL` (a node for the stops, not the gateway's), optionally
-   `COLOSSEUM_ARCHIVE_RPC_URL`. Without both network lines `colosseum-multi-keeper@`, `colosseum-sim-checker@` and
-   `colosseum-payout-review@` run on testnet, as before, and on a mainnet node they refuse to start (the chain id is
-   checked); with one of them alone they refuse to start.
-4. `/etc/colosseum/watch.env`: `COLOSSEUM_ALERT_CMD`, the channel every alarm above goes to. On mainnet the stops'
-   loop (in the keeper's process), the second writer and `colosseum-payout-review@` refuse to start without it, and
-   an alarm only written to the flag file is never taken as delivered (it is said again at the next pass). Try the
-   channel by hand once: `echo test | sh -c "$COLOSSEUM_ALERT_CMD"` reaches a person.
-5. The second writer ("The second writer of prices"), with its own node, the two network lines, its own
-   `COLOSSEUM_ALERT_CMD` and `COLOSSEUM_HOST_HEALTH_URL`, and its host watch timer enabled.
-6. `install.sh` from the release; then `systemctl enable --now colosseum-payout-review@<name>.timer`.
-7. The index of the page (`gateway.simindex`): `colosseum-sim-index@<name>.service`, installed by `install.sh` and
-   enabled by hand, reads the review folder of its instance and nothing else of the keeper's; its settings in
-   `/etc/colosseum/sim-index-<name>.env` (`SIM_INDEX_RECORD`, `SIM_INDEX_ALLOW_ORIGIN`, `SIM_INDEX_RPC_URL`,
-   `COLOSSEUM_NETWORK=mainnet`); nginx's `/v1/simindex/` route as docs/GATEWAY.md has it.
+A host that served testnet is taken off it first (its testnet keys stay on its disk, of no value, and no unit of a
+mainnet host reads them). Each unit the host has, then every file that names a testnet deployment:
+
+    sudo systemctl disable --now colosseum-gateway colosseum-keeper colosseum-shared-keeper \
+        colosseum-watch-keys.timer colosseum-watch-keeper.timer
+    # and for each further instance <name>, those of these it has:
+    sudo systemctl disable --now colosseum-gateway@<name> colosseum-keeper@<name> colosseum-multi-keeper@<name> \
+        colosseum-sim-checker@<name> colosseum-sim-index@<name> colosseum-payout-review@<name>.timer \
+        colosseum-key-copy@<name>.path colosseum-key-copy@<name>.timer \
+        colosseum-watch-keys-<name>.timer colosseum-watch-keeper-<name>.timer colosseum-watch-multi@<name>.timer
+    sudo mkdir /etc/colosseum/testnet-off
+    sudo mv /etc/colosseum/deployment /etc/colosseum/deployment.env /etc/colosseum/deployment-* \
+        /etc/colosseum/shared-keeper.env /etc/colosseum/testnet-off/
+
+What the host needs before a simulated pool runs on mainnet, in order. `<name>` is the instance's name, `<label>`
+its deployment's label:
+
+1. The host's network. On a new host `bootstrap.sh` is copied there by hand, as for any first setup ("One-time
+   setup"); on a host whose release already has `--network` it is run from it:
+
+       sudo bash /opt/colosseum-pools/current/ops/host/bootstrap.sh --network mainnet
+
+   It writes `host.env`, makes the users and directories and the TLS key, and writes none of testnet's settings
+   (`gateway.env`, `keeper.env`, `shared-keeper.env`). It refuses while a testnet deployment is still named on the
+   host. The certificate for nginx is as in "One-time setup", step 5: the index is reached through it.
+2. A release, from the operator's machine: `ops/host/deploy.sh <commit> <user@host>`. With no instance yet it
+   installs the release and starts nothing.
+3. The instance: `sudo bash /opt/colosseum-pools/current/ops/host/bootstrap.sh --sim-instance <name> <label>`. On a
+   mainnet host it writes `keeper-<name>.env` (root's, mode 600) with the key directory and
+   `COLOSSEUM_NETWORK=mainnet`, and `sim-index-<name>.env` with the network and the record; the lines a person adds
+   are named in both, as comments. From here to step 7 no other release goes to the host: a release stops on an
+   instance whose record it does not carry.
+4. The keys in the instance's secrets, made on the host ("A simulated pool's keeper"): the filler (with HYPE for the
+   stops' gas) and the checker. Their addresses go into the deployment (`deploy_sim deploy --filler --checker`); the
+   Safe of the operator is the factory's operator, the Ledger the pools' approver.
+5. By hand, in `keeper-<name>.env` (`sudoedit`), each on a line of its own:
+   - `COLOSSEUM_CONFIRM_MAINNET=<label>`: without it the services send nothing on mainnet, and `install.sh`
+     switches to nothing;
+   - `COLOSSEUM_HOST_RPC_URL=<the host's own node>`: the keeper's node, and the stops' loop's while
+     `COLOSSEUM_STOP_RPC_URL` names none. It is named here only. The record is public and names a public node, with
+     no key in its address (`deploy_sim deploy --keeper-nodes`), and the units read the record's file last, so the
+     record's `COLOSSEUM_RPC_URL` replaces a line by hand; `COLOSSEUM_HOST_RPC_URL` is read whatever it says
+     (`spike/hlspike/common.py`). The checker and the payout review read the same file and follow it. While it is
+     named no log line, alarm or prompt carries a node's address: a failed call's words are hushed, and the line a
+     person confirms a send by says "the host's own node";
+   - `COLOSSEUM_STOP_RPC_URL=<a node for the stops>`, optional, and `COLOSSEUM_ARCHIVE_RPC_URL`, optional (the
+     review's third check).
+
+   And in `/etc/colosseum/watch.env` (root's, mode 600): `COLOSSEUM_ALERT_CMD`, the channel every alarm above goes
+   to. On mainnet the stops' loop (in the keeper's process), the second writer and `colosseum-payout-review@` refuse
+   to start without it, and an alarm only written to the flag file is never taken as delivered (it is said again at
+   the next pass).
+6. The folder for the second journal: `sudo bash /opt/colosseum-pools/current/ops/host/second-prices.sh` ("The second
+   writer of prices"; the second machine's key is given to it later, when there is one).
+7. The release that carries the record `deployments/mainnet-<label>.json`: `ops/host/deploy.sh <commit> <user@host>`.
+   Before it switches, `install.sh` checks the host's network, that the instance is the host's one, its file's two
+   lines, that `keeper-<name>.env`, `sim-index-<name>.env` and `watch.env` are root's with mode 600, and both wallets
+   against the record; only then it puts the release's units in place, enables and restarts
+   `colosseum-multi-keeper@<name>` and `colosseum-sim-checker@<name>`. `nothing switched` names what is missing.
+8. The channel tried once, read as the units read it. The line `alarm_test` must reach a person: the command says
+   `the alarm channel took the test alarm` for a channel that takes the line and delivers it to nobody, too.
+
+       sudo systemd-run --wait --pipe --quiet --uid=colosseum-keeper -p EnvironmentFile=/etc/colosseum/watch.env \
+           --working-directory=/opt/colosseum-pools/current -E PYTHONDONTWRITEBYTECODE=1 \
+           /opt/colosseum-pools/venv/bin/python -m ops.review_service --say-test
+
+9. The payout review: `sudo systemctl enable --now colosseum-payout-review@<name>.timer`. Until the second journal
+   arrives it says `second_journal_stale`.
+10. The index of the page and the host's pulse (`gateway.simindex`): in `sim-index-<name>.env`, by hand,
+    `SIM_INDEX_ALLOW_ORIGIN=<the site's origin>` and, optionally, `SIM_INDEX_RPC_URL`; then
+    `sudo systemctl enable --now colosseum-sim-index@<name>`. It reads the review folder of its instance and the
+    time of the stops' journal's day file, `prices-<label>-YYYY-MM-DD.jsonl`, and nothing else of the keeper's.
+    nginx passes `/v1/simindex/health`, `/v1/simindex/pool` and `/v1/simindex/reviews` to it, GET alone, from every
+    release (docs/GATEWAY.md):
+
+        curl -s 127.0.0.1:8789/v1/simindex/health                       # on the host
+        curl -s https://<the pools API's domain>/v1/simindex/health     # from outside: the same answer
+
+    `now`, `prices_at` and `review_at` are numbers, `prices_at` less than a minute old.
+11. The second writer on its own machine ("The second writer of prices"), with its own node, the two network lines,
+    its own `COLOSSEUM_ALERT_CMD` and `COLOSSEUM_HOST_HEALTH_URL`: its installer starts the writer, the sync and the
+    host watch once its settings and its key are there.
+
+Three things a person does on a running pool, each a command that reads the chain first and says what it would send
+(`ops/deploy_sim.py`):
+
+- **A stop of reason 3**, a result disputed without a pair, which no program sends. On the host, as the keeper's
+  user, with the checker's key, the review's document of the payout and the written analysis (the file as it is
+  published: the chain keeps its keccak256):
+
+      cd /opt/colosseum-pools/current && sudo -u colosseum-keeper env COLOSSEUM_NETWORK=mainnet \
+          COLOSSEUM_KEY_DIR=/var/lib/colosseum-keeper/instances/<name>/secrets PYTHONDONTWRITEBYTECODE=1 \
+          /opt/colosseum-pools/venv/bin/python -m ops.deploy_sim stop --network mainnet --key checker \
+          --deployment <label> --review /var/lib/colosseum-keeper/reviews-<name>/<pool>-<id>.json \
+          --analysis <the analysis file>
+
+  It shows the pool, the payout, the reason, each transaction of the review's draft and the analysis's hash, and
+  refuses a payout the pool would no longer stop, a pool whose factory is not the one of `--deployment`'s record, and
+  a review read more than an hour before the chain's head (the service writes a fresh one every 10 minutes: take the
+  latest; `--old-review` takes an older one when the service has written none since and the payout would otherwise
+  go out unstopped). With `--send` it asks for the confirmation at the terminal, reads
+  the payout once more and sends. The line above reads through the network's public node, which a few reads fit.
+  The checker's own service sends with the same key: a stop of its own in the same seconds takes the key's nonce,
+  the send here fails, and the command is run again.
+- **A line of the menu switched off** (the Safe signs): `deploy_sim line --pool <pool> --signer <the Safe> --line <n> --off`.
+- **A key of the platform replaced** (the Safe signs): `deploy_sim role --deployment <label> --signer <the Safe> --role
+  filler --address <the new key>`, and `checker`, `closer`, `fee-recipient` the same way. An exam already sold keeps
+  the filler it started with. After a new filler or checker the record's `filler` or `checker` is changed in a
+  commit and the new wallet put in the instance's secrets: `install.sh` holds the two together.
 
 ## The host's watchdogs
 
@@ -1484,8 +1627,10 @@ drpc's did not read the precompiles. What that node has to do (11 Nov 2026):
 5. refuse a window that is too wide with a code or words of its own, not the `-32005` of a rate limit;
 6. answer a window within 5 seconds, old ranges included, without a 504.
 
-An address that carries a key cannot go in the record, which is public; a deployment on such a node leaves
-`keeper_nodes` out of its record, so that keeper.env's line holds.
+An address that carries a key cannot go in the record, which is public. An exchange's deployment on such a node
+leaves `keeper_nodes` out of its record, so that keeper.env's line holds. A simulated pool's host names its own node
+as `COLOSSEUM_HOST_RPC_URL` in the instance's `keeper-<name>.env`, which the record's node does not replace
+("Mainnet", above).
 
 ## If the host is lost
 

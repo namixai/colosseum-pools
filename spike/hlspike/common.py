@@ -7,11 +7,17 @@ repository (COLOSSEUM_KEY_DIR, default ~/secure/colosseum-testnet), one hex key 
 
 COLOSSEUM_RPC_URL replaces the public HyperEVM testnet RPC, which rate-limits after a handful
 of calls. Whatever it points at, assert_network() still checks its chain id against the network.
+
+COLOSSEUM_HOST_RPC_URL is a host's own node, named only in a settings file on that host and never in a
+public deployment record. Set, it is the node, whatever COLOSSEUM_RPC_URL says; its address may hold its
+key, so no failure of a call carries a node's address while it is set (`hush`), and nothing shows it
+(`node_shown`).
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import json
 import os
 import time
@@ -31,6 +37,13 @@ from . import network
 
 NETWORK = network.select()
 RPC_URL = os.environ.get("COLOSSEUM_RPC_URL", NETWORK.rpc_url)
+# The host's own node. On a host the units read the record's file last, so COLOSSEUM_RPC_URL there is the record's
+# node, a public one (the record is public: ops/host_instances.py `keeper_nodes`); the node the host's operator pays
+# for is named in the instance's own file under this name, and wins.
+OWN_NODE_ENV = "COLOSSEUM_HOST_RPC_URL"
+OWN_NODE = os.environ.get(OWN_NODE_ENV, "").strip()
+if OWN_NODE:
+    RPC_URL = OWN_NODE
 API_URL = NETWORK.api_url
 CHAIN_ID = NETWORK.chain_id
 USER_AGENT = "colosseum-pools-spike"
@@ -109,6 +122,47 @@ def record(step: str, **fields: Any) -> dict:
     return row
 
 
+# ── a node's address stays out of what is said ───────────────────────────────────────
+
+def hush(text) -> str:
+    """`text` with no node's address in it, by the rules the checker already has for its own lines (ops/sim_check.py,
+    `quiet`): the configured nodes' addresses with whatever goes on after them, every other URL, a bare request path,
+    a host='…', and the configured nodes' host names wherever else they stand. This module's node is among the
+    configured ones, so the host's own node is. Not cut: whoever logs it cuts it, after the address is gone."""
+    from ops import sim_check  # it imports this module, so here and not at the top
+    try:
+        return sim_check.quiet(text, None)
+    except ValueError:  # a configured address that does not parse: nothing of the text is said rather than all of it
+        return "an error whose words are withheld: a node's address in them could not be taken out"
+
+
+def node_shown(url: str | None = None) -> str:
+    """A node as a line for a person may show it: its address without the query, as before; the host's own node not at
+    all."""
+    url = RPC_URL if url is None else url
+    if OWN_NODE and url.strip().rstrip("/") == OWN_NODE.rstrip("/"):
+        return "the host's own node (its address is not shown)"
+    return url.split("?")[0]
+
+
+def _no_address(call):
+    """While the host's own node is named, a call to a node that fails says nothing of a node's address: the HTTP
+    library writes the whole URL, or its host and path, into its errors, and every caller logs an error's text (the
+    keepers' journals, an alarm's line, a traceback at a start). The error keeps its type and what it carries; its
+    text is hushed, and the errors under it, which name the address too, are not shown with it. Without the own node
+    every error is as it was."""
+    @functools.wraps(call)
+    def quiet(*args, **kwargs):
+        try:
+            return call(*args, **kwargs)
+        except requests.RequestException as exc:
+            if not OWN_NODE:
+                raise
+            exc.args = (hush(exc),)
+            raise exc from None
+    return quiet
+
+
 # ── HyperEVM JSON-RPC ────────────────────────────────────────────────────────────────
 
 RATE_LIMITED = -32005  # what the public HyperEVM RPC answers when it throttles
@@ -121,6 +175,7 @@ RPC_ATTEMPTS = 7
 RPC_BACKOFF_TOTAL_S = 63
 
 
+@_no_address
 def rpc(method: str, params: Sequence[Any] = ()) -> Any:
     """One JSON-RPC call. A throttled call (HTTP 429 or error -32005) is retried after 1, 2, 4,
     8, 16 and 32 seconds -- 63 in all, so the wait crosses the minute the limit is counted over.
@@ -147,6 +202,7 @@ class NodeBusy(RuntimeError):
     """A node's HTTP 429: it will answer again in a moment, unlike an error about the request itself."""
 
 
+@_no_address
 def rpc_once(url: str, method: str, params: Sequence[Any] = (), timeout: float = 10.0) -> Any:
     """One JSON-RPC call to `url`, tried once: no ladder. For a reader that has something else to try at once --
     the keeper's scan, which takes a window the first node refused to the second (ops/keeper.py). HTTP 429 raises

@@ -25,6 +25,11 @@
     spike/.venv/bin/python -m ops.deploy_sim pot --pool 0x.. --key creator --amount 2 [--send]         # add to it
     spike/.venv/bin/python -m ops.deploy_sim claim --pool 0x.. --key partner --code G1 [--code G2] [--send] # shares
     spike/.venv/bin/python -m ops.deploy_sim pay --pool 0x.. --key deployer --max 10 [--send]          # payouts
+    spike/.venv/bin/python -m ops.deploy_sim stop --deployment sim1 --review <pool>-<id>.json \\
+        --analysis analysis.md --key checker [--old-review] [--send]                    # a stop of reason 3, by hand
+    spike/.venv/bin/python -m ops.deploy_sim line --pool 0x.. --signer 0xSafe --line 8 --off           # stop selling it
+    spike/.venv/bin/python -m ops.deploy_sim role --deployment sim1 --signer 0xSafe --role filler \\
+        --address 0x..                                                                  # replace a platform key
 
 `deploy` puts PaperExam (the implementation every exam clones), SimPool (every pool's), a TermsBook
 and the SimPoolFactory on HyperEVM, with the fee for opening a pool set in the factory (--creation-fee, in HYPE: 1 on
@@ -35,8 +40,9 @@ opens our pools) and the platform's recipient, and lists the assets with their l
 the platform's decision of 11 November 2026), each at its perp index on the network (ops/sim_network.py). It
 hands the factory to our Safe last (--safe; setOperator, read before and after, the Safe's threshold and owners read and shown first; needed on mainnet, where the
 deployer's key must not stay its operator), and writes deployments/<network>-<label>.json; on testnet with the same keeper nodes as demo3, on mainnet with the
-ones --keeper-nodes names (a JSON file, as a record's `keeper_nodes`: a node of the keeper's own, not the
-gateway's), so the host's keeper unit can run on it.
+ones --keeper-nodes names (a JSON file, as a record's `keeper_nodes`: a public node, with no key in its address, since
+the record is public; the host's own node is named on the host alone, COLOSSEUM_HOST_RPC_URL in its keeper-<name>.env,
+and wins there), so the host's keeper unit can run on it.
 
 `buy` approves a line's price and buys an exam with a code from the trader's key, for --measure in
 ops/sim_keeper.py; it prints the exam.
@@ -94,6 +100,21 @@ may, the keeper does it pass after pass): it lists each payout within --max from
 eth_call from the sender, how many it settles; none, and it says why and sends nothing. None of them caps an amount:
 each passes what it is given, and says what the pool or its token would refuse.
 
+`stop` stops a waiting payout for reason 3, a result disputed without a pair (stopPayout, from the factory's checker):
+the one stop no program sends. It takes the review's document of that payout, whose `stopDraft` names the pool and the
+transactions that show the flaw, and the written analysis (--analysis, the file as it is published: its keccak256 is the
+one link the chain keeps; or --analysis-hash). It shows what would be sent, the pool, the payout, the reason, the
+transactions and the analysis's hash, reads the payout and asks the pool by eth_call, and refuses what the pool would:
+not the checker, a payout no longer waiting or stopped once already, a document of another chain, pool or claim. It
+sends only with --send, from the checker's key (on the host: the instance's secrets), after the confirmation, and
+reads the payout once more right before.
+
+`line` switches a line of a pool's menu off or on for new sales (setLine, from the creator: our Safe with --signer);
+exams sold keep running. Off always; on only while the pool is open and has two of the line's payouts free. `role`
+names a new filler, checker, closer or fee recipient in a deployment's factory (setFiller, setChecker, setCloser,
+setFeeRecipient, from its operator: our Safe with --signer), the way to replace a key that leaked. Each reads the
+chain first and says what it would send or why it would be refused.
+
 `check` asks SimPoolFactory.check whether a plan could open a pool, by eth_call, sending nothing and reading no key:
 with --deployment, the factory it names; without, the factory and PaperExam of this checkout, put in the call by a
 state override on the network's precompiles, so a plan is checked before any factory is deployed.
@@ -106,7 +127,7 @@ and the terms' text.
 Without --send nothing is sent and no key is read: each command prints what it would do.
 
 With --signer ADDRESS (pool, codes, code, pot, claim, pay, close, finish, request, withdraw, cancel, approver,
-approve, lift, fee) the call is
+approve, lift, fee, stop, line, role) the call is
 from an address that signs elsewhere: our pool's creator is a Safe with two signatures, its approver of payouts
 a Ledger. The command reads the chain as that address, checks as it would for a key, and prints the calls in
 order as the Safe's Transaction Builder takes them (to, value, data); it sends nothing and reads no key. With it,
@@ -124,6 +145,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import sys
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -395,10 +417,13 @@ def on_of(raw: dict) -> int:
 
 def keeper_nodes_of(args) -> dict | None:
     """The keeper's nodes for the record: --keeper-nodes's file, checked as the host checks a record's; on testnet
-    without it, demo3's (read at --send). Mainnet has no default: its keeper needs a node of its own (audit M-1)."""
+    without it, demo3's (read at --send). Mainnet has no default: the record names a public node, said outright, and
+    the keeper's own node (audit M-1) is named on its host, where it wins over the record's (COLOSSEUM_HOST_RPC_URL)."""
     if not args.keeper_nodes:
         if c.NETWORK.name == "mainnet":
-            raise SystemExit("--keeper-nodes is needed on mainnet: the keeper's own node, not the gateway's (audit M-1)")
+            raise SystemExit("--keeper-nodes is needed on mainnet: the node the record names, a public one with no key "
+                             "in its address (the record is public); the host's own node is named on the host alone, "
+                             "COLOSSEUM_HOST_RPC_URL in its keeper-<name>.env, and wins there (audit M-1)")
         return None
     nodes = json.loads(pathlib.Path(args.keeper_nodes).read_text())
     from ops.host_instances import keeper_nodes
@@ -1470,6 +1495,294 @@ def pay_cmd(args) -> int:
     return send_or_say(args, pool_, "pay(uint256)", ["uint256"], [args.max])
 
 
+# ── a stop of reason 3 by hand, a line switched off, a platform key replaced ────────
+
+HASH = re.compile(r"0x[0-9a-fA-F]{64}")
+DISPUTED = 3  # SimPool.stopPayout's reason for a result disputed without a pair
+
+
+def stop_draft(doc, chain_id: int) -> dict:
+    """The draft of a stop of reason 3 in a review's document (`ops/payout_review.py`, `stopDraft`), held to what the
+    review writes: this schema, this chain, the document's own pool, reason 3 with no paired account, at least one
+    transaction, and the analysis still to be named. Anything else is refused: a draft is sent as it was reviewed, or
+    not at all."""
+    from ops import payout_review as pr
+    from ops import sim_check as chk
+    if not isinstance(doc, dict) or doc.get("schema") != pr.SCHEMA:
+        raise SystemExit(f"--review is not a {pr.SCHEMA} document: the review service's <pool>-<id>.json, copied as it is")
+    try:
+        other_chain = doc.get("chainId") is None or int(doc["chainId"]) != int(chain_id)
+        pid = int(doc["id"])
+    except (KeyError, TypeError, ValueError):
+        raise SystemExit("--review is a review not read whole: no chain or no payout number in it") from None
+    if other_chain:
+        raise SystemExit(f"--review is a review of another chain ({doc.get('chainId')}, this one is {chain_id})")
+    draft = doc.get("stopDraft")
+    if not isinstance(draft, dict):
+        raise SystemExit(f"the review of payout {pid} made no draft of a stop (`stopDraft` is empty): a stop of reason 3 "
+                         "names the transactions that show the flaw, and this review found none to name")
+    trades = draft.get("trades")
+    if (draft.get("kind") != "stop-draft" or draft.get("reason") != DISPUTED or draft.get("call") != chk.STOP
+            or str(draft.get("to", "")).lower() != str(doc.get("pool", "")).lower() or not HASH.fullmatch(str(doc.get("pool", "")) + "0" * 24)
+            or str(draft.get("paired", "")).lower() != ZERO or draft.get("links") != [pr.ANALYSIS]
+            or not isinstance(trades, list) or not trades or len(set(trades)) != len(trades)
+            or not all(isinstance(t, str) and HASH.fullmatch(t) for t in trades)):
+        raise SystemExit(f"the draft in the review of payout {pid} is not a draft of a stop of reason 3 on its own pool, "
+                         "with no paired account, its transactions' hashes and the analysis still to name: it is sent "
+                         "as the review wrote it, or not at all")
+    return draft
+
+
+def analysis_link(args) -> tuple[bytes, str]:
+    """The one link of a stop of reason 3: the keccak256 of the written analysis as it is published. --analysis is the
+    file, hashed byte for byte; --analysis-hash the hash, made elsewhere. One of the two."""
+    if bool(args.analysis) == bool(args.analysis_hash):
+        raise SystemExit("--analysis <the written analysis, the file as it is published> or --analysis-hash 0x..: one "
+                         "of the two; reason 3 stands on a published analysis, and the chain keeps its hash")
+    if args.analysis_hash:
+        if not HASH.fullmatch(args.analysis_hash):
+            raise SystemExit(f"--analysis-hash {args.analysis_hash!r} is not a keccak256, 0x and 64 hex digits")
+        return bytes.fromhex(args.analysis_hash[2:]), "given as a hash"
+    try:
+        data = pathlib.Path(args.analysis).read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"--analysis {args.analysis}: {exc.strerror}") from None
+    if not data.strip():
+        raise SystemExit(f"--analysis {args.analysis} is empty: reason 3 stands on a written analysis")
+    return keccak(data), f"of {args.analysis}, {len(data)} bytes: publish this file as it is, byte for byte"
+
+
+def ago(seconds: int) -> str:
+    """A span as a person reads it: the largest whole unit of days, hours, minutes and seconds."""
+    for unit, size in (("day", 86_400), ("hour", 3_600), ("minute", 60)):
+        if seconds >= size:
+            n = seconds // size
+            return f"{n} {unit}{'s' if n != 1 else ''}"
+    return f"{max(seconds, 0)} seconds"
+
+
+def review_age(doc: dict, now: int, old_ok: bool) -> str:
+    """When the review was read and how long before the chain's head `now`, or why a stop is not sent on it: read more
+    than an hour before (`payout_review.REVIEW_MAX_S`, the hour `approve` takes), the payout and its trades may have
+    changed since, and the review service writes a fresh one every 10 minutes; such a review is taken only with
+    --old-review (`old_ok`), a person's word, when there is no fresher one (the service stopped) and the payout would
+    otherwise go out unstopped. A review read after the head, or with no time, is never taken."""
+    from ops import payout_review as pr
+    try:
+        t = int((doc.get("readAt") or {})["time"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        raise SystemExit("--review is a review not read whole: no time it was read at (readAt)") from None
+    if t > now + 60:
+        raise SystemExit(f"the review says it was read at {utc(t)}, after the chain's head ({utc(now)}): nothing is "
+                         "stopped on a review of another clock")
+    age = now - t
+    if age > pr.REVIEW_MAX_S and not old_ok:
+        raise SystemExit(f"the review was read {ago(age)} ago ({utc(t)}), more than an hour before the chain's head: the "
+                         "payout may have changed since. Take the review service's latest document of the payout "
+                         "(it writes one every 10 minutes), or say --old-review to stop on this one; nothing was stopped")
+    return f"{utc(t)}, {ago(age)} ago" + (", older than an hour: --old-review" if age > pr.REVIEW_MAX_S else "")
+
+
+def stop_check(checker: str, sender: str, p: tuple | None, pid: int, doc: dict, now: int, until_paid: bool) -> str:
+    """What stopping payout `pid` from `sender` would do, or why the pool would refuse it: the factory's checker alone
+    stops, a payout that waits and was never stopped, and on a pool from before approvals not within 5 minutes of its
+    time (`sim_check.stop_due`, the checker's own rule). And the payout is the one the review read: its trader, amount
+    and due time. `p`: the pool's payout(id) as read (None: no such payout)."""
+    from ops import sim_check as chk
+    if sender != checker:
+        raise SystemExit(f"NotChecker: {sender} is not the factory's checker ({checker}): its key alone stops a payout")
+    if p is None:
+        raise SystemExit(f"BadPayout: payout {pid} does not exist")
+    state = PAYOUT_STATE[p[4]]
+    if state != "Due":
+        raise SystemExit(f"BadPayout: payout {pid} is {state}, not waiting: the pool takes no stop of it now")
+    if p[5]:
+        raise SystemExit(f"BadPayout: payout {pid} was stopped once already and its stop lifted: the pool takes one stop "
+                         "a payout")
+    if not chk.stop_due(state, bool(p[5]), int(p[3]), now, until_paid):
+        raise SystemExit(f"payout {pid} goes out by itself at {utc(int(p[3]))}: its time to stop is over")
+    try:
+        same = (str(doc.get("trader", "")).lower() == str(p[1]).lower() and int(doc.get("amount", -1)) == int(p[2])
+                and int(doc.get("dueAt", -1)) == int(p[3]))
+    except (TypeError, ValueError):
+        same = False
+    if not same:
+        raise SystemExit(f"the review is of another claim than payout {pid} as the pool holds it now (its trader, amount "
+                         "or due time differ): nothing is stopped on a review of something else")
+    return f"payout {pid}: {usdc(int(p[2]))} to {to_checksum_address(p[1])}, waiting; goes out from {utc(int(p[3]))} if approved"
+
+
+def stop_cmd(args) -> int:
+    """stopPayout for reason 3, by a person's hand: the review's draft, the written analysis's hash, the checker's key.
+    The pool is one of the deployment named (--deployment: its record's SimPoolFactory is the pool's factory()), and the
+    review is at most an hour old (`review_age`). Without --send it reads and says; with it, the confirmation, the
+    payout and the review's age read once more, then the send."""
+    from ops import payout_review as pr
+    from ops import sim_check as chk
+    expected = deployments.load(args.deployment).get("SimPoolFactory")
+    if not expected:
+        raise SystemExit(f"the record {args.deployment!r} names no SimPoolFactory: a stop is sent in a deployment of "
+                         "simulated pools")
+    try:
+        doc = json.loads(pathlib.Path(args.review).read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"--review {args.review} cannot be read as JSON: {type(exc).__name__}") from None
+    draft = stop_draft(doc, int(c.rpc("eth_chainId"), 16))
+    link, link_from = analysis_link(args)
+    pool_, pid, sender = to_checksum_address(draft["to"]), int(doc["id"]), signer_of(args)
+    factory = to_checksum_address(c.call_view(pool_, "factory()", [], [], ["address"])[0])
+    if factory != to_checksum_address(expected):
+        raise SystemExit(f"the pool {pool_} is of the factory {factory}, and {args.deployment!r}'s record names "
+                         f"{to_checksum_address(expected)}: nothing is stopped in another deployment")
+    checker = to_checksum_address(c.call_view(factory, "checker()", [], [], ["address"])[0])
+    approvals = chk.takes_approvals(pool_)
+    if approvals is None:
+        raise SystemExit(f"whether the pool {pool_} takes approvals was not read (approver()): nothing is stopped on a "
+                         "pool not read; try again")
+    kind = PAYOUT_T if approvals else chk.PAYOUT_BEFORE_APPROVALS
+
+    def payout() -> tuple | None:
+        count = int(c.call_view(pool_, "payoutCount()", [], [], ["uint256"])[0])
+        return c.call_view(pool_, "payout(uint256)", ["uint256"], [pid], [kind])[0] if 0 <= pid < count else None
+
+    now = chain_now()
+    read = review_age(doc, now, args.old_review)
+    line = stop_check(checker, sender, payout(), pid, doc, now, approvals)
+    reserve = int(c.call_view(factory, "STOP_RESERVE()", [], [], ["uint32"])[0])
+    values = [pid, DISPUTED, ZERO, [bytes.fromhex(t[2:]) for t in draft["trades"]], [link]]
+    data = c.encode_call(chk.STOP, chk.STOP_TYPES, values)
+    try:
+        # The pool's own answer, from the checker: what it would refuse is said before anything is sent.
+        c.rpc("eth_call", [dict(to=pool_, data="0x" + data.hex(), **{"from": sender}), "latest"])
+    except RuntimeError as exc:
+        raise SystemExit(f"the pool would refuse it: {exc}") from None
+    print(f"deploy_sim stop: pool {pool_}, stopPayout of payout {pid} for reason {DISPUTED} from {args.key or 'the signer'} "
+          f"({sender}), the factory's checker")
+    print("  " + line)
+    print(f"  reason {DISPUTED}: {pr.STOP_REASONS[DISPUTED]}")
+    print(f"  the review: read at block {(doc.get('readAt') or {}).get('block')}, {read}, verdict "
+          f"{doc.get('verdict')!r}, action {doc.get('action')!r}")
+    print(f"  the deployment: {args.deployment}, factory {factory}")
+    for i, t in enumerate(draft["trades"]):
+        print(f"  transaction {i + 1} of {len(draft['trades'])}: {t}")
+    print(f"  the analysis: keccak256 0x{link.hex()}, {link_from}")
+    print(f"  stopped, the money stays in the pool for {reserve // 86_400} days: the trader can object, and the factory's "
+          "operator can lift the stop (`lift`); after them the stop is final. The pool takes one stop a payout")
+
+    def still_due() -> None:
+        # The person's confirmation has no time limit: the payout is read again as it stands after it, and the review
+        # held to the chain's clock as it stands then.
+        now_ = chain_now()
+        review_age(doc, now_, args.old_review)
+        stop_check(checker, sender, payout(), pid, doc, now_, approvals)
+    return send_or_say(args, pool_, chk.STOP, chk.STOP_TYPES, values, before=still_due)
+
+
+def line_check(creator: str, sender: str, lines: int, line: int, on: bool, state: tuple | None) -> str:
+    """What setLine(line, on) from `sender` would do, or why the pool would refuse it, in the pool's order: the creator
+    alone, a line of the menu; on only while the pool is open and has two of the line's payouts free. `state`: the
+    pool's lineState(line), (on, sells, canSwitchOn, short); None for a line the menu does not have."""
+    if sender != creator:
+        raise SystemExit(f"NotCreator: {sender} is not the pool's creator ({creator}); only the creator switches a line")
+    if state is None or not 0 <= line < lines:
+        raise SystemExit(f"NoSuchLine: the pool's menu has lines 0 to {lines - 1}, not {line}")
+    is_on, _, can_switch_on, short = state
+    if bool(is_on) == on:
+        raise SystemExit(f"line {line} is {'on' if on else 'off'} already: nothing to send")
+    if not on:
+        return (f"line {line} is switched off: no new exam of it is sold; the exams and stages sold keep running, and "
+                "the pool keeps what they may be paid")
+    if short:
+        raise SystemExit(f"NotCovered: the pool is {usdc(int(short))} short of two payouts of line {line} free")
+    if not can_switch_on:
+        raise SystemExit("Closing: the pool is closed: no line is switched on")
+    return f"line {line} is switched on: it sells again from the next block"
+
+
+def line_cmd(args) -> int:
+    """setLine on a pool, from its creator: our Safe with --signer, which gets the call printed (to, value, data)."""
+    pool_, sender = to_checksum_address(args.pool), signer_of(args)
+    creator = to_checksum_address(c.call_view(pool_, "creator()", [], [], ["address"])[0])
+    menu = c.call_view(pool_, "menu()", [], [], ["(uint64,uint64)[]"])[0]
+    state = (c.call_view(pool_, "lineState(uint256)", ["uint256"], [args.line], ["bool", "bool", "bool", "uint256"])
+             if 0 <= args.line < len(menu) else None)
+    text = line_check(creator, sender, len(menu), args.line, args.on, state)
+    size, price = menu[args.line]
+    print(f"deploy_sim line: pool {pool_}, setLine({args.line}, {str(args.on).lower()}) from {args.key or 'the signer'} "
+          f"({sender}): the line of {usdc(int(size))} for {usdc(int(price))}")
+    print("  " + text)
+    return send_or_say(args, pool_, "setLine(uint256,bool)", ["uint256", "bool"], [args.line, args.on])
+
+
+# The factory's roles its operator names anew: the setter, the getter, and what the change does.
+ROLES = {
+    "filler": ("setFiller(address)", "filler()",
+               "the filler of the orders of every exam sold from now on. An exam already sold keeps the filler it "
+               "started with: the old key goes on filling the exams running now, to their end"),
+    "checker": ("setChecker(address)", "checker()",
+                "the one key that stops a payout, in every pool of the factory, from now on; the old one stops none"),
+    "closer": ("setCloser(address)", "closer()",
+               "the key that may close any pool of the factory before its term and cancel a creator's request"),
+    "fee-recipient": ("setFeeRecipient(address)", "feeRecipient()", "where the platform's fees go from now on"),
+}
+KEYS = ("filler", "checker", "closer")
+
+
+def role_check(role: str, new: str, operator: str, sender: str, now: dict) -> str:
+    """What naming `new` as `role` from `sender` would do, or why it would be refused. The factory's own refusals: its
+    operator alone, never 0x0, and one key is never both the filler and the checker. And `deploy`'s, held here too:
+    the filler, the checker and the closer are three keys, none of them the operator. `now`: role -> the address the
+    factory names now."""
+    if operator != sender:
+        raise SystemExit(f"NotOperator: {sender} is not the factory's operator ({operator}): it alone names the "
+                         "factory's roles")
+    if int(new, 16) == 0:
+        raise SystemExit(f"BadRole: the {role} is a real address, never 0x0")
+    if new == now[role]:
+        raise SystemExit(f"the factory's {role} is {new} already: nothing to send")
+    if role in KEYS:
+        taken = [other for other in KEYS if other != role and now[other] == new]
+        if taken:
+            raise SystemExit(f"BadRole: {new} is the factory's {taken[0]}: the filler, the checker and the closer are "
+                             "three keys")
+        if new == operator:
+            raise SystemExit(f"{new} is the factory's operator: it opens our pools, and holds none of the three keys")
+    return f"{new} becomes {ROLES[role][2]}"
+
+
+def role_cmd(args) -> int:
+    """setFiller, setChecker, setCloser or setFeeRecipient on a deployment's factory, from its operator: our Safe with
+    --signer, which gets the call printed (to, value, data); read back after a send from a key."""
+    record = deployments.load(args.deployment)
+    factory = record.get("SimPoolFactory")
+    if not factory:
+        raise SystemExit(f"the record {args.deployment!r} names no SimPoolFactory")
+    sig, getter, _ = ROLES[args.role]
+    new, sender, operator = to_checksum_address(args.address), signer_of(args), operator_of(factory)
+    now = {r: to_checksum_address(c.call_view(factory, ROLES[r][1], [], [], ["address"])[0]) for r in ROLES}
+    text = role_check(args.role, new, operator, sender, now)
+    print(f"deploy_sim role: {c.NETWORK.name} (chain {c.CHAIN_ID}), factory {factory}: {sig.split('(')[0]}({new}) from "
+          f"{args.key or 'the signer'} ({sender}); the {args.role} is {now[args.role]} now")
+    print("  " + text)
+    if args.role in ("filler", "checker"):
+        print(f"  after it: the record of {args.deployment!r} still names the old {args.role}, and the host's release "
+              f"stops on a wallet that is not the record's: change `{args.role}` in the record in a commit, and put the "
+              f"new key's wallet in the instance's secrets as {args.role}.key and .addr (docs/HOSTING.md)")
+    if getattr(args, "signer", None):
+        return print_batch(args, f"{sig} on {factory}", [(factory, 0, c.encode_call(sig, ["address"], [new]))])
+    if not args.send:
+        print("deploy_sim: nothing was sent (--send sends).")
+        return 0
+    sn.confirm_send(args, f"name {new} the {args.role} of the factory {factory} from the key {args.key!r}", c)
+    rcpt = c.transact(c.account(args.key), factory, sig, ["address"], [new])
+    named = to_checksum_address(c.call_view(factory, getter, [], [], ["address"])[0])
+    if named != new:
+        raise SystemExit(f"after {sig.split('(')[0]} the factory's {args.role} reads {named}, not {new}: "
+                         f"tx {rcpt['transactionHash']}")
+    print(f"deploy_sim: the factory's {args.role} is {named}, tx {rcpt['transactionHash']}")
+    return 0
+
+
 def buy(args) -> int:
     record = deployments.load(args.deployment)
     pool_ = to_checksum_address(args.pool)
@@ -1508,7 +1821,8 @@ def main(argv: list[str] | None = None) -> int:
                                           "mainnet 1 unless named")
     d.add_argument("--confirm-large-fee", action="store_true",
                    help="on mainnet, send a --creation-fee above 10 HYPE: refused without it")
-    d.add_argument("--keeper-nodes", help="a JSON file of the keeper's nodes, as a record's keeper_nodes; needed on mainnet")
+    d.add_argument("--keeper-nodes", help="a JSON file of the keeper's nodes, as a record's keeper_nodes; needed on mainnet. "
+                                          "Public nodes: the host's own node goes in its keeper-<name>.env, never here")
     d.add_argument("--send", action="store_true")
     q = sub.add_parser("pool")
     q.add_argument("--deployment", required=True)
@@ -1607,6 +1921,35 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--signer", help="an address that signs elsewhere: print the call, send nothing")
     z.add_argument("--max", required=True, type=int, help="how many payouts from the head `pay` looks at")
     z.add_argument("--send", action="store_true")
+    z = sub.add_parser("stop")
+    z.add_argument("--deployment", required=True, help="the deployment of the pool: its record's SimPoolFactory must be "
+                                                       "the pool's factory, or nothing is stopped")
+    z.add_argument("--old-review", action="store_true",
+                   help="stop on a review read more than an hour ago, when the service has written none since: "
+                        "refused without it")
+    z.add_argument("--review", required=True, help="the review service's document of the payout, <pool>-<id>.json, as it "
+                                                   "is: its stopDraft names the pool and the transactions")
+    z.add_argument("--analysis", help="the written analysis, the file as it is published: its keccak256 is the stop's link")
+    z.add_argument("--analysis-hash", help="the keccak256 of the published analysis, when it was hashed elsewhere")
+    z.add_argument("--key", help="the factory's checker (on the host: checker, in the instance's secrets)")
+    z.add_argument("--signer", help="the checker as an address that signs elsewhere: print the call, send nothing")
+    z.add_argument("--send", action="store_true")
+    z = sub.add_parser("line")
+    z.add_argument("--pool", required=True)
+    z.add_argument("--key", help="the pool's creator")
+    z.add_argument("--signer", help="the creator as an address that signs elsewhere (our Safe): print the call, send nothing")
+    z.add_argument("--line", required=True, type=int, help="the line's number in the pool's menu, from 0")
+    on = z.add_mutually_exclusive_group(required=True)
+    on.add_argument("--off", dest="on", action="store_false", help="stop selling the line; exams sold keep running")
+    on.add_argument("--on", dest="on", action="store_true", help="sell it again: the pool open, two of its payouts free")
+    z.add_argument("--send", action="store_true")
+    z = sub.add_parser("role")
+    z.add_argument("--deployment", required=True)
+    z.add_argument("--role", required=True, choices=sorted(ROLES), help="which of the factory's roles is named anew")
+    z.add_argument("--address", required=True, help="the new address of the role")
+    z.add_argument("--key", help="the factory's operator")
+    z.add_argument("--signer", help="the operator as an address that signs elsewhere (our Safe): print the call, send nothing")
+    z.add_argument("--send", action="store_true")
     for each in sub.choices.values():
         sn.add_args(each)
     args = p.parse_args(argv)
@@ -1615,7 +1958,7 @@ def main(argv: list[str] | None = None) -> int:
     return {"deploy": deploy, "pool": pool, "check": check, "buy": buy, "codes": codes, "close": close, "finish": finish,
             "request": request, "withdraw": withdraw, "cancel": cancel, "approver": approver_cmd,
             "approve": approve, "lift": lift_cmd, "fee": fee_cmd, "code": code_cmd, "pot": pot, "claim": claim,
-            "pay": pay_cmd}[args.cmd](args)
+            "pay": pay_cmd, "stop": stop_cmd, "line": line_cmd, "role": role_cmd}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -2,8 +2,9 @@
 # a simulated pool"), instance %i: it reads the factory's logs into a file of its own and answers GET /v1/simindex/*
 # on 127.0.0.1:8789, which nginx passes on. Its reviews route reads the payout review's folder of the same instance
 # (reviews-%i, read only) and hands out each document cut to what the page decides by (`outward`): no evidence, no
-# draft of a stop. Its settings, /etc/colosseum/sim-index-%i.env: SIM_INDEX_RECORD (deployments/<label>.json),
-# SIM_INDEX_ALLOW_ORIGIN, SIM_INDEX_RPC_URL (a node of its own), and COLOSSEUM_NETWORK=mainnet on mainnet.
+# draft of a stop. Its settings, /etc/colosseum/sim-index-%i.env: SIM_INDEX_RECORD (deployments/<network>-<label>.json),
+# SIM_INDEX_ALLOW_ORIGIN, SIM_INDEX_RPC_URL (a node of its own), and COLOSSEUM_NETWORK=mainnet on mainnet (a mainnet
+# host's bootstrap.sh --sim-instance writes the file, with the lines a person adds named in it).
 # ops/host/install.sh puts it in place; it is enabled by hand: systemctl enable --now colosseum-sim-index@<name>
 [Unit]
 Description=colosseum-pools simulated pool index %i
@@ -16,9 +17,9 @@ WorkingDirectory=/opt/colosseum-pools/current
 EnvironmentFile=/etc/colosseum/sim-index-%i.env
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SIM_INDEX_DIR=/var/lib/colosseum-sim-index-%i
 Environment=SIM_INDEX_REVIEWS=/var/lib/colosseum-keeper/reviews-%i
-# The health route's pulse: the time of the stops' journal's day file (prices-<label>-YYYY-MM-DD.jsonl here, the label
-# the record's name; a stat by name, nothing read) and of the review's last pass (status.json in its folder), watched
-# from the second machine (colosseum-host-watch@).
+# The health route's pulse: the time of the stops' journal's day file (prices-<label>-YYYY-MM-DD.jsonl here, by the
+# deployment's label as the keeper names it, the record's file name without its network; a stat by name, nothing read)
+# and of the review's last pass (status.json in its folder), watched from the second machine (colosseum-host-watch@).
 Environment=SIM_INDEX_KEEPER_DIR=/var/lib/colosseum-keeper
 StateDirectory=colosseum-sim-index-%i
 ExecStart=/opt/colosseum-pools/venv/bin/python -m gateway.simindex

@@ -1,4 +1,5 @@
-# The keeper of instance %i's MultiPool, testnet only (ops/multi_keeper.py): the calls a pool of many traders
+# The keeper of instance %i's MultiPool (ops/multi_keeper.py; testnet only), or of its simulated pools on the host's
+# network (ops/sim_keeper.py, which the same program hands a SimPoolFactory's record to): the calls a pool of many traders
 # leaves to anyone, made when the pool takes them -- each running paper exam's snapshot of the day in the first
 # fifteen minutes of a UTC day, its breach, its expiry, the fill of the order it has waiting, a seat's arming,
 # opening and end. Without it the snapshot that the daily loss limit is measured from is taken by whoever it suits,
@@ -9,7 +10,7 @@
 # installs it and enables it for an instance whose record names a MultiPool, once that key is there
 # (docs/HOSTING.md, "A MultiPool's keeper"); for any other instance it is never started.
 [Unit]
-Description=colosseum-pools MultiPool keeper %i (HyperEVM testnet)
+Description=colosseum-pools MultiPool or simulated pool keeper %i
 After=network-online.target
 Wants=network-online.target
 
@@ -20,12 +21,16 @@ WorkingDirectory=/opt/colosseum-pools/current
 # The alarm channel (COLOSSEUM_ALERT_CMD) of the stops' loop in this process: on mainnet the loop does not start
 # without it (ops/stop_filler.py, require_channel); on testnet an alarm goes to the journal and the flag file as before.
 EnvironmentFile=-/etc/colosseum/watch.env
-# The record's file last, as the gateway's: it wins over a line by hand in keeper-%i.env.
+# The record's file last, as the gateway's: it wins over a line by hand in keeper-%i.env. Not over the host's own node:
+# COLOSSEUM_HOST_RPC_URL in keeper-%i.env, which no record names (a record is public, and that address may hold a key),
+# is the keeper's node whatever the record's COLOSSEUM_RPC_URL says, and the stops' loop's when COLOSSEUM_STOP_RPC_URL
+# names none (spike/hlspike/common.py). No log line and no alarm carries its address.
 EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env
 # The network and its confirmation from the instance's own file (keeper-%i.env): testnet when it names none, as before.
-# Mainnet only with both lines written there by hand, COLOSSEUM_NETWORK=mainnet and COLOSSEUM_CONFIRM_MAINNET=<the
-# deployment's label>; one without the other is refused at the start (ops/sim_network.py), never run on the wrong chain.
+# Mainnet only with both lines there: COLOSSEUM_NETWORK=mainnet, which a mainnet host's bootstrap.sh writes and
+# install.sh holds to the host's one network (/etc/colosseum/host.env), and COLOSSEUM_CONFIRM_MAINNET=<the deployment's
+# label>, written by hand; one without the other is refused at the start (ops/sim_network.py), never run on the wrong chain.
 Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=
 # The payout review's last pass, whose age the stops' loop watches (ops/stop_filler.py, review_stale).
 Environment=COLOSSEUM_REVIEW_STATUS=/var/lib/colosseum-keeper/reviews-%i/status.json
@@ -73,7 +78,7 @@ BindPaths=-/var/lib/colosseum-keeper/instances/%i/made-keys
 Environment=GATEWAY_KEYS_DIR=/var/lib/colosseum-keeper/instances/%i/made-keys
 # Other users' processes are hidden from /proc, and /proc shows processes alone. This does not hide
 # another instance of this service, which runs as the same user: on testnet that is accepted, and a
-# mainnet host runs one instance or gives each its own user (docs/HOSTING.md).
+# mainnet host runs one instance, a simulated pool's (ops/host_instances.py refuses a second; docs/HOSTING.md).
 ProtectProc=invisible
 ProcSubset=pid
 

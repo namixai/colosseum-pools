@@ -54,7 +54,7 @@ StateDirectory=colosseum-gw/faucet-%i colosseum-gw/contacts-%i
 StateDirectoryMode=0700
 # Other users' processes are hidden from /proc, and /proc shows processes alone. This does not hide
 # another instance of this service, which runs as the same user: on testnet that is accepted, and a
-# mainnet host runs one instance or gives each its own user (docs/HOSTING.md).
+# mainnet host runs one instance, a simulated pool's (ops/host_instances.py refuses a second; docs/HOSTING.md).
 ProtectProc=invisible
 ProcSubset=pid
 

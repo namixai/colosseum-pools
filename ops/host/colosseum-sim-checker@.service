@@ -8,7 +8,7 @@
 # ops/host/install.sh installs it and enables it for an instance whose record is a simulated pool's (docs/HOSTING.md,
 # "A simulated pool's checker"); for any other instance it is never started.
 [Unit]
-Description=colosseum-pools simulated pool checker %i (HyperEVM testnet)
+Description=colosseum-pools simulated pool checker %i
 After=network-online.target
 Wants=network-online.target
 
@@ -16,12 +16,14 @@ Wants=network-online.target
 User=colosseum-keeper
 Group=colosseum-keeper
 WorkingDirectory=/opt/colosseum-pools/current
-# The record's file last, as the keeper's: it wins over a line by hand in keeper-%i.env. The node is the keeper's.
+# The record's file last, as the keeper's: it wins over a line by hand in keeper-%i.env. The node is the keeper's: the
+# host's own (COLOSSEUM_HOST_RPC_URL in keeper-%i.env) where the host names one, else the record's.
 EnvironmentFile=/etc/colosseum/keeper-%i.env
 EnvironmentFile=/etc/colosseum/deployment-%i.env
 # The network and its confirmation from the instance's own file (keeper-%i.env): testnet when it names none, as before.
-# Mainnet only with both lines written there by hand, COLOSSEUM_NETWORK=mainnet and COLOSSEUM_CONFIRM_MAINNET=<the
-# deployment's label>; one without the other is refused at the start (ops/sim_network.py), never run on the wrong chain.
+# Mainnet only with both lines there: COLOSSEUM_NETWORK=mainnet, which a mainnet host's bootstrap.sh writes and
+# install.sh holds to the host's one network (/etc/colosseum/host.env), and COLOSSEUM_CONFIRM_MAINNET=<the deployment's
+# label>, written by hand; one without the other is refused at the start (ops/sim_network.py), never run on the wrong chain.
 Environment=COLOSSEUM_NETWORK=testnet COLOSSEUM_CONFIRM_MAINNET=
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 # Only flags every release with the service loop reads, so a release rolled back to still starts it.

@@ -2427,7 +2427,11 @@ class TheStart(Base):
         loop = self.loop(wallet=None)
         stop = threading.Event()
         loop._served = lambda until, s: stop.set()
-        loop.run(0.5, stop)
+        # The keeper's own node, named by its scheme and host; a node of the stops' own is not named (review 19 of #340,
+        # L1: test_mainnet_host.py), so the line is read here with the loop's node as the keeper's, whatever the
+        # environment of the run names.
+        with mock.patch.object(c, "RPC_URL", self.node.url):
+            loop.run(0.5, stop)
         started = self.events("stop_loop_started")[0]
         self.assertEqual((started["poll"], started["looks_a_minute"], started["one_call"]), (0.5, 120, True))
         self.assertEqual(started["node"], "http://127.0.0.1:9")

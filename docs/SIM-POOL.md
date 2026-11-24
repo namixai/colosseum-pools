@@ -660,7 +660,9 @@ covers every payout owed. Passes can come faster than prices, and a payout waits
 
 - **The host**: `bootstrap.sh --sim-instance` makes the instance without a gateway, and `install.sh` enables
   `colosseum-multi-keeper@<name>` with the filler's wallet, after checking it and the checker's against the
-  record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route.
+  record (docs/HOSTING.md, "A simulated pool's keeper"). No gateway, no instance keeper, no nginx route of its
+  own; its index is reached at `/v1/simindex/`. One host serves one network: a mainnet host serves one such
+  instance and nothing else (docs/HOSTING.md, "Mainnet").
 
 - **The page's check**: `test_page_recordedChain` (test/sim/SimPool.t.sol) runs a pool on the simulator and
   records every event of it a page reads, as the node gives them, into `app/tests/fixtures/sim-page-chain.json`,
@@ -840,8 +842,9 @@ As the code does it, with the reasons a payout may be stopped for that the pool 
   held: the review offers no approval (`hold`), and a pool with approvals pays it unapproved only at its ceiling,
   7 days after the claim. A person decides from the review and the journal whether the result is disputed; if it
   is, the checker stops the payout for reason 3, "the result is disputed: a flaw of the exam, the oracle or the
-  filler", with a published analysis, sent with the checker's key. A stop of reason 3 is never sent by a program,
-  and only the factory's operator lifts it (`liftStop`). A pool without approvals pays by itself at 72 hours: the
+  filler", with a published analysis, sent with the checker's key. A stop of reason 3 is never sent by a program:
+  a person sends it with `deploy_sim stop`, from the review's document and the written analysis (docs/HOSTING.md,
+  "Mainnet"), and only the factory's operator lifts it (`liftStop`). A pool without approvals pays by itself at 72 hours: the
   review's service raises an alarm with the last moment a stop is still taken (`payout_needs_a_stop`).
 Nothing here moves money by itself, changes a result on chain, or pays anyone back.
 
@@ -926,7 +929,8 @@ testnet's default) and a confirmation: `deploy_sim ... --send` and `sim_keeper -
 ask the person at the terminal to type `send on mainnet` and refuse without a terminal; the keeper, the relayer
 and the checker as services take `--confirm-mainnet <label>`, the deployment's label, so that a unit copied from
 testnet does not start sending there. `deploy_sim deploy` on mainnet reads the meta again and stops if an index
-moved, takes the keeper's node from `--keeper-nodes` (a node of its own, not the gateway's), and `pool` refuses a
+moved, takes the record's node from `--keeper-nodes` (a public one, with no key in its address: the keeper's own
+node is named on its host alone, `COLOSSEUM_HOST_RPC_URL`, and wins there), and `pool` refuses a
 plan whose terms say testnet. The MultiPool keeper stays testnet's; on mainnet the host's unit serves only a
 simulated pool's record.
 

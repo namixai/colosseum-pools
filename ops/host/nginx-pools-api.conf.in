@@ -7,6 +7,12 @@
 # /<name>/v1/order, /<name>/v1/health, /<name>/v1/faucet and /<name>/v1/contacts, sent to its own gateway's port
 # through an upstream of its own. install.sh puts those upstreams and locations in place of the two INSTANCE markers; with no
 # instance, nothing is there.
+#
+# The index of a simulated pool's events (gateway/simindex.py, colosseum-sim-index@<name>, on 127.0.0.1:8789) is reached
+# at /v1/simindex/health, /v1/simindex/pool and /v1/simindex/reviews: the operator's page reads the last two, and the
+# second machine's watch of this host reads the first (docs/HOSTING.md, "The second writer of prices"). The route is
+# part of this file, so a release keeps it; on a host where no index runs nginx answers those three paths 502 and
+# every other path as before.
 
 # Every order costs the gateway six RPC calls. These limits keep that inside the budget of the
 # node the GATEWAY reads -- rpc.hyperliquid-testnet.xyz, which we measured at about 100 calls a
@@ -48,6 +54,10 @@ map $request_method $pools_contacts_any_writer {
 limit_req_zone $binary_remote_addr zone=pools_contacts_ip:1m rate=60r/m;
 limit_req_zone $pools_contacts_writer zone=pools_contacts_write:1m rate=2r/m;
 limit_req_zone $pools_contacts_any_writer zone=pools_contacts_write_all:1m rate=6r/m;
+# The index of a simulated pool (gateway/simindex.py) answers from what it has read already: a request costs the node
+# nothing. A page asks for its pool and its payouts' reviews, the second machine's watch asks for the health once a
+# minute: one a second from a network is room for both.
+limit_req_zone $binary_remote_addr zone=pools_simindex_ip:1m rate=60r/m;
 limit_req_status 429;
 
 # While a gateway is not listening -- a restart, from its stop until it listens again (17 s on
@@ -152,6 +162,20 @@ server {
         proxy_pass http://pools_gateway;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
+    }
+
+    # The index of a simulated pool: the three paths it answers and no other, GET alone (it writes nothing, and its
+    # page's GET needs no preflight), on its own port. Nothing on the way keeps an answer: nginx has no cache, and the
+    # answer goes out as no-store whatever the index said of it (a review's age is what an approval rests on, and the
+    # health route is a watch's question about now).
+    location ~ ^/v1/simindex/(health|pool|reviews)$ {
+        limit_except GET { deny all; }
+        limit_req zone=pools_simindex_ip burst=20 nodelay;
+        proxy_pass http://127.0.0.1:8789;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control no-store always;
     }
 
 @INSTANCE_LOCATIONS@

@@ -428,7 +428,7 @@ class Install(unittest.TestCase):
         self.assertLess(check, install.index('> "$site"'), "a label with no record stops the release before nginx")
         loop = install[check:install.index("done", check)]
         self.assertIn('-m ops.host_instances deployment-env "$label") > /dev/null', loop)
-        self.assertIn('|| fail "deployment $label: no complete testnet record in this release; nothing switched"', loop)
+        self.assertIn('|| fail "deployment $label: no complete $network record in this release; nothing switched"', loop)
         self.assertIn('deployment_env "$first_label" /etc/colosseum/deployment.env', install)
         # The label served is the one the instances were checked against: one reader, ops/host_instances.py.
         read = install.index('first_label="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances first-label /etc/colosseum)"')

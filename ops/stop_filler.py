@@ -225,6 +225,13 @@ def host_of(url: str) -> str:
     return f"{parts.scheme}://{parts.hostname or ''}" + (f":{parts.port}" if parts.port else "")
 
 
+def node_said(url: str) -> str:
+    """The stops' node as the loop's first line names it: the keeper's node by its scheme and host, as before (the
+    record's public node; the host's own is hushed by `log`); a node of the stops' own (--stop-rpc,
+    COLOSSEUM_STOP_RPC_URL) not at all, on any network: a provider's key may be its host name."""
+    return host_of(url) if url == c.RPC_URL else "the stops' own node (--stop-rpc; its address is not shown)"
+
+
 def scrub(text: str) -> str:
     """`text` with every address in it cut to its scheme and host, and a bare request path (urllib3's "url: /v2/…")
     taken out: an error of the keeper's node names its URL, and a key may ride in its path. An address that does not
@@ -1944,7 +1951,7 @@ class StopLoop:
         stop = stop or threading.Event()
         self.poll = poll
         self.alive_at = time.monotonic()
-        log("stop_loop_started", node=host_of(self.node.url), tip_wei=self.tip, sends=self.sender is not None,
+        log("stop_loop_started", node=node_said(self.node.url), tip_wei=self.tip, sends=self.sender is not None,
             journal=str(self.journal.path) if self.journal else None,
             flag=str(self.alarm.flag) if self.alarm.flag else None,
             poll=poll, looks_a_minute=round(60 / poll) if poll > 0 else None, one_call=self.multicall,
