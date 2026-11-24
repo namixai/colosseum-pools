@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import queue
 import sys
 import time
 
@@ -205,6 +206,188 @@ def refused(exc) -> str:
     return refusal(Exception(sim_check.quiet(exc, None)))
 
 
+# ── many reads in one call ───────────────────────────────────────────────────────────
+
+# Multicall3 stands at one address on every chain that has it, HyperEVM's two among them (3 808 bytes of code on
+# each, read on 24 November 2026). One eth_call of its `aggregate3` carries many reads, each allowed to fail by
+# itself, and the number and the time of the block the call ran in with them: all from one state, and the number is
+# the call's own, not the tag of the request. A node paid by the request is paid once for all of them.
+MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11"
+AGGREGATE3 = "aggregate3((address,bool,bytes)[])"
+BLOCK_READS = (c.encode_call("getBlockNumber()"), c.encode_call("getCurrentBlockTimestamp()"))
+# The most reads one eth_call carries, the two of the block among them.
+BATCH = 100
+# How often the keeper measures again how its node numbers the block of a call (`numbering`).
+NUMBERING_EVERY_S = 600.0
+# How often a process says it is alive, with the requests it made since by method (`keeper_alive`).
+ALIVE_EVERY_S = 60.0
+
+
+def has_multicall(call) -> bool:
+    """Whether Multicall3 stands on the chain of the node `call` asks (c.rpc, or a node's own call)."""
+    code = call("eth_getCode", [MULTICALL3, "latest"])
+    return isinstance(code, str) and len(code) > 2
+
+
+def aggregate(call, reads, tag: str = "latest") -> tuple[int, int, list[bytes | None]]:
+    """One eth_call of `aggregate3` at `tag`: the number and the time of the block the call says it ran in, and the
+    answer of each of `reads` ((to, data) each), None for one that failed. The number is as the node gives it: a node
+    that runs a call at `latest` as the next block's says one more than its head (`numbering`). The call itself
+    failing (the node, a revert of the whole, an answer of another shape) raises, as any call does."""
+    calls = [(MULTICALL3, False, data) for data in BLOCK_READS]
+    calls += [(to_checksum_address(to), True, data) for to, data in reads]
+    raw = call("eth_call", [{"to": MULTICALL3, "data": "0x" + c.encode_call(AGGREGATE3, ["(address,bool,bytes)[]"],
+                                                                         [calls]).hex()}, tag])
+    out = abi_decode(["(bool,bytes)[]"], bytes.fromhex(raw[2:]))[0]
+    if len(out) != len(calls) or len(out[0][1]) != 32 or len(out[1][1]) != 32:
+        raise RuntimeError(f"aggregate3: {len(out)} answers to {len(calls)} reads")
+    return (int.from_bytes(out[0][1], "big"), int.from_bytes(out[1][1], "big"),
+            [bytes(data) if ok else None for ok, data in out[2:]])
+
+
+class BadNumbering(RuntimeError):
+    """The number a call says it runs in is neither the head's nor the next block's: nothing here can read it."""
+
+
+def numbering(call, head_of) -> int | None:
+    """How many blocks past its head the node numbers a call at `latest`: 0 for a node that runs it as the head block
+    itself, 1 for one that runs it as the block to come (HyperEVM's own nodes, read on 24 November 2026: the number
+    of the next block with the time of the head). Measured between two reads of the head (`head_of`) that agree;
+    None when a block came between them, to be measured again. Anything else raises: the call's number says nothing
+    this code knows how to read."""
+    before = head_of()
+    number, _, _ = aggregate(call, [])
+    if head_of() != before:
+        return None
+    if number - before not in (0, 1):
+        raise BadNumbering(f"a call at the head {before} says it runs in block {number}")
+    return number - before
+
+
+class Counted:
+    """A node's call (`c.rpc`) with its requests counted by method, for the line a process writes once a minute
+    (`keeper_alive`, the stops' loop's `stop_loop_alive`): what a node paid by the request is paid for. A call the
+    node throttled and c.rpc tried again is counted once. No address of the node is kept."""
+
+    def __init__(self, call) -> None:
+        self.call = call
+        self.counts: dict[str, int] = {}
+
+    def __call__(self, method: str, params=()):
+        self.counts[method] = self.counts.get(method, 0) + 1  # one thread: the keeper's own
+        return self.call(method, params)
+
+    def taken(self) -> dict[str, int]:
+        """The counts since they were last taken, by method."""
+        counts, self.counts = self.counts, {}
+        return dict(sorted(counts.items()))
+
+
+def count_requests() -> Counted:
+    """c.rpc counted from here on, for this process: every call of the plumbing goes through it."""
+    if not isinstance(c.rpc, Counted):
+        c.rpc = Counted(c.rpc)
+    return c.rpc
+
+
+def multicall_or_not(call, who: str) -> bool:
+    """Whether Multicall3 is there, looked at once at the start. Without it the process works as before, a read a
+    request, and says so in one line; on mainnet it does not start: it is there, and a node that says otherwise is
+    not the chain's."""
+    if has_multicall(call):
+        return True
+    if c.NETWORK.name == "mainnet":
+        raise SystemExit(f"refusing to run {who} on mainnet: no Multicall3 at {MULTICALL3} on this node")
+    log("no_multicall", who=who, at=MULTICALL3, then="each read is its own request, as before")
+    return False
+
+
+class Reads:
+    """What one pass reads of the chain, asked in batches (`aggregate`) and answered from them: `view` and
+    `call_view` as the keeper's own, the same answers decoded the same way. A read that was not in a batch, or that
+    failed in it, or whose answer does not decode, is asked alone as before, so a failure is said as it was.
+
+    The reads of one account are never cut in two: they are of one block, the block of the call that carried them
+    (`at`), counted back by the node's numbering. Reads that may burn the call's gas when they fail (`violation()`
+    on an asset with no price) go last in their call; a call that fails whole is asked once more without them."""
+
+    def __init__(self) -> None:
+        self.got: dict[tuple[str, bytes], bytes] = {}
+        self.block_of: dict[str, int] = {}   # an account -> the block its reads are of
+        self.assets: dict[str, list[int]] = {}  # an exam -> the assets whose stops were asked for
+        self.block: int | None = None        # the block and the time of the first call
+        self.time: int | None = None
+        self.calls = 0
+
+    def load(self, groups, call, ahead: int = 0, size: int = BATCH) -> None:
+        """`groups`: (owner, reads, last) each; `last` are the reads that go at the end of the call."""
+        room = size - len(BLOCK_READS)
+        chunk: list = []
+        for group in groups:
+            if chunk and sum(len(g[1]) + len(g[2]) for g in chunk) + len(group[1]) + len(group[2]) > room:
+                self._ask(chunk, call, ahead, room)
+                chunk = []
+            chunk.append(group)
+        if chunk:
+            self._ask(chunk, call, ahead, room)
+
+    def _ask(self, chunk, call, ahead: int, room: int) -> None:
+        first = [r for _, reads, _ in chunk for r in reads]
+        last = [r for _, _, tail in chunk for r in tail]
+        whole = len(first) + len(last) <= room  # a group larger than a call is cut: its reads are of no one block
+        for reads in ([first + last] if whole else [(first + last)[i:i + room] for i in range(0, len(first + last), room)]):
+            try:
+                self.calls += 1
+                number, t, answers = aggregate(call, reads)
+            except Exception as exc:
+                if not (whole and last):
+                    log("batch_failed", reads=len(reads), error=refused(exc), then="each asked alone")
+                    continue
+                try:  # a read that burns the gas when it fails takes the whole call with it: once more without them
+                    self.calls += 1
+                    reads = first
+                    number, t, answers = aggregate(call, reads)
+                except Exception as again:
+                    log("batch_failed", reads=len(reads), error=refused(again), then="each asked alone")
+                    continue
+            if self.block is None:
+                self.block, self.time = number - ahead, t
+            for (to, data), answer in zip(reads, answers):
+                if answer is not None:
+                    self.got[(to.lower(), data)] = answer
+            if whole:
+                for owner, _, _ in chunk:
+                    self.block_of[owner] = number - ahead
+
+    def raw(self, to: str, sig: str, types=(), args=()) -> bytes | None:
+        return self.got.get((to.lower(), c.encode_call(sig, list(types), list(args))))
+
+    def read(self, to: str, sig: str, types, args, out) -> tuple:
+        """A read of the batch, decoded; one that is not in it raises: nothing is asked in its place."""
+        raw = self.raw(to, sig, types, args)
+        if raw is None:
+            raise RuntimeError(f"{sig.split('(')[0]}: not read in the pass's call")
+        return abi_decode(list(out), raw)
+
+    def view(self, addr: str, sig: str, out: str, types=(), args=()):
+        raw = self.raw(addr, sig, types, args)
+        if raw is not None:
+            try:
+                return abi_decode([out], raw)[0]
+            except Exception:
+                pass  # an answer of another shape (an address with no code answers with nothing): asked alone
+        return view(addr, sig, out, types, args)
+
+    def call_view(self, to: str, sig: str, types, args, out) -> tuple:
+        raw = self.raw(to, sig, types, args)
+        if raw is not None:
+            try:
+                return abi_decode(list(out), raw)
+            except Exception:
+                pass
+        return c.call_view(to, sig, types, args, out)
+
+
 # ── the keeper ───────────────────────────────────────────────────────────────────────
 
 class SimKeeper:
@@ -235,6 +418,13 @@ class SimKeeper:
         # tries them and each send is c.send_tx's.
         self.stop_loop = None
         self.outbox = None
+        # With Multicall3 on the chain (`main` looks at the start) the slow pass asks its reads in batches (`Reads`);
+        # without, and until the node's numbering is measured, each is asked alone as before.
+        self.multicall = False
+        self.ahead: int | None = None  # how the node numbers the block of a call (`numbering`); None: not measured
+        self.ahead_at = 0.0
+        self.reads = Reads()  # the pass's batch; empty outside a pass, and every read is then asked alone
+        self.rule_assets: dict[str, list[int]] = {}  # an account -> the assets of its rules, written once when it is made
         if state_path.exists():
             state = json.loads(state_path.read_text())
             if to_checksum_address(state["factory"]) != self.factory:
@@ -311,7 +501,7 @@ class SimKeeper:
     # ── the slow pass ────────────────────────────────────────────────────────────────
 
     def scan(self, latest: int) -> None:
-        for p in view(self.factory, "pools()", "address[]"):
+        for p in self.reads.view(self.factory, "pools()", "address[]"):
             p = to_checksum_address(p)
             if p not in self.pools:
                 self.pools.append(p)
@@ -334,10 +524,11 @@ class SimKeeper:
 
     def account_pass(self, a: str, now: int) -> None:
         info = self.accounts[a]
-        if c.call_view(info["pool"], "accountOf(address)", ["address"], [a], ["uint8", "uint8", "bool"])[2]:
+        view, call_view = self.reads.view, self.reads.call_view  # the pass's batch; a read not in it is asked alone
+        if call_view(info["pool"], "accountOf(address)", ["address"], [a], ["uint8", "uint8", "bool"])[2]:
             self.done.add(a)  # released, funded or claimed: the pool holds it done
             return
-        status, _, _, passed_at = c.call_view(a, "result()", [], [], ["uint8", "address", "uint64", "uint64"])
+        status, _, _, passed_at = call_view(a, "result()", [], [], ["uint8", "address", "uint64", "uint64"])
         status = EXAM_STATUS[status]
         broken = over = snapshot_due = False
         if status == "Active":
@@ -363,6 +554,7 @@ class SimKeeper:
                 self.done.add(a)
 
     def pool_pass(self, pool: str, now: int) -> None:
+        view = self.reads.view  # the pass's batch; a read not in it (a payout, say) is asked alone
         head = view(pool, "head()", "uint256")
         count = view(pool, "payoutCount()", "uint256")
         if head >= count:
@@ -401,26 +593,121 @@ class SimKeeper:
 
     def slow_pass(self) -> None:
         latest = int(c.rpc("eth_blockNumber"), 16)
-        now = int(c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
-        self.scan(latest)
-        for a in self.live():
-            try:
-                self.account_pass(a, now)
-            except Exception as exc:
-                log("account_failed", account=a, error=str(exc)[:200])
-        for p in self.pools:
-            try:
-                self.pool_pass(p, now)
-            except Exception as exc:
-                log("pool_failed", pool=p, error=str(exc)[:200])
+        self.reads = self.read_all(latest)
+        try:
+            # The time of the head: the batch's own (the call that read the accounts says it), or asked as before.
+            now = self.reads.time if self.reads.time is not None else int(
+                c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
+            self.scan(latest)
+            for a in self.live():
+                try:
+                    self.account_pass(a, now)
+                except Exception as exc:
+                    log("account_failed", account=a, error=str(exc)[:200])
+            for p in self.pools:
+                try:
+                    self.pool_pass(p, now)
+                except Exception as exc:
+                    log("pool_failed", pool=p, error=str(exc)[:200])
+        finally:
+            calls, self.reads = self.reads.calls, Reads()  # the batch is the pass's: nothing later is answered from it
         self.save()
-        log("pass_done", pools=len(self.pools), live=len(self.live()), next_block=self.next_block)
+        log("pass_done", pools=len(self.pools), live=len(self.live()), next_block=self.next_block, batches=calls)
+
+    # ── the pass's reads, in batches ─────────────────────────────────────────────────
+
+    def measure_numbering(self, tries: int = 3) -> int | None:
+        """How the keeper's node numbers the block of a call at `latest` (`numbering`), measured at the first pass and
+        every NUMBERING_EVERY_S after: the block a batch's reads are of is its number less this. None while it is not
+        measured (a block came between the reads each time): the pass then asks each read alone. A node whose number
+        cannot be read at all ends the batches for this run, said once."""
+        if self.ahead is not None and time.monotonic() - self.ahead_at < NUMBERING_EVERY_S:
+            return self.ahead
+        for _ in range(tries):
+            try:
+                got = numbering(c.rpc, lambda: int(c.rpc("eth_blockNumber"), 16))
+            except BadNumbering as exc:
+                self.multicall = False
+                log("batches_off", why=str(exc)[:200], then="every read is asked alone, as before")
+                return None
+            except Exception as exc:
+                log("numbering_unread", error=refused(exc))
+                return self.ahead
+            if got is not None:
+                if self.ahead is not None and got != self.ahead:
+                    log("numbering_changed", was=self.ahead, now=got)
+                self.ahead, self.ahead_at = got, time.monotonic()
+                return got
+        return self.ahead
+
+    def account_reads(self, a: str, day: bool) -> tuple[str, list, list]:
+        """The reads `account_pass` makes of an account, for the pass's batch: its own, and its stops' (the rules while
+        its assets are not known; of each asset its stop, its take and its position once they are). `violation()`
+        goes last in the call: it reads prices, and a read of a price that fails may burn the call's gas."""
+        pool = self.accounts[a]["pool"]
+        reads = [(pool, c.encode_call("accountOf(address)", ["address"], [a])), (a, c.encode_call("result()")),
+                 (a, c.encode_call("deadline()")), (a, c.encode_call("lastFillAt()")), (a, c.encode_call("terms()"))]
+        if day:
+            reads.append((a, c.encode_call("day()")))
+        return a, reads + self.stop_reads(a), [(a, c.encode_call("violation()"))]
+
+    def stop_reads(self, a: str) -> list:
+        assets = self.rule_assets.get(a)
+        if assets is None:
+            return [(a, c.encode_call("rules()"))]
+        return [(a, c.encode_call(sig, ["uint32"], [asset])) for asset in assets
+                for sig in ("stopOf(uint32)", "takeOf(uint32)", "positionOf(uint32)")]
+
+    def read_all(self, latest: int) -> Reads:
+        """The reads of this pass, asked in batches of at most BATCH: the factory's pools, each pool's queue of payouts,
+        and each live account's own reads with its stops', an account never cut in two. An account met for the first
+        time has its rules read in the first call and its stops in a second: an exam's assets are written once, when
+        it is made, and are kept from then on. Without Multicall3, or with the node's numbering not measured, the
+        batch is empty and every read is asked alone, as before."""
+        reads = Reads()
+        if not self.multicall:
+            return reads
+        ahead = self.measure_numbering()
+        if ahead is None:
+            return reads
+        # `day()` is read in the day's first minutes only; the chain's clock is not known before the call, so by this
+        # machine's with five minutes either side (a read left out is asked alone).
+        day = any(core.in_checkpoint_window(int(time.time()) + d) for d in (-300, 0, 300))
+        live = self.live()
+        groups = [(self.factory, [(self.factory, c.encode_call("pools()"))], [])]
+        groups += [(p, [(p, c.encode_call(sig)) for sig in ("head()", "payoutCount()", "payRoom()", "fundWindow()")], [])
+                   for p in self.pools]
+        groups += [self.account_reads(a, day) for a in live]
+        reads.load(groups, c.rpc, ahead)
+        new = []
+        for a in live:
+            if a not in self.rule_assets:
+                try:
+                    self.rule_assets[a] = [int(x) for x in reads.read(a, "rules()", [], [], [RULES])[0][3]]
+                except Exception:
+                    continue  # not read: its stops are read the old way in this pass
+                new.append((a, [(a, c.encode_call("result()"))] + self.stop_reads(a), []))
+        if new:
+            reads.load(new, c.rpc, ahead)
+        if reads.block is not None and reads.block < latest:
+            # The call says an older block than the head read before it: the node numbers its calls another way now.
+            log("numbering_changed", head=latest, call=reads.block, then="measured again; this pass's stops read alone")
+            self.ahead = None
+            reads.block_of.clear()
+        reads.assets = {a: self.rule_assets[a] for a in live if a in self.rule_assets and a in reads.block_of}
+        for a in [a for a in self.rule_assets if a in self.done]:
+            del self.rule_assets[a]
+        return reads
 
     # ── the fast loop ────────────────────────────────────────────────────────────────
 
-    def fast_step(self, latest: int) -> list[str]:
+    def fast_step(self, latest: int, fed: tuple[int, list[dict]] | None = None) -> list[str]:
         """Reads the `Placed` events since the last look, and the pools' new exams and stages with them, and
         sends the fills that are due for the next block. The exams it sent a fill for.
+
+        `fed`: with the stops' loop, the logs it read of the blocks from `fed[0]` to `latest` (`fed_step`): they are
+        taken as they are and nothing is asked of the node, except for blocks before them that this loop has not
+        read (the first look after a start), which it reads itself as before.
 
         A new account is read here, not only in the slow pass: an order placed within seconds of the purchase
         would otherwise fall before the account was known and lapse (review of #270). A fill the exam refuses
@@ -433,8 +720,10 @@ class SimKeeper:
         lo = max(self.fast_block + 1, latest - MAX_LOG_WINDOW + 1)
         if lo <= latest:
             new: list[str] = []
-            for l in c.rpc("eth_getLogs", [{"address": watched, "topics": [[PLACED, EXAM_SOLD, FUNDED, *TRIGGER_TOPICS]],
-                                            "fromBlock": hex(lo), "toBlock": hex(latest)}]):
+            # Handed in from block `fed[0]` on: only the blocks before it are asked for here, and none when there are none.
+            own = latest if fed is None else min(latest, fed[0] - 1)
+            for l in (c.rpc("eth_getLogs", [{"address": watched, "topics": [[PLACED, EXAM_SOLD, FUNDED, *TRIGGER_TOPICS]],
+                                             "fromBlock": hex(lo), "toBlock": hex(own)}]) if lo <= own else []):
                 if l["topics"][0] == PLACED:
                     self._order(l)
                     continue
@@ -448,8 +737,18 @@ class SimKeeper:
                     new.append(a)
             if new:  # their orders in the same blocks, which the read above could not name
                 for l in c.rpc("eth_getLogs", [{"address": new, "topics": [[PLACED, *TRIGGER_TOPICS]],
-                                                "fromBlock": hex(lo), "toBlock": hex(latest)}]):
+                                                "fromBlock": hex(lo), "toBlock": hex(own)}]):
                     self._trigger(l) if l["topics"][0] in TRIGGER_TOPICS else self._order(l)
+            for l in sorted((l for l in (fed[1] if fed is not None else []) if lo <= int(l["blockNumber"], 16) <= latest),
+                            key=lambda l: (int(l["blockNumber"], 16), int(l.get("logIndex", "0x0"), 16))):
+                # The stops' loop read these, the orders of an account sold in the same blocks among them.
+                if l["topics"][0] == PLACED:
+                    self._order(l)
+                elif l["topics"][0] in (EXAM_SOLD, FUNDED):
+                    a = to_checksum_address("0x" + l["topics"][1][-40:])
+                    if a not in self.accounts:
+                        kind = "exam" if l["topics"][0] == EXAM_SOLD else "stage"
+                        self.accounts[a] = {"pool": to_checksum_address(l["address"]), "kind": kind}
             self.fast_block = latest
         sent = []
         for exam, (start, until) in list(self.orders.items()):
@@ -463,6 +762,29 @@ class SimKeeper:
                     del self.orders[exam]
                     self.tried.pop(exam, None)
         return sent + (self.trigger_step(latest) if self.stop_loop is None else [])  # with the loop, the stops are its
+
+    def fed_step(self, wait: float) -> list[str]:
+        """With the stops' loop: its looks at the head and its one read of each block's logs serve this loop too. Waits
+        up to `wait` seconds for its next step, takes every step handed in since, and makes one fast step to the last
+        head with their logs: no look at the head and no eth_getLogs of this loop's own."""
+        feed = self.stop_loop.feed
+        try:
+            steps = [feed.get(timeout=wait)]
+        except queue.Empty:
+            return []
+        while True:
+            try:
+                steps.append(feed.get_nowait())
+            except queue.Empty:
+                break
+        lo, head = steps[-1][0], steps[-1][1]
+        if head <= self.fast_block:
+            return []
+        for first, last, _ in reversed(steps[:-1]):
+            if last + 1 < lo:
+                break  # the loop skipped blocks here (it was far behind): the ones before are not handed in
+            lo = min(lo, first)
+        return self.fast_step(head, fed=(lo, [l for _, _, logs in steps for l in logs]))
 
     def trigger_step(self, latest: int) -> list[str]:
         """The stops and takes armed for the next block: each is tried, once a block, by a call that changes
@@ -498,9 +820,13 @@ class SimKeeper:
         knows the ones set while it was down, which the fast loop's window of logs no longer reaches (review of
         #297). With the stops' loop, read at one block and handed to it."""
         if self.stop_loop is not None:
-            self.stop_loop.reread(exam)
+            if exam in self.reads.assets:  # read in the pass's batch, at one block: handed over as it is
+                self.stop_loop.reread(exam, batch=self.reads)
+            else:
+                self.stop_loop.reread(exam)
             return
-        for asset in view(exam, "rules()", RULES)[3]:
+        view = self.reads.view
+        for asset in self.rule_assets.get(exam) or view(exam, "rules()", RULES)[3]:
             for is_take, getter in ((False, "stopOf(uint32)"), (True, "takeOf(uint32)")):
                 px, _, armed_at, _ = view(exam, getter, TRIGGER, ["uint32"], [asset])
                 key = (exam, int(asset), is_take)
@@ -543,18 +869,27 @@ def measure(exam: str, trader, asset: int, size: int, orders: int, out: pathlib.
         placed_block = int(rcpt["blockNumber"], 16)
         row = {"order": i, "buy": is_buy, "placed_block": placed_block, "late": None, "source": None, "lapsed": False}
         started = time.time()
+        gone = False
         while time.time() - started < timeout_s:
             logs = c.rpc("eth_getLogs", [{"address": exam, "topics": [[FILLED, LAPSED]],
                                           "fromBlock": hex(placed_block), "toBlock": "latest"}])
-            filled = [l for l in logs if l["topics"][0] == FILLED and int(l["blockNumber"], 16) > placed_block]
+            after = [l for l in logs if int(l["blockNumber"], 16) > placed_block]
+            filled = [l for l in after if l["topics"][0] == FILLED]
             if filled:
                 row["late"], row["source"] = filled_of(filled[0])
                 row["filled_block"] = int(filled[0]["blockNumber"], 16)
                 late.append(row["late"])
                 break
-            if c.call_view(exam, "pending()", [], [], ["uint32", "bool", "uint64", "uint64"])[2] == 0:
+            if any(l["topics"][0] == LAPSED for l in after):
+                row["lapsed"] = True
                 break
-            time.sleep(1)
+            if gone:
+                break  # no order waits and the chain's events, read after that, name neither a fill nor a lapse
+            # The order is judged by the chain's events, never by `pending()` alone: a fill that lands between the
+            # read of the events above and this read leaves no order waiting, and is in the events read next.
+            gone = c.call_view(exam, "pending()", [], [], ["uint32", "bool", "uint64", "uint64"])[2] == 0
+            if not gone:
+                time.sleep(1)
         else:
             row["lapsed"] = True
         rows.append(row)
@@ -615,7 +950,10 @@ def main(argv: list[str] | None = None) -> int:
     state = pathlib.Path(args.state) if args.state else STATE_DIR / f"sim-{args.deployment}.json"
     k = SimKeeper(record["SimPoolFactory"], wallet, sender, args.dry_run, state, int(record["block"]),
                   window=args.log_window, max_windows=args.max_windows)
+    counted = count_requests()
+    k.multicall = multicall_or_not(c.rpc, "the keeper")
     thread = None
+    poll = args.stop_poll or args.poll
     if args.stops == "loop" and not args.once:
         # The filler is known before the loop starts: its thread never waits on the keeper's node. A key that is not the
         # filler sends nothing of the stops, and its own sends stay c.send_tx's.
@@ -627,8 +965,11 @@ def main(argv: list[str] | None = None) -> int:
                               why="the keeper's key is not the factory's filler: it sends no stop, every stop reached "
                                   "goes uncarried until the filler's key runs a keeper")
         k.outbox = k.stop_loop.sender
-        thread = stop_filler.start(k.stop_loop, args.stop_poll or args.poll)
+        # One look at the head and one read of each block's logs for both loops: the stops' loop hands its own on.
+        k.stop_loop.share()
+        thread = stop_filler.start(k.stop_loop, poll)
     last_slow = 0.0
+    alive_at = time.monotonic()
     while True:
         try:
             if time.time() - last_slow >= args.every:
@@ -636,8 +977,14 @@ def main(argv: list[str] | None = None) -> int:
                 last_slow = time.time()
             if args.once:
                 return 0
+            if time.monotonic() - alive_at >= ALIVE_EVERY_S:
+                seconds, alive_at = time.monotonic() - alive_at, time.monotonic()
+                log("keeper_alive", block=k.fast_block, live=len(k.live()), orders=len(k.orders),
+                    seconds=round(seconds), requests=counted.taken())
             if thread is not None:
-                thread = stop_filler.keep_alive(k.stop_loop, thread, args.stop_poll or args.poll)
+                thread = stop_filler.keep_alive(k.stop_loop, thread, poll)
+                k.fed_step(args.poll)  # waits for the stops' loop's next step: no look at the head of its own
+                continue
             latest = int(c.rpc("eth_blockNumber"), 16)
             if latest > k.fast_block:
                 k.fast_step(latest)

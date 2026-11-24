@@ -1,5 +1,9 @@
 """The stops' loop and its watch (ops/stop_filler.py): a stop reached is sent in the step that sees it, nothing waits on
-anything else, a busy node costs a look and no block, and a reach with no fill is an alarm. On a node made up here."""
+anything else, a busy node costs a look and no block, and a reach with no fill is an alarm. On a node made up here.
+
+The node made up here has Multicall3: a look is one eth_call that says the block's number, its time and every price.
+Every test of the loop runs a second time on a node without it (`the_old_way`, at the end), where the loop is as it
+was: the head, then a call a price."""
 import json
 import pathlib
 import re
@@ -27,7 +31,11 @@ POOL = to_checksum_address("0x" + "55" * 20)
 FILLER = Account.from_key("0x" + "42" * 32)  # made up here; no key directory is read
 BTC = 3
 SEL = {name: "0x" + keccak(text=name)[:4].hex() for name in ("positionOf(uint32)", "fillTrigger(uint32,bool)", "deadline()",
-                                                              "lastFillAt()", "terms()", "result()")}
+                                                              "lastFillAt()", "terms()", "result()", "rules()",
+                                                              "stopOf(uint32)", "takeOf(uint32)", "getBlockNumber()",
+                                                              "getCurrentBlockTimestamp()",
+                                                              "aggregate3((address,bool,bytes)[])")}
+ORACLE_OF = {a: "0x" + encode(["uint32"], [a]).hex() for a in (0, 3, 4)}  # the data of an oracle read, by asset
 
 
 def word(n: int) -> str:
@@ -90,26 +98,112 @@ class Node:
         self.senders: list[int] = []  # the thread of each eth_sendRawTransaction
         self.stale = 0  # seconds the head's time is behind the clock of `Base.clock`
         self.balance = 10**18
+        self.multicall = True  # Multicall3 stands on this chain
+        self.ahead = 0  # 1: a call at `latest` says the next block's number (HyperEVM's own nodes), with the head's time
+        self.ignores_tag = False  # a batch asked for a block by its number is answered at the head all the same
+        self.no_past = False  # a batch asked for a block that is no longer the head is not answered
+        self.unread_assets: set[int] = set()  # assets whose oracle read fails, in any block
+        self.batch_fails = 0  # the next batches at `latest` that fail whole
+        self.stops: dict[tuple[str, int, bool], tuple[int, int]] = {}  # (exam, asset, take) -> (px, armed), as the exam holds them
+        self.exam_assets = [BTC]
+        # Every read of the chain's state, alone or inside a batch: (to, data, the block it was answered at).
+        self.reads: list[tuple[str, str, int]] = []
+        self.counts: dict[str, int] = {}
 
     def oracle(self, block: int) -> int:
         past = [b for b in self.price if b <= block]
         return self.price[max(past)] if past else 1_000_000
 
+    def taken(self) -> dict[str, int]:
+        counts, self.counts = self.counts, {}
+        return counts
+
+    def price_reads(self, asset: int = BTC) -> list[int]:
+        """The blocks the oracle price of `asset` was read at, in order, alone or inside a batch."""
+        return [block for to, data, block in self.reads if to.lower() == sf.ORACLE_PX.lower() and data == ORACLE_OF[asset]]
+
+    def batches(self) -> list[tuple[str, int]]:
+        """The batches asked for: (the tag, how many reads besides the block's two)."""
+        return [(p[1], len(decode(["(address,bool,bytes)[]"], bytes.fromhex(p[0]["data"][10:]))[0]) - 2)
+                for m, p in self.calls if m == "eth_call" and p[0]["to"].lower() == sk.MULTICALL3.lower()]
+
+    def time_of(self, block: int) -> int:
+        return 1_000_000 + block - self.stale
+
+    def batch(self, data: str, tag: str) -> str:
+        """Multicall3's aggregate3, as a node answers it: every read at one block, each allowed to fail alone."""
+        if tag == "latest" and self.batch_fails:
+            self.batch_fails -= 1
+            raise RuntimeError("eth_call: {'code': -32000, 'message': 'out of gas'}")
+        if tag != "latest" and self.no_past and int(tag, 16) != self.head:
+            raise RuntimeError("eth_call: {'code': -32000, 'message': 'header not found'}")
+        block = self.head if tag == "latest" or self.ignores_tag else int(tag, 16)
+        out = []
+        for to, may_fail, inner in decode(["(address,bool,bytes)[]"], bytes.fromhex(data[10:]))[0]:
+            inner = "0x" + inner.hex()
+            try:
+                if to.lower() == sk.MULTICALL3.lower():
+                    answer = encode(["uint256"], [block + self.ahead if inner == SEL["getBlockNumber()"] else self.time_of(block)])
+                else:
+                    answer = bytes.fromhex(self.read(to_checksum_address(to), inner, block)[2:])
+                out.append((True, answer))
+            except c.NodeBusy:
+                raise
+            except Exception:
+                if not may_fail:
+                    raise RuntimeError("eth_call: execution reverted: Multicall3: call failed") from None
+                out.append((False, b""))
+        return "0x" + encode(["(bool,bytes)[]"], [out]).hex()
+
+    def read(self, to: str, data: str, block: int, sender=None) -> str:
+        """One read of the chain's state at `block`: the same answer alone and inside a batch."""
+        self.reads.append((to, data, block))
+        if to.lower() == sf.ORACLE_PX.lower():
+            if block in self.unreadable or decode(["uint32"], bytes.fromhex(data[2:]))[0] in self.unread_assets:
+                raise RuntimeError("header not found")
+            return "0x" + encode(["uint64"], [self.oracle(block)]).hex()
+        if data.startswith(SEL["positionOf(uint32)"]):
+            asset = decode(["uint32"], bytes.fromhex(data[10:]))[0]
+            return "0x" + encode(["int256"], [self.positions.get((to_checksum_address(to), asset), 0)]).hex()
+        if data.startswith(SEL["fillTrigger(uint32,bool)"]):
+            if self.refuse_fill:
+                raise RuntimeError("execution reverted: TooFarFromOracle")
+            return "0x"
+        if data == SEL["deadline()"]:
+            return "0x" + encode(["uint64"], [self.deadline]).hex()
+        if data == SEL["lastFillAt()"]:
+            return "0x" + encode(["uint64"], [self.last_fill]).hex()
+        if data == SEL["terms()"]:
+            return "0x" + encode([sk.EXAM_TERMS], [(0, [], 0, self.max_idle, 0, 0, 0, 0)]).hex()
+        if data == SEL["result()"]:
+            return "0x" + encode(sf.RESULT, [self.status, FILLER.address, 0, 0]).hex()
+        if data == SEL["rules()"]:
+            return "0x" + encode([sk.RULES], [(300, 600, 1000, self.exam_assets, [])]).hex()
+        for take, getter in ((False, "stopOf(uint32)"), (True, "takeOf(uint32)")):
+            if data.startswith(SEL[getter]):
+                asset = decode(["uint32"], bytes.fromhex(data[10:]))[0]
+                px, armed = self.stops.get((to_checksum_address(to), asset, take), (0, 0))
+                return "0x" + encode(["uint64", "uint64", "uint64", "uint64"], [px, 0, armed, 0]).hex()
+        raise AssertionError(f"the loop read {data} of {to}")
+
     def call(self, method, params=()):
         self.calls.append((method, params))
+        self.counts[method] = self.counts.get(method, 0) + 1
         if method in self.busy:
             raise c.NodeBusy(f"{method}: HTTP 429")
         if method == "eth_blockNumber":
             return hex(self.head)
         if method == "eth_chainId":
             return hex(c.CHAIN_ID)
+        if method == "eth_getCode":
+            return "0x" + "60" * 3808 if self.multicall and params[0].lower() == sk.MULTICALL3.lower() else "0x"
         if method == "eth_gasPrice":
             return hex(100_000_000)
         if method == "eth_getTransactionCount":
             return hex(self.count if params[1] == "pending" or self.latest is None else self.latest)
         if method == "eth_getBlockByNumber":
             block = self.head if params[0] == "latest" else int(params[0], 16)
-            return {"number": hex(block), "timestamp": hex(1_000_000 + block - self.stale)}
+            return {"number": hex(block), "timestamp": hex(self.time_of(block))}
         if method == "eth_getBalance":
             return hex(self.balance)
         if method == "eth_getLogs":
@@ -133,27 +227,11 @@ class Node:
             return self.receipts.get(params[0])
         if method == "eth_call":
             q, tag = params
-            data = q["data"]
-            if q["to"].lower() == sf.ORACLE_PX.lower():
-                block = int(tag, 16)
-                if block in self.unreadable:
-                    raise RuntimeError("header not found")
-                return "0x" + encode(["uint64"], [self.oracle(block)]).hex()
-            if data.startswith(SEL["positionOf(uint32)"]):
-                asset = decode(["uint32"], bytes.fromhex(data[10:]))[0]
-                return "0x" + encode(["int256"], [self.positions.get((to_checksum_address(q["to"]), asset), 0)]).hex()
-            if data.startswith(SEL["fillTrigger(uint32,bool)"]):
-                if self.refuse_fill:
-                    raise RuntimeError("execution reverted: TooFarFromOracle")
-                return "0x"
-            if data == SEL["deadline()"]:
-                return "0x" + encode(["uint64"], [self.deadline]).hex()
-            if data == SEL["lastFillAt()"]:
-                return "0x" + encode(["uint64"], [self.last_fill]).hex()
-            if data == SEL["terms()"]:
-                return "0x" + encode([sk.EXAM_TERMS], [(0, [], 0, self.max_idle, 0, 0, 0, 0)]).hex()
-            if data == SEL["result()"]:
-                return "0x" + encode(sf.RESULT, [self.status, FILLER.address, 0, 0]).hex()
+            if q["to"].lower() == sk.MULTICALL3.lower():
+                if not self.multicall:
+                    raise AssertionError("the loop asked a node with no Multicall3 for a batch")
+                return self.batch(q["data"], tag)
+            return self.read(q["to"], q["data"], self.head if tag == "latest" else int(tag, 16))
         raise AssertionError(f"the loop asked the node for {method} {params}")
 
     def sent(self) -> list[dict]:
@@ -182,6 +260,9 @@ class Keeper:
 
 
 class Base(unittest.TestCase):
+    # Whether the node made up for the test has Multicall3. Each class of tests runs again without (`the_old_way`).
+    MULTICALL = True
+
     def setUp(self):
         self.dir = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
@@ -205,16 +286,26 @@ class Base(unittest.TestCase):
         self.journal = sf.PriceJournal(self.dir / "prices.jsonl")
         self.addCleanup(self.journal.close)
         kw.setdefault("clock", lambda: 1_000_000 + self.node.head + self.later)
-        return sf.StopLoop(self.keeper, self.node, wallet=wallet, sender=sender, tip_wei=tip, journal=self.journal,
-                           alarm=alarm, **kw)
+        self.node.multicall = self.MULTICALL
+        made = sf.StopLoop(self.keeper, self.node, wallet=wallet, sender=sender, tip_wei=tip, journal=self.journal,
+                           alarm=alarm, multicall=self.MULTICALL, **kw)
+        # The node's numbering as `run` measures it before its first look (TheNodesNumbering measures it for real).
+        made.ahead, made.ahead_at = self.node.ahead, time.monotonic()
+        return made
 
     def run_to(self, loop, *heads):
-        """Each head as the loop's `run` takes it: its time as polled, then a step to it."""
+        """Each head as the loop's `run` takes it: one look at it, then a step to it with what the look read. Without
+        Multicall3 the look is the head and its time alone, and the step reads the prices."""
         out = []
         for h in heads:
             self.node.head = h
-            loop.head_t[h] = 1_000_000 + h - self.node.stale  # the fake node's time of a block
-            out.append(loop.step(h))
+            if loop.multicall:
+                head, head_t, look = loop._head()
+                loop.head_t[head] = head_t
+                out.append(loop.step(head, look))
+            else:
+                loop.head_t[h] = self.node.time_of(h)  # the fake node's time of a block
+                out.append(loop.step(h))
         return out
 
     def events(self, name):
@@ -427,9 +518,8 @@ class NoBlindSpots(Base):
         self.node.head = 103
         sent = loop.step(103)
         self.assertEqual(sent, [(EXAM, BTC, False)])
-        oracle_blocks = [int(p[1], 16) for m, p in self.node.calls if m == "eth_call" and p[0]["to"] == sf.ORACLE_PX
-                         and p[0]["data"].endswith(encode(["uint32"], [BTC]).hex())]
-        self.assertEqual(oracle_blocks, [100, 103, 101, 102], "the head's price first, then the blocks between")
+        # The blocks BTC's price was read at, alone (a call a price) or in the block's one call: the same order.
+        self.assertEqual(self.node.price_reads(), [100, 103, 101, 102], "the head's price first, then the blocks between")
         self.assertLess([m for m, _ in self.node.calls].index("eth_sendRawTransaction"),
                         [m for m, _ in self.node.calls].index("eth_getLogs", 2), "sent before the read back")
         short = self.events("stop_reach_too_short")
@@ -465,7 +555,9 @@ class NoBlindSpots(Base):
         self.keeper.accounts, self.keeper.pools = {}, []
         loop = self.loop()
         self.run_to(loop, 100, 101)
-        self.assertEqual({m for m, _ in self.node.calls}, set())
+        # With Multicall3 the look at the head is its one call, the platform's prices in it; nothing else either way.
+        self.assertEqual({m for m, _ in self.node.calls}, {"eth_call"} if self.MULTICALL else set())
+        self.assertEqual([tag for tag, _ in self.node.batches()], ["latest", "latest"] if self.MULTICALL else [])
         self.assertEqual(loop.block, 101)
 
 
@@ -1006,15 +1098,8 @@ class TheBotsReview(Base):
         self.node.logs += [set_log(100, 950_000, 101), set_log(100, 2_000, 101, asset=4, exam=OTHER)]
         self.run_to(loop, 100)
         self.node.price[101] = 900_000
-        real = self.node.call
-
-        def call(method, params=()):
-            if method == "eth_call" and params[0]["to"] == sf.ORACLE_PX and params[0]["data"].endswith("04"):
-                raise RuntimeError("asset 4 not read")
-            return real(method, params)
-
-        with mock.patch.object(self.node, "call", side_effect=call):
-            self.assertEqual(self.run_to(loop, 101), [[(EXAM, BTC, False)]])
+        self.node.unread_assets = {4}  # its read fails, alone or inside the block's one call
+        self.assertEqual(self.run_to(loop, 101), [[(EXAM, BTC, False)]])
         self.assertIn("assets [4]", self.events("stop_watch_blind")[0]["why"])
 
     def test_blocks_not_judged_break_a_reach_and_raise_nothing(self):
@@ -1218,7 +1303,8 @@ class TheSecondReview(Base):
         self.run_to(loop, 106)
         calls = self.node.calls[before:]
         sent_at = [i for i, (m, _) in enumerate(calls) if m == "eth_sendRawTransaction"][0]
-        last_price = [i for i, (m, p) in enumerate(calls) if m == "eth_call" and p[0]["to"] == sf.ORACLE_PX][-1]
+        last_price = [i for i, (m, p) in enumerate(calls) if m == "eth_call" and p[0]["to"].lower() in (
+            sf.ORACLE_PX.lower(), sk.MULTICALL3.lower())][-1]  # a price read alone, or a block's one call
         self.assertLess(sent_at, last_price, "not held to the end of the step")
 
     def test_the_oldest_transaction_waiting_long_is_an_alarm_once(self):
@@ -1550,10 +1636,13 @@ class TheKeeperWithTheLoop(unittest.TestCase):
                 mock.patch.object(sk.sn, "confirm_service"), mock.patch.object(sk, "SimKeeper", return_value=k), \
                 mock.patch.object(k, "slow_pass"), mock.patch.object(k, "fast_step"), \
                 mock.patch.object(sk.c, "rpc", return_value="0x1"), mock.patch.object(sk.time, "sleep", side_effect=Out), \
+                mock.patch.object(k, "fed_step", side_effect=Out) as fed, \
                 mock.patch.object(sf, "build") as build, mock.patch.object(sf, "start") as start, \
                 mock.patch.object(sf, "keep_alive") as alive:
+            # One turn ends where the keeper waits: for the stops' loop's next step with the loop, in its sleep without.
             with self.assertRaises(Out):
                 sk.main(list(argv))
+        self.fed = fed
         return k, build, start, alive
 
     def test_by_default_the_loop_starts_and_inline_is_the_keeper_as_it_was(self):
@@ -1582,6 +1671,618 @@ class TheKeeperWithTheLoop(unittest.TestCase):
                 mock.patch.object(sk.c, "send_tx", return_value={"transactionHash": "0x01", "blockNumber": hex(5)}) as old:
             k.fill(EXAM)
         old.assert_called_once()
+
+
+class TheOneCall(Base):
+    """With Multicall3 a look is one eth_call: the block's number, its time and every price, all of one state. The line
+    of the journal takes its number and its time from that call, and a block the node does not answer for by its
+    number is a gap, never a line with another block's price."""
+    ONE_CALL_ONLY = True
+
+    def rows(self) -> list[dict]:
+        return [json.loads(x) for f in sorted(self.dir.glob("prices-*.jsonl")) for x in f.read_text().splitlines()[1:] if x.strip()]
+
+    def test_the_numbers_of_multicall3_are_its_own(self):
+        """Multicall3 (mds1/multicall3) is at one address on every chain; its three functions by their selectors."""
+        self.assertEqual(sk.MULTICALL3, "0xcA11bde05977b3631167028862bE2a173976CA11")
+        self.assertEqual(SEL["aggregate3((address,bool,bytes)[])"], "0x82ad56cb")
+        self.assertEqual(SEL["getBlockNumber()"], "0x42cbb15c")
+        self.assertEqual(SEL["getCurrentBlockTimestamp()"], "0x0f28c97d")
+        self.assertEqual("0x" + sk.c.encode_call(sk.AGGREGATE3)[:4].hex(), "0x82ad56cb")
+        self.assertEqual(["0x" + d.hex() for d in sk.BLOCK_READS], ["0x42cbb15c", "0x0f28c97d"])
+
+    def test_a_look_is_one_call_and_the_line_takes_its_number_and_its_time_from_it(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        self.node.price[101] = 960_000
+        before = len(self.node.calls)
+        self.run_to(loop, 101)
+        asked = self.node.calls[before:]
+        self.assertEqual([m for m, _ in asked], ["eth_call", "eth_getLogs"], "one call for the head, its time and its "
+                         "prices, and the block's logs: no eth_blockNumber, no eth_getBlockByNumber, no call a price")
+        self.assertEqual(self.node.batches()[-1], ("latest", 3), "at `latest`, the platform's three prices in it")
+        row = self.rows()[-1]
+        self.assertEqual((row["b"], row["t"], row["px"]["3"]), (101, self.node.time_of(101), 960_000))
+        # The number and the time are the call's own: a node that says another time for the block says it in the line.
+        with mock.patch.object(self.node, "time_of", side_effect=lambda b: 5_000_000 + b):
+            self.run_to(loop, 102)
+        self.assertEqual((self.rows()[-1]["b"], self.rows()[-1]["t"]), (102, 5_000_102))
+
+    def test_a_look_at_a_head_already_looked_at_is_its_one_call_and_nothing_more(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        before = len(self.node.calls)
+        self.run_to(loop, 100, 100)
+        self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_call", "eth_call"])
+
+    def test_a_node_that_answers_a_number_with_another_block_gives_a_gap_and_never_a_line(self):
+        """Two blocks went by between two looks. Asked for each by its number, an honest node answers for it; a node
+        that answers with its head (the public ones do, read on 24 November 2026), or with nothing for a block that
+        is no longer its last, gives no line: the price of block 103 is never written under 101 or 102."""
+        for how, lines in (("honest", {100: 1_000_000, 101: 111, 102: 222, 103: 333}),
+                           ("ignores_tag", {100: 1_000_000, 103: 333}), ("no_past", {100: 1_000_000, 103: 333})):
+            self.node = Node()
+            self.said.clear()
+            for f in self.dir.glob("prices*"):
+                f.unlink()
+            self.journal = None
+            if how != "honest":
+                setattr(self.node, how, True)
+            loop = self.loop(wallet=None)
+            self.run_to(loop, 100)
+            self.node.price.update({101: 111, 102: 222, 103: 333})
+            self.run_to(loop, 103)
+            journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+            self.assertEqual(journal.px[BTC], lines, how)
+            self.assertEqual(self.node.batches()[-3:], [("latest", 3), (hex(101), 3), (hex(102), 3)], how)
+            gaps = [(lo, hi) for lo, hi, _ in journal.gaps]
+            self.assertEqual(gaps, [] if how == "honest" else [(101, 101), (102, 102)], how)
+            if how != "honest":
+                self.assertTrue(all("not read back" in why for _, _, why in journal.gaps))
+                self.assertEqual(self.events("stop_watch_blind")[0]["from_block"], 101)
+                self.assertEqual(self.events("stop_read_back_gap"), [], "no stop standing: a line and a gap, no alarm")
+
+    def test_a_block_not_read_back_with_a_stop_standing_is_an_alarm_once_an_hour(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        self.node.ignores_tag = True
+        self.run_to(loop, 103)
+        alarms = self.events("stop_read_back_gap")
+        self.assertEqual([(a["block"], a["blocks"], a["alarm"]) for a in alarms], [(101, 1, "ALARM")], "once, at once")
+        self.assertIn("answered for block 103", alarms[0]["reason"])
+        self.run_to(loop, 106)
+        self.assertEqual(len(self.events("stop_read_back_gap")), 1, "the next ones inside the hour are counted, not said")
+        loop.read_back_said_at -= sf.READ_BACK_REALARM_S
+        self.run_to(loop, 109)
+        self.assertEqual([(a["block"], a["blocks"]) for a in self.events("stop_read_back_gap")], [(101, 1), (107, 4)])
+        # The reach is judged across the blocks not read as across any not judged: nothing is raised for them.
+        self.assertEqual(self.events("stop_missed") + self.events("stop_overdue"), [])
+
+    def test_the_read_backs_of_a_step_are_no_more_than_its_read_back(self):
+        loop = self.loop(wallet=None, backfill=4)
+        self.run_to(loop, 100)
+        self.run_to(loop, 130)
+        tags = [tag for tag, _ in self.node.batches()]
+        self.assertEqual(tags, ["latest", "latest", hex(127), hex(128), hex(129)], "three read back, the rest a gap")
+        journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+        self.assertIn((101, 126, "the head ran ahead of the loop: their prices were not read back"), journal.gaps)
+
+    def test_one_asset_that_fails_leaves_the_line_the_others_prices(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.node.unread_assets = {4}
+        self.node.price[101] = 123
+        before = len(self.node.calls)
+        self.run_to(loop, 101, 102)
+        row = self.rows()[-2]
+        self.assertEqual((row["b"], row["px"], row["unread"]), (101, {"0": 123, "3": 123}, [4]))
+        self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_call", "eth_getLogs"] * 2,
+                         "the one that failed is not asked for again: a call and the logs a block, as before")
+
+    def test_the_platforms_assets_go_first_in_the_call_and_a_stops_asset_after_them(self):
+        """A read of the oracle for an asset it does not have burns the gas left to the call: the platform's three
+        are read before any other, and nothing but the platform's and the assets of known stops is asked for."""
+        other = 2  # an asset below the platform's in number, with a stop standing
+        ORACLE_OF[other] = "0x" + encode(["uint32"], [other]).hex()
+        self.node.positions[(EXAM, other)] = 5
+        loop = self.loop(wallet=None)
+        self.node.logs.append(set_log(100, 950_000, 101, asset=other))
+        self.run_to(loop, 100)
+        self.node.reads.clear()
+        self.run_to(loop, 101)
+        order = [decode(["uint32"], bytes.fromhex(data[2:]))[0] for to, data, _ in self.node.reads if to.lower() == sf.ORACLE_PX.lower()]
+        self.assertEqual(order, [0, 3, 4, other])
+
+    def test_a_stop_set_on_another_asset_since_the_look_has_its_price_read_at_the_blocks_number(self):
+        """A stop on an asset outside the platform's, set in the block before the head and found in this step: the look
+        at the head did not ask for its price. It is read by the head's number in one more call, once, and taken
+        only if the node answers for that very block; if not, it is unread in the line, never another block's."""
+        other = 2
+        ORACLE_OF[other] = "0x" + encode(["uint32"], [other]).hex()
+        for moved_on in (False, True):
+            self.node = Node()
+            for f in self.dir.glob("prices*"):
+                f.unlink()
+            self.node.positions[(EXAM, other)] = 5
+            loop = self.loop(wallet=None)
+            self.run_to(loop, 100)
+            self.node.logs.append(set_log(101, 950_000, 102, asset=other))
+            self.node.price[101] = 777
+            real = self.node.call
+
+            def call(method, params=()):
+                out = real(method, params)
+                if method == "eth_getLogs" and moved_on:
+                    self.node.head, self.node.ignores_tag = 103, True  # the node went on, and answers a number with its head
+                return out
+
+            with mock.patch.object(self.node, "call", side_effect=call):
+                self.run_to(loop, 102)
+            row = [r for r in self.rows() if r.get("b") == 102][-1]
+            self.assertEqual(self.node.batches()[-3:], [("latest", 3), (hex(101), 3), (hex(102), 1)],
+                             "the look, block 101 read back, and the one price the look did not ask for")
+            if moved_on:
+                self.assertEqual((row["px"], row["unread"]), ({"0": 777, "3": 777, "4": 777}, [other]))
+            else:
+                self.assertEqual(row["px"], {"0": 777, "2": 777, "3": 777, "4": 777})
+            before = len(self.node.calls)
+            self.node.ignores_tag = False
+            self.run_to(loop, 103)
+            self.assertEqual(self.node.batches()[-1], ("latest", 4), "from the next look on it is in the look")
+            self.assertEqual([m for m, _ in self.node.calls[before:]].count("eth_call"), 1)
+
+    def test_the_call_failing_whole_makes_this_look_the_old_way_and_the_next_one_again_one_call(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.node.batch_fails = 1
+        self.node.price[101] = 555
+        before = len(self.node.calls)
+        self.run_to(loop, 101)
+        asked = [m for m, _ in self.node.calls[before:]]
+        self.assertEqual(asked, ["eth_call", "eth_getBlockByNumber", "eth_call", "eth_call", "eth_call", "eth_getLogs"],
+                         "the call that failed, then the head and a call a price")
+        self.assertEqual(self.node.price_reads()[-1], 101)
+        self.assertEqual(self.rows()[-1]["px"], {"0": 555, "3": 555, "4": 555})
+        self.assertEqual(len(self.events("stop_look_failed")), 1)
+        before = len(self.node.calls)
+        self.run_to(loop, 102)
+        self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_call", "eth_getLogs"])
+
+    def test_a_busy_node_is_not_asked_the_old_way(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.node.busy = {"eth_call"}
+        self.node.head = 101
+        before = len(self.node.calls)
+        with self.assertRaises(c.NodeBusy):
+            loop._head()
+        self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_call"], "it costs the look, not four more calls")
+
+
+class TheNodesNumbering(Base):
+    """HyperEVM's own nodes run a call at `latest` as the block to come: the call says the next block's number with the
+    head's time (read on both networks on 24 November 2026). Others run it as the head itself. The loop measures
+    which, between two reads of the head that agree, and counts the call's number back: the head is a block that
+    exists, its logs are there to read, and the line is the head's."""
+    ONE_CALL_ONLY = True
+
+    def test_the_head_is_the_calls_number_less_the_nodes_one(self):
+        for ahead in (0, 1):
+            self.node = Node()
+            self.node.ahead = ahead
+            for f in self.dir.glob("prices*"):
+                f.unlink()
+            loop = self.loop(wallet=None)
+            loop.ahead = None  # as at the start: measured before the first look
+            self.node.price[100] = 4_242
+            stop = threading.Event()
+            loop._served = lambda until, s: stop.set()
+            loop.run(0.01, stop)
+            self.assertEqual(loop.ahead, ahead)
+            self.assertEqual([m for m, _ in self.node.calls], ["eth_blockNumber", "eth_call", "eth_blockNumber", "eth_call",
+                                                               "eth_getLogs"], "measured once, then the look and its logs")
+            logs = [p[0] for m, p in self.node.calls if m == "eth_getLogs"][0]
+            self.assertEqual((logs["fromBlock"], logs["toBlock"]), (hex(100), hex(100)), "the head, not the block to come")
+            journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
+            self.assertEqual((journal.px[BTC], journal.times), ({100: 4_242}, {100: self.node.time_of(100)}))
+            self.assertEqual(loop.block, 100)
+
+    def test_a_block_asked_for_by_its_number_is_taken_by_the_same_count(self):
+        self.node.ahead = 1
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.node.price.update({101: 111, 102: 222})
+        self.run_to(loop, 102)
+        self.assertEqual(pr.load_prices(pr.journal_text(self.dir / "prices.jsonl")).px[BTC], {100: 1_000_000, 101: 111, 102: 222})
+
+    def test_a_block_that_comes_between_the_two_reads_is_measured_again(self):
+        loop = self.loop(wallet=None)
+        loop.ahead = None
+        real = self.node.call
+        moves = {"left": 1}
+
+        def call(method, params=()):
+            out = real(method, params)
+            if method == "eth_call" and moves["left"]:
+                moves["left"] -= 1
+                self.node.head += 1  # a block between the two reads of the head
+            return out
+
+        with mock.patch.object(self.node, "call", side_effect=call):
+            loop._numbering()
+        self.assertEqual(loop.ahead, 0, "the first measure said 1 with the head moved under it: not taken")
+        self.assertEqual([m for m, _ in self.node.calls], ["eth_blockNumber", "eth_call", "eth_blockNumber"] * 2)
+
+    def test_a_number_that_is_neither_the_heads_nor_the_next_ends_the_one_call_with_an_alarm(self):
+        self.node.ahead = 2
+        loop = self.loop(wallet=None)
+        loop.ahead = None
+        self.run_to(loop, 100, 101)
+        self.assertFalse(loop.multicall)
+        off = self.events("stop_one_call_off")
+        self.assertEqual((len(off), off[0]["alarm"]), (1, "ALARM"))
+        self.assertEqual(self.node.batches(), [("latest", 0)], "the measure's own call, and none after")
+        self.assertEqual(sorted(pr.load_prices(pr.journal_text(self.dir / "prices.jsonl")).px[BTC]), [100, 101],
+                         "the loop goes on as it was without Multicall3")
+
+    def test_it_is_measured_again_and_a_change_is_an_alarm(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.assertEqual(self.node.calls[0][0], "eth_call", "measured a moment ago: not again")
+        loop.ahead_at -= sf.NUMBERING_EVERY_S
+        self.node.ahead = 1
+        self.run_to(loop, 101)
+        changed = self.events("stop_numbering_changed")
+        self.assertEqual([(a["was"], a["now"], a["alarm"]) for a in changed], [(0, 1, "ALARM")])
+        self.assertEqual((loop.ahead, loop.block), (1, 101))
+
+
+class AMinuteOfRequests(Base):
+    """What a node paid by the request is paid for: the loop's own `run` over a minute of blocks, a block a second."""
+
+    def minute(self, loop, blocks=60, looks_a_block=2) -> dict:
+        stop = threading.Event()
+        looks = {"n": 0}
+
+        def served(until, s):
+            looks["n"] += 1
+            if looks["n"] >= blocks * looks_a_block:
+                s.set()
+            elif looks["n"] % looks_a_block == 0:
+                self.node.head += 1
+
+        loop._served = served
+        self.node.counts = {}
+        loop.run(1.0 / looks_a_block, stop)
+        return self.node.taken()
+
+    def test_two_looks_a_second_with_a_stop_standing(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        self.node.head = 101
+        got = self.minute(loop)
+        if self.MULTICALL:
+            self.assertEqual(got, {"eth_call": 120, "eth_getLogs": 60}, "a call a look, the logs a block: 180 a minute")
+        else:
+            self.assertEqual(got, {"eth_getBlockByNumber": 120, "eth_call": 180, "eth_getLogs": 60},
+                             "the head a look, a call a price a block, the logs a block: 360 a minute")
+        self.assertEqual(loop.block, 160)
+        self.assertEqual(sorted(pr.load_prices(pr.journal_text(self.dir / "prices.jsonl")).px[BTC]), list(range(100, 161)))
+
+    def test_one_look_a_second(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.node.head = 101
+        got = self.minute(loop, looks_a_block=1)
+        self.assertEqual(sum(got.values()), 120 if self.MULTICALL else 300)
+        self.assertEqual(self.events("stop_loop_started")[0]["looks_a_minute"], 60)
+
+    def test_the_line_that_says_it_is_alive_says_the_requests_by_method_and_no_address(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.node.head = 101
+        with mock.patch.object(sf, "ALIVE_EVERY_S", 0.0):
+            self.minute(loop, blocks=2)
+        alive = self.events("stop_loop_alive")
+        self.assertEqual(len(alive), 4, "one a look here; one a minute on a host")
+        total: dict = {}
+        for line in alive:
+            for method, n in line["requests"].items():
+                total[method] = total.get(method, 0) + n
+        self.assertEqual(total, {"eth_call": 4, "eth_getLogs": 2} if self.MULTICALL else
+                         {"eth_getBlockByNumber": 4, "eth_call": 6, "eth_getLogs": 2})
+        self.assertNotIn("127.0.0.1", json.dumps(alive))
+
+    def test_the_nodes_own_count_is_by_method_and_starts_again_once_taken(self):
+        node = sf.Node("http://127.0.0.1:9/v2/SECRETKEY")
+        answer = mock.Mock(status_code=200)
+        answer.json.return_value = {"result": "0x1"}
+        with mock.patch.object(node.session, "post", return_value=answer):
+            node.call("eth_blockNumber")
+            node.call("eth_call", [{}, "latest"])
+            node.call("eth_call", [{}, "latest"])
+        with mock.patch.object(node.session, "post", side_effect=sf.requests.ConnectTimeout("x")):
+            with self.assertRaises(sf.Unreached):
+                node.call("eth_getLogs", [{}])
+        self.assertEqual(node.taken(), {"eth_blockNumber": 1, "eth_call": 2, "eth_getLogs": 1}, "one that failed is paid for too")
+        self.assertEqual(node.taken(), {})
+
+
+class LinesWithNoPrice(Base):
+    """A journal of lines with no price checks nothing, and said nothing: `stop_watch_blind` is raised only for an
+    asset with a stop standing. More than a tenth of the last ten minutes' blocks without a price is an alarm, a
+    stop standing or not, said again at most once an hour."""
+
+    def test_more_than_a_tenth_of_ten_minutes_with_no_price_is_an_alarm_with_no_stop_standing(self):
+        loop = self.loop(wallet=None)
+        self.node.unread_assets = {0, 3, 4}
+        self.run_to(loop, *range(100, 100 + sf.UNPRICED_MIN - 1))
+        self.assertEqual(self.events("stop_prices_unread"), [], "too few blocks to judge by")
+        self.run_to(loop, 100 + sf.UNPRICED_MIN - 1)
+        said = self.events("stop_prices_unread")
+        self.assertEqual([(a["blocks"], a["without"], a["alarm"]) for a in said], [(sf.UNPRICED_MIN, sf.UNPRICED_MIN, "ALARM")])
+        self.assertEqual(loop.triggers, {}, "no stop stands")
+        self.run_to(loop, *range(130, 200))
+        self.assertEqual(len(self.events("stop_prices_unread")), 1, "once while it lasts, inside the hour")
+        self.later = sf.UNPRICED_REALARM_S
+        self.run_to(loop, *range(200, 240))
+        self.assertEqual(len(self.events("stop_prices_unread")), 2, "an hour later, again")
+
+    def test_a_tenth_or_less_is_no_alarm_and_old_lines_are_forgotten(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, *range(100, 190))
+        self.node.unread_assets = {0, 3, 4}
+        self.run_to(loop, *range(190, 200))
+        self.assertEqual(self.events("stop_prices_unread"), [], "ten of a hundred: a tenth, not more")
+        self.run_to(loop, 200)
+        self.assertEqual(self.events("stop_prices_unread")[0]["without"], 11)
+        # Ten minutes on, the lines of before are out of the count: a journal that reads again is not held to them.
+        self.node.unread_assets = set()
+        loop.unpriced_said_at = None
+        self.later = sf.UNPRICED_WINDOW_S + 1
+        self.run_to(loop, *range(201, 260))
+        self.assertEqual(len(self.events("stop_prices_unread")), 1)
+
+    def test_one_asset_read_is_a_line_with_a_price(self):
+        loop = self.loop(wallet=None)
+        self.node.unread_assets = {0, 4}
+        self.run_to(loop, *range(100, 160))
+        self.assertEqual(self.events("stop_prices_unread"), [])
+
+
+class HeldForItsBlock(Base):
+    """The keeper's batch reads an exam at the node's head, which may be a block this loop has not looked at yet."""
+
+    def test_a_read_of_a_block_the_loop_has_not_reached_waits_for_that_blocks_events(self):
+        loop = self.loop(wallet=None)
+        self.armed_stop(loop)
+        self.node.price[101] = 900_000
+        self.run_to(loop, 101)
+        self.assertEqual(loop.triggers[(EXAM, BTC, False)]["touch"], 101)
+        # Block 102 fills the stop; the keeper's batch ran at 102 and found no stop, before this loop read 102.
+        self.node.logs += fill_of_stop(102)
+        self.node.positions[(EXAM, BTC)] = 0
+        loop.inbox.put(("state", EXAM, 102, {}, {}))
+        self.run_to(loop, 102)
+        self.assertEqual(self.events("stop_missed"), [], "applied before 102's events it would be a stop gone while reached")
+        self.assertEqual(self.events("stop_caught")[0]["filled"], 102)
+        self.assertEqual(loop.held, [])
+
+    def test_a_stop_set_in_the_block_of_the_read_is_not_dropped_by_it(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        self.node.logs.append(set_log(102, 950_000, 103))
+        loop.inbox.put(("state", EXAM, 101, {}, {}))  # read at 101: no stop yet
+        self.run_to(loop, 102)
+        self.assertIn((EXAM, BTC, False), loop.triggers, "the event of 102 is newer than the read of 101")
+        loop.inbox.put(("state", EXAM, 104, {(EXAM, BTC, False): (940_000, 104)}, {BTC: 1}))
+        self.run_to(loop, 103)
+        self.assertEqual(loop.triggers[(EXAM, BTC, False)]["px"], 950_000, "held: block 104 is not looked at yet")
+        self.run_to(loop, 104)
+        self.assertEqual(loop.triggers[(EXAM, BTC, False)]["px"], 940_000, "taken once 104's events are in")
+
+    def test_before_the_first_step_a_read_is_taken_at_once(self):
+        loop = self.loop(wallet=None)
+        loop.inbox.put(("state", EXAM, 100, {(EXAM, BTC, False): (950_000, 90)}, {BTC: 1}))
+        self.node.price[100] = 900_000
+        self.run_to(loop, 100)
+        self.assertEqual(loop.triggers[(EXAM, BTC, False)]["touch"], 100, "known from the first block looked at")
+
+
+class TheKeepersBatch(Base):
+    """The slow pass reads an exam's status, stops, takes and positions in one call with its other reads (sk.Reads):
+    handed to the loop as it is, at the block that call ran in."""
+    ONE_CALL_ONLY = True
+
+    def batch(self, exams, ahead=0):
+        reads = sk.Reads()
+        groups = [(e, [(e, sk.c.encode_call("result()"))] + [(e, sk.c.encode_call(sig, ["uint32"], [BTC]))
+                       for sig in ("stopOf(uint32)", "takeOf(uint32)", "positionOf(uint32)")], []) for e in exams]
+        reads.load(groups, self.node.call, ahead)
+        reads.assets = {e: [BTC] for e in exams}
+        return reads
+
+    def test_the_stops_of_a_batch_are_taken_at_the_block_its_call_ran_in(self):
+        for ahead in (0, 1):
+            self.node = Node()
+            self.node.ahead = ahead
+            self.said.clear()
+            loop = self.loop()
+            self.run_to(loop, 100)
+            self.node.stops[(EXAM, BTC, False)] = (950_000, 95)
+            self.node.head = 101  # the node's head when the keeper's batch runs: a block ahead of the loop
+            before = len(self.node.calls)
+            loop.reread(EXAM, batch=self.batch([EXAM], ahead))
+            self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_call"], "one call, and none by the reread itself")
+            self.assertEqual(loop.inbox.queue[0][:3], ("state", EXAM, 101), "the block the call ran in, by the node's numbering")
+            self.node.price[101] = 900_000
+            self.assertEqual(self.run_to(loop, 101), [[(EXAM, BTC, False)]], "known and reached at 101: sent in that step")
+            self.assertEqual(self.events("stop_found_by_read")[0]["at"], 101)
+
+    def test_an_exam_that_ended_is_told_by_the_batch(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        loop.apply_reread(EXAM, 100, {(EXAM, BTC, False): (950_000, 90)}, {BTC: 1})
+        self.node.status = 3
+        loop.reread(EXAM, batch=self.batch([EXAM]))
+        self.run_to(loop, 101)
+        self.assertIn(EXAM, loop.ended)
+
+    def test_a_read_that_failed_in_the_batch_is_said_and_nothing_is_handed_over(self):
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        batch = self.batch([EXAM])
+        del batch.got[(EXAM.lower(), sk.c.encode_call("stopOf(uint32)", ["uint32"], [BTC]))]
+        with self.assertRaises(RuntimeError) as caught:
+            loop.reread(EXAM, batch=batch)
+        self.assertIn("stopOf", str(caught.exception))
+        self.assertTrue(loop.inbox.empty())
+
+class TheWatchAlonesBatch(Base):
+    def test_the_watch_alone_reads_all_its_exams_in_one_call(self):
+        exams = [to_checksum_address("0x" + f"{i:040x}") for i in range(0x7001, 0x7001 + 9)]
+        loop = self.loop(wallet=None)
+        self.run_to(loop, 100)
+        keeper = sk.SimKeeper("0x" + "33" * 20, None, "0x" + "44" * 20, True, self.dir / "watch.json", 1)
+        keeper.multicall = self.MULTICALL
+        keeper.ahead, keeper.ahead_at = 0, time.monotonic()
+        for e in exams:
+            self.node.stops[(e, BTC, False)] = (950_000, 95)
+        with mock.patch.object(c, "rpc", side_effect=self.node.call):
+            for turn in (1, 2):
+                before = len(self.node.calls)
+                loop.reread_all(exams, keeper)
+                asked = [m for m, _ in self.node.calls[before:]]
+                if not self.MULTICALL:
+                    self.assertEqual(len(asked), 9 * 5, "a call a read, as before: status, rules, stop, take, position")
+                elif turn == 1:
+                    self.assertEqual(asked, ["eth_call", "eth_call"], "the rules of each, then the stops of each")
+                else:
+                    self.assertEqual(asked, ["eth_call"], "the rules are written once: one call from then on")
+        self.run_to(loop, 101)
+        self.assertEqual(sorted(k[0] for k in loop.triggers), sorted(exams))
+
+
+class OneReadOfTheLogs(Base):
+    """With the keeper's fast loop fed from here, the orders placed are read in the step's own eth_getLogs and handed
+    on with the step's blocks; the watch alone asks for no orders."""
+
+    def placed(self, block, exam=EXAM):
+        return ev(sk.PLACED, exam, block, encode(["bool", "uint64", "uint256", "uint256"], [True, 100, block + 1, block + 5]),
+                  word(BTC))
+
+    def test_shared_the_orders_are_read_with_the_stops_and_handed_on_with_the_blocks(self):
+        loop = self.loop(wallet=None)
+        feed = loop.share()
+        self.node.logs += [set_log(100, 950_000, 101), self.placed(100)]
+        self.run_to(loop, 100)
+        asked = [p[0] for m, p in self.node.calls if m == "eth_getLogs"]
+        self.assertEqual(len(asked), 1, "one read of the block's logs for both loops")
+        self.assertIn(sk.PLACED, asked[0]["topics"][0])
+        lo, hi, logs = feed.get_nowait()
+        self.assertEqual((lo, hi, [l["topics"][0] for l in logs]), (100, 100, [sk.PLACED]), "the stops' own events stay here")
+        self.assertIn((EXAM, BTC, False), loop.triggers)
+        self.run_to(loop, 103)
+        self.assertEqual(feed.get_nowait()[:2], (101, 103), "a step over three blocks is handed on as it is")
+
+    def test_an_account_sold_in_the_same_blocks_has_its_orders_handed_on_too(self):
+        new = to_checksum_address("0x" + "69" * 20)
+        loop = self.loop(wallet=None)
+        feed = loop.share()
+        self.run_to(loop, 99)
+        feed.get_nowait()
+        sold = ev(sk.EXAM_SOLD, POOL, 100, b"", word(int(new, 16)))
+        self.node.logs += [sold, self.placed(100, exam=new)]
+        self.run_to(loop, 100)
+        _, _, logs = feed.get_nowait()
+        self.assertEqual(sorted((l["topics"][0], l["address"]) for l in logs), sorted([(sk.EXAM_SOLD, POOL), (sk.PLACED, new)]))
+
+    def test_with_nothing_watched_the_head_is_handed_on_all_the_same(self):
+        self.keeper.accounts, self.keeper.pools = {}, []
+        loop = self.loop(wallet=None)
+        feed = loop.share()
+        self.run_to(loop, 100, 101)
+        self.assertEqual([feed.get_nowait(), feed.get_nowait()], [(100, 100, []), (101, 101, [])])
+
+    def test_not_shared_no_order_is_asked_for(self):
+        loop = self.loop(wallet=None)
+        self.node.logs.append(self.placed(100))
+        self.run_to(loop, 100)
+        asked = [p[0] for m, p in self.node.calls if m == "eth_getLogs"]
+        self.assertNotIn(sk.PLACED, asked[0]["topics"][0])
+        self.assertIsNone(loop.feed)
+
+
+class TheStart(Base):
+    """What `build` looks at once at the start, and what the first line of the loop says."""
+    ONE_CALL_ONLY = True
+
+    def args(self, **kw):
+        base = dict(stop_rpc="", price_journal=None, stop_alarm=None, deployment="sim1", stop_tip_gwei=0, stop_overdue=5,
+                    stop_alarm_min_blocks=2, stop_poll=None, review_status="")
+        return mock.Mock(**{**base, **kw})
+
+    def test_with_multicall3_the_loop_looks_in_one_call_and_without_it_is_as_it_was_and_says_so_once(self):
+        lines = []
+        for there in (True, False):
+            self.node = Node()
+            self.node.multicall = there
+            with mock.patch.object(sf, "Node", return_value=self.node), \
+                    mock.patch.object(sk, "log", side_effect=lambda e, **f: lines.append((e, f))):
+                loop = sf.build(self.args(), Keeper(), self.dir / f"k{there}" / "multi-sim1.json")
+            loop.journal.close()
+            self.assertEqual(loop.multicall, there)
+            self.assertEqual([m for m, _ in self.node.calls], ["eth_chainId", "eth_getCode"])
+        self.assertEqual([(e, f["who"]) for e, f in lines], [("no_multicall", "the stops' loop")], "one line, without it only")
+
+    def test_on_mainnet_a_node_with_no_multicall3_does_not_start(self):
+        from spike.hlspike import network as networks
+        self.node.multicall = False
+        with mock.patch.object(sf, "Node", return_value=self.node), mock.patch.object(sf, "check_chain"), \
+                mock.patch.object(sf.core, "check_node"), mock.patch.object(c, "NETWORK", networks.MAINNET), \
+                mock.patch.dict("os.environ", {"COLOSSEUM_ALERT_CMD": "cat"}):
+            with self.assertRaises(SystemExit) as caught:
+                sf.build(self.args(), Keeper(), self.dir / "multi-sim1.json")
+        self.assertIn("no Multicall3", str(caught.exception))
+
+    def test_the_looks_a_second_are_a_setting_and_the_first_line_says_them(self):
+        import argparse
+        import os
+
+        def parse(argv, env):
+            p = argparse.ArgumentParser()
+            with mock.patch.dict("os.environ", env):
+                if "COLOSSEUM_STOP_POLL" not in env:
+                    os.environ.pop("COLOSSEUM_STOP_POLL", None)
+                sf.add_args(p)
+                return p.parse_args(argv)
+
+        self.assertIsNone(parse([], {}).stop_poll, "not set: the keeper's --poll, twice a second")
+        self.assertEqual(parse([], {"COLOSSEUM_STOP_POLL": "1"}).stop_poll, 1.0)
+        self.assertEqual(parse(["--stop-poll", "0.25"], {"COLOSSEUM_STOP_POLL": "1"}).stop_poll, 0.25, "the flag over the variable")
+        with mock.patch.object(sf, "Node", return_value=self.node):
+            with self.assertRaises(SystemExit):
+                sf.build(self.args(stop_poll=0.0), Keeper(), self.dir / "multi-sim1.json")
+        loop = self.loop(wallet=None)
+        stop = threading.Event()
+        loop._served = lambda until, s: stop.set()
+        loop.run(0.5, stop)
+        started = self.events("stop_loop_started")[0]
+        self.assertEqual((started["poll"], started["looks_a_minute"], started["one_call"]), (0.5, 120, True))
+        self.assertEqual(started["node"], "http://127.0.0.1:9")
+
+
+def the_old_way(module: dict) -> None:
+    """Every class of tests of the loop in `module` (its globals), again on a node with no Multicall3: the loop as it
+    was, the head and then a call a price, which is what it falls back to. A class with ONE_CALL_ONLY set tests what
+    only the one call has."""
+    for name, cls in list(module.items()):
+        if (isinstance(cls, type) and issubclass(cls, Base) and cls.__module__ == module["__name__"]
+                and cls.MULTICALL and not getattr(cls, "ONE_CALL_ONLY", False) and cls is not Base):
+            module[name + "TheOldWay"] = type(name + "TheOldWay", (cls,), {"MULTICALL": False, "__module__": cls.__module__})
+
+
+the_old_way(globals())
 
 
 if __name__ == "__main__":

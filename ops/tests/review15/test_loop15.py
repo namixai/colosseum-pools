@@ -49,5 +49,8 @@ class Restart(S.Base):
         self.assertEqual(nulls, [], "rows with no time are outside the candle screen, and nothing says so")
 
 
+S.the_old_way(globals())  # each again on a node with no Multicall3: the loop as it was
+
+
 if __name__ == "__main__":
     unittest.main()
