@@ -25,8 +25,8 @@
     spike/.venv/bin/python -m ops.deploy_sim pot --pool 0x.. --key creator --amount 2 [--send]         # add to it
     spike/.venv/bin/python -m ops.deploy_sim claim --pool 0x.. --key partner --code G1 [--code G2] [--send] # shares
     spike/.venv/bin/python -m ops.deploy_sim pay --pool 0x.. --key deployer --max 10 [--send]          # payouts
-    spike/.venv/bin/python -m ops.deploy_sim stop --review <pool>-<id>.json --analysis analysis.md \\
-        --key checker [--send]                                                          # a stop of reason 3, by hand
+    spike/.venv/bin/python -m ops.deploy_sim stop --deployment sim1 --review <pool>-<id>.json \\
+        --analysis analysis.md --key checker [--old-review] [--send]                    # a stop of reason 3, by hand
     spike/.venv/bin/python -m ops.deploy_sim line --pool 0x.. --signer 0xSafe --line 8 --off           # stop selling it
     spike/.venv/bin/python -m ops.deploy_sim role --deployment sim1 --signer 0xSafe --role filler \\
         --address 0x..                                                                  # replace a platform key
@@ -1552,6 +1552,37 @@ def analysis_link(args) -> tuple[bytes, str]:
     return keccak(data), f"of {args.analysis}, {len(data)} bytes: publish this file as it is, byte for byte"
 
 
+def ago(seconds: int) -> str:
+    """A span as a person reads it: the largest whole unit of days, hours, minutes and seconds."""
+    for unit, size in (("day", 86_400), ("hour", 3_600), ("minute", 60)):
+        if seconds >= size:
+            n = seconds // size
+            return f"{n} {unit}{'s' if n != 1 else ''}"
+    return f"{max(seconds, 0)} seconds"
+
+
+def review_age(doc: dict, now: int, old_ok: bool) -> str:
+    """When the review was read and how long before the chain's head `now`, or why a stop is not sent on it: read more
+    than an hour before (`payout_review.REVIEW_MAX_S`, the hour `approve` takes), the payout and its trades may have
+    changed since, and the review service writes a fresh one every 10 minutes; such a review is taken only with
+    --old-review (`old_ok`), a person's word, when there is no fresher one (the service stopped) and the payout would
+    otherwise go out unstopped. A review read after the head, or with no time, is never taken."""
+    from ops import payout_review as pr
+    try:
+        t = int((doc.get("readAt") or {})["time"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        raise SystemExit("--review is a review not read whole: no time it was read at (readAt)") from None
+    if t > now + 60:
+        raise SystemExit(f"the review says it was read at {utc(t)}, after the chain's head ({utc(now)}): nothing is "
+                         "stopped on a review of another clock")
+    age = now - t
+    if age > pr.REVIEW_MAX_S and not old_ok:
+        raise SystemExit(f"the review was read {ago(age)} ago ({utc(t)}), more than an hour before the chain's head: the "
+                         "payout may have changed since. Take the review service's latest document of the payout "
+                         "(it writes one every 10 minutes), or say --old-review to stop on this one; nothing was stopped")
+    return f"{utc(t)}, {ago(age)} ago" + (", older than an hour: --old-review" if age > pr.REVIEW_MAX_S else "")
+
+
 def stop_check(checker: str, sender: str, p: tuple | None, pid: int, doc: dict, now: int, until_paid: bool) -> str:
     """What stopping payout `pid` from `sender` would do, or why the pool would refuse it: the factory's checker alone
     stops, a payout that waits and was never stopped, and on a pool from before approvals not within 5 minutes of its
@@ -1583,9 +1614,15 @@ def stop_check(checker: str, sender: str, p: tuple | None, pid: int, doc: dict, 
 
 def stop_cmd(args) -> int:
     """stopPayout for reason 3, by a person's hand: the review's draft, the written analysis's hash, the checker's key.
-    Without --send it reads and says; with it, the confirmation, the payout read once more, then the send."""
+    The pool is one of the deployment named (--deployment: its record's SimPoolFactory is the pool's factory()), and the
+    review is at most an hour old (`review_age`). Without --send it reads and says; with it, the confirmation, the
+    payout and the review's age read once more, then the send."""
     from ops import payout_review as pr
     from ops import sim_check as chk
+    expected = deployments.load(args.deployment).get("SimPoolFactory")
+    if not expected:
+        raise SystemExit(f"the record {args.deployment!r} names no SimPoolFactory: a stop is sent in a deployment of "
+                         "simulated pools")
     try:
         doc = json.loads(pathlib.Path(args.review).read_text())
     except (OSError, ValueError) as exc:
@@ -1593,7 +1630,10 @@ def stop_cmd(args) -> int:
     draft = stop_draft(doc, int(c.rpc("eth_chainId"), 16))
     link, link_from = analysis_link(args)
     pool_, pid, sender = to_checksum_address(draft["to"]), int(doc["id"]), signer_of(args)
-    factory = c.call_view(pool_, "factory()", [], [], ["address"])[0]
+    factory = to_checksum_address(c.call_view(pool_, "factory()", [], [], ["address"])[0])
+    if factory != to_checksum_address(expected):
+        raise SystemExit(f"the pool {pool_} is of the factory {factory}, and {args.deployment!r}'s record names "
+                         f"{to_checksum_address(expected)}: nothing is stopped in another deployment")
     checker = to_checksum_address(c.call_view(factory, "checker()", [], [], ["address"])[0])
     approvals = chk.takes_approvals(pool_)
     if approvals is None:
@@ -1605,7 +1645,9 @@ def stop_cmd(args) -> int:
         count = int(c.call_view(pool_, "payoutCount()", [], [], ["uint256"])[0])
         return c.call_view(pool_, "payout(uint256)", ["uint256"], [pid], [kind])[0] if 0 <= pid < count else None
 
-    line = stop_check(checker, sender, payout(), pid, doc, chain_now(), approvals)
+    now = chain_now()
+    read = review_age(doc, now, args.old_review)
+    line = stop_check(checker, sender, payout(), pid, doc, now, approvals)
     reserve = int(c.call_view(factory, "STOP_RESERVE()", [], [], ["uint32"])[0])
     values = [pid, DISPUTED, ZERO, [bytes.fromhex(t[2:]) for t in draft["trades"]], [link]]
     data = c.encode_call(chk.STOP, chk.STOP_TYPES, values)
@@ -1618,8 +1660,9 @@ def stop_cmd(args) -> int:
           f"({sender}), the factory's checker")
     print("  " + line)
     print(f"  reason {DISPUTED}: {pr.STOP_REASONS[DISPUTED]}")
-    print(f"  the review: read at block {(doc.get('readAt') or {}).get('block')}, verdict {doc.get('verdict')!r}, "
-          f"action {doc.get('action')!r}")
+    print(f"  the review: read at block {(doc.get('readAt') or {}).get('block')}, {read}, verdict "
+          f"{doc.get('verdict')!r}, action {doc.get('action')!r}")
+    print(f"  the deployment: {args.deployment}, factory {factory}")
     for i, t in enumerate(draft["trades"]):
         print(f"  transaction {i + 1} of {len(draft['trades'])}: {t}")
     print(f"  the analysis: keccak256 0x{link.hex()}, {link_from}")
@@ -1627,8 +1670,11 @@ def stop_cmd(args) -> int:
           "operator can lift the stop (`lift`); after them the stop is final. The pool takes one stop a payout")
 
     def still_due() -> None:
-        # The person's confirmation has no time limit: the payout is read again as it stands after it.
-        stop_check(checker, sender, payout(), pid, doc, chain_now(), approvals)
+        # The person's confirmation has no time limit: the payout is read again as it stands after it, and the review
+        # held to the chain's clock as it stands then.
+        now_ = chain_now()
+        review_age(doc, now_, args.old_review)
+        stop_check(checker, sender, payout(), pid, doc, now_, approvals)
     return send_or_say(args, pool_, chk.STOP, chk.STOP_TYPES, values, before=still_due)
 
 
@@ -1876,6 +1922,11 @@ def main(argv: list[str] | None = None) -> int:
     z.add_argument("--max", required=True, type=int, help="how many payouts from the head `pay` looks at")
     z.add_argument("--send", action="store_true")
     z = sub.add_parser("stop")
+    z.add_argument("--deployment", required=True, help="the deployment of the pool: its record's SimPoolFactory must be "
+                                                       "the pool's factory, or nothing is stopped")
+    z.add_argument("--old-review", action="store_true",
+                   help="stop on a review read more than an hour ago, when the service has written none since: "
+                        "refused without it")
     z.add_argument("--review", required=True, help="the review service's document of the payout, <pool>-<id>.json, as it "
                                                    "is: its stopDraft names the pool and the transactions")
     z.add_argument("--analysis", help="the written analysis, the file as it is published: its keccak256 is the stop's link")

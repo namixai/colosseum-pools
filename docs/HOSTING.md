@@ -232,7 +232,7 @@ after Chainlink's went down and both keepers missed a day's snapshot. Both units
 | `/opt/colosseum-watch/releases/<sha>` | the watchdogs of one release, copied by `install.sh` from `ops/host/watchdogs` | root, read-only to the watchdogs |
 | `/opt/colosseum-watch/current` | link to the newest of them; the watchdogs' units run from it, never from a pools release | root |
 | `/var/lib/colosseum-watch` | one `<name>.alarm` file for each check that has a finding standing | `colosseum-watch`, 700 |
-| `/etc/colosseum/watch.env` | optional: the alert command and node overrides for the watchdogs; written by hand if at all | root, 644 |
+| `/etc/colosseum/watch.env` | optional: the alert command and node overrides for the watchdogs; written by hand if at all | root, 644; on a mainnet host root, 600 (`install.sh` refuses otherwise) |
 
 Each service can't read the other's `/var/lib` directory, by owner and again by its unit
 (`InaccessiblePaths`). The units are in `ops/host/` and run with `ProtectSystem=strict`,
@@ -1066,8 +1066,11 @@ each says by name what a person still has to write. In order:
    `/var/lib/colosseum-keeper` (mode 0710: it lists nothing there, and every key directory stays 0700), puts
    `/var/lib/colosseum-keeper/second-prices` (owner `colosseum-prices`, group `colosseum-keeper`, mode 2750) on a file
    system of its own (below), and writes the key into that user's `authorized_keys` as
-   `command="rrsync -wo /var/lib/colosseum-keeper/second-prices",restrict ssh-ed25519 ...`: it can write there and
-   nothing else. It needs `rrsync` on the host and refuses without it. It prints the host's own key's fingerprint.
+   `command="mountpoint -q /var/lib/colosseum-keeper/second-prices && exec rrsync -wo -munge -no-del /var/lib/colosseum-keeper/second-prices",restrict ssh-ed25519 ...`:
+   it can write there while the folder is mounted, deletes nothing (`-no-del`), makes no link that leads out of the
+   folder (`-munge`), and does nothing else. `authorized_keys` and its `.ssh` folder are root's (0644 and 0755): the
+   key's user cannot rewrite the line that holds it. It needs `rrsync` of rsync 3.2.4 or later on the host (the one
+   that takes `-munge` and `-no-del`) and refuses without it. It prints the host's own key's fingerprint.
    The pools host must take ssh from the second machine's address (its security group's rule for port 22).
 5. Back on the second machine, the pools host's key, its fingerprint held against the one step 4 printed, and the
    proof that the key does nothing but write (rrsync must refuse this, not answer it):
@@ -1114,8 +1117,11 @@ The folder takes what the second machine's key writes, so it gets a file system 
 day files; old day files can be removed, the review reads only the days of stops still waiting), and the keeper's
 state and journal never share its disk. `ops/host/second-prices.sh` makes it (step 4 above; `install.sh` does not):
 a file of 2 GB, `/var/lib/colosseum-second-prices.img`, made into an ext4 file system, named in `/etc/fstab`
-(`loop,nodev,nosuid,noexec`) and mounted at the folder. A folder already mounted so is left as it is; one that holds
-files and is no file system of its own stops the script, since mounting over it would hide them. Afterwards:
+(`loop,nodev,nosuid,noexec,nofail`: an image that does not mount leaves the folder unmounted and the host starts all
+the same) and mounted at the folder. Not mounted, the key writes nothing: its command runs rrsync only on a mounted
+folder, never into the bare one on the root disk, and the review says `second_journal_stale`. A folder already mounted
+so is left as it is; one that holds files and is no file system of its own stops the script, since mounting over it
+would hide them. Afterwards:
 
     df -h /var/lib/colosseum-keeper/second-prices    # 2.0G, its own, and not the root disk
 
@@ -1190,8 +1196,9 @@ its deployment's label:
    writer of prices"; the second machine's key is given to it later, when there is one).
 7. The release that carries the record `deployments/mainnet-<label>.json`: `ops/host/deploy.sh <commit> <user@host>`.
    Before it switches, `install.sh` checks the host's network, that the instance is the host's one, its file's two
-   lines, and both wallets against the record; then it enables and restarts `colosseum-multi-keeper@<name>` and
-   `colosseum-sim-checker@<name>`. `nothing switched` names what is missing.
+   lines, that `keeper-<name>.env`, `sim-index-<name>.env` and `watch.env` are root's with mode 600, and both wallets
+   against the record; only then it puts the release's units in place, enables and restarts
+   `colosseum-multi-keeper@<name>` and `colosseum-sim-checker@<name>`. `nothing switched` names what is missing.
 8. The channel tried once, read as the units read it. The line `alarm_test` must reach a person: the command says
    `the alarm channel took the test alarm` for a channel that takes the line and delivers it to nobody, too.
 
@@ -1226,10 +1233,14 @@ Three things a person does on a running pool, each a command that reads the chai
       cd /opt/colosseum-pools/current && sudo -u colosseum-keeper env COLOSSEUM_NETWORK=mainnet \
           COLOSSEUM_KEY_DIR=/var/lib/colosseum-keeper/instances/<name>/secrets PYTHONDONTWRITEBYTECODE=1 \
           /opt/colosseum-pools/venv/bin/python -m ops.deploy_sim stop --network mainnet --key checker \
-          --review /var/lib/colosseum-keeper/reviews-<name>/<pool>-<id>.json --analysis <the analysis file>
+          --deployment <label> --review /var/lib/colosseum-keeper/reviews-<name>/<pool>-<id>.json \
+          --analysis <the analysis file>
 
   It shows the pool, the payout, the reason, each transaction of the review's draft and the analysis's hash, and
-  refuses a payout the pool would no longer stop. With `--send` it asks for the confirmation at the terminal, reads
+  refuses a payout the pool would no longer stop, a pool whose factory is not the one of `--deployment`'s record, and
+  a review read more than an hour before the chain's head (the service writes a fresh one every 10 minutes: take the
+  latest; `--old-review` takes an older one when the service has written none since and the payout would otherwise
+  go out unstopped). With `--send` it asks for the confirmation at the terminal, reads
   the payout once more and sends. The line above reads through the network's public node, which a few reads fit.
   The checker's own service sends with the same key: a stop of its own in the same seconds takes the key's nonce,
   the send here fails, and the command is run again.

@@ -1,6 +1,7 @@
 # The second writer's journal (colosseum-price-watch@%i) copied to the pools host every minute, over ssh with a key
 # that can do nothing there but write into one directory (the host's authorized_keys pins it to
-# `rrsync -wo /var/lib/colosseum-keeper/second-prices`). Only the day files are sent, appended as they grow; the host
+# `rrsync -wo -munge -no-del /var/lib/colosseum-keeper/second-prices`, and only while that folder is mounted; nothing
+# is deleted there). Only the day files are sent, appended as they grow; the host
 # never connects here, and this machine holds no key of the pools. COLOSSEUM_PRICE_SYNC_TO in
 # /etc/colosseum/price-watch-%i.env is the host's address as user@host: (docs/HOSTING.md, "The second writer of prices").
 [Unit]

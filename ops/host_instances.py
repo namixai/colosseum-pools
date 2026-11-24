@@ -26,6 +26,9 @@ factory's filler as its wallet; the checker's wallet is kept beside it.
     python -m ops.host_instances multi-pool <label>              its MultiPool, which has a watchdog, or an empty line
     python -m ops.host_instances sim-wallets <label>             a simulated pool's wallets, "<name> <address>" a line
     python -m ops.host_instances network /etc/colosseum          the one network this host serves: testnet or mainnet
+    python -m ops.host_instances private /etc/colosseum          on a mainnet host: exit 1, the files named, unless
+                                                                 the files of a node's key and the alarm channel are
+                                                                 root's with mode 600
 
 One host serves one network. /etc/colosseum/host.env names it on one line, COLOSSEUM_NETWORK=testnet or
 COLOSSEUM_NETWORK=mainnet (`bootstrap.sh --network`); a host without the file is a testnet host, as every host was
@@ -215,6 +218,28 @@ def mainnet_host(etc: pathlib.Path, found: list[Instance], first: str) -> None:
                              "(docs/HOSTING.md, \"Mainnet\")")
 
 
+# On a mainnet host the files the host's own node's key is written in (COLOSSEUM_HOST_RPC_URL in keeper-<name>.env, the
+# index's node in sim-index-<name>.env) and the alarm channel's command (COLOSSEUM_ALERT_CMD in watch.env): root's,
+# mode 600. systemd reads them for the units; any other user of the host reads nothing of them.
+PRIVATE_FILES = ("keeper-*.env", "sim-index-*.env", "watch.env")
+PRIVATE_OWNER = 0  # root
+
+
+def private_files(etc: pathlib.Path) -> list[str]:
+    """The files of PRIVATE_FILES in `etc` that are not root's with mode 600, each said by its name, its mode and its
+    owner's uid, never a line of it; [] on a testnet host, which is as before. One written by hand under a umask of
+    022 is 0644: every user of the host would read the node's key."""
+    if not host_network(etc).is_mainnet:
+        return []
+    out = []
+    for pattern in PRIVATE_FILES:
+        for f in sorted(etc.glob(pattern)):
+            st = f.stat()
+            if st.st_uid != PRIVATE_OWNER or st.st_mode & 0o777 != 0o600:
+                out.append(f"{f} (mode {st.st_mode & 0o777:o}, owner uid {st.st_uid})")
+    return out
+
+
 def first_label(etc: pathlib.Path) -> str:
     """The first deployment's label as install.sh serves it: /etc/colosseum/deployment with every
     space taken out, "de mo2" as "demo2"; "" when there is no such file. install.sh reads it here, so
@@ -372,6 +397,19 @@ def gateway_limits(record: dict) -> str:
 # A node the keeper reads, as the record names it: https, a host, a path, and nothing else. The record is public, so a
 # node whose address carries a key has no place in it; and a line systemd reads must hold no space or quote.
 NODE_URL = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?")
+# A word of such an address, between its dots and slashes, that is a key and not a name: providers put one in the path
+# (/v2/<key>, /<token>/evm) or as the host's first label. 16 characters or more with a digit among them (a key in hex,
+# a token, a client id), or 32 or more of anything; a public node's words are names, "evm", "rpc",
+# "hyperliquid-testnet", "998". The record is public, and the env file written from it is read by every user.
+NODE_WORD = re.compile(r"[^./:~]+")
+
+
+def keylike(url: str) -> bool:
+    """Whether an address of NODE_URL's shape has a word that is a key (NODE_WORD's rule), its host's labels included."""
+    return any(len(w) >= 32 or (len(w) >= 16 and any(ch.isdigit() for ch in w))
+               for w in NODE_WORD.findall(url[len("https://"):]))
+
+
 # The widest eth_getLogs window the keeper takes from each node (ops/keeper.py, MAX_LOG_WINDOW and
 # MAX_BACKUP_LOG_WINDOW): Hyperliquid's node answers 50 blocks at most; of second nodes thirdweb's answered 1000 and
 # dRPC's public one answers 101 (measured 11 Nov 2026), and the record names the window its own node takes.
@@ -403,7 +441,14 @@ def keeper_nodes(record: dict) -> str:
             raise SystemExit(f"keeper_nodes: {role} must be an object of url and log_window, not {node!r}")
         url, window = node["url"], node["log_window"]
         if not isinstance(url, str) or not NODE_URL.fullmatch(url):
-            raise SystemExit(f"keeper_nodes: {role} url {url!r} is not an https address with no key, space or quote")
+            # Not the address itself: what makes it no address of the record's (a query, a hash) may be its key.
+            raise SystemExit(f"keeper_nodes: {role} url is not an https address with no key, space or quote (it is not "
+                             "shown: it may hold a key)")
+        if keylike(url):
+            # Not the address itself: it holds the key.
+            raise SystemExit(f"keeper_nodes: {role} url has a word that is a key, not a name (16 characters with a "
+                             "digit, or 32): the record is public; the host's own node goes in its keeper-<name>.env, "
+                             "COLOSSEUM_HOST_RPC_URL")
         most = KEEPER_MAX_LOG_WINDOW[role]
         if not isinstance(window, int) or isinstance(window, bool) or not 1 <= window <= most:
             raise SystemExit(f"keeper_nodes: {role} log_window {window!r} is not a whole number of blocks, 1 to {most}")
@@ -557,6 +602,11 @@ def main(argv: list[str]) -> int:
             raise SystemExit(f"odd label {argv[1]!r}")
         print(publisher(deployments.load(argv[1])))
         return 0
+    if len(argv) == 2 and argv[0] == "private":
+        found = private_files(pathlib.Path(argv[1]))
+        for line in found:
+            print(f"host_instances: not root's with mode 600: {line}", file=sys.stderr)
+        return 1 if found else 0
     if len(argv) == 2 and argv[0] == "first-label":
         print(first_label(pathlib.Path(argv[1])))
         return 0

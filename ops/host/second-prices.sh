@@ -8,9 +8,12 @@
 #   2. /var/lib/colosseum-keeper lets its group pass (mode 0710): that user and the index reach their own folders
 #      under it and list nothing of it; every key directory under it stays 0700;
 #   3. /var/lib/colosseum-keeper/second-prices on a file system of its own, 2 GB in one file: what the second machine's
-#      key writes can fill that and nothing else, never the disk of the keeper's state and journal;
+#      key writes can fill that and nothing else, never the disk of the keeper's state and journal. Named in fstab
+#      with `nofail`: a broken image is a folder not mounted, never a host that does not start;
 #   4. given the second machine's public key file: that key alone in the user's authorized_keys, held to
-#      `rrsync -wo` into that one folder: it writes there and does nothing else on this host.
+#      `rrsync -wo -munge -no-del` into that one folder, and only while the folder is mounted: it writes there, deletes
+#      nothing, follows no link out of it and does nothing else on this host. The file and its .ssh folder are root's:
+#      the key's user cannot write the line that holds it.
 #
 # It makes no key and reads no private one; the public key is the second machine's own, made there
 # (ops/host/second-writer/install.sh says how).
@@ -27,7 +30,12 @@ prices_user=colosseum-prices
 prices_home=/var/lib/colosseum-prices-home
 keeper_group=colosseum-keeper
 folder_own="colosseum-prices:colosseum-keeper"
-ssh_own="-o colosseum-prices -g colosseum-keeper"
+# authorized_keys and its .ssh folder: root's, 0644 and 0755 (sshd's StrictModes takes that), never the key's user's.
+ssh_owner=root:root
+# rrsync (rsync's own, 3.2.4 or later) as the key's one command: -wo writes and sends nothing back, -munge makes every
+# symbolic link it is sent point nowhere (a link to authorized_keys would be a way out of the folder), -no-del refuses
+# rsync's --delete: the key adds the journal's days and never erases what is there.
+rrsync_cmd="rrsync -wo -munge -no-del"
 host_key=/etc/ssh/ssh_host_ed25519_key.pub
 # One public key on one line, and nothing before it: an option before a key is a command the key would run.
 key_line='^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]+( [A-Za-z0-9@._-]+)?$'
@@ -49,6 +57,8 @@ prices_user_and_pass() {
   id "$keeper_group" >/dev/null 2>&1 || fail "no user $keeper_group on this host: ops/host/bootstrap.sh comes first"
   command -v rrsync >/dev/null 2>&1 \
     || fail "rrsync is not on this host: it is what holds the second machine's key to one folder; install it (it comes with rsync, or as a package of its own) and run this again"
+  grep -q -- '-munge' "$(command -v rrsync)" && grep -q -- '-no-del' "$(command -v rrsync)" \
+    || fail "rrsync on this host takes no -munge or -no-del (rsync before 3.2.4): without them the key could erase the journal and write out of its folder by a link; install a newer rsync and run this again"
   if id "$prices_user" >/dev/null 2>&1; then
     say "user $prices_user exists"
   else
@@ -76,7 +86,7 @@ prices_folder() {
     fi
     mkdir -p "$folder"
     grep -qF "$image $folder " "$fstab" \
-      || printf '%s\n' "$image $folder ext4 loop,nodev,nosuid,noexec 0 2" >> "$fstab"
+      || printf '%s\n' "$image $folder ext4 loop,nodev,nosuid,noexec,nofail 0 2" >> "$fstab"
     mount "$folder"
     mountpoint -q "$folder" || fail "$folder is still no file system of its own after mount: nothing more is done"
     say "$folder is mounted from $image"
@@ -92,14 +102,20 @@ prices_authorize() {
     say "  then: sudo bash /opt/colosseum-pools/current/ops/host/second-prices.sh <that .pub file>"
     return 0
   fi
-  # shellcheck disable=SC2086
-  install -d -m 0700 $ssh_own "$prices_home/.ssh"
-  # Written aside and put in place whole: the one line is the restriction and the key, or the file is not there.
-  (umask 077 && printf 'command="rrsync -wo %s",restrict %s\n' "$folder" "$(cat "$key")" > "$prices_home/.ssh/authorized_keys.next")
-  # shellcheck disable=SC2086
-  install -m 0600 $ssh_own "$prices_home/.ssh/authorized_keys.next" "$prices_home/.ssh/authorized_keys"
+  # The folder root's first, then nothing in it is the user's: a file it left there is not written through.
+  install -d -m 0755 "$prices_home/.ssh"
+  chown "$ssh_owner" "$prices_home/.ssh"
+  chmod 0755 "$prices_home/.ssh"
   rm -f "$prices_home/.ssh/authorized_keys.next"
-  say "the key of $key may write into $folder and do nothing else here (rrsync -wo, restrict)"
+  # Written aside and put in place whole: the one line is the restriction and the key, or the file is not there. The
+  # command runs rrsync only while the folder is its own file system: not mounted, the key writes nowhere, never into
+  # the bare folder on the root disk.
+  (umask 022 && printf 'command="mountpoint -q %s && exec %s %s",restrict %s\n' "$folder" "$rrsync_cmd" "$folder" "$(cat "$key")" \
+    > "$prices_home/.ssh/authorized_keys.next")
+  chown "$ssh_owner" "$prices_home/.ssh/authorized_keys.next"
+  chmod 0644 "$prices_home/.ssh/authorized_keys.next"
+  mv -f "$prices_home/.ssh/authorized_keys.next" "$prices_home/.ssh/authorized_keys"
+  say "the key of $key may write into $folder while it is mounted and do nothing else here ($rrsync_cmd, restrict)"
   if [ -f "$host_key" ] && command -v ssh-keygen >/dev/null 2>&1; then
     say "this host's own key, to hold the second machine's known_hosts against: $(ssh-keygen -lf "$host_key")"
   fi

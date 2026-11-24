@@ -5,6 +5,8 @@ records, no systemd, no nginx, no node."""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -378,6 +380,136 @@ class Install(unittest.TestCase):
         self.assertEqual(self.guard(block, "testnet", wants=own, list_fails=True).returncode, 0)
 
 
+class NoKeyInTheRecordsNode(unittest.TestCase):
+    """The record is public, and the env file written from it (deployment-<name>.env, 0644) is read by every user of
+    the host: the node it names carries no key, in its path or as its host's first label."""
+
+    def env(self, nodes):
+        record = {"PoolFactory": "0x" + "f1" * 20, "KeyRegistry": "0x" + "f2" * 20, "keeper_nodes": nodes}
+        with mock.patch.object(hi.deployments, "load", return_value=record):
+            return hi.deployment_env("v3-demo3")
+
+    # Review 19 of #340, L2: a key in the path of a node the record calls public passed the address's shape, and went
+    # into the public record, the env file every user reads (deployment-<name>.env, 0644) and every line that shows
+    # the node.
+    def test_a_key_in_a_nodes_path_or_host_is_refused_and_never_said(self):
+        hl = {"url": "https://rpc.hyperliquid-testnet.xyz/evm", "log_window": 50}
+        keyed = {
+            "a provider's key after /v2/": "https://hyperliquid-mainnet.g.alchemy.com/v2/AbCdEfGh12345678ijKLmnOP90qrST",
+            "a token before /evm": "https://name.hype-mainnet.quiknode.pro/0123456789abcdef0123456789abcdef01234567/evm",
+            "a client id in hex": "https://998.rpc.thirdweb.com/0123456789abcdef0123456789abcdef",
+            "16 with a digit": "https://node.example/evm/abcdefghijklmno1",
+            "16 digits": "https://node.example/1234567890123456",
+            "32 letters": "https://node.example/" + "abcdefghijklmnop" * 2,
+            "a key as the host's first label": "https://k3y0123456789abcd.node.example/evm",
+            "a key between dashes and underscores": "https://node.example/v1/Ab-12_cd-34_ef-56_gh",
+        }
+        for what, url in keyed.items():
+            with self.subTest(what):
+                with self.assertRaises(SystemExit) as stop:
+                    self.env({"primary": {**hl, "url": url}})
+                self.assertIn("has a word that is a key", str(stop.exception))
+                self.assertNotIn(url.split("/")[-1], str(stop.exception), "the key is not said")
+                with self.assertRaises(SystemExit):
+                    self.env({"primary": hl, "backup": {"url": url, "log_window": 100}})
+        # Public nodes' words are names: each passes as it did.
+        for url in ("https://rpc.hyperliquid.xyz/evm", "https://rpc.hyperliquid-testnet.xyz/evm", "https://998.rpc.thirdweb.com",
+                    "https://hyperliquid-testnet.drpc.org", "https://node.example/evm/abcdefghijklmno",
+                    "https://node.example/123456789012345", "https://node.example/abcdefghijklmnopabcdefghijklmno",
+                    "https://node.example:8545/v2/evm"):
+            with self.subTest(url):
+                self.assertIn(f"COLOSSEUM_RPC_URL={url}\n", self.env({"primary": {**hl, "url": url}}))
+        # An address of another shape, a query or a hash, is not said either: its key may be there.
+        with self.assertRaises(SystemExit) as stop:
+            self.env({"primary": {**hl, "url": "https://node.example/evm?key=THE-KEY"}})
+        self.assertNotIn("THE-KEY", str(stop.exception))
+
+
+class TheUnitsComeAfterTheChecks(unittest.TestCase):
+    """Review 19 of #340, M4: the units were put in place and systemd reloaded before the network and every check, and a
+    release stopped by one of them said "nothing switched" with this release's units already in systemd: a service of
+    the old release restarted by anything would have run on a unit of the new one."""
+
+    def setUp(self):
+        self.install = (HOST / "install.sh").read_text()
+
+    def test_no_unit_is_put_in_place_and_systemd_is_not_reloaded_before_every_check_has_passed(self):
+        units = self.install.index('install -m 0644 -o root -g root "$rel/ops/host/colosseum-')
+        reload = self.install.index("systemctl daemon-reload")
+        site = self.install.index("site=/etc/nginx/conf.d/pools-api.conf")
+        self.assertEqual(self.install.count("systemctl daemon-reload"), 1)
+        self.assertEqual(self.install.count("/etc/systemd/system/\n"), 13, "every unit in one place")
+        self.assertLess(units, reload)
+        self.assertLess(reload, site, "the units before nginx, as the release's second step")
+        # Every refusal that says nothing switched comes before the first unit: what it says is so.
+        refusals = [m.start() for m in re.finditer(r'fail "[^"\n]*nothing switched', self.install)]
+        self.assertGreater(len(refusals), 20)
+        self.assertLess(max(refusals), units)
+        for check in ("-m ops.host_instances network /etc/colosseum", "-m ops.host_instances list /etc/colosseum",
+                      "-m ops.host_instances private /etc/colosseum", 'if [ "$network" = mainnet ]; then\n  for unit',
+                      "systemctl list-units --plain", '-m ops.host_instances sim-wallets "$label"',
+                      'shared_env=/etc/colosseum/shared-keeper.env'):
+            self.assertLess(self.install.index(check), units, check)
+
+
+class TheFilesOfAKeyAreRootsAlone(unittest.TestCase):
+    """Review 19 of #340, M5: on a mainnet host keeper-<name>.env (the host's own node, its key), sim-index-<name>.env
+    (the index's node) and watch.env (the alarm channel's command) are root's with mode 600, or nothing switches: one
+    written by hand under a umask of 022 is read by every user of the host."""
+
+    def etc(self, files: dict[str, str], modes: dict[str, int]) -> pathlib.Path:
+        etc = etc_with(files)
+        for name, mode in modes.items():
+            (etc / name).chmod(mode)
+        return etc
+
+    FILES = {**MAINNET_HOST, "keeper-sim1.env": KEEPER_ENV + "COLOSSEUM_HOST_RPC_URL=https://node.example/evm/A-KEY\n",
+             "sim-index-sim1.env": "COLOSSEUM_NETWORK=mainnet\n", "watch.env": "COLOSSEUM_ALERT_CMD='curl -s -d @- https://alerts.example/THE-CHANNELS-TOKEN'\n",
+             "deployment-sim1.env": "COLOSSEUM_DEPLOYMENT=sim1\n"}
+    PRIVATE = {"keeper-sim1.env": 0o600, "sim-index-sim1.env": 0o600, "watch.env": 0o600}
+
+    def test_on_a_mainnet_host_each_is_roots_with_mode_600_or_it_is_named(self):
+        me = os.getuid()
+        with mock.patch.object(hi, "PRIVATE_OWNER", me):
+            self.assertEqual(hi.private_files(self.etc(self.FILES, self.PRIVATE)), [])
+            # The record's file and host.env hold no key: read by all, as before.
+            self.assertEqual(hi.private_files(self.etc(self.FILES, {**self.PRIVATE, "deployment-sim1.env": 0o644,
+                                                                    "host.env": 0o644})), [])
+            for name in self.PRIVATE:
+                for mode in (0o644, 0o640, 0o604, 0o700, 0o400):
+                    with self.subTest(name=name, mode=oct(mode)):
+                        etc = self.etc(self.FILES, {**self.PRIVATE, name: mode})
+                        self.assertEqual(hi.private_files(etc), [f"{etc / name} (mode {mode:o}, owner uid {me})"])
+            # Files that are not there are not asked for here (keeper-<name>.env is, by `instances`).
+            only = {k: v for k, v in self.FILES.items() if k not in ("sim-index-sim1.env", "watch.env")}
+            self.assertEqual(hi.private_files(self.etc(only, {"keeper-sim1.env": 0o600})), [])
+        # Another owner than root: the test's own files are not root's.
+        etc = self.etc(self.FILES, self.PRIVATE)
+        self.assertEqual(len(hi.private_files(etc)), 3)
+        self.assertIn(f"owner uid {os.getuid()}", hi.private_files(etc)[0])
+
+    def test_a_testnet_host_is_as_before(self):
+        files = {"deployment-demo3": "v3-demo3\n", "keeper-demo3.env": "COLOSSEUM_NETWORK=testnet\n",
+                 "watch.env": "COLOSSEUM_ALERT_CMD=true\n"}
+        self.assertEqual(hi.private_files(self.etc(files, {"keeper-demo3.env": 0o644, "watch.env": 0o644})), [])
+
+    def test_install_asks_before_anything_switches_and_no_line_of_a_file_is_said(self):
+        etc = self.etc(self.FILES, {**self.PRIVATE, "keeper-sim1.env": 0o644})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(hi.main(["private", str(etc)]), 1)
+        self.assertIn(f"not root's with mode 600: {etc / 'keeper-sim1.env'} (mode 644", err.getvalue())
+        self.assertNotIn("A-KEY", err.getvalue())
+        self.assertNotIn("THE-CHANNELS-TOKEN", err.getvalue())
+        with mock.patch.object(hi, "PRIVATE_OWNER", os.getuid()):
+            self.assertEqual(hi.main(["private", str(self.etc(self.FILES, self.PRIVATE))]), 0)
+        install = (HOST / "install.sh").read_text()
+        self.assertIn('(cd "$rel" && "$venv/bin/python" -m ops.host_instances private /etc/colosseum) \\\n'
+                      '  || fail "on a mainnet host the files of a node\'s key and of the alarm channel are root\'s, mode '
+                      '600 (chown root:root and chmod 600 each); nothing switched"', install)
+        self.assertLess(install.index("-m ops.host_instances private"), install.index('ln -sfn "releases/$sha"'))
+
+
 class Bootstrap(unittest.TestCase):
     def setUp(self):
         self.boot = (HOST / "bootstrap.sh").read_text()
@@ -738,7 +870,7 @@ class TheHostsOwnNode(unittest.TestCase):
         from ops import sim_keeper, stop_filler
         from spike.hlspike import common as c
         # The stops' loop says its node's scheme and host at its start, through the keepers' one `log`.
-        self.assertIn('log("stop_loop_started", node=host_of(self.node.url)', (ROOT / "ops" / "stop_filler.py").read_text())
+        self.assertIn('log("stop_loop_started", node=node_said(self.node.url)', (ROOT / "ops" / "stop_filler.py").read_text())
         self.assertIs(stop_filler.log, core.log)
         self.assertIs(sim_keeper.log, core.log)
         started = dict(node=stop_filler.host_of(OWN), tip_wei=0, sends=True, block=7)
@@ -755,6 +887,37 @@ class TheHostsOwnNode(unittest.TestCase):
         with mock.patch.object(c, "OWN_NODE", ""), contextlib.redirect_stdout(out):
             core.log("stop_loop_started", **started)
         self.assertEqual(json.loads(out.getvalue())["node"], "https://key-in-the-host.node.example", "as before without it")
+
+    # Review 19 of #340, L1: with COLOSSEUM_STOP_RPC_URL and no host's own node, the loop's first line named the stops'
+    # node's scheme and host, and a provider's key may be its host name.
+    def test_the_stops_own_node_is_not_named_at_the_loops_start(self):
+        import contextlib
+        import io
+        import threading
+
+        from ops import stop_filler as sf
+        from spike.hlspike import common as c
+        public, stops = "https://rpc.hyperliquid.xyz/evm", "https://KEY-IN-THE-HOST.stops.example/evm"
+
+        def first_line(url: str) -> dict:
+            loop = sf.StopLoop(mock.Mock(factory=None), sf.Node(url), assets=[0])
+            stop = threading.Event()
+            stop.set()  # the line of the start, then out: no node is asked
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                loop.run(0.01, stop)
+            (line,) = [json.loads(l) for l in out.getvalue().splitlines()]
+            return line
+        for own in ("", OWN):
+            with self.subTest(own=bool(own)), mock.patch.object(c, "OWN_NODE", own), \
+                    mock.patch.object(c, "RPC_URL", own or public):
+                line = first_line(stops)
+                self.assertEqual((line["event"], line["node"]),
+                                 ("stop_loop_started", "the stops' own node (--stop-rpc; its address is not shown)"))
+                self.assertNotIn("key-in-the-host", json.dumps(line).lower())
+        # The keeper's own node, as before: the record's public one by its scheme and host.
+        with mock.patch.object(c, "OWN_NODE", ""), mock.patch.object(c, "RPC_URL", public):
+            self.assertEqual(first_line(public)["node"], "https://rpc.hyperliquid.xyz")
 
     def test_the_record_keeps_a_public_node_and_the_host_is_told_where_its_own_goes(self):
         # The record refuses an address with a key in it, as before; the host's file is where bootstrap says it goes.
@@ -785,7 +948,8 @@ class Stand(unittest.TestCase):
         "useradd": '#!/bin/sh\necho "useradd $*" >> "$FAKE_LOG"\n',
         "chown": '#!/bin/sh\necho "chown $*" >> "$FAKE_LOG"\n',
         "rsync": "#!/bin/sh\nexit 0\n",
-        "rrsync": "#!/bin/sh\nexit 0\n",
+        # rsync's own rrsync of 3.2.4 or later: its options are in its text, as second-prices.sh looks for them.
+        "rrsync": '#!/bin/sh\n# rrsync [-ro|-wo] [-munge] [-no-del] [-no-lock] DIR\necho "rrsync $*" >> "$FAKE_LOG"\n',
         # `python3.12 -m venv DIR` makes a DIR/bin/python that writes down what it is asked to install.
         "python3.12": '#!/bin/sh\necho "python3.12 $*" >> "$FAKE_LOG"\n[ "$1 $2" = "-m venv" ] || exit 0\nmkdir -p "$3/bin"\n'
                       'printf \'#!/bin/sh\\necho "venv-python $*" >> "$FAKE_LOG"\\n\' > "$3/bin/python"\nchmod +x "$3/bin/python"\n',
@@ -1102,21 +1266,22 @@ second_prices {" ".join(f'"{a}"' for a in args)}
         self.assertIn(f"fallocate -l 2G {image}.next", self.calls())
         self.assertIn(f"mkfs.ext4 -q -m 0 {image}.next", self.calls())
         self.assertIn(f"mount {self.folder}", self.calls())
-        self.assertEqual(self.fstab.read_text().splitlines()[1:], [f"{image} {self.folder} ext4 loop,nodev,nosuid,noexec 0 2"])
+        self.assertEqual(self.fstab.read_text().splitlines()[1:], [f"{image} {self.folder} ext4 loop,nodev,nosuid,noexec,nofail 0 2"])
         self.assertEqual(self.folder.stat().st_mode & 0o7777, 0o2750)
         self.assertIn(f"chown colosseum-prices:colosseum-keeper {self.folder}", self.calls())
         # The key: one line, the restriction before it; the folder is the one the review's unit reads.
         keys = self.home / ".ssh" / "authorized_keys"
-        self.assertEqual(keys.read_text(), f'command="rrsync -wo {self.folder}",restrict {PUBLIC_KEY}\n')
-        self.assertEqual(keys.stat().st_mode & 0o777, 0o600)
-        self.assertEqual((self.home / ".ssh").stat().st_mode & 0o777, 0o700)
+        self.assertEqual(keys.read_text(), f'command="mountpoint -q {self.folder} && exec rrsync -wo -munge -no-del '
+                                           f'{self.folder}",restrict {PUBLIC_KEY}\n')
+        self.assertEqual(keys.stat().st_mode & 0o777, 0o644)
+        self.assertEqual((self.home / ".ssh").stat().st_mode & 0o777, 0o755)
         self.assertIn("this host's own key, to hold the second machine's known_hosts against: 256 SHA256:the-hosts-fingerprint", out.stdout)
         text = self.SCRIPT.read_text()
         self.assertIn("folder=/var/lib/colosseum-keeper/second-prices\n", text)
         review = (HOST / "colosseum-payout-review@.service").read_text()
         self.assertIn("--prices2 /var/lib/colosseum-keeper/second-prices/watch-prices-${COLOSSEUM_DEPLOYMENT}.jsonl", review)
         sync = (HOST / "second-writer" / "colosseum-price-sync@.service").read_text()
-        self.assertIn("rrsync -wo /var/lib/colosseum-keeper/second-prices", sync)
+        self.assertIn("rrsync -wo -munge -no-del /var/lib/colosseum-keeper/second-prices", sync)
 
     def test_run_again_it_changes_nothing_that_is_there(self):
         self.assertEqual(self.run_it(str(self.key), env={"FAKE_NO_USER": "colosseum-prices"}).returncode, 0)
@@ -1178,6 +1343,67 @@ second_prices {" ".join(f'"{a}"' for a in args)}
         self.assertEqual(out.returncode, 1)
         self.assertIn("is still no file system of its own after mount", out.stderr)
         self.assertFalse((self.home / ".ssh").exists())
+
+    # Review 19 of #340, M1: the key's file and its .ssh were its own user's, and `rrsync -wo` alone let the key delete
+    # the journal and write a link out of the folder: a link to authorized_keys would have dropped the command.
+    def test_the_keys_file_and_its_folder_are_roots_and_the_key_erases_nothing_and_makes_no_way_out(self):
+        # What a run of the script before left: the user's own .ssh, 0700, and in it a link where the new file is
+        # written, to a file outside that is not to be touched.
+        outside = self.tmp / "outside"
+        outside.write_text("not to be written\n")
+        ssh = self.home / ".ssh"
+        ssh.mkdir(mode=0o700)
+        (ssh / "authorized_keys.next").symlink_to(outside)
+        out = self.run_it(str(self.key))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(outside.read_text(), "not to be written\n", "nothing is written through a link left there")
+        keys = ssh / "authorized_keys"
+        self.assertFalse(keys.is_symlink())
+        self.assertFalse((ssh / "authorized_keys.next").exists())
+        # root's, readable by sshd, written by root alone (sshd's StrictModes takes 0755 and 0644 of root).
+        self.assertIn(f"chown root:root {ssh}", self.calls())
+        self.assertIn(f"chown root:root {ssh}/authorized_keys.next", self.calls())
+        self.assertEqual((ssh.stat().st_mode & 0o777, keys.stat().st_mode & 0o777), (0o755, 0o644))
+        self.assertIn(f' && exec rrsync -wo -munge -no-del {self.folder}",restrict ssh-ed25519 ', keys.read_text())
+        self.assertIn("rrsync -wo -munge -no-del, restrict", out.stdout)
+        # An rrsync that knows neither option (rsync before 3.2.4): nothing is set up, and it is said.
+        for missing in ("-munge", "-no-del"):
+            with self.subTest(missing):
+                shutil.rmtree(ssh, ignore_errors=True)
+                self.log.write_text("")
+                (self.bin / "rrsync").write_text(self.FAKES["rrsync"].replace(f" [{missing}]", ""))
+                out = self.run_it(str(self.key), env={"FAKE_NO_USER": "colosseum-prices"})
+                self.assertEqual(out.returncode, 1)
+                self.assertIn("rrsync on this host takes no -munge or -no-del", out.stderr)
+                self.assertEqual(self.calls("useradd") + self.calls("mount") + self.calls("chown"), [])
+                self.assertFalse(ssh.exists())
+
+    # Review 19 of #340, M2: not mounted, the key wrote into the bare folder on the root disk, with no limit.
+    def test_the_key_runs_rrsync_only_while_its_folder_is_mounted(self):
+        self.assertEqual(self.run_it(str(self.key)).returncode, 0)
+        line = (self.home / ".ssh" / "authorized_keys").read_text()
+        command = re.fullmatch(r'command="([^"]*)",restrict ' + re.escape(PUBLIC_KEY) + "\n", line).group(1)
+
+        def as_sshd_runs_it() -> subprocess.CompletedProcess:  # the user's shell, /bin/sh, given the command with -c
+            self.log.write_text("")
+            return subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True,
+                                  env={**os.environ, "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
+                                       "FAKE_LOG": str(self.log)})
+        ran = as_sshd_runs_it()
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(self.calls("rrsync"), [f"rrsync -wo -munge -no-del {self.folder}"])
+        (self.folder / ".mounted").unlink()  # the image did not mount at the host's start
+        ran = as_sshd_runs_it()
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertEqual(self.calls("rrsync"), [], "nothing is written into the bare folder on the root disk")
+
+    # Review 19 of #340, M2: a broken image or a failed fsck took the host's start to systemd's emergency mode.
+    def test_the_folder_is_named_in_fstab_so_that_a_broken_image_never_stops_the_hosts_start(self):
+        self.assertEqual(self.run_it().returncode, 0)
+        (line,) = self.fstab.read_text().splitlines()[1:]
+        image, folder, kind, options, _, _ = line.split()
+        self.assertEqual((image, folder, kind), (str(self.tmp / "second-prices.img"), str(self.folder), "ext4"))
+        self.assertIn("nofail", options.split(","))
 
     def test_it_makes_no_key_and_bootstrap_keeps_the_pass_it_sets(self):
         text = self.SCRIPT.read_text()

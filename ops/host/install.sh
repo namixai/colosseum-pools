@@ -63,22 +63,6 @@ if [ ! -f "$venv/.complete" ]; then
   say "built $venv"
 fi
 
-# 2. Units, and nginx when the certificate is here.
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-gateway.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-keeper.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-gateway@.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-keeper@.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-shared-keeper.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.path" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-multi-keeper@.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-payout-review@.service" "$rel/ops/host/colosseum-payout-review@.timer" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-unit-failed@.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-index@.service" /etc/systemd/system/
-install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-checker@.service" /etc/systemd/system/
-systemctl daemon-reload
-
 # The host's one network, read once (/etc/colosseum/host.env, by ops/host_instances.py; testnet when there is no such
 # file) and exported: every record below is read for it, and nothing here names a network a second time.
 network="$(cd "$rel" && "$venv/bin/python" -m ops.host_instances network /etc/colosseum)" \
@@ -108,6 +92,11 @@ for label in $first_label $(awk '{print $2}' <<< "$instances"); do
   (cd "$rel" && "$venv/bin/python" -m ops.host_instances deployment-env "$label") > /dev/null \
     || fail "deployment $label: no complete $network record in this release; nothing switched"
 done
+
+# On a mainnet host the files a node's key or the alarm channel's command is written in (keeper-<name>.env,
+# sim-index-<name>.env, watch.env) are root's, mode 600: systemd reads them, nobody else (ops/host_instances.py).
+(cd "$rel" && "$venv/bin/python" -m ops.host_instances private /etc/colosseum) \
+  || fail "on a mainnet host the files of a node's key and of the alarm channel are root's, mode 600 (chown root:root and chmod 600 each); nothing switched"
 
 # A mainnet host runs none of testnet's services. Its one instance is a simulated pool's (ops/host_instances.py
 # refused anything else just above); what an earlier use of the host left enabled would be restarted below on this
@@ -252,6 +241,24 @@ if [ -f "$shared_env" ]; then
   (cd "$rel" && "$venv/bin/python" -c 'import sys; from ops import deployments; n = sys.argv[1].split(","); sys.exit(0 if len(set(n)) == len(n) and all("SharedPool" in deployments.load(x) for x in n) else 1)' "$shared_label") \
     || fail "shared pool $shared_label: no complete testnet record with a SharedPool in this release; nothing switched"
 fi
+
+# 2. Units, and nginx when the certificate is here. The units only now, once every check above has passed: a
+# release stopped by one of them leaves systemd's units as they were, as its words say, and a service of the old
+# release never restarts on a unit of this one.
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-gateway.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-keeper.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-gateway@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-keeper@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-shared-keeper.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.path" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-key-copy@.timer" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-multi-keeper@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-payout-review@.service" "$rel/ops/host/colosseum-payout-review@.timer" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-unit-failed@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-index@.service" /etc/systemd/system/
+install -m 0644 -o root -g root "$rel/ops/host/colosseum-sim-checker@.service" /etc/systemd/system/
+systemctl daemon-reload
 
 site=/etc/nginx/conf.d/pools-api.conf
 if [ -f /etc/colosseum/tls/origin.crt ] && [ -f /etc/colosseum/tls/origin.key ]; then

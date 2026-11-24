@@ -89,18 +89,28 @@ class TheStopOfReason3(unittest.TestCase):
         self.link = keccak(self.analysis.read_bytes())
 
     def run_stop(self, chain: Chain, doc: dict | None = None, *flags, key=CHECKER, analysis=True, now=NOW, sent=None,
-                 confirm=None):
+                 confirm=None, record=None, clock=None, deployment="sim1"):
+        """`record`: the deployment's record as `deployments.load` gives it (its SimPoolFactory the pool's factory
+        unless said); `clock`: chain_now's answers in turn, in place of `now` every time. Every way out to a key or a
+        node is stood in for: a mutant that takes a refusal away reaches none."""
         path = self.dir / "review.json"
         path.write_text(json.dumps(review() if doc is None else doc))
-        argv = ["stop", "--review", str(path), *(["--analysis", str(self.analysis)] if analysis else []), *flags]
+        argv = ["stop", *(["--deployment", deployment] if deployment else []), "--review", str(path),
+                *(["--analysis", str(self.analysis)] if analysis else []), *flags]
         if "--signer" not in flags:
             argv += ["--key", "checker"]
         out = io.StringIO()
         sent = mock.Mock(return_value={"transactionHash": "0x01"}) if sent is None else sent
+        record = {"SimPoolFactory": FACTORY} if record is None else record
+        never = mock.Mock(side_effect=AssertionError("not a path of `stop`"))
         with mock.patch.object(d.c, "call_view", side_effect=chain.view), mock.patch.object(d.c, "rpc", side_effect=chain.rpc), \
-                mock.patch.object(d, "chain_now", return_value=now), mock.patch.object(d.c, "address_of", return_value=key), \
+                mock.patch.object(d, "chain_now", **({"side_effect": clock} if clock else {"return_value": now})), \
+                mock.patch.object(d.c, "address_of", return_value=key), mock.patch.object(d.deployments, "load", return_value=record), \
                 mock.patch.object(d.c, "assert_testnet"), mock.patch.object(d.c, "account", return_value="the checker's key") as wallet, \
                 mock.patch.object(d.c, "transact", sent), mock.patch.object(chk, "log"), \
+                mock.patch.object(d.c, "send_tx", never), mock.patch.object(d.sn, "check_assets", never), \
+                mock.patch.object(d, "big_blocks", never), mock.patch.object(d, "save", never), \
+                mock.patch.object(d, "mark_incomplete", never), \
                 mock.patch.object(d.sn, "confirm_send", confirm or mock.Mock()) as confirmed, contextlib.redirect_stdout(out):
             code = d.main(argv)
         return code, out.getvalue(), sent, wallet, confirmed
@@ -202,12 +212,15 @@ class TheStopOfReason3(unittest.TestCase):
         lifted = WAITING[:5] + (True,) + WAITING[6:]
         self.assertIn("BadPayout: payout 3 was stopped once already and its stop lifted", self.refused(Chain(payouts=(lifted,))))
         self.assertIn("BadPayout: payout 3 does not exist", self.refused(Chain(count=3)))
-        # A pool from before approvals pays at its time by itself: within 5 minutes of it the stop is not sent.
-        self.assertIn("its time to stop is over", self.refused(Chain(approvals=False), now=DUE - chk.MARGIN_S))
-        code, *_ = self.run_stop(Chain(approvals=False), now=DUE - chk.MARGIN_S - 1)
+        # A pool from before approvals pays at its time by itself: within 5 minutes of it the stop is not sent. (Each
+        # on a review read a minute before the chain's time of the test.)
+        fresh = lambda now: review(readAt={"block": 4_000, "time": now - 60})
+        self.assertIn("its time to stop is over", self.refused(Chain(approvals=False), fresh(DUE - chk.MARGIN_S),
+                                                               now=DUE - chk.MARGIN_S))
+        code, *_ = self.run_stop(Chain(approvals=False), fresh(DUE - chk.MARGIN_S - 1), now=DUE - chk.MARGIN_S - 1)
         self.assertEqual(code, 0)
         # A pool with approvals takes a stop until the payout is paid, past its due time too.
-        self.assertEqual(self.run_stop(Chain(), now=DUE + 3 * DAY)[0], 0)
+        self.assertEqual(self.run_stop(Chain(), fresh(DUE + 3 * DAY), now=DUE + 3 * DAY)[0], 0)
 
     def test_only_the_factorys_checker_stops(self):
         said = self.refused(Chain(), key=OTHER)
@@ -224,8 +237,10 @@ class TheStopOfReason3(unittest.TestCase):
             with self.subTest(field):
                 self.assertIn("the review is of another claim than payout 3", self.refused(Chain(), review(**{field: value})))
         (self.dir / "broken.json").write_text("{")
-        with self.assertRaises(SystemExit) as stop, mock.patch.object(d.c, "rpc", side_effect=Chain().rpc):
-            d.main(["stop", "--review", str(self.dir / "broken.json"), "--analysis", str(self.analysis), "--key", "checker"])
+        with self.assertRaises(SystemExit) as stop, mock.patch.object(d.c, "rpc", side_effect=Chain().rpc), \
+                mock.patch.object(d.deployments, "load", return_value={"SimPoolFactory": FACTORY}):
+            d.main(["stop", "--deployment", "sim1", "--review", str(self.dir / "broken.json"), "--analysis",
+                    str(self.analysis), "--key", "checker"])
         self.assertIn("cannot be read as JSON", str(stop.exception))
 
     def test_a_draft_that_is_not_the_reviews_is_sent_not_at_all(self):
@@ -248,6 +263,66 @@ class TheStopOfReason3(unittest.TestCase):
         self.assertIn("is empty", self.refused(Chain()))
         self.analysis.unlink()
         self.assertIn("No such file", self.refused(Chain()))
+
+    # Review 19 of #340, M3: a review a month old with the same trader, amount and due time was taken, its age not even
+    # shown; `approve` takes none older than an hour.
+    def test_a_review_read_more_than_an_hour_ago_stops_nothing_unless_a_person_says_so(self):
+        old = review(readAt={"block": 4_000, "time": NOW - 30 * DAY})
+        said = self.refused(Chain(), old)
+        self.assertIn(f"the review was read 30 days ago ({d.utc(NOW - 30 * DAY)}), more than an hour before the chain's "
+                      "head", said)
+        self.assertIn("say --old-review to stop on this one; nothing was stopped", said)
+        chain = Chain()
+        self.refused(chain, old)
+        self.assertEqual(chain.calls, [], "refused before the pool is asked")
+        # An hour is taken, an hour and a second is not.
+        at = lambda t: review(readAt={"block": 4_000, "time": t})
+        self.assertEqual(self.run_stop(Chain(), at(NOW - pr.REVIEW_MAX_S))[0], 0)
+        self.assertIn("more than an hour", self.refused(Chain(), at(NOW - pr.REVIEW_MAX_S - 1)))
+        # With --old-review, a person's word, it is taken and its age said.
+        code, said, *_ = self.run_stop(Chain(), old, "--old-review")
+        self.assertEqual(code, 0)
+        self.assertIn(f"  the review: read at block 4000, {d.utc(NOW - 30 * DAY)}, 30 days ago, older than an hour: "
+                      "--old-review, verdict 'suspicious', action 'hold'", said)
+        # A fresh one says its age too.
+        self.assertIn(f"the review: read at block 4000, {d.utc(NOW - 60)}, 1 minute ago, verdict", self.run_stop(Chain())[1])
+        # A review read after the chain's head (a minute of clocks apart is taken), or with no time: never, said or not.
+        self.assertEqual(self.run_stop(Chain(), at(NOW + 60))[0], 0)
+        self.assertIn("after the chain's head", self.refused(Chain(), at(NOW + 61), "--old-review"))
+        for read_at in ({"block": 4_000}, None, {"block": 4_000, "time": "soon"}, "at noon", [4_000]):
+            with self.subTest(read_at=read_at):
+                self.assertIn("no time it was read at (readAt)", self.refused(Chain(), review(readAt=read_at), "--old-review"))
+
+    def test_a_review_that_grew_old_while_the_person_confirmed_is_not_sent(self):
+        # Fresh at the offer, an hour and more by the time the person confirmed: read again then, and refused.
+        said = self.refused(Chain(), None, "--send", clock=[NOW, NOW + pr.REVIEW_MAX_S])
+        self.assertIn("more than an hour before the chain's head", said)
+        # With --old-review the person said it: sent.
+        code, said, sent, wallet, _ = self.run_stop(Chain(), None, "--send", "--old-review", clock=[NOW, NOW + pr.REVIEW_MAX_S])
+        self.assertEqual(code, 0)
+        sent.assert_called_once()
+        wallet.assert_called_once_with("checker")
+
+    # Review 19 of #340, M3: any pool whose factory's checker was the sender was taken: nothing tied the pool to the
+    # deployment the person meant.
+    def test_a_pool_of_another_deployment_is_not_stopped(self):
+        other = to_checksum_address("0x" + "98" * 20)
+        said = self.refused(Chain(), record={"SimPoolFactory": other})
+        self.assertIn(f"the pool {POOL} is of the factory {FACTORY}, and 'sim1''s record names {other}: nothing is "
+                      "stopped in another deployment", said)
+        sent = mock.Mock()
+        with self.assertRaises(SystemExit):
+            self.run_stop(Chain(), None, "--send", record={"SimPoolFactory": other}, sent=sent)
+        sent.assert_not_called()
+        self.assertIn("names no SimPoolFactory", self.refused(Chain(), record={"PoolFactory": FACTORY}))
+        self.assertIn("names no SimPoolFactory", self.refused(Chain(), record={"SimPoolFactory": ""}))
+        # The record's address as it is written, in any case.
+        self.assertEqual(self.run_stop(Chain(), record={"SimPoolFactory": FACTORY.lower()})[0], 0)
+        self.assertIn(f"  the deployment: sim1, factory {FACTORY}\n", self.run_stop(Chain())[1])
+        # And the deployment is named, or the command does not run.
+        with self.assertRaises(SystemExit) as stop, contextlib.redirect_stderr(io.StringIO()):
+            self.run_stop(Chain(), deployment=None)
+        self.assertEqual(stop.exception.code, 2)
 
     def test_a_pool_not_read_is_not_stopped(self):
         chain = Chain()
