@@ -256,16 +256,22 @@ def fell_behind(out: pathlib.Path, behind: pr.Behind, said: dict, now: float) ->
 def behind_long(behind: pr.Behind, now: float, said: dict, alarm) -> None:
     """The passes have ended behind for longer than BEHIND_LONG_S in a row (since `fell_behind` first kept it): the
     alarm `review_behind_long`, said again every BEHIND_EVERY_S while it lasts, remembered only once the channel took
-    it. Only a pass that reads to the head ends the row; one that fails between two that fell behind does not."""
+    it. Only a pass that reads to the head ends the row; one that fails between two that fell behind does not. An
+    alarm that raises is one not taken, as in `one_pass`: the pass fell behind and did not fail, and ends so."""
     kept = said["_behind"]
     if now - kept["since"] <= BEHIND_LONG_S:
         return
     if is_time(kept.get("said")) and now - kept["said"] < BEHIND_EVERY_S:
         return
-    if alarm("review_behind_long", wait=True, read_to=behind.read_to, head=behind.head, since=utc(int(kept["since"])),
-             why="the payout review has not read the chain to its head for over an hour: each pass runs out of its "
-                 "time and the next goes on from there; no document is fresh meanwhile, approve refuses every payout, "
-                 "and a held payout is not said again") is not False:
+    try:
+        took = alarm("review_behind_long", wait=True, read_to=behind.read_to, head=behind.head, since=utc(int(kept["since"])),
+                     why="the payout review has not read the chain to its head for over an hour: each pass runs out of its "
+                         "time and the next goes on from there; no document is fresh meanwhile, approve refuses every "
+                         "payout, and a held payout is not said again")
+    except Exception as exc:  # the alarm's own failure: not taken, and said at the next pass
+        core.log("review_alarm_raised", what="review_behind_long", error=type(exc).__name__)
+        took = False
+    if took is not False:
         kept["said"] = now
 
 

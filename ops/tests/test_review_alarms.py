@@ -401,7 +401,12 @@ class FallenBehind(unittest.TestCase):
         from contextlib import ExitStack
         if minutes is not None:
             self.now = self.T0 + 60 * minutes
-        took = lambda self_, event, **kw: (self.raised.append(((self.now - self.T0) // 60, event, kw)), self.took)[1]  # noqa: E731
+        def took(self_, event, **kw):
+            self.raised.append(((self.now - self.T0) // 60, event, kw))
+            if isinstance(self.took, Exception):
+                raise self.took
+            return self.took
+
         with ExitStack() as stack:
             if chain is not None:
                 read = {"side_effect": chain} if isinstance(chain, BaseException) else {"return_value": chain}
@@ -476,6 +481,20 @@ class FallenBehind(unittest.TestCase):
         self.run_pass(pr.Behind(9_900, 90_000), minutes=140)
         self.assertEqual(self.alarms()[2:], [(140, "review_behind_long")], "an hour after the channel last took it")
         self.assertEqual(self.said()["_behind"], {"since": self.T0, "said": self.T0 + 140 * 60})
+
+    def test_an_alarm_that_raises_is_one_not_taken_and_the_pass_still_ends_with_code_0(self):
+        """The channel's own failures are answered False by the alarm. Should the alarm itself raise, the pass that
+        fell behind would end as a failed unit, which is what it is not: not taken, said at the next pass."""
+        self.run_pass(pr.Behind(1_000, 90_000))
+        self.took = RuntimeError("the alarm itself")
+        self.assertEqual(self.run_pass(pr.Behind(2_000, 90_000), minutes=70), 0)
+        self.assertEqual(self.alarms(), [(70, "review_behind_long")])
+        self.assertEqual(self.said(), {"_behind": {"since": self.T0}}, "kept, and nothing remembered as said")
+        self.assertEqual([f for e, f in self.lines if e == "review_alarm_raised"],
+                         [{"what": "review_behind_long", "error": "RuntimeError"}])
+        self.took = True
+        self.assertEqual(self.run_pass(pr.Behind(3_000, 90_000), minutes=80), 0)
+        self.assertEqual(self.alarms()[1:], [(80, "review_behind_long")])
 
     def test_a_failed_pass_between_them_does_not_end_the_row_and_a_pass_that_reads_to_the_head_does(self):
         for k in range(4):
