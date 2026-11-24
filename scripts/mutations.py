@@ -17805,6 +17805,26 @@ MUTATIONS = [
      "            lo, logs = min(lo, first), list(more) + logs",
      "            lo, logs = min(lo, first), logs",
      ["test_steps_that_waited_are_taken_together_and_a_block_handed_in_twice_is_taken_once"]),
+    # The measuring pool's plan of mainnet (24 November 2026): a plan that names its network is refused on the other,
+    # and the plan is the testnet one but for its network.
+    ("SK435", "ops/deploy_sim.py",
+     "    if named is not None and named != c.NETWORK.name:",
+     "    if False:",
+     ["test_mainnet_takes_it_and_testnet_refuses_it", "test_check_takes_it_on_mainnet_and_refuses_it_on_testnet",
+      "test_a_plan_that_names_no_network_is_one_for_both_and_a_wrong_name_is_refused_on_both"]),
+    ("SK436", "deployments/plans/sim-measure-pool-999.json",
+     '  "network": "mainnet",',
+     '  "network": "testnet",',
+     ["test_it_is_the_testnet_plan_but_for_its_network", "test_mainnet_takes_it_and_testnet_refuses_it",
+      "test_check_takes_it_on_mainnet_and_refuses_it_on_testnet"]),
+    ("SK437", "deployments/plans/sim-measure-pool-999.json",
+     '    "fill_delay": 4,\n    "fill_window": 60\n  },\n  "funded_rules"',
+     '    "fill_delay": 4,\n    "fill_window": 59\n  },\n  "funded_rules"',
+     ["test_it_is_the_testnet_plan_but_for_its_network"]),
+    ("SK438", "deployments/plans/sim-measure-pool-999.json",
+     "on nobody's money; prices are in USDC.",
+     "on nobody's money; prices are testnet USDC.",
+     ["test_it_is_the_testnet_plan_but_for_its_network", "test_mainnet_takes_it_and_testnet_refuses_it"]),
     # Review 20 of #342: a look's number held to the block it ran in (the time of the head in the call, the node's own
     # record of the block once a minute or when in doubt), the measure taken twice, the keeper's batch held to the head it
     # read, the node's answers by number held to the loop's own looks, the reads a burnt call lost read again alone, the

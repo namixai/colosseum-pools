@@ -1095,6 +1095,80 @@ class TheMeasurePool(unittest.TestCase):
                          "one code, the creator's own, with no share: a sale needs one")
 
 
+class TheMainnetMeasurePlan(unittest.TestCase):
+    """The measuring pool's plan of mainnet (24 November 2026): the testnet plan with its network named and the opening
+    of its terms in mainnet's words, nothing else; mainnet takes it, testnet refuses it, and `check` takes it."""
+    PLAN = str(ROOT / "deployments/plans/sim-measure-pool-999.json")
+    LARGEST = "0x" + (1_000 * 10**6).to_bytes(32, "big").hex()
+    FEE_SEL = "0x" + keccak(text="creationFee()")[:4].hex()
+    RAW = json.loads((ROOT / "deployments/plans/sim-measure-pool-999.json").read_text(encoding="utf-8"))
+    TESTNET = json.loads((ROOT / "deployments/plans/sim-measure-pool.json").read_text(encoding="utf-8"))
+    OPENING = ("Simulated pool for measuring fills, testnet. Not for sale. Simulated pool, testnet. Both stages are "
+               "paper exams on nobody's money; prices are testnet USDC.",
+               "Simulated pool for measuring fills. Not for sale. Both stages are paper exams on nobody's money; prices "
+               "are in USDC.")
+
+    def test_it_is_the_testnet_plan_but_for_its_network(self):
+        raw, old = self.RAW, self.TESTNET
+        self.assertEqual(raw["network"], "mainnet")
+        self.assertNotIn("network", old)
+        rest = lambda p: {k: v for k, v in p.items() if k not in ("network", "about", "terms_text")}
+        self.assertEqual(rest(raw), rest(old), "every number, rule and code the testnet plan's")
+        self.assertEqual(old["terms_text"].count(self.OPENING[0]), 1)
+        self.assertEqual(raw["terms_text"], old["terms_text"].replace(*self.OPENING), "the terms but their opening")
+        self.assertNotIn("testnet", (raw["terms_text"] + raw["about"]).lower())
+        self.assertEqual("0x" + keccak(text=raw["terms_text"]).hex(),
+                         "0x9f205b9bffb0495bf4f1c2b4b8070ba45f0783736ab5713b7ba363d2c59a942b",
+                         "the terms the mainnet sheet names")
+        self.assertEqual(d.locked_of(raw), 160 * 10**6)
+        self.assertEqual(d.on_of(raw), 1, "its one line on")
+        for stage in ("exam", "funded"):
+            self.assertEqual(raw[stage]["fill_window"], int(constant("MAX_FILL_WINDOW")))
+        self.assertEqual(raw["exam_rules"]["assets"], ["BTC", "ETH", "SOL"])
+        self.assertIn("filled within 60 blocks from then", raw["terms_text"])
+
+    def test_mainnet_takes_it_and_testnet_refuses_it(self):
+        from spike.hlspike import network as networks
+        with mock.patch.object(d.c, "NETWORK", networks.MAINNET):
+            d.plan_network_ok(self.RAW)
+            with self.assertRaises(SystemExit) as caught:
+                d.plan_network_ok(self.TESTNET)
+            self.assertIn("written for testnet", str(caught.exception))
+        with mock.patch.object(d.c, "NETWORK", networks.TESTNET):
+            with self.assertRaises(SystemExit) as caught:
+                d.plan_network_ok(self.RAW)
+            self.assertIn("written for mainnet", str(caught.exception))
+            d.plan_network_ok(self.TESTNET)
+
+    def test_a_plan_that_names_no_network_is_one_for_both_and_a_wrong_name_is_refused_on_both(self):
+        from spike.hlspike import network as networks
+        for net in (networks.MAINNET, networks.TESTNET):
+            with mock.patch.object(d.c, "NETWORK", net):
+                d.plan_network_ok(FIRST)
+                with self.assertRaises(SystemExit):
+                    d.plan_network_ok(dict(self.RAW, network="mainet"))
+
+    def test_check_takes_it_on_mainnet_and_refuses_it_on_testnet(self):
+        from spike.hlspike import network as networks
+        with mock.patch.multiple(d.c, NETWORK=networks.MAINNET, CHAIN_ID=networks.MAINNET.chain_id,
+                                 USDC_ERC20=networks.MAINNET.usdc_erc20, assert_network=mock.DEFAULT):
+            code, calls, said = TheCheck.run_check(self, ["--network", "mainnet"], create_needs=1_000_000)
+        self.assertEqual(code, 0)
+        self.assertIn("deploy_sim check: mainnet (chain 999)", said)
+        self.assertIn("line             1000 for 9 USDC: loss limit 6 %, target 10 %, from the start", said)
+        self.assertIn("payouts a day    2; locks 160 USDC; terms keccak 0x9f205b9bffb0", said)
+        self.assertIn("the factory accepts the plan; largest size 1000 USDC.", said)
+        self.assertIn("the pool opens by an ordinary transaction. Nothing was sent.", said)
+        # The assets as `deploy` lists them on mainnet: BTC 0, ETH 1, SOL 5.
+        state = next(p for m, p in calls if m == "eth_call")[2]
+        factory = state[d.CHECK_AT["factory"]]["stateDiff"]
+        for idx in (0, 1, 5):
+            self.assertIn("0x" + keccak(idx.to_bytes(32, "big") + (6).to_bytes(32, "big")).hex(), factory)
+        with self.assertRaises(SystemExit) as caught:
+            TheCheck.run_check(self, [])
+        self.assertIn("written for mainnet", str(caught.exception))
+
+
 class TheRehearsalPlan(unittest.TestCase):
     """The plan of the rehearsal on testnet: one line of 20 for 2 test USDC, the first pool's rules, a lock of two
     payouts, the creator's own code; checked by `check` as the first pool's plan is."""
@@ -1129,7 +1203,7 @@ class TheRehearsalPlan(unittest.TestCase):
         from spike.hlspike import network as networks
         with mock.patch.object(d.c, "NETWORK", networks.MAINNET):
             with self.assertRaises(SystemExit) as caught:
-                d.mainnet_plan_ok(self.RAW)
+                d.plan_network_ok(self.RAW)
         self.assertIn("written for testnet", str(caught.exception))
 
     def test_check_takes_it_as_it_takes_the_first_pools(self):
