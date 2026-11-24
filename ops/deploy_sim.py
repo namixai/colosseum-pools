@@ -1090,13 +1090,14 @@ def approve(args) -> int:
         # The person's confirmation has no time limit: the payouts and their reviews are held to the chain as it stands
         # after it. A payout paid, stopped or approved meanwhile, or a pool with another approver by then, stops the
         # send as it would have stopped the offer; and each review is held to the payout as the pool answers it now.
-        head = int(c.rpc("eth_blockNumber"), 16)
-        head_time = int(c.rpc("eth_getBlockByNumber", [hex(head), False])["timestamp"], 16)
         approver_now, payouts_now = approval_state(pool_, ids)
         try:
             approve_check(approver_now, sender, payouts_now, ids, hard)
         except SystemExit as exc:
             raise SystemExit(f"{exc} (read again once the send was confirmed: nothing was sent)") from None
+        # The head last: a review's hour is held to the chain's clock as it stands after the pool's answers, not before.
+        head = int(c.rpc("eth_blockNumber"), 16)
+        head_time = int(c.rpc("eth_getBlockByNumber", [hex(head), False])["timestamp"], 16)
         review_check(reviews, pool_, payouts_now, ids, int(c.rpc("eth_chainId"), 16), head, head_time, hint)
     return send_or_say(args, pool_, "approvePayouts(uint256[])", ["uint256[]"], [ids], before=still_fresh)
 

@@ -1721,6 +1721,27 @@ class TheClosing(unittest.TestCase):
         got, sent, _ = self.approve_main(["--ids", "3", "--send"], {3: self.review(3)}, confirm=lambda folder: None)
         self.assertEqual((got, sent.call_count), (0, 1))
 
+    def test_after_the_confirmation_the_head_is_read_once_the_pool_has_answered(self):
+        """The reviews' hour is held to the chain's clock as it stands when the pool has answered for its payouts, not
+        to the clock from before those reads: a review that ran out of its hour while they were made stops the send."""
+        chain = {"eth_chainId": hex(998), "eth_blockNumber": hex(5_100), "eth_getBlockByNumber": {"timestamp": hex(9_100)}}
+
+        class TheLastAnswer(list):
+            """The pool's answer for its approver, the last of the reads; as it is read the chain's clock passes the hour."""
+
+            def __getitem__(self, i):
+                chain["eth_getBlockByNumber"] = {"timestamp": hex(9_000 + 3_601)}
+                return super().__getitem__(i)
+
+        def during(folder):
+            self.answers["approver()"] = TheLastAnswer(self.answers["approver()"])
+
+        with self.assertRaises(SystemExit) as caught:
+            self.approve_main(["--ids", "3", "--send"], {3: self.review(3)}, chain, confirm=during)
+        self.assertIn("NoReview", str(caught.exception))
+        self.assertIn("more than an hour", str(caught.exception))
+        self.sent.assert_not_called()
+
     def test_lift_only_the_factorys_operator_a_stopped_payout_within_its_14_days(self):
         """The pool's order of refusals (SimPool.liftStop, SimPoolStops.lift): the factory's operator alone, not on a
         finished pool, a stopped payout, within STOP_RESERVE of the stop. The checker stops; it does not lift."""
