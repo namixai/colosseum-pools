@@ -13,6 +13,9 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
+
+import requests
 
 from gateway import simindex
 from gateway.chain import Throttled
@@ -239,6 +242,36 @@ class Reading(unittest.TestCase):
         self.assertEqual(index.errors, 2)
         self.assertIsNone(index.last_error)
         self.assertEqual(index.health()["behind_blocks"], 0)
+
+    def test_the_health_route_says_which_error_and_none_of_its_words(self):
+        """The words of a read that failed can carry the node's address, and with it a provider's key (requests writes
+        the whole URL); the health route is public. It says the error's name; the service's log keeps the words."""
+        url = "https://rpc.example.com/v2/SECRETKEY123"
+        node = Node(history(), head=3000)
+        node.fail = [requests.HTTPError(f"500 Server Error: Internal Server Error for url: {url}")]
+        index = make(node, self.tmp)
+        stop = threading.Event()
+        seen = []
+
+        def wait(s):
+            seen.append(json.dumps(index.health()))
+            stop.set()
+            return True
+
+        stop.wait = wait
+        logged = []
+        with mock.patch.object(simindex, "log_line", side_effect=lambda **f: logged.append(f)):
+            index.run(stop)
+        self.assertEqual((index.last_error, json.loads(seen[0])["last_error"]), ("HTTPError", "HTTPError"))
+        self.assertNotIn("SECRETKEY123", seen[0])
+        self.assertNotIn("rpc.example.com", seen[0])
+        self.assertIn("SECRETKEY123", logged[0]["error"], "the log, which is the service's own, keeps the words")
+        # Whatever is kept there, the route hands out a name or nothing.
+        for kept, said in ((f"HTTPError: 500 for url: {url}", "HTTPError"), (url, "error"), ("requests.exceptions.HTTPError", "requests.exceptions.HTTPError"),
+                           ("two words: x", "error"), (None, None)):
+            index.last_error = kept
+            self.assertEqual(index.health()["last_error"], said, kept)
+            self.assertNotIn("SECRETKEY123", json.dumps(index.health()))
 
 
 class Routes(unittest.TestCase):

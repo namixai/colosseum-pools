@@ -581,7 +581,6 @@ class Watch16(unittest.TestCase):
                       fetch=lambda u: (_ for _ in ()).throw(OSError("https://secret.example/KEY")))
         self.assertNotIn("secret.example", seen[0])
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_health_says_nothing_of_the_provider_url_when_a_read_failed(self):
         """`last_error` is in the public health route and is `str(exc)[:200]` of the read that failed; requests' own
         HTTPError names the URL, which for a provider is the key."""

@@ -94,6 +94,19 @@ ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 WORD = re.compile(r"0x[0-9a-fA-F]{64}\Z")
 
 
+_ERROR_NAME = re.compile(r"([A-Za-z_][A-Za-z0-9_.]{0,79})(?:: |$)")
+
+
+def error_name(text) -> str | None:
+    """Of an error kept as "Name: its words", the name alone, for the health route. The words of a read that failed can
+    carry the node's address (requests writes the whole URL), which for a provider holds its key, and the route is
+    public: it says which kind of error, the service's own log says the rest."""
+    if text is None:
+        return None
+    named = _ERROR_NAME.match(str(text))
+    return named.group(1) if named else "error"
+
+
 def log_line(**fields) -> None:
     print(json.dumps({"t": int(time.time()), "part": "sim-index", **fields}, default=str), flush=True)
 
@@ -377,8 +390,9 @@ class SimIndex:
             except Exception as exc:  # the node, the network, the disk: said, waited out, read again
                 with self.lock:
                     self.errors += 1
-                    self.last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
-                log_line(event="read_failed", error=self.last_error, wait_s=delay, at=self.scanned_to + 1)
+                    self.last_error = type(exc).__name__  # the name alone: it is handed out by the health route
+                log_line(event="read_failed", error=f"{type(exc).__name__}: {str(exc)[:200]}", wait_s=delay,
+                         at=self.scanned_to + 1)
                 if self._dirty:
                     try:
                         self.save()
@@ -395,7 +409,7 @@ class SimIndex:
             return {"ok": True, "chain_id": self.chain_id, "factory": self.factory, "from_block": self.from_block,
                     "scanned_to": self.scanned_to, "head": self.head, "behind_blocks": behind,
                     "pools": len(self.pools), "window": self.window, "updated_at": self.updated_at,
-                    "last_error": self.last_error, "errors": self.errors}
+                    "last_error": error_name(self.last_error), "errors": self.errors}
 
     def pool(self, pool: str) -> tuple[int, dict]:
         if not isinstance(pool, str) or not ADDRESS.match(pool):

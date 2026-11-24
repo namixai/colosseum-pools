@@ -17294,7 +17294,7 @@ MUTATIONS = [
      "        if not os.environ.get(\"COLOSSEUM_ALERT_CMD\", \"\").strip():\n            raise SystemExit(\"refusing to run the host's watch",
      "        if False:\n            raise SystemExit(\"refusing to run the host's watch",
      ["test_it_does_not_run_without_a_channel_on_any_network"]),
-    ("RZ21", "ops/review_service.py",
+    ("AL7", "ops/review_service.py",
      "        if not os.environ.get(\"COLOSSEUM_ALERT_CMD\", \"\").strip():\n            raise SystemExit(\"refusing to run the host's watch",
      "        if c.NETWORK.name == \"mainnet\" and not os.environ.get(\"COLOSSEUM_ALERT_CMD\", \"\").strip():\n            raise SystemExit(\"refusing to run the host's watch",
      ["test_it_does_not_run_without_a_channel_on_any_network"]),
@@ -17512,6 +17512,19 @@ MUTATIONS = [
      "    fresh = f\"{url}{'&' if '?' in url else '?'}r={secrets.token_hex(8)}\"",
      "    fresh = url",
      ["test_each_question_carries_a_parameter_no_question_before_had"]),
+    # Review 16: the public health route says which error a read failed with, and none of its words.
+    ("G417", "gateway/simindex.py",
+     "                    \"last_error\": error_name(self.last_error), \"errors\": self.errors}",
+     "                    \"last_error\": self.last_error, \"errors\": self.errors}",
+     ["test_the_health_route_says_which_error_and_none_of_its_words"]),
+    ("G418", "gateway/simindex.py",
+     "                    self.last_error = type(exc).__name__  # the name alone: it is handed out by the health route",
+     "                    self.last_error = f\"{type(exc).__name__}: {str(exc)[:200]}\"",
+     ["test_the_health_route_says_which_error_and_none_of_its_words"]),
+    ("G419", "gateway/simindex.py",
+     "    return named.group(1) if named else \"error\"",
+     "    return named.group(1) if named else str(text)",
+     ["test_the_health_route_says_which_error_and_none_of_its_words"]),
 ]
 
 RUNNERS = {
