@@ -17342,6 +17342,15 @@ MUTATIONS = [
      "error=refusal(Exception(quiet(exc, None))))",
      "error=quiet(refusal(exc)))",
      ["test_a_stop_the_node_refused_is_said_with_no_host_name_cut_in_two"]),
+    # A journal line with a number no block, time or price can be: a bad line, never the end of the pass.
+    ("JR9", "ops/payout_review.py",
+     "            except (TypeError, ValueError, KeyError, IndexError, OverflowError):",
+     "            except (TypeError, ValueError, KeyError, IndexError):",
+     ["test_a_number_no_block_time_or_price_can_be_is_a_bad_line_not_the_end_of_the_pass"]),
+    ("JR10", "ops/payout_review.py",
+     r"""_ROW_BLOCK = re.compile(r'\{\s*"b"\s*:\s*(\d{1,10})\s*[,}]')""",
+     r"""_ROW_BLOCK = re.compile(r'\{\s*"b"\s*:\s*(\d+)\s*[,}]')""",
+     ["test_a_number_no_block_time_or_price_can_be_is_a_bad_line_not_the_end_of_the_pass"]),
 ]
 
 RUNNERS = {

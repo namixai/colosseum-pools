@@ -900,7 +900,9 @@ class Windows:
         return self.has(None, block)
 
 
-_ROW_BLOCK = re.compile(r'\{\s*"b"\s*:\s*(\d+)\s*[,}]')
+# A row's block, read without parsing the row: at most ten digits (a block is below 2**32); a longer number is left to
+# the parser, which calls the row bad (a number past the interpreter's own limit of digits would raise here).
+_ROW_BLOCK = re.compile(r'\{\s*"b"\s*:\s*(\d{1,10})\s*[,}]')
 CONFLICT_TEXTS = 50  # the words of a conflict kept a journal asset; every block of one is kept, as a number
 
 
@@ -1062,7 +1064,7 @@ class Journal:
                     raise TypeError("px")
                 if not 0 <= b < U32 or any(not -(1 << 63) <= v < (1 << 63) for v in got.values()):
                     raise ValueError("out of range")
-            except (TypeError, ValueError, KeyError, IndexError):
+            except (TypeError, ValueError, KeyError, IndexError, OverflowError):  # OverflowError: a number like 1e999
                 self.bad += 1  # its block is a hole: no price of it is taken
                 continue
             self.lines += 1

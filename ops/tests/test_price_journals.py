@@ -68,6 +68,23 @@ class Shapes(unittest.TestCase):
         got = pr.load_prices(row(4, 7) + '\n{"b": 5, "px": {"3": "x"}}\n{"b": true, "px": {}}\n' + row(6, 7) + "\n")
         self.assertEqual((sorted(got.px[3]), got.bad), ([4, 6], 2))
 
+    def test_a_number_no_block_time_or_price_can_be_is_a_bad_line_not_the_end_of_the_pass(self):
+        """Valid JSON all the same: 1e999 is read as infinity, which no integer takes (OverflowError), and a block of
+        more digits than the interpreter converts raises where the row's block is read ahead of its parsing. Each is a
+        bad line, its block a hole; the lines around it are read, with the blocks kept (`want`) or all of them."""
+        bads = ['{"gap": [1e999, 2]}', '{"b": 5, "t": 1e999, "px": {"3": 7}}', '{"b": 5, "px": {"3": 1e999}}',
+                '{"b": 5, "t": Infinity, "px": {"3": 7}}', '{"b": ' + "9" * 5_000 + ', "px": {"3": 7}}',
+                '{"b": 99999999999, "px": {"3": 7}}']
+        for bad in bads:
+            for want in (None, {3: [(1, 10)]}):
+                j = pr.Journal(want)
+                j.add_text(row(4, 7) + "\n" + bad + "\n" + row(6, 7) + "\n")
+                self.assertEqual((sorted(j.px[3]), j.gaps), ([4, 6], []), (bad[:40], want))
+        self.assertEqual(pr.load_prices(row(4, 7) + "\n" + bads[1] + "\n").bad, 1)
+        kept = pr.Journal({3: [(1, 10)]})
+        kept.add_text(row(4, 7) + "\n" + row(4_000_000_000, 7) + "\n")
+        self.assertEqual(sorted(kept.px[3]), [4], "a block of ten digits is still read ahead, and left out as outside")
+
     def test_a_block_written_twice_alike_is_one_block_and_with_two_prices_a_conflict(self):
         got = pr.load_prices(row(4, 7) + "\n" + row(4, 7) + "\n")
         self.assertEqual(got.conflicts, {})
