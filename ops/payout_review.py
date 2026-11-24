@@ -1261,13 +1261,16 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
                     chain's price, and at one of them a price other than its latest (a node that answers a call at an
                     old block with the state of today shows nothing). Only then are the sample's blocks asked: the
                     ends of each stop's time, each block the journal shows at the price or past it, and blocks spread
-                    over the rest, `reads` an account at most, each to be the journal's price.
+                    over the rest, `reads` an account at most, one block of each asset first, each to be the journal's
+                    price. An asset with a stop and no block asked (the limit, or none of its sample in the journal)
+                    is a doubt: every asset under review has a block the node bore out, or the payout is held.
 
     `node(asset, block)` is the oracle price at that block or None (`oracle_at`), and `node` None is no such node: the
     third line is optional (a node that keeps old blocks, COLOSSEUM_ARCHIVE_RPC_URL), and without it only the chain's own
     prices are held against the journal. Returns, for each account with a stop,
     {"asked", "agreed", "doubts"}: a doubt is why the journal is not borne out (a price that differs, a node that keeps
-    no state that far back or answers with today's, no chain price to calibrate on), and any doubt holds the payout."""
+    no state that far back or answers with today's or gives no latest price, no chain price to calibrate on, an asset
+    none of whose blocks was asked), and any doubt holds the payout."""
     out: dict[str, dict] = {}
     truth = chain_prices(exam_events)
     calibrated: dict[int, str | None] = {}
@@ -1280,6 +1283,10 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
         near = sorted(mine, key=lambda b: (0 if lo <= b <= hi else min(abs(b - lo), abs(b - hi)), b))[:CALIBRATE_ON]
         if asset not in now_px:
             now_px[asset] = node(asset, latest)
+        if now_px[asset] is None:
+            # A latest price not read is no price to tell an old block's from: nothing is shown, never taken as shown.
+            return (f"asset {asset}: the node gave no latest price to tell an old block's from: whether it answers for "
+                    "old blocks as they stood is not shown")
         shown = False
         for b in near:
             got = node(asset, b)
@@ -1320,7 +1327,16 @@ def check_journal(accounts: list[str], exam_events: dict[str, list[dict]], journ
         each = max(1, (reads - len(want)) // len(spans))
         for s in spans:
             want += [(s["asset"], b) for b in spread(s["armedAt"], s["end"], each)]
-        want = [w for w in dict.fromkeys(want) if w[1] in journal.px.get(w[0], {})][:max(reads, 0)]
+        want = [w for w in dict.fromkeys(want) if w[1] in journal.px.get(w[0], {})]
+        # One block of each asset first: the limit leaves no asset out while it has room for one block of each.
+        first: dict[int, tuple[int, int]] = {}
+        for w in want:
+            first.setdefault(w[0], w)
+        want = list(dict.fromkeys([*first.values(), *want]))[:max(reads, 0)]
+        # An asset with a stop and no block asked is not checked by the node at all: a doubt, never a clean journal.
+        for asset in sorted({s["asset"] for s in spans} - {w[0] for w in want}):
+            res["doubts"].append(f"asset {asset}: none of its blocks was asked of the node ({reads} reads an account, or "
+                                 "none of its sample in the journal): the journal is not checked for it")
         for asset in sorted({w[0] for w in want}):
             if asset not in calibrated:
                 bs = [b for x, b in want if x == asset]

@@ -17320,6 +17320,19 @@ MUTATIONS = [
      "    print(f\"  the reviews were read from {reviews}\" + (\"\" if named else \" (the default: --reviews names another folder)\"))",
      "    pass",
      ["test_approve_says_which_folder_it_read_and_where_the_hosts_reviews_are_when_its_default_has_none"]),
+    # The node's check of the journal: a latest price not read shows nothing; no asset with a stop left unasked in silence.
+    ("RV228", "ops/payout_review.py",
+     "        if now_px[asset] is None:",
+     "        if False:",
+     ["test_a_node_whose_latest_price_was_not_read_shows_nothing_and_holds_the_payout"]),
+    ("RV229", "ops/payout_review.py",
+     "        want = list(dict.fromkeys([*first.values(), *want]))[:max(reads, 0)]",
+     "        want = want[:max(reads, 0)]",
+     ["test_every_asset_with_a_stop_has_a_block_the_node_bore_out_or_the_journal_is_doubted"]),
+    ("RV230", "ops/payout_review.py",
+     "        for asset in sorted({s[\"asset\"] for s in spans} - {w[0] for w in want}):",
+     "        for asset in ():",
+     ["test_every_asset_with_a_stop_has_a_block_the_node_bore_out_or_the_journal_is_doubted"]),
 ]
 
 RUNNERS = {

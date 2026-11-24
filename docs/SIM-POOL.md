@@ -789,8 +789,10 @@ keeps old blocks:
   and so is a block whose journal line carries no time (it falls in no minute: not screened). The stops' loop writes
   each block's time on its line, a block before the head of a step over several asked of the node;
 - optionally, a node that answers for old blocks (`COLOSSEUM_ARCHIVE_RPC_URL`): calibrated on the chain's prices and
-  asked for a sample of 200 blocks an account (`--journal-checks`, at least 1), and for each block only one journal
-  holds (as many again an account at most), which it bears out. Without one nothing is held for it.
+  asked for a sample of 200 blocks an account (`--journal-checks`, at least 1; one block of each asset with a stop
+  first, and an asset none of whose blocks was asked is a doubt), and for each block only one journal
+  holds (as many again an account at most), which it bears out. A node whose latest price is not read is not
+  calibrated: a doubt too. Without a node nothing is held for it.
 A block neither journal holds, two prices for one block (in one journal or between the two), a candle that
 contradicts, or a file of another chain, factory or deployment (refused whole) is `stop-unchecked`; a block only
 one journal holds (the other refused, missing, behind or down there) and no node bore out is `stop-one-journal`:

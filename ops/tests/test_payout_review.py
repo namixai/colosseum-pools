@@ -1529,6 +1529,52 @@ class TheStopsJournal(unittest.TestCase):
         self.assertEqual(got["action"], "hold")
         self.assertIn("the node gives 999999 at block 1003, the journal 1000000", " ".join(got["reasons"]))
 
+    def test_a_node_whose_latest_price_was_not_read_shows_nothing_and_holds_the_payout(self):
+        """The node is calibrated by giving, at an old block, a price other than its latest. A latest price not read
+        (None) differs from every price: the node would pass having shown nothing. It is a doubt, and the payout held."""
+        low = set(range(1_300, 1_306))
+        truth = self.mt.prices(low, until=2_001)
+        got = self.judged(low, node=lambda asset, block: None if block == 2_000 else truth.get(block, self.mt.MARK))
+        self.assertEqual((got["action"], got["kinds"]), ("hold", ["stop-unchecked"]))
+        self.assertIn("asset 3: the node gave no latest price to tell an old block's from", " ".join(got["reasons"]))
+        self.assertIn("the journal is not checked", " ".join(got["reasons"]))
+
+    def test_every_asset_with_a_stop_has_a_block_the_node_bore_out_or_the_journal_is_doubted(self):
+        """The sample is cut at `reads` an account. One asset's ends and reaches must not fill it and leave the journal
+        of another asset unasked with nothing said: one block of each asset goes first, and an asset still left out
+        is a doubt (which holds the payout), never a journal borne out."""
+        s1 = addr(0x301)
+        own = self.mt.events()
+        evs = sorted(own + [{**e, "asset": 4, "index": e["index"] + 10} for e in own if "asset" in e],
+                     key=lambda e: (e["block"], e["index"]))
+        low = set(range(1_300, 1_306))
+        text = "\n".join(json.dumps({"b": b, "t": 1_000 * b, "w": 0, "px": {"3": px, "4": px}})
+                         for b, px in sorted(self.mt.prices(low).items()) if 1_002 <= b <= 1_400) + "\n"
+        j = r.load_prices(text)
+        j.add_text(text, None, "second")
+        truth = self.mt.prices(low, until=2_001)
+
+        def check(reads):
+            asked = []
+
+            def node(asset, block):
+                asked.append((asset, block))
+                return truth.get(block, self.mt.MARK)
+            return r.check_journal([s1], {s1: evs}, j, 2_000, node, reads)[s1], asked
+        two, asked = check(2)
+        self.assertEqual((two["asked"], two["agreed"], two["doubts"]), (2, 2, []))
+        self.assertIn((4, 1_003), asked, "two reads, two assets: one block of each, not both of the first")
+        one, asked = check(1)
+        self.assertEqual(one["asked"], 1)
+        self.assertEqual(len(one["doubts"]), 1, one["doubts"])
+        self.assertIn("asset 4: none of its blocks was asked of the node", one["doubts"][0])
+        self.assertNotIn(4, {a for a, _ in asked})
+        usual, _ = check(r.JOURNAL_CHECKS)
+        self.assertEqual(usual["doubts"], [], "with room for both, both are asked and nothing is doubted")
+        # A doubt of the check holds the payout (`stop_doubt`).
+        held = r.stop_doubt(evs, None, j, one, 2_000)
+        self.assertIn(one["doubts"][0], held["unchecked"])
+
     def test_no_chain_price_to_calibrate_on_checks_nothing(self):
         evs = [dict(e, source=r.SOURCE_BOOK) if e["name"] == "Filled" else e for e in self.mt.events()]
         got = self.judged(set(range(1_300, 1_306)), events=evs)
