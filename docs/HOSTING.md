@@ -1187,6 +1187,41 @@ in the Cloudflare dashboard:
    the snippet until the pattern in the script follows it. `scripts/test-verify-live.sh` holds it to
    that on a copy of the site on disk.
 
+### A mainnet site
+
+The mainnet site is a site of simulation pools
+([DEPLOYMENTS.md](DEPLOYMENTS.md#the-site-of-a-network-with-no-live-deployment)): the pools of one `SimPoolFactory`,
+on chain 999, with mainnet's own page. Nothing is written into `app/` for it; the pack is made from the commit.
+
+1. On `origin/main`: the deployment's record, `deployments/mainnet-<label>.json`, and its entry in
+   `deployments/LIVE.json` with `"network": "mainnet"`, `"chainId": 999` and `"role": "staged"`. The entry's
+   `gateway` is the https address the pools' index answers at (`<gateway>/v1/simindex/health`, "Mainnet" above), or
+   `null` while there is none: the panels then read the chain themselves, and the operator's page offers no
+   one-signature approval, which needs a review from the index. The index answers one origin
+   (`SIM_INDEX_ALLOW_ORIGIN`, docs/GATEWAY.md): the mainnet site's.
+2. Read what the pack will carry before making it:
+
+       python3 scripts/app_config.py --network mainnet --commit <commit>            # config.js
+       python3 scripts/app_config.py --network mainnet --index --commit <commit>    # index.html
+
+   The first names chain 999, `https://rpc.hyperliquid.xyz/evm`, the factory under `sim` and no other deployment;
+   the second says "Mainnet. Real USDC. Unaudited." where testnet's page has its notice and its entry question, and
+   has "Pools" alone in its menu. Either stops with the reason when the commit has nothing on mainnet for a site
+   to read.
+3. Pack: `./scripts/pack-site.sh --network mainnet <commit> [out-dir]`. The folder is the commit's `app/` with those
+   two files in place of testnet's, `build.json` is `{"commit": "<the full hash>", "network": "mainnet"}`, and the
+   list goes beside the folder as for testnet. The last line must say `differ=0 extra=0`.
+4. Upload the folder as in step 3 above, to the Worker that serves the mainnet site. A mainnet pack uploaded over
+   the testnet site replaces it, and the other way round: check the folder's `build.json` before dragging it.
+5. Open `/` (the factory's pools, or "Not deployed yet" before the factory is on chain), `#/sim/<a pool>`,
+   `#/manage/<a pool>`, `#/manage/<a pool>/operator` and `#/exam/<an exam>` on the site. `#/new`, `#/economics`
+   and an address that is not one of the factory's pools answer "Not found".
+6. Check the site against the pack: `python3 scripts/verify-live.py <out-dir>.sha256 https://<the mainnet site>`.
+
+The page of a mainnet site names no picture for a shared link and has no terms page: the picture in `app/brand/`
+has testnet's plaque drawn into it, and the terms are the testnet demo's (docs/DEPLOYMENTS.md, "The app on either
+network").
+
 ## Checking
 
 - `curl -s 127.0.0.1:8787/v1/health` on the host: the chain, the signer mode and the number of keys.
