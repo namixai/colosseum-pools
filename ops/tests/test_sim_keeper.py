@@ -546,6 +546,68 @@ class TheTriggers(unittest.TestCase):
         self.assertEqual(sk.triggers, {})
 
 
+class NoKeyOfTheNodeInALine(unittest.TestCase):
+    """A node's address may hold its key, and requests writes the whole address into its errors: the keeper's lines of
+    a call the chain refused or that failed on the way carry none of it (ops/sim_check.py, `quiet`)."""
+    EXAM = k.to_checksum_address("0x" + "11" * 20)
+
+    def keeper(self) -> k.SimKeeper:
+        import shutil
+        tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        sk = k.SimKeeper("0x" + "33" * 20, None, "0x" + "44" * 20, False, pathlib.Path(tmp_dir) / "s.json", 1)
+        sk.accounts = {self.EXAM: {"pool": "0x" + "55" * 20, "kind": "exam"}}
+        return sk
+
+    def test_a_call_refused_or_failed_is_said_without_the_nodes_address(self):
+        """The four lines: a slow call not due, a slow call that failed, a fill that failed, a stop's fill that failed."""
+        import json
+        failed = RuntimeError("403 Client Error: Forbidden for url: https://rpc.example.org/v2/SECRETKEY123")
+        sk = self.keeper()
+        sk._trigger(trigger_log(self.EXAM, k.TRIGGER_SET, 3, False, armed_at=1))
+        lines = []
+        with mock.patch.object(k, "log", side_effect=lambda event, **f: lines.append({"event": event, **f})), \
+                mock.patch.object(sk, "is_filler", return_value=True):
+            with mock.patch.object(k.c, "rpc", side_effect=failed):
+                self.assertFalse(sk.send(self.EXAM, "release()"))
+            with mock.patch.object(k.c, "rpc", return_value="0x5208"), mock.patch.object(k.c, "send_tx", side_effect=failed):
+                self.assertFalse(sk.send(self.EXAM, "release()"))
+                self.assertIsNone(sk.fill(self.EXAM))
+                self.assertEqual(sk.trigger_step(5), [self.EXAM])
+        self.assertEqual([l["event"] for l in lines], ["not_due", "send_failed", "fill_failed", "trigger_fill_failed"])
+        for line in lines:
+            said = line.get("error") or line.get("reason")
+            self.assertEqual(said, "403 Client Error: Forbidden for url: <node>", line["event"])
+        self.assertNotIn("SECRETKEY123", json.dumps(lines))
+        self.assertNotIn("rpc.example.org", json.dumps(lines))
+
+    def test_the_address_goes_out_of_the_whole_text_before_it_is_cut_and_a_refusal_keeps_its_name(self):
+        """`refusal` cuts the node's words to 200. Cut first, a host name that is the node's key stands there in part,
+        `host='KEY.prov`, with no end for any rule to know it by. And what the contract itself refused with is still
+        said by its name, whatever address stands around it."""
+        import json
+        import os
+        from ops import contract_errors as ce
+        url = "https://SECRETKEY123.provider.example/v2"
+        sk = self.keeper()
+        lines = []
+        with mock.patch.object(k.c, "RPC_URL", url), mock.patch.dict(os.environ, {"COLOSSEUM_RPC_URL": url}), \
+                mock.patch.object(k, "log", side_effect=lambda event, **f: lines.append({"event": event, **f})), \
+                mock.patch.object(sk, "is_filler", return_value=True):
+            for lead in range(150, 200):
+                text = "x" * lead + " HTTPSConnectionPool(host='SECRETKEY123.provider.example', port=443): Max retries exceeded"
+                with mock.patch.object(k.c, "send_tx", side_effect=RuntimeError(text)):
+                    self.assertIsNone(sk.fill(self.EXAM))
+            self.assertEqual(len(lines), 50)
+            self.assertNotIn("SECRETKEY123", json.dumps(lines))
+            self.assertTrue(all(len(l["error"]) <= 200 for l in lines))
+            sel, sig = next((sel, sig) for sel, sig in ce.BY_SELECTOR.items() if sig.endswith("()"))
+            said = RuntimeError(f"{{'code': 3, 'message': 'execution reverted', 'data': '{sel}'}} for url: {url}/SECRETKEY123")
+            with mock.patch.object(k.c, "rpc", side_effect=said):
+                self.assertFalse(sk.send(self.EXAM, "release()"))
+        self.assertEqual((lines[-1]["event"], lines[-1]["reason"]), ("not_due", sig))
+
+
 class TheHostsOneUnit(unittest.TestCase):
     def test_multi_keeper_hands_a_simulated_record_to_this_keeper(self):
         from ops import multi_keeper

@@ -17612,6 +17612,32 @@ MUTATIONS = [
      "        if host and host not in (\"127.0.0.1\", \"localhost\"):\n            text = re.sub(re.escape(host), \"<host>\", text, flags=re.I)\n    return text[:limit]",
      "        if False:\n            text = re.sub(re.escape(host), \"<host>\", text, flags=re.I)\n    return text[:limit]",
      ["test_the_configured_nodes_go_whole_the_longest_first_and_their_host_names_wherever_they_stand"]),
+    # The keeper of simulated pools: no node address in the line of a call refused or failed, each of the four, and
+    # the address out of the whole text before `refusal` cuts it.
+    ("SK250", "ops/sim_keeper.py",
+     "    return refusal(Exception(sim_check.quiet(exc, None)))",
+     "    return refusal(exc)",
+     ["test_a_call_refused_or_failed_is_said_without_the_nodes_address"]),
+    ("SK251", "ops/sim_keeper.py",
+     "    return refusal(Exception(sim_check.quiet(exc, None)))",
+     "    return sim_check.quiet(refusal(exc))",
+     ["test_the_address_goes_out_of_the_whole_text_before_it_is_cut_and_a_refusal_keeps_its_name"]),
+    ("SK252", "ops/sim_keeper.py",
+     "            log(\"not_due\", to=to, call=sig.split(\"(\")[0], reason=refused(exc))",
+     "            log(\"not_due\", to=to, call=sig.split(\"(\")[0], reason=refusal(exc))",
+     ["test_a_call_refused_or_failed_is_said_without_the_nodes_address"]),
+    ("SK253", "ops/sim_keeper.py",
+     "            log(\"send_failed\", to=to, call=sig.split(\"(\")[0], error=refused(exc))",
+     "            log(\"send_failed\", to=to, call=sig.split(\"(\")[0], error=refusal(exc))",
+     ["test_a_call_refused_or_failed_is_said_without_the_nodes_address"]),
+    ("SK254", "ops/sim_keeper.py",
+     "            log(\"fill_failed\", exam=exam, error=refused(exc))",
+     "            log(\"fill_failed\", exam=exam, error=refusal(exc))",
+     ["test_a_call_refused_or_failed_is_said_without_the_nodes_address"]),
+    ("SK255", "ops/sim_keeper.py",
+     "                log(\"trigger_fill_failed\", exam=exam, asset=asset, take=is_take, error=refused(exc))",
+     "                log(\"trigger_fill_failed\", exam=exam, asset=asset, take=is_take, error=refusal(exc))",
+     ["test_a_call_refused_or_failed_is_said_without_the_nodes_address"]),
 ]
 
 RUNNERS = {
