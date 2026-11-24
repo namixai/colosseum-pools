@@ -4,7 +4,10 @@ view as soon as it is mined."""
 
 from __future__ import annotations
 
+import os
+import re
 import time
+import urllib.parse
 from typing import Any, Callable, Sequence
 
 import eth_abi
@@ -31,6 +34,34 @@ KEY_BOUND = 2  # KeyRegistry.State: 1 Free, 2 Bound, 3 Retired
 class Throttled(RuntimeError):
     """The node refused every attempt because it is rate limiting this caller, not because the
     read was wrong. Worth telling apart: waiting helps, and the visitor can be told so."""
+
+
+# A URL in an error's words (requests writes the node's whole address, its path and its key with it), urllib3's
+# host='...' and its path after "url: ": none of them reaches a log line of this package. The same rules as the
+# checker's (ops/sim_check.py, `quiet`), kept here: nothing under gateway/ imports from ops/.
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>()]+")
+_HOST = re.compile(r"(host=['\"])[^'\"]*(['\"])")
+_URL_PATH = re.compile(r"(url: ?)/[^\s'\"<>()]*")
+# Where a node's address is set for the parts of this package: the gateway's and the index's.
+NODE_SETTINGS = ("GATEWAY_RPC_URL", "SIM_INDEX_RPC_URL")
+
+
+def quiet(exc, limit: int | None = 200) -> str:
+    """An error's words with no node address in them, cut to `limit` (None: not cut) after the address is gone: a
+    node's URL may hold its key, in its path or in its host name. The addresses this package is set to read go out
+    as they are, the longest first (one that begins another would leave the other's end, its key, behind), then any
+    other URL, a bare path after "url:", and a host named as host='...' or by a configured node's name."""
+    text = str(exc)
+    urls = [u for u in (*(os.environ.get(k) for k in NODE_SETTINGS), NETWORK.rpc_url) if u]
+    for url in sorted(set(urls), key=len, reverse=True):
+        text = text.replace(url, "<node>")
+    text = _URL_PATH.sub(r"\1<path>", _URL.sub("<node>", text))
+    text = _HOST.sub(r"\1<host>\2", text)
+    for url in urls:
+        host = urllib.parse.urlparse(url).hostname
+        if host and host not in ("127.0.0.1", "localhost"):
+            text = re.sub(re.escape(host), "<host>", text, flags=re.I)
+    return text[:limit]
 
 # ChallengeAccount.Status.Active and Pool.Stage.Funded
 CHALLENGE_ACTIVE = 2

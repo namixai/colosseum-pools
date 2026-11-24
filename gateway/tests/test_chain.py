@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import os
 import unittest
+from unittest import mock
 
 import requests
 
@@ -70,6 +72,44 @@ class Throttling(unittest.TestCase):
         with self.assertRaises(requests.HTTPError):
             r._rpc("eth_call", [])
         self.assertEqual((r._session.posts, self.slept), (1, []))
+
+
+class NoKeyOfTheNodeInALine(unittest.TestCase):
+    """A node's address may hold its key, in its path or in its host name: `quiet` takes it out of an error's words
+    before they reach a log line of the gateway or of the index."""
+
+    def test_a_url_a_bare_path_and_a_named_host_are_taken_out(self):
+        url = "https://rpc.example.com/v2/SECRETKEY123"
+        for text, said in ((f"500 Server Error: Internal Server Error for url: {url}",
+                            "500 Server Error: Internal Server Error for url: <node>"),
+                           (f"Max retries exceeded with url: /v2/SECRETKEY123 (Caused by {url})",
+                            "Max retries exceeded with url: <path> (Caused by <node>)"),
+                           ("HTTPSConnectionPool(host='SECRETKEY123.provider.example', port=443): Read timed out.",
+                            "HTTPSConnectionPool(host='<host>', port=443): Read timed out."),
+                           ("eth_call: rate limited 5 times in a row", "eth_call: rate limited 5 times in a row")):
+            self.assertEqual(chain.quiet(requests.HTTPError(text)), said)
+
+    def test_the_configured_nodes_go_whole_the_longest_first_and_their_host_names_wherever_they_stand(self):
+        short, long = "https://rpc.example.org", "https://rpc.example.org/SECRETKEY123"
+        for gateway, index in ((short, long), (long, short)):
+            with mock.patch.dict(os.environ, {"GATEWAY_RPC_URL": gateway, "SIM_INDEX_RPC_URL": index}):
+                got = chain.quiet(RuntimeError(f"both: {short} and {long}, twice {long}"), 400)
+                self.assertEqual(got, "both: <node> and <node>, twice <node>")
+        keyed = "https://SECRETKEY123.provider.example/v2"
+        for name in chain.NODE_SETTINGS:
+            with mock.patch.dict(os.environ, {name: keyed}):
+                got = chain.quiet(RuntimeError("Failed to resolve 'secretkey123.provider.example' ([Errno 8] nodename nor servname)"))
+                self.assertEqual(got, "Failed to resolve '<host>' ([Errno 8] nodename nor servname)", name)
+
+    def test_the_words_are_cut_after_the_address_is_gone_never_before(self):
+        """Cut first, a host name that is the node's key stands there in part, `host='KEY.prov`, with no end for any
+        rule to know it by."""
+        for lead in range(150, 200):
+            text = "x" * lead + " HTTPSConnectionPool(host='SECRETKEY123.provider.example', port=443): Max retries exceeded"
+            got = chain.quiet(RuntimeError(text))
+            self.assertNotIn("SECRETKEY123"[:4], got, lead)
+            self.assertLessEqual(len(got), 200)
+        self.assertEqual(len(chain.quiet(RuntimeError("y" * 500), None)), 500)
 
 
 if __name__ == "__main__":

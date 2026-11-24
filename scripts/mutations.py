@@ -17586,6 +17586,32 @@ MUTATIONS = [
      "        if took is not True:\n            print(\"the alarm channel did not take the test",
      "        if False:\n            print(\"the alarm channel did not take the test",
      ["test_say_test_sends_one_alarm_and_its_exit_says_whether_the_channel_took_it"]),
+    # The gateway's start: /v1/health says which error the reading of the keys failed with and none of its words; the
+    # log keeps the words, the node's address taken out of the whole of them before they are cut.
+    ("G420", "gateway/server.py",
+     "            self.last_error = type(exc).__name__  # the name alone: /v1/health hands it out",
+     "            self.last_error = str(exc)[:200]",
+     ["test_health_says_which_error_the_reading_failed_with_and_none_of_its_words"]),
+    ("G421", "gateway/server.py",
+     "log_line(event=\"protect_take_on_retry\", error=f\"{type(exc).__name__}: {quiet(exc)}\", wait_s=delay)",
+     "log_line(event=\"protect_take_on_retry\", error=f\"{type(exc).__name__}: {str(exc)[:200]}\", wait_s=delay)",
+     ["test_the_log_keeps_the_words_of_a_failed_reading_without_the_nodes_address"]),
+    ("G422", "gateway/chain.py",
+     "    for url in sorted(set(urls), key=len, reverse=True):\n        text = text.replace(url, \"<node>\")",
+     "    for url in sorted(set(urls), key=len):\n        text = text.replace(url, \"<node>\")",
+     ["test_the_configured_nodes_go_whole_the_longest_first_and_their_host_names_wherever_they_stand"]),
+    ("G423", "gateway/chain.py",
+     "    text = str(exc)\n    urls = [u for u in (*(os.environ.get(k) for k in NODE_SETTINGS), NETWORK.rpc_url) if u]",
+     "    text = str(exc)[:limit]\n    urls = [u for u in (*(os.environ.get(k) for k in NODE_SETTINGS), NETWORK.rpc_url) if u]",
+     ["test_the_words_are_cut_after_the_address_is_gone_never_before"]),
+    ("G424", "gateway/chain.py",
+     "    text = _URL_PATH.sub(r\"\\1<path>\", _URL.sub(\"<node>\", text))\n    text = _HOST.sub(",
+     "    text = _URL.sub(\"<node>\", text)\n    text = _HOST.sub(",
+     ["test_a_url_a_bare_path_and_a_named_host_are_taken_out"]),
+    ("G425", "gateway/chain.py",
+     "        if host and host not in (\"127.0.0.1\", \"localhost\"):\n            text = re.sub(re.escape(host), \"<host>\", text, flags=re.I)\n    return text[:limit]",
+     "        if False:\n            text = re.sub(re.escape(host), \"<host>\", text, flags=re.I)\n    return text[:limit]",
+     ["test_the_configured_nodes_go_whole_the_longest_first_and_their_host_names_wherever_they_stand"]),
 ]
 
 RUNNERS = {
