@@ -1,5 +1,6 @@
 // Small DOM helpers. Everything user-visible that comes from the chain or an API goes
 // through esc() or textContent.
+import { networkWord } from "./network.js";
 
 /** The zero address, and whether two addresses are the same one (case aside): one answer for every page. */
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -147,7 +148,8 @@ function nodeWords(err) {
 }
 
 const RPC = "The public HyperEVM RPC";
-const HYPERLIQUID = "Hyperliquid's testnet API";
+// Named for the network the site is built for (app/lib/network.js): "Hyperliquid's testnet API", "Hyperliquid's API".
+const HYPERLIQUID = `Hyperliquid's ${networkWord()}API`;
 
 /**
  * Which service answered "too many requests", or "" when none did. Who refused belongs in the
@@ -227,7 +229,7 @@ export function failureHint(err) {
   }
   if (all.some(unreachable)) {
     return "A service this page reads could not be reached or answered with an error: the HyperEVM "
-      + "testnet RPC, Hyperliquid's testnet API or the pool gateway. Reload in a moment.";
+      + `${networkWord()}RPC, ${HYPERLIQUID} or the pool gateway. Reload in a moment.`;
   }
   return "";
 }

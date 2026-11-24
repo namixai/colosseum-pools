@@ -872,6 +872,9 @@ Its log, one JSON line an event:
 - `sent`: a stop sent, with the pool (`to`), the payout's `id`, the `reason`, the `paired` account and the
   transaction's hash `tx`; `would_send` the same with no key, nothing sent; `send_failed` with the pool's refusal;
 - `stop_not_sent`: a pair found on a payout that was paid or stopped by the time it was read again;
+- `stage_exam_unread`: a paid stage with a pair by its fills whose own exam is not known (a stage and the exam it
+  was started from are no pair, and the pool's `Funded` that names the exam was not in what the node gave), after
+  the pool's events were read again from the deployment's block, once a stage: the payout is judged by the fills alone;
 - `pass_failed`: a pass the node broke off, with its error; the next one comes in 600 seconds.
 
 A stop that was wrong is lifted within 14 days of the stop (a stop not lifted by then is final), and not from the
@@ -957,7 +960,11 @@ that pool's record is missing or has no `SharedPool`: the label it checks is the
   buyers' funding is not read to the end and how many blocks are left for them, numbers only; the index's public
   health route takes the time of the pass from this file and nothing else), which the stops' loop in the
   keeper's process watches (`COLOSSEUM_REVIEW_STATUS` in the keeper's unit): older than 30 minutes with payouts
-  waiting, or 2 hours whatever it saw, is the alarm `review_stale`, said again every 6 hours while it lasts;
+  waiting, or 2 hours whatever it saw, is the alarm `review_stale`, said again every 6 hours while it lasts. A pass
+  that ran out of its time before it read to the head writes its end too: its time, `behind` (the block it read to,
+  the head, and `since`, the end of the first such pass in a row) and the payouts waiting and held as the last pass
+  that read to the head counted them. The review runs and is catching up, so the watch of the file's age says
+  nothing; a pass that reads to the head writes the file without `behind`;
 - `said.json` and `ALARM`: the alarms raised, each remembered only once the channel took it.
 
 Each payout held is the alarm `payout_held` with the date it goes out by itself, said again every 6 hours, and once
@@ -974,7 +981,12 @@ journal longer than 64 KB, nested past the parser's depth, with `Infinity` or `N
 that is not whole where the block, its time or a price stands (`7.9` is not taken as 7) is a bad line: its
 block is not in that journal. A second journal whose reading fails in any other way is `second_journal_unread`
 (every 6 hours while it lasts): the pass goes on and writes its documents, and the stops standing in the blocks that
-journal did not give are held as resting on one journal. A pass that fails is `review_failed` (once an hour); a pass killed by its
+journal did not give are held as resting on one journal. A pass that runs out of its time (420 seconds) before it has
+read to the head is no failure: it saves what it read, says `review_behind` in its journal with the block it read to
+and the head, writes no document (those there keep their own hour, and `approve` refuses them past it) and ends with
+code 0, so neither `review_failed` nor `unit_failed` is said; the next pass goes on from there, as the first passes
+over a long history do. Passes that end so for over an hour with none between them that read to the head are
+`review_behind_long`, said again every hour while it lasts (a pass that fails among them does not end the row). A pass that fails is `review_failed` (once an hour); a pass killed by its
 `TimeoutStartSec` or its `MemoryMax` (1 GB; the journals are read line by line and only the blocks of the stops'
 time are kept, about 6 MB a day of two journals of three assets) starts `colosseum-unit-failed@` (its `OnFailure=`), which says
 `unit_failed` once an hour. The channel is `COLOSSEUM_ALERT_CMD` in `/etc/colosseum/watch.env`, which these units read
@@ -1308,8 +1320,9 @@ in the Cloudflare dashboard:
 
 1. Pack `app/` of a commit on `origin/main`: `./scripts/pack-site.sh <commit>`. It copies the
    folder file by file from the commit's blobs into `~/Downloads/pools-app-<first 8 of the commit>`,
-   checks every file against its blob, adds `build.json` with the commit, and writes beside the
-   folder, not into it, `pools-app-<first 8>.sha256`: a sha256 for every file of the pack.
+   checks every file against its blob, adds `build.json` with the commit and the network
+   (`"network": "testnet"`), and writes beside the folder, not into it, `pools-app-<first 8>.sha256`:
+   a sha256 for every file of the pack.
 2. If the contracts were deployed again, first give the new record its entry in
    `deployments/LIVE.json`, write `app/config.js` again with `python3 scripts/app_config.py --out
    app/config.js` (docs/DEPLOYMENTS.md) and merge that. An
@@ -1325,12 +1338,57 @@ in the Cloudflare dashboard:
 5. Check the site against the pack:
    `python3 scripts/verify-live.py ~/Downloads/pools-app-<first 8>.sha256 https://pools.usenami.io`.
    It reads every file of the list from the site and exits 0 only if all of them match. A file
-   that differs or cannot be read is named, and the exit is 1. Cloudflare inserts two tags into
+   that differs or cannot be read is named, and the exit is 1. It first reads the site's `build.json`
+   for the network the pack was made for: this is the check of the testnet site unless `--network
+   mainnet` says otherwise, and a pack made for the other network is refused before a file is
+   compared, since every file of it would match its own list. Cloudflare inserts two tags into
    `index.html` before `</body>`, its challenge script and its Web Analytics beacon. The check cuts
    those two, each only in the exact form Cloudflare serves it, where the ids and tokens are the only
    parts that vary, and nothing else: anything more on the page is a mismatch, and so is a new form of
    the snippet until the pattern in the script follows it. `scripts/test-verify-live.sh` holds it to
    that on a copy of the site on disk.
+
+### A mainnet site
+
+The mainnet site is a site of simulation pools
+([DEPLOYMENTS.md](DEPLOYMENTS.md#the-site-of-a-network-with-no-live-deployment)): the pools of one `SimPoolFactory`,
+on chain 999, with mainnet's own page. Nothing is written into `app/` for it; the pack is made from the commit.
+
+1. On `origin/main`: the deployment's record, `deployments/mainnet-<label>.json`, and its entry in
+   `deployments/LIVE.json` with `"network": "mainnet"`, `"chainId": 999` and `"role": "staged"`. The entry's
+   `gateway` is the https address the pools' index answers at (`<gateway>/v1/simindex/health`, "Mainnet" above), or
+   `null` while there is none: the panels then read the chain themselves, and the operator's page offers no
+   one-signature approval, which needs a review from the index. The index answers one origin
+   (`SIM_INDEX_ALLOW_ORIGIN`, docs/GATEWAY.md): the mainnet site's.
+2. Pack: `./scripts/pack-site.sh --network mainnet <commit> [out-dir]`. The folder, by default
+   `~/Downloads/pools-app-mainnet-<first 8 of the commit>`, is the commit's `app/` with `config.js` and `index.html`
+   written for mainnet by that commit's own `scripts/app_config.py`, in place of testnet's; `build.json` is
+   `{"commit": "<the full hash>", "network": "mainnet"}`, and the list goes beside the folder as for testnet. The
+   last line must say `differ=0 extra=0`. The packer stops with the reason, and writes nothing, when the commit has
+   nothing on mainnet for a site to read.
+3. Read the folder's two written files before uploading. `config.js` names chain 999,
+   `https://rpc.hyperliquid.xyz/evm`, the factory under `sim` and no other deployment. `index.html` says "Mainnet.
+   Real USDC. Unaudited." where testnet's page has its notice and its entry question, and has "Pools" alone in its
+   menu. To look without packing, the packer's two commands can be run in a checkout of that commit, where the
+   script is the commit's own:
+
+       python3 scripts/app_config.py --network mainnet            # config.js
+       python3 scripts/app_config.py --network mainnet --index    # index.html
+
+4. Upload the folder the way a testnet pack goes up (drag the folder itself, not the files inside it), to the Worker
+   that serves the mainnet site. A mainnet pack uploaded over the testnet site replaces it, and the other way
+   round: check the folder's `build.json` before dragging it.
+5. Open `/` (the factory's pools, or "Not deployed yet" before the factory is on chain), `#/sim/<a pool>`,
+   `#/manage/<a pool>`, `#/manage/<a pool>/operator` and `#/exam/<an exam>` on the site. `#/new`, `#/economics`
+   and an address that is not one of the factory's pools answer "Not found".
+6. Check the site against the pack:
+   `python3 scripts/verify-live.py --network mainnet <out-dir>.sha256 https://<the mainnet site>`. Without
+   `--network mainnet` the check is of the testnet site and refuses a mainnet pack; with it, it refuses a testnet
+   pack. So a pack that went up to the wrong site is not confirmed there, though every file matches its list.
+
+The page of a mainnet site names no picture for a shared link and has no terms page: the picture in `app/brand/`
+has testnet's plaque drawn into it, and the terms are the testnet demo's (docs/DEPLOYMENTS.md, "The app on either
+network").
 
 ## Checking
 

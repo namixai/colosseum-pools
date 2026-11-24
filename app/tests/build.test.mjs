@@ -47,6 +47,6 @@ test("the page shows the link only when its copy carries a commit, and the repos
   assert.equal(existsSync(new URL("../build.json", import.meta.url)), false);
   const packer = text("../../scripts/pack-site.sh");
   assert.match(packer, /SHA="\$\(git rev-parse --verify "\$\{1:\?a commit\}\^\{commit\}"\)"/);
-  assert.match(packer, /printf '\{"commit":"%s"\}\\n' "\$SHA" > "\$OUT\/build\.json"/);
+  assert.match(packer, /^printf '\{"commit":"%s","network":"%s"\}\\n' "\$SHA" "\$NETWORK" > "\$OUT\/build\.json"$/m, "one line writes it for every pack: the full commit, and the network");
   assert.match(packer, /\[ -e "\$OUT\/build\.json" \] && \{ echo "app\/build\.json is in the commit; it is the packer's to write"; exit 1; \}/);
 });

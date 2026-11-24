@@ -12,6 +12,8 @@ import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
 import { keepFromReceipt } from "./simtrader.js";
 import { networkMarks } from "../lib/examscreen.js";
+import { networkName } from "../lib/network.js";
+import { payToken } from "../lib/simsite.js";
 import { CONFIG } from "../config.js";
 
 const { ethers } = window;
@@ -49,7 +51,7 @@ export async function simPoolView(address, query, page) {
   render(page, `<div class="sp sp-user">
     ${userHeaderHtml({ address: at, account: accountLabel(), marks })}
     <section class="sp-hero">
-      <div class="sp-kick">Pool ${esc(chain.short(at))} · Hyperliquid testnet</div>
+      <div class="sp-kick">Pool ${esc(chain.short(at))} · ${esc(networkName())}</div>
       <h1>How deep<br>is <em>the pool?</em></h1>
       <p class="sp-lede"><b>Depth = money the pool has free for payouts.</b> Each line is an exam: pass it, then pass the stage on the same size,
         and the pool pays out. A line sells only while the pool holds <span class="sp-mk">two of its payouts</span> free.</p>
@@ -122,7 +124,8 @@ async function buy(address, data, line, codeText) {
   const code = codeHash(codeText.trim(), ethers.keccak256);
   const set = await pool.codeOf(code);
   const { args, price } = purchase({ menu: data.rows, line, code, codes: [{ code, partner: set.partner }] });
-  const usdc = new ethers.Contract(await pool.usdc(), ERC20_ABI, signer);
+  // The token is the pool's own answer, held to the settings' USDC on mainnet before any allowance is asked for.
+  const usdc = new ethers.Contract(payToken(await pool.usdc()), ERC20_ABI, signer);
   if ((await usdc.allowance(signer.address, address)) < price) await (await usdc.approve(address, price)).wait();
   const receipt = await (await pool.buy(...args)).wait();
   chain.forgetLiveReads();

@@ -15,7 +15,10 @@ approved already, or one whose approvals were not read) is an alarm at once with
 person can still stop it for reason 3 (`stop_deadline`). Each is said again every 6 hours while it stays so, and once
 more 24 and 6 hours before its deadline; one whose verdict, action or reasons change is said again at once; and an
 alarm is remembered only once the channel took it, so one that did not go out is said at the next pass. A pass that
-fails is an alarm too (once an hour), and so is a unit that failed (`--unit-failed`, its OnFailure=). One hold waits
+fails is an alarm too (once an hour), and so is a unit that failed (`--unit-failed`, its OnFailure=). A pass that ran
+out of its time before it read to the head is no failure: it saved what it read, says `review_behind` with the block it
+read to and the head, writes no document, and ends with code 0; passes that end so for over an hour without one that
+reads to the head are the alarm `review_behind_long`, said again every hour while it lasts. One hold waits
 with its alarm: a payout held by nothing but the buyers' funding still being read (each new buyer starts that reading
 again, for every payout waiting) is said only once that has lasted over an hour without a break, or at once from 24
 hours before the payout goes out by itself (`links_only`); its document says the hold from the first pass.
@@ -24,7 +27,9 @@ Every block of each stop's time is judged by the journals of prices (--prices, t
 writer's from another machine), the venue's minute candles kept in --out (`ops/venue_candles.py`, fetched each pass),
 and, when there is one, a node that answers for old blocks (--archive-rpc). The logs read are kept in --out/scan.json:
 each pass reads only the new blocks. The end of each pass goes to --out/status.json, whose age the stops' loop
-watches; it says too how far the reading of the buyers' funding is (`linksLeft`: buyers not read, blocks left).
+watches; it says too how far the reading of the buyers' funding is (`linksLeft`: buyers not read, blocks left), and,
+after a pass that did not read to the head, how far that reading is (`behind`: the block read to, the head, and since
+when).
 
 It sends nothing and holds no key. On the host: colosseum-payout-review@<name>.service run by its .timer every 10
 minutes (ops/host). Testnet unless both COLOSSEUM_NETWORK=mainnet and --network mainnet name mainnet.
@@ -66,6 +71,11 @@ BEFORE_S = (24 * 3_600, 6 * 3_600)
 FAILED_EVERY_S = 3_600
 # Seconds a pass may read the chain before it saves what it read and ends (the unit's TimeoutStartSec is 540).
 PASS_BUDGET_S = 420
+# A pass that ends so (`payout_review.Behind`) is no failure: the next one goes on from what it saved. Passes that end
+# so for longer than BEHIND_LONG_S with no pass between them that read to the head are an alarm (no document is fresh
+# meanwhile), said again every BEHIND_EVERY_S while it lasts.
+BEHIND_LONG_S = 3_600
+BEHIND_EVERY_S = 3_600
 # Seconds the alarms of one pass may take in all, once every document is written (review 15 of #338): a channel that
 # hangs (30 s an alarm at most) cannot keep the documents from the disk or run the pass past its unit's time; an alarm
 # not said in it is not remembered, and the next pass says it.
@@ -213,6 +223,56 @@ def write_status(out: pathlib.Path, status: dict) -> None:
     tmp = out / "status.json.part"
     tmp.write_text(json.dumps(status) + "\n")
     os.replace(tmp, out / "status.json")
+
+
+def is_time(value) -> bool:
+    """Whether `value` is a time as `said` keeps one: a number, and no true or false."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def fell_behind(out: pathlib.Path, behind: pr.Behind, said: dict, now: float) -> None:
+    """A pass that ran out of its time before it read to the head (`payout_review.Behind`): no failure. It says
+    `review_behind` with the block it read to and the head, and writes its end to status.json: its own time (`at`: the
+    review is alive), `behind` (`readTo`, `head`, and `since`: the end of the first such pass in a row), and how many
+    payouts waited and were held at the last pass that read to the head (`due`, `held`, where there was one), so that
+    whoever watches the file's age tells a review that is catching up from one that stands, and holds one that then
+    stops to the payouts that waited. No document is written by such a pass: `read_chain` raises before any payout is
+    reviewed. `since` is kept in `said` ("_behind") until a pass reads to the head (`main`)."""
+    kept = said.get("_behind")
+    if not isinstance(kept, dict) or not is_time(kept.get("since")):
+        kept = said["_behind"] = {"since": int(now)}
+    since = int(kept["since"])
+    core.log("review_behind", read_to=behind.read_to, head=behind.head, since=utc(since),
+             then="no document this pass; the next one goes on from there")
+    try:
+        last = json.loads((out / "status.json").read_text())
+    except (OSError, ValueError):
+        last = None
+    waited = {k: last[k] for k in ("due", "held") if isinstance(last, dict) and is_time(last.get(k))}
+    out.mkdir(parents=True, exist_ok=True)
+    write_status(out, {"at": int(now), **waited, "behind": {"readTo": behind.read_to, "head": behind.head, "since": since}})
+
+
+def behind_long(behind: pr.Behind, now: float, said: dict, alarm) -> None:
+    """The passes have ended behind for longer than BEHIND_LONG_S in a row (since `fell_behind` first kept it): the
+    alarm `review_behind_long`, said again every BEHIND_EVERY_S while it lasts, remembered only once the channel took
+    it. Only a pass that reads to the head ends the row; one that fails between two that fell behind does not. An
+    alarm that raises is one not taken, as in `one_pass`: the pass fell behind and did not fail, and ends so."""
+    kept = said["_behind"]
+    if now - kept["since"] <= BEHIND_LONG_S:
+        return
+    if is_time(kept.get("said")) and now - kept["said"] < BEHIND_EVERY_S:
+        return
+    try:
+        took = alarm("review_behind_long", wait=True, read_to=behind.read_to, head=behind.head, since=utc(int(kept["since"])),
+                     why="the payout review has not read the chain to its head for over an hour: each pass runs out of its "
+                         "time and the next goes on from there; no document is fresh meanwhile, approve refuses every "
+                         "payout, and a held payout is not said again")
+    except Exception as exc:  # the alarm's own failure: not taken, and said at the next pass
+        core.log("review_alarm_raised", what="review_behind_long", error=type(exc).__name__)
+        took = False
+    if took is not False:
+        kept["said"] = now
 
 
 def read_prices(path: pathlib.Path, expect: dict | None = None, second: pathlib.Path | None = None,
@@ -473,14 +533,21 @@ def main(argv: list[str] | None = None) -> int:
         bps = int(os.environ.get("COLOSSEUM_CANDLE_BPS", "") or
                   (pr.CANDLE_BPS if c.NETWORK.name == "mainnet" else TESTNET_CANDLE_BPS))
     archive = pr.archive_oracle(args.archive_rpc) if args.archive_rpc else None
+    behind = None
     try:
         candles = None if args.no_candles else fetch_candles(out)
-        with chk.node_errors():
-            one_pass(record, out, prices, said, alarm, scan=out / "scan.json", candles=candles, candle_bps=bps,
-                     archive=archive, until=time.monotonic() + PASS_BUDGET_S)
-        said.pop("_failed", None)
-    except pr.Behind as exc:
-        core.log("review_behind", why=str(exc), then="no document this pass; the next one goes on")
+        try:
+            # `Behind` is no failure of the node: it passes `node_errors` as it is. Taken for one, every pass of a
+            # long first reading ended as `review_failed` with code 1, and the branch below was never reached.
+            with chk.node_errors(pr.Behind):
+                one_pass(record, out, prices, said, alarm, scan=out / "scan.json", candles=candles, candle_bps=bps,
+                         archive=archive, until=time.monotonic() + PASS_BUDGET_S)
+        except pr.Behind as exc:
+            behind = exc
+            fell_behind(out, exc, said, time.time())
+        else:
+            said.pop("_failed", None)
+            said.pop("_behind", None)
     except BaseException as exc:
         if time.time() - float(said.get("_failed", 0)) >= FAILED_EVERY_S:
             if alarm("review_failed", wait=True, error=chk.quiet(exc, 200),
@@ -490,10 +557,13 @@ def main(argv: list[str] | None = None) -> int:
         save_said(said_path, said)
         raise
     try:
-        second_unread(unread, time.time(), said, alarm)
+        if behind is None:
+            second_unread(unread, time.time(), said, alarm)
+        else:  # no journal was read by a pass that fell behind: it says nothing of the second one's reading
+            behind_long(behind, time.time(), said, alarm)
         second_stale(second, time.time(), said, alarm)
     finally:
-        save_said(said_path, said)  # whatever these two do, the alarms the pass said stay said
+        save_said(said_path, said)  # whatever these do, the alarms the pass said stay said
     return 0
 
 

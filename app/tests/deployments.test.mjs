@@ -327,8 +327,9 @@ function checkLive(live, records, recordOf) {
     if ("network" in r) assert.equal(r.network, e.network, `${e.label}: the record's network`);
     // A simulation-pool deployment (ops/deploy_sim.py) names its factory SimPoolFactory, and the pool the team opened on
     // it afterwards is no part of the record, as the live run's pool is none of demo2's: the entry may name one.
-    // Everything that serves or shows a deployment reads PoolFactory (scripts/app_config.py, scripts/settled_accounts.py,
-    // the keepers), so it is listed staged or retired, never as one of those.
+    // What serves a live or a testers deployment reads PoolFactory (scripts/settled_accounts.py, the keepers), so it is
+    // listed staged or retired, never as one of those. The site of a network with no live deployment shows the staged
+    // one (scripts/app_config.py; app/tests/config.test.mjs).
     const sim = "SimPoolFactory" in r;
     assert.equal(e.factory, r.PoolFactory ?? r.SimPoolFactory, `${e.label}: factory`);
     if (sim) {
@@ -348,8 +349,11 @@ function checkLive(live, records, recordOf) {
     // What serves it: its own gateway and keeper for live and testers; the shared pools' keeper for a shared pool,
     // whose seats trade through the gateway of the deployment that made them; nothing for the staged, the archive and
     // the retired.
+    // A staged simulation-pool deployment may name where its pools' index answers on the host (gateway/simindex.py,
+    // `<gateway>/v1/simindex/health`): the site that shows it finds the index there. No orders go through it.
     const served = e.role === "live" || e.role === "testers";
-    if (served) assert.match(e.gateway, /^https:\/\/[a-z0-9.-]+(\/[a-z0-9]+)?$/, `${e.label}: gateway`);
+    const indexed = sim && e.role === "staged" && e.gateway !== null;
+    if (served || indexed) assert.match(e.gateway, /^https:\/\/[a-z0-9.-]+(\/[a-z0-9]+)?$/, `${e.label}: gateway`);
     else assert.equal(e.gateway, null, `${e.label}: no gateway of its own`);
     if (served || e.role === "shared") assert.match(e.keeper, /^0x[0-9a-fA-F]{40}$/, `${e.label}: keeper`);
     else assert.equal(e.keeper, null, `${e.label}: no keeper`);
@@ -427,6 +431,12 @@ test("a simulation-pool deployment is listed by its SimPoolFactory, with the poo
   checkLive(...plus({ ...SIM, pool: null }), recordOf);
   checkLive(...plus({ ...SIM, role: "retired" }), recordOf);
   checkSite(plus(SIM)[0]);
+  // Where its index answers, once the host serves one: an https address of its own, and only while it is staged.
+  checkLive(...plus({ ...SIM, gateway: "https://pools-api.usenami.io/sim" }), recordOf);
+  assert.throws(() => checkLive(...plus({ ...SIM, gateway: "http://pools-api.usenami.io/sim" }), recordOf), /sim-example: gateway/);
+  assert.throws(() => checkLive(...plus({ ...SIM, gateway: LIVE.find((e) => e.role === "live").gateway }), recordOf), /no gateway serves two deployments/);
+  assert.throws(() => checkLive(...plus({ ...SIM, role: "retired", gateway: "https://pools-api.usenami.io/sim" }), recordOf), /sim-example: no gateway of its own/);
+  assert.throws(() => checkLive(...plus({ ...SIM, keeper: SIM.deployer }), recordOf), /sim-example: no keeper/);
   assert.throws(() => checkLive(...plus({ ...SIM, factory: "0x00000000000000000000000000000000000000F6" }), recordOf), /sim-example: factory/);
   assert.throws(() => checkLive(...plus({ ...SIM, pool: "0xnot-an-address" }), recordOf), /sim-example: pool is an address or null/);
   assert.throws(() => checkLive(...plus({ ...SIM, role: "archive" }), recordOf), /a simulation-pool deployment is staged or retired/);

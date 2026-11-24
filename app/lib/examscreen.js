@@ -15,6 +15,7 @@ export const SCREEN_TEXT = Object.freeze({
   strip: "Exam",
   testnetPlaque: "Testnet. Mock USDC. Unaudited.",
   testnetTag: "Testnet app",
+  mainnetPlaque: "Mainnet. Real USDC. Unaudited.",
   usdcNoPrice: "The price of this asset was not read, so an amount in USDC is off.",
   fillsLater: "Orders fill a few seconds after you send them, at the price of that moment.",
   exit: "To exit a position, send an order yourself, or set a stop or a take on it.",
@@ -45,9 +46,10 @@ export function usdShown(units) {
   return `${neg ? "-" : ""}$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${frac.padEnd(2, "0")}`;
 }
 
-/** The marks a page built for a network that is not mainnet carries: the plaque and the tag. None on mainnet. */
+/** The marks a page carries, by the network its settings are for: the plaque, and on a network that is not mainnet the
+ *  tag by the brand. A mainnet page has its own plaque and no tag. */
 export function networkMarks(config) {
-  if (config?.hyperliquidChain === "Mainnet") return null;
+  if (config?.hyperliquidChain === "Mainnet") return { plaque: SCREEN_TEXT.mainnetPlaque, tag: null };
   return { plaque: SCREEN_TEXT.testnetPlaque, tag: SCREEN_TEXT.testnetTag };
 }
 

@@ -17,7 +17,7 @@ instead of keeping a copy.
 | `record` | `deployments/<network>-<label>.json`, written by the deploy |
 | `factory` | the record's `PoolFactory`, or its `SimPoolFactory` for a simulation-pool deployment; for a shared pool, the factory its seats come from |
 | `pool` | the record's `SharedPool`; `null` for a factory's deployment, which has many pools. A simulation-pool deployment may name one pool its record does not carry (below) |
-| `gateway` | where the deployment's own gateway answers, as in `<gateway>/v1/health`; `null` if it has none |
+| `gateway` | where the deployment's own gateway answers, as in `<gateway>/v1/health`; `null` if it has none. For a simulation-pool deployment, where its pools' index answers (below) |
 | `deployer` | the record's `deployer` |
 | `keeper` | the address the keeper tending it on the host sends from; `null` if nothing tends it |
 
@@ -34,7 +34,9 @@ this list go by the file name.
   has no gateway of its own: its seats are pools made by `factory`, so their challenges trade through that
   deployment's gateway. `sharedPoolRecord` in `app/config.js` picks the one `#/shared` opens.
 - `staged`: deployed and its record committed, but nothing serves it yet and the site doesn't read it: no gateway,
-  no keeper. A new deployment stays `staged` until its gateway and keeper run.
+  no keeper. A new deployment stays `staged` until its gateway and keeper run. A simulation-pool deployment stays
+  `staged` for as long as it is in use, and on a network with no `live` deployment the site is written from it
+  ([below](#the-site-of-a-network-with-no-live-deployment)).
 - `archive`: the site reads it and sells nothing on it (`role: "archive"` in `app/config.js`).
 - `retired`: nothing serves it and the site doesn't name it. The record stays, since the evidence pages still point
   at what it made.
@@ -48,9 +50,45 @@ differences, which `app/tests/deployments.test.mjs` holds:
 - `factory` is the record's `SimPoolFactory`.
 - `pool` is `null`, or the address of the one pool the team opened on that factory. The record is written by the deploy,
   before any pool exists, so it cannot carry that pool, as `liveRunPool` in `app/config.js` is not in demo2's record.
-- `role` is `staged` or `retired`, never `live`, `testers`, `shared` or `archive`: the site, the weekly watch and the
-  keepers read `PoolFactory`, and a simulation-pool deployment is none of what they serve or show. Its keeper, the
-  simulation pool's, runs from the machine that opened the pool, not the host, so `keeper` and `gateway` are `null`.
+- `role` is `staged` or `retired`, never `live`, `testers`, `shared` or `archive`: the weekly watch and the keepers
+  of those roles read `PoolFactory`, and a simulation-pool deployment is none of what they serve. `keeper` is `null`:
+  the simulation pool's keeper is not the host's keeper of a `PoolFactory` deployment.
+- `gateway` is `null`, or, while the entry is `staged`, the https address its pools' index answers at once the host
+  serves one (`gateway/simindex.py`, `<gateway>/v1/simindex/health`). No orders go through it; the site that shows the
+  deployment finds the index there.
+
+### The site of a network with no live deployment
+
+No role changes for it: a simulation-pool deployment stays `staged`. What changes is what the site's settings are
+written from (`scripts/app_config.py`).
+
+- A network with a `live` entry gets the settings it always had, and its `staged` entries are not in them. That is
+  testnet: its site opens a simulation pool by the pool's address, whichever factory made it.
+- A network with no `live` entry gets a site of simulation pools. Its one `staged` simulation-pool entry goes into the
+  settings as `sim` (the entry's label and its `SimPoolFactory`), `deployments` is empty, and `simIndex` is the
+  entry's `gateway` when it names one. The site then shows that factory's pools and no others: the first page lists
+  the factory's own `pools()`, and a pool's page, its panels and an exam's screen open only for a pool that list
+  names. Any other address is "Not found": with real USDC a contract that answers like a pool must not be drawn as
+  one of the site's. That is mainnet: no `PoolFactory` deployment is live there, and the simulation-pool deployment
+  listed `staged` under `"network": "mainnet"` is its site.
+
+The script stops, and nothing is packed, when the network has neither kind of entry; when two simulation-pool
+deployments are `staged` on it (set the one the site should no longer show to `retired`); when the entry lacks its
+`chainId`, `factory` or `gateway`, its `chainId` is not the network's, or its `factory` is not an address a contract
+can stand at (0x and 40 hexadecimal characters, not all zeros); when the entry's `factory` is not the record's
+`SimPoolFactory`; and when the record's `usdc` is not the network's USDC in `spike/hlspike/network.py`: the pages
+call the token USDC, and mainnet's plaque calls it real.
+
+Mainnet's settings are never written without `sim`. A `live` entry listed on mainnet, alone or beside the staged
+simulation-pool deployment, stops the script: settings written from a live deployment name no factory of simulation
+pools, and a site without one has no list to hold a pool's address to, so its pages would open for any contract a
+link names. The pages hold the same line themselves (`app/lib/simsite.js`, `poolPages`): on mainnet settings that
+name no factory, no page of a pool, no panel and no exam's screen is drawn, whoever wrote the settings.
+
+Why not a role of its own, or `live`: the weekly watch reads `live` and `testers` entries as `PoolFactory`
+deployments with a gateway and a keeper, so a simulation-pool deployment listed under either would be read as one,
+and a new role would have to be taught to every reader of this file. Reading the `staged` entry where there is no
+`live` one changes one script and no entry.
 
 ## Adding or retiring a deployment
 
@@ -59,7 +97,8 @@ One edit to `deployments/LIVE.json`: in the commit that adds the record, or as s
 - To add one, the deploy writes `deployments/<network>-<label>.json`; add an entry with its role and what serves
   it, `staged` until its gateway and keeper run. The site reads `live` and `archive` entries of its own network:
   for those, write `app/config.js` again with `python3 scripts/app_config.py --out app/config.js`. The tests name
-  any field that is missing.
+  any field that is missing. On a network with no `live` entry the site is written from the `staged` simulation-pool
+  entry; nothing is committed for it, since the pack is made from the entry (`scripts/pack-site.sh --network mainnet`).
 - To retire one, set `role` to `retired` and `gateway` and `keeper` to `null`. Keep the record.
 - When a gateway or keeper starts or stops on the host, change `gateway` or `keeper` here. This file doesn't
   configure the host: `/etc/colosseum/deployment`, the instances beside it and `shared-keeper.env` decide what it
@@ -76,6 +115,12 @@ is `deployments/mainnet-<label>.json` with `"chain_id": 999` and `"network": "ma
 The record has the fields of `deployments/testnet-v3-demo3.json` (the contracts, `block`, `commit`, `deployer`,
 `operator`, `platform_assets`, `published_keys`, `tx`, `codehash`, `initcode_keccak`) except testnet's own test
 dollar and faucet: on mainnet `usdc` is Circle's, `usdc_erc20` in network.py, and there is no `faucet`.
+
+The first mainnet record is a simulation-pool deployment's: what `ops/deploy_sim.py` writes, as
+`deployments/testnet-rehearsal998.json` is testnet's, with `"chain_id": 999`, `"network": "mainnet"`, `usdc` Circle's
+and mainnet's perp numbers in `platform_assets` (BTC 0, ETH 1, SOL 5, `ops/sim_network.py`). Its entry is `staged`,
+with `"network": "mainnet"` and `"chainId": 999`, and the mainnet site is written from it
+([above](#the-site-of-a-network-with-no-live-deployment)).
 
 Where each value comes from:
 
@@ -142,23 +187,48 @@ Two more pieces of the way to mainnet are decided apart from this code, and noth
 
 `app/config.js` is written by `scripts/app_config.py` from `spike/hlspike/network.py` and from that network's
 entries here: the `live` one, then the `archive` ones in this file's order, each with its record, and the first
-`shared` entry on the live factory, which `#/shared` opens. The committed file is the testnet output, and
-`app/tests/config.test.mjs` holds the two equal. After a change to network.py or to this file, run
+`shared` entry on the live factory, which `#/shared` opens; or, on a network with no `live` entry, its `staged`
+simulation-pool entry ([above](#the-site-of-a-network-with-no-live-deployment)). The committed file is the testnet
+output, and `app/tests/config.test.mjs` holds the two equal. After a change to network.py or to this file, run
 `python3 scripts/app_config.py --out app/config.js` and commit both. `app/lib/hlsend.js` signs spot transfers for
 the config's `hyperliquidChain`.
 
-`scripts/pack-site.sh --network mainnet <commit>` packs the same commit for mainnet. Its `config.js` is the
-script's mainnet output, written from that commit's files, and its `build.json` carries `"network": "mainnet"`.
-Every other file is checked against its blob, as for testnet, and `scripts/verify-live.py` checks the site against
-the pack's own list as before. The config goes into the pack instead of being fetched when the page loads, so a
-mainnet site cannot fall back to testnet's values because a file failed to arrive. While this file has no live
-mainnet entry, which is the case today, the script stops and nothing is packed.
+Everything a page says or does that depends on the network comes from the settings, and no page names a network
+in its own words (`app/tests/network.test.mjs`): the chain a wallet is offered (`chainId`, `chainHex`, `chainName`,
+`nativeCurrency`), the public node the pages read and the wallet is given (`rpc`), Hyperliquid's API and app,
+`usdc`, and `networkName`, the name the pages write beside a pool: "Hyperliquid testnet", "Hyperliquid". The
+simulation pools' pages take the tag and the plaque of their panels from the same settings
+(`app/lib/examscreen.js`, `networkMarks`): "Testnet. Mock USDC. Unaudited." with the tag "Testnet app" on testnet,
+"Mainnet. Real USDC. Unaudited." and no tag on mainnet. A simulation pool's token is the pool's own `usdc()`, and
+the script holds the record's to the network's. The app links no block explorer, offers a wallet none, and has no
+faucet, on either network, so the settings carry neither.
+
+`app/index.html` is static, so its words cannot follow the settings as the page loads; the script writes them
+instead (`--index`). The committed page is testnet's. Mainnet's is that page with each line that names the network
+replaced (`INDEX_WORDS` in the script): the title and the description, testnet's notice and the entry question by
+mainnet's plaque, and no picture for a shared link, since `brand/og-image-1200x630.png` has testnet's plaque drawn
+into it. A site of simulation pools also loses the lines of the other pools (`INDEX_SIM_ONLY`): their landing line,
+their pages in the menu, the footer's sentence about their keys and the link to the terms of their demo. Each line
+must be in the committed page exactly as many times as the script expects; after an edit that moves one, the
+script stops and names it, and mainnet's words are moved by hand.
+
+`scripts/pack-site.sh --network mainnet <commit>` packs the same commit for mainnet. Its `config.js` and its
+`index.html` are the script's mainnet output, written from that commit's files, and its `build.json` carries
+`"network": "mainnet"`. Every other file is checked against its blob, as for testnet, and `scripts/verify-live.py`
+checks the site against the pack's own list as before, and holds the network the pack names in `build.json` (every
+pack names one, testnet's too) to the site it is asked about (`--network mainnet` for the mainnet site). The settings and the page go into the pack instead of being
+fetched or rewritten when the page loads, so a mainnet site cannot fall back to testnet's values or words because
+a file failed to arrive. While this file has no mainnet entry a site can be written from, neither a `live` one nor
+a `staged` simulation-pool one, which is the case today, the script stops and nothing is packed.
 
 Two of the app's values are not in this file. `liveRunPool` is a pool opened on testnet's live deployment after it
 was deployed; the script keeps it by network and label. `assetLeverage` is set when the record names a
 `PaperExamImpl`, that is, for a v3 factory.
 
-What a mainnet site still needs is copy. The pages say testnet in their own words: the title and the gate in
-`app/index.html`, the about text in `app/app.js`, "Testnet. Mock USDC. Unaudited." in `app/views/pools.js`, the
-shared pool, verify, economics and evidence pages, and the safety and evidence data in `app/data/`. Each needs
-mainnet wording before a mainnet pack is uploaded.
+What a mainnet site does not have. The pages of the pools a `PoolFactory` makes still say testnet in their own
+words: the about text in `app/app.js`, "Testnet. Mock USDC. Unaudited." in `app/views/pools.js`, the shared pool,
+verify, economics and evidence pages, and the safety and evidence data in `app/data/`. They are no routes of a
+site of simulation pools (`app/app.js`, `poolRoutes`; their addresses answer "Not found"), and the script writes
+mainnet no settings from a `live` entry: showing a `PoolFactory`'s pools on mainnet would take mainnet wording for
+each of those pages and a decision about what the site lists, neither of which is here. And three things the script
+does not write: a picture for a shared link, terms for a mainnet site, and a description of it beyond its title.

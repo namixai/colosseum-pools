@@ -12,6 +12,7 @@
 import { esc, ZERO_ADDRESS, sameAddress } from "./ui.js";
 import { dollars, tierOf, isSet } from "./simlines.js";
 import { utc, STOP_RESERVE, stopReasonText } from "./simpool.js";
+import { networkName } from "./network.js";
 import {
   awaitingApproval, approveSelectedCall, stopCall, withdrawRequest, reasonsText, PAYOUT_DELAY, PAYOUT_HARD,
 } from "./operator.js";
@@ -354,6 +355,7 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 /** The address of the reviews of `ids` of `pool` on the index's host (gateway/simindex.py, GET /v1/simindex/reviews).
  *  Over https, or http to this machine only, as the index's other route. */
 export function reviewsUrl(base, pool, ids) {
+  if (!base) throw new Error("this site names no index");
   const url = new URL(base);
   const local = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
@@ -598,7 +600,7 @@ export function requestsHtml(model) {
 }
 
 /** The page under the header, for a wallet with a role: the five tiles and the sections of its role. */
-export function operatorHtml(model, { name, role }) {
+export function operatorHtml(model, { name, role, network = networkName() }) {
   const { may } = model;
   const lede = may.stop
     ? "Every payout passes here in the order it was claimed. Until it is paid, the checker may stop it once, with one of four reasons written on chain. The trader has 14 days to object."
@@ -609,7 +611,7 @@ export function operatorHtml(model, { name, role }) {
         : "The creator's request to withdraw waits here for a week. The closer may cancel it.";
   const h1 = may.stop ? `Payout checks <em>&amp; stops</em>` : may.approve ? `Payout <em>approvals</em>`
     : may.lift ? `Stops <em>&amp; lifts</em>` : `Withdrawal <em>requests</em>`;
-  return `<section class="sp-hero sp-hd"><div class="sp-kick">Operator panel · ${esc(name)} · Hyperliquid testnet</div>`
+  return `<section class="sp-hero sp-hd"><div class="sp-kick">Operator panel · ${esc(name)} · ${esc(network)}</div>`
     + `<h1>${h1}</h1><p class="sp-lede">${esc(lede)}</p></section>`
     + summaryHtml(model.summary, may)
     + (may.seeQueue ? queueHtml(model) : "")

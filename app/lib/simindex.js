@@ -22,6 +22,7 @@ const block = (n) => Number.isSafeInteger(n) && n >= 0;
 
 /** The index's address for a pool, on the gateway's host. Over https, or http to this machine only, as the orders go. */
 export function indexUrl(base, pool) {
+  if (!base) throw new Error("this site names no index");
   const url = new URL(base);
   const local = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
