@@ -337,10 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     if "SimPoolFactory" not in record:
         raise SystemExit(f"deployment {args.deployment!r} has no SimPoolFactory")
     said_path = pathlib.Path(args.said) if args.said else out / "said.json"
-    try:
-        said = json.loads(said_path.read_text())
-    except (OSError, ValueError):
-        said = {}
+    said = load_said(said_path)
     alarm = sf.Alarm(flag)
     expect = {"chain": c.CHAIN_ID, "factory": record["SimPoolFactory"], "label": args.deployment}
     second = pathlib.Path(args.prices2) if args.prices2 else None
@@ -386,6 +383,22 @@ def fetch_candles(out: pathlib.Path):
     except Exception as exc:  # the info API down: what is on disk is read, and the minutes missing are said
         core.log("candles_unread", error=type(exc).__name__, then="the minutes not on disk are said by the review")
     return lambda lo, hi: store.load(lo - 86_400, hi)
+
+
+def load_said(path: pathlib.Path) -> dict:
+    """What `save_said` wrote: the alarms raised, by payout, and the times a failed pass and a stale second journal
+    were last said. A file not there, not JSON or not an object is no memory (`[]` parses, and every pass after would
+    fail on it): each alarm is said again, and the file written anew. A time that is no number is forgotten alike."""
+    try:
+        said = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(said, dict):
+        return {}
+    for key in ("_failed", "_second"):
+        if key in said and (isinstance(said[key], bool) or not isinstance(said[key], (int, float))):
+            del said[key]
+    return said
 
 
 def save_said(path: pathlib.Path, said: dict) -> None:

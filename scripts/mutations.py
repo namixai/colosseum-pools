@@ -17386,6 +17386,15 @@ MUTATIONS = [
      "        stop = (\"a person stops it for reason 3 (the draft is in the review)\" if r.get(\"stopDraft\") else",
      "        stop = (\"a person stops it for reason 3 (the draft is in the review)\" if True else",
      ["test_the_alarm_names_a_draft_of_a_stop_only_where_the_review_made_one"]),
+    # The memory of alarms: a file that is not an object is no memory, a time that is no number forgotten.
+    ("RW8", "ops/review_service.py",
+     "    if not isinstance(said, dict):\n        return {}\n    for key in (\"_failed\", \"_second\"):",
+     "    for key in (\"_failed\", \"_second\"):",
+     ["test_a_memory_of_alarms_that_is_not_an_object_is_no_memory_and_the_pass_goes_on"]),
+    ("RW9", "ops/review_service.py",
+     "        if key in said and (isinstance(said[key], bool) or not isinstance(said[key], (int, float))):",
+     "        if False:",
+     ["test_a_memory_of_alarms_that_is_not_an_object_is_no_memory_and_the_pass_goes_on"]),
 ]
 
 RUNNERS = {

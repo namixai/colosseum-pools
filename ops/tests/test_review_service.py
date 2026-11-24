@@ -114,6 +114,31 @@ class TheService(unittest.TestCase):
         self.assertIsNotNone(reviews[0]["stopDraft"])
         self.assertIn("(the draft is in the review)", alarms[0][1]["do"])
 
+    def test_a_memory_of_alarms_that_is_not_an_object_is_no_memory_and_the_pass_goes_on(self):
+        """said.json holding `[]` (or a word, a number, null) is JSON, and not what the pass keeps its alarms in: read
+        as it is, this pass and every one after fails on it. It is no memory: the alarm is said, the file written anew."""
+        ch, _ = self.hold.world()
+        for bad in ("[]", '"x"', "5", "null", "{broken"):
+            with tempfile.TemporaryDirectory() as d:
+                (pathlib.Path(d) / "said.json").write_text(bad)
+                raised = []
+                with mock.patch.object(svc.pr, "read_chain", return_value=ch.d), mock.patch.object(svc.core, "log"), \
+                        mock.patch.object(svc.deployments, "load", return_value={"SimPoolFactory": "0x" + "11" * 20, "block": 1}), \
+                        mock.patch.object(svc.sn, "confirm_service"), \
+                        mock.patch.object(svc.sf.Alarm, "__call__", lambda self_, event, **kw: raised.append(event)):
+                    self.assertEqual(svc.main(["--deployment", "x", "--out", d, "--no-candles"]), 0, bad)
+                self.assertEqual(raised, ["payout_held"], bad)
+                kept = json.loads((pathlib.Path(d) / "said.json").read_text())
+                self.assertIsInstance(kept, dict, bad)
+                self.assertIn(f"{POOL}-0", kept, bad)
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "said.json"
+            path.write_text(json.dumps({"_failed": "x", "_second": None, f"{POOL}-0": {"mark": [], "at": 1, "before": []}}))
+            self.assertEqual(svc.load_said(path), {f"{POOL}-0": {"mark": [], "at": 1, "before": []}},
+                             "a time that is no number is forgotten, the rest kept")
+            path.write_text(json.dumps({"_failed": 5.5, "_second": 7}))
+            self.assertEqual(svc.load_said(path), {"_failed": 5.5, "_second": 7})
+
     def test_no_journal_to_read_is_no_journal_and_the_payout_with_a_stop_is_held(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(svc.core, "log") as said:
             self.assertIsNone(svc.read_prices(pathlib.Path(d) / "none.jsonl"))
