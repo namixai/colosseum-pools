@@ -2420,7 +2420,9 @@ def card_problem(doc, pool: str, pid: int, payout: dict, chain_id: int, latest: 
     this schema, of this chain, pool, payout, trader, amount and due time, read after the claim and at most
     REVIEW_MAX_BLOCKS blocks and REVIEW_MAX_S seconds before `latest` and `now`, and say "approve" with a clean verdict
     and the approval as its call. Anything else, a "hold", a "decide", a "stop", a "none", a document not read whole:
-    no approval rests on it (review 12 of #336). `payout`: {trader, amount, dueAt} as the pool answers them."""
+    no approval rests on it (review 12 of #336). A field of the wrong shape (a `claimedAt` that is no number, a `call`
+    or `reasons` that is a list or a word) is a reason like any other, never an exception: the caller says it for
+    that payout and goes on to the next. `payout`: {trader, amount, dueAt} as the pool answers them."""
     if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
         return f"not a {SCHEMA} document"
     try:
@@ -2434,17 +2436,19 @@ def card_problem(doc, pool: str, pid: int, payout: dict, chain_id: int, latest: 
             return "a review of another claim"
         read_at = doc.get("readAt") or {}
         block, t = int(read_at["block"]), int(read_at["time"])
-    except (KeyError, TypeError, ValueError):
+        claimed = None if doc.get("claimedAt") is None else int(doc["claimedAt"])
+    except (KeyError, TypeError, ValueError, OverflowError):
         return "a review not read whole"
-    if doc.get("claimedAt") is None or t < int(doc["claimedAt"]):
+    if claimed is None or t < claimed:
         return "a review read before the claim"
     if block > latest or latest - block > REVIEW_MAX_BLOCKS or now - t > REVIEW_MAX_S or t > now + 60:
         return f"a review read at block {block}, more than an hour from block {latest}: review it again"
     if doc.get("action") != "approve" or doc.get("verdict") != "clean":
-        why = "; ".join(str(x.get("text", x)) if isinstance(x, dict) else str(x) for x in doc.get("reasons") or [])
+        reasons = doc.get("reasons")
+        why = "; ".join(str(x.get("text", x)) if isinstance(x, dict) else str(x) for x in (reasons if isinstance(reasons, list) else []))
         return f"the review says {doc.get('action')!r} ({doc.get('verdict')})" + (f": {why}" if why else "")
-    call = doc.get("call") or {}
-    if call.get("kind") != "approve":
+    call = doc.get("call")
+    if not isinstance(call, dict) or call.get("kind") != "approve":
         return "a review whose call is not the approval"
     return None
 

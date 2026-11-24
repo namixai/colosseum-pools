@@ -1606,6 +1606,31 @@ class TheClosing(unittest.TestCase):
         src = pathlib.Path(d.__file__).read_text()
         self.assertNotIn("--no-review", src)
 
+    def test_a_review_with_a_field_of_the_wrong_shape_is_refused_for_its_payout_like_any_other(self):
+        """A document that is JSON and of the schema, with a field no review writes: a `claimedAt` that is no number, a
+        `call` that is a list, `reasons` that is a number. None is approved, and none ends the command with a traceback
+        in place of its NoReview, which names every payout refused."""
+        from ops import payout_review as pr
+        payout = {"trader": self.WAITING[1], "amount": self.WAITING[2], "dueAt": self.WAITING[3]}
+        pool = d.to_checksum_address(self.OTHER)
+        cases = (({"claimedAt": "soon"}, "not read whole"), ({"claimedAt": [1]}, "not read whole"),
+                 ({"claimedAt": 1e999}, "not read whole"), ({"id": 1e999}, "not read whole"),
+                 ({"call": ["approve"]}, "call is not the approval"), ({"call": "approve"}, "call is not the approval"),
+                 ({"call": None}, "call is not the approval"),
+                 ({"action": "hold", "reasons": 5}, "says 'hold'"), ({"action": "hold", "reasons": {"text": "x"}}, "says 'hold'"))
+        for change, word in cases:
+            why = pr.card_problem(self.review(3, **change), pool, 3, payout, 998, 5_100, 9_100)
+            self.assertIn(word, why or "", change)
+        self.assertIsNone(pr.card_problem(self.review(3), pool, 3, payout, 998, 5_100, 9_100))
+        # Through the command: both payouts are named, the second not lost behind the first one's shape.
+        with self.assertRaises(SystemExit) as caught:
+            self.approve_main(["--ids", "3,4", "--send"], {3: self.review(3, call=["approve"]), 4: self.review(4, claimedAt="soon")})
+        text = str(caught.exception)
+        self.assertIn("NoReview", text)
+        self.assertIn("payout 3: a review whose call is not the approval", text)
+        self.assertIn("payout 4: a review not read whole", text)
+        self.sent.assert_not_called()
+
     def test_approve_says_which_folder_it_read_and_where_the_hosts_reviews_are_when_its_default_has_none(self):
         """The host's review service writes /var/lib/colosseum-keeper/reviews-<name>; without --reviews the command reads
         ops/state/reviews, what a review run in the checkout writes. It never guesses the host's folder: it says which

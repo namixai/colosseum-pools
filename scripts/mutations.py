@@ -17351,6 +17351,23 @@ MUTATIONS = [
      r"""_ROW_BLOCK = re.compile(r'\{\s*"b"\s*:\s*(\d{1,10})\s*[,}]')""",
      r"""_ROW_BLOCK = re.compile(r'\{\s*"b"\s*:\s*(\d+)\s*[,}]')""",
      ["test_a_number_no_block_time_or_price_can_be_is_a_bad_line_not_the_end_of_the_pass"]),
+    # A review document with a field of the wrong shape: a reason for its payout, never an exception.
+    ("SK246", "ops/payout_review.py",
+     "    if not isinstance(call, dict) or call.get(\"kind\") != \"approve\":",
+     "    if (call or {}).get(\"kind\") != \"approve\":",
+     ["test_a_review_with_a_field_of_the_wrong_shape_is_refused_for_its_payout_like_any_other"]),
+    ("SK247", "ops/payout_review.py",
+     "    except (KeyError, TypeError, ValueError, OverflowError):\n        return \"a review not read whole\"",
+     "    except (KeyError, TypeError, ValueError):\n        return \"a review not read whole\"",
+     ["test_a_review_with_a_field_of_the_wrong_shape_is_refused_for_its_payout_like_any_other"]),
+    ("SK248", "ops/payout_review.py",
+     "for x in (reasons if isinstance(reasons, list) else []))",
+     "for x in (reasons or []))",
+     ["test_a_review_with_a_field_of_the_wrong_shape_is_refused_for_its_payout_like_any_other"]),
+    ("SK249", "ops/payout_review.py",
+     "        claimed = None if doc.get(\"claimedAt\") is None else int(doc[\"claimedAt\"])\n    except",
+     "    except",
+     ["test_a_review_with_a_field_of_the_wrong_shape_is_refused_for_its_payout_like_any_other"]),
 ]
 
 RUNNERS = {
