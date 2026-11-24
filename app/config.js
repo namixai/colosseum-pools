@@ -7,6 +7,7 @@ export const CONFIG = {
   chainId: 998,
   chainHex: "0x3e6",
   chainName: "HyperEVM Testnet",
+  networkName: "Hyperliquid testnet",
   nativeCurrency: { name: "HYPE", symbol: "HYPE", decimals: 18 },
   rpc: "https://rpc.hyperliquid-testnet.xyz/evm",
   hlInfo: "https://api.hyperliquid-testnet.xyz/info",

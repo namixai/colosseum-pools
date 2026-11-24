@@ -11,6 +11,8 @@ import { readLogs, SIM_POOL_ABI } from "../lib/simpool.js";
 import { ACCOUNT_ABI, KIND } from "../lib/simtrader.js";
 import { userHeaderHtml, footerHtml } from "../lib/simpanel.js";
 import { accountLabel, wireShell } from "./simshell.js";
+import { sitePool } from "./simsite.js";
+import { poolPages, readFailed } from "../lib/simsite.js";
 import {
   PAPER_EXAM_ABI, dataSource, examAccount, oraclePxCall, bboCall, placeCall, graduateCall, setAgentCall,
   setTriggerCall, clearTriggerCall, refusalOf,
@@ -51,14 +53,17 @@ const UNIT_KEY = "exam-size-unit";
 const kept = new Map();  // the second key where storage is blocked, for this tab
 
 /** The pool an exam belongs to, when it is an exam or a stage of a pool of exams (the pool's own `accountOf` says): the
- *  trading screen then stands in that pool's user panel. Null for an account of any other kind of pool. */
-async function simPoolOf(address) {
+ *  trading screen then stands in that pool's user panel. Null for an account of any other kind of pool. `strict`, on a
+ *  site of simulation pools, where null means "Not found": a read that failed on its way is thrown, never taken for
+ *  the contract saying it is no exam of a pool. */
+async function simPoolOf(address, strict = false) {
   try {
     const pool = await new ethers.Contract(address, ACCOUNT_ABI, chain.readProvider).pool();
     if (!isAddress(pool) || same(pool, ZERO)) return null;
     const account = await new ethers.Contract(pool, SIM_POOL_ABI, chain.readProvider).accountOf(address);
     return [KIND.exam, KIND.stage].includes(Number(account.kind)) ? ethers.getAddress(pool) : null;
-  } catch {
+  } catch (err) {
+    if (strict && readFailed(err)) throw err;
     return null;
   }
 }
@@ -82,12 +87,19 @@ export async function examView(address, page, query = "") {
       <p><a href="#/exam">Back</a></p></section>`);
     return;
   }
+  // On a site of simulation pools the screen opens only for an exam or a stage of one of the site's pools: any other
+  // contract, an exam of another factory's pool among them, is "Not found" before anything of it is read. Mainnet
+  // settings that name no factory open no exam at all (app/lib/simsite.js, poolPages).
+  const pages = poolPages();
+  const ofSite = pages === "listed" ? await simPoolOf(address, true) : null;
+  if (pages !== "any" && !(await sitePool(ofSite, page))) return;
   const exam = new ethers.Contract(address, PAPER_EXAM_ABI, chain.readProvider);
   // The chain the exam is on is the one the node that answers its getters says (eth_chainId): the page's data source
   // is that chain's or nothing (dataSource), never another network's candles beside this exam.
   const chainId = await nodeChainId();
   const ds = dataSource({ chainId }, CONFIG);
-  const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(), simPoolOf(address)]);
+  const [rules, terms, trader, panelPool] = await Promise.all([exam.rules(), exam.terms(), exam.trader(),
+    pages === "listed" ? ofSite : simPoolOf(address)]);
   // The panel's header and footer (set by the router for every exam address) stay only for an exam of a pool of exams.
   // This continuation may have been left behind by a page change: only the page on screen touches the page-wide marker.
   if (!page.isConnected) return;
@@ -177,7 +189,7 @@ function skeleton(st) {
       <div class="ex-prev" id="ex-${k}-prev"></div>`;
   return `
     <div class="ex-strip">
-      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks && !st.panelPool ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
+      <span class="ex-badge">${esc(SCREEN_TEXT.strip)}</span>${marks.tag && !st.panelPool ? `<span class="ex-tag">${esc(marks.tag)}</span>` : ""}
       <p class="ex-line">${esc(WHAT_THIS_IS)}</p>
       <div class="ex-kv" id="ex-kv"></div>
       <div class="ex-steps" id="ex-steps"></div>
@@ -249,7 +261,7 @@ function skeleton(st) {
         </div>
       </section>
     </div>
-    ${marks && !st.panelPool ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
+    ${marks.plaque && !st.panelPool ? `<div class="ex-foot"><span class="ex-disc">${esc(marks.plaque)}</span></div>` : ""}`;
 }
 
 // ── readings ────────────────────────────────────────────────────

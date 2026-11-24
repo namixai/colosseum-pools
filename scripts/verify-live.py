@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """The site as it is served, checked against the pack it was uploaded from.
 
-    python3 scripts/verify-live.py <pack>.sha256 https://pools.usenami.io
-    python3 scripts/verify-live.py <pack>.sha256 <a folder standing in for the site>
+    python3 scripts/verify-live.py [--network testnet|mainnet] <pack>.sha256 https://pools.usenami.io
+    python3 scripts/verify-live.py [--network testnet|mainnet] <pack>.sha256 <a folder standing in for the site>
 
 The list is the one scripts/pack-site.sh writes beside the pack: a sha256 for every file of the pack, build.json
 included. Every file in it is read from the site and hashed. Exit 0 only if every one matches; 1 if any differs or
 cannot be read, each named on a line of its own; 2 if the arguments or the list cannot be used.
+
+--network says which network's site the address is, testnet unless named. The site's own build.json names the
+network its pack was made for (scripts/pack-site.sh), and a pack made for the other network is refused with exit 1
+before a file is compared: every file of a mainnet pack uploaded over the testnet site would match its own list,
+and the check would have confirmed the wrong site. A build.json that names no network is a pack from before the
+packer named one, which was only ever testnet's.
 
 index.html is read from "/", the address a visitor opens. Cloudflare inserts two tags into it before </body>, in
 either order: its challenge script, and its Web Analytics beacon followed by a newline. Each is cut on its own, so
@@ -16,6 +22,7 @@ anything more -- another body, another attribute -- stays in, and index.html is 
 Cloudflare changes its snippet, until the pattern here is brought up to it.
 """
 import hashlib
+import json
 import os
 import re
 import sys
@@ -54,6 +61,17 @@ BEACON = re.compile(
     rb" data-cf-beacon='\{[^<>'\\]{1,512}\}'"
     rb' crossorigin="anonymous"></script>\n?')
 LINE = re.compile(r"^([0-9a-f]{64}) [ *](.+)$")
+NETWORKS = ("testnet", "mainnet")  # the ones scripts/pack-site.sh packs for
+BUILD = "build.json"
+
+
+def network_of(get):
+    """The network the site's pack was made for, as its build.json names it; testnet for one that names none."""
+    body, _ = get(BUILD)
+    build = json.loads(body)
+    if not isinstance(build, dict):
+        raise ValueError(f"{BUILD} is not an object")
+    return build.get("network", "testnet")
 
 
 def entries(path):
@@ -96,10 +114,13 @@ def reader(base):
 
 
 def main(argv):
-    if len(argv) != 3:
+    args, want = argv[1:], "testnet"
+    if args[:1] == ["--network"]:
+        want, args = (args[1] if len(args) > 1 else ""), args[2:]
+    if len(args) != 2 or want not in NETWORKS:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
-    sums, base = argv[1], argv[2].rstrip("/")
+    sums, base = args[0], args[1].rstrip("/")
     try:
         files = entries(sums)
         get, index_from = reader(base)
@@ -107,6 +128,17 @@ def main(argv):
         print(f"verify-live: {e}", file=sys.stderr)
         return 2
     print("read at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    # Which network's pack the site serves, before any file is compared: a pack of the other network matches its own
+    # list file for file, and that match must not be read as this site being right.
+    try:
+        got = network_of(get)
+    except Exception as e:  # no build.json, or one that cannot be read: the site does not say what it is
+        print(f"live {base}: its {BUILD} does not say which network its pack is for ({e}); nothing was compared")
+        return 1
+    if got != want:
+        print(f"live {base}: serves a pack made for {got}, and this is the check of the {want} site; nothing was "
+              f"compared. If this address is the {got} site, say so: --network {got}")
+        return 1
     match = differ = 0
     notes = []
     for want, rel in files:

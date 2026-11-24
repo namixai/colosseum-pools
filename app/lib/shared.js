@@ -9,8 +9,9 @@ import { liveDeployment, isArchive } from "./deployments.js";
 
 /** The pool `#/shared` opens when the link names no address: the live deployment's current one
  *  (app/config.js, `sharedPool` and the record `sharedPoolRecord` names). The pools of the earlier
- *  rounds are still there and open by address, the way docs/EVIDENCE-SHARED-POOL.md lists them. */
-export const SHARED_POOL = liveDeployment().sharedPool;
+ *  rounds are still there and open by address, the way docs/EVIDENCE-SHARED-POOL.md lists them. A site
+ *  with no live deployment (a site of simulation pools) has no shared pool, and no page for one. */
+export const SHARED_POOL = liveDeployment()?.sharedPool;
 
 /** Whether `address` is the pool the page takes deposits into. */
 export function isCurrentPool(address, current = SHARED_POOL) {

@@ -12,6 +12,7 @@ import {
 } from "../lib/simlines.js";
 import { manageHeaderHtml, footerHtml, notOwnerHtml, noWalletHtml } from "../lib/simpanel.js";
 import { ownerPairHtml } from "../lib/simowner.js";
+import { networkName } from "../lib/network.js";
 import { accountLabel, wireShell } from "./simshell.js";
 import { readCodes, codesSection, wireCodes } from "./simowner-codes.js";
 import { readWithdraw, withdrawSection, wireWithdraw } from "./simowner-withdraw.js";
@@ -46,7 +47,7 @@ export async function simAdminView(address, page) {
   const [data, codes, cash] = await Promise.all([readOwnerPool(at), readCodes(at), readWithdraw(at)]);
   render(page, `<div class="sp sp-manage">${header}
     <section class="sp-hero sp-hd">
-      <div class="sp-kick">Owner panel · ${esc(name)} · Hyperliquid testnet</div>
+      <div class="sp-kick">Owner panel · ${esc(name)} · ${esc(networkName())}</div>
       <h1>The pool's <em>water level</em></h1>
       <p class="sp-lede">Water level = the pool's money. A line can sell, or be switched on, only while the free money covers <span class="sp-mk">two of its payouts</span>.</p>
     </section>

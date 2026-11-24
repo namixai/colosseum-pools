@@ -20,8 +20,13 @@ import { simPartnerView } from "./views/simpartner.js";
 import { simTradeView, simExamsView, simPayoutsView } from "./views/simtrader.js";
 import { panelOf } from "./lib/simpanel.js";
 import { examView } from "./views/exam.js";
+import { simListView, sitePool } from "./views/simsite.js";
+import { simSite, NOT_FOUND } from "./lib/simsite.js";
+import { isMainnet } from "./lib/network.js";
 
-const GATE_KEY = "pools-gate-v1";
+// The entry question's answer is kept for the network the site is built for: "this is a testnet demo" answers
+// nothing a mainnet site asks.
+const GATE_KEY = isMainnet() ? "pools-gate-v1-mainnet" : "pools-gate-v1";
 
 function termsView(page) {
   render(page, `<section class="card narrow">
@@ -35,7 +40,10 @@ function termsView(page) {
   </section>`);
 }
 
-const routes = [
+// The pages of the pools a PoolFactory deployment makes, and what stands beside them: the list, a pool, a challenge,
+// the shared pool, the calculator, the records and the terms of their demo. A site has them when its settings name
+// such a deployment (app/config.js, `deployments`).
+const poolRoutes = [
   [/^#?\/?$/, (m, page) => listView(page)],
   [/^#\/new$/, (m, page) => newPoolView(page)],
   [/^#\/pool\/(0x[0-9a-fA-F]{40})$/, (m, page) => poolView(m[1], page)],
@@ -44,6 +52,10 @@ const routes = [
   [/^#\/economics$/, (m, page) => economicsView(page)],
   [/^#\/shared(?:\/(0x[0-9a-fA-F]{40}))?$/, (m, page) => sharedView(m[1], page)],
   [/^#\/evidence$/, (m, page) => evidenceView(page)],
+  [/^#\/terms$/, (m, page) => termsView(page)],
+];
+
+const simRoutes = [
   // A simulated pool has two panels, and neither links to the other: the trader's page of the pool, and the control
   // panel (the owner's section), which the site's navigation does not name.
   [/^#\/sim\/(0x[0-9a-fA-F]{40})\/partner$/, (m, page) => simPartnerView(m[1], page)],
@@ -54,8 +66,14 @@ const routes = [
   [/^#\/sim\/(0x[0-9a-fA-F]{40})\/payouts$/, (m, page) => simPayoutsView(m[1], page)],
   [/^#\/manage\/(0x[0-9a-fA-F]{40})$/, (m, page) => simAdminView(m[1], page)],
   [/^#\/exam(?:\/(0x[0-9a-fA-F]{40}))?(?:\?(.*))?$/, (m, page) => examView(m[1], page, m[2])],
-  [/^#\/terms$/, (m, page) => termsView(page)],
 ];
+
+// A site of simulation pools (app/config.js, `sim`) opens on the list of its factory's pools and has none of the other
+// pools' pages: their addresses draw "Not found", as any address the site has no page for.
+const routes = simSite() ? [[/^#?\/?$/, (m, page) => simListView(page)], ...simRoutes] : [...poolRoutes, ...simRoutes];
+// The pool a page of the panels names. On a site of simulation pools the page opens only for a pool of the site's
+// factory (views/simsite.js); on any other site, for any address, as before.
+const PANEL_POOL = /^#\/(?:sim|manage)\/(0x[0-9a-fA-F]{40})/;
 
 // A new page says it is loading until its view writes into it: the page before it is gone at once, and an empty
 // screen says nothing. Leaving a page tells the reader, so what that page still had waiting is not sent.
@@ -134,10 +152,11 @@ function rpcWaitNotice() {
 function viewFor(hash) {
   for (const [pattern, handler] of routes) {
     const m = hash.match(pattern);
-    if (m) return (page) => handler(m, page);
+    if (!m) continue;
+    const pool = PANEL_POOL.exec(hash)?.[1];
+    return pool ? async (page) => ((await sitePool(pool, page)) ? handler(m, page) : undefined) : (page) => handler(m, page);
   }
-  return (page) =>
-    render(page, `<section class="card"><h2>Not found</h2><p><a href="#/">Back to the pools</a></p></section>`);
+  return (page) => render(page, NOT_FOUND);
 }
 
 function route() {
@@ -225,7 +244,8 @@ function showBuild() {
 // The commit the pool gateway on the host runs, as its /v1/health names it, beside the site's own.
 function showGatewayCommit() {
   const link = $("#gateway-commit");
-  if (!link) return;
+  // A site of simulation pools sends no orders and names no gateway: there is no host's commit to show.
+  if (!link || !CONFIG.gateway) return;
   fetch(`${CONFIG.gateway}/v1/health`, { cache: "no-store" })
     .then((res) => (res.ok ? res.json() : null))
     .then((health) => {
