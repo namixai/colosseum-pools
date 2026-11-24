@@ -17333,6 +17333,15 @@ MUTATIONS = [
      "        for asset in sorted({s[\"asset\"] for s in spans} - {w[0] for w in want}):",
      "        for asset in ():",
      ["test_every_asset_with_a_stop_has_a_block_the_node_bore_out_or_the_journal_is_doubted"]),
+    # No key of the node in a line: the longest configured address first; a refusal cleaned before it is cut.
+    ("SC43", "ops/sim_check.py",
+     "    for url in sorted(set(urls), key=len, reverse=True):\n        text = text.replace(url, \"<node>\")",
+     "    for url in sorted(set(urls), key=len):\n        text = text.replace(url, \"<node>\")",
+     ["test_one_configured_address_that_begins_another_leaves_none_of_the_others_key"]),
+    ("SC44", "ops/sim_check.py",
+     "error=refusal(Exception(quiet(exc, None))))",
+     "error=quiet(refusal(exc)))",
+     ["test_a_stop_the_node_refused_is_said_with_no_host_name_cut_in_two"]),
 ]
 
 RUNNERS = {

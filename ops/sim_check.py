@@ -93,13 +93,14 @@ _HOST = re.compile(r"(host=['\"])[^'\"]*(['\"])")
 _URL_PATH = re.compile(r"(url: ?)/[^\s'\"<>()]*")
 
 
-def quiet(exc, limit: int = 200) -> str:
-    """An exception's text with no node address in it, cut to `limit` after the address is gone: a node's URL may hold
-    its key. The configured nodes' addresses are taken out as they are, then any other URL, then a bare path."""
+def quiet(exc, limit: int | None = 200) -> str:
+    """An exception's text with no node address in it, cut to `limit` (None: not cut) after the address is gone: a
+    node's URL may hold its key. The configured nodes' addresses are taken out as they are, the longest first (one that
+    begins another would leave the other's end, its key, behind), then any other URL, then a bare path."""
     text = str(exc)
     urls = [u for u in (getattr(c, "RPC_URL", None), os.environ.get("COLOSSEUM_RPC_URL"),
                         os.environ.get("COLOSSEUM_RPC_BACKUP_URL")) if u]
-    for url in urls:
+    for url in sorted(set(urls), key=len, reverse=True):
         text = text.replace(url, "<node>")
     text = _URL_PATH.sub(r"\1<path>", _URL.sub("<node>", text))
     # A key may be the node's host name itself (KEY.provider.example): urllib3 writes it as host='…' and in its
@@ -423,7 +424,9 @@ class Checker:
             log("sent", to=to, call=sig.split("(")[0], **fields, tx=rcpt["transactionHash"])
             return True
         except Exception as exc:
-            log("send_failed", to=to, call=sig.split("(")[0], **fields, error=quiet(refusal(exc)))
+            # The address goes out of the whole text first: `refusal` cuts it to 200, and a host name cut in two
+            # is no longer known for one.
+            log("send_failed", to=to, call=sig.split("(")[0], **fields, error=refusal(Exception(quiet(exc, None))))
             return False
 
 

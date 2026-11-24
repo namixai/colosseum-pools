@@ -651,6 +651,54 @@ class TheLoop(unittest.TestCase):
         load.assert_not_called()
 
 
+class NoKeyOfTheNodeInALine(unittest.TestCase):
+    """A node's address may hold its key, in its path or in its host name: `quiet` takes every configured address out."""
+
+    def test_one_configured_address_that_begins_another_leaves_none_of_the_others_key(self):
+        """The first node's address is the start of the second's, which ends in its key: taken out in the order they
+        are configured, the first would turn the second into "<node>/KEY", a text no later rule knows for an address."""
+        import os
+        from unittest import mock
+        short, long = "https://rpc.example.org", "https://rpc.example.org/SECRETKEY123"
+        texts = (f"403 Client Error: Forbidden for url: {long}", f"down: {long}", f"both: {short} and {long}, twice {long}")
+        for first, backup in ((short, long), (long, short)):
+            with mock.patch.object(s.c, "RPC_URL", first), \
+                    mock.patch.dict(os.environ, {"COLOSSEUM_RPC_URL": first, "COLOSSEUM_RPC_BACKUP_URL": backup}):
+                for text in texts:
+                    got = s.quiet(RuntimeError(text), 400)
+                    self.assertNotIn("SECRETKEY123", got, (first, text))
+                    self.assertNotIn("rpc.example.org", got, (first, text))
+                    self.assertIn("<node>", got)
+                self.assertEqual(s.quiet(RuntimeError(f"down: {long}"), 400), "down: <node>")
+
+    def test_a_stop_the_node_refused_is_said_with_no_host_name_cut_in_two(self):
+        """The refusal's text is cut to 200. Cut first, a host name that is the node's key stands there in part,
+        `host='KEY.prov`, with no end for any rule to know it by: the address goes out of the whole text, then the cut."""
+        import os
+        from unittest import mock
+        from ops import contract_errors as ce
+        url = "https://SECRETKEY123.provider.example/v2"
+        node = Node()
+        ch = TheLoop().checker(node)
+        lines = []
+        for lead in range(150, 200):
+            text = "x" * lead + " HTTPSConnectionPool(host='SECRETKEY123.provider.example', port=443): Max retries exceeded"
+            with mock.patch.object(s.c, "RPC_URL", url), mock.patch.dict(os.environ, {"COLOSSEUM_RPC_URL": url}), \
+                    mock.patch.object(s.c, "transact", side_effect=RuntimeError(text)), \
+                    mock.patch.object(s, "log", side_effect=lambda event, **f: lines.append({"event": event, **f})):
+                self.assertFalse(ch.send(node.pool, [], s.STOP, s.STOP_TYPES, id=0))
+        self.assertEqual(len(lines), 50)
+        self.assertNotIn("SECRETKEY123", json.dumps(lines))
+        self.assertTrue(all(len(l["error"]) <= 200 for l in lines))
+        # What the pool itself refused with is still said by its name, whatever stands around it.
+        sel, sig = next((k, v) for k, v in ce.BY_SELECTOR.items() if v.endswith("()"))
+        refused = RuntimeError(f"{{'code': 3, 'message': 'execution reverted', 'data': '{sel}'}} for url: {url}/SECRETKEY123")
+        with mock.patch.object(s.c, "RPC_URL", url), mock.patch.object(s.c, "transact", side_effect=refused), \
+                mock.patch.object(s, "log", side_effect=lambda event, **f: lines.append({"event": event, **f})):
+            ch.send(node.pool, [], s.STOP, s.STOP_TYPES, id=0)
+        self.assertEqual(lines[-1]["error"], sig)
+
+
 class ThePace(unittest.TestCase):
     def test_reads_are_spaced_by_the_gap_from_the_end_of_the_last(self):
         clock = [100.0]
