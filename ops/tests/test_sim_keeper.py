@@ -691,7 +691,8 @@ class Chain:
         if method == "eth_blockNumber":
             return hex(self.head)
         if method == "eth_getBlockByNumber":
-            return {"number": hex(self.head), "timestamp": hex(self.now())}
+            block = self.head if params[0] == "latest" else int(params[0], 16)
+            return {"number": hex(block), "timestamp": hex(self.now(block))}
         if method == "eth_getLogs":
             q = params[0]
             return [l for l in self.logs if int(q["fromBlock"], 16) <= int(l["blockNumber"], 16) <= int(q["toBlock"], 16)]
@@ -763,7 +764,7 @@ class TheBatchedPass(unittest.TestCase):
             reads = sum(len(b) for b in chain.batches)
             self.assertEqual(reads, 1 + 4 + n * (5 + 3 * 3 + 1), "the factory's pools, the pool's four, fifteen an account")
             self.assertTrue(all(len(b) + 2 <= k.BATCH for b in chain.batches), "at most a hundred a call")
-            self.assertEqual([m for m, _ in chain.calls], ["eth_blockNumber"] + ["eth_call"] * len(chain.batches) + ["eth_getLogs"])
+            self.assertEqual([m for m, _ in chain.calls], ["eth_getBlockByNumber"] + ["eth_call"] * len(chain.batches) + ["eth_getLogs"])
             counts[n] = len(chain.calls)
             self.assertEqual(sk.stop_loop.reread.call_count, 2 * n, "each exam's stops handed to the loop, each pass")
             self.assertEqual(sk.reads.got, {}, "the batch is the pass's: nothing later is answered from it")
@@ -777,9 +778,9 @@ class TheBatchedPass(unittest.TestCase):
         sk = self.keeper(chain)
         self.passes(sk, chain)
         self.assertEqual(chain.batches, [])
-        self.assertEqual(len(chain.calls), 1 + 1 + 1 + 1 + 100 * (6 + 7 + 1) + 2,
-                         "the head, its time, the pools, the scan; of each account six reads of its own, its rules and "
-                         "a stop and a take an asset, its pool's window; the pool's queue")
+        self.assertEqual(len(chain.calls), 1 + 1 + 1 + 100 * (6 + 7 + 1) + 2,
+                         "the head with its time, the pools, the scan; of each account six reads of its own, its rules "
+                         "and a stop and a take an asset, its pool's window; the pool's queue")
 
     def test_an_account_is_never_cut_in_two_and_its_block_is_the_block_of_its_call(self):
         for ahead in (0, 1):
@@ -900,16 +901,20 @@ class TheBatchedPass(unittest.TestCase):
         chain = Chain(2, ahead=1)
         sk = self.keeper(chain)
         self.passes(sk, chain)
-        self.assertEqual([m for m, _ in chain.calls][:4], ["eth_blockNumber", "eth_blockNumber", "eth_call", "eth_blockNumber"],
-                         "the pass's head, then the measure between two reads of the head")
+        measure = ["eth_blockNumber", "eth_call", "eth_blockNumber", "eth_getBlockByNumber"] * 2
+        self.assertEqual([m for m, _ in chain.calls][:9], ["eth_getBlockByNumber"] + measure,
+                         "the pass's head with its time, then two measures that agree, each between two reads of the "
+                         "head and with the head's time")
         self.assertEqual(sk.ahead, 1)
         chain.calls.clear()
         self.passes(sk, chain, 3)
-        self.assertEqual([m for m, _ in chain.calls].count("eth_blockNumber"), 3, "not measured again: the pass's own, each pass")
+        methods = [m for m, _ in chain.calls]
+        self.assertEqual((methods.count("eth_blockNumber"), methods.count("eth_getBlockByNumber")), (0, 3),
+                         "not measured again: the pass's own head, each pass")
         sk.ahead_at -= k.NUMBERING_EVERY_S
         chain.calls.clear()
         self.passes(sk, chain)
-        self.assertEqual([m for m, _ in chain.calls].count("eth_blockNumber"), 3)
+        self.assertEqual([m for m, _ in chain.calls].count("eth_blockNumber"), 4)
 
     def test_a_numbering_that_cannot_be_read_ends_the_batches_and_says_so(self):
         chain = Chain(2, ahead=3)

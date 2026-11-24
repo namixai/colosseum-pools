@@ -794,14 +794,15 @@ What the keeper asks of its node, on a node paid by the request. A look at the h
 the block's number, its time and the oracle price of every platform asset and every asset with a stop standing, all
 of one state, and the journal's line takes its number and its time from that call. There is one `eth_getLogs` a block
 (one for each 50 blocks read back), and it serves the stops and the orders alike: the keeper's fast loop takes its
-head and its logs from the stops' loop and asks for neither. The slow pass, every 30 seconds, asks the head, the
-scan's `eth_getLogs`, and its reads of the pools and the accounts in batches of at most 100 through the same
+head and its logs from the stops' loop and asks for neither. The slow pass, every 30 seconds, asks the head (with its
+time, one `eth_getBlockByNumber`), the scan's `eth_getLogs`, and its reads of the pools and the accounts in batches
+of at most 100 through the same
 Multicall3 (fifteen reads an account with three assets, an account never cut in two: six accounts a call). Counted
 between the process and a stand-in node, a block a second, three assets, one minute:
 
 | | before | now |
 |---|---|---|
-| keeper with the stops' loop, 3 accounts | 638 (`eth_call` 276, `eth_getLogs` 122, `eth_getBlockByNumber` 120, `eth_blockNumber` 120) | 185 (`eth_call` 121, `eth_getLogs` 62, `eth_blockNumber` 2) |
+| keeper with the stops' loop, 3 accounts | 638 (`eth_call` 276, `eth_getLogs` 122, `eth_getBlockByNumber` 120, `eth_blockNumber` 120) | 185 (`eth_call` 121, `eth_getLogs` 62, `eth_blockNumber` 2: since review 20 of #342 the pass's head is `eth_getBlockByNumber`, one for one) |
 | the same, 100 accounts | 3 541 (`eth_call` 3 186) | 217 (`eth_call` 153) |
 | the second writer of prices | 358 (`eth_call` 180, `eth_getBlockByNumber` 118, `eth_getLogs` 60) | 179 (`eth_call` 119, `eth_getLogs` 60); 121 with `COLOSSEUM_STOP_POLL=1` |
 
@@ -810,19 +811,34 @@ each hundred accounts where it was 125 million. On top of that, as they come: a 
 is asked for by its number, one call (20 a step at most); a second `eth_getLogs` for a block with a sale; a position
 read for each stop set or fill; a receipt read a block for each stop in flight; a gas price read every ten blocks;
 the keeper's own transactions; four reads before each alarm (whether the exam was over); the key's balance every
-five minutes; and three requests every ten minutes that measure how the node numbers the block of a call. Each
+five minutes; one `eth_getBlockByNumber` a minute for each loop's look held against the node's record of its block,
+and one for a look that skips blocks or says a time it should not (review 20 of #342); one for a slow pass whose
+first call ran a block after the head it read, and one for each pass of the second writer; and eight requests every
+ten minutes that measure how the node numbers the block of a call (they were three). Each
 process says what it asked once a minute, by method and with no address of the node: `stop_loop_alive` (the stops'
 loop), `keeper_alive` (the keeper's own thread), `watch_alive` (the second writer's pass): `requests` is the count
 since the last such line.
 
 A node answers a read "at block N" as it likes: Hyperliquid's own nodes answer it at their head (read on both
 networks on 24 November 2026), others with nothing for a block that is no longer the last. So a block asked for by
-its number is taken only when the call itself says it ran in that block; otherwise the block is a gap of the
+its number is taken only when the call itself says it ran in that block, and only from a node whose answers by
+number held, within the last ten minutes, against the loop's own look at a block now behind the head: a node that
+says an old block's number and time with its head's state (an oracle with no past) gives other prices for it, and
+reading back is then off for the run (`stop_read_back_off`). Otherwise the block is a gap of the
 journal, which the payout review holds as not checked, and an alarm at most once an hour when a stop stood armed in
 it (`stop_read_back_gap`). The same nodes run a call at `latest` as the block to come, the next number with the
-head's time: the loop measures that at its start, between two reads of the head that agree, and counts the number
-back (`stop_numbering_changed` if a later measure differs, `stop_one_call_off` if the number is neither the head's
-nor the next: the loop then goes on as it was before, a call a price). More than a tenth of the last ten minutes'
+head's time: the loop measures that at its start, twice, each between two reads of the head that agree and with
+the call's time the head's own (asked of the node by the head's number), takes it when the two agree, and counts
+the number back (`stop_numbering_changed` if a later measure differs, `stop_one_call_off` if the number is neither
+the head's nor the next: the loop then goes on as it was before, a call a price). Every call says the head's time,
+whatever number it says, so a numbering that moves between two measures shows in the looks: a block seen before
+with another time, a new block with the last look's time, blocks skipped. Such a look, and any look once a minute,
+is held against the node's own record of its block by its number; one that does not hold makes no step by its
+number: the numbering is measured again at once, and that look is made the old way, the head as the node says it
+(`stop_look_wrong`, at most once an hour, when the measure comes out as before and the node still records that
+number with another time). The keeper's slow pass holds its batch's first call against the head it read just
+before it in the same way, and the second writer's pass against the node's record: a batch that does not hold
+hands nothing to the loop, its exams are read alone and the numbering is measured again. More than a tenth of the last ten minutes'
 blocks with no price in the journal is an alarm whether a stop stands or not (`stop_prices_unread`, said again at
 most once an hour). Without Multicall3 on the chain the keeper and the loop work as they did, a read a request, and
 say so once at the start (`no_multicall`); on mainnet, where it stands, they do not start without it. A node of the

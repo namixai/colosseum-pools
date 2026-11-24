@@ -715,8 +715,13 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
   asset with a stop or a take standing, all of one state. The journal's line takes its number and its time from
   that call, not from a tag of the request; a price that fails alone leaves the others in the line. A node that
   runs a call at `latest` as the block to come (Hyperliquid's own do: the next number, the head's time) is measured
-  at the start and its number counted back. If the call fails whole, that one look is the head and then a call a
-  price, as before; without Multicall3 on the chain every look is (and on mainnet the loop does not start);
+  at the start, twice and taken when the two agree, and its number counted back. A look that gives a reason to
+  doubt its number (a block seen before with another time, a new one with the last look's time, blocks skipped),
+  and any look once a minute, is held against the node's own record of its block; one that does not hold makes no
+  step by its number: the numbering is measured again at once and that look is the head and a call a price. A price
+  read in the call after one that failed (and may have burned its gas) is asked again alone. If the call fails
+  whole, that one look is the head and then a call a price, as before; without Multicall3 on the chain every look
+  is (and on mainnet the loop does not start);
 - every block: one `eth_getLogs` of the blocks since its last look (stops and takes set, cleared and filled, the
   fills that move a position, exams sold and ended), and the comparison made by the loop itself, not one `eth_call`
   a stop. With the keeper, the orders placed are read in the same call and each step's blocks and logs are handed
@@ -739,9 +744,11 @@ the keeper looks at the stops in a loop of their own, `ops/stop_filler.py`, a th
 - the slow pass, a receipt the keeper's own thread waits for, and that thread's retry ladder hold only that
   thread. Every call of the loop is tried once: a busy node costs it that look. The blocks it missed are read back
   the next time, their events always (1 000 blocks at most) and their prices for the last 20, each by its number in
-  one call and taken only when the call itself says it ran in that block: a node that answers a number with its
-  head, or with nothing, gives a gap of the journal and never a line with another block's price (an alarm at most
-  once an hour with a stop armed, `stop_read_back_gap`); the head's stops go
+  one call and taken only when the call itself says it ran in that block, from a node whose answers by number held
+  against the loop's own look at an older block within ten minutes: a node that answers a number with its head, or
+  with nothing, or with an old block's number and its head's prices, gives a gap of the journal and never a line with
+  another block's price (an alarm at most once an hour with a stop armed, `stop_read_back_gap`; the last of them
+  turns reading back off for the run, `stop_read_back_off`); the head's stops go
   out before the blocks behind it are read. Blocks with no prices are said (`stop_watch_blind`), and more than a
   tenth of the last ten minutes' blocks without one is an alarm with or without a stop (`stop_prices_unread`). Blocks skipped by
   the read-back of prices are an alarm at once when a stop stood armed in them or was set and armed in them

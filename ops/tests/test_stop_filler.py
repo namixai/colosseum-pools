@@ -36,6 +36,9 @@ SEL = {name: "0x" + keccak(text=name)[:4].hex() for name in ("positionOf(uint32)
                                                               "getCurrentBlockTimestamp()",
                                                               "aggregate3((address,bool,bytes)[])")}
 ORACLE_OF = {a: "0x" + encode(["uint32"], [a]).hex() for a in (0, 3, 4)}  # the data of an oracle read, by asset
+# The requests of one measure of the node's numbering (`sk.numbering`): twice, each a call between two reads of the
+# head with the head's time asked for by its number, taken when the two agree (review 20 of #342).
+MEASURE = ["eth_blockNumber", "eth_call", "eth_blockNumber", "eth_getBlockByNumber"] * 2
 
 
 def word(n: int) -> str:
@@ -1746,8 +1749,15 @@ class TheOneCall(Base):
             journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
             self.assertEqual(journal.px[BTC], lines, how)
             self.assertEqual(journal.times, {b: self.node.time_of(b) for b in lines}, "each line's time by its own call")
-            self.assertEqual({m for m, _ in self.node.calls}, {"eth_call", "eth_getLogs"}, "no block asked for apart")
-            self.assertEqual(self.node.batches()[-3:], [("latest", 3), (hex(101), 3), (hex(102), 3)], how)
+            self.assertEqual({m for m, _ in self.node.calls} - {"eth_getBlockByNumber"}, {"eth_call", "eth_getLogs"})
+            self.assertEqual([p[0] for m, p in self.node.calls if m == "eth_getBlockByNumber"], [hex(103)],
+                             "no block asked for apart but the head's, by its number: a look that skips blocks is held "
+                             "against the node's record of its block (review 20 of #342)")
+            if how == "honest":
+                # The first block read back is taken once the node's answers by number hold against the look at 100.
+                self.assertEqual(self.node.batches()[-4:], [("latest", 3), (hex(101), 3), (hex(100), 3), (hex(102), 3)])
+            else:
+                self.assertEqual(self.node.batches()[-3:], [("latest", 3), (hex(101), 3), (hex(102), 3)], how)
             gaps = [(lo, hi) for lo, hi, _ in journal.gaps]
             self.assertEqual(gaps, [] if how == "honest" else [(101, 101), (102, 102)], how)
             if how != "honest":
@@ -1832,8 +1842,12 @@ class TheOneCall(Base):
             with mock.patch.object(self.node, "call", side_effect=call):
                 self.run_to(loop, 102)
             row = [r for r in self.rows() if r.get("b") == 102][-1]
-            self.assertEqual(self.node.batches()[-3:], [("latest", 3), (hex(101), 3), (hex(102), 1)],
-                             "the look, block 101 read back, and the one price the look did not ask for")
+            # The look, block 101 read back (taken once the node's answers by number hold against the look at 100,
+            # review 20 of #342), and the one price the look did not ask for.
+            if moved_on:
+                self.assertEqual(self.node.batches()[-3:], [("latest", 3), (hex(101), 3), (hex(102), 1)])
+            else:
+                self.assertEqual(self.node.batches()[-4:], [("latest", 3), (hex(101), 3), (hex(100), 3), (hex(102), 1)])
             if moved_on:
                 self.assertEqual((row["px"], row["unread"]), ({"0": 777, "3": 777, "4": 777}, [other]))
             else:
@@ -1907,8 +1921,8 @@ class TheNodesNumbering(Base):
             loop._served = lambda until, s: stop.set()
             loop.run(0.01, stop)
             self.assertEqual(loop.ahead, ahead)
-            self.assertEqual([m for m, _ in self.node.calls], ["eth_blockNumber", "eth_call", "eth_blockNumber", "eth_call",
-                                                               "eth_getLogs"], "measured once, then the look and its logs")
+            self.assertEqual([m for m, _ in self.node.calls], MEASURE + ["eth_call", "eth_getLogs"],
+                             "measured once, then the look and its logs")
             logs = [p[0] for m, p in self.node.calls if m == "eth_getLogs"][0]
             self.assertEqual((logs["fromBlock"], logs["toBlock"]), (hex(100), hex(100)), "the head, not the block to come")
             journal = pr.load_prices(pr.journal_text(self.dir / "prices.jsonl"))
@@ -1939,7 +1953,7 @@ class TheNodesNumbering(Base):
         with mock.patch.object(self.node, "call", side_effect=call):
             loop._numbering()
         self.assertEqual(loop.ahead, 0, "the first measure said 1 with the head moved under it: not taken")
-        self.assertEqual([m for m, _ in self.node.calls], ["eth_blockNumber", "eth_call", "eth_blockNumber"] * 2)
+        self.assertEqual([m for m, _ in self.node.calls], ["eth_blockNumber", "eth_call", "eth_blockNumber"] + MEASURE)
 
     def test_a_number_that_is_neither_the_heads_nor_the_next_ends_the_one_call_with_an_alarm(self):
         self.node.ahead = 2
@@ -1978,8 +1992,7 @@ class TheNodesNumbering(Base):
         before = len(self.node.calls)
         self.run_to(loop, 103)
         self.assertEqual(loop.ahead, 1, "measured at the next look")
-        self.assertEqual([m for m, _ in self.node.calls[before:]], ["eth_blockNumber", "eth_call", "eth_blockNumber", "eth_call",
-                                                                    "eth_getLogs"])
+        self.assertEqual([m for m, _ in self.node.calls[before:]], MEASURE + ["eth_call", "eth_getLogs"])
 
     def test_a_busy_node_at_the_measure_costs_the_look_and_is_not_asked_the_old_way(self):
         loop = self.loop(wallet=None)
@@ -1995,7 +2008,10 @@ class TheNodesNumbering(Base):
         self.assertEqual(self.node.calls[0][0], "eth_call", "measured a moment ago: not again")
         loop.ahead_at -= sf.NUMBERING_EVERY_S
         self.node.ahead = 1
+        before = len(self.node.calls)
         self.run_to(loop, 101)
+        self.assertEqual([m for m, _ in self.node.calls[before:]], MEASURE + ["eth_call", "eth_getLogs"],
+                         "ten minutes on, measured again before the look, which then counts by the new measure")
         changed = self.events("stop_numbering_changed")
         self.assertEqual([(a["was"], a["now"], a["alarm"]) for a in changed], [(0, 1, "ALARM")])
         self.assertEqual((loop.ahead, loop.block), (1, 101))
@@ -2250,9 +2266,11 @@ class TheWatchAlonesBatch(Base):
                 if not self.MULTICALL:
                     self.assertEqual(len(asked), 9 * 5, "a call a read, as before: status, rules, stop, take, position")
                 elif turn == 1:
-                    self.assertEqual(asked, ["eth_call", "eth_call"], "the rules of each, then the stops of each")
+                    # The rules of each, then the stops of each, then the first call's block held against the node's
+                    # record of it (review 20 of #342).
+                    self.assertEqual(asked, ["eth_call", "eth_call", "eth_getBlockByNumber"])
                 else:
-                    self.assertEqual(asked, ["eth_call"], "the rules are written once: one call from then on")
+                    self.assertEqual(asked, ["eth_call", "eth_getBlockByNumber"], "the rules are written once")
         self.run_to(loop, 101)
         self.assertEqual(sorted(k[0] for k in loop.triggers), sorted(exams))
 

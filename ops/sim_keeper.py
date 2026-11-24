@@ -258,16 +258,63 @@ class BadNumbering(RuntimeError):
 def numbering(call, head_of) -> int | None:
     """How many blocks past its head the node numbers a call at `latest`: 0 for a node that runs it as the head block
     itself, 1 for one that runs it as the block to come (HyperEVM's own nodes, read on 24 November 2026: the number
-    of the next block with the time of the head). Measured between two reads of the head (`head_of`) that agree;
-    None when a block came between them, to be measured again. Anything else raises: the call's number says nothing
-    this code knows how to read."""
+    of the next block with the time of the head). Measured twice, and taken only when the two agree (review 20 of
+    #342): one address may be several servers, and one measure may meet a server a block behind the others. None
+    when they do not, or when either could not be made: to be measured again. Anything else raises: the call's
+    number says nothing this code knows how to read."""
+    first = _measured(call, head_of)
+    if first is None:
+        return None
+    return first if _measured(call, head_of) == first else None
+
+
+def _measured(call, head_of) -> int | None:
+    """One measure: a call between two reads of the head (`head_of`) that agree, and the call's time the head's own,
+    as the node records the head by its number. Both kinds of node say the head's time in a call, whatever number
+    they say; a call that says another time ran on another block (a server behind the one that read the head), and
+    its number says nothing of the head's. None for either: a block came between, or the call met another block."""
     before = head_of()
-    number, _, _ = aggregate(call, [])
-    if head_of() != before:
+    number, t, _ = aggregate(call, [])
+    if head_of() != before or block_time(call, before) != t:
         return None
     if number - before not in (0, 1):
         raise BadNumbering(f"a call at the head {before} says it runs in block {number}")
     return number - before
+
+
+def head(call) -> tuple[int, int]:
+    """The head block's number and its time, in one request."""
+    got = call("eth_getBlockByNumber", ["latest", False])
+    return int(got["number"], 16), int(got["timestamp"], 16)
+
+
+def block_time(call, block: int) -> int | None:
+    """The time of block `block` as the node records it, asked for by its number; None for a block it does not have
+    (a number past its head) or an answer that is not that block."""
+    got = call("eth_getBlockByNumber", [hex(block), False])
+    try:
+        number, t = int(got["number"], 16), int(got["timestamp"], 16)
+    except (TypeError, KeyError, ValueError):
+        return None
+    return t if number == block else None
+
+
+def ran_in(call, block: int, t: int | None, latest: tuple[int, int | None] | None = None) -> bool:
+    """Whether a batch whose call says it ran in `block` at `t` (its number counted back by the node's numbering) ran
+    in that block, held against the head read just before it (`latest`: its number and time) when there is one
+    (review 20 of #342). Both kinds of node say the head's time in a call: the head's time under another number, or
+    the head's number with another time, is a numbering that moved since it was measured. Any other block (one that
+    came between the head and the call, a server a block behind, or no head to hold it against) costs a request: the
+    node's own record of `block` by its number, whose time must be the call's. Anything that does not hold, or cannot
+    be asked, is no."""
+    if latest is not None:
+        number, number_t = latest
+        if number_t is not None and (block == number or t == number_t):
+            return block == number and t == number_t
+    try:
+        return t is not None and block_time(call, block) == t
+    except Exception:
+        return False
 
 
 class Counted:
@@ -341,6 +388,11 @@ class Reads:
         first = [r for _, reads, _ in chunk for r in reads]
         last = [r for _, _, tail in chunk for r in tail]
         whole = len(first) + len(last) <= room  # a group larger than a call is cut: its reads are of no one block
+        if not whole:
+            # Nor of the block an earlier call gave it (review 20 of #342: a new exam's rules, in the pass's first
+            # call, and its stops cut across two more): what is not of one block is not handed over as one.
+            for owner, _, _ in chunk:
+                self.block_of.pop(owner, None)
         for reads in ([first + last] if whole else [(first + last)[i:i + room] for i in range(0, len(first + last), room)]):
             try:
                 self.calls += 1
@@ -609,12 +661,12 @@ class SimKeeper:
             log("pay_out_of_reach", pool=pool, head=head, looked=len(rows), beyond=count - end)
 
     def slow_pass(self) -> None:
-        latest = int(c.rpc("eth_blockNumber"), 16)
-        self.reads = self.read_all(latest)
+        # The head with its time, in one request: the batch's call is held against both (`read_all`).
+        latest, latest_t = head(c.rpc)
+        self.reads = self.read_all(latest, latest_t)
         try:
-            # The time of the head: the batch's own (the call that read the accounts says it), or asked as before.
-            now = self.reads.time if self.reads.time is not None else int(
-                c.rpc("eth_getBlockByNumber", ["latest", False])["timestamp"], 16)
+            # The time of the head: the batch's own (the call that read the accounts says it), or the head's.
+            now = self.reads.time if self.reads.time is not None else latest_t
             self.scan(latest)
             for a in self.live():
                 try:
@@ -675,12 +727,13 @@ class SimKeeper:
         return [(a, c.encode_call(sig, ["uint32"], [asset])) for asset in assets
                 for sig in ("stopOf(uint32)", "takeOf(uint32)", "positionOf(uint32)")]
 
-    def read_all(self, latest: int) -> Reads:
+    def read_all(self, latest: int, latest_t: int | None = None) -> Reads:
         """The reads of this pass, asked in batches of at most BATCH: the factory's pools, each pool's queue of payouts,
         and each live account's own reads with its stops', an account never cut in two. An account met for the first
         time has its rules read in the first call and its stops in a second: an exam's assets are written once, when
         it is made, and are kept from then on. Without Multicall3, or with the node's numbering not measured, the
-        batch is empty and every read is asked alone, as before."""
+        batch is empty and every read is asked alone, as before. `latest`, `latest_t`: the head read just before,
+        with its time, which the batch's first call is held against (`ran_in`)."""
         reads = Reads()
         if not self.multicall:
             return reads
@@ -706,8 +759,10 @@ class SimKeeper:
                 new.append((a, [(a, c.encode_call("result()"))] + self.stop_reads(a), []))
         if new:
             reads.load(new, c.rpc, ahead)
-        if reads.block is not None and reads.block < latest:
-            # The call says an older block than the head read before it: the node numbers its calls another way now.
+        if reads.block is not None and not ran_in(c.rpc, reads.block, reads.time, (latest, latest_t)):
+            # The call says another block than it ran in: the head's own time under another number, the head's number
+            # with another time, or a time the node does not record for that number. The node numbers its calls another
+            # way now; handed over, a batch labelled a block late would be taken as read after that block's events.
             log("numbering_changed", head=latest, call=reads.block, then="measured again; this pass's stops read alone")
             self.ahead = None
             reads.block_of.clear()
