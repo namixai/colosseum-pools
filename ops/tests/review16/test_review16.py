@@ -74,14 +74,12 @@ class UnboundedRows(unittest.TestCase):
         tracemalloc.stop()
         return cur / size, j
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_gap_rows_outside_every_stop_are_not_kept(self):
         lines = ['{"gap":[%d,%d],"why":"x"}' % (5_000 + 2 * i, 5_001 + 2 * i) for i in range(100_000)]
         ratio, j = self.retained(lines)
         self.assertLess(ratio, 0.5, f"{ratio:.1f} bytes kept per byte of gap rows ({len(j.gaps)} gaps): 64 MB is "
                                     f"{64 * ratio:.0f} MB, and three day files are the unit's whole gigabyte")
 
-    @unittest.expectedFailure  # found by review 16: put right in a later commit of this round
     def test_header_rows_refused_do_not_grow_the_notes(self):
         lines = ['{"journal":"x%d"}' % i for i in range(100_000)]
         ratio, j = self.retained(lines, {"label": "a"})

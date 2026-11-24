@@ -899,6 +899,14 @@ class Windows:
     def any(self, block: int) -> bool:
         return self.has(None, block)
 
+    def touches(self, lo: int, hi: int) -> bool:
+        """Whether any block from `lo` to `hi` is one some asset keeps."""
+        los = self.lo.get(None)
+        if not los or hi < lo:
+            return False
+        i = bisect_right(los, hi) - 1
+        return i >= 0 and self.hi[None][i] >= lo
+
 
 # A row's block, read without parsing the row: at most ten digits (a block is below 2**32); a longer number is left to
 # the parser, which calls the row bad (a number past the interpreter's own limit of digits would raise here).
@@ -907,6 +915,12 @@ CONFLICT_TEXTS = 50  # the words of a conflict kept a journal asset; every block
 # The longest line of a journal that is parsed: the loop's own lines are about 85 bytes, a gap's a little more. A longer
 # one (the second machine's folder is filled by whoever holds its key) is a bad line, not parsed at all.
 LINE_MAX = 64 * 1024
+# What a journal keeps beside its prices goes with what the review asks, not with the bytes of a file (review 16 of
+# #338): the gaps that touch a stop's time (the first GAPS_KEPT of them, each one's reason cut to WHY_MAX) and the
+# first NOTES_KEPT notes; the rest are counted (`gaps_more`, `notes_more`), never kept.
+GAPS_KEPT = 1_000
+NOTES_KEPT = 100
+WHY_MAX = 120
 
 
 class NotANumber(ValueError):
@@ -958,6 +972,8 @@ class Journal:
         self.conflicts: dict[int, dict[int, str]] = {}  # asset -> {block: what disagrees}, the first CONFLICT_TEXTS
         self._clash: dict[int, array] = {}  # asset -> every block that disagrees
         self.notes: list[str] = []
+        self.gaps_more = 0   # gap lines read and not kept: outside every stop's time, or past GAPS_KEPT
+        self.notes_more = 0  # notes past NOTES_KEPT
         self.unread: list[str] = []  # the second journal not read to its end, and why (`read_journals`)
         self.sources = 0
         self.want = Windows(want) if want is not None else None
@@ -1058,14 +1074,18 @@ class Journal:
                 why = journal_foreign(row, expect)
                 refused = why is not None
                 if refused:
-                    self.notes.append(f"{name}: {why}: its lines are not read")
+                    self.note(f"{name}: {why}: its lines are not read")
                 continue
             if refused:
                 continue
             try:
                 if "gap" in row:
                     a, b = row["gap"]
-                    self.gaps.append((int(a), int(b), str(row.get("why", ""))))
+                    a, b = int(a), int(b)
+                    if len(self.gaps) < GAPS_KEPT and (want is None or want.touches(a, b)):
+                        self.gaps.append((a, b, str(row.get("why", ""))[:WHY_MAX]))
+                    else:
+                        self.gaps_more += 1
                     continue
                 if "b" not in row:
                     continue
@@ -1109,6 +1129,16 @@ class Journal:
         for asset, ex in extra.items():
             self._merge(asset, self.px[asset], ex, bit, name)
         self._merge(None, self.times, extra_t, bit, name)
+
+    def note(self, text: str, first: bool = False) -> None:
+        """A note kept while there is room for one (NOTES_KEPT), counted past it; `first` puts it before the others."""
+        if first:
+            self.notes.insert(0, text)
+        else:
+            self.notes.append(text)
+        if len(self.notes) > NOTES_KEPT:
+            self.notes_more += len(self.notes) - NOTES_KEPT
+            del self.notes[NOTES_KEPT:]
 
     def gaps_in(self, lo: int, hi: int) -> list[str]:
         return [f"{a}..{b} ({why})" for a, b, why in self.gaps if a <= hi and b >= lo]
@@ -1221,12 +1251,16 @@ def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: i
     for k, path in enumerate(paths):
         exists = path.is_file() or any(path.parent.glob(f"{path.stem}-????-??-??{path.suffix}"))
         if not exists:
-            j.notes.append(f"the journal {path.name} is not there")
+            j.note(f"the journal {path.name} is not there")
             continue
         found = True
         try:
             # The second writer's folder is filled from another machine: only its day files by name, none past the limit.
-            files = journal_files(path, lo_t, hi_t, strict=k > 0, notes=j.notes)
+            said: list[str] = []
+            files = journal_files(path, lo_t, hi_t, strict=k > 0, notes=said)
+            for text in said[:NOTES_KEPT]:
+                j.note(text)
+            j.notes_more += max(0, len(said) - NOTES_KEPT)
             j.add_lines(file_lines(files), expect, path.name)
         except Exception as exc:
             if k == 0:
@@ -1235,7 +1269,7 @@ def read_journals(paths: list[pathlib.Path], expect: dict | None = None, lo_t: i
             # (review 16 of #338): the blocks it did not give rest on one journal, which holds their payouts, and the
             # service says it (`unread`).
             j.unread.append(f"{path.name}: {type(exc).__name__}")
-            j.notes.insert(0, f"the second journal {path.name} was not read to its end ({type(exc).__name__})")
+            j.note(f"the second journal {path.name} was not read to its end ({type(exc).__name__})", first=True)
     return j if found else None
 
 

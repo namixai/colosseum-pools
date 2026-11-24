@@ -148,6 +148,46 @@ class BadRows(unittest.TestCase):
         self.assertEqual((j.single_in(3, 4, 6), j.bad), ([5], 1), "held as resting on one journal, never clean")
 
 
+class WhatAJournalKeeps(unittest.TestCase):
+    """Beside its prices a journal keeps the gaps that touch a stop's time and its first notes; the rest are counted."""
+
+    @staticmethod
+    def gap(a, b, why="x"):
+        return json.dumps({"gap": [a, b], "why": why}) + "\n"
+
+    def test_a_gap_is_kept_where_it_touches_a_stops_time_and_counted_where_it_does_not(self):
+        j = pr.Journal({3: [(1_000, 1_400)], 4: [(3_000, 3_010)]})
+        j.add_lines([self.gap(900, 999), self.gap(990, 1_000), self.gap(1_100, 1_101), self.gap(1_400, 1_500),
+                     self.gap(1_401, 2_999), self.gap(2_000, 3_000), self.gap(3_011, 9_000), self.gap(1, 9_000, "y" * 500)])
+        self.assertEqual([(a, b) for a, b, _ in j.gaps], [(990, 1_000), (1_100, 1_101), (1_400, 1_500), (2_000, 3_000), (1, 9_000)])
+        self.assertEqual(j.gaps_more, 3)
+        self.assertEqual(j.gaps_in(1_000, 1_400)[:3], ["990..1000 (x)", "1100..1101 (x)", "1400..1500 (x)"])
+        self.assertEqual(len(j.gaps[-1][2]), pr.WHY_MAX, "a gap's reason is cut")
+        by_hand = pr.Journal()
+        by_hand.add_lines(self.gap(10 * k, 10 * k + 1) for k in range(pr.GAPS_KEPT + 5))
+        self.assertEqual((len(by_hand.gaps), by_hand.gaps_more), (pr.GAPS_KEPT, 5), "read by hand: every gap, to the limit")
+
+    def test_the_notes_are_the_first_hundred_and_a_count(self):
+        import pathlib
+        import shutil
+        import tempfile
+        from ops.tests.test_price_journals import HEAD
+        j = pr.Journal()
+        j.add_lines(('{"journal":"x%d"}\n' % k for k in range(250)), {"label": "a"}, "second")
+        self.assertEqual((len(j.notes), j.notes_more), (pr.NOTES_KEPT, 150))
+        j.note("the one that matters", first=True)
+        self.assertEqual((j.notes[0], len(j.notes), j.notes_more), ("the one that matters", pr.NOTES_KEPT, 151))
+        # The files of the second folder that are not day files are said the same way: the first hundred, and a count.
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        (d / "second").mkdir()
+        (d / "prices-sim1-1970-01-01.jsonl").write_text(json.dumps(HEAD) + "\n" + row(4, 7) + "\n")
+        for k in range(150):
+            (d / "second" / f"watch-prices-sim1-abc{k // 100}-ef-{k % 100:02d}.jsonl").write_text("x\n")
+        got = pr.read_journals([d / "prices-sim1.jsonl", d / "second" / "watch-prices-sim1.jsonl"], HEAD)
+        self.assertEqual((len(got.notes), got.notes_more, sorted(got.px[3])), (pr.NOTES_KEPT, 50, [4]))
+
+
 class SecondJournalNotRead(unittest.TestCase):
     """Whatever goes wrong reading the second journal is that journal not read: its blocks rest on one journal (held),
     the service says it, and the pass goes on to write its documents."""
